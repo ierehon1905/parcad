@@ -291,6 +291,28 @@ mod tests {
     }
 
     #[test]
+    fn final_corner_fillet_edges_keep_their_source_node() {
+        let doc: Doc = serde_json::from_str(
+            r#"{
+                "root": 1,
+                "nodes": [
+                    { "op": "cuboid", "size": { "x": 20, "y": 10, "z": 8 } },
+                    {
+                        "op": "fillet",
+                        "child": 0,
+                        "radius": 1,
+                        "vertices": ">X and >Y and >Z",
+                        "expect": { "count": 1 }
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        assert!(treatment_edge_count(&doc, 1) > 0);
+    }
+
+    #[test]
     fn final_chamfer_edges_keep_their_source_node() {
         let doc: Doc = serde_json::from_str(
             r#"{

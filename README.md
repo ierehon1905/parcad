@@ -78,6 +78,19 @@ straight edge parallel to X. The desktop viewport shows its temporary `edge@…`
 ID on hover and can copy a matching selector; that ID is diagnostic only and is
 not valid script input after a rebuild.
 
+Select a geometric corner when the intent is to round or bevel all of its
+incident edges together:
+
+```js
+return body.vertices(">X and >Y and >Z").expect({ count: 1 }).fillet(2);
+```
+
+The selector names the outermost positive-X, positive-Y, positive-Z vertex;
+the exact backend expands that corner to its three incident B-rep edges and
+constructs one rolling-ball corner result. Vertex selectors currently use
+directional extrema (`>X` / `<X`) or `{ at: { x: "max", ... } }` only. They do
+not yet claim Boolean provenance that the kernel cannot follow for vertices.
+
 Click the `.fillet`, `.chamfer`, `.smooth`, or `.squircle` method name in the
 desktop editor to overlay the exact input edges in gold. This is a source-to-
 viewport inspection aid: it resolves the authored selector before the treatment
@@ -126,6 +139,7 @@ The same stable edge selection can drive different treatments:
 ```js
 body.edges(">Z and >Y and |X").chamfer(1);
 body.edges({ role: "hole", adjacentTo: { faceNormal: "+z" } }).fillet(0.8);
+body.vertices(">X and >Y and >Z").chamfer(1);
 ```
 
 Equal-distance chamfers and tangent (G1) fillets are exact today. `.smooth()`

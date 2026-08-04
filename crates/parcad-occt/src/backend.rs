@@ -17,8 +17,9 @@ use opencascade::{
 use parcad_core::{
     graph::{ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, NodeId, Op, V3},
     selectors::{
-        parse_edge_selector, Axis, AxisDirection, CurveKind, EdgeExpectation, EdgeExtrema,
-        EdgeQuery, EdgeRole, EdgeSelector, EdgeSelectorTerm, Extreme,
+        parse_edge_selector, parse_vertex_selector, Axis, AxisDirection, CurveKind,
+        EdgeExpectation, EdgeExtrema, EdgeQuery, EdgeRole, EdgeSelector, EdgeSelectorTerm,
+        Extreme, VertexQuery, VertexSelector,
     },
 };
 
@@ -119,6 +120,16 @@ struct SelectableEdge {
     /// A direction-independent key. OCCT's explorer can visit the same edge
     /// through both adjacent faces; a fillet builder must receive it once.
     key: Vec<[i64; 3]>,
+}
+
+/// A B-rep vertex represented by its exact incident edges.
+///
+/// The wrapped OCCT API accepts 3D fillet/chamfer contours by edge, not by
+/// vertex. A vertex target therefore keeps its authored corner identity through
+/// selection, then expands to this set immediately before the exact operation.
+struct SelectableVertex {
+    point: DVec3,
+    incident: Vec<Edge>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -329,6 +340,48 @@ fn selectable_edges(shape: &Shape) -> Vec<SelectableEdge> {
         .collect()
 }
 
+/// Group the endpoints of the current logical edges into selectable vertices.
+///
+/// The wrapper exposes reliable endpoint coordinates but not a vertex explorer.
+/// These coordinates are exact B-rep values; the micro-millimetre key only
+/// reconciles tiny representation noise between incident edge endpoints. Closed
+/// curve seams do not make a geometric corner, so they are not a vertex target.
+fn selectable_vertices(shape: &Shape) -> Vec<SelectableVertex> {
+    let mut vertices = BTreeMap::<[i64; 3], SelectableVertex>::new();
+    for selectable in selectable_edges(shape) {
+        let start = selectable.edge.start_point();
+        let end = selectable.edge.end_point();
+        if (end - start).length_squared() <= 1e-16 {
+            continue;
+        }
+        vertices
+            .entry(vertex_key(start))
+            .or_insert_with(|| SelectableVertex {
+                point: start,
+                incident: Vec::new(),
+            })
+            .incident
+            .push(selectable.edge.clone());
+        vertices
+            .entry(vertex_key(end))
+            .or_insert_with(|| SelectableVertex {
+                point: end,
+                incident: Vec::new(),
+            })
+            .incident
+            .push(selectable.edge);
+    }
+    vertices.into_values().collect()
+}
+
+fn vertex_key(point: DVec3) -> [i64; 3] {
+    [
+        (point.x * 1_000_000.0).round() as i64,
+        (point.y * 1_000_000.0).round() as i64,
+        (point.z * 1_000_000.0).round() as i64,
+    ]
+}
+
 /// Named edges that have survived the exact operations evaluated so far.
 ///
 /// These are live OCCT sub-shapes, not sampled viewport IDs. A Boolean tells us
@@ -415,6 +468,19 @@ fn extrema(edges: &[SelectableEdge]) -> ([f64; 3], [f64; 3]) {
     (minima, maxima)
 }
 
+fn vertex_extrema(vertices: &[SelectableVertex]) -> ([f64; 3], [f64; 3]) {
+    let mut maxima = [f64::NEG_INFINITY; 3];
+    let mut minima = [f64::INFINITY; 3];
+    for vertex in vertices {
+        for axis in [Axis::X, Axis::Y, Axis::Z] {
+            let component = component(vertex.point, axis);
+            maxima[axis.component()] = maxima[axis.component()].max(component);
+            minima[axis.component()] = minima[axis.component()].min(component);
+        }
+    }
+    (minima, maxima)
+}
+
 const EXTREME_TOLERANCE_MM: f64 = 1e-5;
 const PARALLEL_TOLERANCE: f64 = 1.0 - 1e-6;
 
@@ -435,6 +501,28 @@ fn matches_extrema(
             }
             Some(Extreme::Max) => {
                 (edge.centre[component_index] - maxima[component_index]).abs()
+                    <= EXTREME_TOLERANCE_MM
+            }
+        })
+}
+
+fn matches_vertex_extrema(
+    vertex: &SelectableVertex,
+    query: &EdgeExtrema,
+    minima: [f64; 3],
+    maxima: [f64; 3],
+) -> bool {
+    [query.x, query.y, query.z]
+        .into_iter()
+        .enumerate()
+        .all(|(component_index, extreme)| match extreme {
+            None => true,
+            Some(Extreme::Min) => {
+                (vertex.point[component_index] - minima[component_index]).abs()
+                    <= EXTREME_TOLERANCE_MM
+            }
+            Some(Extreme::Max) => {
+                (vertex.point[component_index] - maxima[component_index]).abs()
                     <= EXTREME_TOLERANCE_MM
             }
         })
@@ -587,6 +675,81 @@ fn check_edge_expectation(
     Ok(())
 }
 
+fn select_vertices(
+    shape: &Shape,
+    selector: &VertexSelector,
+    id: NodeId,
+    label: &str,
+) -> Result<Vec<SelectableVertex>> {
+    let vertices = selectable_vertices(shape);
+    if vertices.is_empty() {
+        bail!("node {id} ({label}) cannot select {selector:?}: the shape has no usable corner vertices");
+    }
+    let (minima, maxima) = vertex_extrema(&vertices);
+    let selected: Vec<SelectableVertex> = match selector {
+        VertexSelector::Directional(source) => {
+            let terms = parse_vertex_selector(source).map_err(|e| {
+                anyhow::anyhow!("node {id} ({label}) has invalid vertex selector {source:?}: {e}")
+            })?;
+            vertices
+                .into_iter()
+                .filter(|vertex| {
+                    terms.iter().all(|term| match *term {
+                        EdgeSelectorTerm::Max(axis) => {
+                            (component(vertex.point, axis) - maxima[axis.component()]).abs()
+                                <= EXTREME_TOLERANCE_MM
+                        }
+                        EdgeSelectorTerm::Min(axis) => {
+                            (component(vertex.point, axis) - minima[axis.component()]).abs()
+                                <= EXTREME_TOLERANCE_MM
+                        }
+                        EdgeSelectorTerm::Parallel(_) => false,
+                    })
+                })
+                .collect()
+        }
+        VertexSelector::Query(VertexQuery { at }) => {
+            let Some(at) = at else {
+                bail!("node {id} ({label}) has an empty vertex query; specify at");
+            };
+            if at.is_empty() {
+                bail!("node {id} ({label}) has an empty vertex query; specify at");
+            }
+            vertices
+                .into_iter()
+                .filter(|vertex| matches_vertex_extrema(vertex, at, minima, maxima))
+                .collect()
+        }
+    };
+    if selected.is_empty() {
+        bail!(
+            "node {id} ({label}) vertex selector {selector:?} matched no corner vertices. \
+             Inspect the current B-rep vertices and refine the selector, for example >X and >Y and >Z"
+        );
+    }
+    Ok(selected)
+}
+
+fn check_vertex_expectation(
+    expectation: EdgeExpectation,
+    actual: usize,
+    selector: &VertexSelector,
+    id: NodeId,
+    label: &str,
+) -> Result<()> {
+    if expectation.count == 0 {
+        bail!("node {id} ({label}) has a vertex expectation of zero; a corner treatment must select at least one vertex");
+    }
+    if actual != expectation.count {
+        bail!(
+            "node {id} ({label}) vertex selector {selector:?} expected {} vertex(s), but matched {actual}. \
+             The model's topology changed; inspect the current vertices and update the selector or expectation",
+            expectation.count,
+        );
+    }
+    Ok(())
+}
+
 fn select_edge_target(
     shape: &Shape,
     target: &EdgeTarget,
@@ -594,12 +757,30 @@ fn select_edge_target(
     id: NodeId,
     label: &str,
 ) -> Result<Vec<Edge>> {
-    let EdgeTarget::Edges { selector, expect } = target;
-    let selected = select_edges(shape, selector, lineage, id, label)?;
-    if let Some(expectation) = expect {
-        check_edge_expectation(*expectation, selected.len(), selector, id, label)?;
+    match target {
+        EdgeTarget::Edges { selector, expect } => {
+            let selected = select_edges(shape, selector, lineage, id, label)?;
+            if let Some(expectation) = expect {
+                check_edge_expectation(*expectation, selected.len(), selector, id, label)?;
+            }
+            Ok(selected)
+        }
+        EdgeTarget::Vertices { vertices, expect } => {
+            let selected = select_vertices(shape, vertices, id, label)?;
+            if let Some(expectation) = expect {
+                check_vertex_expectation(*expectation, selected.len(), vertices, id, label)?;
+            }
+            let mut seen = HashSet::new();
+            Ok(selected
+                .into_iter()
+                .flat_map(|vertex| vertex.incident)
+                .filter(|edge| {
+                    describe_edge(edge.clone())
+                        .is_some_and(|described| seen.insert(described.key))
+                })
+                .collect())
+        }
     }
-    Ok(selected)
 }
 
 /// Resolve the pre-treatment B-rep edges for one fillet or chamfer.
@@ -1382,6 +1563,47 @@ mod tests {
         assert!(error
             .to_string()
             .contains("expected 4 edge(s), but matched 6"));
+    }
+
+    #[test]
+    fn corner_vertex_expands_to_its_three_incident_box_edges() {
+        let shape = AdHocShape::make_box_point_point(
+            DVec3::new(-5.0, -5.0, -5.0),
+            DVec3::new(5.0, 5.0, 5.0),
+        )
+        .0;
+        let target = EdgeTarget::Vertices {
+            vertices: VertexSelector::Directional(">X and >Y and >Z".to_owned()),
+            expect: Some(EdgeExpectation { count: 1 }),
+        };
+
+        let selected = select_edge_target(&shape, &target, &EdgeLineage::default(), 0, "body")
+            .unwrap();
+        assert_eq!(selected.len(), 3);
+    }
+
+    #[test]
+    fn fillets_one_selected_box_corner() {
+        let doc: Doc = serde_json::from_str(
+            r#"{
+                "root": 1,
+                "nodes": [
+                    { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+                    {
+                        "op": "fillet",
+                        "child": 0,
+                        "radius": 1,
+                        "vertices": ">X and >Y and >Z",
+                        "expect": { "count": 1 }
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let target = inspect_edge_target(&doc, 1).unwrap();
+        assert_eq!(target.len(), 3);
+        build(&doc).unwrap();
     }
 
     #[test]

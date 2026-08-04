@@ -22,6 +22,33 @@ pub enum EdgeSelector {
     Query(EdgeQuery),
 }
 
+/// An authored vertex reference for a corner treatment.
+///
+/// Vertices use directional extrema only for now. Unlike edges, there is no
+/// vertex lineage after Boolean operations yet, so accepting `generatedBy`
+/// here would promise a stable relation the exact backend cannot provide.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum VertexSelector {
+    Directional(String),
+    Query(VertexQuery),
+}
+
+/// A composable query over B-rep vertex positions.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VertexQuery {
+    /// Match vertices at the requested document extrema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<EdgeExtrema>,
+}
+
+impl VertexQuery {
+    pub fn is_empty(&self) -> bool {
+        self.at.as_ref().is_none_or(EdgeExtrema::is_empty)
+    }
+}
+
 /// A post-condition for a selector-backed edge operation.
 ///
 /// The expectation is checked against the exact B-rep at evaluation time. It
@@ -177,6 +204,22 @@ pub fn parse_edge_selector(source: &str) -> Result<Vec<EdgeSelectorTerm>> {
         .collect::<Result<Vec<_>>>()
 }
 
+/// Parse a compact vertex-selector expression.
+///
+/// Vertices have positions but no direction, so `>X and >Y and >Z` is valid
+/// while `|X` is intentionally rejected instead of silently meaning something
+/// different from its edge-selector counterpart.
+pub fn parse_vertex_selector(source: &str) -> Result<Vec<EdgeSelectorTerm>> {
+    let terms = parse_edge_selector(source)?;
+    if terms
+        .iter()
+        .any(|term| matches!(term, EdgeSelectorTerm::Parallel(_)))
+    {
+        bail!("vertex selectors use only >X or <X extrema; |X applies to edges")
+    }
+    Ok(terms)
+}
+
 fn parse_term(term: &str) -> Result<EdgeSelectorTerm> {
     let bytes = term.as_bytes();
     if bytes.len() != 2 {
@@ -252,5 +295,18 @@ mod tests {
                 ..
             }) if tag == "mount_holes"
         ));
+    }
+
+    #[test]
+    fn parses_a_corner_vertex_without_accepting_edge_direction() {
+        assert_eq!(
+            parse_vertex_selector(">X and >Y and >Z").unwrap(),
+            vec![
+                EdgeSelectorTerm::Max(Axis::X),
+                EdgeSelectorTerm::Max(Axis::Y),
+                EdgeSelectorTerm::Max(Axis::Z),
+            ]
+        );
+        assert!(parse_vertex_selector(">X and |Y").is_err());
     }
 }

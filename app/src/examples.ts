@@ -25,7 +25,7 @@ const drilled = body
 // Every selected edge is a circular hole rim bordering the upward-facing top face.
 // The same query keeps selecting just the top rim if a hole moves or more
 // holes are added; the lower rims and vertical walls are not selected.
-return drilled
+const roundedHoles = drilled
   .edges({
     generatedBy: "mount_holes",
     curve: "circle",
@@ -35,6 +35,14 @@ return drilled
   .expect({ count: 4 })
   .fillet(0.8)
   .tag("top_hole_rims");
+
+// This names a corner rather than a kernel vertex ID. The exact backend expands
+// it to its three incident edges, then makes one rolling-ball corner fillet.
+return roundedHoles
+  .vertices(">X and >Y and <Z")
+  .expect({ count: 1 })
+  .fillet(2)
+  .tag("outer_corner_round");
 `;
 
 export const ENCLOSURE = `// A printable enclosure — shows shell() and offset().

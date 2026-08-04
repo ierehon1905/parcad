@@ -35,9 +35,10 @@ All three currently `bail!` with an explanation rather than approximating.
   An ordinal result selector (`nth`) may follow as an explicitly fragile,
   sorted tie-breaker; `op#3.edge[2]` will not be an authored reference.
 - **Complete edge-treatment recipes.** Equal-distance chamfers and G1
-  rolling-ball fillets share the selected-edge target contract. Add G2 smooth
-  blends, setback/miter/blend corners, chamfer two-distance and distance/angle
-  modes, and variable/chord/asymmetric fillets only with exact kernel support;
+  rolling-ball fillets share edge-set and extrema-selected corner-vertex
+  targets. Add vertex provenance/adjacency, G2 smooth blends,
+  setback/miter/blend corners, chamfer two-distance and distance/angle modes,
+  and variable/chord/asymmetric fillets only with exact kernel support;
   declared-but-unsupported recipes must keep failing explicitly.
 - **Bidirectional feature inspection.** Selecting a treatment method previews
   its exact input edges in the viewport; final curves returned by the exact

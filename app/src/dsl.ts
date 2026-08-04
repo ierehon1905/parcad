@@ -56,9 +56,18 @@ export interface EdgeQuery {
 
 export type EdgeSelector = string | EdgeQuery;
 
-/** A post-condition checked against the selected B-rep edge count. */
+/** A positional query over B-rep vertices for a corner treatment. */
+export interface VertexQuery {
+  /** Match vertices at the requested document extrema. */
+  at?: Partial<Record<"x" | "y" | "z", "min" | "max">>;
+}
+
+/** A compact vertex selector such as `>X and >Y and >Z`, or a vertex query. */
+export type VertexSelector = string | VertexQuery;
+
+/** A post-condition checked against the selected B-rep entity count. */
 export interface EdgeExpectation {
-  /** The exact number of edges the selector must match. */
+  /** The exact number of selected edges or vertices the selector must match. */
   count: number;
 }
 
@@ -139,6 +148,19 @@ function assertEdgeSelector(selector: EdgeSelector) {
   }
   if (selector.generatedBy !== undefined && !selector.generatedBy.trim()) {
     throw new Error("generatedBy must name a tagged operation");
+  }
+}
+
+function assertVertexSelector(selector: VertexSelector) {
+  if (typeof selector === "string") {
+    if (!selector.trim()) throw new Error("vertex selector is empty; use a term such as >X and >Y and >Z");
+    if (selector.split(" and ").some((term) => !/^[<>][xyz]$/i.test(term))) {
+      throw new Error("vertex selectors use only >X or <X extrema; |X applies to edges");
+    }
+    return;
+  }
+  if (!selector.at || !Object.values(selector.at).some(Boolean)) {
+    throw new Error("vertex query is empty; specify at");
   }
 }
 
@@ -238,6 +260,66 @@ export class EdgeSelection {
   /** Alias for {@link smooth}; a true squircle is a 2D superellipse, not this 3D blend. */
   squircle(radius: number, options?: Omit<FilletOptions, "continuity">): Shape {
     return this.owner.fillet(
+      radius,
+      this.selector,
+      this.expectation,
+      { ...options, continuity: "curvature" },
+      treatmentSource("squircle"),
+    );
+  }
+}
+
+/** A selected corner-vertex set, expanded to incident edges by the exact backend. */
+export class VertexSelection {
+  /** @internal */
+  constructor(
+    private readonly owner: Shape,
+    private readonly selector: VertexSelector,
+    private readonly expectation?: EdgeExpectation,
+  ) {}
+
+  /** Require this selector to resolve to exactly `count` corner vertices. */
+  expect(expectation: EdgeExpectation): VertexSelection {
+    assertEdgeExpectation(expectation);
+    return new VertexSelection(this.owner, this.selector, expectation);
+  }
+
+  /** Round every incident edge at the selected corner vertices. */
+  fillet(radius: number, options?: FilletOptions): Shape {
+    return this.owner.filletVertices(
+      radius,
+      this.selector,
+      this.expectation,
+      options,
+      treatmentSource("fillet"),
+    );
+  }
+
+  /** Bevel every incident edge at the selected corner vertices. */
+  chamfer(distance: number, options?: ChamferOptions): Shape {
+    return this.owner.chamferVertices(
+      distance,
+      this.selector,
+      this.expectation,
+      options,
+      treatmentSource("chamfer"),
+    );
+  }
+
+  /** Request a curvature-continuous (G2) corner blend. */
+  smooth(radius: number, options?: Omit<FilletOptions, "continuity">): Shape {
+    return this.owner.filletVertices(
+      radius,
+      this.selector,
+      this.expectation,
+      { ...options, continuity: "curvature" },
+      treatmentSource("smooth"),
+    );
+  }
+
+  /** Alias for {@link smooth}; it describes a G2 blend, not a 2D superellipse. */
+  squircle(radius: number, options?: Omit<FilletOptions, "continuity">): Shape {
+    return this.owner.filletVertices(
       radius,
       this.selector,
       this.expectation,
@@ -350,6 +432,18 @@ export class Shape {
     return new EdgeSelection(this, selector);
   }
 
+  /**
+   * Select B-rep vertices for a corner treatment.
+   *
+   * `>X and >Y and >Z` means the outer corner at all three positive extrema.
+   * The exact backend expands each selected vertex to its incident edge set;
+   * it never stores a transient viewport vertex ID in the graph.
+   */
+  vertices(selector: VertexSelector): VertexSelection {
+    assertVertexSelector(selector);
+    return new VertexSelection(this, selector);
+  }
+
   /** Round the edges matched by an authored selector. */
   fillet(
     radius: number,
@@ -382,6 +476,44 @@ export class Shape {
     assertChamferOptions(options);
     return new Shape(
       ([child]) => ({ op: "chamfer", child, distance, selector, expect: expectation, recipe: options }),
+      [this],
+      undefined,
+      { kind: "chamfer", source },
+    );
+  }
+
+  /** @internal Round the edge set incident to selected corner vertices. */
+  filletVertices(
+    radius: number,
+    vertices: VertexSelector,
+    expectation?: EdgeExpectation,
+    options?: FilletOptions,
+    source = treatmentSource("fillet"),
+  ): Shape {
+    assertVertexSelector(vertices);
+    if (expectation) assertEdgeExpectation(expectation);
+    assertFilletOptions(options);
+    return new Shape(
+      ([child]) => ({ op: "fillet", child, radius, vertices, expect: expectation, recipe: options }),
+      [this],
+      undefined,
+      { kind: "fillet", source },
+    );
+  }
+
+  /** @internal Bevel the edge set incident to selected corner vertices. */
+  chamferVertices(
+    distance: number,
+    vertices: VertexSelector,
+    expectation?: EdgeExpectation,
+    options?: ChamferOptions,
+    source = treatmentSource("chamfer"),
+  ): Shape {
+    assertVertexSelector(vertices);
+    if (expectation) assertEdgeExpectation(expectation);
+    assertChamferOptions(options);
+    return new Shape(
+      ([child]) => ({ op: "chamfer", child, distance, vertices, expect: expectation, recipe: options }),
       [this],
       undefined,
       { kind: "chamfer", source },

@@ -5,7 +5,7 @@
 //! separation is what lets an exact B-rep backend land later without invalidating
 //! a single script.
 
-use crate::selectors::{EdgeExpectation, EdgeSelector};
+use crate::selectors::{EdgeExpectation, EdgeSelector, VertexSelector};
 use serde::{Deserialize, Serialize};
 
 /// Index into [`Doc::nodes`].
@@ -86,6 +86,16 @@ pub enum EdgeTarget {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expect: Option<EdgeExpectation>,
     },
+    /// A selected set of B-rep vertices, expanded to their incident edges.
+    ///
+    /// This asks for a corner treatment without pretending OCCT's 3D fillet
+    /// builder accepts a vertex directly. The backend passes its exact incident
+    /// edge set to that builder, which constructs the shared corner patch.
+    Vertices {
+        vertices: VertexSelector,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expect: Option<EdgeExpectation>,
+    },
 }
 
 /// How planar chamfers join where several selected edges meet.
@@ -162,6 +172,19 @@ mod tests {
         };
         assert_eq!(recipe, ChamferRecipe::default());
         assert!(matches!(target, EdgeTarget::Edges { .. }));
+    }
+
+    #[test]
+    fn vertex_target_preserves_the_authored_corner_intent() {
+        let op: Op = serde_json::from_str(
+            r#"{"op":"fillet","child":0,"radius":2,"vertices":">X and >Y and >Z","expect":{"count":1}}"#,
+        )
+        .unwrap();
+
+        let Op::Fillet { target, .. } = op else {
+            panic!("expected a fillet operation");
+        };
+        assert!(matches!(target, EdgeTarget::Vertices { .. }));
     }
 }
 
