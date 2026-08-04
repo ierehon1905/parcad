@@ -1607,6 +1607,30 @@ mod tests {
     }
 
     #[test]
+    fn chamfers_one_selected_box_corner() {
+        let doc: Doc = serde_json::from_str(
+            r#"{
+                "root": 1,
+                "nodes": [
+                    { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+                    {
+                        "op": "chamfer",
+                        "child": 0,
+                        "distance": 1,
+                        "vertices": ">X and >Y and >Z",
+                        "expect": { "count": 1 }
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let target = inspect_edge_target(&doc, 1).unwrap();
+        assert_eq!(target.len(), 3);
+        build(&doc).unwrap();
+    }
+
+    #[test]
     fn chamfers_one_selected_box_edge() {
         let doc: Doc = serde_json::from_str(
             r#"{
