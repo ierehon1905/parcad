@@ -39,6 +39,11 @@ All three currently `bail!` with an explanation rather than approximating.
   blends, setback/miter/blend corners, chamfer two-distance and distance/angle
   modes, and variable/chord/asymmetric fillets only with exact kernel support;
   declared-but-unsupported recipes must keep failing explicitly.
+- **Bidirectional feature inspection.** Selecting a treatment method previews
+  its exact input edges in the viewport; final curves returned by the exact
+  fillet/chamfer history now focus that source call on click. Extend this to
+  replacement faces and history through changed curves, rather than guessing
+  after an operation replaces topology.
 - **Sidecar packaging.** `parcad-occt-worker` is copied beside the dev binaries
   by `tools/build-worker.sh`, but is *not* declared as a Tauri sidecar. A
   bundled `.app` will not find it. (`bundle.active` is currently `false`.)

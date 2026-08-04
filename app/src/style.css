@@ -139,6 +139,12 @@ main {
   outline: none;
 }
 
+.cm-treatment-hover {
+  background: rgba(245, 185, 66, 0.28);
+  border-bottom: 1px solid #f5b942;
+  border-radius: 2px;
+}
+
 #splitter {
   width: 1px;
   background: var(--line);
@@ -228,6 +234,11 @@ main {
   color: var(--accent);
 }
 
+.edge-origin {
+  margin-top: 5px;
+  color: #f5b942;
+}
+
 .edge-inspector button {
   margin-top: 7px;
   padding: 3px 6px;
@@ -243,6 +254,24 @@ main {
   cursor: default;
   color: var(--ink-dim);
   opacity: 0.65;
+}
+
+.target-preview {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  padding: 9px 10px;
+  border: 1px solid #8f6d2a;
+  border-radius: 8px;
+  background: rgba(18, 20, 25, 0.86);
+  backdrop-filter: blur(8px);
+  color: #f5b942;
+  font: 11.5px/1.5 var(--mono);
+  pointer-events: none;
+}
+
+#target-preview-detail {
+  color: var(--ink-dim);
 }
 
 .error {

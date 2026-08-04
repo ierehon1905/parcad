@@ -1,5 +1,6 @@
 use crate::{
     adhoc::AdHocShape,
+    history::ffi as history,
     mesh::{Mesh, Mesher},
     primitives::{
         make_dir, make_point, make_vec, BooleanShape, Compound, Edge, EdgeIterator, Face,
@@ -140,6 +141,19 @@ impl Shape {
         self.inner = ffi::TopoDS_Shape_to_owned(filleted_shape);
     }
 
+    /// Fillet selected edges and retain the result shapes generated from them.
+    ///
+    /// The generated shapes are exact OCCT history, suitable for transient
+    /// feature inspection. They are not stable entity IDs and must not escape
+    /// the current evaluation.
+    pub fn fillet_edges_with_history<T: AsRef<Edge>>(
+        &mut self,
+        radius: f64,
+        edges: impl IntoIterator<Item = T>,
+    ) -> Vec<Self> {
+        self.treat_edges_with_history(radius, edges, false)
+    }
+
     pub fn chamfer_edges<T: AsRef<Edge>>(
         &mut self,
         distance: f64,
@@ -156,6 +170,46 @@ impl Shape {
         let chamfered_shape = make_chamfer.pin_mut().Shape();
 
         self.inner = ffi::TopoDS_Shape_to_owned(chamfered_shape);
+    }
+
+    /// Chamfer selected edges and retain the result shapes generated from them.
+    pub fn chamfer_edges_with_history<T: AsRef<Edge>>(
+        &mut self,
+        distance: f64,
+        edges: impl IntoIterator<Item = T>,
+    ) -> Vec<Self> {
+        self.treat_edges_with_history(distance, edges, true)
+    }
+
+    fn treat_edges_with_history<T: AsRef<Edge>>(
+        &mut self,
+        distance: f64,
+        edges: impl IntoIterator<Item = T>,
+        chamfer: bool,
+    ) -> Vec<Self> {
+        let edges: Vec<Edge> = edges
+            .into_iter()
+            .map(|edge| edge.as_ref().clone())
+            .collect();
+        let mut treatment = if chamfer {
+            history::parcad_chamfer_with_history(&self.inner)
+        } else {
+            history::parcad_fillet_with_history(&self.inner)
+        };
+        for edge in &edges {
+            treatment.pin_mut().add(distance, &edge.inner);
+        }
+        treatment.pin_mut().build();
+
+        let mut generated = Vec::new();
+        for edge in edges {
+            let shapes = treatment.pin_mut().generated(&edge.inner);
+            generated.extend(shapes.iter().map(|shape| Self {
+                inner: ffi::TopoDS_Shape_to_owned(shape),
+            }));
+        }
+        self.inner = ffi::TopoDS_Shape_to_owned(treatment.pin_mut().result());
+        generated
     }
 
     /// Performs fillet of `radius` on all edges of the shape

@@ -22,5 +22,5 @@ pub mod backend;
 pub mod host;
 pub mod protocol;
 
-pub use host::{evaluate, OcctError, Options};
-pub use protocol::{EdgeCurve, Success, Timings, Topology};
+pub use host::{evaluate, inspect_edge_target, OcctError, Options};
+pub use protocol::{EdgeCurve, Success, TargetPreview, Timings, Topology};

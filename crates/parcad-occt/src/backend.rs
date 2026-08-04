@@ -9,22 +9,20 @@
 //! This code runs only inside the worker process. It is allowed to die.
 
 use anyhow::{bail, Result};
-use glam::DVec3;
+use glam::{DMat3, DVec3};
 use opencascade::{
     adhoc::AdHocShape,
     primitives::{BooleanShape, Edge, Shape},
 };
 use parcad_core::{
-    graph::{
-        ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, NodeId, Op, V3,
-    },
+    graph::{ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, NodeId, Op, V3},
     selectors::{
         parse_edge_selector, Axis, AxisDirection, CurveKind, EdgeExpectation, EdgeExtrema,
         EdgeQuery, EdgeRole, EdgeSelector, EdgeSelectorTerm, Extreme,
     },
 };
 
-use crate::protocol::breadcrumb;
+use crate::protocol::{breadcrumb, edge_curve, EdgeCurve};
 use std::collections::{BTreeMap, HashSet};
 
 fn v(p: V3) -> DVec3 {
@@ -604,6 +602,161 @@ fn select_edge_target(
     Ok(selected)
 }
 
+/// Resolve the pre-treatment B-rep edges for one fillet or chamfer.
+///
+/// This intentionally rebuilds only the treatment's child. Once a fillet or
+/// chamfer has run, its input edges may have been replaced, so asking the final
+/// shape for `edge@…` would be a topology guess rather than an exact preview.
+pub fn inspect_edge_target(doc: &Doc, id: NodeId) -> Result<Vec<EdgeCurve>> {
+    doc.topo_order()?;
+    let node = doc.node(id)?;
+    let label = node.tag.as_deref().unwrap_or("untagged");
+    let (child, target) = match &node.op {
+        Op::Fillet { child, target, .. } | Op::Chamfer { child, target, .. } => (child, target),
+        _ => bail!("node {id} ({label}) is not a selected-edge treatment"),
+    };
+
+    let solid = build_node(doc, *child, DVec3::ZERO)?;
+    let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
+    let transforms = target_transforms(doc, id)?;
+    let several_instances = transforms.len() > 1;
+    Ok(transforms
+        .into_iter()
+        .enumerate()
+        .flat_map(|(instance, transform)| {
+            selected
+                .iter()
+                .enumerate()
+                .filter_map(move |(index, edge)| {
+                    let points = edge
+                        .approximation_segments()
+                        .map(|point| transform.point(point))
+                        .collect();
+                    let mut curve = edge_curve(points)?;
+                    curve.id = if several_instances {
+                        format!("target@{id}.{instance}.{index}")
+                    } else {
+                        format!("target@{id}.{index}")
+                    };
+                    Some(curve)
+                })
+        })
+        .collect())
+}
+
+/// A model-space transform accumulated from the graph root down to a node.
+///
+/// The treatment itself resolves its edges in its own local coordinates. The
+/// preview has to apply its parent transforms afterward so a rounded part that
+/// is placed or reused appears exactly where the viewport shows it.
+#[derive(Clone, Copy)]
+struct TargetTransform {
+    linear: DMat3,
+    translation: DVec3,
+}
+
+impl TargetTransform {
+    const IDENTITY: Self = Self {
+        linear: DMat3::IDENTITY,
+        translation: DVec3::ZERO,
+    };
+
+    fn after_translation(self, by: DVec3) -> Self {
+        Self {
+            linear: self.linear,
+            translation: self.translation + self.linear * by,
+        }
+    }
+
+    fn after_linear(self, linear: DMat3) -> Self {
+        Self {
+            linear: self.linear * linear,
+            translation: self.translation,
+        }
+    }
+
+    fn point(self, point: DVec3) -> [f32; 3] {
+        let point = self.linear * point + self.translation;
+        [point.x as f32, point.y as f32, point.z as f32]
+    }
+}
+
+/// Every final-model placement of a graph node.
+///
+/// A DAG node can be reused under several parents, so this is deliberately a
+/// list rather than one parent walk. Geometric operations that preserve the
+/// node's coordinate system simply recurse; only transforms alter the matrix.
+fn target_transforms(doc: &Doc, target: NodeId) -> Result<Vec<TargetTransform>> {
+    fn visit(
+        doc: &Doc,
+        current: NodeId,
+        target: NodeId,
+        transform: TargetTransform,
+        out: &mut Vec<TargetTransform>,
+    ) -> Result<()> {
+        if current == target {
+            out.push(transform);
+            return Ok(());
+        }
+
+        match &doc.node(current)?.op {
+            Op::Translate { child, by } => visit(
+                doc,
+                *child,
+                target,
+                transform.after_translation(v(*by)),
+                out,
+            ),
+            Op::Rotate {
+                child,
+                axis,
+                degrees,
+            } => {
+                let axis = v(*axis);
+                if axis.length_squared() < 1e-18 {
+                    bail!("node {current} rotates about a zero-length axis");
+                }
+                visit(
+                    doc,
+                    *child,
+                    target,
+                    transform.after_linear(DMat3::from_axis_angle(
+                        axis.normalize(),
+                        degrees.to_radians(),
+                    )),
+                    out,
+                )
+            }
+            Op::Scale { child, by } => visit(
+                doc,
+                *child,
+                target,
+                transform.after_linear(DMat3::from_diagonal(v(*by))),
+                out,
+            ),
+            _ => {
+                for child in doc.children_of(current)? {
+                    visit(doc, child, target, transform, out)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    let mut transforms = Vec::new();
+    visit(
+        doc,
+        doc.root,
+        target,
+        TargetTransform::IDENTITY,
+        &mut transforms,
+    )?;
+    if transforms.is_empty() {
+        bail!("node {target} is not reachable from the document root");
+    }
+    Ok(transforms)
+}
+
 /// Build the finished solid.
 pub fn build(doc: &Doc) -> Result<Shape> {
     // Reject cycles and dangling references before touching the kernel, where
@@ -612,9 +765,21 @@ pub fn build(doc: &Doc) -> Result<Shape> {
     Ok(build_node(doc, doc.root, DVec3::ZERO)?.shape)
 }
 
+/// Build a final shape with ephemeral ownership for treatment-generated edges.
+///
+/// The keys describe exact curves in this one evaluation. They let the desktop
+/// focus an authored fillet or chamfer after a viewport click; they are never
+/// accepted as graph input, and disappear as soon as the model is rebuilt.
+pub fn build_with_treatment_edges(doc: &Doc) -> Result<(Shape, BTreeMap<Vec<[i64; 3]>, NodeId>)> {
+    doc.topo_order()?;
+    let built = build_node(doc, doc.root, DVec3::ZERO)?;
+    Ok((built.shape, built.features.edge_owners()))
+}
+
 struct BuiltShape {
     shape: Shape,
     lineage: EdgeLineage,
+    features: TreatmentFeatures,
 }
 
 impl BuiltShape {
@@ -622,12 +787,84 @@ impl BuiltShape {
         Self {
             shape,
             lineage: EdgeLineage::default(),
+            features: TreatmentFeatures::default(),
         }
     }
 
     fn primitive(shape: Shape, tag: Option<&str>) -> Self {
         let lineage = EdgeLineage::primitive(&shape, tag);
-        Self { shape, lineage }
+        Self {
+            shape,
+            lineage,
+            features: TreatmentFeatures::default(),
+        }
+    }
+}
+
+/// Exact result shapes generated by selected-edge treatments.
+///
+/// They are kept as shapes, rather than edge indexes, so an outer transform or
+/// a later Boolean can either carry an unchanged edge through exactly or make
+/// it disappear from the final lookup. No geometric nearest-edge guess is made.
+#[derive(Default)]
+struct TreatmentFeatures {
+    generated: Vec<(NodeId, Shape)>,
+}
+
+impl TreatmentFeatures {
+    fn extend(&mut self, other: Self) {
+        self.generated.extend(other.generated);
+    }
+
+    fn add_generated(&mut self, node: NodeId, shapes: Vec<Shape>) {
+        self.generated
+            .extend(shapes.into_iter().map(|shape| (node, shape)));
+    }
+
+    fn rotated(self, origin: DVec3, axis: DVec3, radians: f64) -> Self {
+        Self {
+            generated: self
+                .generated
+                .into_iter()
+                .map(|(node, shape)| (node, shape.rotated(origin, axis, radians)))
+                .collect(),
+        }
+    }
+
+    fn scaled_uniform(self, origin: DVec3, factor: f64) -> Self {
+        Self {
+            generated: self
+                .generated
+                .into_iter()
+                .map(|(node, shape)| (node, shape.scaled_uniform(origin, factor)))
+                .collect(),
+        }
+    }
+
+    fn translated(self, by: DVec3) -> Self {
+        Self {
+            generated: self
+                .generated
+                .into_iter()
+                .map(|(node, shape)| (node, shape.translated(by)))
+                .collect(),
+        }
+    }
+
+    fn edge_owners(&self) -> BTreeMap<Vec<[i64; 3]>, NodeId> {
+        let mut owners = BTreeMap::new();
+        for (node, shape) in &self.generated {
+            for edge in shape.edges() {
+                let points: Vec<DVec3> = edge.approximation_segments().collect();
+                if points.len() >= 2 {
+                    // Later feature entries intentionally win: if a second
+                    // treatment consumes a first treatment's boundary, the
+                    // visible replacement belongs to the later source call.
+                    owners.insert(edge_key(&points), *node);
+                }
+            }
+        }
+        owners
     }
 }
 
@@ -676,6 +913,14 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 let other = build_node(doc, c, offset)?;
                 breadcrumb(&format!("union node {id} ({label}) with node {c}"));
                 let mut joined = acc.shape.union(&other.shape);
+                let lineage = if *blend > 0.0 {
+                    EdgeLineage::default()
+                } else {
+                    acc.lineage
+                        .through_boolean(other.lineage, &joined, node.tag.as_deref())
+                };
+                let mut features = acc.features;
+                features.extend(other.features);
 
                 if *blend > 0.0 {
                     breadcrumb(&format!(
@@ -684,14 +929,16 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     // The edges a boolean creates are exactly the seam, which is
                     // what `blend` names in the graph.
                     joined.fillet_new_edges(*blend);
-                    acc = BuiltShape::untracked(joined.shape);
-                } else {
-                    let lineage =
-                        acc.lineage
-                            .through_boolean(other.lineage, &joined, node.tag.as_deref());
                     acc = BuiltShape {
                         shape: joined.shape,
                         lineage,
+                        features,
+                    };
+                } else {
+                    acc = BuiltShape {
+                        shape: joined.shape,
+                        lineage,
+                        features,
                     };
                 }
             }
@@ -704,20 +951,30 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 let tool = build_node(doc, *t, offset)?;
                 breadcrumb(&format!("subtract node {t} from node {id} ({label})"));
                 let mut cut = acc.shape.subtract(&tool.shape);
+                let lineage = if *blend > 0.0 {
+                    EdgeLineage::default()
+                } else {
+                    acc.lineage
+                        .through_boolean(tool.lineage, &cut, node.tag.as_deref())
+                };
+                let mut features = acc.features;
+                features.extend(tool.features);
 
                 if *blend > 0.0 {
                     breadcrumb(&format!(
                         "fillet {blend} mm on edges created by cut at node {id} ({label})"
                     ));
                     cut.fillet_new_edges(*blend);
-                    acc = BuiltShape::untracked(cut.shape);
-                } else {
-                    let lineage =
-                        acc.lineage
-                            .through_boolean(tool.lineage, &cut, node.tag.as_deref());
                     acc = BuiltShape {
                         shape: cut.shape,
                         lineage,
+                        features,
+                    };
+                } else {
+                    acc = BuiltShape {
+                        shape: cut.shape,
+                        lineage,
+                        features,
                     };
                 }
             }
@@ -747,7 +1004,13 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 // result type the other two use.
                 let mut met = AdHocShape(acc.shape);
                 met.intersect(&other.shape);
-                acc = BuiltShape::untracked(met.0);
+                let mut features = acc.features;
+                features.extend(other.features);
+                acc = BuiltShape {
+                    shape: met.0,
+                    lineage: EdgeLineage::default(),
+                    features,
+                };
             }
             acc
         }
@@ -782,10 +1045,22 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             } else {
                 turned.translated(offset)
             };
-            // The transform wrapper does not expose its own modification
-            // history yet. Refuse a later provenance lookup rather than match
-            // an edge by a geometric guess.
-            BuiltShape::untracked(shape)
+            let features = inner
+                .features
+                .rotated(DVec3::ZERO, dir.normalize(), degrees.to_radians());
+            let features = if offset == DVec3::ZERO {
+                features
+            } else {
+                features.translated(offset)
+            };
+            // Transforms do not yet carry authored provenance selectors, but
+            // inspection can keep exact generated curves in lockstep with the
+            // result without making a geometric nearest-edge guess.
+            BuiltShape {
+                shape,
+                lineage: EdgeLineage::default(),
+                features,
+            }
         }
 
         Op::Scale { child, by } => {
@@ -818,7 +1093,17 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             } else {
                 scaled.translated(offset)
             };
-            BuiltShape::untracked(shape)
+            let features = inner.features.scaled_uniform(DVec3::ZERO, uniform);
+            let features = if offset == DVec3::ZERO {
+                features
+            } else {
+                features.translated(offset)
+            };
+            BuiltShape {
+                shape,
+                lineage: EdgeLineage::default(),
+                features,
+            }
         }
         Op::Offset { child, distance } => {
             if *distance <= 0.0 {
@@ -878,7 +1163,11 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     op_name(&doc.node(*child)?.op)
                 );
             }
-            BuiltShape::untracked(grown)
+            BuiltShape {
+                shape: grown,
+                lineage: EdgeLineage::default(),
+                features: solid.features,
+            }
         }
 
         Op::Shell { child, thickness } => {
@@ -918,7 +1207,11 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             }
 
             breadcrumb(&format!("hollow node {id} ({label})"));
-            BuiltShape::untracked(solid.shape.subtract(&cavity).shape)
+            BuiltShape {
+                shape: solid.shape.subtract(&cavity).shape,
+                lineage: EdgeLineage::default(),
+                features: solid.features,
+            }
         }
 
         Op::Fillet {
@@ -952,8 +1245,13 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 "fillet node {id} ({label}) {radius} mm on {} selected edge(s)",
                 selected.len()
             ));
-            solid.shape.fillet_edges(*radius, selected);
-            BuiltShape::untracked(solid.shape)
+            let generated = solid.shape.fillet_edges_with_history(*radius, selected);
+            solid.features.add_generated(id, generated);
+            BuiltShape {
+                shape: solid.shape,
+                lineage: EdgeLineage::default(),
+                features: solid.features,
+            }
         }
 
         Op::Chamfer {
@@ -981,8 +1279,15 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 "chamfer node {id} ({label}) {distance} mm on {} selected edge(s)",
                 selected.len()
             ));
-            solid.shape.chamfer_edges(*distance, selected);
-            BuiltShape::untracked(solid.shape)
+            let generated = solid
+                .shape
+                .chamfer_edges_with_history(*distance, selected);
+            solid.features.add_generated(id, generated);
+            BuiltShape {
+                shape: solid.shape,
+                lineage: EdgeLineage::default(),
+                features: solid.features,
+            }
         }
     })
 }
@@ -1110,6 +1415,88 @@ mod tests {
     }
 
     #[test]
+    fn target_preview_resolves_the_pre_treatment_edge() {
+        let doc: Doc = serde_json::from_str(
+            r#"{
+                "units": "mm",
+                "root": 1,
+                "nodes": [
+                    { "op": "cuboid", "size": { "x": 80, "y": 60, "z": 8 } },
+                    {
+                        "op": "fillet",
+                        "child": 0,
+                        "radius": 2,
+                        "selector": ">Z and >Y and |X"
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let target = inspect_edge_target(&doc, 1).unwrap();
+        assert_eq!(target.len(), 1);
+        assert_eq!(target[0].id, "target@1.0");
+        assert!((target[0].length_mm - 80.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn target_preview_follows_a_parent_translation() {
+        let doc: Doc = serde_json::from_str(
+            r#"{
+                "root": 2,
+                "nodes": [
+                    { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+                    {
+                        "op": "fillet",
+                        "child": 0,
+                        "radius": 1,
+                        "selector": ">Z and >Y and |X"
+                    },
+                    { "op": "translate", "child": 1, "by": { "x": 20, "y": 0, "z": 0 } }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let target = inspect_edge_target(&doc, 1).unwrap();
+        assert_eq!(target.len(), 1);
+        assert!((target[0].center[0] - 20.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn target_preview_follows_parent_rotation_and_scale() {
+        let doc: Doc = serde_json::from_str(
+            r#"{
+                "root": 3,
+                "nodes": [
+                    { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+                    {
+                        "op": "fillet",
+                        "child": 0,
+                        "radius": 1,
+                        "selector": ">Z and >Y and |X"
+                    },
+                    {
+                        "op": "rotate",
+                        "child": 1,
+                        "axis": { "x": 0, "y": 0, "z": 1 },
+                        "degrees": 90
+                    },
+                    { "op": "scale", "child": 2, "by": { "x": 2, "y": 2, "z": 2 } }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let target = inspect_edge_target(&doc, 1).unwrap();
+        assert_eq!(target.len(), 1);
+        assert!((target[0].center[0] + 10.0).abs() < 1e-3);
+        assert!(target[0].center[1].abs() < 1e-3);
+        assert!((target[0].center[2] - 10.0).abs() < 1e-3);
+        assert!((target[0].length_mm - 20.0).abs() < 1e-3);
+    }
+
+    #[test]
     fn unsupported_fillet_recipe_is_rejected_before_kernel_work() {
         let doc: Doc = serde_json::from_str(
             r#"{
@@ -1132,8 +1519,8 @@ mod tests {
             Ok(_) => panic!("curvature fillets must not be silently accepted"),
             Err(error) => error,
         };
-        assert!(error
-            .to_string()
-            .contains("currently supports only { continuity: \"tangent\", corner: \"rollingBall\" }"));
+        assert!(error.to_string().contains(
+            "currently supports only { continuity: \"tangent\", corner: \"rollingBall\" }"
+        ));
     }
 }

@@ -76,6 +76,53 @@ export interface ChamferOptions {
   corner?: "chamfer" | "miter" | "blend";
 }
 
+/** The position of a treatment call in the editor source. */
+export interface SourceLocation {
+  /** One-based line in the script, not in the generated Function wrapper. */
+  line: number;
+  /** One-based column of the treatment method name. */
+  column: number;
+  method: "fillet" | "chamfer" | "smooth" | "squircle";
+}
+
+/** A selected-edge treatment node and the source call that authored it. */
+export interface TreatmentSource {
+  node: number;
+  kind: "fillet" | "chamfer";
+  source?: SourceLocation;
+}
+
+type TreatmentCall = Omit<TreatmentSource, "node">;
+
+/**
+ * A source transform normally supplies this location explicitly. The stack is
+ * only a fallback for callers outside the editor, where it may not be portable
+ * across JavaScript engines. This is inspection metadata only: it never enters
+ * the persisted intent graph or the geometry kernel.
+ */
+let activeTreatmentSource: SourceLocation | undefined;
+
+/** @internal Wraps an editor treatment call with its syntax-derived location. */
+export function __parcadTreatmentSource<T>(source: SourceLocation, run: () => T): T {
+  const previous = activeTreatmentSource;
+  activeTreatmentSource = source;
+  try {
+    return run();
+  } finally {
+    activeTreatmentSource = previous;
+  }
+}
+
+function treatmentSource(method: SourceLocation["method"]): SourceLocation | undefined {
+  if (activeTreatmentSource?.method === method) return activeTreatmentSource;
+  const line = new Error().stack
+    ?.split("\n")
+    .map((frame) => frame.match(/parcad-editor\.js:(\d+):(\d+)/))
+    .find((match): match is RegExpMatchArray => match !== null);
+  if (!line) return undefined;
+  return { line: Number(line[1]) - 2, column: Number(line[2]), method };
+}
+
 function assertEdgeSelector(selector: EdgeSelector) {
   if (typeof selector === "string") {
     if (!selector.trim()) throw new Error("edge selector is empty; use a term such as >Z or |X");
@@ -151,12 +198,24 @@ export class EdgeSelection {
    * that geometry exactly.
    */
   fillet(radius: number, options?: FilletOptions): Shape {
-    return this.owner.fillet(radius, this.selector, this.expectation, options);
+    return this.owner.fillet(
+      radius,
+      this.selector,
+      this.expectation,
+      options,
+      treatmentSource("fillet"),
+    );
   }
 
   /** Bevel the selected edges by an equal distance in millimetres. */
   chamfer(distance: number, options?: ChamferOptions): Shape {
-    return this.owner.chamfer(distance, this.selector, this.expectation, options);
+    return this.owner.chamfer(
+      distance,
+      this.selector,
+      this.expectation,
+      options,
+      treatmentSource("chamfer"),
+    );
   }
 
   /**
@@ -167,15 +226,24 @@ export class EdgeSelection {
    * has a true G2 surface construction.
    */
   smooth(radius: number, options?: Omit<FilletOptions, "continuity">): Shape {
-    return this.owner.fillet(radius, this.selector, this.expectation, {
-      ...options,
-      continuity: "curvature",
-    });
+    return this.owner.fillet(
+      radius,
+      this.selector,
+      this.expectation,
+      { ...options, continuity: "curvature" },
+      treatmentSource("smooth"),
+    );
   }
 
   /** Alias for {@link smooth}; a true squircle is a 2D superellipse, not this 3D blend. */
   squircle(radius: number, options?: Omit<FilletOptions, "continuity">): Shape {
-    return this.smooth(radius, options);
+    return this.owner.fillet(
+      radius,
+      this.selector,
+      this.expectation,
+      { ...options, continuity: "curvature" },
+      treatmentSource("squircle"),
+    );
   }
 }
 
@@ -185,7 +253,13 @@ export class Shape {
     private readonly emit: Emit,
     private readonly kids: Shape[],
     private name?: string,
+    private readonly treatment?: TreatmentCall,
   ) {}
+
+  /** @internal Source call that authored this selected-edge treatment. */
+  get treatmentCall(): TreatmentCall | undefined {
+    return this.treatment;
+  }
 
   /**
    * Name this shape so selectors — and you, reading a render — can refer to it.
@@ -282,6 +356,7 @@ export class Shape {
     selector: EdgeSelector,
     expectation?: EdgeExpectation,
     options?: FilletOptions,
+    source = treatmentSource("fillet"),
   ): Shape {
     assertEdgeSelector(selector);
     if (expectation) assertEdgeExpectation(expectation);
@@ -289,6 +364,8 @@ export class Shape {
     return new Shape(
       ([child]) => ({ op: "fillet", child, radius, selector, expect: expectation, recipe: options }),
       [this],
+      undefined,
+      { kind: "fillet", source },
     );
   }
 
@@ -298,6 +375,7 @@ export class Shape {
     selector: EdgeSelector,
     expectation?: EdgeExpectation,
     options?: ChamferOptions,
+    source = treatmentSource("chamfer"),
   ): Shape {
     assertEdgeSelector(selector);
     if (expectation) assertEdgeExpectation(expectation);
@@ -305,6 +383,8 @@ export class Shape {
     return new Shape(
       ([child]) => ({ op: "chamfer", child, distance, selector, expect: expectation, recipe: options }),
       [this],
+      undefined,
+      { kind: "chamfer", source },
     );
   }
 
@@ -421,7 +501,7 @@ export interface Doc {
  * node with several parents — the graph stays a DAG and the core evaluates the
  * shared work once.
  */
-export function build(root: Shape): Doc {
+export function build(root: Shape, treatments?: TreatmentSource[]): Doc {
   const nodes: Record<string, unknown>[] = [];
   const ids = new Map<Shape, number>();
 
@@ -437,6 +517,7 @@ export function build(root: Shape): Doc {
     const id = nodes.length;
     nodes.push(node);
     ids.set(s, id);
+    if (s.treatmentCall) treatments?.push({ node: id, ...s.treatmentCall });
     return id;
   };
 

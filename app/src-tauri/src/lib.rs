@@ -68,6 +68,22 @@ fn evaluate(
     }
 }
 
+/// Resolve a fillet or chamfer's input edges without applying that treatment.
+///
+/// The editor uses this only for source-to-viewport inspection. It is a second
+/// worker request so normal live modelling does not pay for previews nobody is
+/// looking at.
+#[tauri::command]
+fn inspect_edge_target(
+    graph: serde_json::Value,
+    node: usize,
+) -> Result<parcad_occt::TargetPreview, String> {
+    let doc: Doc =
+        serde_json::from_value(graph).map_err(|e| format!("the graph is not valid: {e}"))?;
+    parcad_occt::inspect_edge_target(&doc, node, &parcad_occt::Options::default())
+        .map_err(|e| format!("{e}"))
+}
+
 fn evaluate_implicit(doc: &Doc, depth: u8) -> Result<Evaluated, String> {
     let t0 = std::time::Instant::now();
     let (tree, tess, report) =
@@ -233,7 +249,12 @@ fn export_step(graph: serde_json::Value, path: String) -> Result<String, String>
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![evaluate, export_stl, export_step])
+        .invoke_handler(tauri::generate_handler![
+            evaluate,
+            inspect_edge_target,
+            export_stl,
+            export_step
+        ])
         .run(tauri::generate_context!())
         .expect("error while running parcad");
 }

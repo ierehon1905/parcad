@@ -11,6 +11,10 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
     pub doc: Doc,
+    /// If present, resolve this selected-edge treatment instead of building the
+    /// finished part. Used by the editor's source-to-viewport target preview.
+    #[serde(default)]
+    pub inspect_target: Option<usize>,
     /// Tessellation tolerance in mm: the furthest a triangle may sit from the
     /// true surface. Unlike the implicit backend's grid resolution, this is a
     /// real error bound, because the true surface is known exactly.
@@ -60,6 +64,89 @@ pub struct EdgeCurve {
     pub direction: Option<[f32; 3]>,
     /// Polyline length in millimetres, for the hover inspector.
     pub length_mm: f32,
+    /// Intent-graph node of the fillet or chamfer that generated this edge.
+    ///
+    /// This is inspection metadata for one evaluated result, never an authored
+    /// edge reference. Absent for ordinary model edges and for preview targets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub treatment_node: Option<usize>,
+}
+
+/// Exact input edges resolved for one fillet or chamfer node.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TargetPreview {
+    /// Node that owns the selected-edge treatment in the intent graph.
+    pub node: usize,
+    /// Ephemeral curves for the feature's input edge set.
+    pub edges: Vec<EdgeCurve>,
+}
+
+/// Turn sampled exact points into viewport metadata.
+///
+/// The caller assigns its own ephemeral ID because a final-shape `edge@…` and
+/// a pre-treatment `target@…` belong to different topology snapshots.
+pub fn edge_curve(points: Vec<[f32; 3]>) -> Option<EdgeCurve> {
+    if points.len() < 2 {
+        return None;
+    }
+
+    let mut center = [0.0; 3];
+    let mut length_mm = 0.0;
+    for (index, point) in points.iter().enumerate() {
+        for axis in 0..3 {
+            center[axis] += point[axis];
+        }
+        if index > 0 {
+            let previous = points[index - 1];
+            length_mm += ((point[0] - previous[0]).powi(2)
+                + (point[1] - previous[1]).powi(2)
+                + (point[2] - previous[2]).powi(2))
+            .sqrt();
+        }
+    }
+    for value in &mut center {
+        *value /= points.len() as f32;
+    }
+
+    let direction = points.first().zip(points.last()).and_then(|(start, end)| {
+        let delta = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
+        let magnitude = (delta[0].powi(2) + delta[1].powi(2) + delta[2].powi(2)).sqrt();
+        if magnitude <= f32::EPSILON || !is_straight(&points, *start, delta, magnitude) {
+            None
+        } else {
+            Some([
+                delta[0] / magnitude,
+                delta[1] / magnitude,
+                delta[2] / magnitude,
+            ])
+        }
+    });
+
+    Some(EdgeCurve {
+        id: String::new(),
+        points,
+        center,
+        direction,
+        length_mm,
+        treatment_node: None,
+    })
+}
+
+fn is_straight(points: &[[f32; 3]], start: [f32; 3], delta: [f32; 3], magnitude: f32) -> bool {
+    points.iter().all(|point| {
+        let from_start = [
+            point[0] - start[0],
+            point[1] - start[1],
+            point[2] - start[2],
+        ];
+        let cross = [
+            from_start[1] * delta[2] - from_start[2] * delta[1],
+            from_start[2] * delta[0] - from_start[0] * delta[2],
+            from_start[0] * delta[1] - from_start[1] * delta[0],
+        ];
+        let distance = (cross[0].powi(2) + cross[1].powi(2) + cross[2].powi(2)).sqrt() / magnitude;
+        distance <= 1e-4
+    })
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,9 +180,13 @@ pub struct Success {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Response {
     Ok(Box<Success>),
+    TargetPreview(TargetPreview),
     /// The worker understood the request and refused it — a bad radius, an
     /// unsupported operation, a boolean that produced nothing.
-    Error { stage: String, message: String },
+    Error {
+        stage: String,
+        message: String,
+    },
 }
 
 /// Marker the worker prints to stderr before each risky step.
@@ -108,4 +199,25 @@ pub const BREADCRUMB: &str = "@stage ";
 
 pub fn breadcrumb(stage: &str) {
     eprintln!("{BREADCRUMB}{stage}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn target_preview_round_trips_over_the_worker_protocol() {
+        let response = Response::TargetPreview(TargetPreview {
+            node: 3,
+            edges: vec![edge_curve(vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]]).unwrap()],
+        });
+
+        let json = serde_json::to_string(&response).unwrap();
+        let decoded: Response = serde_json::from_str(&json).unwrap();
+        let Response::TargetPreview(preview) = decoded else {
+            panic!("expected a target preview response");
+        };
+        assert_eq!(preview.node, 3);
+        assert_eq!(preview.edges.len(), 1);
+    }
 }

@@ -11,7 +11,9 @@ pub(crate) mod ffi {
         include!("include/history.hxx");
 
         type TopoDS_Shape = opencascade_sys::ffi::TopoDS_Shape;
+        type TopoDS_Edge = opencascade_sys::ffi::TopoDS_Edge;
         type ParcadBoolean;
+        type ParcadEdgeTreatment;
 
         fn parcad_cut_with_history(
             base: &TopoDS_Shape,
@@ -29,5 +31,15 @@ pub(crate) mod ffi {
             original: &TopoDS_Shape,
         ) -> UniquePtr<CxxVector<TopoDS_Shape>>;
         fn is_deleted(self: &ParcadBoolean, original: &TopoDS_Shape) -> bool;
+
+        fn parcad_fillet_with_history(base: &TopoDS_Shape) -> UniquePtr<ParcadEdgeTreatment>;
+        fn parcad_chamfer_with_history(base: &TopoDS_Shape) -> UniquePtr<ParcadEdgeTreatment>;
+        fn add(self: Pin<&mut ParcadEdgeTreatment>, distance: f64, edge: &TopoDS_Edge);
+        fn build(self: Pin<&mut ParcadEdgeTreatment>) -> bool;
+        fn result(self: Pin<&mut ParcadEdgeTreatment>) -> &TopoDS_Shape;
+        fn generated(
+            self: Pin<&mut ParcadEdgeTreatment>,
+            original: &TopoDS_Edge,
+        ) -> UniquePtr<CxxVector<TopoDS_Shape>>;
     }
 }

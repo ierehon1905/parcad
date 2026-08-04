@@ -6,7 +6,9 @@
 //! kernel terminates the process there is no return value left to carry it.
 
 use parcad_occt::backend;
-use parcad_occt::protocol::{breadcrumb, EdgeCurve, Request, Response, Success, Timings, Topology};
+use parcad_occt::protocol::{
+    breadcrumb, edge_curve, EdgeCurve, Request, Response, Success, TargetPreview, Timings, Topology,
+};
 use std::io::Read;
 use std::time::Instant;
 
@@ -47,7 +49,10 @@ fn main() {
 ///
 /// Degenerate edges — the collapsed "edge" at the pole of a sphere, which is
 /// really a point — fall out of the same rule.
-fn edge_curves(shape: &opencascade::primitives::Shape) -> Vec<EdgeCurve> {
+fn edge_curves(
+    shape: &opencascade::primitives::Shape,
+    treatment_owners: &std::collections::BTreeMap<Vec<[i64; 3]>, usize>,
+) -> Vec<EdgeCurve> {
     use std::collections::HashMap;
 
     // Keyed on the sampled points: two visits of one edge produce identical
@@ -96,11 +101,12 @@ fn edge_curves(shape: &opencascade::primitives::Shape) -> Vec<EdgeCurve> {
     let mut edges: Vec<EdgeCurve> = faces_touching
         .into_values()
         .filter(|(faces, _)| *faces >= 2)
-        .map(|(_, points)| make_edge_curve(points))
+        .filter_map(|(_, points)| edge_curve(points))
         .collect();
     edges.sort_by_key(|edge| edge_key(&edge.points));
     for (index, edge) in edges.iter_mut().enumerate() {
         edge.id = format!("edge@{index}");
+        edge.treatment_node = treatment_owners.get(&edge_key(&edge.points)).copied();
     }
     edges
 }
@@ -120,65 +126,6 @@ fn edge_key(points: &[[f32; 3]]) -> Vec<[i64; 3]> {
         .collect();
     let backward: Vec<[i64; 3]> = forward.iter().rev().copied().collect();
     forward.min(backward)
-}
-
-fn make_edge_curve(points: Vec<[f32; 3]>) -> EdgeCurve {
-    let mut center = [0.0; 3];
-    let mut length_mm = 0.0;
-    for (index, point) in points.iter().enumerate() {
-        for axis in 0..3 {
-            center[axis] += point[axis];
-        }
-        if index > 0 {
-            let previous = points[index - 1];
-            length_mm += ((point[0] - previous[0]).powi(2)
-                + (point[1] - previous[1]).powi(2)
-                + (point[2] - previous[2]).powi(2))
-            .sqrt();
-        }
-    }
-    for value in &mut center {
-        *value /= points.len() as f32;
-    }
-
-    let direction = points.first().zip(points.last()).and_then(|(start, end)| {
-        let delta = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
-        let magnitude = (delta[0].powi(2) + delta[1].powi(2) + delta[2].powi(2)).sqrt();
-        if magnitude <= f32::EPSILON || !is_straight(&points, *start, delta, magnitude) {
-            None
-        } else {
-            Some([
-                delta[0] / magnitude,
-                delta[1] / magnitude,
-                delta[2] / magnitude,
-            ])
-        }
-    });
-
-    EdgeCurve {
-        id: String::new(),
-        points,
-        center,
-        direction,
-        length_mm,
-    }
-}
-
-fn is_straight(points: &[[f32; 3]], start: [f32; 3], delta: [f32; 3], magnitude: f32) -> bool {
-    points.iter().all(|point| {
-        let from_start = [
-            point[0] - start[0],
-            point[1] - start[1],
-            point[2] - start[2],
-        ];
-        let cross = [
-            from_start[1] * delta[2] - from_start[2] * delta[1],
-            from_start[2] * delta[0] - from_start[0] * delta[2],
-            from_start[0] * delta[1] - from_start[1] * delta[0],
-        ];
-        let distance = (cross[0].powi(2) + cross[1].powi(2) + cross[2].powi(2)).sqrt() / magnitude;
-        distance <= 1e-4
-    })
 }
 
 /// What `Mesher::new` passes to `BRepMesh_IncrementalMesh`.
@@ -209,9 +156,20 @@ fn run() -> Response {
         }
     };
 
+    if let Some(node) = request.inspect_target {
+        breadcrumb(&format!("resolving target for node {node}"));
+        return match backend::inspect_edge_target(&request.doc, node) {
+            Ok(edges) => Response::TargetPreview(TargetPreview { node, edges }),
+            Err(e) => Response::Error {
+                stage: "resolving selected-edge target".into(),
+                message: format!("{e:#}"),
+            },
+        };
+    }
+
     breadcrumb("lowering the graph");
     let t0 = Instant::now();
-    let shape = match backend::build(&request.doc) {
+    let (shape, treatment_owners) = match backend::build_with_treatment_edges(&request.doc) {
         Ok(s) => s,
         Err(e) => {
             return Response::Error {
@@ -238,7 +196,7 @@ fn run() -> Response {
     breadcrumb("tessellating");
     let t1 = Instant::now();
     let mesh = shape.mesh();
-    let edges = edge_curves(&shape);
+    let edges = edge_curves(&shape, &treatment_owners);
     let mesh_ms = t1.elapsed().as_millis() as u64;
 
     let t2 = Instant::now();
@@ -295,4 +253,99 @@ fn run() -> Response {
         step_path,
         stl_path,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parcad_core::graph::Doc;
+
+    fn treatment_edge_count(doc: &Doc, node: usize) -> usize {
+        let (shape, owners) = backend::build_with_treatment_edges(doc).unwrap();
+        edge_curves(&shape, &owners)
+            .iter()
+            .filter(|edge| edge.treatment_node == Some(node))
+            .count()
+    }
+
+    #[test]
+    fn final_fillet_edges_keep_their_source_node() {
+        let doc: Doc = serde_json::from_str(
+            r#"{
+                "root": 1,
+                "nodes": [
+                    { "op": "cuboid", "size": { "x": 20, "y": 10, "z": 8 } },
+                    {
+                        "op": "fillet",
+                        "child": 0,
+                        "radius": 1,
+                        "selector": ">Z and >Y and |X",
+                        "expect": { "count": 1 }
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        assert!(treatment_edge_count(&doc, 1) > 0);
+    }
+
+    #[test]
+    fn final_chamfer_edges_keep_their_source_node() {
+        let doc: Doc = serde_json::from_str(
+            r#"{
+                "root": 1,
+                "nodes": [
+                    { "op": "cuboid", "size": { "x": 20, "y": 10, "z": 8 } },
+                    {
+                        "op": "chamfer",
+                        "child": 0,
+                        "distance": 1,
+                        "selector": ">Z and >Y and |X",
+                        "expect": { "count": 1 }
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        assert!(treatment_edge_count(&doc, 1) > 0);
+    }
+
+    #[test]
+    fn final_hole_rim_fillet_edges_keep_their_source_node() {
+        let doc: Doc = serde_json::from_str(
+            r#"{
+                "root": 7,
+                "nodes": [
+                    { "op": "cuboid", "size": { "x": 40, "y": 30, "z": 8 } },
+                    { "op": "cylinder", "r": 3, "h": 32 },
+                    { "op": "translate", "child": 1, "by": { "x": -10, "y": -8, "z": 0 } },
+                    { "op": "translate", "child": 1, "by": { "x": -10, "y": 8, "z": 0 } },
+                    { "op": "translate", "child": 1, "by": { "x": 10, "y": -8, "z": 0 } },
+                    { "op": "translate", "child": 1, "by": { "x": 10, "y": 8, "z": 0 } },
+                    { "op": "difference", "base": 0, "tools": [2, 3, 4, 5], "blend": 0 },
+                    {
+                        "op": "fillet",
+                        "child": 6,
+                        "radius": 0.8,
+                        "selector": {
+                            "curve": "circle",
+                            "role": "hole",
+                            "adjacentTo": { "faceNormal": "+z" }
+                        },
+                        "expect": { "count": 4 }
+                    }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        // Source -> viewport: the intent resolves the four exact input rims.
+        assert_eq!(backend::inspect_edge_target(&doc, 7).unwrap().len(), 4);
+        // Viewport -> source: every selected rim produces two visible final
+        // boundary curves. The inspector must preserve all eight links, not
+        // merely a single sample.
+        assert_eq!(treatment_edge_count(&doc, 7), 8);
+    }
 }

@@ -21,12 +21,42 @@ backend produces geometry a slicer or a machinist will accept. The graph is the
 contract between them, which is why a script written today survives a kernel
 swap tomorrow.
 
-## Quickstart
+## Reproducible setup
+
+The committed `Cargo.lock` and `app/bun.lock` pin the Rust and JavaScript
+dependency graphs. `rust-toolchain.toml` pins Rust 1.95.0; Cargo will install
+that toolchain through `rustup` when needed. This source tree is intended to
+build on macOS, Linux, and Windows with a C++ compiler and CMake available.
+The desktop app has the usual Tauri system prerequisites: Xcode Command Line
+Tools on macOS, or the platform-specific packages in the
+[Tauri prerequisites guide](https://v2.tauri.app/start/prerequisites/).
+
+Install [Bun 1.3.13](https://bun.sh/) and CMake, then check the toolchain:
 
 ```bash
-cargo build --release                              # core + CLI + app host
-tools/build-worker.sh                              # the B-rep kernel (slow, ~10 min cold)
+rustc --version       # 1.95.0 (selected automatically by rustup)
+bun --version         # 1.3.13
+cmake --version
 ```
+
+Install the locked frontend dependencies before running the desktop app:
+
+```bash
+cd app
+bun install --frozen-lockfile
+cd ..
+```
+
+Build the complete project from the repository root:
+
+```bash
+cargo build --locked --release                     # core + CLI + app host
+tools/build-worker.sh                              # B-rep kernel; ~10 min cold build
+```
+
+`tools/build-worker.sh` builds the vendored OpenCASCADE kernel and places its
+worker next to the release binaries. Keep `Cargo.lock`, `app/bun.lock`, and
+`rust-toolchain.toml` unchanged to reproduce the same dependency inputs.
 
 Run a part headlessly:
 
@@ -47,6 +77,24 @@ return body.edges(">Z and >Y and |X").fillet(2);
 straight edge parallel to X. The desktop viewport shows its temporary `edge@…`
 ID on hover and can copy a matching selector; that ID is diagnostic only and is
 not valid script input after a rebuild.
+
+Click the `.fillet`, `.chamfer`, `.smooth`, or `.squircle` method name in the
+desktop editor to overlay the exact input edges in gold. This is a source-to-
+viewport inspection aid: it resolves the authored selector before the treatment
+changes topology, and does not turn a temporary viewport ID into script input.
+
+The reverse inspection link uses the exact history from the fillet/chamfer
+builder. A final edge that the builder generated is labelled `from .fillet(…)`
+or `from .chamfer(…)` on hover; its source call highlights immediately, and a
+click focuses it and reveals its gold input edges. This is one-evaluation
+inspection metadata, not a durable edge reference. It follows an unchanged
+generated curve through placement and later operations, but does not guess when
+a later operation replaces that curve.
+
+The editor derives those source locations from the parsed code and passes them
+only to the evaluation copy. The authored script and intent graph stay
+unchanged, and the links work consistently in browser JavaScript and Tauri's
+WebKit runtime.
 
 For all upper rims of drilled circular holes, use a topology query instead of
 listing edge IDs:
@@ -88,7 +136,14 @@ surface; it is not silently approximated as a circular fillet.
 Run the desktop app — **from `app/`, not the repo root**:
 
 ```bash
-cd app && bunx tauri dev
+cd app && bun run tauri dev
+```
+
+Verify a clean checkout after setup:
+
+```bash
+cargo test --locked --workspace
+cd app && bun run build
 ```
 
 ## Layout

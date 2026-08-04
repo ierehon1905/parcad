@@ -11,7 +11,7 @@
 //! For an agent that will routinely ask for a fillet larger than the material
 //! can take, this is the difference between a bad answer and a dead session.
 
-use crate::protocol::{Request, Response, Success, BREADCRUMB};
+use crate::protocol::{Request, Response, Success, TargetPreview, BREADCRUMB};
 use parcad_core::graph::Doc;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -104,12 +104,50 @@ fn worker_path() -> Result<PathBuf, OcctError> {
 
 /// Evaluate a document through the B-rep kernel.
 pub fn evaluate(doc: &Doc, opts: &Options) -> Result<Success, OcctError> {
-    let request = Request {
-        doc: doc.clone(),
-        deflection: opts.deflection,
-        step_path: opts.step_path.clone(),
-        stl_path: opts.stl_path.clone(),
-    };
+    match run_worker(
+        Request {
+            doc: doc.clone(),
+            inspect_target: None,
+            deflection: opts.deflection,
+            step_path: opts.step_path.clone(),
+            stl_path: opts.stl_path.clone(),
+        },
+        opts,
+    )? {
+        Response::Ok(success) => Ok(*success),
+        Response::Error { stage, message } => Err(OcctError::Rejected { stage, message }),
+        Response::TargetPreview(_) => Err(OcctError::Host(
+            "the kernel returned a target preview for a full-model request".into(),
+        )),
+    }
+}
+
+/// Resolve the exact B-rep edges targeted by one selected-edge treatment.
+pub fn inspect_edge_target(
+    doc: &Doc,
+    node: usize,
+    opts: &Options,
+) -> Result<TargetPreview, OcctError> {
+    match run_worker(
+        Request {
+            doc: doc.clone(),
+            inspect_target: Some(node),
+            deflection: opts.deflection,
+            step_path: None,
+            stl_path: None,
+        },
+        opts,
+    )? {
+        Response::TargetPreview(preview) => Ok(preview),
+        Response::Error { stage, message } => Err(OcctError::Rejected { stage, message }),
+        Response::Ok(_) => Err(OcctError::Host(
+            "the kernel returned a full model for a target-preview request".into(),
+        )),
+    }
+}
+
+/// Send one request to the expendable kernel process and return its raw reply.
+fn run_worker(request: Request, opts: &Options) -> Result<Response, OcctError> {
     let payload = serde_json::to_vec(&request)
         .map_err(|e| OcctError::Host(format!("cannot encode the request: {e}")))?;
 
@@ -198,20 +236,20 @@ pub fn evaluate(doc: &Doc, opts: &Options) -> Result<Success, OcctError> {
         });
     }
 
-    let raw = std::fs::read(&reply_path).map_err(|e| OcctError::Host(format!(
-        "the kernel exited cleanly but left no reply at {}: {e}",
-        reply_path.display()
-    )))?;
+    let raw = std::fs::read(&reply_path).map_err(|e| {
+        OcctError::Host(format!(
+            "the kernel exited cleanly but left no reply at {}: {e}",
+            reply_path.display()
+        ))
+    })?;
     let _ = std::fs::remove_file(&reply_path);
 
-    match serde_json::from_slice::<Response>(&raw) {
-        Ok(Response::Ok(success)) => Ok(*success),
-        Ok(Response::Error { stage, message }) => Err(OcctError::Rejected { stage, message }),
-        Err(e) => Err(OcctError::Host(format!(
+    serde_json::from_slice::<Response>(&raw).map_err(|e| {
+        OcctError::Host(format!(
             "the kernel wrote {} bytes this host could not read ({e})",
             raw.len()
-        ))),
-    }
+        ))
+    })
 }
 
 static REPLY_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
