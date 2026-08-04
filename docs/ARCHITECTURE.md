@@ -30,8 +30,9 @@ Consequences worth internalising:
 | B-rep | boolean, then fillet the newly-created edges | no bulge; a true fillet |
 
 Both are defensible readings of "round this join by 6 mm". They are not the same
-shape. Don't try to make the implicit one match — the whole point of the mesh
-preview is that it's cheap and approximate.
+shape. The desktop mesh preview therefore triangulates the B-rep result: it
+shows the same geometry as the solid view while retaining the triangle overlay.
+The implicit backend remains available for field queries, renders and perception.
 
 ## Two backends, deliberately unequal
 
@@ -119,12 +120,10 @@ line down it. For the bracket this takes 77 curves down to 67.
 - `app/src/dsl.ts` is the authoring layer and lives in TypeScript, not Rust.
   That's what lets `tools/run.ts` (bun) and the webview run *the same* DSL and
   hand the same JSON to the same core.
-- `app/src/viewport.ts` renders **two visually distinct looks** so you always
-  know which kernel you're seeing: B-rep gets `MeshStandardMaterial`, real edge
-  lines and a silhouette outline pass; implicit gets flat-shaded Lambert, a
-  wireframe overlay at 0.14 opacity, a hemisphere light, and *no outline pass at
-  all*. The implicit view is explicitly a **mesh preview**, not a pretend
-  finished surface.
+- `app/src/viewport.ts` renders **two visually distinct B-rep views**: the
+  solid gets `MeshStandardMaterial`, real edge lines and a silhouette outline
+  pass; mesh preview gets smooth Lambert shading, a faint triangle overlay and
+  no outline pass. Both display the same B-rep geometry.
 - Timings the app reports include JSON serialisation of the geometry across the
   Tauri IPC bridge, which for the bracket (~12 000 triangles + 67 edge curves)
   is a real fraction of the total.

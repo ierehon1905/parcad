@@ -20,11 +20,11 @@ pub struct Evaluated {
     /// Triangle indices. Empty when each triangle carries its own corners,
     /// which is how the implicit path gets flat shading.
     indices: Vec<u32>,
-    /// Logical edge curves, each a polyline. Empty on the implicit path, which
-    /// has no such thing and has to infer edges in screen space instead.
+    /// Logical edge curves, each a polyline. Empty for a mesh preview, which
+    /// deliberately draws its triangles instead of solid-model edges.
     edges: Vec<Vec<[f32; 3]>>,
-    /// Face and edge counts. Absent on the implicit path — not zero, absent,
-    /// because "no faces" and "the question does not apply" are different.
+    /// Face and edge counts. Absent from a mesh preview — it is a tessellation
+    /// view rather than a topology view.
     topology: Option<parcad_occt::Topology>,
     /// Which backend actually produced this, for the UI to state plainly.
     backend: &'static str,
@@ -47,15 +47,23 @@ pub struct Timings {
 /// person — so the alternate `{:#}` form is used to keep the whole context chain
 /// rather than just the outermost message.
 #[tauri::command]
-fn evaluate(graph: serde_json::Value, depth: u8, backend: Option<String>) -> Result<Evaluated, String> {
+fn evaluate(
+    graph: serde_json::Value,
+    depth: u8,
+    backend: Option<String>,
+) -> Result<Evaluated, String> {
     let doc: Doc =
         serde_json::from_value(graph).map_err(|e| format!("the graph is not valid: {e}"))?;
 
     match backend.as_deref().unwrap_or("implicit") {
+        "preview" => evaluate_mesh_preview(&doc),
+        // Keep the SDF evaluator available to callers that use the command
+        // directly. The desktop's mesh-preview control uses the B-rep mesh so
+        // it cannot invent or omit geometry relative to the solid model.
         "implicit" => evaluate_implicit(&doc, depth),
         "brep" => evaluate_brep(&doc),
         other => Err(format!(
-            "unknown backend {other:?}; expected \"implicit\" or \"brep\""
+            "unknown backend {other:?}; expected \"preview\", \"implicit\", or \"brep\""
         )),
     }
 }
@@ -91,8 +99,8 @@ fn evaluate_implicit(doc: &Doc, depth: u8) -> Result<Evaluated, String> {
 
 fn evaluate_brep(doc: &Doc) -> Result<Evaluated, String> {
     let t0 = std::time::Instant::now();
-    let s = parcad_occt::evaluate(doc, &parcad_occt::Options::default())
-        .map_err(|e| format!("{e}"))?;
+    let s =
+        parcad_occt::evaluate(doc, &parcad_occt::Options::default()).map_err(|e| format!("{e}"))?;
     let kernel_ms = t0.elapsed().as_millis() as u64;
 
     Ok(Evaluated {
@@ -111,6 +119,20 @@ fn evaluate_brep(doc: &Doc) -> Result<Evaluated, String> {
     })
 }
 
+/// Tessellate the exact B-rep model but omit its logical edges.
+///
+/// This keeps the preview's triangle overlay while guaranteeing that its
+/// geometry is the same part the solid view shows. The SDF backend remains
+/// available for field operations and headless perception; it is not used for
+/// an interactive comparison against a B-rep solid because smooth booleans can
+/// add or remove material by design.
+fn evaluate_mesh_preview(doc: &Doc) -> Result<Evaluated, String> {
+    let mut preview = evaluate_brep(doc)?;
+    preview.edges.clear();
+    preview.topology = None;
+    Ok(preview)
+}
+
 /// Measure a B-rep result with the same code that measures an implicit one.
 ///
 /// Worth doing even though OCCT can report its own mass properties: running the
@@ -118,7 +140,11 @@ fn evaluate_brep(doc: &Doc) -> Result<Evaluated, String> {
 /// the thing we actually hand to a printer. A B-rep can be valid and still
 /// tessellate into a mesh with holes.
 fn measure_brep(doc: &Doc, s: &parcad_occt::Success) -> Result<parcad_core::PartReport, String> {
-    let vertices: Vec<[f32; 3]> = s.positions.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+    let vertices: Vec<[f32; 3]> = s
+        .positions
+        .chunks_exact(3)
+        .map(|c| [c[0], c[1], c[2]])
+        .collect();
     let triangles: Vec<[usize; 3]> = s
         .indices
         .chunks_exact(3)
@@ -170,7 +196,7 @@ fn export_stl(
     let doc: Doc =
         serde_json::from_value(graph).map_err(|e| format!("the graph is not valid: {e}"))?;
 
-    if backend.as_deref() == Some("brep") {
+    if matches!(backend.as_deref(), Some("brep" | "preview")) {
         let opts = parcad_occt::Options {
             stl_path: Some(path.clone().into()),
             ..Default::default()

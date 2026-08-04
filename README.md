@@ -13,7 +13,7 @@ that same graph:
 | speed | instant, never fails | ~40 ms build for a real part |
 | accuracy | approximate; dual-contouring stair-steps sharp edges | exact — `box(20).scale(2)` is *exactly* 8000 mm³ |
 | gives you | raymarched renders, tag-region maps, any field probe | faces, edges, STEP export, real edge curves |
-| used for | the mesh preview, agent perception | the finished part |
+| used for | agent perception and field queries | the desktop mesh preview and finished part |
 
 Neither is a fallback for the other. The implicit backend can answer questions a
 B-rep can't ("what is the distance to material at this point?"); the B-rep

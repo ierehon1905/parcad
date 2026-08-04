@@ -45,9 +45,9 @@ interface Evaluated {
   positions: number[];
   normals: number[];
   indices: number[];
-  /** Logical edge curves. B-rep only; the implicit backend has none. */
+  /** Logical edge curves. Omitted in mesh-preview mode. */
   edges: number[][][];
-  /** Face and edge counts. Null on the implicit path, where the question does
+  /** Face and edge counts. Null in mesh-preview mode, where the question does
    *  not apply — which is different from the answer being zero. */
   topology: { faces: number; edges: number } | null;
   backend: "implicit" | "brep";
@@ -126,6 +126,14 @@ async function run() {
 
     const depth = Number(depthInput.value);
     const result = await evaluateGraph(graph, depth, backendSelect.value);
+
+    // The browser fallback is a fixed geometry artifact. Reflect its real
+    // backend in the disabled selector instead of leaving it claiming that a
+    // coarse SDF mesh is a B-rep solid.
+    if (!inTauri) {
+      backendSelect.value = result.backend === "brep" ? "brep" : "preview";
+      syncBackendUi();
+    }
 
     show(result);
     clearError();
@@ -300,12 +308,12 @@ markBrowserOnly();
   schedule();
 });
 
-/** The detail slider is a grid depth, and B-rep has no grid. */
+/** B-rep meshes to a fixed deflection; its solid and triangle views have no grid. */
 function syncBackendUi() {
-  const brep = backendSelect.value === "brep";
-  depthInput.disabled = brep || !inTauri;
-  depthInput.parentElement!.classList.toggle("disabled", brep);
-  depthInput.parentElement!.title = brep
+  const brepMesh = backendSelect.value === "brep" || backendSelect.value === "preview";
+  depthInput.disabled = brepMesh || !inTauri;
+  depthInput.parentElement!.classList.toggle("disabled", brepMesh);
+  depthInput.parentElement!.title = brepMesh
     ? "B-rep meshes to a fixed 0.01 mm deflection; there is no grid to coarsen"
     : "";
 }

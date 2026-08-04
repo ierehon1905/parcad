@@ -186,14 +186,10 @@ export class Viewport {
     this.preview = !hasRealEdges;
     this.ambient.visible = this.preview;
 
-    // Two different jobs, so two different looks.
-    //
-    // With real edges this is a finished solid and should read as one: lit
-    // surfaces, cast shadow, crisp curves. Without them it is a sampled
-    // approximation of a distance field, and dressing that up as a finished
-    // surface is what made it look broken — every artefact of the sampling
-    // arrived looking like a defect in the part. Shown plainly as a mesh, the
-    // same geometry reads as what it is: a fast preview.
+    // Mesh preview has no logical edge curves, but it does provide
+    // surface-aware normals for every triangle corner. Preserve those normals:
+    // flat shading turns a smooth cylinder or fillet into visible facets even
+    // when the sampled surface is otherwise accurate enough for previewing.
     const mesh = new THREE.Mesh(
       g,
       DEBUG === "normals"
@@ -201,7 +197,6 @@ export class Viewport {
         : this.preview
           ? new THREE.MeshLambertMaterial({
               color: 0x9aa6b6,
-              flatShading: true,
               emissive: 0x0c1018,
             })
           : new THREE.MeshStandardMaterial({
@@ -236,7 +231,8 @@ export class Viewport {
       // curves, sampled. A straight edge is two points.
       this.partGroup.add(edgeLines(geo.edges!));
     } else {
-      // The triangles themselves, which is the only honest thing to draw here.
+      // Show the sampling grid in a restrained weight: it identifies this as a
+      // mesh preview while leaving the smoothed surface readable.
       this.partGroup.add(meshWireframe(g));
     }
     // Stop guessing at creases once we are being told where they are. The
@@ -404,10 +400,8 @@ function edgeLines(polylines: number[][][]): THREE.LineSegments {
 /**
  * The triangle edges of a mesh, drawn faintly over it.
  *
- * Only for the preview. This is exactly the wireframe a user does not want to
- * see on a finished part — but on a preview it is the point: it shows how
- * coarsely the surface was sampled, which is the one thing the shaded surface
- * cannot tell you and the one thing worth knowing before trusting a dimension.
+ * Only for the mesh preview. It shows where the mesher sampled densely or
+ * sparsely without overpowering the smoothed surface.
  */
 function meshWireframe(g: THREE.BufferGeometry): THREE.LineSegments {
   const lines = new THREE.LineSegments(
@@ -415,7 +409,7 @@ function meshWireframe(g: THREE.BufferGeometry): THREE.LineSegments {
     // Faint: at fifty thousand triangles a solid wireframe is a grey wall.
     // Low opacity lets density itself carry the information — dense where the
     // mesher subdivided, sparse where it did not.
-    new THREE.LineBasicMaterial({ color: 0x2b3440, transparent: true, opacity: 0.14 }),
+    new THREE.LineBasicMaterial({ color: 0x2b3440, transparent: true, opacity: 0.45 }),
   );
   lines.castShadow = false;
   lines.receiveShadow = false;
