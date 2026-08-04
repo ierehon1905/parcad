@@ -72,6 +72,19 @@ pub struct EdgeCurve {
     pub treatment_node: Option<usize>,
 }
 
+/// One exact pre-treatment corner selected by a vertex-targeted treatment.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TargetVertex {
+    /// Ephemeral ID for this target-preview snapshot, such as `target-vertex@3.0`.
+    ///
+    /// Like `edge@…`, this is diagnostic data only. The modelling DSL keeps
+    /// authored corner intent semantic, so a topology change cannot turn this
+    /// display ID into a different corner silently.
+    pub id: String,
+    /// Exact B-rep position in document-space millimetres.
+    pub point: [f32; 3],
+}
+
 /// Exact input edges resolved for one fillet or chamfer node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TargetPreview {
@@ -79,6 +92,10 @@ pub struct TargetPreview {
     pub node: usize,
     /// Ephemeral curves for the feature's input edge set.
     pub edges: Vec<EdgeCurve>,
+    /// Exact input corners for a vertex-targeted treatment. Empty for an
+    /// edge-targeted treatment.
+    #[serde(default)]
+    pub vertices: Vec<TargetVertex>,
 }
 
 /// Turn sampled exact points into viewport metadata.
@@ -210,6 +227,10 @@ mod tests {
         let response = Response::TargetPreview(TargetPreview {
             node: 3,
             edges: vec![edge_curve(vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]]).unwrap()],
+            vertices: vec![TargetVertex {
+                id: "target-vertex@3.0".into(),
+                point: [10.0, 0.0, 0.0],
+            }],
         });
 
         let json = serde_json::to_string(&response).unwrap();
@@ -219,5 +240,6 @@ mod tests {
         };
         assert_eq!(preview.node, 3);
         assert_eq!(preview.edges.len(), 1);
+        assert_eq!(preview.vertices[0].id, "target-vertex@3.0");
     }
 }

@@ -159,7 +159,11 @@ fn run() -> Response {
     if let Some(node) = request.inspect_target {
         breadcrumb(&format!("resolving target for node {node}"));
         return match backend::inspect_edge_target(&request.doc, node) {
-            Ok(edges) => Response::TargetPreview(TargetPreview { node, edges }),
+            Ok(target) => Response::TargetPreview(TargetPreview {
+                node,
+                edges: target.edges,
+                vertices: target.vertices,
+            }),
             Err(e) => Response::Error {
                 stage: "resolving selected-edge target".into(),
                 message: format!("{e:#}"),
@@ -364,7 +368,7 @@ mod tests {
         .unwrap();
 
         // Source -> viewport: the intent resolves the four exact input rims.
-        assert_eq!(backend::inspect_edge_target(&doc, 7).unwrap().len(), 4);
+        assert_eq!(backend::inspect_edge_target(&doc, 7).unwrap().edges.len(), 4);
         // Viewport -> source: every selected rim produces two visible final
         // boundary curves. The inspector must preserve all eight links, not
         // merely a single sample.

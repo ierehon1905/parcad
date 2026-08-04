@@ -19,7 +19,7 @@ import { Shape } from "./dsl";
 import { BRACKET, EDGE_TREATMENTS, ENCLOSURE } from "./examples";
 import { suggestVertexSelector, verticesFromEdges, type VertexPoint } from "./entities";
 import { instrumentTreatmentCalls, sourceOffset, treatmentCallRange } from "./source-link";
-import { Viewport } from "./viewport";
+import { Viewport, type TargetVertex } from "./viewport";
 
 interface Report {
   units: string;
@@ -72,6 +72,7 @@ interface BuiltGraph {
 interface TargetPreview {
   node: number;
   edges: EdgeCurve[];
+  vertices: TargetVertex[];
 }
 
 /** A visible B-rep edge. `id` is valid only for this evaluated result. */
@@ -431,7 +432,7 @@ async function previewTreatmentAtCursor() {
 
   viewport.setTargetPreview([]);
   targetPreviewEl.hidden = false;
-  targetPreviewName.textContent = `.${treatment.source!.method} input edges`;
+  targetPreviewName.textContent = `.${treatment.source!.method} input target`;
   targetPreviewDetail.textContent = "resolving exact target…";
 
   try {
@@ -441,8 +442,16 @@ async function previewTreatmentAtCursor() {
     });
     if (request !== targetPreviewRequest) return;
     if (preview.node !== treatment.node) throw new Error("the worker returned a different treatment");
-    viewport.setTargetPreview(normalizeEdges(preview.edges));
-    targetPreviewDetail.textContent = `${preview.edges.length} selected edge${preview.edges.length === 1 ? "" : "s"}`;
+    const vertices = preview.vertices ?? [];
+    viewport.setTargetPreview(normalizeEdges(preview.edges), vertices);
+    targetPreviewName.textContent = vertices.length > 0
+      ? `.${treatment.source!.method} input corner and edges`
+      : `.${treatment.source!.method} input edges`;
+    const entities = [
+      vertices.length > 0 && `${vertices.length} selected corner${vertices.length === 1 ? "" : "s"}`,
+      `${preview.edges.length} selected edge${preview.edges.length === 1 ? "" : "s"}`,
+    ].filter(Boolean);
+    targetPreviewDetail.textContent = entities.join(" · ");
   } catch {
     if (request !== targetPreviewRequest) return;
     clearTargetPreview();

@@ -122,7 +122,7 @@ pub fn evaluate(doc: &Doc, opts: &Options) -> Result<Success, OcctError> {
     }
 }
 
-/// Resolve the exact B-rep edges targeted by one selected-edge treatment.
+/// Resolve the exact B-rep entities targeted by one edge or vertex treatment.
 pub fn inspect_edge_target(
     doc: &Doc,
     node: usize,

@@ -40,6 +40,13 @@ export interface EdgeCurve {
   treatment_node?: number;
 }
 
+/** An exact corner selected by a source-to-viewport target preview. */
+export interface TargetVertex {
+  /** Ephemeral ID for this preview only; never a modelling-language input. */
+  id: string;
+  point: [number, number, number];
+}
+
 export interface EdgeCallbacks {
   onHover?: (edge: EdgeCurve | undefined) => void;
   onSelect?: (edge: EdgeCurve | undefined) => void;
@@ -84,7 +91,7 @@ export class Viewport {
   private readonly edgeLines: THREE.LineSegments[] = [];
   private readonly vertexRaycaster = new THREE.Raycaster();
   private readonly vertexMarkers: THREE.Points[] = [];
-  /** Gold source-selected edges, separate from the pickable final topology. */
+  /** Gold source-selected entities, separate from the pickable final topology. */
   private targetPreview?: THREE.Group;
   private hoveredEdge?: THREE.LineSegments;
   private selectedEdge?: THREE.LineSegments;
@@ -380,22 +387,27 @@ export class Viewport {
     this.aimSun(bounds, size);
   }
 
-  /** Overlay exact pre-treatment edges selected from the editor source. */
-  setTargetPreview(edges: EdgeCurve[]) {
+  /** Overlay exact pre-treatment entities selected from the editor source. */
+  setTargetPreview(edges: EdgeCurve[], vertices: TargetVertex[] = []) {
     this.clearTargetPreview();
-    if (edges.length === 0) return;
+    if (edges.length === 0 && vertices.length === 0) return;
 
-    const rendered = edgeLines(edges, 0xf5b942, 1);
-    for (const line of rendered.lines) {
-      const material = line.material as THREE.LineBasicMaterial;
-      // Target curves can have been consumed by a fillet, so draw the exact
-      // input over the finished surface instead of letting it disappear behind
-      // the replacement faces. They are not added to the raycast set.
-      material.depthTest = false;
-      line.renderOrder = 2;
+    const group = new THREE.Group();
+    if (edges.length > 0) {
+      const rendered = edgeLines(edges, 0xf5b942, 1);
+      for (const line of rendered.lines) {
+        const material = line.material as THREE.LineBasicMaterial;
+        // Target curves can have been consumed by a fillet, so draw the exact
+        // input over the finished surface instead of letting it disappear behind
+        // the replacement faces. They are not added to the raycast set.
+        material.depthTest = false;
+        line.renderOrder = 2;
+      }
+      group.add(rendered.group);
     }
-    this.targetPreview = rendered.group;
-    this.partGroup.add(rendered.group);
+    if (vertices.length > 0) group.add(targetVertexMarkers(vertices));
+    this.targetPreview = group;
+    this.partGroup.add(group);
   }
 
   private clearTargetPreview() {
@@ -597,6 +609,29 @@ function vertexMarkers(vertices: VertexPoint[]): { group: THREE.Group; markers: 
     markers.push(marker);
   }
   return { group, markers };
+}
+
+/** Gold exact corner targets, intentionally visible through their replacement patch. */
+function targetVertexMarkers(vertices: TargetVertex[]): THREE.Group {
+  const group = new THREE.Group();
+  for (const vertex of vertices) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertex.point, 3));
+    const marker = new THREE.Points(
+      geometry,
+      new THREE.PointsMaterial({
+        color: 0xf5b942,
+        size: 12,
+        sizeAttenuation: false,
+        depthTest: false,
+        transparent: true,
+        opacity: 1,
+      }),
+    );
+    marker.renderOrder = 3;
+    group.add(marker);
+  }
+  return group;
 }
 
 /**

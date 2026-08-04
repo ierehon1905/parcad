@@ -92,14 +92,16 @@ directional extrema (`>X` / `<X`) or `{ at: { x: "max", ... } }` only. They do
 not yet claim Boolean provenance that the kernel cannot follow for vertices.
 
 Click the `.fillet`, `.chamfer`, `.smooth`, or `.squircle` method name in the
-desktop editor to overlay the exact input edges in gold. This is a source-to-
-viewport inspection aid: it resolves the authored selector before the treatment
-changes topology, and does not turn a temporary viewport ID into script input.
+desktop editor to overlay the exact input entities in gold. An edge target
+shows its input curves; a vertex target also shows the exact selected corner.
+This is a source-to-viewport inspection aid: it resolves the authored selector
+before the treatment changes topology, and does not turn a temporary viewport
+ID into script input.
 
 The reverse inspection link uses the exact history from the fillet/chamfer
 builder. A final edge that the builder generated is labelled `from .fillet(…)`
 or `from .chamfer(…)` on hover; its source call highlights immediately, and a
-click focuses it and reveals its gold input edges. This is one-evaluation
+click focuses it and reveals its gold input entities. This is one-evaluation
 inspection metadata, not a durable edge reference. It follows an unchanged
 generated curve through placement and later operations, but does not guess when
 a later operation replaces that curve.

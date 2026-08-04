@@ -23,7 +23,7 @@ use parcad_core::{
     },
 };
 
-use crate::protocol::{breadcrumb, edge_curve, EdgeCurve};
+use crate::protocol::{breadcrumb, edge_curve, EdgeCurve, TargetVertex};
 use std::collections::{BTreeMap, HashSet};
 
 fn v(p: V3) -> DVec3 {
@@ -130,6 +130,15 @@ struct SelectableEdge {
 struct SelectableVertex {
     point: DVec3,
     incident: Vec<Edge>,
+}
+
+/// A semantic treatment target resolved against one pre-treatment B-rep.
+///
+/// Vertex targets expand to exact incident edges for OCCT, while retaining the
+/// selected corner positions for the editor's source-to-viewport preview.
+struct ResolvedEdgeTarget {
+    edges: Vec<Edge>,
+    vertices: Vec<DVec3>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -756,14 +765,17 @@ fn select_edge_target(
     lineage: &EdgeLineage,
     id: NodeId,
     label: &str,
-) -> Result<Vec<Edge>> {
+) -> Result<ResolvedEdgeTarget> {
     match target {
         EdgeTarget::Edges { selector, expect } => {
             let selected = select_edges(shape, selector, lineage, id, label)?;
             if let Some(expectation) = expect {
                 check_edge_expectation(*expectation, selected.len(), selector, id, label)?;
             }
-            Ok(selected)
+            Ok(ResolvedEdgeTarget {
+                edges: selected,
+                vertices: Vec::new(),
+            })
         }
         EdgeTarget::Vertices { vertices, expect } => {
             let selected = select_vertices(shape, vertices, id, label)?;
@@ -771,14 +783,16 @@ fn select_edge_target(
                 check_vertex_expectation(*expectation, selected.len(), vertices, id, label)?;
             }
             let mut seen = HashSet::new();
-            Ok(selected
+            let vertices = selected.iter().map(|vertex| vertex.point).collect();
+            let edges = selected
                 .into_iter()
                 .flat_map(|vertex| vertex.incident)
                 .filter(|edge| {
                     describe_edge(edge.clone())
                         .is_some_and(|described| seen.insert(described.key))
                 })
-                .collect())
+                .collect();
+            Ok(ResolvedEdgeTarget { edges, vertices })
         }
     }
 }
@@ -788,7 +802,12 @@ fn select_edge_target(
 /// This intentionally rebuilds only the treatment's child. Once a fillet or
 /// chamfer has run, its input edges may have been replaced, so asking the final
 /// shape for `edge@…` would be a topology guess rather than an exact preview.
-pub fn inspect_edge_target(doc: &Doc, id: NodeId) -> Result<Vec<EdgeCurve>> {
+pub struct TargetGeometry {
+    pub edges: Vec<EdgeCurve>,
+    pub vertices: Vec<TargetVertex>,
+}
+
+pub fn inspect_edge_target(doc: &Doc, id: NodeId) -> Result<TargetGeometry> {
     doc.topo_order()?;
     let node = doc.node(id)?;
     let label = node.tag.as_deref().unwrap_or("untagged");
@@ -801,28 +820,36 @@ pub fn inspect_edge_target(doc: &Doc, id: NodeId) -> Result<Vec<EdgeCurve>> {
     let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
     let transforms = target_transforms(doc, id)?;
     let several_instances = transforms.len() > 1;
-    Ok(transforms
-        .into_iter()
-        .enumerate()
-        .flat_map(|(instance, transform)| {
-            selected
-                .iter()
-                .enumerate()
-                .filter_map(move |(index, edge)| {
-                    let points = edge
-                        .approximation_segments()
-                        .map(|point| transform.point(point))
-                        .collect();
-                    let mut curve = edge_curve(points)?;
-                    curve.id = if several_instances {
-                        format!("target@{id}.{instance}.{index}")
-                    } else {
-                        format!("target@{id}.{index}")
-                    };
-                    Some(curve)
-                })
-        })
-        .collect())
+    let mut edges = Vec::new();
+    let mut vertices = Vec::new();
+    for (instance, transform) in transforms.into_iter().enumerate() {
+        for (index, edge) in selected.edges.iter().enumerate() {
+            let points = edge
+                .approximation_segments()
+                .map(|point| transform.point(point))
+                .collect();
+            let Some(mut curve) = edge_curve(points) else {
+                continue;
+            };
+            curve.id = if several_instances {
+                format!("target@{id}.{instance}.{index}")
+            } else {
+                format!("target@{id}.{index}")
+            };
+            edges.push(curve);
+        }
+        for (index, point) in selected.vertices.iter().enumerate() {
+            vertices.push(TargetVertex {
+                id: if several_instances {
+                    format!("target-vertex@{id}.{instance}.{index}")
+                } else {
+                    format!("target-vertex@{id}.{index}")
+                },
+                point: transform.point(*point),
+            });
+        }
+    }
+    Ok(TargetGeometry { edges, vertices })
 }
 
 /// A model-space transform accumulated from the graph root down to a node.
@@ -1424,9 +1451,11 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
             breadcrumb(&format!(
                 "fillet node {id} ({label}) {radius} mm on {} selected edge(s)",
-                selected.len()
+                selected.edges.len()
             ));
-            let generated = solid.shape.fillet_edges_with_history(*radius, selected);
+            let generated = solid
+                .shape
+                .fillet_edges_with_history(*radius, selected.edges);
             solid.features.add_generated(id, generated);
             BuiltShape {
                 shape: solid.shape,
@@ -1458,11 +1487,11 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
             breadcrumb(&format!(
                 "chamfer node {id} ({label}) {distance} mm on {} selected edge(s)",
-                selected.len()
+                selected.edges.len()
             ));
             let generated = solid
                 .shape
-                .chamfer_edges_with_history(*distance, selected);
+                .chamfer_edges_with_history(*distance, selected.edges);
             solid.features.add_generated(id, generated);
             BuiltShape {
                 shape: solid.shape,
@@ -1579,7 +1608,8 @@ mod tests {
 
         let selected = select_edge_target(&shape, &target, &EdgeLineage::default(), 0, "body")
             .unwrap();
-        assert_eq!(selected.len(), 3);
+        assert_eq!(selected.edges.len(), 3);
+        assert_eq!(selected.vertices, [DVec3::new(5.0, 5.0, 5.0)]);
     }
 
     #[test]
@@ -1602,7 +1632,9 @@ mod tests {
         .unwrap();
 
         let target = inspect_edge_target(&doc, 1).unwrap();
-        assert_eq!(target.len(), 3);
+        assert_eq!(target.edges.len(), 3);
+        assert_eq!(target.vertices.len(), 1);
+        assert_eq!(target.vertices[0].point, [5.0, 5.0, 5.0]);
         build(&doc).unwrap();
     }
 
@@ -1626,7 +1658,8 @@ mod tests {
         .unwrap();
 
         let target = inspect_edge_target(&doc, 1).unwrap();
-        assert_eq!(target.len(), 3);
+        assert_eq!(target.edges.len(), 3);
+        assert_eq!(target.vertices.len(), 1);
         build(&doc).unwrap();
     }
 
@@ -1680,9 +1713,10 @@ mod tests {
         .unwrap();
 
         let target = inspect_edge_target(&doc, 1).unwrap();
-        assert_eq!(target.len(), 1);
-        assert_eq!(target[0].id, "target@1.0");
-        assert!((target[0].length_mm - 80.0).abs() < 1e-3);
+        assert_eq!(target.edges.len(), 1);
+        assert!(target.vertices.is_empty());
+        assert_eq!(target.edges[0].id, "target@1.0");
+        assert!((target.edges[0].length_mm - 80.0).abs() < 1e-3);
     }
 
     #[test]
@@ -1705,8 +1739,34 @@ mod tests {
         .unwrap();
 
         let target = inspect_edge_target(&doc, 1).unwrap();
-        assert_eq!(target.len(), 1);
-        assert!((target[0].center[0] - 20.0).abs() < 1e-3);
+        assert_eq!(target.edges.len(), 1);
+        assert!((target.edges[0].center[0] - 20.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn vertex_target_preview_follows_a_parent_translation() {
+        let doc: Doc = serde_json::from_str(
+            r#"{
+                "root": 2,
+                "nodes": [
+                    { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+                    {
+                        "op": "fillet",
+                        "child": 0,
+                        "radius": 1,
+                        "vertices": ">X and >Y and >Z",
+                        "expect": { "count": 1 }
+                    },
+                    { "op": "translate", "child": 1, "by": { "x": 20, "y": 0, "z": 0 } }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let target = inspect_edge_target(&doc, 1).unwrap();
+        assert_eq!(target.vertices.len(), 1);
+        assert_eq!(target.vertices[0].id, "target-vertex@1.0");
+        assert_eq!(target.vertices[0].point, [25.0, 5.0, 5.0]);
     }
 
     #[test]
@@ -1735,11 +1795,11 @@ mod tests {
         .unwrap();
 
         let target = inspect_edge_target(&doc, 1).unwrap();
-        assert_eq!(target.len(), 1);
-        assert!((target[0].center[0] + 10.0).abs() < 1e-3);
-        assert!(target[0].center[1].abs() < 1e-3);
-        assert!((target[0].center[2] - 10.0).abs() < 1e-3);
-        assert!((target[0].length_mm - 20.0).abs() < 1e-3);
+        assert_eq!(target.edges.len(), 1);
+        assert!((target.edges[0].center[0] + 10.0).abs() < 1e-3);
+        assert!(target.edges[0].center[1].abs() < 1e-3);
+        assert!((target.edges[0].center[2] - 10.0).abs() < 1e-3);
+        assert!((target.edges[0].length_mm - 20.0).abs() < 1e-3);
     }
 
     #[test]

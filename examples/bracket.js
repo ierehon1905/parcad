@@ -36,9 +36,18 @@ const roundedHoles = drilled
   .fillet(0.8)
   .tag("top_hole_rims");
 
+// This names the leftmost underside edge rather than a kernel edge ID. It is
+// deliberately away from the corner treatment below, so each feature remains
+// independently inspectable in the viewport and source.
+const chamferedBase = roundedHoles
+  .edges("<X and <Z and |Y")
+  .expect({ count: 1 })
+  .chamfer(1)
+  .tag("left_base_chamfer");
+
 // This names a corner rather than a kernel vertex ID. The exact backend expands
 // it to its three incident edges, then makes one rolling-ball corner fillet.
-return roundedHoles
+return chamferedBase
   .vertices(">X and >Y and <Z")
   .expect({ count: 1 })
   .fillet(2)
