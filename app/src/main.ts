@@ -18,7 +18,7 @@ import * as dsl from "./dsl";
 import { Shape } from "./dsl";
 import { BRACKET, EDGE_TREATMENTS, ENCLOSURE } from "./examples";
 import { suggestVertexSelector, verticesFromEdges, type VertexPoint } from "./entities";
-import { instrumentTreatmentCalls, sourceOffset, treatmentCallRange } from "./source-link";
+import { instrumentTreatmentCalls, sourceOffset, treatmentAtCursor, treatmentCallRange } from "./source-link";
 import { Viewport, type TargetVertex } from "./viewport";
 
 interface Report {
@@ -424,7 +424,9 @@ async function previewTreatmentAtCursor() {
   const request = ++targetPreviewRequest;
   const source = editor.state.doc.toString();
   const treatment =
-    source === lastSource ? treatmentAtCursor(source, editor.state.selection.main.head) : undefined;
+    source === lastSource
+      ? treatmentAtCursor(editor.state, source, lastTreatments, editor.state.selection.main.head)
+      : undefined;
   if (!treatment || !lastGraph || !inTauri) {
     if (request === targetPreviewRequest) clearTargetPreview();
     return;
@@ -456,15 +458,6 @@ async function previewTreatmentAtCursor() {
     if (request !== targetPreviewRequest) return;
     clearTargetPreview();
   }
-}
-
-/** Find a treatment method name at the current cursor, never by node ordering. */
-function treatmentAtCursor(source: string, cursor: number): dsl.TreatmentSource | undefined {
-  return lastTreatments.find((treatment) => {
-    if (!treatment.source || treatment.source.line < 1 || treatment.source.column < 1) return false;
-    const start = sourceOffset(source, treatment.source.line, treatment.source.column);
-    return start !== undefined && cursor >= start && cursor <= start + treatment.source.method.length;
-  });
 }
 
 /** Show the hovered B-rep entity's temporary ID and a semantic selector. */

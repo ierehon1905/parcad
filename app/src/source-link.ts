@@ -51,6 +51,27 @@ export function treatmentCallRange(
   return { from: start, to: start + location.method.length };
 }
 
+/** Find the most specific treatment call whose authored chain contains a cursor. */
+export function treatmentAtCursor<T extends { source?: SourceLocation }>(
+  state: EditorState,
+  source: string,
+  treatments: readonly T[],
+  cursor: number,
+): T | undefined {
+  return treatments
+    .map((treatment) => ({
+      treatment,
+      range: treatment.source && treatmentCallRange(state, source, treatment.source),
+    }))
+    .filter((entry): entry is { treatment: T; range: SourceRange } =>
+      !!entry.range && cursor >= entry.range.from && cursor <= entry.range.to,
+    )
+    // Later chained treatments contain earlier calls. The smallest range is
+    // therefore the treatment the cursor actually belongs to.
+    .sort((a, b) => (a.range.to - a.range.from) - (b.range.to - b.range.from))[0]
+    ?.treatment;
+}
+
 /**
  * Carry editor source locations into `new Function` explicitly.
  *

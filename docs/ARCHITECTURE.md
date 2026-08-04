@@ -102,16 +102,17 @@ never replace a semantic or provenance reference.
 
 ### Source-to-viewport target preview
 
-Selecting a treatment method name (`.fillet`, `.chamfer`, `.smooth`, or
-`.squircle`) in the desktop editor asks the isolated worker to resolve that
-node's target against its **input** B-rep. Those exact curves are drawn in
-gold over the finished part; a `vertices(...)` target also draws the exact
-selected corner point. This matters because a treatment usually consumes or
-replaces its input edges; highlighting final `edge@…` values would otherwise
-suggest a false correspondence. The preview follows parent translations,
-rotations, and scales, and repeats when a graph node is reused. It is strictly
-diagnostic: source selectors remain the authored reference, while the returned
-`target@…` curves and `target-vertex@…` markers are ephemeral inspection IDs.
+Placing the editor caret anywhere in a treatment's selector, expectation, or
+method call (`.fillet`, `.chamfer`, `.smooth`, or `.squircle`) asks the isolated
+worker to resolve that node's target against its **input** B-rep. Those exact
+curves are drawn in gold over the finished part; a `vertices(...)` target also
+draws the exact selected corner point. This matters because a treatment usually
+consumes or replaces its input edges; highlighting final `edge@…` values would
+otherwise suggest a false correspondence. The preview follows parent
+translations, rotations, and scales, and repeats when a graph node is reused.
+It is strictly diagnostic: source selectors remain the authored reference,
+while the returned `target@…` curves and `target-vertex@…` markers are
+ephemeral inspection IDs.
 
 The editor obtains a treatment's source range from its parsed syntax and wraps
 only the evaluated copy of that call with the location. It does not persist the

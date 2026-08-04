@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { EditorState } from "@codemirror/state";
 import { javascript } from "@codemirror/lang-javascript";
 import * as dsl from "../src/dsl.ts";
-import { instrumentTreatmentCalls, treatmentCallRange } from "../src/source-link.ts";
+import { instrumentTreatmentCalls, treatmentAtCursor, treatmentCallRange } from "../src/source-link.ts";
 
 test("a treatment's final edge can highlight its complete authored chain", () => {
   const source = `const body = box(20, 10, 8);
@@ -67,4 +67,45 @@ return body
     { method: "fillet", line: 4, column: 4 },
     { method: "chamfer", line: 6, column: 4 },
   ]);
+});
+
+test("a selector or expectation cursor previews its owning treatment", () => {
+  const source = `const body = box(20, 10, 8);
+return body
+  .edges(">Z and >Y and |X")
+  .expect({ count: 1 })
+  .fillet(1)
+  .edges("<Z and >Y and |X")
+  .expect({ count: 1 })
+  .chamfer(1);`;
+  const state = EditorState.create({ doc: source, extensions: [javascript()] });
+  const api = { ...dsl };
+  const names = Object.keys(api);
+  const result = new Function(...names, instrumentTreatmentCalls(state, source))(
+    ...names.map((name) => api[name]),
+  );
+  const treatments = [];
+  dsl.build(result, treatments);
+
+  expect(treatmentAtCursor(state, source, treatments, source.indexOf(">Z"))?.source?.method).toBe("fillet");
+  expect(treatmentAtCursor(state, source, treatments, source.indexOf("count"))?.source?.method).toBe("fillet");
+  expect(treatmentAtCursor(state, source, treatments, source.lastIndexOf("count"))?.source?.method).toBe("chamfer");
+});
+
+test("a vertex selector cursor previews its corner treatment", () => {
+  const source = `const body = box(20, 10, 8);
+return body
+  .vertices(">X and >Y and >Z")
+  .expect({ count: 1 })
+  .fillet(1);`;
+  const state = EditorState.create({ doc: source, extensions: [javascript()] });
+  const api = { ...dsl };
+  const names = Object.keys(api);
+  const result = new Function(...names, instrumentTreatmentCalls(state, source))(
+    ...names.map((name) => api[name]),
+  );
+  const treatments = [];
+  dsl.build(result, treatments);
+
+  expect(treatmentAtCursor(state, source, treatments, source.indexOf(">X"))?.source?.method).toBe("fillet");
 });
