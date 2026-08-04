@@ -74,9 +74,9 @@ return body.edges(">Z and >Y and |X").fillet(2);
 ```
 
 `>Z` means the topmost edge centre, `>Y` the positive-Y-most, and `|X` a
-straight edge parallel to X. The desktop viewport shows its temporary `edge@…`
-ID on hover and can copy a matching selector; that ID is diagnostic only and is
-not valid script input after a rebuild.
+straight edge parallel to X. The desktop viewport shows temporary `edge@…` and
+`vertex@…` IDs on hover and can copy a matching selector; those IDs are
+diagnostic only and are not valid script input after a rebuild.
 
 Select a geometric corner when the intent is to round or bevel all of its
 incident edges together:

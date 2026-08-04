@@ -11,6 +11,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { verticesFromEdges, type VertexPoint } from "./entities";
 import { OutlineRenderer } from "./outline";
 
 export interface Geometry {
@@ -42,6 +43,8 @@ export interface EdgeCurve {
 export interface EdgeCallbacks {
   onHover?: (edge: EdgeCurve | undefined) => void;
   onSelect?: (edge: EdgeCurve | undefined) => void;
+  onVertexHover?: (vertex: VertexPoint | undefined) => void;
+  onVertexSelect?: (vertex: VertexPoint | undefined) => void;
 }
 
 export interface Bounds {
@@ -79,10 +82,14 @@ export class Viewport {
   private preview = false;
   private readonly edgeRaycaster = new THREE.Raycaster();
   private readonly edgeLines: THREE.LineSegments[] = [];
+  private readonly vertexRaycaster = new THREE.Raycaster();
+  private readonly vertexMarkers: THREE.Points[] = [];
   /** Gold source-selected edges, separate from the pickable final topology. */
   private targetPreview?: THREE.Group;
   private hoveredEdge?: THREE.LineSegments;
   private selectedEdge?: THREE.LineSegments;
+  private hoveredVertex?: THREE.Points;
+  private selectedVertex?: THREE.Points;
 
   constructor(
     private readonly container: HTMLElement,
@@ -109,10 +116,14 @@ export class Viewport {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.12;
 
-    this.renderer.domElement.addEventListener("pointermove", this.pickEdge);
-    this.renderer.domElement.addEventListener("pointerleave", () => this.setHoveredEdge());
+    this.renderer.domElement.addEventListener("pointermove", this.pickEntity);
+    this.renderer.domElement.addEventListener("pointerleave", () => {
+      this.setHoveredEdge();
+      this.setHoveredVertex();
+    });
     this.renderer.domElement.addEventListener("click", () => {
-      this.setSelectedEdge(this.hoveredEdge);
+      this.setSelectedVertex(this.hoveredVertex);
+      this.setSelectedEdge(this.hoveredVertex ? undefined : this.hoveredEdge);
     });
 
     this.scene.add(this.partGroup);
@@ -197,13 +208,13 @@ export class Viewport {
 
   dispose() {
     cancelAnimationFrame(this.frame);
-    this.renderer.domElement.removeEventListener("pointermove", this.pickEdge);
+    this.renderer.domElement.removeEventListener("pointermove", this.pickEntity);
     this.outline.dispose();
     this.renderer.dispose();
   }
 
-  /** Find the visible logical edge beneath the pointer. */
-  private pickEdge = (event: PointerEvent) => {
+  /** Find the visible B-rep entity beneath the pointer. */
+  private pickEntity = (event: PointerEvent) => {
     if (this.preview || this.edgeLines.length === 0) return;
 
     const rect = this.renderer.domElement.getBoundingClientRect();
@@ -219,9 +230,14 @@ export class Viewport {
     const distance = this.camera.position.distanceTo(this.controls.target);
     const visibleHeight = 2 * Math.tan((this.camera.fov * Math.PI) / 360) * distance;
     this.edgeRaycaster.params.Line!.threshold = (visibleHeight / rect.height) * 12;
+    this.vertexRaycaster.params.Points!.threshold = (visibleHeight / rect.height) * 9;
 
-    const hit = this.edgeRaycaster.intersectObjects(this.edgeLines, false)[0];
-    this.setHoveredEdge(hit?.object as THREE.LineSegments | undefined);
+    this.vertexRaycaster.setFromCamera(pointer, this.camera);
+    const vertexHit = this.vertexRaycaster.intersectObjects(this.vertexMarkers, false)[0];
+    const edgeHit = this.edgeRaycaster.intersectObjects(this.edgeLines, false)[0];
+    const vertex = vertexHit?.object as THREE.Points | undefined;
+    this.setHoveredVertex(vertex);
+    this.setHoveredEdge(vertex ? undefined : edgeHit?.object as THREE.LineSegments | undefined);
   };
 
   private setHoveredEdge(next?: THREE.LineSegments) {
@@ -249,6 +265,33 @@ export class Viewport {
       line === this.selectedEdge ? 0xf5b942 : line === this.hoveredEdge ? 0x4c91ff : 0x2b3440,
     );
     material.opacity = line === this.hoveredEdge || line === this.selectedEdge ? 1 : 0.85;
+  }
+
+  private setHoveredVertex(next?: THREE.Points) {
+    if (next === this.hoveredVertex) return;
+    const previous = this.hoveredVertex;
+    this.hoveredVertex = next;
+    this.paintVertex(previous);
+    this.paintVertex(next);
+    this.edgeCallbacks.onVertexHover?.(next?.userData.vertex as VertexPoint | undefined);
+  }
+
+  private setSelectedVertex(next?: THREE.Points) {
+    if (next === this.selectedVertex) return;
+    const previous = this.selectedVertex;
+    this.selectedVertex = next;
+    this.paintVertex(previous);
+    this.paintVertex(next);
+    this.edgeCallbacks.onVertexSelect?.(next?.userData.vertex as VertexPoint | undefined);
+  }
+
+  private paintVertex(marker?: THREE.Points) {
+    if (!marker) return;
+    const material = marker.material as THREE.PointsMaterial;
+    material.color.setHex(
+      marker === this.selectedVertex ? 0xf5b942 : marker === this.hoveredVertex ? 0x4c91ff : 0x5c6b7c,
+    );
+    material.size = marker === this.selectedVertex ? 9 : marker === this.hoveredVertex ? 8 : 5;
   }
 
   /** Replace the displayed part. */
@@ -314,6 +357,9 @@ export class Viewport {
       const renderedEdges = edgeLines(geo.edges!);
       this.partGroup.add(renderedEdges.group);
       this.edgeLines.push(...renderedEdges.lines);
+      const renderedVertices = vertexMarkers(verticesFromEdges(geo.edges!));
+      this.partGroup.add(renderedVertices.group);
+      this.vertexMarkers.push(...renderedVertices.markers);
     } else {
       // Show the sampling grid in a restrained weight: it identifies this as a
       // mesh preview while leaving the smoothed surface readable.
@@ -370,9 +416,14 @@ export class Viewport {
     this.clearTargetPreview();
     this.hoveredEdge = undefined;
     this.selectedEdge = undefined;
+    this.hoveredVertex = undefined;
+    this.selectedVertex = undefined;
     this.edgeLines.length = 0;
+    this.vertexMarkers.length = 0;
     this.edgeCallbacks.onHover?.(undefined);
     this.edgeCallbacks.onSelect?.(undefined);
+    this.edgeCallbacks.onVertexHover?.(undefined);
+    this.edgeCallbacks.onVertexSelect?.(undefined);
     for (const child of [...this.partGroup.children]) {
       this.partGroup.remove(child);
       child.traverse((o) => {
@@ -525,6 +576,27 @@ function edgeLines(
     lines.push(line);
   }
   return { group, lines };
+}
+
+/** Turn exact edge endpoints into small pickable corner markers. */
+function vertexMarkers(vertices: VertexPoint[]): { group: THREE.Group; markers: THREE.Points[] } {
+  const group = new THREE.Group();
+  const markers: THREE.Points[] = [];
+  for (const vertex of vertices) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertex.point, 3));
+    const marker = new THREE.Points(
+      geometry,
+      new THREE.PointsMaterial({ color: 0x5c6b7c, size: 5, sizeAttenuation: false, transparent: true, opacity: 0.9 }),
+    );
+    marker.userData.vertex = vertex;
+    marker.castShadow = false;
+    marker.receiveShadow = false;
+    marker.renderOrder = 2;
+    group.add(marker);
+    markers.push(marker);
+  }
+  return { group, markers };
 }
 
 /**

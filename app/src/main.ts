@@ -17,6 +17,7 @@ import { oneDark } from "@codemirror/theme-one-dark";
 import * as dsl from "./dsl";
 import { Shape } from "./dsl";
 import { BRACKET, EDGE_TREATMENTS, ENCLOSURE } from "./examples";
+import { suggestVertexSelector, verticesFromEdges, type VertexPoint } from "./entities";
 import { instrumentTreatmentCalls, sourceOffset, treatmentCallRange } from "./source-link";
 import { Viewport } from "./viewport";
 
@@ -93,6 +94,7 @@ const depthInput = $<HTMLInputElement>("depth");
 const depthValue = $("depth-value");
 const backendSelect = $<HTMLSelectElement>("backend");
 const edgeInspector = $("edge-inspector");
+const entityInspectorTitle = $("entity-inspector-title");
 const edgeIdEl = $("edge-id");
 const edgeDetailEl = $("edge-detail");
 const edgeOriginEl = $("edge-origin");
@@ -103,20 +105,33 @@ const targetPreviewName = $("target-preview-name");
 const targetPreviewDetail = $("target-preview-detail");
 
 let visibleEdges: EdgeCurve[] = [];
+let visibleVertices: VertexPoint[] = [];
 let hoveredEdge: EdgeCurve | undefined;
 let selectedEdge: EdgeCurve | undefined;
+let hoveredVertex: VertexPoint | undefined;
+let selectedVertex: VertexPoint | undefined;
 let suggestedSelector: string | undefined;
 
 const viewport = new Viewport($("viewport"), {
   onHover: (edge) => {
     hoveredEdge = edge;
-    updateEdgeInspector();
+    updateEntityInspector();
     highlightTreatmentForEdge(edge);
   },
   onSelect: (edge) => {
     selectedEdge = edge;
-    updateEdgeInspector();
+    updateEntityInspector();
     focusTreatmentForEdge(edge);
+  },
+  onVertexHover: (vertex) => {
+    hoveredVertex = vertex;
+    updateEntityInspector();
+    if (vertex) highlightTreatmentForEdge(undefined);
+  },
+  onVertexSelect: (vertex) => {
+    selectedVertex = vertex;
+    updateEntityInspector();
+    if (vertex) focusTreatmentForEdge(undefined);
   },
 });
 // Handle for poking at the scene from the console during development.
@@ -277,7 +292,7 @@ function markBrowserOnly() {
   note.className = "notice";
   note.textContent =
     "Browser fixture: frozen bracket geometry from /dev-geometry.json. " +
-    "Hover a filleted hole rim to see its code highlighted. " +
+    "Hover a corner marker to inspect its vertex ID and selector. " +
     "Edits and source-to-viewport target previews need the desktop app.";
   $("viewport-pane").appendChild(note);
 }
@@ -314,6 +329,7 @@ function buildGraph(source: string): BuiltGraph {
 function show(result: Evaluated) {
   const { report } = result;
   visibleEdges = normalizeEdges(result.edges);
+  visibleVertices = verticesFromEdges(visibleEdges);
 
   viewport.setGeometry(
     {
@@ -442,8 +458,27 @@ function treatmentAtCursor(source: string, cursor: number): dsl.TreatmentSource 
   });
 }
 
-/** Show the hovered edge's temporary ID and, when possible, a pasteable query. */
-function updateEdgeInspector() {
+/** Show the hovered B-rep entity's temporary ID and a semantic selector. */
+function updateEntityInspector() {
+  const vertex = hoveredVertex ?? selectedVertex;
+  if (vertex) {
+    edgeInspector.hidden = false;
+    entityInspectorTitle.textContent = "vertex inspector";
+    edgeIdEl.textContent = vertex.id;
+    edgeDetailEl.textContent = `(${vertex.point.map(fmt).join(", ")}) mm · ${vertex.degree} incident edge${vertex.degree === 1 ? "" : "s"}`;
+    edgeOriginEl.hidden = true;
+    suggestedSelector = suggestVertexSelector(vertex, visibleVertices);
+    edgeSelectorEl.textContent = suggestedSelector
+      ? `vertices: ${suggestedSelector}`
+      : "no unique directional vertex selector";
+    copyEdgeSelector.textContent = "copy vertex selector";
+    copyEdgeSelector.disabled = !suggestedSelector;
+    copyEdgeSelector.title = suggestedSelector
+      ? "Copy a selector for shape.vertices(…); it is re-resolved on each evaluation"
+      : "Add a stronger directional condition after changing the model";
+    return;
+  }
+
   const edge = hoveredEdge ?? selectedEdge;
   if (!edge) {
     edgeInspector.hidden = true;
@@ -453,6 +488,7 @@ function updateEdgeInspector() {
   }
 
   edgeInspector.hidden = false;
+  entityInspectorTitle.textContent = "edge inspector";
   edgeIdEl.textContent = edge.id;
   const direction = edge.direction ? ` · ${directionLabel(edge.direction)}` : "";
   edgeDetailEl.textContent = `${fmt(edge.length_mm)} mm${direction}`;
@@ -466,6 +502,7 @@ function updateEdgeInspector() {
   edgeSelectorEl.textContent = suggestedSelector
     ? `selector: ${suggestedSelector}`
     : "no unique directional selector";
+  copyEdgeSelector.textContent = "copy selector";
   copyEdgeSelector.disabled = !suggestedSelector;
   copyEdgeSelector.title = suggestedSelector
     ? "Copy a selector for shape.edges(…); it is re-resolved on each evaluation"
