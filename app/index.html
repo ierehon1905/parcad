@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>parcad</title>
+  </head>
+  <body>
+    <div id="app">
+      <header id="titlebar">
+        <span class="brand">parcad</span>
+        <span class="sep"></span>
+        <select id="example" title="Load an example">
+          <option value="bracket">bracket</option>
+          <option value="enclosure">enclosure</option>
+        </select>
+        <select id="backend" title="Which geometry kernel evaluates the graph">
+          <option value="brep">B-rep</option>
+          <option value="implicit">mesh preview</option>
+        </select>
+        <label class="quality">
+          detail
+          <input id="depth" type="range" min="4" max="8" step="1" value="6" />
+          <span id="depth-value">6</span>
+        </label>
+        <span class="spacer"></span>
+        <span id="status" class="status">ready</span>
+      </header>
+
+      <main>
+        <section id="editor-pane">
+          <div id="editor"></div>
+          <div id="error" class="error" hidden></div>
+        </section>
+
+        <div id="splitter"></div>
+
+        <section id="viewport-pane">
+          <div id="viewport"></div>
+          <div id="report" class="report"></div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

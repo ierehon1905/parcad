@@ -1,0 +1,23 @@
+# Vendored from crates.io: opencascade 0.2.0, by Brian Schwind.
+# https://github.com/bschwind/opencascade-rs
+#
+# Forked because the published crate keeps `Shape.inner` private, which puts
+# rotation, scaling and spheres out of reach even though `opencascade-sys`
+# already binds every OpenCASCADE call they need. See PARCAD-CHANGES.md.
+#
+# LGPL-2.1, unchanged. Our own crates are MIT OR Apache-2.0; this one is not,
+# and modifications to it stay under its licence.
+[package]
+name = "opencascade"
+description = "A high level Rust wrapper to build 3D models in code, using the OpenCascade CAD kernel"
+authors = ["Brian Schwind <brianmschwind@gmail.com>"]
+license = "LGPL-2.1"
+version = "0.2.0"
+edition = "2021"
+repository = "https://github.com/bschwind/opencascade-rs"
+
+[dependencies]
+cxx = "1"
+opencascade-sys = "0.2"
+glam = { version = "0.23", features = ["bytemuck"] }
+thiserror = "1"

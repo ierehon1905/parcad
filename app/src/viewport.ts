@@ -1,0 +1,450 @@
+/**
+ * The 3D viewport.
+ *
+ * This is a different renderer from the one the agent looks through, on purpose.
+ * The agent's renders are CPU raymarched at a fixed small size for a vision
+ * model; this one is GPU triangles at native display resolution, and its job is
+ * to be smooth under the mouse. Sharing one renderer between the two would make
+ * both worse.
+ */
+
+import * as THREE from "three";
+import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { OutlineRenderer } from "./outline";
+
+export interface Geometry {
+  positions: Float32Array;
+  normals: Float32Array;
+  indices: Uint32Array;
+  /**
+   * Logical edges as polylines, when the backend knows what they are.
+   *
+   * The implicit backend cannot supply these, and the difference is visible: a
+   * screen-space pass can only ever *guess* where an edge is from the pixels
+   * around it, while these are the curve itself.
+   */
+  edges?: number[][][];
+}
+
+export interface Bounds {
+  min: { x: number; y: number; z: number };
+  max: { x: number; y: number; z: number };
+}
+
+/** Fusion-style light canvas: dark chrome, bright work area. */
+const BG_TOP = "#e8ecf1";
+const BG_BOTTOM = "#c3ccd8";
+
+/**
+ * Diagnostic modes, via `?debug=` in the URL.
+ *
+ * `normals` paints the raw normal field, which separates "the normals are noisy"
+ * from "the surface is bumpy" — the two look alike once shaded.
+ */
+const DEBUG = new URLSearchParams(location.search).get("debug") ?? "";
+
+export class Viewport {
+  private readonly renderer: THREE.WebGLRenderer;
+  private readonly scene = new THREE.Scene();
+  private readonly camera: THREE.PerspectiveCamera;
+  private readonly controls: OrbitControls;
+  private readonly partGroup = new THREE.Group();
+  private readonly sun: THREE.DirectionalLight;
+  private ambient!: THREE.HemisphereLight;
+  private outline!: OutlineRenderer;
+  /** @internal exposed for debugging */
+  readonly debugScene = () => this.scene;
+  private grid?: THREE.GridHelper;
+  private ground?: THREE.Mesh;
+  private frame = 0;
+  /** True while showing a mesh preview rather than a solid with real edges. */
+  private preview = false;
+
+  constructor(private readonly container: HTMLElement) {
+    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    // Without tone mapping, anything approaching full brightness clips to a flat
+    // white patch and the shape reads as a silhouette with a hole in it.
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.0;
+    container.appendChild(this.renderer.domElement);
+
+    this.scene.background = gradientTexture();
+
+    this.camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100000);
+    // Z is up, as everywhere else in this project.
+    this.camera.up.set(0, 0, 1);
+    this.camera.position.set(120, -160, 110);
+
+    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
+    this.controls.enableDamping = true;
+    this.controls.dampingFactor = 0.12;
+
+    this.scene.add(this.partGroup);
+    this.scene.add(this.camera);
+
+    // Image-based lighting does most of the work. A standard material with no
+    // environment to reflect has nothing to shade *with*, which is what makes
+    // untouched three.js scenes look like flat grey plastic.
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    pmrem.compileEquirectangularShader();
+    this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    this.scene.environmentIntensity = 0.62;
+
+    // One fixed sun for directional definition and the cast shadow. Fixed rather
+    // than camera-attached: a shadow that swings around as you orbit reads as the
+    // part moving, not the camera.
+    this.sun = new THREE.DirectionalLight(0xffffff, 1.9);
+    this.sun.position.set(-0.5, -0.9, 1.4);
+    this.sun.castShadow = true;
+    this.sun.shadow.mapSize.set(2048, 2048);
+    this.sun.shadow.bias = -0.0012;
+    this.scene.add(this.sun);
+    this.scene.add(this.sun.target);
+
+    // A weak fill that rides with the camera, so faces turned away from the sun
+    // stay readable instead of going black when you orbit behind them.
+    const fill = new THREE.DirectionalLight(0xc9d6ee, 0.45);
+    fill.position.set(0, 0, 1);
+    this.camera.add(fill);
+    // A DirectionalLight aims from its position at its *target*, and the target
+    // defaults to the world origin — so parenting only the light to the camera
+    // leaves it pointing at the scene centre and the fill stops being a fill.
+    // The target has to travel with it.
+    fill.target.position.set(0, 0, -1);
+    this.camera.add(fill.target);
+
+    // Ambient sky/ground light, on only for the preview. The finished view gets
+    // its ambient from the environment map, but that is a physically-based
+    // feature the preview's cheap material cannot see — without this, any face
+    // turned away from the sun goes almost black.
+    this.ambient = new THREE.HemisphereLight(0xdfe7f2, 0x6c7382, 2.1);
+    this.ambient.visible = false;
+    this.scene.add(this.ambient);
+
+    this.outline = new OutlineRenderer(this.renderer, this.scene, this.camera);
+
+    const ro = new ResizeObserver(() => this.resize());
+    ro.observe(container);
+    this.resize();
+
+    this.tick();
+  }
+
+  private resize() {
+    const w = this.container.clientWidth;
+    const h = this.container.clientHeight;
+    if (w === 0 || h === 0) return;
+    // Let three set the CSS size as well as the drawing buffer. Passing
+    // `false` here sizes the buffer to w * devicePixelRatio but leaves the
+    // element's layout size alone, so on a retina display the canvas lays out at
+    // twice its pane and spills off the bottom-right corner.
+    this.renderer.setSize(w, h);
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+    this.outline?.setSize(w, h);
+  }
+
+  private tick = () => {
+    this.frame = requestAnimationFrame(this.tick);
+    this.controls.update();
+    if (this.preview || DEBUG === "noedge" || DEBUG === "normals") {
+      // No edge pass in preview mode. Finding creases from neighbouring pixels
+      // is guesswork, and on a dual-contoured mesh the guess lands on the
+      // zigzag of vertices that stands in for a sharp edge — which is what made
+      // this view look like a bad mesh instead of an honest one.
+      this.renderer.render(this.scene, this.camera);
+    } else {
+      // Only the part gets edges; the grid is scenery, not geometry.
+      this.outline.render([this.partGroup]);
+    }
+  };
+
+  dispose() {
+    cancelAnimationFrame(this.frame);
+    this.outline.dispose();
+    this.renderer.dispose();
+  }
+
+  /** Replace the displayed part. */
+  setGeometry(geo: Geometry, bounds: Bounds) {
+    this.clearPart();
+
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(geo.positions, 3));
+    g.setAttribute("normal", new THREE.BufferAttribute(geo.normals, 3));
+    // Expanded triangles carry per-corner normals, so there is nothing to index.
+    if (geo.indices.length > 0) {
+      g.setIndex(new THREE.BufferAttribute(geo.indices, 1));
+    }
+    g.computeBoundingSphere();
+
+    const hasRealEdges = !!geo.edges?.length;
+    this.preview = !hasRealEdges;
+    this.ambient.visible = this.preview;
+
+    // Two different jobs, so two different looks.
+    //
+    // With real edges this is a finished solid and should read as one: lit
+    // surfaces, cast shadow, crisp curves. Without them it is a sampled
+    // approximation of a distance field, and dressing that up as a finished
+    // surface is what made it look broken — every artefact of the sampling
+    // arrived looking like a defect in the part. Shown plainly as a mesh, the
+    // same geometry reads as what it is: a fast preview.
+    const mesh = new THREE.Mesh(
+      g,
+      DEBUG === "normals"
+        ? new THREE.MeshNormalMaterial()
+        : this.preview
+          ? new THREE.MeshLambertMaterial({
+              color: 0x9aa6b6,
+              flatShading: true,
+              emissive: 0x0c1018,
+            })
+          : new THREE.MeshStandardMaterial({
+              color: 0xaeb8c6,
+              roughness: 0.46,
+              metalness: 0.1,
+              envMapIntensity: 1.0,
+              flatShading: DEBUG === "flat",
+              // Push the shaded surface a hair away from the viewer so the edge
+              // lines, which lie exactly on it, win the depth test instead of
+              // stitching in and out of it.
+              polygonOffset: true,
+              polygonOffsetFactor: 1,
+              polygonOffsetUnits: 1,
+            }),
+    );
+    mesh.castShadow = true;
+    // The part does not receive its own shadow. A hard shadow of the fin thrown
+    // across the base plate is physically right and reads as a mark *on* the
+    // plate — a discoloured patch, or a step that is not there. Fusion makes
+    // the same call: cast onto the ground, never onto yourself. Crevices still
+    // darken, but from ambient occlusion, which follows the geometry rather
+    // than one arbitrary light direction.
+    mesh.receiveShadow = false;
+    this.partGroup.add(mesh);
+
+    if (hasRealEdges) {
+      // Note what is *not* here: `EdgesGeometry`. That finds an edge wherever
+      // two adjacent triangles differ by more than a threshold, which assumes a
+      // tidy triangulation. Dual contouring produces nothing of the sort. These
+      // lines are not inferred from triangles at all; they are the kernel's own
+      // curves, sampled. A straight edge is two points.
+      this.partGroup.add(edgeLines(geo.edges!));
+    } else {
+      // The triangles themselves, which is the only honest thing to draw here.
+      this.partGroup.add(meshWireframe(g));
+    }
+    // Stop guessing at creases once we are being told where they are. The
+    // silhouette half of the pass stays on regardless: the outline of a
+    // cylinder is where the surface turns away from the camera, which is a
+    // property of the view, not of the solid, so no kernel can supply it.
+    this.outline.setCreases(false);
+
+    const size = {
+      x: bounds.max.x - bounds.min.x,
+      y: bounds.max.y - bounds.min.y,
+      z: bounds.max.z - bounds.min.z,
+    };
+    this.placeGround(bounds, size);
+    this.aimSun(bounds, size);
+  }
+
+  /** Show nothing, without disturbing the camera. */
+  clearPart() {
+    for (const child of [...this.partGroup.children]) {
+      this.partGroup.remove(child);
+      const o = child as THREE.Mesh | THREE.LineSegments;
+      o.geometry?.dispose();
+      (o.material as THREE.Material)?.dispose();
+    }
+  }
+
+  /**
+   * Grid and shadow-catcher, sitting on the bottom of the part.
+   *
+   * The shadow is the point. A part floating against a flat background has no
+   * cue for where it sits or how far it stands off; a contact shadow supplies
+   * both for almost nothing.
+   */
+  private placeGround(bounds: Bounds, size: { x: number; y: number; z: number }) {
+    const extent = Math.max(size.x, size.y, size.z);
+    const step = niceStep(extent / 10);
+    const span = Math.max(step * 20, extent * 3);
+    const z = bounds.min.z;
+
+    if (this.grid) {
+      this.scene.remove(this.grid);
+      this.grid.dispose();
+    }
+    this.grid = new THREE.GridHelper(
+      span,
+      Math.max(2, Math.round(span / step)),
+      0x8b96a6,
+      0xb4bdc9,
+    );
+    // GridHelper lies in XZ; stand it up so it is the XY ground plane.
+    this.grid.rotateX(Math.PI / 2);
+    this.grid.position.z = z;
+    this.scene.add(this.grid);
+
+    if (this.ground) {
+      this.scene.remove(this.ground);
+      this.ground.geometry.dispose();
+    }
+    this.ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(span, span),
+      new THREE.ShadowMaterial({ opacity: 0.22 }),
+    );
+    this.ground.position.z = z - 0.01;
+    this.ground.receiveShadow = true;
+    this.scene.add(this.ground);
+  }
+
+  /** Point the sun at the part and tighten its shadow frustum around it. */
+  private aimSun(bounds: Bounds, size: { x: number; y: number; z: number }) {
+    const radius = Math.max(1e-3, Math.hypot(size.x, size.y, size.z) / 2);
+    const center = new THREE.Vector3(
+      (bounds.min.x + bounds.max.x) / 2,
+      (bounds.min.y + bounds.max.y) / 2,
+      (bounds.min.z + bounds.max.z) / 2,
+    );
+
+    const dir = new THREE.Vector3(-0.5, -0.9, 1.4).normalize();
+    this.sun.position.copy(center).addScaledVector(dir, radius * 4);
+    this.sun.target.position.copy(center);
+    this.sun.target.updateMatrixWorld();
+
+    // A shadow camera much larger than the part spends all its resolution on
+    // empty space, and the shadow turns to mush.
+    const cam = this.sun.shadow.camera;
+    cam.left = -radius * 1.6;
+    cam.right = radius * 1.6;
+    cam.top = radius * 1.6;
+    cam.bottom = -radius * 1.6;
+    cam.near = radius * 0.5;
+    cam.far = radius * 9;
+    cam.updateProjectionMatrix();
+  }
+
+  /** Frame the part, filling the view. */
+  frameAll(bounds: Bounds) {
+    const size = {
+      x: bounds.max.x - bounds.min.x,
+      y: bounds.max.y - bounds.min.y,
+      z: bounds.max.z - bounds.min.z,
+    };
+    const center = new THREE.Vector3(
+      (bounds.min.x + bounds.max.x) / 2,
+      (bounds.min.y + bounds.max.y) / 2,
+      (bounds.min.z + bounds.max.z) / 2,
+    );
+
+    const radius = Math.max(1e-3, Math.hypot(size.x, size.y, size.z) / 2);
+
+    // Fit against whichever field of view is *narrower*. `camera.fov` is the
+    // vertical one, so on a tall narrow pane — which is exactly what a
+    // side-by-side editor leaves — fitting to it alone crops the part off both
+    // sides.
+    const vFov = (this.camera.fov * Math.PI) / 180;
+    const hFov = 2 * Math.atan(Math.tan(vFov / 2) * this.camera.aspect);
+    const fov = Math.min(vFov, hFov);
+    const distance = (radius / Math.sin(fov / 2)) * 1.06;
+
+    const dir = new THREE.Vector3(0.72, -1, 0.62).normalize();
+    this.camera.position.copy(center).addScaledVector(dir, distance);
+    // Hug the part. A frustum spanning five orders of magnitude leaves the
+    // depth buffer with almost no precision across the part itself, and the
+    // outline pass reads that buffer.
+    this.camera.near = Math.max(distance - radius * 3, distance * 0.02);
+    this.camera.far = distance + radius * 6;
+    this.camera.updateProjectionMatrix();
+
+    this.controls.target.copy(center);
+    this.controls.update();
+  }
+}
+
+/**
+ * Turn edge polylines into one drawable object.
+ *
+ * All the edges become a single `LineSegments` rather than one object per
+ * curve: seventy-odd draw calls per frame for something this cheap would be
+ * silly, and they share a material anyway.
+ */
+function edgeLines(polylines: number[][][]): THREE.LineSegments {
+  const pts: number[] = [];
+  for (const line of polylines) {
+    for (let i = 0; i + 1 < line.length; i++) {
+      pts.push(line[i][0], line[i][1], line[i][2]);
+      pts.push(line[i + 1][0], line[i + 1][1], line[i + 1][2]);
+    }
+  }
+
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+
+  const lines = new THREE.LineSegments(
+    g,
+    new THREE.LineBasicMaterial({ color: 0x2b3440, transparent: true, opacity: 0.85 }),
+  );
+  // Edges are not geometry to be lit or to cast shadows; they are annotation.
+  lines.castShadow = false;
+  lines.receiveShadow = false;
+  // Depth-tested, so edges on the far side of the part stay hidden. That is
+  // what makes this read as a solid rather than a wireframe.
+  lines.renderOrder = 1;
+  return lines;
+}
+
+/**
+ * The triangle edges of a mesh, drawn faintly over it.
+ *
+ * Only for the preview. This is exactly the wireframe a user does not want to
+ * see on a finished part — but on a preview it is the point: it shows how
+ * coarsely the surface was sampled, which is the one thing the shaded surface
+ * cannot tell you and the one thing worth knowing before trusting a dimension.
+ */
+function meshWireframe(g: THREE.BufferGeometry): THREE.LineSegments {
+  const lines = new THREE.LineSegments(
+    new THREE.WireframeGeometry(g),
+    // Faint: at fifty thousand triangles a solid wireframe is a grey wall.
+    // Low opacity lets density itself carry the information — dense where the
+    // mesher subdivided, sparse where it did not.
+    new THREE.LineBasicMaterial({ color: 0x2b3440, transparent: true, opacity: 0.14 }),
+  );
+  lines.castShadow = false;
+  lines.receiveShadow = false;
+  return lines;
+}
+
+/** Round to 1, 2 or 5 times a power of ten. */
+function niceStep(v: number): number {
+  if (!(v > 0) || !Number.isFinite(v)) return 1;
+  const decade = 10 ** Math.floor(Math.log10(v));
+  const n = v / decade;
+  const snapped = n < 1.5 ? 1 : n < 3.5 ? 2 : n < 7.5 ? 5 : 10;
+  return snapped * decade;
+}
+
+
+/** Vertical gradient used as the canvas backdrop. */
+function gradientTexture(): THREE.Texture {
+  const c = document.createElement("canvas");
+  c.width = 2;
+  c.height = 256;
+  const ctx = c.getContext("2d")!;
+  const g = ctx.createLinearGradient(0, 0, 0, 256);
+  g.addColorStop(0, BG_TOP);
+  g.addColorStop(1, BG_BOTTOM);
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, 2, 256);
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}

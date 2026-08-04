@@ -1,0 +1,16 @@
+# Rust
+/target/
+
+# Node
+node_modules/
+app/dist/
+
+# Tauri generated
+app/src-tauri/gen/schemas/
+
+# CLI and app output: renders, STL, STEP, reports. All reproducible.
+/out/
+app/public/dev-geometry.json
+
+# macOS
+.DS_Store

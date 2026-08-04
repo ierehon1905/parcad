@@ -1,0 +1,23 @@
+[package]
+name = "parcad-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "parcad desktop application"
+
+[lib]
+name = "parcad_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+parcad-core = { path = "../../crates/parcad-core" }
+# Default features only: this pulls in the host half, which spawns a worker and
+# reads its reply. No OpenCASCADE is linked into the application binary.
+parcad-occt = { path = "../../crates/parcad-occt" }
+tauri = { version = "2", features = [] }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true

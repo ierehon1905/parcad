@@ -1,0 +1,21 @@
+# Vendored OCCT still declares `cmake_minimum_required` below 3.5, and CMake 4
+# removed that compatibility shim. The policy override is what CMake itself
+# suggests, and it has to be set for `occt-sys`'s build script — which we cannot
+# reach from our own build.rs, so it goes here and applies to every cargo run.
+[env]
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+
+# Optimise OpenCASCADE. See cmake/occt-toolchain.cmake for the whole story —
+# briefly, the `cmake` crate configures OCCT as a Debug build even under
+# `cargo build --release`, so without this the entire geometry kernel compiles
+# at -O0 and every boolean and fillet runs several times slower than it should.
+#
+# A toolchain file rather than CXXFLAGS because the `cmake` crate strips `-O`
+# arguments from forwarded compiler flags on purpose; the toolchain file is the
+# one hook it passes through untouched.
+#
+# Relative paths are resolved against the CMake build directory, which is deep
+# inside target/, so this has to be absolute. That makes the checkout location
+# part of it — `tools/build-worker.sh` verifies the optimisation actually took
+# effect rather than trusting this to have been read.
+CMAKE_TOOLCHAIN_FILE = { value = "cmake/occt-toolchain.cmake", relative = true }

@@ -1,0 +1,16 @@
+[package]
+name = "parcad-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Headless driver for parcad: graph in, renders and measurements out"
+
+[[bin]]
+name = "parcad"
+path = "src/main.rs"
+
+[dependencies]
+parcad-core = { path = "../parcad-core" }
+parcad-occt = { path = "../parcad-occt" }
+anyhow.workspace = true
+serde_json.workspace = true

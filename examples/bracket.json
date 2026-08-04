@@ -1,0 +1,16 @@
+{
+  "units": "mm",
+  "root": 9,
+  "nodes": [
+    { "op": "cuboid", "size": { "x": 80, "y": 60, "z": 8 }, "tag": "plate" },
+    { "op": "cuboid", "size": { "x": 8, "y": 60, "z": 40 } },
+    { "op": "translate", "child": 1, "by": { "x": -36, "y": 0, "z": 20 }, "tag": "wall" },
+    { "op": "union", "children": [0, 2], "blend": 6, "tag": "body" },
+    { "op": "cylinder", "r": 3, "h": 40 },
+    { "op": "translate", "child": 4, "by": { "x": 25, "y": 20, "z": 0 }, "tag": "hole_a" },
+    { "op": "translate", "child": 4, "by": { "x": 25, "y": -20, "z": 0 }, "tag": "hole_b" },
+    { "op": "translate", "child": 4, "by": { "x": 0, "y": 20, "z": 0 }, "tag": "hole_c" },
+    { "op": "translate", "child": 4, "by": { "x": 0, "y": -20, "z": 0 }, "tag": "hole_d" },
+    { "op": "difference", "base": 3, "tools": [5, 6, 7, 8], "blend": 0.8, "tag": "drilled" }
+  ]
+}

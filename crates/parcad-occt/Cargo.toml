@@ -1,0 +1,30 @@
+[package]
+name = "parcad-occt"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "B-rep backend for parcad, isolated from OCCT's failure modes"
+
+# The host half — spawn a worker, read its reply — needs no geometry kernel at
+# all. Only the worker links OpenCASCADE, so the application can depend on this
+# crate without paying for a multi-minute C++ build.
+[features]
+default = []
+kernel = ["dep:opencascade", "dep:glam"]
+
+[[bin]]
+name = "parcad-occt-worker"
+path = "src/bin/worker.rs"
+required-features = ["kernel"]
+
+[[example]]
+name = "try"
+required-features = ["kernel"]
+
+[dependencies]
+parcad-core = { path = "../parcad-core" }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+opencascade = { path = "../../vendor/opencascade", optional = true }
+glam = { version = "0.23", optional = true }
