@@ -24,10 +24,21 @@ All three currently `bail!` with an explanation rather than approximating.
 
 ## Product
 
-- **Per-edge fillet selection.** The obvious next feature, and the one that
-  reintroduces topological naming in full — which makes tags and selectors much
-  more load-bearing than they are today. Design the selector language before
-  writing the fillet code.
+- **Provenance selectors and persistent feature history.** Per-edge fillets use
+  spatial (`>Z and >Y and |X`), topological, and Boolean provenance selectors,
+  not B-rep indices; `expect({ count })` also makes a changed match count fail
+  loudly. `generatedBy: "mount_holes"` follows created Boolean section edges
+  plus OCCT modified and deleted edge relations across union and difference,
+  then combines with facts such as `curve: "circle"` and `role: "hole"`.
+  Extend that history through fillet, offset, shell, transforms and intersection
+  before treating it as universal.
+  An ordinal result selector (`nth`) may follow as an explicitly fragile,
+  sorted tie-breaker; `op#3.edge[2]` will not be an authored reference.
+- **Complete edge-treatment recipes.** Equal-distance chamfers and G1
+  rolling-ball fillets share the selected-edge target contract. Add G2 smooth
+  blends, setback/miter/blend corners, chamfer two-distance and distance/angle
+  modes, and variable/chord/asymmetric fillets only with exact kernel support;
+  declared-but-unsupported recipes must keep failing explicitly.
 - **Sidecar packaging.** `parcad-occt-worker` is copied beside the dev binaries
   by `tools/build-worker.sh`, but is *not* declared as a Tauri sidecar. A
   bundled `.app` will not find it. (`bundle.active` is currently `false`.)

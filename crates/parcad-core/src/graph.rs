@@ -5,10 +5,165 @@
 //! separation is what lets an exact B-rep backend land later without invalidating
 //! a single script.
 
+use crate::selectors::{EdgeExpectation, EdgeSelector};
 use serde::{Deserialize, Serialize};
 
 /// Index into [`Doc::nodes`].
 pub type NodeId = usize;
+
+/// How the fillet surface meets its neighbouring faces.
+///
+/// This is deliberately separate from edge selection and corner handling. A
+/// future vertex/corner fillet can use the same continuity contract without
+/// pretending that a vertex is an edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilletContinuity {
+    /// Tangent (G1) continuity. This is the exact backend's current mode.
+    Tangent,
+    /// Curvature (G2) continuity. Reserved until the exact backend supports it.
+    Curvature,
+}
+
+impl Default for FilletContinuity {
+    fn default() -> Self {
+        Self::Tangent
+    }
+}
+
+/// How a fillet resolves the corner where several selected edges meet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FilletCorner {
+    /// Extend spherical rolling-ball patches through the corner.
+    RollingBall,
+    /// Trim the adjacent fillets back from the corner by an explicit setback.
+    ///
+    /// The distance parameter for this mode will be added with the first exact
+    /// implementation; accepting it now would be a misleading no-op.
+    Setback,
+}
+
+impl Default for FilletCorner {
+    fn default() -> Self {
+        Self::RollingBall
+    }
+}
+
+/// The geometric recipe for a constant-radius edge fillet.
+///
+/// Target selection belongs to the feature's target kind (an edge set today;
+/// corner vertices and full-round face sets later). Keeping this recipe
+/// independent makes those additions additive rather than variants of an edge
+/// selector.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FilletRecipe {
+    #[serde(default)]
+    pub continuity: FilletContinuity,
+    #[serde(default)]
+    pub corner: FilletCorner,
+}
+
+impl FilletRecipe {
+    pub fn is_default(recipe: &Self) -> bool {
+        *recipe == Self::default()
+    }
+}
+
+/// The geometry that an edge treatment changes.
+///
+/// This enum is untagged so selected-edge JSON stays source-compatible: its
+/// `selector` and `expect` fields remain directly on the feature node. A
+/// vertex/corner target and a full-round face-set target can therefore become
+/// new variants without reinterpreting an edge selector as some other entity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum EdgeTarget {
+    /// A selected set of B-rep edges, optionally guarded by its cardinality.
+    Edges {
+        selector: EdgeSelector,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expect: Option<EdgeExpectation>,
+    },
+}
+
+/// How planar chamfers join where several selected edges meet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ChamferCorner {
+    /// Continue the planar bevel through the shared corner.
+    Chamfer,
+    /// Meet bevels at a miter point. Reserved for the exact backend.
+    Miter,
+    /// Blend the bevel into neighbouring faces. Reserved for the exact backend.
+    Blend,
+}
+
+impl Default for ChamferCorner {
+    fn default() -> Self {
+        Self::Chamfer
+    }
+}
+
+/// The geometric recipe for an equal-distance edge chamfer.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChamferRecipe {
+    #[serde(default)]
+    pub corner: ChamferCorner,
+}
+
+impl ChamferRecipe {
+    pub fn is_default(recipe: &Self) -> bool {
+        *recipe == Self::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_fillet_json_defaults_to_the_supported_recipe() {
+        let op: Op = serde_json::from_str(
+            r#"{"op":"fillet","child":0,"radius":2,"selector":">Z and |X"}"#,
+        )
+        .unwrap();
+
+        let Op::Fillet { recipe, target, .. } = op else {
+            panic!("expected a fillet operation");
+        };
+        assert_eq!(recipe, FilletRecipe::default());
+        assert!(matches!(target, EdgeTarget::Edges { .. }));
+    }
+
+    #[test]
+    fn fillet_recipe_round_trips_without_changing_legacy_json() {
+        let op: Op = serde_json::from_str(
+            r#"{"op":"fillet","child":0,"radius":2,"selector":">Z and |X","recipe":{"continuity":"curvature","corner":"setback"}}"#,
+        )
+        .unwrap();
+        let json = serde_json::to_value(op).unwrap();
+
+        assert_eq!(json["recipe"]["continuity"], "curvature");
+        assert_eq!(json["recipe"]["corner"], "setback");
+    }
+
+    #[test]
+    fn chamfer_has_the_same_selected_edge_target_contract() {
+        let op: Op = serde_json::from_str(
+            r#"{"op":"chamfer","child":0,"distance":1,"selector":">Z and |X"}"#,
+        )
+        .unwrap();
+
+        let Op::Chamfer { recipe, target, .. } = op else {
+            panic!("expected a chamfer operation");
+        };
+        assert_eq!(recipe, ChamferRecipe::default());
+        assert!(matches!(target, EdgeTarget::Edges { .. }));
+    }
+}
 
 /// A point or vector in document space. Units are millimetres, always.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -19,7 +174,11 @@ pub struct V3 {
 }
 
 impl V3 {
-    pub const ZERO: V3 = V3 { x: 0.0, y: 0.0, z: 0.0 };
+    pub const ZERO: V3 = V3 {
+        x: 0.0,
+        y: 0.0,
+        z: 0.0,
+    };
 
     pub fn new(x: f64, y: f64, z: f64) -> Self {
         Self { x, y, z }
@@ -51,21 +210,48 @@ impl From<V3> for nalgebra::Vector3<f64> {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
     /// Rectangular prism with the given full extents.
-    Cuboid { size: V3 },
-    Sphere { r: f64 },
+    Cuboid {
+        size: V3,
+    },
+    Sphere {
+        r: f64,
+    },
     /// Cylinder along +Z with the given full height.
-    Cylinder { r: f64, h: f64 },
+    Cylinder {
+        r: f64,
+        h: f64,
+    },
 
     /// Union. `blend` > 0 rounds the join by that radius.
-    Union { children: Vec<NodeId>, blend: f64 },
+    Union {
+        children: Vec<NodeId>,
+        blend: f64,
+    },
     /// `base` minus every entry in `tools`. `blend` > 0 fillets the cut.
-    Difference { base: NodeId, tools: Vec<NodeId>, blend: f64 },
-    Intersection { children: Vec<NodeId>, blend: f64 },
+    Difference {
+        base: NodeId,
+        tools: Vec<NodeId>,
+        blend: f64,
+    },
+    Intersection {
+        children: Vec<NodeId>,
+        blend: f64,
+    },
 
-    Translate { child: NodeId, by: V3 },
+    Translate {
+        child: NodeId,
+        by: V3,
+    },
     /// Rotation about `axis` through the origin, right-handed, in degrees.
-    Rotate { child: NodeId, axis: V3, degrees: f64 },
-    Scale { child: NodeId, by: V3 },
+    Rotate {
+        child: NodeId,
+        axis: V3,
+        degrees: f64,
+    },
+    Scale {
+        child: NodeId,
+        by: V3,
+    },
 
     /// Grow (`distance` > 0) or shrink the shape by moving its surface.
     ///
@@ -74,11 +260,48 @@ pub enum Op {
     /// conservative rather than exact near concave features, so a shrink followed
     /// by an equal grow returns the original shape; it is not a way to round
     /// edges in place. For that, use `blend` on the boolean that created the edge.
-    Offset { child: NodeId, distance: f64 },
+    Offset {
+        child: NodeId,
+        distance: f64,
+    },
     /// Hollow the shape, leaving a wall of `thickness` lying inside the original
     /// surface. The outer surface is unchanged, which is what you want for a
     /// printable enclosure.
-    Shell { child: NodeId, thickness: f64 },
+    Shell {
+        child: NodeId,
+        thickness: f64,
+    },
+
+    /// Round the B-rep edges matched by `selector`.
+    ///
+    /// This is deliberately an exact-backend operation. A distance field has no
+    /// B-rep edges to select, so the implicit evaluator reports that distinction
+    /// rather than pretending to round an arbitrary run of mesh vertices.
+    Fillet {
+        child: NodeId,
+        radius: f64,
+        /// The exact geometry to blend. The current edge-set target is flattened
+        /// to preserve existing source JSON (`selector` and optional `expect`).
+        #[serde(flatten)]
+        target: EdgeTarget,
+        /// The surface and multi-edge-corner recipe. Omitted JSON keeps the
+        /// original G1 rolling-ball behaviour for existing scripts.
+        #[serde(default, skip_serializing_if = "FilletRecipe::is_default")]
+        recipe: FilletRecipe,
+    },
+    /// Bevel the B-rep edges matched by `selector`.
+    ///
+    /// The initial exact implementation supports equal-distance chamfers. Its
+    /// selection target is deliberately shared with fillets: selectors identify
+    /// entities, while the feature selects the geometric treatment.
+    Chamfer {
+        child: NodeId,
+        distance: f64,
+        #[serde(flatten)]
+        target: EdgeTarget,
+        #[serde(default, skip_serializing_if = "ChamferRecipe::is_default")]
+        recipe: ChamferRecipe,
+    },
 }
 
 /// A node in the graph.
@@ -114,9 +337,12 @@ fn default_units() -> String {
 
 impl Doc {
     pub fn node(&self, id: NodeId) -> anyhow::Result<&Node> {
-        self.nodes
-            .get(id)
-            .ok_or_else(|| anyhow::anyhow!("node {id} does not exist (document has {} nodes)", self.nodes.len()))
+        self.nodes.get(id).ok_or_else(|| {
+            anyhow::anyhow!(
+                "node {id} does not exist (document has {} nodes)",
+                self.nodes.len()
+            )
+        })
     }
 
     /// Every node that the root actually depends on, in dependency order.
@@ -174,7 +400,9 @@ impl Doc {
             | Op::Rotate { child, .. }
             | Op::Scale { child, .. }
             | Op::Offset { child, .. }
-            | Op::Shell { child, .. } => vec![*child],
+            | Op::Shell { child, .. }
+            | Op::Fillet { child, .. }
+            | Op::Chamfer { child, .. } => vec![*child],
         })
     }
 

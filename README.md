@@ -36,6 +36,55 @@ bun tools/run.ts examples/bracket.js > /tmp/bracket.json
 ./target/release/parcad /tmp/bracket.json --brep --step out/part.step
 ```
 
+Select one exact edge for an operation with a directional query — never a
+kernel edge index:
+
+```js
+return body.edges(">Z and >Y and |X").fillet(2);
+```
+
+`>Z` means the topmost edge centre, `>Y` the positive-Y-most, and `|X` a
+straight edge parallel to X. The desktop viewport shows its temporary `edge@…`
+ID on hover and can copy a matching selector; that ID is diagnostic only and is
+not valid script input after a rebuild.
+
+For all upper rims of drilled circular holes, use a topology query instead of
+listing edge IDs:
+
+```js
+return drilled
+  .edges({
+    generatedBy: "mount_holes",
+    curve: "circle",
+    role: "hole",
+    adjacentTo: { faceNormal: "+z" },
+  })
+  .expect({ count: 4 })
+  .fillet(0.8);
+```
+
+`role: "hole"` is a closed inner circular loop; combined with `+z`, it selects
+the top rims only. `generatedBy` restricts that class to edges created by the
+named Boolean feature, so a later unrelated circular hole does not join the
+fillet set. The relation is carried through later exact Boolean operations and
+refused after operations whose history is not exposed yet. `expect({ count: 4
+})` makes an unexpected topology change a build error rather than silently
+filleting a different set of edges.
+
+### Edge treatments
+
+The same stable edge selection can drive different treatments:
+
+```js
+body.edges(">Z and >Y and |X").chamfer(1);
+body.edges({ role: "hole", adjacentTo: { faceNormal: "+z" } }).fillet(0.8);
+```
+
+Equal-distance chamfers and tangent (G1) fillets are exact today. `.smooth()`
+(also available as `.squircle()`) records a curvature-continuous G2 blend
+request and currently fails clearly until the exact backend can construct that
+surface; it is not silently approximated as a circular fillet.
+
 Run the desktop app — **from `app/`, not the repo root**:
 
 ```bash

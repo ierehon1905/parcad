@@ -23,7 +23,9 @@ pub struct Shape {
 /// shrunken copy of it.
 impl Clone for Shape {
     fn clone(&self) -> Self {
-        Self { inner: ffi::TopoDS_Shape_to_owned(&self.inner) }
+        Self {
+            inner: ffi::TopoDS_Shape_to_owned(&self.inner),
+        }
     }
 }
 
@@ -146,7 +148,9 @@ impl Shape {
         let mut make_chamfer = ffi::BRepFilletAPI_MakeChamfer_ctor(&self.inner);
 
         for edge in edges.into_iter() {
-            make_chamfer.pin_mut().add_edge(distance, &edge.as_ref().inner);
+            make_chamfer
+                .pin_mut()
+                .add_edge(distance, &edge.as_ref().inner);
         }
 
         let chamfered_shape = make_chamfer.pin_mut().Shape();
@@ -165,35 +169,24 @@ impl Shape {
     }
 
     pub fn subtract(&self, other: &Shape) -> BooleanShape {
-        let mut cut_operation = ffi::BRepAlgoAPI_Cut_ctor(&self.inner, &other.inner);
-
-        let edge_list = cut_operation.pin_mut().SectionEdges();
-        let vec = ffi::shape_list_to_vector(edge_list);
-
-        let mut new_edges = vec![];
-        for shape in vec.iter() {
-            let edge = ffi::TopoDS_cast_to_edge(shape);
-            let inner = ffi::TopoDS_Edge_to_owned(edge);
-            let edge = Edge { inner };
-            new_edges.push(edge);
-        }
-
-        let cut_shape = cut_operation.pin_mut().Shape();
-        let inner = ffi::TopoDS_Shape_to_owned(cut_shape);
-
-        BooleanShape { shape: Shape { inner }, new_edges }
+        BooleanShape::cut(self, other)
     }
 
     pub fn read_step(path: impl AsRef<Path>) -> Result<Self, Error> {
         let mut reader = ffi::STEPControl_Reader_ctor();
 
-        let status = ffi::read_step(reader.pin_mut(), path.as_ref().to_string_lossy().to_string());
+        let status = ffi::read_step(
+            reader.pin_mut(),
+            path.as_ref().to_string_lossy().to_string(),
+        );
 
         if status != ffi::IFSelect_ReturnStatus::IFSelect_RetDone {
             return Err(Error::StepReadFailed);
         }
 
-        reader.pin_mut().TransferRoots(&ffi::Message_ProgressRange_ctor());
+        reader
+            .pin_mut()
+            .TransferRoots(&ffi::Message_ProgressRange_ctor());
 
         let inner = ffi::one_shape(&reader);
 
@@ -209,7 +202,10 @@ impl Shape {
             return Err(Error::StepWriteFailed);
         }
 
-        let status = ffi::write_step(writer.pin_mut(), path.as_ref().to_string_lossy().to_string());
+        let status = ffi::write_step(
+            writer.pin_mut(),
+            path.as_ref().to_string_lossy().to_string(),
+        );
 
         if status != ffi::IFSelect_ReturnStatus::IFSelect_RetDone {
             return Err(Error::StepWriteFailed);
@@ -219,22 +215,7 @@ impl Shape {
     }
 
     pub fn union(&self, other: &Shape) -> BooleanShape {
-        let mut fuse_operation = ffi::BRepAlgoAPI_Fuse_ctor(&self.inner, &other.inner);
-        let edge_list = fuse_operation.pin_mut().SectionEdges();
-        let vec = ffi::shape_list_to_vector(edge_list);
-
-        let mut new_edges = vec![];
-        for shape in vec.iter() {
-            let edge = ffi::TopoDS_cast_to_edge(shape);
-            let inner = ffi::TopoDS_Edge_to_owned(edge);
-            let edge = Edge { inner };
-            new_edges.push(edge);
-        }
-
-        let fuse_shape = fuse_operation.pin_mut().Shape();
-        let inner = ffi::TopoDS_Shape_to_owned(fuse_shape);
-
-        BooleanShape { shape: Shape { inner }, new_edges }
+        BooleanShape::fuse(self, other)
     }
 
     pub fn write_stl<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
@@ -348,7 +329,9 @@ impl Shape {
 
         let location = ffi::TopLoc_Location_from_transform(&transform);
 
-        self.inner.pin_mut().set_global_translation(&location, false);
+        self.inner
+            .pin_mut()
+            .set_global_translation(&location, false);
     }
 
     pub fn mesh(&self) -> Mesh {
@@ -384,7 +367,9 @@ impl Shape {
             let face = ffi::BRepIntCurveSurface_Inter_face(&intersector);
             let point = ffi::BRepIntCurveSurface_Inter_point(&intersector);
 
-            let face = Face { inner: ffi::TopoDS_Face_to_owned(&face) };
+            let face = Face {
+                inner: ffi::TopoDS_Face_to_owned(&face),
+            };
 
             results.push((face, dvec3(point.X(), point.Y(), point.Z())));
 
@@ -406,7 +391,13 @@ impl Shape {
         }
 
         let mut solid_maker = ffi::BRepOffsetAPI_MakeThickSolid_ctor();
-        ffi::MakeThickSolidByJoin(solid_maker.pin_mut(), &self.inner, &faces_list, offset, 0.001);
+        ffi::MakeThickSolidByJoin(
+            solid_maker.pin_mut(),
+            &self.inner,
+            &faces_list,
+            offset,
+            0.001,
+        );
 
         let hollowed_shape = solid_maker.pin_mut().Shape();
         let inner = ffi::TopoDS_Shape_to_owned(hollowed_shape);

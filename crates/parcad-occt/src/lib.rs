@@ -23,4 +23,4 @@ pub mod host;
 pub mod protocol;
 
 pub use host::{evaluate, OcctError, Options};
-pub use protocol::{Success, Timings, Topology};
+pub use protocol::{EdgeCurve, Success, Timings, Topology};

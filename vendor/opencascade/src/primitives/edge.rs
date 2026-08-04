@@ -7,6 +7,14 @@ pub struct Edge {
     pub(crate) inner: UniquePtr<ffi::TopoDS_Edge>,
 }
 
+impl Clone for Edge {
+    fn clone(&self) -> Self {
+        Self {
+            inner: ffi::TopoDS_Edge_to_owned(&self.inner),
+        }
+    }
+}
+
 impl AsRef<Edge> for Edge {
     fn as_ref(&self) -> &Edge {
         self
@@ -77,7 +85,10 @@ impl Edge {
         let adaptor_curve = ffi::BRepAdaptor_Curve_ctor(&self.inner);
         let approximator = ffi::GCPnts_TangentialDeflection_ctor(&adaptor_curve, 0.1, 0.1);
 
-        ApproximationSegmentIterator { count: 1, approximator }
+        ApproximationSegmentIterator {
+            count: 1,
+            approximator,
+        }
     }
 
     pub fn tangent_arc(_p1: DVec3, _tangent: DVec3, _p3: DVec3) {}

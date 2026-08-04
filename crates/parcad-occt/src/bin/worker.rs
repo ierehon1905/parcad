@@ -6,7 +6,7 @@
 //! kernel terminates the process there is no return value left to carry it.
 
 use parcad_occt::backend;
-use parcad_occt::protocol::{breadcrumb, Request, Response, Success, Timings, Topology};
+use parcad_occt::protocol::{breadcrumb, EdgeCurve, Request, Response, Success, Timings, Topology};
 use std::io::Read;
 use std::time::Instant;
 
@@ -47,7 +47,7 @@ fn main() {
 ///
 /// Degenerate edges — the collapsed "edge" at the pole of a sphere, which is
 /// really a point — fall out of the same rule.
-fn edge_curves(shape: &opencascade::primitives::Shape) -> Vec<Vec<[f32; 3]>> {
+fn edge_curves(shape: &opencascade::primitives::Shape) -> Vec<EdgeCurve> {
     use std::collections::HashMap;
 
     // Keyed on the sampled points: two visits of one edge produce identical
@@ -67,7 +67,7 @@ fn edge_curves(shape: &opencascade::primitives::Shape) -> Vec<Vec<[f32; 3]>> {
             if points.len() < 2 {
                 continue;
             }
-            let key: Key = points
+            let forward: Key = points
                 .iter()
                 .map(|p| {
                     [
@@ -77,6 +77,11 @@ fn edge_curves(shape: &opencascade::primitives::Shape) -> Vec<Vec<[f32; 3]>> {
                     ]
                 })
                 .collect();
+            // An edge is the same curve whichever direction its neighbouring
+            // face happened to traverse it. Canonicalise that direction so its
+            // hover ID and face count are deterministic.
+            let backward: Key = forward.iter().rev().copied().collect();
+            let key = forward.min(backward);
 
             // Count each face at most once, so a seam's two visits from the
             // same face still total one.
@@ -88,11 +93,92 @@ fn edge_curves(shape: &opencascade::primitives::Shape) -> Vec<Vec<[f32; 3]>> {
         }
     }
 
-    faces_touching
+    let mut edges: Vec<EdgeCurve> = faces_touching
         .into_values()
         .filter(|(faces, _)| *faces >= 2)
-        .map(|(_, points)| points)
-        .collect()
+        .map(|(_, points)| make_edge_curve(points))
+        .collect();
+    edges.sort_by_key(|edge| edge_key(&edge.points));
+    for (index, edge) in edges.iter_mut().enumerate() {
+        edge.id = format!("edge@{index}");
+    }
+    edges
+}
+
+/// Same stable key used to deduplicate an edge, independent of its curve
+/// direction. The visible ID is intentionally stable within one result only.
+fn edge_key(points: &[[f32; 3]]) -> Vec<[i64; 3]> {
+    let forward: Vec<[i64; 3]> = points
+        .iter()
+        .map(|p| {
+            [
+                (p[0] as f64 * 1000.0).round() as i64,
+                (p[1] as f64 * 1000.0).round() as i64,
+                (p[2] as f64 * 1000.0).round() as i64,
+            ]
+        })
+        .collect();
+    let backward: Vec<[i64; 3]> = forward.iter().rev().copied().collect();
+    forward.min(backward)
+}
+
+fn make_edge_curve(points: Vec<[f32; 3]>) -> EdgeCurve {
+    let mut center = [0.0; 3];
+    let mut length_mm = 0.0;
+    for (index, point) in points.iter().enumerate() {
+        for axis in 0..3 {
+            center[axis] += point[axis];
+        }
+        if index > 0 {
+            let previous = points[index - 1];
+            length_mm += ((point[0] - previous[0]).powi(2)
+                + (point[1] - previous[1]).powi(2)
+                + (point[2] - previous[2]).powi(2))
+            .sqrt();
+        }
+    }
+    for value in &mut center {
+        *value /= points.len() as f32;
+    }
+
+    let direction = points.first().zip(points.last()).and_then(|(start, end)| {
+        let delta = [end[0] - start[0], end[1] - start[1], end[2] - start[2]];
+        let magnitude = (delta[0].powi(2) + delta[1].powi(2) + delta[2].powi(2)).sqrt();
+        if magnitude <= f32::EPSILON || !is_straight(&points, *start, delta, magnitude) {
+            None
+        } else {
+            Some([
+                delta[0] / magnitude,
+                delta[1] / magnitude,
+                delta[2] / magnitude,
+            ])
+        }
+    });
+
+    EdgeCurve {
+        id: String::new(),
+        points,
+        center,
+        direction,
+        length_mm,
+    }
+}
+
+fn is_straight(points: &[[f32; 3]], start: [f32; 3], delta: [f32; 3], magnitude: f32) -> bool {
+    points.iter().all(|point| {
+        let from_start = [
+            point[0] - start[0],
+            point[1] - start[1],
+            point[2] - start[2],
+        ];
+        let cross = [
+            from_start[1] * delta[2] - from_start[2] * delta[1],
+            from_start[2] * delta[0] - from_start[0] * delta[2],
+            from_start[0] * delta[1] - from_start[1] * delta[0],
+        ];
+        let distance = (cross[0].powi(2) + cross[1].powi(2) + cross[2].powi(2)).sqrt() / magnitude;
+        distance <= 1e-4
+    })
 }
 
 /// What `Mesher::new` passes to `BRepMesh_IncrementalMesh`.

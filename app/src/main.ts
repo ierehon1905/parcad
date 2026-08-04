@@ -14,7 +14,7 @@ import { javascript } from "@codemirror/lang-javascript";
 import { oneDark } from "@codemirror/theme-one-dark";
 import * as dsl from "./dsl";
 import { Shape } from "./dsl";
-import { BRACKET, ENCLOSURE } from "./examples";
+import { BRACKET, EDGE_TREATMENTS, ENCLOSURE } from "./examples";
 import { Viewport } from "./viewport";
 
 interface Report {
@@ -46,7 +46,7 @@ interface Evaluated {
   normals: number[];
   indices: number[];
   /** Logical edge curves. Omitted in mesh-preview mode. */
-  edges: number[][][];
+  edges: EdgeCurve[];
   /** Face and edge counts. Null in mesh-preview mode, where the question does
    *  not apply — which is different from the answer being zero. */
   topology: { faces: number; edges: number } | null;
@@ -59,6 +59,15 @@ interface Evaluated {
   };
 }
 
+/** A visible B-rep edge. `id` is valid only for this evaluated result. */
+interface EdgeCurve {
+  id: string;
+  points: number[][];
+  center: [number, number, number];
+  direction: [number, number, number] | null;
+  length_mm: number;
+}
+
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
 const statusEl = $("status");
@@ -67,8 +76,27 @@ const reportEl = $("report");
 const depthInput = $<HTMLInputElement>("depth");
 const depthValue = $("depth-value");
 const backendSelect = $<HTMLSelectElement>("backend");
+const edgeInspector = $("edge-inspector");
+const edgeIdEl = $("edge-id");
+const edgeDetailEl = $("edge-detail");
+const edgeSelectorEl = $("edge-selector");
+const copyEdgeSelector = $<HTMLButtonElement>("copy-edge-selector");
 
-const viewport = new Viewport($("viewport"));
+let visibleEdges: EdgeCurve[] = [];
+let hoveredEdge: EdgeCurve | undefined;
+let selectedEdge: EdgeCurve | undefined;
+let suggestedSelector: string | undefined;
+
+const viewport = new Viewport($("viewport"), {
+  onHover: (edge) => {
+    hoveredEdge = edge;
+    updateEdgeInspector();
+  },
+  onSelect: (edge) => {
+    selectedEdge = edge;
+    updateEdgeInspector();
+  },
+});
 // Handle for poking at the scene from the console during development.
 (window as unknown as Record<string, unknown>).__viewport = viewport;
 
@@ -229,13 +257,14 @@ function buildGraph(source: string): unknown {
 
 function show(result: Evaluated) {
   const { report } = result;
+  visibleEdges = normalizeEdges(result.edges);
 
   viewport.setGeometry(
     {
       positions: new Float32Array(result.positions),
       normals: new Float32Array(result.normals),
       indices: new Uint32Array(result.indices),
-      edges: result.edges,
+      edges: visibleEdges,
     },
     report.bounds,
   );
@@ -273,6 +302,119 @@ function show(result: Evaluated) {
     .filter(Boolean)
     .join("<br>");
 }
+
+/**
+ * Keep the browser-only development artifact usable until it is regenerated.
+ * The desktop worker always returns the metadata-rich form; older artifacts
+ * contain bare polylines and can still be hovered, just without a direction.
+ */
+function normalizeEdges(edges: EdgeCurve[]): EdgeCurve[] {
+  if (!Array.isArray(edges) || edges.length === 0 || !Array.isArray(edges[0])) return edges;
+
+  return (edges as unknown as number[][][]).map((points, index) => {
+    const center: [number, number, number] = [0, 0, 0];
+    let length = 0;
+    for (let i = 0; i < points.length; i++) {
+      for (let axis = 0; axis < 3; axis++) center[axis] += points[i][axis];
+      if (i > 0) length += Math.hypot(
+        points[i][0] - points[i - 1][0],
+        points[i][1] - points[i - 1][1],
+        points[i][2] - points[i - 1][2],
+      );
+    }
+    for (let axis = 0; axis < 3; axis++) center[axis] /= points.length;
+    return { id: `edge@${index}`, points, center, direction: null, length_mm: length };
+  });
+}
+
+/** Show the hovered edge's temporary ID and, when possible, a pasteable query. */
+function updateEdgeInspector() {
+  const edge = hoveredEdge ?? selectedEdge;
+  if (!edge) {
+    edgeInspector.hidden = true;
+    suggestedSelector = undefined;
+    return;
+  }
+
+  edgeInspector.hidden = false;
+  edgeIdEl.textContent = edge.id;
+  const direction = edge.direction ? ` · ${directionLabel(edge.direction)}` : "";
+  edgeDetailEl.textContent = `${fmt(edge.length_mm)} mm${direction}`;
+  suggestedSelector = suggestEdgeSelector(edge, visibleEdges);
+  edgeSelectorEl.textContent = suggestedSelector
+    ? `selector: ${suggestedSelector}`
+    : "no unique directional selector";
+  copyEdgeSelector.disabled = !suggestedSelector;
+  copyEdgeSelector.title = suggestedSelector
+    ? "Copy a selector for shape.edges(…); it is re-resolved on each evaluation"
+    : "Add a stronger directional condition, or use a future point/adjacency selector";
+}
+
+function directionLabel(direction: [number, number, number]): string {
+  const components = direction.map(Math.abs);
+  const index = components.indexOf(Math.max(...components));
+  return `|${["X", "Y", "Z"][index]}`;
+}
+
+/**
+ * Derive the shortest `>X`, `<Y`, `|Z` conjunction that identifies this
+ * currently visible edge. It is a convenience for the inspector, not a hidden
+ * ID: if the geometry later becomes ambiguous, the B-rep evaluator refuses.
+ */
+function suggestEdgeSelector(edge: EdgeCurve, all: EdgeCurve[]): string | undefined {
+  if (all.length === 0) return undefined;
+  const axes = ["X", "Y", "Z"] as const;
+  const terms: string[] = [];
+  const epsilon = 1e-4;
+
+  if (edge.direction) {
+    const axis = edge.direction.map(Math.abs).indexOf(Math.max(...edge.direction.map(Math.abs)));
+    if (Math.abs(edge.direction[axis]) >= 0.999) terms.push(`|${axes[axis]}`);
+  }
+  for (let axis = 0; axis < 3; axis++) {
+    const values = all.map((candidate) => candidate.center[axis]);
+    const maximum = Math.max(...values);
+    const minimum = Math.min(...values);
+    if (Math.abs(edge.center[axis] - maximum) <= epsilon) terms.push(`>${axes[axis]}`);
+    if (Math.abs(edge.center[axis] - minimum) <= epsilon) terms.push(`<${axes[axis]}`);
+  }
+
+  const matches = (candidate: EdgeCurve, term: string) => {
+    const axis = axes.indexOf(term[1] as (typeof axes)[number]);
+    if (term[0] === "|") {
+      return candidate.direction !== null && Math.abs(candidate.direction[axis]) >= 0.999;
+    }
+    const values = all.map((other) => other.center[axis]);
+    const extreme = term[0] === ">" ? Math.max(...values) : Math.min(...values);
+    return Math.abs(candidate.center[axis] - extreme) <= epsilon;
+  };
+
+  const selected: string[] = [];
+  let candidates = all;
+  while (candidates.length > 1) {
+    const currentCount = candidates.length;
+    const next = terms
+      .filter((term) => !selected.includes(term))
+      .map((term) => ({ term, candidates: candidates.filter((candidate) => matches(candidate, term)) }))
+      .filter(({ candidates: remaining }) => remaining.length > 0 && remaining.length < currentCount)
+      .sort((a, b) => a.candidates.length - b.candidates.length)[0];
+    if (!next || next.candidates.length >= candidates.length) break;
+    selected.push(next.term);
+    candidates = next.candidates;
+  }
+
+  return candidates.length === 1 && selected.length > 0 ? selected.join(" and ") : undefined;
+}
+
+copyEdgeSelector.addEventListener("click", async () => {
+  if (!suggestedSelector || !navigator.clipboard) return;
+  try {
+    await navigator.clipboard.writeText(suggestedSelector);
+    setStatus(`copied ${suggestedSelector}`);
+  } catch {
+    setStatus("could not copy selector", "failed");
+  }
+});
 
 const fmt = (v: number) =>
   Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(2).replace(/\.00$/, "");
@@ -322,7 +464,8 @@ markBrowserOnly();
 
 $<HTMLSelectElement>("example").addEventListener("change", (e) => {
   const which = (e.target as HTMLSelectElement).value;
-  const doc = which === "enclosure" ? ENCLOSURE : BRACKET;
+  const doc =
+    which === "enclosure" ? ENCLOSURE : which === "edge-treatments" ? EDGE_TREATMENTS : BRACKET;
   editor.dispatch({
     changes: { from: 0, to: editor.state.doc.length, insert: doc },
   });

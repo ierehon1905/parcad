@@ -13,6 +13,7 @@
         <select id="example" title="Load an example">
           <option value="bracket">bracket</option>
           <option value="enclosure">enclosure</option>
+          <option value="edge-treatments">edge treatments</option>
         </select>
         <select id="backend" title="Which geometry kernel evaluates the graph">
           <option value="brep">B-rep solid</option>
@@ -37,6 +38,13 @@
 
         <section id="viewport-pane">
           <div id="viewport"></div>
+          <div id="edge-inspector" class="edge-inspector" hidden>
+            <div class="edge-inspector-title">edge inspector</div>
+            <div id="edge-id" class="edge-id"></div>
+            <div id="edge-detail" class="edge-detail"></div>
+            <div id="edge-selector" class="edge-selector"></div>
+            <button id="copy-edge-selector" type="button" disabled>copy selector</button>
+          </div>
           <div id="report" class="report"></div>
         </section>
       </main>

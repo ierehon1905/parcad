@@ -15,10 +15,13 @@ Consequences worth internalising:
 
 - **Primitives are centred on the origin.** Placement is a separate `Translate`
   node. This keeps distance fields exact and makes symmetry the default.
-- **Tags, never indices.** A `tag` on a node is the anchor for selection. In the
-  implicit backend a tag resolves to a *region of the visible surface*; in the
-  B-rep backend it will resolve to a *set of faces*. Same name, both times. This
-  is how we dodge the topological-naming problem for as long as possible.
+- **Tags and selectors, never indices.** A `tag` on a node is the anchor for
+  named regions. For exact edge operations, a directional selector such as
+  `>Z and >Y and |X` is resolved against the current B-rep; it is not an OCCT
+  edge number. In the implicit backend a tag resolves to a *region of the
+  visible surface*; in the B-rep backend it will resolve to a *set of faces*.
+  Same name, both times. This avoids pretending that a transient topology index
+  can survive a model edit.
 - **A node's meaning can differ per backend and that is allowed** — but it must
   be documented. See "blend" below.
 
@@ -33,6 +36,102 @@ Both are defensible readings of "round this join by 6 mm". They are not the same
 shape. The desktop mesh preview therefore triangulates the B-rep result: it
 shows the same geometry as the solid view while retaining the triangle overlay.
 The implicit backend remains available for field queries, renders and perception.
+
+### Selected edge fillets are exact-only
+
+`shape.edges(">Z and >Y and |X").fillet(2)` is a B-rep operation. `>Z` and
+`<Z` select edges whose centres are at a global directional extreme; `|X`
+restricts the result to straight edges parallel to X. Terms are combined with
+`and`, and a selector that finds nothing is rejected rather than silently
+falling back to an array position. The implicit evaluator has no logical edges,
+so it explains that the operation needs the B-rep backend instead of rounding
+mesh vertices that happen to be nearby.
+
+Object selectors express topology facts that directional extrema cannot. For
+example, the bracket uses
+`shape.edges({ curve: "circle", role: "hole", adjacentTo: { faceNormal: "+z" } })`
+to select every closed circular inner loop bordering an upward-facing face.
+This keeps the four upper hole rims coupled to their geometry as holes move or
+multiply, while excluding lower rims, outside bosses, and open blend arcs.
+
+### Selector strength is intentional
+
+No one selector kind is universally strongest: each encodes a different kind of
+design intent. An authored reference should say why an edge matters, not where
+it happened to land in a kernel-owned list.
+
+| kind | example | use it when | stability |
+|---|---|---|---|
+| spatial | `>X and |Z` | the intent is truly "the rightmost vertical edge" | relative to the whole current part |
+| topology | `{ curve: "circle", role: "hole", adjacentTo: { faceNormal: "+z" } }` | the intent is a class of feature such as upper hole rims | relative to the current topology |
+| provenance | `{ generatedBy: "mount_holes", curve: "circle", role: "hole" }` | the intent is specifically an entity produced by a named Boolean operation | carried through later exact Booleans; refused after unsupported history |
+| ordinal *(planned, fragile)* | `{ generatedBy: "mount_holes", orderBy: "radius", nth: 1 }` | a deliberately ordered tie-break is really part of the intent | changes if the result set changes |
+| viewport ID | `edge@42` | inspect, hover, debug, or show code-to-viewport correspondence | one evaluation only; never script input |
+
+The source-facing reference is therefore a **named operation tag**, not
+`op#3.edge[2]`. It combines with a topology query and an optional cardinality
+assertion:
+
+```js
+drilled.edges({
+  generatedBy: "mount_holes",
+  curve: "circle",
+  role: "hole",
+  adjacentTo: { faceNormal: "+z" },
+}).expect({ count: 4 }).fillet(0.8);
+```
+
+`expect({ count })` validates the selector result in the exact backend before
+the operation changes the solid. `generatedBy` follows created Boolean section
+edges plus OCCT's modified and deleted edge relations through union and
+difference. Other topology-changing operations currently clear that relation
+and an attempted lookup fails rather than guessing. A raw ordinal remains an
+escape hatch only: it must be explicitly sorted, visually marked fragile, and
+never replace a semantic or provenance reference.
+
+### Edge treatments are a feature family, not an edge-selector trick
+
+The current API applies a treatment to an **edge-set target**:
+
+```js
+shape.edges({ generatedBy: "mount_holes", role: "hole" })
+  .fillet(0.8, { continuity: "tangent", corner: "rollingBall" });
+
+shape.edges(">Z and >Y and |X")
+  .chamfer(1.0);
+```
+
+Selection (`edges(...)`) is intentionally separate from the geometric recipe:
+selectors say *what* changes; the treatment says *how*. The current contract is:
+
+| source operation | exact support | extensible recipe |
+|---|---|---|
+| `.fillet(radius)` | tangent (G1), rolling-ball | G2 curvature, setback, variable/chord/asymmetric size laws |
+| `.chamfer(distance)` | equal-distance, planar corner | two-distance, distance/angle, miter and blend corners |
+| `.smooth(radius)` / `.squircle(radius)` | declared intent; rejected until a true G2 surface builder exists | curvature-continuous blend shape and weights |
+
+`continuity: "tangent"` is G1; `"curvature"` is G2. The fillet `corner`
+describes how several selected edges are solved at a shared vertex:
+`"rollingBall"` or `"setback"`. Chamfers independently have `"chamfer"`,
+`"miter"`, and `"blend"` corner policies. Unsupported but valid recipes are
+rejected by the exact backend rather than being accepted and ignored.
+
+`squircle` is an ergonomic alias for `.smooth()`, not a claim that this 3D edge
+treatment is a 2D superellipse. In CAD terms the intended property is G2
+curvature continuity; using that name keeps scripts and agent explanations
+geometrically honest.
+
+This leaves three future targets as first-class additions, shared by fillets,
+chamfers, and smooth blends instead of special forms of `EdgeSelector`:
+
+| target family | authoring intent | example use |
+|---|---|---|
+| edge set *(current)* | round selected boundary edges | top rims of all mounting holes |
+| corner / vertex set *(planned)* | solve a named vertex with its incident edges and faces | soften only the four exterior enclosure corners |
+| full round *(planned)* | replace a center face with a transition between two side-face sets | fully round the web between two parallel faces |
+
+This preserves a stable distinction: selectors say *what* is affected; the
+treatment recipe says *how* it changes.
 
 ## Two backends, deliberately unequal
 

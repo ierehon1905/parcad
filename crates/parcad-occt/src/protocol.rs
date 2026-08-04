@@ -42,6 +42,26 @@ pub struct Timings {
     pub export_ms: u64,
 }
 
+/// One visible logical B-rep edge, with enough information to inspect it in a
+/// viewport without ever presenting its array position as a durable reference.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EdgeCurve {
+    /// Ephemeral ID for this evaluated shape, such as `edge@12`.
+    ///
+    /// It is deliberately not accepted by the modelling DSL: boolean and
+    /// fillet operations can change topology, and this ID is only meaningful
+    /// until the next evaluation.
+    pub id: String,
+    /// The sampled exact edge curve, in document-space millimetres.
+    pub points: Vec<[f32; 3]>,
+    /// Average sample position, used for inspection and directional selectors.
+    pub center: [f32; 3],
+    /// Unit direction when this is a straight edge; absent for curves.
+    pub direction: Option<[f32; 3]>,
+    /// Polyline length in millimetres, for the hover inspector.
+    pub length_mm: f32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Success {
     pub positions: Vec<f32>,
@@ -61,7 +81,7 @@ pub struct Success {
     /// and has to be *inferred* in screen space; here the curve is a first-class
     /// object and gets sampled directly. A straight edge comes back as two
     /// points, and draws as a straight line, because it is one.
-    pub edges: Vec<Vec<[f32; 3]>>,
+    pub edges: Vec<EdgeCurve>,
     pub topology: Topology,
     pub timings: Timings,
     pub step_path: Option<PathBuf>,

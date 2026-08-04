@@ -28,6 +28,10 @@ out. Everything below could otherwise have lived in our own crate.
 - `impl Clone for Shape` — several operations take `self` by value while the
   caller still needs the original. Cheap: `TopoDS_Shape` is a handle onto a
   refcounted `TShape`.
+- Boolean operation history — `BooleanShape` now exposes the kernel's modified
+  and deleted relations for exact input edges, alongside its created section
+  edges. This is the primitive needed for ParcAD to compose stable feature
+  provenance; it is not a source-level edge-index API.
 
 ## Not added
 

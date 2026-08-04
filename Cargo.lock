@@ -2627,7 +2627,9 @@ name = "opencascade"
 version = "0.2.0"
 dependencies = [
  "cxx",
+ "cxx-build",
  "glam 0.23.0",
+ "occt-sys",
  "opencascade-sys",
  "thiserror 1.0.69",
 ]

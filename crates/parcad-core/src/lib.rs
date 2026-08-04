@@ -16,6 +16,7 @@ pub mod measure;
 pub mod mesh;
 pub mod render;
 pub mod sdf;
+pub mod selectors;
 pub mod tags;
 pub mod view;
 

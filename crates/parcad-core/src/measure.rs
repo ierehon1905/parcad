@@ -213,6 +213,9 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
         Op::Offset { child, distance } => get(*child)?.expand(*distance),
         // Shelling hollows the inside; the outer surface is unchanged.
         Op::Shell { child, thickness } => get(*child)?.expand(thickness / 2.0),
+        // An edge treatment replaces material inside the existing boundary, so
+        // it cannot enlarge this conservative bound.
+        Op::Fillet { child, .. } | Op::Chamfer { child, .. } => get(*child)?,
     })
 }
 

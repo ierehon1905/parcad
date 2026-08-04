@@ -22,7 +22,7 @@ pub struct Evaluated {
     indices: Vec<u32>,
     /// Logical edge curves, each a polyline. Empty for a mesh preview, which
     /// deliberately draws its triangles instead of solid-model edges.
-    edges: Vec<Vec<[f32; 3]>>,
+    edges: Vec<parcad_occt::EdgeCurve>,
     /// Face and edge counts. Absent from a mesh preview — it is a tessellation
     /// view rather than a topology view.
     topology: Option<parcad_occt::Topology>,

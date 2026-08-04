@@ -18,12 +18,23 @@ const body = union(plate, wall, { blend: 6 }).tag("body");
 
 const hole = cylinder(3, t * 4);
 
-return body
-  .cut(
-    ...grid(2, 2, 50, 40).map(([x, y]) => hole.at(x, y)),
-    { blend: 0.8 },
-  )
-  .tag("drilled");
+const drilled = body
+  .cut(...grid(2, 2, 36, 40).map(([x, y]) => hole.at(x, y)))
+  .tag("mount_holes");
+
+// Every selected edge is a circular hole rim bordering the upward-facing top face.
+// The same query keeps selecting just the top rim if a hole moves or more
+// holes are added; the lower rims and vertical walls are not selected.
+return drilled
+  .edges({
+    generatedBy: "mount_holes",
+    curve: "circle",
+    role: "hole",
+    adjacentTo: { faceNormal: "+z" },
+  })
+  .expect({ count: 4 })
+  .fillet(0.8)
+  .tag("top_hole_rims");
 `;
 
 export const ENCLOSURE = `// A printable enclosure — shows shell() and offset().
@@ -45,4 +56,22 @@ const lid = box(w, d, h).at(0, 0, h - wall).tag("open_top");
 const port = cylinder(5, 40).rotate("x", 90).at(0, -d / 2, 0).tag("port");
 
 return body.cut(lid).cut(port);
+`;
+
+export const EDGE_TREATMENTS = `// One edge fillet and one edge chamfer.
+// Both use stable selectors, never a kernel-owned edge number.
+
+const body = box(80, 60, 8).tag("body");
+
+const rounded = body
+  .edges(">Z and >Y and |X")
+  .expect({ count: 1 })
+  .fillet(2)
+  .tag("top_front_round");
+
+return rounded
+  .edges("<Z and >Y and |X")
+  .expect({ count: 1 })
+  .chamfer(1)
+  .tag("bottom_front_chamfer");
 `;

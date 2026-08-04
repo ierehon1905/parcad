@@ -197,6 +197,54 @@ main {
   color: var(--good);
 }
 
+.edge-inspector {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  min-width: 184px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(18, 20, 25, 0.86);
+  backdrop-filter: blur(8px);
+  color: var(--ink-dim);
+  font: 11.5px/1.5 var(--mono);
+}
+
+.edge-inspector-title {
+  color: var(--ink-dim);
+  font: 10px/1.3 -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.edge-id {
+  color: var(--ink);
+  margin-top: 2px;
+}
+
+.edge-selector {
+  margin-top: 5px;
+  color: var(--accent);
+}
+
+.edge-inspector button {
+  margin-top: 7px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel-2);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+.edge-inspector button:disabled {
+  cursor: default;
+  color: var(--ink-dim);
+  opacity: 0.65;
+}
+
 .error {
   flex: 0 0 auto;
   max-height: 34%;

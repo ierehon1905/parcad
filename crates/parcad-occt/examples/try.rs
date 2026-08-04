@@ -34,12 +34,12 @@ fn main() {
                 s.positions.len() / 3,
                 s.indices.len() / 3
             );
-            let straight = s.edges.iter().filter(|e| e.len() == 2).count();
+            let straight = s.edges.iter().filter(|e| e.points.len() == 2).count();
             println!(
                 "  curves     {} unique edges ({straight} straight, {} curved), {} points",
                 s.edges.len(),
                 s.edges.len() - straight,
-                s.edges.iter().map(|e| e.len()).sum::<usize>()
+                s.edges.iter().map(|e| e.points.len()).sum::<usize>()
             );
             // Sanity: the numbers should match what the implicit backend
             // reports for the same graph, or one of the two is wrong.

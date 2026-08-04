@@ -30,6 +30,155 @@ export interface BoolOptions {
   blend?: number;
 }
 
+/**
+ * A compact directional query over the logical edges of a shape.
+ *
+ * `>Z` means furthest in +Z, `<Y` furthest in -Y, and `|X` parallel to X.
+ * Join terms with `and`: `>Z and >Y and |X` picks the top edge at positive Y
+ * that runs along X. The query is resolved anew after each evaluation, rather
+ * than depending on an unstable B-rep edge number.
+ */
+export type AxisDirection = "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
+
+/** A topology-aware alternative to the compact directional selector string. */
+export interface EdgeQuery {
+  /** Match edges created by this named Boolean operation. */
+  generatedBy?: string;
+  /** Match a curve category identified from the B-rep edge. */
+  curve?: "line" | "circle";
+  /** Match a circular hole rim, excluding the rim of an outside boss. */
+  role?: "hole";
+  /** Match an edge touching a face with this outward normal. */
+  adjacentTo?: { faceNormal: AxisDirection };
+  /** Match edge centres at the requested document extrema. */
+  at?: Partial<Record<"x" | "y" | "z", "min" | "max">>;
+}
+
+export type EdgeSelector = string | EdgeQuery;
+
+/** A post-condition checked against the selected B-rep edge count. */
+export interface EdgeExpectation {
+  /** The exact number of edges the selector must match. */
+  count: number;
+}
+
+/** How a constant-radius edge fillet meets its neighbouring faces. */
+export interface FilletOptions {
+  /** Tangent (G1) is available now; curvature (G2) is reserved for the exact backend. */
+  continuity?: "tangent" | "curvature";
+  /** Rolling-ball is available now; setback is reserved for the exact backend. */
+  corner?: "rollingBall" | "setback";
+}
+
+/** How equal-distance chamfers meet where selected edges share a corner. */
+export interface ChamferOptions {
+  /** Planar chamfer is available now; miter and blend are reserved for the exact backend. */
+  corner?: "chamfer" | "miter" | "blend";
+}
+
+function assertEdgeSelector(selector: EdgeSelector) {
+  if (typeof selector === "string") {
+    if (!selector.trim()) throw new Error("edge selector is empty; use a term such as >Z or |X");
+    return;
+  }
+  if (
+    !selector.generatedBy &&
+    !selector.curve &&
+    !selector.role &&
+    !selector.adjacentTo &&
+    (!selector.at || !Object.values(selector.at).some(Boolean))
+  ) {
+    throw new Error("edge query is empty; specify generatedBy, curve, role, adjacentTo, or at");
+  }
+  if (selector.generatedBy !== undefined && !selector.generatedBy.trim()) {
+    throw new Error("generatedBy must name a tagged operation");
+  }
+}
+
+function assertEdgeExpectation(expectation: EdgeExpectation) {
+  if (!Number.isInteger(expectation.count) || expectation.count <= 0) {
+    throw new Error("edge expectation count must be a positive integer");
+  }
+}
+
+function assertFilletOptions(options?: FilletOptions) {
+  if (!options) return;
+  if (options.continuity && options.continuity !== "tangent" && options.continuity !== "curvature") {
+    throw new Error('fillet continuity must be "tangent" or "curvature"');
+  }
+  if (options.corner && options.corner !== "rollingBall" && options.corner !== "setback") {
+    throw new Error('fillet corner must be "rollingBall" or "setback"');
+  }
+}
+
+function assertChamferOptions(options?: ChamferOptions) {
+  if (!options) return;
+  if (
+    options.corner &&
+    options.corner !== "chamfer" &&
+    options.corner !== "miter" &&
+    options.corner !== "blend"
+  ) {
+    throw new Error('chamfer corner must be "chamfer", "miter", or "blend"');
+  }
+}
+
+/** A selected edge set, ready for an edge-specific operation. */
+export class EdgeSelection {
+  /** @internal */
+  constructor(
+    private readonly owner: Shape,
+    private readonly selector: EdgeSelector,
+    private readonly expectation?: EdgeExpectation,
+  ) {}
+
+  /**
+   * Require this selector to resolve to exactly `count` edges.
+   *
+   * This turns a topology edit that changes the target set into a clear build
+   * error instead of silently filleting a different number of edges.
+   */
+  expect(expectation: EdgeExpectation): EdgeSelection {
+    assertEdgeExpectation(expectation);
+    return new EdgeSelection(this.owner, this.selector, expectation);
+  }
+
+  /**
+   * Round the selected logical edges by `radius` millimetres.
+   *
+   * The default recipe is tangent, rolling-ball. Other valid recipes are kept
+   * in the intent graph but the exact backend refuses them until it can produce
+   * that geometry exactly.
+   */
+  fillet(radius: number, options?: FilletOptions): Shape {
+    return this.owner.fillet(radius, this.selector, this.expectation, options);
+  }
+
+  /** Bevel the selected edges by an equal distance in millimetres. */
+  chamfer(distance: number, options?: ChamferOptions): Shape {
+    return this.owner.chamfer(distance, this.selector, this.expectation, options);
+  }
+
+  /**
+   * Request a curvature-continuous (G2) blend.
+   *
+   * This is the precise CAD term for the "squircle-like" smooth transition.
+   * It is kept as authored intent now; the exact backend rejects it until it
+   * has a true G2 surface construction.
+   */
+  smooth(radius: number, options?: Omit<FilletOptions, "continuity">): Shape {
+    return this.owner.fillet(radius, this.selector, this.expectation, {
+      ...options,
+      continuity: "curvature",
+    });
+  }
+
+  /** Alias for {@link smooth}; a true squircle is a 2D superellipse, not this 3D blend. */
+  squircle(radius: number, options?: Omit<FilletOptions, "continuity">): Shape {
+    return this.smooth(radius, options);
+  }
+}
+
 export class Shape {
   /** @internal */
   constructor(
@@ -113,6 +262,50 @@ export class Shape {
   /** Hollow this out, leaving a wall of `thickness` inside the current surface. */
   shell(thickness: number): Shape {
     return new Shape(([child]) => ({ op: "shell", child, thickness }), [this]);
+  }
+
+  /**
+   * Select B-rep edges with an authored selector for a later operation.
+   *
+   * The selector is intentionally source-facing. The viewport's `edge@…` IDs
+   * are useful for inspection during one evaluation, but are never a durable
+   * script reference.
+   */
+  edges(selector: EdgeSelector): EdgeSelection {
+    assertEdgeSelector(selector);
+    return new EdgeSelection(this, selector);
+  }
+
+  /** Round the edges matched by an authored selector. */
+  fillet(
+    radius: number,
+    selector: EdgeSelector,
+    expectation?: EdgeExpectation,
+    options?: FilletOptions,
+  ): Shape {
+    assertEdgeSelector(selector);
+    if (expectation) assertEdgeExpectation(expectation);
+    assertFilletOptions(options);
+    return new Shape(
+      ([child]) => ({ op: "fillet", child, radius, selector, expect: expectation, recipe: options }),
+      [this],
+    );
+  }
+
+  /** Bevel the edges matched by an authored selector. */
+  chamfer(
+    distance: number,
+    selector: EdgeSelector,
+    expectation?: EdgeExpectation,
+    options?: ChamferOptions,
+  ): Shape {
+    assertEdgeSelector(selector);
+    if (expectation) assertEdgeExpectation(expectation);
+    assertChamferOptions(options);
+    return new Shape(
+      ([child]) => ({ op: "chamfer", child, distance, selector, expect: expectation, recipe: options }),
+      [this],
+    );
   }
 
   union(...rest: (Shape | BoolOptions)[]): Shape {

@@ -18,9 +18,20 @@ const body = union(plate, wall, { blend: 6 }).tag("body");
 
 const hole = cylinder(3, t * 4);
 
-return body
-  .cut(
-    ...grid(2, 2, 50, 40).map(([x, y]) => hole.at(x, y)),
-    { blend: 0.8 },
-  )
-  .tag("drilled");
+const drilled = body
+  .cut(...grid(2, 2, 36, 40).map(([x, y]) => hole.at(x, y)))
+  .tag("mount_holes");
+
+// Every selected edge is a circular hole rim bordering the upward-facing top face.
+// The same query keeps selecting just the top rim if a hole moves or more
+// holes are added; the lower rims and vertical walls are not selected.
+return drilled
+  .edges({
+    generatedBy: "mount_holes",
+    curve: "circle",
+    role: "hole",
+    adjacentTo: { faceNormal: "+z" },
+  })
+  .expect({ count: 4 })
+  .fillet(0.8)
+  .tag("top_hole_rims");

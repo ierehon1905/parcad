@@ -21,3 +21,7 @@ cxx = "1"
 opencascade-sys = "0.2"
 glam = { version = "0.23", features = ["bytemuck"] }
 thiserror = "1"
+
+[build-dependencies]
+cxx-build = "1"
+occt-sys = "0.2"

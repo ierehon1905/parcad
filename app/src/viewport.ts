@@ -24,7 +24,22 @@ export interface Geometry {
    * screen-space pass can only ever *guess* where an edge is from the pixels
    * around it, while these are the curve itself.
    */
-  edges?: number[][][];
+  edges?: EdgeCurve[];
+}
+
+/** A logical B-rep edge returned by the exact backend. */
+export interface EdgeCurve {
+  /** Ephemeral identifier for this evaluated model, for inspection only. */
+  id: string;
+  points: number[][];
+  center: [number, number, number];
+  direction: [number, number, number] | null;
+  length_mm: number;
+}
+
+export interface EdgeCallbacks {
+  onHover?: (edge: EdgeCurve | undefined) => void;
+  onSelect?: (edge: EdgeCurve | undefined) => void;
 }
 
 export interface Bounds {
@@ -60,8 +75,15 @@ export class Viewport {
   private frame = 0;
   /** True while showing a mesh preview rather than a solid with real edges. */
   private preview = false;
+  private readonly edgeRaycaster = new THREE.Raycaster();
+  private readonly edgeLines: THREE.LineSegments[] = [];
+  private hoveredEdge?: THREE.LineSegments;
+  private selectedEdge?: THREE.LineSegments;
 
-  constructor(private readonly container: HTMLElement) {
+  constructor(
+    private readonly container: HTMLElement,
+    private readonly edgeCallbacks: EdgeCallbacks = {},
+  ) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
@@ -82,6 +104,12 @@ export class Viewport {
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.12;
+
+    this.renderer.domElement.addEventListener("pointermove", this.pickEdge);
+    this.renderer.domElement.addEventListener("pointerleave", () => this.setHoveredEdge());
+    this.renderer.domElement.addEventListener("click", () => {
+      this.setSelectedEdge(this.hoveredEdge);
+    });
 
     this.scene.add(this.partGroup);
     this.scene.add(this.camera);
@@ -165,8 +193,57 @@ export class Viewport {
 
   dispose() {
     cancelAnimationFrame(this.frame);
+    this.renderer.domElement.removeEventListener("pointermove", this.pickEdge);
     this.outline.dispose();
     this.renderer.dispose();
+  }
+
+  /** Find the visible logical edge beneath the pointer. */
+  private pickEdge = (event: PointerEvent) => {
+    if (this.preview || this.edgeLines.length === 0) return;
+
+    const rect = this.renderer.domElement.getBoundingClientRect();
+    const pointer = new THREE.Vector2(
+      ((event.clientX - rect.left) / rect.width) * 2 - 1,
+      -((event.clientY - rect.top) / rect.height) * 2 + 1,
+    );
+    this.edgeRaycaster.setFromCamera(pointer, this.camera);
+
+    // A fixed world-space hit radius feels either tiny on a large part or huge
+    // when zoomed in. Eight screen pixels keeps edge inspection predictable.
+    const distance = this.camera.position.distanceTo(this.controls.target);
+    const visibleHeight = 2 * Math.tan((this.camera.fov * Math.PI) / 360) * distance;
+    this.edgeRaycaster.params.Line!.threshold = (visibleHeight / rect.height) * 8;
+
+    const hit = this.edgeRaycaster.intersectObjects(this.edgeLines, false)[0];
+    this.setHoveredEdge(hit?.object as THREE.LineSegments | undefined);
+  };
+
+  private setHoveredEdge(next?: THREE.LineSegments) {
+    if (next === this.hoveredEdge) return;
+    const previous = this.hoveredEdge;
+    this.hoveredEdge = next;
+    this.paintEdge(previous);
+    this.paintEdge(next);
+    this.edgeCallbacks.onHover?.(next?.userData.edge as EdgeCurve | undefined);
+  }
+
+  private setSelectedEdge(next?: THREE.LineSegments) {
+    if (next === this.selectedEdge) return;
+    const previous = this.selectedEdge;
+    this.selectedEdge = next;
+    this.paintEdge(previous);
+    this.paintEdge(next);
+    this.edgeCallbacks.onSelect?.(next?.userData.edge as EdgeCurve | undefined);
+  }
+
+  private paintEdge(line?: THREE.LineSegments) {
+    if (!line) return;
+    const material = line.material as THREE.LineBasicMaterial;
+    material.color.setHex(
+      line === this.selectedEdge ? 0xf5b942 : line === this.hoveredEdge ? 0x4c91ff : 0x2b3440,
+    );
+    material.opacity = line === this.hoveredEdge || line === this.selectedEdge ? 1 : 0.85;
   }
 
   /** Replace the displayed part. */
@@ -229,7 +306,9 @@ export class Viewport {
       // tidy triangulation. Dual contouring produces nothing of the sort. These
       // lines are not inferred from triangles at all; they are the kernel's own
       // curves, sampled. A straight edge is two points.
-      this.partGroup.add(edgeLines(geo.edges!));
+      const renderedEdges = edgeLines(geo.edges!);
+      this.partGroup.add(renderedEdges.group);
+      this.edgeLines.push(...renderedEdges.lines);
     } else {
       // Show the sampling grid in a restrained weight: it identifies this as a
       // mesh preview while leaving the smoothed surface readable.
@@ -252,11 +331,20 @@ export class Viewport {
 
   /** Show nothing, without disturbing the camera. */
   clearPart() {
+    this.hoveredEdge = undefined;
+    this.selectedEdge = undefined;
+    this.edgeLines.length = 0;
+    this.edgeCallbacks.onHover?.(undefined);
+    this.edgeCallbacks.onSelect?.(undefined);
     for (const child of [...this.partGroup.children]) {
       this.partGroup.remove(child);
-      const o = child as THREE.Mesh | THREE.LineSegments;
-      o.geometry?.dispose();
-      (o.material as THREE.Material)?.dispose();
+      child.traverse((o) => {
+        const drawable = o as THREE.Mesh | THREE.LineSegments;
+        drawable.geometry?.dispose();
+        const material = drawable.material;
+        if (Array.isArray(material)) material.forEach((m) => m.dispose());
+        else material?.dispose();
+      });
     }
   }
 
@@ -366,35 +454,36 @@ export class Viewport {
 }
 
 /**
- * Turn edge polylines into one drawable object.
+ * Turn logical edges into independently pickable drawables.
  *
- * All the edges become a single `LineSegments` rather than one object per
- * curve: seventy-odd draw calls per frame for something this cheap would be
- * silly, and they share a material anyway.
+ * Parts currently expose tens or low hundreds of B-rep edges. That keeps a
+ * separate line primitive per edge much simpler and more useful than colour-ID
+ * GPU picking, while still being negligible beside the shaded part.
  */
-function edgeLines(polylines: number[][][]): THREE.LineSegments {
-  const pts: number[] = [];
-  for (const line of polylines) {
-    for (let i = 0; i + 1 < line.length; i++) {
-      pts.push(line[i][0], line[i][1], line[i][2]);
-      pts.push(line[i + 1][0], line[i + 1][1], line[i + 1][2]);
+function edgeLines(edges: EdgeCurve[]): { group: THREE.Group; lines: THREE.LineSegments[] } {
+  const group = new THREE.Group();
+  const lines: THREE.LineSegments[] = [];
+  for (const edge of edges) {
+    const pts: number[] = [];
+    for (let i = 0; i + 1 < edge.points.length; i++) {
+      pts.push(...edge.points[i], ...edge.points[i + 1]);
     }
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
+    const line = new THREE.LineSegments(
+      geometry,
+      new THREE.LineBasicMaterial({ color: 0x2b3440, transparent: true, opacity: 0.85 }),
+    );
+    line.userData.edge = edge;
+    // Edges are annotation, not geometry to be lit or to cast shadows.
+    line.castShadow = false;
+    line.receiveShadow = false;
+    // Depth-tested, so far-side edges stay hidden and the model reads solid.
+    line.renderOrder = 1;
+    group.add(line);
+    lines.push(line);
   }
-
-  const g = new THREE.BufferGeometry();
-  g.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
-
-  const lines = new THREE.LineSegments(
-    g,
-    new THREE.LineBasicMaterial({ color: 0x2b3440, transparent: true, opacity: 0.85 }),
-  );
-  // Edges are not geometry to be lit or to cast shadows; they are annotation.
-  lines.castShadow = false;
-  lines.receiveShadow = false;
-  // Depth-tested, so edges on the far side of the part stay hidden. That is
-  // what makes this read as a solid rather than a wireframe.
-  lines.renderOrder = 1;
-  return lines;
+  return { group, lines };
 }
 
 /**

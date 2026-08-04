@@ -130,6 +130,10 @@ fn lower_node(doc: &Doc, id: NodeId, built: &[Option<Tree>]) -> Result<Tree> {
             let half = thickness / 2.0;
             (f + half).abs() - half
         }
+
+        Op::Fillet { .. } | Op::Chamfer { .. } => anyhow::bail!(
+            "per-edge treatment at node {id} needs the B-rep backend; an implicit field has no logical edges to select"
+        ),
     })
 }
 
