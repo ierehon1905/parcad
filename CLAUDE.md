@@ -8,7 +8,7 @@ already been diagnosed once.
 
 ```bash
 tools/check.sh                         # everything below that gates a change, in order
-tools/check.sh --fast                  # the same without the corpus (~35 s)
+tools/check.sh --fast                  # kernel crates only: <1 s warm, ~4 s after an edit
 cargo build --locked --release         # core, CLI, app host — no C++
 tools/build-worker.sh                  # B-rep worker; verifies OCCT is optimised
 cd app && bun install --frozen-lockfile && bun run tauri dev  # from app/
@@ -26,6 +26,13 @@ local config and does not travel with a clone:
 ```bash
 git config core.hooksPath .githooks
 ```
+
+**`--fast` builds no worker and runs no geometry.** It is the kernel crates in
+the `test` profile — incremental, opt-level 2 — and it deliberately skips
+`parcad-app` (a 5 s sleep in its sandbox test) and `tools/build-worker.sh`
+(relinking 26 MB of OpenCASCADE). Both belong to the full run. Release is
+compiled hard and slowly on purpose; never reach for it to make an edit-test
+loop faster, and see the profile comments in `Cargo.toml` before changing it.
 
 **The running app also serves MCP at <http://127.0.0.1:4242/mcp>** — the same
 `service.rs` the UI uses. Scripts from an agent run in `script.rs`'s QuickJS

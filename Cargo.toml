@@ -24,18 +24,30 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 glam = "0.30"
 
-# Release is the one that runs: the corpus, tools/bench-kernel.sh and the shipped
-# worker are all measured here, so it is compiled as hard as cargo can, and how
-# long that takes is not a consideration.
+# Release is the profile that runs: the corpus, tools/bench-kernel.sh and the
+# shipped worker are all measured here, so it is compiled as hard as is worth
+# anything and how long that takes is not a consideration.
+#
+# Measured on a 142k-triangle implicit mesh (eval/scripts/torus.js at depth 9),
+# median of 3, because guessing at this is how the -O0 bug survived:
+#
+#   no LTO, default codegen-units   2396 ms
+#   thin LTO, codegen-units = 1     2273 ms
+#   fat LTO,  codegen-units = 1     2299 ms
+#
+# thin and fat are the same number to within noise, and thin links the worker in
+# 2.9 min against fat's 7. The B-rep path does not move at all either way — that
+# work is inside OpenCASCADE's C++, which cmake compiles at -O2 and Rust's LTO
+# never sees. Swapping thin for fat is one word if that ever stops being true.
 [profile.release]
-lto = false
+lto = "thin"
+codegen-units = 1
 
-# Dev is the one that compiles: default opt-level, incremental, no LTO.
-
-# The test profile inherits dev and would therefore run unoptimised — which for
-# this codebase means the unit tests take 5.4 s to *execute* rather than 0.06 s,
-# because they are SDF evaluation and meshing rather than plumbing. opt-level 2
-# buys that back while staying incremental, which is what makes tools/check.sh
-# --fast a sub-second loop.
+# Dev is the profile that compiles: cargo's defaults, incremental, unoptimised.
+#
+# The test profile inherits it and would therefore run unoptimised too, which
+# here means the unit tests take 5.4 s to *execute* rather than 0.06 s — they
+# are SDF evaluation and meshing, not plumbing. opt-level 2 buys that back and
+# stays incremental, which is what makes `tools/check.sh --fast` sub-second.
 [profile.test]
 opt-level = 2
