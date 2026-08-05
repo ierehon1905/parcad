@@ -69,6 +69,26 @@ fn offset_slip(before: (DVec3, DVec3), after: (DVec3, DVec3), d: f64) -> f64 {
         .max_element()
 }
 
+/// Check that an edge treatment did not enlarge the part.
+///
+/// Same argument as [`offset_slip`], applied to fillets and chamfers: OCCT will
+/// return a shape rather than an error for a radius the material cannot take,
+/// and the shape is wrong. Measured — `box(10,10,10).edges(">Z").fillet(8)`
+/// came back 14.95 x 14.10 x 10.54 mm. (At radius 5 the same call segfaults,
+/// which the host already handles; radius 8 is the silent case.)
+///
+/// A fillet removes material at a convex edge and adds it inside a concavity.
+/// Neither moves a bounding-box extreme outward, whatever the shape or the
+/// selection, so containment is a fact about the result rather than a guess
+/// about the input. The check is one-sided: shrinking is the normal outcome.
+///
+/// Returns how far outside the original box the result reaches, in mm.
+fn growth_slip(before: (DVec3, DVec3), after: (DVec3, DVec3)) -> f64 {
+    let below = before.0 - after.0; // the low corner moved down
+    let above = after.1 - before.1; // the high corner moved up
+    below.max(above).max_element().max(0.0)
+}
+
 /// Five times the mesher's deflection: loose enough not to trip on
 /// tessellation, far tighter than any real geometry error.
 const SLIP_TOLERANCE_MM: f64 = 0.05;
@@ -1449,13 +1469,26 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             }
             let mut solid = build_node(doc, *child, offset)?;
             let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
+            let count = selected.edges.len();
             breadcrumb(&format!(
-                "fillet node {id} ({label}) {radius} mm on {} selected edge(s)",
-                selected.edges.len()
+                "fillet node {id} ({label}) {radius} mm on {count} selected edge(s)"
             ));
+            let before = bbox(&solid.shape);
             let generated = solid
                 .shape
                 .fillet_edges_with_history(*radius, selected.edges);
+
+            let slip = growth_slip(before, bbox(&solid.shape));
+            if slip > SLIP_TOLERANCE_MM {
+                bail!(
+                    "node {id} ({label}) fillets {count} edge(s) by {radius} mm, and the \
+                     kernel returned a shape reaching {slip:.2} mm outside the solid it \
+                     started from. A fillet can only remove material at a convex edge or \
+                     fill a concave one, so this result is wrong rather than merely \
+                     surprising. The radius is too large for the material along those \
+                     edges — reduce it, or select fewer edges"
+                );
+            }
             solid.features.add_generated(id, generated);
             BuiltShape {
                 shape: solid.shape,
@@ -1485,13 +1518,27 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             }
             let mut solid = build_node(doc, *child, offset)?;
             let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
+            let count = selected.edges.len();
             breadcrumb(&format!(
-                "chamfer node {id} ({label}) {distance} mm on {} selected edge(s)",
-                selected.edges.len()
+                "chamfer node {id} ({label}) {distance} mm on {count} selected edge(s)"
             ));
+            let before = bbox(&solid.shape);
             let generated = solid
                 .shape
                 .chamfer_edges_with_history(*distance, selected.edges);
+
+            // Identical argument to the fillet above: cutting a corner off
+            // cannot push the part outward.
+            let slip = growth_slip(before, bbox(&solid.shape));
+            if slip > SLIP_TOLERANCE_MM {
+                bail!(
+                    "node {id} ({label}) chamfers {count} edge(s) by {distance} mm, and the \
+                     kernel returned a shape reaching {slip:.2} mm outside the solid it \
+                     started from. A chamfer only cuts material away, so this result is \
+                     wrong rather than merely surprising. The distance is too large for \
+                     the material along those edges — reduce it, or select fewer edges"
+                );
+            }
             solid.features.add_generated(id, generated);
             BuiltShape {
                 shape: solid.shape,
@@ -1636,6 +1683,47 @@ mod tests {
         assert_eq!(target.vertices.len(), 1);
         assert_eq!(target.vertices[0].point, [5.0, 5.0, 5.0]);
         build(&doc).unwrap();
+    }
+
+    #[test]
+    fn growth_slip_is_one_sided() {
+        let before = (DVec3::splat(-5.0), DVec3::splat(5.0));
+        // Shrinking is the normal outcome of a fillet and must read as zero.
+        let shrunk = (DVec3::splat(-4.0), DVec3::splat(4.0));
+        assert_eq!(growth_slip(before, shrunk), 0.0);
+
+        // Growing on any single axis, in either direction, is the failure.
+        let grew_up = (DVec3::splat(-5.0), DVec3::new(5.0, 5.0, 5.4));
+        assert!((growth_slip(before, grew_up) - 0.4).abs() < 1e-9);
+        let grew_down = (DVec3::new(-5.3, -5.0, -5.0), DVec3::splat(5.0));
+        assert!((growth_slip(before, grew_down) - 0.3).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fillet_larger_than_the_material_is_rejected_not_returned() {
+        // OCCT answers this one with a shape instead of an error, and the shape
+        // is a 10 mm cube that came back roughly 14.95 x 14.10 x 10.54 mm. The
+        // post-condition is the only thing standing between that and the user.
+        let doc: Doc = serde_json::from_str(
+            r#"{
+                "root": 1,
+                "nodes": [
+                    { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+                    { "op": "fillet", "child": 0, "radius": 8, "selector": ">Z" }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        // `Shape` is not Debug, so unwrap_err() is unavailable here.
+        let err = match build(&doc) {
+            Ok(_) => panic!("the kernel returned a shape for a fillet that cannot fit"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("outside the solid it started from"),
+            "expected a containment refusal, got: {err}"
+        );
     }
 
     #[test]

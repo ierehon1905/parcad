@@ -1,0 +1,14 @@
+{
+  "name": "refuse-oversized-fillet",
+  "script": "eval/scripts/refuse-oversized-fillet.js",
+  "why": "A radius the material cannot take. OCCT segfaults; the contract is that this arrives as a typed Crashed error carrying the breadcrumb of the operation that died, not as a lost session.",
+  "brep": {
+    "refuses": {
+      "kind": "crashed",
+      "message_contains": [
+        "fillet node",
+        "5 mm on 4 selected edge(s)"
+      ]
+    }
+  }
+}

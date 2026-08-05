@@ -12,5 +12,8 @@ app/src-tauri/gen/schemas/
 /out/
 app/public/dev-geometry.json
 
+# Source archives made for sharing
+/parcad-*-source-*.zip
+
 # macOS
 .DS_Store

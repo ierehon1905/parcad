@@ -4,7 +4,14 @@ members = ["crates/*", "app/src-tauri", "vendor/opencascade"]
 # parcad-occt statically builds OpenCASCADE, which is minutes on a cold cache.
 # Keep it out of the default build so the everyday loop stays fast; build it
 # explicitly with `cargo build -p parcad-occt`.
-default-members = ["crates/parcad-core", "crates/parcad-cli", "app/src-tauri"]
+# parcad-eval is in the default set on purpose: it depends on parcad-occt with
+# default features, which is the host half only, so it compiles no C++ either.
+default-members = [
+    "crates/parcad-core",
+    "crates/parcad-cli",
+    "crates/parcad-eval",
+    "app/src-tauri",
+]
 
 [workspace.package]
 version = "0.0.1"

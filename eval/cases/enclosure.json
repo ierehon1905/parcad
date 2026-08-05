@@ -1,0 +1,31 @@
+{
+  "name": "enclosure",
+  "script": "examples/enclosure.js",
+  "why": "A shelled body, which is where the exact and implicit backends disagree most and where OCCT's hollow() silently returned a shrunken solid.",
+  "implicit": {
+    "depth": 6,
+    "size": [
+      70.0,
+      45.0,
+      28.0
+    ],
+    "volume_mm3": 22130.037,
+    "area_mm2": 22299.689,
+    "triangles": 45368,
+    "watertight": true
+  },
+  "brep": {
+    "size": [
+      70.0,
+      45.0,
+      28.0
+    ],
+    "volume_mm3": 22136.263,
+    "area_mm2": 22218.311,
+    "triangles": 4988,
+    "watertight": true,
+    "faces": 53,
+    "edges": 214,
+    "curves": 98
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "refuse-non-uniform-scale",
+  "script": "eval/scripts/refuse-non-uniform-scale.js",
+  "why": "Non-uniform scale turns cylinders into elliptic cylinders, which the exact backend has no surfaces for. It must refuse and say which scale it can do.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": ["scale uniformly"]
+    }
+  }
+}

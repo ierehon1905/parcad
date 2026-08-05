@@ -225,6 +225,16 @@ the operation refuses above `SLIP_TOLERANCE_MM` (0.05), naming the millimetre
 error. This turns a class of silent wrongness into a loud refusal, which is
 strictly better than an allow-list of "shapes we think are safe".
 
+Fillet and chamfer get the same treatment through `growth_slip()`, one-sided.
+A fillet removes material at a convex edge and fills a concave one; a chamfer
+only cuts. Neither can move a bounding-box extreme outward, whatever the shape
+or the selection, so the result must fit inside the solid it started from.
+Without this, `box(10,10,10).edges(">Z").fillet(8)` returned a 14.95 × 14.10 ×
+10.54 mm shape and no error — a radius that does not fit produces a wrong
+answer rather than a refusal. (At radius 5 the same call segfaults instead,
+which the host already turns into a breadcrumbed `Crashed`. Both outcomes are
+in the eval corpus, because they are different failures.)
+
 Two lowerings exist for the same reason:
 
 - **`Offset` of a cuboid** is lowered as *grow + fillet all 12 edges to r*.

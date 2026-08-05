@@ -185,6 +185,11 @@ const editor = new EditorView({
     }),
   ],
 });
+// Match the viewport's developer-console handle above. The desktop smoke test
+// uses this to place CodeMirror's normal selection deterministically; its
+// assertions still cover the real selection listener, Tauri IPC request, and
+// returned viewport overlay.
+(window as unknown as Record<string, unknown>).__editor = editor;
 
 // ------------------------------------------------------------ the eval cycle
 

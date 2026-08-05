@@ -1,0 +1,11 @@
+{
+  "name": "refuse-selector-drift",
+  "script": "eval/scripts/refuse-selector-drift.js",
+  "why": "A wrong cardinality must fail before the treatment changes the solid. This is the mechanism the whole provenance-selector design rests on.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": ["expected 99 edge(s), but matched"]
+    }
+  }
+}

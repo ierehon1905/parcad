@@ -248,7 +248,14 @@ fn export_step(graph: serde_json::Value, path: String) -> Result<String, String>
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // WebDriver is an end-to-end test transport, not an application feature.
+    // Keep its HTTP server out of release binaries even if somebody happens to
+    // pass `--features e2e` to a release build.
+    #[cfg(all(feature = "e2e", debug_assertions))]
+    let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
+
+    builder
         .invoke_handler(tauri::generate_handler![
             evaluate,
             inspect_edge_target,

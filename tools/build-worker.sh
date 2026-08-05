@@ -10,7 +10,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-cargo build -p parcad-occt --features kernel --release --bins
+cargo build --locked -p parcad-occt --features kernel --release --bins
 
 # Beside every application binary, which is where host::worker_path looks.
 for dir in target/debug target/release; do

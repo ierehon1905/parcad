@@ -1,0 +1,179 @@
+{
+  "note": "The selector grammar, recorded once. `crates/parcad-core/src/selectors.rs` parses selectors for the kernel and `app/src/selectors.ts` parses them for the editor; both are tested against this file so the two cannot disagree about what a selector means. `terms` is the canonical source form of each parsed term. `span` is a byte range into the authored string, used to underline the offending text. Every case states both the edge and the vertex result, because the two entry points reject different things.",
+  "cases": [
+    {
+      "why": "the composed directional selector from the docs",
+      "selector": ">Z and >Y and |X",
+      "edge": { "terms": [">Z", ">Y", "|X"], "spans": [[0, 2], [7, 9], [14, 16]] },
+      "vertex": {
+        "error": {
+          "message": "vertex selectors use only >X or <X extrema; |X applies to edges",
+          "span": [14, 16]
+        }
+      }
+    },
+    {
+      "why": "a single term is a whole selector",
+      "selector": ">Z",
+      "edge": { "terms": [">Z"], "spans": [[0, 2]] },
+      "vertex": { "terms": [">Z"], "spans": [[0, 2]] }
+    },
+    {
+      "why": "an outer corner, which is what a vertex treatment selects",
+      "selector": ">X and >Y and >Z",
+      "edge": { "terms": [">X", ">Y", ">Z"], "spans": [[0, 2], [7, 9], [14, 16]] },
+      "vertex": { "terms": [">X", ">Y", ">Z"], "spans": [[0, 2], [7, 9], [14, 16]] }
+    },
+    {
+      "why": "the minimum extreme, and a lowercase axis",
+      "selector": "<y",
+      "edge": { "terms": ["<Y"], "spans": [[0, 2]] },
+      "vertex": { "terms": ["<Y"], "spans": [[0, 2]] }
+    },
+    {
+      "why": "surrounding whitespace is trimmed, and spans stay relative to the authored string",
+      "selector": "  >Z  ",
+      "edge": { "terms": [">Z"], "spans": [[2, 4]] },
+      "vertex": { "terms": [">Z"], "spans": [[2, 4]] }
+    },
+    {
+      "why": "an empty selector names its own fix",
+      "selector": "",
+      "edge": {
+        "error": {
+          "message": "edge selector is empty; use a term such as >Z or |X",
+          "span": [0, 0]
+        }
+      },
+      "vertex": {
+        "error": {
+          "message": "edge selector is empty; use a term such as >Z or |X",
+          "span": [0, 0]
+        }
+      }
+    },
+    {
+      "why": "whitespace only is empty too, and the span covers what was typed",
+      "selector": "   ",
+      "edge": {
+        "error": {
+          "message": "edge selector is empty; use a term such as >Z or |X",
+          "span": [0, 3]
+        }
+      },
+      "vertex": {
+        "error": {
+          "message": "edge selector is empty; use a term such as >Z or |X",
+          "span": [0, 3]
+        }
+      }
+    },
+    {
+      "why": "`+` is not a selector prefix; the axis-direction spelling belongs to adjacentTo",
+      "selector": "+Z",
+      "edge": {
+        "error": {
+          "message": "invalid edge-selector term \"+Z\"; expected >X, <Y, or |Z",
+          "span": [0, 2]
+        }
+      },
+      "vertex": {
+        "error": {
+          "message": "invalid edge-selector term \"+Z\"; expected >X, <Y, or |Z",
+          "span": [0, 2]
+        }
+      }
+    },
+    {
+      "why": "there is no fourth axis",
+      "selector": ">Q",
+      "edge": {
+        "error": {
+          "message": "invalid edge-selector axis in \">Q\"; expected X, Y, or Z",
+          "span": [0, 2]
+        }
+      },
+      "vertex": {
+        "error": {
+          "message": "invalid edge-selector axis in \">Q\"; expected X, Y, or Z",
+          "span": [0, 2]
+        }
+      }
+    },
+    {
+      "why": "`and` is the only connective; disjunction would need a real grammar",
+      "selector": ">Z or >Y",
+      "edge": {
+        "error": {
+          "message": "invalid edge-selector term \">Z or >Y\"; expected >X, <Y, or |Z (joined with `and`)",
+          "span": [0, 8]
+        }
+      },
+      "vertex": {
+        "error": {
+          "message": "invalid edge-selector term \">Z or >Y\"; expected >X, <Y, or |Z (joined with `and`)",
+          "span": [0, 8]
+        }
+      }
+    },
+    {
+      "why": "the second term is the bad one, and only it is blamed",
+      "selector": ">Z and >QQ",
+      "edge": {
+        "error": {
+          "message": "invalid edge-selector term \">QQ\"; expected >X, <Y, or |Z (joined with `and`)",
+          "span": [7, 10]
+        }
+      },
+      "vertex": {
+        "error": {
+          "message": "invalid edge-selector term \">QQ\"; expected >X, <Y, or |Z (joined with `and`)",
+          "span": [7, 10]
+        }
+      }
+    },
+    {
+      "why": "the separator is exactly one space either side; a doubled space is a typo, not a term",
+      "selector": ">Z  and  >Y",
+      "edge": {
+        "error": {
+          "message": "invalid edge-selector term \">Z \"; expected >X, <Y, or |Z (joined with `and`)",
+          "span": [0, 3]
+        }
+      },
+      "vertex": {
+        "error": {
+          "message": "invalid edge-selector term \">Z \"; expected >X, <Y, or |Z (joined with `and`)",
+          "span": [0, 3]
+        }
+      }
+    },
+    {
+      "why": "a dangling connective is part of the term, not a separator, so the whole thing is blamed",
+      "selector": ">Z and ",
+      "edge": {
+        "error": {
+          "message": "invalid edge-selector term \">Z and\"; expected >X, <Y, or |Z (joined with `and`)",
+          "span": [0, 6]
+        }
+      },
+      "vertex": {
+        "error": {
+          "message": "invalid edge-selector term \">Z and\"; expected >X, <Y, or |Z (joined with `and`)",
+          "span": [0, 6]
+        }
+      }
+    },
+    {
+      "why": "a parallel term is rejected for vertices wherever it appears",
+      "selector": "|X and >Z",
+      "edge": { "terms": ["|X", ">Z"], "spans": [[0, 2], [7, 9]] },
+      "vertex": {
+        "error": {
+          "message": "vertex selectors use only >X or <X extrema; |X applies to edges",
+          "span": [0, 2]
+        }
+      }
+    }
+  ]
+}

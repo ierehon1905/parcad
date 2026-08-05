@@ -14,6 +14,8 @@
  * produces one cylinder with two placements, not two cylinders.
  */
 
+import { parseEdgeSelector, parseVertexSelector } from "./selectors";
+
 export type Vec3 = { x: number; y: number; z: number };
 
 type Emit = (childIds: number[]) => Record<string, unknown>;
@@ -134,7 +136,9 @@ function treatmentSource(method: SourceLocation["method"]): SourceLocation | und
 
 function assertEdgeSelector(selector: EdgeSelector) {
   if (typeof selector === "string") {
-    if (!selector.trim()) throw new Error("edge selector is empty; use a term such as >Z or |X");
+    // The full grammar, not just a non-empty check: this used to accept any
+    // non-blank string and let `>Q` survive until the kernel parsed it.
+    parseEdgeSelector(selector);
     return;
   }
   if (
@@ -153,10 +157,9 @@ function assertEdgeSelector(selector: EdgeSelector) {
 
 function assertVertexSelector(selector: VertexSelector) {
   if (typeof selector === "string") {
-    if (!selector.trim()) throw new Error("vertex selector is empty; use a term such as >X and >Y and >Z");
-    if (selector.split(" and ").some((term) => !/^[<>][xyz]$/i.test(term))) {
-      throw new Error("vertex selectors use only >X or <X extrema; |X applies to edges");
-    }
+    // Previously a regex that collapsed every syntax mistake into the one
+    // message about `|X`. The shared parser names the actual fault instead.
+    parseVertexSelector(selector);
     return;
   }
   if (!selector.at || !Object.values(selector.at).some(Boolean)) {

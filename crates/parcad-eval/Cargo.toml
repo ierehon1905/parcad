@@ -1,0 +1,19 @@
+[package]
+name = "parcad-eval"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "parcad-eval"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+parcad-core = { path = "../parcad-core" }
+# Default features on purpose: this is the *host* half of the B-rep backend, so
+# the harness builds without a line of C++ and asks the worker for geometry the
+# same way the app does. Cases needing the kernel skip loudly when it is absent.
+parcad-occt = { path = "../parcad-occt" }

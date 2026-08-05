@@ -62,24 +62,61 @@ All three currently `bail!` with an explanation rather than approximating.
 The reason for keeping the implicit backend is that it can answer questions a
 B-rep cannot. Barely started:
 
-- An **eval harness** — a bucket of parts with expected measurements, plus
-  ablation of perception channels, so "does the agent still get this right
-  without renders?" is a measurable question.
+- An **eval harness**. The deterministic half exists: `crates/parcad-eval`
+  runs `eval/cases/*.json` through both backends and checks measurements,
+  topology counts and required refusals. Still missing is the half that makes
+  it a *perception* harness — ablation of the channels an agent is given, so
+  "does it still get this right without renders?" is a measurable question.
+  That needs a bundle format (which artifacts a case exposes), a question set
+  with expected answers, and a runner that grades a model's replies.
 - **Non-human perception modes**: field probes, slice stacks, ray arrays,
   printability fields. These are cheap on an SDF and impossible on a B-rep, and
   they are the point of having both.
 
 ## Reference numbers
 
-Verified geometry (implicit vs B-rep):
+These now live in `eval/cases/*.json` and are checked rather than described:
 
-| case | implicit | B-rep |
+```bash
+cargo run -p parcad-eval              # every case, both backends
+cargo run -p parcad-eval -- --update  # re-record after an intended change
+```
+
+The table that used to sit here was hand-maintained and had drifted — it
+claimed 12 018 triangles and 31 faces for the bracket where the part now
+measures 6 838 and 28, and a 26 mm enclosure that is 28 mm. That is the whole
+argument for the corpus: nobody edits a prose table when a face count moves.
+
+Where the two backends disagree, the implicit column's error is not a bug — it
+is dual contouring at the chosen depth, and each case carries a looser
+tolerance for that path than for the exact one. It is also exactly why the
+B-rep backend exists.
+
+The corpus also asserts the refusals. Non-uniform scale, blended intersection,
+inward offset and a wrong `expect({ count })` must each fail with a named
+variant *and* with the words a reader needs to fix it, because "refuse rather
+than approximate" is worth nothing if the refusal does not say what to do
+instead.
+
+### Edge treatments now verify their own work *(closed)*
+
+Found by the corpus on its first run. `box(10,10,10).edges(">Z").fillet(r)`:
+
+| r | before | after |
 |---|---|---|
-| bracket | 81.51 × 63.01 × 44.17, 50 006 tris | 80.00 × 60.00 × 44.00, 12 018 tris, 31 faces / 154 edges |
-| enclosure | 70.00 × 45.00 × 26.01, 71 792 tris | 70.00 × 45.00 × 26.00, 3 976 tris, 52 faces / 220 edges |
-| `box.rotate("z",45)` | 21.17, vol 1199.82 | 21.21, vol 1200.00 (exact) |
-| `box.scale(2)` | vol 7999.22 | vol 8000.00 (exact) |
-| `box(64,39,22).shell(2)` | vol 17107.27 | vol 17112.00 (exact) |
+| 2, 4 | correct; 10 × 10 × 10, volume falls | unchanged |
+| 5 | SIGSEGV — caught, typed, breadcrumbed | unchanged; working as designed |
+| 8 | **14.95 × 14.10 × 10.54** — a fillet that grew the solid | refused, naming the radius |
 
-The implicit column's error is not a bug — it is dual contouring at the chosen
-depth. It is also exactly why the B-rep backend exists.
+`offset` had `offset_slip()`; fillet and chamfer had nothing. They now share
+`growth_slip()`, which is the same idea one-sided: a fillet removes material at
+a convex edge and fills a concave one, and a chamfer only cuts, so neither can
+move a bounding-box extreme outward. Containment is a fact about the result
+rather than a guess about the input, which is what makes it preferable to an
+allow-list. Guarded by `eval/cases/fillet-must-not-grow.json` and a unit test
+in `backend.rs`.
+
+Worth noting what the right answer was *not*: a 10 mm cube. A rolling ball of
+radius 8 does not fit those edges at all, so refusing is the whole of the
+correct behaviour — the first draft of that eval case asserted a cube and was
+wrong for a second reason.

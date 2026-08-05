@@ -8,8 +8,17 @@
 //! A selector describes geometry; it is not a persisted OCCT edge number.
 //! Topology can be created, split, or deleted by a later operation, so a
 //! stable-looking list index would be a misleading authoring interface.
+//!
+//! This grammar is authored in two places — here, and in `app/src/selectors.ts`
+//! so the editor can reject a term without a round trip through the kernel.
+//! Two implementations of one grammar drift silently, which is why both are
+//! driven by the same corpus in `eval/selectors.json`. Change the rules here,
+//! record them there, and the TypeScript test fails until it agrees.
 
-use anyhow::{bail, Result};
+use std::fmt;
+use std::ops::Range;
+
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 /// An authored edge reference. Strings are concise for simple directional
@@ -188,20 +197,59 @@ pub enum EdgeSelectorTerm {
     Parallel(Axis),
 }
 
+impl EdgeSelectorTerm {
+    /// The term's canonical source form, which is also how the shared corpus
+    /// in `eval/selectors.json` records a successful parse.
+    pub fn to_source(self) -> String {
+        let (prefix, axis) = match self {
+            EdgeSelectorTerm::Max(axis) => ('>', axis),
+            EdgeSelectorTerm::Min(axis) => ('<', axis),
+            EdgeSelectorTerm::Parallel(axis) => ('|', axis),
+        };
+        format!("{prefix}{}", ["X", "Y", "Z"][axis.component()])
+    }
+}
+
+/// One parsed term and the byte range of the source text it came from.
+///
+/// The range is what turns a rejected selector into an underline under the one
+/// bad term rather than under the whole string literal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpannedTerm {
+    pub term: EdgeSelectorTerm,
+    pub span: Range<usize>,
+}
+
+/// A selector-syntax failure, and the text responsible for it.
+///
+/// The span is a byte range into the *authored* string, including any leading
+/// whitespace the parser trims, so an editor can map it back to a document
+/// offset by adding the position of the opening quote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectorError {
+    pub message: String,
+    pub span: Range<usize>,
+}
+
+impl fmt::Display for SelectorError {
+    // Only the message: the existing `anyhow` callers put this straight into a
+    // user-facing evaluation error, where a byte range would be noise.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for SelectorError {}
+
 /// Parse a compact edge-selector expression.
 ///
 /// Keeping this parser kernel-agnostic means the DSL can validate and document
 /// the syntax without assigning a permanent identity to a kernel sub-shape.
 pub fn parse_edge_selector(source: &str) -> Result<Vec<EdgeSelectorTerm>> {
-    let source = source.trim();
-    if source.is_empty() {
-        bail!("edge selector is empty; use a term such as >Z or |X")
-    }
-
-    source
-        .split(" and ")
-        .map(parse_term)
-        .collect::<Result<Vec<_>>>()
+    Ok(parse_edge_selector_spanned(source)?
+        .into_iter()
+        .map(|spanned| spanned.term)
+        .collect())
 }
 
 /// Parse a compact vertex-selector expression.
@@ -210,34 +258,84 @@ pub fn parse_edge_selector(source: &str) -> Result<Vec<EdgeSelectorTerm>> {
 /// while `|X` is intentionally rejected instead of silently meaning something
 /// different from its edge-selector counterpart.
 pub fn parse_vertex_selector(source: &str) -> Result<Vec<EdgeSelectorTerm>> {
-    let terms = parse_edge_selector(source)?;
-    if terms
-        .iter()
-        .any(|term| matches!(term, EdgeSelectorTerm::Parallel(_)))
-    {
-        bail!("vertex selectors use only >X or <X extrema; |X applies to edges")
+    Ok(parse_vertex_selector_spanned(source)?
+        .into_iter()
+        .map(|spanned| spanned.term)
+        .collect())
+}
+
+/// Parse an edge selector, keeping each term's source range.
+pub fn parse_edge_selector_spanned(source: &str) -> Result<Vec<SpannedTerm>, SelectorError> {
+    // Offsets stay relative to the untrimmed input; the caller knows where the
+    // string literal starts, not where the parser decided the content did.
+    let leading = source.len() - source.trim_start().len();
+    let trimmed = source.trim();
+    if trimmed.is_empty() {
+        return Err(SelectorError {
+            message: "edge selector is empty; use a term such as >Z or |X".into(),
+            span: 0..source.len(),
+        });
+    }
+
+    // Split on the separator while keeping offsets. `match_indices` finds the
+    // same non-overlapping separators `split(" and ")` would, so an oddly
+    // spaced selector is still rejected exactly as it was before.
+    let mut terms = Vec::new();
+    let mut at = 0;
+    for (found, separator) in trimmed.match_indices(" and ").chain([(trimmed.len(), "")]) {
+        let span = leading + at..leading + found;
+        terms.push(SpannedTerm {
+            term: parse_term(&trimmed[at..found], span.clone())?,
+            span,
+        });
+        at = found + separator.len();
     }
     Ok(terms)
 }
 
-fn parse_term(term: &str) -> Result<EdgeSelectorTerm> {
+/// Parse a vertex selector, keeping each term's source range.
+pub fn parse_vertex_selector_spanned(source: &str) -> Result<Vec<SpannedTerm>, SelectorError> {
+    let terms = parse_edge_selector_spanned(source)?;
+    if let Some(parallel) = terms
+        .iter()
+        .find(|spanned| matches!(spanned.term, EdgeSelectorTerm::Parallel(_)))
+    {
+        return Err(SelectorError {
+            message: "vertex selectors use only >X or <X extrema; |X applies to edges".into(),
+            span: parallel.span.clone(),
+        });
+    }
+    Ok(terms)
+}
+
+fn parse_term(term: &str, span: Range<usize>) -> Result<EdgeSelectorTerm, SelectorError> {
+    let bad = |message: String| SelectorError { message, span };
+
     let bytes = term.as_bytes();
     if bytes.len() != 2 {
-        bail!("invalid edge-selector term {term:?}; expected >X, <Y, or |Z (joined with `and`)")
+        return Err(bad(format!(
+            "invalid edge-selector term {term:?}; expected >X, <Y, or |Z (joined with `and`)"
+        )));
     }
 
     let axis = match bytes[1].to_ascii_uppercase() {
         b'X' => Axis::X,
         b'Y' => Axis::Y,
         b'Z' => Axis::Z,
-        _ => bail!("invalid edge-selector axis in {term:?}; expected X, Y, or Z"),
+        _ => {
+            return Err(bad(format!(
+                "invalid edge-selector axis in {term:?}; expected X, Y, or Z"
+            )))
+        }
     };
 
     match bytes[0] {
         b'>' => Ok(EdgeSelectorTerm::Max(axis)),
         b'<' => Ok(EdgeSelectorTerm::Min(axis)),
         b'|' => Ok(EdgeSelectorTerm::Parallel(axis)),
-        _ => bail!("invalid edge-selector term {term:?}; expected >X, <Y, or |Z"),
+        _ => Err(bad(format!(
+            "invalid edge-selector term {term:?}; expected >X, <Y, or |Z"
+        ))),
     }
 }
 
@@ -263,6 +361,85 @@ mod tests {
         assert!(parse_edge_selector("+Z").is_err());
         assert!(parse_edge_selector(">Q").is_err());
         assert!(parse_edge_selector(">Z or >Y").is_err());
+    }
+
+    /// The shared grammar corpus, which `app/src/selectors.test.ts` also runs.
+    ///
+    /// Both sides assert against the same recorded messages and spans, so a
+    /// rule changed in one implementation and not the other is a test failure
+    /// here or there rather than an editor that accepts what the kernel later
+    /// refuses.
+    #[test]
+    fn agrees_with_the_shared_selector_corpus() {
+        #[derive(Deserialize)]
+        struct Corpus {
+            cases: Vec<Case>,
+        }
+        #[derive(Deserialize)]
+        struct Case {
+            why: String,
+            selector: String,
+            edge: Expected,
+            vertex: Expected,
+        }
+        #[derive(Deserialize)]
+        struct Expected {
+            terms: Option<Vec<String>>,
+            spans: Option<Vec<(usize, usize)>>,
+            error: Option<ExpectedError>,
+        }
+        #[derive(Deserialize)]
+        struct ExpectedError {
+            message: String,
+            span: (usize, usize),
+        }
+
+        let corpus: Corpus =
+            serde_json::from_str(include_str!("../../../eval/selectors.json")).unwrap();
+
+        for case in &corpus.cases {
+            for (kind, expected, parsed) in [
+                (
+                    "edge",
+                    &case.edge,
+                    parse_edge_selector_spanned(&case.selector),
+                ),
+                (
+                    "vertex",
+                    &case.vertex,
+                    parse_vertex_selector_spanned(&case.selector),
+                ),
+            ] {
+                let at = format!("{kind} {:?} ({})", case.selector, case.why);
+                match (&expected.terms, &expected.error, parsed) {
+                    (Some(terms), None, Ok(actual)) => {
+                        assert_eq!(
+                            actual
+                                .iter()
+                                .map(|spanned| spanned.term.to_source())
+                                .collect::<Vec<_>>(),
+                            *terms,
+                            "{at}"
+                        );
+                        if let Some(spans) = &expected.spans {
+                            assert_eq!(
+                                actual
+                                    .iter()
+                                    .map(|spanned| (spanned.span.start, spanned.span.end))
+                                    .collect::<Vec<_>>(),
+                                *spans,
+                                "{at}: spans"
+                            );
+                        }
+                    }
+                    (None, Some(error), Err(actual)) => {
+                        assert_eq!(actual.message, error.message, "{at}");
+                        assert_eq!((actual.span.start, actual.span.end), error.span, "{at}: span");
+                    }
+                    (_, _, actual) => panic!("{at}: corpus and parser disagree, got {actual:?}"),
+                }
+            }
+        }
     }
 
     #[test]

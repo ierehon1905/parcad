@@ -1,0 +1,14 @@
+{
+  "name": "fillet-must-not-grow",
+  "script": "eval/scripts/fillet-must-not-grow.js",
+  "why": "A fillet that cannot fit must refuse, not return a larger solid. This returned a 14.95 x 14.10 x 10.54 mm shape from a 10 mm cube until fillet got the same bounding-box post-condition offset already had.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "outside the solid it started from",
+        "reduce it, or select fewer edges"
+      ]
+    }
+  }
+}

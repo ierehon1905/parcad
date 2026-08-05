@@ -163,6 +163,14 @@ cargo test --locked --workspace
 cd app && bun run build
 ```
 
+The desktop-only regression harness launches the compiled Tauri app with its
+real OCCT worker. It verifies the bracket's generated-edge source link and
+selector-caret target preview, both of which the browser fixture cannot cover:
+
+```bash
+cd app && bun run test:e2e
+```
+
 ## Layout
 
 ```

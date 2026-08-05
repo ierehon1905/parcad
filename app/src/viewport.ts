@@ -124,6 +124,11 @@ export class Viewport {
     this.controls.dampingFactor = 0.12;
 
     this.renderer.domElement.addEventListener("pointermove", this.pickEntity);
+    // WKWebView's WebDriver endpoint currently emits mouse events for an
+    // automated hover. Handling both keeps the real pointer interaction intact
+    // while making that native desktop path inspectable in regression tests.
+    // `setHovered…` is idempotent, so browsers that emit both do no extra work.
+    this.renderer.domElement.addEventListener("mousemove", this.pickEntity);
     this.renderer.domElement.addEventListener("pointerleave", () => {
       this.setHoveredEdge();
       this.setHoveredVertex();
@@ -216,12 +221,13 @@ export class Viewport {
   dispose() {
     cancelAnimationFrame(this.frame);
     this.renderer.domElement.removeEventListener("pointermove", this.pickEntity);
+    this.renderer.domElement.removeEventListener("mousemove", this.pickEntity);
     this.outline.dispose();
     this.renderer.dispose();
   }
 
   /** Find the visible B-rep entity beneath the pointer. */
-  private pickEntity = (event: PointerEvent) => {
+  private pickEntity = (event: PointerEvent | MouseEvent) => {
     if (this.preview || this.edgeLines.length === 0) return;
 
     const rect = this.renderer.domElement.getBoundingClientRect();

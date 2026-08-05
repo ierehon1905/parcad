@@ -45,7 +45,7 @@ cases produced byte-identical geometry after the change.
 "could not determine executable to run for package tauri".
 
 ```bash
-cd app && bunx tauri dev
+cd app && bun install --frozen-lockfile && bun run tauri dev
 ```
 
 ### `cargo build -p parcad-occt` does not build the worker
