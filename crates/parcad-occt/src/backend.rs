@@ -12,7 +12,8 @@ use anyhow::{bail, Result};
 use glam::{DMat3, DVec3};
 use opencascade::{
     adhoc::AdHocShape,
-    primitives::{BooleanShape, Edge, Face, Shape, Wire},
+    angle::Angle,
+    primitives::{BooleanShape, Edge, Face, Shape, Solid, Wire},
 };
 use parcad_core::{
     graph::{ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, NodeId, Op, V3},
@@ -112,6 +113,7 @@ fn op_name(op: &Op) -> &'static str {
         Op::Cuboid { .. } => "box",
         Op::Sphere { .. } => "sphere",
         Op::Revolve { .. } => "revolve",
+        Op::Torus { .. } => "torus",
         Op::Extrude { .. } => "extrude",
         Op::Mirror { .. } => "mirror",
         Op::Cylinder { .. } => "cylinder",
@@ -1341,38 +1343,83 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             BuiltShape::primitive(placed, node.tag.as_deref())
         }
 
-        Op::Extrude { profile, height } => {
+        Op::Torus {
+            major,
+            minor,
+            sweep,
+        } => {
             breadcrumb(&format!(
-                "extrude node {id} ({label}) of a {}-point outline, {height} mm thick",
+                "torus node {id} ({label}), major {major} minor {minor}, {sweep}° of sweep"
+            ));
+            Op::validate_torus(*major, *minor, *sweep)
+                .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+
+            // `BRepPrimAPI_MakeTorus` is not bound, but a torus is a circle
+            // revolved about a parallel axis — the same construction as
+            // `Op::Revolve`, with `Edge::circle` in place of the segments. The
+            // circle is drawn in the XZ plane so the revolution sweeps out of
+            // it, exactly as a revolve section is.
+            let circle = Edge::circle(DVec3::new(*major, 0.0, 0.0), DVec3::Y, *minor);
+            let face = Face::from_wire(&Wire::from_edges([&circle]));
+            let arc = (*sweep < 360.0).then(|| Angle::Degrees(*sweep));
+            let solid = face.revolve(DVec3::ZERO, DVec3::Z, arc);
+
+            let placed = Shape::from(solid);
+            let placed = if offset == DVec3::ZERO {
+                placed
+            } else {
+                placed.translated(offset)
+            };
+            BuiltShape::primitive(placed, node.tag.as_deref())
+        }
+
+        Op::Extrude {
+            profile,
+            height,
+            draft,
+        } => {
+            breadcrumb(&format!(
+                "extrude node {id} ({label}) of a {}-point outline, {height} mm thick, {draft}° draft",
                 profile.len()
             ));
-            Op::validate_outline(profile)
-                .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
             if !height.is_finite() || *height <= 0.0 {
                 bail!("node {id} ({label}) extrudes by {height}, which is not a thickness");
             }
+            // The graph owns the rules, including how much draft this outline
+            // can carry, so the two backends refuse the same parts.
+            let (_, top) = Op::draft_inset(profile, *height, *draft)
+                .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
 
             // The outline is drawn at z = -height/2 and swept up, which centres
             // the solid on the origin like every other primitive.
             let base = -height / 2.0;
-            let points: Vec<DVec3> = profile
-                .iter()
-                .map(|[x, y]| DVec3::new(*x, *y, base))
-                .collect();
+            let ring = |points: &[[f64; 2]], z: f64| {
+                let points: Vec<DVec3> = points
+                    .iter()
+                    .map(|[x, y]| DVec3::new(*x, *y, z))
+                    .collect();
+                let edges: Vec<Edge> = points
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, a)| {
+                        let b = points[(i + 1) % points.len()];
+                        // Skip a repeated point: OCCT refuses a zero-length
+                        // edge, and the polygon is unchanged without it.
+                        (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
+                    })
+                    .collect();
+                Wire::from_edges(&edges)
+            };
 
-            let edges: Vec<Edge> = points
-                .iter()
-                .enumerate()
-                .filter_map(|(i, a)| {
-                    let b = points[(i + 1) % points.len()];
-                    // Skip a repeated point: OCCT refuses a zero-length edge,
-                    // and the polygon is unchanged without it.
-                    (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
-                })
-                .collect();
-
-            let face = Face::from_wire(&Wire::from_edges(&edges));
-            let solid = face.extrude(DVec3::Z * *height);
+            let solid = if *draft == 0.0 {
+                Face::from_wire(&ring(profile, base)).extrude(DVec3::Z * *height)
+            } else {
+                // A drafted prism is a loft between the outline and its inset
+                // copy. `BRepOffsetAPI_DraftAngle` is not bound, and it would be
+                // the wrong tool anyway: it modifies faces of a finished solid,
+                // while this builds the tapered walls directly.
+                Solid::loft([&ring(profile, base), &ring(&top, base + height)])
+            };
 
             let placed = Shape::from(solid);
             let placed = if offset == DVec3::ZERO {

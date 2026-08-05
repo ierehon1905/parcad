@@ -144,18 +144,53 @@ Ordered, because each item is the prerequisite for the next:
    one `EvaluationSnapshot` that every transport serialises and nobody
    redefines.
 2. **Renders, sections and region maps as fields on that snapshot**, not as
-   further bespoke tools. Renders come off the distance field, so a part
-   *measured* through the B-rep is *seen* through the implicit backend; the two
-   disagree by the blend bulge, in millimetres, and the artifact has to say
-   which one drew it. A section view is a render-time half-plane, needs no new
-   op, and `docs/DSL_GAPS.md` records it as the thing most missed while writing
-   all twelve examples.
+   further bespoke tools. A section view is a render-time half-plane, needs no
+   new op, and `docs/DSL_GAPS.md` records it as the thing most missed while
+   writing all twelve examples. Renders and region maps are done; see below for
+   what drawing them off the wrong backend cost.
 3. **Compare.** The loop in `AI_CAD_PLATFORM.md` is inspect → plan → modify →
    evaluate → *compare* → verify → explain, and there is no diff. Two graphs in,
    geometry/topology/measurement delta out.
 4. **Lineage through fillet, offset, shell and transforms** — see the provenance
    bullet above. `equivalent_tags` is only ever as sound as the history under
    it.
+### A render must depict the backend that was measured *(closed)*
+
+The same bug as `1861964 Fix mesh preview geometry`, found again the moment
+renders became reachable by an agent rather than by the CLI. Renders came off
+the distance field whatever had been measured, and a blended union is a
+polynomial smooth-minimum there and a rolling-ball fillet in the exact kernel.
+Measured on `examples/bracket.js`:
+
+| | the part | the picture of it |
+|---|---|---|
+| size | 80.00 × 60.00 × 44.00 mm | 81.50 × 63.00 × 44.17 mm |
+| volume | 55 074.79 mm³ | 56 218.85 mm³ |
+
+3 mm of material in Y that is not there, and a bounding box grown *outward* —
+which is precisely what `growth_slip()` refuses when a real fillet does it.
+Worse, the field refuses `Fillet` and `Chamfer` outright, so most of
+`examples/` could not be drawn at all.
+
+`render::raster` fixes it by rasterising the evaluated mesh into the same
+`GeometryBuffer` the raymarcher produces, so shading, ambient occlusion,
+silhouette outlines, `model_point` and tag attribution are all the code that
+already existed and cannot drift from it. The picture is now of the same
+evaluation as the numbers beside it.
+
+Two things worth keeping:
+
+- `a_rastered_view_lands_where_the_raymarched_one_does` compares silhouette
+  coverage between the two renderers across all seven views. It caught a
+  half-pixel sampling offset in the first draft — 4% of coverage, and a picture
+  that looks entirely correct while being systematically shifted. `view`'s
+  promise that a feature lands on comparable pixels now spans two renderers.
+- Region *attribution* still asks the distance field whose surface a point is
+  on, so a fillet — having no field — owns nothing and its material falls to
+  `unclaimed`. Reported in `unattributed_treatments` rather than handed to a
+  neighbouring tag, because a confidently wrong legend is worse than a short
+  one.
+
 5. **Refusals that name the *right* fix.** `docs/GOTCHAS.md` is a list of places
    where the message we already emit is confidently wrong: a blended union of
    face-touching solids aborts the kernel and blames the radius, which is not

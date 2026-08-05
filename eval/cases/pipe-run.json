@@ -1,0 +1,31 @@
+{
+  "name": "pipe-run",
+  "script": "eval/scripts/pipe-run.js",
+  "why": "The polyline sweep, against a closed form: three runs totalling 130 mm at r = 5, less the quarter Steinmetz solid each right-angle joint shares, plus the quarter ball neither run covers — 10138.64 mm3. Both backends read about 0.1% under it, which is the tessellation under-reading curved surfaces, and they agree with each other to 0.08%. A sweep along a spline has no exact field and is not offered; this one is a union of exact primitives, and the number is what says the joints neither double-count nor leave a gap.",
+  "implicit": {
+    "depth": 7,
+    "size": [
+      64.999,
+      50.011,
+      35.013
+    ],
+    "volume_mm3": 10119.916,
+    "area_mm2": 4246.049,
+    "triangles": 72020,
+    "watertight": true
+  },
+  "brep": {
+    "size": [
+      65.0,
+      50.0,
+      35.0
+    ],
+    "volume_mm3": 10128.047,
+    "area_mm2": 4196.714,
+    "triangles": 3162,
+    "watertight": true,
+    "faces": 7,
+    "edges": 29,
+    "curves": 10
+  }
+}

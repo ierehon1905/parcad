@@ -1,0 +1,31 @@
+{
+  "name": "torus",
+  "script": "eval/scripts/torus.js",
+  "why": "The torus primitive against its closed form, volume and area both: 2*pi^2*R*r^2 = 9474.820 mm3 and 4*pi^2*R*r = 4737.410 mm2. Neither backend lands on it exactly and neither should — both numbers are measured on a mesh, and a 4 mm section across a 68 mm part is where a mesher's resolution shows. They bracket it: the implicit mesh reads 0.18% over, the tessellated B-rep 0.20% under. It is the first primitive here whose section is an arc rather than a polygon, and OCCT builds it as one periodic face.",
+  "implicit": {
+    "depth": 7,
+    "size": [
+      68.0,
+      68.0,
+      8.071
+    ],
+    "volume_mm3": 9492.285,
+    "area_mm2": 4949.91,
+    "triangles": 72732,
+    "watertight": true
+  },
+  "brep": {
+    "size": [
+      67.992,
+      67.995,
+      7.995
+    ],
+    "volume_mm3": 9456.097,
+    "area_mm2": 4734.668,
+    "triangles": 21574,
+    "watertight": true,
+    "faces": 1,
+    "edges": 4,
+    "curves": 0
+  }
+}

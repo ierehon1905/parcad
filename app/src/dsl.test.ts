@@ -5,13 +5,19 @@ import {
   build,
   cone,
   countersink,
+  clearance,
+  counterbore,
   cylinder,
   extrude,
   grid,
+  holeFor,
   ngon,
   polar,
+  pipe,
   repeat,
   revolve,
+  tapDrill,
+  torus,
   union,
 } from "./dsl";
 
@@ -208,5 +214,96 @@ describe("mirror", () => {
     // uniform -1 is a point inversion, and a non-uniform one is refused.
     const doc = build(box(2, 2, 2).mirror("z"));
     expect(doc.nodes.some((n) => n.op === "scale")).toBe(false);
+  });
+});
+
+describe("fasteners", () => {
+  test("knows the standard diameters, and they are not interchangeable", () => {
+    // The three numbers a hole can have for one screw, all different, all
+    // correct for a different job: tap it, clear it, or clear it loosely.
+    expect(tapDrill("M6")).toBe(5.0);
+    expect(clearance("M6", "close")).toBe(6.4);
+    expect(clearance("M6")).toBe(6.6);
+    expect(clearance("M6", "free")).toBe(7.0);
+    expect(counterbore("M6")).toEqual({ diameter: 11, depth: 6 });
+    // M2.5 is the one designation with a decimal point in it.
+    expect(tapDrill("M2.5")).toBe(2.05);
+  });
+
+  test("an unknown size lists the ones it has", () => {
+    expect(() => tapDrill("M7")).toThrow("Known sizes");
+    expect(() => tapDrill("M7")).toThrow("M6");
+  });
+
+  test("a hole cutter crosses the face it enters, and through goes out the far side", () => {
+    const blind = build(holeFor("M6", 10));
+    const through = build(holeFor("M6", 10, { through: true }));
+    const heightOf = (doc: ReturnType<typeof build>) =>
+      doc.nodes.find((n) => n.op === "cylinder")!.h as number;
+
+    // 0.5 of overshoot at the entry either way, and 0.5 more at the exit.
+    expect(heightOf(blind)).toBe(10.5);
+    expect(heightOf(through)).toBe(11);
+    // The entry face stays at z = 0: the cutter hangs below it.
+    const dz = (build(holeFor("M6", 10)).nodes.find((n) => n.op === "translate")!.by as { z: number }).z;
+    expect(near(dz, 0.5 - 10.5 / 2)).toBe(true);
+  });
+
+  test("tapped drills the tap size, not the clearance", () => {
+    const tapped = build(holeFor("M8", 12, { tapped: true }));
+    expect((tapped.nodes.find((n) => n.op === "cylinder")!.r as number) * 2).toBe(6.8);
+  });
+});
+
+describe("draft", () => {
+  test("rides on the extrusion rather than being a separate operation", () => {
+    const doc = build(extrude([[0, 0], [10, 0], [10, 10]], 5, { draft: 3 }));
+    expect(doc.nodes).toHaveLength(1);
+    expect(doc.nodes[0].draft).toBe(3);
+  });
+
+  test("ngon passes it through, and a wall angle has to be one", () => {
+    expect(build(ngon(6, 20, 10, { across: "flats", draft: 2 })).nodes[0].draft).toBe(2);
+    expect(() => extrude([[0, 0], [10, 0], [10, 10]], 5, { draft: 90 })).toThrow(
+      "between -90 and 90",
+    );
+  });
+});
+
+describe("torus and pipe", () => {
+  test("a torus refuses to pass through its own axis", () => {
+    expect(build(torus(30, 4)).nodes[0].sweep).toBe(360);
+    expect(() => torus(4, 4)).toThrow("through its own axis");
+    expect(() => torus(30, 4, { sweep: 0 })).toThrow("not an arc");
+  });
+
+  test("a square-cornered pipe is runs plus one ball per corner", () => {
+    const doc = build(pipe([[0, 0, 0], [60, 0, 0], [60, 40, 0]], 10));
+    const ops = doc.nodes.map((n) => n.op);
+    expect(ops.filter((op) => op === "cylinder")).toHaveLength(2);
+    expect(ops.filter((op) => op === "sphere")).toHaveLength(1);
+    expect(ops.filter((op) => op === "torus")).toHaveLength(0);
+  });
+
+  test("a bend radius replaces the ball with an arc and trims the runs", () => {
+    const doc = build(pipe([[0, 0, 0], [60, 0, 0], [60, 40, 0]], 10, { bend: 15 }));
+    const ops = doc.nodes.map((n) => n.op);
+    expect(ops.filter((op) => op === "sphere")).toHaveLength(0);
+
+    const arc = doc.nodes.find((n) => n.op === "torus")!;
+    expect(arc.major).toBe(15);
+    expect(near(arc.sweep as number, 90)).toBe(true);
+    // A 90 degree bend of radius 15 eats 15 mm of straight at each end, so the
+    // 60 mm run is 45 and the 40 mm run is 25.
+    const lengths = doc.nodes.filter((n) => n.op === "cylinder").map((n) => n.h as number);
+    expect(lengths.sort((a, b) => a - b)).toEqual([25, 45]);
+  });
+
+  test("a bend that does not fit says how big one would", () => {
+    // 10 mm of straight cannot carry a 15 mm radius through a right angle.
+    expect(() => pipe([[0, 0, 0], [10, 0, 0], [10, 40, 0]], 10, { bend: 15 })).toThrow(
+      "does not fit",
+    );
+    expect(() => pipe([[0, 0, 0], [10, 0, 0], [10, 40, 0]], 10, { bend: 15 })).toThrow("10.00 mm");
   });
 });

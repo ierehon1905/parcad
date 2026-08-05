@@ -148,6 +148,46 @@ mod tests {
         assert!(matches!(target, EdgeTarget::Edges { .. }));
     }
 
+    const SQUARE: [[f64; 2]; 4] = [
+        [-20.0, -20.0],
+        [20.0, -20.0],
+        [20.0, 20.0],
+        [-20.0, 20.0],
+    ];
+
+    #[test]
+    fn a_positive_draft_pulls_the_top_in() {
+        // The direction is the whole point: a mould releases upward, and a
+        // frustum has the same volume either way up, so nothing downstream
+        // would catch this being backwards.
+        let (inset, top) = Op::draft_inset(&SQUARE, 20.0, 5.0).unwrap();
+        assert!((inset - 20.0 * 5f64.to_radians().tan()).abs() < 1e-12);
+        assert_eq!(top.len(), 4);
+        for [x, y] in top {
+            assert!((x.abs() - (20.0 - inset)).abs() < 1e-9, "{x}");
+            assert!((y.abs() - (20.0 - inset)).abs() < 1e-9, "{y}");
+        }
+    }
+
+    #[test]
+    fn a_negative_draft_pushes_it_out() {
+        let (inset, top) = Op::draft_inset(&SQUARE, 20.0, -5.0).unwrap();
+        assert!(inset < 0.0);
+        assert!(top.iter().all(|[x, _]| x.abs() > 20.0));
+    }
+
+    #[test]
+    fn too_much_draft_reports_the_angle_that_would_work() {
+        // A 10 mm wide rib cannot carry 30° over 40 mm: the walls meet at 20.
+        let err = Op::draft_inset(&[[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]], 40.0, 30.0)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("closes this outline"), "{err}");
+        // atan(5 / 40) = 7.13°, and the message must name it rather than
+        // leaving the reader to bisect by hand.
+        assert!(err.contains("7.1"), "{err}");
+    }
+
     #[test]
     fn fillet_recipe_round_trips_without_changing_legacy_json() {
         let op: Op = serde_json::from_str(
@@ -267,6 +307,27 @@ pub enum Op {
         profile: Vec<[f64; 2]>,
     },
 
+    /// A circle of radius `minor` swept round the +Z axis at radius `major`.
+    ///
+    /// The one revolved shape whose section is an arc rather than a polygon, and
+    /// therefore the one an O-ring groove, a bearing seat or a rounded ring is
+    /// made of. It is a primitive instead of a `Revolve` case because its field
+    /// is a closed form — `Revolve` carries a polygon and would have to grow an
+    /// arc segment type to express this, which is the larger change this one
+    /// buys time for.
+    Torus {
+        /// Distance from the Z axis to the centre of the swept circle.
+        major: f64,
+        /// Radius of the swept circle itself.
+        minor: f64,
+        /// How far round the axis to sweep, in degrees, starting at +X and
+        /// turning anticlockwise. A full turn is the ring; anything less is the
+        /// bend in a pipe, which is what makes a routed tube exact rather than
+        /// a chain of ball joints.
+        #[serde(default = "full_turn", skip_serializing_if = "is_full_turn")]
+        sweep: f64,
+    },
+
     /// A closed convex polygon in the XY plane, given a thickness along Z.
     ///
     /// The counterpart of [`Op::Revolve`] for a part that is *drawn* rather than
@@ -283,6 +344,17 @@ pub enum Op {
         profile: Vec<[f64; 2]>,
         /// Full thickness along Z.
         height: f64,
+        /// Draft angle in degrees: the walls lean in by this much going up, so
+        /// the outline is full size at the bottom and inset at the top.
+        ///
+        /// This is what makes a moulded or cast part releasable, and it is an
+        /// option on the extrusion rather than a separate "apply draft"
+        /// operation because the result is one solid with one set of faces —
+        /// modelling it as a modifier would import a history model for no gain.
+        /// Negative drafts are allowed and lean the other way, which is a
+        /// dovetail.
+        #[serde(default, skip_serializing_if = "crate::graph::is_zero")]
+        draft: f64,
     },
 
     /// Union. `blend` > 0 rounds the join by that radius.
@@ -385,6 +457,97 @@ pub enum Op {
     },
 }
 
+/// Move every edge of an anticlockwise convex polygon inward by `distance`, by
+/// clipping a generous starting rectangle against each moved edge line.
+///
+/// `None` when nothing is left — which is the honest answer for a draft steeper
+/// than the outline can carry, not an error to be clamped away.
+fn clip_inward(points: &[[f64; 2]], distance: f64) -> Option<Vec<[f64; 2]>> {
+    let (mut lo, mut hi) = ([f64::MAX, f64::MAX], [f64::MIN, f64::MIN]);
+    for [x, y] in points {
+        lo = [lo[0].min(*x), lo[1].min(*y)];
+        hi = [hi[0].max(*x), hi[1].max(*y)];
+    }
+    let pad = distance.abs() + 1.0;
+    let mut poly = vec![
+        [lo[0] - pad, lo[1] - pad],
+        [hi[0] + pad, lo[1] - pad],
+        [hi[0] + pad, hi[1] + pad],
+        [lo[0] - pad, hi[1] + pad],
+    ];
+
+    for i in 0..points.len() {
+        let a = points[i];
+        let b = points[(i + 1) % points.len()];
+        let (ex, ey) = (b[0] - a[0], b[1] - a[1]);
+        let len = (ex * ex + ey * ey).sqrt();
+        if len < 1e-12 {
+            continue;
+        }
+        // Outward unit normal of an anticlockwise polygon, and the line moved
+        // inward by `distance`: inside is `p . n <= offset`.
+        let n = [ey / len, -ex / len];
+        let offset = a[0] * n[0] + a[1] * n[1] - distance;
+
+        // Sutherland–Hodgman against this one half-plane.
+        let mut next: Vec<[f64; 2]> = Vec::with_capacity(poly.len() + 1);
+        for j in 0..poly.len() {
+            let p = poly[j];
+            let q = poly[(j + 1) % poly.len()];
+            let dp = p[0] * n[0] + p[1] * n[1] - offset;
+            let dq = q[0] * n[0] + q[1] * n[1] - offset;
+            if dp <= 0.0 {
+                next.push(p);
+            }
+            if (dp < 0.0 && dq > 0.0) || (dp > 0.0 && dq < 0.0) {
+                let t = dp / (dp - dq);
+                next.push([p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]);
+            }
+        }
+        poly = next;
+        if poly.len() < 3 {
+            return None;
+        }
+    }
+
+    // Drop points the clipping left duplicated, then insist on real area: a
+    // polygon reduced to a line has three points and no cross-section.
+    poly.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9);
+    if poly.len() >= 3 {
+        let first = poly[0];
+        let last = poly[poly.len() - 1];
+        if (first[0] - last[0]).abs() < 1e-9 && (first[1] - last[1]).abs() < 1e-9 {
+            poly.pop();
+        }
+    }
+    if poly.len() < 3 {
+        return None;
+    }
+    let mut area = 0.0;
+    for i in 0..poly.len() {
+        let a = poly[i];
+        let b = poly[(i + 1) % poly.len()];
+        area += a[0] * b[1] - b[0] * a[1];
+    }
+    (area / 2.0 > 1e-9).then_some(poly)
+}
+
+fn full_turn() -> f64 {
+    360.0
+}
+
+/// Serde helper: an unswept torus is a whole ring, and a graph written before
+/// bends existed must keep round-tripping unchanged.
+fn is_full_turn(value: &f64) -> bool {
+    *value == 360.0
+}
+
+/// Serde helper: an absent draft and a zero draft are the same thing, and a
+/// graph written before drafts existed must keep round-tripping unchanged.
+pub(crate) fn is_zero(value: &f64) -> bool {
+    *value == 0.0
+}
+
 /// Which section a validation message is talking about.
 ///
 /// The rules are identical for a revolved and an extruded section — closed,
@@ -455,6 +618,81 @@ impl Op {
     /// sit anywhere in XY, including across the origin.
     pub fn validate_outline(profile: &[[f64; 2]]) -> anyhow::Result<f64> {
         Self::validate_section(profile, SectionKind::Extrude)
+    }
+
+    /// Check a [`Op::Torus`]'s radii.
+    ///
+    /// `minor >= major` is the spindle torus, which passes through its own axis
+    /// and encloses a lens-shaped double region. OCCT builds one, the implicit
+    /// field describes the other, and neither is what anybody drawing an O-ring
+    /// groove meant — so it is refused rather than picked between.
+    pub fn validate_torus(major: f64, minor: f64, sweep: f64) -> anyhow::Result<()> {
+        if !major.is_finite() || !minor.is_finite() || major <= 0.0 || minor <= 0.0 {
+            anyhow::bail!("a torus needs positive major and minor radii; got {major} and {minor}");
+        }
+        if !sweep.is_finite() || sweep <= 0.0 || sweep > 360.0 {
+            anyhow::bail!(
+                "a torus sweep of {sweep}° is not an arc; it must be more than 0 and at most 360"
+            );
+        }
+        if minor >= major {
+            anyhow::bail!(
+                "a torus with minor radius {minor} and major radius {major} passes through its own axis. Keep minor < major, or build the shape as a revolve"
+            );
+        }
+        Ok(())
+    }
+
+    /// The top outline of a drafted extrusion, and how far it moved.
+    ///
+    /// Both backends call this and neither computes it: the implicit field only
+    /// needs the tilt, the B-rep needs the polygon, and if they disagreed about
+    /// when a draft collapses the two would refuse different parts.
+    ///
+    /// The inset is a half-plane intersection rather than a per-vertex offset,
+    /// because on a convex outline that is the definition — and it degrades the
+    /// right way, by losing an edge, where corner arithmetic produces a bow tie.
+    pub fn draft_inset(
+        profile: &[[f64; 2]],
+        height: f64,
+        draft_degrees: f64,
+    ) -> anyhow::Result<(f64, Vec<[f64; 2]>)> {
+        let area = Self::validate_outline(profile)?;
+        if draft_degrees.abs() >= 90.0 {
+            anyhow::bail!(
+                "draft of {draft_degrees}° is not a wall angle; it must be between -90 and 90"
+            );
+        }
+        let inset = height * draft_degrees.to_radians().tan();
+        if inset == 0.0 {
+            return Ok((0.0, profile.to_vec()));
+        }
+
+        let points: Vec<[f64; 2]> = if area < 0.0 {
+            profile.iter().rev().copied().collect()
+        } else {
+            profile.to_vec()
+        };
+        let Some(top) = clip_inward(&points, inset) else {
+            // Report the angle that would just work, measured rather than
+            // guessed: the caller's next question is always "how much can I
+            // have?".
+            let mut lo = 0.0;
+            let mut hi = inset.abs();
+            for _ in 0..40 {
+                let mid = (lo + hi) / 2.0;
+                if clip_inward(&points, mid.copysign(inset)).is_some() {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let most = (lo / height).atan().to_degrees();
+            anyhow::bail!(
+                "a draft of {draft_degrees}° closes this outline before the top of a {height} mm extrusion. The most it takes is about {most:.2}°; deepen the outline, shorten the extrusion, or build it as two"
+            );
+        };
+        Ok((inset, top))
     }
 
     fn validate_section(profile: &[[f64; 2]], kind: SectionKind) -> anyhow::Result<f64> {
@@ -604,6 +842,7 @@ impl Doc {
             | Op::Sphere { .. }
             | Op::Cylinder { .. }
             | Op::Revolve { .. }
+            | Op::Torus { .. }
             | Op::Extrude { .. } => vec![],
             Op::Union { children, .. } | Op::Intersection { children, .. } => children.clone(),
             Op::Difference { base, tools, .. } => {

@@ -8,7 +8,7 @@
 
 const acrossFlats = 5.5;
 const length = 20;
-const tapDrill = 2.5;
+const drill = tapDrill("M3"); // 2.5, the coarse tap drill
 
 // Each slab must be wide enough that only its own two flats can bound the
 // result: across-corners is acrossFlats * 2 / sqrt(3), so 2x is ample.
@@ -16,7 +16,7 @@ const slab = box(acrossFlats, acrossFlats * 2, length);
 
 const hex = intersect(slab, slab.rotate("z", 60), slab.rotate("z", 120)).tag("hex");
 
-const bore = cylinder(tapDrill / 2, length * 2).tag("tap_drill");
+const bore = cylinder(drill / 2, length * 2).tag("tap_drill");
 
 const drilled = hex.cut(bore).tag("drilled");
 

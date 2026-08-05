@@ -1,6 +1,6 @@
 # Examples
 
-Sixteen parts, each a `.js` script that returns a shape. On first run they are copied into parcad's project folder
+Nineteen parts, each a `.js` script that returns a shape. On first run they are copied into parcad's project folder
 (`~/Documents/parcad`, or `PARCAD_PROJECTS_DIR`), where they become ordinary
 projects the user can edit and the app's picker lists — this directory is the
 seed, not the live copy, so editing a part in the app does not change it here.
@@ -25,10 +25,13 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 
 | file | part | why it is here |
 |---|---|---|
+| `cast-foot.js` | cast machine foot, M10 down / M8 up | draft on every wall, and hole sizes read from the fastener table rather than written out |
+| `clevis.js` | threaded rod-end clevis, 10 mm pin | one fork arm authored and the other mirrored; spanner flats as a hexagon across the flats |
 | `cover-plate.js` | bolted cover, turned spigot | revolved geometry: a tapered spigot and four countersunk screws, both cones |
 | `extrusion-2020.js` | 20x20 T-slot extrusion, 200 mm | four-fold symmetry by rotating the *cutter*; corner fillets among 37 candidate edges |
 | `flange.js` | ASME B16.5 class 150 NPS 2 slip-on flange | a bolt circle, and one cut whose provenance reaches five rims |
 | `heat-sink.js` | 60x60 extruded fin sink | one fin shape placed nine times — one graph node, nine placements |
+| `hydraulic-line.js` | bent 12 mm hydraulic line | a routed tube: straight runs and real bend radii, bored along the same route |
 | `hex-standoff.js` | M3 hex standoff, 5.5 AF | a prism from three intersecting slabs, which is exact |
 | `knurled-knob.js` | 30 mm knurled knob, D-bore | a D-bore by intersection; a dish cut with a large sphere; 24 flutes |
 | `manifold-block.js` | hydraulic manifold, cross-drilled | galleries that have to actually intersect; position-based rim selection |

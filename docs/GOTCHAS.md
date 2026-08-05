@@ -203,3 +203,43 @@ wrong in the same way everywhere is the hardest kind to see.
   `opencascade-sys` already binds every OCCT call we needed.
 - TypeScript: `isLineSegments` doesn't exist on the intersected three.js type.
   Use `isLine` — `LineSegments extends Line`.
+
+## A union of pieces that do not touch each other kills the fuse that joins them
+
+`pipe()` builds a tube as runs and bend arcs and unions them. Assembled with
+every arc first and the straight runs afterwards, OCCT **hung** on a two-bend
+route and **segfaulted** on a three-bend one; assembled in path order — run,
+arc, run, arc — the same route builds in milliseconds.
+
+The reason is that the fold is pairwise. Arcs at different corners are disjoint
+solids, so fusing them first produces a compound of separate lumps, and the
+boolean that finally bridges them has to resolve every contact at once. Fusing
+along the chain means each step touches what is already there.
+
+**The rule:** when unioning a chain of shapes, union them in the order they
+touch. This is cheap to get right and expensive to debug, because the failure
+is a SIGSEGV three operations later.
+
+## A coaxial torus groove in a cylinder segfaults `UnifySameDomain`
+
+```js
+cylinder(12, 14).cut(torus(11.5, 1))   // SIGSEGV
+```
+
+That is an O-ring gland, which is the shape a torus exists for. The **boolean
+is fine** — the crash is in `unified()`, the `clean()` / `UnifySameDomain` pass
+every result goes through to weld away imprint edges, and it dies on the two
+coaxial circular seams the cut leaves in the cylinder wall.
+
+What does *not* crash, which is what makes it identifiable:
+
+| shape | result |
+|---|---|
+| `box(30, 30, 14).cut(torus(11.5, 1))` | fine |
+| `cylinder(12, 14).cut(torus(20, 4))` — enters from the side | fine |
+| `cylinder(12, 14).cut(cylinder(11, 20))` — coaxial, no torus | fine |
+| `cylinder(12, 14).cut(torus(11.5, 1))` | **SIGSEGV** |
+
+Held by `eval/cases/torus-gland.json` as a `known_defect`, so it cannot be
+forgotten and cannot silently outlive the fix. `examples/hydraulic-line.js`
+goes without its gland because of it and says so.

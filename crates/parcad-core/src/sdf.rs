@@ -56,7 +56,12 @@ fn lower_node(doc: &Doc, id: NodeId, built: &[Option<Tree>]) -> Result<Tree> {
         Op::Sphere { r } => sphere(*r),
         Op::Cylinder { r, h } => cylinder(*r, *h),
         Op::Revolve { profile } => revolve(profile)?,
-        Op::Extrude { profile, height } => extrude(profile, *height)?,
+        Op::Torus { major, minor, sweep } => torus(*major, *minor, *sweep)?,
+        Op::Extrude {
+            profile,
+            height,
+            draft,
+        } => extrude(profile, *height, *draft)?,
 
         Op::Union { children, blend } => {
             let mut it = children.iter().copied();
@@ -187,6 +192,36 @@ fn cylinder(r: f64, h: f64) -> Tree {
     outside + inside
 }
 
+/// Exact torus distance, swept about +Z.
+///
+/// The nearest point on a torus is always in the query point's own meridian
+/// half-plane, so the 3D distance is the 2D distance from `(hypot(x, y), z)` to
+/// the swept circle — one `hypot` of one `hypot`, exact everywhere, with none of
+/// the clamping that made `revolve`'s exact form unusable under intervals.
+fn torus(major: f64, minor: f64, sweep: f64) -> Result<Tree> {
+    Op::validate_torus(major, minor, sweep)?;
+    let radial = length2(Tree::x(), Tree::y()) - major;
+    let ring = length2(radial, Tree::z()) - minor;
+    if sweep >= 360.0 {
+        return Ok(ring);
+    }
+
+    // Trim to the arc with two half-planes through the axis: one at the start,
+    // at +X, and one at the sweep angle. Up to a half turn the kept region is
+    // their intersection, and past it the wedge is reflex and the region is
+    // their union — the same two planes, joined the other way round. Both are
+    // linear in x and y, so neither costs the mesher anything.
+    let s = sweep.to_radians();
+    let start = -Tree::y();
+    let end = Tree::x() * -s.sin() + Tree::y() * s.cos();
+    let wedge = if sweep <= 180.0 {
+        start.max(end)
+    } else {
+        start.min(end)
+    };
+    Ok(ring.max(wedge))
+}
+
 /// A convex section revolved about +Z.
 ///
 /// The section lives in the (radius, z) half-plane, and a full revolution maps
@@ -261,14 +296,25 @@ fn revolve(profile: &[[f64; 2]]) -> Result<Tree> {
 /// on the boundary and inside, an underestimate outside a corner, and stable
 /// under interval arithmetic because no term is clamped.
 ///
-/// The thickness is then combined the way [`cylinder`] combines its radial and
-/// axial terms rather than by a plain `max`, which makes the field exact around
-/// the top and bottom rims too, everywhere the planar term itself is exact.
-fn extrude(profile: &[[f64; 2]], height: f64) -> Result<Tree> {
+/// With no draft the thickness is combined the way [`cylinder`] combines its
+/// radial and axial terms rather than by a plain `max`, which makes the field
+/// exact around the top and bottom rims too. **That combination is only valid
+/// where the side walls meet the ends at a right angle.** Under draft they do
+/// not, and `hypot` of two signed distances then *over*-reads outside an obtuse
+/// rim — an overestimate lets the mesher prune a cell that contains surface,
+/// which is the one error an implicit field must never make. A drafted
+/// extrusion therefore takes the plain `max`, which underestimates there
+/// instead, exactly as it does outside a corner.
+fn extrude(profile: &[[f64; 2]], height: f64, draft: f64) -> Result<Tree> {
     let area = Op::validate_outline(profile)?;
     if !height.is_finite() || height <= 0.0 {
         anyhow::bail!("extrude height must be a positive length; got {height}");
     }
+    // Refused here as well as in the B-rep, from the same function, so that a
+    // draft too steep for the outline fails the same way in both.
+    let (_, _top) = Op::draft_inset(profile, height, draft)?;
+    let lean = draft.to_radians();
+    let (cos_lean, sin_lean) = (lean.cos(), lean.sin());
     // Normalise to anticlockwise so the half-plane normals point outward.
     let points: Vec<[f64; 2]> = if area < 0.0 {
         profile.iter().rev().copied().collect()
@@ -287,7 +333,16 @@ fn extrude(profile: &[[f64; 2]], height: f64) -> Result<Tree> {
             // area, which `validate_outline` has already established.
             continue;
         }
-        let signed = ((Tree::x() - ax) * (ey / len)) - ((Tree::y() - ay) * (ex / len));
+        // Signed distance to the wall's plane, positive outside. Undrafted that
+        // is the vertical half-plane through the edge; drafted, the same plane
+        // tilted by `lean`, whose unit normal gains a z component — so the term
+        // stays linear in x, y and z, and stays exact.
+        let flat = ((Tree::x() - ax) * (ey / len)) - ((Tree::y() - ay) * (ex / len));
+        let signed = if draft == 0.0 {
+            flat
+        } else {
+            flat * cos_lean + (Tree::z() + height / 2.0) * sin_lean
+        };
         planar = Some(match planar {
             Some(acc) => acc.max(signed),
             None => signed,
@@ -296,6 +351,10 @@ fn extrude(profile: &[[f64; 2]], height: f64) -> Result<Tree> {
     let planar = planar.ok_or_else(|| anyhow::anyhow!("extrude outline has no edge"))?;
 
     let axial = Tree::z().abs() - height / 2.0;
+    if draft != 0.0 {
+        // See the note above: the walls are no longer square to the ends.
+        return Ok(planar.max(axial));
+    }
     let outside = length2(planar.clone().max(0.0), axial.clone().max(0.0));
     let inside = planar.max(axial).min(0.0);
     Ok(outside + inside)
@@ -494,7 +553,7 @@ mod tests {
     ];
 
     fn extruded(profile: &[[f64; 2]], height: f64, p: [f64; 3]) -> f32 {
-        let tree = extrude(profile, height).expect("outline should be accepted");
+        let tree = extrude(profile, height, 0.0).expect("outline should be accepted");
         let shape = VmShape::from(tree);
         let mut eval = VmShape::new_point_eval();
         let tape = shape.ez_point_tape();
@@ -540,6 +599,35 @@ mod tests {
     }
 
     #[test]
+    fn a_drafted_wall_leans_the_way_a_mould_releases() {
+        // The 20 mm square, 20 tall, drafted 5°: the wall stands at x = 10 at
+        // the bottom and has pulled in to 8.25 at the top. Volume cannot catch
+        // this being backwards — a frustum measures the same upside down — so
+        // the field is sampled where the two differ.
+        let tree = extrude(&SQUARE, 20.0, 5.0).unwrap();
+        let shape = VmShape::from(tree);
+        let mut eval = VmShape::new_point_eval();
+        let tape = shape.ez_point_tape();
+        let mut at = |x: f32, z: f32| eval.eval(&tape, x, 0.0, z).unwrap().0;
+
+        assert!(at(9.5, -9.0) < 0.0, "just inside the wide bottom");
+        assert!(at(9.5, 9.0) > 0.0, "outside the narrow top");
+    }
+
+    #[test]
+    fn a_draft_the_outline_cannot_carry_is_refused_by_both_backends() {
+        // The same message the B-rep gives, because it is the same function.
+        let err = extrude(
+            &[[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]],
+            40.0,
+            30.0,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("closes this outline"), "{err}");
+    }
+
+    #[test]
     fn winding_does_not_change_the_solid() {
         // Clockwise: every half-plane normal points inward until the winding is
         // normalised, which would turn the prism inside out.
@@ -570,6 +658,7 @@ mod tests {
                 [0.0, 25.0],
             ],
             5.0,
+            0.0,
         )
         .unwrap_err();
         assert!(err.to_string().contains("not convex"), "{err}");

@@ -76,6 +76,24 @@ pub fn regions(doc: &Doc, bounds: Aabb, view: View, opts: &RenderOptions) -> Res
         .clone()
         .ok_or_else(|| anyhow::anyhow!("root node {} was never evaluated", doc.root))?;
 
+    let buf = render::geometry(&root, bounds, view, opts)?;
+    regions_in(&buf, doc, opts)
+}
+
+/// Attribute an already-rendered view to the tags that own its surface.
+///
+/// Split out because *what the surface is* and *which node owns a point on it*
+/// are answered by different backends. The exact kernel draws the part; the
+/// distance field says whose field vanishes at a point on it. Feeding a
+/// rasterised B-rep buffer in here is what lets a region map describe the part
+/// that was measured rather than the field's approximation of it.
+///
+/// A point that no node claims is unclaimed, which now includes fillet surfaces:
+/// a treatment has no distance field, so the material it added answers to
+/// nothing. That is reported rather than attributed to a neighbour.
+pub fn regions_in(buf: &GeometryBuffer, doc: &Doc, opts: &RenderOptions) -> Result<RegionMap> {
+    let trees = crate::sdf::lower_all(doc)?;
+
     let tagged: Vec<(String, Tree)> = doc
         .tags()
         .into_iter()
@@ -87,20 +105,21 @@ pub fn regions(doc: &Doc, bounds: Aabb, view: View, opts: &RenderOptions) -> Res
         })
         .collect();
 
-    let buf = render::geometry(&root, bounds, view, opts)?;
-    let base = render::shade(&buf, opts);
+    let base = render::shade(buf, opts);
 
     // Gather the visible surface points once; every tag is then one bulk
     // evaluation over the same list.
-    let (pixels, xs, ys, zs) = surface_points(&buf);
+    let (pixels, xs, ys, zs) = surface_points(buf);
 
     let mut owner: Vec<Option<usize>> = vec![None; pixels.len()];
     let mut best: Vec<f32> = vec![f32::INFINITY; pixels.len()];
 
     // A point counts as "on" a node's surface if it is within about a pixel of
     // it. Tying the tolerance to the render scale keeps the answer stable as
-    // resolution changes.
-    let tolerance = (2.0 * crate::view::fit_scale(bounds) / buf.size.max(1) as f64) as f32 * 1.5;
+    // resolution changes. One pixel in millimetres is the length of the buffer's
+    // own screen-x column, which is the same number the framing produced and
+    // does not need the bounds passed in alongside it.
+    let tolerance = buf.screen_to_model.column(0).norm() * 1.5;
 
     for (i, (_, tree)) in tagged.iter().enumerate() {
         let shape = JitShape::from(tree.clone());

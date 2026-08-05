@@ -134,10 +134,29 @@ impl Rgb {
     }
 
     pub fn write_png(&self, path: &std::path::Path) -> Result<()> {
-        let buf = image::RgbImage::from_raw(self.width, self.height, self.data.clone())
-            .ok_or_else(|| anyhow::anyhow!("image buffer is the wrong size for {}x{}", self.width, self.height))?;
-        buf.save(path)?;
+        std::fs::write(path, self.to_png()?)?;
         Ok(())
+    }
+
+    /// Encode as PNG in memory.
+    ///
+    /// A caller that is not a person needs the bytes, not a path: an agent
+    /// receives a render over a protocol, and a temporary file it would have to
+    /// read back and delete is a filesystem round trip in the middle of what is
+    /// otherwise a pure function.
+    pub fn to_png(&self) -> Result<Vec<u8>> {
+        let buf = image::RgbImage::from_raw(self.width, self.height, self.data.clone())
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "image buffer is the wrong size for {}x{}",
+                    self.width,
+                    self.height
+                )
+            })?;
+
+        let mut png = std::io::Cursor::new(Vec::new());
+        buf.write_to(&mut png, image::ImageFormat::Png)?;
+        Ok(png.into_inner())
     }
 }
 
@@ -251,6 +270,179 @@ pub fn geometry(
 pub fn render_view(tree: &Tree, bounds: Aabb, view: View, opts: &RenderOptions) -> Result<Rgb> {
     let buf = geometry(tree, bounds, view, opts)?;
     Ok(shade(&buf, opts).downsample(opts.ss()))
+}
+
+/// A triangle mesh, in the flat layout the exact kernel returns.
+///
+/// `indices` may be empty, in which case every three positions are one triangle
+/// with its own corners — which is how the implicit tessellator emits flat
+/// shading.
+pub struct Surface<'a> {
+    pub positions: &'a [f32],
+    pub normals: &'a [f32],
+    pub indices: &'a [u32],
+}
+
+impl Surface<'_> {
+    fn triangles(&self) -> Vec<[usize; 3]> {
+        if self.indices.is_empty() {
+            (0..self.positions.len() / 9)
+                .map(|t| [t * 3, t * 3 + 1, t * 3 + 2])
+                .collect()
+        } else {
+            self.indices
+                .chunks_exact(3)
+                .map(|c| [c[0] as usize, c[1] as usize, c[2] as usize])
+                .collect()
+        }
+    }
+
+    fn vertex(&self, i: usize) -> ([f32; 3], [f32; 3]) {
+        let p = [
+            self.positions[i * 3],
+            self.positions[i * 3 + 1],
+            self.positions[i * 3 + 2],
+        ];
+        let n = self
+            .normals
+            .get(i * 3..i * 3 + 3)
+            .map(|n| [n[0], n[1], n[2]])
+            .unwrap_or([0.0, 0.0, 1.0]);
+        (p, n)
+    }
+}
+
+/// Render a *mesh* into the same buffer the raymarcher produces.
+///
+/// This exists because the two backends do not agree about the shape, and the
+/// picture must show the one that was measured. A blended union is a polynomial
+/// smooth-minimum in the distance field and a rolling-ball fillet in the exact
+/// kernel; on `examples/bracket.js` that is 3 mm of extra material in Y and a
+/// bounding box 81.5 × 63.0 where the part is 80 × 60. The desktop mesh preview
+/// hit exactly this and was fixed the same way — depict what was evaluated,
+/// never the other backend's idea of it.
+///
+/// The output is a [`GeometryBuffer`], not an image, so everything downstream —
+/// shading, ambient occlusion, silhouette outlines, tag attribution, and
+/// `model_point` — is the code that already existed and cannot drift from the
+/// raymarched path.
+pub fn raster(
+    surface: &Surface,
+    bounds: Aabb,
+    view: View,
+    opts: &RenderOptions,
+) -> Result<GeometryBuffer> {
+    let ss = opts.ss();
+    let size = opts.size * ss;
+    let depth_samples = opts.depth_samples * ss;
+
+    // Built exactly as in `geometry`, and used only for its matrix: framing has
+    // to be identical across the two paths or a feature would land on different
+    // pixels depending on which backend drew it.
+    let cfg = voxel::RenderConfig {
+        image_size: voxel::RenderSize::new(size, size, depth_samples),
+        world_to_model: crate::view::view_transform(bounds, view),
+        tile_sizes: None,
+        threads: Some(&ThreadPool::Global),
+        cancel: CancelToken::new(),
+    };
+    let screen_to_model = cfg.mat();
+    let model_to_screen = screen_to_model
+        .try_inverse()
+        .ok_or_else(|| anyhow::anyhow!("the view transform is not invertible"))?;
+
+    // Normals are rotated, never passed through the full matrix: that matrix
+    // carries the fit scale and the depth quantisation, and a non-uniform scale
+    // skews a direction. The rotation's columns are the model-space directions
+    // of screen right, up and toward the viewer, so its transpose takes a
+    // model-space normal into the view space `shade` lights.
+    let rotation = view.rotation();
+    let r: nalgebra::Matrix3<f32> =
+        nalgebra::convert(rotation.fixed_view::<3, 3>(0, 0).transpose());
+
+    let mut image = voxel::Image::new(voxel::RenderSize::new(size, size, depth_samples));
+    let project = |p: [f32; 3]| {
+        let q = model_to_screen.transform_point(&nalgebra::Point3::new(p[0], p[1], p[2]));
+        [q.x, q.y, q.z]
+    };
+
+    for tri in surface.triangles() {
+        let corners = tri.map(|i| surface.vertex(i));
+        let screen = corners.map(|(p, _)| project(p));
+        let normals = corners.map(|(_, n)| {
+            let v = r * nalgebra::Vector3::new(n[0], n[1], n[2]);
+            let len = v.norm();
+            if len > 1e-9 {
+                [v.x / len, v.y / len, v.z / len]
+            } else {
+                [0.0, 0.0, 1.0]
+            }
+        });
+
+        // Half-open pixel bounds, clipped to the image.
+        let min_x = screen.iter().map(|p| p[0]).fold(f32::MAX, f32::min);
+        let max_x = screen.iter().map(|p| p[0]).fold(f32::MIN, f32::max);
+        let min_y = screen.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+        let max_y = screen.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
+        if !(min_x.is_finite() && max_x.is_finite() && min_y.is_finite() && max_y.is_finite()) {
+            continue;
+        }
+        let x0 = min_x.floor().max(0.0) as u32;
+        let x1 = (max_x.ceil() as i64).clamp(0, size as i64) as u32;
+        let y0 = min_y.floor().max(0.0) as u32;
+        let y1 = (max_y.ceil() as i64).clamp(0, size as i64) as u32;
+
+        let [a, b, c] = screen;
+        let area = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+        if area.abs() < 1e-12 {
+            continue; // edge-on, contributes no pixels
+        }
+
+        for y in y0..y1 {
+            for x in x0..x1 {
+                // Sample *on* the integer pixel coordinate, not at the pixel
+                // centre. That is where `model_point` reads a pixel back, and
+                // where the raymarcher samples; a half-pixel offset here costs
+                // about 4% of coverage on a 128-pixel view, which looks like
+                // nothing and is a systematically shifted picture.
+                let (px, py) = (x as f32, y as f32);
+                let w0 = ((b[0] - px) * (c[1] - py) - (c[0] - px) * (b[1] - py)) / area;
+                let w1 = ((c[0] - px) * (a[1] - py) - (a[0] - px) * (c[1] - py)) / area;
+                let w2 = 1.0 - w0 - w1;
+                if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                    continue;
+                }
+
+                let depth = w0 * a[2] + w1 * b[2] + w2 * c[2];
+                if !depth.is_finite() {
+                    continue;
+                }
+                // Depth 0 means "no surface here", so a hit is never allowed to
+                // round down into it.
+                let depth = (depth.round() as i64).clamp(1, depth_samples as i64) as u32;
+
+                let pixel = &mut image[(y as usize, x as usize)];
+                // Larger depth is nearer the viewer, matching the raymarcher.
+                if depth <= pixel.depth {
+                    continue;
+                }
+
+                let n = [
+                    w0 * normals[0][0] + w1 * normals[1][0] + w2 * normals[2][0],
+                    w0 * normals[0][1] + w1 * normals[1][1] + w2 * normals[2][1],
+                    w0 * normals[0][2] + w1 * normals[1][2] + w2 * normals[2][2],
+                ];
+                *pixel = voxel::GeometryPixel { normal: n, depth };
+            }
+        }
+    }
+
+    Ok(GeometryBuffer {
+        image,
+        screen_to_model,
+        size,
+        depth_samples,
+    })
 }
 
 /// Turn a geometry buffer into a legible image.
@@ -545,4 +737,135 @@ pub fn contact_sheet(tree: &Tree, bounds: Aabb, opts: &RenderOptions) -> Result<
         image: sheet,
         panels,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::graph::{Doc, Node, Op, V3};
+
+    /// One box, which both backends agree about exactly — no blends, no
+    /// treatments, nothing either one has to approximate.
+    fn cube() -> Doc {
+        Doc {
+            nodes: vec![Node {
+                op: Op::Cuboid {
+                    size: V3::new(20.0, 30.0, 12.0),
+                },
+                tag: None,
+            }],
+            root: 0,
+            units: "mm".to_string(),
+        }
+    }
+
+    /// A plate and an upright, sharing a face — the bracket's shape, with the
+    /// blend set to zero so both backends agree about it exactly.
+    fn ell() -> Doc {
+        Doc {
+            nodes: vec![
+                Node {
+                    op: Op::Cuboid {
+                        size: V3::new(80.0, 60.0, 8.0),
+                    },
+                    tag: None,
+                },
+                Node {
+                    op: Op::Cuboid {
+                        size: V3::new(8.0, 60.0, 40.0),
+                    },
+                    tag: None,
+                },
+                Node {
+                    op: Op::Translate {
+                        child: 1,
+                        by: V3::new(-36.0, 0.0, 20.0),
+                    },
+                    tag: None,
+                },
+                Node {
+                    op: Op::Union {
+                        children: vec![0, 2],
+                        blend: 0.0,
+                    },
+                    tag: None,
+                },
+            ],
+            root: 3,
+            units: "mm".to_string(),
+        }
+    }
+
+    /// The rasteriser and the raymarcher must frame a part identically.
+    ///
+    /// This is the property the whole of `view` exists to provide — a feature at
+    /// a given pixel in one view is at a comparable pixel in another — and it
+    /// now has to hold across two renderers as well. A projection that is
+    /// subtly off produces a picture that looks entirely plausible, which is
+    /// exactly the failure that made this test worth writing.
+    #[test]
+    fn a_rastered_view_lands_where_the_raymarched_one_does() {
+        agrees_for(cube());
+        agrees_for(ell());
+    }
+
+    fn agrees_for(doc: Doc) {
+        let tree = crate::sdf::lower(&doc).expect("lower");
+        let bounds = crate::measure::bounds(&doc).expect("bounds");
+        let (_, tess, _) = crate::evaluate(&doc, 6).expect("evaluate");
+
+        let opts = RenderOptions {
+            size: 128,
+            depth_samples: 128,
+            ssao: false,
+            supersample: 1,
+        };
+
+        let positions: Vec<f32> = tess
+            .vertices
+            .iter()
+            .flat_map(|v| [v[0], v[1], v[2]])
+            .collect();
+        let indices: Vec<u32> = tess
+            .triangles
+            .iter()
+            .flat_map(|t| [t[0] as u32, t[1] as u32, t[2] as u32])
+            .collect();
+        // Normals do not affect coverage, and this test is about where the part
+        // lands rather than how it is lit.
+        let normals = vec![0.0; positions.len()];
+
+        for view in View::ALL {
+            let marched = geometry(&tree, bounds, view, &opts).expect("raymarch");
+            let rastered = raster(
+                &Surface {
+                    positions: &positions,
+                    normals: &normals,
+                    indices: &indices,
+                },
+                bounds,
+                view,
+                &opts,
+            )
+            .expect("raster");
+
+            let (mut both, mut either) = (0usize, 0usize);
+            for y in 0..opts.size as usize {
+                for x in 0..opts.size as usize {
+                    let a = marched.image[(y, x)].depth > 0;
+                    let b = rastered.image[(y, x)].depth > 0;
+                    both += usize::from(a && b);
+                    either += usize::from(a || b);
+                }
+            }
+
+            let overlap = both as f64 / either.max(1) as f64;
+            assert!(
+                overlap > 0.97,
+                "the {} view covers different pixels in the two renderers \
+                 (intersection over union {overlap:.3}); the projection disagrees",
+                view.name()
+            );
+        }
+    }
 }

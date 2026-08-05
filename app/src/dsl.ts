@@ -602,6 +602,35 @@ export function cylinder(r: number, h: number): Shape {
   return new Shape(() => ({ op: "cylinder", r, h }), []);
 }
 
+/**
+ * A ring: a circle of radius `minor` swept round the Z axis at radius `major`.
+ *
+ * Both are radii, like {@link cylinder}'s — an O-ring is quoted by cord
+ * diameter and inside diameter, so a 2 mm cord on a 20 mm ID is
+ * `torus(20 / 2 + 2 / 2, 2 / 2)`, and it is worth writing the halves out.
+ *
+ * `minor >= major` is refused: that torus passes through its own axis, and the
+ * two backends do not agree on what the resulting solid is.
+ */
+export function torus(
+  major: number,
+  minor: number,
+  options: { sweep?: number } = {},
+): Shape {
+  if (!(major > 0) || !(minor > 0)) throw new Error("torus radii must be positive");
+  if (minor >= major) {
+    throw new Error(
+      `a torus with minor radius ${minor} and major radius ${major} passes through its own axis; keep minor < major`,
+    );
+  }
+  const sweep = options.sweep ?? 360;
+  if (!(sweep > 0) || sweep > 360) {
+    throw new Error(`a torus sweep of ${sweep} degrees is not an arc; give more than 0 and at most 360`);
+  }
+  // The arc starts at +X and turns anticlockwise, like every other angle here.
+  return new Shape(() => ({ op: "torus", major, minor, sweep }), []);
+}
+
 /** A point in a revolved section: `[radius, z]`, with radius measured off +Z. */
 export type SectionPoint = [number, number];
 
@@ -663,7 +692,10 @@ export function cone(r1: number, r2: number, h: number): Shape {
  * one. The cutter is returned positioned so its wide end sits at z = 0 — cut it
  * where the hole breaks out, `.at(x, y, faceZ)`.
  */
-export function countersink(headDia: number, includedAngle = 90): Shape {
+export function countersink(head: number | string, includedAngle = 90): Shape {
+  // A thread designation looks the size up rather than making the caller carry
+  // it: `countersink("M5")` is the same call with the number it stands for.
+  const headDia = typeof head === "string" ? fastener(head).csink : head;
   if (headDia <= 0) throw new Error("countersink head diameter must be positive");
   if (includedAngle <= 0 || includedAngle >= 180) {
     throw new Error("countersink included angle must be between 0 and 180 degrees");
@@ -685,6 +717,106 @@ export function countersink(headDia: number, includedAngle = 90): Shape {
   return cone(0, r + over * slope, depth + over).at(0, 0, over - (depth + over) / 2);
 }
 
+// ---------------------------------------------------------------------------
+// Fasteners. The numbers a machinist knows by heart, and a script otherwise
+// writes as an unchecked literal.
+// ---------------------------------------------------------------------------
+
+/** How loosely a clearance hole is drilled, per ISO 273. */
+export type Fit = "close" | "normal" | "free";
+
+/**
+ * ISO metric coarse fasteners: everything a hole needs, by thread designation.
+ *
+ * `tap` is the drill for a coarse-pitch tapped hole; `close`/`normal`/`free`
+ * are ISO 273's three clearance series; `head` is the head diameter of a socket
+ * head cap screw (ISO 4762) and `csink` that of a 90° countersunk socket screw
+ * (ISO 10642). Diameters in mm, always.
+ *
+ * Exported so a caller can see the whole table rather than discover a missing
+ * size one refusal at a time — and so a size that is not here is obviously
+ * absent rather than silently approximated.
+ */
+export const METRIC_FASTENERS: Record<
+  string,
+  { tap: number; close: number; normal: number; free: number; head: number; csink: number }
+> = {
+  M2: { tap: 1.6, close: 2.2, normal: 2.4, free: 2.6, head: 3.8, csink: 4.0 },
+  M2_5: { tap: 2.05, close: 2.7, normal: 2.9, free: 3.1, head: 4.5, csink: 5.0 },
+  M3: { tap: 2.5, close: 3.2, normal: 3.4, free: 3.6, head: 5.5, csink: 6.0 },
+  M4: { tap: 3.3, close: 4.3, normal: 4.5, free: 4.8, head: 7.0, csink: 8.0 },
+  M5: { tap: 4.2, close: 5.3, normal: 5.5, free: 5.8, head: 8.5, csink: 10.0 },
+  M6: { tap: 5.0, close: 6.4, normal: 6.6, free: 7.0, head: 10.0, csink: 12.0 },
+  M8: { tap: 6.8, close: 8.4, normal: 9.0, free: 10.0, head: 13.0, csink: 16.0 },
+  M10: { tap: 8.5, close: 10.5, normal: 11.0, free: 12.0, head: 16.0, csink: 20.0 },
+  M12: { tap: 10.2, close: 13.0, normal: 13.5, free: 14.5, head: 18.0, csink: 24.0 },
+  M16: { tap: 14.0, close: 17.0, normal: 17.5, free: 18.5, head: 24.0, csink: 32.0 },
+  M20: { tap: 17.5, close: 21.0, normal: 22.0, free: 24.0, head: 30.0, csink: 40.0 },
+};
+
+function fastener(thread: string) {
+  const key = thread.trim().toUpperCase().replace(".", "_");
+  const entry = METRIC_FASTENERS[key];
+  if (!entry) {
+    throw new Error(
+      `no fastener data for ${thread}. Known sizes: ${Object.keys(METRIC_FASTENERS)
+        .map((k) => k.replace("_", "."))
+        .join(", ")}. Add it to METRIC_FASTENERS, or write the diameter out and say where it came from`,
+    );
+  }
+  return entry;
+}
+
+/** Drill diameter for a coarse-pitch tapped hole: `tapDrill("M6")` is 5.0. */
+export function tapDrill(thread: string): number {
+  return fastener(thread).tap;
+}
+
+/** Clearance hole diameter, ISO 273: `clearance("M6")` is 6.6, close fit 6.4. */
+export function clearance(thread: string, fit: Fit = "normal"): number {
+  return fastener(thread)[fit];
+}
+
+/**
+ * Counterbore for a socket head cap screw: the diameter to bore and how deep.
+ *
+ * The bore is the head diameter plus 1 mm of drill clearance, and the depth is
+ * the head height, which for these screws is the thread diameter itself.
+ */
+export function counterbore(thread: string): { diameter: number; depth: number } {
+  const entry = fastener(thread);
+  const nominal = Number(thread.trim().toUpperCase().replace("M", "").replace("_", "."));
+  return { diameter: entry.head + 1, depth: nominal };
+}
+
+/**
+ * A hole cutter along Z for a named fastener, entering at z = 0 going down.
+ *
+ * `holeFor("M6", 12)` is a blind clearance hole 12 mm deep; `{ tapped: true }`
+ * drills it for a coarse thread instead, which is how every threaded hole in
+ * `examples/` is drawn — there is no thread op, and a stack of tori pretending
+ * to be one is the approximation this project refuses.
+ *
+ * The cutter always overshoots the face it enters by 0.5 mm, and `through`
+ * overshoots the far side too. That is not tidiness: a tool ending exactly on a
+ * face leaves a zero-thickness sliver, and one *starting* on it can cost the rim
+ * the selector was going to reach.
+ */
+export function holeFor(
+  thread: string,
+  depth: number,
+  options: { fit?: Fit; tapped?: boolean; through?: boolean } = {},
+): Shape {
+  if (!(depth > 0)) throw new Error("hole depth must be positive");
+  const diameter = options.tapped
+    ? tapDrill(thread)
+    : clearance(thread, options.fit ?? "normal");
+  const over = 0.5;
+  const past = options.through ? over : 0;
+  const length = depth + over + past;
+  return cylinder(diameter / 2, length).at(0, 0, over - length / 2);
+}
+
 /** A point in an extruded outline: `[x, y]`, in the plane the shape is drawn on. */
 export type OutlinePoint = [number, number];
 
@@ -700,14 +832,20 @@ export type OutlinePoint = [number, number];
  * escape: an L outline is `union` of two convex prisms, which is also how the
  * part would be cut.
  */
-export function extrude(profile: OutlinePoint[], height: number): Shape {
+export function extrude(
+  profile: OutlinePoint[],
+  height: number,
+  options: { draft?: number } = {},
+): Shape {
   if (profile.length < 3) {
     throw new Error(
       "an extrude outline needs at least 3 [x, y] points, e.g. extrude([[-5, -5], [5, -5], [5, 5], [-5, 5]], 2)",
     );
   }
   if (!(height > 0)) throw new Error("extrude height must be positive");
-  return new Shape(() => ({ op: "extrude", profile, height }), []);
+  const draft = options.draft ?? 0;
+  if (Math.abs(draft) >= 90) throw new Error("draft must be between -90 and 90 degrees");
+  return new Shape(() => ({ op: "extrude", profile, height, draft }), []);
 }
 
 /**
@@ -723,7 +861,7 @@ export function ngon(
   sides: number,
   size: number,
   height: number,
-  options: { across?: "corners" | "flats" } = {},
+  options: { across?: "corners" | "flats"; draft?: number } = {},
 ): Shape {
   if (!Number.isInteger(sides) || sides < 3) {
     throw new Error(`ngon needs at least 3 whole sides; got ${sides}`);
@@ -740,7 +878,155 @@ export function ngon(
     const a = (i / sides) * Math.PI * 2;
     return [Math.cos(a) * radius, Math.sin(a) * radius];
   });
-  return extrude(profile, height);
+  return extrude(profile, height, { draft: options.draft });
+}
+
+/** A point on a routed path: `[x, y, z]`. */
+export type PathPoint = [number, number, number];
+
+// Vector arithmetic for `pipe`. Deliberately not exported: every export becomes
+// a reserved word inside a part script, and `add`, `cross` and `unit` are names
+// a part would plausibly want for itself.
+const sub = (a: PathPoint, b: PathPoint): PathPoint => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const dot = (a: PathPoint, b: PathPoint) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a: PathPoint, b: PathPoint): PathPoint => [
+  a[1] * b[2] - a[2] * b[1],
+  a[2] * b[0] - a[0] * b[2],
+  a[0] * b[1] - a[1] * b[0],
+];
+const norm = (a: PathPoint) => Math.hypot(a[0], a[1], a[2]);
+const scale3 = (a: PathPoint, k: number): PathPoint => [a[0] * k, a[1] * k, a[2] * k];
+const add = (a: PathPoint, b: PathPoint): PathPoint => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+const unit = (a: PathPoint): PathPoint => scale3(a, 1 / norm(a));
+const degrees = (radians: number) => (radians * 180) / Math.PI;
+
+/** Turn a shape built along +Z so its axis lies along `axis`. */
+function alignZ(shape: Shape, axis: PathPoint): Shape {
+  const perpendicular = cross([0, 0, 1], axis);
+  if (norm(perpendicular) < 1e-12) {
+    return axis[2] > 0 ? shape : shape.rotate("x", 180);
+  }
+  const angle = Math.acos(Math.min(1, Math.max(-1, axis[2])));
+  const [x, y, z] = unit(perpendicular);
+  return shape.rotate({ x, y, z }, degrees(angle));
+}
+
+/** Where `alignZ` sends +X, which is where a swept arc starts. */
+function alignedX(axis: PathPoint): PathPoint {
+  const perpendicular = cross([0, 0, 1], axis);
+  if (norm(perpendicular) < 1e-12) return [1, 0, 0];
+  const k = unit(perpendicular);
+  const angle = Math.acos(Math.min(1, Math.max(-1, axis[2])));
+  // Rodrigues, applied to +X.
+  const v: PathPoint = [1, 0, 0];
+  return add(
+    add(scale3(v, Math.cos(angle)), scale3(cross(k, v), Math.sin(angle))),
+    scale3(k, dot(k, v) * (1 - Math.cos(angle))),
+  );
+}
+
+/**
+ * A round tube of `diameter` following a path: hydraulic line, hose, wire.
+ *
+ * This is the honest half of what Fusion calls Sweep, and it is a bigger half
+ * than it first looks. A sweep along a *spline* has no exact distance field —
+ * the implicit backend would have to solve for the nearest point on the path,
+ * which for a cubic is a quintic — but the two path elements a tube is actually
+ * made of do: a straight run is a cylinder, and a bend is a partial torus.
+ * Both are exact in both backends, so a routed tube is exact.
+ *
+ * `bend` is the centreline bend radius, which is how tube is specified and how
+ * a bender is set. Without it the corners are square and filled with a ball of
+ * the tube diameter — inside the swept envelope, fine for clearance work, and
+ * not a shape anybody can make. With it, the runs are trimmed back to their
+ * tangent points and an arc joins them, which is the real part.
+ *
+ * What is still not offered: a spline path, and a profile that is not a circle.
+ */
+export function pipe(
+  points: PathPoint[],
+  diameter: number,
+  options: { bend?: number } = {},
+): Shape {
+  if (points.length < 2) throw new Error("a pipe needs at least 2 path points");
+  if (!(diameter > 0)) throw new Error("pipe diameter must be positive");
+  const r = diameter / 2;
+  const bend = options.bend ?? 0;
+  if (bend < 0) throw new Error("pipe bend radius must be positive");
+
+  const legs: PathPoint[] = points.map(([x, y, z]) => [x, y, z]);
+  for (let i = 0; i < legs.length - 1; i++) {
+    if (norm(sub(legs[i + 1], legs[i])) < 1e-9) {
+      throw new Error(`pipe path points ${i} and ${i + 1} are the same point`);
+    }
+  }
+
+  // Every corner is resolved first, because a bend shortens the two runs that
+  // meet at it, and only then is the chain assembled in path order.
+  const from: PathPoint[] = legs.map((p) => p);
+  const to: PathPoint[] = legs.map((_, i) => legs[Math.min(i + 1, legs.length - 1)]);
+  const corner: (Shape | undefined)[] = legs.map(() => undefined);
+
+  for (let i = 1; i < legs.length - 1; i++) {
+    const u = unit(sub(legs[i], legs[i - 1]));
+    const v = unit(sub(legs[i + 1], legs[i]));
+    const turn = Math.acos(Math.min(1, Math.max(-1, dot(u, v))));
+    if (turn < 1e-9) continue; // collinear: no corner to fill
+    if (Math.PI - turn < 1e-9) {
+      throw new Error(`the pipe path doubles back on itself at point ${i}`);
+    }
+    if (bend === 0) {
+      corner[i] = sphere(r).at(legs[i][0], legs[i][1], legs[i][2]);
+      continue;
+    }
+
+    const tangent = bend * Math.tan(turn / 2);
+    const before = norm(sub(legs[i], legs[i - 1]));
+    const after = norm(sub(legs[i + 1], legs[i]));
+    if (tangent > before - 1e-9 || tangent > after - 1e-9) {
+      // The largest radius the shorter of the two runs can carry, named rather
+      // than left to the reader.
+      const most = (Math.min(before, after) / Math.tan(turn / 2)).toFixed(2);
+      throw new Error(
+        `a bend radius of ${bend} does not fit at path point ${i}: it needs ${tangent.toFixed(2)} mm of straight either side. The most this corner takes is about ${most} mm`,
+      );
+    }
+
+    to[i - 1] = sub(legs[i], scale3(u, tangent));
+    from[i] = add(legs[i], scale3(v, tangent));
+
+    const axis = unit(cross(u, v));
+    const centre = add(legs[i], scale3(unit(sub(v, u)), bend / Math.cos(turn / 2)));
+    const start = unit(sub(to[i - 1], centre));
+    // The arc starts at the aligned +X, so the torus is spun about its own axis
+    // first to put that where the run leaves off.
+    const x0 = alignedX(axis);
+    const spin = Math.atan2(dot(cross(x0, start), axis), dot(x0, start));
+    corner[i] = alignZ(
+      torus(bend, r, { sweep: degrees(turn) }).rotate("z", degrees(spin)),
+      axis,
+    ).at(centre[0], centre[1], centre[2]);
+  }
+
+  // Run, corner, run, corner — in path order, so every piece being fused
+  // touches what is already there. Fusing the corners first builds a compound
+  // of solids that do not meet, and OCCT hangs or dies on the boolean that
+  // finally bridges them; three bends was enough to segfault the worker.
+  const parts: Shape[] = [];
+  for (let i = 0; i < legs.length - 1; i++) {
+    const a = from[i];
+    const b = to[i];
+    const d = sub(b, a);
+    const len = norm(d);
+    if (len > 1e-9) {
+      const mid = scale3(add(a, b), 0.5);
+      parts.push(alignZ(cylinder(r, len), unit(d)).at(mid[0], mid[1], mid[2]));
+    }
+    const joint = corner[i + 1];
+    if (joint) parts.push(joint);
+  }
+
+  return union(...parts);
 }
 
 export function union(...args: (Shape | BoolOptions)[]): Shape {

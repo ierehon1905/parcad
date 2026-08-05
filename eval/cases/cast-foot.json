@@ -1,0 +1,19 @@
+{
+  "name": "cast-foot",
+  "script": "examples/cast-foot.js",
+  "why": "Draft in a real part, and the fastener table: every wall leans so the pattern releases, and no hole diameter is a literal. The four-rim selector reaches the underside the foot sits on.",
+  "brep": {
+    "size": [
+      120.0,
+      80.0,
+      46.0
+    ],
+    "volume_mm3": 195953.48,
+    "area_mm2": 32493.424,
+    "triangles": 3582,
+    "watertight": true,
+    "faces": 31,
+    "edges": 128,
+    "curves": 52
+  }
+}

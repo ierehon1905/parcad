@@ -11,7 +11,7 @@ const length = 30;
 const boreA = 8;      // motor side
 const boreB = 10;     // leadscrew side
 const boreDepth = 13; // each, leaving a 4 mm web at the centre
-const setScrew = 4.2; // clearance drill for M5 grub screws
+const setScrew = 4.2; // tap drill for M5 grub screws
 
 const body = cylinder(od / 2, length).tag("body");
 

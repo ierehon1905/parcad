@@ -42,6 +42,11 @@ when `dsl.ts` changes under it — it just quietly describes an older part. The 
 
 ## Conventions
 
+**Every DSL export becomes a reserved word in a script.** Parts run as
+`new Function(...names, source)`, so adding an export called `hole` breaks every
+saved part that wrote `const hole = ...`. Adding one is a compatibility change:
+prefer a name a part would not choose for a local, and check `examples/` builds.
+
 **Units are millimetres. Always.** `Doc::units` records it so a file can't be
 silently misread. Anything else is rejected at the door.
 
@@ -81,6 +86,7 @@ recorded number is worse than no case — that's what `known_defect` is for.
 | how an op becomes a B-rep | `crates/parcad-occt/src/backend.rs` |
 | crash handling, timeouts, breadcrumbs | `crates/parcad-occt/src/host.rs` |
 | the authoring DSL | `app/src/dsl.ts` (shared with `tools/run.ts`) |
+| drill and clearance sizes | `METRIC_FASTENERS` in `app/src/dsl.ts` — never a literal in a part |
 | what the app can do at all | `app/src-tauri/src/service.rs` — never a transport file |
 | the IPC, HTTP and MCP adapters | `app/src-tauri/src/lib.rs`, `http.rs`, `mcp.rs` |
 | the sandbox agent scripts run in | `app/src-tauri/src/script.rs` |
@@ -93,6 +99,8 @@ recorded number is worse than no case — that's what `known_defect` is for.
 | what "still correct" means | `eval/cases/*.json`, `eval/scripts/*.js` |
 | the seed parts | `examples/*.js` — indexed in `examples/README.md`; copied into the project folder on first run, not read by the picker |
 | what the DSL makes hard | `docs/DSL_GAPS.md` |
+| which op to add next, and why not the others | `docs/OP_ROADMAP.md` |
+| what an agent can see, and what to tell it instead | `docs/PERCEPTION.md` |
 
 A new op touches `graph.rs` (variant + `children_of`), `sdf.rs`, `measure.rs`
 (its bounds), `backend.rs`, `dsl.ts`, plus a case in `eval/cases/`. Missing

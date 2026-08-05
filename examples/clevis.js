@@ -10,7 +10,7 @@
 
 const shankDia = 20;
 const shankLen = 26;
-const tapDrill = 10.2;   // M12 x 1.75
+const drill = tapDrill("M12"); // 10.2, for M12 x 1.75
 const threadDepth = 20;
 const flats = 17;        // across the flats, a 17 mm spanner
 const flatsLen = 12;
@@ -50,7 +50,7 @@ const body = union(shank, crown, fork).tag("body");
 // stack of tori pretending to be one is the approximation this project refuses.
 // It starts below the end face so the cutter crosses it rather than ending on
 // it, and reaches the called-out depth.
-const thread = cylinder(tapDrill / 2, threadDepth + 4)
+const thread = cylinder(drill / 2, threadDepth + 4)
   .at(0, 0, -shankLen - 4 + (threadDepth + 4) / 2)
   .tag("tap_drill");
 

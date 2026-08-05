@@ -37,16 +37,30 @@ it for free.
 The lesson is worth more than the op: before recording something as impossible,
 check the layer that would implement it, not the layer above.
 
+### Since fixed, by the same route
+
+- **extrude an authored outline** — `Op::Extrude`, with `extrude(profile, h)`
+  and `ngon(sides, size, h, { across })` in the DSL. Convex outlines only, the
+  same rule and the same escape as a revolve section. `hex-prism` in
+  `eval/cases/` checks it against the closed form for a hexagon.
+- **mirror** — `Op::Mirror`, as `.mirror("x")`. This one needed a composition
+  rather than a binding: `gp_Trsf::SetMirror` is bound only for an *axis*,
+  which is a half turn about a line, not a reflection in a plane. The
+  reflection is that half turn composed with a point inversion — both bound,
+  both exact — and `mirrored-hand` in `eval/cases/` is a chiral part whose
+  bounding box tells the two apart, because their volumes cannot.
+
+A survey of what a mainstream tool has that this still does not, with the cost
+of each here, is in [OP_ROADMAP.md](OP_ROADMAP.md).
+
 ### Still missing
 
 | wanted | needed for | what it takes |
 |---|---|---|
-| **extrude an authored section** | a custom extrusion profile, a cam plate, any 2D outline given a thickness | a 2D section type, then `Op::Extrude` over the already-bound `MakePrism`. The section type is the real work, and `Revolve` has now defined what one looks like |
 | **arcs in a section** | a true torus, an O-ring groove, a bearing seat — anything with a radius in section rather than a chamfer | `Edge::arc` is bound; the profile is a `Vec<[f64; 2]>` of straight segments, so an arc has nowhere to live yet |
 | **helix** | real threads — every "threaded" hole in the corpus is drawn as its tap drill; a diamond knurl; a spring | a helical path plus a sweep. `MakePipe` is not currently bound |
 | **involute and other authored curves** | a spur gear, a cam, a real GT2 flank (`timing-pulley.js` approximates it and says so) | curve construction in the graph, on top of the section type |
 | **re-entrant (non-convex) sections** | a stepped hub in one operation | today it is refused, deliberately: no exact distance field. A union of convex revolves is exact, and is how the part is turned anyway |
-| **mirror** | every symmetric part writes both halves by hand | `Op::Mirror`. It cannot be sugar over `Scale`, because non-uniform scale is refused, correctly |
 | **variable-radius and unequal-distance treatments** | a casting fillet that tapers, an asymmetric chamfer for a weld prep | `Fillet`/`Chamfer` take one scalar |
 | **section / cut-away for inspection** | seeing that `manifold-block.js`'s galleries meet without exporting an STL and slicing it elsewhere | a view concern, not a geometry one, and still the thing most missed while writing these |
 | **multi-body / assembly** | a pillow block *and* its bearing, a tee *and* its pipes, any fit check | the graph has one root and one solid |
@@ -223,10 +237,27 @@ message should distinguish "no edges matched because nothing was circular" from
 
 - **`repeat()` takes points, not shapes.** Placing two *different* shapes at a
   list of positions falls back to `union(...list.map(...))`.
-- **A tool that ends exactly on a face is a trap.** Every example extends its
-  cutters past the material for this reason, and every example has to say so in
-  a comment. A `through()` helper that oversizes a cutter along its own axis
-  would remove a whole class of comment.
+- **A tool that ends exactly on a face is a trap — partly FIXED.** Every example
+  extends its cutters past the material for this reason, and every example had
+  to say so in a comment. `holeFor(thread, depth, { through })` now does the
+  overshoot itself, at both ends when the hole goes through. It only covers
+  round holes for named fasteners; a slot or a pocket still oversizes by hand.
+
+- **Every DSL export is a reserved word inside a script.** Scripts run as
+  `new Function(...names, source)`, so `const hole = cylinder(3, 40)` in a part
+  collides with an export called `hole` and the whole script fails to parse.
+  Adding `hole()` and `tapDrill()` broke four scripts in this repo at once,
+  which is how the hazard was found: the cutter helper is called `holeFor` for
+  exactly that reason, and `hex-standoff.js` and `clevis.js` now take their
+  drill sizes from the table rather than shadowing it.
+
+  This is a real cost of every new export, and it lands on parts already saved
+  in someone's project folder, not only on the ones here. **Fix:** the places
+  that compile a script (`tools/run.ts`, `app/src/main.ts`,
+  `app/src-tauri/src/script.rs`) should catch the redeclaration and name the
+  builtin that was shadowed. "`hole` is a parcad builtin — rename your local"
+  is a one-line fix for the reader; "Cannot declare a const variable twice" is
+  not.
 - **`grid()` returns `[x, y]`, but placements are `[x, y, z]`.** Lifting a
   pattern onto another plane is `.map(([x, z]) => [x, 0, z + h])`, which reads
   badly at exactly the moment the reader is trying to picture the part.

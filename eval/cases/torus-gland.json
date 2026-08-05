@@ -1,0 +1,10 @@
+{
+  "name": "torus-gland",
+  "script": "eval/scripts/torus-gland.js",
+  "why": "The torus's main use — an O-ring gland — currently kills the worker, and this case keeps that visible rather than remembered. The boolean is fine; UnifySameDomain crashes on the coaxial seams it produces. Assertions are the bounding box and watertightness only, because a crashed part has no volume to record; when the crash is fixed this case starts passing, and a passing case still marked known_defect fails, so the marker cannot outlive the bug.",
+  "brep": {
+    "size": [24.0, 24.0, 14.0],
+    "watertight": true,
+    "known_defect": "UnifySameDomain segfaults on the coaxial circular seams a torus groove leaves in a cylinder. Repro: cylinder(12, 14).cut(torus(11.5, 1)). See docs/GOTCHAS.md."
+  }
+}

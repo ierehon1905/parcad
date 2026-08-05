@@ -1,0 +1,17 @@
+{
+  "name": "refuse-impossible-draft",
+  "script": "eval/scripts/refuse-impossible-draft.js",
+  "why": "A draft steeper than the outline can carry must be refused by both backends, and the message must name the angle that would work — 7.13 degrees here. Error messages name the fix, and a number a reader would otherwise bisect for by hand is the fix.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": ["closes this outline", "7.1"]
+    }
+  },
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": ["closes this outline", "7.1"]
+    }
+  }
+}

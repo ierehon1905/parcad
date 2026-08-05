@@ -150,14 +150,35 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
         }
 
         // The outline's own extent in X and Y, and the thickness about z = 0.
-        Op::Extrude { profile, height } => {
-            Op::validate_outline(profile)?;
+        // A positive draft only ever pulls the top in, so the outline still
+        // bounds it; a negative one pushes the top out by the inset distance,
+        // and squaring that off keeps the box conservative on every side.
+        Op::Extrude {
+            profile,
+            height,
+            draft,
+        } => {
+            let (inset, _) = Op::draft_inset(profile, *height, *draft)?;
+            let grow = (-inset).max(0.0);
             let (mut lo, mut hi) = (V3::new(f64::MAX, f64::MAX, 0.0), V3::new(f64::MIN, f64::MIN, 0.0));
             for [x, y] in profile {
                 lo = V3::new(lo.x.min(*x), lo.y.min(*y), -height.abs() / 2.0);
                 hi = V3::new(hi.x.max(*x), hi.y.max(*y), height.abs() / 2.0);
             }
-            Aabb { min: lo, max: hi }
+            Aabb {
+                min: V3::new(lo.x - grow, lo.y - grow, lo.z),
+                max: V3::new(hi.x + grow, hi.y + grow, hi.z),
+            }
+        }
+
+        // The swept circle reaches major + minor in every radial direction, and
+        // minor above and below the plane it is swept in.
+        // Conservative for a partial sweep: an arc is inside the whole ring,
+        // and a box that is too large is the error this function is allowed to
+        // make.
+        Op::Torus { major, minor, sweep } => {
+            Op::validate_torus(*major, *minor, *sweep)?;
+            Aabb::from_center_half(V3::ZERO, V3::new(major + minor, major + minor, *minor))
         }
 
         Op::Union { children, blend } => {

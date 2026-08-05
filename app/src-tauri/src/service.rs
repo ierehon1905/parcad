@@ -100,6 +100,36 @@ pub struct Snapshot {
     /// the blend bulge, which is millimetres rather than rounding.
     pub backend: String,
     pub kernel_ms: u64,
+    /// Images rendered alongside these measurements, in the order they were
+    /// asked for. The pixels ride with the reply; this says what each one shows.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<RenderedView>,
+    /// Treatment nodes a region map could not attribute to their tag.
+    ///
+    /// Only region maps are affected, and only in their *legend*. The surface
+    /// drawn is the measured one, fillets included; but "which node owns this
+    /// point" is answered by asking whose distance field vanishes there, and a
+    /// treatment has no distance field. So a fillet's own surface belongs to
+    /// nothing, and lands in `unclaimed_fraction` rather than being handed to a
+    /// neighbouring tag — a wrong attribution being much worse than a missing
+    /// one. `inspect_treatment_target` answers what a treatment actually took.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unattributed_treatments: Vec<usize>,
+}
+
+impl Snapshot {
+    /// Record what was drawn alongside these measurements.
+    ///
+    /// Takes the summaries a transport has already split from their pixels, so
+    /// that saying what an image shows and carrying the image are separate
+    /// decisions.
+    pub fn with_views(mut self, views: Vec<RenderedView>, unattributed: Vec<usize>) -> Self {
+        if !views.is_empty() {
+            self.views = views;
+            self.unattributed_treatments = unattributed;
+        }
+        self
+    }
 }
 
 /// An edge treatment, as a handle a caller can inspect.
@@ -117,6 +147,224 @@ pub struct Treatment {
     /// that wrote one cannot tell its request survived.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continuity: Option<String>,
+}
+
+/// A rendered view: the pixels, and what a caller needs to read them.
+///
+/// The two halves travel together but serialise apart. `summary` goes into the
+/// [`Snapshot`], where a caller reading numbers can see what was drawn and what
+/// the colours mean; `png` is attached by the transport in whatever way that
+/// transport carries an image. Base64 inside the JSON would be the worst of
+/// both: it inflates a structure meant to be read, and a model still could not
+/// look at it.
+pub struct Render {
+    pub summary: RenderedView,
+    pub png: Vec<u8>,
+}
+
+/// What one image shows, in the snapshot.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct RenderedView {
+    /// `iso`, `front`, `top`, …
+    pub view: String,
+    pub width: u32,
+    pub height: u32,
+    /// Present only for a tag-region map: which tag owns which colour, and how
+    /// much of the visible surface each one covers in *this* view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub regions: Option<Vec<Region>>,
+    /// Visible surface no tag claimed, 0 to 1. High means the script names
+    /// little of its own work, so most of the part cannot be selected by name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unclaimed_fraction: Option<f64>,
+}
+
+/// One tag's share of a view.
+///
+/// A restatement of `parcad_core::tags::RegionEntry` rather than a re-export:
+/// core does not depend on `schemars` and should not start, since a JSON schema
+/// is a fact about this wire format and not about the geometry.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Region {
+    pub tag: String,
+    /// `#rrggbb`, as painted in the image.
+    pub color: String,
+    pub pixels: usize,
+    /// Share of the part's visible surface in this view, 0 to 1.
+    pub fraction: f64,
+    /// Whether the tag appears at all here. A tag that is genuinely in the model
+    /// but hidden from this angle is the case worth stating: without it, a
+    /// caller concludes its edit did nothing.
+    pub visible: bool,
+}
+
+/// Everything one render request produced.
+pub struct Renders {
+    pub views: Vec<Render>,
+    /// Treatment nodes a region map could not attribute. See [`drawable`].
+    pub omitted: Vec<usize>,
+}
+
+/// The document as a distance field can draw it.
+///
+/// The implicit backend refuses `Fillet` and `Chamfer` outright — it has no
+/// logical edges to select — and that refusal is right for geometry and useless
+/// for a picture: every part in `examples/` with an edge treatment would be
+/// undrawable, which is most of them. So each treatment is replaced by an
+/// identity node, and the caller is told which ones by node index.
+///
+/// This is not the "refuse rather than approximate" rule being bent. That rule
+/// governs geometry a caller might measure or export; nothing here reaches
+/// either. What it does require is that the omission be *stated* — a picture
+/// missing a fillet nobody mentioned would have a caller conclude its treatment
+/// failed, which is the one wrong answer this could produce.
+///
+/// Two details that are load-bearing:
+///
+/// - The identity is a zero `Translate` rather than a removal, so every node
+///   index in the document still means what it meant. A caller holding a
+///   treatment node from a snapshot can still inspect it.
+/// - The tag goes with it. A tag on a fillet node names *the filleted result*;
+///   left on the identity it would name the child's entire surface, and the
+///   region legend would confidently report `top_hole_rims` covering half the
+///   part. A missing entry is recoverable, a wrong one is not.
+fn drawable(doc: &Doc) -> (Doc, Vec<usize>) {
+    let mut drawable = doc.clone();
+    let mut omitted = Vec::new();
+
+    for (id, node) in drawable.nodes.iter_mut().enumerate() {
+        let child = match node.op {
+            Op::Fillet { child, .. } | Op::Chamfer { child, .. } => child,
+            _ => continue,
+        };
+
+        node.op = Op::Translate {
+            child,
+            by: parcad_core::graph::V3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+        };
+        node.tag = None;
+        omitted.push(id);
+    }
+
+    (drawable, omitted)
+}
+
+/// Draw the part.
+///
+/// Renders come off the distance field, never off the mesh, so what a caller
+/// sees is the shape rather than the mesher's approximation of it. The
+/// consequence is stated rather than hidden: a part *measured* through the exact
+/// kernel is *drawn* through the implicit one, and the two disagree by the blend
+/// bulge — millimetres, not rounding. [`Snapshot::rendered_by`] carries that,
+/// and [`Renders::omitted`] carries the treatments no field can draw at all.
+///
+/// Framing is shared across every view (see `parcad_core::view`), so a feature at
+/// a given pixel in the front view is at a comparable pixel in the top view, and
+/// two renders of different revisions are comparable too. That is worth more
+/// than filling each frame.
+pub fn render(
+    evaluated: &Evaluated,
+    doc: &Doc,
+    views: &[parcad_core::view::View],
+    size: u32,
+    regions: bool,
+) -> Result<Renders, String> {
+    let surface = parcad_core::render::Surface {
+        positions: &evaluated.positions,
+        normals: &evaluated.normals,
+        indices: &evaluated.indices,
+    };
+    let bounds = evaluated.report.bounds;
+
+    let opts = parcad_core::render::RenderOptions {
+        size,
+        depth_samples: size,
+        ..Default::default()
+    };
+
+    // Only the region map needs the distance field, and only to say which node
+    // owns a point — the surface itself is the exact one either way.
+    let (fields, omitted) = if regions {
+        let (fields, omitted) = drawable(doc);
+        (Some(fields), omitted)
+    } else {
+        (None, Vec::new())
+    };
+
+    views
+        .iter()
+        .map(|view| {
+            let buffer = parcad_core::render::raster(&surface, bounds, *view, &opts)
+                .map_err(|e| format!("drawing the {} view: {e:#}", view.name()))?;
+
+            let (image, entries, unclaimed) = if regions {
+                let fields = fields.as_ref().expect("regions implies a field document");
+                let map = parcad_core::tags::regions_in(&buffer, fields, &opts)
+                    .map_err(|e| format!("rendering the {} region map: {e:#}", view.name()))?;
+
+                // Reported as a fraction of visible surface, like every other
+                // entry, so the two numbers can be compared without knowing the
+                // render size.
+                let claimed: usize = map.legend.iter().map(|e| e.pixels).sum();
+                let total = (claimed + map.unclaimed_pixels).max(1);
+                let regions = map
+                    .legend
+                    .iter()
+                    .map(|e| Region {
+                        tag: e.tag.clone(),
+                        color: e.color.clone(),
+                        pixels: e.pixels,
+                        fraction: e.fraction,
+                        visible: e.visible,
+                    })
+                    .collect();
+
+                (
+                    map.image,
+                    Some(regions),
+                    Some(map.unclaimed_pixels as f64 / total as f64),
+                )
+            } else {
+                let shaded = parcad_core::render::shade(&buffer, &opts);
+                (shaded.downsample(opts.supersample.clamp(1, 4)), None, None)
+            };
+
+            let png = image
+                .to_png()
+                .map_err(|e| format!("encoding the {} view: {e:#}", view.name()))?;
+
+            Ok(Render {
+                summary: RenderedView {
+                    view: view.name().to_string(),
+                    width: image.width,
+                    height: image.height,
+                    regions: entries,
+                    unclaimed_fraction: unclaimed,
+                },
+                png,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()
+        .map(|views| Renders { views, omitted })
+}
+
+/// Parse view names, naming the alternatives when one is wrong.
+pub fn parse_views(names: &[String]) -> Result<Vec<parcad_core::view::View>, String> {
+    names
+        .iter()
+        .map(|name| {
+            parcad_core::view::View::parse(name).ok_or_else(|| {
+                format!(
+                    "unknown view {name:?}; expected one of {}",
+                    parcad_core::view::View::ALL.map(|v| v.name()).join(", ")
+                )
+            })
+        })
+        .collect()
 }
 
 /// Describe one evaluation.
@@ -158,6 +406,10 @@ pub fn snapshot(doc: &Doc, evaluated: &Evaluated) -> Snapshot {
         treatments: treatments(doc),
         backend: evaluated.backend.to_string(),
         kernel_ms: evaluated.timings.kernel_ms,
+        // Nothing is drawn unless a caller asks: a raymarch costs far more than
+        // the measurements above, and most calls only want the numbers.
+        views: Vec::new(),
+        unattributed_treatments: Vec::new(),
     }
 }
 
@@ -204,6 +456,7 @@ fn treatments(doc: &Doc) -> Vec<Treatment> {
                 Op::Cuboid { .. }
                 | Op::Sphere { .. }
                 | Op::Cylinder { .. }
+                | Op::Torus { .. }
                 | Op::Revolve { .. }
                 | Op::Extrude { .. }
                 | Op::Union { .. }
@@ -573,6 +826,152 @@ mod tests {
         assert_eq!(treatments.len(), 1);
         assert_eq!(treatments[0].op, "fillet");
         assert_eq!(treatments[0].continuity.as_deref(), Some("curvature"));
+    }
+
+    /// A part with a named hole through it, for the perception tests: the hole
+    /// is visible from the top and hidden from the bottom-facing shading of a
+    /// plain render, which is the distinction a region map exists to make.
+    fn plate_with_a_hole() -> Doc {
+        doc(serde_json::json!({
+            "root": 3,
+            "nodes": [
+                { "op": "cuboid", "size": { "x": 40, "y": 40, "z": 6 }, "tag": "plate" },
+                { "op": "cylinder", "r": 6, "h": 20, "tag": "bore" },
+                { "op": "translate", "child": 1, "by": { "x": 0, "y": 0, "z": 0 } },
+                { "op": "difference", "base": 0, "tools": [2], "blend": 0 },
+            ],
+        }))
+    }
+
+    /// Renders are of an *evaluation*, so the test evaluates first. The
+    /// implicit backend is used to keep this hermetic — the raster path takes a
+    /// mesh and does not care which kernel produced it.
+    fn evaluated(doc: &Doc) -> Evaluated {
+        evaluate(doc, 6, Backend::Implicit).expect("the plate should evaluate")
+    }
+
+    #[test]
+    fn a_render_comes_back_as_a_png_of_the_size_asked_for() {
+        let doc = plate_with_a_hole();
+        let renders = render(
+            &evaluated(&doc),
+            &doc,
+            &[parcad_core::view::View::Iso, parcad_core::view::View::Top],
+            128,
+            false,
+        )
+        .expect("the plate should render");
+
+        let named: Vec<_> = renders
+            .views
+            .iter()
+            .map(|r| r.summary.view.as_str())
+            .collect();
+        assert_eq!(named, ["iso", "top"], "views come back in the order asked");
+
+        for render in &renders.views {
+            assert_eq!((render.summary.width, render.summary.height), (128, 128));
+            // Encoded, not just allocated: a caller receives these bytes and
+            // has no way to tell a truncated buffer from a dark render.
+            assert_eq!(
+                &render.png[..8],
+                b"\x89PNG\r\n\x1a\n",
+                "the {} view should be a PNG",
+                render.summary.view
+            );
+        }
+    }
+
+    #[test]
+    fn a_region_map_names_every_tag_and_what_it_covers() {
+        let doc = plate_with_a_hole();
+        let renders = render(
+            &evaluated(&doc),
+            &doc,
+            &[parcad_core::view::View::Top],
+            128,
+            true,
+        )
+        .expect("the plate should render");
+
+        let regions = renders.views[0]
+            .summary
+            .regions
+            .as_ref()
+            .expect("a region map reports its legend");
+        let visible: Vec<_> = regions
+            .iter()
+            .filter(|r| r.visible)
+            .map(|r| r.tag.as_str())
+            .collect();
+
+        // Both tags own surface from above: the plate's top face, and the wall
+        // of the bore it was cut with. A subtracted tool owning the hole it made
+        // is the point of tagging a cutter at all.
+        assert_eq!(visible, ["plate", "bore"]);
+        assert!(
+            regions.iter().all(|r| r.color.starts_with('#')),
+            "a legend without colours cannot be read against the image: {regions:?}"
+        );
+
+        let unclaimed = renders.views[0]
+            .summary
+            .unclaimed_fraction
+            .expect("a fraction");
+        assert!(
+            (0.0..=1.0).contains(&unclaimed),
+            "unclaimed surface is a fraction, got {unclaimed}"
+        );
+    }
+
+    /// The surface a region map colours is the measured one, fillets included.
+    /// Only *attribution* steps over a treatment, because a fillet has no
+    /// distance field to ask. Checked on the pure function so the test needs no
+    /// kernel: the identity keeps the node index, and drops the tag.
+    #[test]
+    fn attribution_steps_over_a_treatment_and_takes_its_tag_with_it() {
+        let treated = doc(serde_json::json!({
+            "root": 2,
+            "nodes": [
+                { "op": "cuboid", "size": { "x": 20, "y": 20, "z": 20 }, "tag": "body" },
+                { "op": "cylinder", "r": 4, "h": 40, "tag": "bore" },
+                {
+                    "op": "fillet",
+                    "child": 0,
+                    "radius": 2,
+                    "selector": ">Z",
+                    "tag": "top_rim",
+                },
+            ],
+        }));
+
+        let (fields, unattributed) = drawable(&treated);
+        assert_eq!(unattributed, [2], "the fillet node is named");
+        assert_eq!(
+            fields.nodes.len(),
+            treated.nodes.len(),
+            "node indices must keep meaning what they meant"
+        );
+
+        // The tag goes with the treatment. Left on the identity it would name
+        // the *unfilleted* cube, and the legend would report `top_rim` owning
+        // the whole part — worse than not listing it at all.
+        let tags: Vec<_> = fields
+            .tags()
+            .into_iter()
+            .map(|(_, t)| t.to_string())
+            .collect();
+        assert_eq!(tags, ["body", "bore"]);
+        assert!(matches!(fields.nodes[2].op, Op::Translate { child: 0, .. }));
+    }
+
+    #[test]
+    fn an_unknown_view_lists_the_ones_that_exist() {
+        let error = parse_views(&["isometric".to_string()]).expect_err("not a view name");
+        assert!(
+            error.contains("isometric") && error.contains("iso") && error.contains("front"),
+            "the refusal must name the alternatives, got: {error}"
+        );
     }
 
     /// A treatment the root does not reach was never built. Offering it as

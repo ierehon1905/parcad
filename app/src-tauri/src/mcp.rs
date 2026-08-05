@@ -79,6 +79,21 @@ pub struct EvaluateRequest {
     /// edges, so it cannot do edge treatments.
     #[serde(default)]
     pub backend: Option<String>,
+    /// Also draw the part, from these viewpoints: `iso`, `front`, `back`,
+    /// `left`, `right`, `top`, `bottom`. Omit to measure without rendering,
+    /// which is much faster. Every view shares one framing, so a feature at a
+    /// given pixel in one is at a comparable pixel in another.
+    #[serde(default)]
+    pub views: Option<Vec<String>>,
+    /// Colour each view by the tag that owns the surface, instead of shading it.
+    /// The reply then names every tag's colour and its share of the visible
+    /// surface — including tags that are in the model but hidden from this
+    /// angle, which is what tells you whether an edit is invisible or absent.
+    #[serde(default)]
+    pub regions: Option<bool>,
+    /// Pixels per side, 128 to 1024. Defaults to 512.
+    #[serde(default)]
+    pub image_size: Option<u32>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -221,12 +236,12 @@ impl Parcad {
     /// refusal says what to do instead.
     #[tool(
         name = "evaluate_part",
-        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality and tags. Use this to check that a script produces the part you intended."
+        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality and tags. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Use this to check that a script produces the part you intended."
     )]
     async fn evaluate_part(
         &self,
         Parameters(request): Parameters<EvaluateRequest>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<service::Snapshot>, ErrorData> {
+    ) -> Result<rmcp::model::CallToolResult, ErrorData> {
         // The exact kernel by default. `Backend::parse` defaults to the
         // implicit one, which is right for the editor — it always returns
         // something while you type — and wrong here: a caller that did not
@@ -234,15 +249,55 @@ impl Parcad {
         // fillet needs a backend it never asked to leave.
         let backend = service::Backend::parse(Some(request.backend.as_deref().unwrap_or("brep")))
             .map_err(invalid)?;
-        let snapshot = blocking(move || {
+        let views =
+            service::parse_views(request.views.as_deref().unwrap_or(&[])).map_err(invalid)?;
+        let regions = request.regions.unwrap_or(false);
+        if regions && views.is_empty() {
+            return Err(invalid(
+                "regions asks how a view is coloured, so it needs at least one \
+                 view; pass views: [\"iso\"]",
+            ));
+        }
+        let size = request.image_size.unwrap_or(512).clamp(128, 1024);
+
+        let (snapshot, pngs) = blocking(move || {
             let graph = script::build_graph(&request.script)?;
             let doc = service::parse_graph(graph)?;
             let evaluated = service::evaluate(&doc, 7, backend)?;
-            Ok(service::snapshot(&doc, &evaluated))
+
+            // Render after measuring, so a part that cannot be built fails on
+            // the geometry rather than after spending a raymarch on it.
+            let renders = service::render(&evaluated, &doc, &views, size, regions)?;
+            let (summaries, pngs) = renders
+                .views
+                .into_iter()
+                .map(|render| (render.summary, render.png))
+                .unzip::<_, _, Vec<_>, Vec<_>>();
+
+            Ok((
+                service::snapshot(&doc, &evaluated).with_views(summaries, renders.omitted),
+                pngs,
+            ))
         })
         .await?;
 
-        Ok(rmcp::handler::server::wrapper::Json(snapshot))
+        // The measurements are both text and structured content: a client that
+        // understands the schema gets the typed object, and one that does not
+        // still shows the caller its numbers rather than an empty reply.
+        let measured = serde_json::to_value(&snapshot).map_err(|e| {
+            ErrorData::internal_error(format!("serialising the snapshot: {e}"), None)
+        })?;
+        let mut content = vec![rmcp::model::ContentBlock::text(measured.to_string())];
+        content.extend(pngs.into_iter().map(|png| {
+            rmcp::model::ContentBlock::image(
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png),
+                "image/png",
+            )
+        }));
+
+        let mut result = rmcp::model::CallToolResult::success(content);
+        result.structured_content = Some(measured);
+        Ok(result)
     }
 
     /// List the selectable edges of an evaluated part.
@@ -479,7 +534,15 @@ impl ServerHandler for Parcad {
                  different number of edges fails instead of quietly filleting the wrong thing.\n\n\
                  The kernel refuses rather than approximating — a fillet radius that does not \
                  fit, a non-uniform scale, a general offset. Those refusals name the fix; read \
-                 them rather than retrying the same call."
+                 them rather than retrying the same call.\n\n\
+                 You can look at the part: evaluate_part takes views: [\"iso\", \"top\", …] and \
+                 returns images with the measurements. Two things to know about them. Renders \
+                 come off the distance field even when the numbers came from the exact kernel, \
+                 so where a picture and a measurement disagree the measurement is right — the \
+                 reply says so in rendered_by. And regions: true recolours a view by the tag \
+                 owning each patch of surface, which is how you check that a tag covers what \
+                 you think: a tag that is in the model but hidden from that angle comes back \
+                 visible: false rather than missing."
                 .into(),
         );
         info
