@@ -96,6 +96,15 @@ pub struct TargetPreview {
     /// edge-targeted treatment.
     #[serde(default)]
     pub vertices: Vec<TargetVertex>,
+    /// Tags whose live edge set is exactly this target.
+    ///
+    /// Unlike `edge@…`, these *are* authored references: swapping a directional
+    /// selector for `{ generatedBy: tag }` is a source edit the editor can
+    /// offer, because a provenance selector survives the dimension change that
+    /// would move an extremum out from under `>Z`. Empty when no tag matches
+    /// exactly — a tag selecting these edges and others would change the part.
+    #[serde(default)]
+    pub provenance: Vec<String>,
 }
 
 /// Turn sampled exact points into viewport metadata.
@@ -231,6 +240,7 @@ mod tests {
                 id: "target-vertex@3.0".into(),
                 point: [10.0, 0.0, 0.0],
             }],
+            provenance: vec!["mount_holes".into()],
         });
 
         let json = serde_json::to_string(&response).unwrap();
@@ -241,5 +251,6 @@ mod tests {
         assert_eq!(preview.node, 3);
         assert_eq!(preview.edges.len(), 1);
         assert_eq!(preview.vertices[0].id, "target-vertex@3.0");
+        assert_eq!(preview.provenance, ["mount_holes"]);
     }
 }

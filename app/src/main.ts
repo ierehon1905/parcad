@@ -8,7 +8,7 @@
  */
 
 import "./style.css";
-import { invoke } from "@tauri-apps/api/core";
+import * as backend from "./backend";
 import { EditorView, basicSetup } from "codemirror";
 import { StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
@@ -16,9 +16,11 @@ import { javascript } from "@codemirror/lang-javascript";
 import { oneDark } from "@codemirror/theme-one-dark";
 import * as dsl from "./dsl";
 import { Shape } from "./dsl";
-import { BRACKET, EDGE_TREATMENTS, ENCLOSURE } from "./examples";
+import { BRACKET, EXAMPLES, exampleSource } from "./examples";
 import { suggestVertexSelector, verticesFromEdges, type VertexPoint } from "./entities";
 import { selectorLinter } from "./selector-lint";
+import { treatmentHover as treatmentHoverTooltip, type TreatmentHoverSource } from "./treatment-hover";
+import type { TreatmentNode } from "./treatment-info";
 import { instrumentTreatmentCalls, sourceOffset, treatmentAtCursor, treatmentCallRange } from "./source-link";
 import { Viewport, type TargetVertex } from "./viewport";
 
@@ -74,6 +76,8 @@ interface TargetPreview {
   node: number;
   edges: EdgeCurve[];
   vertices: TargetVertex[];
+  /** Tags whose live edge set is exactly this target, from the kernel. */
+  provenance?: string[];
 }
 
 /** A visible B-rep edge. `id` is valid only for this evaluated result. */
@@ -88,6 +92,7 @@ interface EdgeCurve {
 }
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+
 
 const statusEl = $("status");
 const errorEl = $("error");
@@ -168,6 +173,30 @@ const treatmentHover = StateField.define<DecorationSet>({
 
 // ---------------------------------------------------------------- the editor
 
+/**
+ * What the hover tooltip is allowed to know.
+ *
+ * Annotated and declared separately so the editor's type does not depend on
+ * an extension that reads the editor back.
+ */
+const hoverSource: TreatmentHoverSource = {
+  // Only for a document that still matches the evaluated graph. Hovering
+  // half-typed source must not report the last part's counts.
+  treatmentAt: (pos) => {
+    const source = editor.state.doc.toString();
+    if (source !== lastSource) return undefined;
+    const treatment = treatmentAtCursor(editor.state, source, lastTreatments, pos);
+    return treatment && { node: treatment.node, method: treatment.source?.method };
+  },
+  nodeAt: (node) => lastGraph?.nodes[node] as TreatmentNode | undefined,
+  callRange: (node) => treatmentRange(lastTreatments.find((t) => t.node === node)),
+  resolve: resolveTarget,
+};
+
+// Handle for poking at the tooltip during development, alongside `__editor`
+// and `__viewport`.
+(window as unknown as Record<string, unknown>).__hoverSource = hoverSource;
+
 const editor = new EditorView({
   doc: BRACKET,
   parent: $("editor"),
@@ -180,6 +209,7 @@ const editor = new EditorView({
     // selector resolves, and to how many edges — waits for the evaluation
     // below, because only the kernel knows.
     selectorLinter,
+    treatmentHoverTooltip(hoverSource),
     EditorView.updateListener.of((v) => {
       if (v.docChanged) {
         clearTargetPreview();
@@ -228,19 +258,14 @@ async function run() {
     const built = buildGraph(editor.state.doc.toString());
 
     const depth = Number(depthInput.value);
-    const result = await evaluateGraph(built.graph, depth, backendSelect.value);
-
-    // The browser fallback is a fixed geometry artifact. Reflect its real
-    // backend in the disabled selector instead of leaving it claiming that a
-    // coarse SDF mesh is a B-rep solid.
-    if (!inTauri) {
-      backendSelect.value = result.backend === "brep" ? "brep" : "preview";
-      syncBackendUi();
-    }
+    const result = await backend.evaluate<Evaluated>(built.graph, depth, backendSelect.value);
 
     lastGraph = built.graph;
     lastSource = built.source;
     lastTreatments = built.treatments;
+    // Resolved targets belong to one graph. A cached count that outlived the
+    // edit that changed it would be a confident wrong answer.
+    resolvedTargets.clear();
     show(result);
     previewTreatmentAtCursor();
     clearError();
@@ -256,56 +281,6 @@ async function run() {
     running = false;
     if (dirty) schedule();
   }
-}
-
-/** Is the Tauri bridge present, or are we in a plain browser? */
-const inTauri = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
-
-/**
- * Evaluate a graph, or serve a pre-baked one when there is no desktop shell.
- *
- * The fallback exists so the viewport can be developed and looked at in a normal
- * browser, where the geometry backend does not exist. It rebuilds the intent
- * graph only to preserve source locations; its geometry remains a fixed bracket
- * fixture, which the status line makes explicit.
- */
-async function evaluateGraph(
-  graph: unknown,
-  depth: number,
-  backend: string,
-): Promise<Evaluated> {
-  if (inTauri) return invoke<Evaluated>("evaluate", { graph, depth, backend });
-
-  const res = await fetch("/dev-geometry.json");
-  if (!res.ok) {
-    throw new Error(
-      "no desktop backend, and no /dev-geometry.json to fall back on.\n" +
-        "Generate one with:\n" +
-        "  parcad graph.json --geometry app/public/dev-geometry.json",
-    );
-  }
-  return res.json() as Promise<Evaluated>;
-}
-
-/**
- * In a plain browser there is no geometry backend, so the viewport shows a
- * pre-baked file and the backend and detail controls do nothing. The untouched
- * bracket source can still demonstrate its baked treatment-history link; any
- * edited model needs the desktop app for live geometry and exact target preview.
- */
-function markBrowserOnly() {
-  if (inTauri) return;
-  for (const el of [backendSelect, depthInput]) {
-    el.disabled = true;
-    el.title = "needs the desktop app — the browser shows pre-baked geometry";
-  }
-  const note = document.createElement("div");
-  note.className = "notice";
-  note.textContent =
-    "Browser fixture: frozen bracket geometry from /dev-geometry.json. " +
-    "Hover a corner marker to inspect its vertex ID and selector. " +
-    "Edits and source-to-viewport target previews need the desktop app.";
-  $("viewport-pane").appendChild(note);
 }
 
 /**
@@ -429,6 +404,32 @@ function clearTargetPreview() {
   targetPreviewEl.hidden = true;
 }
 
+/**
+ * Exact targets already resolved for the current graph, keyed by node.
+ *
+ * The cursor preview and the hover tooltip ask the same question of the same
+ * node, and the answer costs a worker round trip that rebuilds the treatment's
+ * child. Cleared whenever a new graph evaluates.
+ */
+const resolvedTargets = new Map<number, Promise<TargetPreview>>();
+
+function resolveTarget(node: number): Promise<TargetPreview> {
+  const cached = resolvedTargets.get(node);
+  if (cached) return cached;
+
+  const pending = backend.inspectEdgeTarget<TargetPreview>(lastGraph, node).then(
+    (preview) => {
+      if (preview.node !== node) throw new Error("the worker returned a different treatment");
+      return preview;
+    },
+  );
+  // A failed resolve is not cached: the next hover should ask again rather
+  // than repeat a stale failure after the model is fixed.
+  pending.catch(() => resolvedTargets.delete(node));
+  resolvedTargets.set(node, pending);
+  return pending;
+}
+
 /** Resolve and highlight the treatment call under the editor cursor. */
 async function previewTreatmentAtCursor() {
   const request = ++targetPreviewRequest;
@@ -437,7 +438,7 @@ async function previewTreatmentAtCursor() {
     source === lastSource
       ? treatmentAtCursor(editor.state, source, lastTreatments, editor.state.selection.main.head)
       : undefined;
-  if (!treatment || !lastGraph || !inTauri) {
+  if (!treatment || !lastGraph) {
     if (request === targetPreviewRequest) clearTargetPreview();
     return;
   }
@@ -448,12 +449,8 @@ async function previewTreatmentAtCursor() {
   targetPreviewDetail.textContent = "resolving exact target…";
 
   try {
-    const preview = await invoke<TargetPreview>("inspect_edge_target", {
-      graph: lastGraph,
-      node: treatment.node,
-    });
+    const preview = await resolveTarget(treatment.node);
     if (request !== targetPreviewRequest) return;
-    if (preview.node !== treatment.node) throw new Error("the worker returned a different treatment");
     const vertices = preview.vertices ?? [];
     viewport.setTargetPreview(normalizeEdges(preview.edges), vertices);
     targetPreviewName.textContent = vertices.length > 0
@@ -523,9 +520,6 @@ function updateEntityInspector() {
 
 /** The source call whose exact builder history generated this final edge. */
 function treatmentForEdge(edge: EdgeCurve): dsl.TreatmentSource | undefined {
-  // The browser artifact is generated from exactly BRACKET. Let it demonstrate
-  // the link, but never pretend an edited source still owns its frozen curves.
-  if (!inTauri && lastSource !== BRACKET) return undefined;
   return edge.treatment_node === undefined
     ? undefined
     : lastTreatments.find((treatment) => treatment.node === edge.treatment_node);
@@ -682,7 +676,6 @@ depthInput.addEventListener("input", () => {
 
 backendSelect.addEventListener("change", () => {
   syncBackendUi();
-markBrowserOnly();
   // A backend swap changes the geometry, not the part, so the camera stays.
   schedule();
 });
@@ -690,24 +683,33 @@ markBrowserOnly();
 /** B-rep meshes to a fixed deflection; its solid and triangle views have no grid. */
 function syncBackendUi() {
   const brepMesh = backendSelect.value === "brep" || backendSelect.value === "preview";
-  depthInput.disabled = brepMesh || !inTauri;
+  depthInput.disabled = brepMesh;
   depthInput.parentElement!.classList.toggle("disabled", brepMesh);
   depthInput.parentElement!.title = brepMesh
     ? "B-rep meshes to a fixed 0.01 mm deflection; there is no grid to coarsen"
     : "";
 }
 syncBackendUi();
-markBrowserOnly();
 
-$<HTMLSelectElement>("example").addEventListener("change", (e) => {
-  const which = (e.target as HTMLSelectElement).value;
-  const doc =
-    which === "enclosure" ? ENCLOSURE : which === "edge-treatments" ? EDGE_TREATMENTS : BRACKET;
-  editor.dispatch({
-    changes: { from: 0, to: editor.state.doc.length, insert: doc },
+// The picker is built from the example registry rather than listed in the HTML,
+// so a file added to examples/ shows up here without a second edit.
+{
+  const picker = $<HTMLSelectElement>("example");
+  for (const example of EXAMPLES) {
+    const option = document.createElement("option");
+    option.value = example.id;
+    option.textContent = example.label;
+    picker.append(option);
+  }
+
+  picker.addEventListener("change", (e) => {
+    const doc = exampleSource((e.target as HTMLSelectElement).value);
+    editor.dispatch({
+      changes: { from: 0, to: editor.state.doc.length, insert: doc },
+    });
+    framed = false;
   });
-  framed = false;
-});
+}
 
 // Draggable split between editor and viewport.
 {
@@ -741,15 +743,10 @@ window.addEventListener("keydown", async (e) => {
   const step = e.shiftKey;
   setStatus(step ? "exporting STEP" : "exporting STL", "busy");
   try {
-    const path = step
-      ? await invoke<string>("export_step", { graph: lastGraph, path: "part.step" })
-      : await invoke<string>("export_stl", {
-          graph: lastGraph,
-          depth: Number(depthInput.value),
-          path: "part.stl",
-          backend: backendSelect.value,
-        });
-    setStatus(`exported ${path}`);
+    const name = step
+      ? await backend.exportStep(lastGraph)
+      : await backend.exportStl(lastGraph, Number(depthInput.value), backendSelect.value);
+    setStatus(`exported ${name}`);
     clearError();
   } catch (err) {
     showError(err);

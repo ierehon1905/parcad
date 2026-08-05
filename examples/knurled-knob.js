@@ -14,19 +14,11 @@ const fluteDia = 3;
 
 const body = cylinder(knobDia / 2, knobH).tag("body");
 
-// One flute, placed by angle around the rim. Written out because the DSL has
-// no polar array — the same loop appears in flange.js and timing-pulley.js.
-const flute = cylinder(fluteDia / 2, knobH * 1.2);
-const knurl = union(
-  ...Array.from({ length: flutes }, (_, i) => {
-    const angle = (i / flutes) * Math.PI * 2;
-    // Centred on the rim, so half the flute cuts in and half cuts air.
-    return flute.at(
-      Math.cos(angle) * (knobDia / 2),
-      Math.sin(angle) * (knobDia / 2),
-    );
-  }),
-).tag("knurl");
+// One flute, placed on the rim once and spun around the axis. Centred on the
+// rim, so half of it cuts in and half cuts air — which is what makes the flute
+// a scallop rather than a slot.
+const flute = cylinder(fluteDia / 2, knobH * 1.2).at(knobDia / 2, 0);
+const knurl = around(flute, flutes).tag("knurl");
 
 // The D-bore: a round hole with one side flatted off. The flat is what
 // transmits torque, so its depth is a fit dimension, not decoration.

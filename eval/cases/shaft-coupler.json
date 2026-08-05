@@ -1,0 +1,19 @@
+{
+  "name": "shaft-coupler",
+  "script": "examples/shaft-coupler.js",
+  "why": "Two blind bores meeting at a web, with radial grub screws breaking into them — the case where a rim stops being a full circle and the selector has to know it.",
+  "brep": {
+    "size": [
+      25.0,
+      25.0,
+      30.0
+    ],
+    "volume_mm3": 12142.452,
+    "area_mm2": 4695.302,
+    "triangles": 2866,
+    "watertight": true,
+    "faces": 16,
+    "edges": 86,
+    "curves": 27
+  }
+}

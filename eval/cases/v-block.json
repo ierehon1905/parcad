@@ -1,0 +1,19 @@
+{
+  "name": "v-block",
+  "script": "examples/v-block.js",
+  "why": "A 90 degree vee cut by a rotated cube, so the included angle cannot drift when the depth changes. Also the directional selector at its most literal.",
+  "brep": {
+    "size": [
+      50.0,
+      50.0,
+      50.0
+    ],
+    "volume_mm3": 102281.81,
+    "area_mm2": 16697.711,
+    "triangles": 320,
+    "watertight": true,
+    "faces": 18,
+    "edges": 96,
+    "curves": 47
+  }
+}

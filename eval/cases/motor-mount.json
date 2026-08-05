@@ -1,0 +1,19 @@
+{
+  "name": "motor-mount",
+  "script": "examples/motor-mount.js",
+  "why": "The NEMA 17 interface, plus gussets unioned unblended because a blend across all four solids aborts inside OCCT. Guards the face-normal form of the rim selector.",
+  "brep": {
+    "size": [
+      50.0,
+      45.0,
+      50.0
+    ],
+    "volume_mm3": 23984.402,
+    "area_mm2": 10487.788,
+    "triangles": 2642,
+    "watertight": true,
+    "faces": 47,
+    "edges": 252,
+    "curves": 114
+  }
+}

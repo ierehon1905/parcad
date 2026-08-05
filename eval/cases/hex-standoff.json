@@ -1,0 +1,19 @@
+{
+  "name": "hex-standoff",
+  "script": "examples/hex-standoff.js",
+  "why": "A hexagonal prism built as three intersecting slabs — the only way to get a prism here — with the across-flats dimension carried by the slab thickness.",
+  "brep": {
+    "size": [
+      5.5,
+      6.351,
+      20.0
+    ],
+    "volume_mm3": 424.885,
+    "area_mm2": 577.3,
+    "triangles": 448,
+    "watertight": true,
+    "faces": 11,
+    "edges": 50,
+    "curves": 22
+  }
+}

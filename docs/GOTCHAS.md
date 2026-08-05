@@ -48,6 +48,22 @@ cases produced byte-identical geometry after the change.
 cd app && bun install --frozen-lockfile && bun run tauri dev
 ```
 
+### A second app instance silently has no browser UI
+
+The UI port is held by whichever instance bound it first. The second one prints
+why and keeps its desktop window working — but a browser tab is then talking to
+the *first* instance's kernel, which is not obviously wrong and is very
+confusing. Read the app's stderr; it names the fix:
+
+```bash
+PARCAD_HTTP_PORT=4243 cargo run -p parcad-app
+```
+
+A browser that loses the host mid-session shows "the parcad desktop process is
+not answering" and keeps the last good geometry on screen. That is the app
+having exited, not a failed evaluation — `tauri dev` restarting on a rebuild is
+the usual cause.
+
 ### `cargo build -p parcad-occt` does not build the worker
 
 Without `--features kernel` you get only the host half and the binary is skipped
@@ -93,6 +109,28 @@ afterwards.
 `Mesher::new`. `Success::deflection_mm` reports what the mesher *actually* used —
 report that, never the request. (We once claimed 0.050 mm quality while meshing
 at 0.010.)
+
+### A blended union of face-touching solids kills the kernel
+
+Two solids that meet *exactly* on a plane — a hub standing on a flange face, a
+gusset landing on a plate — abort OCCT with `SIGABRT` when the union is
+blended, at any radius. Overlap them instead: bury the hub a few millimetres
+into the plate, or take the blend between two solids and union the third on
+unblended. `examples/flange.js` and `examples/motor-mount.js` both carry the
+workaround with a comment, and docs/DSL_GAPS.md §4 has the full table of shapes
+that trigger it.
+
+The crash is caught and reported with a breadcrumb, so nothing is lost — but
+the message blames the radius, and the radius is not the problem.
+
+### `adjacentTo: { faceNormal }` also matches a hole's own wall
+
+A rim edge borders two faces: the flat face it sits in, and the cylindrical
+wall of the hole. The wall answers to axis-aligned normals, so both end rims of
+a bore drilled along X match `adjacentTo: { faceNormal: "+z" }`. On a part with
+cross-drillings — `examples/manifold-block.js` — the "opens onto the top face"
+query silently picked up two extra rims. Use `at: { z: "max" }` there; the
+face-normal form is fine when every hole is drilled along one axis.
 
 ### `.at(x, y, h)` vs `.at(x, y, h - wall)`
 

@@ -1,0 +1,19 @@
+{
+  "name": "timing-pulley",
+  "script": "examples/timing-pulley.js",
+  "why": "An approximate GT2 profile, marked as approximate in the script. It measures what the approximation actually produces so a change to it is visible. Its grooves sit exactly on the pitch circle, so the edge and curve counts move with the placement arithmetic while the volume does not.",
+  "brep": {
+    "size": [
+      17.732,
+      17.732,
+      8.0
+    ],
+    "volume_mm3": 1013.67,
+    "area_mm2": 1509.185,
+    "triangles": 4572,
+    "watertight": true,
+    "faces": 62,
+    "edges": 806,
+    "curves": 362
+  }
+}

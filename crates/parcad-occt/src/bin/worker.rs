@@ -163,6 +163,7 @@ fn run() -> Response {
                 node,
                 edges: target.edges,
                 vertices: target.vertices,
+                provenance: target.provenance,
             }),
             Err(e) => Response::Error {
                 stage: "resolving selected-edge target".into(),

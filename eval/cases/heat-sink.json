@@ -1,0 +1,19 @@
+{
+  "name": "heat-sink",
+  "script": "examples/heat-sink.js",
+  "why": "A fin array from one reused fin shape: nine placements of a single node, which is the DAG property the graph exists to have.",
+  "brep": {
+    "size": [
+      60.0,
+      60.0,
+      30.0
+    ],
+    "volume_mm3": 44907.656,
+    "area_mm2": 36365.95,
+    "triangles": 906,
+    "watertight": true,
+    "faces": 128,
+    "edges": 532,
+    "curves": 264
+  }
+}

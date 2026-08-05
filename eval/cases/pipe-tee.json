@@ -1,0 +1,19 @@
+{
+  "name": "pipe-tee",
+  "script": "examples/pipe-tee.js",
+  "why": "Two cylinders crossing at 90 degrees: a saddle intersection curve outside and in, blended, with sockets counterbored into the ends.",
+  "brep": {
+    "size": [
+      100.0,
+      47.99,
+      79.0
+    ],
+    "volume_mm3": 134874.495,
+    "area_mm2": 33910.033,
+    "triangles": 12372,
+    "watertight": true,
+    "faces": 19,
+    "edges": 70,
+    "curves": 26
+  }
+}

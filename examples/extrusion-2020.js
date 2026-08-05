@@ -6,9 +6,9 @@
 // end screw.
 //
 // It is written as one side's cuts, placed four times by rotating the *cutter*
-// rather than the body. That is the closest thing here to a circular pattern —
-// see docs/DSL_GAPS.md, which asks for a `pattern()` helper so this loop does
-// not have to be rewritten in every symmetric part.
+// rather than the body — `around(slot, 4)`. The profile is genuinely four-fold
+// symmetric, so that is exact rather than four placements that could drift
+// apart under an edit.
 
 const size = 20;
 const length = 200;
@@ -34,12 +34,7 @@ const slot = union(opening, chamber);
 // Four identical slots. Rotating the cutter about the extrusion axis is exact:
 // the profile is genuinely four-fold symmetric, so nothing here is a placement
 // approximation that could drift.
-const slots = union(
-  slot,
-  slot.rotate("z", 90),
-  slot.rotate("z", 180),
-  slot.rotate("z", 270),
-).tag("slots");
+const slots = around(slot, 4).tag("slots");
 
 const coreHole = cylinder(core / 2, length * 1.2).tag("core_hole");
 

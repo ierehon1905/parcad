@@ -1,0 +1,19 @@
+{
+  "name": "flange",
+  "script": "examples/flange.js",
+  "why": "An ASME B16.5 flange: a bolt circle written with Math because there is no polar array, and one chamfer selector that has to reach five rims drilled by a single operation.",
+  "brep": {
+    "size": [
+      152.395,
+      152.398,
+      25.4
+    ],
+    "volume_mm3": 296023.409,
+    "area_mm2": 48108.94,
+    "triangles": 15778,
+    "watertight": true,
+    "faces": 16,
+    "edges": 66,
+    "curves": 20
+  }
+}

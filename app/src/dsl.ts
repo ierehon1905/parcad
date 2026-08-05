@@ -578,6 +578,79 @@ export function cylinder(r: number, h: number): Shape {
   return new Shape(() => ({ op: "cylinder", r, h }), []);
 }
 
+/** A point in a revolved section: `[radius, z]`, with radius measured off +Z. */
+export type SectionPoint = [number, number];
+
+/**
+ * A closed convex section in the (radius, z) half-plane, revolved a full turn
+ * about Z.
+ *
+ * This is how a turned part is drawn: you author the *section*, the shape that
+ * a lathe tool would leave, and the axis does the rest. It is the only
+ * primitive here that is not a fixed shape with parameters, and it is what a
+ * cone, a countersink, a tapered hub or a V-groove ring is made of.
+ *
+ * Two rules, enforced by the core rather than by this file, because a graph can
+ * arrive from anywhere:
+ *
+ * - **radius >= 0** — a section that crosses the axis sweeps through itself.
+ * - **convex** — a re-entrant section has no exact distance field, so it is
+ *   refused instead of being approximated differently by each backend. Build a
+ *   stepped profile as a union of convex revolves; that is how it is turned.
+ */
+export function revolve(profile: SectionPoint[]): Shape {
+  if (profile.length < 3) {
+    throw new Error(
+      "a revolve section needs at least 3 [radius, z] points, e.g. revolve([[0, -5], [4, -5], [0, 5]])",
+    );
+  }
+  if (profile.some(([r]) => r < 0)) {
+    throw new Error("revolve section radii must be >= 0; mirror the section onto +radius");
+  }
+  return new Shape(() => ({ op: "revolve", profile }), []);
+}
+
+/**
+ * A cone or truncated cone along Z, centred on the origin like every other
+ * primitive: `r1` at the bottom, `r2` at the top.
+ *
+ * A cone *is* a revolved triangle, which is why this is four lines rather than
+ * a kernel primitive. `cone(r, 0, h)` is a point; `cone(r, r, h)` is a cylinder
+ * built the long way round, and `cylinder()` is the one to use for that.
+ */
+export function cone(r1: number, r2: number, h: number): Shape {
+  if (r1 < 0 || r2 < 0) throw new Error("cone radii must be >= 0");
+  if (r1 === 0 && r2 === 0) throw new Error("a cone needs at least one non-zero radius");
+  if (h <= 0) throw new Error("cone height must be positive");
+  // Anticlockwise in (radius, z), and the two zero-radius cases drop the
+  // degenerate point rather than emitting a repeated one.
+  const section: SectionPoint[] = [[0, -h / 2]];
+  if (r1 > 0) section.push([r1, -h / 2]);
+  if (r2 > 0) section.push([r2, h / 2]);
+  section.push([0, h / 2]);
+  return revolve(section);
+}
+
+/**
+ * A countersink cutter for a screw head: the frustum a drill leaves, sized by
+ * the head diameter and the included angle.
+ *
+ * 90° is the ISO metric countersink and the default here; 82° is the imperial
+ * one. The cutter is returned positioned so its wide end sits at z = 0 — cut it
+ * where the hole breaks out, `.at(x, y, faceZ)`.
+ */
+export function countersink(headDia: number, includedAngle = 90): Shape {
+  if (headDia <= 0) throw new Error("countersink head diameter must be positive");
+  if (includedAngle <= 0 || includedAngle >= 180) {
+    throw new Error("countersink included angle must be between 0 and 180 degrees");
+  }
+  // The cone's half-angle is half the included angle, so the depth follows from
+  // the head radius: depth = r / tan(half).
+  const r = headDia / 2;
+  const depth = r / Math.tan((includedAngle / 2) * (Math.PI / 180));
+  return cone(0, r, depth).at(0, 0, -depth / 2);
+}
+
 export function union(...args: (Shape | BoolOptions)[]): Shape {
   const { shapes, opts } = split(args);
   return new Shape(
@@ -617,6 +690,76 @@ export function grid(
     }
   }
   return out;
+}
+
+/** How a bolt circle is placed relative to the centrelines. */
+export interface PolarOptions {
+  /** Angle of the first point, in degrees anticlockwise from +X. Default 0. */
+  start?: number;
+  /**
+   * Rotate the whole circle by half a step, so no point lands on a centreline.
+   *
+   * This is the convention in ASME B16.5 and most flange standards, and it is
+   * worth a named option rather than an unexplained `+ 0.5` in a loop: a reader
+   * can check "straddle" against a drawing, and cannot check arithmetic.
+   */
+  straddle?: boolean;
+}
+
+/**
+ * `count` points spaced evenly around a circle of `radius`.
+ *
+ * The rotational counterpart to {@link grid}, and returns the same `[x, y]`
+ * tuples, so it feeds {@link repeat} the same way. Every part with a bolt
+ * circle used to write this loop out with `Math.cos`/`Math.sin`; the trouble
+ * with that is not the length but that the standards knowledge — where the
+ * holes sit relative to the centrelines — ended up encoded as arithmetic.
+ */
+export function polar(
+  count: number,
+  radius: number,
+  options: PolarOptions = {},
+): [number, number][] {
+  if (!Number.isInteger(count) || count <= 0) {
+    throw new Error("polar count must be a positive integer, e.g. polar(4, 60)");
+  }
+  if (!Number.isFinite(radius)) {
+    throw new Error("polar radius must be a number in millimetres");
+  }
+  const step = 360 / count;
+  const start = (options.start ?? 0) + (options.straddle ? step / 2 : 0);
+  return Array.from({ length: count }, (_, i) => {
+    const radians = ((start + i * step) * Math.PI) / 180;
+    return [Math.cos(radians) * radius, Math.sin(radians) * radius];
+  });
+}
+
+/**
+ * `count` copies of `shape`, spun evenly about an axis through the origin and
+ * unioned together.
+ *
+ * Where {@link polar} places points, this rotates a whole shape — which is what
+ * a feature that is not rotationally symmetric needs: a T-slot on each face of
+ * an extrusion, a flute around a knob. Placing the shape once at its radius and
+ * spinning it keeps the radius in one place instead of inside a trig call, and
+ * the copies share one node in the graph.
+ */
+export function around(
+  shape: Shape,
+  count: number,
+  axis: "x" | "y" | "z" = "z",
+): Shape {
+  if (!Number.isInteger(count) || count <= 0) {
+    throw new Error("around count must be a positive integer, e.g. around(slot, 4)");
+  }
+  // The first copy is the shape itself, not a rotation by zero: an identity
+  // transform in the graph is a node the kernel still has to evaluate, and it
+  // makes the result differ from the same pattern written out by hand.
+  return union(
+    ...Array.from({ length: count }, (_, i) =>
+      i === 0 ? shape : shape.rotate(axis, (i * 360) / count),
+    ),
+  );
 }
 
 // ---------------------------------------------------------------------------

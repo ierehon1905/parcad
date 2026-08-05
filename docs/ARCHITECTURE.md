@@ -263,6 +263,46 @@ line down it. For the bracket this takes 77 curves down to 67.
 
 ## The app
 
+### One application, two windows
+
+The desktop process hosts its own UI and API on `127.0.0.1:4242`
+(`PARCAD_HTTP_PORT` to move it). A browser pointed at that port is not a
+reduced build: it loads the same frontend bundle Tauri embeds and calls the
+same Rust functions the webview calls, so there is no such thing as a
+browser-only limitation to learn.
+
+```
+  webview  ──Tauri IPC──┐
+                        ├──> app/src-tauri/src/service.rs ──> core / OCCT worker
+  browser  ──HTTP────────┘
+```
+
+`service.rs` owns every capability; `lib.rs` and `http.rs` are adapters that add
+nothing. That split is load-bearing. The browser build was previously a frozen
+`dev-geometry.json` fixture, and each capability the editor gated on `inTauri` —
+editing, backend choice, exact target preview, both exports — was a difference
+the user had to discover. The frontend now reaches the backend only through
+`app/src/backend.ts`, which chooses a transport and nothing else.
+
+Three constraints on the HTTP half, each deliberate:
+
+- **Loopback only.** The endpoint evaluates arbitrary intent graphs, which means
+  spawning the OCCT worker. It is a local tool, never bound to a routable
+  address.
+- **No CORS headers.** Their absence *is* the access control: another origin can
+  send a JSON POST but its preflight fails, so it can never read a reply.
+- **No caller-supplied paths.** IPC writes an export where the desktop user
+  pointed; HTTP returns bytes and the browser saves them. A path parameter on a
+  socket is an arbitrary-write primitive.
+
+The one honest difference left is where an export lands — a file on the desktop,
+a download in the browser. Same bytes, same kernel; it is a property of the host,
+not of the model.
+
+Under `tauri dev` the UI comes from Vite on 1420, which proxies `/api` to the
+app's port. That keeps every frontend call same-origin, which is what lets the
+app ship no CORS configuration at all.
+
 - `app/src/dsl.ts` is the authoring layer and lives in TypeScript, not Rust.
   That's what lets `tools/run.ts` (bun) and the webview run *the same* DSL and
   hand the same JSON to the same core.
@@ -270,6 +310,6 @@ line down it. For the bracket this takes 77 curves down to 67.
   solid gets `MeshStandardMaterial`, real edge lines and a silhouette outline
   pass; mesh preview gets smooth Lambert shading, a faint triangle overlay and
   no outline pass. Both display the same B-rep geometry.
-- Timings the app reports include JSON serialisation of the geometry across the
-  Tauri IPC bridge, which for the bracket (~12 000 triangles + 67 edge curves)
-  is a real fraction of the total.
+- Timings the app reports include serialising the geometry across whichever
+  transport asked — the Tauri IPC bridge or the HTTP host — which for the
+  bracket (~12 000 triangles + 67 edge curves) is a real fraction of the total.

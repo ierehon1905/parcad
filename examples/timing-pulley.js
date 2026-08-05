@@ -32,16 +32,8 @@ const blank = union(
 // The tooth grooves. Each is a cylinder standing on the pitch circle, so the
 // groove depth follows from where the pitch circle sits — that is the one
 // dimension a belt actually cares about.
-const groove = cylinder(0.62, beltWidth * 3);
-const grooves = union(
-  ...Array.from({ length: teeth }, (_, i) => {
-    const angle = (i / teeth) * Math.PI * 2;
-    return groove.at(
-      Math.cos(angle) * (pitchDia / 2),
-      Math.sin(angle) * (pitchDia / 2),
-    );
-  }),
-).tag("grooves");
+const groove = cylinder(0.62, beltWidth * 3).at(pitchDia / 2, 0);
+const grooves = around(groove, teeth).tag("grooves");
 
 // The bore, and one radial grub screw through a flange into it.
 const shaftBore = cylinder(bore / 2, bodyH * 2).tag("bore");

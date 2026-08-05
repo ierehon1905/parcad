@@ -6,16 +6,15 @@
 // centrelines, which is the part of the standard people get wrong: they sit at
 // 45°, not at 0°.
 //
-// The DSL has no polar array, so the bolt circle is written out with Math.
-// See docs/DSL_GAPS.md — a `polar()` helper next to `grid()` would remove
-// this boilerplate from every rotationally symmetric part.
+// `polar()` is the rotational counterpart to `grid()`, and `straddle` is the
+// convention itself: the holes sit half a step off the centrelines. Written as
+// arithmetic it was a `+ 0.5` nobody could check against a drawing.
 
 const od = 152.4;
 const thickness = 19.1;
 const bore = 60.3;
 const hubOd = 92.1;
-const throughHub = 25.4;           // back face to top of hub
-const hubHeight = throughHub - thickness;
+const throughHub = 25.4;   // back face to top of hub
 const boltCircle = 120.7;
 const boltDia = 19.1;
 const bolts = 4;
@@ -24,8 +23,13 @@ const bolts = 4;
 // back face (the one that gets faced flat) stays at z = -thickness / 2.
 const plate = cylinder(od / 2, thickness).tag("plate");
 
-const hub = cylinder(hubOd / 2, hubHeight)
-  .at(0, 0, (thickness + hubHeight) / 2)
+// The hub is modelled buried to the plate's mid-plane rather than standing on
+// its top face. Two coaxial cylinders that meet exactly on a face abort inside
+// OCCT when the union is blended — at any radius, including 1 mm — and an
+// overlap is both the fix and what a casting actually is. See docs/DSL_GAPS.md.
+const hubTop = throughHub - thickness / 2;
+const hub = cylinder(hubOd / 2, hubTop)
+  .at(0, 0, hubTop / 2)
   .tag("hub");
 
 // A small blend at the hub root: a sharp internal corner there is a stress
@@ -36,14 +40,7 @@ const body = union(plate, hub, { blend: 3 }).tag("body");
 // zero-thickness sliver that booleans handle badly — extend it past both ends.
 const throughBore = cylinder(bore / 2, throughHub * 4).tag("bore");
 
-const boltHoles = Array.from({ length: bolts }, (_, i) => {
-  // 45° offset so no hole lands on a centreline, per the standard.
-  const angle = ((i + 0.5) / bolts) * Math.PI * 2;
-  return [
-    Math.cos(angle) * (boltCircle / 2),
-    Math.sin(angle) * (boltCircle / 2),
-  ];
-});
+const boltHoles = polar(bolts, boltCircle / 2, { straddle: true });
 
 // One tagged cut, not two. `generatedBy` names a single operation, so bore and
 // bolt holes have to be drilled by the same node for one selector to reach all

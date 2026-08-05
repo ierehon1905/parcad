@@ -1,0 +1,19 @@
+{
+  "name": "pillow-block",
+  "script": "examples/pillow-block.js",
+  "why": "A bore-on-a-base housing: a blended union where the boss deliberately reaches into the base, and slots whose ends are arcs and so are not matched by role: \"hole\".",
+  "brep": {
+    "size": [
+      90.0,
+      32.0,
+      48.496
+    ],
+    "volume_mm3": 68693.073,
+    "area_mm2": 15124.442,
+    "triangles": 2422,
+    "watertight": true,
+    "faces": 28,
+    "edges": 156,
+    "curves": 75
+  }
+}

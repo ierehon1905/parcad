@@ -12,7 +12,7 @@ use anyhow::{bail, Result};
 use glam::{DMat3, DVec3};
 use opencascade::{
     adhoc::AdHocShape,
-    primitives::{BooleanShape, Edge, Shape},
+    primitives::{BooleanShape, Edge, Face, Shape, Wire},
 };
 use parcad_core::{
     graph::{ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, NodeId, Op, V3},
@@ -111,6 +111,7 @@ fn op_name(op: &Op) -> &'static str {
     match op {
         Op::Cuboid { .. } => "box",
         Op::Sphere { .. } => "sphere",
+        Op::Revolve { .. } => "revolve",
         Op::Cylinder { .. } => "cylinder",
         Op::Union { .. } => "union",
         Op::Difference { .. } => "difference",
@@ -463,10 +464,34 @@ impl EdgeLineage {
                  or a later operation without history changed that feature"
             )
         })?;
-        Ok(edges
+        Ok(Self::live_keys(edges))
+    }
+
+    /// Tags whose live edge set is *exactly* `selected`.
+    ///
+    /// Equality, not containment. A tag covering these edges and more would
+    /// make `{ generatedBy: tag }` select a larger set, so offering it as a
+    /// replacement for the current selector would quietly change the part —
+    /// the same reason the rest of this backend refuses rather than
+    /// approximates. An editor uses this to offer a provenance selector that
+    /// survives a dimension change, and only when it means the same thing.
+    fn equivalent_sources(&self, selected: &[Edge]) -> Vec<String> {
+        let wanted = Self::live_keys(selected);
+        if wanted.is_empty() {
+            return Vec::new();
+        }
+        self.by_source
+            .iter()
+            .filter(|(_, edges)| Self::live_keys(edges) == wanted)
+            .map(|(source, _)| source.clone())
+            .collect()
+    }
+
+    fn live_keys(edges: &[Edge]) -> HashSet<Vec<[i64; 3]>> {
+        edges
             .iter()
             .filter_map(|edge| describe_edge(edge.clone()).map(|edge| edge.key))
-            .collect())
+            .collect()
     }
 }
 
@@ -825,6 +850,9 @@ fn select_edge_target(
 pub struct TargetGeometry {
     pub edges: Vec<EdgeCurve>,
     pub vertices: Vec<TargetVertex>,
+    /// Tags that currently select exactly this edge set. See
+    /// [`EdgeLineage::equivalent_sources`].
+    pub provenance: Vec<String>,
 }
 
 pub fn inspect_edge_target(doc: &Doc, id: NodeId) -> Result<TargetGeometry> {
@@ -869,7 +897,11 @@ pub fn inspect_edge_target(doc: &Doc, id: NodeId) -> Result<TargetGeometry> {
             });
         }
     }
-    Ok(TargetGeometry { edges, vertices })
+    Ok(TargetGeometry {
+        edges,
+        vertices,
+        provenance: solid.lineage.equivalent_sources(&selected.edges),
+    })
 }
 
 /// A model-space transform accumulated from the graph root down to a node.
@@ -1248,6 +1280,48 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             BuiltShape::primitive(AdHocShape::make_sphere(offset, *r).0, node.tag.as_deref())
         }
 
+        Op::Revolve { profile } => {
+            breadcrumb(&format!(
+                "revolve node {id} ({label}) of a {}-point section",
+                profile.len()
+            ));
+            // The graph owns the rules; the backend only reports where they
+            // were broken. Both backends call the same check, so an accepted
+            // profile means the same thing here and in the implicit field.
+            Op::validate_profile(profile)
+                .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+
+            // The section is drawn in the XZ plane at y = 0: x is the radius,
+            // which is the plane the revolution sweeps out of.
+            let points: Vec<DVec3> = profile
+                .iter()
+                .map(|[r, z]| DVec3::new(*r, 0.0, *z))
+                .collect();
+
+            let edges: Vec<Edge> = points
+                .iter()
+                .enumerate()
+                .filter_map(|(i, a)| {
+                    let b = points[(i + 1) % points.len()];
+                    // Skip a repeated point: OCCT refuses a zero-length edge,
+                    // and the polygon is unchanged without it.
+                    (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
+                })
+                .collect();
+
+            let face = Face::from_wire(&Wire::from_edges(&edges));
+            let solid = face.revolve(DVec3::ZERO, DVec3::Z, None);
+
+            let placed = Shape::from(solid);
+            let placed = if offset == DVec3::ZERO {
+                placed
+            } else {
+                placed.translated(offset)
+            };
+
+            BuiltShape::primitive(placed, node.tag.as_deref())
+        }
+
         Op::Rotate {
             child,
             axis,
@@ -1624,6 +1698,51 @@ mod tests {
         assert_eq!(selected.len(), 1);
     }
 
+    /// The editor offers to swap a directional selector for
+    /// `{ generatedBy: tag }`, so this must only report a tag that selects the
+    /// *same* edges. A tag covering these and more would make the offered edit
+    /// treat edges the author never selected.
+    #[test]
+    fn a_tag_is_equivalent_only_when_it_selects_exactly_the_same_edges() {
+        let body = AdHocShape::make_box_point_point(
+            DVec3::new(-20.0, -20.0, -4.0),
+            DVec3::new(20.0, 20.0, 4.0),
+        )
+        .0;
+        let tool = AdHocShape::make_cylinder(DVec3::new(0.0, 0.0, -8.0), 3.0, 16.0).0;
+        let cut = body.subtract(&tool);
+        let lineage =
+            EdgeLineage::default().through_boolean(EdgeLineage::default(), &cut, Some("hole"));
+
+        // The cut creates two rims, top and bottom, and both carry the tag.
+        let rim_query = |adjacent| {
+            EdgeSelector::Query(EdgeQuery {
+                curve: Some(CurveKind::Circle),
+                role: Some(EdgeRole::Hole),
+                adjacent_to: adjacent,
+                ..Default::default()
+            })
+        };
+        let both = select_edges(&cut.shape, &rim_query(None), &lineage, 0, "drilled").unwrap();
+        assert_eq!(both.len(), 2);
+        assert_eq!(lineage.equivalent_sources(&both), ["hole"]);
+
+        let top = select_edges(
+            &cut.shape,
+            &rim_query(Some(parcad_core::selectors::AdjacentFace {
+                face_normal: AxisDirection::PosZ,
+            })),
+            &lineage,
+            0,
+            "drilled",
+        )
+        .unwrap();
+        assert_eq!(top.len(), 1);
+        // `hole` also owns the bottom rim, so it is not a replacement for a
+        // selector that picked only the top one.
+        assert!(lineage.equivalent_sources(&top).is_empty());
+    }
+
     #[test]
     fn edge_expectation_reports_a_topology_change() {
         let selector = EdgeSelector::Directional(">Z and |X".to_owned());
@@ -1918,3 +2037,4 @@ mod tests {
         ));
     }
 }
+

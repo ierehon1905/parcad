@@ -1,0 +1,19 @@
+{
+  "name": "manifold-block",
+  "script": "examples/manifold-block.js",
+  "why": "Cross-drilled galleries that must actually intersect, and the case that pins the at-extrema form of the rim selector where the face-normal form over-matches.",
+  "brep": {
+    "size": [
+      80.0,
+      50.0,
+      40.0
+    ],
+    "volume_mm3": 145263.889,
+    "area_mm2": 25114.018,
+    "triangles": 4952,
+    "watertight": true,
+    "faces": 26,
+    "edges": 132,
+    "curves": 46
+  }
+}

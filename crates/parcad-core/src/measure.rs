@@ -135,6 +135,19 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
         Op::Cylinder { r, h } => {
             Aabb::from_center_half(V3::ZERO, V3::new(*r, *r, h / 2.0))
         }
+        // A full revolution reaches its widest radius in every direction, so the
+        // box is the profile's radius extent squared off, and its z extent kept.
+        Op::Revolve { profile } => {
+            Op::validate_profile(profile)?;
+            let r = profile.iter().fold(0.0f64, |acc, [r, _]| acc.max(*r));
+            let (z_min, z_max) = profile.iter().fold((f64::MAX, f64::MIN), |(lo, hi), [_, z]| {
+                (lo.min(*z), hi.max(*z))
+            });
+            Aabb {
+                min: V3::new(-r, -r, z_min),
+                max: V3::new(r, r, z_max),
+            }
+        }
 
         Op::Union { children, blend } => {
             let mut it = children.iter().copied();

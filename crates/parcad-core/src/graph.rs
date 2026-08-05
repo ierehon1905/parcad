@@ -245,6 +245,28 @@ pub enum Op {
         h: f64,
     },
 
+    /// A closed convex polygon in the (radius, z) half-plane, revolved a full
+    /// turn about +Z.
+    ///
+    /// This is the primitive that a cone, a countersink cutter, a tapered hub or
+    /// a V-groove ring is made of — shapes that the three fixed primitives
+    /// cannot produce at all. The profile is authored in *section*, which is how
+    /// a turned part is drawn and dimensioned.
+    ///
+    /// Two constraints, both checked in [`Op::validate_profile`]:
+    ///
+    /// - **radius >= 0.** A profile crossing the axis sweeps through itself, and
+    ///   what comes back is neither the shape asked for nor an error.
+    /// - **convex.** A convex section has an exact distance field (the max of
+    ///   its half-planes inside, the nearest-segment distance outside); a
+    ///   re-entrant one does not, and approximating it would put the two
+    ///   backends quietly out of step. A stepped profile is authored as a union
+    ///   of convex revolves, which is also how it is turned.
+    Revolve {
+        /// `[radius, z]` pairs, anticlockwise, first point not repeated.
+        profile: Vec<[f64; 2]>,
+    },
+
     /// Union. `blend` > 0 rounds the join by that radius.
     Union {
         children: Vec<NodeId>,
@@ -325,6 +347,68 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "ChamferRecipe::is_default")]
         recipe: ChamferRecipe,
     },
+}
+
+impl Op {
+    /// Check a [`Op::Revolve`] profile, and report the signed area.
+    ///
+    /// The sign is the winding: positive is anticlockwise in the (radius, z)
+    /// plane. Both backends call this before building anything, because every
+    /// rejected case here is one that produces a *plausible* solid rather than
+    /// an error — a profile crossing the axis sweeps through itself, and a
+    /// re-entrant one meshes fine while the two backends disagree about where
+    /// its surface is.
+    pub fn validate_profile(profile: &[[f64; 2]]) -> anyhow::Result<f64> {
+        if profile.len() < 3 {
+            anyhow::bail!(
+                "a revolve profile needs at least 3 points; got {}. Author it as [radius, z] pairs, e.g. [[0, -5], [4, -5], [0, 5]] for a cone",
+                profile.len()
+            );
+        }
+        for (i, [r, z]) in profile.iter().enumerate() {
+            if !r.is_finite() || !z.is_finite() {
+                anyhow::bail!("revolve profile point {i} is not a finite [radius, z] pair");
+            }
+            if *r < 0.0 {
+                anyhow::bail!(
+                    "revolve profile point {i} has radius {r}, which is left of the axis. A profile that crosses the axis sweeps through itself; mirror it so every radius is >= 0"
+                );
+            }
+        }
+
+        // Shoelace area, and the cross product at each corner. A convex polygon
+        // turns the same way at every corner; the area's sign says which way.
+        let n = profile.len();
+        let mut area = 0.0;
+        let mut turn: Option<f64> = None;
+        for i in 0..n {
+            let a = profile[i];
+            let b = profile[(i + 1) % n];
+            let c = profile[(i + 2) % n];
+            area += a[0] * b[1] - b[0] * a[1];
+
+            let cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
+            // Collinear corners are allowed: they are a redundant point, not a
+            // dent, and refusing them would reject a profile a generator wrote.
+            if cross.abs() > 1e-12 {
+                match turn {
+                    Some(previous) if previous * cross < 0.0 => anyhow::bail!(
+                        "revolve profile is not convex at point {}. A re-entrant section has no exact distance field, so it is refused rather than approximated; build a stepped profile as a union of convex revolves",
+                        (i + 1) % n
+                    ),
+                    _ => turn = Some(cross),
+                }
+            }
+        }
+        let area = area / 2.0;
+
+        if area.abs() < 1e-12 {
+            anyhow::bail!(
+                "revolve profile encloses no area; its points are collinear or repeated"
+            );
+        }
+        Ok(area)
+    }
 }
 
 /// A node in the graph.
@@ -412,7 +496,10 @@ impl Doc {
     /// Direct dependencies of a node.
     pub fn children_of(&self, id: NodeId) -> anyhow::Result<Vec<NodeId>> {
         Ok(match &self.node(id)?.op {
-            Op::Cuboid { .. } | Op::Sphere { .. } | Op::Cylinder { .. } => vec![],
+            Op::Cuboid { .. }
+            | Op::Sphere { .. }
+            | Op::Cylinder { .. }
+            | Op::Revolve { .. } => vec![],
             Op::Union { children, .. } | Op::Intersection { children, .. } => children.clone(),
             Op::Difference { base, tools, .. } => {
                 let mut v = vec![*base];
