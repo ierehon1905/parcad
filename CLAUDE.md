@@ -15,6 +15,7 @@ cd app && bun install --frozen-lockfile && bun run tauri dev  # from app/
 bun tools/run.ts examples/bracket.js > /tmp/bracket.json   # DSL -> intent graph
 tools/bench-kernel.sh /tmp/bracket.json                    # medians, and the -O level
 cargo run -p parcad-eval               # the geometry + refusal corpus
+tools/field-test.sh eval/field/does-the-port-meet.md 4   # ask a small model, over MCP
 cd app && bun test src                 # editor-side units: the selector grammar
 ```
 
@@ -95,6 +96,15 @@ assumed. `eval/cases/` makes a measurement permanent: add a case with each new
 operation, `--update` when a change is intended. A case that's green on a wrong
 recorded number is worse than no case — that's what `known_defect` is for.
 
+**And never claim an agent-facing tool works because its output is correct.**
+Whether a model *reads* that output is a separate fact, measured separately, and
+it has been wrong every time it was checked: a probe flag read inverted, a field
+name read as the wrong noun, a tool never called at all. `tools/field-test.sh`
+puts a question to a small model over the running app's MCP and keeps the
+transcript. Run it before calling anything in docs/PERCEPTION.md done, and read
+the transcript rather than the verdict — the most instructive trial on record
+got the right answer by quoting the part's own source comment.
+
 ## Where things live
 
 | you want to change | file |
@@ -119,6 +129,7 @@ recorded number is worse than no case — that's what `known_defect` is for.
 | what the DSL makes hard | `docs/DSL_GAPS.md` |
 | which op to add next, and why not the others | `docs/OP_ROADMAP.md` |
 | what an agent can see, and what to tell it instead | `docs/PERCEPTION.md` |
+| whether a model can *read* a tool | `eval/field/*.md`, run by `tools/field-test.sh` |
 
 A new op touches `graph.rs` (variant + `children_of`), `sdf.rs`, `measure.rs`
 (its bounds), `backend.rs`, `dsl.ts`, plus a case in `eval/cases/`. Missing

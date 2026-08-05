@@ -103,6 +103,49 @@ Every entry below obeys the same three rules, which are already how
    fix.
 3. **Nothing is inferred that could be measured.** This is the whole page.
 
+### How to tell whether one works — run the field test
+
+**A perception tool is not finished when its number is right. It is finished
+when a model reads the number right, and those are different days' work.** The
+probe in §3 passed its Rust tests on the first run and then failed three
+separate ways in front of an actual model — a flag read inverted, a field name
+read as the wrong noun, and the tool not being called at all. None of those is
+reachable from inside the process, and no test in this repo can catch any of
+them. So before calling anything below done:
+
+```bash
+cargo build -p parcad-app --bin parcad-app     # the build you mean to test
+PARCAD_OCCT_WORKER=$PWD/target/release/parcad-occt-worker ./target/debug/parcad-app &
+tools/field-test.sh eval/field/does-the-port-meet.md 4
+THINK=0 tools/field-test.sh eval/field/does-the-port-meet.md 4
+```
+
+That is four trials of `claude -p` on Haiku 4.5 in parallel — a separate
+process, its own context, every local tool denied so it cannot open the file and
+read the answer — against the MCP server the running app hosts. `THINK=0` is the
+non-reasoning arm and is worth running: reasoning did not prevent any of the
+three failures above, and one of them appeared *only* without it.
+`tools/field-test-score.py` prints who called the tool and who quoted a measured
+value; the failures themselves have all been in the prose, so open the
+transcripts.
+
+Four things this cost to learn, all of which will otherwise cost it again:
+
+- **The app serves the binary it started with.** Rebuild *and restart* between
+  rounds. A round that silently tested the old build is indistinguishable from a
+  round where the change did nothing.
+- **Trials are parallel and independent.** The server is stateless and a script
+  carries its whole part, so four at once take one trial's wall clock.
+- **Extended thinking is on unless you turn it off,** so an unconfigured run
+  measures the reasoning model only.
+- **Read the transcript, not the verdict.** The single most useful trial on
+  record got the *right* answer while quoting the part's own source comment as
+  its evidence. Correct and worthless, and only the transcript says so.
+
+`eval/field/README.md` has what makes a prompt worth adding. Write the result
+into the section it bears on, next to the design decision it changed — that is
+what §3, §4 and the order at the bottom of this page are now made of.
+
 ## 2. Fewer views, chosen — a correction to the default
 
 The contact sheet ships all seven of `View::ALL`. That was the right call for a
@@ -178,6 +221,110 @@ across the flats, 2.5 tap drill — a ray across a flat crosses at ±2.75 and
 1.5, a ray down the bore finds nothing at all, and the point at the origin reads
 +1.25 from the bore wall.
 
+**Driven by a small model, which is the test that matters.** Haiku 4.5 over MCP,
+asked for the wall between the bore and a flat on `examples/hex-standoff.js`
+without being allowed to compute it from the source: it read the project,
+evaluated, fired one ray from the bore wall at a flat, and reported 1.5 mm from
+`first_solid_mm`. The same question with `probe_part` withheld got the same
+number — *derived* from `acrossFlats` and `tapDrill` in the script, presented in
+the language of measurement, at "99% confidence". That is the failure mode the
+tool exists to remove: not an unreachable number, but a computed one wearing a
+measurement's clothes. On a part where the source and the built geometry have
+diverged — the thing `eval/cases/` exists to catch — the derivation is
+confidently wrong and nothing in the answer says so.
+
+**And the limit it found: a probe says whether there is material, not what it
+is in.** Asked to prove that `manifold-block.js`'s drop ports really meet the
+main gallery, the same model measured correctly — port void from z=20 to z=−5,
+gallery from z=+4 to z=−4 — and concluded they *did not* meet, inventing a
+millimetre of material between −4 and −5 that its own ray had just measured as
+void. It read two overlapping intervals as two adjacent ones.
+
+**Re-run with tagged crossings, and the result is worse than a null.** Four
+trials, `claude -p` on Haiku 4.5 against the running app's MCP, one prompt: does
+a drop port break into the gallery, every number from a measurement. Three never
+called `probe_part` at all — two answered from `portDepth` arithmetic (one
+quoting the script's own comment as evidence), one from looking at a front view.
+The fourth probed four times, was handed `tag: "ports"` on every crossing, and
+answered **DO NOT MEET**.
+
+It failed on the sign. Given `{"distance_mm": 5, "inside": false}` at the port's
+axis at gallery height it wrote "the material is solid with 5 mm of solid
+material remaining", and given `{"distance_mm": -0.5, "inside": true}` a
+millimetre lower it wrote "inside a void" — `inside` read as *inside the void*,
+exactly inverted, and then reasoned impeccably from it. It had also fired a ray
+along +X from that point, got zero crossings over 50 mm, and never used it.
+
+Three things this settles, none of them the thing it was meant to test:
+
+- **A field nothing reads is not a feature.** The tag is correct and was in
+  front of the model in the one trial that could have used it. Naming a crossing
+  does not help a caller that never fires the ray, and does not survive a caller
+  that has the polarity backwards before it starts.
+- **`inside` is the bug.** Inside *what* is genuinely ambiguous on a part made
+  of negative space, and a boolean gives a model a coin to flip. A string it
+  cannot inject a sign error into — `medium: "material" | "void"` — is the same
+  information with no free parameter. The same goes for `starts_inside`,
+  `ends_inside` and `entering`.
+- **`probe_part` is not being reached.** Three of four reached for renders and
+  the source instead. That is a tool-description problem, and no amount of
+  work inside the tool fixes it.
+
+**Both were fixed, and the fix was measured.** Nineteen trials over three
+rounds, half of them with extended thinking off, same prompt throughout:
+
+| round | what changed | reached `probe_part` | correct |
+|---|---|---|---|
+| 1 | tagged crossings | 1/4 | 3/4, all but one by not measuring |
+| 2 | `medium` replaces `inside` | 2/7 | 3/7 |
+| 3 | `surface_of` replaces `tag`, plus the tool description | **8/8** | **7/8** |
+
+Round 2 killed the sign error outright — no trial in either arm misread
+`medium`, and none has since. It exposed the next one in the same place: handed
+`{"into": "material", "surface_of": "ports"}` under its old name `tag`, a model
+wrote "crosses into **port material**", taking the tag for the name of the stuff
+on the far side rather than the face it went through. Same shape of mistake as
+`inside` — a field name that lets the reader supply the wrong noun — and the
+same fix, a name with only one reading.
+
+Round 3's other half is that the tool description now says *this is the tool for
+'do these two bores meet', reach for it before you reason from a dimension in
+the source*, and 4 of 4 did. That single paragraph moved the number more than
+either field did. **The most valuable change to a perception tool was not in the
+tool.**
+
+Two things the rounds settled that no unit test could have:
+
+- **Reasoning did not help.** Every failure mode appeared with thinking on, and
+  round 3's only wrong answer is from the *reasoning* arm while its
+  non-reasoning arm went 4/4. Run both; do not assume the smarter setting is the
+  safe one.
+- **A right answer is not evidence.** Round 1 scored 3/4 correct while
+  measuring almost nothing — one trial quoted the part's own source comment as
+  its proof. `tools/field-test-score.py` prints who *reached* the tool for
+  exactly this reason, and had a bug that scored "DO NOT MEET" as a pass, which
+  is the same failure one level up.
+
+**What round 3's one wrong answer asks for next.** It measured 13 mm of material
+between the gallery and a port and was right — at z = 16, near the top of the
+block, having decided that was where the gallery was. It is at 0. Nothing it
+could call would say where a *tag* is: `list_entities` gives edges, a region map
+needs eyes, and `probe_part` answers about a line you already chose. A model
+cannot aim a ray at a feature it cannot locate. `measure::bounds` over one
+tagged node's field is the whole implementation — see the order below.
+
+The reasoning error is the model's. The gap is ours: down a port's axis the port
+void and the gallery void are the same air, so no axial ray can distinguish
+them, and the measurement that settles it is a *transverse* one the model never
+thought to fire. (It is decisive — at the gallery's own height the void at
+x=−22 spans y=−5…+5, which is the port's Ø10 and not the gallery's Ø8.) A
+crossing that names the tag it entered — `ports` rather than `main_bore` —
+makes the intersection a reading rather than a deduction, and that is what §4's
+cheap half now does: `tags.rs` already answered exactly that question for a
+*pixel*, by asking whose field vanishes there, and a crossing point is the same
+query. The transverse ray is still one the model has to think to fire; §9 is
+the argument for handing it the faces without being asked.
+
 **No `eval/cases/` entry, deliberately.** A case there is a two-backend
 geometry comparison — `Observed` is size, volume, area, triangles, topology —
 and a probe is neither a geometry nor available on both backends. Pinning these
@@ -210,7 +357,22 @@ evaluation, exactly like `edge@N`. It must never look like something to write in
 a script, and the tool description has to say so in the same words
 `list_entities` does.
 
-**Cost.** Medium, and it is the highest-value *visual* change.
+**The cheaper half of this is done: a `Crossing` names what it is on.**
+`tags::owners_at` asks of three coordinates what `regions_in` asks of a pixel —
+whose field vanishes here — so every crossing carries the `tag` of the node
+whose surface it is, or nothing where an untagged node or a fillet owns it.
+`crossings_tell_two_voids_that_meet_apart` is §3's manifold, measured: across
+the part at the gallery's height the void is bounded by `port` on both sides,
+which *is* the intersection, where the same fact as a pair of diameters was a
+deduction a model got backwards. Two surfaces can genuinely meet at a point — a
+bore's wall and the face it breaks out of, at the rim — and there the nearer
+wins; that ambiguity is real rather than a rounding choice.
+
+Marks on the render are the same idea for a viewer with eyes; this was the
+version for one without.
+
+**Cost.** Medium, for the marks that remain — still the highest-value *visual*
+change.
 
 ## 5. Wall thickness and minimum feature
 
@@ -376,17 +538,28 @@ is the inverse of this page's rule.
 
 1. ~~Point and ray probes~~ — **done**, measured against closed forms, and it
    found the treatment-blindness caveat that §5 now inherits.
-2. **Wall thickness** (§5), immediately after, since it is §3 plus a loop and it
-   is the check every example silently assumes.
-3. **Section view** (§7). Already wanted by the window; the agent needs it more.
-4. **Numbered marks** (§4). The visual change with the best evidence behind it,
-   and it makes the selector loop closeable.
-5. **Diff render** (§8), numeric half first.
-6. **Faces as text** (§9). Larger, touches the selector grammar in two
+2. ~~Name what a crossing hit~~ (§4, the cheap half) — **done**. `tags.rs`
+   already had the query; it took a field on `Crossing` and one bulk call.
+3. ~~Say `material` or `void`, not `inside`~~ — **done**, with `surface_of`
+   for `tag` and a rewritten tool description alongside it. Measured: 1/4 of
+   trials reached `probe_part` before, 8/8 after. The description did more of
+   that than either field.
+4. **Where is this tag?** (§3, from round 3's only wrong answer). Bounds and
+   centre of one tagged node's field — `measure::bounds` on a tree `tags.rs`
+   already lowers, so it is an afternoon. A model that cannot locate a feature
+   aims its rays at the wrong plane and measures something real, correctly, in
+   the wrong place, which reads exactly like a right answer.
+5. **Wall thickness** (§5), since it is §3 plus a loop and it is the check every
+   example silently assumes.
+6. **Section view** (§7). Already wanted by the window; the agent needs it more.
+7. **Numbered marks on the render** (§4, the visual half). The change with the
+   best evidence behind it, and it makes the selector loop closeable.
+8. **Diff render** (§8), numeric half first.
+9. **Faces as text** (§9). Larger, touches the selector grammar in two
    languages, unlocks per-face work later.
-7. **Adaptive slice summary** (§10) and the default view set (§2), both worth
+10. **Adaptive slice summary** (§10) and the default view set (§2), both worth
    measuring before building.
-8. ASCII grids and depth images: not at all, for the reasons recorded above
+11. ASCII grids and depth images: not at all, for the reasons recorded above
    rather than the intention.
 
 Each of these needs a case in `eval/cases/` that pins the *reported* numbers, on

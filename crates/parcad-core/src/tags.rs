@@ -14,7 +14,7 @@
 //! A B-rep backend would answer the same question by tracking faces through each
 //! boolean instead. The question, and the tag that phrases it, stay the same.
 
-use crate::graph::Doc;
+use crate::graph::{Doc, V3};
 use crate::measure::Aabb;
 use crate::render::{self, GeometryBuffer, RenderOptions, Rgb};
 use crate::view::View;
@@ -92,18 +92,7 @@ pub fn regions(doc: &Doc, bounds: Aabb, view: View, opts: &RenderOptions) -> Res
 /// a treatment has no distance field, so the material it added answers to
 /// nothing. That is reported rather than attributed to a neighbour.
 pub fn regions_in(buf: &GeometryBuffer, doc: &Doc, opts: &RenderOptions) -> Result<RegionMap> {
-    let trees = crate::sdf::lower_all(doc)?;
-
-    let tagged: Vec<(String, Tree)> = doc
-        .tags()
-        .into_iter()
-        .filter_map(|(id, name)| {
-            trees
-                .get(id)
-                .and_then(|t| t.clone())
-                .map(|t| (name.to_string(), t))
-        })
-        .collect();
+    let tagged = tagged_trees(doc)?;
 
     let base = render::shade(buf, opts);
 
@@ -111,30 +100,13 @@ pub fn regions_in(buf: &GeometryBuffer, doc: &Doc, opts: &RenderOptions) -> Resu
     // evaluation over the same list.
     let (pixels, xs, ys, zs) = surface_points(buf);
 
-    let mut owner: Vec<Option<usize>> = vec![None; pixels.len()];
-    let mut best: Vec<f32> = vec![f32::INFINITY; pixels.len()];
-
     // A point counts as "on" a node's surface if it is within about a pixel of
     // it. Tying the tolerance to the render scale keeps the answer stable as
     // resolution changes. One pixel in millimetres is the length of the buffer's
     // own screen-x column, which is the same number the framing produced and
     // does not need the bounds passed in alongside it.
     let tolerance = buf.screen_to_model.column(0).norm() * 1.5;
-
-    for (i, (_, tree)) in tagged.iter().enumerate() {
-        let shape = JitShape::from(tree.clone());
-        let mut eval = JitShape::new_float_slice_eval();
-        let tape = shape.ez_float_slice_tape();
-        let values = eval.eval(&tape, &xs, &ys, &zs)?;
-
-        for (p, v) in values.iter().enumerate() {
-            let d = v.abs();
-            if d < best[p] && d <= tolerance {
-                best[p] = d;
-                owner[p] = Some(i);
-            }
-        }
-    }
+    let owner = nearest_owner(&tagged, &xs, &ys, &zs, tolerance)?;
 
     // Paint.
     let mut image = base;
@@ -179,6 +151,86 @@ pub fn regions_in(buf: &GeometryBuffer, doc: &Doc, opts: &RenderOptions) -> Resu
         legend,
         unclaimed_pixels: unclaimed,
     })
+}
+
+/// Which tag owns each of these points, if any.
+///
+/// The same question [`regions_in`] asks of a pixel, asked of three
+/// coordinates. It is what lets a *measurement* name what it hit: a ray
+/// crossing carrying `ports` rather than a bare position is something a caller
+/// reads, where the position alone is something it has to deduce — and
+/// docs/PERCEPTION.md records a model deducing exactly that backwards.
+///
+/// `tolerance` is how near a node's zero counts as on it, in millimetres. Two
+/// tagged surfaces can genuinely meet at a point — a bore's wall and the face
+/// it breaks out of, at the rim — and there the nearer wins; the answer is
+/// ambiguous rather than wrong. `None` means no tagged node's surface passes
+/// through the point at all, which includes every fillet, since a treatment has
+/// no field to vanish.
+pub fn owners_at(doc: &Doc, points: &[V3], tolerance: f64) -> Result<Vec<Option<String>>> {
+    if points.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let tagged = tagged_trees(doc)?;
+    let xs: Vec<f32> = points.iter().map(|p| p.x as f32).collect();
+    let ys: Vec<f32> = points.iter().map(|p| p.y as f32).collect();
+    let zs: Vec<f32> = points.iter().map(|p| p.z as f32).collect();
+
+    let owner = nearest_owner(&tagged, &xs, &ys, &zs, tolerance as f32)?;
+    Ok(owner
+        .into_iter()
+        .map(|o| o.map(|i| tagged[i].0.clone()))
+        .collect())
+}
+
+/// Every tagged node's own distance function, in tag order.
+fn tagged_trees(doc: &Doc) -> Result<Vec<(String, Tree)>> {
+    let trees = crate::sdf::lower_all(doc)?;
+    Ok(doc
+        .tags()
+        .into_iter()
+        .filter_map(|(id, name)| {
+            trees
+                .get(id)
+                .and_then(|t| t.clone())
+                .map(|t| (name.to_string(), t))
+        })
+        .collect())
+}
+
+/// For each point, the tagged node whose field comes nearest to vanishing
+/// there — or `None` where none of them does within `tolerance`.
+///
+/// One bulk evaluation per tag over the whole point list, rather than one
+/// evaluation per point: the tapes are what cost, and there are far fewer of
+/// them than there are points.
+fn nearest_owner(
+    tagged: &[(String, Tree)],
+    xs: &[f32],
+    ys: &[f32],
+    zs: &[f32],
+    tolerance: f32,
+) -> Result<Vec<Option<usize>>> {
+    let mut owner: Vec<Option<usize>> = vec![None; xs.len()];
+    let mut best: Vec<f32> = vec![f32::INFINITY; xs.len()];
+
+    for (i, (_, tree)) in tagged.iter().enumerate() {
+        let shape = JitShape::from(tree.clone());
+        let mut eval = JitShape::new_float_slice_eval();
+        let tape = shape.ez_float_slice_tape();
+        let values = eval.eval(&tape, xs, ys, zs)?;
+
+        for (p, v) in values.iter().enumerate() {
+            let d = v.abs();
+            if d < best[p] && d <= tolerance {
+                best[p] = d;
+                owner[p] = Some(i);
+            }
+        }
+    }
+
+    Ok(owner)
 }
 
 /// Every pixel that hit the part, with its position in millimetres.

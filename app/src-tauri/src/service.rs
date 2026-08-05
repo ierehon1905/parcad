@@ -379,15 +379,33 @@ pub struct ProbeReport {
     pub omitted_treatments: Vec<usize>,
 }
 
+/// What a probe found itself in.
+///
+/// A word and not a boolean, and that is the whole point. `inside: true` asks
+/// the reader to supply "inside *what*", and on a part whose function lives in
+/// its negative space that is a coin flip — docs/PERCEPTION.md §3 records a
+/// model calling `distance_mm: -0.5, inside: true` "inside a void", reasoning
+/// impeccably from it, and reporting a manifold's ports as blocked. A value
+/// that says `material` cannot be read as `void`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Medium {
+    Material,
+    Void,
+}
+
 /// The field at one point.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct PointProbe {
     pub point: [f64; 3],
-    /// Signed distance to the nearest surface: negative inside the solid.
-    /// Exact on a face; near an edge it is short of the true distance, never
-    /// over it. The sign is right either way.
+    /// Whether this point is in solid material or in empty space. The answer to
+    /// "is there material here", on its own and in a word.
+    pub medium: Medium,
+    /// Distance to the nearest surface: negative in material, positive in void,
+    /// which is the same fact as `medium` with a magnitude attached. Exact on a
+    /// face; near an edge it is short of the true distance, never over it. The
+    /// sign is right either way.
     pub distance_mm: f64,
-    pub inside: bool,
 }
 
 /// What one ray crossed.
@@ -399,9 +417,11 @@ pub struct RayProbe {
     /// The length actually followed — the requested one, or the default this
     /// derived from the part's size.
     pub max_distance_mm: f64,
-    pub starts_inside: bool,
-    /// Still in material at the end of the ray, so `solid_mm` is a lower bound.
-    pub ends_inside: bool,
+    /// What the ray was in at its origin.
+    pub starts_in: Medium,
+    /// What it was in when it ran out of length. `material` means `solid_mm` is
+    /// a lower bound: the last run has no far face.
+    pub ends_in: Medium,
     pub crossings: Vec<Crossing>,
     /// Total material along the ray.
     pub solid_mm: f64,
@@ -422,8 +442,23 @@ pub struct RayProbe {
 pub struct Crossing {
     pub distance_mm: f64,
     pub point: [f64; 3],
-    /// `true` where the ray enters material, `false` where it leaves.
-    pub entering: bool,
+    /// What the ray passed *into* here. Read down the list and it spells out
+    /// the line: material, void, material.
+    pub into: Medium,
+    /// The tag of the node this face belongs to — the same question a region
+    /// map answers for a pixel. This is what makes a crossing readable rather
+    /// than deducible: two voids that meet are one void along the ray, and only
+    /// the name says which feature each face bounded.
+    ///
+    /// `surface_of` and not `tag`, because a bare `tag` gets read as the name of
+    /// the *stuff* on the far side. docs/PERCEPTION.md §3 records a model
+    /// turning `{"into": "material", "tag": "ports"}` into "crosses into port
+    /// material"; it names the surface, and the field name has to say so.
+    ///
+    /// Absent where no tagged node's surface passes through the point: an
+    /// untagged node, or a fillet, which has no field to own anything.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface_of: Option<String>,
 }
 
 /// Measure the part along lines and at points, without drawing anything.
@@ -431,6 +466,11 @@ pub struct Crossing {
 /// This is the non-visual answer to the questions a render provokes and cannot
 /// settle: how thick is that wall, does the counterbore break through, is there
 /// material here. Two crossings on one ray are a thickness, measured.
+///
+/// Each crossing carries the tag of the surface it is on, where one owns it, so
+/// "does this port meet that gallery" is read off the names rather than
+/// reconstructed from the distances — down a shared void the distances alone
+/// cannot tell the two features apart.
 ///
 /// **Implicit backend only, and that is a real limitation, not a default.** The
 /// probes run against the distance field, so a filleted or chamfered edge is
@@ -457,6 +497,13 @@ pub fn probe(
 
     let v3 = |p: [f64; 3]| V3::new(p[0], p[1], p[2]);
     let arr = |v: V3| [v.x, v.y, v.z];
+    let medium = |in_material: bool| {
+        if in_material {
+            Medium::Material
+        } else {
+            Medium::Void
+        }
+    };
 
     let probed = parcad_core::probe::distance_at(&tree, &points.iter().map(|p| v3(*p)).collect::<Vec<_>>())
         .map_err(|e| format!("probing points: {e:#}"))?;
@@ -483,15 +530,16 @@ pub fn probe(
                 origin: arr(p.origin),
                 direction: arr(p.direction),
                 max_distance_mm: p.max_distance,
-                starts_inside: p.starts_inside,
-                ends_inside: p.ends_inside,
+                starts_in: medium(p.starts_inside),
+                ends_in: medium(p.ends_inside),
                 crossings: p
                     .hits
                     .iter()
                     .map(|h| Crossing {
                         distance_mm: h.distance,
                         point: arr(h.point),
-                        entering: h.entering,
+                        into: medium(h.entering),
+                        surface_of: None, // named below, in one pass over every ray
                     })
                     .collect(),
                 solid_mm: p.solid_mm,
@@ -500,6 +548,29 @@ pub fn probe(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let mut rays = rays;
+
+    // Name every crossing at once. The question is `tags::owners_at`'s — whose
+    // field vanishes here — and asking it for all the rays together costs one
+    // tape per tag instead of one per crossing.
+    //
+    // The tolerance is a hair, because a crossing is bisected onto the surface
+    // rather than stepped near it: what it has to absorb is f32 evaluation
+    // noise, which grows with the coordinates, not any error in the position.
+    let points: Vec<V3> = rays
+        .iter()
+        .flat_map(|r| r.crossings.iter().map(|c| v3(c.point)))
+        .collect();
+    let owners = parcad_core::tags::owners_at(&fields, &points, (bounds.radius() * 1e-4).max(1e-3))
+        .map_err(|e| format!("naming crossings: {e:#}"))?;
+
+    for (crossing, owner) in rays
+        .iter_mut()
+        .flat_map(|r| r.crossings.iter_mut())
+        .zip(owners)
+    {
+        crossing.surface_of = owner;
+    }
 
     Ok(ProbeReport {
         units: doc.units.clone(),
@@ -507,8 +578,8 @@ pub fn probe(
             .into_iter()
             .map(|p| PointProbe {
                 point: arr(p.point),
+                medium: medium(p.inside),
                 distance_mm: p.distance,
-                inside: p.inside,
             })
             .collect(),
         rays,
@@ -1157,7 +1228,7 @@ mod tests {
 
         let ray = &report.rays[0];
         assert_eq!(ray.crossings.len(), 4, "two walls, four faces: {ray:?}");
-        assert!(!ray.starts_inside && !ray.ends_inside);
+        assert_eq!((ray.starts_in, ray.ends_in), (Medium::Void, Medium::Void));
         assert!(
             (ray.first_solid_mm.unwrap() - 14.0).abs() < 0.01,
             "wall beside the bore, got {:?}",
@@ -1168,6 +1239,101 @@ mod tests {
         // Given no length, the ray still crossed the whole part: a caller that
         // omitted it meant "all the way through", not "nowhere".
         assert!(ray.max_distance_mm > 100.0);
+    }
+
+    /// The crossings name the surfaces they are on, so the four faces read as
+    /// plate, bore, bore, plate rather than as four positions.
+    #[test]
+    fn a_crossing_names_the_feature_it_is_on() {
+        let report = probe(
+            &plate_with_a_hole(),
+            &[],
+            &[RayRequest {
+                origin: [-100.0, 0.0, 0.0],
+                direction: [1.0, 0.0, 0.0],
+                max_distance: None,
+            }],
+        )
+        .expect("the plate should probe");
+
+        let named: Vec<_> = report.rays[0]
+            .crossings
+            .iter()
+            .map(|c| c.surface_of.as_deref())
+            .collect();
+        assert_eq!(
+            named,
+            [Some("plate"), Some("bore"), Some("bore"), Some("plate")],
+            "{:?}",
+            report.rays[0].crossings
+        );
+    }
+
+    /// A blind port down Z meeting a gallery along X — the manifold of
+    /// docs/PERCEPTION.md §3, where a model read two *overlapping* z-intervals
+    /// as two adjacent ones and invented a millimetre of material inside a span
+    /// its own ray had measured as void.
+    ///
+    /// The measurement that settles it is transverse, at the gallery's own
+    /// height, and what settles it is the *name*: if the port and the gallery
+    /// did not meet, the void there would be the gallery's alone.
+    fn manifold() -> Doc {
+        doc(serde_json::json!({
+            "root": 6,
+            "nodes": [
+                { "op": "cuboid", "size": { "x": 60, "y": 30, "z": 30 }, "tag": "block" },
+                // Ø10 port from the top face down to z = -5, at x = -20.
+                { "op": "cylinder", "r": 5, "h": 25 },
+                { "op": "translate", "child": 1, "by": { "x": -20, "y": 0, "z": 7.5 },
+                  "tag": "port" },
+                // Ø8 gallery straight through along X, on the mid-plane.
+                { "op": "cylinder", "r": 4, "h": 80 },
+                { "op": "rotate", "child": 3, "axis": { "x": 0, "y": 1, "z": 0 },
+                  "degrees": 90, "tag": "gallery" },
+                { "op": "difference", "base": 0, "tools": [2, 4], "blend": 0 },
+                { "op": "translate", "child": 5, "by": { "x": 0, "y": 0, "z": 0 } },
+            ],
+        }))
+    }
+
+    #[test]
+    fn crossings_tell_two_voids_that_meet_apart() {
+        let report = probe(
+            &manifold(),
+            &[],
+            &[RayRequest {
+                // Across the part at the port's x and the gallery's height.
+                origin: [-20.0, -40.0, 0.0],
+                direction: [0.0, 1.0, 0.0],
+                max_distance: None,
+            }],
+        )
+        .expect("the manifold should probe");
+
+        let ray = &report.rays[0];
+        let named: Vec<_> = ray
+            .crossings
+            .iter()
+            .map(|c| (c.surface_of.as_deref(), c.into))
+            .collect();
+        assert_eq!(
+            named,
+            [
+                (Some("block"), Medium::Material),
+                // The void at the gallery's height is bounded by the *port*, so
+                // the port reaches this far down: they meet. Read, not deduced.
+                (Some("port"), Medium::Void),
+                (Some("port"), Medium::Material),
+                (Some("block"), Medium::Void),
+            ],
+            "{:?}",
+            ray.crossings
+        );
+
+        // And it is the port's Ø10, not the gallery's Ø8 — the arithmetic the
+        // name saves a caller from having to do.
+        let void = ray.crossings[2].distance_mm - ray.crossings[1].distance_mm;
+        assert!((void - 10.0).abs() < 0.01, "got {void}");
     }
 
     /// A ray down the bore finds nothing, and says nothing rather than failing.
@@ -1192,7 +1358,8 @@ mod tests {
         // The centre of the bore is 6mm from its wall; a point well clear of
         // the part is far from everything. Both outside, which is the sign
         // answering the question on its own.
-        assert!(!report.points[0].inside && !report.points[1].inside);
+        assert_eq!(report.points[0].medium, Medium::Void);
+        assert_eq!(report.points[1].medium, Medium::Void);
         assert!((report.points[0].distance_mm - 6.0).abs() < 0.01);
     }
 
