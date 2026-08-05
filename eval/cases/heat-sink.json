@@ -8,12 +8,12 @@
       60.0,
       30.0
     ],
-    "volume_mm3": 44907.656,
-    "area_mm2": 36365.95,
-    "triangles": 906,
+    "volume_mm3": 44907.727,
+    "area_mm2": 36365.952,
+    "triangles": 808,
     "watertight": true,
-    "faces": 128,
-    "edges": 532,
-    "curves": 264
+    "faces": 46,
+    "edges": 260,
+    "curves": 126
   }
 }

@@ -1,19 +1,19 @@
 {
   "name": "knurled-knob",
   "script": "examples/knurled-knob.js",
-  "why": "A D-bore made by intersection rather than by adding a slot, a dish cut by a large sphere, and twenty-four flutes \u2014 the densest small-feature count in the corpus. Its 24 flutes sit exactly on the rim, so the face and edge counts are sensitive to how the placement is computed \u2014 volume and area are not. Rewriting the trig loop as around() moved 72 faces to 61 and left the volume at 9285 mm3.",
+  "why": "A D-bore made by intersection rather than by adding a slot, a dish cut by a large sphere, and twenty-four flutes — the densest small-feature count in the corpus. Its 24 flutes sit exactly on the rim, so the face and edge counts are sensitive to how the placement is computed — volume and area are not. Rewriting the trig loop as around() moved 72 faces to 61 and left the volume at 9285 mm3.",
   "brep": {
     "size": [
       29.85,
       29.85,
       16.0
     ],
-    "volume_mm3": 9285.253,
-    "area_mm2": 3571.13,
-    "triangles": 4978,
+    "volume_mm3": 9285.196,
+    "area_mm2": 3571.129,
+    "triangles": 4976,
     "watertight": true,
-    "faces": 61,
-    "edges": 342,
-    "curves": 170
+    "faces": 55,
+    "edges": 314,
+    "curves": 156
   }
 }

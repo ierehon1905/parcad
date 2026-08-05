@@ -1,7 +1,7 @@
 {
   "name": "cone",
   "script": "eval/scripts/cone.js",
-  "why": "The revolve primitive, against a closed form: pi*h*(r1^2+r1*r2+r2^2)/3 = 3267.256 mm3. The implicit field lands on it to 0.002%. The B-rep number is 0.12% under, because every volume here is measured on the tessellation and an inscribed mesh under-reads a curved surface \u2014 a plain cylinder of the same size under-reads by 0.07%. Recording that gap is the point: a change that moves it is a change to the geometry or to the mesher, and both are worth seeing.",
+  "why": "The revolve primitive, against a closed form: pi*h*(r1^2+r1*r2+r2^2)/3 = 3267.256 mm3. The implicit field lands on it to 0.002%. The B-rep number is 0.12% under, because every volume here is measured on the tessellation and an inscribed mesh under-reads a curved surface — a plain cylinder of the same size under-reads by 0.07%. Recording that gap is the point: a change that moves it is a change to the geometry or to the mesher, and both are worth seeing.",
   "implicit": {
     "depth": 7,
     "size": [

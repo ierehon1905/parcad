@@ -154,6 +154,24 @@ cross-drillings — `examples/manifold-block.js` — the "opens onto the top fac
 query silently picked up two extra rims. Use `at: { z: "max" }` there; the
 face-normal form is fine when every hole is drilled along one axis.
 
+### `generatedBy` names the cut, not the tool
+
+Lineage records the boolean node's tag, so `blank.cut(grooves, shaftBore, grub)`
+gives all three tools one name and `generatedBy: "bore"` — the tool's own tag —
+matches nothing at all. `timing-pulley.js` asked for `{ generatedBy: "machined",
+curve: "circle", role: "hole", at: { z: "min" } }` and passed `expect({ count: 1
+})` only because the twenty groove rims beside the bore rim were split into open
+arcs by coplanar face splits, and `role: "hole"` wants a closed circle. The
+backend now merges those faces (`unified`, in `backend.rs`), the arcs close, and
+the same query matches 21 — the assertion had been resting on how fragmented the
+topology happened to be. Cut in one tagged step per feature, as
+`knurled-knob.js` does, and the name means something.
+
+That merge moves counts elsewhere too, and the direction is always fewer: the
+D-bore lead-in in `knurled-knob.js` used to select five arc fragments and now
+selects the two curves they always described. A count over fragments is a count
+over how the kernel happened to split a face. Assert over features.
+
 ### A cutter coplanar with the face it cuts loses the rim
 
 `countersink()` first built its cone with the wide end exactly on the top face —

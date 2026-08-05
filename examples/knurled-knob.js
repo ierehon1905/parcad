@@ -45,13 +45,14 @@ const bored = turned.cut(bore).tag("bored");
 
 // Break the bottom of the bore — the edge that is pushed onto the shaft.
 //
-// Five edges: a D-bore's outline is the straight flat plus an arc, and the
-// kernel returns that arc in pieces. `role: "hole"` would match nothing here,
-// because it wants a closed circle and this outline is not one. The count is
-// still the assertion — it is measured, and a change to it means the bore
-// stopped being a D.
+// Two edges: a D-bore's outline is the straight flat plus one arc, and that is
+// what the count asserts. It was five until the backend started merging
+// same-domain faces, which welded the arc's four pieces — 4.71 + 2.95 + 4.71 +
+// 2.95 mm — back into the single 15.33 mm curve they always described.
+// `role: "hole"` would match nothing here either way, because it wants a closed
+// circle and this outline is not one.
 return bored
   .edges({ generatedBy: "bored", at: { z: "min" } })
-  .expect({ count: 5 })
+  .expect({ count: 2 })
   .chamfer(0.5)
   .tag("bore_lead_in");

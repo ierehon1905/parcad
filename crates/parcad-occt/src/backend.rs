@@ -497,13 +497,20 @@ impl EdgeLineage {
     }
 }
 
-/// EXPERIMENT (PARCAD_UNIFY=1): merge the coplanar faces a boolean leaves
-/// behind, dissolving the imprint edges where a flush wall meets a plate.
-/// Off by default while we find out what it costs the lineage.
+/// Merge the coplanar faces a boolean leaves behind.
+///
+/// A fuse or a cut imprints every contact curve onto the faces it touches, so a
+/// wall flush with the plate it stands on splits that plate's face along the
+/// wall's outline and both halves keep the shared boundary. Those imprint edges
+/// are real topology — they reach STEP, CAM and every selector — while
+/// describing a surface that is flat across them. `UnifySameDomain` welds the
+/// faces back together, and the arcs of a rim that a face split had chopped up
+/// with them: the bracket loses 16 edges, the timing pulley 280.
+///
+/// Called *after* `fillet_new_edges`, never before. A blend fillets the edge
+/// handles the boolean reported as new, and unifying first invalidates them.
 fn unified(mut shape: Shape) -> Shape {
-    if std::env::var_os("PARCAD_UNIFY").is_some() {
-        shape.clean();
-    }
+    shape.clean();
     shape
 }
 

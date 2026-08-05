@@ -6,14 +6,14 @@
     "size": [
       90.0,
       32.0,
-      48.496
+      48.495
     ],
-    "volume_mm3": 68693.073,
-    "area_mm2": 15124.442,
-    "triangles": 2422,
+    "volume_mm3": 68693.009,
+    "area_mm2": 15124.429,
+    "triangles": 2216,
     "watertight": true,
-    "faces": 28,
-    "edges": 156,
-    "curves": 75
+    "faces": 21,
+    "edges": 122,
+    "curves": 58
   }
 }
