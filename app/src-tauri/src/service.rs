@@ -54,6 +54,61 @@ impl Evaluated {
     }
 }
 
+/// A millimetre value, rounded to the micron for the reply.
+///
+/// **This drops noise, not measurement.** The field is evaluated in f32, and an
+/// f32 widened to f64 no longer has a short decimal form: 30.15 comes back out
+/// as `30.149999618530273`, because `serde_json` must print every digit needed
+/// to round-trip the f64 it was handed. Those fourteen trailing digits are the
+/// f32's own rounding error, serialised as though it were measurement, at a
+/// precision three orders of magnitude past anything the pipeline resolves.
+/// "Report measured values" cuts against that as much as it cuts against
+/// reporting a requested one.
+///
+/// (An f32 field needs none of this — serde prints it as the shortest decimal
+/// that round-trips *as f32*, which is "30.15". Only the widened ones do.)
+///
+/// It is also the difference between a centroid of `0` and one of
+/// `6.066550368146516e-7`, which a reader takes for a real offset. Rounding is
+/// the only thing that turns that back into zero.
+///
+/// A micron is far below any tolerance a millimetre part carries and below what
+/// the sampling grids resolve, so nothing a caller could act on is lost. The
+/// `+ 0.0` is not decoration: without it a value just under zero rounds to
+/// `-0.0` and serialises with the sign still attached.
+///
+/// Everything a transport serialises goes through here. Measurements keep full
+/// precision inside the kernel, where they are compared and accumulated; this
+/// is a decision about the *reply*, in the same module that chose `medium` over
+/// `inside` for the same kind of reason.
+pub fn round_mm(v: f64) -> f64 {
+    round_to(v, 1e3)
+}
+
+fn round_to(v: f64, scale: f64) -> f64 {
+    (v * scale).round() / scale + 0.0
+}
+
+/// The same, for a point.
+pub fn round_point(p: [f64; 3]) -> [f64; 3] {
+    [round_mm(p[0]), round_mm(p[1]), round_mm(p[2])]
+}
+
+/// A direction cosine, which needs finer rounding than a length.
+///
+/// These are unit vectors, so a micron of rounding is a thousandth of the whole
+/// range — coarse enough to be visible as a skewed axis. A millionth is not,
+/// and is still a third of the digits.
+pub fn round_dir(d: [f64; 3]) -> [f64; 3] {
+    d.map(|v| round_to(v, 1e6))
+}
+
+/// A share of something, 0 to 1. A hundredth of a percent is finer than any
+/// pixel count these are computed from.
+pub fn round_fraction(v: f64) -> f64 {
+    round_to(v, 1e4)
+}
+
 /// One evaluation, in measured values: the artifact a caller reasons about.
 ///
 /// Separate from [`Evaluated`] because the two answer different questions.
@@ -177,6 +232,30 @@ pub struct RenderedView {
     /// little of its own work, so most of the part cannot be selected by name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unclaimed_fraction: Option<f64>,
+    /// Where this view was cut open, if it was.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<SectionCut>,
+}
+
+/// The plane a view was cut on, and how much of the picture it opened.
+///
+/// Every field is what happened rather than what was asked for. `at_mm` and
+/// `keep` are resolved — a request that named neither still gets told which
+/// plane it got — and `cut_fraction` is the one that matters: a plane clear of
+/// the material, or one this view looks along, produces a perfectly ordinary
+/// picture, and a caller with no number to check would read it as a solid part.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct SectionCut {
+    /// `x`, `y` or `z`.
+    pub axis: String,
+    /// Where the plane sits on that axis, mm.
+    pub at_mm: f64,
+    /// Which side survived: `below` or `above`.
+    pub keep: String,
+    /// Share of the drawn part that is cut face, 0 to 1. Zero means this view
+    /// shows no cut: either the plane missed the material, or the view looks
+    /// along the plane instead of at it.
+    pub cut_fraction: f64,
 }
 
 /// One tag's share of a view.
@@ -253,6 +332,18 @@ fn drawable(doc: &Doc) -> (Doc, Vec<usize>) {
     (drawable, omitted)
 }
 
+/// What one render request asks for.
+#[derive(Debug, Clone, Copy)]
+pub struct RenderSpec<'a> {
+    pub views: &'a [parcad_core::view::View],
+    /// Pixels per side.
+    pub size: u32,
+    /// Colour by owning tag instead of shading.
+    pub regions: bool,
+    /// Cut the part open on a plane first.
+    pub section: Option<parcad_core::view::Section>,
+}
+
 /// Draw the part.
 ///
 /// Renders come off the distance field, never off the mesh, so what a caller
@@ -266,13 +357,17 @@ fn drawable(doc: &Doc) -> (Doc, Vec<usize>) {
 /// a given pixel in the front view is at a comparable pixel in the top view, and
 /// two renders of different revisions are comparable too. That is worth more
 /// than filling each frame.
-pub fn render(
-    evaluated: &Evaluated,
-    doc: &Doc,
-    views: &[parcad_core::view::View],
-    size: u32,
-    regions: bool,
-) -> Result<Renders, String> {
+///
+/// A section is a property of the *request*, not of a view: one plane is cut
+/// through the part and every view asked for shows it, each from its own side.
+pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Renders, String> {
+    let RenderSpec {
+        views,
+        size,
+        regions,
+        section,
+    } = *spec;
+
     let surface = parcad_core::render::Surface {
         positions: &evaluated.positions,
         normals: &evaluated.normals,
@@ -283,6 +378,7 @@ pub fn render(
     let opts = parcad_core::render::RenderOptions {
         size,
         depth_samples: size,
+        section,
         ..Default::default()
     };
 
@@ -318,7 +414,7 @@ pub fn render(
                         tag: e.tag.clone(),
                         color: e.color.clone(),
                         pixels: e.pixels,
-                        fraction: e.fraction,
+                        fraction: round_fraction(e.fraction),
                         visible: e.visible,
                     })
                     .collect();
@@ -326,7 +422,7 @@ pub fn render(
                 (
                     map.image,
                     Some(regions),
-                    Some(map.unclaimed_pixels as f64 / total as f64),
+                    Some(round_fraction(map.unclaimed_pixels as f64 / total as f64)),
                 )
             } else {
                 let shaded = parcad_core::render::shade(&buffer, &opts);
@@ -344,6 +440,12 @@ pub fn render(
                     height: image.height,
                     regions: entries,
                     unclaimed_fraction: unclaimed,
+                    section: buffer.cut_plane.map(|cut| SectionCut {
+                        axis: cut.axis.name().to_string(),
+                        at_mm: round_mm(cut.at_mm),
+                        keep: cut.keep.name().to_string(),
+                        cut_fraction: round_fraction(buffer.cut_fraction()),
+                    }),
                 },
                 png,
             })
@@ -496,7 +598,7 @@ pub fn probe(
     let bounds = parcad_core::measure::bounds(&fields).map_err(|e| format!("{e:#}"))?;
 
     let v3 = |p: [f64; 3]| V3::new(p[0], p[1], p[2]);
-    let arr = |v: V3| [v.x, v.y, v.z];
+    let arr = |v: V3| round_point([v.x, v.y, v.z]);
     let medium = |in_material: bool| {
         if in_material {
             Medium::Material
@@ -508,7 +610,12 @@ pub fn probe(
     let probed = parcad_core::probe::distance_at(&tree, &points.iter().map(|p| v3(*p)).collect::<Vec<_>>())
         .map_err(|e| format!("probing points: {e:#}"))?;
 
-    let rays = rays
+    // Marched first, kept whole, and only then turned into a reply. The
+    // crossing positions are wanted at full precision for the tag query below,
+    // where the tolerance is itself a hair — rounding them for the caller and
+    // then asking which surface they are on would spend most of that tolerance
+    // on the rounding.
+    let marched = rays
         .iter()
         .map(|request| {
             let origin = v3(request.origin);
@@ -523,32 +630,10 @@ pub fn probe(
             };
             let max = request.max_distance.unwrap_or(reach);
 
-            let p = parcad_core::probe::ray(&tree, origin, v3(request.direction), max)
-                .map_err(|e| format!("{e:#}"))?;
-
-            Ok(RayProbe {
-                origin: arr(p.origin),
-                direction: arr(p.direction),
-                max_distance_mm: p.max_distance,
-                starts_in: medium(p.starts_inside),
-                ends_in: medium(p.ends_inside),
-                crossings: p
-                    .hits
-                    .iter()
-                    .map(|h| Crossing {
-                        distance_mm: h.distance,
-                        point: arr(h.point),
-                        into: medium(h.entering),
-                        surface_of: None, // named below, in one pass over every ray
-                    })
-                    .collect(),
-                solid_mm: p.solid_mm,
-                first_solid_mm: p.first_solid_mm,
-                incomplete: p.steps_exhausted,
-            })
+            parcad_core::probe::ray(&tree, origin, v3(request.direction), max)
+                .map_err(|e| format!("{e:#}"))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    let mut rays = rays;
 
     // Name every crossing at once. The question is `tags::owners_at`'s — whose
     // field vanishes here — and asking it for all the rays together costs one
@@ -557,20 +642,34 @@ pub fn probe(
     // The tolerance is a hair, because a crossing is bisected onto the surface
     // rather than stepped near it: what it has to absorb is f32 evaluation
     // noise, which grows with the coordinates, not any error in the position.
-    let points: Vec<V3> = rays
-        .iter()
-        .flat_map(|r| r.crossings.iter().map(|c| v3(c.point)))
-        .collect();
-    let owners = parcad_core::tags::owners_at(&fields, &points, (bounds.radius() * 1e-4).max(1e-3))
+    let crossings: Vec<V3> = marched.iter().flat_map(|p| p.hits.iter().map(|h| h.point)).collect();
+    let owners = parcad_core::tags::owners_at(&fields, &crossings, (bounds.radius() * 1e-4).max(1e-3))
         .map_err(|e| format!("naming crossings: {e:#}"))?;
+    let mut owners = owners.into_iter();
 
-    for (crossing, owner) in rays
-        .iter_mut()
-        .flat_map(|r| r.crossings.iter_mut())
-        .zip(owners)
-    {
-        crossing.surface_of = owner;
-    }
+    let rays: Vec<RayProbe> = marched
+        .iter()
+        .map(|p| RayProbe {
+            origin: arr(p.origin),
+            direction: round_dir([p.direction.x, p.direction.y, p.direction.z]),
+            max_distance_mm: round_mm(p.max_distance),
+            starts_in: medium(p.starts_inside),
+            ends_in: medium(p.ends_inside),
+            crossings: p
+                .hits
+                .iter()
+                .map(|h| Crossing {
+                    distance_mm: round_mm(h.distance),
+                    point: arr(h.point),
+                    into: medium(h.entering),
+                    surface_of: owners.next().flatten(),
+                })
+                .collect(),
+            solid_mm: round_mm(p.solid_mm),
+            first_solid_mm: p.first_solid_mm.map(round_mm),
+            incomplete: p.steps_exhausted,
+        })
+        .collect();
 
     Ok(ProbeReport {
         units: doc.units.clone(),
@@ -579,11 +678,159 @@ pub fn probe(
             .map(|p| PointProbe {
                 point: arr(p.point),
                 medium: medium(p.inside),
-                distance_mm: p.distance,
+                distance_mm: round_mm(p.distance),
             })
             .collect(),
         rays,
         omitted_treatments: omitted,
+    })
+}
+
+/// One place the part is thin, with both faces named.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ThinSpot {
+    /// Material between the two faces below, measured along the inward normal.
+    pub thickness_mm: f64,
+    /// The point on the surface this was measured from.
+    pub at: [f64; 3],
+    /// Where the material ran out — the far face of this wall.
+    pub opposite: [f64; 3],
+    /// The tag of the node whose surface `at` lies on, where one owns it. Same
+    /// question, and the same answer, as a ray crossing's `surface_of`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface_of: Option<String>,
+    /// The tag of the surface across the wall. Read with `surface_of` it names
+    /// the wall: `body` to `main_bore` is the material around a hole, and a
+    /// thin one is a hole that is nearly through the side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opposite_surface_of: Option<String>,
+}
+
+/// Where the part is thinnest, and how much of it is thin.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ThicknessReport {
+    pub units: String,
+    /// The thinnest place found. Absent only when nothing was measurable,
+    /// which for a real part means something is wrong with the sweep rather
+    /// than with the part.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinnest: Option<ThinSpot>,
+    /// Surface points measured, and points skipped as unusable. A sweep that
+    /// discarded most of what it sampled is a weaker answer, and says so.
+    pub samples: usize,
+    pub discarded: usize,
+    /// Echoed back, because "0 below threshold" is meaningless without it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub threshold_mm: Option<f64>,
+    /// How many samples were at or below `threshold_mm` — the number that
+    /// separates one bad spot from a wall that is thin everywhere.
+    pub below_threshold: usize,
+    /// Distinct thin places, worst first, spread out rather than clustered.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub thin_spots: Vec<ThinSpot>,
+    /// Edge treatments the distance field cannot carry, by node index — as in
+    /// [`ProbeReport`], and read with `caveat`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub omitted_treatments: Vec<usize>,
+    /// Spelled out in words when there are omitted treatments, because the
+    /// error here has a *direction*: a fillet removes material, so the sharp
+    /// corner this measured is thicker than the real part. A list of node
+    /// indices does not say that, and this is the one measurement whose
+    /// omission is optimistic. See docs/PERCEPTION.md §5.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caveat: Option<String>,
+}
+
+/// Find the thinnest material in the part, and where it is.
+///
+/// A ray from every sampled surface point, back along its own inward normal —
+/// `parcad_core::thickness` is the loop, and this names the two faces each
+/// measurement lies between so the answer reads as "2.1 mm between `body` and
+/// `main_bore`" rather than as a pair of coordinates.
+///
+/// **Implicit backend only**, with the same caveat probes carry and one extra
+/// turn of the screw: the field has no fillets, so near a rounded edge this
+/// measures the sharp corner, which has *more* material than the part does. A
+/// minimum is therefore an upper bound wherever a treatment was dropped, and
+/// `caveat` says so in the payload rather than only here.
+pub fn wall_thickness(
+    doc: &Doc,
+    threshold_mm: Option<f64>,
+    resolution: Option<u32>,
+) -> Result<ThicknessReport, String> {
+    use parcad_core::graph::V3;
+
+    if let Some(t) = threshold_mm {
+        if !(t > 0.0) || !t.is_finite() {
+            return Err(format!(
+                "threshold_mm must be a positive length in mm, not {t}"
+            ));
+        }
+    }
+
+    let (fields, omitted) = drawable(doc);
+    let tree = parcad_core::sdf::lower(&fields).map_err(|e| format!("{e:#}"))?;
+    let bounds = parcad_core::measure::bounds(&fields).map_err(|e| format!("{e:#}"))?;
+    if bounds.is_empty() {
+        return Err("the part is empty, so it has no thickness to measure".to_string());
+    }
+
+    let opts = parcad_core::thickness::Options {
+        // Clamped rather than rejected: the cost is a ray per hit pixel per
+        // view, and the useful range is narrow enough that a caller asking for
+        // 4000 wants detail rather than an hour.
+        resolution: resolution.unwrap_or(96).clamp(32, 256),
+        threshold_mm,
+        ..Default::default()
+    };
+    let report =
+        parcad_core::thickness::measure(&tree, bounds, &opts).map_err(|e| format!("{e:#}"))?;
+
+    // Name both faces of every spot reported, in one pass — same query, same
+    // tolerance and same reasoning as the ray crossings above.
+    let reported: Vec<parcad_core::thickness::Sample> = report
+        .min
+        .into_iter()
+        .chain(report.thin_spots.iter().copied())
+        .collect();
+    let points: Vec<V3> = reported
+        .iter()
+        .flat_map(|s| [s.at, s.opposite])
+        .collect();
+    let owners = parcad_core::tags::owners_at(&fields, &points, (bounds.radius() * 1e-4).max(1e-3))
+        .map_err(|e| format!("naming surfaces: {e:#}"))?;
+
+    let mut spots = reported.iter().zip(owners.chunks(2)).map(|(s, o)| ThinSpot {
+        thickness_mm: round_mm(s.thickness_mm),
+        at: round_point([s.at.x, s.at.y, s.at.z]),
+        opposite: round_point([s.opposite.x, s.opposite.y, s.opposite.z]),
+        surface_of: o[0].clone(),
+        opposite_surface_of: o[1].clone(),
+    });
+
+    let thinnest = report.min.is_some().then(|| spots.next()).flatten();
+    let thin_spots: Vec<ThinSpot> = spots.collect();
+
+    let caveat = (!omitted.is_empty()).then(|| {
+        format!(
+            "{} edge treatment(s) are missing from what was measured, because the distance \
+             field cannot represent a fillet or a chamfer. Near a treated edge this measured \
+             the sharp corner, which has more material than the finished part — so the \
+             thinnest value here is an upper bound, and the real minimum is at or below it.",
+            omitted.len()
+        )
+    });
+
+    Ok(ThicknessReport {
+        units: doc.units.clone(),
+        thinnest,
+        samples: report.samples,
+        discarded: report.discarded,
+        threshold_mm,
+        below_threshold: report.below_threshold,
+        thin_spots,
+        omitted_treatments: omitted,
+        caveat,
     })
 }
 
@@ -602,6 +849,31 @@ pub fn parse_views(names: &[String]) -> Result<Vec<parcad_core::view::View>, Str
         .collect()
 }
 
+/// Parse a section plane, naming the alternatives when one is wrong.
+pub fn parse_section(
+    axis: &str,
+    at_mm: Option<f64>,
+    keep: Option<&str>,
+) -> Result<parcad_core::view::Section, String> {
+    use parcad_core::view::{Axis, Keep};
+
+    let axis = Axis::parse(axis).ok_or_else(|| {
+        format!(
+            "unknown section axis {axis:?}; expected one of {}",
+            Axis::ALL.map(|a| a.name()).join(", ")
+        )
+    })?;
+    let keep = keep
+        .map(|k| {
+            Keep::parse(k).ok_or_else(|| {
+                format!("unknown section side {k:?}; expected \"below\" or \"above\"")
+            })
+        })
+        .transpose()?;
+
+    Ok(parcad_core::view::Section { axis, at_mm, keep })
+}
+
 /// Describe one evaluation.
 ///
 /// Takes the document as well as the result because a treatment is a fact about
@@ -613,28 +885,28 @@ pub fn snapshot(doc: &Doc, evaluated: &Evaluated) -> Snapshot {
 
     Snapshot {
         units: report.units.clone(),
-        size: [report.size.x, report.size.y, report.size.z],
-        bounds_min: [
+        size: round_point([report.size.x, report.size.y, report.size.z]),
+        bounds_min: round_point([
             report.bounds.min.x,
             report.bounds.min.y,
             report.bounds.min.z,
-        ],
-        bounds_max: [
+        ]),
+        bounds_max: round_point([
             report.bounds.max.x,
             report.bounds.max.y,
             report.bounds.max.z,
-        ],
-        volume_mm3: report.mass.volume_mm3,
-        area_mm2: report.mass.area_mm2,
-        centroid: [
+        ]),
+        volume_mm3: round_mm(report.mass.volume_mm3),
+        area_mm2: round_mm(report.mass.area_mm2),
+        centroid: round_point([
             report.mass.centroid.x,
             report.mass.centroid.y,
             report.mass.centroid.z,
-        ],
+        ]),
         faces: topology.map(|t| t.faces),
         topological_edges: topology.map(|t| t.edges),
         triangles: report.mesh.triangles,
-        resolution_mm: report.mesh.resolution_mm,
+        resolution_mm: round_mm(report.mesh.resolution_mm),
         watertight: report.mesh.watertight,
         non_manifold_edges: report.mesh.non_manifold_edges,
         tags: report.tags.clone(),
@@ -1101,9 +1373,12 @@ mod tests {
         let renders = render(
             &evaluated(&doc),
             &doc,
-            &[parcad_core::view::View::Iso, parcad_core::view::View::Top],
-            128,
-            false,
+            &RenderSpec {
+                views: &[parcad_core::view::View::Iso, parcad_core::view::View::Top],
+                size: 128,
+                regions: false,
+                section: None,
+            },
         )
         .expect("the plate should render");
 
@@ -1127,15 +1402,90 @@ mod tests {
         }
     }
 
+    /// A section reports the plane it actually cut, and how much it opened.
+    ///
+    /// Both halves matter to a caller that cannot see. The resolved `at_mm` and
+    /// `keep` are what let it move the plane by a known amount next time, and
+    /// `cut_fraction` is the difference between "the part is solid there" and
+    /// "the section missed" — two conclusions from one identical-looking image.
+    #[test]
+    fn a_sectioned_view_says_which_plane_it_cut_and_how_much_it_opened() {
+        let doc = plate_with_a_hole();
+        let evaluated = evaluated(&doc);
+        let spec = |section| RenderSpec {
+            views: &[parcad_core::view::View::Front],
+            size: 128,
+            regions: false,
+            section,
+        };
+
+        let renders = render(
+            &evaluated,
+            &doc,
+            &spec(Some(parcad_core::view::Section {
+                axis: parcad_core::view::Axis::Y,
+                at_mm: None,
+                keep: None,
+            })),
+        )
+        .expect("the plate should render");
+
+        let cut = renders.views[0]
+            .summary
+            .section
+            .as_ref()
+            .expect("a sectioned view reports its plane");
+        // Rounded to the micron like every other length in a reply, so a
+        // measured bounding-box centre of -4.8e-6 is reported as the 0 it is.
+        assert_eq!((cut.axis.as_str(), cut.at_mm), ("y", 0.0));
+        // The front view looks from -Y, so the half in the way is the one below.
+        assert_eq!(cut.keep, "above");
+        assert!(
+            cut.cut_fraction > 0.5,
+            "a 40 mm plate cut through the middle is mostly cut face, not {:.3}",
+            cut.cut_fraction
+        );
+
+        // The same plane 60 mm clear of a 40 mm plate touches nothing, and the
+        // picture that comes back is an ordinary front view.
+        let renders = render(
+            &evaluated,
+            &doc,
+            &spec(Some(parcad_core::view::Section {
+                axis: parcad_core::view::Axis::Y,
+                at_mm: Some(-60.0),
+                keep: None,
+            })),
+        )
+        .expect("the plate should render");
+        assert_eq!(
+            renders.views[0]
+                .summary
+                .section
+                .as_ref()
+                .expect("still a section")
+                .cut_fraction,
+            0.0
+        );
+
+        // And an ordinary render says nothing about a section at all, rather
+        // than reporting one it did not take.
+        let renders = render(&evaluated, &doc, &spec(None)).expect("the plate should render");
+        assert!(renders.views[0].summary.section.is_none());
+    }
+
     #[test]
     fn a_region_map_names_every_tag_and_what_it_covers() {
         let doc = plate_with_a_hole();
         let renders = render(
             &evaluated(&doc),
             &doc,
-            &[parcad_core::view::View::Top],
-            128,
-            true,
+            &RenderSpec {
+                views: &[parcad_core::view::View::Top],
+                size: 128,
+                regions: true,
+                section: None,
+            },
         )
         .expect("the plate should render");
 
@@ -1336,6 +1686,114 @@ mod tests {
         assert!((void - 10.0).abs() < 0.01, "got {void}");
     }
 
+    /// The manifold's thinnest wall is the 5 mm left outboard of the port —
+    /// the block runs to x = -30 and the Ø10 port at x = -20 takes it to -25.
+    /// Nothing asked about that wall; the sweep is what found it, which is the
+    /// difference between this and `probe_part`.
+    #[test]
+    fn the_thinnest_wall_is_found_without_being_asked_about() {
+        let report =
+            wall_thickness(&manifold(), Some(6.0), None).expect("the manifold should measure");
+
+        let thinnest = report.thinnest.expect("a thinnest place");
+        assert!(
+            (thinnest.thickness_mm - 5.0).abs() < 0.2,
+            "thinnest measured {} mm, expected 5: {thinnest:?}",
+            thinnest.thickness_mm
+        );
+
+        // Named at both ends, which is what makes it a wall rather than a pair
+        // of coordinates. Either face may be the one the ray started from.
+        let named = {
+            let mut n = [
+                thinnest.surface_of.as_deref(),
+                thinnest.opposite_surface_of.as_deref(),
+            ];
+            n.sort();
+            n
+        };
+        assert_eq!(named, [Some("block"), Some("port")], "{thinnest:?}");
+
+        assert!(report.below_threshold > 0);
+        assert!(report.samples > 500, "only {} samples", report.samples);
+        // Nothing was filleted, so nothing is hidden and nothing is claimed.
+        assert!(report.omitted_treatments.is_empty());
+        assert!(report.caveat.is_none());
+    }
+
+    /// The dangerous case, and the reason `caveat` is prose rather than a list
+    /// of node indices: a fillet the field dropped means the corner measured
+    /// here has more material than the finished part, so the minimum reported
+    /// is an upper bound. Every other omission in this file makes an answer
+    /// vaguer; this one makes it optimistic.
+    #[test]
+    fn a_dropped_fillet_makes_the_minimum_an_upper_bound_and_says_so() {
+        let treated = doc(serde_json::json!({
+            "root": 1,
+            "nodes": [
+                { "op": "cuboid", "size": { "x": 30, "y": 30, "z": 8 }, "tag": "body" },
+                { "op": "fillet", "child": 0, "radius": 2, "selector": ">Z" },
+            ],
+        }));
+
+        let report = wall_thickness(&treated, None, Some(48)).expect("it should measure");
+
+        assert_eq!(report.omitted_treatments, vec![1]);
+        let caveat = report.caveat.expect("a caveat naming the direction of the error");
+        assert!(
+            caveat.contains("upper bound") && caveat.contains("more material"),
+            "{caveat}"
+        );
+        // And it measured the *unfilleted* block, which is the thing the caveat
+        // is about: 8 mm through the plate, with the rounded edge absent.
+        let thinnest = report.thinnest.expect("a thinnest place");
+        assert!(
+            (thinnest.thickness_mm - 8.0).abs() < 0.3,
+            "got {} mm",
+            thinnest.thickness_mm
+        );
+    }
+
+    /// Nothing a transport serialises carries an f32's rounding error widened
+    /// into f64 digits. Asserted on the JSON rather than on the struct, because
+    /// the defect only exists in the text: the f64 is a perfectly good number
+    /// and `serde_json` is right to print all of it.
+    #[test]
+    fn a_reply_carries_no_digits_the_kernel_did_not_measure() {
+        let doc = plate_with_a_hole();
+        let json = serde_json::to_string(
+            &probe(
+                &doc,
+                &[[0.0, 0.0, 0.0], [19.0, 0.0, 0.0]],
+                &[RayRequest {
+                    origin: [-100.0, 0.0, 0.0],
+                    direction: [1.0, 0.0, 0.0],
+                    max_distance: None,
+                }],
+            )
+            .expect("the plate should probe"),
+        )
+        .expect("serialising");
+
+        let long: Vec<&str> = json
+            .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-'))
+            .filter(|t| t.split('.').nth(1).is_some_and(|d| d.len() > 6))
+            .collect();
+        assert!(long.is_empty(), "un-rounded values in the reply: {long:?}");
+
+        // And the values are still right, not merely short. The plate is 40
+        // across with a Ø12 bore, so from x = -100 the ray crosses at x = -20,
+        // -6, 6, 20, and the wall it enters is 14 mm.
+        assert!(json.contains("\"first_solid_mm\":14.0"), "{json}");
+        assert!(json.contains("\"point\":[-6.0,0.0,0.0]"), "{json}");
+    }
+
+    #[test]
+    fn a_threshold_that_is_not_a_length_is_refused_by_name() {
+        let err = wall_thickness(&plate_with_a_hole(), Some(0.0), None).unwrap_err();
+        assert!(err.contains("threshold_mm"), "{err}");
+    }
+
     /// A ray down the bore finds nothing, and says nothing rather than failing.
     /// "Does this hole go all the way through" is the question, and an empty
     /// crossing list is the answer to it.
@@ -1418,3 +1876,6 @@ mod tests {
         );
     }
 }
+
+
+

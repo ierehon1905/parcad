@@ -4,7 +4,11 @@
 //!     parcad <graph.json> [--out DIR] [--depth N] [--size PX] [--view NAME]
 
 use anyhow::{Context, Result};
-use parcad_core::{graph::Doc, render, view::View};
+use parcad_core::{
+    graph::Doc,
+    render,
+    view::{Axis, Keep, Section, View},
+};
 use std::path::PathBuf;
 
 struct Args {
@@ -15,6 +19,8 @@ struct Args {
     view: Option<View>,
     /// Also produce the tag-region map for the chosen view.
     regions: bool,
+    /// Cut the part open before drawing it.
+    section: Option<Section>,
     /// Dump viewport-ready geometry as JSON to this path.
     geometry: Option<PathBuf>,
     /// Evaluate through the B-rep kernel instead of the distance field.
@@ -31,6 +37,7 @@ fn parse_args() -> Result<Args> {
     let mut size = 512u32;
     let mut view = None;
     let mut regions = false;
+    let mut section = None;
     let mut geometry = None;
     let mut brep = false;
     let mut step = None;
@@ -63,6 +70,10 @@ fn parse_args() -> Result<Args> {
                 })?);
             }
             "--regions" => regions = true,
+            "--section" => {
+                let spec = it.next().context("--section needs a plane, e.g. z or y@5:above")?;
+                section = Some(parse_section(&spec)?);
+            }
             "--geometry" => {
                 geometry = Some(PathBuf::from(
                     it.next().context("--geometry needs a path")?,
@@ -73,7 +84,8 @@ fn parse_args() -> Result<Args> {
             "-h" | "--help" => {
                 eprintln!(
                     "usage: parcad <graph.json> [--out DIR] [--depth N] [--size PX]\n\
-                     \x20              [--view NAME] [--regions] [--geometry PATH]\n\
+                     \x20              [--view NAME] [--regions] [--section PLANE]\n\
+                     \x20              [--geometry PATH]\n\
                      \x20              [--brep] [--step PATH]"
                 );
                 std::process::exit(0);
@@ -90,10 +102,45 @@ fn parse_args() -> Result<Args> {
         size,
         view,
         regions,
+        section,
         geometry,
         brep: brep || step.is_some(),
         step,
     })
+}
+
+/// `AXIS[@MM][:below|above]` — `z`, `y@5`, `x@0:below`.
+///
+/// Defaulting both the position and the kept side is the point: `--section z`
+/// is the section anyone actually wants, and the two suffixes are there for the
+/// times it is not.
+fn parse_section(spec: &str) -> Result<Section> {
+    let (plane, keep) = match spec.split_once(':') {
+        Some((plane, side)) => (
+            plane,
+            Some(Keep::parse(side).with_context(|| {
+                format!("unknown side {side:?} in --section; expected below or above")
+            })?),
+        ),
+        None => (spec, None),
+    };
+    let (axis, at_mm) = match plane.split_once('@') {
+        Some((axis, at)) => (
+            axis,
+            Some(at.parse().with_context(|| {
+                format!("{at:?} in --section is not a position in mm")
+            })?),
+        ),
+        None => (plane, None),
+    };
+
+    let axis = Axis::parse(axis).with_context(|| {
+        format!(
+            "unknown axis {axis:?} in --section; expected one of: {}",
+            Axis::ALL.map(|a| a.name()).join(", ")
+        )
+    })?;
+    Ok(Section { axis, at_mm, keep })
 }
 
 fn main() -> Result<()> {
@@ -124,6 +171,7 @@ fn main() -> Result<()> {
     // Renders.
     let opts = render::RenderOptions {
         size: args.size,
+        section: args.section,
         ..Default::default()
     };
     let render_started = std::time::Instant::now();

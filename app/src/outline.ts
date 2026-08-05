@@ -153,7 +153,10 @@ export class OutlineRenderer {
 
     // Multisampling on the composer's own target: routing through a render
     // target otherwise throws away the antialiasing the canvas would have had.
-    const beauty = new THREE.WebGLRenderTarget(w, h, { samples: 4 });
+    // A stencil buffer, because the section cap is drawn with one and the
+    // composer's target is what the scene actually renders into. Without it the
+    // stencil test silently passes everywhere and the cap covers the screen.
+    const beauty = new THREE.WebGLRenderTarget(w, h, { samples: 4, stencilBuffer: true });
     this.composer = new EffectComposer(renderer, beauty);
     this.composer.addPass(new RenderPass(scene, camera));
 
@@ -163,6 +166,17 @@ export class OutlineRenderer {
     this.composer.addPass(this.outlinePass);
 
     this.setSize(size.x, size.y);
+  }
+
+  /**
+   * Clip the normal pass the same way the beauty pass is clipped.
+   *
+   * A scene-wide override material does not inherit the per-material clipping
+   * planes it replaces, so without this the outline is traced around the
+   * *uncut* part: a silhouette hanging in space beside the sectioned solid.
+   */
+  setClippingPlanes(planes: THREE.Plane[]) {
+    this.normalMaterial.clippingPlanes = planes.length > 0 ? planes : null;
   }
 
   /** Draw creases, or leave them to real edge curves supplied by the backend. */

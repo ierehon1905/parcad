@@ -114,6 +114,151 @@ impl View {
     }
 }
 
+/// A model axis. The planes people actually cut on are the three of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Axis {
+    X,
+    Y,
+    Z,
+}
+
+impl Axis {
+    pub const ALL: [Axis; 3] = [Axis::X, Axis::Y, Axis::Z];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Axis::X => "x",
+            Axis::Y => "y",
+            Axis::Z => "z",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Axis> {
+        Axis::ALL.into_iter().find(|a| a.name() == s)
+    }
+
+    pub fn unit(self) -> Vector3<f64> {
+        match self {
+            Axis::X => Vector3::new(1.0, 0.0, 0.0),
+            Axis::Y => Vector3::new(0.0, 1.0, 0.0),
+            Axis::Z => Vector3::new(0.0, 0.0, 1.0),
+        }
+    }
+
+    /// Index of this axis in a coordinate triple, and in a 4x4's rows.
+    pub fn index(self) -> usize {
+        match self {
+            Axis::X => 0,
+            Axis::Y => 1,
+            Axis::Z => 2,
+        }
+    }
+}
+
+/// Which side of a section plane keeps its material.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Keep {
+    /// Material at or below the plane on its axis survives.
+    Below,
+    /// Material at or above it survives.
+    Above,
+}
+
+impl Keep {
+    pub fn name(self) -> &'static str {
+        match self {
+            Keep::Below => "below",
+            Keep::Above => "above",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Keep> {
+        match s {
+            "below" => Some(Keep::Below),
+            "above" => Some(Keep::Above),
+            _ => None,
+        }
+    }
+}
+
+/// A cutting plane, as asked for.
+///
+/// Both defaults exist because the useful section is nearly always the obvious
+/// one, and a caller made to state it will state it wrongly: the half that has
+/// to go is the half between the plane and the viewer, and that depends on the
+/// view, not on the part. See [`Section::resolve`].
+#[derive(Debug, Clone, Copy)]
+pub struct Section {
+    pub axis: Axis,
+    /// Where the plane sits on that axis, mm. `None` cuts through the middle of
+    /// the part.
+    pub at_mm: Option<f64>,
+    /// `None` keeps whichever side faces *away* from the viewer, which is the
+    /// only choice that shows the cut rather than hiding it.
+    pub keep: Option<Keep>,
+}
+
+/// A section resolved against one part and one view: nothing left to decide.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cut {
+    pub axis: Axis,
+    pub at_mm: f64,
+    pub keep: Keep,
+}
+
+impl Section {
+    pub fn resolve(self, bounds: Aabb, view: View) -> Cut {
+        let at_mm = self.at_mm.unwrap_or_else(|| {
+            let c: V3 = bounds.center();
+            [c.x, c.y, c.z][self.axis.index()]
+        });
+
+        let keep = self.keep.unwrap_or_else(|| {
+            // Column 2 of the view rotation is the model-space direction that
+            // points at the viewer, so its component along the section axis says
+            // which half of the part is in the way.
+            let toward = view.rotation().column(2).xyz();
+            if toward.dot(&self.axis.unit()) > 0.0 {
+                Keep::Below
+            } else {
+                Keep::Above
+            }
+        });
+
+        Cut {
+            axis: self.axis,
+            at_mm,
+            keep,
+        }
+    }
+}
+
+impl Cut {
+    /// `+1` where the plane's own axis coordinate grows into removed material,
+    /// `-1` where it grows into kept material.
+    ///
+    /// Every geometric use of a cut — the half-space distance field, the
+    /// screen-space clip test, the direction the cut face looks in — is this
+    /// sign times something, so it is worth having once.
+    pub fn sense(self) -> f64 {
+        match self.keep {
+            Keep::Below => 1.0,
+            Keep::Above => -1.0,
+        }
+    }
+
+    /// Signed distance to the half-space that survives: negative in kept
+    /// material, positive in what the cut took away.
+    pub fn removed_depth(self, p: [f64; 3]) -> f64 {
+        self.sense() * (p[self.axis.index()] - self.at_mm)
+    }
+
+    /// Outward normal of the cut face — the direction the material went.
+    pub fn normal(self) -> Vector3<f64> {
+        self.axis.unit() * self.sense()
+    }
+}
+
 /// Uniform scale that fits the part inside the world cube for *any* view.
 ///
 /// Derived from the bounding sphere, so it cannot change with view direction —

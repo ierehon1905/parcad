@@ -78,7 +78,7 @@ Findings that changed decisions on this page:
 | Selector syntax check | ✅ `check_selector` | no geometry touched |
 | Depth + normal per pixel | ~ `render::GeometryBuffer` | exists, and `model_point` already ties a pixel to a millimetre — not exposed |
 | Point and ray probe | ✅ `probe.rs`, `probe_part` | §3 — signed distance at a point, every crossing along a ray, and the wall thickness between them |
-| **Wall thickness / minimum feature** | ❌ | §5 |
+| Wall thickness / minimum feature | ✅ `thickness.rs`, `measure_wall_thickness` | §5 — a ray from every sampled surface point, both faces named; optimistic where a fillet was dropped, and it says so |
 | **Overhang and printability** | ❌ | §6 |
 | **Section view** | ❌ | §7, and OP_ROADMAP §8 |
 | **Numbered marks on the render** | ❌ | §4 |
@@ -333,6 +333,13 @@ The closed forms are pinned in the unit tests instead, which is where the rest
 of the field's own behaviour is checked. If §5 lands and thickness becomes a
 part-level property, that is the point to revisit it.
 
+§5 landed, and the answer is still no: a thickness is implicit-only for the
+same reason a probe is, and the B-rep backend has no thickness to disagree
+with. Widening the corpus schema for a one-backend number would make `Observed`
+mean two things. Its closed forms are pinned in `thickness.rs`'s unit tests —
+a 40 mm shell, an off-centre pocket with a 2 mm wall on one side and 12 mm on
+the other, and a sphere, whose every inward normal is a diameter.
+
 ## 4. Numbered marks — the rest of Set-of-Mark
 
 **What it is.** `tags.rs` already colours a render by which tag owns each
@@ -400,6 +407,95 @@ as loudly as `omitted_treatments` does.
 **Report shape.** Minimum, the point, and the two surfaces it lies between —
 plus a count of how many samples fell below a caller-supplied threshold, so
 "one bad spot" and "the whole wall is thin" are distinguishable.
+
+**Done**, as `thickness.rs` and `measure_wall_thickness`, in the shape above.
+The loop is `probe::rays` — added alongside it, because compiling the field
+once per ray is fine for the handful a caller fires by hand and ruinous for the
+thousands this fires at one part. Both faces are named through `tags::owners_at`,
+the same call §4's crossings use, so the answer reads "5 mm between `block` and
+`port`" and the wall is identified rather than located.
+
+Three things the implementation settled that the design above did not:
+
+- **The omission is stated as prose, not as a list.** `omitted_treatments`
+  carries the node indices as everywhere else, and a `caveat` string next to it
+  says *which way the error runs*: the sharp corner has more material, so the
+  reported minimum is an upper bound and the true one is at or below it. A list
+  of indices makes an answer vaguer; only this one makes it optimistic, and the
+  field name `omitted_treatments` cannot say so. The B-rep alternative is still
+  the real fix, and is still not done.
+- **Surface samples need refining before they are surface samples.**
+  `model_point` reads back a *quantised* depth, so it lands within a voxel of
+  the surface — far enough out that the inward ray starts in void, or far enough
+  in that every wall reads short by the same bias. Two Newton steps along the
+  gradient close it. But a field built from `abs` or `sqrt` has no derivative
+  where it is exactly zero, so a point landed perfectly on the surface returns
+  `NaN`: success and failure look identical. The last *usable* normal is the one
+  kept, never the last one evaluated.
+- **A ray thickness is not an inscribed sphere**, and the difference is signed.
+  They agree on a wall with parallel faces; in a concave corner the ray crosses
+  to whatever is straight across, which is further than the sphere that fits.
+  Upper bound again, and stated in the module rather than discovered later.
+
+**Measured on a model**, `eval/field/how-thin-is-it.md`, four trials of Haiku
+4.5 with thinking on, against the flange: *what is the thinnest material in this
+part, and between which two surfaces?* The ligament between a bolt hole and the
+OD is 6.3 mm, and `thickness = 19.1` is sitting in the script one line away from
+being the wrong answer.
+
+| reached the tool | quoted a measured value | carried the caveat | correct |
+|---|---|---|---|
+| 4/4 | 4/4 | 4/4 | 4/4 |
+
+Nothing derived it from the script, and every trial reproduced the caveat *with
+its direction* — "the true minimum is at or below 6.30 mm". That is the first
+time a warning in a payload has been read back correctly on the first round,
+and the paragraph in the tool description saying *use this before you call a
+part ready to print* is the likeliest reason, as it was in §3 round 3.
+
+**And the transcripts say the tag names are not enough**, which the score does
+not. All four named the pair `plate` / `drilled` and then explained it in
+English, and two of the four explained it wrongly: trial 4 put the wall between
+"the top surface of the flange" and the bolt holes, trial 1 between the plate
+and "the bore". It is neither. The wall is *radial*, from the OD to a bolt hole,
+and both trials had the coordinates that say so — `at` and `opposite` share a z.
+
+**The round after it was void, and that is worth recording too.** Rerunning
+`does-the-port-meet.md` against the rounded replies, two of four trials never
+answered: stuck, they went hunting for a shell, found `Monitor` and `Skill` —
+neither on `field-test.sh`'s deny list, which predates them existing — and spent
+the run trying to fix this repo's compiler warnings. The scorer counted them as
+trials. A deny list is wrong by default every time the CLI grows a tool, so the
+scorer now prints a `stray` column instead of trusting the list; eval/field's
+README has both failure modes. The §5 round above is unaffected — all four of
+its trials called nothing but `ToolSearch` and parcad.
+
+The cause is that a tag names a *node*, not a face. `plate` is one cylinder and
+owns the OD, the top and the bottom; `drilled` is one cut and owns the bore and
+all four bolt holes. `surface_of` therefore narrows the answer to a handful of
+faces and stops, and the model fills the rest in from the part it is imagining.
+Same shape as every failure on this page: the number survived and the
+*location* drifted. It is an argument for §9 rather than a defect here —
+nothing short of naming faces can say "the OD" — and the interim mitigation is
+that the coordinates are already right and already in the reply.
+
+**Replies are rounded to the micron**, in `service::round_mm` and nowhere else.
+Not a size optimisation first — though it is a quarter to a third of every
+numeric reply — but the same rule as the rest of this page pointed at
+precision. The field is evaluated in f32, and an f32 widened to f64 has no short
+decimal form: 30.15 serialises as `30.149999618530273`, because `serde_json`
+must print enough digits to round-trip the f64 it was handed. Those fourteen
+trailing digits are the f32's own rounding error presented as measurement, at a
+precision three orders past anything the pipeline resolves — and a centroid of
+`6.066550368146516e-7` is a zero that reads as an offset. A model has already
+been observed spending tokens reconciling the noise: *6.30 mm (measured as
+6.29999268054804 mm)*. An f32 field needs none of this; only the widened ones
+do.
+
+Re-run against `does-the-port-meet.md` afterwards, four trials of Haiku 4.5:
+4/4 reached the tool, 4/4 quoted a measured value, 4/4 correct, none strayed.
+Rounding a reply is still a change to a reply, and this page's rule is that the
+model reading it is a separate fact from the number being right.
 
 ## 6. Overhang and printability
 
@@ -469,6 +565,13 @@ for per-face offset and for draft applied to an existing face
 **Cost.** Medium, and it interacts with the selector grammar — which is parsed
 twice on purpose, so a face selector is a change in `selectors.rs`,
 `selectors.ts` and `eval/selectors.json` together, or it is a red test.
+
+**§5's field round is the strongest evidence for it.** A tag names a node, and
+a node owns several faces — `plate` is the flange's OD *and* its top *and* its
+bottom. Handed a correct thickness between `plate` and `drilled`, half the
+trials described the wrong wall, because the name they were given cannot
+distinguish the faces it covers. Every measurement that reports *where* runs
+into this, and no amount of care in the measuring tool fixes it.
 
 ## 10. Slices — the idea, and the version worth building
 
@@ -549,8 +652,9 @@ is the inverse of this page's rule.
    already lowers, so it is an afternoon. A model that cannot locate a feature
    aims its rays at the wrong plane and measures something real, correctly, in
    the wrong place, which reads exactly like a right answer.
-5. **Wall thickness** (§5), since it is §3 plus a loop and it is the check every
-   example silently assumes.
+5. ~~Wall thickness~~ (§5) — **done**. It was §3 plus a loop, once the samples
+   were walked onto the surface; the caveat needed a sentence rather than a
+   list, because this is the one omission that reads *optimistic*.
 6. **Section view** (§7). Already wanted by the window; the agent needs it more.
 7. **Numbered marks on the render** (§4, the visual half). The change with the
    best evidence behind it, and it makes the selector loop closeable.

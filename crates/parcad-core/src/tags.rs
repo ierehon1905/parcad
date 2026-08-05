@@ -240,6 +240,13 @@ fn surface_points(buf: &GeometryBuffer) -> (Vec<(u32, u32)>, Vec<f32>, Vec<f32>,
 
     for y in 0..buf.size {
         for x in 0..buf.size {
+            // A cut face is not surface of the part — it is the inside of the
+            // material, where no node's field vanishes. Counted, every one of
+            // those pixels would come back unattributed, and a sectioned region
+            // map would report a well-tagged part as mostly unclaimed.
+            if buf.is_cut(x, y) {
+                continue;
+            }
             if let Some(p) = buf.model_point(x, y) {
                 pixels.push((x, y));
                 xs.push(p[0]);

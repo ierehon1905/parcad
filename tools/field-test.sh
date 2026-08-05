@@ -54,12 +54,24 @@ EOF
 # still gets the source through read_project, because probe_part needs a script
 # to run — "measure it, do not derive it" is a rule in the prompt, and whether
 # it holds is one of the things being measured.
+#
+# **This list is version-sensitive and has already been wrong once.** It names
+# what to deny, so every built-in the CLI gains is allowed until someone adds
+# it here. A round of §5 lost two of four trials that way: stuck, they went
+# looking for a shell, found Monitor and Skill, and spent the rest of the run
+# trying to fix this repo's compiler warnings instead of answering. Neither
+# produced a verdict, and nothing in the summary line said why.
+#
+# ToolSearch cannot be denied — the CLI defers the MCP tools behind it, so a
+# trial that cannot search cannot reach parcad at all. The scorer's `stray`
+# column is the backstop: any *other* non-parcad tool call means the trial
+# wandered off, and a wandered trial is not evidence about anything.
 run_one() {
   MAX_THINKING_TOKENS="$THINK" claude -p "$(cat "$PROMPT")" \
     --model "$MODEL" \
     --mcp-config "$RUN/mcp.json" \
-    --allowed-tools "mcp__parcad__list_projects,mcp__parcad__read_project,mcp__parcad__evaluate_part,mcp__parcad__probe_part,mcp__parcad__list_entities,mcp__parcad__inspect_treatment_target,mcp__parcad__check_selector" \
-    --disallowed-tools "Bash,Read,Grep,Glob,Edit,Write,WebFetch,WebSearch,Task" \
+    --allowed-tools "mcp__parcad__list_projects,mcp__parcad__read_project,mcp__parcad__evaluate_part,mcp__parcad__probe_part,mcp__parcad__measure_wall_thickness,mcp__parcad__list_entities,mcp__parcad__inspect_treatment_target,mcp__parcad__check_selector" \
+    --disallowed-tools "Bash,Read,Grep,Glob,Edit,Write,WebFetch,WebSearch,Task,Skill,Monitor,NotebookEdit,CronCreate,RemoteTrigger,TaskCreate,SendMessage" \
     --output-format stream-json --verbose < /dev/null > "$RUN/trial$1.jsonl" 2>&1
 }
 

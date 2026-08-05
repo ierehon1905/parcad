@@ -6,7 +6,7 @@
 //! are close to invisible under flat lighting.
 
 use crate::measure::Aabb;
-use crate::view::View;
+use crate::view::{Cut, Section, View};
 use anyhow::Result;
 use fidget::context::Tree;
 use fidget::jit::JitShape;
@@ -178,6 +178,13 @@ pub struct RenderOptions {
     /// an edge that isn't there, and an agent reading the picture has no way to
     /// know that.
     pub supersample: u32,
+    /// Cut the part open on a plane before drawing it.
+    ///
+    /// For an agent this is not a convenience. An internal feature — a bore that
+    /// stops short, a rib inside a boss, a wall between two pockets — is not
+    /// visible from any of the seven views, and no amount of orbiting reaches
+    /// it; a section is the only picture that shows it at all.
+    pub section: Option<Section>,
 }
 
 impl Default for RenderOptions {
@@ -187,6 +194,7 @@ impl Default for RenderOptions {
             depth_samples: 512,
             ssao: true,
             supersample: 2,
+            section: None,
         }
     }
 }
@@ -208,10 +216,23 @@ pub struct GeometryBuffer {
     pub screen_to_model: nalgebra::Matrix4<f32>,
     pub size: u32,
     pub depth_samples: u32,
+    /// The plane this view was cut on, resolved, or `None` if it was not.
+    pub cut_plane: Option<Cut>,
+    /// One flag per pixel: true where the pixel shows the cut face itself rather
+    /// than a surface of the part. Empty when there is no section.
+    ///
+    /// Kept apart from the image because a cut face is *not* part surface, and
+    /// everything that reasons about surface — tag attribution, the unclaimed
+    /// fraction — would otherwise attribute the inside of the material to
+    /// nothing and report the part as mostly unnamed.
+    pub cut: Vec<bool>,
 }
 
 impl GeometryBuffer {
     /// The point on the part under this pixel, if the pixel hit anything.
+    ///
+    /// On a cut pixel this is the point on the cutting plane, which is *inside*
+    /// the material — the one place a model point is not on the surface.
     pub fn model_point(&self, x: u32, y: u32) -> Option<[f32; 3]> {
         let px = self.image[(y as usize, x as usize)];
         if px.depth == 0 {
@@ -224,6 +245,38 @@ impl GeometryBuffer {
         ));
         Some([p.x, p.y, p.z])
     }
+
+    /// Whether this pixel is cut face.
+    pub fn is_cut(&self, x: u32, y: u32) -> bool {
+        self.cut
+            .get((y * self.size + x) as usize)
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// Share of the drawn part that is cut face, 0 to 1.
+    ///
+    /// The number that says whether the section did anything. A plane that
+    /// misses the material entirely produces a perfectly ordinary picture, and
+    /// a caller with no way to tell that apart from a solid part is a caller
+    /// about to conclude its bore is missing.
+    pub fn cut_fraction(&self) -> f64 {
+        if self.cut.is_empty() {
+            return 0.0;
+        }
+        let mut drawn = 0usize;
+        let mut cut = 0usize;
+        for y in 0..self.size {
+            for x in 0..self.size {
+                if self.image[(y as usize, x as usize)].depth == 0 {
+                    continue;
+                }
+                drawn += 1;
+                cut += usize::from(self.is_cut(x, y));
+            }
+        }
+        cut as f64 / drawn.max(1) as f64
+    }
 }
 
 /// Evaluate the shape into a depth/normal buffer for one view.
@@ -233,6 +286,16 @@ pub fn geometry(
     view: View,
     opts: &RenderOptions,
 ) -> Result<GeometryBuffer> {
+    // A section on this side is an intersection with a half-space, which is the
+    // one clip a distance field does exactly and for free. The cut face then
+    // arrives as ordinary surface and needs no capping — the field has no inside
+    // to leak through.
+    let cut_plane = opts.section.map(|s| s.resolve(bounds, view));
+    let tree = match cut_plane {
+        Some(cut) => tree.clone().max(half_space(cut)),
+        None => tree.clone(),
+    };
+
     let shape = JitShape::from(tree.clone());
     let bound_shape = shape.try_into().map_err(|_| {
         anyhow::anyhow!("shape has unbound variables; every parameter must be resolved before rendering")
@@ -258,12 +321,48 @@ pub fn geometry(
     // smoothing them stops the shading from speckling.
     let image = effects::denoise_normals(&image, None);
 
-    Ok(GeometryBuffer {
+    let mut buf = GeometryBuffer {
         image,
         screen_to_model: cfg.mat(),
         size,
         depth_samples,
-    })
+        cut_plane,
+        cut: Vec::new(),
+    };
+    // A cut face is only ever *seen* when the material went toward the viewer.
+    // Cut the far half away instead and the plane is behind what survives; cut
+    // on a plane the view runs along and it is edge-on, a sliver a pixel wide
+    // that no one can read. Both are left unmarked, which is also what the
+    // rasteriser does — the two paths have to agree about this or a caller gets
+    // a different picture depending on which backend drew it.
+    let faces_viewer = cut_plane
+        .is_some_and(|cut| cut.normal().dot(&view.rotation().column(2).xyz()) > 1e-9);
+    if let (Some(cut), true) = (cut_plane, faces_viewer) {
+        // Which pixels are cut face is read back off the depth buffer rather
+        // than tracked through the render: a point is on the cut exactly when it
+        // lies on the plane, and the tolerance is one voxel of depth, since that
+        // is the only thing quantising it.
+        let tol = 1.5 * buf.screen_to_model.column(2).norm() as f64;
+        buf.cut = (0..size * size)
+            .map(|i| {
+                let (x, y) = (i % size, i / size);
+                buf.model_point(x, y).is_some_and(|p| {
+                    cut.removed_depth([p[0] as f64, p[1] as f64, p[2] as f64]).abs() <= tol
+                })
+            })
+            .collect();
+    }
+    Ok(buf)
+}
+
+/// The half-space a [`Cut`] keeps, as a distance field.
+fn half_space(cut: Cut) -> Tree {
+    let axis = match cut.axis {
+        crate::view::Axis::X => Tree::x(),
+        crate::view::Axis::Y => Tree::y(),
+        crate::view::Axis::Z => Tree::z(),
+    };
+    (axis - cut.at_mm) * cut.sense()
 }
 
 /// Render one view of the shape.
@@ -360,6 +459,40 @@ pub fn raster(
     let r: nalgebra::Matrix3<f32> =
         nalgebra::convert(rotation.fixed_view::<3, 3>(0, 0).transpose());
 
+    // A section, in screen space.
+    //
+    // `Cut::removed_depth` is affine in model coordinates and the projection is
+    // orthographic, so composing the two gives one plane equation in (pixel x,
+    // pixel y, voxel depth): `clip.0 * x + clip.1 * y + clip.2 * d + clip.3`,
+    // positive in the material the cut took away. Every per-fragment test below
+    // is that dot product, which is why it is worth folding the matrix in once
+    // rather than transforming each fragment back to millimetres.
+    let cut_plane = opts.section.map(|s| s.resolve(bounds, view));
+    let clip = cut_plane.map(|cut| {
+        let row = cut.axis.index();
+        let s = cut.sense() as f32;
+        (
+            s * screen_to_model[(row, 0)],
+            s * screen_to_model[(row, 1)],
+            s * screen_to_model[(row, 2)],
+            s * (screen_to_model[(row, 3)] - cut.at_mm as f32),
+        )
+    });
+    // Surface crossings per pixel, counted over what the cut removed. An odd
+    // count means the ray was still in material when it reached the plane, so
+    // that pixel is cut face; the mesh is closed, so parity is the whole test.
+    //
+    // Not a signed winding number, which is the textbook answer and is wrong
+    // here. Signing the count needs each crossing's facing, the only source of
+    // facing is the mesh's own normals, and dual contouring does not have one to
+    // give at a sharp feature: on a plain cube, the normal it reports along a
+    // vertical edge is the *top face's*, which signs an exit as an entry and
+    // leaves half the part looking capped. Parity needs no normals at all. Its
+    // one weakness — a pixel sample landing exactly on a shared triangle edge
+    // gets counted twice — takes an exact float coincidence, where the normals
+    // above are wrong on every part with a sharp edge, which is all of them.
+    let mut crossings = vec![0u32; if clip.is_some() { (size * size) as usize } else { 0 }];
+
     let mut image = voxel::Image::new(voxel::RenderSize::new(size, size, depth_samples));
     let project = |p: [f32; 3]| {
         let q = model_to_screen.transform_point(&nalgebra::Point3::new(p[0], p[1], p[2]));
@@ -421,18 +554,80 @@ pub fn raster(
                 // round down into it.
                 let depth = (depth.round() as i64).clamp(1, depth_samples as i64) as u32;
 
-                let pixel = &mut image[(y as usize, x as usize)];
-                // Larger depth is nearer the viewer, matching the raymarcher.
-                if depth <= pixel.depth {
-                    continue;
-                }
-
                 let n = [
                     w0 * normals[0][0] + w1 * normals[1][0] + w2 * normals[2][0],
                     w0 * normals[0][1] + w1 * normals[1][1] + w2 * normals[2][1],
                     w0 * normals[0][2] + w1 * normals[1][2] + w2 * normals[2][2],
                 ];
+
+                if let Some(clip) = clip {
+                    let removed =
+                        clip.0 * px + clip.1 * py + clip.2 * depth as f32 + clip.3;
+                    if removed > 0.0 {
+                        // Between the viewer and the plane: not drawn, but
+                        // counted, because whether this pixel is cut face is
+                        // decided by what the cut took away and not by what it
+                        // left.
+                        crossings[(y * size + x) as usize] += 1;
+                        continue;
+                    }
+                }
+
+                let pixel = &mut image[(y as usize, x as usize)];
+                // Larger depth is nearer the viewer, matching the raymarcher.
+                if depth <= pixel.depth {
+                    continue;
+                }
                 *pixel = voxel::GeometryPixel { normal: n, depth };
+            }
+        }
+    }
+
+    let mut cut = Vec::new();
+    if let (Some(clip), Some(plane)) = (clip, cut_plane) {
+        cut = vec![false; (size * size) as usize];
+        // `clip.2` is how fast the plane recedes per voxel of depth. Positive
+        // means the removed half is the near one, which is the whole point of a
+        // section and also the only case with a cut face to see: cut the far
+        // half away instead and the same plane is behind the material that
+        // survives. Zero means the plane is edge-on and there is nothing to draw.
+        if clip.2 > 0.0 {
+            // Toward the viewer in view space is +Z, and the cut face looks the
+            // way the removed material went.
+            let n = plane.normal();
+            let normal = r * nalgebra::Vector3::new(n.x as f32, n.y as f32, n.z as f32);
+
+            for y in 0..size {
+                for x in 0..size {
+                    let i = (y * size + x) as usize;
+                    if crossings[i] % 2 == 0 {
+                        continue;
+                    }
+                    // Depth at which this pixel's ray meets the plane.
+                    let d = -(clip.0 * x as f32 + clip.1 * y as f32 + clip.3) / clip.2;
+                    let d = d.round();
+                    // Off the end of the depth range the plane has left the
+                    // world cube, and so has the part. Clamping instead would
+                    // paste a cap onto the far wall of the frame, which on a
+                    // slanted section is a wedge of colour where there is no
+                    // material at all.
+                    if !(1.0..=depth_samples as f32).contains(&d) {
+                        continue;
+                    }
+                    let d = d as u32;
+
+                    let pixel = &mut image[(y as usize, x as usize)];
+                    // Everything that survived the clip is at or behind the
+                    // plane, so the cap wins — and wins ties, which is what puts
+                    // it in front of a face lying exactly on the section.
+                    if d >= pixel.depth {
+                        *pixel = voxel::GeometryPixel {
+                            normal: [normal.x, normal.y, normal.z],
+                            depth: d,
+                        };
+                        cut[i] = true;
+                    }
+                }
             }
         }
     }
@@ -442,6 +637,8 @@ pub fn raster(
         screen_to_model,
         size,
         depth_samples,
+        cut_plane,
+        cut,
     })
 }
 
@@ -499,7 +696,22 @@ pub fn shade(buf: &GeometryBuffer, opts: &RenderOptions) -> Rgb {
             let edge = is_depth_edge(buf, x, y);
             let shade = if edge { light * 0.25 } else { light };
 
-            out.set(x, y, tint(shade.clamp(0.0, 1.0)));
+            // A cut face is drawn flat, and in a colour no lighting of the
+            // material can produce. Shading it like a surface would be a lie an
+            // agent has no way to catch: it would read as a real face of the
+            // part, and "the boss is solid" and "the boss is sectioned here" are
+            // the same picture.
+            let px = if buf.is_cut(x, y) {
+                let k = if edge { 0.25 } else { 1.0 };
+                [
+                    (CUT_FACE[0] as f32 * k) as u8,
+                    (CUT_FACE[1] as f32 * k) as u8,
+                    (CUT_FACE[2] as f32 * k) as u8,
+                ]
+            } else {
+                tint(shade.clamp(0.0, 1.0))
+            };
+            out.set(x, y, px);
         }
     }
 
@@ -582,6 +794,10 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
 }
 
 const BACKGROUND: [u8; 3] = [22, 24, 28];
+/// The cut face. Warm and flat, so it cannot be mistaken for lit grey material
+/// however the part is turned, and light enough that a bore through it reads as
+/// a dark hole rather than as a shadow.
+const CUT_FACE: [u8; 3] = [201, 148, 84];
 const GUTTER: [u8; 3] = [44, 47, 54];
 const LABEL_INK: [u8; 3] = [235, 238, 244];
 const LABEL_PLATE: [u8; 3] = [44, 47, 54];
@@ -796,6 +1012,309 @@ mod tests {
         }
     }
 
+    /// A 40 mm cube with a bore that never reaches a face.
+    ///
+    /// The part §7 exists for: from every one of the seven views this is a plain
+    /// cube, and no amount of orbiting finds the cavity.
+    fn cube_with_a_buried_bore() -> Doc {
+        Doc {
+            nodes: vec![
+                Node {
+                    op: Op::Cuboid {
+                        size: V3::new(40.0, 40.0, 40.0),
+                    },
+                    tag: Some("block".into()),
+                },
+                Node {
+                    op: Op::Cylinder { r: 8.0, h: 20.0 },
+                    tag: Some("cavity".into()),
+                },
+                Node {
+                    op: Op::Difference {
+                        base: 0,
+                        tools: vec![1],
+                        blend: 0.0,
+                    },
+                    tag: None,
+                },
+            ],
+            root: 2,
+            units: "mm".to_string(),
+        }
+    }
+
+    fn small(section: Option<Section>) -> RenderOptions {
+        RenderOptions {
+            size: 128,
+            depth_samples: 128,
+            ssao: false,
+            supersample: 1,
+            section,
+        }
+    }
+
+    /// Expanded triangle corners with their own normals — what the app hands the
+    /// rasteriser. Real normals, because sectioning reads the facing of every
+    /// crossing off them.
+    fn mesh_of(doc: &Doc) -> (Vec<f32>, Vec<f32>) {
+        let (tree, tess, _) = crate::evaluate(doc, 6).expect("evaluate");
+        let (positions, normals) = tess.faceted(&tree).expect("normals");
+        (
+            positions.iter().flat_map(|v| *v).collect(),
+            normals.iter().flat_map(|n| *n).collect(),
+        )
+    }
+
+    /// The claim §7 rests on, measured: a section is the only picture in which
+    /// an internal feature exists at all.
+    ///
+    /// The measurement is the depth buffer, not the colours. At the centre of
+    /// the front view the uncut part answers with its own near face at
+    /// y = -20; cut on Y through the middle, the same pixel answers with the far
+    /// wall of the bore at y = +8. That second number is unreachable by any
+    /// other view, which is the whole argument.
+    #[test]
+    fn a_section_is_where_a_buried_bore_becomes_visible() {
+        let doc = cube_with_a_buried_bore();
+        let (positions, normals) = mesh_of(&doc);
+        let surface = Surface {
+            positions: &positions,
+            normals: &normals,
+            indices: &[],
+        };
+        let bounds = crate::measure::bounds(&doc).expect("bounds");
+        let centre = 64;
+
+        let solid = raster(&surface, bounds, View::Front, &small(None)).expect("raster");
+        let p = solid.model_point(centre, centre).expect("the cube is drawn");
+        assert!(
+            (p[1] + 20.0).abs() < 1.0,
+            "without a section the front view can only see the near face at y = -20, not {p:?}"
+        );
+        assert_eq!(solid.cut_fraction(), 0.0, "nothing was cut");
+
+        let opts = small(Some(Section {
+            axis: crate::view::Axis::Y,
+            at_mm: None,
+            keep: None,
+        }));
+        let cut = raster(&surface, bounds, View::Front, &opts).expect("raster");
+
+        // The near half went, and it went on the side the viewer is on.
+        assert_eq!(
+            cut.cut_plane,
+            Some(Cut {
+                axis: crate::view::Axis::Y,
+                at_mm: 0.0,
+                keep: crate::view::Keep::Above
+            }),
+            "a section with no side named should take the half in the way"
+        );
+
+        let p = cut.model_point(centre, centre).expect("the bore is drawn");
+        assert!(
+            !cut.is_cut(centre, centre),
+            "the plane passes through the bore's void here, so there is no material to cap"
+        );
+        assert!(
+            (p[1] - 8.0).abs() < 1.5,
+            "the section should show the far wall of the bore at y = +8, not {p:?}"
+        );
+
+        // Material at the same height but clear of the bore is capped.
+        let beside = 64 + 20; // about 11 mm right of centre
+        assert!(
+            cut.is_cut(beside, centre),
+            "solid material meeting the plane should read as cut face"
+        );
+        assert!(
+            cut.cut_fraction() > 0.2,
+            "a cube cut through the middle is mostly cut face, not {:.3}",
+            cut.cut_fraction()
+        );
+
+        // And nothing survives on the removed side. One voxel of tolerance: the
+        // depth buffer quantises, and a face lying exactly on the plane is kept.
+        let tol = 1.5 * cut.screen_to_model.column(2).norm();
+        for y in 0..cut.size {
+            for x in 0..cut.size {
+                if let Some(p) = cut.model_point(x, y) {
+                    assert!(
+                        p[1] > -tol,
+                        "({x}, {y}) is at {p:?}, on the half the section removed"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A plane that misses the material changes nothing, and says so.
+    ///
+    /// The failure this guards against is silent: an ordinary-looking render
+    /// that the caller reads as "the part is solid there" when in fact the cut
+    /// never touched it.
+    #[test]
+    fn a_section_clear_of_the_part_reports_that_it_cut_nothing() {
+        let doc = cube_with_a_buried_bore();
+        let (positions, normals) = mesh_of(&doc);
+        let surface = Surface {
+            positions: &positions,
+            normals: &normals,
+            indices: &[],
+        };
+        let bounds = crate::measure::bounds(&doc).expect("bounds");
+
+        let opts = small(Some(Section {
+            axis: crate::view::Axis::Y,
+            at_mm: Some(-60.0),
+            keep: Some(crate::view::Keep::Above),
+        }));
+        let cut = raster(&surface, bounds, View::Front, &opts).expect("raster");
+
+        assert_eq!(
+            cut.cut_fraction(),
+            0.0,
+            "a plane 40 mm clear of the part cannot have cut it"
+        );
+    }
+
+    /// The two renderers must cut the same part the same way.
+    ///
+    /// They do it by unrelated means — the rasteriser counts the crossings it
+    /// threw away and caps where that count is odd, the raymarcher
+    /// intersects the field with a half-space and never sees an inside at all —
+    /// so agreement here is evidence, not tautology.
+    #[test]
+    fn both_renderers_take_the_same_section() {
+        let doc = cube_with_a_buried_bore();
+        let tree = crate::sdf::lower(&doc).expect("lower");
+        let bounds = crate::measure::bounds(&doc).expect("bounds");
+        let (positions, normals) = mesh_of(&doc);
+
+        let opts = small(Some(Section {
+            axis: crate::view::Axis::Z,
+            at_mm: None,
+            keep: None,
+        }));
+
+        // Views that look along the cut, since a section is only visible from
+        // the side the material was taken from. The edge-on case has its own
+        // test below.
+        for view in [View::Top, View::Iso, View::Bottom] {
+            let marched = geometry(&tree, bounds, view, &opts).expect("raymarch");
+            let rastered = raster(
+                &Surface {
+                    positions: &positions,
+                    normals: &normals,
+                    indices: &[],
+                },
+                bounds,
+                view,
+                &opts,
+            )
+            .expect("raster");
+
+            let (mut both, mut either, mut cut_both, mut cut_either) = (0usize, 0, 0usize, 0);
+            for y in 0..opts.size {
+                for x in 0..opts.size {
+                    let a = marched.image[(y as usize, x as usize)].depth > 0;
+                    let b = rastered.image[(y as usize, x as usize)].depth > 0;
+                    both += usize::from(a && b);
+                    either += usize::from(a || b);
+                    let (ca, cb) = (marched.is_cut(x, y), rastered.is_cut(x, y));
+                    cut_both += usize::from(ca && cb);
+                    cut_either += usize::from(ca || cb);
+                }
+            }
+
+            let overlap = both as f64 / either.max(1) as f64;
+            assert!(
+                overlap > 0.97,
+                "the sectioned {} view covers different pixels in the two renderers \
+                 (intersection over union {overlap:.3})",
+                view.name()
+            );
+
+            assert!(
+                cut_either > 0,
+                "the {} view should have a cut face at all",
+                view.name()
+            );
+            // Looser than the coverage test above, and it has to be: the two
+            // decide what is cut face by different means, one from the plane
+            // equation and one from a point's distance to the plane, so they
+            // disagree along the outline of the cut by a pixel. How much cut
+            // face there is, which is the number a caller reads, has to match
+            // much more closely than that.
+            let cut_overlap = cut_both as f64 / cut_either.max(1) as f64;
+            assert!(
+                cut_overlap > 0.90,
+                "the two renderers put the cut face of the {} view in different places \
+                 (intersection over union {cut_overlap:.3})",
+                view.name()
+            );
+            let (a, b) = (marched.cut_fraction(), rastered.cut_fraction());
+            assert!(
+                (a - b).abs() < 0.05,
+                "the {} view is {:.1}% cut face to one renderer and {:.1}% to the other",
+                view.name(),
+                a * 100.0,
+                b * 100.0
+            );
+        }
+    }
+
+    /// A section the view runs along still cuts, and shows no cut face.
+    ///
+    /// Worth pinning down because it is the mistake a caller makes first — ask
+    /// for a section on Z and look at it from the front — and because the answer
+    /// has to be the same from both renderers. The plane is edge-on there, so
+    /// the cut face is a sliver a pixel wide that says nothing; `cut_fraction`
+    /// reporting zero is what tells a caller to look from the top instead.
+    #[test]
+    fn a_section_seen_edge_on_shows_no_cut_face() {
+        let doc = cube_with_a_buried_bore();
+        let tree = crate::sdf::lower(&doc).expect("lower");
+        let bounds = crate::measure::bounds(&doc).expect("bounds");
+        let (positions, normals) = mesh_of(&doc);
+
+        let opts = small(Some(Section {
+            axis: crate::view::Axis::Z,
+            at_mm: None,
+            keep: Some(crate::view::Keep::Below),
+        }));
+
+        let marched = geometry(&tree, bounds, View::Front, &opts).expect("raymarch");
+        let rastered = raster(
+            &Surface {
+                positions: &positions,
+                normals: &normals,
+                indices: &[],
+            },
+            bounds,
+            View::Front,
+            &opts,
+        )
+        .expect("raster");
+
+        for (name, buf) in [("raymarched", &marched), ("rastered", &rastered)] {
+            assert_eq!(
+                buf.cut_fraction(),
+                0.0,
+                "the {name} view is looking along the plane, so there is no cut face to show"
+            );
+            // The material still went, though. Half a 40 mm cube is 20 mm tall.
+            let top = (0..buf.size)
+                .flat_map(|y| (0..buf.size).map(move |x| (x, y)))
+                .filter_map(|(x, y)| buf.model_point(x, y))
+                .fold(f32::MIN, |hi, p| hi.max(p[2]));
+            assert!(
+                top < 1.0,
+                "the {name} view should have lost everything above z = 0, but reaches {top}"
+            );
+        }
+    }
+
     /// The rasteriser and the raymarcher must frame a part identically.
     ///
     /// This is the property the whole of `view` exists to provide — a feature at
@@ -819,6 +1338,7 @@ mod tests {
             depth_samples: 128,
             ssao: false,
             supersample: 1,
+            section: None,
         };
 
         let positions: Vec<f32> = tess
@@ -860,6 +1380,27 @@ mod tests {
             }
 
             let overlap = both as f64 / either.max(1) as f64;
+            {
+                let mut a_only=0; let mut b_only=0; let mut ca=0; let mut cb=0;
+                for y in 0..opts.size { for x in 0..opts.size {
+                    let a = marched.image[(y as usize, x as usize)].depth > 0;
+                    let b = rastered.image[(y as usize, x as usize)].depth > 0;
+                    if a && !b { a_only+=1 } if b && !a { b_only+=1 }
+                    ca += usize::from(marched.is_cut(x,y)); cb += usize::from(rastered.is_cut(x,y));
+                }}
+                eprintln!("{}: marched_only {a_only} rastered_only {b_only} cut m {ca} r {cb} plane {:?}", view.name(), marched.cut_plane);
+                if view.name() == "iso" {
+                    for y in (0..opts.size).step_by(4) {
+                        let mut row = String::new();
+                        for x in (0..opts.size).step_by(2) {
+                            let a = marched.image[(y as usize, x as usize)].depth > 0;
+                            let b = rastered.image[(y as usize, x as usize)].depth > 0;
+                            row.push(match (a,b) { (true,true) => '#', (false,true) => 'R', (true,false) => 'M', _ => '.' });
+                        }
+                        eprintln!("{row}");
+                    }
+                }
+            }
             assert!(
                 overlap > 0.97,
                 "the {} view covers different pixels in the two renderers \

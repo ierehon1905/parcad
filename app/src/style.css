@@ -92,6 +92,31 @@ input[type="range"] {
   min-width: 1ch;
 }
 
+.section {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-dim);
+}
+
+.section input[type="range"] {
+  width: 110px;
+  padding: 0;
+}
+
+/* The position holds its width as the slider moves, so nothing beside it
+   shuffles sideways while you drag. */
+.section-at {
+  font-family: var(--mono);
+  color: var(--ink);
+  min-width: 7ch;
+  text-align: right;
+}
+
+.section :disabled {
+  opacity: 0.4;
+}
+
 .status {
   font-family: var(--mono);
   font-size: 12px;

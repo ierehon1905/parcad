@@ -97,6 +97,15 @@ pub struct RayProbe {
     pub steps_exhausted: bool,
 }
 
+/// One line to measure along.
+#[derive(Debug, Clone, Copy)]
+pub struct Line {
+    pub origin: V3,
+    /// Need not be normalised.
+    pub direction: V3,
+    pub max_distance: f64,
+}
+
 /// Signed distance at each point, in one bulk evaluation.
 pub fn distance_at(tree: &Tree, points: &[V3]) -> Result<Vec<PointProbe>> {
     if points.is_empty() {
@@ -124,13 +133,58 @@ pub fn distance_at(tree: &Tree, points: &[V3]) -> Result<Vec<PointProbe>> {
 }
 
 /// Every surface crossing along a ray, in order.
+pub fn ray(tree: &Tree, origin: V3, direction: V3, max_distance: f64) -> Result<RayProbe> {
+    let mut probes = rays(
+        tree,
+        &[Line {
+            origin,
+            direction,
+            max_distance,
+        }],
+    )?;
+    Ok(probes.remove(0))
+}
+
+/// The same, for many lines at once.
+///
+/// Compiling the field is what costs — a tape per call is fine for the handful
+/// of rays a caller asks for by hand, and ruinous for the thousands that
+/// [`crate::thickness`] fires at one part. One tape, reused down the list.
+pub fn rays(tree: &Tree, lines: &[Line]) -> Result<Vec<RayProbe>> {
+    if lines.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let shape = JitShape::from(tree.clone());
+    let mut eval = JitShape::new_point_eval();
+    let tape = shape.ez_point_tape();
+
+    lines
+        .iter()
+        .map(|line| {
+            let mut field = |p: V3| -> Result<f64> {
+                let (v, _) = eval.eval(&tape, p.x as f32, p.y as f32, p.z as f32)?;
+                Ok(v as f64)
+            };
+            cast(line, &mut field)
+        })
+        .collect()
+}
+
+/// March one line, asking `field` for the distance at each point.
 ///
 /// Sphere tracing: step by the distance to the nearest surface, which cannot
 /// overshoot on a field that never over-estimates. The step is floored at `EPS`
 /// so the march still makes progress when it is grazing something, and each
 /// resulting sign change is then bisected — the crossing comes from the sign,
 /// which is exact, rather than from the magnitude, which is not.
-pub fn ray(tree: &Tree, origin: V3, direction: V3, max_distance: f64) -> Result<RayProbe> {
+fn cast(line: &Line, field: &mut dyn FnMut(V3) -> Result<f64>) -> Result<RayProbe> {
+    let Line {
+        origin,
+        direction,
+        max_distance,
+    } = *line;
+
     let len = direction.length();
     if !len.is_finite() || len < 1e-9 {
         anyhow::bail!("the ray direction has no length; give a direction such as [0, 0, 1]");
@@ -141,15 +195,7 @@ pub fn ray(tree: &Tree, origin: V3, direction: V3, max_distance: f64) -> Result<
 
     let dir = V3::new(direction.x / len, direction.y / len, direction.z / len);
     let at = |t: f64| V3::new(origin.x + dir.x * t, origin.y + dir.y * t, origin.z + dir.z * t);
-
-    let shape = JitShape::from(tree.clone());
-    let mut eval = JitShape::new_point_eval();
-    let tape = shape.ez_point_tape();
-    let mut field = |t: f64| -> Result<f64> {
-        let p = at(t);
-        let (v, _) = eval.eval(&tape, p.x as f32, p.y as f32, p.z as f32)?;
-        Ok(v as f64)
-    };
+    let mut field = |t: f64| field(at(t));
 
     let mut t = 0.0;
     let mut d = field(0.0)?;
@@ -374,3 +420,4 @@ mod tests {
         assert!(err.contains("direction"), "{err}");
     }
 }
+

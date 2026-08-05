@@ -19,6 +19,7 @@ pub mod render;
 pub mod sdf;
 pub mod selectors;
 pub mod tags;
+pub mod thickness;
 pub mod view;
 
 use anyhow::Result;

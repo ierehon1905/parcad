@@ -128,6 +128,7 @@ got the right answer by quoting the part's own source comment.
 | the seed parts | `examples/*.js` — indexed in `examples/README.md`; copied into the project folder on first run, not read by the picker |
 | what the DSL makes hard | `docs/DSL_GAPS.md` |
 | which op to add next, and why not the others | `docs/OP_ROADMAP.md` |
+| measuring a part without looking at it | `crates/parcad-core/src/probe.rs`, `thickness.rs` |
 | what an agent can see, and what to tell it instead | `docs/PERCEPTION.md` |
 | whether a model can *read* a tool | `eval/field/*.md`, run by `tools/field-test.sh` |
 

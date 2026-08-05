@@ -105,9 +105,34 @@ pub struct EvaluateRequest {
     /// angle, which is what tells you whether an edit is invisible or absent.
     #[serde(default)]
     pub regions: Option<bool>,
+    /// Cut the part open on a plane before drawing it, so the views show the
+    /// inside. Nothing about the part changes — this is how it is drawn, not an
+    /// operation on it.
+    #[serde(default)]
+    pub section: Option<SectionRequest>,
     /// Pixels per side, 128 to 1024. Defaults to 512.
     #[serde(default)]
     pub image_size: Option<u32>,
+}
+
+/// Where to cut a part open for the picture.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct SectionRequest {
+    /// The axis the cutting plane is square to: `x`, `y` or `z`. Look at the
+    /// section from a view that runs along that axis — `x` from `left` or
+    /// `right`, `y` from `front` or `back`, `z` from `top` or `bottom`, or `iso`
+    /// for any of them. A view that looks *along* the plane instead sees it
+    /// edge-on and shows no cut at all.
+    pub axis: String,
+    /// Where the plane sits on that axis, in mm. Omit to cut through the middle
+    /// of the part, which is what puts a central bore in the picture.
+    #[serde(default)]
+    pub at_mm: Option<f64>,
+    /// Which half survives: `below` or `above` the plane on its axis. Omit and
+    /// the half between the plane and the viewer goes, which is the choice that
+    /// shows the cut rather than hiding it behind the material.
+    #[serde(default)]
+    pub keep: Option<String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -135,6 +160,21 @@ pub struct ProbeRequest {
     /// Lines to measure along.
     #[serde(default)]
     pub rays: Vec<service::RayRequest>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ThicknessRequest {
+    /// A parcad DSL script ending in a returned shape.
+    pub script: String,
+    /// What counts as too thin, in mm — the process minimum, such as 1.2 for a
+    /// typical print or 2.5 for a casting. Without it only the thinnest place
+    /// is reported and nothing is counted.
+    #[serde(default)]
+    pub threshold_mm: Option<f64>,
+    /// How finely the surface is sampled, 32 to 256. Higher finds smaller thin
+    /// features and costs more. The default, 96, is right for most parts.
+    #[serde(default)]
+    pub resolution: Option<u32>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -262,7 +302,7 @@ impl Parcad {
     /// refusal says what to do instead.
     #[tool(
         name = "evaluate_part",
-        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality and tags. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Use this to check that a script produces the part you intended."
+        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality and tags. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Use this to check that a script produces the part you intended.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face, drawn flat in orange. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
     )]
     async fn evaluate_part(
         &self,
@@ -284,6 +324,18 @@ impl Parcad {
                  view; pass views: [\"iso\"]",
             ));
         }
+        let section = request
+            .section
+            .as_ref()
+            .map(|s| service::parse_section(&s.axis, s.at_mm, s.keep.as_deref()))
+            .transpose()
+            .map_err(invalid)?;
+        if section.is_some() && views.is_empty() {
+            return Err(invalid(
+                "a section is something to look at, so it needs at least one \
+                 view; pass views: [\"iso\"]",
+            ));
+        }
         let size = request.image_size.unwrap_or(512).clamp(128, 1024);
 
         let (snapshot, pngs) = blocking(move || {
@@ -293,7 +345,16 @@ impl Parcad {
 
             // Render after measuring, so a part that cannot be built fails on
             // the geometry rather than after spending a raymarch on it.
-            let renders = service::render(&evaluated, &doc, &views, size, regions)?;
+            let renders = service::render(
+                &evaluated,
+                &doc,
+                &service::RenderSpec {
+                    views: &views,
+                    size,
+                    regions,
+                    section,
+                },
+            )?;
             let (summaries, pngs) = renders
                 .views
                 .into_iter()
@@ -401,6 +462,29 @@ impl Parcad {
             let graph = script::build_graph(&request.script)?;
             let doc = service::parse_graph(graph)?;
             service::probe(&doc, &request.points, &request.rays)
+        })
+        .await?;
+
+        Ok(rmcp::handler::server::wrapper::Json(report))
+    }
+
+    /// The thinnest material in the part, found rather than asked about.
+    ///
+    /// `probe_part` answers "how thick is it *here*", which needs a caller that
+    /// already suspects where. This answers "where is it thinnest", which is
+    /// the question nobody knows to ask until the part comes back wrong.
+    #[tool(
+        name = "measure_wall_thickness",
+        description = "Find the thinnest material anywhere in the part, and where it is. Use this before saying a part is ready to print, cast or mill, and any time you cut a pocket, a bore or a shell into something — it is the check that catches a wall you thinned without meaning to. Unlike probe_part it needs no guess about where to look: it fires a ray inward from thousands of points over the whole surface and reports the worst.\n\nReports `thinnest` — the thickness in mm, the point, and `surface_of` and `opposite_surface_of`, the tags of the two faces the material lies between, which is what tells you *which* wall is thin. Pass `threshold_mm` (the process minimum, e.g. 1.2 for a print) and it also reports `below_threshold`, how many samples failed it, plus `thin_spots`, the distinct places they are: one bad corner and a wall that is thin all over are different problems and this is how you tell them apart.\n\nRuns against the distance field, so fillets and chamfers are not in what was measured. That error has a direction — the sharp corner it measured has MORE material than the real part — so where `omitted_treatments` is non-empty the reported minimum is an upper bound and the true one is at or below it. `caveat` says so in the reply."
+    )]
+    async fn measure_wall_thickness(
+        &self,
+        Parameters(request): Parameters<ThicknessRequest>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<service::ThicknessReport>, ErrorData> {
+        let report = blocking(move || {
+            let graph = script::build_graph(&request.script)?;
+            let doc = service::parse_graph(graph)?;
+            service::wall_thickness(&doc, request.threshold_mm, request.resolution)
         })
         .await?;
 
@@ -817,6 +901,10 @@ fn invalid(message: impl Into<String>) -> ErrorData {
 fn entity(edge: &parcad_occt::EdgeCurve) -> Entity {
     Entity {
         id: edge.id.clone(),
+        // Not rounded, and does not need to be: these are f32, and serde
+        // prints an f32 as the shortest decimal that round-trips *as f32* —
+        // "6.3", not the seventeen digits the same value grows when it is
+        // widened to f64. See `service::round_mm`.
         center: edge.center,
         direction: edge.direction,
         length_mm: edge.length_mm,

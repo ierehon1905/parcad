@@ -59,6 +59,23 @@ export interface Bounds {
   max: { x: number; y: number; z: number };
 }
 
+/**
+ * A cutting plane, in the same terms the kernel and MCP use.
+ *
+ * Deliberately the same three fields as `parcad_core::view::Section`, so "cut it
+ * on Y at 5, keep above" means one thing whether it is typed here or asked for
+ * over MCP. The window resolves nothing — an axis with no position is not a
+ * section yet — because here there is a slider to say it with.
+ */
+export interface SectionPlane {
+  axis: "x" | "y" | "z";
+  atMm: number;
+  keep: "below" | "above";
+}
+
+/** The cut face, in the raster's own colour. See `CUT_FACE` in render.rs. */
+const CUT_FACE = 0xc99454;
+
 /** Fusion-style light canvas: dark chrome, bright work area. */
 const BG_TOP = "#e8ecf1";
 const BG_BOTTOM = "#c3ccd8";
@@ -102,6 +119,12 @@ export class Viewport {
   private selectedVertex?: THREE.Points;
   /** Where the pointer went down, to tell a click apart from an orbit drag. */
   private pointerDownAt?: { x: number; y: number };
+  /** The section plane, or none. At most one — see `setSection`. */
+  private readonly clipPlanes: THREE.Plane[] = [];
+  /** Stencil helpers and the cap quad. Kept out of `partGroup` on purpose. */
+  private sectionGroup?: THREE.Group;
+  private partMesh?: THREE.Mesh;
+  private partBounds?: Bounds;
   /** Set by the ResizeObserver; applied by the frame that then draws. */
   private pendingResize = false;
 
@@ -109,7 +132,12 @@ export class Viewport {
     private readonly container: HTMLElement,
     private readonly edgeCallbacks: EdgeCallbacks = {},
   ) {
-    this.renderer = new THREE.WebGLRenderer({ antialias: true });
+    // `stencil` has defaulted to false since three r163, and the section cap is
+    // drawn with a stencil test. Without a stencil buffer that test does not
+    // fail safe — it passes everywhere, and the cap covers the entire viewport.
+    // The composed path renders into its own target and would not have noticed;
+    // the mesh preview draws straight to this canvas and does.
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
@@ -117,6 +145,11 @@ export class Viewport {
     // white patch and the shape reads as a silhouette with a hole in it.
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
+    // Per-material clipping rather than the renderer-wide kind: the cap that
+    // fills the cut is a quad lying *on* the section plane, and a global plane
+    // would clip the cap along with everything else — coplanar, so it would
+    // flicker in and out as the camera moved.
+    this.renderer.localClippingEnabled = true;
     container.appendChild(this.renderer.domElement);
 
     this.scene.background = gradientTexture();
@@ -390,6 +423,8 @@ export class Viewport {
     // than one arbitrary light direction.
     mesh.receiveShadow = false;
     this.partGroup.add(mesh);
+    this.partMesh = mesh;
+    this.partBounds = bounds;
 
     if (hasRealEdges) {
       // Note what is *not* here: `EdgesGeometry`. That finds an edge wherever
@@ -421,6 +456,173 @@ export class Viewport {
     };
     this.placeGround(bounds, size);
     this.aimSun(bounds, size);
+
+    // A new part keeps the plane the last one was cut on. Editing a script and
+    // having the section silently close is worse than either alternative: the
+    // whole reason it is open is to watch one internal feature change.
+    this.applyClipping();
+    this.buildCap(this.section);
+  }
+
+  /** The plane currently cut, if any — `setSection`'s argument, remembered. */
+  private section?: SectionPlane;
+
+  /**
+   * Cut the part open on a plane, or stop.
+   *
+   * The same feature the agent gets through `evaluate_part`'s `section`, and for
+   * the same reason: a bore that stops short, a rib inside a boss, the wall
+   * between two pockets are in no view of the outside. What differs is only the
+   * means — there the raster counts the crossings it clipped away and caps where
+   * the count is odd, here the GPU does the identical parity count in its
+   * stencil buffer while drawing the part's own back and front faces.
+   */
+  setSection(section?: SectionPlane) {
+    this.section = section;
+    this.clipPlanes.length = 0;
+    if (section) {
+      // three.js keeps the half-space where dot(normal, p) + constant > 0, so
+      // the normal points *into* the material that survives.
+      const sign = section.keep === "below" ? -1 : 1;
+      const normal = new THREE.Vector3(
+        section.axis === "x" ? sign : 0,
+        section.axis === "y" ? sign : 0,
+        section.axis === "z" ? sign : 0,
+      );
+      this.clipPlanes.push(new THREE.Plane(normal, -sign * section.atMm));
+    }
+
+    this.applyClipping();
+    this.buildCap(section);
+    this.outline.setClippingPlanes(this.clipPlanes);
+  }
+
+  /**
+   * Which half to keep so the cut faces the camera.
+   *
+   * `Section::resolve` in the kernel, with an orbiting camera in place of a
+   * fixed view: the half that has to go is the one between the plane and the
+   * viewer. Keep the other one and the section is behind the material that
+   * survives — a part that looks entirely uncut, which is the one way a section
+   * can be wrong without looking wrong.
+   */
+  keepFacingCamera(axis: "x" | "y" | "z"): "below" | "above" {
+    const toward = this.camera.position.clone().sub(this.controls.target);
+    return toward[axis] > 0 ? "below" : "above";
+  }
+
+  /** Hand the current plane to everything the part is drawn with. */
+  private applyClipping() {
+    const planes = this.clipPlanes.length > 0 ? this.clipPlanes : null;
+    this.partGroup.traverse((object) => {
+      const drawable = object as THREE.Mesh | THREE.LineSegments;
+      const material = drawable.material;
+      if (!material) return;
+      for (const m of Array.isArray(material) ? material : [material]) {
+        const before = m.clippingPlanes?.length ?? 0;
+        m.clippingPlanes = planes;
+        // The part still casts a shadow of the half that is left, not of the
+        // half that went.
+        m.clipShadows = true;
+        // How many clipping planes there are is compiled *into* the shader, so
+        // a material that already has a program keeps using one with no clip
+        // test in it. Nothing errors; the plane is simply ignored, which is a
+        // section that quietly does not cut.
+        if (before !== (planes?.length ?? 0)) m.needsUpdate = true;
+      }
+    });
+  }
+
+  /**
+   * Fill the cut with a flat face, so a section reads as solid material.
+   *
+   * Without this the part is a hollow shell: clipping removes the near half of
+   * the *surface* and leaves you looking at the inside of the far half, which is
+   * exactly as misleading as it sounds — an agent reading the same picture would
+   * call a solid boss a thin cup.
+   *
+   * The trick is the standard one. Draw the part's back faces incrementing the
+   * stencil and its front faces decrementing it, both invisibly and both clipped
+   * by the same plane; where the counts do not cancel, the ray was inside
+   * material when it crossed the plane. Then paint a quad on the plane wherever
+   * the stencil is non-zero.
+   */
+  private buildCap(section?: SectionPlane) {
+    if (this.sectionGroup) {
+      this.scene.remove(this.sectionGroup);
+      disposeTree(this.sectionGroup);
+      this.sectionGroup = undefined;
+    }
+    if (!section || !this.partMesh || !this.partBounds) return;
+
+    const group = new THREE.Group();
+    const geometry = this.partMesh.geometry;
+
+    for (const [side, op] of [
+      [THREE.BackSide, THREE.IncrementWrapStencilOp],
+      [THREE.FrontSide, THREE.DecrementWrapStencilOp],
+    ] as const) {
+      const material = new THREE.MeshBasicMaterial({
+        side,
+        clippingPlanes: this.clipPlanes,
+        // Counting, not drawing: no colour, no depth, and no depth test, so a
+        // crossing is counted wherever it is rather than only where it is
+        // nearest.
+        colorWrite: false,
+        depthWrite: false,
+        depthTest: false,
+        stencilWrite: true,
+        stencilFunc: THREE.AlwaysStencilFunc,
+        stencilFail: op,
+        stencilZFail: op,
+        stencilZPass: op,
+      });
+      const counter = new THREE.Mesh(geometry, material);
+      counter.renderOrder = -2;
+      group.add(counter);
+    }
+
+    const size = Math.max(
+      this.partBounds.max.x - this.partBounds.min.x,
+      this.partBounds.max.y - this.partBounds.min.y,
+      this.partBounds.max.z - this.partBounds.min.z,
+    );
+    const cap = new THREE.Mesh(
+      new THREE.PlaneGeometry(size * 3, size * 3),
+      new THREE.MeshBasicMaterial({
+        color: CUT_FACE,
+        side: THREE.DoubleSide,
+        stencilWrite: true,
+        stencilRef: 0,
+        stencilFunc: THREE.NotEqualStencilFunc,
+        // Reset as it draws, so the next frame starts from a clean buffer.
+        stencilFail: THREE.ReplaceStencilOp,
+        stencilZFail: THREE.ReplaceStencilOp,
+        stencilZPass: THREE.ReplaceStencilOp,
+      }),
+    );
+    // A quad in XY facing +Z, turned to face along the section axis.
+    if (section.axis === "x") cap.rotateY(Math.PI / 2);
+    if (section.axis === "y") cap.rotateX(Math.PI / 2);
+    const centre = {
+      x: (this.partBounds.min.x + this.partBounds.max.x) / 2,
+      y: (this.partBounds.min.y + this.partBounds.max.y) / 2,
+      z: (this.partBounds.min.z + this.partBounds.max.z) / 2,
+    };
+    cap.position.set(centre.x, centre.y, centre.z);
+    cap.position[section.axis] = section.atMm;
+    cap.renderOrder = -1;
+    cap.castShadow = false;
+    cap.receiveShadow = false;
+    group.add(cap);
+
+    // In the scene rather than in `partGroup`: the outline pass hides every
+    // mesh that is not part of what it was asked to outline, which is exactly
+    // what these need — the stencil helpers are the *unclipped* part, and left
+    // visible they would fill the normal buffer with the shape that was cut
+    // away.
+    this.sectionGroup = group;
+    this.scene.add(group);
   }
 
   /** Overlay exact pre-treatment entities selected from the editor source. */
@@ -449,19 +651,19 @@ export class Viewport {
   private clearTargetPreview() {
     if (!this.targetPreview) return;
     this.partGroup.remove(this.targetPreview);
-    this.targetPreview.traverse((object) => {
-      const drawable = object as THREE.LineSegments;
-      drawable.geometry?.dispose();
-      const material = drawable.material;
-      if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
-      else material?.dispose();
-    });
+    disposeTree(this.targetPreview);
     this.targetPreview = undefined;
   }
 
   /** Show nothing, without disturbing the camera. */
   clearPart() {
     this.clearTargetPreview();
+    if (this.sectionGroup) {
+      this.scene.remove(this.sectionGroup);
+      disposeTree(this.sectionGroup);
+      this.sectionGroup = undefined;
+    }
+    this.partMesh = undefined;
     this.hoveredEdge = undefined;
     this.selectedEdge = undefined;
     this.hoveredVertex = undefined;
@@ -687,6 +889,21 @@ function meshWireframe(g: THREE.BufferGeometry): THREE.LineSegments {
   lines.castShadow = false;
   lines.receiveShadow = false;
   return lines;
+}
+
+/**
+ * Drop everything under an object.
+ *
+ * Geometry is *not* disposed here: the stencil helpers share the part's own
+ * buffers, and disposing those with the cap would take the part with it.
+ */
+function disposeTree(root: THREE.Object3D) {
+  root.traverse((object) => {
+    const drawable = object as THREE.Mesh | THREE.LineSegments;
+    const material = drawable.material;
+    if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
+    else material?.dispose();
+  });
 }
 
 /** Round to 1, 2 or 5 times a power of ten. */

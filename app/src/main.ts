@@ -22,7 +22,7 @@ import { selectorLinter } from "./selector-lint";
 import { treatmentHover as treatmentHoverTooltip, type TreatmentHoverSource } from "./treatment-hover";
 import type { TreatmentNode } from "./treatment-info";
 import { instrumentTreatmentCalls, sourceOffset, treatmentAtCursor, treatmentCallRange } from "./source-link";
-import { Viewport, type TargetVertex } from "./viewport";
+import { Viewport, type SectionPlane, type TargetVertex } from "./viewport";
 
 interface Report {
   units: string;
@@ -100,6 +100,10 @@ const reportEl = $("report");
 const depthInput = $<HTMLInputElement>("depth");
 const depthValue = $("depth-value");
 const backendSelect = $<HTMLSelectElement>("backend");
+const sectionAxis = $<HTMLSelectElement>("section-axis");
+const sectionAt = $<HTMLInputElement>("section-at");
+const sectionAtValue = $("section-at-value");
+const sectionFlip = $<HTMLButtonElement>("section-flip");
 const edgeInspector = $("edge-inspector");
 const entityInspectorTitle = $("entity-inspector-title");
 const edgeIdEl = $("edge-id");
@@ -336,6 +340,11 @@ function show(result: Evaluated) {
     viewport.frameAll(report.bounds);
     framed = true;
   }
+
+  // The plane's travel is the part's own extent, so the slider covers exactly
+  // the cuts that can show anything and no more.
+  sectionBounds = report.bounds;
+  retuneSection();
 
   const { size, mass, mesh } = report;
   const dead = report.total_nodes - report.live_nodes;
@@ -678,6 +687,69 @@ function clearError() {
 depthInput.addEventListener("input", () => {
   depthValue.textContent = depthInput.value;
   schedule();
+});
+
+// ------------------------------------------------------------------ section
+
+/** The part's extent, so the plane can only travel where there is material. */
+let sectionBounds: { min: Vec3; max: Vec3 } | undefined;
+/** Which half survives. Chosen from the camera when an axis is picked; the flip
+ *  button is the override, and it sticks until the axis changes again. */
+let sectionKeep: "below" | "above" = "below";
+
+/**
+ * Re-fit the slider to the current part, keeping the plane where it was.
+ *
+ * Both halves matter. Re-fitting is what makes one slider work for a 6 mm part
+ * and a 600 mm one; keeping the position is what stops a section jumping to the
+ * middle of the part on every keystroke, which is the difference between a
+ * usable section and one you have to re-aim after every edit.
+ */
+function retuneSection() {
+  const axis = sectionAxis.value as "" | "x" | "y" | "z";
+  const enabled = axis !== "" && sectionBounds !== undefined;
+
+  sectionAt.disabled = !enabled;
+  sectionFlip.disabled = !enabled;
+  if (!enabled) {
+    sectionAtValue.textContent = "";
+    viewport.setSection(undefined);
+    return;
+  }
+
+  const min = sectionBounds!.min[axis];
+  const max = sectionBounds!.max[axis];
+  sectionAt.min = String(min);
+  sectionAt.max = String(max);
+  // A hundred steps across the part: fine enough to walk a plane through a
+  // 2 mm wall, coarse enough that dragging it is not a slideshow.
+  sectionAt.step = String(Math.max((max - min) / 100, 1e-4));
+
+  const at = Math.min(Math.max(Number(sectionAt.value), min), max);
+  sectionAt.value = String(at);
+  sectionAtValue.textContent = `${at.toFixed(1)} mm`;
+
+  const plane: SectionPlane = { axis, atMm: at, keep: sectionKeep };
+  viewport.setSection(plane);
+}
+
+sectionAxis.addEventListener("change", () => {
+  // A fresh axis starts in the middle of the part, where a section is most
+  // likely to cross something worth seeing — the same default the kernel picks
+  // when an agent names an axis and no position.
+  if (sectionBounds && sectionAxis.value !== "") {
+    const axis = sectionAxis.value as "x" | "y" | "z";
+    sectionAt.value = String((sectionBounds.min[axis] + sectionBounds.max[axis]) / 2);
+    // Open it facing the camera. Keeping the near half instead puts the cut on
+    // the far side of the material, which looks exactly like no section at all.
+    sectionKeep = viewport.keepFacingCamera(axis);
+  }
+  retuneSection();
+});
+sectionAt.addEventListener("input", retuneSection);
+sectionFlip.addEventListener("click", () => {
+  sectionKeep = sectionKeep === "below" ? "above" : "below";
+  retuneSection();
 });
 
 backendSelect.addEventListener("change", () => {
