@@ -99,6 +99,9 @@ pub fn serve<R: Runtime>(app: AppHandle<R>) {
 fn router<R: Runtime>(app: AppHandle<R>) -> Router {
     Router::new()
         .route("/api/health", get(health))
+        // Whether a model is connected to the MCP endpoint below. Read by both
+        // windows; the desktop one gets it over IPC instead.
+        .route("/api/mcp", get(mcp_status))
         .route("/api/evaluate", post(evaluate))
         .route("/api/inspect-edge-target", post(inspect_edge_target))
         .route("/api/export/stl", post(export_stl))
@@ -126,6 +129,10 @@ async fn health() -> impl IntoResponse {
         // before it decides it has a backend at all.
         "transport": "http",
     }))
+}
+
+async fn mcp_status() -> impl IntoResponse {
+    Json(service::mcp_status())
 }
 
 /// Geometry work is blocking and slow — the OCCT path is a whole subprocess.

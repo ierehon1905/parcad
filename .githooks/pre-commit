@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# Build, unit tests and the editor-side tests. The corpus is left to pre-push:
+# it takes a minute, and a commit is not yet a claim about the geometry.
+exec "$(git rev-parse --show-toplevel)/tools/check.sh" --fast

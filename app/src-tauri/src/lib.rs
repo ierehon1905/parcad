@@ -77,6 +77,15 @@ fn save_project(name: String, script: String) -> Result<serde_json::Value, Strin
     Ok(serde_json::json!({ "name": name, "path": path }))
 }
 
+/// Whether a model is connected over MCP, for the window to show.
+///
+/// The webview's origin is `tauri://localhost`, so it cannot read `/api/mcp`
+/// the way a browser does — same function, second adapter.
+#[tauri::command]
+fn mcp_status() -> mcp::Status {
+    service::mcp_status()
+}
+
 /// Where the frontend should send API calls, injected before it loads.
 ///
 /// Under IPC the answer is "nowhere, use invoke"; the browser learns its own
@@ -115,6 +124,7 @@ pub fn run() {
             list_projects,
             read_project,
             save_project,
+            mcp_status,
             host_port
         ])
         .run(tauri::generate_context!())

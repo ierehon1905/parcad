@@ -71,6 +71,9 @@ const BG_BOTTOM = "#c3ccd8";
  */
 const DEBUG = new URLSearchParams(location.search).get("debug") ?? "";
 
+/** How far the pointer may travel between down and up and still be a click. */
+const DRAG_SLOP_PX = 4;
+
 export class Viewport {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
@@ -97,6 +100,10 @@ export class Viewport {
   private selectedEdge?: THREE.LineSegments;
   private hoveredVertex?: THREE.Points;
   private selectedVertex?: THREE.Points;
+  /** Where the pointer went down, to tell a click apart from an orbit drag. */
+  private pointerDownAt?: { x: number; y: number };
+  /** Set by the ResizeObserver; applied by the frame that then draws. */
+  private pendingResize = false;
 
   constructor(
     private readonly container: HTMLElement,
@@ -133,7 +140,18 @@ export class Viewport {
       this.setHoveredEdge();
       this.setHoveredVertex();
     });
-    this.renderer.domElement.addEventListener("click", () => {
+    // A click selects, and a selection outlives the pointer leaving the entity —
+    // otherwise the only way to look at an edge is to keep the mouse on it.
+    // An orbit drag ends in a `click` on the canvas as well, and that click
+    // lands wherever the pointer stopped: without the distance test, rotating
+    // the view to see the selected edge from behind is what deselects it.
+    this.renderer.domElement.addEventListener("pointerdown", (event) => {
+      this.pointerDownAt = { x: event.clientX, y: event.clientY };
+    });
+    this.renderer.domElement.addEventListener("click", (event) => {
+      const down = this.pointerDownAt;
+      this.pointerDownAt = undefined;
+      if (down && Math.hypot(event.clientX - down.x, event.clientY - down.y) > DRAG_SLOP_PX) return;
       this.setSelectedVertex(this.hoveredVertex);
       this.setSelectedEdge(this.hoveredVertex ? undefined : this.hoveredEdge);
     });
@@ -182,7 +200,16 @@ export class Viewport {
 
     this.outline = new OutlineRenderer(this.renderer, this.scene, this.camera);
 
-    const ro = new ResizeObserver(() => this.resize());
+    // Resizing is *recorded* here and applied by the frame that draws next.
+    // Doing it inline leaves the canvas and the composer's render targets
+    // reallocated and empty until the next animation frame, which is the flash
+    // of background you see while dragging the splitter or the window edge —
+    // and during a drag the observer fires many times per frame, so the same
+    // flash repeats. One resize per frame, immediately followed by the render
+    // that fills it.
+    const ro = new ResizeObserver(() => {
+      this.pendingResize = true;
+    });
     ro.observe(container);
     this.resize();
 
@@ -192,7 +219,9 @@ export class Viewport {
   private resize() {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
+    // A pane with no size yet stays pending rather than being marked done.
     if (w === 0 || h === 0) return;
+    this.pendingResize = false;
     // Let three set the CSS size as well as the drawing buffer. Passing
     // `false` here sizes the buffer to w * devicePixelRatio but leaves the
     // element's layout size alone, so on a retina display the canvas lays out at
@@ -205,6 +234,7 @@ export class Viewport {
 
   private tick = () => {
     this.frame = requestAnimationFrame(this.tick);
+    if (this.pendingResize) this.resize();
     this.controls.update();
     if (this.preview || DEBUG === "noedge" || DEBUG === "normals") {
       // No edge pass in preview mode. Finding creases from neighbouring pixels

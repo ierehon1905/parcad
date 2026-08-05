@@ -326,6 +326,18 @@ a follow-up question and cannot look at the screen:
   whole. A fillet that does not fit answers with the millimetres it overshot by
   and what to change, rather than "operation failed".
 
+The window says whether that caller is there. An agent reaches the same
+`service.rs` and writes to the same project folder, and nothing on screen would
+otherwise show it: the part being edited can be replaced by a caller the user
+cannot see. `mcp.rs` records what it observes — a request arrived, a client
+handshook and named itself, a session was closed — and `service::mcp_status()`
+hands the same answer to both windows. It is deliberately an observation and not
+a claim: a client killed at the terminal never says goodbye, so the status
+carries the age of the last request and drops a session that has gone quiet for
+fifteen minutes, rather than asserting a connection nobody has heard from. The
+count is of *sessions* for the same reason — one client that reconnects opens a
+second one, and the endpoint cannot tell that from a second client.
+
 Selector work is where an agent needs the most help, so it gets two tools that
 have no UI equivalent: `check_selector` parses a term and returns the error
 *and* its span without touching geometry, and `inspect_treatment_target`

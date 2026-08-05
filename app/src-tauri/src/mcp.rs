@@ -26,7 +26,12 @@ use rmcp::{
     schemars, tool, tool_handler, tool_router, ErrorData, ServerHandler,
 };
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{LazyLock, Mutex},
+    time::{Duration, Instant},
+};
 
 #[derive(Clone)]
 pub struct Parcad {
@@ -49,20 +54,29 @@ impl Parcad {
 /// Stateless: each request builds its own handler. There is no session to keep
 /// because there is no document to keep — a script carries its whole part, so
 /// two calls cannot disagree about what is on screen.
-pub fn service() -> rmcp::transport::streamable_http_server::StreamableHttpService<
-    Parcad,
-    rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
-> {
+pub fn service() -> axum::Router {
     let mut config = rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default();
     // A tool call answers once; there is nothing to stream, and a plain JSON
     // reply is far easier to drive from a shell when something is wrong.
     config.json_response = true;
 
-    rmcp::transport::streamable_http_server::StreamableHttpService::new(
+    let transport = rmcp::transport::streamable_http_server::StreamableHttpService::<
+        Parcad,
+        rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
+    >::new(
         || Ok(Parcad::new()),
         Default::default(),
         config,
-    )
+    );
+
+    // Wrapped so every request passes `record`, which is the only place that
+    // knows an agent is there at all. The tool functions cannot report it: they
+    // are dispatched by generated code, and half of what the UI wants to say —
+    // that a client handshook, which client it is, that it hung up — happens in
+    // `initialize` and `DELETE`, where no tool runs.
+    axum::Router::new()
+        .fallback_service(transport)
+        .layer(axum::middleware::from_fn(record))
 }
 
 // ------------------------------------------------------------------ requests
@@ -109,6 +123,18 @@ pub struct InspectRequest {
     /// The intent-graph node of the treatment to resolve, as reported in
     /// `treatments` by `evaluate_part`.
     pub node: usize,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ProbeRequest {
+    /// A parcad DSL script ending in a returned shape.
+    pub script: String,
+    /// Points to test for material, in mm.
+    #[serde(default)]
+    pub points: Vec<[f64; 3]>,
+    /// Lines to measure along.
+    #[serde(default)]
+    pub rays: Vec<service::RayRequest>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -358,6 +384,29 @@ impl Parcad {
         }))
     }
 
+    /// Measure along lines and at points, with no picture in the loop.
+    ///
+    /// The tool for every question a render provokes and cannot settle. Two
+    /// crossings on one ray are a wall thickness; the sign at a point is
+    /// inside-or-outside.
+    #[tool(
+        name = "probe_part",
+        description = "Measure a part along rays and at points instead of looking at it. Each ray reports every surface crossing in order, the total material along it, and `first_solid_mm` — which is a wall thickness, measured. Each point reports the signed distance to the nearest surface, negative inside. Use this rather than estimating a dimension from a render: fire a ray through a wall to get its thickness, or through a hole to check whether it breaks out the far side. Runs against the distance field, so fillets and chamfers are absent from what it measures and are named in `omitted_treatments`."
+    )]
+    async fn probe_part(
+        &self,
+        Parameters(request): Parameters<ProbeRequest>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<service::ProbeReport>, ErrorData> {
+        let report = blocking(move || {
+            let graph = script::build_graph(&request.script)?;
+            let doc = service::parse_graph(graph)?;
+            service::probe(&doc, &request.points, &request.rays)
+        })
+        .await?;
+
+        Ok(rmcp::handler::server::wrapper::Json(report))
+    }
+
     /// Check a selector's syntax without evaluating any geometry.
     #[tool(
         name = "check_selector",
@@ -547,6 +596,189 @@ impl ServerHandler for Parcad {
         );
         info
     }
+}
+
+// ----------------------------------------------------------- who is out there
+//
+// The UI shows whether an agent is on the other end of this endpoint, and a
+// person cannot see that any other way: MCP arrives on a socket, changes files
+// in the project folder, and leaves no mark on the window. The rule in CLAUDE.md
+// applies to this as much as to geometry — report what was *measured*, never
+// what was assumed. Everything below is an observation of a request that
+// actually arrived, which is why the status carries an age rather than a bare
+// "connected": a client that crashed without saying goodbye leaves a session
+// behind, and the honest thing to show is when it was last heard from.
+
+/// A client that completed `initialize` and has not closed its session.
+struct Session {
+    /// Name and version as the client announced itself, if it did.
+    client: Option<String>,
+    last_seen: Instant,
+}
+
+#[derive(Default)]
+struct Activity {
+    sessions: HashMap<String, Session>,
+    /// The most recent client to handshake, kept after it goes so the UI can
+    /// still say who was here.
+    client: Option<String>,
+    tool_calls: u64,
+    last_tool: Option<String>,
+    last_seen: Option<Instant>,
+}
+
+static ACTIVITY: LazyLock<Mutex<Activity>> = LazyLock::new(Default::default);
+
+/// A session with nothing heard from it for this long is not counted as live.
+///
+/// A client that exits without a `DELETE` — a crash, a killed terminal — would
+/// otherwise leave the UI claiming an agent is connected forever.
+const SESSION_IDLE_LIMIT: Duration = Duration::from_secs(15 * 60);
+
+/// What the app has actually seen an agent do over MCP.
+#[derive(Serialize, Clone, Default)]
+pub struct Status {
+    /// Clients that handshook, have not hung up, and have been heard from
+    /// within [`SESSION_IDLE_LIMIT`].
+    pub clients: usize,
+    /// The most recent client's own name and version.
+    pub client: Option<String>,
+    pub tool_calls: u64,
+    /// The tool of the most recent call, named as the agent asked for it.
+    pub last_tool: Option<String>,
+    /// Seconds since the last request of any kind. Absent if there has never
+    /// been one, which is different from a long time ago.
+    pub idle_secs: Option<u64>,
+    /// Where a client connects, so the UI can tell someone what to configure.
+    pub url: String,
+}
+
+pub fn status() -> Status {
+    let mut activity = ACTIVITY.lock().unwrap_or_else(|e| e.into_inner());
+    activity
+        .sessions
+        .retain(|_, session| session.last_seen.elapsed() < SESSION_IDLE_LIMIT);
+
+    Status {
+        clients: activity.sessions.len(),
+        client: activity.client.clone(),
+        tool_calls: activity.tool_calls,
+        last_tool: activity.last_tool.clone(),
+        idle_secs: activity.last_seen.map(|at| at.elapsed().as_secs()),
+        url: format!("http://127.0.0.1:{}/mcp", crate::http::port()),
+    }
+}
+
+/// Note that a request happened, and what it was, on its way through.
+///
+/// The body is buffered because the JSON-RPC method is *in* it — the HTTP verb
+/// and path are the same for a handshake and for a fillet. These are small
+/// JSON documents; the limit below is generous enough for a long script and
+/// still refuses to hold an unbounded upload in memory.
+async fn record(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    const BODY_LIMIT: usize = 32 * 1024 * 1024;
+
+    let session_id = request
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let method = request.method().clone();
+
+    let (parts, body) = request.into_parts();
+    let bytes = match axum::body::to_bytes(body, BODY_LIMIT).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return (
+                axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                "the MCP request body is larger than 32 MB; send the script itself, \
+                 not a mesh",
+            )
+                .into_response()
+        }
+    };
+
+    let call: Option<serde_json::Value> = serde_json::from_slice(&bytes).ok();
+    let rpc_method = call
+        .as_ref()
+        .and_then(|call| call.get("method"))
+        .and_then(|method| method.as_str())
+        .map(str::to_string);
+    let client = call
+        .as_ref()
+        .and_then(|call| call.pointer("/params/clientInfo"))
+        .map(|info| match (info.get("name"), info.get("version")) {
+            (Some(name), Some(version)) => {
+                format!("{} {}", name.as_str().unwrap_or("?"), version.as_str().unwrap_or("?"))
+            }
+            _ => info.to_string(),
+        });
+
+    {
+        let mut activity = ACTIVITY.lock().unwrap_or_else(|e| e.into_inner());
+        activity.last_seen = Some(Instant::now());
+        if let Some(name) = client.clone() {
+            activity.client = Some(name);
+        }
+        if rpc_method.as_deref() == Some("tools/call") {
+            activity.tool_calls += 1;
+            activity.last_tool = call
+                .as_ref()
+                .and_then(|call| call.pointer("/params/name"))
+                .and_then(|name| name.as_str())
+                .map(str::to_string);
+        }
+        match (&session_id, method) {
+            // A client saying goodbye is the one unambiguous disconnect there
+            // is; everything else is inferred from silence.
+            (Some(id), axum::http::Method::DELETE) => {
+                activity.sessions.remove(id);
+            }
+            (Some(id), _) => {
+                let entry = activity.sessions.entry(id.clone()).or_insert(Session {
+                    client: client.clone(),
+                    last_seen: Instant::now(),
+                });
+                entry.last_seen = Instant::now();
+                if entry.client.is_none() {
+                    entry.client = client.clone();
+                }
+            }
+            (None, _) => {}
+        }
+    }
+
+    let response = next
+        .run(axum::extract::Request::from_parts(
+            parts,
+            axum::body::Body::from(bytes),
+        ))
+        .await;
+
+    // The session id is minted in the reply to `initialize`, so a handshake is
+    // the one request that cannot name its own session on the way in.
+    if let Some(id) = response
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+    {
+        let mut activity = ACTIVITY.lock().unwrap_or_else(|e| e.into_inner());
+        activity
+            .sessions
+            .entry(id.to_string())
+            .or_insert(Session {
+                client,
+                last_seen: Instant::now(),
+            })
+            .last_seen = Instant::now();
+    }
+
+    response
 }
 
 // ------------------------------------------------------------------ helpers

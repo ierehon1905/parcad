@@ -7,6 +7,8 @@ already been diagnosed once.
 ## Build & run
 
 ```bash
+tools/check.sh                         # everything below that gates a change, in order
+tools/check.sh --fast                  # the same without the corpus (~35 s)
 cargo build --locked --release         # core, CLI, app host — no C++
 tools/build-worker.sh                  # B-rep worker; verifies OCCT is optimised
 cd app && bun install --frozen-lockfile && bun run tauri dev  # from app/
@@ -14,6 +16,15 @@ bun tools/run.ts examples/bracket.js > /tmp/bracket.json   # DSL -> intent graph
 tools/bench-kernel.sh /tmp/bracket.json                    # medians, and the -O level
 cargo run -p parcad-eval               # the geometry + refusal corpus
 cd app && bun test src                 # editor-side units: the selector grammar
+```
+
+`tools/check.sh` is wired to git — `pre-commit` runs `--fast`, `pre-push` runs
+the corpus too — and to Claude Code, as a `Stop` hook in `.claude/settings.json`
+that runs in the background and only interrupts on failure. The git side is a
+local config and does not travel with a clone:
+
+```bash
+git config core.hooksPath .githooks
 ```
 
 **The running app also serves MCP at <http://127.0.0.1:4242/mcp>** — the same

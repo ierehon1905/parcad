@@ -107,6 +107,7 @@ const edgeDetailEl = $("edge-detail");
 const edgeOriginEl = $("edge-origin");
 const edgeSelectorEl = $("edge-selector");
 const copyEdgeSelector = $<HTMLButtonElement>("copy-edge-selector");
+const mcpEl = $("mcp");
 const targetPreviewEl = $("target-preview");
 const targetPreviewName = $("target-preview-name");
 const targetPreviewDetail = $("target-preview-detail");
@@ -474,7 +475,10 @@ function updateEntityInspector() {
   const vertex = hoveredVertex ?? selectedVertex;
   if (vertex) {
     edgeInspector.hidden = false;
-    entityInspectorTitle.textContent = "vertex inspector";
+    // Say which of the two states this is. A click pins the entity and the
+    // panel then stays after the pointer leaves; without the label the pinned
+    // panel is indistinguishable from a hover that has not caught up yet.
+    entityInspectorTitle.textContent = hoveredVertex ? "vertex inspector" : "vertex inspector · selected";
     edgeIdEl.textContent = vertex.id;
     edgeDetailEl.textContent = `(${vertex.point.map(fmt).join(", ")}) mm · ${vertex.degree} incident edge${vertex.degree === 1 ? "" : "s"}`;
     edgeOriginEl.hidden = true;
@@ -499,7 +503,7 @@ function updateEntityInspector() {
   }
 
   edgeInspector.hidden = false;
-  entityInspectorTitle.textContent = "edge inspector";
+  entityInspectorTitle.textContent = hoveredEdge ? "edge inspector" : "edge inspector · selected";
   edgeIdEl.textContent = edge.id;
   const direction = edge.direction ? ` · ${directionLabel(edge.direction)}` : "";
   edgeDetailEl.textContent = `${fmt(edge.length_mm)} mm${direction}`;
@@ -692,6 +696,88 @@ function syncBackendUi() {
     : "";
 }
 syncBackendUi();
+
+// ---------------------------------------------------------------- MCP status
+
+/**
+ * Whether a model is on the third transport, refreshed on a timer.
+ *
+ * An agent reaches the same `service.rs` this window does and writes to the
+ * same project folder, and nothing on screen would otherwise say so: the part
+ * you are looking at can be replaced under you by a caller you cannot see.
+ *
+ * Everything shown here is measured — a request that arrived, a tool that was
+ * called — which is why an idle client is reported with the age of its last
+ * call rather than as a flat "connected". A client that was killed cannot say
+ * goodbye, and claiming it is still there would be the confident wrong answer
+ * this codebase refuses everywhere else.
+ */
+const MCP_POLL_MS = 4000;
+/** Below this, the last call is recent enough to call the agent active. */
+const MCP_ACTIVE_SECS = 20;
+
+async function pollMcp() {
+  let mcp: backend.McpStatus;
+  try {
+    mcp = await backend.mcpStatus();
+  } catch {
+    // The host answers this window's every other call too, so a failure here is
+    // not an MCP fact and must not be shown as one.
+    mcpEl.hidden = true;
+    return;
+  }
+
+  const chip = mcpChip(mcp);
+  mcpEl.hidden = false;
+  mcpEl.className = `mcp ${chip.tone}`;
+  mcpEl.textContent = chip.text;
+  mcpEl.title = chip.detail;
+}
+
+/** One status, as the three things the chip shows. */
+function mcpChip(mcp: backend.McpStatus): { text: string; tone: string; detail: string } {
+  const idle = mcp.idle_secs;
+  const working = idle !== null && idle < MCP_ACTIVE_SECS;
+
+  // The chip says connected or not; the session count stays in the tooltip,
+  // where there is room to say what it means. A client that reconnects opens a
+  // second session and the endpoint cannot tell that from a second client, so
+  // "3 sessions" on the chip would read as three agents.
+  let text = "MCP";
+  let tone = "";
+  if (mcp.clients > 0) {
+    text = working ? "MCP connected · working" : `MCP connected · idle ${age(idle!)}`;
+    tone = working ? "busy" : "live";
+  } else if (idle !== null) {
+    text = `MCP last call ${age(idle)} ago`;
+  }
+
+  const lines = [
+    mcp.clients > 0
+      ? `${mcp.clients} open session${mcp.clients === 1 ? "" : "s"} — a client that reconnects opens another`
+      : "no agent connected",
+    `endpoint ${mcp.url}`,
+  ];
+  if (mcp.client) lines.push(`client ${mcp.client}`);
+  if (mcp.tool_calls === 0) {
+    lines.push("no tool calls yet");
+  } else {
+    const calls = `${mcp.tool_calls} tool call${mcp.tool_calls === 1 ? "" : "s"}`;
+    lines.push(mcp.last_tool ? `${calls}, last ${mcp.last_tool}` : calls);
+  }
+  lines.push("An agent writes to the same project folder this window reads.");
+
+  return { text, tone, detail: lines.join("\n") };
+}
+
+function age(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  return `${Math.round(seconds / 3600)}h`;
+}
+
+pollMcp();
+window.setInterval(pollMcp, MCP_POLL_MS);
 
 // The picker lists parcad's project folder rather than anything compiled in,
 // so a part saved by hand or by an agent shows up here on the next load.

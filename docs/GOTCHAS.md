@@ -38,6 +38,23 @@ Measured (median of 7):
 `-O2` is chosen: identical speed to `-O3`, 1.2 MB smaller. All 11 regression
 cases produced byte-identical geometry after the change.
 
+### A missing `capabilities/` rebuilt the app on every single build
+
+`cargo build` with nothing changed took **16 s**, every time. Not compilation:
+`tauri_build::build()` emits a `rerun-if-changed` for `app/src-tauri/capabilities`,
+and cargo treats a `rerun-if-changed` on a *missing* path as permanently stale.
+The build script re-ran on every build, which meant the `bun build` of the DSL
+bundle re-ran, which invalidated `parcad-app` and everything downstream.
+
+The directory now exists and is deliberately empty of capability files — adding
+one would grant permissions the app does not have today. A no-op build is 0.2 s.
+
+Cargo will not tell you this; ask it:
+
+```bash
+CARGO_LOG=cargo::core::compiler::fingerprint=info cargo build --release 2>&1 | grep dirty
+```
+
 ### Run the app from `app/`, not the repo root
 
 `bunx tauri dev` at the repo root fetches `tauri` from npm and dies building

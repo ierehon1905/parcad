@@ -140,6 +140,23 @@ export async function saveProject(name: string, script: string): Promise<string>
   return saved.path;
 }
 
+/** What the host has seen an agent do on the MCP endpoint it also serves. */
+export interface McpStatus {
+  /** Sessions that handshook and have not hung up or gone silent. */
+  clients: number;
+  /** The most recent client's own name and version. */
+  client: string | null;
+  tool_calls: number;
+  last_tool: string | null;
+  /** Seconds since the last request; null if there has never been one. */
+  idle_secs: number | null;
+  url: string;
+}
+
+export function mcpStatus(): Promise<McpStatus> {
+  return inTauri ? invoke<McpStatus>("mcp_status") : get<McpStatus>("mcp");
+}
+
 export function evaluate<T>(graph: unknown, depth: number, backend: string): Promise<T> {
   return inTauri
     ? invoke<T>("evaluate", { graph, depth, backend })

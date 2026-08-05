@@ -98,6 +98,46 @@ input[type="range"] {
   color: var(--ink-dim);
 }
 
+/* An agent working through MCP changes the same project folder this window
+   shows. The chip is dim while nobody is there and lights up when one is. */
+.mcp {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 14px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-dim);
+  cursor: default;
+}
+
+.mcp::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ink-dim);
+  opacity: 0.5;
+}
+
+.mcp.live {
+  color: var(--good);
+}
+
+.mcp.live::before {
+  background: var(--good);
+  opacity: 1;
+}
+
+.mcp.busy {
+  color: var(--accent);
+}
+
+.mcp.busy::before {
+  background: var(--accent);
+  opacity: 1;
+}
+
 .status.busy {
   color: var(--accent);
 }

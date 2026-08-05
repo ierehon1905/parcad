@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+#
+# Everything that has to be true before a change lands, in the one order that
+# works. Run it bare for the full pass, or `--fast` to skip the corpus.
+#
+#     tools/check.sh              # build, unit tests, worker, eval corpus
+#     tools/check.sh --fast       # everything but the corpus (~20 s)
+#
+# The order is not arbitrary:
+#
+#   * The worker is built *after* `cargo test`. Testing `parcad-occt` without
+#     `--features kernel` builds the crate without its binary target, and cargo
+#     then deletes the `parcad-occt-worker` it finds next to it — every case in
+#     the corpus turns to SKIP, which reads exactly like a pass. See the gotcha
+#     of the same name in docs/GOTCHAS.md.
+#   * The corpus runs last because it is the only step that needs the worker,
+#     and it finds it beside its own executable in target/release.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+fast=0
+case "${1:-}" in
+  --fast) fast=1 ;;
+  "") ;;
+  *) echo "usage: tools/check.sh [--fast]" >&2; exit 2 ;;
+esac
+
+step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
+
+if [ "$fast" = 1 ]; then
+  # The kernel crates only. `parcad-app` is left out on purpose: its test binary
+  # is slow to link and one of its tests sleeps 5 s by design (the sandbox's
+  # endless-script timeout), which together are the whole difference between a
+  # 0.3 s loop and a 6 s one. Nothing here reaches the app, so the app is not
+  # what a fast loop is checking.
+  # One cargo invocation, not a build followed by a test: `cargo test` builds
+  # every lib and bin it needs anyway, and a separate `cargo build` only adds a
+  # second link of the same crates.
+  # Not --release: that profile is LTO'd and non-incremental on purpose, which
+  # is right for the thing that runs and wrong for the thing you run every few
+  # minutes. The `test` profile is incremental at opt-level 2 (see Cargo.toml),
+  # so the tests still execute in hundredths of a second.
+  step "cargo test -p parcad-core -p parcad-occt -p parcad-cli"
+  cargo test --locked -p parcad-core -p parcad-occt -p parcad-cli
+
+  step "bun test"
+  (cd app && bun test src)
+
+  # No worker here. Building it recompiles parcad-occt under `--features kernel`
+  # and relinks 26 MB of statically-bound OpenCASCADE, which is most of a
+  # kernel-edit iteration — and nothing in this path runs geometry. The corpus
+  # needs it; the corpus is not in this path.
+  printf '\n\033[1mok\033[0m — kernel only, no worker, no corpus. Run tools/check.sh before pushing.\n'
+  exit 0
+fi
+
+step "cargo build --locked --release"
+cargo build --locked --release
+
+step "cargo test"
+cargo test --release --workspace
+
+step "bun test"
+(cd app && bun test src)
+
+step "tools/build-worker.sh"
+tools/build-worker.sh
+
+step "eval corpus"
+cargo run -q -p parcad-eval
+
+printf '\n\033[1mall green\033[0m\n'

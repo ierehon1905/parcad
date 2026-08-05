@@ -77,7 +77,7 @@ Findings that changed decisions on this page:
 | Treatment target preview | ✅ `inspect_treatment_target` | plus tags whose edge set is *exactly* the target |
 | Selector syntax check | ✅ `check_selector` | no geometry touched |
 | Depth + normal per pixel | ~ `render::GeometryBuffer` | exists, and `model_point` already ties a pixel to a millimetre — not exposed |
-| **Point and ray probe** | ❌ | §3 — the highest-value missing tool |
+| Point and ray probe | ✅ `probe.rs`, `probe_part` | §3 — signed distance at a point, every crossing along a ray, and the wall thickness between them |
 | **Wall thickness / minimum feature** | ❌ | §5 |
 | **Overhang and printability** | ❌ | §6 |
 | **Section view** | ❌ | §7, and OP_ROADMAP §8 |
@@ -120,37 +120,71 @@ the sort of thing that is invisible until measured.
 theirs. An eval that asks the same question of the same part at four views and
 seven would settle it.
 
-## 3. Point and ray probes — the missing caliper
+## 3. Point and ray probes — **DONE**
 
-**What it is.** Three queries against the implicit field, which `sdf.rs` already
-builds for every part:
+**What it is.** `crates/parcad-core/src/probe.rs`, reached as `probe_part`:
 
-- `distance_at(p)` → the signed distance. The sign alone answers "is this point
-  inside the part", which today needs a render and a guess.
-- `ray(origin, direction)` → the ordered entry and exit distances along a ray.
-- `section_extent(axis, at)` → where the solid starts and stops along a line.
+- `distance_at(points)` → the signed distance at each. The sign alone answers
+  "is this point inside the part", which previously needed a render and a guess.
+- `ray(origin, direction, max)` → every crossing along the line, in order, plus
+  `solid_mm` and `first_solid_mm` — the total material and the first complete
+  run of it.
 
-**Why it matters here.** Two hits on one ray *is* a wall thickness, measured
-exactly, with no picture in the loop. It is the answer to the whole class of
-question a render provokes and cannot settle: how thick is that boss wall, does
-the counterbore break through, is there really material between these two
-pockets. [CADSmith][cadsmith]'s gap-at-the-joint failure is one ray cast.
+**Why it mattered.** Two crossings on one ray *is* a wall thickness, measured,
+with no picture in the loop. It is the answer to the whole class of question a
+render provokes and cannot settle: how thick is that boss wall, does the
+counterbore break through, is there material between these two pockets.
+[CADSmith][cadsmith]'s gap-at-the-joint failure is one ray cast.
 
-**What it takes.** Small. `lower()` gives a `fidget::Tree`; evaluating it at a
-point is what the mesher does thousands of times a second. The ray form is a
-sphere trace along the direction with the same field, which is exactly
-`render.rs`'s raster inner loop with a different framing.
+**What it cost, and what was learnt.** The estimate above was right that the
+work was small and wrong about the shape of the answer in three places.
 
-**The honest caveat, and it must be in the error text.** The implicit field is
-*exact* for primitives and cheap booleans, and an **under**-estimate at corners
-by construction (see OP_ROADMAP §1 on drafted extrusions — an overestimate is
-the one error the octree cannot tolerate, so every corner reads short). A sphere
-trace on an underestimating field converges, slowly, and never overshoots the
-surface. So a probe returns a distance that is correct on faces and conservative
-near edges, and it must say so. Where a number has to be exact near an edge, the
-B-rep side is the one to ask.
+*Bisect on the sign, not on the distance.* The field is exact for primitives and
+cheap booleans and an **under**-estimate at corners by construction (OP_ROADMAP
+§1 — an overestimate deletes geometry, because the octree prunes on it, so every
+corner reads short). A sphere trace on such a field converges and never
+overshoots, but it also never lands: it approaches the surface asymptotically.
+So the march floors its step at `EPS`, which lets a sign change happen, and then
+bisects on the sign. That matters more than it sounds: a *crossing position* is
+found from the sign, which is exact, rather than from the magnitude, which is
+not — so thicknesses are correct even where the field around them is
+conservative. A distance reported at a point stays a lower bound, and says so.
 
-**Cost.** Small, and the highest value per line on this page.
+*A ray that grazes a surface can march forever.* It reads a near-zero distance
+and advances `EPS` a step. That is a real geometric situation, not a bug, so it
+is capped and reported (`incomplete`) rather than hidden. Past the last crossing
+the answer is *unknown*, which is not the same as *nothing there*.
+
+*The field has no fillets, and the report has to say so.* This was the one that
+would have shipped a wrong number quietly. `drawable()` already replaces every
+`Fillet` and `Chamfer` with an identity so a part can be drawn at all — a probe
+must go through the same door, which means it measures the **sharp** corner:
+material the real part does not have. `omitted_treatments` names every treatment
+that was dropped, exactly as a region map does. A probe near a rounded edge that
+did not say this would be the "valid-looking wrong answer" the whole corpus rule
+exists to catch.
+
+*A caller that gives no length means "all the way through".* The default reach
+is derived from the origin and the framing bounds and reported back as
+`max_distance_mm`, rather than making the caller compute it from a snapshot —
+the follow-up question `PartReport` exists to prevent.
+
+**Measured, not assumed.** The unit tests pin closed forms: a 40 mm cube shelled
+to 5 mm reads a 5.000 mm wall and 10 mm of material across two walls; the
+service tests use the 40 mm plate with a Ø12 bore, where the wall beside the
+bore is 14 mm. On real generated geometry — `examples/hex-standoff.js`, 5.5
+across the flats, 2.5 tap drill — a ray across a flat crosses at ±2.75 and
+±1.25 and reports `first_solid_mm` 1.4999993 against a closed form of exactly
+1.5, a ray down the bore finds nothing at all, and the point at the origin reads
++1.25 from the bore wall.
+
+**No `eval/cases/` entry, deliberately.** A case there is a two-backend
+geometry comparison — `Observed` is size, volume, area, triangles, topology —
+and a probe is neither a geometry nor available on both backends. Pinning these
+numbers there would mean widening the corpus schema for one implicit-only tool.
+The closed forms are pinned in the unit tests instead, which is where the rest
+of the field's own behaviour is checked. If §5 lands and thickness becomes a
+part-level property, that is the point to revisit it.
 
 ## 4. Numbered marks — the rest of Set-of-Mark
 
@@ -191,8 +225,15 @@ actually fails on. It is also what the commercial DFM tools sell as a feature.
 
 **What it takes.** The `GeometryBuffer` gives surface points and normals for
 free — one per hit pixel, from all seven views, which is a dense enough sample
-to find the minimum without a mesh traversal. Each sample is one ray from §3.
-So this is §3 plus a loop, and it should not ship before §3.
+to find the minimum without a mesh traversal. Each sample is one ray from §3,
+which now exists, so this is that loop.
+
+**And it inherits §3's caveat, more sharply.** The field has no fillets, so a
+sampled minimum near a rounded edge is the sharp corner's thickness. For a
+*minimum* that is the dangerous direction: the report would be optimistic about
+the very feature most likely to be thin. Either sample from the B-rep surface
+and probe the field only along the inward normal, or state the omission at least
+as loudly as `omitted_treatments` does.
 
 **Report shape.** Minimum, the point, and the two surfaces it lies between —
 plus a count of how many samples fell below a caller-supplied threshold, so
@@ -333,8 +374,8 @@ is the inverse of this page's rule.
 
 ## Suggested order
 
-1. **Point and ray probes** (§3). Smallest, and it is the tool the other
-   measurements are built out of.
+1. ~~Point and ray probes~~ — **done**, measured against closed forms, and it
+   found the treatment-blindness caveat that §5 now inherits.
 2. **Wall thickness** (§5), immediately after, since it is §3 plus a loop and it
    is the check every example silently assumes.
 3. **Section view** (§7). Already wanted by the window; the agent needs it more.

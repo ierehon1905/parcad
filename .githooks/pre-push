@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# The full pass, corpus included. Pushing is the point at which "the geometry is
+# still what it was" stops being someone's memory of having checked.
+exec "$(git rev-parse --show-toplevel)/tools/check.sh"

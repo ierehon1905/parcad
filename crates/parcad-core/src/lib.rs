@@ -14,6 +14,7 @@ pub mod font;
 pub mod graph;
 pub mod measure;
 pub mod mesh;
+pub mod probe;
 pub mod render;
 pub mod sdf;
 pub mod selectors;

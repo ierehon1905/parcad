@@ -352,6 +352,170 @@ pub fn render(
         .map(|views| Renders { views, omitted })
 }
 
+/// One line to measure along.
+#[derive(Debug, Clone, Copy, serde::Deserialize, schemars::JsonSchema)]
+pub struct RayRequest {
+    /// Where the ray starts, in mm.
+    pub origin: [f64; 3],
+    /// Which way it points. Need not be a unit vector.
+    pub direction: [f64; 3],
+    /// How far to follow it. Defaults to far enough to cross the whole part
+    /// from this origin, which is almost always what was meant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_distance: Option<f64>,
+}
+
+/// What the probes found.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ProbeReport {
+    pub units: String,
+    pub points: Vec<PointProbe>,
+    pub rays: Vec<RayProbe>,
+    /// Edge treatments the field cannot represent, by node index. See
+    /// [`drawable`] — the same caveat renders carry, and it matters more here:
+    /// a probe near a filleted edge is measuring the *unfilleted* corner, which
+    /// is material that is not there.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub omitted_treatments: Vec<usize>,
+}
+
+/// The field at one point.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct PointProbe {
+    pub point: [f64; 3],
+    /// Signed distance to the nearest surface: negative inside the solid.
+    /// Exact on a face; near an edge it is short of the true distance, never
+    /// over it. The sign is right either way.
+    pub distance_mm: f64,
+    pub inside: bool,
+}
+
+/// What one ray crossed.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct RayProbe {
+    pub origin: [f64; 3],
+    /// Normalised, so the distances below are millimetres along it.
+    pub direction: [f64; 3],
+    /// The length actually followed — the requested one, or the default this
+    /// derived from the part's size.
+    pub max_distance_mm: f64,
+    pub starts_inside: bool,
+    /// Still in material at the end of the ray, so `solid_mm` is a lower bound.
+    pub ends_inside: bool,
+    pub crossings: Vec<Crossing>,
+    /// Total material along the ray.
+    pub solid_mm: f64,
+    /// The first complete run of material — the wall thickness, for a ray fired
+    /// at a wall from outside it. Absent when the ray began inside material,
+    /// because that run's near face is behind the origin.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub first_solid_mm: Option<f64>,
+    /// The march ran out of steps, which happens where a ray runs very nearly
+    /// tangent to a surface. Anything past the last crossing is unknown rather
+    /// than absent.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub incomplete: bool,
+}
+
+/// One surface crossing.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Crossing {
+    pub distance_mm: f64,
+    pub point: [f64; 3],
+    /// `true` where the ray enters material, `false` where it leaves.
+    pub entering: bool,
+}
+
+/// Measure the part along lines and at points, without drawing anything.
+///
+/// This is the non-visual answer to the questions a render provokes and cannot
+/// settle: how thick is that wall, does the counterbore break through, is there
+/// material here. Two crossings on one ray are a thickness, measured.
+///
+/// **Implicit backend only, and that is a real limitation, not a default.** The
+/// probes run against the distance field, so a filleted or chamfered edge is
+/// not there to be measured — `omitted_treatments` names every treatment the
+/// field dropped, exactly as a region map does. Near such an edge the field
+/// describes the sharp corner, which has *more* material than the real part.
+pub fn probe(
+    doc: &Doc,
+    points: &[[f64; 3]],
+    rays: &[RayRequest],
+) -> Result<ProbeReport, String> {
+    use parcad_core::graph::V3;
+
+    if points.is_empty() && rays.is_empty() {
+        return Err(
+            "nothing to probe; pass points to test for material, or rays to measure along"
+                .to_string(),
+        );
+    }
+
+    let (fields, omitted) = drawable(doc);
+    let tree = parcad_core::sdf::lower(&fields).map_err(|e| format!("{e:#}"))?;
+    let bounds = parcad_core::measure::bounds(&fields).map_err(|e| format!("{e:#}"))?;
+
+    let v3 = |p: [f64; 3]| V3::new(p[0], p[1], p[2]);
+    let arr = |v: V3| [v.x, v.y, v.z];
+
+    let probed = parcad_core::probe::distance_at(&tree, &points.iter().map(|p| v3(*p)).collect::<Vec<_>>())
+        .map_err(|e| format!("probing points: {e:#}"))?;
+
+    let rays = rays
+        .iter()
+        .map(|request| {
+            let origin = v3(request.origin);
+            // Far enough to leave the part from wherever the ray starts. A
+            // caller that gave no length meant "all the way through", and
+            // making it work that out from the bounds is the follow-up question
+            // this service exists to avoid.
+            let reach = {
+                let c = bounds.center();
+                let to_center = V3::new(origin.x - c.x, origin.y - c.y, origin.z - c.z).length();
+                (to_center + bounds.radius()) * 1.05 + 1.0
+            };
+            let max = request.max_distance.unwrap_or(reach);
+
+            let p = parcad_core::probe::ray(&tree, origin, v3(request.direction), max)
+                .map_err(|e| format!("{e:#}"))?;
+
+            Ok(RayProbe {
+                origin: arr(p.origin),
+                direction: arr(p.direction),
+                max_distance_mm: p.max_distance,
+                starts_inside: p.starts_inside,
+                ends_inside: p.ends_inside,
+                crossings: p
+                    .hits
+                    .iter()
+                    .map(|h| Crossing {
+                        distance_mm: h.distance,
+                        point: arr(h.point),
+                        entering: h.entering,
+                    })
+                    .collect(),
+                solid_mm: p.solid_mm,
+                first_solid_mm: p.first_solid_mm,
+                incomplete: p.steps_exhausted,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    Ok(ProbeReport {
+        units: doc.units.clone(),
+        points: probed
+            .into_iter()
+            .map(|p| PointProbe {
+                point: arr(p.point),
+                distance_mm: p.distance,
+                inside: p.inside,
+            })
+            .collect(),
+        rays,
+        omitted_treatments: omitted,
+    })
+}
+
 /// Parse view names, naming the alternatives when one is wrong.
 pub fn parse_views(names: &[String]) -> Result<Vec<parcad_core::view::View>, String> {
     names
@@ -769,6 +933,16 @@ pub fn write_export(export: &Export, path: &str) -> Result<String, String> {
     Ok(path.to_string())
 }
 
+/// Whether an agent is on the third transport, and what it last did.
+///
+/// A capability rather than a transport detail, even though it describes the
+/// MCP endpoint: both windows ask for it, and they must be told the same thing.
+/// The desktop webview cannot reach `/api`, so without this it would be the one
+/// place where you *couldn't* see that a model was editing your project folder.
+pub fn mcp_status() -> crate::mcp::Status {
+    crate::mcp::status()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -963,6 +1137,90 @@ mod tests {
             .collect();
         assert_eq!(tags, ["body", "bore"]);
         assert!(matches!(fields.nodes[2].op, Op::Translate { child: 0, .. }));
+    }
+
+    /// The number the tool exists for. The plate is 40 wide with a 12mm bore,
+    /// so a ray across it at mid-height crosses 14mm of material, then air,
+    /// then 14mm again — a closed form, not a reading off a picture.
+    #[test]
+    fn a_ray_across_the_plate_measures_the_wall_beside_the_bore() {
+        let report = probe(
+            &plate_with_a_hole(),
+            &[],
+            &[RayRequest {
+                origin: [-100.0, 0.0, 0.0],
+                direction: [1.0, 0.0, 0.0],
+                max_distance: None,
+            }],
+        )
+        .expect("the plate should probe");
+
+        let ray = &report.rays[0];
+        assert_eq!(ray.crossings.len(), 4, "two walls, four faces: {ray:?}");
+        assert!(!ray.starts_inside && !ray.ends_inside);
+        assert!(
+            (ray.first_solid_mm.unwrap() - 14.0).abs() < 0.01,
+            "wall beside the bore, got {:?}",
+            ray.first_solid_mm
+        );
+        assert!((ray.solid_mm - 28.0).abs() < 0.01, "got {}", ray.solid_mm);
+
+        // Given no length, the ray still crossed the whole part: a caller that
+        // omitted it meant "all the way through", not "nowhere".
+        assert!(ray.max_distance_mm > 100.0);
+    }
+
+    /// A ray down the bore finds nothing, and says nothing rather than failing.
+    /// "Does this hole go all the way through" is the question, and an empty
+    /// crossing list is the answer to it.
+    #[test]
+    fn a_ray_down_the_bore_finds_no_material() {
+        let report = probe(
+            &plate_with_a_hole(),
+            &[[0.0, 0.0, 0.0], [0.0, 0.0, 100.0]],
+            &[RayRequest {
+                origin: [0.0, 0.0, -100.0],
+                direction: [0.0, 0.0, 1.0],
+                max_distance: None,
+            }],
+        )
+        .expect("the plate should probe");
+
+        assert!(report.rays[0].crossings.is_empty());
+        assert_eq!(report.rays[0].solid_mm, 0.0);
+
+        // The centre of the bore is 6mm from its wall; a point well clear of
+        // the part is far from everything. Both outside, which is the sign
+        // answering the question on its own.
+        assert!(!report.points[0].inside && !report.points[1].inside);
+        assert!((report.points[0].distance_mm - 6.0).abs() < 0.01);
+    }
+
+    /// A probe measures the field, and the field has no fillets. Saying so is
+    /// the whole difference between a measurement and a wrong measurement: near
+    /// a rounded edge this reports the sharp corner, which has material the
+    /// real part does not.
+    #[test]
+    fn a_probe_names_the_treatments_it_could_not_measure() {
+        let treated = doc(serde_json::json!({
+            "root": 1,
+            "nodes": [
+                { "op": "cuboid", "size": { "x": 20, "y": 20, "z": 20 } },
+                { "op": "fillet", "child": 0, "radius": 3, "selector": ">Z" },
+            ],
+        }));
+
+        let report = probe(&treated, &[[0.0, 0.0, 0.0]], &[]).expect("the cube should probe");
+        assert_eq!(report.omitted_treatments, [1]);
+    }
+
+    #[test]
+    fn a_probe_with_nothing_to_measure_says_what_to_pass() {
+        let error = probe(&plate_with_a_hole(), &[], &[]).expect_err("nothing was asked");
+        assert!(
+            error.contains("points") && error.contains("rays"),
+            "the refusal must name both, got: {error}"
+        );
     }
 
     #[test]
