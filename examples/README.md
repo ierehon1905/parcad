@@ -1,9 +1,11 @@
 # Examples
 
-Fifteen parts, each a `.js` script that returns a shape. They are the app's
-example picker (`app/src/examples.ts` reads this directory, so there is no
-second copy to keep in step) and most of them are measured in `eval/cases/`, so
-an example that stops building fails a case rather than surprising someone.
+Sixteen parts, each a `.js` script that returns a shape. On first run they are copied into parcad's project folder
+(`~/Documents/parcad`, or `PARCAD_PROJECTS_DIR`), where they become ordinary
+projects the user can edit and the app's picker lists — this directory is the
+seed, not the live copy, so editing a part in the app does not change it here.
+Most of them are measured in `eval/cases/`, so an example that stops building
+fails a case rather than surprising someone.
 
 ```bash
 bun tools/run.ts examples/flange.js > /tmp/flange.json   # DSL -> intent graph
@@ -23,6 +25,7 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 
 | file | part | why it is here |
 |---|---|---|
+| `cover-plate.js` | bolted cover, turned spigot | revolved geometry: a tapered spigot and four countersunk screws, both cones |
 | `extrusion-2020.js` | 20x20 T-slot extrusion, 200 mm | four-fold symmetry by rotating the *cutter*; corner fillets among 37 candidate edges |
 | `flange.js` | ASME B16.5 class 150 NPS 2 slip-on flange | a bolt circle, and one cut whose provenance reaches five rims |
 | `heat-sink.js` | 60x60 extruded fin sink | one fin shape placed nine times — one graph node, nine placements |
@@ -50,8 +53,9 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 
 ## What is not here, and why
 
-No example has a countersink, a thread, a gear, an O-ring groove or a draft
-angle — not because they were skipped, but because the thirteen ops in the
-graph cannot produce those shapes. `docs/DSL_GAPS.md` §0 lists what is missing
+No example has a thread, a gear or an O-ring groove — not because they were
+skipped, but because the graph cannot produce those shapes. Countersinks and
+tapers *were* on that list until `revolve` landed; `cover-plate.js` is what
+came of it. `docs/DSL_GAPS.md` §0 lists what is missing
 and what each absence costs; §1 onward covers what the language *can* do but
 makes harder than it should be.

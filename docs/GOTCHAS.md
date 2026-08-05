@@ -64,6 +64,28 @@ not answering" and keeps the last good geometry on screen. That is the app
 having exited, not a failed evaluation — `tauri dev` restarting on a rebuild is
 the usual cause.
 
+### The MCP server only exists while the app is running
+
+It is hosted by the desktop process, not by a separate binary, so an MCP client
+configured against it connects only when parcad is open. Point a client at the
+streamable-HTTP URL:
+
+```bash
+claude mcp add --transport http parcad http://127.0.0.1:4242/mcp
+```
+
+There is no stdio transport on purpose. A stdio server would be a second process
+with its own kernel and its own idea of what is on screen, which is the split
+that `service.rs` exists to prevent.
+
+### `cargo build` needs bun, because the sandbox embeds the DSL
+
+`build.rs` shells out to `bun build` to compile `app/src/dsl.ts` into the script
+sandbox. The app already needed bun for its frontend, so this is not a new
+requirement — but the failure now happens during `cargo build` rather than at
+`bun run tauri dev`, which is a surprising place to meet it. The panic names the
+fix.
+
 ### `cargo build -p parcad-occt` does not build the worker
 
 Without `--features kernel` you get only the host half and the binary is skipped
@@ -131,6 +153,23 @@ a bore drilled along X match `adjacentTo: { faceNormal: "+z" }`. On a part with
 cross-drillings — `examples/manifold-block.js` — the "opens onto the top face"
 query silently picked up two extra rims. Use `at: { z: "max" }` there; the
 face-normal form is fine when every hole is drilled along one axis.
+
+### A cutter coplanar with the face it cuts loses the rim
+
+`countersink()` first built its cone with the wide end exactly on the top face —
+which is where a countersink geometrically ends. OCCT merged the cone's flat top
+into that face, and the rim stopped being an edge the cut had generated: the
+selector matched one edge instead of five, and no dimension looked wrong. The
+helper now builds the cone 0.5 mm taller and wider along its own taper, so the
+section at the face is still the called-out head diameter. Same rule as every
+cutter in `examples/`: run past the material.
+
+### `role: "hole"` does not match a conical opening
+
+A countersink rim is an inner boundary of the top face by any reading, and
+`role: "hole"` drops it — `cover-plate.js` selects on `curve` and position
+instead. Related to the D-bore case in docs/DSL_GAPS.md §6: the term matches a
+narrower thing than its name suggests.
 
 ### `.at(x, y, h)` vs `.at(x, y, h - wall)`
 

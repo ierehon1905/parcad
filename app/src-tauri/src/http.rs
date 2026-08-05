@@ -19,9 +19,11 @@
 //!   desktop user pointed; HTTP returns the bytes and lets the browser save
 //!   them. A path parameter on a socket is an arbitrary-write primitive.
 
+use crate::mcp;
+use crate::projects;
 use crate::service::{self, Backend};
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::{header, StatusCode, Uri},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -55,6 +57,11 @@ fn default_depth() -> u8 {
 struct InspectRequest {
     graph: serde_json::Value,
     node: usize,
+}
+
+#[derive(Deserialize)]
+struct SaveRequest {
+    script: String,
 }
 
 #[derive(Deserialize)]
@@ -96,6 +103,15 @@ fn router<R: Runtime>(app: AppHandle<R>) -> Router {
         .route("/api/inspect-edge-target", post(inspect_edge_target))
         .route("/api/export/stl", post(export_stl))
         .route("/api/export/step", post(export_step))
+        // Projects are files on disk shared with the desktop window and with
+        // MCP. The frontend reads them from here rather than from a build-time
+        // glob, so a part an agent saves shows up in the picker.
+        .route("/api/projects", get(list_projects))
+        .route("/api/projects/{name}", get(read_project).put(save_project))
+        // The same application again, for a model rather than a person. It
+        // reaches `service` through the same functions, and the scripts it
+        // sends run in `script`'s sandbox rather than the webview.
+        .nest_service("/mcp", mcp::service())
         // Everything else is the frontend. Registered last and as a fallback so
         // no asset name can ever shadow an API route.
         .fallback(asset)
@@ -167,6 +183,28 @@ fn download(export: service::Export) -> Response {
         .into_response()
 }
 
+async fn list_projects() -> Result<Response, Failed> {
+    let projects = projects::list().map_err(Failed)?;
+    Ok(Json(json!({
+        "projects": projects,
+        "directory": projects::dir().to_string_lossy(),
+    }))
+    .into_response())
+}
+
+async fn read_project(Path(name): Path<String>) -> Result<Response, Failed> {
+    let script = projects::read(&name).map_err(Failed)?;
+    Ok(Json(json!({ "name": name, "script": script })).into_response())
+}
+
+async fn save_project(
+    Path(name): Path<String>,
+    Json(request): Json<SaveRequest>,
+) -> Result<Response, Failed> {
+    let path = projects::write(&name, &request.script).map_err(Failed)?;
+    Ok(Json(json!({ "name": name, "path": path })).into_response())
+}
+
 /// Serve the frontend bundle Tauri already carries.
 ///
 /// Resolving through Tauri's asset resolver rather than a static directory keeps
@@ -185,11 +223,7 @@ async fn asset<R: Runtime>(State(app): State<AppHandle<R>>, uri: Uri) -> Respons
         .or_else(|| app.asset_resolver().get("index.html".into()));
 
     match resolved {
-        Some(asset) => (
-            [(header::CONTENT_TYPE, asset.mime_type)],
-            asset.bytes,
-        )
-            .into_response(),
+        Some(asset) => ([(header::CONTENT_TYPE, asset.mime_type)], asset.bytes).into_response(),
         // In `tauri dev` the frontend is served by Vite and only bundled at
         // build time, so there may be nothing to resolve. Say where it is
         // instead of returning a bare 404.

@@ -112,6 +112,8 @@ fn op_name(op: &Op) -> &'static str {
         Op::Cuboid { .. } => "box",
         Op::Sphere { .. } => "sphere",
         Op::Revolve { .. } => "revolve",
+        Op::Extrude { .. } => "extrude",
+        Op::Mirror { .. } => "mirror",
         Op::Cylinder { .. } => "cylinder",
         Op::Union { .. } => "union",
         Op::Difference { .. } => "difference",
@@ -493,6 +495,16 @@ impl EdgeLineage {
             .filter_map(|edge| describe_edge(edge.clone()).map(|edge| edge.key))
             .collect()
     }
+}
+
+/// EXPERIMENT (PARCAD_UNIFY=1): merge the coplanar faces a boolean leaves
+/// behind, dissolving the imprint edges where a flush wall meets a plate.
+/// Off by default while we find out what it costs the lineage.
+fn unified(mut shape: Shape) -> Shape {
+    if std::env::var_os("PARCAD_UNIFY").is_some() {
+        shape.clean();
+    }
+    shape
 }
 
 fn evolve_edges(edges: Vec<Edge>, result: &BooleanShape) -> Vec<Edge> {
@@ -1190,13 +1202,13 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     // what `blend` names in the graph.
                     joined.fillet_new_edges(*blend);
                     acc = BuiltShape {
-                        shape: joined.shape,
+                        shape: unified(joined.shape),
                         lineage,
                         features,
                     };
                 } else {
                     acc = BuiltShape {
-                        shape: joined.shape,
+                        shape: unified(joined.shape),
                         lineage,
                         features,
                     };
@@ -1226,13 +1238,13 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     ));
                     cut.fillet_new_edges(*blend);
                     acc = BuiltShape {
-                        shape: cut.shape,
+                        shape: unified(cut.shape),
                         lineage,
                         features,
                     };
                 } else {
                     acc = BuiltShape {
-                        shape: cut.shape,
+                        shape: unified(cut.shape),
                         lineage,
                         features,
                     };
@@ -1267,7 +1279,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 let mut features = acc.features;
                 features.extend(other.features);
                 acc = BuiltShape {
-                    shape: met.0,
+                    shape: unified(met.0),
                     lineage: EdgeLineage::default(),
                     features,
                 };
@@ -1320,6 +1332,99 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             };
 
             BuiltShape::primitive(placed, node.tag.as_deref())
+        }
+
+        Op::Extrude { profile, height } => {
+            breadcrumb(&format!(
+                "extrude node {id} ({label}) of a {}-point outline, {height} mm thick",
+                profile.len()
+            ));
+            Op::validate_outline(profile)
+                .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+            if !height.is_finite() || *height <= 0.0 {
+                bail!("node {id} ({label}) extrudes by {height}, which is not a thickness");
+            }
+
+            // The outline is drawn at z = -height/2 and swept up, which centres
+            // the solid on the origin like every other primitive.
+            let base = -height / 2.0;
+            let points: Vec<DVec3> = profile
+                .iter()
+                .map(|[x, y]| DVec3::new(*x, *y, base))
+                .collect();
+
+            let edges: Vec<Edge> = points
+                .iter()
+                .enumerate()
+                .filter_map(|(i, a)| {
+                    let b = points[(i + 1) % points.len()];
+                    // Skip a repeated point: OCCT refuses a zero-length edge,
+                    // and the polygon is unchanged without it.
+                    (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
+                })
+                .collect();
+
+            let face = Face::from_wire(&Wire::from_edges(&edges));
+            let solid = face.extrude(DVec3::Z * *height);
+
+            let placed = Shape::from(solid);
+            let placed = if offset == DVec3::ZERO {
+                placed
+            } else {
+                placed.translated(offset)
+            };
+
+            BuiltShape::primitive(placed, node.tag.as_deref())
+        }
+
+        Op::Mirror { child, normal } => {
+            // Reflection does not commute with translation either, so like a
+            // rotation the child is built at the origin and moved afterwards.
+            let inner = build_node(doc, *child, DVec3::ZERO)?;
+            let n = v(*normal);
+            if n.length_squared() < 1e-18 {
+                bail!("node {id} ({label}) mirrors in a plane with a zero-length normal");
+            }
+            let n = n.normalize();
+            breadcrumb(&format!(
+                "mirror node {id} ({label}) in the plane with normal ({}, {}, {})",
+                normal.x, normal.y, normal.z
+            ));
+
+            let reflect = |shape: Shape| {
+                // `gp_Trsf::SetMirror` is bound for an *axis* only, which is a
+                // half turn about a line rather than a reflection in a plane.
+                // The reflection is that half turn composed with a point
+                // inversion: -(2nn^T - I) = I - 2nn^T, the Householder matrix
+                // the implicit backend uses. Both halves are already bound, and
+                // both are exact, so no surface changes type.
+                shape
+                    .scaled_uniform(DVec3::ZERO, -1.0)
+                    .rotated(DVec3::ZERO, n, std::f64::consts::PI)
+            };
+
+            let place = |shape: Shape| {
+                if offset == DVec3::ZERO {
+                    shape
+                } else {
+                    shape.translated(offset)
+                }
+            };
+
+            let shape = place(reflect(inner.shape));
+            let features = TreatmentFeatures {
+                generated: inner
+                    .features
+                    .generated
+                    .into_iter()
+                    .map(|(node, shape)| (node, place(reflect(shape))))
+                    .collect(),
+            };
+            BuiltShape {
+                shape,
+                lineage: EdgeLineage::default(),
+                features,
+            }
         }
 
         Op::Rotate {

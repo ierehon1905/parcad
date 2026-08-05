@@ -7,6 +7,9 @@
 //! lived here would be a feature the desktop had and the browser did not.
 
 mod http;
+mod mcp;
+mod projects;
+mod script;
 mod service;
 
 use service::{Backend, Evaluated};
@@ -49,6 +52,31 @@ fn export_step(graph: serde_json::Value, path: String) -> Result<String, String>
     service::write_export(&export, &path)
 }
 
+/// The project folder, shared with the browser host and with MCP.
+///
+/// The webview cannot reach `/api` — its origin is `tauri://localhost`, not the
+/// HTTP host — so projects need an IPC adapter like everything else. Both call
+/// the same `projects` functions and read the same directory.
+#[tauri::command]
+fn list_projects() -> Result<serde_json::Value, String> {
+    Ok(serde_json::json!({
+        "projects": projects::list()?,
+        "directory": projects::dir().to_string_lossy(),
+    }))
+}
+
+#[tauri::command]
+fn read_project(name: String) -> Result<serde_json::Value, String> {
+    let script = projects::read(&name)?;
+    Ok(serde_json::json!({ "name": name, "script": script }))
+}
+
+#[tauri::command]
+fn save_project(name: String, script: String) -> Result<serde_json::Value, String> {
+    let path = projects::write(&name, &script)?;
+    Ok(serde_json::json!({ "name": name, "path": path }))
+}
+
 /// Where the frontend should send API calls, injected before it loads.
 ///
 /// Under IPC the answer is "nowhere, use invoke"; the browser learns its own
@@ -70,6 +98,12 @@ pub fn run() {
 
     builder
         .setup(|app| {
+            // Seed before the host comes up: the frontend asks for the project
+            // list as it loads, and an empty first launch would look like a
+            // fresh install with nothing in it.
+            if let Err(e) = projects::seed() {
+                eprintln!("parcad: could not prepare the project folder: {e}");
+            }
             http::serve(app.handle().clone());
             Ok(())
         })
@@ -78,6 +112,9 @@ pub fn run() {
             inspect_edge_target,
             export_stl,
             export_step,
+            list_projects,
+            read_project,
+            save_project,
             host_port
         ])
         .run(tauri::generate_context!())

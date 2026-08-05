@@ -16,6 +16,13 @@ cargo run -p parcad-eval               # the geometry + refusal corpus
 cd app && bun test src                 # editor-side units: the selector grammar
 ```
 
+**The running app also serves MCP at <http://127.0.0.1:4242/mcp>** — the same
+`service.rs` the UI uses. Scripts from an agent run in `script.rs`'s QuickJS
+sandbox, never in the webview; that is a hard rule, and docs/ROADMAP.md records
+why. Parts live in one shared folder (`~/Documents/parcad`, or
+`PARCAD_PROJECTS_DIR`) that the app, the user and MCP all read and write —
+`examples/` only seeds it on first run.
+
 **The running app hosts the UI on <http://127.0.0.1:4242>.** A browser there is
 the same application as the desktop window, not a cut-down one — same bundle,
 same Rust service, same kernel. Under `tauri dev` use <http://localhost:1420>
@@ -75,19 +82,22 @@ recorded number is worse than no case — that's what `known_defect` is for.
 | crash handling, timeouts, breadcrumbs | `crates/parcad-occt/src/host.rs` |
 | the authoring DSL | `app/src/dsl.ts` (shared with `tools/run.ts`) |
 | what the app can do at all | `app/src-tauri/src/service.rs` — never a transport file |
-| the IPC and HTTP adapters | `app/src-tauri/src/lib.rs`, `app/src-tauri/src/http.rs` |
+| the IPC, HTTP and MCP adapters | `app/src-tauri/src/lib.rs`, `http.rs`, `mcp.rs` |
+| the sandbox agent scripts run in | `app/src-tauri/src/script.rs` |
+| where parts are stored | `app/src-tauri/src/projects.rs` |
 | how the frontend calls the backend | `app/src/backend.ts` — the only module that knows there are two |
 | the selector grammar | `selectors.rs` **and** `app/src/selectors.ts` — see below |
 | what the editor marks as you type | `app/src/selector-lint.ts` |
 | what a treatment hover says, and offers to edit | `app/src/treatment-info.ts` (content), `treatment-hover.ts` (the extension) |
 | how it looks | `app/src/viewport.ts`, `app/src/outline.ts` |
 | what "still correct" means | `eval/cases/*.json`, `eval/scripts/*.js` |
-| the example parts | `examples/*.js` — indexed in `examples/README.md`, read directly by the app's picker |
+| the seed parts | `examples/*.js` — indexed in `examples/README.md`; copied into the project folder on first run, not read by the picker |
 | what the DSL makes hard | `docs/DSL_GAPS.md` |
 
-A new op touches `graph.rs` (variant + `children_of`), `sdf.rs`, `backend.rs`,
-`dsl.ts`, plus a case in `eval/cases/`. Missing `children_of` is silent — the
-node just never gets evaluated.
+A new op touches `graph.rs` (variant + `children_of`), `sdf.rs`, `measure.rs`
+(its bounds), `backend.rs`, `dsl.ts`, plus a case in `eval/cases/`. Missing
+`children_of` is silent — the node just never gets evaluated. Rust will find the
+other three for you: every one of those matches is exhaustive.
 
 **The selector grammar is parsed twice on purpose.** The kernel must own a
 parser, because a graph can arrive from anywhere and the editor is never the

@@ -149,6 +149,17 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
             }
         }
 
+        // The outline's own extent in X and Y, and the thickness about z = 0.
+        Op::Extrude { profile, height } => {
+            Op::validate_outline(profile)?;
+            let (mut lo, mut hi) = (V3::new(f64::MAX, f64::MAX, 0.0), V3::new(f64::MIN, f64::MIN, 0.0));
+            for [x, y] in profile {
+                lo = V3::new(lo.x.min(*x), lo.y.min(*y), -height.abs() / 2.0);
+                hi = V3::new(hi.x.max(*x), hi.y.max(*y), height.abs() / 2.0);
+            }
+            Aabb { min: lo, max: hi }
+        }
+
         Op::Union { children, blend } => {
             let mut it = children.iter().copied();
             let first = it
@@ -221,6 +232,32 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
                 min: V3::new(lo_x, lo_y, lo_z),
                 max: V3::new(hi_x, hi_y, hi_z),
             }
+        }
+
+        Op::Mirror { child, normal } => {
+            let b = get(*child)?;
+            let n: nalgebra::Vector3<f64> = (*normal).into();
+            let unit = nalgebra::Unit::try_new(n, 1e-12)
+                .ok_or_else(|| anyhow::anyhow!("mirror at node {id} has a zero-length normal"))?;
+            // Reflect the eight corners and re-fit: exact for an axis-aligned
+            // plane, conservative for an oblique one, same as the rotation above.
+            let mut acc: Option<Aabb> = None;
+            for i in 0..8 {
+                let c = V3::new(
+                    if i & 1 == 0 { b.min.x } else { b.max.x },
+                    if i & 2 == 0 { b.min.y } else { b.max.y },
+                    if i & 4 == 0 { b.min.z } else { b.max.z },
+                );
+                let v: nalgebra::Vector3<f64> = c.into();
+                let r = v - unit.as_ref() * (2.0 * v.dot(unit.as_ref()));
+                let pv = V3::new(r.x, r.y, r.z);
+                let single = Aabb { min: pv, max: pv };
+                acc = Some(match acc {
+                    None => single,
+                    Some(a) => a.union(single),
+                });
+            }
+            acc.expect("eight corners is not zero corners")
         }
 
         Op::Offset { child, distance } => get(*child)?.expand(*distance),

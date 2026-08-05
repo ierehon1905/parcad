@@ -56,6 +56,7 @@ fn lower_node(doc: &Doc, id: NodeId, built: &[Option<Tree>]) -> Result<Tree> {
         Op::Sphere { r } => sphere(*r),
         Op::Cylinder { r, h } => cylinder(*r, *h),
         Op::Revolve { profile } => revolve(profile)?,
+        Op::Extrude { profile, height } => extrude(profile, *height)?,
 
         Op::Union { children, blend } => {
             let mut it = children.iter().copied();
@@ -118,6 +119,19 @@ fn lower_node(doc: &Doc, id: NodeId, built: &[Option<Tree>]) -> Result<Tree> {
             // correct even though the field is no longer exact.
             let worst = by.x.abs().max(by.y.abs()).max(by.z.abs());
             scaled * worst
+        }
+
+        Op::Mirror { child, normal } => {
+            let n: nalgebra::Vector3<f64> = (*normal).into();
+            let unit = nalgebra::Unit::try_new(n, 1e-12)
+                .ok_or_else(|| anyhow::anyhow!("mirror at node {id} has a zero-length normal"))?;
+            // The Householder reflection I - 2nn^T. It is its own inverse, so
+            // the usual "remap by the inverse" is the same matrix — and it is an
+            // isometry, so the child's field stays exact rather than becoming a
+            // bound the way `Op::Scale`'s does.
+            let r = nalgebra::Matrix3::identity()
+                - 2.0 * unit.as_ref() * unit.as_ref().transpose();
+            get(*child)?.remap_affine(affine(r.to_homogeneous()))
         }
 
         Op::Offset { child, distance } => get(*child)? - *distance,
@@ -240,6 +254,53 @@ fn revolve(profile: &[[f64; 2]]) -> Result<Tree> {
     field.ok_or_else(|| anyhow::anyhow!("revolve section has no edge off the axis"))
 }
 
+/// A convex outline in XY, given a thickness along Z.
+///
+/// The planar field is the same construction as [`revolve`]'s — the largest of
+/// the outline's signed half-plane distances — with the same properties: exact
+/// on the boundary and inside, an underestimate outside a corner, and stable
+/// under interval arithmetic because no term is clamped.
+///
+/// The thickness is then combined the way [`cylinder`] combines its radial and
+/// axial terms rather than by a plain `max`, which makes the field exact around
+/// the top and bottom rims too, everywhere the planar term itself is exact.
+fn extrude(profile: &[[f64; 2]], height: f64) -> Result<Tree> {
+    let area = Op::validate_outline(profile)?;
+    if !height.is_finite() || height <= 0.0 {
+        anyhow::bail!("extrude height must be a positive length; got {height}");
+    }
+    // Normalise to anticlockwise so the half-plane normals point outward.
+    let points: Vec<[f64; 2]> = if area < 0.0 {
+        profile.iter().rev().copied().collect()
+    } else {
+        profile.to_vec()
+    };
+
+    let mut planar: Option<Tree> = None;
+    for i in 0..points.len() {
+        let [ax, ay] = points[i];
+        let [bx, by] = points[(i + 1) % points.len()];
+        let (ex, ey) = (bx - ax, by - ay);
+        let len = (ex * ex + ey * ey).sqrt();
+        if len < 1e-12 {
+            // A repeated point contributes no edge; the outline still encloses
+            // area, which `validate_outline` has already established.
+            continue;
+        }
+        let signed = ((Tree::x() - ax) * (ey / len)) - ((Tree::y() - ay) * (ex / len));
+        planar = Some(match planar {
+            Some(acc) => acc.max(signed),
+            None => signed,
+        });
+    }
+    let planar = planar.ok_or_else(|| anyhow::anyhow!("extrude outline has no edge"))?;
+
+    let axial = Tree::z().abs() - height / 2.0;
+    let outside = length2(planar.clone().max(0.0), axial.clone().max(0.0));
+    let inside = planar.max(axial).min(0.0);
+    Ok(outside + inside)
+}
+
 // ---------------------------------------------------------------------------
 // Combinators
 // ---------------------------------------------------------------------------
@@ -317,7 +378,7 @@ mod tests {
         assert!((field(&CONE, [0.0, 0.0, -11.0]) - 1.0).abs() < 1e-4);
         // Straight out from the slanted side: the nearest feature is that face,
         // and the field is its exact distance.
-        assert!((field(&CONE, [10.0, 0.0, 0.0]) - 3.2952).abs() < 1e-3);
+        assert!((field(&CONE, [10.0, 0.0, 0.0]) - 2.8735).abs() < 1e-3);
         // Inside, on the axis. The nearest surface is the slanted side, 6.705
         // away — *not* the axis itself, which is where a section distance that
         // measured to the closing edge would read zero along the centreline.
@@ -340,7 +401,7 @@ mod tests {
         let mut eval = JitShape::new_point_eval();
         let tape = shape.ez_point_tape();
         let got = eval.eval(&tape, 10.0, 0.0, 0.0).unwrap().0;
-        assert!((got - 3.2952).abs() < 1e-3, "jit {got}");
+        assert!((got - 2.8735).abs() < 1e-3, "jit {got}");
     }
 
     #[test]
@@ -420,5 +481,120 @@ mod tests {
         ])
         .unwrap_err();
         assert!(err.to_string().contains("not convex"), "{err}");
+    }
+
+    /// A 20 mm square, 10 mm thick — every distance below is one anybody can
+    /// check on paper, which is the point of testing the field rather than the
+    /// mesh it produces.
+    const SQUARE: [[f64; 2]; 4] = [
+        [-10.0, -10.0],
+        [10.0, -10.0],
+        [10.0, 10.0],
+        [-10.0, 10.0],
+    ];
+
+    fn extruded(profile: &[[f64; 2]], height: f64, p: [f64; 3]) -> f32 {
+        let tree = extrude(profile, height).expect("outline should be accepted");
+        let shape = VmShape::from(tree);
+        let mut eval = VmShape::new_point_eval();
+        let tape = shape.ez_point_tape();
+        eval.eval(&tape, p[0] as f32, p[1] as f32, p[2] as f32)
+            .unwrap()
+            .0
+    }
+
+    #[test]
+    fn an_extruded_square_is_the_box_it_should_be() {
+        // The same solid as `cuboid(20, 20, 10)`, built the other way round.
+        for p in [
+            [0.0, 0.0, 0.0],
+            [9.0, 0.0, 0.0],
+            [12.0, 0.0, 0.0],
+            [0.0, 0.0, 7.0],
+            // Outside in x and in z at once: the rim term is the one the plain
+            // `max` of the two would get wrong.
+            [12.0, 0.0, 9.0],
+            [3.0, -4.0, -2.0],
+        ] {
+            let a = extruded(&SQUARE, 10.0, p);
+            let tree = cuboid(V3::new(20.0, 20.0, 10.0));
+            let shape = VmShape::from(tree);
+            let mut eval = VmShape::new_point_eval();
+            let tape = shape.ez_point_tape();
+            let b = eval.eval(&tape, p[0] as f32, p[1] as f32, p[2] as f32).unwrap().0;
+            assert!((a - b).abs() < 1e-4, "at {p:?}: extrude {a} vs cuboid {b}");
+        }
+    }
+
+    /// The prism's half of the corner under-read `revolve` records above, kept
+    /// separately because a square has the same corner in plan that a section
+    /// has in elevation.
+    #[test]
+    fn outside_a_prism_corner_the_field_under_reads_too() {
+        // Diagonally out from the corner at (10, 10): the true distance is to
+        // that vertical edge, sqrt(8) = 2.828.
+        let got = extruded(&SQUARE, 10.0, [12.0, 12.0, 0.0]);
+        assert!(got > 0.0, "must still read outside: {got}");
+        assert!(got < 2.828, "an overestimate would let the mesher prune wrongly: {got}");
+        assert!((got - 2.0).abs() < 1e-4, "{got}");
+    }
+
+    #[test]
+    fn winding_does_not_change_the_solid() {
+        // Clockwise: every half-plane normal points inward until the winding is
+        // normalised, which would turn the prism inside out.
+        let reversed: Vec<[f64; 2]> = SQUARE.iter().rev().copied().collect();
+        let inside = extruded(&reversed, 10.0, [0.0, 0.0, 0.0]);
+        assert!((inside + 5.0).abs() < 1e-4, "{inside}");
+    }
+
+    #[test]
+    fn an_extruded_outline_need_not_enclose_the_origin() {
+        // Unlike a revolve section, an outline is placed in its own plane; a
+        // profile sitting entirely off to one side is an ordinary part, not an
+        // error.
+        let offset = [[30.0, 0.0], [40.0, 0.0], [40.0, 6.0], [30.0, 6.0]];
+        assert!(extruded(&offset, 4.0, [35.0, 3.0, 0.0]) < 0.0);
+        assert!(extruded(&offset, 4.0, [0.0, 0.0, 0.0]) > 0.0);
+    }
+
+    #[test]
+    fn a_re_entrant_outline_names_the_prisms_that_replace_it() {
+        let err = extrude(
+            &[
+                [0.0, 0.0],
+                [30.0, 0.0],
+                [30.0, 10.0],
+                [10.0, 10.0],
+                [10.0, 25.0],
+                [0.0, 25.0],
+            ],
+            5.0,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("not convex"), "{err}");
+        assert!(err.to_string().contains("union of convex prisms"), "{err}");
+    }
+
+    #[test]
+    fn a_reflection_is_an_isometry_of_the_field() {
+        // The property that makes `Op::Mirror` free where `Op::Scale` is not:
+        // the reflected field is the original field, read at the mirrored
+        // point, with no correction factor.
+        let cone = revolve(&CONE).unwrap();
+        let m = nalgebra::Matrix3::new(
+            -1.0, 0.0, 0.0, //
+            0.0, 1.0, 0.0, //
+            0.0, 0.0, 1.0,
+        );
+        let mirrored = cone.clone().remap_affine(affine(m.to_homogeneous()));
+        let shape = VmShape::from(mirrored);
+        let mut eval = VmShape::new_point_eval();
+        let tape = shape.ez_point_tape();
+        for p in [[3.0f32, 1.0, 0.0], [15.0, 0.0, -10.0], [0.0, 6.0, 4.0]] {
+            let got = eval.eval(&tape, p[0], p[1], p[2]).unwrap().0;
+            let want = field(&CONE, [-(p[0] as f64), p[1] as f64, p[2] as f64]);
+            assert!((got - want).abs() < 1e-5, "at {p:?}: {got} vs {want}");
+        }
     }
 }

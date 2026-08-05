@@ -401,6 +401,30 @@ export class Shape {
     );
   }
 
+  /**
+   * Reflect in a plane through the origin, named by its normal.
+   *
+   * `.mirror("x")` reflects across the YZ plane — the axis names the direction
+   * the shape is flipped in, not the plane it stays in. A symmetric part is
+   * `union(half, half.mirror("x"))`; the reflection on its own is the left-hand
+   * version of a right-hand part.
+   *
+   * Unlike `.scale(-1)` this is a reflection rather than a point inversion, and
+   * it costs nothing in either backend: reflections are isometries, so no
+   * surface changes type and the implicit field stays exact.
+   */
+  mirror(axis: Vec3 | "x" | "y" | "z"): Shape {
+    const normal: Vec3 =
+      axis === "x"
+        ? { x: 1, y: 0, z: 0 }
+        : axis === "y"
+          ? { x: 0, y: 1, z: 0 }
+          : axis === "z"
+            ? { x: 0, y: 0, z: 1 }
+            : axis;
+    return new Shape(([child]) => ({ op: "mirror", child, normal }), [this]);
+  }
+
   scale(x: number, y = x, z = x): Shape {
     return new Shape(
       ([child]) => ({ op: "scale", child, by: { x, y, z } }),
@@ -647,8 +671,76 @@ export function countersink(headDia: number, includedAngle = 90): Shape {
   // The cone's half-angle is half the included angle, so the depth follows from
   // the head radius: depth = r / tan(half).
   const r = headDia / 2;
-  const depth = r / Math.tan((includedAngle / 2) * (Math.PI / 180));
-  return cone(0, r, depth).at(0, 0, -depth / 2);
+  const slope = Math.tan((includedAngle / 2) * (Math.PI / 180));
+  const depth = r / slope;
+
+  // Built 0.5 mm taller than the countersink actually is, and widened along its
+  // own taper to match, so the tool crosses the face instead of ending exactly
+  // on it. A cutter coplanar with the surface it cuts leaves a zero-thickness
+  // sliver: here it cost the rim entirely — OCCT merged the cone's flat top
+  // into the face and the rim stopped being an edge the cut had generated.
+  // The section at z = 0 still has radius r, so the visible countersink is the
+  // size the drawing calls for.
+  const over = 0.5;
+  return cone(0, r + over * slope, depth + over).at(0, 0, over - (depth + over) / 2);
+}
+
+/** A point in an extruded outline: `[x, y]`, in the plane the shape is drawn on. */
+export type OutlinePoint = [number, number];
+
+/**
+ * A closed convex outline in XY, given a thickness along Z.
+ *
+ * The counterpart of {@link revolve} for a part that is drawn rather than
+ * turned: a plate outline, a cam blank, a hexagon. Like every other primitive
+ * it is centred on the origin in Z, so the solid runs from `-height / 2` to
+ * `+height / 2`; the outline carries its own placement in X and Y.
+ *
+ * Convex only, for the same reason a revolve section is, and with the same
+ * escape: an L outline is `union` of two convex prisms, which is also how the
+ * part would be cut.
+ */
+export function extrude(profile: OutlinePoint[], height: number): Shape {
+  if (profile.length < 3) {
+    throw new Error(
+      "an extrude outline needs at least 3 [x, y] points, e.g. extrude([[-5, -5], [5, -5], [5, 5], [-5, 5]], 2)",
+    );
+  }
+  if (!(height > 0)) throw new Error("extrude height must be positive");
+  return new Shape(() => ({ op: "extrude", profile, height }), []);
+}
+
+/**
+ * A regular polygon prism along Z: hex stock, a square drive, a triangular key.
+ *
+ * `size` is measured **across the corners** by default, which is the polygon's
+ * circumscribed diameter. Hex bar and every spanner in the world are specified
+ * across the *flats* instead, so that is `{ across: "flats" }` rather than a
+ * conversion the caller has to remember — the same reason `polar()` has a
+ * `straddle` flag instead of an unexplained half-step.
+ */
+export function ngon(
+  sides: number,
+  size: number,
+  height: number,
+  options: { across?: "corners" | "flats" } = {},
+): Shape {
+  if (!Number.isInteger(sides) || sides < 3) {
+    throw new Error(`ngon needs at least 3 whole sides; got ${sides}`);
+  }
+  if (!(size > 0)) throw new Error("ngon size must be positive");
+  const across = options.across ?? "corners";
+  // Across the flats, the polygon touches its inscribed circle: the corners
+  // stand out by 1 / cos(pi / n).
+  const radius =
+    across === "flats" ? size / 2 / Math.cos(Math.PI / sides) : size / 2;
+  // Anticlockwise, first corner on +X. A flat lands on -Y for even side counts,
+  // which is how a hex nut sits on a drawing.
+  const profile: OutlinePoint[] = Array.from({ length: sides }, (_, i) => {
+    const a = (i / sides) * Math.PI * 2;
+    return [Math.cos(a) * radius, Math.sin(a) * radius];
+  });
+  return extrude(profile, height);
 }
 
 export function union(...args: (Shape | BoolOptions)[]): Shape {

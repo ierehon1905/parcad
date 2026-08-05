@@ -303,6 +303,73 @@ Under `tauri dev` the UI comes from Vite on 1420, which proxies `/api` to the
 app's port. That keeps every frontend call same-origin, which is what lets the
 app ship no CORS configuration at all.
 
+### A third caller: MCP
+
+`/mcp` on the same port is the same application again, for a model rather than a
+person. It reaches `service.rs` through the same functions, so a tool cannot do
+something the UI cannot, or measure it differently.
+
+```
+  webview  ──Tauri IPC──┐
+  browser  ──HTTP───────┼──> service.rs ──> core / OCCT worker
+  agent    ──MCP────────┘
+```
+
+Two things are shaped by the caller being a model rather than a person, both
+from CLAUDE.md and both worth more here than anywhere else — a model cannot ask
+a follow-up question and cannot look at the screen:
+
+- **Measured values, never requested ones.** `evaluate_part` returns the
+  deflection the mesher achieved, bounds taken from the geometry, and real face
+  and edge counts, so nothing has to be inferred from the input.
+- **Refusals name the fix.** The service layer's messages are passed through
+  whole. A fillet that does not fit answers with the millimetres it overshot by
+  and what to change, rather than "operation failed".
+
+Selector work is where an agent needs the most help, so it gets two tools that
+have no UI equivalent: `check_selector` parses a term and returns the error
+*and* its span without touching geometry, and `inspect_treatment_target`
+resolves a fillet's input edges against the shape *before* that fillet runs —
+the same question the editor's gold target preview answers, asked in text.
+
+### Scripts from a model run in QuickJS
+
+The editor builds a graph with `new Function` in the webview, which is fine for
+a script a human typed. It is not fine for one a model wrote: that code would
+run in the page, with the Tauri bridge and the user's session in reach.
+
+`script.rs` therefore evaluates agent-authored scripts in an embedded QuickJS
+realm with no host functions at all. There is no `fetch`, `require`,
+filesystem, or console to remove — `quickjs-libc` is not linked and nothing adds
+them back. What QuickJS *can* still do is never return or allocate without
+bound, so a 5 s interrupt deadline and a 64 MB cap turn both into ordinary
+refusals. See ROADMAP.md for what this closed and what it did not.
+
+The DSL those scripts run against is `app/src/dsl.ts`, bundled into the binary
+by `build.rs` at compile time. Not a committed copy: a generated artifact that
+is checked in does not fail when its source changes under it, and a stale one
+here would tell an agent that an operation exists which the kernel no longer
+has.
+
+### Projects are files, not fixtures
+
+`projects.rs` owns one directory — `~/Documents/parcad`, or
+`PARCAD_PROJECTS_DIR` — of `.js` scripts, shared by all three callers. The parts
+that ship are *seeded* into it on first run and are then ordinary projects:
+editable, renamable, deletable. Seeding only ever adds what is missing, so a
+part the user deletes stays deleted.
+
+This is why the app's picker reads the folder over the API instead of globbing
+`examples/` at build time. An "example" that a user cannot open, change and save
+back is a different kind of object from the part they are about to make, and the
+difference is invisible until they try. It also gives an agent somewhere to put
+its work: `save_project` writes to the folder the picker lists, so a part
+written over MCP is one reload away from being on screen.
+
+A project *name* is never a path. `read_project`, `save_project` and the export
+tools reject anything with a separator or `..`, because two of the three callers
+are a socket and a model.
+
 - `app/src/dsl.ts` is the authoring layer and lives in TypeScript, not Rust.
   That's what lets `tools/run.ts` (bun) and the webview run *the same* DSL and
   hand the same JSON to the same core.

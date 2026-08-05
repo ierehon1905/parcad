@@ -15,6 +15,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 e2e = ["dep:tauri-plugin-wdio-webdriver"]
 
 [build-dependencies]
+serde_json.workspace = true
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
@@ -32,4 +33,6 @@ tokio = { version = "1", default-features = false, features = ["net"] }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
-rmcp = { version = "3.1.0", features = ["server", "transport-streamable-http-server", "macros"] }
+rmcp = { version = "3.1.0", features = ["server", "transport-streamable-http-server", "macros", "schemars"] }
+rquickjs = { version = "0.12.2", features = ["bindgen"] }
+schemars = "1.2.2"

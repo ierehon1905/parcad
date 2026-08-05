@@ -60,6 +60,37 @@ async function post<T>(route: string, body: unknown): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+/** Same failure wording as `post`, for the routes that only read. */
+async function send<T>(route: string, init: RequestInit): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(`/api/${route}`, init);
+  } catch {
+    throw new Error(
+      "the parcad desktop process is not answering.\n" +
+        "It hosts this page and its geometry backends; start it with:\n" +
+        "  cd app && bun run tauri dev",
+    );
+  }
+  if (!response.ok) {
+    const detail = await response
+      .json()
+      .then((body) => (body as { error?: string }).error)
+      .catch(() => undefined);
+    throw new Error(detail ?? `the host refused the request (${response.status})`);
+  }
+  return response.json() as Promise<T>;
+}
+
+const get = <T>(route: string) => send<T>(route, { method: "GET" });
+
+const put = <T>(route: string, body: unknown) =>
+  send<T>(route, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
 async function download(route: string, body: unknown): Promise<Blob> {
   const response = await fetch(`/api/${route}`, {
     method: "POST",
@@ -83,6 +114,30 @@ function save(blob: Blob, filename: string) {
   link.download = filename;
   link.click();
   URL.revokeObjectURL(url);
+}
+
+export interface ProjectList {
+  projects: string[];
+  /** The folder on disk, so the UI can tell the user where their parts are. */
+  directory: string;
+}
+
+export function listProjects(): Promise<ProjectList> {
+  return inTauri ? invoke<ProjectList>("list_projects") : get<ProjectList>("projects");
+}
+
+export async function readProject(name: string): Promise<string> {
+  const project = inTauri
+    ? await invoke<{ script: string }>("read_project", { name })
+    : await get<{ script: string }>(`projects/${encodeURIComponent(name)}`);
+  return project.script;
+}
+
+export async function saveProject(name: string, script: string): Promise<string> {
+  const saved = inTauri
+    ? await invoke<{ path: string }>("save_project", { name, script })
+    : await put<{ path: string }>(`projects/${encodeURIComponent(name)}`, { script });
+  return saved.path;
 }
 
 export function evaluate<T>(graph: unknown, depth: number, backend: string): Promise<T> {

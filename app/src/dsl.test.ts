@@ -1,5 +1,19 @@
 import { describe, expect, test } from "bun:test";
-import { around, box, build, cylinder, grid, polar, repeat, union } from "./dsl";
+import {
+  around,
+  box,
+  build,
+  cone,
+  countersink,
+  cylinder,
+  extrude,
+  grid,
+  ngon,
+  polar,
+  repeat,
+  revolve,
+  union,
+} from "./dsl";
 
 /**
  * The pattern helpers are pure arithmetic, which is exactly why they are worth
@@ -96,5 +110,103 @@ describe("around", () => {
 
   test("refuses a count that is not a positive integer", () => {
     expect(() => around(box(1, 1, 1), -1)).toThrow("positive integer");
+  });
+});
+
+describe("revolve", () => {
+  test("a cone is a revolved triangle, centred like every other primitive", () => {
+    const doc = build(cone(10, 4, 20));
+    expect(doc.nodes).toHaveLength(1);
+    expect(doc.nodes[0].op).toBe("revolve");
+    expect(doc.nodes[0].profile).toEqual([
+      [0, -10],
+      [10, -10],
+      [4, 10],
+      [0, 10],
+    ]);
+  });
+
+  test("a point-ended cone drops the degenerate zero-radius corner", () => {
+    const profile = build(cone(6, 0, 12)).nodes[0].profile as [number, number][];
+    expect(profile).toHaveLength(3);
+    expect(profile.filter(([r]) => r === 0)).toHaveLength(2);
+  });
+
+  test("a countersink crosses the face it cuts, at the called-out diameter", () => {
+    // The tool has to overshoot: a cutter ending exactly on the face merges
+    // into it and the rim stops being an edge the cut generated.
+    const doc = build(countersink(10.4, 90));
+    const revolveNode = doc.nodes.find((n) => n.op === "revolve")!;
+    const translate = doc.nodes.find((n) => n.op === "translate")!;
+    const profile = revolveNode.profile as [number, number][];
+    const dz = (translate.by as { z: number }).z;
+
+    const top = profile[profile.length - 2];
+    expect(top[1] + dz).toBeGreaterThan(0); // above the face
+    // 90° included: the radius closes at 1 mm per mm, so the section at the
+    // face is exactly the head radius.
+    const radiusAtFace = top[0] - (top[1] + dz);
+    expect(Math.abs(radiusAtFace - 5.2)).toBeLessThan(1e-9);
+  });
+
+  test("refuses a section that crosses the axis or cannot close", () => {
+    expect(() => revolve([[1, 0], [2, 0]])).toThrow("at least 3");
+    expect(() => revolve([[-1, 0], [2, 0], [0, 3]])).toThrow(">= 0");
+    expect(() => cone(5, 5, 0)).toThrow("height must be positive");
+    expect(() => countersink(6, 200)).toThrow("between 0 and 180");
+  });
+});
+
+describe("ngon", () => {
+  test("across the flats is the inscribed size, across the corners the circumscribed one", () => {
+    // 17 mm hex bar fits a 17 mm spanner and measures 19.63 corner to corner.
+    const flats = build(ngon(6, 17, 5, { across: "flats" })).nodes[0]
+      .profile as [number, number][];
+    const corners = build(ngon(6, 17, 5)).nodes[0].profile as [number, number][];
+
+    const radius = ([x, y]: [number, number]) => Math.hypot(x, y);
+    expect(near(radius(flats[0]), 17 / 2 / Math.cos(Math.PI / 6))).toBe(true);
+    expect(near(radius(corners[0]), 17 / 2)).toBe(true);
+  });
+
+  test("area follows the closed form, so the winding and the radius are both right", () => {
+    // Shoelace over the emitted outline: a regular n-gon of circumradius R has
+    // area n/2 * R^2 * sin(2pi/n), positive when the points run anticlockwise.
+    const profile = build(ngon(5, 20, 3)).nodes[0].profile as [number, number][];
+    let area = 0;
+    for (let i = 0; i < profile.length; i++) {
+      const [ax, ay] = profile[i];
+      const [bx, by] = profile[(i + 1) % profile.length];
+      area += ax * by - bx * ay;
+    }
+    const expected = (5 / 2) * 10 * 10 * Math.sin((2 * Math.PI) / 5);
+    expect(near(area / 2, expected)).toBe(true);
+  });
+
+  test("refuses a shape that is not a polygon", () => {
+    expect(() => ngon(2, 10, 5)).toThrow("at least 3");
+    expect(() => ngon(6.5, 10, 5)).toThrow("whole sides");
+    expect(() => extrude([[0, 0], [1, 0]], 2)).toThrow("at least 3");
+    expect(() => extrude([[0, 0], [1, 0], [1, 1]], 0)).toThrow("must be positive");
+  });
+});
+
+describe("mirror", () => {
+  test("names the plane by its normal, and shares the shape it reflects", () => {
+    const half = box(10, 4, 2).at(8, 0, 0);
+    const doc = build(union(half, half.mirror("x")));
+    const mirror = doc.nodes.find((n) => n.op === "mirror")!;
+
+    expect(mirror.normal).toEqual({ x: 1, y: 0, z: 0 });
+    // One box and one translation, referenced twice: reflecting does not copy.
+    expect(doc.nodes.filter((n) => n.op === "cuboid")).toHaveLength(1);
+    expect(doc.nodes.filter((n) => n.op === "translate")).toHaveLength(1);
+  });
+
+  test("is not a scale of -1", () => {
+    // The distinction the graph makes, and the reason mirror is its own op: a
+    // uniform -1 is a point inversion, and a non-uniform one is refused.
+    const doc = build(box(2, 2, 2).mirror("z"));
+    expect(doc.nodes.some((n) => n.op === "scale")).toBe(false);
   });
 });

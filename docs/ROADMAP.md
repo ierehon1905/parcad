@@ -1,14 +1,38 @@
 # Known gaps and what's next
 
-## Security — do this before MCP lands
+## Security
 
-**Scripts run via `new Function` in the webview have full page access, including
-the Tauri `invoke` bridge.** That is fine for scripts a human typed. It is not
-fine the moment an agent authors them, which is the entire point of the project.
+### Agent-authored scripts run in QuickJS, not the webview *(closed)*
 
-Fix before shipping an MCP server: run scripts in a worker with no Tauri API
-exposed, or move execution to QuickJS in Rust. `tools/run.ts` has the same shape
-of problem but runs under bun where the blast radius is the user's own shell.
+The blocker was: **scripts run via `new Function` in the webview have full page
+access, including the Tauri `invoke` bridge.** Fine for a script a human typed
+into their own editor; not fine the moment an agent authors one, which is the
+entire point of the project.
+
+`app/src-tauri/src/script.rs` takes the second of the two options that were on
+the table — QuickJS in Rust — rather than a webview worker, because it needs no
+window open and shares no origin with the editor. The realm is created empty:
+QuickJS without `quickjs-libc` has no `fetch`, no `require`, no filesystem and
+no console, and nothing in that file adds a host function. It is not an
+allow-list, which would have to be complete to be worth anything.
+
+Asserted rather than described, in `script::tests`:
+
+| probe | result |
+|---|---|
+| `require`, `fetch`, `process`, `window`, `__TAURI_INTERNALS__`, `Deno`, `Bun`, … | `ReferenceError` — the name is simply not there |
+| `while (true) {}` | stopped at 5 s by an interrupt handler |
+| unbounded allocation | `out of memory` inside the script, at a 64 MB cap |
+
+**`tools/run.ts` still has the original shape of the problem** — it runs a script
+under bun with the user's own shell privileges. That is acceptable for a
+developer running a file they are looking at, and it is not a path an agent
+reaches; the MCP server does not use it.
+
+The remaining gap is the *editor*: the webview still uses `new Function`, which
+is correct for a human typing into it, but a script pasted from a model into
+that editor is not sandboxed. Routing the editor through the same Rust sandbox
+would close it, at the cost of an IPC round trip per keystroke-debounced build.
 
 ## Kernel capabilities not yet reachable
 
@@ -72,6 +96,71 @@ B-rep cannot. Barely started:
 - **Non-human perception modes**: field probes, slice stacks, ray arrays,
   printability fields. These are cheap on an SDF and impossible on a B-rep, and
   they are the point of having both.
+
+### The agent surface exists, and it cannot see
+
+`app/src-tauri/src/mcp.rs` landed as soon as the sandbox closed, so a model now
+reaches the same `service` functions the two windows do. Every one of its tools
+returns numbers. Meanwhile `parcad-core` already contains an ambient-occlusion
+raymarcher (`render.rs`), seven consistently-framed standard views (`view.rs`),
+and a false-coloured tag-region map whose legend reports `visible: false` for a
+tag that is genuinely in the model but hidden from this angle (`tags.rs`) — and
+the only caller of any of it is `parcad-cli`. `service.rs` has no render entry
+point, so neither window nor any agent can ask for one.
+
+It also cannot *act on* what the user is looking at. MCP is stateless by
+construction: every tool call carries its whole script, evaluates it in
+isolation, and returns. `save_project` writes a file and stops — no event
+reaches the webview or the browser, so a part an agent saves appears in the
+picker only on reload. While an agent works, the open window is a correct but
+stale view of the folder.
+
+**Decided, not built: one live session the agent can drive.** The app process
+already owns both ends — the MCP handler and the window are the same process,
+and browsers are on the same axum host — so the plumbing is short:
+
+- Session state in Rust (`name`, `script`, `revision`, and the id of whichever
+  viewer originated the change), plus a broadcast channel.
+- `open_project`, `set_script` and `get_session` on the MCP side, so an agent
+  can change what is on screen *and* read what the user has since typed.
+- Viewers push their own document back on the existing evaluation debounce, or
+  `get_session` lies. Each viewer ignores broadcasts it originated, which is
+  what keeps two browser tabs and the desktop window in sync without an echo
+  loop.
+- SSE at `/api/session/events` for browsers; a Tauri event for the webview.
+  One broadcast, two transports, same rule as everything else here.
+
+The conflict rule is deliberately not a lock: **an agent edit is an ordinary
+edit.** It lands in CodeMirror's normal undo history, so Cmd-Z takes it back and
+a user who disagrees with a change reverses it the way they reverse their own.
+A lock would have to be explained; undo does not.
+
+Ordered, because each item is the prerequisite for the next:
+
+1. **One evaluation artifact.** `mcp.rs` builds its own flat summary and rescans
+   the raw graph JSON for treatment nodes — a second definition of "what an
+   evaluation is", living in a transport file, which is the divergence
+   `service.rs` was extracted to stop. `docs/AI_CAD_PLATFORM.md` names the fix:
+   one `EvaluationSnapshot` that every transport serialises and nobody
+   redefines.
+2. **Renders, sections and region maps as fields on that snapshot**, not as
+   further bespoke tools. Renders come off the distance field, so a part
+   *measured* through the B-rep is *seen* through the implicit backend; the two
+   disagree by the blend bulge, in millimetres, and the artifact has to say
+   which one drew it. A section view is a render-time half-plane, needs no new
+   op, and `docs/DSL_GAPS.md` records it as the thing most missed while writing
+   all twelve examples.
+3. **Compare.** The loop in `AI_CAD_PLATFORM.md` is inspect → plan → modify →
+   evaluate → *compare* → verify → explain, and there is no diff. Two graphs in,
+   geometry/topology/measurement delta out.
+4. **Lineage through fillet, offset, shell and transforms** — see the provenance
+   bullet above. `equivalent_tags` is only ever as sound as the history under
+   it.
+5. **Refusals that name the *right* fix.** `docs/GOTCHAS.md` is a list of places
+   where the message we already emit is confidently wrong: a blended union of
+   face-touching solids aborts the kernel and blames the radius, which is not
+   the problem. An agent reads that, believes it, and retries. Each gotcha with
+   a wrong message is a bug in the harness, not a note for a human.
 
 ## Reference numbers
 

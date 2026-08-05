@@ -16,7 +16,7 @@ import { javascript } from "@codemirror/lang-javascript";
 import { oneDark } from "@codemirror/theme-one-dark";
 import * as dsl from "./dsl";
 import { Shape } from "./dsl";
-import { BRACKET, EXAMPLES, exampleSource } from "./examples";
+import { label as projectLabel, loadProjects, readProject } from "./projects";
 import { suggestVertexSelector, verticesFromEdges, type VertexPoint } from "./entities";
 import { selectorLinter } from "./selector-lint";
 import { treatmentHover as treatmentHoverTooltip, type TreatmentHoverSource } from "./treatment-hover";
@@ -198,7 +198,9 @@ const hoverSource: TreatmentHoverSource = {
 (window as unknown as Record<string, unknown>).__hoverSource = hoverSource;
 
 const editor = new EditorView({
-  doc: BRACKET,
+  // Empty until the project folder answers. The document is loaded from disk
+  // rather than compiled in, so there is nothing to show synchronously.
+  doc: "",
   parent: $("editor"),
   extensions: [
     basicSetup,
@@ -691,24 +693,64 @@ function syncBackendUi() {
 }
 syncBackendUi();
 
-// The picker is built from the example registry rather than listed in the HTML,
-// so a file added to examples/ shows up here without a second edit.
-{
-  const picker = $<HTMLSelectElement>("example");
-  for (const example of EXAMPLES) {
-    const option = document.createElement("option");
-    option.value = example.id;
-    option.textContent = example.label;
-    picker.append(option);
+// The picker lists parcad's project folder rather than anything compiled in,
+// so a part saved by hand or by an agent shows up here on the next load.
+const picker = $<HTMLSelectElement>("example");
+
+picker.addEventListener("change", async (e) => {
+  const name = (e.target as HTMLSelectElement).value;
+  try {
+    const source = await readProject(name);
+    editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: source } });
+    framed = false;
+    clearError();
+  } catch (err) {
+    showError(err);
+    setStatus("could not open the project", "failed");
+  }
+});
+
+/**
+ * Fill the picker and open a part.
+ *
+ * Evaluation is deliberately not started before this resolves: running the
+ * empty document would report "the script must return a shape", which is true
+ * and useless as a first impression.
+ */
+async function start() {
+  setStatus("loading projects", "busy");
+  let projects;
+  try {
+    projects = await loadProjects();
+  } catch (e) {
+    showError(e);
+    setStatus("failed", "failed");
+    return;
   }
 
-  picker.addEventListener("change", (e) => {
-    const doc = exampleSource((e.target as HTMLSelectElement).value);
-    editor.dispatch({
-      changes: { from: 0, to: editor.state.doc.length, insert: doc },
-    });
-    framed = false;
-  });
+  for (const name of projects.names) {
+    const option = document.createElement("option");
+    option.value = name;
+    option.textContent = projectLabel(name);
+    picker.append(option);
+  }
+  picker.title = `Parts in ${projects.directory}`;
+
+  if (!projects.initial) {
+    setStatus("no projects");
+    showError(
+      new Error(
+        `parcad's project folder is empty:\n  ${projects.directory}\n` +
+          "Put a .js part in it, or write one here and save it.",
+      ),
+    );
+    return;
+  }
+
+  picker.value = projects.initial;
+  const source = await readProject(projects.initial);
+  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: source } });
+  run();
 }
 
 // Draggable split between editor and viewport.
@@ -754,4 +796,4 @@ window.addEventListener("keydown", async (e) => {
   }
 });
 
-run();
+start();

@@ -1,0 +1,31 @@
+{
+  "name": "hex-prism",
+  "script": "eval/scripts/hex-prism.js",
+  "why": "The extrude primitive, against a closed form: a regular hexagon 20 mm across the flats is 2*sqrt(3)*100 = 346.410 mm2, so 3464.102 mm3 at 10 mm thick. It also pins ngon's across-the-flats convention, which read as across the corners would give 2598.076 mm3.",
+  "implicit": {
+    "depth": 7,
+    "size": [
+      23.094,
+      20.0,
+      10.0
+    ],
+    "volume_mm3": 3463.712,
+    "area_mm2": 1400.182,
+    "triangles": 119684,
+    "watertight": true
+  },
+  "brep": {
+    "size": [
+      23.094,
+      20.0,
+      10.0
+    ],
+    "volume_mm3": 3464.102,
+    "area_mm2": 1385.641,
+    "triangles": 20,
+    "watertight": true,
+    "faces": 8,
+    "edges": 36,
+    "curves": 18
+  }
+}

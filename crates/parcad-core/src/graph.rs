@@ -267,6 +267,24 @@ pub enum Op {
         profile: Vec<[f64; 2]>,
     },
 
+    /// A closed convex polygon in the XY plane, given a thickness along Z.
+    ///
+    /// The counterpart of [`Op::Revolve`] for a part that is *drawn* rather than
+    /// turned: a plate outline, a cam blank, a hexagon. It is centred on the
+    /// origin in Z like every other primitive, so the section runs from
+    /// `-height / 2` to `+height / 2`; the profile carries its own placement in
+    /// X and Y, exactly as a revolve section does in radius and z.
+    ///
+    /// Convexity is required for the same reason as on a revolve, and has the
+    /// same escape: an L-bracket outline is a union of two convex prisms, which
+    /// is also how it would be fabricated.
+    Extrude {
+        /// `[x, y]` pairs, anticlockwise, first point not repeated.
+        profile: Vec<[f64; 2]>,
+        /// Full thickness along Z.
+        height: f64,
+    },
+
     /// Union. `blend` > 0 rounds the join by that radius.
     Union {
         children: Vec<NodeId>,
@@ -296,6 +314,24 @@ pub enum Op {
     Scale {
         child: NodeId,
         by: V3,
+    },
+
+    /// Reflect in the plane through the origin whose normal is `normal`.
+    ///
+    /// A reflection is an isometry, so unlike [`Op::Scale`] it costs nothing in
+    /// either backend: the implicit field is exact through it, and the B-rep
+    /// keeps every surface type. It is a separate op because it cannot be sugar
+    /// over a scale of -1 — non-uniform scale is refused, correctly, and a
+    /// uniform -1 is a point inversion rather than a reflection.
+    ///
+    /// Mirroring does not union the halves. `mirror(half)` is the other half;
+    /// a symmetric part is `union(half, mirror(half))`, which keeps "reflect"
+    /// and "join" separable — a left-hand variant of a part is the reflection
+    /// alone.
+    Mirror {
+        child: NodeId,
+        /// Normal of the mirror plane. Need not be unit length.
+        normal: V3,
     },
 
     /// Grow (`distance` > 0) or shrink the shape by moving its surface.
@@ -349,6 +385,50 @@ pub enum Op {
     },
 }
 
+/// Which section a validation message is talking about.
+///
+/// The rules are identical for a revolved and an extruded section — closed,
+/// convex, enclosing area — and only the words a reader needs differ. Keeping
+/// one checker means the two ops can never drift into accepting different
+/// polygons, which is the failure the shared selector corpus exists to prevent
+/// one layer up.
+#[derive(Clone, Copy)]
+enum SectionKind {
+    Revolve,
+    Extrude,
+}
+
+impl SectionKind {
+    fn op(self) -> &'static str {
+        match self {
+            Self::Revolve => "revolve",
+            Self::Extrude => "extrude",
+        }
+    }
+
+    fn pair(self) -> &'static str {
+        match self {
+            Self::Revolve => "[radius, z]",
+            Self::Extrude => "[x, y]",
+        }
+    }
+
+    fn example(self) -> &'static str {
+        match self {
+            Self::Revolve => "[[0, -5], [4, -5], [0, 5]] for a cone",
+            Self::Extrude => "[[-5, -5], [5, -5], [5, 5], [-5, 5]] for a square",
+        }
+    }
+
+    /// What to build instead, when the section is re-entrant.
+    fn workaround(self) -> &'static str {
+        match self {
+            Self::Revolve => "build a stepped profile as a union of convex revolves",
+            Self::Extrude => "build the outline as a union of convex prisms",
+        }
+    }
+}
+
 impl Op {
     /// Check a [`Op::Revolve`] profile, and report the signed area.
     ///
@@ -359,19 +439,40 @@ impl Op {
     /// re-entrant one meshes fine while the two backends disagree about where
     /// its surface is.
     pub fn validate_profile(profile: &[[f64; 2]]) -> anyhow::Result<f64> {
-        if profile.len() < 3 {
-            anyhow::bail!(
-                "a revolve profile needs at least 3 points; got {}. Author it as [radius, z] pairs, e.g. [[0, -5], [4, -5], [0, 5]] for a cone",
-                profile.len()
-            );
-        }
-        for (i, [r, z]) in profile.iter().enumerate() {
-            if !r.is_finite() || !z.is_finite() {
-                anyhow::bail!("revolve profile point {i} is not a finite [radius, z] pair");
-            }
+        for (i, [r, _]) in profile.iter().enumerate() {
             if *r < 0.0 {
                 anyhow::bail!(
                     "revolve profile point {i} has radius {r}, which is left of the axis. A profile that crosses the axis sweeps through itself; mirror it so every radius is >= 0"
+                );
+            }
+        }
+        Self::validate_section(profile, SectionKind::Revolve)
+    }
+
+    /// Check an [`Op::Extrude`] profile, and report the signed area.
+    ///
+    /// Same rules as a revolve section minus the axis: an extruded outline may
+    /// sit anywhere in XY, including across the origin.
+    pub fn validate_outline(profile: &[[f64; 2]]) -> anyhow::Result<f64> {
+        Self::validate_section(profile, SectionKind::Extrude)
+    }
+
+    fn validate_section(profile: &[[f64; 2]], kind: SectionKind) -> anyhow::Result<f64> {
+        if profile.len() < 3 {
+            anyhow::bail!(
+                "a {} profile needs at least 3 points; got {}. Author it as {} pairs, e.g. {}",
+                kind.op(),
+                profile.len(),
+                kind.pair(),
+                kind.example()
+            );
+        }
+        for (i, [u, v]) in profile.iter().enumerate() {
+            if !u.is_finite() || !v.is_finite() {
+                anyhow::bail!(
+                    "{} profile point {i} is not a finite {} pair",
+                    kind.op(),
+                    kind.pair()
                 );
             }
         }
@@ -393,8 +494,10 @@ impl Op {
             if cross.abs() > 1e-12 {
                 match turn {
                     Some(previous) if previous * cross < 0.0 => anyhow::bail!(
-                        "revolve profile is not convex at point {}. A re-entrant section has no exact distance field, so it is refused rather than approximated; build a stepped profile as a union of convex revolves",
-                        (i + 1) % n
+                        "{} profile is not convex at point {}. A re-entrant section has no exact distance field, so it is refused rather than approximated; {}",
+                        kind.op(),
+                        (i + 1) % n,
+                        kind.workaround()
                     ),
                     _ => turn = Some(cross),
                 }
@@ -404,7 +507,8 @@ impl Op {
 
         if area.abs() < 1e-12 {
             anyhow::bail!(
-                "revolve profile encloses no area; its points are collinear or repeated"
+                "{} profile encloses no area; its points are collinear or repeated",
+                kind.op()
             );
         }
         Ok(area)
@@ -499,7 +603,8 @@ impl Doc {
             Op::Cuboid { .. }
             | Op::Sphere { .. }
             | Op::Cylinder { .. }
-            | Op::Revolve { .. } => vec![],
+            | Op::Revolve { .. }
+            | Op::Extrude { .. } => vec![],
             Op::Union { children, .. } | Op::Intersection { children, .. } => children.clone(),
             Op::Difference { base, tools, .. } => {
                 let mut v = vec![*base];
@@ -509,6 +614,7 @@ impl Doc {
             Op::Translate { child, .. }
             | Op::Rotate { child, .. }
             | Op::Scale { child, .. }
+            | Op::Mirror { child, .. }
             | Op::Offset { child, .. }
             | Op::Shell { child, .. }
             | Op::Fillet { child, .. }

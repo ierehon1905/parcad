@@ -13,7 +13,10 @@
 //! exact and partial — it refuses operations it cannot do faithfully, and what
 //! it returns has real faces, real edges, and nominal dimensions.
 
-use parcad_core::{graph::Doc, mesh::Tessellation};
+use parcad_core::{
+    graph::{Doc, Op},
+    mesh::Tessellation,
+};
 use serde::Serialize;
 use std::path::Path;
 
@@ -37,6 +40,185 @@ pub struct Evaluated {
     backend: &'static str,
     report: parcad_core::PartReport,
     timings: Timings,
+}
+
+/// Read access for callers that list entities rather than serialise geometry.
+///
+/// The measured fields deliberately have no getters. They had four, one per
+/// value the MCP server wanted, and that is how a transport ends up assembling
+/// its own idea of what an evaluation is. Ask for a [`Snapshot`] instead — there
+/// is one of those, and both transports serialise the same one.
+impl Evaluated {
+    pub fn edges(&self) -> &[parcad_occt::EdgeCurve] {
+        &self.edges
+    }
+}
+
+/// One evaluation, in measured values: the artifact a caller reasons about.
+///
+/// Separate from [`Evaluated`] because the two answer different questions.
+/// `Evaluated` carries a mesh for something to *draw*; a `Snapshot` carries what
+/// the part *is*, for a caller that cannot look at the screen. Both come from
+/// one evaluation, so they cannot describe different parts.
+///
+/// It lives here rather than in a transport because a summary is a statement
+/// about the model, and a capability that exists on one transport and not
+/// another is the divergence this module was extracted to stop. The MCP server
+/// previously built its own copy of this from the raw graph JSON, which is how
+/// it came to look for `smooth` and `squircle` nodes — DSL method names that
+/// have never been ops.
+///
+/// Every field is measured from what the kernel produced, except `treatments`,
+/// which is read off the document because a requested treatment that resolved to
+/// no edges is exactly what a caller needs to be told about.
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct Snapshot {
+    /// Always "mm".
+    pub units: String,
+    /// Taken from the geometry, never from the requested framing.
+    pub size: [f64; 3],
+    pub bounds_min: [f64; 3],
+    pub bounds_max: [f64; 3],
+    pub volume_mm3: f64,
+    pub area_mm2: f64,
+    pub centroid: [f64; 3],
+    /// Exact-kernel counts. Absent for the implicit backend, which has no
+    /// topology — different from having none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub faces: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub topological_edges: Option<usize>,
+    pub triangles: usize,
+    /// What the mesher achieved, never what was asked for.
+    pub resolution_mm: f64,
+    pub watertight: bool,
+    pub non_manifold_edges: usize,
+    pub tags: Vec<String>,
+    /// Edge treatments the finished part actually depends on.
+    pub treatments: Vec<Treatment>,
+    /// Which backend produced this. Worth stating plainly: the two disagree by
+    /// the blend bulge, which is millimetres rather than rounding.
+    pub backend: String,
+    pub kernel_ms: u64,
+}
+
+/// An edge treatment, as a handle a caller can inspect.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Treatment {
+    /// Intent-graph node index — the handle `inspect_edge_target` takes.
+    pub node: usize,
+    /// `fillet` or `chamfer`, the op rather than the DSL method that wrote it.
+    pub op: String,
+    /// Radius for a fillet, distance for a chamfer. The authored parameter, not
+    /// a measurement: what the treatment did is `inspect_edge_target`'s answer.
+    pub amount_mm: f64,
+    /// `tangent` (G1) or `curvature` (G2), for a fillet. `.smooth()` and
+    /// `.squircle()` are DSL spellings of a G2 fillet, so without this a caller
+    /// that wrote one cannot tell its request survived.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub continuity: Option<String>,
+}
+
+/// Describe one evaluation.
+///
+/// Takes the document as well as the result because a treatment is a fact about
+/// the graph: the kernel consumes a fillet and hands back a solid, so by the
+/// time there is geometry there is nothing left to ask which node produced it.
+pub fn snapshot(doc: &Doc, evaluated: &Evaluated) -> Snapshot {
+    let report = &evaluated.report;
+    let topology = evaluated.topology.as_ref();
+
+    Snapshot {
+        units: report.units.clone(),
+        size: [report.size.x, report.size.y, report.size.z],
+        bounds_min: [
+            report.bounds.min.x,
+            report.bounds.min.y,
+            report.bounds.min.z,
+        ],
+        bounds_max: [
+            report.bounds.max.x,
+            report.bounds.max.y,
+            report.bounds.max.z,
+        ],
+        volume_mm3: report.mass.volume_mm3,
+        area_mm2: report.mass.area_mm2,
+        centroid: [
+            report.mass.centroid.x,
+            report.mass.centroid.y,
+            report.mass.centroid.z,
+        ],
+        faces: topology.map(|t| t.faces),
+        topological_edges: topology.map(|t| t.edges),
+        triangles: report.mesh.triangles,
+        resolution_mm: report.mesh.resolution_mm,
+        watertight: report.mesh.watertight,
+        non_manifold_edges: report.mesh.non_manifold_edges,
+        tags: report.tags.clone(),
+        treatments: treatments(doc),
+        backend: evaluated.backend.to_string(),
+        kernel_ms: evaluated.timings.kernel_ms,
+    }
+}
+
+/// The edge treatments the root depends on, in dependency order.
+///
+/// Only live nodes: a fillet the root does not reach is not in the part, and
+/// offering it as something to inspect sends a caller to look at geometry that
+/// was never built. `PartReport::live_nodes` already reports that a document has
+/// dead nodes; this is the same fact applied to one kind of them.
+///
+/// The match is exhaustive on purpose. A new treatment op fails to compile here
+/// rather than silently never appearing — which is what a `matches!` over op
+/// name strings does, and did.
+fn treatments(doc: &Doc) -> Vec<Treatment> {
+    let Ok(order) = doc.topo_order() else {
+        // An unorderable graph has no live nodes to report. It also cannot have
+        // evaluated, so this is unreachable from `snapshot`; returning nothing
+        // is still the honest answer rather than falling back to every node.
+        return Vec::new();
+    };
+
+    order
+        .into_iter()
+        .filter_map(|node| {
+            let treatment = match &doc.nodes.get(node)?.op {
+                Op::Fillet { radius, recipe, .. } => Treatment {
+                    node,
+                    op: "fillet".to_string(),
+                    amount_mm: *radius,
+                    continuity: Some(
+                        match recipe.continuity {
+                            parcad_core::graph::FilletContinuity::Tangent => "tangent",
+                            parcad_core::graph::FilletContinuity::Curvature => "curvature",
+                        }
+                        .to_string(),
+                    ),
+                },
+                Op::Chamfer { distance, .. } => Treatment {
+                    node,
+                    op: "chamfer".to_string(),
+                    amount_mm: *distance,
+                    continuity: None,
+                },
+                Op::Cuboid { .. }
+                | Op::Sphere { .. }
+                | Op::Cylinder { .. }
+                | Op::Revolve { .. }
+                | Op::Extrude { .. }
+                | Op::Union { .. }
+                | Op::Difference { .. }
+                | Op::Intersection { .. }
+                | Op::Translate { .. }
+                | Op::Rotate { .. }
+                | Op::Scale { .. }
+                | Op::Mirror { .. }
+                | Op::Offset { .. }
+                | Op::Shell { .. } => return None,
+            };
+            Some(treatment)
+        })
+        .collect()
 }
 
 #[derive(Serialize, Default)]
@@ -309,7 +491,10 @@ fn with_scratch_file(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let path = std::env::temp_dir().join(format!("parcad-export-{}-{unique}.{extension}", std::process::id()));
+    let path = std::env::temp_dir().join(format!(
+        "parcad-export-{}-{unique}.{extension}",
+        std::process::id()
+    ));
 
     let outcome = write(&path).and_then(|()| {
         std::fs::read(&path).map_err(|e| format!("reading the exported {extension}: {e}"))
@@ -329,4 +514,83 @@ fn with_scratch_file(
 pub fn write_export(export: &Export, path: &str) -> Result<String, String> {
     std::fs::write(path, &export.bytes).map_err(|e| format!("writing {path}: {e}"))?;
     Ok(path.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Documents are built from JSON rather than from `Op` values: this is the
+    /// shape a DSL script actually produces, and the reporting bug these tests
+    /// exist for was a mismatch between that shape and an assumption about it.
+    fn doc(json: serde_json::Value) -> Doc {
+        parse_graph(json).expect("the test graph should parse")
+    }
+
+    #[test]
+    fn treatments_are_reported_in_dependency_order_with_their_parameters() {
+        let treatments = treatments(&doc(serde_json::json!({
+            "root": 2,
+            "nodes": [
+                { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+                { "op": "fillet", "child": 0, "radius": 2, "selector": ">Z" },
+                { "op": "chamfer", "child": 1, "distance": 1, "selector": "<Z" },
+            ],
+        })));
+
+        let reported: Vec<_> = treatments
+            .iter()
+            .map(|t| (t.node, t.op.as_str(), t.amount_mm, t.continuity.as_deref()))
+            .collect();
+        assert_eq!(
+            reported,
+            [
+                (1, "fillet", 2.0, Some("tangent")),
+                (2, "chamfer", 1.0, None),
+            ]
+        );
+    }
+
+    /// `.smooth()` and `.squircle()` are DSL spellings of a G2 fillet, not ops.
+    /// The transport-side summary this replaced looked for nodes named `smooth`
+    /// and `squircle`, which no graph has ever contained.
+    #[test]
+    fn a_smooth_is_reported_as_a_fillet_asking_for_curvature() {
+        let treatments = treatments(&doc(serde_json::json!({
+            "root": 1,
+            "nodes": [
+                { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+                {
+                    "op": "fillet",
+                    "child": 0,
+                    "radius": 2,
+                    "selector": ">Z",
+                    "recipe": { "continuity": "curvature" },
+                },
+            ],
+        })));
+
+        assert_eq!(treatments.len(), 1);
+        assert_eq!(treatments[0].op, "fillet");
+        assert_eq!(treatments[0].continuity.as_deref(), Some("curvature"));
+    }
+
+    /// A treatment the root does not reach was never built. Offering it as
+    /// something to inspect sends a caller to look at geometry that is not in
+    /// the part.
+    #[test]
+    fn a_treatment_the_root_does_not_reach_is_not_reported() {
+        let treatments = treatments(&doc(serde_json::json!({
+            "root": 0,
+            "nodes": [
+                { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+                { "op": "fillet", "child": 0, "radius": 2, "selector": ">Z" },
+            ],
+        })));
+
+        assert!(
+            treatments.is_empty(),
+            "a fillet outside the root's dependencies is not in the part: {treatments:?}"
+        );
+    }
 }

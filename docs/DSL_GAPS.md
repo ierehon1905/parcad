@@ -15,35 +15,41 @@ Two kinds of entry, kept apart on purpose:
   they should. All twelve parts in `examples/` build exactly and are measured
   in `eval/cases/`, so none of those are blockers.
 
-Format for both: what happens, where it hurts, and what would fix it.
+Entries that have since been fixed are kept, marked **FIXED**, with what the
+fix turned out to be — a gap that was closed is the most useful kind of record
+when deciding whether the next one is real.
+
+Format for all of them: what happens, where it hurts, and what would fix it.
 
 ---
 
 ## 0. Not expressible: the feature is missing
 
-The whole vocabulary is thirteen ops — `Cuboid`, `Sphere`, `Cylinder`, three
-booleans, `Translate`, `Rotate`, `Scale`, `Offset`, `Shell`, `Fillet`,
-`Chamfer` (`crates/parcad-core/src/graph.rs`). Everything below was reached for
-while modelling the twelve example parts and abandoned, because no combination
-of those thirteen produces it.
+**Corrected once already.** This section originally said a cone was out of
+reach because `opencascade-sys` binds no `BRepPrimAPI_MakeCone`. That was the
+wrong layer to look at: a cone is a revolved triangle, and
+`BRepPrimAPI_MakeRevol` *is* bound — as are `MakePrism` (extrude) and
+`ThruSections` (loft), with `Edge`, `Wire` and `Face` to build a section from.
+The kernel was never the constraint; our graph was. `Op::Revolve` now exists
+because of it, and `cone()`, `countersink()` and any turned section came with
+it for free.
 
-| wanted | needed for | missing op |
+The lesson is worth more than the op: before recording something as impossible,
+check the layer that would implement it, not the layer above.
+
+### Still missing
+
+| wanted | needed for | what it takes |
 |---|---|---|
-| **cone / tapered solid** | countersunk screw holes on `motor-mount.js` and `manifold-block.js`, any draft angle, a lathe centre, a chamfered boss | `Cone { r1, r2, h }` — the cheapest big win here; a countersink is the single most common feature in the whole corpus and none of the twelve has one |
-| **torus** | an O-ring groove in `pipe-tee.js` and `manifold-block.js` port faces, a rounded rim without a fillet | `Torus { major, minor }` |
-| **revolve a profile** | any turned part whose section is not a stack of cylinders: a proper flange hub taper, a bearing seat, a pulley crown | a 2D profile type, then `Revolve` |
-| **sweep / extrude a profile along a path** | a true GT2 tooth (`timing-pulley.js` approximates it and says so), any custom extrusion section, a pipe bend, a cable channel | same 2D profile type, then `Sweep` |
-| **helix** | real threads anywhere — every "threaded" hole in the corpus is drawn as its tap drill, and `hex-standoff.js` says so in a comment; a diamond knurl on `knurled-knob.js`; a spring | a helical path, which needs the sweep above |
-| **involute / non-circular profile curves** | a spur gear, a cam, a proper GT2 flank | curve construction of any kind; today the only curves are the ones primitives happen to have |
-| **mirror** | every symmetric part writes both halves by hand | `Mirror { axis }`. It cannot be sugar over `Scale`: non-uniform scale is refused, correctly |
+| **extrude an authored section** | a custom extrusion profile, a cam plate, any 2D outline given a thickness | a 2D section type, then `Op::Extrude` over the already-bound `MakePrism`. The section type is the real work, and `Revolve` has now defined what one looks like |
+| **arcs in a section** | a true torus, an O-ring groove, a bearing seat — anything with a radius in section rather than a chamfer | `Edge::arc` is bound; the profile is a `Vec<[f64; 2]>` of straight segments, so an arc has nowhere to live yet |
+| **helix** | real threads — every "threaded" hole in the corpus is drawn as its tap drill; a diamond knurl; a spring | a helical path plus a sweep. `MakePipe` is not currently bound |
+| **involute and other authored curves** | a spur gear, a cam, a real GT2 flank (`timing-pulley.js` approximates it and says so) | curve construction in the graph, on top of the section type |
+| **re-entrant (non-convex) sections** | a stepped hub in one operation | today it is refused, deliberately: no exact distance field. A union of convex revolves is exact, and is how the part is turned anyway |
+| **mirror** | every symmetric part writes both halves by hand | `Op::Mirror`. It cannot be sugar over `Scale`, because non-uniform scale is refused, correctly |
 | **variable-radius and unequal-distance treatments** | a casting fillet that tapers, an asymmetric chamfer for a weld prep | `Fillet`/`Chamfer` take one scalar |
-| **section / cut-away for inspection** | seeing that `manifold-block.js`'s galleries actually meet without exporting an STL and slicing it elsewhere | a view concern, not a geometry one, but it is the thing most missed while writing these |
+| **section / cut-away for inspection** | seeing that `manifold-block.js`'s galleries meet without exporting an STL and slicing it elsewhere | a view concern, not a geometry one, and still the thing most missed while writing these |
 | **multi-body / assembly** | a pillow block *and* its bearing, a tee *and* its pipes, any fit check | the graph has one root and one solid |
-
-Two of these compound: threads, knurls, springs and gear flanks are all
-"sweep a profile along a path", so a profile type plus `Sweep` unlocks most of
-the list. `Cone` and `Mirror` are small and independent, and would improve the
-existing twelve parts today.
 
 What is deliberately absent and should stay absent: anything that would let a
 part be *approximately* right. A "thread" that is a stack of tori, or a cone
@@ -51,10 +57,33 @@ faked from a scaled cylinder, is exactly the silent approximation the project
 refuses — `timing-pulley.js` is the boundary case, and it only exists because
 it announces itself in the first line of the file.
 
-## 1. No polar array. Every round part rewrites the same loop
+### What `Revolve` cost, and what it is worth reading about
 
-`grid()` gives rectangular patterns; there is no rotational equivalent, so a
-bolt circle is authored arithmetic:
+Two findings from implementing it, both recorded in the code:
+
+- **The implicit field is a bound outside a convex corner**, not an exact
+  distance. The exact nearest-segment formula was written first and rejected:
+  under interval arithmetic its clamped projection loses the correlation
+  between its own terms, the octree could no longer prove a cell empty, and a
+  plain tube meshed to 31k triangles at depth 6 instead of about 1k — with NaN
+  vertices at depth 7. The half-plane form is exact on the surface and inside,
+  underestimates outside a corner, and is safe for the mesher in the way an
+  overestimate would not be. `sdf::revolve` says so, and a unit test pins the
+  under-read so that making it exact later is a deliberate edit.
+- **`role: "hole"` does not recognise a conical opening.** A countersink rim is
+  an inner boundary of the top face by any reading, and the term drops it —
+  `cover-plate.js` selects on `curve` and position instead. Same root cause as
+  §6: the term means something narrower than it says.
+
+## 1. No polar array. Every round part rewrites the same loop — **FIXED**
+
+`polar(count, radius, { straddle })` and `around(shape, count, axis)` now sit
+beside `grid()` in `dsl.ts`, with unit tests in `dsl.test.ts`. `flange.js` uses
+the first, `knurled-knob.js`, `timing-pulley.js` and `extrusion-2020.js` the
+second. The record of what was wrong with the old form:
+
+`grid()` gave rectangular patterns only, so a bolt circle was authored
+arithmetic:
 
 ```js
 const boltHoles = Array.from({ length: bolts }, (_, i) => {
@@ -69,13 +98,17 @@ the standards knowledge hides — the `+ 0.5` is what makes ASME bolt holes
 straddle the centrelines, and it is invisible arithmetic rather than an
 authored intent.
 
-**Fix:** `polar(count, radius, { offset })` beside `grid()`, returning the same
-`[x, y]` tuple list. Ten lines in `dsl.ts`, and three examples get shorter.
+Two shapes were needed, not one: `polar()` returns *points* for `repeat()`, the
+way `grid()` does, and `around()` spins a whole *shape*, for a feature that is
+not rotationally symmetric — a T-slot on each face of an extrusion, a flute
+around a knob. `around()` emits the first copy untransformed rather than a
+rotation by zero, so it produces exactly the graph the hand-written version did.
 
-A second form is worth considering: `pattern(shape, "z", count)` that rotates
-copies rather than translating them, for slots that are not on a circle of
-points — `extrusion-2020.js` writes its four T-slots as four explicit
-`.rotate("z", n * 90)` calls.
+One thing the refactor showed, worth keeping in mind: `knurled-knob.js` and
+`timing-pulley.js` place cutters *exactly* on a surface, and moving from
+`cos`/`sin` arithmetic to a rotation changed their face and edge counts (72
+faces to 61 on the knob) while leaving volume and area alone. The solid is the
+same; its B-rep partitioning is not. Both cases say so in their `why`.
 
 ## 2. Selecting "the outermost" edges needs one selector per corner
 
@@ -150,9 +183,10 @@ the tool internally or `bail!` with the real reason. Failing that, extend the
 crash message: name coincident faces as a known cause and point at the
 overlap workaround.
 
-## 5. Three primitives go a long way — and where they stop (see §0)
+## 5. Four primitives go a long way — and where they stop (see §0)
 
-The primitives are box, sphere and cylinder. That covers a surprising amount —
+The primitives are box, sphere, cylinder and — since §0 — a revolved section.
+The first three cover a surprising amount on their own —
 a hexagon is three intersecting slabs, a 90° vee is a rotated cube, a triangular
 gusset is a cube cut by a rotated cube — and each of those constructions is
 *exact*, which is better than a sketch that has to be constrained.

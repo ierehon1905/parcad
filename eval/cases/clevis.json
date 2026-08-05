@@ -1,0 +1,19 @@
+{
+  "name": "clevis",
+  "script": "examples/clevis.js",
+  "why": "The mirror and extrude ops in a real part: the fork's second arm is a reflection of the first, and the spanner flats are a hexagon quoted across the flats. The four-rim selector is what proves the pin bore still crosses both arms.",
+  "brep": {
+    "size": [
+      40.0,
+      24.0,
+      60.0
+    ],
+    "volume_mm3": 27615.04,
+    "area_mm2": 9486.167,
+    "triangles": 2336,
+    "watertight": true,
+    "faces": 33,
+    "edges": 144,
+    "curves": 64
+  }
+}
