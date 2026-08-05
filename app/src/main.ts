@@ -18,6 +18,7 @@ import * as dsl from "./dsl";
 import { Shape } from "./dsl";
 import { BRACKET, EDGE_TREATMENTS, ENCLOSURE } from "./examples";
 import { suggestVertexSelector, verticesFromEdges, type VertexPoint } from "./entities";
+import { selectorLinter } from "./selector-lint";
 import { instrumentTreatmentCalls, sourceOffset, treatmentAtCursor, treatmentCallRange } from "./source-link";
 import { Viewport, type TargetVertex } from "./viewport";
 
@@ -175,6 +176,10 @@ const editor = new EditorView({
     javascript(),
     oneDark,
     treatmentHover,
+    // Selector syntax is marked as you type. Everything else — whether the
+    // selector resolves, and to how many edges — waits for the evaluation
+    // below, because only the kernel knows.
+    selectorLinter,
     EditorView.updateListener.of((v) => {
       if (v.docChanged) {
         clearTargetPreview();
