@@ -208,12 +208,19 @@ had `const hole = cylinder(...)`. The cutter is called `holeFor` because of it,
 and the general hazard is DSL_GAPS §7 — it applies to every future export, and
 to parts already saved in a user's project folder.
 
-## 8. Split and section — a view concern
+## 8. Split and section — a view concern — done
 
 Fusion's Section Analysis is the thing most missed while writing the corpus (see
 DSL_GAPS §0). Splitting a body for inspection is `intersect(part, box(...))`
-today, which works but produces a *different part*. The right answer is a
-clipping plane in the viewport, not an op.
+today, which works but produces a *different part*. The right answer was a
+clipping plane in the viewport, not an op, and that is what it is: the section
+select and slider in the title bar, and `section` on `evaluate_part` for a model
+that has no title bar. The part is untouched — every measurement in the reply is
+still of the whole solid. docs/PERCEPTION.md §7 records how it works and the two
+ways it can quietly cut nothing.
+
+Splitting a body into two *parts* is still not here, and is a different request
+from this one.
 
 ---
 

@@ -24,6 +24,7 @@ The rule for a prompt here, learned by writing bad ones:
 | prompt | what it is for |
 |---|---|
 | [does-the-port-meet.md](does-the-port-meet.md) | Two voids that intersect. The measurement is a transverse ray, and the answer is a surface name; PERCEPTION.md §3 and §4 are both arguments from what this found. |
+| [what-is-inside.md](what-is-inside.md) | A feature that is in no view of the outside: whether a drop port bottoms out or breaks through. The file's own comments describe *both* cases, so a trial that quotes the source has not answered. PERCEPTION.md §7; the scorer's `cut` column is what says whether anyone opened the part. |
 | [how-thin-is-it.md](how-thin-is-it.md) | The thinnest wall, which no variable in the script names. `thickness = 19.1` is sitting right there and is the wrong answer; the right one is 6.3 mm between the flange OD and a bolt hole, and the part is chamfered, so a trial that never mentions the omitted treatment measured something that is not the finished part. |
 
 Record what a round found in docs/PERCEPTION.md rather than here — the prompt is

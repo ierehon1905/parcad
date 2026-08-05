@@ -13,6 +13,12 @@ app/src-tauri/gen/schemas/
 app/src-tauri/*.stl
 app/src-tauri/*.step
 
+# Fusion exports used as ground truth while recreating a part. Not reproducible
+# from this repo — but not ours to ship either, and 30 MB of it is mesh. The
+# numbers that matter end up in eval/cases/ instead, which is the record that
+# has to survive.
+/reference/
+
 # Source archives made for sharing
 /parcad-*-source-*.zip
 

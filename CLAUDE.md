@@ -129,6 +129,7 @@ got the right answer by quoting the part's own source comment.
 | what the DSL makes hard | `docs/DSL_GAPS.md` |
 | which op to add next, and why not the others | `docs/OP_ROADMAP.md` |
 | measuring a part without looking at it | `crates/parcad-core/src/probe.rs`, `thickness.rs` |
+| cutting a part open to see inside it | `view.rs`'s `Section`, then `render.rs` for the agent and `app/src/viewport.ts` for the window |
 | what an agent can see, and what to tell it instead | `docs/PERCEPTION.md` |
 | whether a model can *read* a tool | `eval/field/*.md`, run by `tools/field-test.sh` |
 

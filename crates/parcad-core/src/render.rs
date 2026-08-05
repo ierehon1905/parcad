@@ -6,7 +6,7 @@
 //! are close to invisible under flat lighting.
 
 use crate::measure::Aabb;
-use crate::view::{Cut, Section, View};
+use crate::view::{Axis, Cut, Section, View};
 use anyhow::Result;
 use fidget::context::Tree;
 use fidget::jit::JitShape;
@@ -296,7 +296,7 @@ pub fn geometry(
         None => tree.clone(),
     };
 
-    let shape = JitShape::from(tree.clone());
+    let shape = JitShape::from(tree);
     let bound_shape = shape.try_into().map_err(|_| {
         anyhow::anyhow!("shape has unbound variables; every parameter must be resolved before rendering")
     })?;
@@ -358,9 +358,9 @@ pub fn geometry(
 /// The half-space a [`Cut`] keeps, as a distance field.
 fn half_space(cut: Cut) -> Tree {
     let axis = match cut.axis {
-        crate::view::Axis::X => Tree::x(),
-        crate::view::Axis::Y => Tree::y(),
-        crate::view::Axis::Z => Tree::z(),
+        Axis::X => Tree::x(),
+        Axis::Y => Tree::y(),
+        Axis::Z => Tree::z(),
     };
     (axis - cut.at_mm) * cut.sense()
 }
@@ -959,6 +959,7 @@ pub fn contact_sheet(tree: &Tree, bounds: Aabb, opts: &RenderOptions) -> Result<
 mod tests {
     use super::*;
     use crate::graph::{Doc, Node, Op, V3};
+    use crate::view::Keep;
 
     /// One box, which both backends agree about exactly — no blends, no
     /// treatments, nothing either one has to approximate.
@@ -1094,7 +1095,7 @@ mod tests {
         assert_eq!(solid.cut_fraction(), 0.0, "nothing was cut");
 
         let opts = small(Some(Section {
-            axis: crate::view::Axis::Y,
+            axis: Axis::Y,
             at_mm: None,
             keep: None,
         }));
@@ -1104,9 +1105,9 @@ mod tests {
         assert_eq!(
             cut.cut_plane,
             Some(Cut {
-                axis: crate::view::Axis::Y,
+                axis: Axis::Y,
                 at_mm: 0.0,
-                keep: crate::view::Keep::Above
+                keep: Keep::Above
             }),
             "a section with no side named should take the half in the way"
         );
@@ -1165,9 +1166,9 @@ mod tests {
         let bounds = crate::measure::bounds(&doc).expect("bounds");
 
         let opts = small(Some(Section {
-            axis: crate::view::Axis::Y,
+            axis: Axis::Y,
             at_mm: Some(-60.0),
-            keep: Some(crate::view::Keep::Above),
+            keep: Some(Keep::Above),
         }));
         let cut = raster(&surface, bounds, View::Front, &opts).expect("raster");
 
@@ -1192,7 +1193,7 @@ mod tests {
         let (positions, normals) = mesh_of(&doc);
 
         let opts = small(Some(Section {
-            axis: crate::view::Axis::Z,
+            axis: Axis::Z,
             at_mm: None,
             keep: None,
         }));
@@ -1279,9 +1280,9 @@ mod tests {
         let (positions, normals) = mesh_of(&doc);
 
         let opts = small(Some(Section {
-            axis: crate::view::Axis::Z,
+            axis: Axis::Z,
             at_mm: None,
-            keep: Some(crate::view::Keep::Below),
+            keep: Some(Keep::Below),
         }));
 
         let marched = geometry(&tree, bounds, View::Front, &opts).expect("raymarch");

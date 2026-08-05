@@ -80,7 +80,7 @@ Findings that changed decisions on this page:
 | Point and ray probe | ✅ `probe.rs`, `probe_part` | §3 — signed distance at a point, every crossing along a ray, and the wall thickness between them |
 | Wall thickness / minimum feature | ✅ `thickness.rs`, `measure_wall_thickness` | §5 — a ray from every sampled surface point, both faces named; optimistic where a fillet was dropped, and it says so |
 | **Overhang and printability** | ❌ | §6 |
-| **Section view** | ❌ | §7, and OP_ROADMAP §8 |
+| Section view | ✅ `render.rs`, `evaluate_part`'s `section` | §7 — a clipping plane in both renderers, the cut face capped and drawn flat, and `cut_fraction` to say whether it opened anything |
 | **Numbered marks on the render** | ❌ | §4 |
 | **Diff render** | ❌ | §8 |
 | **Face adjacency as text** | ❌ | §9 — we list edges, never faces |
@@ -519,20 +519,80 @@ that the gyration and elongation numbers come from.
 at 18° from the build plane" is a measurement; "this part will fail to print" is
 a process opinion that depends on a machine we know nothing about.
 
-## 7. Section view
+## 7. Section view — done
 
-Already on OP_ROADMAP as §8, filed as a view concern rather than an op, and it
-is the single thing most missed while writing the corpus (DSL_GAPS §0). It
-belongs on this page too, because for an agent a section is not a convenience —
-it is the only way to see an internal feature at all. A cut through a boss is
-worth ten isometrics, and `intersect(part, box(...))` is the wrong answer
-because it produces a *different part*.
+Filed on OP_ROADMAP as §8, as a view concern rather than an op, and the single
+thing most missed while writing the corpus (DSL_GAPS §0). It belongs on this
+page too, because for an agent a section is not a convenience — it is the only
+way to see an internal feature at all. A cut through a boss is worth ten
+isometrics, and `intersect(part, box(...))` is the wrong answer because it
+produces a *different part*. `evaluate_part` takes a `section`, and nothing
+about the part changes: it is how the picture is drawn.
 
-**What it takes.** A clipping plane in the raster: reject any hit before the
-plane and shade the cut surface flat. `render_view` already walks depth along
-the view axis, so the plane is a start offset plus a cap colour.
+**One `Section`, two renderers.** `view::Section` is an axis, a position and a
+side, and both defaults are resolved *per view* because the half that has to go
+depends on where you are looking from — the plane cuts through the middle of the
+part, and the half between the plane and the viewer is the one that goes. The
+raymarcher gets this almost free: intersecting the field with a half-space is
+exact, and the cut arrives as ordinary surface. The rasteriser, which is what an
+agent's renders come off, has to cap the hole the clip leaves, or a solid boss
+would be drawn as a thin cup.
 
-**Cost.** Small, and it serves the window and the agent with one change.
+**Capping is a parity count, and the textbook answer was wrong here.** Each
+pixel counts the crossings the clip threw away; odd means the ray was still in
+material at the plane, so that pixel is cut face. The signed-winding version —
++1 for a face turned toward the viewer, -1 for one turned away — is the standard
+and it needs each crossing's *facing*, which means the mesh's normals, which
+dual contouring does not have at a sharp feature: on a plain cube it reports the
+top face's normal along a vertical edge, and a third of the part comes back
+falsely capped. Parity needs no normals. Both renderers now agree pixel for
+pixel, which is the test that caught it.
+
+**What is reported, because the failure is silent.** A plane clear of the
+material, or one this view looks *along*, produces a perfectly ordinary picture
+of an uncut part. So every sectioned view reports the plane it actually cut —
+`at_mm` and `keep` resolved, whether the caller named them or not — and
+`cut_fraction`, the share of the drawn part that is cut face. Zero means you are
+looking at an uncut part and should move the plane or change the view. The cut
+face itself is drawn flat, in a colour no lighting of the grey material can
+produce, so "the boss is solid" and "the boss is sectioned here" cannot be the
+same picture.
+
+A cut face is not surface of the part, so `tags.rs` skips those pixels: counted,
+every one of them would come back unattributed and a sectioned region map would
+report a well-tagged part as mostly unclaimed.
+
+**The window got it from the same change**, which is what OP_ROADMAP predicted,
+though not quite in the way it meant — the viewport is three.js and shares no
+code with the raster. What it shares is the idea and the numbers: the same three
+fields, the same rule for which half to keep, the same cut colour, and the same
+parity count, done by the GPU in its stencil buffer while drawing the part's own
+back and front faces. Two things there fail silently and are worth knowing:
+three.js compiles the *number* of clipping planes into the shader, so a material
+that already has a program ignores a plane added later, and `stencil` has
+defaulted to false on `WebGLRenderer` since r163, which makes the stencil test
+pass everywhere rather than fail.
+
+**What the field round found**, on `eval/field/what-is-inside.md` — does a drop
+port bottom out in a floor, or open into the gallery — asked of haiku-4.5 four
+times. Every trial asked for a section unprompted, which is the first evidence on
+this page that a new tool gets *reached for* rather than merely working. Three of
+four were right. The fourth described the cut face correctly and then read it
+backwards: "That black gap is solid material—it's the floor." The picture was
+fine; the convention was not, and nothing in the reply said which colour meant
+what. Naming it in the tool description — the flat colour is the material the
+plane passed through, a dark shape inside it is void, never shadow and never
+material — took the next round to 4/4, and the trial that had inverted it wrote
+"fully merged with the main gallery bore (black void)". This is the ordinary
+result here: the output was already correct, and the sentence that says how to
+read it was the whole difference.
+
+Still unfixed, and recorded so it is not rediscovered: a section is so
+convincing that it stops the model measuring. One trial in four reached a probe;
+the rest answered from the picture alone. On this question they were right, but a
+port that stops 0.2 mm short of the gallery makes the same picture, and none of
+them would have caught it. §4's answer — the reply telling the model what would
+settle it — applies to a sectioned view as much as to a render.
 
 ## 8. Diff render
 
@@ -655,7 +715,10 @@ is the inverse of this page's rule.
 5. ~~Wall thickness~~ (§5) — **done**. It was §3 plus a loop, once the samples
    were walked onto the surface; the caveat needed a sentence rather than a
    list, because this is the one omission that reads *optimistic*.
-6. **Section view** (§7). Already wanted by the window; the agent needs it more.
+6. ~~Section view~~ (§7) — **done**, in the raster and in the window, off one
+   `Section`. The plane and the kept side both default per view, because the
+   half that has to go depends on where you are looking from and a caller made
+   to say so says it wrong.
 7. **Numbered marks on the render** (§4, the visual half). The change with the
    best evidence behind it, and it makes the selector loop closeable.
 8. **Diff render** (§8), numeric half first.

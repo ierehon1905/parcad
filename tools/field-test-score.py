@@ -139,11 +139,17 @@ def main():
     for r in rows:
         tail = " ".join(r["final"].split())[-90:]
         if args.verdict:
+            # Two ways a loose test scores a failure as a pass, both seen here.
             # The negated verdict contains the verdict — "DO NOT MEET" ends in
-            # "MEET" — so a substring test scores every failure as a pass. Take
-            # the *last* mention and require it to carry no negation.
-            hits = re.findall(rf"(do(?:es)? not |no |not )?{re.escape(args.verdict)}",
-                              r["final"][-600:], re.I)
+            # "MEET" — so take the *last* mention and require no negation. And
+            # the verdict is often an ordinary English word: a trial that
+            # answered FLAT FLOOR scored OK on --verdict OPEN off the sentence
+            # "the port cavities don't open directly into the gallery". Every
+            # prompt here asks for the verdict in capitals, so match capitals —
+            # prose cannot reach it, and a trial that would not shout its
+            # verdict has not given one.
+            hits = re.findall(rf"((?i:do(?:es)? not |don't |no |not ))?\b{re.escape(args.verdict)}\b",
+                              r["final"][-600:])
             hit = bool(hits) and not hits[-1].strip()
             right += hit
             tail = ("OK  " if hit else "BAD ") + tail
