@@ -40,3 +40,8 @@ dropping it.
   generic corner code returns broken geometry with `IsDone() == true`. The
   header inside the patch says what it fixes, how it was measured, and that
   it has not yet been offered upstream. See `../PARCAD-CHANGES.md`.
+- `0002-unify-merge-must-not-abort.patch` — `ShapeUpgrade_UnifySameDomain`
+  lets an exception from one edge-chain's merge abort the whole operation;
+  reachable through an edge that is closed on one of its faces (a seam
+  generator) chained with a collinear neighbour. The failed chain is now
+  left unmerged instead. Header inside the patch; not yet offered upstream.

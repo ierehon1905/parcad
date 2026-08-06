@@ -77,7 +77,19 @@ has no effect on a path dependency. It is left alone, and is now stale.
 
 ## Changes to OCCT itself
 
-One patch, `patches/0001-tangent-pinch-corner.patch`: a corner treatment for
+Two patches.
+
+`patches/0002-unify-merge-must-not-abort.patch`: edge unification in
+`ShapeUpgrade_UnifySameDomain` no longer aborts wholesale when a single
+chain cannot build its union edge — the reachable case being a chain through
+an edge that lies along a cylinder's parametric seam, whose two pcurves a
+concatenation cannot both join. Found when parcad's `clean()` pass gained
+real merge tolerances (see `vendor/opencascade/PARCAD-CHANGES.md`) and the
+retainer's seam-side tangent generator became a merge candidate: the merge
+threw "Courbes non jointives" and killed an otherwise valid build. The chain
+is now left split, which on that shape is also the correct answer.
+
+`patches/0001-tangent-pinch-corner.patch`: a corner treatment for
 fillet spines that end on an exact tangency, `ChFi3d_Builder::PerformTangentPinch`,
 dispatched from `PerformFilletOnVertex` ahead of the generic corner code. The
 patch header carries the full account — what it fixes, how it was measured, and

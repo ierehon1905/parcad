@@ -1,0 +1,61 @@
+Do not abort edge unification when one chain cannot be merged.
+
+What it fixes
+  ShapeUpgrade_UnifySameDomain::MergeEdges lets any exception from
+  MergeSubSeq escape, so a single chain whose union edge cannot be
+  constructed aborts the whole operation. The reachable case: a chain
+  containing an edge that is closed on one of its faces (two pcurves
+  there, e.g. an edge lying along a cylinder's parametric seam) chained
+  with a plain collinear neighbour — pcurve concatenation can join the
+  neighbour to only one of the two representations and Geom2dConvert
+  raises "Courbes non jointives". Seen on a fillet result whose corner
+  pinches onto a cylindrical boss's seam generator, with merge
+  tolerances of 1e-4; the same shape unifies fine when that one chain is
+  simply left split, which is what this patch does.
+
+How it was measured
+  On the parcad retainer (a disc flush on the end of a plate, blended,
+  tangent to the disc's seam at one side): before, UnifySameDomain with
+  linear/angular tolerance 1e-4 threw and killed the build; after, the
+  shape's collinear tangent-generator pair away from the seam merges,
+  the seam-side chain stays split, and the result is unchanged
+  otherwise — BRepCheck-valid, watertight, identical volume and
+  bounding box (143829.66 mm^3, 59.49 x 148.126 x 36.664).
+
+Upstream status
+  Not yet offered upstream (github.com/Open-Cascade-SAS/OCCT).
+--- a/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
++++ b/src/ModelingAlgorithms/TKShHealing/ShapeUpgrade/ShapeUpgrade_UnifySameDomain.cxx
+@@ -14,6 +14,7 @@
+ // commercial license or contractual agreement.
+ 
+ #include <ShapeUpgrade_UnifySameDomain.hxx>
++#include <Standard_ErrorHandler.hxx>
+ 
+ #include <BRep_Builder.hxx>
+ #include <BRep_Tool.hxx>
+@@ -2887,10 +2888,22 @@
+     {
+       continue;
+     }
+-    if (MergeSubSeq(SeqOfSubSeqOfEdges(i).SeqsEdges, theVFmap, UE))
++    // A chain that cannot build its union edge must not abort the whole
++    // operation: an edge closed on one of its faces carries two pcurves
++    // there, and the curve concatenation can join a neighbour to only one
++    // of them, raising for the other. Leave such a chain unmerged and
++    // carry on.
++    try
+     {
+-      SeqOfSubSeqOfEdges(i).UnionEdges = UE;
++      OCC_CATCH_SIGNALS
++      if (MergeSubSeq(SeqOfSubSeqOfEdges(i).SeqsEdges, theVFmap, UE))
++      {
++        SeqOfSubSeqOfEdges(i).UnionEdges = UE;
++      }
+     }
++    catch (Standard_Failure const&)
++    {
++    }
+   }
+   return true;
+ }

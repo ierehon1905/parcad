@@ -45,6 +45,15 @@ out. Everything below could otherwise have lived in our own crate.
   native BREP export that preserves the exact topology STEP normalises away.
   Both exist for diagnosing kernel output the checks above have refused.
 
+- `Shape::clean()` now sets the unifier's merge tolerances to 1e-4 mm and
+  1e-4 rad instead of the defaults (1e-7 mm, 1e-12 rad), which only ever
+  merge exactly coincident geometry. A fillet corner rebuilt through
+  approximation places its vertices only to the vertex tolerance, so two
+  collinear pieces of one line come back a few 1e-7 apart and stayed split.
+  Measured across the whole eval corpus: the only shape that changes is the
+  tangent-blend retainer stock, which loses exactly the spurious junction
+  the tangent-pinch fix leaves on the grazing generator.
+
 ## Not added
 
 - `BRepOffsetAPI_MakeOffsetShape`, for a general outward offset. Missing from

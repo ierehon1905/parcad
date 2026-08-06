@@ -334,6 +334,17 @@ impl Shape {
     pub fn clean(&mut self) {
         let mut upgrader = ffi::ShapeUpgrade_UnifySameDomain_ctor(&self.inner, true, true, true);
         upgrader.pin_mut().AllowInternalEdges(false);
+        // The default merge tolerances (1e-7 mm, 1e-12 rad) only ever weld
+        // exactly coincident geometry — fine for boolean imprints, whose split
+        // pieces share exact curves, but blind to fragments downstream of an
+        // approximated rebuild. A fillet corner rebuilt through approximation
+        // places its vertices only to the vertex tolerance (1e-4 mm), so two
+        // collinear pieces of one tangent line come back ~1e-7 mm and ~1e-7 rad
+        // apart and the pass refuses them. These bounds cover that vertex
+        // tolerance with margin while staying orders of magnitude below any
+        // designed angle or offset.
+        upgrader.pin_mut().SetLinearTolerance(1.0e-4);
+        upgrader.pin_mut().SetAngularTolerance(1.0e-4);
         upgrader.pin_mut().Build();
 
         let upgraded_shape = upgrader.Shape();

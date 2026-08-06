@@ -48,6 +48,11 @@ later release of it exists, so there is no version to bump to.
   export normalises exact topology away, and the report alone cannot be
   re-interrogated.
 
+- `SetLinearTolerance` / `SetAngularTolerance` bound on
+  `ShapeUpgrade_UnifySameDomain`. The defaults (1e-7 mm, 1e-12 rad) merge
+  only exactly coincident geometry; the caller decides what "the same" means
+  for shapes that went through an approximated rebuild.
+
 ## Not changed
 
 Everything else is upstream 0.2.0 verbatim, including `build.rs` and the OCCT

@@ -1029,6 +1029,11 @@ pub mod ffi {
             concat_b_splines: bool,
         ) -> UniquePtr<ShapeUpgrade_UnifySameDomain>;
         pub fn AllowInternalEdges(self: Pin<&mut ShapeUpgrade_UnifySameDomain>, allow: bool);
+        // Merge tolerances — added for parcad, see PARCAD-CHANGES.md. The
+        // defaults (Precision::Confusion / Precision::Angular) only ever merge
+        // exactly coincident geometry.
+        pub fn SetLinearTolerance(self: Pin<&mut ShapeUpgrade_UnifySameDomain>, value: f64);
+        pub fn SetAngularTolerance(self: Pin<&mut ShapeUpgrade_UnifySameDomain>, value: f64);
         pub fn Build(self: Pin<&mut ShapeUpgrade_UnifySameDomain>);
         pub fn Shape(self: &ShapeUpgrade_UnifySameDomain) -> &TopoDS_Shape;
     }

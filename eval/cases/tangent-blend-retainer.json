@@ -10,10 +10,10 @@
     ],
     "volume_mm3": 177226.455,
     "area_mm2": 26346.348,
-    "triangles": 3864,
+    "triangles": 3862,
     "watertight": true,
     "faces": 8,
-    "edges": 38,
-    "curves": 18
+    "edges": 36,
+    "curves": 17
   }
 }
