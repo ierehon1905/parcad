@@ -24,17 +24,26 @@ triple-suffixed copy the bundler demands into `app/src-tauri/binaries/`, and
 [`worker_path()`](../crates/parcad-occt/src/host.rs) accepts either the bare or
 the suffixed name — Tauri 2.11 on macOS strips the suffix again, which the
 comment there records as a measured fact rather than a contract. Verified the
-only way it counts: `parcad.app` copied to `/tmp`, launched with
+only way it counts: `ParCAD.app` installed to `/Applications`, launched with
 `PARCAD_OCCT_WORKER` unset, evaluated `examples/bracket.js` over the HTTP host
 at **55074.791 mm³, 80 × 60 × 44 mm, watertight, 22 faces / 107 edges** — the
 value `eval/cases/bracket.json` records. With the worker deleted from the same
 bundle the evaluation refuses and names the rebuild.
 
-**Still not shipping.** The bundle is unsigned and un-notarised, so a second
-machine meets Gatekeeper before it meets the kernel; there is no updater; and
-nothing has been built for a target that is not this one, where the stripped
-suffix is exactly the assumption most likely to break. The `.app` has been run
-from outside the build tree, not from a fresh user account.
+**Still not shipping, and the next step costs money rather than time.** The
+bundle is unsigned and un-notarised, so a second machine meets Gatekeeper before
+it meets the kernel. Signing needs an Apple Developer Program membership; that
+is a decision, not a task. There is also no updater, and nothing has been built
+for a target that is not this one, where the stripped triple suffix is exactly
+the assumption most likely to break. The `.app` has been run from outside the
+build tree, never from a fresh user account.
+
+**One hazard here is free to close and worth closing.** `tauri build` has no
+dependency on `tools/build-worker.sh`. A *missing* staging copy fails the build
+loudly; a *stale* one silently bundles last week's kernel, and the app it
+produces measures parts confidently with it. That is the exact shape of wrongness
+this project refuses everywhere else, and it is currently held by a sentence in
+a document rather than by the build.
 
 ## 2. One live session the agent can drive
 
@@ -54,12 +63,15 @@ for the webview, each viewer ignoring what it originated. It is in
 can drive". **Read that before designing anything**; the conflict rule in
 particular is a product decision, not an implementation detail.
 
-**Its prerequisite is real work, not a chore.** `mcp.rs` builds its own flat
-summary and rescans raw graph JSON for treatment nodes — a second definition of
-"what an evaluation is", living in a transport file, which is the divergence
-`service.rs` was extracted to stop. One `EvaluationSnapshot` that every transport
-serialises and nobody redefines comes first. See
-[AI_CAD_PLATFORM.md](AI_CAD_PLATFORM.md).
+**Its prerequisite is done, and it is now the top of this list.**
+`service::evaluate` produces one `EvaluationSnapshot` and all three transports
+serialise it; `mcp.rs` defines no type that describes geometry. Worth knowing how
+that landed, because this file said the wrong thing about it: the duplicate
+definition was *not* in `mcp.rs` — that had been fixed in `9cbdd443` and the
+roadmap was simply stale. It was on the far side of the UI transport, in
+`main.ts`'s own `Report` interface, deriving size, volume, faces and
+watertightness in TypeScript. Both roadmaps can run a commit or two behind the
+code; check before believing either.
 
 **Do not** add a lock. An agent edit is an ordinary edit; a lock would have to be
 explained and undo does not.
