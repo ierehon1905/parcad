@@ -1,6 +1,6 @@
 # Examples
 
-Nineteen parts, each a `.js` script that returns a shape. On first run each is
+Twenty parts, each a `.js` script that returns a shape. On first run each is
 seeded into parcad's project folder (`~/Documents/parcad`, or
 `PARCAD_PROJECTS_DIR`) as a `<name>.parcad` project folder, where it becomes an
 ordinary project the user can edit, rename, move into a folder or throw away —
@@ -30,6 +30,7 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 | `cast-foot.js` | cast machine foot, M10 down / M8 up | draft on every wall, and hole sizes read from the fastener table rather than written out |
 | `clevis.js` | threaded rod-end clevis, 10 mm pin | one fork arm authored and the other mirrored; spanner flats as a hexagon across the flats |
 | `cover-plate.js` | bolted cover, turned spigot | revolved geometry: a tapered spigot and four countersunk screws, both cones |
+| `diamond-v19.js` | round brilliant cut, 57 facets | a Fusion 360 recreation, promoted from `fusion360/`: a convex solid as the intersection of its facet half-spaces, agreeing with the export to every published digit |
 | `extrusion-2020.js` | 20x20 T-slot extrusion, 200 mm | four-fold symmetry by rotating the *cutter*; corner fillets among 37 candidate edges |
 | `flange.js` | ASME B16.5 class 150 NPS 2 slip-on flange | a bolt circle, and one cut whose provenance reaches five rims |
 | `heat-sink.js` | 60x60 extruded fin sink | one fin shape placed nine times — one graph node, nine placements |

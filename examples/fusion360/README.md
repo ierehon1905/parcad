@@ -35,6 +35,14 @@ bun tools/run.ts examples/fusion360/retainer-v1.js > /tmp/part.json
 | file | part | agreement with the original |
 |---|---|---|
 | `retainer-v1.js` | plate with a bored, drafted disc | volume +0.0028%, bbox exact, all 23 faces the same surface types |
+| `../diamond-v19.js` | round brilliant, 57 planar facets | volume, area and bbox agree to every published digit; the same 57 planes — promoted up into `examples/`, measured by `eval/cases/diamond-v19.json` |
+
+The diamond needed no new op at all. Fusion built it with BoundaryFill, but the
+solid is convex, so it *is* the intersection of its 57 facet half-spaces — an
+intersection of rotated boxes, exact in both backends. The blocker recorded in
+its header was the construction Fusion happened to use, not what the shape
+requires; the audit that found this is the reason each remaining target below
+names the *geometry* it is blocked on rather than the Fusion feature list.
 
 That one needed a fix to OpenCASCADE itself
 (`vendor/occt-sys/patches/0001-tangent-pinch-corner.patch`): the blend where the
@@ -45,23 +53,35 @@ while reporting success.
 
 | file | part | Fusion volume | faces | NURBS | blocked on |
 |---|---|---|---|---|---|
-| `diamond-v19.js` | diamond v19 | 196,778 mm³ | 57 | 0 | BoundaryFill |
-| `spiral-v1.js` | Spiral v1 | 406,116 mm³ | 3 | 0 | Loft along a helix |
-| `steam-top-4-holed-v1-v6.js` | Steam Top 4 Holed v1 v6 | 8,976 mm³ | 39 | 10 | Patch |
-| `untitled2-v1.js` | Untitled2 v1 | 36,357 mm³ | 1 | 1 | Revolve of a spline profile |
-| `untriangle-v3.js` | UnTriangle v3 | 31,976 mm³ | 30 | 15 | Loft |
-| `v2.js` | ваза v2 | 144,242 mm³ | 9 | 8 | Loft |
-| `v3.js` | шар v3 | 515,661 mm³ | 460 | 32 | Sweep |
-| `v4.js` | v4 v4 | 7,375 mm³ | 3 | 1 | SplitBody and DeleteFace |
+| `spiral-v1.js` | Spiral v1 | 406,116 mm³ | 3 | 0 | a loft whose sections rotate as they rise; also two solids |
+| `steam-top-4-holed-v1-v6.js` | Steam Top 4 Holed v1 v6 | 8,976 mm³ | 39 | 10 | Patch — out by decision: surface logic |
+| `untitled2-v1.js` | Untitled2 v1 | 36,357 mm³ | 1 | 1 | a spline in a revolve section; also two solids |
+| `untriangle-v3.js` | UnTriangle v3 | 31,976 mm³ | 30 | 15 | its loft sections live only in the Fusion document, and Fusion's fit vs OCCT's is unmeasured; also two solids |
+| `v2.js` | ваза v2 | 144,242 mm³ | 9 | 8 | spline loft sections; parcad's loft takes polygons |
+| `v3.js` | шар v3 | 515,661 mm³ | 460 | 32 | a sweep around a sphere; parcad's sweep follows runs and circular bends |
+| `v4.js` | v4 v4 | 7,375 mm³ | 3 | 1 | a spline outline in an extrude, then SplitBody |
 
 Each throws with its reason. They are deliberately not approximate solids: a stub
 that returned something roughly right would measure as a part and read as
 progress, which is worse than nothing.
 
-The pattern across all of them is one thing — **parcad only makes analytic
-surfaces** (planes, cylinders, cones, spheres, tori). Every blocked target needs
-a freeform surface, and the ops that produce them are loft, sweep and patch. See
-`docs/DSL_GAPS.md` and `docs/OP_ROADMAP.md`.
+The wall moved when `loft` and `sweep` landed, and it is worth saying exactly
+where it now stands. parcad can build freeform *walls* — a smooth loft's fitted
+surface is a genuine NURBS — but only through the sections it can author, which
+are convex polygons, along the paths it can author, which are runs and circular
+bends. Every remaining target above fails on the *section or path*, not on the
+op: five of the seven carry spline sketch geometry the section type cannot
+hold, one rotates its sections up a helix, and one needs Patch, which stays out
+by decision. The next enabling change is a richer section type — arcs first,
+splines after — not another sweep or loft variant. See `docs/DSL_GAPS.md` and
+`docs/OP_ROADMAP.md`.
+
+A loft or sweep in a part also has a measured cost on the agent side: those
+nodes have no exact distance field, the implicit backend refuses them by name,
+and every capability that runs on the field — probes, wall thickness,
+raymarched renders and sections — is unavailable for that part. The B-rep
+still builds, measures and exports it; what is lost is inspection without
+looking.
 
 ## Exports not carried here
 

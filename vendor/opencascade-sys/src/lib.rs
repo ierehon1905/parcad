@@ -664,11 +664,32 @@ pub mod ffi {
             is_solid: bool,
         ) -> UniquePtr<BRepOffsetAPI_ThruSections>;
 
+        // PARCAD: the two-argument ctor, for choosing ruled walls over the
+        // default smooth fit through the sections.
+        #[cxx_name = "construct_unique"]
+        pub fn BRepOffsetAPI_ThruSections_ruled_ctor(
+            is_solid: bool,
+            ruled: bool,
+        ) -> UniquePtr<BRepOffsetAPI_ThruSections>;
+
         pub fn AddWire(self: Pin<&mut BRepOffsetAPI_ThruSections>, wire: &TopoDS_Wire);
         pub fn CheckCompatibility(self: Pin<&mut BRepOffsetAPI_ThruSections>, check: bool);
         pub fn Shape(self: Pin<&mut BRepOffsetAPI_ThruSections>) -> &TopoDS_Shape;
         pub fn Build(self: Pin<&mut BRepOffsetAPI_ThruSections>, progress: &Message_ProgressRange);
         pub fn IsDone(self: &BRepOffsetAPI_ThruSections) -> bool;
+
+        // PARCAD: sweeping a profile along a spine wire
+        type BRepOffsetAPI_MakePipe;
+
+        #[cxx_name = "construct_unique"]
+        pub fn BRepOffsetAPI_MakePipe_ctor(
+            spine: &TopoDS_Wire,
+            profile: &TopoDS_Shape,
+        ) -> UniquePtr<BRepOffsetAPI_MakePipe>;
+
+        pub fn Shape(self: Pin<&mut BRepOffsetAPI_MakePipe>) -> &TopoDS_Shape;
+        pub fn Build(self: Pin<&mut BRepOffsetAPI_MakePipe>, progress: &Message_ProgressRange);
+        pub fn IsDone(self: &BRepOffsetAPI_MakePipe) -> bool;
 
         // Boolean Operations
         type BRepAlgoAPI_Fuse;

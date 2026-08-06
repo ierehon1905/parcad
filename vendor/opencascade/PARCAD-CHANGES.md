@@ -57,6 +57,15 @@ out. Everything below could otherwise have lived in our own crate.
   spurious junctions the tangent-pinch fix leaves on the grazing
   generators.
 
+- `Solid::loft_sections(wires, ruled)` — `loft` with the walls' shape made
+  explicit. The bare `BRepOffsetAPI_ThruSections` ctor defaults to a smooth
+  surface fitted through the sections; `ruled` walls run straight between
+  consecutive pairs, which is the form whose extent the sections themselves
+  bound. Needed a two-argument sys ctor, see the sys crate's changes.
+- `Shape::sweep_profile_along(profile, spine)` — `BRepOffsetAPI_MakePipe`,
+  sweeping a profile face along a spine wire. New sys binding, same pattern as
+  the other `construct_unique` ctors.
+
 ## Not added
 
 - `BRepOffsetAPI_MakeOffsetShape`, for a general outward offset. Missing from

@@ -1029,6 +1029,96 @@ export function pipe(
   return union(...parts);
 }
 
+/** One loft section: a convex outline lying flat at height `z`. */
+export interface LoftSection {
+  /** Height of the plane this section lies in. */
+  z: number;
+  /** `[x, y]` pairs, anticlockwise, first point not repeated. */
+  outline: OutlinePoint[];
+}
+
+/**
+ * Skin a solid through two or more convex outlines stacked along +Z.
+ *
+ * This is a B-rep-only operation, and deliberately so: a loft between
+ * arbitrary outlines has no exact distance field, and an approximate one
+ * would mean probes and wall-thickness checks confidently measuring a part
+ * that does not exist. The implicit backend refuses a lofted part by name
+ * and points here; everything that runs on the distance field — probes,
+ * wall thickness, raymarched renders and sections — is unavailable for it.
+ *
+ * By default the walls are ruled: straight lines between consecutive
+ * sections, so the surface is exactly the skin of its sections and a
+ * two-section loft of an outline and its inset is the same solid a drafted
+ * extrude builds. `smooth: true` fits one continuous surface through all the
+ * sections instead — Fusion's default look — and the backend then measures
+ * that the fit stayed inside the sections' own bounding box, refusing one
+ * that bulged past it.
+ *
+ * Sections must be convex, for the same reason extrude and revolve sections
+ * are, plus one of loft's own: the kernel pairs section vertices to build
+ * the wall, and a re-entrant outline makes that pairing a silent guess. A
+ * stepped or hollow loft is a boolean of convex ones.
+ */
+export function loft(
+  sections: LoftSection[],
+  options: { smooth?: boolean } = {},
+): Shape {
+  if (!Array.isArray(sections) || sections.length < 2) {
+    throw new Error("a loft needs at least 2 sections, each { z, outline }");
+  }
+  for (const [i, section] of sections.entries()) {
+    if (!section || !Number.isFinite(section.z) || !Array.isArray(section.outline)) {
+      throw new Error(`loft section ${i} must be { z: number, outline: [[x, y], ...] }`);
+    }
+    if (i > 0 && section.z <= sections[i - 1].z) {
+      throw new Error(
+        `loft sections must rise strictly: section ${i} is at z = ${section.z}, below or level with section ${i - 1} at z = ${sections[i - 1].z}`,
+      );
+    }
+  }
+  const smooth = options.smooth ?? false;
+  return new Shape(() => ({
+    op: "loft",
+    sections: sections.map(({ outline, z }) => ({ outline, z })),
+    ...(smooth ? { smooth } : {}),
+  }), []);
+}
+
+/**
+ * Sweep a convex outline along a path of straight runs joined by circular
+ * bends — `pipe()` with an authored section in place of the circle.
+ *
+ * The path model is the one a bender or a router can follow: runs, and
+ * tangent arcs of radius `bend` at every corner. `bend` is required as soon
+ * as the path turns (an authored section has no ball to fill a square corner
+ * with), must fit the legs either side, and must clear the profile's own
+ * extent so the inner side of the bend does not sweep through itself. The
+ * profile is drawn perpendicular to the first run, its +Y kept as close to
+ * global +Z as that run allows.
+ *
+ * Like `loft` this is B-rep only: the implicit backend refuses it by name,
+ * and a swept part loses the capabilities that run on the distance field.
+ * A *round* section should stay a `pipe()`, which is exact in both backends.
+ */
+export function sweep(
+  profile: OutlinePoint[],
+  path: PathPoint[],
+  options: { bend?: number } = {},
+): Shape {
+  if (!Array.isArray(path) || path.length < 2) {
+    throw new Error("a sweep path needs at least 2 points");
+  }
+  const bend = options.bend ?? 0;
+  if (bend < 0) throw new Error("sweep bend radius must be positive");
+  return new Shape(() => ({
+    op: "sweep",
+    profile,
+    path: path.map(([x, y, z]) => ({ x, y, z })),
+    ...(bend > 0 ? { bend } : {}),
+  }), []);
+}
+
 export function union(...args: (Shape | BoolOptions)[]): Shape {
   const { shapes, opts } = split(args);
   return new Shape(

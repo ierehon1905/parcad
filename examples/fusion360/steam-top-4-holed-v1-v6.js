@@ -11,8 +11,11 @@
 //
 // Fusion built it with: CircularPattern, ConstructionPlane, Extrude, Fillet, Patch, ReverseNormal, Revolve, Sketch, Stitch, Sweep, Thicken, Trim.
 //
-// Blocked on Patch: surface modelling: it closes a boundary with a patch, then thickens. See docs/DSL_GAPS.md and docs/OP_ROADMAP.md for
-// whether that op is coming and what it would cost.
+// Blocked on Patch: surface modelling — it closes a boundary with a patch,
+// then thickens. Patch (and BoundaryFill as an op) are out by decision:
+// surface logic, judged too complex for now, so unlike the loft and sweep
+// targets this one is not waiting on a section type. See docs/DSL_GAPS.md
+// and docs/OP_ROADMAP.md.
 //
 // This file throws rather than approximating. A stub that returned a rough
 // solid would measure as a part and read as progress, which is worse than

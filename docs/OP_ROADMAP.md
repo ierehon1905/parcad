@@ -35,8 +35,8 @@ entries below are marked *hold* with a reason instead of a plan.
 | Offset face / Thicken | ✅ `.offset()` | whole-body offset, not per face |
 | Hole | ✅ `holeFor` `tapDrill` `clearance` `counterbore` | ISO metric coarse, M2–M20 |
 | **Draft** | ✅ `extrude(..., { draft })` | shipped — see below |
-| **Sweep** | ~ `pipe(path, dia, { bend })` | runs and bend arcs, both exact; no spline path, no non-circular profile |
-| **Loft** | ❌ | hold |
+| **Sweep** | ✅ `sweep(profile, path, { bend })`, `pipe(path, dia, { bend })` | runs and bend arcs; authored profile is B-rep only, round profile exact in both; no spline path |
+| **Loft** | ✅ `loft(sections, { smooth })` | B-rep only — the implicit backend refuses it by name; see below |
 | **Coil / Thread** | ❌ | hold, and probably for good |
 | **Rib / Web** | ❌ | sugar over what exists |
 | **Split body / face, Section view** | ❌ | a view concern more than a geometry one |
@@ -126,7 +126,7 @@ which is the argument for it, made by a part rather than by a table.
 
 **Cost.** Medium for the full profile type; the torus itself is done.
 
-## 3. Sweep — **DONE for the path elements that have an exact field**
+## 3. Sweep — **DONE**, in two honesty classes
 
 **The correction first.** This entry originally said sweep was out, and filed
 the whole feature under "hold". That was too broad, and the pushback was right:
@@ -147,28 +147,72 @@ form against a closed form that is *not* the obvious one — two perpendicular
 runs overlap in a quarter of a Steinmetz solid, and the ball that fills the
 corner is three quarters redundant.
 
+**What shipped after it: the authored profile.** `sweep(profile, path,
+{ bend })` — `Op::Sweep` — takes a convex outline along the same run-and-bend
+path model, via a new `BRepOffsetAPI_MakePipe` binding. It sits in the second
+honesty class, the one §4 defines: B-rep only, refused by name in the implicit
+backend, because an authored section along a bent path has no exact field the
+way a circle's does. On a rectangular section around a 90° bend the kernel's
+surfaces come out fully analytic — cylinders and planes, no splines — and
+`swept-channel` in `eval/cases/` holds it against Pappus's closed form
+(9141.59 mm³, read 0.005% under by tessellation, the same effect `bent-tube`
+records). The corner math is `pipe()`'s, moved into `Op::sweep_spine` so both
+backends and the graph refuse the same paths with the same numbers: a corner
+without a bend radius, a bend that does not fit its legs, and a bend tighter
+than the profile's own reach are all named refusals. A *round* profile should
+stay a `pipe()`, which both backends build exactly.
+
 **What is still out, and why.** A spline path: the distance to a cubic is a
 quintic, and even solved it is the sort of expression that stopped `revolve`'s
-exact form from pruning under intervals. A non-circular profile swept along a
-path: for a *straight* run that is just an extrude, so the missing piece is
-only the bend, which needs a general swept surface rather than a torus. Both
-are honest gaps; neither is "sweep is impossible here".
+exact form from pruning under intervals; now that the B-rep side no longer
+requires an exact field, what keeps it out is the same section-and-path
+authoring gap that blocks the Fusion targets — there is no spline type in the
+graph to sweep along. A profile that twists or scales along the path is out
+with it.
 
 **The one that bit.** The pieces have to be unioned *in path order*. Fusing all
 the arcs first builds a compound of solids that do not touch, and the boolean
 that finally bridges them hangs on a two-bend route and segfaults on a
 three-bend one. docs/GOTCHAS.md has it.
 
-## 4. Loft — hold
+## 4. Loft — **DONE**, and the hold lifted deliberately
 
-`Solid::loft` is bound and the B-rep side is nearly free. The implicit side is
-not: a loft between two arbitrary outlines has no closed-form distance, and the
-two backends would describe different solids.
+This entry said *hold*, because a loft between two arbitrary outlines has no
+closed-form distance and the two backends would describe different solids. The
+hold was lifted as a product decision — loft and sweep each appear in more of
+the owner's real documents than revolve, which we did build — and the way it
+was lifted matters more than the op:
 
-Draft, above, is now built *on* that loft — the one case where the implicit
-side has a closed form, because a drafted prism's walls are planes. That is the
-argument for leaving general loft alone rather than the argument for adding it:
-the mechanism is already earning its keep in the shape the field can describe.
+**The implicit backend refuses a loft by name; it does not approximate one.**
+An approximate distance field would be the worst outcome available: probes,
+wall thickness, renders and sections all run on the field, so a field that is
+quietly wrong means an agent confidently measuring a part that does not
+exist. `Op::Loft` therefore lowers only in `backend.rs`; `sdf.rs` answers
+"no exact distance field — evaluate this part with the B-rep backend", and
+`loft-frustum` in `eval/cases/` asserts that refusal's wording alongside the
+B-rep's closed-form agreement (a 40→20 mm square prismatoid, 28000 mm³
+exactly).
+
+What shipped: `loft(sections, { smooth })` through two or more convex polygon
+outlines stacked along +Z. Default walls are ruled — contained in the
+sections' hull by construction, so the graph's cheap bounds are honest.
+`smooth: true` is Fusion's look, one surface fitted through all sections; a
+fit can in principle bulge past the sections' box, so `backend.rs` *measures*
+containment on the built solid and refuses a bulge over the slip tolerance —
+the `offset_slip` bargain applied to bounds. Sections stay convex for the
+extrude/revolve reason plus loft's own: the kernel pairs section vertices to
+build the wall, and on a re-entrant outline that pairing is a silent guess.
+
+**The measured cost, which the owner should weigh.** A part containing a loft
+or an authored-profile sweep loses every field-backed capability at once:
+`probe_part`, `measure_wall_thickness`, raymarched renders, and the section
+view — the whole of what an agent can do without looking. The freeform parts
+these ops exist for are exactly the parts an agent can no longer inspect.
+The plausible way back is a signed distance derived from the B-rep
+tessellation the worker already produces: the mesher reports the deflection
+it achieved, so a mesh-derived field carries a *known, reported* error bound
+rather than a silent one — honest in the way an analytic approximation is
+not. That is future work, deliberately not smuggled in here.
 
 ## 5. Threads and coils — hold, deliberately
 
@@ -247,6 +291,9 @@ makes on purpose, and `v-block.js`'s exact 90° vee is what it buys.
 4. ~~`pipe()`~~ — **done**, runs and bends, measured against closed forms.
 5. ~~Fix the `UnifySameDomain` segfault~~ — **done**, by vendoring OCCT 8.0.1,
    and `examples/hydraulic-line.js` has its groove back.
+5b. ~~Loft, and sweep of an authored profile~~ — **done**, B-rep only with a
+   named implicit refusal; the hold on loft was lifted as a product decision,
+   recorded in §4 with the capability cost that came with it.
 6. **Arcs in a section** — the general version of what the torus does for one
    shape: grooves, seats, radiused shoulders. The groove in 5 is round-bottomed
    because a torus is all there is; a gland section is rectangular and wider

@@ -58,7 +58,7 @@ of each here, is in [OP_ROADMAP.md](OP_ROADMAP.md).
 | wanted | needed for | what it takes |
 |---|---|---|
 | **arcs in a section** | a true torus, an O-ring groove, a bearing seat — anything with a radius in section rather than a chamfer | `Edge::arc` is bound; the profile is a `Vec<[f64; 2]>` of straight segments, so an arc has nowhere to live yet |
-| **helix** | real threads — every "threaded" hole in the corpus is drawn as its tap drill; a diamond knurl; a spring | a helical path plus a sweep. `MakePipe` is not currently bound |
+| **helix** | real threads — every "threaded" hole in the corpus is drawn as its tap drill; a diamond knurl; a spring | a helical path type. `MakePipe` is bound now and `sweep()` uses it, but the graph's path model is runs and circular bends — a helix has nowhere to live |
 | **involute and other authored curves** | a spur gear, a cam, a real GT2 flank (`timing-pulley.js` approximates it and says so) | curve construction in the graph, on top of the section type |
 | **re-entrant (non-convex) sections** | a stepped hub in one operation | today it is refused, deliberately: no exact distance field. A union of convex revolves is exact, and is how the part is turned anyway |
 | **variable-radius and unequal-distance treatments** | a casting fillet that tapers, an asymmetric chamfer for a weld prep | `Fillet`/`Chamfer` take one scalar |
@@ -90,9 +90,9 @@ How many designs use each feature (counted once per design, not per use):
 | `CircularPattern` | 9 | yes (`polar`) |
 | `Combine` | 7 | yes (booleans) |
 | `Revolve` | 6 | yes |
-| **`Loft`** | **6** | **no** |
-| `Mirror` | 6 | no — hand-placed instead |
-| **`Sweep`** | **6** | **no** |
+| **`Loft`** | **6** | yes — polygon sections, B-rep only; the implicit backend refuses it by name |
+| `Mirror` | 6 | yes (`.mirror()`) |
+| **`Sweep`** | **6** | yes — convex profile along runs and bends, B-rep only; round profile is `pipe()`, exact in both |
 | `Sphere` | 5 | yes |
 | **`SplitBody`** | **5** | **no** |
 | `Move` | 5 | yes (`.at()`) |
@@ -105,11 +105,18 @@ How many designs use each feature (counted once per design, not per use):
 
 Two conclusions, and the first is the one that matters:
 
-**parcad only makes analytic surfaces, and that is the wall.** 13 of the 21
-designs have NURBS faces; in the worst (`v10`) it is 575 of 585. `Loft` and
-`Sweep` are tied at six designs each — each used in more designs than `Revolve`,
-which we did implement. Everything under `Thicken`, `Stitch` and `Patch` is the
-same wall approached from the surface-modelling side.
+**The wall was "parcad only makes analytic surfaces", and it has since
+moved.** 13 of the 21 designs have NURBS faces; in the worst (`v10`) it is 575
+of 585. `Loft` and `Sweep` were tied at six designs each — each used in more
+designs than `Revolve`, which we did implement — and that count is what
+eventually lifted the hold on both (docs/OP_ROADMAP.md §3–4: B-rep builds
+them, the implicit backend refuses them by name rather than approximating a
+field that probes would then trust). What the counts could not say, and the
+recreation targets in `examples/fusion360/` did, is that the ops alone were
+not the wall: every still-blocked target fails on *spline sketch geometry in
+the section or path*, which the profile type cannot hold. Everything under
+`Thicken`, `Stitch` and `Patch` remains the surface-modelling side of that
+wall, out by decision.
 
 **15 of the 21 are multi-solid**, which the one-root-one-solid graph cannot hold
 at all. That is the "multi-body / assembly" row above, and this sample says it is

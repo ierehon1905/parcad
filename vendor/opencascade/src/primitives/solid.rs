@@ -35,6 +35,31 @@ impl Solid {
         Compound { inner }
     }
 
+    // PARCAD: `loft` with the walls' shape made explicit. `ruled` walls run
+    // straight between consecutive sections; otherwise one smooth surface is
+    // fitted through all of them, which is what the bare ctor defaults to.
+    pub fn loft_sections<T: AsRef<Wire>>(
+        wires: impl IntoIterator<Item = T>,
+        ruled: bool,
+    ) -> Self {
+        let is_solid = true;
+        let mut make_loft = ffi::BRepOffsetAPI_ThruSections_ruled_ctor(is_solid, ruled);
+
+        for wire in wires.into_iter() {
+            make_loft.pin_mut().AddWire(&wire.as_ref().inner);
+        }
+
+        // Avoid twisted results when section outlines start at different
+        // vertices.
+        make_loft.pin_mut().CheckCompatibility(true);
+
+        let shape = make_loft.pin_mut().Shape();
+        let solid = ffi::TopoDS_cast_to_solid(shape);
+        let inner = ffi::TopoDS_Solid_to_owned(solid);
+
+        Self { inner }
+    }
+
     pub fn loft<T: AsRef<Wire>>(wires: impl IntoIterator<Item = T>) -> Self {
         let is_solid = true;
         let mut make_loft = ffi::BRepOffsetAPI_ThruSections_ctor(is_solid);

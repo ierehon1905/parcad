@@ -11,8 +11,11 @@
 //
 // Fusion built it with: CircularPattern, ConstructionAxis, ConstructionPlane, Extrude, Fillet, Loft, Sketch, Sweep.
 //
-// Blocked on Loft along a helix: no helical path, and no loft. See docs/DSL_GAPS.md and docs/OP_ROADMAP.md for
-// whether that op is coming and what it would cost.
+// Blocked on a helical loft — parcad now has loft, but this is not a stack of
+// sections along +Z: the export's wall is one twisted surface carrying over a
+// thousand B-spline curves, a loft whose sections rotate as they rise. It is
+// also two solids, and the graph holds one. Neither half is reachable with
+// the section types parcad has. See docs/DSL_GAPS.md and docs/OP_ROADMAP.md.
 //
 // This file throws rather than approximating. A stub that returned a rough
 // solid would measure as a part and read as progress, which is worse than
@@ -21,5 +24,6 @@
 
 throw new Error(
   "spiral-v1 is a Fusion recreation target, not a part yet: " +
-    "parcad has no Loft along a helix. See examples/fusion360/README.md.",
+    "parcad's loft stacks sections along +Z and this spiral's sections rotate as they rise " +
+    "(and it is two solids). See examples/fusion360/README.md.",
 );

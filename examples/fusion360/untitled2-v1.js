@@ -11,8 +11,13 @@
 //
 // Fusion built it with: Fillet, Revolve, Sketch.
 //
-// Blocked on Revolve of a spline profile: revolve() only takes a polyline section; this profile is a NURBS curve. See docs/DSL_GAPS.md and docs/OP_ROADMAP.md for
-// whether that op is coming and what it would cost.
+// Blocked on a spline in section: revolve() takes a convex polygon profile,
+// and this body is one NURBS surface — a spline revolved about the axis. A
+// polyline stand-in for the spline would build and measure and be exactly
+// the approximation this file refuses; the honest unblocking step is a
+// richer section type (arcs first, then splines). It is also two solids in
+// the document, of which the header records the first. See docs/DSL_GAPS.md
+// and docs/OP_ROADMAP.md.
 //
 // This file throws rather than approximating. A stub that returned a rough
 // solid would measure as a part and read as progress, which is worse than
@@ -21,5 +26,6 @@
 
 throw new Error(
   "untitled2-v1 is a Fusion recreation target, not a part yet: " +
-    "parcad has no Revolve of a spline profile. See examples/fusion360/README.md.",
+    "revolve() takes a polygon section and this profile is a spline. " +
+    "See examples/fusion360/README.md.",
 );

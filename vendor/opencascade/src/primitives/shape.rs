@@ -103,6 +103,20 @@ impl From<AdHocShape> for Shape {
 }
 
 impl Shape {
+    // PARCAD: sweep a profile face along a spine wire (BRepOffsetAPI_MakePipe).
+    // The spine must be G1-continuous — straight runs joined by tangent arcs —
+    // which the caller is responsible for; a sharp corner makes the sweep's
+    // frame ambiguous and OCCT resolves it however it likes.
+    pub fn sweep_profile_along(profile: &Face, spine: &Wire) -> Self {
+        let profile_shape = ffi::cast_face_to_shape(&profile.inner);
+        let mut make_pipe = ffi::BRepOffsetAPI_MakePipe_ctor(&spine.inner, profile_shape);
+        let shape = make_pipe.pin_mut().Shape();
+
+        Self {
+            inner: ffi::TopoDS_Shape_to_owned(shape),
+        }
+    }
+
     pub fn shape_type(&self) -> ShapeType {
         self.inner.ShapeType().into()
     }

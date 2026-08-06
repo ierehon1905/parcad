@@ -1,0 +1,28 @@
+{
+  "name": "swept-channel",
+  "script": "eval/scripts/swept-channel.js",
+  "why": "The sweep op against a closed form: a 10 mm square bar around one 90-degree bend of 20 mm is 100*60 of straight run plus Pappus's 100*20*pi/2 for the bend, 9141.59 mm3. The B-rep reads 0.005% under it, which is the tessellation under-reading the bend's cylinder walls, the same effect bent-tube records; the surfaces themselves are exact, 2 cylinders and the rest planes, no splines. The implicit half is the contract: refuse by name, point at the B-rep, never approximate.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": [
+        "no exact distance field",
+        "B-rep backend"
+      ]
+    }
+  },
+  "brep": {
+    "size": [
+      65.0,
+      45.0,
+      10.0
+    ],
+    "volume_mm3": 9141.087,
+    "area_mm2": 3856.486,
+    "triangles": 304,
+    "watertight": true,
+    "faces": 14,
+    "edges": 56,
+    "curves": 28
+  }
+}

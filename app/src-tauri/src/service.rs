@@ -1086,6 +1086,8 @@ fn treatments(doc: &Doc) -> Vec<Treatment> {
                 | Op::Torus { .. }
                 | Op::Revolve { .. }
                 | Op::Extrude { .. }
+                | Op::Loft { .. }
+                | Op::Sweep { .. }
                 | Op::Union { .. }
                 | Op::Difference { .. }
                 | Op::Intersection { .. }

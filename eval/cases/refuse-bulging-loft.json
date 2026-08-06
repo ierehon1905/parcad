@@ -1,0 +1,11 @@
+{
+  "name": "refuse-bulging-loft",
+  "script": "eval/scripts/refuse-bulging-loft.js",
+  "why": "A smooth loft through oscillating sections overshoots their bounding box like any interpolant (2.82 mm when written), while the graph told the mesher that box bounds the part. The backend measures containment on the built solid and must refuse, naming the overshoot and both fixes — the same bargain as offset's slip check, applied to a fitted surface.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": ["bulges", "outside its sections", "drop `smooth`"]
+    }
+  }
+}

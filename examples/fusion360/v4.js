@@ -11,8 +11,12 @@
 //
 // Fusion built it with: ConstructionPlane, DeleteFace, Extrude, Fillet, Sketch, SplitBody.
 //
-// Blocked on SplitBody and DeleteFace: parcad has no way to cut a solid in two and keep one half. See docs/DSL_GAPS.md and docs/OP_ROADMAP.md for
-// whether that op is coming and what it would cost.
+// Blocked on a spline outline, before SplitBody ever comes up. The body is a
+// 3 mm extrusion whose side wall is one NURBS surface: a closed *spline*
+// sketch outline (six B-spline curves in the export) pushed through the
+// thickness, then split. parcad's extrude takes a convex polygon outline, so
+// the shape cannot be authored even before the split-and-keep-one-half step
+// that parcad also lacks. See docs/DSL_GAPS.md and docs/OP_ROADMAP.md.
 //
 // This file throws rather than approximating. A stub that returned a rough
 // solid would measure as a part and read as progress, which is worse than
@@ -21,5 +25,6 @@
 
 throw new Error(
   "v4 is a Fusion recreation target, not a part yet: " +
-    "parcad has no SplitBody and DeleteFace. See examples/fusion360/README.md.",
+    "its outline is a spline, which extrude() cannot take, and parcad also has no " +
+    "SplitBody. See examples/fusion360/README.md.",
 );

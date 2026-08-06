@@ -1,0 +1,17 @@
+{
+  "name": "refuse-tight-sweep-bend",
+  "script": "eval/scripts/refuse-tight-sweep-bend.js",
+  "why": "A 5 mm bend on a section that reaches 7.07 mm from the path sweeps the inner side through itself, which OCCT renders as a self-intersecting surface rather than an error. The shared spine resolver must refuse in both backends, naming the profile's reach and both fixes.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": ["inside the profile's own", "reach", "sweep through itself"]
+    }
+  },
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": ["inside the profile's own", "reach", "sweep through itself"]
+    }
+  }
+}

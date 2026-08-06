@@ -357,6 +357,60 @@ pub enum Op {
         draft: f64,
     },
 
+    /// Skin a solid through two or more convex outlines stacked along +Z.
+    ///
+    /// This is the op that was held while the implicit backend had no honest
+    /// answer for it, and the resolution is not an approximate field: a loft
+    /// between two arbitrary outlines has no closed-form distance, so the
+    /// implicit evaluator *refuses it by name* and points at the B-rep
+    /// backend, which builds it exactly. A part containing a loft therefore
+    /// loses every capability that runs on the distance field — probes, wall
+    /// thickness, raymarched renders and sections — and that trade is the
+    /// documented cost of the op, not a bug.
+    ///
+    /// Sections are convex for the same reason extrude and revolve sections
+    /// are, plus one of loft's own: OCCT matches section vertices to build the
+    /// wall, and a re-entrant section makes that correspondence — and with it
+    /// the whole surface — an unstated guess. A stepped or hollow loft is a
+    /// boolean of convex ones.
+    Loft {
+        /// Sections bottom to top, each at its own strictly increasing height.
+        sections: Vec<LoftSection>,
+        /// `false` (the default) makes each wall segment ruled — straight
+        /// lines between consecutive sections, so the surface is exactly the
+        /// convex-hull skin of its sections. `true` fits one smooth B-spline
+        /// surface through all of them, which is Fusion's default look; the
+        /// backend then *measures* that the fitted surface stayed inside the
+        /// sections' own bounding box and refuses if it bulged past it, so
+        /// the graph's cheap bounds stay conservative rather than assumed.
+        #[serde(default, skip_serializing_if = "is_false")]
+        smooth: bool,
+    },
+
+    /// Sweep a convex outline along a path of straight runs joined by
+    /// circular bends — the same path a `pipe` takes, with an authored
+    /// section in place of the circle.
+    ///
+    /// Like [`Op::Loft`] this is B-rep only, and refused by name in the
+    /// implicit evaluator: a swept surface along a bent path has no exact
+    /// distance field. The path model is deliberately the one a bender or a
+    /// router can follow — runs and tangent arcs — rather than a spline,
+    /// whose distance has no closed form even for the B-rep's checks.
+    Sweep {
+        /// `[x, y]` pairs, anticlockwise, first point not repeated. Drawn in
+        /// the plane perpendicular to the first run, with the outline's +Y
+        /// kept as close to global +Z as the first run allows.
+        profile: Vec<[f64; 2]>,
+        /// Waypoints of the swept spine. Corners between runs are replaced by
+        /// arcs of radius `bend`.
+        path: Vec<V3>,
+        /// Bend radius at every interior corner. Required as soon as the path
+        /// has one; it must clear the profile's own extent, or the inner side
+        /// of the bend sweeps through itself.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        bend: f64,
+    },
+
     /// Union. `blend` > 0 rounds the join by that radius.
     Union {
         children: Vec<NodeId>,
@@ -455,6 +509,27 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "ChamferRecipe::is_default")]
         recipe: ChamferRecipe,
     },
+}
+
+/// One [`Op::Loft`] section: a convex outline lying in the plane at `z`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoftSection {
+    /// `[x, y]` pairs, anticlockwise, first point not repeated.
+    pub outline: Vec<[f64; 2]>,
+    /// Height of the plane this section lies in.
+    pub z: f64,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// One resolved piece of an [`Op::Sweep`] spine: a straight run between two
+/// trimmed path points, or a bend arc given by three points on it.
+#[derive(Debug, Clone, Copy)]
+pub enum SpinePiece {
+    Run { from: V3, to: V3 },
+    Bend { from: V3, mid: V3, to: V3 },
 }
 
 /// Move every edge of an anticlockwise convex polygon inward by `distance`, by
@@ -641,6 +716,139 @@ impl Op {
             );
         }
         Ok(())
+    }
+
+    /// Check an [`Op::Loft`]'s sections.
+    ///
+    /// Shared by both backends even though only one builds the shape: the
+    /// implicit evaluator refuses a loft *after* validation, so an authoring
+    /// mistake reads as the mistake it is rather than as "use the other
+    /// backend".
+    pub fn validate_loft(sections: &[LoftSection]) -> anyhow::Result<()> {
+        if sections.len() < 2 {
+            anyhow::bail!(
+                "a loft needs at least 2 sections; got {}. Each section is a convex outline at its own height",
+                sections.len()
+            );
+        }
+        for (i, section) in sections.iter().enumerate() {
+            if !section.z.is_finite() {
+                anyhow::bail!("loft section {i} is at height {}, which is not a height", section.z);
+            }
+            Self::validate_outline(&section.outline)
+                .map_err(|e| anyhow::anyhow!("loft section {i}: {e}"))?;
+            if i > 0 && section.z <= sections[i - 1].z {
+                anyhow::bail!(
+                    "loft sections must rise strictly: section {i} is at z = {}, below or level with section {} at z = {}. Reorder them bottom to top, and give coincident sections one outline",
+                    section.z,
+                    i - 1,
+                    sections[i - 1].z
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve an [`Op::Sweep`] path into runs and bend arcs, refusing what
+    /// cannot be built.
+    ///
+    /// The corner math is the same as `pipe()`'s in the DSL — trim each leg
+    /// back by `bend * tan(turn / 2)` and join the tangent points with an arc —
+    /// and it lives here so the graph refuses exactly what the backend cannot
+    /// build, with the same numbers in the message.
+    pub fn sweep_spine(
+        profile: &[[f64; 2]],
+        path: &[V3],
+        bend: f64,
+    ) -> anyhow::Result<Vec<SpinePiece>> {
+        Self::validate_outline(profile)?;
+        if path.len() < 2 {
+            anyhow::bail!("a sweep path needs at least 2 points; got {}", path.len());
+        }
+        for (i, p) in path.iter().enumerate() {
+            if !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite() {
+                anyhow::bail!("sweep path point {i} is not a finite [x, y, z] triple");
+            }
+        }
+        let pts: Vec<nalgebra::Vector3<f64>> = path.iter().map(|p| (*p).into()).collect();
+        for i in 0..pts.len() - 1 {
+            if (pts[i + 1] - pts[i]).norm() < 1e-9 {
+                anyhow::bail!("sweep path points {i} and {} are the same point", i + 1);
+            }
+        }
+        // The profile's own reach. A bend tighter than this sweeps the inner
+        // side of the section through itself, which OCCT resolves into a
+        // self-intersecting surface rather than an error.
+        let reach = profile
+            .iter()
+            .fold(0.0f64, |acc, [x, y]| acc.max(x.hypot(*y)));
+
+        let mut from = pts.clone();
+        let mut to: Vec<_> = (0..pts.len()).map(|i| pts[(i + 1).min(pts.len() - 1)]).collect();
+        let mut bends: Vec<Option<(nalgebra::Vector3<f64>, nalgebra::Vector3<f64>)>> =
+            vec![None; pts.len()];
+
+        for i in 1..pts.len() - 1 {
+            let u = (pts[i] - pts[i - 1]).normalize();
+            let v = (pts[i + 1] - pts[i]).normalize();
+            let turn = u.dot(&v).clamp(-1.0, 1.0).acos();
+            if turn < 1e-9 {
+                continue; // collinear: no corner
+            }
+            if std::f64::consts::PI - turn < 1e-9 {
+                anyhow::bail!("the sweep path doubles back on itself at point {i}");
+            }
+            if bend <= 0.0 {
+                anyhow::bail!(
+                    "the sweep path turns at point {i}, so it needs a bend radius. Unlike a pipe there is no ball to fill a square corner with — an authored section has no rotationally symmetric stand-in"
+                );
+            }
+            if bend <= reach + 1e-9 {
+                anyhow::bail!(
+                    "a bend radius of {bend} mm is inside the profile's own {reach:.2} mm reach, so the inner side of the bend would sweep through itself. Use a bend radius larger than the profile, or a smaller profile"
+                );
+            }
+            let tangent = bend * (turn / 2.0).tan();
+            let before = (pts[i] - pts[i - 1]).norm();
+            let after = (pts[i + 1] - pts[i]).norm();
+            if tangent > before - 1e-9 || tangent > after - 1e-9 {
+                let most = before.min(after) / (turn / 2.0).tan();
+                anyhow::bail!(
+                    "a bend radius of {bend} does not fit at path point {i}: it needs {tangent:.2} mm of straight either side. The most this corner takes is about {most:.2} mm"
+                );
+            }
+            to[i - 1] = pts[i] - u * tangent;
+            from[i] = pts[i] + v * tangent;
+            let centre = pts[i] + (v - u).normalize() * (bend / (turn / 2.0).cos());
+            // The arc's midpoint, for a three-point construction: on the
+            // bisector from the centre towards the corner.
+            let mid = centre + (pts[i] - centre).normalize() * bend;
+            bends[i] = Some((mid, centre));
+        }
+
+        let mut pieces = Vec::new();
+        for i in 0..pts.len() - 1 {
+            let (a, b) = (from[i], to[i]);
+            if (b - a).norm() > 1e-9 {
+                pieces.push(SpinePiece::Run {
+                    from: V3::new(a.x, a.y, a.z),
+                    to: V3::new(b.x, b.y, b.z),
+                });
+            }
+            if let Some((mid, _)) = bends[i + 1] {
+                let start = to[i];
+                let end = from[i + 1];
+                pieces.push(SpinePiece::Bend {
+                    from: V3::new(start.x, start.y, start.z),
+                    mid: V3::new(mid.x, mid.y, mid.z),
+                    to: V3::new(end.x, end.y, end.z),
+                });
+            }
+        }
+        if pieces.is_empty() {
+            anyhow::bail!("the sweep path has no length");
+        }
+        Ok(pieces)
     }
 
     /// The top outline of a drafted extrusion, and how far it moved.
@@ -843,7 +1051,9 @@ impl Doc {
             | Op::Cylinder { .. }
             | Op::Revolve { .. }
             | Op::Torus { .. }
-            | Op::Extrude { .. } => vec![],
+            | Op::Extrude { .. }
+            | Op::Loft { .. }
+            | Op::Sweep { .. } => vec![],
             Op::Union { children, .. } | Op::Intersection { children, .. } => children.clone(),
             Op::Difference { base, tools, .. } => {
                 let mut v = vec![*base];

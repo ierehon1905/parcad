@@ -171,6 +171,44 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
             }
         }
 
+        // A ruled loft lies inside the convex hull of its sections, so the box
+        // over every section point bounds it exactly at the sections and
+        // conservatively between them. A smooth loft's fitted surface can in
+        // principle bulge past that hull; the B-rep backend *measures* the
+        // built solid against this same box and refuses one that escaped, so
+        // the claim made here stays conservative rather than assumed.
+        Op::Loft { sections, .. } => {
+            Op::validate_loft(sections)?;
+            let mut lo = V3::new(f64::MAX, f64::MAX, sections[0].z);
+            let mut hi = V3::new(f64::MIN, f64::MIN, sections[sections.len() - 1].z);
+            for section in sections {
+                for [x, y] in &section.outline {
+                    lo = V3::new(lo.x.min(*x), lo.y.min(*y), lo.z);
+                    hi = V3::new(hi.x.max(*x), hi.y.max(*y), hi.z);
+                }
+            }
+            Aabb { min: lo, max: hi }
+        }
+
+        // Every swept point lies within the profile's reach of the spine, and
+        // the spine — runs trimmed to their tangent points, arcs inside each
+        // corner's own triangle — lies inside the box over the path points.
+        Op::Sweep { profile, path, bend } => {
+            Op::sweep_spine(profile, path, *bend)?;
+            let reach = profile
+                .iter()
+                .fold(0.0f64, |acc, [x, y]| acc.max(x.hypot(*y)));
+            let (mut lo, mut hi) = (V3::splat(f64::MAX), V3::splat(f64::MIN));
+            for p in path {
+                lo = V3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
+                hi = V3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
+            }
+            Aabb {
+                min: V3::new(lo.x - reach, lo.y - reach, lo.z - reach),
+                max: V3::new(hi.x + reach, hi.y + reach, hi.z + reach),
+            }
+        }
+
         // The swept circle reaches major + minor in every radial direction, and
         // minor above and below the plane it is swept in.
         // Conservative for a partial sweep: an arc is inside the whole ring,

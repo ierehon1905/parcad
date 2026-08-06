@@ -1,0 +1,19 @@
+{
+  "name": "loft-smooth",
+  "script": "eval/scripts/loft-smooth.js",
+  "why": "A smooth loft through three sections has no closed form, so these are the kernel's own numbers held against regression, not a derivation. What the case proves: the smooth ThruSections path builds watertight, the backend's containment gate measured the fitted surface inside the sections' bounding box (a bulge past it is refused), and the box equals the sections' extent — the exact claim measure.rs makes to the mesher.",
+  "brep": {
+    "size": [
+      40.0,
+      40.0,
+      30.0
+    ],
+    "volume_mm3": 35755.358,
+    "area_mm2": 6341.072,
+    "triangles": 7174,
+    "watertight": true,
+    "faces": 6,
+    "edges": 24,
+    "curves": 12
+  }
+}

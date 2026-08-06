@@ -154,6 +154,23 @@ fn lower_node(doc: &Doc, id: NodeId, built: &[Option<Tree>]) -> Result<Tree> {
         Op::Fillet { .. } | Op::Chamfer { .. } => anyhow::bail!(
             "per-edge treatment at node {id} needs the B-rep backend; an implicit field has no logical edges to select"
         ),
+
+        // Refused by name rather than approximated. A field that is quietly
+        // wrong would be worse than no field at all: probes, wall thickness
+        // and renders all run on it, so an approximate loft means a
+        // confidently measured part that does not exist.
+        Op::Loft { sections, .. } => {
+            Op::validate_loft(sections)?;
+            anyhow::bail!(
+                "the loft at node {id} has no exact distance field — a skin between arbitrary outlines has no closed form. Evaluate this part with the B-rep backend, which builds it exactly"
+            )
+        }
+        Op::Sweep { profile, path, bend } => {
+            Op::sweep_spine(profile, path, *bend)?;
+            anyhow::bail!(
+                "the sweep at node {id} has no exact distance field — an authored section along a bent path has no closed form. Evaluate this part with the B-rep backend, which builds it exactly; a round section can stay implicit as pipe()"
+            )
+        }
     })
 }
 

@@ -65,6 +65,16 @@ later release of it exists, so there is no version to bump to.
   torus-gland groove by 168 mesh edges. Representation data only; geometry
   is untouched.
 
+- `BRepOffsetAPI_ThruSections_ruled_ctor(is_solid, ruled)` — the existing
+  ctor pins OCCT's second argument at its default (a smooth surface fitted
+  through the sections); the lofting op needs to choose ruled walls
+  explicitly. Same `construct_unique` pattern, one more argument.
+
+- `BRepOffsetAPI_MakePipe` — type, ctor `(spine, profile)`, `Shape`, `Build`,
+  `IsDone` — sweeping a profile face along a spine wire, plus its
+  `#include <BRepOffsetAPI_MakePipe.hxx>` in `wrapper.hxx`. The general sweep
+  op is built on it.
+
 ## Changed in `build.rs`
 
 - `-std=c++17` instead of `-std=c++11`. OCCT 8.0 headers use constexpr and

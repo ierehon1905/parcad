@@ -11,8 +11,13 @@
 //
 // Fusion built it with: ConstructionPlane, Loft, Sketch.
 //
-// Blocked on Loft: eight of its nine faces are NURBS, all from one Loft. See docs/DSL_GAPS.md and docs/OP_ROADMAP.md for
-// whether that op is coming and what it would cost.
+// Blocked on spline sections, not on Loft itself — parcad now has loft. Its
+// sections are convex polygons; this vase is lofted through *spline* sketch
+// outlines (16 B-spline curves in the export), and eight of its nine faces
+// are the NURBS walls fitted through them. A polygon stand-in for those
+// sections would build, measure, and be the silent approximation this file
+// refuses. What it waits on is a spline (or at least arc) section type — see
+// "arcs in a section" in docs/OP_ROADMAP.md, and docs/DSL_GAPS.md.
 //
 // This file throws rather than approximating. A stub that returned a rough
 // solid would measure as a part and read as progress, which is worse than
@@ -21,5 +26,6 @@
 
 throw new Error(
   "v2 is a Fusion recreation target, not a part yet: " +
-    "parcad has no Loft. See examples/fusion360/README.md.",
+    "parcad's loft takes polygon sections and this vase is lofted through spline outlines. " +
+    "See examples/fusion360/README.md.",
 );

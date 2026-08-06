@@ -16,7 +16,10 @@ use opencascade::{
     primitives::{BooleanShape, Edge, Face, Shape, Solid, Wire},
 };
 use parcad_core::{
-    graph::{ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, NodeId, Op, V3},
+    graph::{
+        ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, NodeId, Op, SpinePiece,
+        V3,
+    },
     selectors::{
         parse_edge_selector, parse_vertex_selector, Axis, AxisDirection, CurveKind,
         EdgeExpectation, EdgeExtrema, EdgeQuery, EdgeRole, EdgeSelector, EdgeSelectorTerm,
@@ -115,6 +118,8 @@ fn op_name(op: &Op) -> &'static str {
         Op::Revolve { .. } => "revolve",
         Op::Torus { .. } => "torus",
         Op::Extrude { .. } => "extrude",
+        Op::Loft { .. } => "loft",
+        Op::Sweep { .. } => "sweep",
         Op::Mirror { .. } => "mirror",
         Op::Cylinder { .. } => "cylinder",
         Op::Union { .. } => "union",
@@ -1549,6 +1554,164 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 placed.translated(offset)
             };
 
+            BuiltShape::primitive(placed, node.tag.as_deref())
+        }
+
+        Op::Loft { sections, smooth } => {
+            breadcrumb(&format!(
+                "loft node {id} ({label}) through {} sections",
+                sections.len()
+            ));
+            Op::validate_loft(sections).map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+
+            let ring = |points: &[[f64; 2]], z: f64| {
+                let points: Vec<DVec3> =
+                    points.iter().map(|[x, y]| DVec3::new(*x, *y, z)).collect();
+                let edges: Vec<Edge> = points
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, a)| {
+                        let b = points[(i + 1) % points.len()];
+                        (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
+                    })
+                    .collect();
+                Wire::from_edges(&edges)
+            };
+            let wires: Vec<Wire> = sections
+                .iter()
+                .map(|s| ring(&s.outline, s.z))
+                .collect();
+            let solid = Solid::loft_sections(&wires, !*smooth);
+            let shape = Shape::from(solid);
+
+            // The graph promised the mesher and the renderer that the loft
+            // stays inside its sections' bounding box. Ruled walls cannot
+            // leave it; a smooth fit through three or more sections can, in
+            // principle, bulge past it — so the promise is measured on the
+            // shape in hand rather than assumed, the same bargain as offset's
+            // slip check.
+            let (mut lo, mut hi) = (
+                DVec3::new(f64::MAX, f64::MAX, sections[0].z),
+                DVec3::new(f64::MIN, f64::MIN, sections[sections.len() - 1].z),
+            );
+            for section in sections {
+                for [x, y] in &section.outline {
+                    lo = DVec3::new(lo.x.min(*x), lo.y.min(*y), lo.z);
+                    hi = DVec3::new(hi.x.max(*x), hi.y.max(*y), hi.z);
+                }
+            }
+            let after = bbox(&shape);
+            let bulge = (lo - after.0).max(after.1 - hi).max_element().max(0.0);
+            if bulge > SLIP_TOLERANCE_MM {
+                bail!(
+                    "node {id} ({label}) lofts a smooth surface that bulges \
+                     {bulge:.2} mm outside its sections' own extent, which the \
+                     rest of the pipeline was told bounds it. Add an \
+                     intermediate section where it bulges, or drop `smooth` \
+                     for ruled walls, which cannot leave the sections' hull"
+                );
+            }
+
+            let placed = if offset == DVec3::ZERO {
+                shape
+            } else {
+                shape.translated(offset)
+            };
+            BuiltShape::primitive(placed, node.tag.as_deref())
+        }
+
+        Op::Sweep { profile, path, bend } => {
+            breadcrumb(&format!(
+                "sweep node {id} ({label}) of a {}-point profile along {} path points",
+                profile.len(),
+                path.len()
+            ));
+            // One resolver for both backends: what it refuses here, the
+            // implicit evaluator refuses with the same words before pointing
+            // at this backend.
+            let pieces = Op::sweep_spine(profile, path, *bend)
+                .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+
+            let p3 = |p: &parcad_core::graph::V3| DVec3::new(p.x, p.y, p.z);
+            let spine_edges: Vec<Edge> = pieces
+                .iter()
+                .map(|piece| match piece {
+                    SpinePiece::Run { from, to } => Edge::segment(p3(from), p3(to)),
+                    SpinePiece::Bend { from, mid, to } => Edge::arc(p3(from), p3(mid), p3(to)),
+                })
+                .collect();
+            let spine = Wire::from_edges(&spine_edges);
+
+            // The profile is authored in 2D; place it at the path's start,
+            // perpendicular to the first run, with its +Y as close to global
+            // +Z as that run allows — the same convention a drawing's section
+            // view uses. The first piece is always a run: validation trims a
+            // corner strictly short of the leg before it.
+            let start = match pieces[0] {
+                SpinePiece::Run { from, .. } => p3(&from),
+                SpinePiece::Bend { from, .. } => p3(&from),
+            };
+            let tangent = match pieces[0] {
+                SpinePiece::Run { from, to } => (p3(&to) - p3(&from)).normalize(),
+                SpinePiece::Bend { .. } => bail!(
+                    "node {id} ({label}): sweep spine unexpectedly starts with a bend"
+                ),
+            };
+            let v_axis = if tangent.z.abs() < 1.0 - 1e-9 {
+                (DVec3::Z - tangent * tangent.z).normalize()
+            } else {
+                DVec3::Y
+            };
+            let u_axis = v_axis.cross(tangent);
+            let section: Vec<DVec3> = profile
+                .iter()
+                .map(|[x, y]| start + u_axis * *x + v_axis * *y)
+                .collect();
+            let section_edges: Vec<Edge> = section
+                .iter()
+                .enumerate()
+                .filter_map(|(i, a)| {
+                    let b = section[(i + 1) % section.len()];
+                    (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
+                })
+                .collect();
+            let face = Face::from_wire(&Wire::from_edges(&section_edges));
+
+            let swept = Shape::sweep_profile_along(&face, &spine);
+            let swept = swept.single_solid().unwrap_or(swept);
+
+            // Same bargain as the loft above: the graph told the pipeline the
+            // sweep stays within the profile's reach of the path, so measure
+            // that on the result instead of assuming OCCT agreed.
+            let reach = profile
+                .iter()
+                .fold(0.0f64, |acc, [x, y]| acc.max(x.hypot(*y)));
+            let (mut lo, mut hi) = (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN));
+            for p in path {
+                lo = lo.min(p3(p));
+                hi = hi.max(p3(p));
+            }
+            let after = bbox(&swept);
+            let bulge = ((lo - DVec3::splat(reach)) - after.0)
+                .max(after.1 - (hi + DVec3::splat(reach)))
+                .max_element()
+                .max(0.0);
+            if bulge > SLIP_TOLERANCE_MM {
+                bail!(
+                    "node {id} ({label}) swept a shape that reaches {bulge:.2} mm \
+                     outside the envelope its path and profile allow, so the \
+                     kernel's frame turned the section somewhere along the way. \
+                     Shorten the runs between bends or enlarge the bend radius, \
+                     and report this shape — it should not happen on a tangent \
+                     path"
+                );
+            }
+
+            let placed = if offset == DVec3::ZERO {
+                swept
+            } else {
+                swept.translated(offset)
+            };
             BuiltShape::primitive(placed, node.tag.as_deref())
         }
 
