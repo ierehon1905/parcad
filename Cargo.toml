@@ -1,6 +1,12 @@
 [workspace]
 resolver = "2"
-members = ["crates/*", "app/src-tauri", "vendor/opencascade"]
+members = [
+    "crates/*",
+    "app/src-tauri",
+    "vendor/opencascade",
+    "vendor/opencascade-sys",
+    "vendor/occt-sys",
+]
 # parcad-occt statically builds OpenCASCADE, which is minutes on a cold cache.
 # Keep it out of the default build so the everyday loop stays fast; build it
 # explicitly with `cargo build -p parcad-occt`.

@@ -1,4 +1,15 @@
 #!/usr/bin/env bash
 # The full pass, corpus included. Pushing is the point at which "the geometry is
 # still what it was" stops being someone's memory of having checked.
+#
+# The banner is not decoration. `cargo build --release` is LTO'd and the worker
+# relinks 26 MB of statically-bound OpenCASCADE, so the first minutes produce no
+# output at all; and if the Stop hook's `check.sh --fast` is still running,
+# cargo blocks on the shared target/ build lock before it even starts. Both look
+# exactly like a hung push, and a push killed halfway is a push that never ran
+# the corpus. Saying up front what this costs is what keeps it from being
+# bypassed.
+printf '\n\033[1mpre-push\033[0m — tools/check.sh: release build, tests, OCCT worker, eval corpus.\n'
+printf '\033[2mAbout 5 min (measured 4m41s cold). Quiet stretches during the release build\n'
+printf 'and the worker relink are normal. Ctrl-C aborts the push.\033[0m\n'
 exec "$(git rev-parse --show-toplevel)/tools/check.sh"

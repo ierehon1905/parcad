@@ -202,15 +202,16 @@ pub struct ExportRequest {
 
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct ProjectRequest {
-    /// A project name with no directory part and no extension, such as
-    /// `bracket`, as listed by `list_projects`.
+    /// A project path exactly as `list_projects` gives it: slash-separated
+    /// folder names and no extension, such as `bracket` or `Mounts/bracket`.
     pub name: String,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct SaveRequest {
-    /// The project name to write, with no directory part and no extension.
-    /// An existing project of that name is replaced.
+    /// The project path to write: slash-separated folder names and no
+    /// extension, such as `bracket` or `Mounts/bracket`. Folders are created
+    /// as needed. An existing project at that path is replaced.
     pub name: String,
     /// The DSL source to save.
     pub script: String,
@@ -271,8 +272,9 @@ pub struct Exported {
 
 #[derive(Serialize, schemars::JsonSchema)]
 pub struct ProjectList {
-    /// Every project in the shared folder, including the parts parcad seeded
-    /// on first run. They are ordinary files with no special status.
+    /// Every project in the shared folder, as slash-separated paths — a part
+    /// in a folder reads `Mounts/bracket`. Includes the parts parcad seeded on
+    /// first run, which have no special status.
     projects: Vec<String>,
     /// The folder itself, so a person can be pointed at it.
     directory: String,
@@ -590,7 +592,7 @@ impl Parcad {
     /// Every project in the shared folder.
     #[tool(
         name = "list_projects",
-        description = "List the parts in parcad's project folder. This is the same folder the desktop app and the user see, so anything listed here can be opened in the app, and anything saved here shows up in it. Parts that ship with parcad are seeded into this folder and are ordinary projects."
+        description = "List the parts in parcad's project folder. This is the same folder the desktop app and the user see, so anything listed here can be opened in the app, and anything saved here shows up in it. Paths are slash-separated: a part inside a folder is listed as 'Mounts/bracket', and that whole string is the name every other project tool takes. Parts that ship with parcad are seeded into this folder and are ordinary projects."
     )]
     async fn list_projects(
         &self,
@@ -605,7 +607,7 @@ impl Parcad {
     /// One project's source.
     #[tool(
         name = "read_project",
-        description = "Return the DSL source of one project. The seeded parts are worth reading before writing your own: they are the same files the eval corpus measures, so they always run."
+        description = "Return the DSL source of one project. The seeded parts are worth reading before writing your own: they are the same files the eval corpus measures, so they always run. On disk a project is usually a '<name>.parcad' folder whose 'part.js' is the source this returns; a README.md beside it describes the part in prose. A loose '<name>.js' file is also a project. Either way, use the path from list_projects rather than a filename."
     )]
     async fn read_project(
         &self,
@@ -621,7 +623,7 @@ impl Parcad {
     /// Save a project where the user can open it.
     #[tool(
         name = "save_project",
-        description = "Write a part to parcad's project folder so the user can open it in the app. Evaluate it first: saving a script that does not build leaves the user a broken file. Replaces an existing project of the same name."
+        description = "Write a part to parcad's project folder so the user can open it in the app. Evaluate it first: saving a script that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed."
     )]
     async fn save_project(
         &self,
@@ -659,6 +661,12 @@ impl ServerHandler for Parcad {
                  with real parts, and they are the same files the test corpus measures, so \
                  they always run. save_project writes back to that same folder, which is \
                  what the user opens in the app.\n\n\
+                 Projects nest in folders, so a name is a slash-separated path like \
+                 'Mounts/bracket' — pass the path list_projects gave you, whole. On disk one \
+                 project is a '<name>.parcad' folder holding part.js, which is the source and \
+                 the only authoritative file in it, beside a README.md describing the part and \
+                 a preview image of it. A loose '<name>.js' is a project too. You never need \
+                 to name any of those files: the project tools take the path and find them.\n\n\
                  Select edges by intent, never by index: a directional selector like \
                  '>Z and >Y and |X', or a topological one like \
                  { curve: \"circle\", role: \"hole\", adjacentTo: { faceNormal: \"+z\" } }. \

@@ -1,6 +1,12 @@
 import { defineConfig } from "vite";
+import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
+  // Tailwind v4 as a Vite plugin: no PostCSS pipeline and no config file. The
+  // design tokens live in `src/style.css`'s `@theme` block, which is also where
+  // anything that is not markup — the CodeMirror theme, the viewport's clear
+  // colour — reads them from as ordinary custom properties.
+  plugins: [tailwindcss()],
   // Tauri drives the dev server on a fixed port and fails loudly rather than
   // silently moving if it is taken.
   clearScreen: false,

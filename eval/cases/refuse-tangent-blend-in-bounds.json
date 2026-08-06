@@ -1,0 +1,15 @@
+{
+  "name": "refuse-tangent-blend-in-bounds",
+  "script": "eval/scripts/refuse-tangent-blend-in-bounds.js",
+  "why": "The tangent blend at the size it was found on, where the broken geometry stays inside the part's own bounding box. Containment passes; only BRepCheck_Analyzer catches it. This is the case that fails if the validity gate is removed, and the shape it would then accept has 22 open edges.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "node 4 (stock) unions node 3 blends by 2 mm",
+        "its own checker rejects it",
+        "BRepCheck_SelfIntersectingWire"
+      ]
+    }
+  }
+}

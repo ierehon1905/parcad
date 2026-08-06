@@ -25,7 +25,11 @@ case "${1:-}" in
   *) echo "usage: tools/check.sh [--fast]" >&2; exit 2 ;;
 esac
 
-step() { printf '\n\033[1m== %s\033[0m\n' "$1"; }
+# Each step announces how long the run has been going. The release build and the
+# worker relink each emit nothing for over a minute, so an elapsed count is the
+# only thing distinguishing "still linking" from "wedged".
+started=$(date +%s)
+step() { printf '\n\033[1m== %s\033[0m \033[2m(%ss)\033[0m\n' "$1" "$(($(date +%s) - started))"; }
 
 if [ "$fast" = 1 ]; then
   # The kernel crates only. `parcad-app` is left out on purpose: its test binary

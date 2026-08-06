@@ -516,6 +516,108 @@ fn unified(mut shape: Shape) -> Shape {
     shape
 }
 
+/// Run OpenCASCADE's healing pass over a blend result, under
+/// `PARCAD_HEAL=<max_tolerance_mm>`.
+///
+/// A diagnostic, not a feature. Healing is allowed to move geometry, so whether
+/// it is acceptable here is a question about the measured volume afterwards, not
+/// about whether the validity check goes green.
+fn heal_probe(shape: &mut Shape, what: &str) {
+    let Ok(raw) = std::env::var("PARCAD_HEAL") else {
+        return;
+    };
+    let Ok(max_tol) = raw.parse::<f64>() else {
+        return;
+    };
+    breadcrumb(&format!("healing {what} with max tolerance {max_tol} mm"));
+    *shape = shape.healed(1.0e-7, max_tol);
+    validity_probe(&format!("{what} after healing"), shape);
+}
+
+/// Ask OpenCASCADE to validate a shape, as a breadcrumb, under
+/// `PARCAD_CHECK_VALIDITY=1` (`=exact` for the slow per-point checks).
+///
+/// A diagnostic, not a gate: it exists to answer whether a blend that reports
+/// `IsDone() == true` and then will not mesh is handing back a B-rep OpenCASCADE
+/// itself considers invalid, or a valid one its mesher cannot cope with. Those
+/// are different bugs in different parts of the kernel.
+fn validity_probe(what: &str, shape: &Shape) {
+    let Ok(mode) = std::env::var("PARCAD_CHECK_VALIDITY") else {
+        return;
+    };
+    if mode == "0" {
+        return;
+    }
+    match shape.check_validity(mode == "exact") {
+        Ok(()) => breadcrumb(&format!("valid: {what}")),
+        Err(report) => {
+            let faults: Vec<&str> = report.lines().collect();
+            breadcrumb(&format!("INVALID: {what} — {} faults", faults.len()));
+            for line in faults.iter().take(40) {
+                breadcrumb(&format!("  {line}"));
+            }
+        }
+    }
+}
+
+/// Post-conditions on a blend, checked where the operation still has a name.
+///
+/// `{ blend }` reaches the same builder as `.fillet()` and inherited none of its
+/// post-conditions, so it returned what the treatment path had refused since the
+/// 14.95 mm box. Both checks are needed and neither subsumes the other:
+/// containment catches `refuse-tangent-blend`, where the result breaches the
+/// bounding box by 0.23 mm; only `BRepCheck_Analyzer` catches
+/// `refuse-tangent-blend-in-bounds`, where the same defect stays inside it.
+///
+/// The analyzer costs ~3 ms against a 167 ms retainer build, which is why it is
+/// a gate here rather than the opt-in `validity_probe` it grew out of.
+fn check_blend(
+    what: &str,
+    radius: f64,
+    before: (DVec3, DVec3),
+    shape: &Shape,
+) -> Result<()> {
+    let slip = growth_slip(before, bbox(shape));
+    if slip > SLIP_TOLERANCE_MM {
+        bail!(
+            "{what} blends by {radius} mm, and the kernel returned a shape reaching \
+             {slip:.2} mm outside the solid it started from. A blend fills the concavity \
+             a union leaves and rounds the convexity a cut leaves; neither can push the \
+             part outward, so this result is wrong rather than merely surprising. Reduce \
+             the radius, or union without a blend and treat the seam edges you want"
+        );
+    }
+
+    if let Err(report) = shape.check_validity(false) {
+        let faults: Vec<&str> = report.lines().collect();
+        let shown: Vec<&str> = faults.iter().take(6).copied().collect();
+        let more = faults.len().saturating_sub(shown.len());
+        bail!(
+            "{what} blends by {radius} mm, and OpenCASCADE reported the result done while \
+             its own checker rejects it — {} fault(s):\n  {}{}\nThis is the kernel \
+             returning a surface that will not close, so the solid cannot be printed, \
+             exported or measured. The trigger is tangency: the blend has to end against \
+             a face it touches without crossing — a boss exactly as wide as the plate it \
+             stands on, or a radius that brings the fillet exactly to a side wall — and \
+             there the fillet's width falls to zero, which OpenCASCADE does not build. \
+             Clearance of a few hundredths of a millimetre fixes it on simple shapes and \
+             is worth trying first, but it is not reliable: on the shape this was found \
+             on, every perturbation ran into a separate crash instead. The dependable \
+             way out is to build the round as geometry — union a torus, or cut with the \
+             complement of one — which is exact, not an approximation. \
+             See docs/GOTCHAS.md",
+            faults.len(),
+            shown.join("\n  "),
+            if more > 0 {
+                format!("\n  ... and {more} more")
+            } else {
+                String::new()
+            },
+        );
+    }
+    Ok(())
+}
+
 fn evolve_edges(edges: Vec<Edge>, result: &BooleanShape) -> Vec<Edge> {
     edges
         .into_iter()
@@ -1043,7 +1145,9 @@ pub fn build(doc: &Doc) -> Result<Shape> {
     // Reject cycles and dangling references before touching the kernel, where
     // the same mistakes would be far less survivable.
     doc.topo_order()?;
-    Ok(build_node(doc, doc.root, DVec3::ZERO)?.shape)
+    let shape = build_node(doc, doc.root, DVec3::ZERO)?.shape;
+    validity_probe("final shape", &shape);
+    Ok(shape)
 }
 
 /// Build a final shape with ephemeral ownership for treatment-generated edges.
@@ -1054,6 +1158,7 @@ pub fn build(doc: &Doc) -> Result<Shape> {
 pub fn build_with_treatment_edges(doc: &Doc) -> Result<(Shape, BTreeMap<Vec<[i64; 3]>, NodeId>)> {
     doc.topo_order()?;
     let built = build_node(doc, doc.root, DVec3::ZERO)?;
+    validity_probe("final shape", &built.shape);
     Ok((built.shape, built.features.edge_owners()))
 }
 
@@ -1209,7 +1314,17 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     ));
                     // The edges a boolean creates are exactly the seam, which is
                     // what `blend` names in the graph.
+                    validity_probe(&format!("union at node {id} before blend"), &joined.shape);
+                    let before = bbox(&joined.shape);
                     joined.fillet_new_edges(*blend);
+                    validity_probe(&format!("union at node {id} after blend {blend}"), &joined.shape);
+                    heal_probe(&mut joined.shape, &format!("union at node {id}"));
+                    check_blend(
+                        &format!("node {id} ({label}) unions node {c}"),
+                        *blend,
+                        before,
+                        &joined.shape,
+                    )?;
                     acc = BuiltShape {
                         shape: unified(joined.shape),
                         lineage,
@@ -1245,7 +1360,14 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     breadcrumb(&format!(
                         "fillet {blend} mm on edges created by cut at node {id} ({label})"
                     ));
+                    let before = bbox(&cut.shape);
                     cut.fillet_new_edges(*blend);
+                    check_blend(
+                        &format!("node {id} ({label}) subtracts node {t}"),
+                        *blend,
+                        before,
+                        &cut.shape,
+                    )?;
                     acc = BuiltShape {
                         shape: unified(cut.shape),
                         lineage,

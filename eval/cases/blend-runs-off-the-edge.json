@@ -1,0 +1,8 @@
+{
+  "name": "blend-runs-off-the-edge",
+  "script": "eval/scripts/blend-runs-off-the-edge.js",
+  "why": "A 2 mm blend that overruns the plate it sits on by 1.5 mm at both ends, so OCCT has to trim the fillet strip against two side planes. It builds and closes. This is the control for refuse-tangent-blend: without it, the refusal there reads as 'blends cannot run off an edge', which is measurably false and would hide the real trigger.",
+  "brep": {
+    "watertight": true
+  }
+}

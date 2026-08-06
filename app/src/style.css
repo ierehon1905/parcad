@@ -1,415 +1,125 @@
-:root {
-  --bg: #101216;
-  --panel: #16181c;
-  --panel-2: #1b1e24;
-  --line: #272c34;
-  --ink: #d8dee9;
-  --ink-dim: #8b94a3;
-  --accent: #6ea8fe;
-  --bad: #ff6b6b;
-  --good: #7bd88f;
-  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+@import "tailwindcss";
+
+/**
+ * The design tokens, and the handful of rules that cannot be utilities.
+ *
+ * Everything a person sees is built from the `@theme` block below. Tailwind
+ * generates a utility for each entry *and* emits it as a plain custom property,
+ * which is what lets the parts of this app that are not markup — the CodeMirror
+ * theme, three.js clear colours, a canvas fill — read the same value rather
+ * than keeping a second copy of the palette in TypeScript. One source for a
+ * colour, in the language that owns colours.
+ *
+ * Utilities go in the markup. What is left here is deliberately only:
+ *
+ *  - `@theme`, the tokens;
+ *  - `@layer base`, the two or three element defaults;
+ *  - `@layer components`, for DOM this app does not generate. CodeMirror emits
+ *    its own `.cm-*` elements, so there is nowhere to put a class on them.
+ *
+ * If a rule here is none of those three, it is in the wrong file — it belongs
+ * on the element as utilities, where the next person reads it without a lookup.
+ */
+
+@theme {
+  /* Fusion-style chrome: a dark frame around a bright work area. Named for the
+     role rather than the shade, so a lighter theme is a change of value here
+     and nothing else anywhere. */
+  --color-bg: #101216;
+  --color-panel: #16181c;
+  --color-panel-2: #1b1e24;
+  --color-line: #272c34;
+  --color-ink: #d8dee9;
+  --color-ink-dim: #8b94a3;
+  --color-accent: #6ea8fe;
+  --color-accent-deep: #23406e;
+  --color-accent-edge: #3a5f9e;
+  --color-bad: #ff6b6b;
+  --color-good: #7bd88f;
+  /* Gold marks a *source* selection — the treatment target preview, and the
+     editor's matching underline. It is never used for anything else, because
+     its whole job is that it means one thing. */
+  --color-gold: #f5b942;
+  --color-gold-edge: #8f6d2a;
+  /* The frosted panels that float over the viewport. Used with an opacity
+     modifier — `bg-glass/86` — so one colour covers every one of them. */
+  --color-glass: #121419;
+  /* The two backdrops: a well behind a thumbnail, and the error pane. */
+  --color-well: #0e1014;
+  --color-bad-bg: #1e1416;
+  --color-bad-ink: #ffb4b4;
+
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+
+  /* The app is dense on purpose: it is a tool window, not a document. 13px is
+     the body, 12 and 11.5 are the two steps down that the chrome uses. */
+  --text-body: 13px;
+  --text-small: 12px;
+  --text-tiny: 11.5px;
 }
 
-* {
-  box-sizing: border-box;
+@layer base {
+  html,
+  body,
+  #app {
+    @apply h-full m-0;
+  }
+
+  body {
+    @apply bg-bg text-ink font-sans overflow-hidden;
+    font-size: var(--text-body);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Form controls do not inherit the page font, and every one of them in this
+     app should. Set once here rather than on each. */
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  /* three.js sizes its own canvas; inline layout would leave a text
+     descender's worth of gap under it. */
+  canvas {
+    @apply block;
+  }
+
+  select,
+  input[type="range"] {
+    @apply bg-panel-2 border border-line rounded-md;
+    accent-color: var(--color-accent);
+    padding: 3px 6px;
+  }
 }
 
-html,
-body,
-#app {
-  height: 100%;
-  margin: 0;
-}
+/**
+ * DOM this app does not generate.
+ *
+ * CodeMirror renders the editor surface and the span behind a decoration, and
+ * names those classes itself — there is no element here to put a utility on.
+ * Everything else that looks like a component, including the treatment tooltip,
+ * is built by this app and styled where it is built.
+ */
+@layer components {
+  .cm-editor {
+    @apply h-full font-mono;
+    font-size: 12.5px;
+  }
 
-body {
-  background: var(--bg);
-  color: var(--ink);
-  font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
-  overflow: hidden;
-  -webkit-font-smoothing: antialiased;
-}
+  .cm-editor.cm-focused {
+    @apply outline-none;
+  }
 
-#app {
-  display: flex;
-  flex-direction: column;
-}
-
-/* ---------------------------------------------------------------- titlebar */
-
-#titlebar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  height: 40px;
-  padding: 0 14px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
-  flex: 0 0 auto;
-}
-
-.brand {
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-.sep {
-  width: 1px;
-  height: 18px;
-  background: var(--line);
-}
-
-.spacer {
-  flex: 1;
-}
-
-select,
-input[type="range"] {
-  accent-color: var(--accent);
-  background: var(--panel-2);
-  color: var(--ink);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 3px 6px;
-  font: inherit;
-}
-
-.quality {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--ink-dim);
-}
-
-.quality input {
-  width: 90px;
-  padding: 0;
-}
-
-#depth-value {
-  font-family: var(--mono);
-  color: var(--ink);
-  min-width: 1ch;
-}
-
-.section {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--ink-dim);
-}
-
-.section input[type="range"] {
-  width: 110px;
-  padding: 0;
-}
-
-/* The position holds its width as the slider moves, so nothing beside it
-   shuffles sideways while you drag. */
-.section-at {
-  font-family: var(--mono);
-  color: var(--ink);
-  min-width: 7ch;
-  text-align: right;
-}
-
-.section :disabled {
-  opacity: 0.4;
-}
-
-.status {
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--ink-dim);
-}
-
-/* An agent working through MCP changes the same project folder this window
-   shows. The chip is dim while nobody is there and lights up when one is. */
-.mcp {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-right: 14px;
-  font-family: var(--mono);
-  font-size: 12px;
-  color: var(--ink-dim);
-  cursor: default;
-}
-
-.mcp::before {
-  content: "";
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--ink-dim);
-  opacity: 0.5;
-}
-
-.mcp.live {
-  color: var(--good);
-}
-
-.mcp.live::before {
-  background: var(--good);
-  opacity: 1;
-}
-
-.mcp.busy {
-  color: var(--accent);
-}
-
-.mcp.busy::before {
-  background: var(--accent);
-  opacity: 1;
-}
-
-.status.busy {
-  color: var(--accent);
-}
-
-.status.failed {
-  color: var(--bad);
-}
-
-/* -------------------------------------------------------------------- main */
-
-main {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-}
-
-#editor-pane {
-  width: 42%;
-  min-width: 280px;
-  display: flex;
-  flex-direction: column;
-  background: var(--panel);
-  min-height: 0;
-}
-
-#editor {
-  flex: 1;
-  min-height: 0;
-  overflow: hidden;
-}
-
-.cm-editor {
-  height: 100%;
-  font-family: var(--mono);
-  font-size: 12.5px;
-}
-
-.cm-editor.cm-focused {
-  outline: none;
-}
-
-.cm-treatment-hover {
-  background: rgba(245, 185, 66, 0.28);
-  border-bottom: 1px solid #f5b942;
-  border-radius: 2px;
-}
-
-.cm-treatment-tooltip {
-  padding: 8px 10px;
-  font: 12px/1.5 var(--mono);
-  color: var(--ink);
-  background: var(--panel-2);
-  max-width: 42ch;
-}
-
-.cm-treatment-tooltip-title {
-  color: var(--accent);
-  margin-bottom: 4px;
-}
-
-.cm-treatment-tooltip dl {
-  display: grid;
-  /* The labels are short and the values are not; let the value column take
-     the slack so a long selector wraps rather than squeezing the labels. */
-  grid-template-columns: max-content 1fr;
-  gap: 1px 10px;
-  margin: 0;
-}
-
-.cm-treatment-tooltip dt {
-  color: var(--ink-dim);
-}
-
-.cm-treatment-tooltip dd {
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-
-.cm-treatment-tooltip dd.ok {
-  color: var(--good);
-}
-
-.cm-treatment-tooltip dd.warn {
-  color: var(--bad);
-}
-
-.cm-treatment-action {
-  display: block;
-  width: 100%;
-  margin-top: 6px;
-  padding: 4px 6px;
-  font: inherit;
-  text-align: left;
-  color: var(--ink);
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  cursor: pointer;
-}
-
-.cm-treatment-action:hover {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-
-#splitter {
-  width: 1px;
-  background: var(--line);
-  cursor: col-resize;
-  flex: 0 0 auto;
-}
-
-#splitter:hover {
-  background: var(--accent);
-}
-
-#viewport-pane {
-  flex: 1;
-  position: relative;
-  min-width: 0;
-}
-
-#viewport {
-  position: absolute;
-  inset: 0;
-}
-
-#viewport canvas {
-  display: block;
-}
-
-/* ------------------------------------------------------------ overlay bits */
-
-.report {
-  position: absolute;
-  left: 14px;
-  bottom: 14px;
-  padding: 10px 12px;
-  background: rgba(18, 20, 25, 0.82);
-  backdrop-filter: blur(8px);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  line-height: 1.7;
-  color: var(--ink-dim);
-  pointer-events: none;
-  max-width: 60%;
-}
-
-.report b {
-  color: var(--ink);
-  font-weight: 500;
-}
-
-.report .warn {
-  color: var(--bad);
-}
-
-.report .ok {
-  color: var(--good);
-}
-
-.edge-inspector {
-  position: absolute;
-  top: 14px;
-  right: 14px;
-  min-width: 184px;
-  padding: 9px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: rgba(18, 20, 25, 0.86);
-  backdrop-filter: blur(8px);
-  color: var(--ink-dim);
-  font: 11.5px/1.5 var(--mono);
-}
-
-.edge-inspector-title {
-  color: var(--ink-dim);
-  font: 10px/1.3 -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.edge-id {
-  color: var(--ink);
-  margin-top: 2px;
-}
-
-.edge-selector {
-  margin-top: 5px;
-  color: var(--accent);
-}
-
-.edge-origin {
-  margin-top: 5px;
-  color: #f5b942;
-}
-
-.edge-inspector button {
-  margin-top: 7px;
-  padding: 3px 6px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: var(--panel-2);
-  color: var(--ink);
-  font: inherit;
-  cursor: pointer;
-}
-
-.edge-inspector button:disabled {
-  cursor: default;
-  color: var(--ink-dim);
-  opacity: 0.65;
-}
-
-.target-preview {
-  position: absolute;
-  top: 14px;
-  left: 14px;
-  padding: 9px 10px;
-  border: 1px solid #8f6d2a;
-  border-radius: 8px;
-  background: rgba(18, 20, 25, 0.86);
-  backdrop-filter: blur(8px);
-  color: #f5b942;
-  font: 11.5px/1.5 var(--mono);
-  pointer-events: none;
-}
-
-#target-preview-detail {
-  color: var(--ink-dim);
-}
-
-.error {
-  flex: 0 0 auto;
-  max-height: 34%;
-  overflow: auto;
-  padding: 10px 12px;
-  border-top: 1px solid var(--line);
-  background: #1e1416;
-  color: #ffb4b4;
-  font-family: var(--mono);
-  font-size: 11.5px;
-  white-space: pre-wrap;
-}
-
-.quality.disabled {
-  opacity: 0.45;
+  /* The editor's mark for the treatment under the viewport pointer. Gold, like
+     every other source-side selection. */
+  .cm-treatment-hover {
+    background: color-mix(in srgb, var(--color-gold) 28%, transparent);
+    border-bottom: 1px solid var(--color-gold);
+    @apply rounded-xs;
+  }
 }

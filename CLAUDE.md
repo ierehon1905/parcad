@@ -54,6 +54,15 @@ is for. Keep it that way; a cold OCCT build is ~10 minutes. Keep the commands
 locked: `rust-toolchain.toml`, `Cargo.lock`, `app/bun.lock` are the reproducible
 inputs.
 
+**A project is a `.parcad` folder, and `part.js` inside it is the only
+authoritative file.** `parcad.json`, `README.md` and `preview.png` beside it are
+derived and disposable — the app rewrites them on save, from *measured* values,
+and nothing reads them back as fact. A loose `.js` is still a project and must
+stay one. Seeding records what it has placed in `.seeded` rather than checking
+whether a path is occupied: a part the user moved into a folder of their own is
+not a part that is missing. See docs/ARCHITECTURE.md, "Projects are files, not
+fixtures".
+
 **No graph JSON is checked in, deliberately.** `examples/` and `eval/cases/` hold
 DSL scripts; generate a graph when you need one. A checked-in graph doesn't fail
 when `dsl.ts` changes under it — it just quietly describes an older part. The old
@@ -70,6 +79,25 @@ prefer a name a part would not choose for a local, and check `examples/` builds.
 silently misread. Anything else is rejected at the door.
 
 **Primitives are centred on the origin**, placed with a separate `Translate`.
+
+**Styling is Tailwind, and `style.css` holds only tokens.** Every colour, font
+and step of the type scale is a `@theme` entry, which Tailwind emits as both a
+utility and a plain custom property — that is what lets the CodeMirror theme and
+the viewport read the same value instead of keeping a second palette in
+TypeScript. Appearance lives on the element as utilities, including for DOM
+built in TypeScript; a shared look is a named constant next to the markup
+(`BUTTON`, `TOOLTIP`), not a class in a stylesheet. The only CSS rules left are
+for elements CodeMirror renders and names itself, because there is nothing there
+to put a class on.
+
+Two traps, both of which have already cost a session:
+
+- **A variant cannot be "the base plus a different colour".** Conflicting
+  utilities resolve by their order in the generated stylesheet, not in the class
+  attribute, so `BUTTON + "bg-accent-deep"` silently keeps whichever background
+  Tailwind emitted last. Base states shape; each variant states its own colours.
+- **Preflight zeroes every margin**, which removes the `margin: auto` a browser
+  uses to centre a modal `<dialog>`. Add `m-auto` back.
 
 **Comments explain *why*, and are load-bearing.** They're the only place some of
 this knowledge lives (why a subprocess, why a post-condition, why not Release) —
@@ -118,12 +146,14 @@ got the right answer by quoting the part's own source comment.
 | what the app can do at all | `app/src-tauri/src/service.rs` — never a transport file |
 | the IPC, HTTP and MCP adapters | `app/src-tauri/src/lib.rs`, `http.rs`, `mcp.rs` |
 | the sandbox agent scripts run in | `app/src-tauri/src/script.rs` |
-| where parts are stored | `app/src-tauri/src/projects.rs` |
+| where parts are stored | `app/src-tauri/src/projects.rs` — a `.parcad` folder per part |
+| the parts picker: folders, new part, rename, trash | `app/src/project-browser.ts`, rules in `app/src/projects.ts` |
 | how the frontend calls the backend | `app/src/backend.ts` — the only module that knows there are two |
 | the selector grammar | `selectors.rs` **and** `app/src/selectors.ts` — see below |
 | what the editor marks as you type | `app/src/selector-lint.ts` |
 | what a treatment hover says, and offers to edit | `app/src/treatment-info.ts` (content), `treatment-hover.ts` (the extension) |
 | how it looks | `app/src/viewport.ts`, `app/src/outline.ts` |
+| colours, type, the design tokens | `@theme` in `app/src/style.css` — never a literal in a component |
 | what "still correct" means | `eval/cases/*.json`, `eval/scripts/*.js` |
 | the seed parts | `examples/*.js` — indexed in `examples/README.md`; copied into the project folder on first run, not read by the picker |
 | what the DSL makes hard | `docs/DSL_GAPS.md` |

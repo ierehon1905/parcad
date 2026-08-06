@@ -8,6 +8,9 @@
 #include <Message_ProgressRange.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Shape.hxx>
+// OCCT 8.0 moved the NCollection typedef aliases to src/Deprecated and stopped
+// pulling them in transitively; each one now needs including where it is used.
+#include <TopTools_ListOfShape.hxx>
 
 #include <memory>
 #include <vector>

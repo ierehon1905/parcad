@@ -281,6 +281,41 @@ export class Viewport {
     }
   };
 
+  /**
+   * A PNG of what is on screen right now, scaled to fit `size`.
+   *
+   * The renderer has no `preserveDrawingBuffer`, so the canvas is empty by the
+   * time anything reads it — the buffer is cleared after each frame is
+   * presented. Drawing once here, synchronously, and copying immediately is
+   * what makes the read return the picture rather than a transparent
+   * rectangle; turning the flag on instead would cost every frame of every
+   * session for a picture taken on save.
+   */
+  snapshot(size = 512): string {
+    this.tickOnce();
+    const canvas = this.renderer.domElement;
+    if (!canvas.width || !canvas.height) return "";
+
+    const scale = Math.min(1, size / Math.max(canvas.width, canvas.height));
+    const out = document.createElement("canvas");
+    out.width = Math.max(1, Math.round(canvas.width * scale));
+    out.height = Math.max(1, Math.round(canvas.height * scale));
+    const context = out.getContext("2d");
+    if (!context) return "";
+    context.drawImage(canvas, 0, 0, out.width, out.height);
+    return out.toDataURL("image/png");
+  }
+
+  /** One frame, outside the animation loop, for `snapshot` to read. */
+  private tickOnce() {
+    if (this.pendingResize) this.resize();
+    if (this.preview || DEBUG === "noedge" || DEBUG === "normals") {
+      this.renderer.render(this.scene, this.camera);
+    } else {
+      this.outline.render([this.partGroup]);
+    }
+  }
+
   dispose() {
     cancelAnimationFrame(this.frame);
     this.renderer.domElement.removeEventListener("pointermove", this.pickEntity);

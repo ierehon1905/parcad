@@ -54,7 +54,7 @@ export function treatmentHover(source: TreatmentHoverSource): Extension {
         above: true,
         create: () => {
           const dom = document.createElement("div");
-          dom.className = "cm-treatment-tooltip";
+          dom.className = TOOLTIP;
 
           const render = (target?: ResolvedTarget, pending = false) => {
             dom.replaceChildren(
@@ -90,21 +90,40 @@ export function treatmentHover(source: TreatmentHoverSource): Extension {
   );
 }
 
+/**
+ * How the tooltip looks.
+ *
+ * The element is built here, so its appearance is here too — CodeMirror only
+ * supplies the positioned shell around it. The one thing left in `style.css` is
+ * what CodeMirror itself renders and names.
+ */
+const TOOLTIP =
+  "bg-panel-2 text-ink font-mono text-small leading-normal px-2.5 py-2 max-w-[42ch]";
+/** Short labels, long values: give the value column the slack. */
+const TABLE = "grid m-0 gap-x-2.5 gap-y-px grid-cols-[max-content_1fr]";
+const ACTION =
+  "block w-full mt-1.5 px-1.5 py-1 text-left text-ink bg-panel border border-line " +
+  "rounded-xs cursor-pointer hover:border-accent hover:text-accent";
+/** The data says ok or warn; only this file decides what colour that is. */
+const TONE = { ok: "text-good", warn: "text-bad" } as const;
+
 function heading(text: string): HTMLElement {
   const element = document.createElement("div");
-  element.className = "cm-treatment-tooltip-title";
+  element.className = "text-accent mb-1";
   element.textContent = text;
   return element;
 }
 
 function table(rows: ReturnType<typeof treatmentRows>): HTMLElement {
   const element = document.createElement("dl");
+  element.className = TABLE;
   for (const row of rows) {
     const label = document.createElement("dt");
+    label.className = "text-ink-dim";
     label.textContent = row.label;
     const value = document.createElement("dd");
+    value.className = `m-0 [overflow-wrap:anywhere] ${row.tone ? TONE[row.tone] : ""}`;
     value.textContent = row.value;
-    if (row.tone) value.className = row.tone;
     element.append(label, value);
   }
   return element;
@@ -112,7 +131,7 @@ function table(rows: ReturnType<typeof treatmentRows>): HTMLElement {
 
 function button(view: EditorView, action: ReturnType<typeof treatmentActions>[number]) {
   const element = document.createElement("button");
-  element.className = "cm-treatment-action";
+  element.className = ACTION;
   element.textContent = action.label;
   element.title = action.detail;
   element.addEventListener("click", () => {

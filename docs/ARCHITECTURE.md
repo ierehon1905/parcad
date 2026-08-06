@@ -366,10 +366,45 @@ has.
 ### Projects are files, not fixtures
 
 `projects.rs` owns one directory — `~/Documents/parcad`, or
-`PARCAD_PROJECTS_DIR` — of `.js` scripts, shared by all three callers. The parts
-that ship are *seeded* into it on first run and are then ordinary projects:
-editable, renamable, deletable. Seeding only ever adds what is missing, so a
-part the user deletes stays deleted.
+`PARCAD_PROJECTS_DIR` — shared by all three callers. The parts that ship are
+*seeded* into it on first run and are then ordinary projects: editable,
+renamable, deletable. Seeding only ever adds what is missing, so a part the user
+deletes stays deleted.
+
+One project is a `.parcad` folder:
+
+```text
+~/Documents/parcad/
+├─ Mounts/                  an ordinary folder; projects nest
+│  ├─ Bracket.parcad/       one project
+│  │  ├─ part.js            the source, and the only authoritative file in it
+│  │  ├─ parcad.json        title and tags
+│  │  ├─ README.md          what the part is, from measured values
+│  │  └─ preview.png        the viewport at the last save
+│  └─ motor-mount.js        a loose script is a project too
+└─ .trash/                  where a removed project goes
+```
+
+The extension is on the *folder* so a bare `ls` says what each entry is without
+descending into it — the layout exists to be read by an agent that landed in the
+directory, and a name that carries its own type is the cheapest way to say so.
+Nothing is registered as a macOS package: hiding the innards from Finder would
+also hide them from the readers this format is for.
+
+**`part.js` is the source of truth; everything beside it is derived.** Deleting
+the README or the preview loses nothing — the next save rewrites them. Nothing
+is cached: no evaluated report is stored, because a stale measurement that looks
+fresh is precisely the confident wrong answer the rest of this codebase refuses.
+The README is written from the report the app just measured, and says which
+kernel measured it and that the script is what to rebuild.
+
+A loose `foo.js` stays a project, so an agent or a person can drop a file in
+without ceremony; the picker offers to convert one, which is the only thing that
+ever changes a project's form.
+
+Removal is a move into `.trash`, not an unlink. These are the user's own files
+and the thing standing between one and a mis-click is a dialog they have already
+learned to dismiss.
 
 This is why the app's picker reads the folder over the API instead of globbing
 `examples/` at build time. An "example" that a user cannot open, change and save
@@ -378,9 +413,15 @@ difference is invisible until they try. It also gives an agent somewhere to put
 its work: `save_project` writes to the folder the picker lists, so a part
 written over MCP is one reload away from being on screen.
 
-A project *name* is never a path. `read_project`, `save_project` and the export
-tools reject anything with a separator or `..`, because two of the three callers
-are a socket and a model.
+A project name is a path *inside that folder* and nothing else. `safe()` splits
+on `/` and refuses a segment that is empty, starts with a dot, carries a `.js`
+or `.parcad` extension, or is not exactly one path component — because two of
+the three callers are a socket and a model. It refuses rather than sanitising:
+correcting a name toward a valid one is a guess about what the caller meant, and
+that guess is what a traversal bug is made of. `app/src/projects.ts` repeats the
+check so the picker can mark a bad name on the keystroke that types it, the same
+arrangement as the selector grammar — `safe()` is the copy that has to be
+right.
 
 - `app/src/dsl.ts` is the authoring layer and lives in TypeScript, not Rust.
   That's what lets `tools/run.ts` (bun) and the webview run *the same* DSL and

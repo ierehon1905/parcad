@@ -204,6 +204,46 @@ fn run() -> Response {
     let edges = edge_curves(&shape, &treatment_owners);
     let mesh_ms = t1.elapsed().as_millis() as u64;
 
+    // The backstop, behind whatever the construction sites caught. A shape whose
+    // triangles do not close is not a solid, whatever `IsDone()` said, and this
+    // check does not depend on understanding why OCCT produced one — which
+    // matters, because that list is only as complete as the bugs already met.
+    //
+    // Weld first, for the reason `Tessellation::weld` documents.
+    let stats = parcad_core::mesh::Tessellation {
+        vertices: mesh
+            .vertices
+            .iter()
+            .map(|v| [v.x as f32, v.y as f32, v.z as f32])
+            .collect(),
+        triangles: mesh
+            .indices
+            .chunks_exact(3)
+            .map(|c| [c[0], c[1], c[2]])
+            .collect(),
+        resolution_mm: BINDING_DEFLECTION_MM,
+    }
+    .weld(1e-3)
+    .stats();
+    if !stats.watertight {
+        return Response::Error {
+            stage: "tessellating".into(),
+            message: format!(
+                "the kernel built a shape whose surface does not close: {} of its \
+                 {} mesh edges border one face instead of two. OpenCASCADE reported \
+                 every operation done, so the defect is in the geometry it returned, \
+                 not in the request. A solid that will not close cannot be printed, \
+                 exported or measured, so it is refused here rather than handed on. \
+                 The known cause is a blend that has to end against a face it is tangent \
+                 to — a boss exactly as wide as the plate it stands on, or a radius \
+                 reaching exactly to a side wall — which the blend itself now refuses by \
+                 name. Reaching this message instead means something else produced it, so \
+                 please report the script: see docs/GOTCHAS.md",
+                stats.non_manifold_edges, stats.triangles * 3,
+            ),
+        };
+    }
+
     let t2 = Instant::now();
     let mut step_path = None;
     if let Some(path) = &request.step_path {

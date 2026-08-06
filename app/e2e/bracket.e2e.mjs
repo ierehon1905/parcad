@@ -37,10 +37,14 @@ async function mountHoleFilletPoint() {
 
 describe("bracket source-to-viewport links", () => {
   it("inspects a generated fillet and previews the selector under the caret", async () => {
-    // The app opens on the bracket, but selecting it here makes the fixture an
-    // explicit part of the regression contract rather than an incidental default.
-    const example = await browser.$("#example");
-    await example.selectByAttribute("value", "bracket");
+    // The app opens on the bracket, but opening it here makes the fixture an
+    // explicit part of the regression contract rather than an incidental
+    // default. Through the picker, because that is now the only way in — and a
+    // path rather than a `<select>` value, since parts live in folders.
+    await browser.$("#project").click();
+    const card = await browser.$('.browser-card [aria-label$="(bracket)"]');
+    await card.waitForDisplayed({ timeout: 5_000 });
+    await card.click();
 
     const status = await browser.$("#status");
     const error = await browser.$("#error");

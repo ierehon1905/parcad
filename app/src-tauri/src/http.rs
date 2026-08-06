@@ -62,6 +62,33 @@ struct InspectRequest {
 #[derive(Deserialize)]
 struct SaveRequest {
     script: String,
+    /// Written into the bundle beside the script. See the IPC adapter's
+    /// `save_project` for why the three travel together.
+    #[serde(default)]
+    readme: Option<String>,
+    /// A `data:image/png;base64,` URL from the viewport canvas.
+    #[serde(default)]
+    preview: Option<String>,
+}
+
+/// Everything a picker does to a project that is not reading or writing it.
+///
+/// One tagged POST rather than five routes: a project path contains slashes, so
+/// it has to be the trailing wildcard of its route, and nothing can follow a
+/// wildcard. The alternative is five parallel `/api/<verb>/{*path}` prefixes,
+/// which reads as five resources when there is one.
+#[derive(Deserialize)]
+#[serde(tag = "op", rename_all = "lowercase")]
+enum ProjectOp {
+    /// A new part, refusing to overwrite one that is there.
+    Create { script: String },
+    /// A new empty folder.
+    Folder,
+    Rename { to: String },
+    /// The readable name, which is not the path.
+    Title { title: String },
+    /// Loose `.js` to `.parcad` folder.
+    Convert,
 }
 
 #[derive(Deserialize)]
@@ -110,7 +137,20 @@ fn router<R: Runtime>(app: AppHandle<R>) -> Router {
         // MCP. The frontend reads them from here rather than from a build-time
         // glob, so a part an agent saves shows up in the picker.
         .route("/api/projects", get(list_projects))
-        .route("/api/projects/{name}", get(read_project).put(save_project))
+        // A project path may name folders, so it is a wildcard. Nothing can
+        // follow one in a route, which is why the thumbnail has a prefix of its
+        // own and everything else is a tagged POST.
+        .route(
+            "/api/projects/{*name}",
+            get(read_project)
+                .put(save_project)
+                .post(project_op)
+                .delete(delete_project),
+        )
+        .route(
+            "/api/preview/{*name}",
+            get(project_preview).put(save_project_preview),
+        )
         // The same application again, for a model rather than a person. It
         // reaches `service` through the same functions, and the scripts it
         // sends run in `script`'s sandbox rather than the webview.
@@ -191,9 +231,11 @@ fn download(export: service::Export) -> Response {
 }
 
 async fn list_projects() -> Result<Response, Failed> {
-    let projects = projects::list().map_err(Failed)?;
     Ok(Json(json!({
-        "projects": projects,
+        // The flat list is what MCP answers with and what a caller that only
+        // wants names can use; the tree is the same parts with their folders.
+        "projects": projects::list().map_err(Failed)?,
+        "tree": projects::tree().map_err(Failed)?,
         "directory": projects::dir().to_string_lossy(),
     }))
     .into_response())
@@ -209,7 +251,62 @@ async fn save_project(
     Json(request): Json<SaveRequest>,
 ) -> Result<Response, Failed> {
     let path = projects::write(&name, &request.script).map_err(Failed)?;
+    if let Some(readme) = request.readme {
+        projects::write_readme(&name, &readme).map_err(Failed)?;
+    }
+    if let Some(preview) = request.preview {
+        projects::write_preview_data_url(&name, &preview).map_err(Failed)?;
+    }
     Ok(Json(json!({ "name": name, "path": path })).into_response())
+}
+
+async fn project_op(
+    Path(name): Path<String>,
+    Json(request): Json<ProjectOp>,
+) -> Result<Response, Failed> {
+    let (renamed, path) = match request {
+        ProjectOp::Create { script } => (name.clone(), projects::create(&name, &script)),
+        ProjectOp::Folder => (name.clone(), projects::create_folder(&name)),
+        ProjectOp::Rename { to } => (to.clone(), projects::rename(&name, &to)),
+        ProjectOp::Title { title } => (
+            name.clone(),
+            projects::set_title(&name, &title).map(|()| name.clone()),
+        ),
+        ProjectOp::Convert => (name.clone(), projects::convert(&name)),
+    };
+    Ok(Json(json!({ "name": renamed, "path": path.map_err(Failed)? })).into_response())
+}
+
+async fn delete_project(Path(name): Path<String>) -> Result<Response, Failed> {
+    let trashed = projects::remove(&name).map_err(Failed)?;
+    Ok(Json(json!({ "name": name, "trashed": trashed })).into_response())
+}
+
+/// A part's thumbnail, as the image itself rather than base64 in JSON — this
+/// one has a browser on the other end and `<img src>` is the whole point.
+#[derive(Deserialize)]
+struct PreviewRequest {
+    /// A `data:image/png;base64,` URL from the viewport canvas.
+    preview: String,
+}
+
+/// The thumbnail on its own, without touching the script.
+///
+/// The app writes one the first time it draws a part that has none, so a folder
+/// of parts nobody has edited yet still shows what they are. Rewriting
+/// `part.js` to do that would touch the user's source — and its mtime, which
+/// the picker reports — for a picture.
+async fn save_project_preview(
+    Path(name): Path<String>,
+    Json(request): Json<PreviewRequest>,
+) -> Result<Response, Failed> {
+    projects::write_preview_data_url(&name, &request.preview).map_err(Failed)?;
+    Ok(Json(json!({ "name": name })).into_response())
+}
+
+async fn project_preview(Path(name): Path<String>) -> Result<Response, Failed> {
+    let png = projects::preview(&name).map_err(Failed)?;
+    Ok(([(header::CONTENT_TYPE, "image/png")], png).into_response())
 }
 
 /// Serve the frontend bundle Tauri already carries.

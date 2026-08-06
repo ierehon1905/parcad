@@ -16,7 +16,8 @@ import { javascript } from "@codemirror/lang-javascript";
 import { oneDark } from "@codemirror/theme-one-dark";
 import * as dsl from "./dsl";
 import { Shape } from "./dsl";
-import { label as projectLabel, loadProjects, readProject } from "./projects";
+import { describeProjects, label as projectLabel, partAt } from "./projects";
+import { mountProjectBrowser } from "./project-browser";
 import { suggestVertexSelector, verticesFromEdges, type VertexPoint } from "./entities";
 import { selectorLinter } from "./selector-lint";
 import { treatmentHover as treatmentHoverTooltip, type TreatmentHoverSource } from "./treatment-hover";
@@ -154,7 +155,11 @@ let framed = false;
 /** The last graph that evaluated cleanly, kept for export. */
 let lastGraph: dsl.Doc | null = null;
 let lastSource = "";
+/** The last measurements, kept so a save can describe the part it saved. */
+let lastReport: Report | undefined;
+let lastBackend: "implicit" | "brep" | undefined;
 let lastTreatments: dsl.TreatmentSource[] = [];
+let lastTopology: { faces: number; edges: number } | null = null;
 let targetPreviewRequest = 0;
 /** A clicked treatment keeps its authored chain visible after pointer-leave. */
 let pinnedTreatment: dsl.TreatmentSource | undefined;
@@ -219,6 +224,9 @@ const editor = new EditorView({
     treatmentHoverTooltip(hoverSource),
     EditorView.updateListener.of((v) => {
       if (v.docChanged) {
+        // The titlebar's saved/unsaved mark is a fact about this keystroke, so
+        // it cannot wait for the debounced evaluation below.
+        showOpenPart();
         clearTargetPreview();
         pinnedTreatment = undefined;
         schedule();
@@ -281,6 +289,7 @@ async function run() {
         ? result.timings.kernel_ms
         : result.timings.lower_and_mesh_ms + result.timings.normals_ms;
     setStatus(`${result.report.mesh.triangles.toLocaleString()} tris · ${ms} ms`);
+    void captureFirstThumbnail();
   } catch (e) {
     showError(e);
     setStatus("failed", "failed");
@@ -321,6 +330,9 @@ function buildGraph(source: string): BuiltGraph {
 
 function show(result: Evaluated) {
   const { report } = result;
+  lastReport = report;
+  lastBackend = result.backend;
+  lastTopology = result.topology;
   visibleEdges = normalizeEdges(result.edges);
   visibleVertices = verticesFromEdges(visibleEdges);
 
@@ -371,15 +383,15 @@ function show(result: Evaluated) {
       : "",
     `mesh <b>${mesh.triangles.toLocaleString()}</b> tris ${tol} ` +
       (mesh.watertight
-        ? `<span class="ok">watertight</span>`
-        : `<span class="warn">NOT watertight — ${mesh.non_manifold_edges} bad edges</span>`),
+        ? `<span class="text-good">watertight</span>`
+        : `<span class="text-bad">NOT watertight — ${mesh.non_manifold_edges} bad edges</span>`),
     report.tags.length ? `tags ${report.tags.join(", ")}` : "no tags",
     linkedEdges
-      ? `<span class="ok">source links <b>${linkedEdges}</b> final curves → ${linkedMethods.join(", ")}</span>`
+      ? `<span class="text-good">source links <b>${linkedEdges}</b> final curves → ${linkedMethods.join(", ")}</span>`
       : lastTreatments.length
-        ? "<span class=\"warn\">source links: no final treatment curves are available</span>"
+        ? "<span class=\"text-bad\">source links: no final treatment curves are available</span>"
         : "source links — no edge treatments",
-    dead > 0 ? `<span class="warn">${dead} unused nodes</span>` : "",
+    dead > 0 ? `<span class="text-bad">${dead} unused nodes</span>` : "",
   ]
     .filter(Boolean)
     .join("<br>");
@@ -665,9 +677,21 @@ copyEdgeSelector.addEventListener("click", async () => {
 const fmt = (v: number) =>
   Math.abs(v) >= 1000 ? v.toFixed(0) : v.toFixed(2).replace(/\.00$/, "");
 
-function setStatus(text: string, cls = "") {
+/**
+ * The three things the status line can be, as colour.
+ *
+ * A lookup rather than a class name assembled from a string: the set is closed,
+ * and Tailwind can only emit a utility it can see written out somewhere.
+ */
+const TONE = {
+  "": "text-ink-dim",
+  busy: "text-accent",
+  failed: "text-bad",
+} as const;
+
+function setStatus(text: string, cls: keyof typeof TONE = "") {
   statusEl.textContent = text;
-  statusEl.className = `status ${cls}`;
+  statusEl.className = `font-mono text-small ${TONE[cls]}`;
 }
 
 function showError(e: unknown) {
@@ -762,7 +786,10 @@ backendSelect.addEventListener("change", () => {
 function syncBackendUi() {
   const brepMesh = backendSelect.value === "brep" || backendSelect.value === "preview";
   depthInput.disabled = brepMesh;
-  depthInput.parentElement!.classList.toggle("disabled", brepMesh);
+  // `aria-disabled` rather than a class: the label is dimmed *because* the
+  // control under it is off, and one attribute says both to the stylesheet and
+  // to a screen reader.
+  depthInput.parentElement!.ariaDisabled = String(brepMesh);
   depthInput.parentElement!.title = brepMesh
     ? "B-rep meshes to a fixed 0.01 mm deflection; there is no grid to coarsen"
     : "";
@@ -801,10 +828,26 @@ async function pollMcp() {
 
   const chip = mcpChip(mcp);
   mcpEl.hidden = false;
-  mcpEl.className = `mcp ${chip.tone}`;
+  mcpEl.className = `${MCP_CHIP} ${chip.tone}`;
   mcpEl.textContent = chip.text;
   mcpEl.title = chip.detail;
 }
+
+/**
+ * The chip's shape, and the dot in front of it.
+ *
+ * The dot is `bg-current`, so saying the chip is green says the dot is green
+ * once. Only its opacity changes with the tone below — dim when nobody is
+ * there, solid when somebody is.
+ */
+const MCP_CHIP =
+  "flex items-center gap-1.5 mr-3.5 font-mono text-small cursor-default " +
+  "before:content-[''] before:size-[7px] before:rounded-full before:bg-current";
+const MCP_TONE = {
+  live: "text-good before:opacity-100",
+  busy: "text-accent before:opacity-100",
+  idle: "text-ink-dim before:opacity-50",
+} as const;
 
 /** One status, as the three things the chip shows. */
 function mcpChip(mcp: backend.McpStatus): { text: string; tone: string; detail: string } {
@@ -816,10 +859,10 @@ function mcpChip(mcp: backend.McpStatus): { text: string; tone: string; detail: 
   // second session and the endpoint cannot tell that from a second client, so
   // "3 sessions" on the chip would read as three agents.
   let text = "MCP";
-  let tone = "";
+  let tone: string = MCP_TONE.idle;
   if (mcp.clients > 0) {
     text = working ? "MCP connected · working" : `MCP connected · idle ${age(idle!)}`;
-    tone = working ? "busy" : "live";
+    tone = working ? MCP_TONE.busy : MCP_TONE.live;
   } else if (idle !== null) {
     text = `MCP last call ${age(idle)} ago`;
   }
@@ -851,25 +894,156 @@ function age(seconds: number): string {
 pollMcp();
 window.setInterval(pollMcp, MCP_POLL_MS);
 
-// The picker lists parcad's project folder rather than anything compiled in,
-// so a part saved by hand or by an agent shows up here on the next load.
-const picker = $<HTMLSelectElement>("example");
-
-picker.addEventListener("change", async (e) => {
-  const name = (e.target as HTMLSelectElement).value;
-  try {
-    const source = await readProject(name);
-    editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: source } });
-    framed = false;
-    clearError();
-  } catch (err) {
-    showError(err);
-    setStatus("could not open the project", "failed");
-  }
-});
+// --------------------------------------------------------------- the part
 
 /**
- * Fill the picker and open a part.
+ * Which project is open, and whether the editor still matches what is on disk.
+ *
+ * The project folder is shared with the user's filesystem and with agents over
+ * MCP, so "the file I opened" and "the text in front of me" genuinely can
+ * disagree without anybody typing. The titlebar says which.
+ */
+let openPath: string | undefined;
+/** The source as last read from or written to disk, to tell dirty from clean. */
+let savedSource = "";
+
+const projectButton = $<HTMLButtonElement>("project");
+const projectName = $("project-name");
+const saveButton = $<HTMLButtonElement>("save");
+
+const browser = mountProjectBrowser({
+  open: openProject,
+  current: () => openPath,
+  changed: (path) => {
+    openPath = path;
+    showOpenPart();
+  },
+});
+
+projectButton.addEventListener("click", () => void browser.show());
+saveButton.addEventListener("click", () => void saveOpenPart());
+
+/** Load a part into the editor, replacing whatever is there. */
+async function openProject(path: string) {
+  const source = await backend.readProject(path);
+  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: source } });
+  openPath = path;
+  savedSource = source;
+  framed = false;
+  clearError();
+  showOpenPart();
+}
+
+/** The titlebar: which part, and whether it is saved. */
+function showOpenPart() {
+  const part = openPath ? partAt(browser.known()?.tree ?? [], openPath) : undefined;
+  const label = part?.title ?? (openPath ? projectLabel(openPath) : "no part");
+  const changed = openPath !== undefined && editor.state.doc.toString() !== savedSource;
+
+  projectName.textContent = label;
+  projectButton.title = openPath
+    ? `${openPath} — click to browse parts (⌘O)`
+    : "Browse parts (⌘O)";
+  saveButton.disabled = openPath === undefined || !changed;
+  saveButton.textContent = changed ? "save •" : "saved";
+}
+
+/**
+ * Write the part, and the two files that describe it, together.
+ *
+ * The description is built from the *measured* report rather than from the
+ * script, and says which kernel measured it — a README claiming dimensions
+ * nobody evaluated is the confident wrong answer this project refuses. If the
+ * current source has not evaluated cleanly, the script is still saved and the
+ * description is left alone rather than being rewritten from stale numbers.
+ */
+async function saveOpenPart() {
+  if (!openPath) return;
+  const source = editor.state.doc.toString();
+  const clean = source === lastSource && lastReport !== undefined;
+
+  setStatus("saving", "busy");
+  try {
+    await backend.saveProject(openPath, source, {
+      readme: clean ? readmeFor(openPath, source) : undefined,
+      preview: clean ? viewport.snapshot() || undefined : undefined,
+    });
+    savedSource = source;
+    await browser.reload();
+    showOpenPart();
+    setStatus(clean ? "saved" : "saved — description left as it was");
+  } catch (e) {
+    showError(e);
+    setStatus("could not save", "failed");
+  }
+}
+
+/**
+ * Give a part its first thumbnail, once, from the part as it is on disk.
+ *
+ * Without this a picker of thumbnails shows nothing until each part has been
+ * edited and saved, which is backwards: the parts worth seeing are the ones
+ * nobody has touched yet. Only when the editor still matches the file — a
+ * picture of a half-typed edit would be a picture of something that is not
+ * there — and only when the bundle has none, so it never fights a saved one.
+ */
+async function captureFirstThumbnail() {
+  if (!openPath || editor.state.doc.toString() !== savedSource) return;
+  const part = partAt(browser.known()?.tree ?? [], openPath);
+  if (!part?.bundle || part.thumbnail) return;
+
+  const png = viewport.snapshot();
+  if (!png) return;
+  try {
+    await backend.saveProjectPreview(openPath, png);
+    await browser.reload();
+  } catch {
+    // A thumbnail nobody asked for must not become an error anybody sees.
+  }
+}
+
+/** What a reader of the folder finds beside the script. */
+function readmeFor(path: string, source: string): string {
+  const report = lastReport!;
+  const { size, mass, mesh } = report;
+  // The author's own opening comment says what the part is for; nothing
+  // generated here could say it better. Only the *leading* block: comments
+  // further down explain one step and read as non-sequitur out of context.
+  const lines = source.split("\n");
+  const intro: string[] = [];
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed && intro.length === 0) continue;
+    if (!trimmed.startsWith("//")) break;
+    intro.push(trimmed.replace(/^\/+\s?/, ""));
+  }
+
+  const kernel = lastBackend === "brep" ? "the exact B-rep kernel" : "the implicit backend";
+  return [
+    `# ${partAt(browser.known()?.tree ?? [], path)?.title ?? projectLabel(path)}`,
+    "",
+    ...(intro.length ? [intro.join("\n"), ""] : []),
+    "## Measured",
+    "",
+    `- **${fmt(size.x)} × ${fmt(size.y)} × ${fmt(size.z)} mm**`,
+    `- volume ${fmt(mass.volume_mm3)} mm³, area ${fmt(mass.area_mm2)} mm²`,
+    ...(lastTopology
+      ? [`- ${lastTopology.faces} faces, ${lastTopology.edges} edges`]
+      : []),
+    `- mesh ${mesh.triangles.toLocaleString()} triangles, ` +
+      (mesh.watertight ? "watertight" : `NOT watertight — ${mesh.non_manifold_edges} bad edges`),
+    ...(report.tags.length ? [`- tags: ${report.tags.join(", ")}`] : []),
+    "",
+    `Measured by ${kernel} when this part was last saved, not read off the ` +
+      "script. `part.js` beside this file is the source and the only thing here " +
+      "that is authoritative — rebuild it rather than trusting these numbers if " +
+      "it has been edited since.",
+    "",
+  ].join("\n");
+}
+
+/**
+ * Fill the titlebar and open a part.
  *
  * Evaluation is deliberately not started before this resolves: running the
  * empty document would report "the script must return a shape", which is true
@@ -879,35 +1053,27 @@ async function start() {
   setStatus("loading projects", "busy");
   let projects;
   try {
-    projects = await loadProjects();
+    projects = describeProjects(await backend.listProjects());
+    await browser.reload();
   } catch (e) {
     showError(e);
     setStatus("failed", "failed");
     return;
   }
 
-  for (const name of projects.names) {
-    const option = document.createElement("option");
-    option.value = name;
-    option.textContent = projectLabel(name);
-    picker.append(option);
-  }
-  picker.title = `Parts in ${projects.directory}`;
-
   if (!projects.initial) {
     setStatus("no projects");
+    showOpenPart();
     showError(
       new Error(
         `parcad's project folder is empty:\n  ${projects.directory}\n` +
-          "Put a .js part in it, or write one here and save it.",
+          "Use New part in the picker, or put a .js file in that folder.",
       ),
     );
     return;
   }
 
-  picker.value = projects.initial;
-  const source = await readProject(projects.initial);
-  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: source } });
+  await openProject(projects.initial);
   run();
 }
 
@@ -932,14 +1098,34 @@ async function start() {
   });
 }
 
-// Cmd-S exports rather than saving a page nobody wants. Cmd-Shift-S writes
-// STEP, which needs the B-rep kernel whatever the viewport is currently showing
-// — a mesh cannot be turned into exact surfaces after the fact.
+/**
+ * Keys.
+ *
+ * ⌘S saves the part. It used to export STL, from when there was nothing on
+ * disk to save and the only file the app could produce was a mesh; now that a
+ * part is a project the conventional meaning is the right one, and exports
+ * moved to ⌘E. ⇧ picks the exact format: STEP needs the B-rep kernel whatever
+ * the viewport happens to be showing, because a mesh cannot be turned back into
+ * exact surfaces after the fact.
+ */
 window.addEventListener("keydown", async (e) => {
-  if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "s") return;
+  if (!(e.metaKey || e.ctrlKey)) return;
+  const key = e.key.toLowerCase();
+
+  if (key === "o") {
+    e.preventDefault();
+    void browser.show();
+    return;
+  }
+  if (key === "s") {
+    e.preventDefault();
+    await saveOpenPart();
+    return;
+  }
+  if (key !== "e") return;
+
   e.preventDefault();
   if (!lastGraph) return;
-
   const step = e.shiftKey;
   setStatus(step ? "exporting STEP" : "exporting STL", "busy");
   try {

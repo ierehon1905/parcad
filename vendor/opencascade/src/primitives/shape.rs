@@ -107,6 +107,37 @@ impl Shape {
         self.inner.ShapeType().into()
     }
 
+    /// Run OpenCASCADE's shape-healing pass over this shape.
+    ///
+    /// Added for parcad; see PARCAD-CHANGES.md. `precision` and `max_tolerance`
+    /// bound how far the repair may move geometry — the caller is expected to
+    /// measure the result rather than trust it, because healing is free to
+    /// change the part.
+    pub fn healed(&self, precision: f64, max_tolerance: f64) -> Self {
+        let fixed = ffi::ShapeFix_repair(&self.inner, precision, max_tolerance);
+        Self {
+            inner: ffi::TopoDS_Shape_to_owned(&fixed),
+        }
+    }
+
+    /// Ask OpenCASCADE whether this shape is valid, and if not, what is wrong.
+    ///
+    /// Added for parcad; see PARCAD-CHANGES.md. `Ok(())` means valid. This is a
+    /// different question from the `IsDone()` an operation reports about itself:
+    /// a fillet has been observed returning `IsDone() == true` alongside a solid
+    /// whose surface will not close.
+    ///
+    /// `exact` enables per-point checking, which is slow and off by default in
+    /// OpenCASCADE — a face carrying an unusable surface can pass without it.
+    pub fn check_validity(&self, exact: bool) -> Result<(), String> {
+        let report = ffi::BRepCheck_report(&self.inner, exact);
+        if report.is_empty() {
+            Ok(())
+        } else {
+            Err(report)
+        }
+    }
+
     pub fn fillet_edge(&mut self, radius: f64, edge: &Edge) {
         let mut make_fillet = ffi::BRepFilletAPI_MakeFillet_ctor(&self.inner);
         make_fillet.pin_mut().add_edge(radius, &edge.inner);

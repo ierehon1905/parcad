@@ -1,7 +1,8 @@
 fn main() {
     cxx_build::bridge("src/history.rs")
         .cpp(true)
-        .flag_if_supported("-std=c++11")
+        // OCCT 8.0 requires C++17; see vendor/opencascade-sys/build.rs.
+        .flag_if_supported("-std=c++17")
         .include(occt_sys::occt_include_path())
         .include(".")
         .compile("parcad_opencascade_history");

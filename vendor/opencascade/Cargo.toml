@@ -5,6 +5,10 @@
 # rotation, scaling and spheres out of reach even though `opencascade-sys`
 # already binds every OpenCASCADE call they need. See PARCAD-CHANGES.md.
 #
+# `opencascade-sys` is vendored beside it now too: the published 0.2.0 does not
+# bind BRepCheck at all, so there was no way to ask OpenCASCADE whether a shape
+# it called `IsDone` on is actually valid. See vendor/opencascade-sys.
+#
 # LGPL-2.1, unchanged. Our own crates are MIT OR Apache-2.0; this one is not,
 # and modifications to it stay under its licence.
 [package]
@@ -18,10 +22,10 @@ repository = "https://github.com/bschwind/opencascade-rs"
 
 [dependencies]
 cxx = "1"
-opencascade-sys = "0.2"
+opencascade-sys = { path = "../opencascade-sys" }
 glam = { version = "0.23", features = ["bytemuck"] }
 thiserror = "1"
 
 [build-dependencies]
 cxx-build = "1"
-occt-sys = "0.2"
+occt-sys = { path = "../occt-sys" }

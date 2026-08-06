@@ -1,8 +1,9 @@
 # Changes from upstream opencascade 0.2.0
 
 Kept as small as possible so the diff stays readable and can go upstream. Every
-addition is a thin wrapper over a call `opencascade-sys` already binds — nothing
-here needed a change to the C++ shim.
+addition but one is a thin wrapper over a call `opencascade-sys` already binds.
+The exception is `check_validity`, which needed a new C++ shim and so a fork of
+the sys crate too — see `vendor/opencascade-sys/PARCAD-CHANGES.md`.
 
 ## Why fork at all
 
@@ -28,6 +29,12 @@ out. Everything below could otherwise have lived in our own crate.
 - `impl Clone for Shape` — several operations take `self` by value while the
   caller still needs the original. Cheap: `TopoDS_Shape` is a handle onto a
   refcounted `TShape`.
+- `Shape::check_validity(exact)` — `BRepCheck_Analyzer`, asking OpenCASCADE
+  whether a shape it built is actually valid. This is a different question from
+  the `IsDone()` an operation reports about itself, and the two disagree: a
+  `union { blend: 2 }` over a curved seam returns `IsDone() == true` and a solid
+  OpenCASCADE simultaneously reports as carrying two `UnorientableShape` faces.
+  See docs/GOTCHAS.md.
 - Boolean operation history — `BooleanShape` now exposes the kernel's modified
   and deleted relations for exact input edges, alongside its created section
   edges. This is the primitive needed for ParcAD to compose stable feature

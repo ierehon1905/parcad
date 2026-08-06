@@ -61,6 +61,7 @@ fn export_step(graph: serde_json::Value, path: String) -> Result<String, String>
 fn list_projects() -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({
         "projects": projects::list()?,
+        "tree": projects::tree()?,
         "directory": projects::dir().to_string_lossy(),
     }))
 }
@@ -71,10 +72,83 @@ fn read_project(name: String) -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "name": name, "script": script }))
 }
 
+/// Save a part, and the two derived files that go beside it.
+///
+/// One call rather than three: a bundle whose `README.md` describes a shape its
+/// `part.js` no longer builds is worse than one with no README at all, and the
+/// only way to keep them together is to write them together. Both are optional
+/// because a loose `.js` has nowhere to put either.
 #[tauri::command]
-fn save_project(name: String, script: String) -> Result<serde_json::Value, String> {
+fn save_project(
+    name: String,
+    script: String,
+    readme: Option<String>,
+    preview: Option<String>,
+) -> Result<serde_json::Value, String> {
     let path = projects::write(&name, &script)?;
+    if let Some(readme) = readme {
+        projects::write_readme(&name, &readme)?;
+    }
+    if let Some(preview) = preview {
+        projects::write_preview_data_url(&name, &preview)?;
+    }
     Ok(serde_json::json!({ "name": name, "path": path }))
+}
+
+#[tauri::command]
+fn create_project(name: String, script: String) -> Result<serde_json::Value, String> {
+    let path = projects::create(&name, &script)?;
+    Ok(serde_json::json!({ "name": name, "path": path }))
+}
+
+#[tauri::command]
+fn create_folder(name: String) -> Result<serde_json::Value, String> {
+    let path = projects::create_folder(&name)?;
+    Ok(serde_json::json!({ "name": name, "path": path }))
+}
+
+#[tauri::command]
+fn rename_project(name: String, to: String) -> Result<serde_json::Value, String> {
+    let path = projects::rename(&name, &to)?;
+    Ok(serde_json::json!({ "name": to, "path": path }))
+}
+
+#[tauri::command]
+fn delete_project(name: String) -> Result<serde_json::Value, String> {
+    let path = projects::remove(&name)?;
+    Ok(serde_json::json!({ "name": name, "trashed": path }))
+}
+
+#[tauri::command]
+fn set_project_title(name: String, title: String) -> Result<(), String> {
+    projects::set_title(&name, &title)
+}
+
+#[tauri::command]
+fn convert_project(name: String) -> Result<serde_json::Value, String> {
+    let path = projects::convert(&name)?;
+    Ok(serde_json::json!({ "name": name, "path": path }))
+}
+
+/// The thumbnail alone. See the HTTP adapter's `save_project_preview` for why
+/// this does not go through `save_project`.
+#[tauri::command]
+fn save_project_preview(name: String, preview: String) -> Result<(), String> {
+    projects::write_preview_data_url(&name, &preview)
+}
+
+/// A part's thumbnail as a data URL, asked for one card at a time.
+///
+/// Not folded into the listing: nineteen base64 PNGs would make opening the
+/// picker a megabyte of JSON to show a dozen cards that fit on screen.
+#[tauri::command]
+fn project_preview(name: String) -> Result<String, String> {
+    use base64::Engine;
+    let png = projects::preview(&name)?;
+    Ok(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(png)
+    ))
 }
 
 /// Whether a model is connected over MCP, for the window to show.
@@ -124,6 +198,14 @@ pub fn run() {
             list_projects,
             read_project,
             save_project,
+            create_project,
+            create_folder,
+            rename_project,
+            delete_project,
+            set_project_title,
+            convert_project,
+            project_preview,
+            save_project_preview,
             mcp_status,
             host_port
         ])

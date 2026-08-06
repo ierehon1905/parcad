@@ -116,8 +116,38 @@ function save(blob: Blob, filename: string) {
   URL.revokeObjectURL(url);
 }
 
+/** One part, as much as the host can say without evaluating it. */
+export interface ProjectPart {
+  kind: "part";
+  /** The leaf, for a label. */
+  name: string;
+  /** Slash-separated from the project root. This is the id everything takes. */
+  path: string;
+  /** The manifest's title, or the file stem made readable. Never empty. */
+  title: string;
+  /** False for a loose `.js`, which cannot carry a title or a thumbnail. */
+  bundle: boolean;
+  /** Whether there is a `preview.png` to ask for. */
+  thumbnail: boolean;
+  tags: string[];
+  /** Seconds since the epoch, from the file itself. */
+  modified: number | null;
+}
+
+export interface ProjectFolder {
+  kind: "folder";
+  name: string;
+  path: string;
+  children: ProjectEntry[];
+}
+
+export type ProjectEntry = ProjectFolder | ProjectPart;
+
 export interface ProjectList {
+  /** Every part, flattened — the same paths MCP lists. */
   projects: string[];
+  /** The same parts with their folders, which is what the picker draws. */
+  tree: ProjectEntry[];
   /** The folder on disk, so the UI can tell the user where their parts are. */
   directory: string;
 }
@@ -126,18 +156,128 @@ export function listProjects(): Promise<ProjectList> {
   return inTauri ? invoke<ProjectList>("list_projects") : get<ProjectList>("projects");
 }
 
+/**
+ * A project path in a URL.
+ *
+ * `encodeURIComponent` would escape the separators, and the host's route is a
+ * wildcard that expects real ones — a part in a folder would 404. Each segment
+ * is escaped instead. The host re-validates whatever arrives; this is about
+ * addressing, not safety.
+ */
+const route = (name: string) => name.split("/").map(encodeURIComponent).join("/");
+
 export async function readProject(name: string): Promise<string> {
   const project = inTauri
     ? await invoke<{ script: string }>("read_project", { name })
-    : await get<{ script: string }>(`projects/${encodeURIComponent(name)}`);
+    : await get<{ script: string }>(`projects/${route(name)}`);
   return project.script;
 }
 
-export async function saveProject(name: string, script: string): Promise<string> {
+/**
+ * The script, and the two derived files that live beside it.
+ *
+ * They travel in one call because a README describing a shape the script no
+ * longer builds is worse than no README. Both are dropped silently for a loose
+ * `.js`, which has nowhere to keep them.
+ */
+export interface Derived {
+  readme?: string;
+  /** A `data:image/png;base64,` URL from the viewport canvas. */
+  preview?: string;
+}
+
+export async function saveProject(
+  name: string,
+  script: string,
+  derived: Derived = {},
+): Promise<string> {
+  const body = { script, readme: derived.readme, preview: derived.preview };
   const saved = inTauri
-    ? await invoke<{ path: string }>("save_project", { name, script })
-    : await put<{ path: string }>(`projects/${encodeURIComponent(name)}`, { script });
+    ? await invoke<{ path: string }>("save_project", { name, ...body })
+    : await put<{ path: string }>(`projects/${route(name)}`, body);
   return saved.path;
+}
+
+/** Refuses to overwrite. "New part" and "save" must not be the same call. */
+export async function createProject(name: string, script: string): Promise<string> {
+  const made = inTauri
+    ? await invoke<{ path: string }>("create_project", { name, script })
+    : await post<{ path: string }>(`projects/${route(name)}`, { op: "create", script });
+  return made.path;
+}
+
+export async function createFolder(name: string): Promise<string> {
+  const made = inTauri
+    ? await invoke<{ path: string }>("create_folder", { name })
+    : await post<{ path: string }>(`projects/${route(name)}`, { op: "folder" });
+  return made.path;
+}
+
+/** Renames or moves; the two are one operation on disk and one here. */
+export async function renameProject(name: string, to: string): Promise<string> {
+  const moved = inTauri
+    ? await invoke<{ path: string }>("rename_project", { name, to })
+    : await post<{ path: string }>(`projects/${route(name)}`, { op: "rename", to });
+  return moved.path;
+}
+
+/** The readable name, which is not the path. */
+export async function setProjectTitle(name: string, title: string): Promise<void> {
+  if (inTauri) {
+    await invoke("set_project_title", { name, title });
+    return;
+  }
+  await post(`projects/${route(name)}`, { op: "title", title });
+}
+
+/** Moves to the project folder's `.trash`. Not an unlink — say so in the UI. */
+export async function deleteProject(name: string): Promise<string> {
+  const gone = inTauri
+    ? await invoke<{ trashed: string }>("delete_project", { name })
+    : await send<{ trashed: string }>(`projects/${route(name)}`, { method: "DELETE" });
+  return gone.trashed;
+}
+
+/** Loose `.js` to `.parcad` folder, keeping the script byte for byte. */
+export async function convertProject(name: string): Promise<string> {
+  const made = inTauri
+    ? await invoke<{ path: string }>("convert_project", { name })
+    : await post<{ path: string }>(`projects/${route(name)}`, { op: "convert" });
+  return made.path;
+}
+
+/**
+ * Write a thumbnail without touching the script.
+ *
+ * The app does this the first time it draws a part that has none, so browsing
+ * fills the picker in. Going through `saveProject` would rewrite `part.js` —
+ * and its modified time, which the picker reports — to store a picture.
+ */
+export async function saveProjectPreview(name: string, preview: string): Promise<void> {
+  if (inTauri) {
+    await invoke("save_project_preview", { name, preview });
+    return;
+  }
+  await put(`preview/${route(name)}`, { preview });
+}
+
+/**
+ * A part's thumbnail as something an `<img>` can take, or null when there is
+ * none. Asked for one card at a time: the listing stays small, and a folder of
+ * a hundred parts does not become a megabyte of base64 to draw a dozen tiles.
+ */
+export async function projectPreview(name: string): Promise<string | null> {
+  try {
+    if (inTauri) return await invoke<string>("project_preview", { name });
+    const response = await fetch(`/api/preview/${route(name)}`);
+    if (!response.ok) return null;
+    const blob = await response.blob();
+    return URL.createObjectURL(blob);
+  } catch {
+    // A missing thumbnail is not an error worth showing anyone; the card falls
+    // back to drawing the part's name.
+    return null;
+  }
 }
 
 /** What the host has seen an agent do on the MCP endpoint it also serves. */

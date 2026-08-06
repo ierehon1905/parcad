@@ -179,14 +179,28 @@ fn run_worker(request: Request, opts: &Options) -> Result<Response, OcctError> {
     // through the model, so whatever is last when it dies names the culprit.
     let stderr = child.stderr.take();
     let (crumb_tx, crumb_rx) = mpsc::channel::<String>();
+    // Only the last breadcrumb survives a successful run, which is all a crash
+    // report needs. `PARCAD_BREADCRUMBS=1` echoes the whole trail instead, for
+    // when the question is what the kernel did rather than where it died.
+    let echo = std::env::var("PARCAD_BREADCRUMBS").is_ok_and(|v| v != "0");
     let crumbs = std::thread::spawn(move || {
         let mut last = String::from("starting up");
         let mut noise = Vec::new();
         if let Some(err) = stderr {
             for line in BufReader::new(err).lines().map_while(Result::ok) {
                 if let Some(stage) = line.strip_prefix(BREADCRUMB) {
+                    if echo {
+                        eprintln!("[kernel] {stage}");
+                    }
                     last = stage.to_string();
                 } else if !line.trim().is_empty() {
+                    if echo {
+                        // Whatever the kernel printed for itself. Deliberately
+                        // not a breadcrumb: the last breadcrumb has to keep
+                        // naming the operation that died, and a debug trace
+                        // must not displace it.
+                        eprintln!("[kernel] {line}");
+                    }
                     noise.push(line);
                 }
             }
