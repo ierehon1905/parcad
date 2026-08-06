@@ -76,6 +76,16 @@ when `dsl.ts` changes under it — it just quietly describes an older part. The 
 saved part that wrote `const hole = ...`. Adding one is a compatibility change:
 prefer a name a part would not choose for a local, and check `examples/` builds.
 
+**The product is called ParCAD; everything a machine reads is `parcad`.** The
+capitalised name belongs in the titlebar, the window title, `productName`, the
+HTML `<title>` and prose. It must never reach an identifier: the bundle id
+`dev.parcad.app`, the `~/Documents/parcad` project folder, the `PARCAD_*`
+variables, the crate and binary names are all lowercase and stay that way.
+Renaming the bundle id makes macOS treat the app as a new one — it re-prompts
+for Documents access and orphans its settings — and renaming the project folder
+orphans every part the user has saved. `mainBinaryName` pins the executable to
+`parcad-app` for the same reason: docs and scripts name that path.
+
 **Units are millimetres. Always.** `Doc::units` records it so a file can't be
 silently misread. Anything else is rejected at the door.
 
