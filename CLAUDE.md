@@ -1,8 +1,32 @@
-# Working on parcad
+# Working on ParCAD
 
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), then
 [docs/GOTCHAS.md](docs/GOTCHAS.md). Most of what looks like a bug here has
 already been diagnosed once.
+
+## The two questions, which are one project
+
+Every piece of work here answers one of two questions, and the good ones answer
+both:
+
+> **"How do I model this?"** — what the kernel and the DSL can express.
+>
+> **"How do I make it easier for someone else to model it?"** — where *someone
+> else* is usually a model. The harness and the MCP tools exist so that models
+> can make models.
+
+They feed each other, and neither half is finished on its own. A capability only
+a person can reach does not compound: it has to be on the agent surface too,
+with a description a model that has never seen this repository can act on. And a
+part that is hard to author is evidence — `docs/DSL_GAPS.md` was derived that
+way, from what fighting the language actually cost.
+
+The corollary is the trap this rule exists to catch. Shipping an *operation* is
+not the same as shipping the *outcome*: `loft` landed, was measured exact, and
+moved not one of the author's own models any closer to building, because the
+sections those models need live in a file nothing could read. When work stops
+short of the outcome, say so plainly — an honest null result is worth more than
+a component reported as progress.
 
 ## Build & run
 
