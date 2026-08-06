@@ -17,10 +17,13 @@ How it was measured
   On the parcad retainer (a disc flush on the end of a plate, blended,
   tangent to the disc's seam at one side): before, UnifySameDomain with
   linear/angular tolerance 1e-4 threw and killed the build; after, the
-  shape's collinear tangent-generator pair away from the seam merges,
-  the seam-side chain stays split, and the result is unchanged
+  failed chain is simply left split and the result is unchanged
   otherwise — BRepCheck-valid, watertight, identical volume and
-  bounding box (143829.66 mm^3, 59.49 x 148.126 x 36.664).
+  bounding box (143829.66 mm^3, 59.49 x 148.126 x 36.664). parcad has
+  since also started healing the stale dual representation before
+  unifying, so on that shape the chain now merges cleanly and this
+  guard is no longer reached; it stays because upstream still lets any
+  chain's exception abort the whole operation.
 
 Upstream status
   Not yet offered upstream (github.com/Open-Cascade-SAS/OCCT).

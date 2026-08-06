@@ -53,6 +53,18 @@ later release of it exists, so there is no version to bump to.
   only exactly coincident geometry; the caller decides what "the same" means
   for shapes that went through an approximated rebuild.
 
+- `Shape_drop_unused_seam_pcurves(shape)` in `wrapper.hxx` — healing for a
+  boolean leftover: an edge that was a cylinder's seam can come out bordering
+  its face only on one side (the wire references it once) while still
+  carrying both seam pcurves, and that dead half stops `UnifySameDomain`
+  from merging the edge with a collinear neighbour. Deliberately narrow: it
+  touches only line generators on cylindrical faces, because on doubly
+  periodic surfaces a boolean legitimately leaves a full boundary circle
+  with both representations even though the wire uses it once, and the
+  mesher needs them — the first, broader version of this pass opened the
+  torus-gland groove by 168 mesh edges. Representation data only; geometry
+  is untouched.
+
 ## Not changed
 
 Everything else is upstream 0.2.0 verbatim, including `build.rs` and the OCCT

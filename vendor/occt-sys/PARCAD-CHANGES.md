@@ -87,7 +87,9 @@ concatenation cannot both join. Found when parcad's `clean()` pass gained
 real merge tolerances (see `vendor/opencascade/PARCAD-CHANGES.md`) and the
 retainer's seam-side tangent generator became a merge candidate: the merge
 threw "Courbes non jointives" and killed an otherwise valid build. The chain
-is now left split, which on that shape is also the correct answer.
+is now left split instead. On the retainer the throw is no longer reachable —
+`clean()` heals the stale dual representation first and the chain merges —
+so the patch remains as hardening against the next such chain.
 
 `patches/0001-tangent-pinch-corner.patch`: a corner treatment for
 fillet spines that end on an exact tangency, `ChFi3d_Builder::PerformTangentPinch`,

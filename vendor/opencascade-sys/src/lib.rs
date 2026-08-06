@@ -573,6 +573,9 @@ pub mod ffi {
 
         // Diagnostics — added for parcad, see PARCAD-CHANGES.md.
         pub fn Shape_topology_report(shape: &TopoDS_Shape) -> String;
+        // Healing of stale seam representations — added for parcad, see
+        // PARCAD-CHANGES.md.
+        pub fn Shape_drop_unused_seam_pcurves(shape: &TopoDS_Shape) -> i32;
         pub fn BRepTools_write_brep(shape: &TopoDS_Shape, path: String) -> bool;
 
         // Fillets

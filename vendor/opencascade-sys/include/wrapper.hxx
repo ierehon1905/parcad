@@ -1,4 +1,8 @@
 #include "rust/cxx.h"
+#include <BRepAdaptor_Surface.hxx>
+#include <Geom_Line.hxx>
+#include <NCollection_DataMap.hxx>
+#include <ShapeBuild_Edge.hxx>
 #include <sstream>
 #include <BOPAlgo_GlueEnum.hxx>
 #include <BRepAdaptor_Curve.hxx>
@@ -537,6 +541,78 @@ inline rust::String Shape_topology_report(const TopoDS_Shape &shape) {
 // Added for parcad as a diagnostic.
 inline bool BRepTools_write_brep(const TopoDS_Shape &shape, rust::String path) {
   return BRepTools::Write(shape, path.c_str());
+}
+
+// Drop the unused half of a stale seam representation. A boolean can leave an
+// edge that was a cylinder's seam bordering the face only on one side — the
+// wire references it once — while the edge still carries both pcurves. That
+// dead second pcurve is what stops UnifySameDomain from merging the edge with
+// a collinear neighbour: the concatenation cannot join a curve to both
+// representations and raises. Genuine seams appear twice in their face's wires
+// and are left untouched. Added for parcad; see PARCAD-CHANGES.md.
+//
+// Mutates the shape in place (only representation data, never geometry) and
+// returns how many pcurves were dropped.
+inline int Shape_drop_unused_seam_pcurves(const TopoDS_Shape &shape) {
+  int dropped = 0;
+  BRep_Builder builder;
+  ShapeBuild_Edge sbe;
+  for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next()) {
+    const TopoDS_Face &face = TopoDS::Face(f.Current());
+    // Only cylindrical faces, and below only line generators: that is the
+    // configuration this heals — a plane-tangent cut leaving half a seam.
+    // On doubly periodic surfaces a boolean legitimately leaves a full
+    // boundary circle carrying both representations even though the wire
+    // uses it once, and the mesher needs them: stripping one opened the
+    // torus-gland groove by 168 mesh edges.
+    {
+      BRepAdaptor_Surface bas(face, false);
+      if (bas.GetType() != GeomAbs_Cylinder) {
+        continue;
+      }
+    }
+    // Count how often each closed-flagged edge appears in the face's wires,
+    // and with which orientation.
+    NCollection_DataMap<TopoDS_Shape, int, TopTools_ShapeMapHasher> count;
+    NCollection_DataMap<TopoDS_Shape, TopAbs_Orientation, TopTools_ShapeMapHasher> orient;
+    for (TopExp_Explorer e(face, TopAbs_EDGE); e.More(); e.Next()) {
+      const TopoDS_Edge &edge = TopoDS::Edge(e.Current());
+      if (!BRep_Tool::IsClosed(edge, face)) {
+        continue;
+      }
+      double cf = 0.0, cl = 0.0;
+      Handle(Geom_Curve) c3 = BRep_Tool::Curve(edge, cf, cl);
+      while (!c3.IsNull() && c3->DynamicType() == STANDARD_TYPE(Geom_TrimmedCurve)) {
+        c3 = Handle(Geom_TrimmedCurve)::DownCast(c3)->BasisCurve();
+      }
+      if (c3.IsNull() || c3->DynamicType() != STANDARD_TYPE(Geom_Line)) {
+        continue;
+      }
+      int n = 0;
+      count.Find(edge, n);
+      count.Bind(edge, n + 1);
+      orient.Bind(edge, edge.Orientation());
+    }
+    for (NCollection_DataMap<TopoDS_Shape, int, TopTools_ShapeMapHasher>::Iterator it(count);
+         it.More(); it.Next()) {
+      if (it.Value() != 1) {
+        continue; // a genuine seam, or something stranger — leave it alone
+      }
+      TopoDS_Edge edge = TopoDS::Edge(it.Key());
+      edge.Orientation(orient.Find(it.Key()));
+      double pf = 0.0, pl = 0.0;
+      Handle(Geom2d_Curve) used = BRep_Tool::CurveOnSurface(edge, face, pf, pl);
+      if (used.IsNull()) {
+        continue;
+      }
+      double tol = BRep_Tool::Tolerance(edge);
+      sbe.RemovePCurve(edge, face);
+      builder.UpdateEdge(edge, used, face, tol);
+      builder.Range(edge, face, pf, pl);
+      ++dropped;
+    }
+  }
+  return dropped;
 }
 
 // BRepCheck: OpenCASCADE's own answer to "is this shape actually valid?".

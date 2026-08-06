@@ -332,6 +332,12 @@ impl Shape {
     }
 
     pub fn clean(&mut self) {
+        // A boolean can leave an edge that was a primitive's seam carrying
+        // both seam pcurves while bordering its face only on one side. The
+        // dead half blocks the unifier from merging that edge with a
+        // collinear neighbour, so drop it first. Representation data only;
+        // geometry is untouched.
+        ffi::Shape_drop_unused_seam_pcurves(&self.inner);
         let mut upgrader = ffi::ShapeUpgrade_UnifySameDomain_ctor(&self.inner, true, true, true);
         upgrader.pin_mut().AllowInternalEdges(false);
         // The default merge tolerances (1e-7 mm, 1e-12 rad) only ever weld

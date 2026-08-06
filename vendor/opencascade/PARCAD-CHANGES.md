@@ -50,9 +50,12 @@ out. Everything below could otherwise have lived in our own crate.
   merge exactly coincident geometry. A fillet corner rebuilt through
   approximation places its vertices only to the vertex tolerance, so two
   collinear pieces of one line come back a few 1e-7 apart and stayed split.
-  Measured across the whole eval corpus: the only shape that changes is the
-  tangent-blend retainer stock, which loses exactly the spurious junction
-  the tangent-pinch fix leaves on the grazing generator.
+  clean() also first drops the dead half of a stale seam representation
+  (`Shape_drop_unused_seam_pcurves`), which is what lets the seam-side pair
+  merge at all. Measured across the whole eval corpus: the only shape that
+  changes is the tangent-blend retainer stock, which loses exactly the two
+  spurious junctions the tangent-pinch fix leaves on the grazing
+  generators.
 
 ## Not added
 
