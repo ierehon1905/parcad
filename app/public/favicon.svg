@@ -1,0 +1,43 @@
+<!--
+  The application icon, and the source every other icon file is generated from
+  by tools/make-icons.sh. Edit this; never edit the PNGs.
+
+  It is drawn flat on purpose. The icon this replaced was a shaded render of
+  examples/bracket.js, which is a fair picture of the product and an unreadable
+  icon: a render carries its legibility in soft shading, and shading is the
+  first thing to go when the image is 16 px across. Three flat tones and one
+  hole survive that. The test is the 16 px column of tools/make-icons.sh's proof
+  sheet, not the 1024 px one.
+
+  Colours are the app's own: the accent (#6ea8fe) and the chrome, both from
+  app/src/style.css's @theme block. They are literals here because an SVG
+  cannot read a custom property from a stylesheet it is never loaded with; if
+  the palette moves, this moves with it by hand.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e222a"/>
+      <stop offset="1" stop-color="#0d0f13"/>
+    </linearGradient>
+    <mask id="bore">
+      <rect x="0" y="0" width="1024" height="1024" fill="#fff"/>
+      <ellipse cx="512" cy="367" rx="96" ry="55" fill="#000"/>
+    </mask>
+  </defs>
+
+  <rect x="80" y="80" width="864" height="864" rx="194" fill="url(#tile)"/>
+  <rect x="80.5" y="80.5" width="863" height="863" rx="193.5" fill="none"
+        stroke="#ffffff" stroke-opacity="0.07" stroke-width="3"/>
+
+  <g mask="url(#bore)">
+    <!-- top, then the two side faces: one flat tone each, which is what keeps
+         the form readable when the whole icon is 16 px across -->
+    <path fill="#a9cdff" d="M 512,222 L 762,367 L 512,512 L 262,367 Z"/>
+    <path fill="#5e93e0" d="M 262,367 L 512,512 L 512,802 L 262,657 Z"/>
+    <path fill="#3d6ab0" d="M 512,512 L 762,367 L 762,657 L 512,802 Z"/>
+  </g>
+
+  <!-- the bore's far wall, so the hole reads as depth rather than a black dot -->
+  <path fill="#25457a" d="M 416,367 A 96,55 0 0 0 608,367 L 608,404 A 96,55 0 0 1 416,404 Z"/>
+</svg>
