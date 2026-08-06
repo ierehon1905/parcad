@@ -68,7 +68,7 @@ Findings that changed decisions on this page:
 
 | capability | parcad | note |
 |---|---|---|
-| Numbers and pictures in one reply | ✅ `evaluate_part` | `Snapshot` as text *and* structured content, then the PNGs — looking costs no extra call |
+| Numbers and pictures in one reply | ✅ `evaluate_part` | `EvaluationSnapshot` as text *and* structured content, then the PNGs — looking costs no extra call |
 | Measured dimensions, volume, area | ✅ `PartReport`, `measure.rs` | tight `bounds`, never `framing_bounds` |
 | Multi-view contact sheet | ✅ `render::contact_sheet` | seven orthographic views, one shared framing |
 | Scale bar on every panel | ✅ `render::ScaleBar` | round 1-2-5 lengths, end ticks — the "how big is this" answer without a call |

@@ -219,39 +219,10 @@ pub struct SaveRequest {
 
 // ------------------------------------------------------------------ replies
 
-#[derive(Serialize, schemars::JsonSchema)]
-pub struct Entities {
-    /// Visible edge curves of the evaluated part. `id` is valid for this
-    /// evaluation only and is never accepted as an authored reference — use it
-    /// to work out a directional or topological selector, not to store one.
-    edges: Vec<Entity>,
-    /// How many edges the part has, when `edges` was truncated.
-    total_edges: usize,
-}
-
-#[derive(Serialize, schemars::JsonSchema)]
-pub struct Entity {
-    id: String,
-    center: [f32; 3],
-    /// Unit direction for a straight edge; absent for a curve.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    direction: Option<[f32; 3]>,
-    length_mm: f32,
-}
-
-#[derive(Serialize, schemars::JsonSchema)]
-pub struct TargetSummary {
-    node: usize,
-    /// How many edges this treatment applies to. `expect({ count })` in the
-    /// script asserts this, and a changed count then fails loudly.
-    edge_count: usize,
-    vertex_count: usize,
-    edges: Vec<Entity>,
-    /// Tags whose live edge set is *exactly* this target. These are authored
-    /// references: `{ generatedBy: tag }` selects the same edges and keeps
-    /// selecting them as the model changes.
-    equivalent_tags: Vec<String>,
-}
+// Everything an evaluation *is* — the snapshot, its edges, a treatment's
+// resolved target — is defined in `service` and only serialised here. The types
+// below are the ones with no geometry in them: a parse result, a written file,
+// a project listing.
 
 #[derive(Serialize, schemars::JsonSchema)]
 pub struct SelectorCheck {
@@ -364,7 +335,7 @@ impl Parcad {
                 .unzip::<_, _, Vec<_>, Vec<_>>();
 
             Ok((
-                service::snapshot(&doc, &evaluated).with_views(summaries, renders.omitted),
+                evaluated.snapshot.with_views(summaries, renders.omitted),
                 pngs,
             ))
         })
@@ -397,24 +368,16 @@ impl Parcad {
     async fn list_entities(
         &self,
         Parameters(request): Parameters<ScriptRequest>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<Entities>, ErrorData> {
-        let evaluated = blocking(move || {
+    ) -> Result<rmcp::handler::server::wrapper::Json<service::Entities>, ErrorData> {
+        let entities = blocking(move || {
             let graph = script::build_graph(&request.script)?;
             let doc = service::parse_graph(graph)?;
-            service::evaluate(&doc, 7, service::Backend::Brep)
+            let evaluated = service::evaluate(&doc, 7, service::Backend::Brep)?;
+            Ok(service::entities(&evaluated))
         })
         .await?;
 
-        let all = evaluated.edges();
-        let total_edges = all.len();
-        // A part with a knurl has hundreds of edges and listing them all buries
-        // the answer. Enough to see the pattern, and the total so the caller
-        // knows it is looking at a sample.
-        let edges = all.iter().take(ENTITY_LIMIT).map(entity).collect();
-        Ok(rmcp::handler::server::wrapper::Json(Entities {
-            edges,
-            total_edges,
-        }))
+        Ok(rmcp::handler::server::wrapper::Json(entities))
     }
 
     /// Resolve a treatment's input edges without applying it.
@@ -425,26 +388,16 @@ impl Parcad {
     async fn inspect_treatment_target(
         &self,
         Parameters(request): Parameters<InspectRequest>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<TargetSummary>, ErrorData> {
-        let preview = blocking(move || {
+    ) -> Result<rmcp::handler::server::wrapper::Json<service::TreatmentTarget>, ErrorData> {
+        let target = blocking(move || {
             let graph = script::build_graph(&request.script)?;
             let doc = service::parse_graph(graph)?;
-            service::inspect_edge_target(&doc, request.node)
+            let preview = service::inspect_edge_target(&doc, request.node)?;
+            Ok(service::treatment_target(&preview))
         })
         .await?;
 
-        Ok(rmcp::handler::server::wrapper::Json(TargetSummary {
-            node: preview.node,
-            edge_count: preview.edges.len(),
-            vertex_count: preview.vertices.len(),
-            edges: preview
-                .edges
-                .iter()
-                .take(ENTITY_LIMIT)
-                .map(entity)
-                .collect(),
-            equivalent_tags: preview.provenance.clone(),
-        }))
+        Ok(rmcp::handler::server::wrapper::Json(target))
     }
 
     /// Measure along lines and at points, with no picture in the loop.
@@ -680,7 +633,8 @@ impl ServerHandler for Parcad {
                  returns images with the measurements. Two things to know about them. Renders \
                  come off the distance field even when the numbers came from the exact kernel, \
                  so where a picture and a measurement disagree the measurement is right — the \
-                 reply says so in rendered_by. And regions: true recolours a view by the tag \
+                 reply names the one that measured it in backend. And regions: true recolours a \
+                 view by the tag \
                  owning each patch of surface, which is how you check that a tag covers what \
                  you think: a tag that is in the model but hidden from that angle comes back \
                  visible: false rather than missing."
@@ -875,9 +829,6 @@ async fn record(
 
 // ------------------------------------------------------------------ helpers
 
-/// Long enough to show a pattern, short enough that the answer is still visible.
-const ENTITY_LIMIT: usize = 60;
-
 /// Where exports land. One directory, so no call can choose a location.
 fn export_dir() -> PathBuf {
     std::env::var_os("PARCAD_EXPORT_DIR")
@@ -904,17 +855,4 @@ where
 /// Pass them through whole rather than replacing them with a code.
 fn invalid(message: impl Into<String>) -> ErrorData {
     ErrorData::invalid_params(message.into(), None)
-}
-
-fn entity(edge: &parcad_occt::EdgeCurve) -> Entity {
-    Entity {
-        id: edge.id.clone(),
-        // Not rounded, and does not need to be: these are f32, and serde
-        // prints an f32 as the shortest decimal that round-trips *as f32* —
-        // "6.3", not the seventeen digits the same value grows when it is
-        // widened to f64. See `service::round_mm`.
-        center: edge.center,
-        direction: edge.direction,
-        length_mm: edge.length_mm,
-    }
 }

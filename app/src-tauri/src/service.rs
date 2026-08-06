@@ -20,7 +20,11 @@ use parcad_core::{
 use serde::Serialize;
 use std::path::Path;
 
-/// Geometry in the layout three.js wants, plus everything measurable about it.
+/// Geometry in the layout three.js wants, plus the description of what it is.
+///
+/// Everything measurable lives in `snapshot` and nowhere else. The mesh arrays
+/// beside it are for something to *draw*; they are not a second account of the
+/// part, and no caller may assemble one from them.
 #[derive(Serialize)]
 pub struct Evaluated {
     /// Vertex positions, flattened xyz.
@@ -33,21 +37,28 @@ pub struct Evaluated {
     /// Logical edge curves, each a polyline. Empty for a mesh preview, which
     /// deliberately draws its triangles instead of solid-model edges.
     edges: Vec<parcad_occt::EdgeCurve>,
-    /// Face and edge counts. Absent from a mesh preview — it is a tessellation
-    /// view rather than a topology view.
-    topology: Option<parcad_occt::Topology>,
-    /// Which backend actually produced this, for the UI to state plainly.
-    backend: &'static str,
-    report: parcad_core::PartReport,
+    /// What the part is — the one artifact every transport serialises.
+    pub snapshot: EvaluationSnapshot,
+    /// How long this run took. A fact about the evaluation rather than about
+    /// the part, which is why it sits beside the snapshot rather than in it.
     timings: Timings,
+    /// The measured bounds, unrounded, for the renderer to frame with.
+    ///
+    /// Not serialised: [`EvaluationSnapshot`] already states the bounds for
+    /// anyone reading the reply, to the micron every other length is reported
+    /// at. This copy exists because framing is arithmetic rather than reporting,
+    /// and rounding a camera's input is a different decision from rounding a
+    /// measurement.
+    #[serde(skip)]
+    bounds: parcad_core::measure::Aabb,
 }
 
 /// Read access for callers that list entities rather than serialise geometry.
 ///
 /// The measured fields deliberately have no getters. They had four, one per
 /// value the MCP server wanted, and that is how a transport ends up assembling
-/// its own idea of what an evaluation is. Ask for a [`Snapshot`] instead — there
-/// is one of those, and both transports serialise the same one.
+/// its own idea of what an evaluation is. Ask for the [`EvaluationSnapshot`]
+/// instead — there is one of those, and every transport serialises the same one.
 impl Evaluated {
     pub fn edges(&self) -> &[parcad_occt::EdgeCurve] {
         &self.edges
@@ -103,6 +114,11 @@ pub fn round_dir(d: [f64; 3]) -> [f64; 3] {
     d.map(|v| round_to(v, 1e6))
 }
 
+/// For a count that is only worth saying when there is one.
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
 /// A share of something, 0 to 1. A hundredth of a percent is finer than any
 /// pixel count these are computed from.
 pub fn round_fraction(v: f64) -> f64 {
@@ -111,23 +127,29 @@ pub fn round_fraction(v: f64) -> f64 {
 
 /// One evaluation, in measured values: the artifact a caller reasons about.
 ///
+/// **There is one of these and every transport serialises it.** MCP returns it
+/// as the reply to `evaluate_part`; the two windows receive it as the `snapshot`
+/// field of an [`Evaluated`], beside the mesh they draw. None of the three is
+/// allowed to compute, re-derive or re-scan any of it, because a summary is a
+/// statement about the model, and a statement that exists on one transport and
+/// not another is the divergence this module was extracted to stop. The MCP
+/// server once built its own copy from the raw graph JSON, which is how it came
+/// to look for `smooth` and `squircle` nodes — DSL method names that have never
+/// been ops; the editor once assembled its own from a raw `PartReport`, which is
+/// how the window and an agent came to disagree about how many nodes a script
+/// was using.
+///
 /// Separate from [`Evaluated`] because the two answer different questions.
-/// `Evaluated` carries a mesh for something to *draw*; a `Snapshot` carries what
-/// the part *is*, for a caller that cannot look at the screen. Both come from
-/// one evaluation, so they cannot describe different parts.
+/// `Evaluated` carries a mesh for something to *draw*; this carries what the
+/// part *is*, for a caller that cannot look at the screen. Both come from one
+/// evaluation, so they cannot describe different parts.
 ///
-/// It lives here rather than in a transport because a summary is a statement
-/// about the model, and a capability that exists on one transport and not
-/// another is the divergence this module was extracted to stop. The MCP server
-/// previously built its own copy of this from the raw graph JSON, which is how
-/// it came to look for `smooth` and `squircle` nodes — DSL method names that
-/// have never been ops.
-///
-/// Every field is measured from what the kernel produced, except `treatments`,
-/// which is read off the document because a requested treatment that resolved to
-/// no edges is exactly what a caller needs to be told about.
+/// Every field is measured from what the kernel produced, except `treatments`
+/// and `unused_nodes`, which are read off the document because a requested
+/// treatment that resolved to no edges, and a shape the root never reaches, are
+/// exactly what a caller needs to be told about.
 #[derive(Serialize, schemars::JsonSchema)]
-pub struct Snapshot {
+pub struct EvaluationSnapshot {
     /// Always "mm".
     pub units: String,
     /// Taken from the geometry, never from the requested framing.
@@ -151,6 +173,11 @@ pub struct Snapshot {
     pub tags: Vec<String>,
     /// Edge treatments the finished part actually depends on.
     pub treatments: Vec<Treatment>,
+    /// Nodes the root does not reach: shapes the script built and never used.
+    /// Absent when there are none. Not an error — a part still evaluates — but
+    /// it is almost always a line that was meant to be cut with or unioned in.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub unused_nodes: usize,
     /// Which backend produced this. Worth stating plainly: the two disagree by
     /// the blend bulge, which is millimetres rather than rounding.
     pub backend: String,
@@ -172,7 +199,7 @@ pub struct Snapshot {
     pub unattributed_treatments: Vec<usize>,
 }
 
-impl Snapshot {
+impl EvaluationSnapshot {
     /// Record what was drawn alongside these measurements.
     ///
     /// Takes the summaries a transport has already split from their pixels, so
@@ -204,11 +231,98 @@ pub struct Treatment {
     pub continuity: Option<String>,
 }
 
+/// One evaluated edge, for a caller that cannot point at one.
+///
+/// A restatement of `parcad_occt::EdgeCurve` without its polyline: the points
+/// are what a viewport draws, and a hundred of them per edge is the difference
+/// between a readable answer and a wall of coordinates.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct EdgeEntity {
+    pub id: String,
+    pub center: [f32; 3],
+    /// Unit direction for a straight edge; absent for a curve.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<[f32; 3]>,
+    pub length_mm: f32,
+}
+
+/// The selectable edges of an evaluation.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct Entities {
+    /// Visible edge curves of the evaluated part. `id` is valid for this
+    /// evaluation only and is never accepted as an authored reference — use it
+    /// to work out a directional or topological selector, not to store one.
+    pub edges: Vec<EdgeEntity>,
+    /// How many edges the part has, when `edges` was truncated.
+    pub total_edges: usize,
+}
+
+/// What a fillet or chamfer will act on, resolved before it runs.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct TreatmentTarget {
+    pub node: usize,
+    /// How many edges this treatment applies to. `expect({ count })` in the
+    /// script asserts this, and a changed count then fails loudly.
+    pub edge_count: usize,
+    pub vertex_count: usize,
+    pub edges: Vec<EdgeEntity>,
+    /// Tags whose live edge set is *exactly* this target. These are authored
+    /// references: `{ generatedBy: tag }` selects the same edges and keeps
+    /// selecting them as the model changes.
+    pub equivalent_tags: Vec<String>,
+}
+
+/// Long enough to show a pattern, short enough that the answer is still visible.
+///
+/// A part with a knurl has hundreds of edges and listing them all buries the
+/// answer, so a listing is capped and says how many there really were. The cap
+/// lives here rather than in a transport for the same reason everything else in
+/// this module does: two callers that disagree about how much of a part they
+/// were shown are two callers looking at different parts.
+const ENTITY_LIMIT: usize = 60;
+
+fn entity(edge: &parcad_occt::EdgeCurve) -> EdgeEntity {
+    EdgeEntity {
+        id: edge.id.clone(),
+        // Not rounded, and does not need to be: these are f32, and serde
+        // prints an f32 as the shortest decimal that round-trips *as f32* —
+        // "6.3", not the seventeen digits the same value grows when it is
+        // widened to f64. See [`round_mm`].
+        center: edge.center,
+        direction: edge.direction,
+        length_mm: edge.length_mm,
+    }
+}
+
+/// The edges of an evaluation, capped and counted.
+pub fn entities(evaluated: &Evaluated) -> Entities {
+    let all = evaluated.edges();
+    Entities {
+        edges: all.iter().take(ENTITY_LIMIT).map(entity).collect(),
+        total_edges: all.len(),
+    }
+}
+
+/// Summarise a resolved treatment target.
+///
+/// The full [`parcad_occt::TargetPreview`] goes to the viewport, which draws
+/// every curve it is given; this is the same resolution said in numbers, for a
+/// caller that has to read it.
+pub fn treatment_target(preview: &parcad_occt::TargetPreview) -> TreatmentTarget {
+    TreatmentTarget {
+        node: preview.node,
+        edge_count: preview.edges.len(),
+        vertex_count: preview.vertices.len(),
+        edges: preview.edges.iter().take(ENTITY_LIMIT).map(entity).collect(),
+        equivalent_tags: preview.provenance.clone(),
+    }
+}
+
 /// A rendered view: the pixels, and what a caller needs to read them.
 ///
 /// The two halves travel together but serialise apart. `summary` goes into the
-/// [`Snapshot`], where a caller reading numbers can see what was drawn and what
-/// the colours mean; `png` is attached by the transport in whatever way that
+/// [`EvaluationSnapshot`], where a caller reading numbers can see what was drawn
+/// and what the colours mean; `png` is attached by the transport in whatever way that
 /// transport carries an image. Base64 inside the JSON would be the worst of
 /// both: it inflates a structure meant to be read, and a model still could not
 /// look at it.
@@ -350,7 +464,7 @@ pub struct RenderSpec<'a> {
 /// sees is the shape rather than the mesher's approximation of it. The
 /// consequence is stated rather than hidden: a part *measured* through the exact
 /// kernel is *drawn* through the implicit one, and the two disagree by the blend
-/// bulge — millimetres, not rounding. [`Snapshot::rendered_by`] carries that,
+/// bulge — millimetres, not rounding. [`EvaluationSnapshot::backend`] carries that,
 /// and [`Renders::omitted`] carries the treatments no field can draw at all.
 ///
 /// Framing is shared across every view (see `parcad_core::view`), so a feature at
@@ -373,7 +487,7 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
         normals: &evaluated.normals,
         indices: &evaluated.indices,
     };
-    let bounds = evaluated.report.bounds;
+    let bounds = evaluated.bounds;
 
     let opts = parcad_core::render::RenderOptions {
         size,
@@ -876,14 +990,19 @@ pub fn parse_section(
 
 /// Describe one evaluation.
 ///
-/// Takes the document as well as the result because a treatment is a fact about
-/// the graph: the kernel consumes a fillet and hands back a solid, so by the
-/// time there is geometry there is nothing left to ask which node produced it.
-pub fn snapshot(doc: &Doc, evaluated: &Evaluated) -> Snapshot {
-    let report = &evaluated.report;
-    let topology = evaluated.topology.as_ref();
-
-    Snapshot {
+/// Takes the document as well as the measurements because a treatment is a fact
+/// about the graph: the kernel consumes a fillet and hands back a solid, so by
+/// the time there is geometry there is nothing left to ask which node produced
+/// it. Private, and called once per evaluation — a transport that could ask for
+/// a snapshot of its own is a transport that could ask for a different one.
+fn describe(
+    doc: &Doc,
+    report: &parcad_core::PartReport,
+    topology: Option<&parcad_occt::Topology>,
+    backend: &str,
+    kernel_ms: u64,
+) -> EvaluationSnapshot {
+    EvaluationSnapshot {
         units: report.units.clone(),
         size: round_point([report.size.x, report.size.y, report.size.z]),
         bounds_min: round_point([
@@ -911,8 +1030,9 @@ pub fn snapshot(doc: &Doc, evaluated: &Evaluated) -> Snapshot {
         non_manifold_edges: report.mesh.non_manifold_edges,
         tags: report.tags.clone(),
         treatments: treatments(doc),
-        backend: evaluated.backend.to_string(),
-        kernel_ms: evaluated.timings.kernel_ms,
+        unused_nodes: report.total_nodes.saturating_sub(report.live_nodes),
+        backend: backend.to_string(),
+        kernel_ms,
         // Nothing is drawn unless a caller asks: a raymarch costs far more than
         // the measurements above, and most calls only want the numbers.
         views: Vec::new(),
@@ -981,12 +1101,16 @@ fn treatments(doc: &Doc) -> Vec<Treatment> {
         .collect()
 }
 
-#[derive(Serialize, Default)]
+/// How long an evaluation took, for the window's status line.
+///
+/// Time in the exact kernel is deliberately not here: it is
+/// [`EvaluationSnapshot::kernel_ms`], stated once, where every transport reads
+/// the same number. These two are the implicit path's halves, which nothing but
+/// the status line has ever wanted.
+#[derive(Serialize)]
 pub struct Timings {
     lower_and_mesh_ms: u64,
     normals_ms: u64,
-    /// B-rep only: time inside the kernel worker.
-    kernel_ms: u64,
 }
 
 /// An exported file, held in memory rather than written.
@@ -1081,13 +1205,11 @@ fn evaluate_implicit(doc: &Doc, depth: u8) -> Result<Evaluated, String> {
         // Corners cannot be shared once each triangle has its own normals.
         indices: Vec::new(),
         edges: Vec::new(),
-        topology: None,
-        backend: "implicit",
-        report,
+        bounds: report.bounds,
+        snapshot: describe(doc, &report, None, "implicit", 0),
         timings: Timings {
             lower_and_mesh_ms,
             normals_ms,
-            ..Default::default()
         },
     })
 }
@@ -1098,18 +1220,17 @@ fn evaluate_brep(doc: &Doc) -> Result<Evaluated, String> {
         parcad_occt::evaluate(doc, &parcad_occt::Options::default()).map_err(|e| format!("{e}"))?;
     let kernel_ms = t0.elapsed().as_millis() as u64;
 
+    let report = measure_brep(doc, &s)?;
     Ok(Evaluated {
-        report: measure_brep(doc, &s)?,
+        bounds: report.bounds,
+        snapshot: describe(doc, &report, Some(&s.topology), "brep", kernel_ms),
         positions: s.positions,
         normals: s.normals,
         indices: s.indices,
         edges: s.edges,
-        topology: Some(s.topology),
-        backend: "brep",
         timings: Timings {
             lower_and_mesh_ms: s.timings.build_ms + s.timings.mesh_ms,
-            kernel_ms,
-            ..Default::default()
+            normals_ms: 0,
         },
     })
 }
@@ -1124,7 +1245,10 @@ fn evaluate_brep(doc: &Doc) -> Result<Evaluated, String> {
 fn evaluate_mesh_preview(doc: &Doc) -> Result<Evaluated, String> {
     let mut preview = evaluate_brep(doc)?;
     preview.edges.clear();
-    preview.topology = None;
+    // A tessellation view has no topology to show — which is different from
+    // having none, and is why these go absent rather than to zero.
+    preview.snapshot.faces = None;
+    preview.snapshot.topological_edges = None;
     Ok(preview)
 }
 
@@ -1343,6 +1467,49 @@ mod tests {
         assert_eq!(treatments.len(), 1);
         assert_eq!(treatments[0].op, "fillet");
         assert_eq!(treatments[0].continuity.as_deref(), Some("curvature"));
+    }
+
+    /// The window and an agent must be reading one description of one part.
+    ///
+    /// The IPC and HTTP transports serialise an `Evaluated`, MCP serialises the
+    /// `EvaluationSnapshot` inside it; this asserts they are the same bytes, and
+    /// that nothing measured has grown back alongside the mesh. A `report`,
+    /// `topology` or `backend` at the top level would be a second account of the
+    /// part for the editor to read instead — which is exactly what this replaced.
+    #[test]
+    fn the_window_and_an_agent_are_handed_the_same_description() {
+        let doc = plate_with_a_hole();
+        let evaluated = evaluate(&doc, 6, Backend::Implicit).expect("the plate should evaluate");
+
+        let mcp = serde_json::to_value(&evaluated.snapshot).expect("the snapshot serialises");
+        let window = serde_json::to_value(&evaluated).expect("the evaluation serialises");
+        assert_eq!(window["snapshot"], mcp);
+
+        let mut keys: Vec<&str> = window
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        keys.sort_unstable();
+        assert_eq!(
+            keys,
+            ["edges", "indices", "normals", "positions", "snapshot", "timings"]
+        );
+    }
+
+    /// A shape the root never reaches is a line the author meant to use.
+    #[test]
+    fn a_shape_the_root_never_reaches_is_counted_as_unused() {
+        let doc = doc(serde_json::json!({
+            "root": 0,
+            "nodes": [
+                { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+                { "op": "sphere", "r": 4 },
+            ],
+        }));
+        let evaluated = evaluate(&doc, 5, Backend::Implicit).expect("the cuboid should evaluate");
+        assert_eq!(evaluated.snapshot.unused_nodes, 1);
     }
 
     /// A part with a named hole through it, for the perception tests: the hole
