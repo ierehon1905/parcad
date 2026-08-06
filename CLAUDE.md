@@ -12,6 +12,7 @@ tools/check.sh --fast                  # kernel crates only: <1 s warm, ~4 s aft
 cargo build --locked --release         # core, CLI, app host — no C++
 tools/build-worker.sh                  # B-rep worker; verifies OCCT is optimised
 cd app && bun install --frozen-lockfile && bun run tauri dev  # from app/
+cd app && bun run tauri build           # .app + .dmg; run build-worker.sh first
 bun tools/run.ts examples/bracket.js > /tmp/bracket.json   # DSL -> intent graph
 tools/bench-kernel.sh /tmp/bracket.json                    # medians, and the -O level
 cargo run -p parcad-eval               # the geometry + refusal corpus

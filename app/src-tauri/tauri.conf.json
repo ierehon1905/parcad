@@ -24,7 +24,10 @@
     }
   },
   "bundle": {
-    "active": false,
-    "targets": "all"
+    "active": true,
+    "targets": "all",
+    "externalBin": [
+      "binaries/parcad-occt-worker"
+    ]
   }
 }

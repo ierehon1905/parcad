@@ -69,9 +69,12 @@ All three currently `bail!` with an explanation rather than approximating.
   fillet/chamfer history now focus that source call on click. Extend this to
   replacement faces and history through changed curves, rather than guessing
   after an operation replaces topology.
-- **Sidecar packaging.** `parcad-occt-worker` is copied beside the dev binaries
-  by `tools/build-worker.sh`, but is *not* declared as a Tauri sidecar. A
-  bundled `.app` will not find it. (`bundle.active` is currently `false`.)
+- ~~**Sidecar packaging.**~~ *Done.* `parcad-occt-worker` is declared as a Tauri
+  `externalBin` and `bundle.active` is `true`; `tools/build-worker.sh` stages the
+  triple-suffixed copy the bundler demands. A `.app` copied out of the build tree
+  and run with `PARCAD_OCCT_WORKER` unset measures the bracket at 55074.791 mm³,
+  watertight, which is the corpus value. Not done: signing, notarisation, an
+  updater, or any target that is not this machine's.
 - **Debounce is now the bottleneck.** The editor waits 350 ms after the last
   keystroke, chosen when a rebuild cost 300–450 ms. Kernel time is now 76 ms
   (enclosure) to ~130 ms (bracket), so you wait longer for the timer than for

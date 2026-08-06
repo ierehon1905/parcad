@@ -108,6 +108,27 @@ fix.
 Without `--features kernel` you get only the host half and the binary is skipped
 entirely. Use `tools/build-worker.sh`.
 
+### A Tauri sidecar is declared, staged and installed under three names
+
+`externalBin` in `tauri.conf.json` names `binaries/parcad-occt-worker`. The file
+on disk has to be `binaries/parcad-occt-worker-aarch64-apple-darwin` or the build
+fails outright — that part is loud. What is quiet is the third name: the macOS
+bundler strips the triple again and writes
+`parcad.app/Contents/MacOS/parcad-occt-worker`. Nothing documents that as a
+promise, and it is not the same on every target.
+
+So `host::worker_path()` accepts both names, and `tools/build-worker.sh` writes
+the staging copy — 28 MB, gitignored — every time it builds. Skip the script and
+`tauri build` either fails or, worse on a stale tree, bundles last week's kernel.
+
+Test a bundle from outside the build tree and with the dev environment removed,
+or the thing being measured is your shell:
+
+```bash
+cp -R target/release/bundle/macos/parcad.app /tmp/ && cd /tmp
+env -u PARCAD_OCCT_WORKER PARCAD_HTTP_PORT=4299 /tmp/parcad.app/Contents/MacOS/parcad-app
+```
+
 ### zsh aborts a command on an unmatched glob
 
 `rm -rf target/release/build/occt-sys-* target/debug/build/occt-sys-*` dies on

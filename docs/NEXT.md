@@ -16,28 +16,25 @@ The ordering argument, in one line each:
 
 ---
 
-## 1. Sidecar packaging — a bundled app cannot find its kernel
+## 1. Shipping — the bundle carries its kernel; nothing else about shipping works
 
-**The state.** `tools/build-worker.sh` copies `parcad-occt-worker` beside the
-dev binaries, and [`host.rs`'s `worker_path()`](../crates/parcad-occt/src/host.rs)
-finds it there or at `PARCAD_OCCT_WORKER`. That covers development and covers
-nothing else: `app/src-tauri/tauri.conf.json` has `bundle.active: false` and no
-`externalBin`, so a bundled `.app` ships without the worker and every B-rep
-build in it fails.
+**Done: the sidecar.** `tauri.conf.json` declares `parcad-occt-worker` as an
+`externalBin` with `bundle.active: true`, `tools/build-worker.sh` stages the
+triple-suffixed copy the bundler demands into `app/src-tauri/binaries/`, and
+[`worker_path()`](../crates/parcad-occt/src/host.rs) accepts either the bare or
+the suffixed name — Tauri 2.11 on macOS strips the suffix again, which the
+comment there records as a measured fact rather than a contract. Verified the
+only way it counts: `parcad.app` copied to `/tmp`, launched with
+`PARCAD_OCCT_WORKER` unset, evaluated `examples/bracket.js` over the HTTP host
+at **55074.791 mm³, 80 × 60 × 44 mm, watertight, 22 faces / 107 edges** — the
+value `eval/cases/bracket.json` records. With the worker deleted from the same
+bundle the evaluation refuses and names the rebuild.
 
-**Done looks like.** A `.app` built on a clean checkout, copied to a second
-machine or a fresh user account, opens a part and measures it.
-
-**The trap, and it is the whole job.** Tauri sidecars are declared with a plain
-name and installed with the target triple appended —
-`parcad-occt-worker-aarch64-apple-darwin`. `worker_path()` joins the bare name,
-so a correctly-declared sidecar still will not be found. Either resolution
-learns the suffixed name or the build installs both; decide which, and say in a
-comment why, because the next person will hit exactly this.
-
-**Do not** solve it by making the failure quieter. `worker_path()`'s error names
-the fix, which is the house rule (CLAUDE.md, "Error messages name the fix") —
-keep that standard for whatever the bundled case fails with.
+**Still not shipping.** The bundle is unsigned and un-notarised, so a second
+machine meets Gatekeeper before it meets the kernel; there is no updater; and
+nothing has been built for a target that is not this one, where the stripped
+suffix is exactly the assumption most likely to break. The `.app` has been run
+from outside the build tree, not from a fresh user account.
 
 ## 2. One live session the agent can drive
 

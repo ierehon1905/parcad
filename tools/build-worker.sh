@@ -18,6 +18,16 @@ for dir in target/debug target/release; do
 done
 echo "worker installed: $(ls -la target/release/parcad-occt-worker | awk '{print $5" bytes"}')"
 
+# And where Tauri looks, which is not the same place or the same name. An
+# `externalBin` entry names the file without its target triple and the bundler
+# demands the file on disk carry one, so this copy exists purely to satisfy
+# `tauri build`. It is a build artifact of the size of a geometry kernel and is
+# gitignored; without it the bundle silently ships no worker.
+triple=$(rustc -vV | awk '/^host: /{print $2}')
+mkdir -p app/src-tauri/binaries
+cp target/release/parcad-occt-worker "app/src-tauri/binaries/parcad-occt-worker-$triple"
+echo "sidecar staged:   app/src-tauri/binaries/parcad-occt-worker-$triple"
+
 # Check OpenCASCADE actually got optimised.
 #
 # The `cmake` crate configures OCCT as a Debug build even under --release, so

@@ -75,11 +75,31 @@ impl Default for Options {
     }
 }
 
+const WORKER: &str = "parcad-occt-worker";
+
 /// Where the worker binary lives.
 ///
 /// Beside the current executable in a real install; `PARCAD_OCCT_WORKER`
 /// overrides for tests and unusual layouts.
+///
+/// Two names are tried, and the second one is the whole reason this function is
+/// longer than a line. A Tauri `externalBin` is declared under a plain name and
+/// the file on disk must carry the target triple —
+/// `parcad-occt-worker-aarch64-apple-darwin` — so it is not obvious which name
+/// ends up installed. Measured, Tauri 2.11 on macOS strips the suffix again and
+/// writes `Contents/MacOS/parcad-occt-worker`, which is why the bare name is
+/// first and why a bundle built today never reaches the second candidate. That
+/// is bundler behaviour, not a contract: it differs by target and has changed
+/// between versions, and getting it wrong ships an app with no kernel at all.
+///
+/// Resolution learns both names rather than the build installing both, because
+/// the second copy would be 26 MB of geometry kernel whose only job is to be
+/// found — a thing that can go missing, go stale, or double the bundle. `TRIPLE`
+/// comes from `build.rs`, so the suffix looked for is the one this binary was
+/// actually built for rather than a string assembled at runtime.
 fn worker_path() -> Result<PathBuf, OcctError> {
+    const TRIPLE: &str = env!("PARCAD_TARGET_TRIPLE");
+
     if let Ok(p) = std::env::var("PARCAD_OCCT_WORKER") {
         return Ok(PathBuf::from(p));
     }
@@ -89,17 +109,34 @@ fn worker_path() -> Result<PathBuf, OcctError> {
         .parent()
         .ok_or_else(|| OcctError::Host("the running executable has no directory".into()))?;
 
-    let candidate = dir.join("parcad-occt-worker");
-    if candidate.exists() {
-        Ok(candidate)
-    } else {
-        Err(OcctError::Host(format!(
-            "cannot find parcad-occt-worker next to {}; \
-             build it with `cargo build -p parcad-occt --features kernel --release` \
-             and point PARCAD_OCCT_WORKER at it",
-            exe.display()
-        )))
+    let names = [WORKER.to_string(), format!("{WORKER}-{TRIPLE}")];
+    if let Some(found) = names.iter().map(|n| dir.join(n)).find(|p| p.exists()) {
+        return Ok(found);
     }
+
+    // Which fix to name depends on where the application is running from: a
+    // developer needs the worker built, a packaged app needs it bundled, and
+    // the two are different commands. `Contents/MacOS` is the only reliable
+    // signal on macOS — the bundle is the directory layout, not a flag.
+    let bundled = dir.ends_with("Contents/MacOS");
+    Err(OcctError::Host(if bundled {
+        format!(
+            "this build of parcad shipped without its geometry kernel: no {WORKER} \
+             beside {}. The bundle should carry one as a Tauri sidecar — rebuild it \
+             with `tools/build-worker.sh && (cd app && bun run tauri build)`, which \
+             stages the worker into app/src-tauri/binaries/ for the `externalBin` \
+             entry in tauri.conf.json. To run this copy meanwhile, point \
+             PARCAD_OCCT_WORKER at a worker binary.",
+            exe.display()
+        )
+    } else {
+        format!(
+            "cannot find {WORKER} next to {}; \
+             build it with `tools/build-worker.sh` \
+             and point PARCAD_OCCT_WORKER at it if it lands elsewhere",
+            exe.display()
+        )
+    }))
 }
 
 /// Evaluate a document through the B-rep kernel.
