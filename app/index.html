@@ -151,8 +151,12 @@
             <div id="target-preview-name"></div>
             <div id="target-preview-detail" class="text-ink-dim"></div>
           </div>
+<!-- Hidden until there is something measured to put in it: the border and
+               backdrop are visible even with no text, and an empty panel over an
+               empty viewport reads as a part that failed to draw. -->
           <div
             id="report"
+            hidden
             class="absolute left-3.5 bottom-3.5 max-w-[60%] px-3 py-2.5 rounded-lg
                    border border-line bg-glass/82 backdrop-blur-lg
                    text-ink-dim font-mono text-tiny leading-[1.7] pointer-events-none

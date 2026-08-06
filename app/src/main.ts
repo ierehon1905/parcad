@@ -160,6 +160,16 @@ let lastReport: Report | undefined;
 let lastBackend: "implicit" | "brep" | undefined;
 let lastTreatments: dsl.TreatmentSource[] = [];
 let lastTopology: { faces: number; edges: number } | null = null;
+/**
+ * Which part the geometry currently on screen belongs to.
+ *
+ * A failed build deliberately leaves the last good part rendered, so a broken
+ * keystroke does not blank the viewport. That is only defensible while the
+ * geometry is still *this* part's: if the first build after opening another one
+ * fails, everything on screen — the solid, its volume, its watertightness —
+ * describes a part the titlebar is no longer naming.
+ */
+let shownPath: string | undefined;
 let targetPreviewRequest = 0;
 /** A clicked treatment keeps its authored chain visible after pointer-leave. */
 let pinnedTreatment: dsl.TreatmentSource | undefined;
@@ -330,6 +340,7 @@ function buildGraph(source: string): BuiltGraph {
 
 function show(result: Evaluated) {
   const { report } = result;
+  shownPath = openPath;
   lastReport = report;
   lastBackend = result.backend;
   lastTopology = result.topology;
@@ -375,6 +386,7 @@ function show(result: Evaluated) {
       ? `within <b>${mesh.resolution_mm.toFixed(3)}</b> mm of the true surface`
       : `at <b>${mesh.resolution_mm.toFixed(3)}</b> mm grid`;
 
+  reportEl.hidden = false;
   reportEl.innerHTML = [
     `<b>${fmt(size.x)} × ${fmt(size.y)} × ${fmt(size.z)}</b> mm`,
     `volume <b>${fmt(mass.volume_mm3)}</b> mm³ · area <b>${fmt(mass.area_mm2)}</b> mm²`,
@@ -698,7 +710,39 @@ function showError(e: unknown) {
   errorEl.textContent = e instanceof Error ? e.message : String(e);
   errorEl.hidden = false;
   // Leave the last good geometry on screen. A broken edit mid-typing should not
-  // blank the viewport.
+  // blank the viewport — but only while that geometry is still this part's.
+  // Once another part is open, the solid and every measurement beside it
+  // describe something the titlebar is no longer naming, and a stale volume
+  // presented under a new name is the confident wrong answer this project
+  // refuses to give.
+  if (shownPath !== openPath) {
+    discardShownPart();
+  }
+}
+
+/** Drop the rendered part and everything measured from it. */
+function discardShownPart() {
+  shownPath = undefined;
+  lastReport = undefined;
+  lastBackend = undefined;
+  lastTopology = null;
+  lastGraph = null;
+  lastSource = "";
+  lastTreatments = [];
+  visibleEdges = [];
+  visibleVertices = [];
+  hoveredEdge = undefined;
+  selectedEdge = undefined;
+  hoveredVertex = undefined;
+  selectedVertex = undefined;
+  suggestedSelector = undefined;
+  resolvedTargets.clear();
+  viewport.clearPart();
+  // Nothing measured is left to report, so the panel goes away rather than
+  // standing empty — its border and backdrop are visible with no text in them.
+  // No placeholder either: the error beside it already says why there is no part.
+  reportEl.innerHTML = "";
+  reportEl.hidden = true;
 }
 
 function clearError() {
