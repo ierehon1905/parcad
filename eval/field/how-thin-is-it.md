@@ -1,3 +1,11 @@
+---
+tool: measure_wall_thickness
+reach: measure_wall_thickness
+verdict: 6\.3
+trap: 19\.1
+quote: 6\.3
+why: The thinnest wall names no variable in the script, and `thickness = 19.1` is sitting one line away from being the wrong answer. The part is chamfered, so the reported minimum is an upper bound and the reply must carry that.
+---
 Use the parcad MCP tools. The part is flange.js in the parcad project folder.
 
 Question: what is the thinnest material anywhere in this flange, and between which two surfaces is it?

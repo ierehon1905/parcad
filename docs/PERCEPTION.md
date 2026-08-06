@@ -73,7 +73,7 @@ Findings that changed decisions on this page:
 | Multi-view contact sheet | ✅ `render::contact_sheet` | seven orthographic views, one shared framing |
 | Scale bar on every panel | ✅ `render::ScaleBar` | round 1-2-5 lengths, end ticks — the "how big is this" answer without a call |
 | Region colouring with a legend | ✅ `tags.rs` | which tag owns which surface, drawn on the image |
-| Edge listing with geometry | ✅ `list_entities` | centre, direction, length; sampled, with the total |
+| Edge listing with geometry | ✅ `list_entities` | centre, direction, length; sampled at 60, with the total — and it disagrees with `evaluate_part`'s `topological_edges`, which double-counts. §13 |
 | Treatment target preview | ✅ `inspect_treatment_target` | plus tags whose edge set is *exactly* the target |
 | Selector syntax check | ✅ `check_selector` | no geometry touched |
 | Depth + normal per pixel | ~ `render::GeometryBuffer` | exists, and `model_point` already ties a pixel to a millimetre — not exposed |
@@ -103,33 +103,43 @@ Every entry below obeys the same three rules, which are already how
    fix.
 3. **Nothing is inferred that could be measured.** This is the whole page.
 
-### How to tell whether one works — run the field test
+### How to tell whether one works — run the field suite
 
 **A perception tool is not finished when its number is right. It is finished
 when a model reads the number right, and those are different days' work.** The
 probe in §3 passed its Rust tests on the first run and then failed three
 separate ways in front of an actual model — a flag read inverted, a field name
-read as the wrong noun, and the tool not being called at all. None of those is
-reachable from inside the process, and no test in this repo can catch any of
-them. So before calling anything below done:
+read as the wrong noun, and the tool not being called at all. A fourth arrived
+later and from the other end: the server's own instructions named a field
+(`rendered_by`) that no reply has ever contained. None of the four is reachable
+from inside the process, and no test in this repo can catch any of them. So
+before calling anything below done:
 
 ```bash
+mkdir -p /tmp/parcad-field-projects
 cargo build -p parcad-app --bin parcad-app     # the build you mean to test
-PARCAD_OCCT_WORKER=$PWD/target/release/parcad-occt-worker ./target/debug/parcad-app &
-tools/field-test.sh eval/field/does-the-port-meet.md 4
-THINK=0 tools/field-test.sh eval/field/does-the-port-meet.md 4
+PARCAD_PROJECTS_DIR=/tmp/parcad-field-projects PARCAD_HTTP_PORT=4344 \
+  PARCAD_OCCT_WORKER=$PWD/target/release/parcad-occt-worker \
+  ./target/debug/parcad-app &
+PARCAD_HTTP_PORT=4344 tools/field-suite.sh 3        # every case, both arms
+PARCAD_HTTP_PORT=4344 tools/field-test.sh eval/field/does-the-port-meet.md 4
 ```
 
-That is four trials of `claude -p` on Haiku 4.5 in parallel — a separate
-process, its own context, every local tool denied so it cannot open the file and
-read the answer — against the MCP server the running app hosts. `THINK=0` is the
-non-reasoning arm and is worth running: reasoning did not prevent any of the
-three failures above, and one of them appeared *only* without it.
-`tools/field-test-score.py` prints who called the tool and who quoted a measured
-value; the failures themselves have all been in the prose, so open the
-transcripts.
+Each trial is `claude -p` on Haiku 4.5 — a separate process, its own context,
+every local tool denied so it cannot open the file and read the answer — against
+the MCP server the running app hosts. The suite runs every case in
+`eval/field/` in both thinking arms and prints one table; `field-test.sh` is
+the single case it is built out of, for when a change bears on one tool.
 
-Four things this cost to learn, all of which will otherwise cost it again:
+**A trial is graded, not passed.** SOUND is the right answer reached by the
+route the case requires; LUCKY is the right answer without it. Counting the two
+together is the failure this page keeps re-learning at one level up — §3 round 1
+scored 3/4 *correct* while measuring almost nothing, one trial quoting the
+part's own source comment as its proof. The suite's per-case `reach` column is
+the number to read first, and `tools/field-test-score.py --show` prints a
+transcript as prose, because the failures worth finding have all been in it.
+
+Five things this cost to learn, all of which will otherwise cost it again:
 
 - **The app serves the binary it started with.** Rebuild *and restart* between
   rounds. A round that silently tested the old build is indistinguishable from a
@@ -141,10 +151,17 @@ Four things this cost to learn, all of which will otherwise cost it again:
 - **Read the transcript, not the verdict.** The single most useful trial on
   record got the *right* answer while quoting the part's own source comment as
   its evidence. Correct and worthless, and only the transcript says so.
+- **A tool missing from the runner's allow list is invisible, not failed.**
+  `save_project` and `export_part` sat outside it from the beginning, which is
+  exactly why nothing had ever measured whether a model can put its work where
+  the user will find it. The deny list is wrong by default every time the CLI
+  grows a built-in; the *allow* list is wrong by default every time this project
+  grows a tool, and it fails silently in the direction that looks like a result.
 
-`eval/field/README.md` has what makes a prompt worth adding. Write the result
-into the section it bears on, next to the design decision it changed — that is
-what §3, §4 and the order at the bottom of this page are now made of.
+`eval/field/README.md` has what makes a case worth adding and what the rubric
+above each prompt means. Write the result into the section it bears on, next to
+the design decision it changed — that is what §3, §4 and the order at the bottom
+of this page are now made of.
 
 ## 2. Fewer views, chosen — a correction to the default
 
@@ -695,6 +712,91 @@ probe that returns a millimetre (§3), not a greyscale image of it for a model t
 squint at. Shipping the picture would be re-encoding a number as pixels, which
 is the inverse of this page's rule.
 
+## 13. What the first whole-surface round found
+
+Everything above was measured one tool at a time, on the tool that had just
+changed. `tools/field-suite.sh` puts every tool in front of a model at once, and
+the first round of it is the first evidence about the parts of the surface
+nobody had ever asked a model to use.
+
+**Ninety trials of Haiku 4.5**, ten cases in both thinking arms, three trials
+each, then a five-case replication:
+
+| | trials | SOUND | LUCKY | WRONG | VOID |
+|---|---|---|---|---|---|
+| round 1, ten cases | 60 | 44 | 7 | 7 | 2 |
+| round 2, five of them again | 30 | 25 | 1 | 3 | 1 |
+
+Per case, SOUND out of trials, both arms together:
+
+| case | tool | round 1 | round 2 |
+|---|---|---|---|
+| how-thin-is-it | `measure_wall_thickness` | **6/6** | — |
+| which-backend-measured | `evaluate_part`'s `backend` | **6/6** | **6/6** |
+| what-is-inside | `section` | 5/6 | — |
+| what-is-hidden | `regions` | 5/6 | **6/6** |
+| how-big-can-the-fillet-be | refusals | 5/6 | **6/6** |
+| does-the-port-meet | `probe_part` | 4/6 | — |
+| what-does-the-fillet-touch | `inspect_treatment_target` | 4/6 | 5/6 |
+| which-selector-holds | `check_selector` | 4/6 | — |
+| put-it-where-i-can-open-it | the project CRUD | 3/6 | 2/6 |
+| how-many-edges | `list_entities` | 2/6 | — |
+
+**Reasoning was not the variable.** 36/45 SOUND with thinking off against 34/45
+with it on, and the two worst cases were both *worse* with it: `how-many-edges`
+went 2/3 to 0/3 and `which-selector-holds` 3/3 to 1/3. In both, the extra
+reasoning was spent constructing a story for a wrong reading rather than
+checking it. That is now the fourth round on this page to say run both arms.
+
+Four findings, in descending order of how much they cost the model, all of them
+in a reply that was already numerically correct:
+
+**`topological_edges` is twice the truth, and `list_entities` disagrees with it
+in the open.** A plain cube reports `topological_edges: 24` and `total_edges:
+12`; the 2020 extrusion reports 246 and 122. `worker.rs` counts with
+`shape.edges().count()`, and OCCT's `TopExp_Explorer` visits an edge once per
+adjacent face — the same walk that builds `list_entities` deduplicates on a
+canonical key, which is why only one of the two is right. A model handed both
+numbers noticed the contradiction, reasoned that "visible edges" meant *visible
+from a camera* and therefore a sample, and chose 246. It is the only failure on
+this page where the model's reasoning was sound and both of its inputs came from
+us.
+
+**A selector's own operators are the characters a model escapes.** Two trials in
+the reasoning arm sent `&lt;y` and `&gt;Z and &gt;Y and |X` to `check_selector`,
+were told `invalid edge-selector term "&lt;y"`, and reported that the kernel
+rejects `<y` — which it accepts. The message echoes the escape back and names no
+fix, so nothing in the reply says the caller's own encoding is the problem. This
+is "error messages name the fix" applied to a caller that is a model: `<`, `>`
+and `|` are the whole grammar, and they are exactly what gets HTML-escaped.
+
+**`METRIC_FASTENERS` does not exist over MCP.** Asked for an M6 clearance hole
+and told explicitly to use parcad's own number, three of six trials wrote a
+literal — 6.5 twice, which is not an ISO 273 size at all. `clearance()`,
+`tapDrill()` and `counterbore()` are named nowhere in the tool descriptions or
+the server instructions, so the rule that CLAUDE.md states for authors ("never a
+literal in a part") reaches nobody on the socket.
+
+**A part can be saved broken and reported as saved.** One trial cut its clearance
+hole with `cylinder(3.3, 6).at(0, 0, -3)` through a 6 mm spacer spanning
+−3…+3 — a blind hole halfway in — evaluated it, read `volume_mm3: 1781.28`
+against an expected 1678.8, and saved it anyway. `save_project` says "evaluate it
+first: saving a script that does not build leaves the user a broken file", and
+this script *built*. The gate that exists catches the rarer failure.
+
+Two smaller ones worth not rediscovering. `regions` omits treatment tags
+entirely rather than reporting them `visible: false`, which the server
+instructions promise it does not do — `bore_lead_in` is a chamfer, `drawable()`
+replaces it with an identity, and no pixel is ever attributed to it. And a
+*vertex* selector that is empty is refused with "edge selector is empty", the
+wrong noun in the error, on the one path where the two grammars differ.
+
+**What did not fail is worth recording too.** `measure_wall_thickness` went 6/6
+including the caveat's direction, and the `rendered_by` regression — the server
+instructions naming a field no reply contains — is 12/12 clean across both
+rounds. Both are §3's and §5's rewritten tool descriptions still holding, which
+remains the cheapest change on this page.
+
 ---
 
 ## Suggested order
@@ -719,14 +821,24 @@ is the inverse of this page's rule.
    `Section`. The plane and the kept side both default per view, because the
    half that has to go depends on where you are looking from and a caller made
    to say so says it wrong.
-7. **Numbered marks on the render** (§4, the visual half). The change with the
+7. **The four §13 fixes, before anything below them.** Each is a line or a
+   sentence, each is measured, and none is in a tool's *logic* — which is this
+   page's oldest lesson and the reason they head the list. Count edges with
+   `TopExp::MapShapes` in `worker.rs` so `topological_edges` stops being
+   double; make `check_selector` recognise `&lt;`/`&gt;` in its input and say
+   so, because those are the grammar's own operators; name `clearance()`,
+   `tapDrill()` and `counterbore()` in the server instructions; and tell
+   `save_project`'s caller to check the evaluation's numbers rather than only
+   that it evaluated. Then re-run the suite: the point of every one of them is
+   a number that moves.
+8. **Numbered marks on the render** (§4, the visual half). The change with the
    best evidence behind it, and it makes the selector loop closeable.
-8. **Diff render** (§8), numeric half first.
-9. **Faces as text** (§9). Larger, touches the selector grammar in two
+9. **Diff render** (§8), numeric half first.
+10. **Faces as text** (§9). Larger, touches the selector grammar in two
    languages, unlocks per-face work later.
-10. **Adaptive slice summary** (§10) and the default view set (§2), both worth
+11. **Adaptive slice summary** (§10) and the default view set (§2), both worth
    measuring before building.
-11. ASCII grids and depth images: not at all, for the reasons recorded above
+12. ASCII grids and depth images: not at all, for the reasons recorded above
    rather than the intention.
 
 Each of these needs a case in `eval/cases/` that pins the *reported* numbers, on

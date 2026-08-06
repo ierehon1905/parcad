@@ -1,3 +1,10 @@
+---
+tool: probe_part
+reach: probe_part
+verdict: MEET
+quote: solid_mm|first_solid|surface_of|no (surface )?crossings|zero crossings|crossed nothing
+why: Two voids that intersect. The measurement is a transverse ray; the naive read of two z-intervals gives the wrong answer.
+---
 Use the parcad MCP tools. The part is manifold-block.js in the parcad project folder.
 
 Question: do the two drop ports actually break into the main gallery, or is there material left between them?
