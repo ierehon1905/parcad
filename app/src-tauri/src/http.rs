@@ -22,6 +22,7 @@
 use crate::mcp;
 use crate::projects;
 use crate::service::{self, Backend};
+use crate::session;
 use axum::{
     extract::{Path, State},
     http::{header, StatusCode, Uri},
@@ -129,6 +130,12 @@ fn router<R: Runtime>(app: AppHandle<R>) -> Router {
         // Whether a model is connected to the MCP endpoint below. Read by both
         // windows; the desktop one gets it over IPC instead.
         .route("/api/mcp", get(mcp_status))
+        // The live session: what is on screen, pushed by viewers on the
+        // editor's debounce, and streamed back out as SSE so every browser tab
+        // follows a change whichever caller made it. The webview gets the same
+        // broadcast as a Tauri event instead — one broadcast, two transports.
+        .route("/api/session", get(get_session).post(push_session))
+        .route("/api/session/events", get(session_events))
         .route("/api/evaluate", post(evaluate))
         .route("/api/inspect-edge-target", post(inspect_edge_target))
         .route("/api/export/stl", post(export_stl))
@@ -173,6 +180,41 @@ async fn health() -> impl IntoResponse {
 
 async fn mcp_status() -> impl IntoResponse {
     Json(service::mcp_status())
+}
+
+#[derive(Deserialize)]
+struct SessionPush {
+    name: Option<String>,
+    script: String,
+    /// The pushing viewer's own id, echoed in the broadcast so that viewer can
+    /// ignore its reflection.
+    origin: String,
+}
+
+async fn get_session() -> impl IntoResponse {
+    Json(session::get())
+}
+
+async fn push_session(Json(request): Json<SessionPush>) -> impl IntoResponse {
+    Json(session::push(request.name, request.script, request.origin))
+}
+
+/// Session changes as they happen, for a browser tab to watch.
+///
+/// SSE rather than a websocket: the traffic is one-way, `EventSource`
+/// reconnects on its own, and the reply stays ordinary HTTP under the same
+/// no-CORS rule as everything else here.
+async fn session_events() -> impl IntoResponse {
+    use axum::response::sse::{Event, KeepAlive, Sse};
+    use tokio_stream::StreamExt;
+
+    let events = tokio_stream::wrappers::BroadcastStream::new(session::subscribe())
+        // A lagged tab missed intermediate states, never the final one — the
+        // next event carries the whole session, so skipping is correct.
+        .filter_map(|event| event.ok())
+        .map(|event| Event::default().json_data(&event));
+
+    Sse::new(events).keep_alive(KeepAlive::default())
 }
 
 /// Geometry work is blocking and slow — the OCCT path is a whole subprocess.

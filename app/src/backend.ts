@@ -15,6 +15,7 @@
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 
 /**
  * Is the Tauri bridge present, or are we a browser talking to the host?
@@ -295,6 +296,60 @@ export interface McpStatus {
 
 export function mcpStatus(): Promise<McpStatus> {
   return inTauri ? invoke<McpStatus>("mcp_status") : get<McpStatus>("mcp");
+}
+
+/**
+ * The live session: which part is on screen and what its script says, shared
+ * by every window and by an agent over MCP. The state and the event are the
+ * same shape on purpose — a viewer that missed a broadcast asks for the state
+ * and treats the answer identically.
+ */
+export interface Session {
+  /** The open project's path, or null before anything is opened. */
+  name: string | null;
+  /** The document being typed — not necessarily the file on disk. */
+  script: string;
+  /** Increases with every real change. */
+  revision: number;
+  /** The viewer that made the change: a window's id, or "agent" over MCP. */
+  origin: string;
+}
+
+export function getSession(): Promise<Session> {
+  return inTauri ? invoke<Session>("get_session") : get<Session>("session");
+}
+
+/**
+ * Tell the host what this window is showing. Called on the evaluation
+ * debounce, so `get_session` answers with what the user actually typed rather
+ * than the last thing an agent wrote. An unchanged document is a no-op on the
+ * host — no revision bump, no broadcast — which is what stops a viewer's push
+ * of an applied remote change from echoing back out.
+ */
+export function pushSession(
+  name: string | null,
+  script: string,
+  origin: string,
+): Promise<Session> {
+  return inTauri
+    ? invoke<Session>("push_session", { name, script, origin })
+    : post<Session>("session", { name, script, origin });
+}
+
+/**
+ * Session changes as they happen — one broadcast, two transports. In a browser
+ * this is SSE from the host (`EventSource` reconnects on its own); in the
+ * webview it is the Tauri event the host forwards, because the webview's
+ * origin cannot open an EventSource against `/api`. Callers never learn which:
+ * that is this module's whole job.
+ */
+export function subscribeSession(onEvent: (session: Session) => void): void {
+  if (inTauri) {
+    void listen<Session>("session-changed", (event) => onEvent(event.payload));
+    return;
+  }
+  const events = new EventSource("/api/session/events");
+  events.onmessage = (event) => onEvent(JSON.parse(event.data) as Session);
 }
 
 export function evaluate<T>(graph: unknown, depth: number, backend: string): Promise<T> {

@@ -36,33 +36,21 @@ nothing has been built for a target that is not this one, where the stripped
 suffix is exactly the assumption most likely to break. The `.app` has been run
 from outside the build tree, not from a fresh user account.
 
-## 2. One live session the agent can drive
+## 2. One live session the agent can drive — built
 
-**The state.** MCP works: an agent reaches the same `service.rs` the windows do.
-But every call is stateless, `save_project` writes a file and stops, and no event
-reaches the webview — so while an agent works, the open window is a correct but
-stale view. Reloading is the only way to see what happened.
+The decided design shipped as designed: `app/src-tauri/src/session.rs` beside
+`service.rs`, `open_project` / `set_script` / `get_session` over MCP, viewers
+pushing their document on the existing debounce, SSE for browsers and a Tauri
+event for the webview, each viewer ignoring what it originated. An agent edit
+is an ordinary edit — it lands in CodeMirror's undo history and Cmd-Z takes it
+back; there is no lock. The account of what was built, and the echo rule that
+made it hold, is in [ROADMAP.md](ROADMAP.md) under "Built: one live session the
+agent can drive"; whether a model drives it is measured by
+`eval/field/change-the-open-part.md`, one trial at a time.
 
-**Done looks like.** An agent changes the part and the window changes. If the
-user disagrees, Cmd-Z takes it back the way it takes back their own typing.
-
-**The design is already decided** and written down — session state plus a
-broadcast channel, `open_project` / `set_script` / `get_session`, viewers pushing
-their own document on the existing debounce, SSE for browsers and a Tauri event
-for the webview, each viewer ignoring what it originated. It is in
-[ROADMAP.md](ROADMAP.md) under "Decided, not built: one live session the agent
-can drive". **Read that before designing anything**; the conflict rule in
-particular is a product decision, not an implementation detail.
-
-**Its prerequisite is real work, not a chore.** `mcp.rs` builds its own flat
-summary and rescans raw graph JSON for treatment nodes — a second definition of
-"what an evaluation is", living in a transport file, which is the divergence
-`service.rs` was extracted to stop. One `EvaluationSnapshot` that every transport
-serialises and nobody redefines comes first. See
-[AI_CAD_PLATFORM.md](AI_CAD_PLATFORM.md).
-
-**Do not** add a lock. An agent edit is an ordinary edit; a lock would have to be
-explained and undo does not.
+What this item still owes: the prerequisite it named — one `EvaluationSnapshot`
+every transport serialises — landed first and holds; the session carries the
+*script*, not an evaluation, so nothing here re-opened that door.
 
 ## 3. Depth over breadth, and the shape question behind it
 

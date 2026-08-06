@@ -27,6 +27,9 @@ PARCAD_TOOLS = {
     "list_projects", "read_project", "save_project", "evaluate_part",
     "probe_part", "measure_wall_thickness", "list_entities",
     "inspect_treatment_target", "check_selector", "export_part",
+    # The live-session surface. A session prompt is *supposed* to call these;
+    # counting them as strays voided the first change-the-open-part trial.
+    "get_session", "open_project", "set_script",
 }
 
 

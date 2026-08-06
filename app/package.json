@@ -12,6 +12,7 @@
     "test:e2e": "../tools/test-desktop.sh"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.10.4",
     "@codemirror/lang-javascript": "^6.2.2",
     "@codemirror/lint": "^6.9.7",
     "@codemirror/theme-one-dark": "^6.1.2",

@@ -4,6 +4,12 @@ import { fileURLToPath } from "node:url";
 // `parcad-app`, which is the process this suite must exercise.
 const appBinaryPath = fileURLToPath(new URL("../../target/debug/parcad-app", import.meta.url));
 
+// A port of this suite's own, inherited by the spawned app. Without it the
+// app under test races whatever parcad the developer already has open for
+// 4242 — and silently loses: the second instance keeps its desktop window
+// but the session spec's HTTP calls would land in the *other* process.
+process.env.PARCAD_HTTP_PORT ??= "4457";
+
 /**
  * Run the compiled Tauri application, not Vite's browser-only geometry fixture.
  * The embedded provider is the portable option and is the only supported way
@@ -11,7 +17,7 @@ const appBinaryPath = fileURLToPath(new URL("../../target/debug/parcad-app", imp
  */
 export const config = {
   runner: "local",
-  specs: ["./bracket.e2e.mjs"],
+  specs: ["./bracket.e2e.mjs", "./session.e2e.mjs"],
   maxInstances: 1,
   capabilities: [{
     browserName: "tauri",

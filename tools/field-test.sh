@@ -11,10 +11,12 @@
 #     tools/field-test.sh eval/field/does-the-port-meet.md 4
 #     THINK=0 tools/field-test.sh eval/field/does-the-port-meet.md 4
 #
-# Trials run in parallel against one app, which is fine — the MCP server is
-# stateless, a script carries its whole part, so two trials cannot see each
-# other. Transcripts land in a run directory this prints at the end; read them
-# with tools/field-test-score.py.
+# Trials run in parallel against one app, which is fine for the measurement
+# tools — a script carries its whole part, so two trials cannot see each other.
+# The *session* tools (get_session, open_project, set_script) are the
+# exception: there is one screen, and parallel trials driving it fight over it.
+# Run session prompts one trial at a time. Transcripts land in a run directory
+# this prints at the end; read them with tools/field-test-score.py.
 #
 # Two things to get right or the run means nothing:
 #
@@ -70,7 +72,7 @@ run_one() {
   MAX_THINKING_TOKENS="$THINK" claude -p "$(cat "$PROMPT")" \
     --model "$MODEL" \
     --mcp-config "$RUN/mcp.json" \
-    --allowed-tools "mcp__parcad__list_projects,mcp__parcad__read_project,mcp__parcad__evaluate_part,mcp__parcad__probe_part,mcp__parcad__measure_wall_thickness,mcp__parcad__list_entities,mcp__parcad__inspect_treatment_target,mcp__parcad__check_selector" \
+    --allowed-tools "mcp__parcad__list_projects,mcp__parcad__read_project,mcp__parcad__evaluate_part,mcp__parcad__probe_part,mcp__parcad__measure_wall_thickness,mcp__parcad__list_entities,mcp__parcad__inspect_treatment_target,mcp__parcad__check_selector,mcp__parcad__get_session,mcp__parcad__open_project,mcp__parcad__set_script" \
     --disallowed-tools "Bash,Read,Grep,Glob,Edit,Write,WebFetch,WebSearch,Task,Skill,Monitor,NotebookEdit,CronCreate,RemoteTrigger,TaskCreate,SendMessage" \
     --output-format stream-json --verbose < /dev/null > "$RUN/trial$1.jsonl" 2>&1
 }
