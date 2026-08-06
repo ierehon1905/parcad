@@ -657,15 +657,8 @@ pub fn seed() -> std::io::Result<()> {
         return Ok(());
     };
 
-    for entry in std::fs::read_dir(&source)? {
-        let path = entry?.path();
-        if path.extension().is_none_or(|e| e != "js") {
-            continue;
-        }
-        let Some(stem) = path.file_stem().map(|s| s.to_string_lossy().to_string()) else {
-            continue;
-        };
-        if seeded.contains(&stem) {
+    for (name, path) in seed_parts(&source)? {
+        if seeded.contains(&name) {
             continue;
         }
         // Either form counts as present. A user who converted a seeded part to
@@ -673,24 +666,77 @@ pub fn seed() -> std::io::Result<()> {
         // matters as much as skipping it: an upgrade over a folder full of
         // parts from before this record existed must adopt them, or the first
         // one the user deletes comes back.
-        if taken(&stem).unwrap_or(true) {
-            seeded.push(stem);
+        if taken(&name).unwrap_or(true) {
+            seeded.push(name);
             continue;
         }
         let script = std::fs::read_to_string(&path)?;
-        let bundle = dir.join(format!("{stem}.{BUNDLE}"));
+        let leaf = name.rsplit('/').next().unwrap_or(&name).to_string();
+        let bundle = dir.join(format!("{name}.{BUNDLE}"));
         std::fs::create_dir_all(&bundle)?;
         std::fs::write(bundle.join(SOURCE), &script)?;
-        if let Ok(manifest) = manifest_json(&stem) {
+        if let Ok(manifest) = manifest_json(&leaf) {
             std::fs::write(bundle.join(MANIFEST), manifest)?;
         }
-        std::fs::write(bundle.join(README), seed_readme(&stem, &script))?;
-        seeded.push(stem);
+        std::fs::write(bundle.join(README), seed_readme(&leaf, &script))?;
+        seeded.push(name);
     }
     // Written last and whole: a crash midway leaves a record of nothing, and
     // seeding again is harmless, while a record of parts that were not written
     // would lose them permanently.
     std::fs::write(&record, seeded.join("\n"))?;
+    Ok(())
+}
+
+/// Every `.js` part under the seed folder, as `(name, path)` where `name` is the
+/// path relative to the seed root without its extension — `"bracket"` at the
+/// top, `"fusion360/retainer-v1"` one level down.
+///
+/// It descends because the seed folder has structure: `examples/fusion360`
+/// holds recreations of real Fusion 360 documents, and they should arrive as a
+/// folder in the project list rather than being mixed in with the shipped parts
+/// or left out of the application altogether.
+///
+/// That relative name is also the `.seeded` key, so two parts with the same leaf
+/// in different folders do not collide. Names written before this walk existed
+/// were bare stems, which is what a top-level part still produces.
+fn seed_parts(root: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
+    let mut found = Vec::new();
+    walk_seed(root, root, 0, &mut found)?;
+    // Deterministic, so seeding twice records the same order and a diff of
+    // `.seeded` is readable.
+    found.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(found)
+}
+
+fn walk_seed(
+    root: &Path,
+    dir: &Path,
+    depth: usize,
+    found: &mut Vec<(String, PathBuf)>,
+) -> std::io::Result<()> {
+    if depth > MAX_DEPTH {
+        return Ok(());
+    }
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            walk_seed(root, &path, depth + 1, found)?;
+            continue;
+        }
+        if path.extension().is_none_or(|e| e != "js") {
+            continue;
+        }
+        let Ok(rel) = path.strip_prefix(root) else {
+            continue;
+        };
+        let Some(name) = rel.with_extension("").to_str().map(str::to_string) else {
+            continue;
+        };
+        // Always `/`, because this string is a project path and the rest of this
+        // module builds those with `/` regardless of platform.
+        found.push((name.replace('\\', "/"), path));
+    }
     Ok(())
 }
 
@@ -888,6 +934,55 @@ mod tests {
                 vec!["Mounts/bracket"],
                 "a moved part must not be restored, and a deleted one must stay gone"
             );
+            unsafe { std::env::remove_var("PARCAD_SEED_DIR") };
+            let _ = std::fs::remove_dir_all(&examples);
+        })
+    }
+
+    /// The seed folder has structure — `examples/fusion360` holds recreations of
+    /// real Fusion 360 documents — and it has to survive into the project list
+    /// as a folder. Two parts sharing a leaf name across folders must also not
+    /// collide, which is why `.seeded` keys on the relative path.
+    #[test]
+    fn seeding_keeps_the_seed_folders_structure() {
+        scoped(|root| {
+            let examples = root.with_file_name(format!(
+                "{}-seed",
+                root.file_name().unwrap().to_string_lossy()
+            ));
+            std::fs::create_dir_all(examples.join("fusion360")).unwrap();
+            std::fs::write(examples.join("bracket.js"), "return box(1,1,1);").unwrap();
+            std::fs::write(
+                examples.join("fusion360").join("retainer.js"),
+                "// Retainer.\nreturn box(2,2,2);",
+            )
+            .unwrap();
+            // Same leaf as a top-level part, to prove the record is keyed on the
+            // whole path and not the stem.
+            std::fs::write(
+                examples.join("fusion360").join("bracket.js"),
+                "return box(3,3,3);",
+            )
+            .unwrap();
+            unsafe { std::env::set_var("PARCAD_SEED_DIR", &examples) };
+
+            seed().expect("the first seed");
+            assert_eq!(
+                list().unwrap(),
+                vec!["bracket", "fusion360/bracket", "fusion360/retainer"],
+                "a seed subfolder becomes a project folder, and leaf names may repeat in it"
+            );
+
+            // The guarantee that motivated `.seeded` has to hold one level down
+            // too: a target the user deletes must stay deleted.
+            remove("fusion360/retainer").unwrap();
+            seed().expect("the second seed");
+            assert_eq!(
+                list().unwrap(),
+                vec!["bracket", "fusion360/bracket"],
+                "a deleted part inside a seeded folder must not come back"
+            );
+
             unsafe { std::env::remove_var("PARCAD_SEED_DIR") };
             let _ = std::fs::remove_dir_all(&examples);
         })

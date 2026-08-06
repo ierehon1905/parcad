@@ -71,6 +71,57 @@ faked from a scaled cylinder, is exactly the silent approximation the project
 refuses — `timing-pulley.js` is the boundary case, and it only exists because
 it announces itself in the first line of the file.
 
+### What twenty-one real Fusion 360 designs actually needed
+
+The list above was derived from parts *we* chose to model, which selects for what
+the language can already do. So twenty-one of the author's own Fusion documents
+were exported and measured instead — a sample of one person's actual CAD rather
+than of our imagination. `examples/fusion360/` carries the ones worth
+recreating, with the measured targets; these are the counts across all 21.
+
+How many designs use each feature (counted once per design, not per use):
+
+| feature | designs | parcad has it |
+|---|---|---|
+| `Sketch` | 19 | n/a — implicit in our ops |
+| `Fillet` | 15 | yes |
+| `ConstructionPlane` | 15 | n/a — no sketch planes |
+| `Extrude` | 15 | yes |
+| `CircularPattern` | 9 | yes (`polar`) |
+| `Combine` | 7 | yes (booleans) |
+| `Revolve` | 6 | yes |
+| **`Loft`** | **6** | **no** |
+| `Mirror` | 6 | no — hand-placed instead |
+| **`Sweep`** | **6** | **no** |
+| `Sphere` | 5 | yes |
+| **`SplitBody`** | **5** | **no** |
+| `Move` | 5 | yes (`.at()`) |
+| `Shell` | 4 | yes |
+| **`Thicken`** | **4** | **no** |
+| **`Form`** (T-spline) | **4** | **no, and should stay no** |
+| **`Remove`** (delete face) | **4** | **no** |
+| `Pipe` | 3 | no |
+| **`Stitch`** (surfaces) | **3** | **no** |
+
+Two conclusions, and the first is the one that matters:
+
+**parcad only makes analytic surfaces, and that is the wall.** 13 of the 21
+designs have NURBS faces; in the worst (`v10`) it is 575 of 585. `Loft` and
+`Sweep` are tied at six designs each — each used in more designs than `Revolve`,
+which we did implement. Everything under `Thicken`, `Stitch` and `Patch` is the
+same wall approached from the surface-modelling side.
+
+**15 of the 21 are multi-solid**, which the one-root-one-solid graph cannot hold
+at all. That is the "multi-body / assembly" row above, and this sample says it is
+not a niche want — it is most real documents. Some of that is assemblies proper
+and some is construction bodies that never get combined, so the row is softer
+than 15/21 makes it sound, but it is not 1-in-20 either.
+
+Worth keeping in proportion: one author, 21 documents, skewed toward decorative
+and 3D-printed work rather than the machined fittings `examples/` covers. It is
+evidence about priorities, not a specification. The counts are reproducible from
+`reference/fusion/*/measurements.json` if that folder is present.
+
 ### What `Revolve` cost, and what it is worth reading about
 
 Two findings from implementing it, both recorded in the code:

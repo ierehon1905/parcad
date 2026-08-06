@@ -58,6 +58,14 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 
 ## What is not here, and why
 
+`fusion360/` holds recreation targets rather than finished parts: real Fusion 360
+documents, exported and measured, with their volume, bounding box and face types
+recorded in each header. One is a faithful recreation; the rest throw naming the
+op they are blocked on. Seeding keeps the folder, so they arrive in the project
+list under `fusion360` and a blocked target shows its reason when opened. A target
+that becomes faithful gets promoted up here and earns a case in `eval/cases/`.
+See `fusion360/README.md`.
+
 No example has a thread, a gear or an O-ring groove — not because they were
 skipped, but because the graph cannot produce those shapes. Countersinks and
 tapers *were* on that list until `revolve` landed; `cover-plate.js` is what

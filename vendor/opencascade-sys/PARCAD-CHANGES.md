@@ -65,7 +65,18 @@ later release of it exists, so there is no version to bump to.
   torus-gland groove by 168 mesh edges. Representation data only; geometry
   is untouched.
 
+## Changed in `build.rs`
+
+- `-std=c++17` instead of `-std=c++11`. OCCT 8.0 headers use constexpr and
+  mutable-state idioms a C++11 compile rejects outright.
+- The STEP and STL toolkits are linked under their new names. OCCT 8.0
+  consolidated data exchange behind the DE framework: `TKSTEP`, `TKSTEPAttr`,
+  `TKSTEPBase` and `TKSTEP209` became `TKDESTEP`, `TKSTL` became `TKDESTL`, and
+  both now sit on XCAF — so `TKDE`, `TKXCAF`, `TKVCAF`, `TKCAF`, `TKLCAF`,
+  `TKCDF`, `TKV3d` and `TKService` are linked too.
+
 ## Not changed
 
-Everything else is upstream 0.2.0 verbatim, including `build.rs` and the OCCT
-version it resolves (7.7.1, via `occt-sys 0.2`).
+Everything else is upstream 0.2.0 verbatim. The OCCT it builds against is **not**
+the 7.7.1 this crate originally resolved: `occt-sys` is vendored beside it at
+8.0.1. See `vendor/occt-sys/PARCAD-CHANGES.md`.
