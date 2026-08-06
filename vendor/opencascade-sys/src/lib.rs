@@ -571,6 +571,10 @@ pub mod ffi {
         // Empty string means valid; otherwise one line per fault.
         pub fn BRepCheck_report(shape: &TopoDS_Shape, exact: bool) -> String;
 
+        // Diagnostics — added for parcad, see PARCAD-CHANGES.md.
+        pub fn Shape_topology_report(shape: &TopoDS_Shape) -> String;
+        pub fn BRepTools_write_brep(shape: &TopoDS_Shape, path: String) -> bool;
+
         // Fillets
         type BRepFilletAPI_MakeFillet;
 

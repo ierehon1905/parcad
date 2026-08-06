@@ -40,6 +40,11 @@ out. Everything below could otherwise have lived in our own crate.
   edges. This is the primitive needed for ParcAD to compose stable feature
   provenance; it is not a source-level edge-index API.
 
+- `Shape::topology_report()` and `Shape::write_brep(path)` — the diagnostic
+  pair over the new wrapper bindings: a full face/wire/edge/vertex dump, and a
+  native BREP export that preserves the exact topology STEP normalises away.
+  Both exist for diagnosing kernel output the checks above have refused.
+
 ## Not added
 
 - `BRepOffsetAPI_MakeOffsetShape`, for a general outward offset. Missing from

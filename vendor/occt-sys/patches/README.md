@@ -35,6 +35,8 @@ dropping it.
 
 ## Current series
 
-Empty, and an empty `patches/` is itself the claim that `../OCCT` is upstream
-and nothing else — which `tools/occt-import.sh` verifies. See
-`../PARCAD-CHANGES.md` for the one patch that has lived here and why it left.
+- `0001-tangent-pinch-corner.patch` — a corner treatment for fillet spines
+  that end on an exact tangency, where the fillet pinches to a point and the
+  generic corner code returns broken geometry with `IsDone() == true`. The
+  header inside the patch says what it fixes, how it was measured, and that
+  it has not yet been offered upstream. See `../PARCAD-CHANGES.md`.

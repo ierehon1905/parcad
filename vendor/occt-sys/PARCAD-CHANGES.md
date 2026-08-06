@@ -77,33 +77,39 @@ has no effect on a path dependency. It is left alone, and is now stale.
 
 ## Changes to OCCT itself
 
-None. `patches/` is empty; see `patches/README.md`.
+One patch, `patches/0001-tangent-pinch-corner.patch`: a corner treatment for
+fillet spines that end on an exact tangency, `ChFi3d_Builder::PerformTangentPinch`,
+dispatched from `PerformFilletOnVertex` ahead of the generic corner code. The
+patch header carries the full account — what it fixes, how it was measured, and
+its upstream status; the behaviour is held down by `eval/cases/tangent-blend.json`,
+`eval/cases/tangent-blend-retainer.json` and their control
+`eval/cases/blend-runs-off-the-edge.json`, and the history of the defect is in
+docs/GOTCHAS.md, "A blend that ends on a face it is tangent to".
 
-One patch has lived here and been deleted: `0001-debug-chfi3d-corners.patch`,
-a trace carrying no fix. It answered its question — a blend that has to end on
-a face it is tangent to is handled by `PerformExtremity` → `PerformOneCorner` →
-`PerformIntersectionAtEnd` → `PerformMoreThreeCorner`, and not by
-`ChFi3d_ExtendSurface`, which is never reached.
+Two earlier conclusions recorded here did not survive contact with the fix, and
+are corrected rather than erased:
 
-**No fix followed, deliberately.** The tangent configuration has no
-non-degenerate answer to build: the fillet's width falls to zero at the
-tangency, so the correct torus face has a boundary that touches itself at a
-point, and `BRepCheck_SelfIntersectingWire` accurately describes the right
-answer rather than reporting a wrong one. Fusion 360 does not solve it either —
-its version of the part carries 7.6e-5 mm of clearance and never poses the
-question. Teaching `PerformIntersectionAtEnd` to emit that face would buy a
-shape nothing downstream can use.
+- **"The tangent configuration has no non-degenerate answer to build" was
+  wrong.** The fillet's width does fall to zero at the tangency, but the
+  correct topology is not a face whose wire touches itself: it is the toroidal
+  face trimmed by the grazing plane, ending at a vertex on its inner contact
+  circle — an ordinary vertex where the trim curve and the contact circle meet
+  at a finite angle. Where the spine passes through the tangency the two
+  crescents share that apex; where it stops there, the extended grazing face
+  and the support meet along the tangent generator, an edge like any other.
+  Fusion 360's own export is this exact construction, torus trimmed by planes.
 
-parcad refuses the configuration instead, at the operation that produced it, and
-keeps OCCT unmodified. Reasoning and measurements are in `docs/GOTCHAS.md`, "A
-blend that ends on a face it is tangent to"; the behaviour is pinned by
-`eval/cases/refuse-tangent-blend.json`,
-`eval/cases/refuse-tangent-blend-in-bounds.json` and their control
-`eval/cases/blend-runs-off-the-edge.json`.
+- **An earlier debug patch, `0001-debug-chfi3d-corners.patch`, was deleted**
+  after establishing (on OCCT 7.7.1) the path `PerformExtremity` →
+  `PerformOneCorner` → `PerformIntersectionAtEnd` → `PerformMoreThreeCorner`.
+  On 8.0.1 that route is real for the single-stripe form (the retainer);
+  the two-stripe form reaches `PerformMoreThreeCorner` directly from
+  `PerformFilletOnVertex`. Both end in the same GeomPlate corner cap, which is
+  what the fix replaces. `ChFi3d_ExtendSurface` remains not involved.
 
-Nothing was reported upstream, because there is no defect to report: the input
-is geometrically degenerate, and the open "fillet returns a faulty shape" family
-(#172, #691, #692, #694, #736, #899, #900, #1177, #1371, #1427, #1430) is
-unowned and would not be advanced by another instance. What would be worth
-offering is a way for OCCT to *refuse* this instead of returning
-`IsDone() == true` — an API-contract change, not a patch we carry.
+What has not changed: OCCT still answers `IsDone() == true` while handing back
+broken geometry for fillet failures outside this configuration — the open
+"fillet returns a faulty shape" family (#172, #691, #692, #694, #736, #899,
+#900, #1177, #1371, #1427, #1430). parcad's own gates (`check_blend`, the
+worker's watertight backstop) stay, because they do not depend on knowing why a
+shape is wrong. The patch has not yet been offered upstream; it should be.

@@ -138,6 +138,18 @@ impl Shape {
         }
     }
 
+    /// Full topology dump: faces, wires, edges, vertices with geometry types
+    /// and tolerances. Added for parcad as a diagnostic; see PARCAD-CHANGES.md.
+    pub fn topology_report(&self) -> String {
+        ffi::Shape_topology_report(&self.inner)
+    }
+
+    /// Write the native BREP format, which preserves exact topology.
+    /// Added for parcad as a diagnostic; see PARCAD-CHANGES.md.
+    pub fn write_brep(&self, path: &str) -> bool {
+        ffi::BRepTools_write_brep(&self.inner, path.to_string())
+    }
+
     pub fn fillet_edge(&mut self, radius: f64, edge: &Edge) {
         let mut make_fillet = ffi::BRepFilletAPI_MakeFillet_ctor(&self.inner);
         make_fillet.pin_mut().add_edge(radius, &edge.inner);

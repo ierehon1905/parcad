@@ -564,10 +564,12 @@ fn validity_probe(what: &str, shape: &Shape) {
 ///
 /// `{ blend }` reaches the same builder as `.fillet()` and inherited none of its
 /// post-conditions, so it returned what the treatment path had refused since the
-/// 14.95 mm box. Both checks are needed and neither subsumes the other:
-/// containment catches `refuse-tangent-blend`, where the result breaches the
-/// bounding box by 0.23 mm; only `BRepCheck_Analyzer` catches
-/// `refuse-tangent-blend-in-bounds`, where the same defect stays inside it.
+/// 14.95 mm box. Both checks are needed and neither subsumes the other: on the
+/// defect that motivated them (the tangent pinch, since fixed in the vendored
+/// kernel and held down by `tangent-blend` and `tangent-blend-retainer`),
+/// containment caught the 20 mm form, which breached the bounding box by
+/// 0.23 mm, and only `BRepCheck_Analyzer` caught the retainer form, where the
+/// same defect stayed inside it.
 ///
 /// The analyzer costs ~3 ms against a 167 ms retainer build, which is why it is
 /// a gate here rather than the opt-in `validity_probe` it grew out of.
@@ -596,16 +598,13 @@ fn check_blend(
             "{what} blends by {radius} mm, and OpenCASCADE reported the result done while \
              its own checker rejects it — {} fault(s):\n  {}{}\nThis is the kernel \
              returning a surface that will not close, so the solid cannot be printed, \
-             exported or measured. The trigger is tangency: the blend has to end against \
-             a face it touches without crossing — a boss exactly as wide as the plate it \
-             stands on, or a radius that brings the fillet exactly to a side wall — and \
-             there the fillet's width falls to zero, which OpenCASCADE does not build. \
-             Clearance of a few hundredths of a millimetre fixes it on simple shapes and \
-             is worth trying first, but it is not reliable: on the shape this was found \
-             on, every perturbation ran into a separate crash instead. The dependable \
-             way out is to build the round as geometry — union a torus, or cut with the \
-             complement of one — which is exact, not an approximation. \
-             See docs/GOTCHAS.md",
+             exported or measured. The known trigger of this class — a blend ending \
+             against a face its boss is exactly tangent to — is fixed by a vendored \
+             kernel patch and builds today, so this failure is one the corpus has not \
+             met. A small clearance between the touching faces is worth trying; the \
+             dependable way out is to build the round as geometry — union a torus, or \
+             cut with the complement of one — which is exact, not an approximation. \
+             Please also report the script. See docs/GOTCHAS.md",
             faults.len(),
             shown.join("\n  "),
             if more > 0 {

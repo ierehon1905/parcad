@@ -162,90 +162,57 @@ that trigger it.
 The crash is caught and reported with a breadcrumb, so nothing is lost — but
 the message blames the radius, and the radius is not the problem.
 
-### A blend that ends on a face it is tangent to returns an unclosable solid
+### A blend that ends on a face it is tangent to — fixed, and worth knowing anyway
 
-The sibling of the case above, and worse, because nothing aborts. `IsDone()`
-returns `true` and the shape it hands back has **22 open edges**. The part looks
-right in the viewport, exports, measures, and is wrong.
+The sibling of the case above, and the origin of a vendored kernel patch. A
+boss standing on a plate exactly as wide as itself puts the blend's end against
+a face it touches without crossing; stock OpenCASCADE returns `IsDone() ==
+true` and a solid that will not close — found while rebuilding a Fusion 360
+part (`reference/retainer.js`, gitignored with the export it was measured
+against), where the result had **22 open edges**, looked right in the
+viewport, exported, measured, and was wrong.
 
-Found while rebuilding a Fusion 360 part (`reference/retainer.js`, gitignored
-with the export it was measured against): a disc standing on the end of a plate
-exactly as wide as the disc.
-
-**The trigger is tangency, not the curved seam and not the run-off.** That is
-worth stating flatly because run-off is the obvious suspect and it is innocent.
-Sweeping the clearance between a boss and the plate's side walls, on a 20 mm
-version of the same shape — every row measured, `blend: 2` throughout:
+**The trigger is tangency, not the curved seam and not the run-off.** Sweeping
+the clearance between a boss and the plate's side walls, on a 20 mm version of
+the same shape — every row measured, `blend: 2` throughout, current kernel:
 
 | clearance | result |
 |---|---|
-| 0 (tangent) | **invalid**, 7 open edges |
-| 1e-9, 1e-7 | **invalid**, 7 open edges |
-| 3.8e-5 .. 1e-4 | valid, watertight |
-| 3e-4 .. 2e-3 | SIGABRT |
-| 3e-3 .. 1.999 | valid, watertight — *and the fillet runs clean off the plate* |
-| 2.0 (= the radius) | **invalid**, 3 open edges |
+| 0 (tangent) | valid, watertight — **fixed** by `vendor/occt-sys/patches/0001-tangent-pinch-corner.patch` |
+| 1e-9, 1e-7 | valid, watertight — same fix (the union still builds the tangency vertex here) |
+| 3.8e-5 .. 1e-4 | valid, watertight — always was |
+| 3e-4 .. 2e-3 | SIGABRT, caught and refused (unchanged, see the face-touching family above) |
+| 3e-3 .. 1.999 | valid, watertight — the fillet runs 1.5 mm off the plate and is trimmed |
+| 2.0 (= the radius) | invalid, refused by the validity gate (unchanged) |
 | 2.001 and up | valid, watertight |
 
-Two isolated failures, both exactly at a tangency: at 0 the boss wall is tangent
-to the side plane, at 2.0 the fillet torus is. Everything between is a genuine
-overrun — the rolling ball's centre passes outside the material and the torus
-reaches 1.5 mm past the wall — and OpenCASCADE trims and closes it correctly.
-`eval/cases/blend-runs-off-the-edge.json` holds that down, because without it
-the refusal below reads as "blends cannot run off an edge", which is false.
+Why tangency was hard: the fillet's width at angle θ is bounded by the plate's
+side plane, at radial distance `R/|cos θ|` from the boss axis. At the tangency
+that equals `R` exactly, so the strip pinches to zero width. The wrong
+conclusion this table originally carried — that the pinch has no valid
+topology — did not survive the fix: the correct answer is the toroidal face
+trimmed by the wall plane, ending at an ordinary vertex where the trim curve
+meets the inner contact circle at a finite angle. OpenCASCADE's own walking
+already computed those exact points; its generic corner code then threw them
+away and filled the corner with a GeomPlate patch. The patch replaces that
+corner treatment for this configuration and nothing else; measured on the
+20 mm shape, the blend now adds 47.50 mm³ of fillet against the 5.17 the
+broken cap added, inside an exact 20 × 40 × 30 box, and the full retainer
+measures 143829.66 mm³ against the reference B-rep's 143825.6.
 
-Why tangency has no answer: the fillet's width at angle θ is bounded by the
-plate's side plane, at radial distance `R/|cos θ|` from the boss axis. At the
-tangency that equals `R` exactly, so the strip pinches to zero width and the
-torus face's own boundary touches itself at a point. That is degenerate, not
-merely awkward — `BRepCheck_SelfIntersectingWire` is the correct description of
-the correct answer. Fusion 360 does not solve it either; it never has to, because
-its own plate is 7.6e-5 mm wider than its disc (STEP planes at x = -4e-11 and
-59.4900755900592 against a radius-29.745 disc on an axis at 29.7450377950092),
-and even at that clearance its torus face carries a 0.0123 mm sliver — which is
-`2*sqrt(3.78e-5)`, the pinch opening up. So the reference is not a counterexample
-to "OCCT cannot do this"; it is a part that never asks.
+What stays true and load-bearing:
 
-How wrong the silent answer is, measured on the 20 mm shape: the plain union is
-14279.05 mm³, the correct blend adds **43.78 mm³** of fillet, and the tangent
-blend adds **5.17**. It is missing 88% of the fillet, not rounding it slightly
-differently.
-
-Everything that looks like a cause is not:
-
-| suspected | tested | result |
-|---|---|---|
-| the fillet runs off the end of the plate | clearance 0.5 mm, so it overruns by 1.5 mm | **watertight** — run-off is fine |
-| the mesher's deflection | re-mesh at 0.05 instead of 0.01 | still open, different triangle count |
-| a particular radius | sweep 0.5 .. 4.0 | every one refused; none silently passes |
-| `{ blend }` differs from an edge treatment | `union(...).edges(...).fillet(2)` | identical geometry where it works — but see below |
-| a plain union is at fault | `union` with no blend | **watertight** |
-| OCCT 7.7.1 vs 8.0.1 | upgrade | identical fault signature |
-| `ShapeFix_Shape` healing | 4 tolerances | fixes 1 of 2 bad faces; mesh byte-identical |
-
-**`{ blend }` and `.fillet()` were not one code path in the way that matters.**
-They reach the same builder and produce identical geometry where it works — but
-the treatment path has carried a containment post-condition since the 14.95 mm
-box, and the blend path went from `IsDone()` straight to the caller. On this
-shape the explicit fillet refused and the blend returned the broken solid.
-
-A blend is now checked by both containment and `BRepCheck_Analyzer`, at the
-operation that produced it; behind them `worker.rs` refuses any shape whose
-welded mesh has an open edge, before an STL, a STEP, the viewport or an MCP
-reply can see it. That backstop does not depend on understanding OCCT's fillet
-— you cannot fix a kernel that reports success on failure, but you can refuse
-to ship what it hands back — and it costs nothing, since every part in
-`examples/` is watertight today.
-
-Containment is what catches radius >= 3, and that is the case worth having:
-there the operation destroys 23% of the retainer's volume *while reducing the
-open-edge count*. Open edges alone are not a success criterion; check volume too.
-
-**No perturbation saves this particular part.** Measured: exact tangency is
-invalid, and clearance of 0.01-1.0 mm, narrowing the disc, and sinking it below
-the back face all SIGABRT instead, for reasons in the face-touching family
-above. The dependable way to get this round is to build it as geometry, which
-`retainer.js` already does for the two corner radii of its bayonet slot.
+- **Open edges alone are not a success criterion.** At radius >= 3 this
+  operation once destroyed 23% of the retainer's volume *while reducing* the
+  open-edge count. Check volume too — that is why `check_blend` pairs
+  containment with `BRepCheck_Analyzer`, and why the worker refuses any welded
+  mesh with an open edge as a backstop that does not depend on knowing the
+  cause.
+- **The face-touching SIGABRT family above is a different defect** and is
+  still refused, not fixed; docs/DSL_GAPS.md §4 has the table.
+- `eval/cases/tangent-blend.json` and `eval/cases/tangent-blend-retainer.json`
+  hold the fix down; `eval/cases/blend-runs-off-the-edge.json` remains the
+  control proving overrun was never the problem.
 
 ### `adjacentTo: { faceNormal }` also matches a hole's own wall
 

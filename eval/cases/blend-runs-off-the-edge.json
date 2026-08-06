@@ -1,8 +1,19 @@
 {
   "name": "blend-runs-off-the-edge",
   "script": "eval/scripts/blend-runs-off-the-edge.js",
-  "why": "A 2 mm blend that overruns the plate it sits on by 1.5 mm at both ends, so OCCT has to trim the fillet strip against two side planes. It builds and closes. This is the control for refuse-tangent-blend: without it, the refusal there reads as 'blends cannot run off an edge', which is measurably false and would hide the real trigger.",
+  "why": "A 2 mm blend that overruns the plate it sits on by 1.5 mm at both ends, so OCCT has to trim the fillet strip against two side planes. It builds and closes, and always did. This was the control that proved the old tangent-blend refusal was about tangency, not overrun; it stays because the rail-and-pivot trimming here is a different construction from the pinched torus the tangent cases now measure, and a change to either should not hide behind the other.",
   "brep": {
-    "watertight": true
+    "size": [
+      21.0,
+      40.0,
+      30.0
+    ],
+    "volume_mm3": 14728.095,
+    "area_mm2": 4109.517,
+    "triangles": 4218,
+    "watertight": true,
+    "faces": 14,
+    "edges": 62,
+    "curves": 30
   }
 }

@@ -1,0 +1,19 @@
+{
+  "name": "tangent-blend-retainer",
+  "script": "eval/scripts/tangent-blend-retainer.js",
+  "why": "The tangent pinch at the size it was found on, the retainer stock: one half-circle spine whose both ends land on tangencies, one on the disc's own seam. Before the vendored patch this was the shape that proved the validity gate's worth — 22 open edges, in bounds, IsDone() == true, caught only by BRepCheck_Analyzer. It now holds the measured result of the single-stripe pinch treatment, tangent-generator edge and all.",
+  "brep": {
+    "size": [
+      59.49,
+      148.126,
+      36.664
+    ],
+    "volume_mm3": 177226.455,
+    "area_mm2": 26346.348,
+    "triangles": 3864,
+    "watertight": true,
+    "faces": 8,
+    "edges": 38,
+    "curves": 18
+  }
+}

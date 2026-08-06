@@ -1,7 +1,7 @@
 {
   "name": "bent-tube",
   "script": "eval/scripts/bent-tube.js",
-  "why": "A real bend, against a closed form: pi*25*70 + pi*15*25*(pi/2) = 7348.34 mm3 for 70 mm of trimmed run and a quarter turn of radius 15. Both backends read 0.12% under it \u2014 the tessellation under-reading curved surfaces \u2014 and agree with each other to 0.01%. The tangent trimming is what the number checks: a bend placed without shortening the runs reads high, and the five faces are what says the runs and the arc fused into one chain rather than three overlapping lumps.",
+  "why": "A real bend, against a closed form: pi*25*70 + pi*15*25*(pi/2) = 7348.34 mm3 for 70 mm of trimmed run and a quarter turn of radius 15. Both backends read 0.12% under it — the tessellation under-reading curved surfaces — and agree with each other to 0.01%. The tangent trimming is what the number checks: a bend placed without shortening the runs reads high, and the five faces are what says the runs and the arc fused into one chain rather than three overlapping lumps.",
   "implicit": {
     "depth": 7,
     "size": [
@@ -20,9 +20,9 @@
       45.0,
       10.0
     ],
-    "volume_mm3": 7339.139,
+    "volume_mm3": 7339.135,
     "area_mm2": 3095.066,
-    "triangles": 5004,
+    "triangles": 5002,
     "watertight": true,
     "faces": 5,
     "edges": 18,

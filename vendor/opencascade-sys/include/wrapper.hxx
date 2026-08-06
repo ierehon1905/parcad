@@ -36,6 +36,7 @@
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepTools.hxx>
+#include <BRepTools_WireExplorer.hxx>
 #include <GCE2d_MakeSegment.hxx>
 #include <GCPnts_TangentialDeflection.hxx>
 #include <GC_MakeArcOfCircle.hxx>
@@ -438,6 +439,104 @@ inline std::unique_ptr<TopoDS_Shape> ShapeFix_repair(const TopoDS_Shape &shape, 
   fixer.SetMaxTolerance(max_tolerance);
   fixer.Perform();
   return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(fixer.Shape()));
+}
+
+// Topology report: every face -> wire -> edge -> vertex, with geometry types,
+// bounds and tolerances. Added for parcad as a diagnostic; the BRepCheck report
+// below says *what* is wrong, this says what the kernel actually built, which
+// is the evidence a fix has to start from.
+//
+// Each wire is listed twice on purpose: first raw (every edge the wire
+// contains, with 3D and UV endpoints — both pcurves for a closed edge), then
+// as far as BRepTools_WireExplorer can traverse it. A wire whose raw list is
+// longer than its traversal is connectable evidence of exactly where a
+// rebuilt boundary went wrong; that difference is what located the tangent
+// pinch defect in the fillet corner code.
+inline rust::String Shape_topology_report(const TopoDS_Shape &shape) {
+  std::ostringstream out;
+  out.precision(10);
+  int fi = 0;
+  for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next(), ++fi) {
+    const TopoDS_Face &face = TopoDS::Face(f.Current());
+    const Handle(Geom_Surface) &surf = BRep_Tool::Surface(face);
+    out << "face " << fi << ": " << (surf.IsNull() ? "null" : surf->DynamicType()->Name())
+        << (face.Orientation() == TopAbs_REVERSED ? " reversed" : "")
+        << " tol " << BRep_Tool::Tolerance(face) << "\n";
+    int wi = 0;
+    for (TopExp_Explorer w(face, TopAbs_WIRE); w.More(); w.Next(), ++wi) {
+      const TopoDS_Wire &wire = TopoDS::Wire(w.Current());
+      int raw = 0;
+      for (TopExp_Explorer re(wire, TopAbs_EDGE); re.More(); re.Next()) {
+        ++raw;
+      }
+      out << "  wire " << wi << " (" << raw << " edges):\n";
+      for (TopExp_Explorer re(wire, TopAbs_EDGE); re.More(); re.Next()) {
+        const TopoDS_Edge &edge = TopoDS::Edge(re.Current());
+        double u0 = 0.0, u1 = 0.0;
+        Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, u0, u1);
+        out << "    raw " << (edge.Orientation() == TopAbs_REVERSED ? "rev " : "fwd ")
+            << (curve.IsNull() ? "no-3d-curve" : curve->DynamicType()->Name());
+        if (!curve.IsNull()) {
+          gp_Pnt p0 = curve->Value(u0), p1 = curve->Value(u1);
+          out << " [" << u0 << ".." << u1 << "]"
+              << " (" << p0.X() << "," << p0.Y() << "," << p0.Z() << ")->("
+              << p1.X() << "," << p1.Y() << "," << p1.Z() << ")";
+        }
+        double pf = 0.0, pl = 0.0;
+        Handle(Geom2d_Curve) pc = BRep_Tool::CurveOnSurface(edge, face, pf, pl);
+        if (!pc.IsNull()) {
+          gp_Pnt2d q0 = pc->Value(pf), q1 = pc->Value(pl);
+          out << " uv(" << q0.X() << "," << q0.Y() << ")->(" << q1.X() << "," << q1.Y() << ")";
+        }
+        if (BRep_Tool::IsClosed(edge, face)) {
+          TopoDS_Edge redge = edge;
+          redge.Reverse();
+          Handle(Geom2d_Curve) pc2 = BRep_Tool::CurveOnSurface(redge, face, pf, pl);
+          if (!pc2.IsNull()) {
+            gp_Pnt2d q0 = pc2->Value(pf), q1 = pc2->Value(pl);
+            out << " uv2(" << q0.X() << "," << q0.Y() << ")->(" << q1.X() << "," << q1.Y() << ")";
+          }
+        }
+        out << "\n";
+      }
+      for (BRepTools_WireExplorer e(wire, face); e.More(); e.Next()) {
+        const TopoDS_Edge &edge = e.Current();
+        double u0 = 0.0, u1 = 0.0;
+        Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, u0, u1);
+        out << "    edge " << (edge.Orientation() == TopAbs_REVERSED ? "rev " : "fwd ")
+            << (curve.IsNull() ? "no-3d-curve" : curve->DynamicType()->Name())
+            << " tol " << BRep_Tool::Tolerance(edge);
+        if (BRep_Tool::Degenerated(edge)) out << " DEGENERATED";
+        if (BRep_Tool::IsClosed(edge, face)) out << " seam";
+        if (!curve.IsNull()) {
+          gp_Pnt p0 = curve->Value(u0), p1 = curve->Value(u1);
+          out << " [" << u0 << ".." << u1 << "]"
+              << " (" << p0.X() << "," << p0.Y() << "," << p0.Z() << ")->("
+              << p1.X() << "," << p1.Y() << "," << p1.Z() << ")";
+        }
+        out << "\n";
+        TopoDS_Vertex v0, v1;
+        TopExp::Vertices(edge, v0, v1);
+        if (!v0.IsNull()) {
+          gp_Pnt p = BRep_Tool::Pnt(v0);
+          out << "      v0 (" << p.X() << "," << p.Y() << "," << p.Z() << ") tol "
+              << BRep_Tool::Tolerance(v0) << "\n";
+        }
+        if (!v1.IsNull()) {
+          gp_Pnt p = BRep_Tool::Pnt(v1);
+          out << "      v1 (" << p.X() << "," << p.Y() << "," << p.Z() << ") tol "
+              << BRep_Tool::Tolerance(v1) << "\n";
+        }
+      }
+    }
+  }
+  return rust::String(out.str());
+}
+
+// Native BREP dump, exact topology preserved (STEP normalises it away).
+// Added for parcad as a diagnostic.
+inline bool BRepTools_write_brep(const TopoDS_Shape &shape, rust::String path) {
+  return BRepTools::Write(shape, path.c_str());
 }
 
 // BRepCheck: OpenCASCADE's own answer to "is this shape actually valid?".

@@ -1,0 +1,681 @@
+Fillet corner treatment for exact tangencies (the "tangent pinch").
+
+What it fixes
+  A fillet whose spine ends where one of its supports is exactly tangent
+  to a third, planar face — a cylindrical boss standing on a plate
+  exactly as wide as its diameter. The fillet's width there is capped at
+  R/|cos t| from the boss axis, which equals R exactly at the tangency,
+  so the correct toroidal face pinches to a point where its inner
+  contact circle touches the grazing plane. The generic n-corner code
+  (PerformMoreThreeCorner) instead fills the corner with a GeomPlate
+  patch that self-intersects along the plate boundary, swallows most of
+  the fillet volume, and reports IsDone() == true: on a 20 x 40 x 10
+  plate with a tangent r=10 boss and a 2 mm fillet the result carried an
+  unorientable B-spline face, a self-intersecting wire, breached the
+  bounding box by 0.23 mm, and added 5.17 mm^3 of fillet where the
+  correct answer adds ~47.5.
+
+  The new ChFi3d_Builder::PerformTangentPinch, dispatched from
+  PerformFilletOnVertex before the generic treatments, builds the exact
+  answer: each stripe keeps its analytic KPart torus, extended along the
+  tangent support to the pinch apex; each stripe end is closed by the
+  exact intersection curve of that torus with the grazing face; and when
+  only one stripe end reaches the vertex, the extended face and the
+  support meet along the tangent generator, added as a new curve, with
+  the consumed spine edge removed the way the singular-corner code does.
+  Vertices that are not of this exact form are left to the existing
+  treatments untouched.
+
+How it was measured
+  BRepCheck_Analyzer valid, watertight welded mesh (0 open edges),
+  bounding box exact, on both trigger shapes:
+  - box(20,40,10) + tangent cylinder(r10,h25), blend 2: volume
+    14326.55 mm^3 = plain union 14279.05 + 47.50 of fillet.
+  - the parcad retainer (59.49 mm plate with a flush disc, Fusion 360
+    reference part): volume 143829.66 mm^3 against the reference
+    B-rep's 143825.6, with every downstream boolean of the part intact.
+  Clearance sweep around the tangency (1e-9 .. 2.001 mm) stays valid
+  and watertight; the previously-failing 1e-9 and 1e-7 rows now build.
+
+Upstream status
+  Not yet offered upstream (github.com/Open-Cascade-SAS/OCCT).
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.hxx
+@@ -559,6 +559,13 @@
+ 
+   Standard_EXPORT virtual void PerformTwoCorner(const int Index) = 0;
+ 
++  //! Exact corner treatment for a vertex created by a tangency between a
++  //! fillet support and a grazing planar face, where the fillet's width
++  //! falls to zero and its surface pinches to a point. Returns false,
++  //! leaving the builder state untouched, if the vertex is not of this
++  //! form; the caller then falls back to the generic treatments.
++  Standard_EXPORT bool PerformTangentPinch(const int Index);
++
+   Standard_EXPORT virtual void PerformThreeCorner(const int Index) = 0;
+ 
+   Standard_EXPORT void PerformMoreThreeCorner(const int Index, const int nbcourb);
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder.cxx
+@@ -819,6 +819,10 @@
+         if (sp->Status(isfirst) == ChFiDS_FreeBoundary)
+         {
+           return;
++        }
++        if (PerformTangentPinch(Index))
++        {
++          break;
+         }
+         if (nba > 3)
+         {
+@@ -850,6 +854,10 @@
+       }
+       break;
+       case 2: {
++        if (PerformTangentPinch(Index))
++        {
++          break;
++        }
+         if (nba > 3)
+         {
+ #ifdef OCCT_DEBUG // perf
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_C1.cxx
+@@ -18,6 +18,10 @@
+ //  Modified by skv - Thu Aug 21 11:55:58 2008 OCC20222
+ 
+ #include <Adaptor2d_Curve2d.hxx>
++#include <Geom_ToroidalSurface.hxx>
++#include <ElSLib.hxx>
++#include <GeomAPI_ProjectPointOnCurve.hxx>
++#include <Geom_Line.hxx>
+ #include <Blend_FuncInv.hxx>
+ #include <BRepAlgo_NormalProjection.hxx>
+ #include <BRepBlend_Line.hxx>
+@@ -5443,3 +5447,586 @@
+   ChFi3d_ResultChron(ch, t_sameinter); // result perf condition if (same &&inter)
+ #endif
+ }
++
++//=======================================================================
++// function : PerformTangentPinch
++// purpose  : Corner treatment for a vertex created by an exact tangency
++//            between a fillet support and a grazing planar face.
++//
++// Configuration: a cylindrical boss stands on a plate whose side wall is
++// exactly tangent to it. The seam circle then carries a vertex at the
++// tangency, and every fillet stripe ending there pinches: the grazing
++// wall caps the fillet at radial distance R/|cos t| from the boss axis,
++// which equals R exactly at the tangency, so the correct toroidal face
++// narrows to zero width at the point where its inner contact circle
++// touches the wall plane (the apex).
++//
++// The generic corner treatments fill such a corner with an approximated
++// patch that self-intersects along the plate boundary and swallows most
++// of the fillet volume. This treatment builds the exact answer instead:
++//
++//  - every stripe ending at the vertex keeps its analytic KPart torus,
++//    with the interference on the tangent support (the cylinder) extended
++//    to the apex;
++//  - each such end is closed by the exact intersection curve of its torus
++//    with the grazing face, from the point where the outer contact circle
++//    crosses that face's boundary (W) up to the apex;
++//  - all ends share one DS point at the apex, and the grazing face
++//    receives the intersection curves, which extends it over the pinch;
++//  - when only one stripe end reaches the vertex (a spine that stops at
++//    the tangency rather than passing through it), the extended face and
++//    the cylindrical support meet along the tangent generator between the
++//    old vertex and the apex, and that segment is added as a new curve.
++//
++// Returns false, leaving the data structure untouched, if the vertex is
++// not of this exact form; the caller falls back to the generic
++// treatments.
++//=======================================================================
++
++bool ChFi3d_Builder::PerformTangentPinch(const int Index)
++{
++  TopOpeBRepDS_DataStructure& DStr = myDS->ChangeDS();
++  const TopoDS_Vertex&        Vtx  = myVDataMap.FindKey(Index);
++  const gp_Pnt                aPVtx = BRep_Tool::Pnt(Vtx);
++
++  // ---- gather the stripe ends meeting at this vertex -------------------
++  occ::handle<ChFiDS_Stripe> aStripe[2];
++  bool                       anIsFirst[2] = {true, true};
++  int                        nbe          = 0;
++  {
++    NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator It(myVDataMap(Index));
++    for (; It.More(); It.Next())
++    {
++      if (nbe >= 2)
++      {
++        return false;
++      }
++      aStripe[nbe++] = It.Value();
++    }
++    if (nbe == 0)
++    {
++      return false;
++    }
++    if (nbe == 2 && aStripe[0] == aStripe[1])
++    {
++      // One stripe, both ends at this vertex.
++      anIsFirst[0] = true;
++      anIsFirst[1] = false;
++    }
++    else
++    {
++      for (int ie = 0; ie < nbe; ie++)
++      {
++        int sens      = 0;
++        ChFi3d_IndexOfSurfData(Vtx, aStripe[ie], sens);
++        anIsFirst[ie] = (sens == 1);
++      }
++    }
++  }
++
++  int         aNum[2];
++  occ::handle<ChFiDS_SurfData> aSD[2];
++  int         aSidePl[2], aSideCy[2]; // 1 or 2
++  TopoDS_Edge aWArc[2];
++  TopoDS_Face aFw;  // the grazing face, common to every W arc
++  TopoDS_Face aFcy; // the cylindrical support
++  gp_Pln      aWallPln;
++
++  for (int ie = 0; ie < nbe; ie++)
++  {
++    NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& seq =
++      aStripe[ie]->ChangeSetOfSurfData()->ChangeSequence();
++
++    // The end SurfData, stepping over walking leftovers: pieces whose
++    // interference on one side is empty. The analytic KPart torus is the
++    // piece to keep.
++    int num  = anIsFirst[ie] ? 1 : seq.Length();
++    int step = anIsFirst[ie] ? 1 : -1;
++    for (;;)
++    {
++      if (num < 1 || num > seq.Length())
++      {
++        return false;
++      }
++      const occ::handle<ChFiDS_SurfData>& sd  = seq.Value(num);
++      const ChFiDS_FaceInterference&      fi1 = sd->InterferenceOnS1();
++      const ChFiDS_FaceInterference&      fi2 = sd->InterferenceOnS2();
++      bool empty1 = std::abs(fi1.LastParameter() - fi1.FirstParameter()) < Precision::PConfusion();
++      bool empty2 = std::abs(fi2.LastParameter() - fi2.FirstParameter()) < Precision::PConfusion();
++      if (!empty1 && !empty2)
++      {
++        break;
++      }
++      num += step;
++    }
++    aNum[ie] = num;
++    aSD[ie]  = seq.Value(num);
++
++    // The fillet surface must be the analytic torus of the known part.
++    occ::handle<Geom_Surface> fsurf = DStr.Surface(aSD[ie]->Surf()).Surface();
++    if (fsurf.IsNull() || !fsurf->IsKind(STANDARD_TYPE(Geom_ToroidalSurface)))
++    {
++      return false;
++    }
++
++    // One side's common point at this end must sit on an arc (W); the
++    // other side's support must graze a face of that arc.
++    int aOnArcSide = 0;
++    for (int side = 1; side <= 2; side++)
++    {
++      const ChFiDS_CommonPoint& cp = aSD[ie]->Vertex(anIsFirst[ie], side);
++      if (cp.IsOnArc() && !cp.IsVertex())
++      {
++        aOnArcSide = side;
++        break;
++      }
++    }
++    if (aOnArcSide == 0)
++    {
++      return false;
++    }
++    aSidePl[ie] = aOnArcSide;
++    aSideCy[ie] = 3 - aOnArcSide;
++    aWArc[ie]   = aSD[ie]->Vertex(anIsFirst[ie], aOnArcSide).Arc();
++
++    // Supports of this stripe.
++    int iPl = (aSidePl[ie] == 1) ? aSD[ie]->IndexOfS1() : aSD[ie]->IndexOfS2();
++    int iCy = (aSideCy[ie] == 1) ? aSD[ie]->IndexOfS1() : aSD[ie]->IndexOfS2();
++    if (iPl <= 0 || iCy <= 0)
++    {
++      return false;
++    }
++    const TopoDS_Face& fPl = TopoDS::Face(DStr.Shape(iPl));
++    const TopoDS_Face& fCy = TopoDS::Face(DStr.Shape(iCy));
++    if (ie == 0)
++    {
++      aFcy = fCy;
++    }
++    else if (!fCy.IsSame(aFcy))
++    {
++      return false;
++    }
++
++    // The grazing face: the face of the W arc that is not this stripe's
++    // other support. It must be the same face for every end, planar, and
++    // tangent at Vtx to the cylindrical support.
++    TopoDS_Face f1, f2;
++    ChFi3d_conexfaces(aWArc[ie], f1, f2, myEFMap);
++    TopoDS_Face fw;
++    if (!f1.IsNull() && !f1.IsSame(fPl))
++    {
++      fw = f1;
++    }
++    else if (!f2.IsNull() && !f2.IsSame(fPl))
++    {
++      fw = f2;
++    }
++    if (fw.IsNull())
++    {
++      return false;
++    }
++    if (ie == 0)
++    {
++      aFw = fw;
++    }
++    else if (!fw.IsSame(aFw))
++    {
++      return false;
++    }
++
++    BRepAdaptor_Surface aBw(fw);
++    if (aBw.GetType() != GeomAbs_Plane)
++    {
++      return false;
++    }
++    aWallPln = aBw.Plane();
++
++    BRepAdaptor_Surface aBc(fCy);
++    if (aBc.GetType() != GeomAbs_Cylinder)
++    {
++      return false;
++    }
++    // Tangency of the grazing plane to the cylindrical support.
++    gp_Cylinder cyl  = aBc.Cylinder();
++    double      dist = aWallPln.Distance(gp_Pnt(cyl.Location().XYZ()));
++    if (std::abs(dist - cyl.Radius()) > 10 * tolapp3d)
++    {
++      return false;
++    }
++    // And the vertex itself lies on the grazing plane.
++    if (aWallPln.Distance(aPVtx) > 10 * tolapp3d)
++    {
++      return false;
++    }
++  }
++
++
++  // ---- the apex: where the inner contact circle touches the wall -------
++  // Every end's cylinder-side contact curve lies on the same circle, so
++  // one apex serves them all. Minimise the distance to the wall plane
++  // along the contact curve, searching outward from this end.
++  gp_Pnt aApex;
++  double aApexPar[2];
++  double aApexDist = RealLast();
++  for (int ie = 0; ie < nbe; ie++)
++  {
++    const ChFiDS_FaceInterference& fi =
++      (aSideCy[ie] == 1) ? aSD[ie]->InterferenceOnS1() : aSD[ie]->InterferenceOnS2();
++    occ::handle<Geom_Surface>        fsurf = DStr.Surface(aSD[ie]->Surf()).Surface();
++    const occ::handle<Geom2d_Curve>& pcs   = fi.PCurveOnSurf();
++    if (pcs.IsNull())
++    {
++      return false;
++    }
++    double tEnd   = fi.Parameter(anIsFirst[ie]);
++    double tOther = fi.Parameter(!anIsFirst[ie]);
++    double dir    = (tEnd >= tOther) ? 1.0 : -1.0;
++    auto   distAt = [&](double t) {
++      gp_Pnt2d uv = pcs->Value(t);
++      return aWallPln.Distance(fsurf->Value(uv.X(), uv.Y()));
++    };
++    // Golden-section search for the tangency over an interval past the end.
++    double       lo = tEnd - 0.2 * dir, hi = tEnd + dir * (M_PI / 2);
++    if (dir < 0)
++    {
++      std::swap(lo, hi);
++    }
++    const double gr = 0.6180339887498949;
++    double       a = lo, b = hi;
++    double       c = b - gr * (b - a), d = a + gr * (b - a);
++    for (int it2 = 0; it2 < 80; it2++)
++    {
++      if (distAt(c) < distAt(d))
++      {
++        b = d;
++      }
++      else
++      {
++        a = c;
++      }
++      c = b - gr * (b - a);
++      d = a + gr * (b - a);
++    }
++    aApexPar[ie] = 0.5 * (a + b);
++    double   dd  = distAt(aApexPar[ie]);
++    gp_Pnt2d uv  = pcs->Value(aApexPar[ie]);
++    gp_Pnt   p   = fsurf->Value(uv.X(), uv.Y());
++    if (dd > 10 * tolapp3d)
++    {
++      return false;
++    }
++    if (ie > 0 && p.Distance(aApex) > 10 * tolapp3d)
++    {
++      return false;
++    }
++    if (dd < aApexDist)
++    {
++      aApexDist = dd;
++      aApex     = p;
++    }
++  }
++
++  // A closed (seam) edge of the cylindrical support through the apex, if
++  // any: the contact arcs must then cut it there.
++  TopoDS_Edge aSeam;
++  double      aSeamPar = 0.;
++  {
++    TopExp_Explorer ex(aFcy, TopAbs_EDGE);
++    for (; ex.More(); ex.Next())
++    {
++      const TopoDS_Edge& e = TopoDS::Edge(ex.Current());
++      if (!BRep_Tool::IsClosed(e, aFcy))
++      {
++        continue;
++      }
++      double                  f0, l0;
++      occ::handle<Geom_Curve> c3 = BRep_Tool::Curve(e, f0, l0);
++      if (c3.IsNull())
++      {
++        continue;
++      }
++      GeomAPI_ProjectPointOnCurve proj(aApex, c3, f0, l0);
++      if (proj.NbPoints() > 0 && proj.LowerDistance() < 10 * tolapp3d)
++      {
++        aSeam    = e;
++        aSeamPar = proj.LowerDistanceParameter();
++        break;
++      }
++    }
++  }
++
++  // One DS point for the apex, shared by every end.
++  int aApexIdx = DStr.AddPoint(TopOpeBRepDS_Point(aApex, tolapp3d));
++
++  // ---- per end: extend to the apex and close with the wall curve -------
++  int                              aIShapeFw = DStr.AddShape(aFw);
++  occ::handle<BRepAdaptor_Surface> aHBs      = new BRepAdaptor_Surface();
++  aHBs->Initialize(aFw);
++
++  for (int ie = 0; ie < nbe; ie++)
++  {
++    NCollection_Sequence<occ::handle<ChFiDS_SurfData>>& seq =
++      aStripe[ie]->ChangeSetOfSurfData()->ChangeSequence();
++
++    // Drop the walking leftovers between the kept SurfData and this end.
++    if (anIsFirst[ie])
++    {
++      while (aNum[ie] > 1)
++      {
++        seq.Remove(1);
++        aNum[ie]--;
++        if (nbe == 2 && aStripe[0] == aStripe[1])
++        {
++          aNum[1 - ie]--;
++        }
++      }
++    }
++    else
++    {
++      while (aNum[ie] < seq.Length())
++      {
++        seq.Remove(seq.Length());
++      }
++    }
++    occ::handle<ChFiDS_SurfData>& sd = seq.ChangeValue(aNum[ie]);
++
++    // Extend the cylinder-side interference to the apex.
++    ChFiDS_FaceInterference& fiCy =
++      (aSideCy[ie] == 1) ? sd->ChangeInterferenceOnS1() : sd->ChangeInterferenceOnS2();
++    if (fiCy.LineIndex() != 0)
++    {
++      const TopOpeBRepDS_Curve& dc = DStr.Curve(fiCy.LineIndex());
++      if (!dc.Curve().IsNull())
++      {
++      }
++    }
++    fiCy.SetParameter(aApexPar[ie], anIsFirst[ie]);
++    ChFiDS_CommonPoint& cpCy = sd->ChangeVertex(anIsFirst[ie], aSideCy[ie]);
++    cpCy.Reset();
++    cpCy.SetPoint(aApex);
++    cpCy.SetTolerance(std::max(aApexDist, tolapp3d));
++    if (!aSeam.IsNull())
++    {
++      cpCy.SetArc(std::max(aApexDist, tolapp3d), aSeam, aSeamPar, TopAbs_FORWARD);
++    }
++
++    // End curve: exact intersection of the fillet torus with the grazing
++    // face, from W to the apex.
++    const ChFiDS_FaceInterference& fiPl =
++      (aSidePl[ie] == 1) ? sd->InterferenceOnS1() : sd->InterferenceOnS2();
++    const ChFiDS_CommonPoint& cpPl = sd->Vertex(anIsFirst[ie], aSidePl[ie]);
++
++    occ::handle<GeomAdaptor_Surface> aHGs =
++      new GeomAdaptor_Surface(DStr.Surface(sd->Surf()).Surface());
++
++    gp_Pnt2d pfilW = fiPl.PCurveOnSurf()->Value(fiPl.Parameter(anIsFirst[ie]));
++    gp_Pnt2d pfilA = fiCy.PCurveOnSurf()->Value(aApexPar[ie]);
++
++    double                    aUb, aVb;
++    occ::handle<Geom2d_Curve> aHc = BRep_Tool::CurveOnSurface(aWArc[ie], aFw, aUb, aVb);
++    if (aHc.IsNull())
++    {
++      return false;
++    }
++    gp_Pnt2d pfacW = aHc->Value(cpPl.ParameterOnArc());
++    double   uA, vA;
++    ElSLib::Parameters(aWallPln, aApex, uA, vA);
++    gp_Pnt2d pfacA(uA, vA);
++
++    NCollection_Array1<double> Pardeb(1, 4), Parfin(1, 4);
++    Pardeb(1) = pfilW.X();
++    Pardeb(2) = pfilW.Y();
++    Pardeb(3) = pfacW.X();
++    Pardeb(4) = pfacW.Y();
++    Parfin(1) = pfilA.X();
++    Parfin(2) = pfilA.Y();
++    Parfin(3) = pfacA.X();
++    Parfin(4) = pfacA.Y();
++
++    double uu1, uu2, vv1, vv2;
++    ChFi3d_Boite(pfacW, pfacA, uu1, uu2, vv1, vv2);
++    BRepAdaptor_Surface& aBs = *aHBs;
++    ChFi3d_BoundFac(aBs, uu1, uu2, vv1, vv2);
++
++    occ::handle<Geom_Curve>   Cc;
++    occ::handle<Geom2d_Curve> Ps, Pc;
++    double                    tolreached = tolapp3d;
++    if (!ChFi3d_ComputeCurves(aHGs, aHBs, Pardeb, Parfin, Cc, Ps, Pc, tolapp3d, tol2d, tolreached))
++    {
++      return false;
++    }
++    double Udeb = Cc->FirstParameter();
++    double Ufin = Cc->LastParameter();
++
++    // Register: points, the curve on the grazing face, and the stripe end.
++    aStripe[ie]->SetIndexPoint(ChFi3d_IndexPointInDS(cpPl, DStr), anIsFirst[ie], aSidePl[ie]);
++    aStripe[ie]->SetIndexPoint(aApexIdx, anIsFirst[ie], aSideCy[ie]);
++
++    TopOpeBRepDS_Curve Tc(Cc, tolreached);
++    int                ICurve = DStr.AddCurve(Tc);
++
++    TopAbs_Orientation Et = TopAbs_FORWARD;
++    {
++      TopExp_Explorer Exp;
++      for (Exp.Init(aFw.Oriented(TopAbs_FORWARD), TopAbs_EDGE); Exp.More(); Exp.Next())
++      {
++        if (Exp.Current().IsSame(aWArc[ie]))
++        {
++          Et =
++            TopAbs::Reverse(TopAbs::Compose(Exp.Current().Orientation(), cpPl.TransitionOnArc()));
++          break;
++        }
++      }
++    }
++    occ::handle<TopOpeBRepDS_SurfaceCurveInterference> Interfc =
++      ChFi3d_FilCurveInDS(ICurve, aIShapeFw, Pc, Et);
++    DStr.ChangeShapeInterferences(aIShapeFw).Append(Interfc);
++
++    aStripe[ie]->ChangePCurve(anIsFirst[ie]) = Ps;
++    aStripe[ie]->SetCurve(ICurve, anIsFirst[ie]);
++    aStripe[ie]->SetParameters(anIsFirst[ie], Udeb, Ufin);
++  }
++
++  // ---- single-ended pinch: close along the tangent generator -----------
++  // With two ends the two trim curves close the extension over the pinch
++  // and the old vertex disappears. With one, the extended face and the
++  // cylindrical support meet along the tangent generator between the old
++  // vertex and the apex; register that segment so both faces are bounded.
++  if (nbe == 1)
++  {
++    gp_Vec aDir(aPVtx, aApex);
++    if (aDir.Magnitude() <= Precision::Confusion())
++    {
++      return false;
++    }
++    occ::handle<Geom_Line>         aLin = new Geom_Line(aPVtx, gp_Dir(aDir));
++    double                         aLen = aPVtx.Distance(aApex);
++    occ::handle<Geom_TrimmedCurve> aSeg = new Geom_TrimmedCurve(aLin, 0., aLen);
++    TopOpeBRepDS_Curve             Tseg(aSeg, tolapp3d);
++    int                            ISeg = DStr.AddCurve(Tseg);
++
++    // Pcurve on the grazing plane.
++    double u0, v0, u1, v1;
++    ElSLib::Parameters(aWallPln, aPVtx, u0, v0);
++    ElSLib::Parameters(aWallPln, aApex, u1, v1);
++    gp_Pnt2d                  p2d0(u0, v0), p2d1(u1, v1);
++    gp_Vec2d                  d2(p2d0, p2d1);
++    occ::handle<Geom2d_Line>  l2w = new Geom2d_Line(p2d0, gp_Dir2d(d2));
++    occ::handle<Geom2d_Curve> pcW = new Geom2d_TrimmedCurve(l2w, 0., aLen);
++
++    // Pcurve on the cylindrical support (the tangent generator). The u
++    // coordinate must be the one the contact interference's pcurve on that
++    // face reports at the apex — on a closed face ElSLib may answer with
++    // the other side of the seam and the wire would not close in UV.
++    BRepAdaptor_Surface aBc(aFcy);
++    gp_Cylinder         cyl = aBc.Cylinder();
++    double              cu0, cv0, cu1, cv1;
++    ElSLib::Parameters(cyl, aPVtx, cu0, cv0);
++    ElSLib::Parameters(cyl, aApex, cu1, cv1);
++    gp_Pnt2d                  c2d0(cu0, cv0), c2d1(cu1, cv1);
++    gp_Vec2d                  dc(c2d0, c2d1);
++    occ::handle<Geom2d_Curve> pcC;
++    if (dc.Magnitude() > gp::Resolution())
++    {
++      occ::handle<Geom2d_Line> l2c = new Geom2d_Line(c2d0, gp_Dir2d(dc));
++      pcC = new Geom2d_TrimmedCurve(l2c, 0., c2d0.Distance(c2d1));
++    }
++    if (pcC.IsNull())
++    {
++      return false;
++    }
++
++    int aIVtx = DStr.AddShape(Vtx);
++    int aICyl = DStr.AddShape(aFcy);
++
++    occ::handle<TopOpeBRepDS_CurvePointInterference> Ip;
++    Ip = ChFi3d_FilPointInDS(TopAbs_FORWARD, ISeg, aIVtx, 0., true);
++    DStr.ChangeCurveInterferences(ISeg).Append(Ip);
++    Ip = ChFi3d_FilPointInDS(TopAbs_REVERSED, ISeg, aApexIdx, aLen, false);
++    DStr.ChangeCurveInterferences(ISeg).Append(Ip);
++
++    occ::handle<TopOpeBRepDS_SurfaceCurveInterference> Ic;
++    Ic = ChFi3d_FilCurveInDS(ISeg, aIShapeFw, pcW, TopAbs_FORWARD);
++    DStr.ChangeShapeInterferences(aIShapeFw).Append(Ic);
++
++    // Orientation and parametric representative of the segment in the
++    // cylindrical face. The fillet consumes the support on one angular
++    // side of the generator; the kept side is the other. For the upward
++    // curve on a forward face, material on the left of the traversal
++    // means: kept at increasing angle -> traversed downward (REVERSED),
++    // kept at decreasing angle -> traversed upward (FORWARD). When the
++    // generator lies on the parametric seam, the pcurve must also sit on
++    // the kept side's period representative or it falls outside the
++    // face's domain.
++    TopAbs_Orientation EtCyl = TopAbs_REVERSED;
++    {
++      const ChFiDS_FaceInterference& fiCy0 =
++        (aSideCy[0] == 1) ? aSD[0]->InterferenceOnS1() : aSD[0]->InterferenceOnS2();
++      const occ::handle<Geom2d_Curve>& pcf = fiCy0.PCurveOnFace();
++      if (pcf.IsNull())
++      {
++        return false;
++      }
++      double tIn =
++        aApexPar[0] + (fiCy0.Parameter(!anIsFirst[0]) >= aApexPar[0] ? 0.05 : -0.05);
++      double uIn  = pcf->Value(tIn).X();
++      double uSeg = c2d0.X();
++      double du   = uIn - uSeg;
++      while (du > M_PI)
++      {
++        du -= 2 * M_PI;
++      }
++      while (du < -M_PI)
++      {
++        du += 2 * M_PI;
++      }
++      // The fillet consumes the du side; the kept side is opposite.
++      const bool keptPlus = (du < 0);
++      EtCyl               = keptPlus ? TopAbs_REVERSED : TopAbs_FORWARD;
++      if (aFcy.Orientation() == TopAbs_REVERSED)
++      {
++        EtCyl = TopAbs::Reverse(EtCyl);
++      }
++      if (!aSeam.IsNull())
++      {
++        // On the seam: pick the period representative bounding the kept side.
++        double uRep = keptPlus ? 0. : 2 * M_PI;
++        c2d0.SetX(uRep);
++        c2d1.SetX(uRep);
++        gp_Vec2d dcr(c2d0, c2d1);
++        occ::handle<Geom2d_Line> l2r = new Geom2d_Line(c2d0, gp_Dir2d(dcr));
++        pcC = new Geom2d_TrimmedCurve(l2r, 0., c2d0.Distance(c2d1));
++      }
++    }
++    Ic = ChFi3d_FilCurveInDS(ISeg, aICyl, pcC, EtCyl);
++    DStr.ChangeShapeInterferences(aICyl).Append(Ic);
++
++    // The spine edge ends here and is wholly consumed by the fillet, but
++    // with a single stripe end the face rebuild does not reclassify it
++    // away on the cylindrical support. Remove it explicitly, the way the
++    // singular-corner treatments do: a vertex interference on the spine
++    // arc at this vertex.
++    {
++      const occ::handle<ChFiDS_Spine>& sp = aStripe[0]->Spine();
++      TopoDS_Edge Arcspine = anIsFirst[0] ? sp->Edges(1) : sp->Edges(sp->NbEdges());
++      int         IArcspine = DStr.AddShape(Arcspine);
++      TopAbs_Orientation OVtx = TopAbs_FORWARD;
++      for (TopExp_Explorer ex(Arcspine.Oriented(TopAbs_FORWARD), TopAbs_VERTEX); ex.More();
++           ex.Next())
++      {
++        if (Vtx.IsSame(ex.Current()))
++        {
++          OVtx = ex.Current().Orientation();
++          break;
++        }
++      }
++      OVtx = TopAbs::Reverse(OVtx);
++      double parVtx = BRep_Tool::Parameter(Vtx, Arcspine);
++      occ::handle<TopOpeBRepDS_CurvePointInterference> interfv =
++        ChFi3d_FilVertexInDS(OVtx, IArcspine, aIVtx, parVtx);
++      DStr.ChangeShapeInterferences(IArcspine).Append(interfv);
++    }
++  }
++
++  return true;
++}

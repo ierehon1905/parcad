@@ -37,6 +37,17 @@ later release of it exists, so there is no version to bump to.
 
 - `#include <sstream>` in `wrapper.hxx`, for the report's `std::ostringstream`.
 
+- `Shape_topology_report(shape)` and `BRepTools_write_brep(shape, path)` in
+  `wrapper.hxx`, both diagnostics. The report walks every face → wire → edge →
+  vertex with geometry types, 3D and UV endpoints and tolerances, listing each
+  wire twice — raw contents, then as far as `BRepTools_WireExplorer` can
+  traverse it. A wire whose raw list is longer than its traversal is the
+  signature of a rebuilt boundary gone wrong; that difference is what located
+  the tangent-pinch defect in the fillet corner code (see
+  `vendor/occt-sys/PARCAD-CHANGES.md`). The BREP writer exists because STEP
+  export normalises exact topology away, and the report alone cannot be
+  re-interrogated.
+
 ## Not changed
 
 Everything else is upstream 0.2.0 verbatim, including `build.rs` and the OCCT

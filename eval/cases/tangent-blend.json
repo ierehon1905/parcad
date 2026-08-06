@@ -1,0 +1,19 @@
+{
+  "name": "tangent-blend",
+  "script": "eval/scripts/tangent-blend.js",
+  "why": "A blend whose ends land on faces the boss is exactly tangent to, where the fillet's width falls to zero. Stock OCCT hands back a self-intersecting corner patch with IsDone() == true; the vendored tangent-pinch patch builds the exact pinched torus instead, and this case holds the measured result down. Pairs with tangent-blend-retainer for the single-stripe form and with blend-runs-off-the-edge, which proves a genuine overrun was never the problem.",
+  "brep": {
+    "size": [
+      20.0,
+      40.0,
+      30.0
+    ],
+    "volume_mm3": 14326.552,
+    "area_mm2": 4015.803,
+    "triangles": 4180,
+    "watertight": true,
+    "faces": 11,
+    "edges": 50,
+    "curves": 23
+  }
+}

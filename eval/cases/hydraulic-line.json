@@ -1,7 +1,7 @@
 {
   "name": "hydraulic-line",
   "script": "examples/hydraulic-line.js",
-  "why": "Routed tube in a real part: three 90 degree bends of one radius, bored along the same route, with a boss at each end. 19340 mm3 against 19359 by hand, which is the usual 0.1% the tessellation under-reads on curved surfaces. The two-rim selector is what says the bore still runs the whole route \u2014 a bend radius that stopped fitting would break the chain and leave a different number.",
+  "why": "Routed tube in a real part: three 90 degree bends of one radius, bored along the same route, with a boss at each end. 19340 mm3 against 19359 by hand, which is the usual 0.1% the tessellation under-reads on curved surfaces. The two-rim selector is what says the bore still runs the whole route — a bend radius that stopped fitting would break the chain and leave a different number.",
   "brep": {
     "size": [
       130.0,

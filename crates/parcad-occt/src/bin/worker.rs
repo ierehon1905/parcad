@@ -234,10 +234,9 @@ fn run() -> Response {
                  every operation done, so the defect is in the geometry it returned, \
                  not in the request. A solid that will not close cannot be printed, \
                  exported or measured, so it is refused here rather than handed on. \
-                 The known cause is a blend that has to end against a face it is tangent \
-                 to — a boss exactly as wide as the plate it stands on, or a radius \
-                 reaching exactly to a side wall — which the blend itself now refuses by \
-                 name. Reaching this message instead means something else produced it, so \
+                 The one cause this backstop has caught — a blend ending against a \
+                 face its boss is exactly tangent to — is fixed by a vendored kernel \
+                 patch, so reaching this message means something new produced it; \
                  please report the script: see docs/GOTCHAS.md",
                 stats.non_manifold_edges, stats.triangles * 3,
             ),
