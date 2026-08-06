@@ -140,12 +140,14 @@ A lock would have to be explained; undo does not.
 
 Ordered, because each item is the prerequisite for the next:
 
-1. **One evaluation artifact.** `mcp.rs` builds its own flat summary and rescans
-   the raw graph JSON for treatment nodes — a second definition of "what an
-   evaluation is", living in a transport file, which is the divergence
-   `service.rs` was extracted to stop. `docs/AI_CAD_PLATFORM.md` names the fix:
-   one `EvaluationSnapshot` that every transport serialises and nobody
-   redefines.
+1. **One evaluation artifact** *(done)*. `service::evaluate` now produces one
+   `EvaluationSnapshot` and all three transports serialise it: MCP as the reply
+   to `evaluate_part`, IPC and HTTP as the `snapshot` beside the mesh. The
+   editor's own `Report` — a second definition living on the far side of a
+   transport, which is the same divergence `service.rs` was extracted to stop —
+   is gone with it, and `unused_nodes` moved into the snapshot so the window
+   still has the one number it derived that nothing else reported. `mcp.rs` now
+   defines no type that describes geometry.
 2. **Renders, sections and region maps as fields on that snapshot**, not as
    further bespoke tools. A section view is a render-time half-plane, needs no
    new op, and `docs/DSL_GAPS.md` records it as the thing most missed while

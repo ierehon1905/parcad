@@ -25,22 +25,39 @@ import type { TreatmentNode } from "./treatment-info";
 import { instrumentTreatmentCalls, sourceOffset, treatmentAtCursor, treatmentCallRange } from "./source-link";
 import { Viewport, type SectionPlane, type TargetVertex } from "./viewport";
 
-interface Report {
+/**
+ * One evaluation, as the host measured it.
+ *
+ * The same object, field for field, that an agent gets back from MCP's
+ * `evaluate_part`: `service.rs` builds exactly one of these per evaluation and
+ * every transport serialises it. Nothing here may compute a measurement of its
+ * own — this window and a model looking at the same part have to be reading the
+ * same numbers, and the only way to guarantee that is to have one producer.
+ *
+ * Millimetres throughout. Triples are `[x, y, z]`.
+ */
+interface EvaluationSnapshot {
   units: string;
-  bounds: { min: Vec3; max: Vec3 };
-  size: Vec3;
-  framing_bounds: { min: Vec3; max: Vec3 };
-  mass: { volume_mm3: number; area_mm2: number; centroid: Vec3 };
-  mesh: {
-    vertices: number;
-    triangles: number;
-    resolution_mm: number;
-    watertight: boolean;
-    non_manifold_edges: number;
-  };
+  size: [number, number, number];
+  bounds_min: [number, number, number];
+  bounds_max: [number, number, number];
+  volume_mm3: number;
+  area_mm2: number;
+  centroid: [number, number, number];
+  /** Exact-kernel counts. Absent for the implicit backend and for a mesh
+   *  preview, where the question does not apply — different from zero. */
+  faces?: number;
+  topological_edges?: number;
+  triangles: number;
+  resolution_mm: number;
+  watertight: boolean;
+  non_manifold_edges: number;
   tags: string[];
-  live_nodes: number;
-  total_nodes: number;
+  treatments: { node: number; op: string; amount_mm: number; continuity?: string }[];
+  /** Shapes the root never reaches. Absent when there are none. */
+  unused_nodes?: number;
+  backend: "implicit" | "brep";
+  kernel_ms: number;
 }
 
 interface Vec3 {
@@ -55,16 +72,18 @@ interface Evaluated {
   indices: number[];
   /** Logical edge curves. Omitted in mesh-preview mode. */
   edges: EdgeCurve[];
-  /** Face and edge counts. Null in mesh-preview mode, where the question does
-   *  not apply — which is different from the answer being zero. */
-  topology: { faces: number; edges: number } | null;
-  backend: "implicit" | "brep";
-  report: Report;
+  snapshot: EvaluationSnapshot;
+  /** The implicit path's two halves. Kernel time is in the snapshot. */
   timings: {
     lower_and_mesh_ms: number;
     normals_ms: number;
-    kernel_ms: number;
   };
+}
+
+/** The snapshot's bounds in the shape the viewport and the section slider take. */
+function boundsOf(snapshot: EvaluationSnapshot): { min: Vec3; max: Vec3 } {
+  const v = ([x, y, z]: [number, number, number]) => ({ x, y, z });
+  return { min: v(snapshot.bounds_min), max: v(snapshot.bounds_max) };
 }
 
 interface BuiltGraph {
@@ -156,10 +175,8 @@ let framed = false;
 let lastGraph: dsl.Doc | null = null;
 let lastSource = "";
 /** The last measurements, kept so a save can describe the part it saved. */
-let lastReport: Report | undefined;
-let lastBackend: "implicit" | "brep" | undefined;
+let lastSnapshot: EvaluationSnapshot | undefined;
 let lastTreatments: dsl.TreatmentSource[] = [];
-let lastTopology: { faces: number; edges: number } | null = null;
 /**
  * Which part the geometry currently on screen belongs to.
  *
@@ -295,10 +312,10 @@ async function run() {
     previewTreatmentAtCursor();
     clearError();
     const ms =
-      result.backend === "brep"
-        ? result.timings.kernel_ms
+      result.snapshot.backend === "brep"
+        ? result.snapshot.kernel_ms
         : result.timings.lower_and_mesh_ms + result.timings.normals_ms;
-    setStatus(`${result.report.mesh.triangles.toLocaleString()} tris · ${ms} ms`);
+    setStatus(`${result.snapshot.triangles.toLocaleString()} tris · ${ms} ms`);
     void captureFirstThumbnail();
   } catch (e) {
     showError(e);
@@ -339,13 +356,12 @@ function buildGraph(source: string): BuiltGraph {
 }
 
 function show(result: Evaluated) {
-  const { report } = result;
+  const snapshot = result.snapshot;
   shownPath = openPath;
-  lastReport = report;
-  lastBackend = result.backend;
-  lastTopology = result.topology;
+  lastSnapshot = snapshot;
   visibleEdges = normalizeEdges(result.edges);
   visibleVertices = verticesFromEdges(visibleEdges);
+  const bounds = boundsOf(snapshot);
 
   viewport.setGeometry(
     {
@@ -354,23 +370,23 @@ function show(result: Evaluated) {
       indices: new Uint32Array(result.indices),
       edges: visibleEdges,
     },
-    report.bounds,
+    bounds,
   );
 
   // Frame once, then leave the camera alone — nothing is more irritating than a
   // view that resets itself every time you change a number.
   if (!framed) {
-    viewport.frameAll(report.bounds);
+    viewport.frameAll(bounds);
     framed = true;
   }
 
   // The plane's travel is the part's own extent, so the slider covers exactly
   // the cuts that can show anything and no more.
-  sectionBounds = report.bounds;
+  sectionBounds = bounds;
   retuneSection();
 
-  const { size, mass, mesh } = report;
-  const dead = report.total_nodes - report.live_nodes;
+  const [sx, sy, sz] = snapshot.size;
+  const dead = snapshot.unused_nodes ?? 0;
   const linkedEdges = visibleEdges.filter((edge) => treatmentForEdge(edge)).length;
   const linkedMethods = [...new Set(
     visibleEdges
@@ -382,22 +398,22 @@ function show(result: Evaluated) {
   // a grid spacing is where samples were taken, a deflection is a bound on how
   // far the result can be from the truth. Label them apart.
   const tol =
-    result.backend === "brep"
-      ? `within <b>${mesh.resolution_mm.toFixed(3)}</b> mm of the true surface`
-      : `at <b>${mesh.resolution_mm.toFixed(3)}</b> mm grid`;
+    snapshot.backend === "brep"
+      ? `within <b>${snapshot.resolution_mm.toFixed(3)}</b> mm of the true surface`
+      : `at <b>${snapshot.resolution_mm.toFixed(3)}</b> mm grid`;
 
   reportEl.hidden = false;
   reportEl.innerHTML = [
-    `<b>${fmt(size.x)} × ${fmt(size.y)} × ${fmt(size.z)}</b> mm`,
-    `volume <b>${fmt(mass.volume_mm3)}</b> mm³ · area <b>${fmt(mass.area_mm2)}</b> mm²`,
-    result.topology
-      ? `topology <b>${result.topology.faces}</b> faces · <b>${result.topology.edges}</b> edges`
+    `<b>${fmt(sx)} × ${fmt(sy)} × ${fmt(sz)}</b> mm`,
+    `volume <b>${fmt(snapshot.volume_mm3)}</b> mm³ · area <b>${fmt(snapshot.area_mm2)}</b> mm²`,
+    snapshot.faces !== undefined
+      ? `topology <b>${snapshot.faces}</b> faces · <b>${snapshot.topological_edges}</b> edges`
       : "",
-    `mesh <b>${mesh.triangles.toLocaleString()}</b> tris ${tol} ` +
-      (mesh.watertight
+    `mesh <b>${snapshot.triangles.toLocaleString()}</b> tris ${tol} ` +
+      (snapshot.watertight
         ? `<span class="text-good">watertight</span>`
-        : `<span class="text-bad">NOT watertight — ${mesh.non_manifold_edges} bad edges</span>`),
-    report.tags.length ? `tags ${report.tags.join(", ")}` : "no tags",
+        : `<span class="text-bad">NOT watertight — ${snapshot.non_manifold_edges} bad edges</span>`),
+    snapshot.tags.length ? `tags ${snapshot.tags.join(", ")}` : "no tags",
     linkedEdges
       ? `<span class="text-good">source links <b>${linkedEdges}</b> final curves → ${linkedMethods.join(", ")}</span>`
       : lastTreatments.length
@@ -723,9 +739,7 @@ function showError(e: unknown) {
 /** Drop the rendered part and everything measured from it. */
 function discardShownPart() {
   shownPath = undefined;
-  lastReport = undefined;
-  lastBackend = undefined;
-  lastTopology = null;
+  lastSnapshot = undefined;
   lastGraph = null;
   lastSource = "";
   lastTreatments = [];
@@ -1004,7 +1018,7 @@ function showOpenPart() {
 async function saveOpenPart() {
   if (!openPath) return;
   const source = editor.state.doc.toString();
-  const clean = source === lastSource && lastReport !== undefined;
+  const clean = source === lastSource && lastSnapshot !== undefined;
 
   setStatus("saving", "busy");
   try {
@@ -1048,8 +1062,8 @@ async function captureFirstThumbnail() {
 
 /** What a reader of the folder finds beside the script. */
 function readmeFor(path: string, source: string): string {
-  const report = lastReport!;
-  const { size, mass, mesh } = report;
+  const snapshot = lastSnapshot!;
+  const [sx, sy, sz] = snapshot.size;
   // The author's own opening comment says what the part is for; nothing
   // generated here could say it better. Only the *leading* block: comments
   // further down explain one step and read as non-sequitur out of context.
@@ -1062,21 +1076,24 @@ function readmeFor(path: string, source: string): string {
     intro.push(trimmed.replace(/^\/+\s?/, ""));
   }
 
-  const kernel = lastBackend === "brep" ? "the exact B-rep kernel" : "the implicit backend";
+  const kernel =
+    snapshot.backend === "brep" ? "the exact B-rep kernel" : "the implicit backend";
   return [
     `# ${partAt(browser.known()?.tree ?? [], path)?.title ?? projectLabel(path)}`,
     "",
     ...(intro.length ? [intro.join("\n"), ""] : []),
     "## Measured",
     "",
-    `- **${fmt(size.x)} × ${fmt(size.y)} × ${fmt(size.z)} mm**`,
-    `- volume ${fmt(mass.volume_mm3)} mm³, area ${fmt(mass.area_mm2)} mm²`,
-    ...(lastTopology
-      ? [`- ${lastTopology.faces} faces, ${lastTopology.edges} edges`]
+    `- **${fmt(sx)} × ${fmt(sy)} × ${fmt(sz)} mm**`,
+    `- volume ${fmt(snapshot.volume_mm3)} mm³, area ${fmt(snapshot.area_mm2)} mm²`,
+    ...(snapshot.faces !== undefined
+      ? [`- ${snapshot.faces} faces, ${snapshot.topological_edges} edges`]
       : []),
-    `- mesh ${mesh.triangles.toLocaleString()} triangles, ` +
-      (mesh.watertight ? "watertight" : `NOT watertight — ${mesh.non_manifold_edges} bad edges`),
-    ...(report.tags.length ? [`- tags: ${report.tags.join(", ")}`] : []),
+    `- mesh ${snapshot.triangles.toLocaleString()} triangles, ` +
+      (snapshot.watertight
+        ? "watertight"
+        : `NOT watertight — ${snapshot.non_manifold_edges} bad edges`),
+    ...(snapshot.tags.length ? [`- tags: ${snapshot.tags.join(", ")}`] : []),
     "",
     `Measured by ${kernel} when this part was last saved, not read off the ` +
       "script. `part.js` beside this file is the source and the only thing here " +

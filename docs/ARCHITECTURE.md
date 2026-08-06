@@ -284,6 +284,18 @@ editing, backend choice, exact target preview, both exports — was a difference
 the user had to discover. The frontend now reaches the backend only through
 `app/src/backend.ts`, which chooses a transport and nothing else.
 
+There is also exactly one description of an evaluation. `service::evaluate`
+builds an `EvaluationSnapshot` — size, bounds, mass, topology counts, mesh
+quality, tags, treatments, unused nodes, the backend that measured it — and
+every transport serialises that same value: MCP returns it as the reply to
+`evaluate_part`, the two windows receive it as the `snapshot` field beside the
+mesh they draw. No transport, and nothing above `backend.ts`, computes a
+measurement of its own. Both halves of that rule have been broken and cost
+something: `mcp.rs` once rebuilt the summary from the raw graph JSON and went
+looking for `smooth` and `squircle` nodes, which have never been ops, and the
+editor once assembled its own from a raw `PartReport`. Two callers looking at
+one part must be reading one set of numbers.
+
 Three constraints on the HTTP half, each deliberate:
 
 - **Loopback only.** The endpoint evaluates arbitrary intent graphs, which means
