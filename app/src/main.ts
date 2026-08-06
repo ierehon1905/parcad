@@ -10,6 +10,7 @@
 import "./style.css";
 import * as backend from "./backend";
 import { EditorView, basicSetup } from "codemirror";
+import { undo } from "@codemirror/commands";
 import { StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet } from "@codemirror/view";
 import { javascript } from "@codemirror/lang-javascript";
@@ -267,6 +268,12 @@ const editor = new EditorView({
 // assertions still cover the real selection listener, Tauri IPC request, and
 // returned viewport overlay.
 (window as unknown as Record<string, unknown>).__editor = editor;
+// The undo *command*, beside the editor handle. The desktop e2e driver cannot
+// reliably deliver a Cmd-Z keystroke to WKWebView (same limitation the bracket
+// spec records for Cmd-F), and what the session suite asserts is not key
+// delivery but history: an agent's edit must sit in the same undo history a
+// user's own typing goes into, and this is that history's own command.
+(window as unknown as Record<string, unknown>).__undo = () => undo(editor);
 
 // ------------------------------------------------------------ the eval cycle
 
@@ -296,8 +303,16 @@ async function run() {
 
   setStatus("evaluating", "busy");
 
+  // Tell the host what this window is showing, on the same debounce. Without
+  // this an agent's get_session would report the last thing it wrote itself
+  // rather than what the user has typed since. Fire and forget: geometry must
+  // not wait on it, and pushing even a script that will fail to build below is
+  // the point — a broken draft is still what is on screen.
+  const source = editor.state.doc.toString();
+  void backend.pushSession(openPath ?? null, source, viewerId).catch(() => {});
+
   try {
-    const built = buildGraph(editor.state.doc.toString());
+    const built = buildGraph(source);
 
     const depth = Number(depthInput.value);
     const result = await backend.evaluate<Evaluated>(built.graph, depth, backendSelect.value);
@@ -1137,6 +1152,63 @@ async function start() {
   await openProject(projects.initial);
   run();
 }
+
+// ------------------------------------------------------------- live session
+
+/**
+ * This window's identity in the shared session, minted fresh per load.
+ *
+ * Its one job is to break the echo loop: every change this window pushes
+ * carries it, and the handler below drops any broadcast carrying it back. Two
+ * tabs and the desktop window each apply the others' changes and never their
+ * own reflection. An agent's edits carry "agent", which no window owns, so
+ * they are applied everywhere — which is the point of the session.
+ *
+ * Not `crypto.randomUUID()`: that only exists in a secure context, and whether
+ * a Tauri webview's origin counts as one is a platform detail this constant
+ * must not depend on. A module-level throw here would take the whole editor
+ * down, in the desktop window only, with nothing on screen to say why.
+ */
+const viewerId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
+backend.subscribeSession((session) => {
+  if (session.origin === viewerId) return;
+
+  const current = editor.state.doc.toString();
+  const opened = (session.name ?? undefined) !== openPath;
+  if (opened) {
+    openPath = session.name ?? undefined;
+    // A name change means someone opened a project, so the script beside it is
+    // what the disk had at that moment — the saved text, not a dirty edit.
+    savedSource = session.script;
+    framed = false;
+    clearError();
+  }
+
+  if (current !== session.script) {
+    // An ordinary edit, deliberately: dispatched like typing, it lands in the
+    // normal undo history and Cmd-Z takes an agent's change back exactly like
+    // the user's own. Only the differing span is replaced, so a cursor outside
+    // it stays put while the user keeps typing. The dispatch triggers the same
+    // docChanged path as a keystroke — titlebar, debounce, push — and the push
+    // of an applied change is a no-op on the host, which ends the ripple.
+    let from = 0;
+    const next = session.script;
+    while (from < current.length && from < next.length && current[from] === next[from]) from++;
+    let toCurrent = current.length;
+    let toNext = next.length;
+    while (toCurrent > from && toNext > from && current[toCurrent - 1] === next[toNext - 1]) {
+      toCurrent--;
+      toNext--;
+    }
+    editor.dispatch({ changes: { from, to: toCurrent, insert: next.slice(from, toNext) } });
+  } else if (opened) {
+    // Same text, different part — a rename-shaped case the dispatch above
+    // would otherwise cover. The titlebar and evaluation still need to follow.
+    showOpenPart();
+    schedule();
+  }
+});
 
 // Draggable split between editor and viewport.
 {

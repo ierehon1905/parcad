@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "session-events",
+  "description": "Let the webview subscribe to the live-session broadcast. The session's Tauri transport is an event emitted from Rust (see lib.rs's forwarder task); without core:event:allow-listen the webview's listen() is denied by the ACL and the desktop window silently never follows an agent's or another window's edits. This is deliberately the only capability granted: app commands need none, and nothing else here uses a core plugin.",
+  "windows": ["main"],
+  "permissions": ["core:event:allow-listen", "core:event:allow-unlisten"]
+}

@@ -11,6 +11,7 @@ mod mcp;
 mod projects;
 mod script;
 mod service;
+mod session;
 
 use service::{Backend, Evaluated};
 
@@ -160,6 +161,19 @@ fn mcp_status() -> mcp::Status {
     service::mcp_status()
 }
 
+/// The live session, over IPC. The webview cannot open an EventSource against
+/// `/api` — its origin is `tauri://localhost` — so it pushes here and receives
+/// broadcasts as the Tauri event the setup hook below forwards.
+#[tauri::command]
+fn get_session() -> session::Session {
+    session::get()
+}
+
+#[tauri::command]
+fn push_session(name: Option<String>, script: String, origin: String) -> session::Session {
+    session::push(name, script, origin)
+}
+
 /// Where the frontend should send API calls, injected before it loads.
 ///
 /// Under IPC the answer is "nowhere, use invoke"; the browser learns its own
@@ -188,6 +202,26 @@ pub fn run() {
                 eprintln!("parcad: could not prepare the project folder: {e}");
             }
             http::serve(app.handle().clone());
+            // One broadcast, two transports: browsers get SSE from the HTTP
+            // host, the webview gets this Tauri event. Forwarded here because
+            // emitting *is* the IPC transport's delivery — the capability
+            // (state, revision, echo rule) stays in `session`.
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                use tauri::Emitter;
+                let mut events = session::subscribe();
+                loop {
+                    match events.recv().await {
+                        Ok(event) => {
+                            let _ = handle.emit("session-changed", &event);
+                        }
+                        // A lagged webview missed intermediate states, not the
+                        // final one: the next event carries the whole session.
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -207,6 +241,8 @@ pub fn run() {
             project_preview,
             save_project_preview,
             mcp_status,
+            get_session,
+            push_session,
             host_port
         ])
         .run(tauri::generate_context!())

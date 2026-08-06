@@ -15,10 +15,13 @@
 # For the whole suite in both arms, with a coverage table, use
 # tools/field-suite.sh — this script is the single case it is built out of.
 #
-# Trials run in parallel against one app, which is fine — the MCP server is
-# stateless, a script carries its whole part, so two trials cannot see each
-# other. Transcripts land in a run directory this prints at the end; read them
-# with tools/field-test-score.py.
+# Trials run in parallel against one app, which is fine for the measurement
+# tools — the MCP server is stateless there, a script carries its whole part, so
+# two trials cannot see each other. The *session* tools (get_session,
+# open_project, set_script) are the exception, and the only stateful thing here:
+# there is one screen, and parallel trials driving it fight over it. Run a
+# session prompt one trial at a time. Transcripts land in a run directory this
+# prints at the end; read them with tools/field-test-score.py.
 #
 # Two things to get right or the run means nothing:
 #
@@ -104,7 +107,8 @@ cp "$PROMPT" "$RUN/case.md"
 ALLOW="mcp__parcad__list_projects,mcp__parcad__read_project,mcp__parcad__save_project,\
 mcp__parcad__evaluate_part,mcp__parcad__probe_part,mcp__parcad__measure_wall_thickness,\
 mcp__parcad__list_entities,mcp__parcad__inspect_treatment_target,\
-mcp__parcad__check_selector,mcp__parcad__export_part"
+mcp__parcad__check_selector,mcp__parcad__export_part,\
+mcp__parcad__get_session,mcp__parcad__open_project,mcp__parcad__set_script"
 DENY="Bash,Read,Grep,Glob,Edit,Write,WebFetch,WebSearch,Task,Agent,Skill,Monitor,\
 NotebookEdit,CronCreate,RemoteTrigger,TaskCreate,TaskStop,SendMessage,Artifact,\
 EnterWorktree,ExitWorktree,ExitPlanMode,TodoWrite,KillShell,BashOutput,Workflow"

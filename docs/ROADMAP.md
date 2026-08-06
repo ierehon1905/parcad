@@ -111,32 +111,32 @@ tag that is genuinely in the model but hidden from this angle (`tags.rs`) — an
 the only caller of any of it is `parcad-cli`. `service.rs` has no render entry
 point, so neither window nor any agent can ask for one.
 
-It also cannot *act on* what the user is looking at. MCP is stateless by
-construction: every tool call carries its whole script, evaluates it in
-isolation, and returns. `save_project` writes a file and stops — no event
-reaches the webview or the browser, so a part an agent saves appears in the
-picker only on reload. While an agent works, the open window is a correct but
-stale view of the folder.
+**Built: one live session the agent can drive.** MCP used to be stateless by
+construction — `save_project` wrote a file and stopped, no event reached any
+window, and the open editor was a correct but stale view of the folder until a
+reload. `app/src-tauri/src/session.rs` now holds the session beside
+`service.rs`: `name`, `script`, `revision`, the id of whichever viewer
+originated the change, and a broadcast channel. The transports adapt it and add
+nothing, as designed:
 
-**Decided, not built: one live session the agent can drive.** The app process
-already owns both ends — the MCP handler and the window are the same process,
-and browsers are on the same axum host — so the plumbing is short:
-
-- Session state in Rust (`name`, `script`, `revision`, and the id of whichever
-  viewer originated the change), plus a broadcast channel.
 - `open_project`, `set_script` and `get_session` on the MCP side, so an agent
-  can change what is on screen *and* read what the user has since typed.
+  changes what is on screen *and* reads what the user has since typed.
 - Viewers push their own document back on the existing evaluation debounce, or
   `get_session` lies. Each viewer ignores broadcasts it originated, which is
   what keeps two browser tabs and the desktop window in sync without an echo
-  loop.
+  loop — and an *identical* push is a no-op on the host (no revision bump, no
+  broadcast), which is what stops a viewer re-pushing an applied remote change
+  from rippling forever.
 - SSE at `/api/session/events` for browsers; a Tauri event for the webview.
   One broadcast, two transports, same rule as everything else here.
 
 The conflict rule is deliberately not a lock: **an agent edit is an ordinary
-edit.** It lands in CodeMirror's normal undo history, so Cmd-Z takes it back and
-a user who disagrees with a change reverses it the way they reverse their own.
-A lock would have to be explained; undo does not.
+edit.** It is dispatched into CodeMirror like typing, so it lands in the normal
+undo history and Cmd-Z takes it back the way the user reverses their own. A
+lock would have to be explained; undo does not. Whether a model *drives* the
+session is measured separately, as everything agent-facing here is:
+`eval/field/change-the-open-part.md`, one trial at a time, because there is one
+screen and parallel trials fight over it.
 
 Ordered, because each item is the prerequisite for the next:
 

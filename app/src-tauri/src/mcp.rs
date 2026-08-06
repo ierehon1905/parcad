@@ -19,7 +19,7 @@
 //! Scripts arrive from a model and run in `script`'s sandbox, never in the
 //! webview. That is the precondition this server was blocked on.
 
-use crate::{projects, script, service};
+use crate::{projects, script, service, session};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
@@ -205,6 +205,13 @@ pub struct ProjectRequest {
     /// A project path exactly as `list_projects` gives it: slash-separated
     /// folder names and no extension, such as `bracket` or `Mounts/bracket`.
     pub name: String,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct SetScriptRequest {
+    /// The DSL source to put on screen, whole — this replaces the open
+    /// document, it does not append to it.
+    pub script: String,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -588,6 +595,45 @@ impl Parcad {
             path,
         }))
     }
+
+    /// What is on the user's screen right now.
+    #[tool(
+        name = "get_session",
+        description = "Read the live session: which project is open in the parcad window and the script as it currently stands in the editor, including anything the user has typed since you last looked. Call this before editing — the on-screen script may differ from the file on disk, and editing from a stale copy silently reverts the user's work. `name` is null until something is opened; `revision` increases with every change. The editor pushes its document a moment after typing stops, so the very last keystrokes can lag by about half a second."
+    )]
+    async fn get_session(
+        &self,
+    ) -> Result<rmcp::handler::server::wrapper::Json<session::Session>, ErrorData> {
+        Ok(rmcp::handler::server::wrapper::Json(session::get()))
+    }
+
+    /// Put a project on the user's screen.
+    #[tool(
+        name = "open_project",
+        description = "Open a project in the parcad window: the app loads it from disk and every open window switches to it, exactly as if the user had picked it. Takes a path from list_projects. Returns the session with the loaded script. Use this before set_script when the part you want to change is not the one on screen — get_session tells you which that is."
+    )]
+    async fn open_project(
+        &self,
+        Parameters(request): Parameters<ProjectRequest>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<session::Session>, ErrorData> {
+        Ok(rmcp::handler::server::wrapper::Json(
+            session::open(&request.name, session::AGENT_ORIGIN).map_err(invalid)?,
+        ))
+    }
+
+    /// Change what is on the user's screen, as an ordinary edit.
+    #[tool(
+        name = "set_script",
+        description = "Replace the script in the open editor. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing — there is no lock, and you must not wait for one. It edits the screen only: nothing is written to disk until the user saves or you call save_project. Evaluate the script first with evaluate_part; putting a script that does not build in front of the user replaces their working part with an error. Read get_session first and base your edit on the script it returns, or you will silently revert what the user typed since you last looked."
+    )]
+    async fn set_script(
+        &self,
+        Parameters(request): Parameters<SetScriptRequest>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<session::Session>, ErrorData> {
+        Ok(rmcp::handler::server::wrapper::Json(
+            session::set_script(request.script, session::AGENT_ORIGIN).map_err(invalid)?,
+        ))
+    }
 }
 
 #[tool_handler]
@@ -614,6 +660,10 @@ impl ServerHandler for Parcad {
                  with real parts, and they are the same files the test corpus measures, so \
                  they always run. save_project writes back to that same folder, which is \
                  what the user opens in the app.\n\n\
+                 You share a live screen with the user. get_session reads what is open and \
+                 what they have typed; open_project and set_script change it, in every window \
+                 at once. An edit you make is an ordinary edit — the user can undo it — so \
+                 read get_session before you write, and evaluate before you set_script.\n\n\
                  Projects nest in folders, so a name is a slash-separated path like \
                  'Mounts/bracket' — pass the path list_projects gave you, whole. On disk one \
                  project is a '<name>.parcad' folder holding part.js, which is the source and \

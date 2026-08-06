@@ -111,6 +111,7 @@ Learned by writing bad ones:
 | [which-backend-measured](which-backend-measured.md) | `evaluate_part` | The regression for a field the server instructions name that the reply does not contain. That has happened; nothing but a field test can see it. |
 | [how-big-can-the-fillet-be](how-big-can-the-fillet-be.md) | `evaluate_part` refusals | "Error messages name the fix" is a rule in CLAUDE.md. Whether a model can act on one is a separate fact from whether it reads well to us. |
 | [put-it-where-i-can-open-it](put-it-where-i-can-open-it.md) | `save_project`, `list_projects`, `read_project`, `export_part` | The whole CRUD half of the surface, which nothing measured until it was noticed that two of those tools were not even on the runner's allow list. |
+| [change-the-open-part](change-the-open-part.md) | `get_session`, `open_project`, `set_script` | The live session, driven rather than described: does a model ask what is on screen before assuming, and change it rather than writing a file? **One trial at a time** — there is one screen, and parallel trials fight over it, which is the only case here that is not stateless. |
 
 Record what a round found in docs/PERCEPTION.md rather than here — the case is
 reusable, the result belongs with the design decision it changed.
