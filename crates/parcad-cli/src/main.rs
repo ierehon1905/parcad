@@ -28,6 +28,10 @@ struct Args {
     /// Write STEP. Implies `--brep`: STEP describes exact surfaces, and the
     /// implicit backend has none to describe.
     step: Option<PathBuf>,
+    /// Read a foreign STEP export and print its measured geometry as JSON,
+    /// instead of evaluating a graph. The reverse of `--step`: what another
+    /// CAD system built, measured so a recreation has numbers to hit.
+    probe_step: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args> {
@@ -41,6 +45,7 @@ fn parse_args() -> Result<Args> {
     let mut geometry = None;
     let mut brep = false;
     let mut step = None;
+    let mut probe_step = None;
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -81,18 +86,40 @@ fn parse_args() -> Result<Args> {
             }
             "--brep" => brep = true,
             "--step" => step = Some(PathBuf::from(it.next().context("--step needs a path")?)),
+            "--probe-step" => {
+                probe_step = Some(PathBuf::from(
+                    it.next().context("--probe-step needs a .step file")?,
+                ))
+            }
             "-h" | "--help" => {
                 eprintln!(
                     "usage: parcad <graph.json> [--out DIR] [--depth N] [--size PX]\n\
                      \x20              [--view NAME] [--regions] [--section PLANE]\n\
                      \x20              [--geometry PATH]\n\
-                     \x20              [--brep] [--step PATH]"
+                     \x20              [--brep] [--step PATH]\n\
+                     \x20      parcad --probe-step FILE.step   # measure a foreign export"
                 );
                 std::process::exit(0);
             }
             other if other.starts_with('-') => anyhow::bail!("unknown flag {other:?}"),
             other => input = Some(PathBuf::from(other)),
         }
+    }
+
+    if let Some(probe) = probe_step {
+        return Ok(Args {
+            input: input.unwrap_or_default(),
+            out,
+            depth,
+            size,
+            view,
+            regions,
+            section,
+            geometry,
+            brep,
+            step,
+            probe_step: Some(probe),
+        });
     }
 
     Ok(Args {
@@ -106,6 +133,7 @@ fn parse_args() -> Result<Args> {
         geometry,
         brep: brep || step.is_some(),
         step,
+        probe_step: None,
     })
 }
 
@@ -145,6 +173,37 @@ fn parse_section(spec: &str) -> Result<Section> {
 
 fn main() -> Result<()> {
     let args = parse_args()?;
+
+    // Probe mode: measure a foreign export instead of evaluating a graph. The
+    // JSON goes to stdout for a pipeline; the one-line summary goes to stderr
+    // for a person, so the two never mix.
+    if let Some(path) = &args.probe_step {
+        let probe = parcad_occt::probe_step(path, &parcad_occt::Options::default())
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        for (i, solid) in probe.solids.iter().enumerate() {
+            let size: Vec<String> = (0..3)
+                .map(|a| format!("{:.2}", solid.bbox_max[a] - solid.bbox_min[a]))
+                .collect();
+            eprintln!(
+                "solid {i}: volume {:.2} mm³, area {:.2} mm², bbox {}, {} faces ({})",
+                solid.volume_mm3,
+                solid.area_mm2,
+                size.join(" x "),
+                solid.faces.len(),
+                solid
+                    .face_types
+                    .iter()
+                    .map(|(k, n)| format!("{k} {n}"))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            );
+        }
+        if probe.free_faces > 0 {
+            eprintln!("{} faces belong to no solid", probe.free_faces);
+        }
+        println!("{}", serde_json::to_string_pretty(&probe)?);
+        return Ok(());
+    }
 
     let text = std::fs::read_to_string(&args.input)
         .with_context(|| format!("reading {}", args.input.display()))?;

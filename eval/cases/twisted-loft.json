@@ -1,0 +1,28 @@
+{
+  "name": "twisted-loft",
+  "script": "eval/scripts/twisted-loft.js",
+  "why": "Loft vertex pairing taken literally, against a closed form: the ruled loft between a square and the same square a quarter turn on has section area a^2((1-t)^2+t^2), so V = 2/3 a^2 L = 2000 mm3 exactly. OCCT's ThruSections compatibility pass used to re-origin the wires and silently rebuild this as the straight 3000 mm3 prism — right sections, wrong solid, no error — so the volume is the tripwire for that pass ever coming back. The implicit half is loft's contract: refuse by name, never approximate.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": [
+        "no exact distance field",
+        "B-rep backend"
+      ]
+    }
+  },
+  "brep": {
+    "size": [
+      10.0,
+      10.0,
+      30.0
+    ],
+    "volume_mm3": 1999.931,
+    "area_mm2": 1187.531,
+    "triangles": 3988,
+    "watertight": true,
+    "faces": 6,
+    "edges": 24,
+    "curves": 12
+  }
+}

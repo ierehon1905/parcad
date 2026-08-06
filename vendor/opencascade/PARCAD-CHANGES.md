@@ -62,9 +62,20 @@ out. Everything below could otherwise have lived in our own crate.
   surface fitted through the sections; `ruled` walls run straight between
   consecutive pairs, which is the form whose extent the sections themselves
   bound. Needed a two-argument sys ctor, see the sys crate's changes.
+  `CheckCompatibility` is off: the caller's vertex ordering is the pairing,
+  taken literally. With it on, OCCT re-origins the wires to minimise twist,
+  which silently rebuilt a loft between a square and its 90°-rotated copy as
+  a straight prism — a twisted bar the sections spelled out, discarded
+  without a word. The caller owes aligned orderings and equal vertex counts
+  (parcad validates both before calling).
 - `Shape::sweep_profile_along(profile, spine)` — `BRepOffsetAPI_MakePipe`,
   sweeping a profile face along a spine wire. New sys binding, same pattern as
   the other `construct_unique` ctors.
+- `Shape::geometry_json()` — measured geometry of a shape as JSON, over the
+  sys crate's new `Shape_geometry_json`. Exists so parcad can read a STEP
+  export from another CAD system back into authorable numbers: solids with
+  exact mass properties, faces with their surface data down to B-spline pole
+  grids, wires as ordered edge loops.
 
 ## Not added
 

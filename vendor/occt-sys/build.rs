@@ -15,6 +15,38 @@ const LIB_DIR: &str = "lib";
 const INCLUDE_DIR: &str = "include";
 
 fn main() {
+    // PARCAD: reuse an OCCT this same source tree has already built, instead of
+    // staging and compiling ~14 000 sources again. A second checkout — a git
+    // worktree, a CI shard — otherwise pays the full ten-minute cmake build for
+    // byte-identical inputs, because its OUT_DIR hash includes its path. Point
+    // this at an existing install (the `out/` of another checkout's occt-sys
+    // build dir, containing `lib/` and `include/`). The caller is asserting the
+    // install was built from the same `OCCT/` and `patches/` as this tree; a
+    // mismatched install links and is silently wrong, exactly like any stale
+    // prebuilt library. See PARCAD-CHANGES.md.
+    println!("cargo:rerun-if-env-changed=PARCAD_OCCT_PREBUILT");
+    if let Ok(prebuilt) = std::env::var("PARCAD_OCCT_PREBUILT") {
+        let dir = PathBuf::from(&prebuilt);
+        let lib = dir.join(LIB_DIR);
+        let include = dir.join(INCLUDE_DIR);
+        assert!(
+            lib.is_dir() && include.is_dir(),
+            "PARCAD_OCCT_PREBUILT={prebuilt} does not hold an OCCT install: \
+             expected {lib:?} and {include:?}. Point it at the out/ of a \
+             finished occt-sys build (target/<profile>/build/occt-sys-*/out), \
+             or unset it to build OCCT from source."
+        );
+        println!(
+            "cargo:rustc-env=OCCT_LIB_PATH={}",
+            lib.to_str().expect("path is valid Unicode")
+        );
+        println!(
+            "cargo:rustc-env=OCCT_INCLUDE_PATH={}",
+            include.to_str().expect("path is valid Unicode")
+        );
+        return;
+    }
+
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let out = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR"));
     let staged = out.join("occt-src");

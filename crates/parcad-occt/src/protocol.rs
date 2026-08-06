@@ -6,11 +6,21 @@
 
 use parcad_core::graph::Doc;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Request {
-    pub doc: Doc,
+    /// The intent graph to evaluate. Absent only for a [`Request::probe_step`]
+    /// request, which measures a foreign file instead of building a part.
+    pub doc: Option<Doc>,
+    /// If present, read this STEP file and reply with its measured geometry
+    /// instead of evaluating a document. Runs in the worker for the same
+    /// reason evaluation does: a foreign export exercises OCCT's reader on
+    /// input nobody vetted, and it must be allowed to die without taking the
+    /// application with it.
+    #[serde(default)]
+    pub probe_step: Option<PathBuf>,
     /// If present, resolve this selected-edge treatment instead of building the
     /// finished part. Used by the editor's source-to-viewport target preview.
     #[serde(default)]
@@ -201,12 +211,154 @@ pub struct Success {
     pub stl_path: Option<PathBuf>,
 }
 
+/// Measured geometry of a foreign B-rep, read from a STEP export.
+///
+/// This is the reply to a [`Request::probe_step`] request, and it exists so a
+/// part authored in another CAD system can be recreated against numbers rather
+/// than an impression: every value is measured off the file's own B-rep by the
+/// kernel, none is echoed from anywhere.
+///
+/// The worker deserialises this from the JSON the vendored wrapper's
+/// `Shape_geometry_json` emits, so the two schemas are the same schema and a
+/// drift fails loudly here. `face_types` and `polygon` are derived on the
+/// worker side after that parse.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepProbe {
+    pub solids: Vec<SolidProbe>,
+    /// Faces belonging to no solid — surface bodies the exporter left loose.
+    /// A file that is all free faces has no solid to recreate.
+    pub free_faces: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SolidProbe {
+    /// Exact mass properties from the B-rep (BRepGProp), not a tessellation.
+    pub volume_mm3: f64,
+    pub area_mm2: f64,
+    pub bbox_min: [f64; 3],
+    pub bbox_max: [f64; 3],
+    /// Tally of `faces` by surface kind: plane, cylinder, cone, sphere, torus,
+    /// nurbs, other — the same nouns a Fusion measurement dump uses, so the
+    /// two can be compared without translation.
+    #[serde(default)]
+    pub face_types: BTreeMap<String, usize>,
+    pub faces: Vec<FaceProbe>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FaceProbe {
+    pub surface: SurfaceProbe,
+    pub wires: Vec<WireProbe>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SurfaceProbe {
+    /// `normal` is the face's outward normal, orientation applied.
+    Plane { origin: [f64; 3], normal: [f64; 3] },
+    Cylinder {
+        origin: [f64; 3],
+        axis: [f64; 3],
+        radius: f64,
+    },
+    Cone {
+        origin: [f64; 3],
+        axis: [f64; 3],
+        radius: f64,
+        half_angle_deg: f64,
+    },
+    Sphere { center: [f64; 3], radius: f64 },
+    Torus {
+        center: [f64; 3],
+        axis: [f64; 3],
+        major_radius: f64,
+        minor_radius: f64,
+    },
+    /// The full surface definition, because a loft target's sections have to
+    /// be reverse-measured from the wall surfaces: boundary edges alone are
+    /// not enough when the interior curves away from every boundary.
+    Nurbs {
+        u_degree: u32,
+        v_degree: u32,
+        rational: bool,
+        u_knots: Vec<f64>,
+        v_knots: Vec<f64>,
+        u_mults: Vec<u32>,
+        v_mults: Vec<u32>,
+        /// Pole grid, `poles[u][v]`.
+        poles: Vec<Vec<[f64; 3]>>,
+    },
+    Other { name: String },
+}
+
+impl SurfaceProbe {
+    /// The tally noun for `face_types`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            SurfaceProbe::Plane { .. } => "plane",
+            SurfaceProbe::Cylinder { .. } => "cylinder",
+            SurfaceProbe::Cone { .. } => "cone",
+            SurfaceProbe::Sphere { .. } => "sphere",
+            SurfaceProbe::Torus { .. } => "torus",
+            SurfaceProbe::Nurbs { .. } => "nurbs",
+            SurfaceProbe::Other { .. } => "other",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WireProbe {
+    /// Whether this is the face's outer boundary; `false` marks a hole loop.
+    pub outer: bool,
+    /// Edges in traversal order, orientation applied: each edge's `b` is the
+    /// next edge's `a`.
+    pub edges: Vec<CurveProbe>,
+    /// When every edge is a straight line: the loop's vertices in traversal
+    /// order, one per edge. This is the planar polygon an extrude or loft
+    /// section wants, ready to use.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub polygon: Option<Vec<[f64; 3]>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CurveProbe {
+    Line { a: [f64; 3], b: [f64; 3] },
+    Circle {
+        center: [f64; 3],
+        axis: [f64; 3],
+        radius: f64,
+        a: [f64; 3],
+        b: [f64; 3],
+    },
+    /// Anything else — a B-spline boundary, an ellipse — with enough samples
+    /// to see its path.
+    Other {
+        name: String,
+        a: [f64; 3],
+        b: [f64; 3],
+        #[serde(default)]
+        samples: Vec<[f64; 3]>,
+    },
+}
+
+impl CurveProbe {
+    pub fn endpoints(&self) -> ([f64; 3], [f64; 3]) {
+        match self {
+            CurveProbe::Line { a, b }
+            | CurveProbe::Circle { a, b, .. }
+            | CurveProbe::Other { a, b, .. } => (*a, *b),
+        }
+    }
+}
+
 /// What the worker prints on stdout, exactly once, if it survives.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Response {
     Ok(Box<Success>),
     TargetPreview(TargetPreview),
+    StepProbe(Box<StepProbe>),
     /// The worker understood the request and refused it — a bad radius, an
     /// unsupported operation, a boolean that produced nothing.
     Error {
@@ -230,6 +382,39 @@ pub fn breadcrumb(stage: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The exact shape `Shape_geometry_json` (vendored wrapper) emits, held
+    /// here so a schema drift on either side goes red in a unit test instead
+    /// of at the first probe of a real file. If this test needs changing, the
+    /// C++ writer and these structs are being changed together — that is the
+    /// contract.
+    #[test]
+    fn the_wrapper_geometry_schema_deserialises_into_a_step_probe() {
+        let json = r#"{"solids":[{"volume_mm3":2000.5,"area_mm2":1187.5,
+            "bbox_min":[-5,-5,0],"bbox_max":[5,5,30],
+            "faces":[
+              {"surface":{"kind":"plane","origin":[0,0,0],"normal":[0,0,-1]},
+               "wires":[{"outer":true,"edges":[
+                 {"kind":"line","a":[5,5,0],"b":[-5,5,0]},
+                 {"kind":"circle","center":[0,0,0],"axis":[0,0,1],"radius":5,"a":[-5,5,0],"b":[5,5,0]}
+               ]}]},
+              {"surface":{"kind":"nurbs","u_degree":1,"v_degree":1,"rational":false,
+               "u_knots":[0,1],"v_knots":[0,1],"u_mults":[2,2],"v_mults":[2,2],
+               "poles":[[[5,5,0],[-5,5,30]],[[-5,5,0],[-5,-5,30]]]},
+               "wires":[{"outer":true,"edges":[
+                 {"kind":"other","name":"Geom_BSplineCurve","a":[5,5,0],"b":[-5,5,30],"samples":[[5,5,0],[-5,5,30]]}
+               ]}]}
+            ]}],"free_faces":0}"#;
+
+        let probe: StepProbe = serde_json::from_str(json).expect("the wrapper schema must parse");
+        assert_eq!(probe.solids.len(), 1);
+        let solid = &probe.solids[0];
+        assert_eq!(solid.faces.len(), 2);
+        assert_eq!(solid.faces[0].surface.kind(), "plane");
+        assert_eq!(solid.faces[1].surface.kind(), "nurbs");
+        let (a, _) = solid.faces[0].wires[0].edges[1].endpoints();
+        assert_eq!(a, [-5.0, 5.0, 0.0]);
+    }
 
     #[test]
     fn target_preview_round_trips_over_the_worker_protocol() {

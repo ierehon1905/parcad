@@ -54,7 +54,10 @@ got; see docs/ARCHITECTURE.md, "One application, two windows".
 Root `cargo build` does **not** build OpenCASCADE — that's what `default-members`
 is for. Keep it that way; a cold OCCT build is ~10 minutes. Keep the commands
 locked: `rust-toolchain.toml`, `Cargo.lock`, `app/bun.lock` are the reproducible
-inputs.
+inputs. A second checkout (a git worktree) would pay that cold build again for
+byte-identical sources; point `PARCAD_OCCT_PREBUILT` at an existing
+`target/release/build/occt-sys-*/out` instead — see
+`vendor/occt-sys/PARCAD-CHANGES.md` for what that asserts.
 
 **A project is a `.parcad` folder, and `part.js` inside it is the only
 authoritative file.** `parcad.json`, `README.md` and `preview.png` beside it are
@@ -179,6 +182,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | which op to add next, and why not the others | `docs/OP_ROADMAP.md` |
 | which of all the open fronts to do first | `docs/NEXT.md` |
 | measuring a part without looking at it | `crates/parcad-core/src/probe.rs`, `thickness.rs` |
+| reading a foreign STEP export into authorable numbers | `StepProbe` in `crates/parcad-occt/src/protocol.rs`; CLI `parcad --probe-step`, MCP `probe_step_export`, both over `service::probe_step` — the C++ half is `Shape_geometry_json` in the vendored wrapper |
 | cutting a part open to see inside it | `view.rs`'s `Section`, then `render.rs` for the agent and `app/src/viewport.ts` for the window |
 | what an agent can see, and what to tell it instead | `docs/PERCEPTION.md` |
 | whether a model can *read* a tool | `eval/field/*.md`, run by `tools/field-suite.sh` |

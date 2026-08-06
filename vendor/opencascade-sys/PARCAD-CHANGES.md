@@ -75,6 +75,19 @@ later release of it exists, so there is no version to bump to.
   `#include <BRepOffsetAPI_MakePipe.hxx>` in `wrapper.hxx`. The general sweep
   op is built on it.
 
+- `Shape_geometry_json(shape)` in `wrapper.hxx` — measured geometry as JSON,
+  for reading a foreign B-rep (a STEP export from another CAD system) back
+  into numbers a part can be authored from. Per solid: exact mass properties
+  via `BRepGProp` and an optimal `Bnd_Box`; per face: the surface geometry —
+  plane origin and outward normal, cylinder/cone/sphere/torus axes and radii,
+  and for a B-spline surface the full pole grid with knots and multiplicities
+  — plus every boundary wire in `BRepTools_WireExplorer` order with edge
+  orientation applied, so a loop of lines reads directly as an ordered
+  polygon. One call for the whole shape because the caller sits across a
+  process boundary. The schema is deserialised by typed structs in parcad's
+  `protocol.rs`, so a drift here fails loudly there. New includes for the
+  `Geom_*` surface and curve classes it downcasts to.
+
 ## Changed in `build.rs`
 
 - `-std=c++17` instead of `-std=c++11`. OCCT 8.0 headers use constexpr and

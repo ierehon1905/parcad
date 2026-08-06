@@ -35,7 +35,10 @@ echo "sidecar staged:   app/src-tauri/binaries/parcad-occt-worker-$triple"
 # at -O0 and every boolean and fillet runs several times slower than it should.
 # That is invisible — everything works, it is just slow — so it is worth an
 # explicit check rather than trusting the config to have been read.
-flags=$(find target/release/build/occt-sys-*/out/build -name flags.make -path "*TKBO*" 2>/dev/null | head -1)
+# A PARCAD_OCCT_PREBUILT install was compiled elsewhere; its flags live under
+# its own build tree, not this checkout's target/.
+flag_root="${PARCAD_OCCT_PREBUILT:+$PARCAD_OCCT_PREBUILT/build}"
+flags=$(find ${flag_root:-target/release/build/occt-sys-*/out/build} -name flags.make -path "*TKBO*" 2>/dev/null | head -1)
 if [ -n "$flags" ]; then
   if grep -q '^CXX_FLAGS =.*-O[123s]' "$flags"; then
     echo "opencascade:      optimised ($(grep -o -- '-O[123s]' "$flags" | head -1))"

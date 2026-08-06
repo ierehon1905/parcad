@@ -111,15 +111,26 @@ Learned by writing bad ones:
 | [which-backend-measured](which-backend-measured.md) | `evaluate_part` | The regression for a field the server instructions name that the reply does not contain. That has happened; nothing but a field test can see it. |
 | [how-big-can-the-fillet-be](how-big-can-the-fillet-be.md) | `evaluate_part` refusals | "Error messages name the fix" is a rule in CLAUDE.md. Whether a model can act on one is a separate fact from whether it reads well to us. |
 | [put-it-where-i-can-open-it](put-it-where-i-can-open-it.md) | `save_project`, `list_projects`, `read_project`, `export_part` | The whole CRUD half of the surface, which nothing measured until it was noticed that two of those tools were not even on the runner's allow list. |
+| [rebuild-from-the-export](rebuild-from-the-export.md) | `probe_step_export` | The extraction-to-authoring loop: export a part, treat the file as another company's CAD, probe it, author a recreation from the probed numbers and hold it to them. The quote pins the probe's exact volume, which no script comment or mesh reply states. |
 | [change-the-open-part](change-the-open-part.md) | `get_session`, `open_project`, `set_script` | The live session, driven rather than described: does a model ask what is on screen before assuming, and change it rather than writing a file? **One trial at a time** — there is one screen, and parallel trials fight over it, which is the only case here that is not stateless. |
 
 Record what a round found in docs/PERCEPTION.md rather than here — the case is
 reusable, the result belongs with the design decision it changed.
 
-## Three ways a round is void rather than negative
+## Four ways a round is void rather than negative
 
-All three were learned by mistaking one for a result, and all three are now
-printed rather than left in the transcripts.
+All four were learned by mistaking one for a result, and the first three are
+now printed rather than left in the transcripts.
+
+**A CLI that connects and delivers no tools.** Claude Code 2.1.223 reported
+the `--mcp-config` server `connected` while registering none of its tools —
+not directly, not behind ToolSearch — so every trial floundered, strayed and
+graded VOID, on new cases and old alike. The server was healthy: a raw
+`initialize` + `tools/list` exchange returned all fourteen tools. Before
+believing a table of zeroes, run one *previously-green* case as a control; if
+its `reach` is NO too, the round measured the harness, not the tools. A
+one-call check that the CLI itself can see the server:
+`claude -p "call mcp__parcad__list_projects" --mcp-config <run>/mcp.json`.
 
 **A trial that strays.** `--disallowed-tools` is a *deny* list, so every built-in
 the CLI gains is allowed until someone adds it. A §5 round lost two of four
