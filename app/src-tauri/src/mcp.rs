@@ -201,6 +201,18 @@ pub struct ExportRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct StepProbeRequest {
+    /// Absolute path of the .step / .stp file to measure, on the machine
+    /// parcad runs on.
+    pub path: String,
+    /// `faces` (the default) includes every face's surface geometry and
+    /// boundary loops; `summary` stops at per-solid volume, area, bounding
+    /// box and face-type counts.
+    #[serde(default)]
+    pub detail: Option<String>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct ProjectRequest {
     /// A project path exactly as `list_projects` gives it: slash-separated
     /// folder names and no extension, such as `bracket` or `Mounts/bracket`.
@@ -547,6 +559,30 @@ impl Parcad {
         .await?;
 
         Ok(rmcp::handler::server::wrapper::Json(exported))
+    }
+
+    /// Measure a foreign STEP export so a recreation has numbers to hit.
+    #[tool(
+        name = "probe_step_export",
+        description = "Measure a STEP file exported from another CAD system — Fusion 360, SolidWorks, FreeCAD — so the part in it can be recreated as a parcad script against numbers instead of an impression. Takes the file's absolute path on this machine. Every value in the reply is measured off the file's own B-rep by the exact kernel; nothing is inferred from the file name, and nothing is echoed from a request.\n\nThe reply lists `solids`, each with exact `volume_mm3` and `area_mm2`, `bbox_min`/`bbox_max`, and `face_types` — a tally such as {\"plane\": 18, \"nurbs\": 12} that says at a glance what kind of geometry the body is made of. A file can hold several solids; recreating one of them is not recreating the document, so check the count and say which body a script reproduces. `free_faces` counts faces that belong to no solid — a file that is all free faces holds surface bodies, and there is no solid to recreate.\n\nBy default each solid also carries `faces`: the surface of each (`plane` with origin and outward `normal`; `cylinder`, `cone`, `sphere`, `torus` with axis and radii; `nurbs` with degrees, knots and the full `poles` grid) and its boundary `wires`, edges in traversal order so each edge's `b` is the next edge's `a`. A wire whose edges are all straight lines also carries `polygon` — its vertices in order, which is a section outline an `extrude` or `loft` can take almost verbatim. Pass detail: \"summary\" for the solids without faces, the right first look at an unfamiliar file.\n\nReading a loft target: a `nurbs` wall whose `poles` grid is 2 by 2 is ruled — four corner points fully determine it, and a parcad `loft` through matching sections rebuilds the identical surface (vertex pairing is by outline index, so a section listed a quarter turn on authors a twisted wall). Bigger pole grids are fitted surfaces; hold a recreation to volume, area and bounding box rather than pole-for-pole equality. To compare a finished recreation, `export_part` it as STEP and probe both files the same way."
+    )]
+    async fn probe_step_export(
+        &self,
+        Parameters(request): Parameters<StepProbeRequest>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<serde_json::Value>, ErrorData> {
+        let keep_faces = match request.detail.as_deref() {
+            None | Some("faces") => true,
+            Some("summary") => false,
+            Some(other) => {
+                return Err(invalid(format!(
+                    "unknown detail {other:?}; expected \"summary\" or \"faces\""
+                )))
+            }
+        };
+        let probe = blocking(move || service::probe_step(&request.path, keep_faces)).await?;
+        let value = serde_json::to_value(&probe)
+            .map_err(|e| invalid(format!("encoding the probe reply: {e}")))?;
+        Ok(rmcp::handler::server::wrapper::Json(value))
     }
 
     /// Every project in the shared folder.

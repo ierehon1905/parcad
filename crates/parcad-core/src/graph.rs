@@ -745,6 +745,17 @@ impl Op {
                     sections[i - 1].z
                 );
             }
+            // The pairing is by index, taken literally — that is what lets a
+            // rotated outline author a twisted wall — so every section must
+            // offer the same number of vertices to pair. The kernel is not
+            // allowed to invent a correspondence.
+            if section.outline.len() != sections[0].outline.len() {
+                anyhow::bail!(
+                    "loft sections must all have the same number of outline points, because walls pair vertices by index: section {i} has {}, section 0 has {}. Repeat a vertex (a collinear point is allowed) to make the counts match",
+                    section.outline.len(),
+                    sections[0].outline.len()
+                );
+            }
         }
         Ok(())
     }

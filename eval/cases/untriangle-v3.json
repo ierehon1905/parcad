@@ -1,0 +1,28 @@
+{
+  "name": "untriangle-v3",
+  "script": "examples/fusion360/untriangle-v3.js",
+  "why": "A Fusion 360 recreation held to the export's own numbers: three quarter-twisted bars closed into a triangle, rebuilt as ruled lofts plus corner prisms. The export's B-rep measures 24799.94 mm3 exactly (BRepGProp); the clean parametric construction is 24800.00 exactly, +0.00024%, and every one of the twelve twisted walls is the bilinear patch through the same four corners as Fusion's, matched to 1.2e-4 mm — the export's own vertex scatter. The numbers recorded here are the runner's mesh-measured ones; their 0.4 mm3 gap to the exact volume is tessellation chord error on the saddle walls. The export carries one of the document's two bodies (Body12); this is that body.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": [
+        "no exact distance field",
+        "B-rep backend"
+      ]
+    }
+  },
+  "brep": {
+    "size": [
+      10.0,
+      132.321,
+      114.593
+    ],
+    "volume_mm3": 24800.419,
+    "area_mm2": 11623.295,
+    "triangles": 12688,
+    "watertight": true,
+    "faces": 30,
+    "edges": 132,
+    "curves": 66
+  }
+}

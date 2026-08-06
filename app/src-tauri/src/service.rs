@@ -1402,6 +1402,42 @@ pub fn write_export(export: &Export, path: &str) -> Result<String, String> {
     Ok(path.to_string())
 }
 
+/// Measure a foreign STEP export: the reverse of [`export_step`].
+///
+/// This is how a part authored in another CAD system becomes numbers a
+/// recreation can be measured against — solids with exact mass properties,
+/// faces with their surface geometry down to B-spline pole grids, boundary
+/// loops as ready-to-use polygons. Runs in the isolated kernel worker, because
+/// OCCT's reader is OCCT code on a file nobody vetted.
+///
+/// `keep_faces` false strips the per-face detail and leaves the per-solid
+/// summary — volume, area, bounding box, face-type tally — which is the right
+/// first look at an unfamiliar file.
+pub fn probe_step(path: &str, keep_faces: bool) -> Result<parcad_occt::StepProbe, String> {
+    let p = std::path::Path::new(path);
+    if !p.is_absolute() {
+        return Err(format!(
+            "{path:?} is not an absolute path. This tool reads a file from the \
+             machine parcad runs on, so give the export's full path, e.g. \
+             /Users/you/exports/part.step"
+        ));
+    }
+    if !p.exists() {
+        return Err(format!(
+            "no file at {path}. Give the absolute path of an existing STEP \
+             (.step / .stp) export"
+        ));
+    }
+    let mut probe =
+        parcad_occt::probe_step(p, &parcad_occt::Options::default()).map_err(|e| format!("{e}"))?;
+    if !keep_faces {
+        for solid in &mut probe.solids {
+            solid.faces.clear();
+        }
+    }
+    Ok(probe)
+}
+
 /// Whether an agent is on the third transport, and what it last did.
 ///
 /// A capability rather than a transport detail, even though it describes the
@@ -1421,6 +1457,23 @@ mod tests {
     /// exist for was a mismatch between that shape and an assumption about it.
     fn doc(json: serde_json::Value) -> Doc {
         parse_graph(json).expect("the test graph should parse")
+    }
+
+    /// The probe's own refusals, which fire before any worker is spawned.
+    /// Both callers of this capability are agents, so the message has to name
+    /// the fix, not just the failure.
+    #[test]
+    fn probe_step_refuses_a_relative_path_and_names_the_fix() {
+        let error = probe_step("exports/part.step", true).unwrap_err();
+        assert!(error.contains("not an absolute path"), "{error}");
+        assert!(error.contains("full path"), "{error}");
+    }
+
+    #[test]
+    fn probe_step_refuses_a_missing_file_and_names_the_fix() {
+        let error = probe_step("/definitely/not/here.step", true).unwrap_err();
+        assert!(error.contains("no file at"), "{error}");
+        assert!(error.contains(".step"), "{error}");
     }
 
     #[test]

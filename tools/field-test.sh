@@ -107,7 +107,7 @@ cp "$PROMPT" "$RUN/case.md"
 ALLOW="mcp__parcad__list_projects,mcp__parcad__read_project,mcp__parcad__save_project,\
 mcp__parcad__evaluate_part,mcp__parcad__probe_part,mcp__parcad__measure_wall_thickness,\
 mcp__parcad__list_entities,mcp__parcad__inspect_treatment_target,\
-mcp__parcad__check_selector,mcp__parcad__export_part,\
+mcp__parcad__check_selector,mcp__parcad__export_part,mcp__parcad__probe_step_export,\
 mcp__parcad__get_session,mcp__parcad__open_project,mcp__parcad__set_script"
 DENY="Bash,Read,Grep,Glob,Edit,Write,WebFetch,WebSearch,Task,Agent,Skill,Monitor,\
 NotebookEdit,CronCreate,RemoteTrigger,TaskCreate,TaskStop,SendMessage,Artifact,\

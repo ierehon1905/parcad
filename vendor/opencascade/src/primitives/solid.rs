@@ -49,9 +49,13 @@ impl Solid {
             make_loft.pin_mut().AddWire(&wire.as_ref().inner);
         }
 
-        // Avoid twisted results when section outlines start at different
-        // vertices.
-        make_loft.pin_mut().CheckCompatibility(true);
+        // The caller's vertex pairing is the wall definition, taken literally.
+        // With the compatibility pass on, OCCT re-origins the wires to
+        // minimise twist — which silently rebuilt a loft between a square and
+        // its 90°-rotated copy as a straight prism, discarding the twist the
+        // sections spelled out. The caller is responsible for aligned
+        // orderings and equal vertex counts; parcad validates both.
+        make_loft.pin_mut().CheckCompatibility(false);
 
         let shape = make_loft.pin_mut().Shape();
         let solid = ffi::TopoDS_cast_to_solid(shape);

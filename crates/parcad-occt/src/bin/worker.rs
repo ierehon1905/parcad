@@ -128,6 +128,90 @@ fn edge_key(points: &[[f32; 3]]) -> Vec<[i64; 3]> {
     forward.min(backward)
 }
 
+/// Read a foreign STEP export and reply with its measured geometry.
+///
+/// Runs here, not in the host, because OCCT's STEP reader is OCCT code on
+/// input nobody vetted — the same argument that puts evaluation in this
+/// process. Every number is measured off the file's B-rep after transfer.
+fn probe_step(path: &std::path::Path) -> Response {
+    use parcad_occt::protocol::{CurveProbe, StepProbe};
+
+    breadcrumb("reading a STEP file");
+    if !path.exists() {
+        return Response::Error {
+            stage: "reading a STEP file".into(),
+            message: format!(
+                "no file at {} — give the absolute path of a .step export",
+                path.display()
+            ),
+        };
+    }
+    let shape = match opencascade::primitives::Shape::read_step(path) {
+        Ok(shape) => shape,
+        Err(e) => {
+            return Response::Error {
+                stage: "reading a STEP file".into(),
+                message: format!(
+                    "OpenCASCADE cannot read {} as STEP ({e}). The file must be a \
+                     STEP (.step / .stp) export; an STL or a native CAD document \
+                     is not one, whatever its extension says",
+                    path.display()
+                ),
+            }
+        }
+    };
+
+    breadcrumb("measuring the STEP");
+    let json = shape.geometry_json();
+    let mut probe: StepProbe = match serde_json::from_str(&json) {
+        Ok(probe) => probe,
+        Err(e) => {
+            return Response::Error {
+                stage: "measuring the STEP".into(),
+                message: format!(
+                    "the kernel's geometry report does not match the protocol \
+                     schema ({e}) — the vendored Shape_geometry_json and \
+                     protocol.rs have drifted apart and must be changed together"
+                ),
+            }
+        }
+    };
+
+    // Derived views of the measured data: the tally a recreation compares
+    // against a Fusion measurement dump, and the ready-to-use polygon for a
+    // loop that is all straight lines.
+    for solid in &mut probe.solids {
+        for face in &solid.faces {
+            *solid
+                .face_types
+                .entry(face.surface.kind().to_string())
+                .or_insert(0) += 1;
+        }
+    }
+    for solid in &mut probe.solids {
+        for face in &mut solid.faces {
+            for wire in &mut face.wires {
+                if wire
+                    .edges
+                    .iter()
+                    .all(|edge| matches!(edge, CurveProbe::Line { .. }))
+                    && !wire.edges.is_empty()
+                {
+                    wire.polygon = Some(
+                        wire.edges
+                            .iter()
+                            .map(|edge| edge.endpoints().0)
+                            .collect(),
+                    );
+                }
+            }
+        }
+    }
+
+    breadcrumb("done");
+    Response::StepProbe(Box::new(probe))
+}
+
 /// What `Mesher::new` passes to `BRepMesh_IncrementalMesh`.
 ///
 /// Hard-coded there, and the shape handle it needs is private, so there is no
@@ -156,9 +240,19 @@ fn run() -> Response {
         }
     };
 
+    if let Some(path) = &request.probe_step {
+        return probe_step(path);
+    }
+
+    let Some(doc) = request.doc else {
+        return Response::Error {
+            stage: "reading the request".into(),
+            message: "the request carries no document and no probe; nothing to do".into(),
+        };
+    };
     if let Some(node) = request.inspect_target {
         breadcrumb(&format!("resolving target for node {node}"));
-        return match backend::inspect_edge_target(&request.doc, node) {
+        return match backend::inspect_edge_target(&doc, node) {
             Ok(target) => Response::TargetPreview(TargetPreview {
                 node,
                 edges: target.edges,
@@ -174,7 +268,7 @@ fn run() -> Response {
 
     breadcrumb("lowering the graph");
     let t0 = Instant::now();
-    let (shape, treatment_owners) = match backend::build_with_treatment_edges(&request.doc) {
+    let (shape, treatment_owners) = match backend::build_with_treatment_edges(&doc) {
         Ok(s) => s,
         Err(e) => {
             return Response::Error {

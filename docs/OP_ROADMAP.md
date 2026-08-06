@@ -196,6 +196,12 @@ exactly).
 What shipped: `loft(sections, { smooth })` through two or more convex polygon
 outlines stacked along +Z. Default walls are ruled — contained in the
 sections' hull by construction, so the graph's cheap bounds are honest.
+Vertex pairing is by outline index, taken literally — OCCT's compatibility
+pass, which used to re-origin the wires and silently untwist a loft, is off
+(docs/GOTCHAS.md) — so sections must share a point count, and a rotated
+outline authors a *twisted* wall on purpose. That twist is what recreated
+UnTriangle v3 (`examples/fusion360/untriangle-v3.js`), held to a closed form
+by `eval/cases/twisted-loft.json`.
 `smooth: true` is Fusion's look, one surface fitted through all sections; a
 fit can in principle bulge past the sections' box, so `backend.rs` *measures*
 containment on the built solid and refuses a bulge over the slip tolerance —

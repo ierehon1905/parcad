@@ -164,6 +164,15 @@ impl Shape {
         ffi::BRepTools_write_brep(&self.inner, path.to_string())
     }
 
+    /// Measured geometry of this shape as JSON: per-solid exact mass
+    /// properties and every face's surface data, down to B-spline pole grids.
+    /// Added for parcad, which uses it to read a foreign STEP export back
+    /// into numbers a part can be authored from; the schema is what
+    /// parcad's `protocol.rs` deserialises. See PARCAD-CHANGES.md.
+    pub fn geometry_json(&self) -> String {
+        ffi::Shape_geometry_json(&self.inner)
+    }
+
     pub fn fillet_edge(&mut self, radius: f64, edge: &Edge) {
         let mut make_fillet = ffi::BRepFilletAPI_MakeFillet_ctor(&self.inner);
         make_fillet.pin_mut().add_edge(radius, &edge.inner);

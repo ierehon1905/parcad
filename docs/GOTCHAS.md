@@ -235,6 +235,24 @@ What stays true and load-bearing:
   hold the fix down; `eval/cases/blend-runs-off-the-edge.json` remains the
   control proving overrun was never the problem.
 
+### `ThruSections` quietly untwisted a loft — `CheckCompatibility` re-origins wires
+
+A ruled loft between a square and the same square listed a quarter turn on
+should twist 90° over its length — that pairing is the wall definition. With
+OCCT's `CheckCompatibility(true)` (which the vendored wrapper used to set,
+following upstream), the builder re-origins the section wires to *minimise*
+twist first, and the same two sections came back as a straight prism: right
+height, right sections, 3000 mm³ instead of 2000, and no error anywhere.
+Found recreating UnTriangle v3, whose whole geometry is that twist.
+
+`Solid::loft_sections` now passes `CheckCompatibility(false)` — the authored
+vertex order *is* the pairing — and `validate_loft` requires every section to
+carry the same point count, because with the compatibility pass off, OCCT no
+longer invents a correspondence for mismatched wires.
+`eval/cases/twisted-loft.json` holds the volume against the closed form
+(⅔·a²·L: the twisted bar is two thirds of its prism), which is the tripwire
+for this pass ever being turned back on.
+
 ### `adjacentTo: { faceNormal }` also matches a hole's own wall
 
 A rim edge borders two faces: the flat face it sits in, and the cylindrical

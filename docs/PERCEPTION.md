@@ -797,6 +797,37 @@ instructions naming a field no reply contains — is 12/12 clean across both
 rounds. Both are §3's and §5's rewritten tool descriptions still holding, which
 remains the cheapest change on this page.
 
+## 14. Reading a foreign B-rep — the tool is done, the reader is unmeasured
+
+**What it is.** `probe_step_export`: hand it the absolute path of a STEP file
+from another CAD system and it returns measured geometry — per-solid exact
+mass properties, every face's surface down to B-spline pole grids, boundary
+loops as ordered polygons where they are all straight lines. The same
+capability is `parcad --probe-step` at the CLI; both sit on
+`service::probe_step` and run the reader inside the expendable worker,
+because it is OCCT code on a file nobody vetted.
+
+**Why it exists.** The Fusion recreation targets stalled on "the sections live
+only in the Fusion document". They never did — they live in the export's
+B-rep, and this is the tool that reads them out. Its first two runs earned
+its keep: it showed `UnTriangle-v3.step` contains a different body than the
+target header recorded, and that the body's "NURBS" walls are bilinear ruled
+patches — which turned an "unmeasured surface-fit question" into an exact
+recreation (`examples/fusion360/untriangle-v3.js`).
+
+**What is measured, and what is not.** The output side is held by unit tests
+(the wrapper-schema contract in `protocol.rs`, the refusal wording in
+`service.rs`) and was exercised over a real MCP session against the retainer
+and UnTriangle exports. Whether a *model* can read it is a separate fact and
+is **unmeasured**: the field case exists
+(`eval/field/rebuild-from-the-export.md` — export a part, treat the file as
+foreign, probe it, author from the probed numbers, hold the result to them)
+but the round it was written for could not run — Claude Code 2.1.223
+connected to the MCP server and registered none of its tools, for the old
+cases exactly as for the new one; eval/field/README.md's fourth void mode
+records the diagnosis. Until a round runs, nothing on this page claims a
+model reads this tool.
+
 ---
 
 ## Suggested order

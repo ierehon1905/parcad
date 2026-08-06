@@ -50,10 +50,17 @@
 #include <Geom2d_Ellipse.hxx>
 #include <Geom2d_TrimmedCurve.hxx>
 #include <GeomAPI_ProjectPointOnSurf.hxx>
+#include <Geom_BSplineCurve.hxx>
+#include <Geom_BSplineSurface.hxx>
 #include <Geom_BezierSurface.hxx>
+#include <Geom_Circle.hxx>
+#include <Geom_ConicalSurface.hxx>
 #include <Geom_CylindricalSurface.hxx>
 #include <Geom_Plane.hxx>
+#include <Geom_RectangularTrimmedSurface.hxx>
+#include <Geom_SphericalSurface.hxx>
 #include <Geom_Surface.hxx>
+#include <Geom_ToroidalSurface.hxx>
 #include <Geom_TrimmedCurve.hxx>
 #include <NCollection_Array1.hxx>
 #include <NCollection_Array2.hxx>
@@ -542,6 +549,252 @@ inline rust::String Shape_topology_report(const TopoDS_Shape &shape) {
 // Added for parcad as a diagnostic.
 inline bool BRepTools_write_brep(const TopoDS_Shape &shape, rust::String path) {
   return BRepTools::Write(shape, path.c_str());
+}
+
+// Measured geometry of a shape as JSON, for reading a foreign B-rep — a STEP
+// export from another CAD system — back into numbers a part can be authored
+// from. Added for parcad; see PARCAD-CHANGES.md.
+//
+// One call returns the whole document because the caller sits on the far side
+// of a process boundary (parcad's kernel worker): per-face accessors would
+// mean a worker round trip per face. The schema is consumed by typed structs
+// in parcad's protocol.rs, so a change here fails loudly over there.
+//
+// Per solid: exact mass properties (BRepGProp, not a tessellation), bounding
+// box, and every face with its surface geometry — plane origin/normal,
+// cylinder/cone/sphere/torus axes and radii, and for a B-spline surface the
+// full pole grid with knots and multiplicities, which is the data a loft
+// section has to be reverse-measured from. Each face carries its boundary
+// wires in traversal order with orientation applied, so a wire of straight
+// lines reads directly as a polygon.
+namespace parcad_geometry_json {
+
+inline void write_xyz(std::ostringstream &out, double x, double y, double z) {
+  out << "[" << x << "," << y << "," << z << "]";
+}
+
+inline void write_pnt(std::ostringstream &out, const gp_Pnt &p) {
+  write_xyz(out, p.X(), p.Y(), p.Z());
+}
+
+inline void write_dir(std::ostringstream &out, const gp_Dir &d) {
+  write_xyz(out, d.X(), d.Y(), d.Z());
+}
+
+// A face's outward normal direction flips with its orientation; report the
+// outward one, because a draft angle read off an inward normal is a sign error
+// nobody catches downstream.
+inline gp_Dir face_axis(const TopoDS_Face &face, gp_Dir axis) {
+  return face.Orientation() == TopAbs_REVERSED ? axis.Reversed() : axis;
+}
+
+inline void write_surface(std::ostringstream &out, const TopoDS_Face &face) {
+  Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+  while (!surf.IsNull() && surf->DynamicType() == STANDARD_TYPE(Geom_RectangularTrimmedSurface)) {
+    surf = Handle(Geom_RectangularTrimmedSurface)::DownCast(surf)->BasisSurface();
+  }
+  if (surf.IsNull()) {
+    out << "{\"kind\":\"other\",\"name\":\"null\"}";
+    return;
+  }
+  if (surf->DynamicType() == STANDARD_TYPE(Geom_Plane)) {
+    const gp_Pln pln = Handle(Geom_Plane)::DownCast(surf)->Pln();
+    out << "{\"kind\":\"plane\",\"origin\":";
+    write_pnt(out, pln.Location());
+    out << ",\"normal\":";
+    write_dir(out, face_axis(face, pln.Axis().Direction()));
+    out << "}";
+  } else if (surf->DynamicType() == STANDARD_TYPE(Geom_CylindricalSurface)) {
+    const gp_Cylinder cyl = Handle(Geom_CylindricalSurface)::DownCast(surf)->Cylinder();
+    out << "{\"kind\":\"cylinder\",\"origin\":";
+    write_pnt(out, cyl.Location());
+    out << ",\"axis\":";
+    write_dir(out, cyl.Axis().Direction());
+    out << ",\"radius\":" << cyl.Radius() << "}";
+  } else if (surf->DynamicType() == STANDARD_TYPE(Geom_ConicalSurface)) {
+    const gp_Cone cone = Handle(Geom_ConicalSurface)::DownCast(surf)->Cone();
+    out << "{\"kind\":\"cone\",\"origin\":";
+    write_pnt(out, cone.Location());
+    out << ",\"axis\":";
+    write_dir(out, cone.Axis().Direction());
+    out << ",\"radius\":" << cone.RefRadius()
+        << ",\"half_angle_deg\":" << cone.SemiAngle() * 180.0 / M_PI << "}";
+  } else if (surf->DynamicType() == STANDARD_TYPE(Geom_SphericalSurface)) {
+    const gp_Sphere sph = Handle(Geom_SphericalSurface)::DownCast(surf)->Sphere();
+    out << "{\"kind\":\"sphere\",\"center\":";
+    write_pnt(out, sph.Location());
+    out << ",\"radius\":" << sph.Radius() << "}";
+  } else if (surf->DynamicType() == STANDARD_TYPE(Geom_ToroidalSurface)) {
+    const gp_Torus tor = Handle(Geom_ToroidalSurface)::DownCast(surf)->Torus();
+    out << "{\"kind\":\"torus\",\"center\":";
+    write_pnt(out, tor.Location());
+    out << ",\"axis\":";
+    write_dir(out, tor.Axis().Direction());
+    out << ",\"major_radius\":" << tor.MajorRadius()
+        << ",\"minor_radius\":" << tor.MinorRadius() << "}";
+  } else if (surf->DynamicType() == STANDARD_TYPE(Geom_BSplineSurface)) {
+    Handle(Geom_BSplineSurface) bs = Handle(Geom_BSplineSurface)::DownCast(surf);
+    out << "{\"kind\":\"nurbs\",\"u_degree\":" << bs->UDegree()
+        << ",\"v_degree\":" << bs->VDegree()
+        << ",\"rational\":" << ((bs->IsURational() || bs->IsVRational()) ? "true" : "false");
+    out << ",\"u_knots\":[";
+    for (int i = 1; i <= bs->NbUKnots(); ++i) {
+      out << (i > 1 ? "," : "") << bs->UKnot(i);
+    }
+    out << "],\"v_knots\":[";
+    for (int i = 1; i <= bs->NbVKnots(); ++i) {
+      out << (i > 1 ? "," : "") << bs->VKnot(i);
+    }
+    out << "],\"u_mults\":[";
+    for (int i = 1; i <= bs->NbUKnots(); ++i) {
+      out << (i > 1 ? "," : "") << bs->UMultiplicity(i);
+    }
+    out << "],\"v_mults\":[";
+    for (int i = 1; i <= bs->NbVKnots(); ++i) {
+      out << (i > 1 ? "," : "") << bs->VMultiplicity(i);
+    }
+    out << "],\"poles\":[";
+    for (int i = 1; i <= bs->NbUPoles(); ++i) {
+      out << (i > 1 ? "," : "") << "[";
+      for (int j = 1; j <= bs->NbVPoles(); ++j) {
+        if (j > 1) {
+          out << ",";
+        }
+        write_pnt(out, bs->Pole(i, j));
+      }
+      out << "]";
+    }
+    out << "]}";
+  } else {
+    out << "{\"kind\":\"other\",\"name\":\"" << surf->DynamicType()->Name() << "\"}";
+  }
+}
+
+inline void write_edge(std::ostringstream &out, const TopoDS_Edge &edge) {
+  double u0 = 0.0, u1 = 0.0;
+  Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, u0, u1);
+  while (!curve.IsNull() && curve->DynamicType() == STANDARD_TYPE(Geom_TrimmedCurve)) {
+    curve = Handle(Geom_TrimmedCurve)::DownCast(curve)->BasisCurve();
+  }
+  if (curve.IsNull()) {
+    out << "{\"kind\":\"other\",\"name\":\"no-3d-curve\",\"a\":[0,0,0],\"b\":[0,0,0],\"samples\":[]}";
+    return;
+  }
+  // Endpoints in the wire's direction of travel, so consecutive edges chain
+  // a -> b -> a -> b and a loop of lines reads off as an ordered polygon.
+  const bool reversed = edge.Orientation() == TopAbs_REVERSED;
+  const gp_Pnt a = curve->Value(reversed ? u1 : u0);
+  const gp_Pnt b = curve->Value(reversed ? u0 : u1);
+  if (curve->DynamicType() == STANDARD_TYPE(Geom_Line)) {
+    out << "{\"kind\":\"line\",\"a\":";
+    write_pnt(out, a);
+    out << ",\"b\":";
+    write_pnt(out, b);
+    out << "}";
+    return;
+  }
+  if (curve->DynamicType() == STANDARD_TYPE(Geom_Circle)) {
+    const gp_Circ circ = Handle(Geom_Circle)::DownCast(curve)->Circ();
+    out << "{\"kind\":\"circle\",\"center\":";
+    write_pnt(out, circ.Location());
+    out << ",\"axis\":";
+    write_dir(out, circ.Axis().Direction());
+    out << ",\"radius\":" << circ.Radius() << ",\"a\":";
+    write_pnt(out, a);
+    out << ",\"b\":";
+    write_pnt(out, b);
+    out << "}";
+    return;
+  }
+  out << "{\"kind\":\"other\",\"name\":\"" << curve->DynamicType()->Name() << "\",\"a\":";
+  write_pnt(out, a);
+  out << ",\"b\":";
+  write_pnt(out, b);
+  out << ",\"samples\":[";
+  const int samples = 16;
+  for (int i = 0; i <= samples; ++i) {
+    const double t = static_cast<double>(reversed ? samples - i : i) / samples;
+    if (i > 0) {
+      out << ",";
+    }
+    write_pnt(out, curve->Value(u0 + (u1 - u0) * t));
+  }
+  out << "]}";
+}
+
+inline void write_face(std::ostringstream &out, const TopoDS_Face &face) {
+  out << "{\"surface\":";
+  write_surface(out, face);
+  out << ",\"wires\":[";
+  const TopoDS_Wire outer = BRepTools::OuterWire(face);
+  int wi = 0;
+  for (TopExp_Explorer w(face, TopAbs_WIRE); w.More(); w.Next(), ++wi) {
+    const TopoDS_Wire &wire = TopoDS::Wire(w.Current());
+    out << (wi > 0 ? "," : "") << "{\"outer\":" << (wire.IsSame(outer) ? "true" : "false")
+        << ",\"edges\":[";
+    int ei = 0;
+    for (BRepTools_WireExplorer e(wire, face); e.More(); e.Next(), ++ei) {
+      if (ei > 0) {
+        out << ",";
+      }
+      write_edge(out, e.Current());
+    }
+    out << "]}";
+  }
+  out << "]}";
+}
+
+inline void write_solid(std::ostringstream &out, const TopoDS_Shape &solid) {
+  GProp_GProps volume_props;
+  BRepGProp::VolumeProperties(solid, volume_props);
+  GProp_GProps area_props;
+  BRepGProp::SurfaceProperties(solid, area_props);
+  Bnd_Box box;
+  BRepBndLib::AddOptimal(solid, box, /*useTriangulation*/ false, /*useShapeTolerance*/ false);
+  double x0 = 0, y0 = 0, z0 = 0, x1 = 0, y1 = 0, z1 = 0;
+  if (!box.IsVoid()) {
+    box.Get(x0, y0, z0, x1, y1, z1);
+  }
+  out << "{\"volume_mm3\":" << volume_props.Mass() << ",\"area_mm2\":" << area_props.Mass()
+      << ",\"bbox_min\":";
+  write_xyz(out, x0, y0, z0);
+  out << ",\"bbox_max\":";
+  write_xyz(out, x1, y1, z1);
+  out << ",\"faces\":[";
+  int fi = 0;
+  for (TopExp_Explorer f(solid, TopAbs_FACE); f.More(); f.Next(), ++fi) {
+    if (fi > 0) {
+      out << ",";
+    }
+    write_face(out, TopoDS::Face(f.Current()));
+  }
+  out << "]}";
+}
+
+} // namespace parcad_geometry_json
+
+inline rust::String Shape_geometry_json(const TopoDS_Shape &shape) {
+  using namespace parcad_geometry_json;
+  std::ostringstream out;
+  out.precision(15);
+  out << "{\"solids\":[";
+  int si = 0;
+  int solid_faces = 0;
+  for (TopExp_Explorer s(shape, TopAbs_SOLID); s.More(); s.Next(), ++si) {
+    if (si > 0) {
+      out << ",";
+    }
+    write_solid(out, s.Current());
+    for (TopExp_Explorer f(s.Current(), TopAbs_FACE); f.More(); f.Next()) {
+      ++solid_faces;
+    }
+  }
+  int all_faces = 0;
+  for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next()) {
+    ++all_faces;
+  }
+  out << "],\"free_faces\":" << (all_faces - solid_faces) << "}";
+  return rust::String(out.str());
 }
 
 // Drop the unused half of a stale seam representation. A boolean can leave an

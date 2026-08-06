@@ -28,7 +28,19 @@ only a side-by-side comparison needs the files.
 ```bash
 bun tools/run.ts examples/fusion360/retainer-v1.js > /tmp/part.json
 ./target/release/parcad /tmp/part.json --brep --step /tmp/part.step --out /tmp/out
+
+# Measure an export itself: solids, faces with surface data, section polygons.
+./target/release/parcad --probe-step reference/fusion/UnTriangle-v3/UnTriangle-v3.step
 ```
+
+The probe is how a target stops being an impression: it reads the STEP through
+the isolated kernel and reports exact mass properties, every face's surface
+geometry down to B-spline pole grids, and each all-straight boundary loop as a
+ready polygon. The same capability is an MCP tool, `probe_step_export`, so an
+agent can do this end to end — probe the export, author the script, export it
+and probe both sides. It found, first thing, that this folder's headers and
+the exports disagree about what is in them: `UnTriangle-v3.step` contains only
+the document's *second* body, while the header recorded the first (see below).
 
 ## Recreated
 
@@ -36,6 +48,7 @@ bun tools/run.ts examples/fusion360/retainer-v1.js > /tmp/part.json
 |---|---|---|
 | `retainer-v1.js` | plate with a bored, drafted disc | volume +0.0028%, bbox exact, all 23 faces the same surface types |
 | `../diamond-v19.js` | round brilliant, 57 planar facets | volume, area and bbox agree to every published digit; the same 57 planes — promoted up into `examples/`, measured by `eval/cases/diamond-v19.json` |
+| `untriangle-v3.js` | impossible-triangle ring of quarter-twisted bars (the export's body, Body12) | volume +0.00024%, area +0.00005%, bbox exact, the same 30 faces (18 plane, 12 nurbs); every twisted wall is the *identical* bilinear surface, corners matched to 1.2e-4 mm — measured by `eval/cases/untriangle-v3.json` |
 
 The diamond needed no new op at all. Fusion built it with BoundaryFill, but the
 solid is convex, so it *is* the intersection of its 57 facet half-spaces — an
@@ -56,7 +69,6 @@ while reporting success.
 | `spiral-v1.js` | Spiral v1 | 406,116 mm³ | 3 | 0 | a loft whose sections rotate as they rise; also two solids |
 | `steam-top-4-holed-v1-v6.js` | Steam Top 4 Holed v1 v6 | 8,976 mm³ | 39 | 10 | Patch — out by decision: surface logic |
 | `untitled2-v1.js` | Untitled2 v1 | 36,357 mm³ | 1 | 1 | a spline in a revolve section; also two solids |
-| `untriangle-v3.js` | UnTriangle v3 | 31,976 mm³ | 30 | 15 | its loft sections live only in the Fusion document, and Fusion's fit vs OCCT's is unmeasured; also two solids |
 | `v2.js` | ваза v2 | 144,242 mm³ | 9 | 8 | spline loft sections; parcad's loft takes polygons |
 | `v3.js` | шар v3 | 515,661 mm³ | 460 | 32 | a sweep around a sphere; parcad's sweep follows runs and circular bends |
 | `v4.js` | v4 v4 | 7,375 mm³ | 3 | 1 | a spline outline in an extrude, then SplitBody |
@@ -65,14 +77,32 @@ Each throws with its reason. They are deliberately not approximate solids: a stu
 that returned something roughly right would measure as a part and read as
 progress, which is worse than nothing.
 
-The wall moved when `loft` and `sweep` landed, and it is worth saying exactly
-where it now stands. parcad can build freeform *walls* — a smooth loft's fitted
-surface is a genuine NURBS — but only through the sections it can author, which
-are convex polygons, along the paths it can author, which are runs and circular
-bends. Every remaining target above fails on the *section or path*, not on the
-op: five of the seven carry spline sketch geometry the section type cannot
-hold, one rotates its sections up a helix, and one needs Patch, which stays out
-by decision. The next enabling change is a richer section type — arcs first,
+The wall moved when `loft` and `sweep` landed, and again when the probe read
+UnTriangle's export properly. What that recreation taught, in order of worth:
+
+- **The exports and the headers can disagree about what is in them.**
+  `UnTriangle-v3.step` holds one solid, and it is Body12 (24,800 mm³, 18
+  plane + 12 nurbs), not the Body1 the header recorded — a recreation aimed
+  at the header's numbers was aiming at a body the reference never
+  contained. Probe the export first; the header is a note, the file is the
+  specification.
+- **"NURBS" in a measurement dump does not mean a fitted surface.** All
+  twelve of UnTriangle's twisted walls are exactly bilinear — ruled patches
+  fully determined by four corners, exported degree-elevated to bicubic. For
+  ruled walls the "does OCCT's fit match Fusion's" question dissolves: both
+  kernels build the one doubly-ruled surface through the same corners, and
+  the recreation's walls match the export's to 1.2e-4 mm, the export's own
+  vertex scatter. A *smooth* loft through three or more sections is still a
+  genuine fit, and two kernels' fits still owe each other nothing.
+- **The loft op was never the blocker there — the pairing was.** OCCT's
+  compatibility pass silently re-origined the section wires and rebuilt the
+  twisted loft as a straight prism. Vertex pairing is now literal, so a
+  rotated outline authors a twist; docs/GOTCHAS.md has the story.
+
+Every remaining target above fails on the *section or path*, not on the op:
+four of the six carry spline sketch geometry the section type cannot hold, one
+rotates its sections up a helix, and one needs Patch, which stays out by
+decision. The next enabling change is a richer section type — arcs first,
 splines after — not another sweep or loft variant. See `docs/DSL_GAPS.md` and
 `docs/OP_ROADMAP.md`.
 

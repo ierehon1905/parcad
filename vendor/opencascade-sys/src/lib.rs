@@ -573,6 +573,9 @@ pub mod ffi {
 
         // Diagnostics — added for parcad, see PARCAD-CHANGES.md.
         pub fn Shape_topology_report(shape: &TopoDS_Shape) -> String;
+        // Measured geometry of a foreign B-rep as JSON — added for parcad, see
+        // PARCAD-CHANGES.md. Schema consumed by parcad's protocol.rs.
+        pub fn Shape_geometry_json(shape: &TopoDS_Shape) -> String;
         // Healing of stale seam representations — added for parcad, see
         // PARCAD-CHANGES.md.
         pub fn Shape_drop_unused_seam_pcurves(shape: &TopoDS_Shape) -> i32;

@@ -114,7 +114,11 @@ them, the implicit backend refuses them by name rather than approximating a
 field that probes would then trust). What the counts could not say, and the
 recreation targets in `examples/fusion360/` did, is that the ops alone were
 not the wall: every still-blocked target fails on *spline sketch geometry in
-the section or path*, which the profile type cannot hold. Everything under
+the section or path*, which the profile type cannot hold. (UnTriangle v3
+looked blocked the same way and was not: probing its export showed the
+"NURBS" walls are ruled patches, and the real obstacle was loft's vertex
+pairing being silently normalised — recreated now, see
+`examples/fusion360/README.md`.) Everything under
 `Thicken`, `Stitch` and `Patch` remains the surface-modelling side of that
 wall, out by decision.
 

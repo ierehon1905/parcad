@@ -143,7 +143,8 @@ fn worker_path() -> Result<PathBuf, OcctError> {
 pub fn evaluate(doc: &Doc, opts: &Options) -> Result<Success, OcctError> {
     match run_worker(
         Request {
-            doc: doc.clone(),
+            doc: Some(doc.clone()),
+            probe_step: None,
             inspect_target: None,
             deflection: opts.deflection,
             step_path: opts.step_path.clone(),
@@ -153,8 +154,34 @@ pub fn evaluate(doc: &Doc, opts: &Options) -> Result<Success, OcctError> {
     )? {
         Response::Ok(success) => Ok(*success),
         Response::Error { stage, message } => Err(OcctError::Rejected { stage, message }),
-        Response::TargetPreview(_) => Err(OcctError::Host(
-            "the kernel returned a target preview for a full-model request".into(),
+        _ => Err(OcctError::Host(
+            "the kernel returned the wrong reply kind for a full-model request".into(),
+        )),
+    }
+}
+
+/// Measure a foreign STEP export through the isolated kernel.
+///
+/// Same worker, same isolation, and for the same reason as evaluation: the
+/// reader is OCCT code running on a file nobody vetted, so it gets a process
+/// it is allowed to die in. Every number in the reply is measured off the
+/// file's B-rep; nothing is inferred from the file name or echoed back.
+pub fn probe_step(path: &std::path::Path, opts: &Options) -> Result<crate::protocol::StepProbe, OcctError> {
+    match run_worker(
+        Request {
+            doc: None,
+            probe_step: Some(path.to_path_buf()),
+            inspect_target: None,
+            deflection: opts.deflection,
+            step_path: None,
+            stl_path: None,
+        },
+        opts,
+    )? {
+        Response::StepProbe(probe) => Ok(*probe),
+        Response::Error { stage, message } => Err(OcctError::Rejected { stage, message }),
+        _ => Err(OcctError::Host(
+            "the kernel returned the wrong reply kind for a STEP probe request".into(),
         )),
     }
 }
@@ -167,7 +194,8 @@ pub fn inspect_edge_target(
 ) -> Result<TargetPreview, OcctError> {
     match run_worker(
         Request {
-            doc: doc.clone(),
+            doc: Some(doc.clone()),
+            probe_step: None,
             inspect_target: Some(node),
             deflection: opts.deflection,
             step_path: None,
@@ -177,8 +205,8 @@ pub fn inspect_edge_target(
     )? {
         Response::TargetPreview(preview) => Ok(preview),
         Response::Error { stage, message } => Err(OcctError::Rejected { stage, message }),
-        Response::Ok(_) => Err(OcctError::Host(
-            "the kernel returned a full model for a target-preview request".into(),
+        _ => Err(OcctError::Host(
+            "the kernel returned the wrong reply kind for a target-preview request".into(),
         )),
     }
 }

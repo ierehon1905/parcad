@@ -1059,6 +1059,14 @@ export interface LoftSection {
  * are, plus one of loft's own: the kernel pairs section vertices to build
  * the wall, and a re-entrant outline makes that pairing a silent guess. A
  * stepped or hollow loft is a boolean of convex ones.
+ *
+ * The pairing is by outline index, taken literally, which makes it part of
+ * the intent: every section must have the same number of points, and listing
+ * a section's outline rotated pairs each vertex with a different one above —
+ * a *twisted* wall, authored on purpose. A square lofted to the same square
+ * a quarter turn on is a bar twisting 90° over its length (see
+ * examples/fusion360/untriangle-v3.js); the kernel is never allowed to
+ * re-origin the sections to untwist what the outlines spell out.
  */
 export function loft(
   sections: LoftSection[],
@@ -1074,6 +1082,11 @@ export function loft(
     if (i > 0 && section.z <= sections[i - 1].z) {
       throw new Error(
         `loft sections must rise strictly: section ${i} is at z = ${section.z}, below or level with section ${i - 1} at z = ${sections[i - 1].z}`,
+      );
+    }
+    if (section.outline.length !== sections[0].outline.length) {
+      throw new Error(
+        `loft sections must all have the same number of outline points, because walls pair vertices by index: section ${i} has ${section.outline.length}, section 0 has ${sections[0].outline.length}. Repeat a vertex (a collinear point is allowed) to make the counts match`,
       );
     }
   }

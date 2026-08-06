@@ -75,6 +75,21 @@ switched off with `BUILD_MODULE_Draw=FALSE` rather than deleted, so that
 The `exclude` list in `Cargo.toml` is a packaging directive for crates.io and
 has no effect on a path dependency. It is left alone, and is now stale.
 
+## `PARCAD_OCCT_PREBUILT`: reuse an install another checkout already built
+
+`build.rs` accepts a `PARCAD_OCCT_PREBUILT` environment variable naming the
+`out/` directory of a finished occt-sys build (the one holding `lib/` and
+`include/`). When set, staging and cmake are skipped entirely and that install
+is linked instead. The point is second checkouts: a git worktree of this repo
+has a different OUT_DIR hash for byte-identical sources, so without this it
+re-runs the full ~10-minute OCCT build to produce the same libraries.
+
+The variable is an assertion by the caller that the install came from the same
+`OCCT/` tree and `patches/` series — nothing verifies that, and a mismatched
+install links and is silently wrong, like any stale prebuilt library.
+`tools/build-worker.sh` knows to check optimisation flags under the prebuilt
+directory when the variable is set.
+
 ## Changes to OCCT itself
 
 Two patches.
