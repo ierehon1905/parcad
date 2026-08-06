@@ -6,18 +6,26 @@
 // What is still not expressible is a path that curves continuously: a spline
 // has no exact distance field, so it is not offered rather than fitted.
 //
-// The inlet boss should carry an O-ring gland, and a torus is the exact shape
-// of one. It is not here: a coaxial torus groove in a cylinder segfaults the
-// kernel on the way out of the boolean, which `eval/cases/torus-gland.json`
-// holds as a known defect and docs/GOTCHAS.md explains. A square-bottomed
-// groove would build, and would not be what an O-ring seals against, so this
-// part goes without until the crash is fixed.
+// The inlet boss carries its O-ring groove. That used to be impossible: the
+// coaxial seams a torus cut leaves in a cylinder wall segfaulted
+// `UnifySameDomain`, and this part went without and said so. OCCT 8.0.1 fixed
+// it; `eval/cases/torus-gland.json` is what proves the fix is still there.
+//
+// The groove is round-bottomed, because a torus cut is a circle in section and
+// that is the only section available. A catalogue gland is rectangular and
+// *wider* than the cord, which no torus can cut — see docs/DSL_GAPS.md, "arcs
+// in a section". So this is a seat the ring is stretched over and drops into,
+// which is how an external groove is assembled anyway, and not a claim to a
+// standard section.
 
 const tube = 12;
 const wall = 1.5;
 const bend = 20;      // centreline bend radius, 1.67 x diameter
 const bossDia = 24;
 const bossLen = 14;
+const cord = 2;         // O-ring cord diameter, 2 mm metric
+const glandDepth = 1.5; // 0.5 mm of the cord stands proud to be squeezed
+const glandFromEnd = 4; // back from the free end, clear of the fitting's lead-in
 
 // The route: out of the pump, along, up, and across to the manifold. Each
 // corner gets the same bend, which is what one tool setting gives you.
@@ -31,11 +39,20 @@ const route = [
 
 const line = pipe(route, tube, { bend }).tag("line");
 
+// The groove is written from the cord, so changing the ring moves the whole
+// feature: the torus centreline sits one cord-radius outside the groove
+// bottom, and that bottom is `glandDepth` under the boss surface.
+const gland = torus(bossDia / 2 - glandDepth + cord / 2, cord / 2)
+  .rotate("y", 90)
+  .at(glandFromEnd, 0, 0)
+  .tag("gland");
+
 // A boss at each end, over the tube, for the fitting to thread into. Each sits
 // on the run it belongs to, so it is placed by the route's own numbers.
 const inlet = cylinder(bossDia / 2, bossLen)
   .rotate("y", 90)
-  .at(bossLen / 2, 0, 0);
+  .at(bossLen / 2, 0, 0)
+  .cut(gland);
 const outlet = cylinder(bossDia / 2, bossLen)
   .rotate("y", 90)
   .at(130 - bossLen / 2, 55, 40);

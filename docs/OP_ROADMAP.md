@@ -112,11 +112,17 @@ revolved about a parallel axis, exact in both backends
 pipe bend. `eval/cases/torus.json` checks volume *and* area against the closed
 form.
 
-**But its main use is currently blocked.** An O-ring gland —
-`cylinder(12, 14).cut(torus(11.5, 1))` — segfaults, not in the boolean but in
-the `UnifySameDomain` pass every result goes through, on the coaxial circular
-seams the cut leaves. `eval/cases/torus-gland.json` holds it as a
-`known_defect`. Fixing that is worth more than the rest of this section.
+**Its main use was blocked, and no longer is.** An O-ring groove —
+`cylinder(12, 14).cut(torus(11.5, 1))` — used to segfault, not in the boolean
+but in the `UnifySameDomain` pass every result goes through, on the coaxial
+circular seams the cut leaves. Vendoring OCCT 8.0.1 fixed it;
+`eval/cases/torus-gland.json` no longer carries a `known_defect`, and
+`examples/hydraulic-line.js` turns the groove into its inlet boss.
+
+**What the torus still cannot be is a catalogue gland.** That section is
+rectangular and wider than the cord; a torus cut is a circle. So the round
+bottom is the honest shape, and the rest waits on the profile type below —
+which is the argument for it, made by a part rather than by a table.
 
 **Cost.** Medium for the full profile type; the torus itself is done.
 
@@ -239,9 +245,11 @@ makes on purpose, and `v-block.js`'s exact 90° vee is what it buys.
 2. ~~Draft~~ — **done**, measured against a closed form in both backends.
 3. ~~Torus~~ — **done**, with a swept arc for bends.
 4. ~~`pipe()`~~ — **done**, runs and bends, measured against closed forms.
-5. **Fix the `UnifySameDomain` segfault** on a coaxial torus groove. It blocks
-   the O-ring gland, which is what the torus was for.
+5. ~~Fix the `UnifySameDomain` segfault~~ — **done**, by vendoring OCCT 8.0.1,
+   and `examples/hydraulic-line.js` has its groove back.
 6. **Arcs in a section** — the general version of what the torus does for one
-   shape: grooves, seats, radiused shoulders.
+   shape: grooves, seats, radiused shoulders. The groove in 5 is round-bottomed
+   because a torus is all there is; a gland section is rectangular and wider
+   than the cord, and this is what would let one be drawn.
 7. Everything else: hold, with the reason recorded above rather than the
    intention.

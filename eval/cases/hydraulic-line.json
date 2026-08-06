@@ -1,19 +1,19 @@
 {
   "name": "hydraulic-line",
   "script": "examples/hydraulic-line.js",
-  "why": "Routed tube in a real part: three 90 degree bends of one radius, bored along the same route, with a boss at each end. 19340 mm3 against 19359 by hand, which is the usual 0.1% the tessellation under-reads on curved surfaces. The two-rim selector is what says the bore still runs the whole route — a bend radius that stopped fitting would break the chain and leave a different number.",
+  "why": "Routed tube in a real part: three 90 degree bends of one radius, bored along the same route, with a boss at each end and an O-ring groove turned into the inlet boss. The two-rim selector is what says the bore still runs the whole route — a bend radius that stopped fitting would break the chain and leave a different number. The groove took 178.78 mm3 out of the 19340.75 the part measured without it, against 179.90 by Pappus: 0.6% under, which is tessellation under-reading a 1 mm concave radius and is the direction that error must have. It is also the shape that used to segfault UnifySameDomain in a cylinder wall, so a part carrying it is a second, in-context guard on the OCCT 8.0.1 fix that torus-gland holds directly.",
   "brep": {
     "size": [
       130.0,
       78.998,
       63.995
     ],
-    "volume_mm3": 19340.747,
-    "area_mm2": 15634.987,
-    "triangles": 34182,
+    "volume_mm3": 19161.974,
+    "area_mm2": 15795.562,
+    "triangles": 41272,
     "watertight": true,
-    "faces": 20,
-    "edges": 88,
-    "curves": 28
+    "faces": 23,
+    "edges": 100,
+    "curves": 31
   }
 }

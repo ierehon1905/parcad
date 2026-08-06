@@ -33,7 +33,7 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 | `extrusion-2020.js` | 20x20 T-slot extrusion, 200 mm | four-fold symmetry by rotating the *cutter*; corner fillets among 37 candidate edges |
 | `flange.js` | ASME B16.5 class 150 NPS 2 slip-on flange | a bolt circle, and one cut whose provenance reaches five rims |
 | `heat-sink.js` | 60x60 extruded fin sink | one fin shape placed nine times — one graph node, nine placements |
-| `hydraulic-line.js` | bent 12 mm hydraulic line | a routed tube: straight runs and real bend radii, bored along the same route |
+| `hydraulic-line.js` | bent 12 mm hydraulic line | a routed tube: straight runs and real bend radii, bored along the same route, with a round-bottomed O-ring groove on the inlet boss |
 | `hex-standoff.js` | M3 hex standoff, 5.5 AF | a prism from three intersecting slabs, which is exact |
 | `knurled-knob.js` | 30 mm knurled knob, D-bore | a D-bore by intersection; a dish cut with a large sphere; 24 flutes |
 | `manifold-block.js` | hydraulic manifold, cross-drilled | galleries that have to actually intersect; position-based rim selection |
@@ -66,9 +66,12 @@ list under `fusion360` and a blocked target shows its reason when opened. A targ
 that becomes faithful gets promoted up here and earns a case in `eval/cases/`.
 See `fusion360/README.md`.
 
-No example has a thread, a gear or an O-ring groove — not because they were
-skipped, but because the graph cannot produce those shapes. Countersinks and
-tapers *were* on that list until `revolve` landed; `cover-plate.js` is what
-came of it. `docs/DSL_GAPS.md` §0 lists what is missing
+No example has a thread or a gear — not because they were skipped, but because
+the graph cannot produce those shapes. Countersinks and tapers *were* on that
+list until `revolve` landed; `cover-plate.js` is what came of it, and
+`hydraulic-line.js`'s groove came off the torus the same way. That groove is
+round-bottomed, which is the boundary of the same argument: a catalogue O-ring
+gland is rectangular and wider than the cord, so the part carries the section
+the kernel can cut exactly and says so rather than passing it off. `docs/DSL_GAPS.md` §0 lists what is missing
 and what each absence costs; §1 onward covers what the language *can* do but
 makes harder than it should be.

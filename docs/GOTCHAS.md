@@ -289,18 +289,19 @@ along the chain means each step touches what is already there.
 touch. This is cheap to get right and expensive to debug, because the failure
 is a SIGSEGV three operations later.
 
-## A coaxial torus groove in a cylinder segfaults `UnifySameDomain`
+## A coaxial torus groove in a cylinder segfaulted `UnifySameDomain` *(fixed)*
 
 ```js
-cylinder(12, 14).cut(torus(11.5, 1))   // SIGSEGV
+cylinder(12, 14).cut(torus(11.5, 1))   // SIGSEGV, before OCCT 8.0.1
 ```
 
-That is an O-ring gland, which is the shape a torus exists for. The **boolean
-is fine** — the crash is in `unified()`, the `clean()` / `UnifySameDomain` pass
-every result goes through to weld away imprint edges, and it dies on the two
+That is an O-ring groove, which is the shape a torus exists for. The **boolean
+was fine** — the crash was in `unified()`, the `clean()` / `UnifySameDomain` pass
+every result goes through to weld away imprint edges, and it died on the two
 coaxial circular seams the cut leaves in the cylinder wall.
 
-What does *not* crash, which is what makes it identifiable:
+What did *not* crash, which is what made it identifiable — kept because it is
+how the next crash of this family gets narrowed down:
 
 | shape | result |
 |---|---|
@@ -309,6 +310,13 @@ What does *not* crash, which is what makes it identifiable:
 | `cylinder(12, 14).cut(cylinder(11, 20))` — coaxial, no torus | fine |
 | `cylinder(12, 14).cut(torus(11.5, 1))` | **SIGSEGV** |
 
-Held by `eval/cases/torus-gland.json` as a `known_defect`, so it cannot be
-forgotten and cannot silently outlive the fix. `examples/hydraulic-line.js`
-goes without its gland because of it and says so.
+**Vendoring OCCT 8.0.1 fixed it**, and the `known_defect` marker came off
+`eval/cases/torus-gland.json`, which is that marker working as designed rather
+than a case being quietly relaxed. The case still runs, so the fix cannot
+silently regress; `examples/hydraulic-line.js` now carries the groove in a real
+part, which guards the same ground with a boolean under it.
+
+What that part cannot do is a *catalogue* gland: a torus cut is a circle in
+section, and a standard gland is rectangular and wider than the cord. The
+blocker moved from the kernel to the section — docs/DSL_GAPS.md, "arcs in a
+section".
