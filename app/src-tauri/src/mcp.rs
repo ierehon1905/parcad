@@ -569,7 +569,7 @@ impl Parcad {
     async fn probe_step_export(
         &self,
         Parameters(request): Parameters<StepProbeRequest>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<serde_json::Value>, ErrorData> {
+    ) -> Result<rmcp::model::CallToolResult, ErrorData> {
         let keep_faces = match request.detail.as_deref() {
             None | Some("faces") => true,
             Some("summary") => false,
@@ -582,7 +582,12 @@ impl Parcad {
         let probe = blocking(move || service::probe_step(&request.path, keep_faces)).await?;
         let value = serde_json::to_value(&probe)
             .map_err(|e| invalid(format!("encoding the probe reply: {e}")))?;
-        Ok(rmcp::handler::server::wrapper::Json(value))
+        let mut result =
+            rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(
+                value.to_string(),
+            )]);
+        result.structured_content = Some(value);
+        Ok(result)
     }
 
     /// Every project in the shared folder.
@@ -941,4 +946,35 @@ where
 /// Pass them through whole rather than replacing them with a code.
 fn invalid(message: impl Into<String>) -> ErrorData {
     ErrorData::invalid_params(message.into(), None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_advertised_schema_is_an_object() {
+        let tools = Parcad::tool_router().list_all();
+        assert!(
+            tools.len() >= 14,
+            "expected the full tool surface, got {}",
+            tools.len()
+        );
+
+        for tool in tools {
+            for (which, schema) in [
+                ("input", Some(&tool.input_schema)),
+                ("output", tool.output_schema.as_ref()),
+            ] {
+                let Some(schema) = schema else { continue };
+                assert_eq!(
+                    schema.get("type").and_then(|t| t.as_str()),
+                    Some("object"),
+                    "{}'s {which} schema is not an object schema: {}",
+                    tool.name,
+                    serde_json::to_string(schema).unwrap_or_default(),
+                );
+            }
+        }
+    }
 }
