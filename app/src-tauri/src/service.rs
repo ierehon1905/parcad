@@ -44,6 +44,14 @@ pub struct Evaluated {
     /// would be inventing topology the model does not have.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     face_runs: Vec<parcad_occt::protocol::FaceRun>,
+    /// What each face is: kind, area, centroid, direction and neighbours.
+    ///
+    /// Empty for the implicit backend, which has no faces at all — see
+    /// `face_runs`. Kept beside the triangles rather than in the snapshot
+    /// because it is as long as the part has faces, and the snapshot is the
+    /// thing a caller reads.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub faces: Vec<parcad_occt::protocol::FaceSummary>,
     /// What the part is — the one artifact every transport serialises.
     pub snapshot: EvaluationSnapshot,
     /// How long this run took. A fact about the evaluation rather than about
@@ -253,6 +261,34 @@ pub struct EdgeEntity {
     pub length_mm: f32,
 }
 
+/// One evaluated face, for a caller that cannot point at one.
+///
+/// The face-adjacency graph as text, which is where the CAD-specific
+/// literature has converged: denser per token than any image, and it survives a
+/// model with no vision at all. `adjacent` is the half that carries the part's
+/// shape rather than its dimensions — "a plane at z=44" does not distinguish
+/// the top of a plate from the floor of a pocket, and what it touches does.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct FaceEntity {
+    /// `face@N`, spelled like `edge@N` and just as ephemeral: valid for this
+    /// evaluation only, never an authored reference.
+    pub id: String,
+    /// `plane`, `cylinder`, `cone`, `sphere`, `torus`, `nurbs` or `other`.
+    pub kind: String,
+    pub area_mm2: f64,
+    /// A point on the face — its centre of mass. This is where it *is*, which
+    /// its surface definition does not say: every coaxial bore in a part shares
+    /// an axis and an origin.
+    pub centroid: [f64; 3],
+    /// Outward normal of a plane, or the axis of anything turned about one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<[f64; 3]>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub radius_mm: Option<f64>,
+    /// The `face@N` ids this face shares an edge with.
+    pub adjacent: Vec<String>,
+}
+
 /// The selectable edges of an evaluation.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct Entities {
@@ -262,6 +298,10 @@ pub struct Entities {
     pub edges: Vec<EdgeEntity>,
     /// How many edges the part has, when `edges` was truncated.
     pub total_edges: usize,
+    /// The part's faces, with what each one is and what it touches.
+    pub faces: Vec<FaceEntity>,
+    /// How many faces the part has, when `faces` was truncated.
+    pub total_faces: usize,
 }
 
 /// What a fillet or chamfer will act on, resolved before it runs.
@@ -302,11 +342,36 @@ fn entity(edge: &parcad_occt::EdgeCurve) -> EdgeEntity {
 }
 
 /// The edges of an evaluation, capped and counted.
+/// Restate one measured face as the entity a caller reads.
+///
+/// Adjacency is renamed into the same `face@N` ids rather than left as bare
+/// integers: a reader that has to remember two numbering schemes at once will
+/// eventually mix them, and the ids cost nothing.
+fn face_entity(index: usize, face: &parcad_occt::protocol::FaceSummary) -> FaceEntity {
+    FaceEntity {
+        id: format!("face@{index}"),
+        kind: face.surface.kind.clone(),
+        area_mm2: round_mm(face.area_mm2),
+        centroid: round_point(face.centroid),
+        direction: face.surface.direction.map(round_dir),
+        radius_mm: face.surface.radius.map(round_mm),
+        adjacent: face.adjacent.iter().map(|n| format!("face@{n}")).collect(),
+    }
+}
+
 pub fn entities(evaluated: &Evaluated) -> Entities {
     let all = evaluated.edges();
     Entities {
         edges: all.iter().take(ENTITY_LIMIT).map(entity).collect(),
         total_edges: all.len(),
+        faces: evaluated
+            .faces
+            .iter()
+            .enumerate()
+            .take(ENTITY_LIMIT)
+            .map(|(index, face)| face_entity(index, face))
+            .collect(),
+        total_faces: evaluated.faces.len(),
     }
 }
 
@@ -1214,8 +1279,10 @@ fn evaluate_implicit(doc: &Doc, depth: u8) -> Result<Evaluated, String> {
         // Corners cannot be shared once each triangle has its own normals.
         indices: Vec::new(),
         edges: Vec::new(),
-        // A distance field has no faces to attribute a triangle to.
+        // A distance field has no faces to attribute a triangle to, and so none
+        // to describe either.
         face_runs: Vec::new(),
+        faces: Vec::new(),
         bounds: report.bounds,
         snapshot: describe(doc, &report, None, "implicit", 0),
         timings: Timings {
@@ -1239,6 +1306,7 @@ fn evaluate_brep(doc: &Doc) -> Result<Evaluated, String> {
         normals: s.normals,
         indices: s.indices,
         face_runs: s.face_runs,
+        faces: s.faces,
         edges: s.edges,
         timings: Timings {
             lower_and_mesh_ms: s.timings.build_ms + s.timings.mesh_ms,

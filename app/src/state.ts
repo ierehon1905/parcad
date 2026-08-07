@@ -100,6 +100,27 @@ export interface FaceRun {
   count: number;
 }
 
+/**
+ * What one face is, measured off the B-rep rather than off its triangles.
+ *
+ * Position in `Evaluated.faces` is the face's own number — the same one
+ * `FaceRun.face` carries — so the face under the pointer and the face described
+ * here are the same face.
+ */
+export interface FaceSummary {
+  area_mm2: number;
+  centroid: [number, number, number];
+  /** Faces sharing an edge with this one, by the same numbering. */
+  adjacent: number[];
+  surface: {
+    /** `plane`, `cylinder`, `cone`, `sphere`, `torus`, `nurbs`, `other`. */
+    kind: string;
+    /** A plane's outward normal, or the axis of anything turned about one. */
+    direction?: [number, number, number];
+    radius?: number;
+  };
+}
+
 export interface Evaluated {
   positions: number[];
   normals: number[];
@@ -114,6 +135,8 @@ export interface Evaluated {
    * pickable here" rather than guessing at one.
    */
   face_runs?: FaceRun[];
+  /** What each face is. Indexed by the kernel's own face number. */
+  faces?: FaceSummary[];
   snapshot: EvaluationSnapshot;
   /** The implicit path's two halves. Kernel time is in the snapshot. */
   timings: {
@@ -188,6 +211,20 @@ export const mcp = signal<McpStatus | undefined>(undefined);
  * something to write into a script.
  */
 export const hoveredFace = signal<{ face: number; triangles: number } | undefined>(undefined);
+
+/** What the hovered face is, when the kernel described it. */
+export const hoveredFaceSummary = computed(() =>
+  hoveredFace.value ? lastFaces.value?.[hoveredFace.value.face] : undefined,
+);
+
+/**
+ * The face descriptions of the part on screen.
+ *
+ * Kept beside the viewport's own copy rather than read back out of it: the
+ * viewport owns triangles, and this is the measurement of what those triangles
+ * are. See the island rule in CLAUDE.md.
+ */
+export const lastFaces = signal<FaceSummary[] | undefined>(undefined);
 
 export const hoveredEdge = signal<EdgeCurve | undefined>(undefined);
 export const selectedEdge = signal<EdgeCurve | undefined>(undefined);

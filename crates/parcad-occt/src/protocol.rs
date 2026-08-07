@@ -201,6 +201,13 @@ pub struct Success {
     /// short of `topology.faces` when an individual face had none.
     #[serde(default)]
     pub face_runs: Vec<FaceRun>,
+    /// What each face is: kind, area, centroid, direction and neighbours.
+    ///
+    /// Indexed by position, and `FaceSummary::face` is the same number
+    /// `face_runs` uses, so the face under a pointer and the face described
+    /// here are the same face. Empty when the shape reported no solid.
+    #[serde(default)]
+    pub faces: Vec<FaceSummary>,
     /// The deflection the mesher actually used, in mm — the furthest any
     /// triangle can sit from the true surface.
     ///
@@ -243,6 +250,50 @@ pub struct FaceRun {
     pub count: u32,
 }
 
+/// One face of an evaluated part, said in numbers a reader can act on.
+///
+/// The exact shape `Shape_faces_json` (vendored wrapper) emits, and the compact
+/// companion to [`FaceProbe`]: what a face *is* and where, without the boundary
+/// wires or a B-spline's pole grid. That distinction is the whole point — this
+/// travels with every evaluation, behind a 120 ms editor debounce, and the full
+/// report costs three times the time and four to six times the bytes to write
+/// the geometry this would then throw away. `Shape_faces_json`'s own comment in
+/// the vendored wrapper carries the measurements.
+///
+/// The face's own number is its position in this list, which is the kernel's
+/// face number — the same one [`FaceRun`] carries — so the face under the
+/// pointer and the face described here are the same face. Like `edge@N`, it is
+/// valid for one evaluation and belongs in no script.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FaceSummary {
+    pub area_mm2: f64,
+    pub centroid: [f64; 3],
+    /// Faces sharing at least one edge with this one, by the same numbering.
+    ///
+    /// Named once each however many edges they share, and never including the
+    /// face itself — a seam edge on a closed cylinder lists its own face twice.
+    pub adjacent: Vec<u32>,
+    pub surface: SurfacePlacement,
+}
+
+/// What kind of surface a face is, and how it is placed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SurfacePlacement {
+    /// `plane`, `cylinder`, `cone`, `sphere`, `torus`, `nurbs`, `other`.
+    pub kind: String,
+    /// The outward normal of a plane, or the axis of anything turned about one.
+    ///
+    /// Absent for a sphere, a B-spline and whatever OCCT calls `other`: none of
+    /// them has a single direction, and reporting one would be inventing a fact
+    /// about the surface rather than measuring it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<[f64; 3]>,
+    /// A cylinder's or sphere's radius, a cone's at its origin, or a torus's
+    /// major radius.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub radius: Option<f64>,
+}
+
 /// Measured geometry of a foreign B-rep, read from a STEP export.
 ///
 /// This is the reply to a [`Request::probe_step`] request, and it exists so a
@@ -279,6 +330,26 @@ pub struct SolidProbe {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FaceProbe {
+    /// Exact surface area from the B-rep (BRepGProp), not from a tessellation.
+    ///
+    /// A tessellated area is short by the chord error on every curved face,
+    /// which matters here because this is the number a caller compares against
+    /// a drawing or uses to pick out the face it means.
+    pub area_mm2: f64,
+    /// Centre of mass of the face itself — a point *on* the surface for a
+    /// plane, and inside the curvature for anything that bends. It says where
+    /// the face is, which its surface definition does not: every one of a
+    /// cylinder's coaxial faces shares an origin and an axis.
+    pub centroid: [f64; 3],
+    /// Faces sharing at least one edge with this one, as positions in the
+    /// solid's `faces` list.
+    ///
+    /// Named once each however many edges they share, and never including the
+    /// face itself — a seam edge on a closed cylinder lists its own face twice.
+    /// This is the adjacency graph the CAD literature feeds a model alongside a
+    /// render; without it "a plane at z=44" cannot distinguish the top of a
+    /// plate from the floor of a pocket.
+    pub adjacent: Vec<usize>,
     pub surface: SurfaceProbe,
     pub wires: Vec<WireProbe>,
 }
@@ -425,12 +496,14 @@ mod tests {
         let json = r#"{"solids":[{"volume_mm3":2000.5,"area_mm2":1187.5,
             "bbox_min":[-5,-5,0],"bbox_max":[5,5,30],
             "faces":[
-              {"surface":{"kind":"plane","origin":[0,0,0],"normal":[0,0,-1]},
+              {"area_mm2":78.5,"centroid":[0,0,0],"adjacent":[1],
+               "surface":{"kind":"plane","origin":[0,0,0],"normal":[0,0,-1]},
                "wires":[{"outer":true,"edges":[
                  {"kind":"line","a":[5,5,0],"b":[-5,5,0]},
                  {"kind":"circle","center":[0,0,0],"axis":[0,0,1],"radius":5,"a":[-5,5,0],"b":[5,5,0]}
                ]}]},
-              {"surface":{"kind":"nurbs","u_degree":1,"v_degree":1,"rational":false,
+              {"area_mm2":942.0,"centroid":[0,0,15],"adjacent":[0],
+               "surface":{"kind":"nurbs","u_degree":1,"v_degree":1,"rational":false,
                "u_knots":[0,1],"v_knots":[0,1],"u_mults":[2,2],"v_mults":[2,2],
                "poles":[[[5,5,0],[-5,5,30]],[[-5,5,0],[-5,-5,30]]]},
                "wires":[{"outer":true,"edges":[
@@ -446,6 +519,47 @@ mod tests {
         assert_eq!(solid.faces[1].surface.kind(), "nurbs");
         let (a, _) = solid.faces[0].wires[0].edges[1].endpoints();
         assert_eq!(a, [-5.0, 5.0, 0.0]);
+
+        // The per-face measurements are part of the contract, not an optional
+        // extra: they carry no serde default, so a wrapper that stops emitting
+        // one fails here rather than reporting a silent zero area.
+        assert_eq!(solid.faces[0].area_mm2, 78.5);
+        assert_eq!(solid.faces[0].centroid, [0.0, 0.0, 0.0]);
+        assert_eq!(solid.faces[0].adjacent, vec![1]);
+        assert_eq!(solid.faces[1].adjacent, vec![0]);
+    }
+
+    /// The same contract for the compact writer, which has its own schema.
+    ///
+    /// Two writers means two ways to drift. This one is the more dangerous of
+    /// the pair: it runs on every evaluation rather than on an explicit probe,
+    /// and `describe_faces` deliberately swallows a parse failure so a bad
+    /// description cannot fail an otherwise good build. That is the right
+    /// behaviour and it means drift here is *silent* — the faces simply stop
+    /// arriving. This test is what makes it loud instead.
+    #[test]
+    fn the_wrapper_face_schema_deserialises_into_face_summaries() {
+        let json = r#"[
+            {"area_mm2":1600,"centroid":[0,0,4],"adjacent":[1,2],
+             "surface":{"kind":"plane","direction":[0,0,1]}},
+            {"area_mm2":150.796,"centroid":[0,0,0],"adjacent":[0],
+             "surface":{"kind":"cylinder","direction":[0,0,1],"radius":3}},
+            {"area_mm2":42,"centroid":[1,2,3],"adjacent":[0],
+             "surface":{"kind":"nurbs"}}
+        ]"#;
+
+        let faces: Vec<FaceSummary> =
+            serde_json::from_str(json).expect("the wrapper's face schema must parse");
+        assert_eq!(faces.len(), 3);
+        assert_eq!(faces[0].surface.kind, "plane");
+        assert_eq!(faces[0].surface.direction, Some([0.0, 0.0, 1.0]));
+        assert_eq!(faces[0].surface.radius, None);
+        assert_eq!(faces[1].surface.radius, Some(3.0));
+        assert_eq!(faces[1].adjacent, vec![0]);
+        // A B-spline reports neither, and that is the measurement: it has no
+        // single direction and no radius, so inventing one would be a lie.
+        assert_eq!(faces[2].surface.direction, None);
+        assert_eq!(faces[2].surface.radius, None);
     }
 
     #[test]

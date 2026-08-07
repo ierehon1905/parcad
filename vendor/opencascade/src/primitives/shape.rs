@@ -173,6 +173,19 @@ impl Shape {
         ffi::Shape_geometry_json(&self.inner)
     }
 
+    /// What each face of the first solid *is*, as JSON: kind, exact area,
+    /// centroid, placement direction and radius, and the faces it shares an
+    /// edge with.
+    ///
+    /// The compact companion to [`Self::geometry_json`], for a caller that
+    /// wants to describe a part rather than recreate one. It writes no boundary
+    /// wires and does not descend into a B-spline's poles, which is where
+    /// almost all of the full report's cost is. Added for parcad; see
+    /// PARCAD-CHANGES.md.
+    pub fn faces_json(&self) -> String {
+        ffi::Shape_faces_json(&self.inner)
+    }
+
     pub fn fillet_edge(&mut self, radius: f64, edge: &Edge) {
         let mut make_fillet = ffi::BRepFilletAPI_MakeFillet_ctor(&self.inner);
         make_fillet.pin_mut().add_edge(radius, &edge.inner);

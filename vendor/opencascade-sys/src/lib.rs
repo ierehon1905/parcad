@@ -576,6 +576,10 @@ pub mod ffi {
         // Measured geometry of a foreign B-rep as JSON — added for parcad, see
         // PARCAD-CHANGES.md. Schema consumed by parcad's protocol.rs.
         pub fn Shape_geometry_json(shape: &TopoDS_Shape) -> String;
+        // The same measurements without the boundary wires or a B-spline's pole
+        // grid, for describing a part rather than recreating one — added for
+        // parcad, see PARCAD-CHANGES.md.
+        pub fn Shape_faces_json(shape: &TopoDS_Shape) -> String;
         // Healing of stale seam representations — added for parcad, see
         // PARCAD-CHANGES.md.
         pub fn Shape_drop_unused_seam_pcurves(shape: &TopoDS_Shape) -> i32;

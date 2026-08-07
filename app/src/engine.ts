@@ -191,6 +191,8 @@ function show(result: Evaluated) {
   // the cuts that can show anything and no more.
   S.bounds.value = bounds;
 
+  S.lastFaces.value = result.faces;
+
   S.linkedEdgeCount.value = edges.filter((edge) => treatmentForEdge(edge)).length;
   S.linkedMethods.value = [
     ...new Set(
@@ -450,6 +452,7 @@ function discardShownPart() {
   S.lastTreatments.value = [];
   S.visibleEdges.value = [];
   S.visibleVertices.value = [];
+  S.lastFaces.value = undefined;
   S.hoveredFace.value = undefined;
   S.hoveredEdge.value = undefined;
   S.selectedEdge.value = undefined;

@@ -3,6 +3,7 @@
 #include <Geom_Line.hxx>
 #include <NCollection_DataMap.hxx>
 #include <ShapeBuild_Edge.hxx>
+#include <set>
 #include <sstream>
 #include <BOPAlgo_GlueEnum.hxx>
 #include <BRepAdaptor_Curve.hxx>
@@ -80,6 +81,7 @@
 #include <TopTools_IndexedMapOfShape.hxx>
 #include <TopTools_ListOfShape.hxx>
 #include <TopAbs_ShapeEnum.hxx>
+#include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Edge.hxx>
@@ -722,8 +724,111 @@ inline void write_edge(std::ostringstream &out, const TopoDS_Edge &edge) {
   out << "]}";
 }
 
-inline void write_face(std::ostringstream &out, const TopoDS_Face &face) {
-  out << "{\"surface\":";
+// Which other faces share an edge with this one, as indices into the solid's
+// own face order.
+//
+// This is the face-adjacency graph the CAD-specific literature serialises
+// alongside a render, and it is the half of a face description that no amount
+// of per-face measurement substitutes for: "a plane at z=44" does not say
+// whether it is the top of the plate or the bottom of a pocket, and the faces
+// it touches do.
+//
+// `edge_faces` is built once per solid, because doing it per face would walk
+// the whole solid once for each of its faces.
+inline void write_neighbours(std::ostringstream &out, const TopoDS_Face &face,
+                             const TopTools_IndexedMapOfShape &faces,
+                             const TopTools_IndexedDataMapOfShapeListOfShape &edge_faces) {
+  // A pair of faces meeting along several edges — a cylinder closed by a seam,
+  // a fillet running into a wall twice — must be named once, not once per
+  // shared edge.
+  std::set<int> neighbours;
+  const int self = faces.FindIndex(face);
+  for (TopExp_Explorer e(face, TopAbs_EDGE); e.More(); e.Next()) {
+    if (!edge_faces.Contains(e.Current())) {
+      continue;
+    }
+    const TopTools_ListOfShape &touching = edge_faces.FindFromKey(e.Current());
+    for (const TopoDS_Shape &neighbour : touching) {
+      const int index = faces.FindIndex(neighbour);
+      // A seam edge lists its own face twice; a face is not its own neighbour.
+      if (index > 0 && index != self) {
+        neighbours.insert(index - 1);
+      }
+    }
+  }
+  out << "[";
+  bool first = true;
+  for (const int index : neighbours) {
+    out << (first ? "" : ",") << index;
+    first = false;
+  }
+  out << "]";
+}
+
+// What kind of surface a face is, and how it is placed — nothing more.
+//
+// `direction` is the outward normal of a plane and the axis of anything turned
+// about one; `radius` is a cylinder's or sphere's, a cone's at its origin, or a
+// torus's major. Both are absent where the surface has no single one, because
+// reporting a direction for a B-spline would be inventing a fact rather than
+// measuring it.
+//
+// Deliberately does not descend into a B-spline: the poles are the expensive
+// part of `write_surface` and a caller reading placements does not want them.
+inline void write_surface_placement(std::ostringstream &out, const TopoDS_Face &face) {
+  Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
+  while (!surf.IsNull() && surf->DynamicType() == STANDARD_TYPE(Geom_RectangularTrimmedSurface)) {
+    surf = Handle(Geom_RectangularTrimmedSurface)::DownCast(surf)->BasisSurface();
+  }
+  if (surf.IsNull()) {
+    out << "{\"kind\":\"other\"}";
+    return;
+  }
+  if (surf->DynamicType() == STANDARD_TYPE(Geom_Plane)) {
+    const gp_Pln pln = Handle(Geom_Plane)::DownCast(surf)->Pln();
+    out << "{\"kind\":\"plane\",\"direction\":";
+    write_dir(out, face_axis(face, pln.Axis().Direction()));
+    out << "}";
+  } else if (surf->DynamicType() == STANDARD_TYPE(Geom_CylindricalSurface)) {
+    const gp_Cylinder cyl = Handle(Geom_CylindricalSurface)::DownCast(surf)->Cylinder();
+    out << "{\"kind\":\"cylinder\",\"direction\":";
+    write_dir(out, cyl.Axis().Direction());
+    out << ",\"radius\":" << cyl.Radius() << "}";
+  } else if (surf->DynamicType() == STANDARD_TYPE(Geom_ConicalSurface)) {
+    const gp_Cone cone = Handle(Geom_ConicalSurface)::DownCast(surf)->Cone();
+    out << "{\"kind\":\"cone\",\"direction\":";
+    write_dir(out, cone.Axis().Direction());
+    out << ",\"radius\":" << cone.RefRadius() << "}";
+  } else if (surf->DynamicType() == STANDARD_TYPE(Geom_SphericalSurface)) {
+    const gp_Sphere sph = Handle(Geom_SphericalSurface)::DownCast(surf)->Sphere();
+    out << "{\"kind\":\"sphere\",\"radius\":" << sph.Radius() << "}";
+  } else if (surf->DynamicType() == STANDARD_TYPE(Geom_ToroidalSurface)) {
+    const gp_Torus tor = Handle(Geom_ToroidalSurface)::DownCast(surf)->Torus();
+    out << "{\"kind\":\"torus\",\"direction\":";
+    write_dir(out, tor.Axis().Direction());
+    out << ",\"radius\":" << tor.MajorRadius() << "}";
+  } else if (surf->DynamicType() == STANDARD_TYPE(Geom_BSplineSurface)) {
+    out << "{\"kind\":\"nurbs\"}";
+  } else {
+    out << "{\"kind\":\"other\"}";
+  }
+}
+
+inline void write_face(std::ostringstream &out, const TopoDS_Face &face,
+                       const TopTools_IndexedMapOfShape &faces,
+                       const TopTools_IndexedDataMapOfShapeListOfShape &edge_faces) {
+  // Exact, from the B-rep rather than from a tessellation: an area read off
+  // triangles is short by the chord error on every curved face, which is the
+  // one place a face measurement gets quietly used as a tolerance.
+  GProp_GProps props;
+  BRepGProp::SurfaceProperties(face, props);
+  const gp_Pnt centroid = props.CentreOfMass();
+
+  out << "{\"area_mm2\":" << props.Mass() << ",\"centroid\":";
+  write_pnt(out, centroid);
+  out << ",\"adjacent\":";
+  write_neighbours(out, face, faces, edge_faces);
+  out << ",\"surface\":";
   write_surface(out, face);
   out << ",\"wires\":[";
   const TopoDS_Wire outer = BRepTools::OuterWire(face);
@@ -760,18 +865,76 @@ inline void write_solid(std::ostringstream &out, const TopoDS_Shape &solid) {
   write_xyz(out, x0, y0, z0);
   out << ",\"bbox_max\":";
   write_xyz(out, x1, y1, z1);
+  // Both maps are indexed in the same explorer order the loop below writes in,
+  // so a map index minus one is the position a reader sees in `faces`. That
+  // correspondence is what makes `adjacent` meaningful, and it is checked from
+  // Rust rather than trusted — see `face_adjacency_is_symmetric_and_indexed_as_written`.
+  TopTools_IndexedMapOfShape faces;
+  TopExp::MapShapes(solid, TopAbs_FACE, faces);
+  TopTools_IndexedDataMapOfShapeListOfShape edge_faces;
+  TopExp::MapShapesAndAncestors(solid, TopAbs_EDGE, TopAbs_FACE, edge_faces);
+
   out << ",\"faces\":[";
   int fi = 0;
   for (TopExp_Explorer f(solid, TopAbs_FACE); f.More(); f.Next(), ++fi) {
     if (fi > 0) {
       out << ",";
     }
-    write_face(out, TopoDS::Face(f.Current()));
+    write_face(out, TopoDS::Face(f.Current()), faces, edge_faces);
   }
   out << "]}";
 }
 
 } // namespace parcad_geometry_json
+
+// Just what each face *is*, for a caller that will not read its boundary.
+//
+// The same measurements `write_face` makes, minus the wires and minus a
+// B-spline's pole grid. Those are what a recreation needs from a foreign STEP
+// file and dead weight on an ordinary rebuild, which is a rebuild per keystroke
+// behind a 120 ms debounce.
+//
+// Measured, best of 25 in-process: a drilled plate of 18 planes and cylinders
+// costs 2.09 ms and 13043 bytes through the full writer against 0.73 ms and
+// 2954 through this one; a six-face twisted loft, 0.46 ms and 5450 bytes
+// against 0.14 ms and 877. Three times the time and four to six times the
+// bytes, for geometry the caller then discards.
+//
+// Two writers rather than one writer with a flag, because the cost is in the
+// writing: a filter would still have built the pole grid before dropping it.
+inline rust::String Shape_faces_json(const TopoDS_Shape &shape) {
+  using namespace parcad_geometry_json;
+  std::ostringstream out;
+  out.precision(15);
+  out << "[";
+  int written = 0;
+  for (TopExp_Explorer s(shape, TopAbs_SOLID); s.More(); s.Next()) {
+    // The first solid only, and deliberately: the face numbering this feeds
+    // counts the shape's faces, and concatenating a second solid's faces onto
+    // it would renumber them into a claim that is wrong rather than partial.
+    const TopoDS_Shape &solid = s.Current();
+    TopTools_IndexedMapOfShape faces;
+    TopExp::MapShapes(solid, TopAbs_FACE, faces);
+    TopTools_IndexedDataMapOfShapeListOfShape edge_faces;
+    TopExp::MapShapesAndAncestors(solid, TopAbs_EDGE, TopAbs_FACE, edge_faces);
+
+    for (TopExp_Explorer f(solid, TopAbs_FACE); f.More(); f.Next(), ++written) {
+      const TopoDS_Face &face = TopoDS::Face(f.Current());
+      GProp_GProps props;
+      BRepGProp::SurfaceProperties(face, props);
+      out << (written > 0 ? "," : "") << "{\"area_mm2\":" << props.Mass() << ",\"centroid\":";
+      write_pnt(out, props.CentreOfMass());
+      out << ",\"adjacent\":";
+      write_neighbours(out, face, faces, edge_faces);
+      out << ",\"surface\":";
+      write_surface_placement(out, face);
+      out << "}";
+    }
+    break;
+  }
+  out << "]";
+  return rust::String(out.str());
+}
 
 inline rust::String Shape_geometry_json(const TopoDS_Shape &shape) {
   using namespace parcad_geometry_json;

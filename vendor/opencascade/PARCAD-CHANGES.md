@@ -77,6 +77,15 @@ out. Everything below could otherwise have lived in our own crate.
   exact mass properties, faces with their surface data down to B-spline pole
   grids, wires as ordered edge loops.
 
+- `Shape::faces_json()` — what each face of the first solid *is*, over the sys
+  crate's new `Shape_faces_json`: kind, exact area, centroid, placement
+  direction and radius, and the faces it shares an edge with. The compact
+  companion to `geometry_json`, for describing a part rather than recreating
+  one. It exists because the full report is written on every rebuild otherwise
+  and costs three times the time and four to six times the bytes to serialise
+  boundary wires and B-spline pole grids the caller then discards; the
+  measurements are in the wrapper's own comment.
+
 - `Mesh::faces` — a `FaceRun { face, start, count }` per face, in triangles,
   saying where each face's triangles landed in `indices`. The mesher already
   walks the shape face by face and concatenates the per-face triangulations; the

@@ -2480,6 +2480,142 @@ mod tests {
         ));
     }
 
+    /// Adjacency must be symmetric, and indexed as the writer says it is.
+    ///
+    /// Both halves are assumptions the C++ makes and cannot check for itself.
+    /// The indices come from `TopExp::MapShapes`, while the list they index is
+    /// written by a separate `TopExp_Explorer` walk — the two agree, but that
+    /// is a property of OCCT rather than of this code, and if it ever stopped
+    /// holding every neighbour list would quietly name the wrong faces.
+    /// Symmetry is the cheap check that catches it: a face's neighbour that
+    /// does not name it back means the indices are not pointing where the
+    /// writer thinks.
+    #[test]
+    fn face_adjacency_is_symmetric_and_indexed_as_written() {
+        use crate::protocol::FaceSummary;
+
+        // A drilled plate: six planes plus the bore, so the answer is known by
+        // hand — the bore touches the top and bottom faces and nothing else.
+        let body = AdHocShape::make_box_point_point(
+            DVec3::new(-20.0, -20.0, -4.0),
+            DVec3::new(20.0, 20.0, 4.0),
+        )
+        .0;
+        let cutter = AdHocShape::make_cylinder(DVec3::new(0.0, 0.0, -8.0), 3.0, 16.0).0;
+        let shape = body.subtract(&cutter).shape;
+
+        let faces: Vec<FaceSummary> = serde_json::from_str(&shape.faces_json())
+            .expect("the wrapper's own output must match the protocol schema");
+        assert_eq!(faces.len(), shape.faces().count());
+
+        for (index, face) in faces.iter().enumerate() {
+            let index = index as u32;
+            assert!(face.area_mm2 > 0.0, "face {index} has no area");
+            for &neighbour in &face.adjacent {
+                assert_ne!(neighbour, index, "a face is not its own neighbour");
+                assert!(
+                    (neighbour as usize) < faces.len(),
+                    "neighbour {neighbour} is not a face"
+                );
+                assert!(
+                    faces[neighbour as usize].adjacent.contains(&index),
+                    "face {index} names {neighbour}, which does not name it back"
+                );
+            }
+        }
+
+        // The bore is the one cylinder, and a through hole in a plate opens on
+        // exactly two faces. Anything else means adjacency is counting edges
+        // rather than faces, or missing the seam.
+        let bore = faces
+            .iter()
+            .position(|f| f.surface.kind == "cylinder")
+            .expect("the drilled plate has a cylindrical bore");
+        assert_eq!(faces[bore].adjacent.len(), 2, "a through hole opens on two faces");
+
+        // And the areas are the closed forms: the bore is pi*d*h through 8 mm
+        // of plate, the top face is the 40x40 square less the hole it lost.
+        let bore_area = std::f64::consts::PI * 6.0 * 8.0;
+        assert!(
+            (faces[bore].area_mm2 - bore_area).abs() < 1e-6,
+            "bore area {} is not pi*d*h = {bore_area}",
+            faces[bore].area_mm2
+        );
+        let top = faces[bore].adjacent[0] as usize;
+        let expected = 40.0 * 40.0 - std::f64::consts::PI * 9.0;
+        assert!(
+            (faces[top].area_mm2 - expected).abs() < 1e-6,
+            "the drilled face measures {} rather than {expected}",
+            faces[top].area_mm2
+        );
+    }
+
+
+
+    /// The mesher's face number and the geometry report's must be the same number.
+    ///
+    /// This is the join the whole face story rests on: a raycast gives a
+    /// triangle, `FaceRun` turns that into a face number, and everything that
+    /// then *describes* that face — surface kind, area, neighbours — is looked
+    /// up by it. The two walks are not the same code. The mesher explores the
+    /// whole shape for faces; the geometry writer explores each solid. They
+    /// coincide while a part is one solid, which is all the graph can currently
+    /// produce, and this fails the day that stops being true rather than
+    /// letting the window describe a face the pointer is not on.
+    ///
+    /// Checked by geometry rather than by index, because two lists agreeing in
+    /// length proves nothing: every triangle of run *i* has to actually lie on
+    /// the surface face *i* claims to be.
+    #[test]
+    fn a_meshed_faces_triangles_lie_on_the_surface_the_report_describes() {
+        use crate::protocol::FaceSummary;
+
+        let body = AdHocShape::make_box_point_point(
+            DVec3::new(-20.0, -20.0, -4.0),
+            DVec3::new(20.0, 20.0, 4.0),
+        )
+        .0;
+        let cutter = AdHocShape::make_cylinder(DVec3::new(0.0, 0.0, -8.0), 3.0, 16.0).0;
+        let shape = body.subtract(&cutter).shape;
+
+        let described: Vec<FaceSummary> = serde_json::from_str(&shape.faces_json()).unwrap();
+        let mesh = shape.mesh();
+
+        for run in &mesh.faces {
+            let surface = &described[run.face].surface;
+            for triangle in run.start..run.start + run.count {
+                for corner in 0..3 {
+                    let point = mesh.vertices[mesh.indices[triangle * 3 + corner]];
+                    // Tessellation sits inside a curved surface, so a vertex is
+                    // allowed to be short of it by the chord error — but only
+                    // ever on the surface it was meshed from.
+                    // The centroid and direction the report gives are enough to
+                    // place both surfaces this solid has: a plane through its
+                    // own centre of mass, and a bore whose axis passes through
+                    // one.
+                    let centre = DVec3::from_array(described[run.face].centroid);
+                    let direction =
+                        DVec3::from_array(surface.direction.expect("a plane or a cylinder"));
+                    let off = match surface.kind.as_str() {
+                        "plane" => (point - centre).dot(direction).abs(),
+                        "cylinder" => {
+                            let axis = direction.normalize();
+                            let radial = (point - centre) - axis * (point - centre).dot(axis);
+                            (radial.length() - surface.radius.expect("a bore has a radius")).abs()
+                        }
+                        other => panic!("this solid has no {other} face"),
+                    };
+                    assert!(
+                        off < 0.05,
+                        "a triangle of face {} sits {off} mm off the {} it is reported to be",
+                        run.face,
+                        surface.kind
+                    );
+                }
+            }
+        }
+    }
+
     /// The face runs must tile the index buffer, and name the kernel's own faces.
     ///
     /// This is the join everything face-shaped rests on: a viewer turns a

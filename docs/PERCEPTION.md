@@ -83,7 +83,7 @@ Findings that changed decisions on this page:
 | Section view | ✅ `render.rs`, `evaluate_part`'s `section` | §7 — a clipping plane in both renderers, the cut face capped and drawn flat, and `cut_fraction` to say whether it opened anything |
 | **Numbered marks on the render** | ❌ | §4 |
 | **Diff render** | ❌ | §8 |
-| **Face adjacency as text** | ❌ | §9 — we list edges, never faces |
+| **Face adjacency as text** | ✅ `Shape_faces_json`, `list_entities` | §9 — kind, exact area, centroid, normal and neighbours; whether a model reads it is unmeasured |
 | Adaptive slice summary | ❌ | §10, the salvaged form |
 | ASCII / voxel dump | ❌ | §10, hold, with numbers |
 
@@ -625,13 +625,44 @@ running into: an op that runs, returns a valid solid, and changes nothing.
 existing `framing_bounds` is exactly the right thing to share), and a
 subtraction. The numeric half is worth shipping even without the images.
 
-## 9. Faces as text
+## 9. Faces as text — built, and unmeasured on a model
 
 **What it is.** What `list_entities` does for edges, done for faces: surface
 type, area, centroid, normal, and an `adjacent_to` list of face ids. This is
 where the CAD-specific literature has converged — [BrepLLM][brepllm],
 [Pointer-CAD][pointercad] and [AgentsCAD][agentscad] all serialise the
 face-adjacency graph as text and feed it alongside the render.
+
+**Built.** `list_entities` now returns `faces` beside `edges`: `face@N`, kind,
+exact area from `BRepGProp` rather than from triangles, centroid, outward
+normal or axis, radius, and the `face@N` ids it shares an edge with. The window
+reads the same numbers on hover — point at a face and it says what that face
+is. `Shape_faces_json` in the vendored wrapper is the writer, deliberately
+separate from the full `Shape_geometry_json` a STEP recreation needs, because
+the full one costs three times the time and four to six times the bytes to
+serialise wires and pole grids this then discards.
+
+Three joins are checked rather than assumed, each of which fails silently on
+its own: the mesher's face runs tile the index buffer exactly; every triangle
+of run *i* lies on the surface face *i* is reported to be, which is what makes
+"the face under the pointer" and "the face described" the same face; and
+adjacency is symmetric, so a neighbour that does not name you back fails
+instead of quietly renumbering. Areas are pinned against closed forms — a
+bore's πdh, a drilled face's a² − πr².
+
+**Not measured: whether a model reads any of it.** That is a separate fact from
+whether the tool works, it has been wrong every time it was checked, and it
+needs a case in `eval/field/`. Until one exists this is a component, not an
+outcome. The obvious case is the §5 failure below, put to a model directly:
+handed a thickness between `plate` and `drilled`, does the face list let it name
+the *right* wall?
+
+**Still absent: a face selector.** Faces can be read and cannot be named. The
+window's inspector says so in as many words rather than offering a control that
+does nothing, and `list_entities`' description says the route that does work is
+the edges around the face. That remains a change in `selectors.rs`,
+`selectors.ts` and `eval/selectors.json` together, and it wants a graph op that
+consumes one — otherwise it is a grammar nothing can act on.
 
 **Why it matters here.** It is far denser per token than any image, it survives
 the model having no vision at all, and it is the natural key for §4's marks.
@@ -865,8 +896,13 @@ model reads this tool.
 8. **Numbered marks on the render** (§4, the visual half). The change with the
    best evidence behind it, and it makes the selector loop closeable.
 9. **Diff render** (§8), numeric half first.
-10. **Faces as text** (§9). Larger, touches the selector grammar in two
-   languages, unlocks per-face work later.
+10. ~~Faces as text~~ (§9) — **the tool is built; the reading is not measured**.
+   Kind, exact area, centroid, normal and adjacency on `list_entities` and on
+   hover in the window, with the mesher-to-report face join checked three ways.
+   What remains is a case in `eval/field/` — the §5 wrong-wall failure is the
+   one to write — and then the face *selector*, which is still a change in
+   `selectors.rs`, `selectors.ts` and `eval/selectors.json` together and which
+   wants an op that consumes it.
 11. **Adaptive slice summary** (§10) and the default view set (§2), both worth
    measuring before building.
 12. ASCII grids and depth images: not at all, for the reasons recorded above

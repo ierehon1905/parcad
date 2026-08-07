@@ -108,16 +108,37 @@ export function EntityInspector() {
   );
 }
 
+/** A cardinal direction as the grammar spells it, or the vector when it is not one. */
+function axisOf(direction: [number, number, number] | undefined): string | undefined {
+  if (!direction) return undefined;
+  const names = ["x", "y", "z"];
+  for (let i = 0; i < 3; i++) {
+    const others = direction.filter((_, j) => j !== i).every((v) => Math.abs(v) < 1e-6);
+    // Named only when it *is* a cardinal axis. A face 2° off +Z called "+z"
+    // would read as an invitation to write a selector that does not select it.
+    if (others && Math.abs(Math.abs(direction[i]) - 1) < 1e-6) {
+      return `${direction[i] > 0 ? "+" : "-"}${names[i]}`;
+    }
+  }
+  return direction.map((v) => v.toFixed(2)).join(", ");
+}
+
 /**
  * What the pointer is on, when it is on a face.
  *
- * Deliberately thin, and it says why: there is no face selector in the DSL yet,
- * so there is nothing here to copy into a script. The number is the kernel's own
- * face number — ephemeral in exactly the way an `edge@…` ID is, which is why it
- * is shown as "of 22" rather than as a name.
+ * Says what the face *is* — measured off the B-rep by the kernel, not inferred
+ * from the triangles on screen — and stops short of offering a selector, which
+ * it also says. There is no face selector in the DSL, so unlike the edge panel
+ * there is nothing here to copy; the honest thing is to name the route that
+ * does work rather than to leave a disabled control where a live one belongs.
+ *
+ * The number is the kernel's own face number, ephemeral in exactly the way an
+ * `edge@…` ID is, which is why it is shown as a position within a count.
  */
 function FacePanel({ face }: { face: { face: number; triangles: number } }) {
   const total = S.snapshot.value?.faces;
+  const described = S.hoveredFaceSummary.value;
+  const axis = axisOf(described?.surface.direction);
   return (
     <div
       class="min-w-[184px] px-2.5 py-2 rounded-lg border border-line
@@ -132,7 +153,22 @@ function FacePanel({ face }: { face: { face: number; triangles: number } }) {
       <div class="mt-1 text-ink">
         face {face.face + 1}
         {total ? ` of ${total}` : ""}
+        {described ? ` · ${described.surface.kind}` : ""}
       </div>
+      {described && (
+        <div>
+          {described.area_mm2.toFixed(1)} mm²
+          {axis ? ` · ${axis}` : ""}
+          {described.surface.radius !== undefined ? ` · r ${described.surface.radius} mm` : ""}
+        </div>
+      )}
+      {described && (
+        <div>
+          at {described.centroid.map((v) => v.toFixed(1)).join(", ")}
+          {" · "}
+          {described.adjacent.length} neighbour{described.adjacent.length === 1 ? "" : "s"}
+        </div>
+      )}
       <div>{face.triangles.toLocaleString()} triangles</div>
       <div class="mt-[5px]">no face selector in the DSL yet — aim at its edges</div>
     </div>

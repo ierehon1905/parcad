@@ -379,10 +379,10 @@ impl Parcad {
         Ok(result)
     }
 
-    /// List the selectable edges of an evaluated part.
+    /// List the selectable edges and the described faces of an evaluated part.
     #[tool(
         name = "list_entities",
-        description = "List the visible edges of a part with their centres, directions and lengths. Use this to work out which directional or topological selector picks the edges you mean. The returned edge@N ids are valid for one evaluation only and must never appear in a script."
+        description = "List what a part is made of, as text rather than a picture: its visible edges with their centres, directions and lengths, and its faces with what each one is (plane, cylinder, cone, sphere, torus), its exact area, a point on it, its outward normal or axis, and the faces it touches.\n\nUse the edges to work out which directional or topological selector picks the edges you mean. Use the faces to work out the *shape* of the part without looking at it — `adjacent` is the half that carries it, because a plane at z=44 could be the top of a plate or the floor of a pocket and what it borders is what tells them apart. A cylindrical face bordering two planes is a through hole; bordering one is a blind one.\n\nThe returned edge@N and face@N ids describe one evaluation and must never appear in a script — there is no face selector in the DSL, so a face is something to read, and the way to act on one is the edges around it."
     )]
     async fn list_entities(
         &self,
