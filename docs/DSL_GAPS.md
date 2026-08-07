@@ -324,6 +324,91 @@ message should distinguish "no edges matched because nothing was circular" from
   pattern onto another plane is `.map(([x, z]) => [x, 0, z + h])`, which reads
   badly at exactly the moment the reader is trying to picture the part.
 
+## 8. One Fusion feature costs a third of a part, because the language has no tool
+
+The evidence is `examples/fusion360/retainer-v1.js`, and it is the strongest in
+this file because both sides can be counted. In Fusion the bayonet slot is three
+ordinary steps: sketch a slot, extrude-cut it, chamfer the mouth. Here it is 49
+of the file's 146 lines.
+
+| what | lines | in Fusion |
+|---|---|---|
+| plate, disc, blend, bore, thread, rim chamfer | 36 | about the same number of steps |
+| **the bayonet slot** | **36** | one sketch, one extrude-cut |
+| **its lead-in chamfers** | **13** | one chamfer, applied after |
+| measured constants | 39 | the sketch's dimensions |
+| header | 22 | — |
+
+And it is worse than a line count, because the scaffolding leaks into the
+constants. `TURN_CX`, `TURN_CY`, `POCKET_X_END` and `INNER_R` are not dimensions
+of the part; they exist to decompose a shape by hand.
+
+**A slot is a swept centreline, not an outline.** The sketch dimensions it the
+way a machinist would: width 10.20, turn radius R12.00, and where the centreline
+runs. That is a cutter of a given diameter following a path — the round end is
+the cutter's own end, and the corner radii are what a constant offset leaves.
+
+The proof is in the file's own constants. It carries `TURN_R = 12` and
+`INNER_R = 1.8` as two independent numbers, and
+
+    12 − 1.8 = 10.2 = SLOT_W
+
+They were never two dimensions. They are one centreline bend radius of 6.9 with
+the tool's half-width added outside and subtracted inside. The language could
+not say "one bend radius", so the author computed both halves and the
+relationship — the thing that would keep them consistent when the slot width
+changes — was lost on the way in. `pipe(points, diameter, { bend })` is this
+exact idea one dimension up, and it is exact for the same reason: a straight run
+offset by a constant is straight, a circular bend offset by a constant is
+circular.
+
+**A finish is a later op, not part of the cutter.** The lead-ins are 45° reliefs
+at the slot mouth, chamfered *after* the cut in Fusion. Here they are triangular
+prisms unioned into the cutter, so they must exist *before* it. That is not only
+verbose, it is the wrong order: a finish has to be reasoned about as geometry.
+The cause is §2 and §3 — the selector grammar reaches document extrema, so there
+is no term for "the two vertical edges at the slot mouth" that does not also
+name the rest. The same limitation is why the corner radii are baked into
+cutters.
+
+### The intuitive routes, and what each one buys
+
+Not a plan — a list of the mechanisms that would make a part like this fast to
+write, so the next piece of work can pick knowingly. Ordered by how much of the
+retainer each one removes.
+
+- **Say the tool, not the shape.** A slot is an end mill of diameter *D* along a
+  path. Expressing the tool gives round ends, both corner radii and the bend
+  relationship for free, and it is honest about manufacture. Removes ~36 lines
+  here and every future keyway, pocket lane and bayonet. `holeFor` is the
+  precedent that already works this way and nobody has complained about it.
+- **Let a dimension stay one dimension.** The 12/1.8 split above. Where two
+  numbers are functions of one, the API should take the one. This is structural,
+  not authoring discipline — JS can compute `INNER_R = TURN_R - SLOT_W`, but
+  nothing makes the author do it, and the recreation did not.
+- **Name a feature, then refer to what it made.** `tag()` names a node; nothing
+  names the edges or faces that node *created*. "Chamfer the edges this cut left
+  on the top face" is the sentence the author wants and cannot write, and it is
+  the general form of §2, §3 and the lead-ins here.
+- **Ops in the order you would perform them.** Cut, then finish. The order is
+  currently forced by what can be selected rather than by what is being made,
+  which is how the lead-ins ended up inside a cutter.
+- **Place against geometry, not coordinates.** Every position in the retainer is
+  arithmetic: `.at(R_DISC, PLATE_L, H_DISC / 2)`. On a face, centred on a bore,
+  flush with an edge — those are what the author means, and the arithmetic is
+  the translation they are doing by hand.
+- **A shop vocabulary, not a kernel one.** `slot`, `pocket`, `boss`, `rib`,
+  `counterbore`, `keyway` each say one thing a machinist says. The kernel
+  vocabulary is right for the graph and wrong for the part.
+- **A plane to work on.** `extrude` takes a 2D outline, but siting it is 3D
+  arithmetic. Sketching on a face is how the sketch above was made.
+
+What this section deliberately does not ask for is a constraint solver. The
+argument in OP_ROADMAP still holds — a script that says `gap / 2 + armT / 2` is
+consistent by construction. The gap is not that dimensions cannot be related; it
+is that the *operations* are kernel-shaped rather than shop-shaped, so the author
+translates before they can even start relating them.
+
 ## What is genuinely good
 
 Worth recording too, so nobody "fixes" it:
