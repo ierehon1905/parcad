@@ -201,15 +201,22 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | the IPC, HTTP and MCP adapters | `app/src-tauri/src/lib.rs`, `http.rs`, `mcp.rs` |
 | the sandbox agent scripts run in | `app/src-tauri/src/script.rs` |
 | where parts are stored | `app/src-tauri/src/projects.rs` — a `.parcad` folder per part |
-| the parts picker: folders, new part, rename, trash | `app/src/project-browser.ts`, rules in `app/src/projects.ts` |
+| the parts picker: folders, new part, rename, trash | `app/src/ui/project-browser.tsx`, rules in `app/src/projects.ts` |
 | how the frontend calls the backend | `app/src/backend.ts` — the only module that knows there are two |
 | the selector grammar | `selectors.rs` **and** `app/src/selectors.ts` — see below |
 | what the editor marks as you type | `app/src/selector-lint.ts` |
-| what a treatment hover says, and offers to edit | `app/src/treatment-info.ts` (content), `treatment-hover.ts` (the extension) |
+| what a treatment hover says, and offers to edit | `app/src/treatment-info.ts` (content), `treatment-hover.tsx` (the extension) |
+| the window's layout, and the keys | `app/src/app.tsx` |
+| the evaluation cycle, saving, the live session | `app/src/engine.ts` — machinery, not components |
+| what the whole window shares | `app/src/state.ts` — signals; nothing there derives a measurement |
+| the icon for an operation | `app/src/ui/icons.tsx` — one drawing per name, one frame for all of them |
+| the operation palette, and what pressing one writes | `app/src/ui/op-palette.tsx` |
+| the kernel and section controls | `app/src/ui/view-tools.tsx` — on the viewport, not the titlebar |
+| any control's tooltip | `tip()` from `app/src/ui/tooltip.tsx`, spread onto the element |
 | how it looks | `app/src/viewport.ts`, `app/src/outline.ts` |
 | colours, type, the design tokens | `@theme` in `app/src/style.css` — never a literal in a component |
 | what "still correct" means | `eval/cases/*.json`, `eval/scripts/*.js` |
-| the seed parts | `examples/*.js` — indexed in `examples/README.md`; copied into the project folder on first run, not read by the picker |
+| the seed parts | `examples/*.js` — indexed in `examples/README.md`; copied into the project folder on first run, not read by the picker. Changing one does **not** change the user's copy: see `examples/fusion360/README.md`, "A seeded copy is frozen" |
 | what the DSL makes hard | `docs/DSL_GAPS.md` |
 | which op to add next, and why not the others | `docs/OP_ROADMAP.md` |
 | which of all the open fronts to do first | `docs/NEXT.md` |
@@ -223,6 +230,26 @@ A new op touches `graph.rs` (variant + `children_of`), `sdf.rs`, `measure.rs`
 (its bounds), `backend.rs`, `dsl.ts`, plus a case in `eval/cases/`. Missing
 `children_of` is silent — the node just never gets evaluated. Rust will find the
 other three for you: every one of those matches is exhaustive.
+
+**The frontend is Preact, and two things in it are deliberately not.** Every
+panel, button and tooltip is a component under `app/src/ui/`, reading signals
+from `state.ts`. CodeMirror and three.js are *islands*: each owns its own DOM,
+its own undo history or render loop, and a virtual DOM must not touch either, so
+`ui/editor.tsx` and `ui/viewport-pane.tsx` hand each one an empty `<div>` and
+then leave it alone. The machinery in `engine.ts` — the debounce, the in-flight
+guard, the echo-breaking viewer id — is not a render either, and stayed exactly
+what it was; signals are what let the components merely *observe* it.
+
+`window.__editor`, `window.__undo`, `window.__viewport` and the ids `#project`,
+`#status`, `#error`, `#editor`, `#viewport`, `#edge-inspector`, `#target-preview`
+and `#edge-origin` are a contract with `app/e2e/`. Renaming one is a test change,
+not a refactor.
+
+**A control that cannot do anything is deleted, not dimmed.** The titlebar
+carried a mesh-detail slider for a long time, disabled under B-rep. Reading the
+host settled it: `Backend::is_exact` covers *both* kernels the window offers, so
+the slider moved a number nothing read, in either mode. Dimming it under one
+kernel had disguised a defect as a mode. See `DEPTH` in `app/src/state.ts`.
 
 **The selector grammar is parsed twice on purpose.** The kernel must own a
 parser, because a graph can arrive from anywhere and the editor is never the

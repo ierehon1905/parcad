@@ -16,6 +16,34 @@ than a target that only exists in the repository.
 `.seeded` records the whole relative path (`fusion360/v2`, not `v2`), so a leaf
 name may repeat across folders and deleting a target still keeps it deleted.
 
+**A seeded copy is frozen, and for targets that is a trap.** Seeding runs once
+per path and never overwrites, which is right for a part the user has edited and
+wrong for reference material: land a recreation here and the copy in
+`~/Documents/parcad/fusion360` still throws the old reason, in the editor, under
+the same name. It reads as the work not having happened. This has now caught two
+sessions — one of them refreshed the folder *before* the recreation landed and
+reported it fixed, which is worse than not refreshing at all.
+
+Nothing detects it, so refresh by hand after changing a target here, and check
+the copy that was refreshed rather than the file in this directory:
+
+```bash
+for f in examples/fusion360/*.js; do
+  n=$(basename "$f" .js); d="$HOME/Documents/parcad/fusion360/$n.parcad"
+  [ -d "$d" ] && cp "$f" "$d/part.js" && rm -f "$d/README.md" "$d/preview.png"
+done
+bun tools/run.ts ~/Documents/parcad/fusion360/untriangle-v3.parcad/part.js >/dev/null
+```
+
+The `README.md` and `preview.png` go because they are derived from the old
+script; the app rewrites them from measured values on the next save. Skipping the
+second line is how the mistake above happened — the check has to run against the
+user's copy, because that is the file that was wrong.
+
+The real fix is not a shell loop: recreation targets are reference material and
+should not be seeded as ordinary parts at all. That is a change to how `seed()`
+works and is not written yet.
+
 A target that becomes a faithful recreation gets promoted up one level into
 `examples/` proper, and at that point it should also earn a case in
 `eval/cases/`.
