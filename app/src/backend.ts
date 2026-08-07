@@ -364,22 +364,36 @@ export function inspectEdgeTarget<T>(graph: unknown, node: number): Promise<T> {
     : post<T>("inspect-edge-target", { graph, node });
 }
 
-/** Where an export ended up, phrased for the status line. */
+/**
+ * Where an export ended up, phrased for the status line.
+ *
+ * The two transports genuinely differ here and the difference is not worth
+ * hiding. The desktop writes the file beside the part and asks the system to
+ * reveal it, so it returns an absolute path there is a point in showing. A
+ * browser cannot write anywhere and cannot open Finder; it hands the bytes to
+ * the download machinery, which puts them wherever that browser puts downloads,
+ * and the most this can honestly return is the file name.
+ *
+ * `project` is the open part's path, because the host resolves the destination
+ * from the project folder. It has to: this window knows which part is open and
+ * not where that folder lives.
+ */
 export async function exportStl(
   graph: unknown,
   depth: number,
   backend: string,
+  project: string | undefined,
 ): Promise<string> {
-  if (inTauri) {
-    return invoke<string>("export_stl", { graph, depth, path: "part.stl", backend });
+  if (inTauri && project) {
+    return invoke<string>("export_stl", { graph, depth, project, backend });
   }
   save(await download("export/stl", { graph, depth, backend }), "part.stl");
   return "part.stl";
 }
 
-export async function exportStep(graph: unknown): Promise<string> {
-  if (inTauri) {
-    return invoke<string>("export_step", { graph, path: "part.step" });
+export async function exportStep(graph: unknown, project: string | undefined): Promise<string> {
+  if (inTauri && project) {
+    return invoke<string>("export_step", { graph, project });
   }
   save(await download("export/step", { graph }), "part.step");
   return "part.step";

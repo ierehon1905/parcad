@@ -309,6 +309,35 @@ fn suffixed(base: &Path, extension: &str) -> PathBuf {
     base.with_file_name(format!("{leaf}.{extension}"))
 }
 
+/// Where an export of this project belongs on disk.
+///
+/// Beside the source, and named after the part: `bracket.parcad/bracket.stl`,
+/// or `flange.stl` next to a loose `flange.js`. Two reasons it is not a scratch
+/// path or the process's working directory, which is what it used to be.
+///
+/// The first is that the desktop export wrote to the *relative* path
+/// `"part.stl"`, so a bundled `.app` put it wherever macOS happened to have set
+/// the working directory — a file the user was told had been written and could
+/// not find. The second is the rule this folder already follows: a `.parcad`
+/// folder holds the source and everything derived from it, and an STL is
+/// derived. `tree()` never descends into a bundle and ignores every file that
+/// is not `.js`, so an export beside the source is invisible to the picker.
+pub fn export_path(path: &str, extension: &str) -> Result<PathBuf, String> {
+    let located = locate(path)?;
+    let leaf = safe(path)?
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let name = format!("{leaf}.{extension}");
+    Ok(match located.bundle {
+        Some(bundle) => bundle.join(name),
+        // A loose script has no folder of its own, so the export lands beside
+        // it in the project folder rather than inventing one.
+        None => located.source.with_file_name(name),
+    })
+}
+
 pub fn read(path: &str) -> Result<String, String> {
     let located = locate(path)?;
     std::fs::read_to_string(&located.source).map_err(|e| {
@@ -785,6 +814,34 @@ mod tests {
         let out = work(&root);
         let _ = std::fs::remove_dir_all(&root);
         out
+    }
+
+    /// The bug this replaced: the desktop wrote to the relative path
+    /// `"part.stl"`, which a bundled `.app` resolved against whatever working
+    /// directory macOS had handed it. Both forms of project must resolve to an
+    /// absolute path beside the source, named after the part.
+    #[test]
+    fn an_export_lands_beside_the_part_it_came_from() {
+        scoped(|root| {
+            create("Mounts/bracket", "return box(1,1,1);").unwrap();
+            std::fs::write(root.join("flange.js"), "return box(1,1,1);").unwrap();
+
+            assert_eq!(
+                export_path("Mounts/bracket", "stl").unwrap(),
+                root.join("Mounts/bracket.parcad/bracket.stl"),
+                "a bundle keeps its export inside itself, where tree() never looks",
+            );
+            // A loose script has no folder of its own; the export goes beside it
+            // rather than conjuring a bundle the user did not ask for.
+            assert_eq!(
+                export_path("flange", "step").unwrap(),
+                root.join("flange.step"),
+            );
+            assert!(
+                export_path("nothing-here", "stl").is_err(),
+                "an export must not invent a destination for a part that is not there",
+            );
+        });
     }
 
     #[test]

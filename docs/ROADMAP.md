@@ -202,6 +202,53 @@ Two things worth keeping:
    the problem. An agent reads that, believes it, and retries. Each gotcha with
    a wrong message is a bug in the harness, not a note for a human.
 
+### Reach — which clients can talk to this at all
+
+The surface being correct and the surface being *reachable* are separate facts,
+in the same way that a tool's output being right and a model reading it right
+are separate facts. This section is the second one. Asked on 2026-08-07 as a
+choice between two proposals — embed a terminal in the app, or polish the web UI
+so an agent's built-in browser can drive it — and both were declined, for
+reasons that outlive the question.
+
+**A terminal in the app is rejected.** It buys no capability. An agent already
+reaches every `service.rs` function over MCP, and since `session.rs` an agent
+edit lands in the open editor as an ordinary edit that Cmd-Z reverses; the
+convenience on offer is not alt-tabbing. Against that, a pty is a full shell
+inside the process — the exact access `script.rs` creates an empty QuickJS realm
+to deny, so the security story becomes "we sandbox the scripts and ship a shell
+beside them". And it answers neither of CLAUDE.md's two questions: it does not
+extend what the kernel can express, and a model's difficulty authoring a part
+was never window management.
+
+**Polishing the UI as an agent channel is rejected for a sharper reason: it is
+a pixel channel for a reader that is bad at pixels.** That is the whole of
+[PERCEPTION.md](PERCEPTION.md) — see the CADSmith result there, a frame that
+passed every vision check by an Opus judge while containing gaps three fixed
+views cannot resolve. A model reading the window gets strictly *less* than one
+calling `evaluate_part`, which already returns the snapshot as text, as
+structured content, and as PNGs in one reply: no measured bounds, no
+`cut_fraction`, no `unattributed_treatments`, just a canvas. The premise is
+sound as a *fact* — Claude Code's desktop browser (July 2026) opens localhost
+origins directly, so `http://127.0.0.1:4242` is already openable with no work
+from us — and the correct reading of it is that **the browser is where the human
+looks.** The agent's job ends at the file; `eval/field/put-it-where-i-can-open-it.md`
+grades exactly that chain, and its prompt says "so I can open it in the app".
+
+**What is actually blocked is a transport, and it is small.** The ChatGPT
+desktop app, Codex CLI and IDE extension share one MCP config, but the desktop
+app [cannot reliably reach a local Streamable HTTP MCP server on
+macOS](https://github.com/openai/codex/issues/13920) — handshake and decode
+failures. No amount of front-end work touches that. A stdio-to-HTTP shim, or
+documenting `npx mcp-remote` beside the `claude mcp add` line in
+[GOTCHAS.md](GOTCHAS.md), converts one whole client from unreachable to working.
+That is the only part of "let modern tools use this" that is load-bearing, and
+it is hours rather than weeks.
+
+If there is a browser deliverable worth building later, it is a URL that opens
+one named part for the *user* — and it must be a bare origin plus session state,
+because that desktop browser refuses a path or query on localhost.
+
 ## Reference numbers
 
 These now live in `eval/cases/*.json` and are checked rather than described:

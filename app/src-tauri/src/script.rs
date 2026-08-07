@@ -43,7 +43,7 @@ const DEADLINE: Duration = Duration::from_secs(5);
 
 /// The runner, evaluated inside the sandbox.
 ///
-/// Deliberately mirrors `main.ts`'s `buildGraph` and `tools/run.ts`: the DSL is
+/// Deliberately mirrors `engine.ts`'s `buildGraph` and `tools/run.ts`: the DSL is
 /// passed as named parameters rather than as globals, so a script cannot reach
 /// anything the realm happens to be holding — including the source string and
 /// the result of the previous call. Its refusals are worded for whoever caused

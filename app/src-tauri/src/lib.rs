@@ -33,24 +33,46 @@ fn inspect_edge_target(
     service::inspect_edge_target(&service::parse_graph(graph)?, node)
 }
 
-/// Write the current part out as a binary STL, where the desktop asked for it.
+/// Write the current part out as a binary STL, beside the part it came from.
 #[tauri::command]
 fn export_stl(
     graph: serde_json::Value,
     depth: u8,
-    path: String,
+    project: String,
     backend: Option<String>,
 ) -> Result<String, String> {
     let backend = Backend::parse(backend.as_deref())?;
     let export = service::export_stl(&service::parse_graph(graph)?, depth, backend)?;
-    service::write_export(&export, &path)
+    write_and_reveal(&export, &project, "stl")
 }
 
 /// Write the current part out as STEP.
 #[tauri::command]
-fn export_step(graph: serde_json::Value, path: String) -> Result<String, String> {
+fn export_step(graph: serde_json::Value, project: String) -> Result<String, String> {
     let export = service::export_step(&service::parse_graph(graph)?)?;
-    service::write_export(&export, &path)
+    write_and_reveal(&export, &project, "step")
+}
+
+/// Put an export where the part is, and show it to the user.
+///
+/// The path is resolved from the project rather than passed in from the
+/// webview: the frontend knows which part is open, not where the project folder
+/// lives, and the one previous caller passed a bare `"part.stl"` that a bundled
+/// app resolved against whatever working directory macOS had given it.
+///
+/// Revealing is best-effort on purpose. The bytes are on disk and the absolute
+/// path is what this returns, so a machine with no file manager reports the
+/// export as done — which it is — instead of reporting a failure of the wrong
+/// thing.
+fn write_and_reveal(
+    export: &service::Export,
+    project: &str,
+    extension: &str,
+) -> Result<String, String> {
+    let path = projects::export_path(project, extension)?;
+    let written = service::write_export(export, &path.to_string_lossy())?;
+    let _ = service::reveal(&written);
+    Ok(written)
 }
 
 /// The project folder, shared with the browser host and with MCP.

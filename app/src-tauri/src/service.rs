@@ -1402,6 +1402,57 @@ pub fn write_export(export: &Export, path: &str) -> Result<String, String> {
     Ok(path.to_string())
 }
 
+/// Show a written file to the user, in whatever their system calls Finder.
+///
+/// An export the app cannot point at is an export the user has to go looking
+/// for, and "exported bracket.stl" does not say where. Each platform has one
+/// command for this and they disagree about everything, including whether the
+/// argument is the file or its folder:
+///
+/// - macOS `open -R` reveals the file with it selected.
+/// - Windows `explorer /select,<path>` does the same. It exits non-zero even
+///   when it worked, so its status is deliberately not checked.
+/// - Linux has no standard for *revealing*, so this opens the containing
+///   folder, which every desktop's `xdg-open` does understand.
+///
+/// A spawned command rather than a Tauri plugin: it is a dozen lines against a
+/// dependency, a permission entry and a capability file, and the failure mode
+/// worth handling — no file manager at all, as on a headless box — is the same
+/// either way. Failing to reveal never fails the export; the file is written
+/// and its path has already been reported.
+pub fn reveal(path: &str) -> Result<(), String> {
+    let file = Path::new(path);
+    if !file.exists() {
+        return Err(format!("nothing at {path} to show"));
+    }
+
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut c = std::process::Command::new("open");
+        c.arg("-R").arg(file);
+        c
+    };
+    #[cfg(target_os = "windows")]
+    let mut command = {
+        let mut c = std::process::Command::new("explorer");
+        // No space after the comma, and one argument: `explorer` parses this
+        // itself rather than through the usual argument rules.
+        c.arg(format!("/select,{}", file.display()));
+        c
+    };
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    let mut command = {
+        let mut c = std::process::Command::new("xdg-open");
+        c.arg(file.parent().unwrap_or(file));
+        c
+    };
+
+    command
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("could not open a file manager for {path}: {e}"))
+}
+
 /// Measure a foreign STEP export: the reverse of [`export_step`].
 ///
 /// This is how a part authored in another CAD system becomes numbers a

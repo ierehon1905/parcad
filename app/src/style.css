@@ -122,4 +122,33 @@
     border-bottom: 1px solid var(--color-gold);
     @apply rounded-xs;
   }
+
+  /* What the operation palette just wrote. The accent rather than gold: gold
+     means "this is the source the viewport is pointing at" everywhere else in
+     this app, and a write is not a selection.
+
+     It fades rather than blinking. A blink says "something is wrong here"; a
+     fade says "this arrived, and it is yours now" — which is the whole message,
+     since the caret is already sitting in the first argument ready to be typed
+     over. `forwards` matters: the animation ends transparent and stays there,
+     so the highlight is gone before op-palette.tsx removes the decoration and
+     nothing flickers back in between. */
+  .cm-insert-flash {
+    @apply rounded-xs;
+    animation: parcad-insert-flash 900ms ease-out forwards;
+  }
+}
+
+/* Held, then faded, rather than faded from the first frame. A pure fade spends
+   most of its life almost invisible, and the one thing this has to survive is
+   the reader's eye arriving late — they pressed a button at the top of the pane
+   and the text landed somewhere else. The hold is what gives them time to look. */
+@keyframes parcad-insert-flash {
+  0%,
+  40% {
+    background: color-mix(in srgb, var(--color-accent) 55%, transparent);
+  }
+  100% {
+    background: transparent;
+  }
 }

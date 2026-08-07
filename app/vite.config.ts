@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import preact from "@preact/preset-vite";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig({
@@ -6,7 +7,11 @@ export default defineConfig({
   // design tokens live in `src/style.css`'s `@theme` block, which is also where
   // anything that is not markup — the CodeMirror theme, the viewport's clear
   // colour — reads them from as ordinary custom properties.
-  plugins: [tailwindcss()],
+  // Preact rather than React: the same JSX and the same hooks, which is what a
+  // model that has never seen this repository already knows, at a tenth of the
+  // weight. `@preact/signals` carries the state the whole window shares — see
+  // src/state.ts for why that is signals and not component state.
+  plugins: [preact(), tailwindcss()],
   // Tauri drives the dev server on a fixed port and fails loudly rather than
   // silently moving if it is taken.
   clearScreen: false,

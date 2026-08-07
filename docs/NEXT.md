@@ -64,7 +64,8 @@ evaluation, so nothing here re-opened that door.
 Worth keeping from how that prerequisite landed, because this file was wrong
 about it: the duplicate definition of an evaluation was never in `mcp.rs`, which
 had been fixed in `9cbdd443`. It was on the far side of the UI transport, in
-`main.ts`'s own `Report` interface. Both roadmaps can run a commit or two behind
+`main.ts`'s own `Report` interface (that file is now `state.ts` and `engine.ts`;
+the frontend was ported to Preact). Both roadmaps can run a commit or two behind
 the code — check before believing either, including this one.
 
 ## 3. Depth over breadth, and the shape question behind it
@@ -105,8 +106,16 @@ in its header. Top row of [DSL_GAPS.md](DSL_GAPS.md)'s "Still missing", item 6 i
 
 ## Also true, and smaller than it sounds
 
-The editor waits 350 ms after the last keystroke ([`main.ts:268`](../app/src/main.ts))
-— chosen when a rebuild cost 300–450 ms, where kernel time is now 76–130 ms. You
-now wait longer for the timer than for the geometry. ~120 ms roughly halves felt
-latency, and it is a one-line change worth making the next time that file is open
-for another reason.
+One client cannot reach the MCP server at all: the Codex desktop app fails the
+handshake against a local Streamable HTTP server on macOS. A stdio shim, or a
+documented `npx mcp-remote` line, is hours of work and is the only load-bearing
+part of "let other agent clients use this" — the rest of that question (a
+terminal in the app, the UI as an agent channel) was asked on 2026-08-07 and
+declined. The argument, and what the browser *is* good for, is in
+[ROADMAP.md](ROADMAP.md) under "Reach — which clients can talk to this at all".
+
+**Done.** The editor waited 350 ms after the last keystroke — chosen when a
+rebuild cost 300–450 ms, where kernel time is now 76–130 ms, so the timer had
+become the longer half of the latency. It is 120 ms, as `DEBOUNCE_MS` in
+[`engine.ts`](../app/src/engine.ts), taken while that file was open for the
+Preact port.

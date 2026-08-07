@@ -315,7 +315,7 @@ message should distinguish "no edges matched because nothing was circular" from
 
   This is a real cost of every new export, and it lands on parts already saved
   in someone's project folder, not only on the ones here. **Fix:** the places
-  that compile a script (`tools/run.ts`, `app/src/main.ts`,
+  that compile a script (`tools/run.ts`, `app/src/engine.ts`,
   `app/src-tauri/src/script.rs`) should catch the redeclaration and name the
   builtin that was shadowed. "`hole` is a parcad builtin — rename your local"
   is a one-line fix for the reader; "Cannot declare a const variable twice" is
