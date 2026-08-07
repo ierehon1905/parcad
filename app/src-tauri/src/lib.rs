@@ -184,6 +184,58 @@ fn host_port() -> u16 {
     http::port()
 }
 
+/// Say so when this window is pointed at a dev server that is not running.
+///
+/// Tauri's dev/production switch is the `custom-protocol` feature the tauri CLI
+/// adds to the `cargo build` it runs — *not* the cargo profile. So a plain
+/// `cargo build --release -p parcad-app` yields a binary that embeds no
+/// frontend and whose window loads `devUrl`. Launched without Vite on that
+/// port, the window comes up, paints nothing, and says nothing, while the HTTP
+/// host below still serves the UI by reading `app/dist` off disk. "Browser
+/// works, webview dead" reads as a broken webview and is nothing of the kind;
+/// the fix is a build flag, so name it. See docs/GOTCHAS.md.
+fn warn_if_the_window_awaits_a_dev_server<R: tauri::Runtime>(app: &tauri::AppHandle<R>) {
+    use tauri::Manager;
+
+    // A production window is on `tauri://localhost`. Only a dev one is on http,
+    // so anything else here is already the case we do not need to warn about.
+    let Some(window) = app.get_webview_window("main") else {
+        return;
+    };
+    let Ok(url) = window.url() else { return };
+    if !matches!(url.scheme(), "http" | "https") {
+        return;
+    }
+
+    let default_port = if url.scheme() == "https" { 443 } else { 80 };
+    let Ok(addrs) = url.socket_addrs(|| Some(default_port)) else {
+        return;
+    };
+    // Loopback refuses immediately, which is the case this exists for; the
+    // timeout only bounds a host that does not answer at all.
+    if addrs.iter().any(|addr| {
+        std::net::TcpStream::connect_timeout(addr, std::time::Duration::from_millis(300)).is_ok()
+    }) {
+        return;
+    }
+
+    eprintln!(
+        "parcad: the desktop window will stay blank, and this is a build flag, not a bug.\n\
+         \n\
+         This binary was built without tauri's `custom-protocol` feature — the one the\n\
+         tauri CLI adds, and the one that embeds the frontend. Its window therefore\n\
+         loads {url}, where nothing is listening.\n\
+         The HTTP host above is unaffected: a browser on it is the whole\n\
+         application, not a reduced one.\n\
+         \n\
+         Embed the frontend, so the binary carries its own UI:\n\
+         \x20 cd app && bun run tauri build\n\
+         \x20 cargo build --release -p parcad-app --features tauri/custom-protocol\n\
+         or start the dev server this window is waiting for:\n\
+         \x20 cd app && bun run tauri dev"
+    );
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
@@ -202,6 +254,8 @@ pub fn run() {
                 eprintln!("parcad: could not prepare the project folder: {e}");
             }
             http::serve(app.handle().clone());
+            // After the host, so the message can point at it as the way out.
+            warn_if_the_window_awaits_a_dev_server(app.handle());
             // One broadcast, two transports: browsers get SSE from the HTTP
             // host, the webview gets this Tauri event. Forwarded here because
             // emitting *is* the IPC transport's delivery — the capability

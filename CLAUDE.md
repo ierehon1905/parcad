@@ -33,7 +33,7 @@ a component reported as progress.
 ```bash
 tools/check.sh                         # everything below that gates a change, in order
 tools/check.sh --fast                  # kernel crates only: <1 s warm, ~4 s after an edit
-cargo build --locked --release         # core, CLI, app host — no C++
+cargo build --locked --release         # core, CLI, app host — no C++, and a dev window
 tools/build-worker.sh                  # B-rep worker; verifies OCCT is optimised
 cd app && bun install --frozen-lockfile && bun run tauri dev  # from app/
 cd app && bun run tauri build           # .app + .dmg; run build-worker.sh first
@@ -44,6 +44,14 @@ tools/field-suite.sh 3                                     # can a model drive t
 tools/field-test.sh eval/field/does-the-port-meet.md 4     # one case of it
 cd app && bun test src                 # editor-side units: the selector grammar
 ```
+
+**`cargo build` produces a *dev* app, whatever the profile.** Tauri's
+dev/production switch is the `custom-protocol` feature its CLI adds, not
+`--release`: a plain `cargo build` embeds no frontend and points the window at
+`devUrl`, so launched on its own it serves a working HTTP host behind a blank
+window. The app now says so on stderr. Add `--features tauri/custom-protocol`
+for a bare binary that carries its UI, or use `tauri build`; docs/GOTCHAS.md has
+the measurements.
 
 `tools/check.sh` is wired to git — `pre-commit` runs `--fast`, `pre-push` runs
 the corpus too — and to Claude Code, as a `Stop` hook in `.claude/settings.json`

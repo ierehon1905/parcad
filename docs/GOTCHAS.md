@@ -65,6 +65,62 @@ CARGO_LOG=cargo::core::compiler::fingerprint=info cargo build --release 2>&1 | g
 cd app && bun install --frozen-lockfile && bun run tauri dev
 ```
 
+### `cargo build --release` builds a *dev* app: the window is blank, the browser is fine
+
+A binary from a plain `cargo build --locked --release -p parcad-app`, launched
+directly, brings up the HTTP host and a desktop window whose webview never runs
+the frontend — no evaluation, no `preview.png`, no session pushed. A browser tab
+against the *same process* works perfectly. That asymmetry reads as a broken
+webview and is nothing of the kind.
+
+**Tauri's dev/production switch is a Cargo feature, not the cargo profile.**
+From `tauri-macros`:
+
+```rust
+dev: cfg!(not(feature = "custom-protocol")),
+```
+
+The tauri CLI adds `custom-protocol` to the `cargo build` it runs. Nothing else
+does. Without it the binary is a *dev* binary regardless of `--release`, and two
+things follow, both from `tauri-codegen`'s `context.rs`:
+
+- `dev && dev_url.is_some()` embeds `EmbeddedAssets::default()` — i.e. **nothing**.
+  The window loads `devUrl` (`http://localhost:1420`), where nothing is listening.
+- `with_config_parent(...)` bakes in the source dir, so the asset resolver falls
+  back to reading `app/dist` **off disk**. That is the only reason the HTTP host
+  serves a UI at all — and it means such a binary is not relocatable.
+
+Measured on `747ed26b`, scratch `PARCAD_PROJECTS_DIR`, bare launch, 15 s:
+
+| binary | window runs frontend | `/api/session` | `preview.png` | size |
+|---|---|---|---|---|
+| `cargo build --release` | no | `revision: 0` | 0 | 13.84 MB |
+| …same, with vite up on 1420 | **yes** | `bracket` | 1 | — |
+| `cargo build --release --features tauri/custom-protocol` | **yes** | `bracket` | 1 | 15.07 MB |
+| `tauri build` bundle (`ParCAD.app`) | **yes** | `bracket` | 1 | 14.86 MB |
+
+The +1.2 MB is the frontend the dev binary does not carry. Hiding `app/dist`
+makes the dev binary's own HTTP host answer `404 … no frontend bundle is
+embedded in this binary`, which is the same fact from the other side.
+
+Two dead ends worth not repeating, both eliminated by measurement:
+
+- **Not the `.app` bundle, and not window activation.** Cross the two variables:
+  the tauri-built binary in a hand-made minimal `.app` works, and the cargo-built
+  binary inside the *real* `ParCAD.app` (re-signed, launched with `open`) fails.
+  The binary is the only variable. `NSRunningApplication.activate()` returns
+  `true` and changes nothing.
+- **Not release-vs-debug.** `tauri build --debug --no-bundle` works because it
+  is the *CLI* that builds it, not because of the profile. A plain
+  `cargo build` (debug) fails the same way — worse, since dev mode is then the
+  profile's doing as well.
+
+The app now says this itself at startup rather than showing a blank window; see
+`warn_if_the_window_awaits_a_dev_server` in `lib.rs`. Note what the WebKit log
+shows in the failing case, because it misleads: the page load *completes*, then
+`view visibility state changed 1 -> 0` and the web process is throttled to
+background. That is the consequence of loading a dead URL, not the cause.
+
 ### A second app instance silently has no browser UI
 
 The UI port is held by whichever instance bound it first. The second one prints
