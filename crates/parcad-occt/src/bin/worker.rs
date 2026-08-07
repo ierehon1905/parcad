@@ -7,7 +7,8 @@
 
 use parcad_occt::backend;
 use parcad_occt::protocol::{
-    breadcrumb, edge_curve, EdgeCurve, Request, Response, Success, TargetPreview, Timings, Topology,
+    breadcrumb, edge_curve, EdgeCurve, FaceRun, Request, Response, Success, TargetPreview, Timings,
+    Topology,
 };
 use std::io::Read;
 use std::time::Instant;
@@ -380,6 +381,15 @@ fn run() -> Response {
             .flat_map(|n| [n.x as f32, n.y as f32, n.z as f32])
             .collect(),
         indices: mesh.indices.iter().map(|i| *i as u32).collect(),
+        face_runs: mesh
+            .faces
+            .iter()
+            .map(|run| FaceRun {
+                face: run.face as u32,
+                start: run.start as u32,
+                count: run.count as u32,
+            })
+            .collect(),
         edges,
         deflection_mm: BINDING_DEFLECTION_MM,
         topology,

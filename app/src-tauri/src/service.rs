@@ -37,6 +37,13 @@ pub struct Evaluated {
     /// Logical edge curves, each a polyline. Empty for a mesh preview, which
     /// deliberately draws its triangles instead of solid-model edges.
     edges: Vec<parcad_occt::EdgeCurve>,
+    /// Where each face's triangles sit in `indices`, and which face each run is.
+    ///
+    /// Empty for the implicit backend and for a mesh preview: a distance field
+    /// has no faces to attribute a triangle to, and saying "face 3" about one
+    /// would be inventing topology the model does not have.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    face_runs: Vec<parcad_occt::protocol::FaceRun>,
     /// What the part is — the one artifact every transport serialises.
     pub snapshot: EvaluationSnapshot,
     /// How long this run took. A fact about the evaluation rather than about
@@ -1207,6 +1214,8 @@ fn evaluate_implicit(doc: &Doc, depth: u8) -> Result<Evaluated, String> {
         // Corners cannot be shared once each triangle has its own normals.
         indices: Vec::new(),
         edges: Vec::new(),
+        // A distance field has no faces to attribute a triangle to.
+        face_runs: Vec::new(),
         bounds: report.bounds,
         snapshot: describe(doc, &report, None, "implicit", 0),
         timings: Timings {
@@ -1229,6 +1238,7 @@ fn evaluate_brep(doc: &Doc) -> Result<Evaluated, String> {
         positions: s.positions,
         normals: s.normals,
         indices: s.indices,
+        face_runs: s.face_runs,
         edges: s.edges,
         timings: Timings {
             lower_and_mesh_ms: s.timings.build_ms + s.timings.mesh_ms,

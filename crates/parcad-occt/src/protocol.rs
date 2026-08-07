@@ -190,6 +190,17 @@ pub struct Success {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
+    /// Where each face's triangles sit in `indices`.
+    ///
+    /// The mesher triangulates face by face and concatenates the results, so
+    /// this costs nothing to record and is the only thing that lets a triangle
+    /// be traced back to the face it belongs to. Without it a viewer can say
+    /// "you are pointing at the solid" and no more.
+    ///
+    /// Empty for a shape whose faces carried no triangulation at all, and
+    /// short of `topology.faces` when an individual face had none.
+    #[serde(default)]
+    pub face_runs: Vec<FaceRun>,
     /// The deflection the mesher actually used, in mm — the furthest any
     /// triangle can sit from the true surface.
     ///
@@ -209,6 +220,27 @@ pub struct Success {
     pub timings: Timings,
     pub step_path: Option<PathBuf>,
     pub stl_path: Option<PathBuf>,
+}
+
+/// One face's triangles, as a span of the shared index buffer.
+///
+/// `start` and `count` are in triangles rather than indices, so a viewer with a
+/// triangle number from a raycast can find its face without dividing by three.
+///
+/// `face` is the face's position in the shape's own face traversal, which is
+/// the order `topology.faces` counts and the order the geometry report walks.
+/// It is deliberately not the run's position in `face_runs`: a face carrying no
+/// triangulation contributes no run, and a viewer that used the position would
+/// name every face after such a gap as its neighbour — a wrong answer that
+/// still counts to a plausible total.
+///
+/// Like `edge@N`, it is valid for one evaluation and describes nothing to write
+/// in a script.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct FaceRun {
+    pub face: u32,
+    pub start: u32,
+    pub count: u32,
 }
 
 /// Measured geometry of a foreign B-rep, read from a STEP export.

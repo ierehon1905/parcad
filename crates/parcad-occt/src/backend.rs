@@ -2479,5 +2479,54 @@ mod tests {
             "currently supports only { continuity: \"tangent\", corner: \"rollingBall\" }"
         ));
     }
+
+    /// The face runs must tile the index buffer, and name the kernel's own faces.
+    ///
+    /// This is the join everything face-shaped rests on: a viewer turns a
+    /// raycast hit into a triangle number, the runs turn that into a face
+    /// number, and anything that later describes or selects that face has to
+    /// mean the same face by it. Each half fails silently on its own — a
+    /// mis-tiled buffer highlights a neighbouring patch, and a run numbered by
+    /// its position rather than by its face still counts to a plausible total.
+    #[test]
+    fn face_runs_tile_the_buffer_and_carry_the_kernels_own_face_numbers() {
+        // A drilled plate: nine faces, and the bore is the curved one whose
+        // triangulation the run boundaries have to survive.
+        let body = AdHocShape::make_box_point_point(
+            DVec3::new(-20.0, -20.0, -4.0),
+            DVec3::new(20.0, 20.0, 4.0),
+        )
+        .0;
+        let cutter = AdHocShape::make_cylinder(DVec3::new(0.0, 0.0, -8.0), 3.0, 16.0).0;
+        let shape = body.subtract(&cutter).shape;
+
+        let faces = shape.faces().count();
+        let mesh = shape.mesh();
+        let triangles = mesh.indices.len() / 3;
+
+        assert!(!mesh.faces.is_empty(), "a meshed solid must attribute its triangles");
+
+        // Every triangle belongs to exactly one face: the runs start at zero,
+        // meet end to end, and finish at the end of the buffer. A gap would be
+        // triangles that belong to no face; an overlap, a triangle claimed by
+        // two.
+        let mut next = 0;
+        for run in &mesh.faces {
+            assert_eq!(run.start, next, "face runs must meet end to end");
+            assert!(run.count > 0, "a run with no triangles is not a run");
+            next += run.count;
+        }
+        assert_eq!(next, triangles, "the runs must cover the whole index buffer");
+
+        // And the number each run carries is the kernel's face number, not the
+        // run's own position. They coincide here — every face of this solid
+        // triangulates — so what is being pinned is that they are read from the
+        // right place: strictly increasing, and inside the shape's face count.
+        assert_eq!(mesh.faces.len(), faces, "this solid's faces all triangulate");
+        for (position, run) in mesh.faces.iter().enumerate() {
+            assert!(run.face < faces, "face {} is outside the shape's {faces} faces", run.face);
+            assert_eq!(run.face, position, "runs are in the shape's own face order");
+        }
+    }
 }
 

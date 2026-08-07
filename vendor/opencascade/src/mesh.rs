@@ -3,12 +3,46 @@ use cxx::UniquePtr;
 use glam::{dvec2, dvec3, DVec2, DVec3};
 use opencascade_sys::ffi;
 
+/// Which face of the shape a run of triangles came from.
+///
+/// `start` and `count` are in triangles, not indices, so a caller that has a
+/// triangle number from a raycast can find its face without dividing by three.
+#[derive(Debug, Clone, Copy)]
+pub struct FaceRun {
+    /// The face's position in the shape's own face traversal — the order
+    /// `Shape::faces()` walks, which is the order everything else that counts
+    /// faces uses too.
+    ///
+    /// Counted across the faces this mesher skips, not derived from the run's
+    /// position in `Mesh::faces`. A face whose triangulation is missing
+    /// contributes no run, so the two numberings part company on exactly the
+    /// shapes where saying "face 7" wrongly would be hardest to notice: the
+    /// count still looks plausible and every face after the gap is named as
+    /// its neighbour.
+    pub face: usize,
+    pub start: usize,
+    pub count: usize,
+}
+
 #[derive(Debug)]
 pub struct Mesh {
     pub vertices: Vec<DVec3>,
     pub uvs: Vec<DVec2>,
     pub normals: Vec<DVec3>,
     pub indices: Vec<usize>,
+    /// One run per *triangulated* face of the meshed shape, in traversal order.
+    ///
+    /// The mesher already triangulates face by face and concatenates the
+    /// results; this records where each face's triangles landed instead of
+    /// throwing that away. Without it a triangle in the finished buffer has no
+    /// way back to the `TopoDS_Face` it came from, which is what a viewer needs
+    /// to say "you are pointing at *this* face" rather than "you are pointing
+    /// at the solid".
+    ///
+    /// Shorter than the shape's face count when a face carried no
+    /// triangulation. Read `FaceRun::face` for which face a run is; the run's
+    /// own position is not that number.
+    pub faces: Vec<FaceRun>,
 }
 
 pub struct Mesher {
@@ -32,11 +66,12 @@ impl Mesher {
         let mut uvs = vec![];
         let mut normals = vec![];
         let mut indices = vec![];
+        let mut faces = vec![];
 
         let triangulated_shape = ffi::TopoDS_Shape_to_owned(self.inner.pin_mut().Shape());
         let triangulated_shape = Shape { inner: triangulated_shape };
 
-        for face in triangulated_shape.faces() {
+        for (face_index, face) in triangulated_shape.faces().enumerate() {
             let mut location = ffi::TopLoc_Location_ctor();
 
             let triangulation_handle =
@@ -99,6 +134,7 @@ impl Mesher {
                 normals.push(dvec3(normal.X(), normal.Y(), normal.Z()));
             }
 
+            let first_triangle = indices.len() / 3;
             for i in 1..=triangulation.NbTriangles() {
                 let triangle = triangulation.Triangle(i);
 
@@ -112,8 +148,13 @@ impl Mesher {
                     indices.push(index_offset + triangle.Value(1) as usize - 1);
                 }
             }
+            faces.push(FaceRun {
+                face: face_index,
+                start: first_triangle,
+                count: indices.len() / 3 - first_triangle,
+            });
         }
 
-        Mesh { vertices, uvs, normals, indices }
+        Mesh { vertices, uvs, normals, indices, faces }
     }
 }

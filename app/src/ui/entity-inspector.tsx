@@ -29,12 +29,18 @@ const shown = computed(() => {
   if (vertex) return { kind: "vertex" as const, vertex, hovering: !!S.hoveredVertex.value };
   const edge = S.hoveredEdge.value ?? S.selectedEdge.value;
   if (edge) return { kind: "edge" as const, edge, hovering: !!S.hoveredEdge.value };
+  const face = S.hoveredFace.value;
+  if (face) return { kind: "face" as const, face, hovering: true };
   return undefined;
 });
 
 export function EntityInspector() {
   const target = shown.value;
   if (!target) return null;
+
+  // A face has no selector to offer, so it gets its own short panel rather
+  // than being squeezed into the shape of the other two.
+  if (target.kind === "face") return <FacePanel face={target.face} />;
 
   const vertex = target.kind === "vertex" ? target.vertex : undefined;
   const edge = target.kind === "edge" ? target.edge : undefined;
@@ -98,6 +104,37 @@ export function EntityInspector() {
         <Icon name="copy" class="size-3.5 shrink-0" />
         <span>copy {vertex ? "vertex " : ""}selector</span>
       </button>
+    </div>
+  );
+}
+
+/**
+ * What the pointer is on, when it is on a face.
+ *
+ * Deliberately thin, and it says why: there is no face selector in the DSL yet,
+ * so there is nothing here to copy into a script. The number is the kernel's own
+ * face number — ephemeral in exactly the way an `edge@…` ID is, which is why it
+ * is shown as "of 22" rather than as a name.
+ */
+function FacePanel({ face }: { face: { face: number; triangles: number } }) {
+  const total = S.snapshot.value?.faces;
+  return (
+    <div
+      class="min-w-[184px] px-2.5 py-2 rounded-lg border border-line
+             bg-glass/86 backdrop-blur-lg text-ink-dim font-mono text-tiny"
+    >
+      <div class="flex items-center gap-1.5">
+        <Icon name="tag" class="size-4 shrink-0 text-ink-dim" />
+        <span class="font-sans text-[10px] leading-[1.3] tracking-[0.08em] uppercase text-ink-dim">
+          face inspector
+        </span>
+      </div>
+      <div class="mt-1 text-ink">
+        face {face.face + 1}
+        {total ? ` of ${total}` : ""}
+      </div>
+      <div>{face.triangles.toLocaleString()} triangles</div>
+      <div class="mt-[5px]">no face selector in the DSL yet — aim at its edges</div>
     </div>
   );
 }

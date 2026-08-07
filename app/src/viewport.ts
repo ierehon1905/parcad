@@ -10,6 +10,9 @@
 
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { Line2 } from "three/examples/jsm/lines/Line2.js";
+import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
+import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { verticesFromEdges, type VertexPoint } from "./entities";
 import { OutlineRenderer } from "./outline";
@@ -26,6 +29,31 @@ export interface Geometry {
    * around it, while these are the curve itself.
    */
   edges?: EdgeCurve[];
+  /**
+   * Where each face's triangles sit in `indices`, and which face each run is.
+   *
+   * Absent for the implicit backend and for a mesh preview. Without it a
+   * triangle under the pointer belongs to the solid and to nothing smaller, so
+   * faces simply are not pickable — which is the honest behaviour, rather than
+   * highlighting a patch of triangles and calling it a face.
+   */
+  faceRuns?: FaceRun[];
+}
+
+/** One face's triangles, as a span of the index buffer. See `state.ts`. */
+export interface FaceRun {
+  face: number;
+  start: number;
+  count: number;
+}
+
+/** A face of the solid, as the viewport can pick it. */
+export interface FacePick {
+  /** The kernel's own face number, not this run's position in the list. */
+  face: number;
+  /** Its triangles, as a span of the index buffer. */
+  run: FaceRun;
+  triangles: number;
 }
 
 /** A logical B-rep edge returned by the exact backend. */
@@ -48,6 +76,7 @@ export interface TargetVertex {
 }
 
 export interface EdgeCallbacks {
+  onFaceHover?: (face: FacePick | undefined) => void;
   onHover?: (edge: EdgeCurve | undefined) => void;
   onSelect?: (edge: EdgeCurve | undefined) => void;
   onVertexHover?: (vertex: VertexPoint | undefined) => void;
@@ -75,6 +104,22 @@ export interface SectionPlane {
 
 /** The cut face, in the raster's own colour. See `CUT_FACE` in render.rs. */
 const CUT_FACE = 0xc99454;
+
+/**
+ * The hover highlight, in the two colours it needs to be legible anywhere.
+ *
+ * The work area is deliberately bright and the part is a mid grey that goes
+ * dark where it turns away from the light, so neither a black mark nor a white
+ * one survives on its own. A near-black core inside a white halo does: the halo
+ * separates it from dark material, the core from the pale background. Vertices
+ * invert it — a white disc with a near-black ring — for the same reason, since
+ * a filled dot needs its contrast the other way round.
+ */
+const INK = 0x0b0e13;
+const HALO = 0xffffff;
+/** The highlight's two widths, in CSS pixels. See `resize` for the conversion. */
+const HALO_PX = 5.5;
+const CORE_PX = 2.2;
 
 /** Fusion-style light canvas: dark chrome, bright work area. */
 const BG_TOP = "#e8ecf1";
@@ -115,6 +160,34 @@ export class Viewport {
   private targetPreview?: THREE.Group;
   private hoveredEdge?: THREE.LineSegments;
   private selectedEdge?: THREE.LineSegments;
+  /**
+   * The hover highlight, built once and re-pointed at whatever is under the
+   * cursor.
+   *
+   * Two fat lines rather than one: a white halo under a near-black core. A
+   * plain black line is invisible against the part's own dark edges and a
+   * plain white one is invisible against the light background, so a highlight
+   * that has to read on both needs both. This is the shape every mechanical
+   * CAD package draws for the same reason.
+   *
+   * `THREE.Line` cannot do it — `linewidth` is ignored by every WebGL driver
+   * that matters, so a halo drawn with it would be exactly as wide as the line
+   * it is meant to surround.
+   */
+  private hoverHalo!: Line2;
+  private hoverCore!: Line2;
+  /** Where each face's triangles sit, when the kernel said. */
+  private faceRuns: FaceRun[] = [];
+  private hoveredFace?: FacePick;
+  /**
+   * The lit patch over the hovered face.
+   *
+   * Its geometry is the face's own triangles copied out of the part, so it is
+   * the face exactly rather than a box around it. Additive, so it *lightens*
+   * whatever it lies on instead of painting a flat colour over shading the eye
+   * uses to read the shape.
+   */
+  private faceHighlight?: THREE.Mesh;
   private hoveredVertex?: THREE.Points;
   private selectedVertex?: THREE.Points;
   /** Where the pointer went down, to tell a click apart from an orbit drag. */
@@ -233,6 +306,38 @@ export class Viewport {
 
     this.outline = new OutlineRenderer(this.renderer, this.scene, this.camera);
 
+    // Depth-tested like the ordinary edges, so a highlight on the far side of
+    // the part stays hidden and the solid still reads as solid. Pulled a little
+    // toward the camera so it wins against the base edge it is drawn over
+    // rather than z-fighting with it.
+    const highlight = (color: number, width: number, order: number) => {
+      const line = new Line2(
+        new LineGeometry(),
+        new LineMaterial({
+          color,
+          linewidth: width,
+          transparent: true,
+          polygonOffset: true,
+          polygonOffsetFactor: -6,
+          polygonOffsetUnits: -6,
+        }),
+      );
+      line.visible = false;
+      line.renderOrder = order;
+      // A highlight is never a pick target. Picking runs against the edge and
+      // vertex lists explicitly, so nothing in the app would hit this — but it
+      // sits in the scene, and anything that ever raycasts the scene broadly
+      // would otherwise select the mark instead of the edge it is marking.
+      line.raycast = () => {};
+      // Never a shadow caster: this is annotation about the part, not part of it.
+      line.castShadow = false;
+      line.receiveShadow = false;
+      this.scene.add(line);
+      return line;
+    };
+    this.hoverHalo = highlight(HALO, HALO_PX, 4);
+    this.hoverCore = highlight(INK, CORE_PX, 5);
+
     // Resizing is *recorded* here and applied by the frame that draws next.
     // Doing it inline leaves the canvas and the composer's render targets
     // reallocated and empty until the next animation frame, which is the flash
@@ -263,6 +368,24 @@ export class Viewport {
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.outline?.setSize(w, h);
+
+    // A fat line is a screen-space quad, so its material has to be told how big
+    // the screen is or its width means nothing. The *drawing buffer*, not the
+    // CSS box: they differ by the device pixel ratio, and passing the CSS size
+    // on a retina display draws every highlight at twice its nominal width.
+    // The widths are then in device pixels, so they are scaled by the same
+    // ratio to keep the highlight the same size to the eye on any display.
+    const buffer = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    const ratio = this.renderer.getPixelRatio();
+    for (const [line, width] of [
+      [this.hoverHalo, HALO_PX],
+      [this.hoverCore, CORE_PX],
+    ] as const) {
+      const material = line?.material as LineMaterial | undefined;
+      if (!material) continue;
+      material.resolution.set(buffer.x, buffer.y);
+      material.linewidth = width * ratio;
+    }
   }
 
   private tick = () => {
@@ -348,8 +471,119 @@ export class Viewport {
     const edgeHit = this.edgeRaycaster.intersectObjects(this.edgeLines, false)[0];
     const vertex = vertexHit?.object as THREE.Points | undefined;
     this.setHoveredVertex(vertex);
-    this.setHoveredEdge(vertex ? undefined : edgeHit?.object as THREE.LineSegments | undefined);
+    const edge = vertex ? undefined : (edgeHit?.object as THREE.LineSegments | undefined);
+    this.setHoveredEdge(edge);
+
+    // A face is what you get when you are not on anything smaller. Corners beat
+    // edges and edges beat faces, because the smaller the entity the harder it
+    // is to put a pointer on and the more specific the thing you meant.
+    if (vertex || edge || !this.partMesh || this.faceRuns.length === 0) {
+      this.setHoveredFace(undefined);
+      return;
+    }
+    this.edgeRaycaster.setFromCamera(pointer, this.camera);
+    const surface = this.edgeRaycaster.intersectObject(this.partMesh, false)[0];
+    const triangle = surface?.faceIndex;
+    this.setHoveredFace(
+      triangle === undefined || triangle === null ? undefined : this.faceAt(triangle),
+    );
   };
+
+  /** Which face a triangle belongs to, by the runs the kernel reported. */
+  private faceAt(triangle: number): FacePick | undefined {
+    for (const run of this.faceRuns) {
+      if (triangle >= run.start && triangle < run.start + run.count) {
+        return { face: run.face, run, triangles: run.count };
+      }
+    }
+    return undefined;
+  }
+
+  private setHoveredFace(next?: FacePick) {
+    if (next?.face === this.hoveredFace?.face) return;
+    this.hoveredFace = next;
+    this.showFaceHighlight(next);
+    this.edgeCallbacks.onFaceHover?.(next);
+  }
+
+  /**
+   * Lay a lit patch over the hovered face, or take it away.
+   *
+   * The patch is a copy of the face's triangles rather than a re-render of the
+   * part with a second material: the part is one mesh with one material, and
+   * splitting it into a group per face to colour one of them would change what
+   * the renderer draws for every frame in order to change what one hover looks
+   * like.
+   */
+  private showFaceHighlight(face?: FacePick) {
+    if (this.faceHighlight) {
+      this.faceHighlight.parent?.remove(this.faceHighlight);
+      this.faceHighlight.geometry.dispose();
+      this.faceHighlight = undefined;
+    }
+    if (!face || !this.partMesh) return;
+
+    const source = this.partMesh.geometry;
+    const index = source.getIndex();
+    if (!index) return;
+
+    const patch = new THREE.BufferGeometry();
+    patch.setAttribute("position", source.getAttribute("position"));
+    patch.setIndex(
+      new THREE.Uint32BufferAttribute(
+        Array.from(index.array).slice(face.run.start * 3, (face.run.start + face.run.count) * 3),
+        1,
+      ),
+    );
+
+    const mesh = new THREE.Mesh(
+      patch,
+      new THREE.MeshBasicMaterial({
+        color: HALO,
+        transparent: true,
+        opacity: 0.22,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        // Coplanar with the face it covers, so it needs pulling forward or the
+        // two z-fight into a shimmer as the camera moves.
+        polygonOffset: true,
+        polygonOffsetFactor: -4,
+        polygonOffsetUnits: -4,
+        side: THREE.DoubleSide,
+        clippingPlanes: this.clipPlanes.length > 0 ? this.clipPlanes : null,
+      }),
+    );
+    mesh.renderOrder = 3;
+    mesh.castShadow = false;
+    mesh.receiveShadow = false;
+    mesh.raycast = () => {};
+
+    // The white edge around the patch — the same job the halo does for an edge,
+    // separating the lit face from whatever it sits against. `EdgesGeometry`
+    // drops every edge between two near-coplanar triangles, so on a flat face
+    // the tessellation disappears and only the boundary survives. On a curved
+    // one some internal edges remain, which reads as the shading it is drawn
+    // over rather than as noise; and a boundary onto a *tangent* neighbour —
+    // a fillet running out into its wall — has no angle to find and is not
+    // drawn. That is a real limit, and the tint is what carries the highlight
+    // there.
+    const outline = new THREE.LineSegments(
+      new THREE.EdgesGeometry(patch, 25),
+      new THREE.LineBasicMaterial({
+        color: HALO,
+        transparent: true,
+        opacity: 0.85,
+        depthWrite: false,
+        clippingPlanes: this.clipPlanes.length > 0 ? this.clipPlanes : null,
+      }),
+    );
+    outline.renderOrder = 4;
+    outline.raycast = () => {};
+    mesh.add(outline);
+
+    this.faceHighlight = mesh;
+    this.partMesh.add(mesh);
+  }
 
   private setHoveredEdge(next?: THREE.LineSegments) {
     if (next === this.hoveredEdge) return;
@@ -357,6 +591,7 @@ export class Viewport {
     this.hoveredEdge = next;
     this.paintEdge(previous);
     this.paintEdge(next);
+    this.showEdgeHighlight(next);
     this.edgeCallbacks.onHover?.(next?.userData.edge as EdgeCurve | undefined);
   }
 
@@ -369,13 +604,42 @@ export class Viewport {
     this.edgeCallbacks.onSelect?.(next?.userData.edge as EdgeCurve | undefined);
   }
 
+  /**
+   * The base edge's own colour. Gold when it is the pinned selection, otherwise
+   * the ordinary edge grey — the *hover* is drawn by the halo below rather than
+   * by recolouring the line, so an edge under the cursor keeps looking like the
+   * part's edge instead of turning into a different one.
+   */
   private paintEdge(line?: THREE.LineSegments) {
     if (!line) return;
     const material = line.material as THREE.LineBasicMaterial;
-    material.color.setHex(
-      line === this.selectedEdge ? 0xf5b942 : line === this.hoveredEdge ? 0x4c91ff : 0x2b3440,
-    );
-    material.opacity = line === this.hoveredEdge || line === this.selectedEdge ? 1 : 0.85;
+    material.color.setHex(line === this.selectedEdge ? 0xf5b942 : 0x2b3440);
+    material.opacity = line === this.selectedEdge ? 1 : 0.85;
+  }
+
+  /**
+   * Lay the halo and core over the hovered edge, or put them away.
+   *
+   * The polyline is rebuilt rather than a per-edge highlight being kept for
+   * every edge: a part with a hundred edges would otherwise carry two hundred
+   * fat lines that are invisible almost all of the time.
+   */
+  private showEdgeHighlight(line?: THREE.LineSegments) {
+    const edge = line?.userData.edge as EdgeCurve | undefined;
+    if (!edge || edge.points.length < 2) {
+      this.hoverHalo.visible = false;
+      this.hoverCore.visible = false;
+      return;
+    }
+    const flat = edge.points.flat();
+    for (const target of [this.hoverHalo, this.hoverCore]) {
+      const geometry = new LineGeometry();
+      geometry.setPositions(flat);
+      target.geometry.dispose();
+      target.geometry = geometry;
+      target.computeLineDistances();
+      target.visible = true;
+    }
   }
 
   private setHoveredVertex(next?: THREE.Points) {
@@ -396,13 +660,25 @@ export class Viewport {
     this.edgeCallbacks.onVertexSelect?.(next?.userData.vertex as VertexPoint | undefined);
   }
 
+  /**
+   * A corner is drawn only while it is being pointed at.
+   *
+   * Every edge endpoint is a pickable corner, so showing them all put a grey
+   * dot on every vertex of the model at all times — dozens of marks about
+   * nothing, over the one thing the window is for looking at. `material.visible`
+   * rather than `object.visible`, because the renderer skips the first and the
+   * raycaster still sees the object: a corner you cannot see is still a corner
+   * you can hover.
+   */
   private paintVertex(marker?: THREE.Points) {
     if (!marker) return;
-    const material = marker.material as THREE.PointsMaterial;
-    material.color.setHex(
-      marker === this.selectedVertex ? 0xf5b942 : marker === this.hoveredVertex ? 0x4c91ff : 0x5c6b7c,
-    );
-    material.size = marker === this.selectedVertex ? 9 : marker === this.hoveredVertex ? 8 : 5;
+    const shown = marker === this.hoveredVertex || marker === this.selectedVertex;
+    marker.material =
+      marker === this.selectedVertex
+        ? vertexMaterial("selected")
+        : shown
+          ? vertexMaterial("hover")
+          : vertexMaterial("hidden");
   }
 
   /** Replace the displayed part. */
@@ -473,6 +749,10 @@ export class Viewport {
       const renderedVertices = vertexMarkers(verticesFromEdges(geo.edges!));
       this.partGroup.add(renderedVertices.group);
       this.vertexMarkers.push(...renderedVertices.markers);
+      // Only the exact kernel attributes a triangle to a face. Left empty
+      // otherwise, which is what makes faces unpickable rather than wrongly
+      // picked — see `faceRuns` on `Geometry`.
+      this.faceRuns = geo.faceRuns ?? [];
     } else {
       // Show the sampling grid in a restrained weight: it identifies this as a
       // mesh preview while leaving the smoothed surface readable.
@@ -705,6 +985,13 @@ export class Viewport {
     this.selectedVertex = undefined;
     this.edgeLines.length = 0;
     this.vertexMarkers.length = 0;
+    this.faceRuns = [];
+    this.hoveredFace = undefined;
+    this.faceHighlight = undefined;
+    // The highlight lives on the scene rather than in the part group, so it has
+    // to be put away by hand — a halo left tracing an edge of the part that was
+    // just replaced is a mark about geometry that is no longer there.
+    this.showEdgeHighlight(undefined);
     this.edgeCallbacks.onHover?.(undefined);
     this.edgeCallbacks.onSelect?.(undefined);
     this.edgeCallbacks.onVertexHover?.(undefined);
@@ -714,9 +1001,7 @@ export class Viewport {
       child.traverse((o) => {
         const drawable = o as THREE.Mesh | THREE.LineSegments;
         drawable.geometry?.dispose();
-        const material = drawable.material;
-        if (Array.isArray(material)) material.forEach((m) => m.dispose());
-        else material?.dispose();
+        releaseMaterial(drawable.material);
       });
     }
   }
@@ -863,17 +1148,83 @@ function edgeLines(
   return { group, lines };
 }
 
-/** Turn exact edge endpoints into small pickable corner markers. */
+/**
+ * The corner sprite: a white disc, a near-black ring, and a white glow outside
+ * it — drawn once into a canvas and shared by every marker.
+ *
+ * A `PointsMaterial` square with a colour cannot be this shape, and the glow in
+ * particular has no other cheap route: it is what keeps the marker readable
+ * where a corner sits against the bright background rather than against the
+ * part.
+ */
+function cornerSprite(fill: string, ring: string): THREE.Texture {
+  const size = 64;
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d")!;
+  const centre = size / 2;
+
+  // The glow first, and wider than the ring, so it reads as a halo around the
+  // whole mark rather than as a smudge under it.
+  ctx.shadowColor = "rgba(255,255,255,0.95)";
+  ctx.shadowBlur = 9;
+  ctx.fillStyle = "rgba(255,255,255,0.9)";
+  ctx.beginPath();
+  ctx.arc(centre, centre, 19, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+
+  ctx.beginPath();
+  ctx.arc(centre, centre, 14, 0, Math.PI * 2);
+  ctx.fillStyle = fill;
+  ctx.fill();
+  ctx.lineWidth = 5;
+  ctx.strokeStyle = ring;
+  ctx.stroke();
+
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
+}
+
+/**
+ * The three states a corner can be in, as three shared materials.
+ *
+ * Shared rather than one per marker: a part has as many corners as it has edge
+ * endpoints, and every one of them would otherwise carry its own texture.
+ * Built lazily so a module import does not need a DOM.
+ */
+const VERTEX_MATERIALS: Partial<Record<"hidden" | "hover" | "selected", THREE.PointsMaterial>> = {};
+
+function vertexMaterial(state: "hidden" | "hover" | "selected"): THREE.PointsMaterial {
+  const existing = VERTEX_MATERIALS[state];
+  if (existing) return existing;
+
+  const made =
+    state === "hidden"
+      ? // Not drawn, but still raycast — see `paintVertex`.
+        new THREE.PointsMaterial({ visible: false })
+      : new THREE.PointsMaterial({
+          map: cornerSprite(state === "selected" ? "#f5b942" : "#ffffff", "#0b0e13"),
+          size: state === "selected" ? 15 : 13,
+          sizeAttenuation: false,
+          transparent: true,
+          depthWrite: false,
+        });
+  made.userData.shared = true;
+  VERTEX_MATERIALS[state] = made;
+  return made;
+}
+
+/** Turn exact edge endpoints into pickable corners, drawn only when pointed at. */
 function vertexMarkers(vertices: VertexPoint[]): { group: THREE.Group; markers: THREE.Points[] } {
   const group = new THREE.Group();
   const markers: THREE.Points[] = [];
   for (const vertex of vertices) {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(vertex.point, 3));
-    const marker = new THREE.Points(
-      geometry,
-      new THREE.PointsMaterial({ color: 0x5c6b7c, size: 5, sizeAttenuation: false, transparent: true, opacity: 0.9 }),
-    );
+    const marker = new THREE.Points(geometry, vertexMaterial("hidden"));
     marker.userData.vertex = vertex;
     marker.castShadow = false;
     marker.receiveShadow = false;
@@ -932,12 +1283,29 @@ function meshWireframe(g: THREE.BufferGeometry): THREE.LineSegments {
  * Geometry is *not* disposed here: the stencil helpers share the part's own
  * buffers, and disposing those with the cap would take the part with it.
  */
+/**
+ * Free a material unless it is one of the shared ones.
+ *
+ * The corner materials below are deliberately shared by every marker on the
+ * part, so the ordinary "dispose everything under this object" sweep would free
+ * them on the first rebuild and every later part would be drawing with a
+ * material whose GPU program had been thrown away. Sharing them and freeing
+ * them per-object are both reasonable; doing both is not.
+ */
+function releaseMaterial(material: THREE.Material | THREE.Material[] | undefined) {
+  if (!material) return;
+  if (Array.isArray(material)) {
+    material.forEach(releaseMaterial);
+    return;
+  }
+  if (material.userData.shared) return;
+  material.dispose();
+}
+
 function disposeTree(root: THREE.Object3D) {
   root.traverse((object) => {
     const drawable = object as THREE.Mesh | THREE.LineSegments;
-    const material = drawable.material;
-    if (Array.isArray(material)) material.forEach((entry) => entry.dispose());
-    else material?.dispose();
+    releaseMaterial(drawable.material);
   });
 }
 

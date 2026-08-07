@@ -31,6 +31,9 @@ export function ViewportPane() {
     if (!host.current) return;
 
     const viewport = new Viewport(host.current, {
+      onFaceHover: (face) => {
+        S.hoveredFace.value = face && { face: face.face, triangles: face.triangles };
+      },
       onHover: (edge) => {
         S.hoveredEdge.value = edge;
         engine.highlightTreatmentForEdge(edge);

@@ -77,6 +77,21 @@ out. Everything below could otherwise have lived in our own crate.
   exact mass properties, faces with their surface data down to B-spline pole
   grids, wires as ordered edge loops.
 
+- `Mesh::faces` — a `FaceRun { face, start, count }` per face, in triangles,
+  saying where each face's triangles landed in `indices`. The mesher already
+  walks the shape face by face and concatenates the per-face triangulations; the
+  boundary between them was simply dropped on the floor. Recording it costs one
+  push per face and is the only thing that lets a triangle be traced back to the
+  `TopoDS_Face` it came from — without it a viewer can say "you are pointing at
+  the solid" and nothing more precise.
+
+  `face` is the index in the shape's own face traversal, counted across the
+  `continue` that skips a face with no triangulation. That distinction is the
+  whole reason the field exists: the runs are otherwise in emission order, which
+  is shorter than the face count on exactly those shapes, and a caller using a
+  run's position would name every face after the gap as its neighbour — wrong,
+  but still adding up to a plausible total.
+
 ## Not added
 
 - `BRepOffsetAPI_MakeOffsetShape`, for a general outward offset. Missing from

@@ -85,12 +85,35 @@ export interface EdgeCurve {
   treatment_node?: number;
 }
 
+/**
+ * One face's triangles, as a span of the shared index buffer.
+ *
+ * `start` and `count` are in triangles, not indices. `face` is the face's
+ * position in the kernel's own face traversal — the order `snapshot.faces`
+ * counts — and deliberately not this run's position in the list: a face
+ * carrying no triangulation contributes no run, so the two disagree exactly
+ * where using the wrong one would still add up to a plausible total.
+ */
+export interface FaceRun {
+  face: number;
+  start: number;
+  count: number;
+}
+
 export interface Evaluated {
   positions: number[];
   normals: number[];
   indices: number[];
   /** Logical edge curves. Omitted in mesh-preview mode. */
   edges: EdgeCurve[];
+  /**
+   * Where each face's triangles sit in `indices`, and which face each run is.
+   *
+   * Absent for the implicit backend and for a mesh preview, which have no faces
+   * to attribute a triangle to — the viewport treats that as "faces are not
+   * pickable here" rather than guessing at one.
+   */
+  face_runs?: FaceRun[];
   snapshot: EvaluationSnapshot;
   /** The implicit path's two halves. Kernel time is in the snapshot. */
   timings: {
@@ -156,6 +179,15 @@ export const errorText = signal("");
 export const mcp = signal<McpStatus | undefined>(undefined);
 
 // ------------------------------------------------------------- the selection
+
+/**
+ * The face under the pointer, when the exact kernel attributed one.
+ *
+ * `face` is the kernel's own face number, which is ephemeral in exactly the way
+ * `edge@7` is — it is shown as a position within a count, never offered as
+ * something to write into a script.
+ */
+export const hoveredFace = signal<{ face: number; triangles: number } | undefined>(undefined);
 
 export const hoveredEdge = signal<EdgeCurve | undefined>(undefined);
 export const selectedEdge = signal<EdgeCurve | undefined>(undefined);

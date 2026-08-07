@@ -175,6 +175,7 @@ function show(result: Evaluated) {
       normals: new Float32Array(result.normals),
       indices: new Uint32Array(result.indices),
       edges,
+      faceRuns: result.face_runs,
     },
     bounds,
   );
@@ -449,6 +450,7 @@ function discardShownPart() {
   S.lastTreatments.value = [];
   S.visibleEdges.value = [];
   S.visibleVertices.value = [];
+  S.hoveredFace.value = undefined;
   S.hoveredEdge.value = undefined;
   S.selectedEdge.value = undefined;
   S.hoveredVertex.value = undefined;
