@@ -1,14 +1,10 @@
 /**
  * Close this when the pointer goes down outside it, or Escape is pressed.
  *
- * On the capture phase, which is the part worth keeping: a press on another
- * group's button has to close the open one *before* that button's own handler
- * runs, or the two fight over the same signal and the menu flickers shut and
- * open again.
- *
- * Not what `PartMenu` needs — a context menu is opened by a click that would
- * otherwise be the click that closes it, so that one registers a one-shot
- * listener a frame later and deliberately stays separate.
+ * Capture phase, and containment: a press on another group's button must close
+ * the open one before that button's own handler runs, and a press *inside* must
+ * not close it at all — doing so removes the pressed element before the click,
+ * which Safari then fires at an ancestor. docs/GOTCHAS.md has that one.
  */
 
 import { useEffect } from "preact/hooks";

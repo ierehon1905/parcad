@@ -1,12 +1,6 @@
 /**
- * The button the dialogs and forms are built from.
- *
- * A variant states its own colours over a shape that states none. Two utilities
- * setting the same property do not resolve by their order in the class
- * attribute — they resolve by their order in the generated stylesheet — so
- * "the base, plus a different background" silently keeps whichever background
- * Tailwind emitted last. Keeping shape and colour in separate strings is what
- * makes that impossible to get wrong from the outside.
+ * The button the dialogs and forms are built from. Shape and colour stay in
+ * separate strings — CLAUDE.md, "A variant cannot be the base plus a colour".
  */
 
 import type { JSX } from "preact";

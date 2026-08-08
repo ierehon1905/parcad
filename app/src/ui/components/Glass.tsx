@@ -1,11 +1,8 @@
 /**
  * The blurred surface everything that floats over the viewport is drawn on.
  *
- * It was written out eight times in six files, at three different opacities —
- * /95, /86 and one /82 that nothing chose, it just drifted. The variants here
- * are the ones the app actually has, and the difference between them is real:
- * something resting *on* the viewport stays translucent enough to read the part
- * through, something floating *above* it does not have to.
+ * Something resting *on* the viewport stays translucent enough to read the part
+ * through; something floating above it does not have to.
  */
 
 import type { ComponentChildren } from "preact";

@@ -1,14 +1,8 @@
 /**
  * A button in a bar that is either the chosen one or not.
  *
- * `pressed` is the whole state, and it reaches the DOM as `aria-pressed` as
- * well as a colour, so a screen reader is told what the accent is telling a
- * sighted user. Shape and colour stay in separate strings for the reason
- * Button gives.
- *
- * Two sizes because the bar and the segmented control genuinely differ: the op
- * palette's groups carry an icon and a word and sit on their own, the view
- * tools' segments sit shoulder to shoulder in a trough.
+ * `pressed` reaches the DOM as `aria-pressed` and not only as a colour, so the
+ * accent is not the only thing saying which one is chosen.
  */
 
 import type { JSX } from "preact";
