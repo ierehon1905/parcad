@@ -18,7 +18,7 @@
  *   shown verbatim, because they name the fix.
  */
 
-import { Fragment, type ComponentChildren } from "preact";
+import { Fragment } from "preact";
 import { useSignal, type Signal } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 
@@ -30,25 +30,22 @@ import {
   freePath,
   join,
   leafOf,
-  nameProblem,
   parentOf,
   search,
+  within,
   when,
-  STARTER,
   type ProjectEntry,
   type ProjectPart,
 } from "../projects";
 import * as S from "../state";
 import { Button } from "./components/Button";
-import { Caption, Field } from "./components/Field";
+import { type Ask, Dialogs, type Failed, type Tell, useDialogs } from "./components/Dialog";
+import { Field } from "./components/Field";
+import { newFolder, newPart } from "./project-actions";
 import { Icon } from "./icons";
 import { tip } from "./tooltip";
 
 const CHIP = "border border-line rounded-xs px-1";
-/** The card a question is asked on, over the dimmed picker. */
-const ASK_BOX =
-  "w-[min(420px,84%)] p-[18px] rounded-xl border border-line bg-panel " +
-  "shadow-[0_18px_44px_rgb(0_0_0/0.55)]";
 
 /**
  * Thumbnails already fetched, so reopening the dialog is not a reload.
@@ -59,44 +56,16 @@ const ASK_BOX =
  */
 const thumbnails = new Map<string, string | null>();
 
-/** A question waiting for an answer, and the promise it will settle. */
-interface AskRequest {
-  title: string;
-  label: string;
-  value: string;
-  confirm: string;
-  /** Offer to start from an existing part rather than the starter script. */
-  from?: ProjectPart[];
-  /** Skip path validation — for a title, which is prose rather than a path. */
-  free?: boolean;
-  settle: (answer: { value: string; from?: string } | null) => void;
-}
-
-/** A message, and optionally a confirmation. */
-interface TellRequest {
-  text: string;
-  confirm?: string;
-  settle: (ok: boolean) => void;
-}
 
 export function ProjectBrowser() {
   const dialog = useRef<HTMLDialogElement>(null);
   /** The folder whose parts the grid shows; "" is everything. */
   const folder = useSignal("");
   const query = useSignal("");
-  const asking = useSignal<AskRequest | undefined>(undefined);
-  const telling = useSignal<TellRequest | undefined>(undefined);
   const menu = useSignal<{ part: ProjectPart; x: number; y: number } | undefined>(undefined);
   const searchBox = useRef<HTMLInputElement>(null);
 
-  const ask = (request: Omit<AskRequest, "settle">) =>
-    new Promise<{ value: string; from?: string } | null>((settle) => {
-      asking.value = { ...request, settle };
-    });
-  const tell = (text: string, confirm?: string) =>
-    new Promise<boolean>((settle) => {
-      telling.value = { text, confirm, settle };
-    });
+  const { ask, tell, failed, asking, telling } = useDialogs();
 
   const refresh = async () => {
     const projects = await engine.reloadProjects();
@@ -104,10 +73,6 @@ export function ProjectBrowser() {
     // not leave the grid pinned to something that no longer exists.
     if (folder.value && !folderPaths(projects.tree).includes(folder.value)) folder.value = "";
   };
-
-  /** A host refusal, whole. Its wording names the fix; do not summarise it. */
-  const failed = (error: unknown) =>
-    tell(error instanceof Error ? error.message : String(error));
 
   const choose = async (path: string) => {
     try {
@@ -288,8 +253,7 @@ export function ProjectBrowser() {
           refresh={refresh}
         />
       )}
-      {asking.value && <AskPanel request={asking} />}
-      {telling.value && <TellPanel request={telling} />}
+      <Dialogs asking={asking} telling={telling} />
       </>
       )}
     </dialog>
@@ -383,16 +347,6 @@ function FolderButton({
   );
 }
 
-/** The entries under one folder path, or nothing if it is gone. */
-function within(entries: ProjectEntry[], path: string): ProjectEntry[] {
-  for (const entry of entries) {
-    if (entry.kind !== "folder") continue;
-    if (entry.path === path) return entry.children;
-    const found = within(entry.children, path);
-    if (found.length) return found;
-  }
-  return [];
-}
 
 // ---------------------------------------------------------------- the grid
 
@@ -512,66 +466,6 @@ function Thumbnail({ part }: { part: ProjectPart }) {
       )}
     </span>
   );
-}
-
-// --------------------------------------------------------------- the verbs
-
-type Ask = (request: Omit<AskRequest, "settle">) => Promise<{ value: string; from?: string } | null>;
-type Tell = (text: string, confirm?: string) => Promise<boolean>;
-type Failed = (error: unknown) => Promise<boolean>;
-
-async function newPart(
-  folder: string,
-  ask: Ask,
-  failed: Failed,
-  refresh: () => Promise<void>,
-  choose: (path: string) => Promise<void>,
-) {
-  const projects = S.projects.peek();
-  if (!projects) return;
-  const taken = projects.parts.map((part) => part.path);
-  const name = await ask({
-    title: "New part",
-    label: `Name, in ${folder || "the project folder"}`,
-    value: leafOf(freePath(taken, folder, "part")),
-    confirm: "Create",
-    // Copying an existing part is how most parts actually start, and the seeded
-    // ones are the parts the eval corpus measures — so "from" is a list of
-    // things known to build, not a gallery of templates.
-    from: projects.parts,
-  });
-  if (!name) return;
-
-  const path = join(folder, name.value);
-  const script = name.from ? await backend.readProject(name.from) : STARTER;
-  try {
-    await backend.createProject(path, script);
-    await refresh();
-    await choose(path);
-  } catch (e) {
-    await failed(e);
-  }
-}
-
-async function newFolder(
-  folder: string,
-  ask: Ask,
-  failed: Failed,
-  refresh: () => Promise<void>,
-) {
-  const name = await ask({
-    title: "New folder",
-    label: `Name, in ${folder || "the project folder"}`,
-    value: "Parts",
-    confirm: "Create",
-  });
-  if (!name) return;
-  try {
-    await backend.createFolder(join(folder, name.value));
-    await refresh();
-  } catch (e) {
-    await failed(e);
-  }
 }
 
 function PartMenu({
@@ -703,119 +597,3 @@ function PartMenu({
     </div>
   );
 }
-
-// ------------------------------------------------------- asking for a name
-
-/**
- * A name, or null if the user backed out.
- *
- * Not `window.prompt`: the desktop webview does not have one, and a browser's
- * cannot mark a name invalid while it is being typed.
- */
-function AskPanel({ request }: { request: Signal<AskRequest | undefined> }) {
-  const value = useSignal(request.value!.value);
-  const from = useSignal("");
-  const input = useRef<HTMLInputElement>(null);
-  const ask = request.value!;
-
-  useEffect(() => {
-    input.current?.focus();
-    input.current?.select();
-  }, []);
-
-  const problem = ask.free ? null : nameProblem(value.value);
-  const done = (answer: { value: string; from?: string } | null) => {
-    request.value = undefined;
-    ask.settle(answer);
-  };
-  const submit = () => {
-    if (problem === null) done({ value: value.value.trim(), from: from.value || undefined });
-  };
-
-  return (
-    <Scrim>
-      <div class={ASK_BOX}>
-        <h3 class="m-0 mb-2.5 text-sm">{ask.title}</h3>
-        <Caption>{ask.label}</Caption>
-        <Field
-          ref={input}
-          type="text"
-          spellcheck={false}
-          value={value.value}
-          onInput={(e) => (value.value = e.currentTarget.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") {
-              e.preventDefault();
-              submit();
-            }
-            // Escape closes the question, not the whole dialog behind it.
-            if (e.key === "Escape") {
-              e.preventDefault();
-              e.stopPropagation();
-              done(null);
-            }
-          }}
-        />
-        <p class="min-h-4 mt-1.5 mb-1 text-bad text-[11.5px]">{problem ?? ""}</p>
-        {ask.from && (
-          <Caption>
-            Start from
-            <select
-              class="w-full mt-1"
-              value={from.value}
-              onChange={(e) => (from.value = e.currentTarget.value)}
-            >
-              <option value="">an empty part</option>
-              {ask.from.map((part) => (
-                <option key={part.path} value={part.path}>
-                  {part.path}
-                </option>
-              ))}
-            </select>
-          </Caption>
-        )}
-        <div class="flex justify-end gap-2 mt-2.5">
-          <Button onClick={() => done(null)}>Cancel</Button>
-          <Button variant="primary" disabled={problem !== null} onClick={submit}>
-            {ask.confirm}
-          </Button>
-        </div>
-      </div>
-    </Scrim>
-  );
-}
-
-function TellPanel({ request }: { request: Signal<TellRequest | undefined> }) {
-  const ask = request.value!;
-  const focus = useRef<HTMLButtonElement>(null);
-  useEffect(() => focus.current?.focus(), []);
-
-  const done = (ok: boolean) => {
-    request.value = undefined;
-    ask.settle(ok);
-  };
-
-  return (
-    <Scrim>
-      <div class={ASK_BOX}>
-        <p class="m-0 mb-3.5 whitespace-pre-wrap">{ask.text}</p>
-        <div class="flex justify-end gap-2 mt-2.5">
-          <Button ref={ask.confirm ? undefined : focus} onClick={() => done(false)}>
-            {ask.confirm ? "Cancel" : "OK"}
-          </Button>
-          {ask.confirm && (
-            <Button variant="danger" ref={focus} onClick={() => done(true)}>
-              {ask.confirm}
-            </Button>
-          )}
-        </div>
-      </div>
-    </Scrim>
-  );
-}
-
-const Scrim = ({ children }: { children: ComponentChildren }) => (
-  <div class="absolute inset-0 flex items-center justify-center bg-[rgb(8_9_12/0.66)]">
-    {children}
-  </div>
-);

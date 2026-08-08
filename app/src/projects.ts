@@ -63,6 +63,17 @@ export function partAt(entries: ProjectEntry[], path: string): ProjectPart | und
   return flatten(entries).find((part) => part.path === path);
 }
 
+/** The entries under one folder path, or nothing if it is gone. */
+export function within(entries: ProjectEntry[], path: string): ProjectEntry[] {
+  for (const entry of entries) {
+    if (entry.kind !== "folder") continue;
+    if (entry.path === path) return entry.children;
+    const found = within(entry.children, path);
+    if (found.length) return found;
+  }
+  return [];
+}
+
 /**
  * The tree with only the parts that match, and only the folders that still
  * hold one.

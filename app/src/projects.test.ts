@@ -10,6 +10,7 @@ import {
   partAt,
   search,
   when,
+  within,
   type ProjectEntry,
 } from "./projects";
 
@@ -61,6 +62,21 @@ describe("the tree", () => {
 
   test("lists every folder", () => {
     expect(folderPaths(tree)).toEqual(["Mounts", "Mounts/Legacy"]);
+  });
+
+  test("reads the entries under a folder at any depth", () => {
+    expect(within(tree, "Mounts").map((e) => e.path)).toEqual([
+      "Mounts/Legacy",
+      "Mounts/motor-mount",
+    ]);
+    expect(within(tree, "Mounts/Legacy").map((e) => e.path)).toEqual(["Mounts/Legacy/old-plate"]);
+  });
+
+  test("reports nothing for a folder that is gone", () => {
+    // What the picker leans on when a folder is deleted from Finder under it:
+    // an empty list, not a throw and not the whole tree.
+    expect(within(tree, "Mounts/Gone")).toEqual([]);
+    expect(within(tree, "bracket")).toEqual([]);
   });
 });
 
