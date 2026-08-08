@@ -346,6 +346,98 @@ helper now builds the cone 0.5 mm taller and wider along its own taper, so the
 section at the face is still the called-out head diameter. Same rule as every
 cutter in `examples/`: run past the material.
 
+### A cut needs overlength at both ends, and the entry end is the silent one
+
+Everything here — the examples, their comments, the entry above — states the
+rule for where a cutter *exits*: run past the material, because a tool ending
+exactly on the face it leaves through makes a zero-thickness sliver. Nothing
+stated it for where a cutter *enters*, because until `display-bezel.js` every
+seeded part cut through something and no cutter had an entry end to get wrong.
+An external session recessing glass panels into a model car found the other
+half: its cutters' outer faces were meant to lie on the body surface, and it
+shipped a **0.004 mm** feather edge that `measure_wall_thickness` found
+afterwards and nothing caught when it was made.
+
+**Exact coincidence is not the trap — it is the safe case.** A 60 × 40 × 20
+plate, a 30 × 20 pocket 4 mm deep, and the cutter's outer face put at four
+distances from the front face it enters:
+
+| the cutter's outer face | volume | faces | mesh | thinnest wall |
+|---|---|---|---|---|
+| exactly on the face | 45600.00 mm³ | 11 | 28 tri, watertight | 10.000 mm |
+| 3 mm proud | 45600.00 mm³ | 11 | 28 tri, watertight | 10.000 mm |
+| 0.001 mm short | 45600.60 mm³ | 12 | 24 tri, watertight | 0.001 mm |
+| 0.004 mm short | 45602.40 mm³ | 12 | 24 tri, watertight | 0.004 mm |
+| 0.1 mm short | 45660.00 mm³ | 12 | 24 tri, watertight | 0.100 mm |
+
+Read the bottom three rows as what they are. They are not a pocket with a thin
+lid over it; **they are not a pocket at all.** The part is a solid block with a
+sealed void inside, the front face is unbroken, the extra volume is the lid, and
+the bounding box, the watertightness and `BRepCheck` are exactly what the
+correct part reports. Face count is the only number that moves, and it moves
+*up*.
+
+**The microns come from arithmetic, not from typing them.** They cannot arise on
+an axis-aligned face, which is why the trap needs a sloped one. Take a block
+whose front face rises 20 mm over 85 mm, and a 4 mm panel recessed into it with
+the recess's outer edge meant to lie on that face. Write the gradient the way a
+sketch reads it — `0.235`, where the exact value is `20 / 85 = 0.23529…` — and
+the outer edge runs *inside* the face by `(65 − x) · 0.000294 · cos 13.24°`:
+0.0029 mm at one end of the cut and 0.019 mm at the other. OCCT builds it,
+reports watertight, 11 faces, and removes exactly the cutter's own
+4519.86 mm³ against the 4519.90 the parallelogram computes — the membrane
+survives intact and nothing in the reply mentions it.
+
+**And the measurement that finds it can miss it.** The field sweep behind
+`measure_wall_thickness` samples the surface from seven rendered views, so it
+reports a membrane only when a sample happens to land on one. On the sloped case
+above, at its default 96 px it reported a minimum of 10.82 mm and *nothing*
+below a 1 mm threshold; at 256 px it reported 0.0104 mm, which is the formula's
+value at that point to six places. Raise `resolution` before believing a clean
+answer, and see docs/PERCEPTION.md §5 for the other direction the number is
+already known to be wrong in.
+
+So the rule is one rule with two ends: **a cutter crosses every face it meets** —
+past the material where it exits, proud of the material where it enters.
+`holeFor` and `countersink` already do it at 0.5 mm; `examples/display-bezel.js`
+is the part that does it on a recess, at the entry of its seat and at both ends
+of its aperture.
+
+### Nothing refuses a coincident cutter face, and the table above is why
+
+Refusal is the stance elsewhere in this project, and the obvious reading of the
+0.004 mm case is that the kernel knew the two planes were near-coincident and
+returned an unmanufacturable solid rather than saying so. It does not refuse,
+and after measuring it should not:
+
+- **The case a refusal would have to fire on is not the coincident one.** Row 1
+  of the table — exactly coplanar — is correct geometry, byte-for-byte the same
+  result as standing the cutter proud, and it is what a boss trimmed back to a
+  face or a slot cut flush with an underside produces. `examples/v-block.js`
+  ships one: its strap slot's floor is exactly the block's own underside. A
+  refusal on coincidence would refuse that.
+- **What is wrong is *near*-coincidence, and it is a continuum.** 0.004 mm is an
+  accident and 0.4 mm is a design; between them is every value, and any
+  threshold is a number some part reaches legitimately. The kernel cannot see
+  which one an author meant, because the difference is not in the geometry.
+- **Measuring the outcome instead of the cause does not rescue it either — not
+  today.** The wall sweep is cheap enough to run on every evaluation (10–40 ms
+  at 96 px on these parts), but it reports **0.0055 mm** for
+  `examples/hydraulic-line.js` and **0.0069 mm** for `examples/timing-pulley.js`,
+  two shipped, correct parts. The hydraulic-line sample sits exactly on the seam
+  where a bend's torus meets its straight run: the two fields are tangent there,
+  so the sampled gradient is the wrong surface's normal and the ray it fires
+  runs *along* the face instead of through the wall. That part's true minimum
+  wall is 1.5 mm. Two false alarms in twenty parts is not a signal to put in
+  front of an agent on every edit — it teaches the agent to ignore the line.
+
+The honest shape of a fix is therefore neither a refusal nor a threshold. It is
+to make the wall measurement trustworthy first — reject a sample whose normal is
+not the surface's, which is what `thickness.rs` already claims to do and does not
+— and only then to consider putting the measured minimum in the evaluation
+reply, where it needs no threshold at all because it is a measurement rather
+than a judgement.
+
 ### `role: "hole"` does not match a conical opening
 
 A countersink rim is an inner boundary of the top face by any reading, and

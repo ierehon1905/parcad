@@ -1,0 +1,19 @@
+{
+  "name": "display-bezel",
+  "script": "examples/display-bezel.js",
+  "why": "The only part that recesses into a face rather than cutting through one, so it is the only case holding the entry-side overlength down. Take that overlength away and the seat cutter never reaches the front face: `generatedBy: \"bezel_seat\"` then tracks no edge there and the build fails by name. Stripped of its treatment the same change is silent — 27 faces become 29, the volume rises by exactly the 24.70 mm³ of skin left across three cut ends, and the part stays watertight. See docs/GOTCHAS.md, \"A cut needs overlength at both ends\".",
+  "brep": {
+    "size": [
+      120.0,
+      80.0,
+      6.0
+    ],
+    "volume_mm3": 40194.127,
+    "area_mm2": 17925.032,
+    "triangles": 1488,
+    "watertight": true,
+    "faces": 35,
+    "edges": 176,
+    "curves": 84
+  }
+}
