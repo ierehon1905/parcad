@@ -351,6 +351,121 @@ helper now builds the cone 0.5 mm taller and wider along its own taper, so the
 section at the face is still the called-out head diameter. Same rule as every
 cutter in `examples/`: run past the material.
 
+### A cut needs overlength at both ends, and the entry end is the silent one
+
+Everything here — the examples, their comments, the entry above — states the
+rule for where a cutter *exits*: run past the material, because a tool ending
+exactly on the face it leaves through makes a zero-thickness sliver. Nothing
+stated it for where a cutter *enters*, because until `display-bezel.js` every
+seeded part cut through something and no cutter had an entry end to get wrong.
+An external session recessing glass panels into a model car found the other
+half: its cutters' outer faces were meant to lie on the body surface, and it
+shipped a **0.004 mm** feather edge that `measure_wall_thickness` found
+afterwards and nothing caught when it was made.
+
+**Exact coincidence is not the trap — it is the safe case.** A 60 × 40 × 20
+plate, a 30 × 20 pocket 4 mm deep, and the cutter's outer face put at four
+distances from the front face it enters:
+
+| the cutter's outer face | volume | faces | mesh | thinnest wall |
+|---|---|---|---|---|
+| exactly on the face | 45600.00 mm³ | 11 | 28 tri, watertight | 10.000 mm |
+| 3 mm proud | 45600.00 mm³ | 11 | 28 tri, watertight | 10.000 mm |
+| 0.001 mm short | 45600.60 mm³ | 12 | 24 tri, watertight | 0.001 mm |
+| 0.004 mm short | 45602.40 mm³ | 12 | 24 tri, watertight | 0.004 mm |
+| 0.1 mm short | 45660.00 mm³ | 12 | 24 tri, watertight | 0.100 mm |
+
+Read the bottom three rows as what they are. They are not a pocket with a thin
+lid over it; **they are not a pocket at all.** The part is a solid block with a
+sealed void inside it, the front face is unbroken, and the extra volume is the
+lid. Nothing that reads like a failure moves: same bounding box, same
+watertight mesh, fewer triangles than the correct part. What moves is the
+volume, up by the lid, and the face count — also up, because a void adds
+surfaces rather than removing them.
+
+**The microns come from arithmetic, not from typing them.** They cannot arise on
+an axis-aligned face, which is why the trap needs a sloped one. Take a block
+whose front face rises 20 mm over 85 mm, and a 4 mm panel recessed into it with
+the recess's outer edge meant to lie on that face. Write the gradient the way a
+sketch reads it — `0.235`, where the exact value is `20 / 85 = 0.23529…` — and
+the outer edge runs *inside* the face by `(65 − x) · 0.000294 · cos 13.24°`:
+0.0029 mm at one end of the cut and 0.019 mm at the other. OCCT builds it,
+reports watertight and 11 faces, and removes 4519.86 mm³ against the
+parallelogram's exact 4519.87 — the cutter's own volume and not a micron more,
+so the membrane is intact, and nothing in the reply mentions it.
+
+**And the measurement that finds it can miss it.** The field sweep behind
+`measure_wall_thickness` samples the surface from seven rendered views, so it
+reports a membrane only when a sample happens to land on one. On the sloped case
+above, at its default 96 px it reported a minimum of 10.82 mm and *nothing*
+below a 1 mm threshold; at 256 px it reported 0.0104 mm, which is the formula's
+value at that point to six places. Raise `resolution` before believing a clean
+answer, and see docs/PERCEPTION.md §5 for the other direction the number is
+already known to be wrong in.
+
+So the rule is one rule with two ends: **a cutter crosses every face it meets** —
+past the material where it exits, proud of the material where it enters.
+`holeFor` and `countersink` already do it at 0.5 mm; `examples/display-bezel.js`
+is the part that does it on a recess, at the entry of its seat and at both ends
+of its aperture.
+
+### Nothing refuses a coincident cutter face, and the table above is why
+
+Refusal is the stance elsewhere in this project, and the obvious reading of the
+0.004 mm case is that the kernel knew the two planes were near-coincident and
+returned an unmanufacturable solid rather than saying so. It does not refuse,
+and after measuring it should not:
+
+- **The case a refusal would have to fire on is not the coincident one.** Row 1
+  of the table — exactly coplanar — is correct geometry: same volume, same 11
+  faces, same watertight 28-triangle mesh as standing the cutter proud, and it
+  is what a boss trimmed back to a face or a slot cut flush with an underside
+  produces. `examples/v-block.js` ships one: its strap slot's floor sits exactly
+  on the block's own underside. A refusal on coincidence would refuse that.
+- **What is wrong is *near*-coincidence, and it is a continuum.** 0.004 mm is an
+  accident and 0.4 mm is a design; between them is every value, and any
+  threshold is a number some part reaches legitimately. The kernel cannot see
+  which one an author meant, because the difference is not in the geometry.
+- **Measuring the outcome instead of the cause is the obvious escape, and it
+  does not work either.** Cost is not the obstacle: the wall sweep runs in
+  10–40 ms at 96 px on these parts, cheap enough for every evaluation. Trust is.
+  Swept over every part in `examples/` it answers sanely for nineteen and
+  returns **0.0055 mm** for `hydraulic-line.js` and **0.0069 mm** for
+  `timing-pulley.js`, both correct parts. Two false alarms, two different
+  causes, and only one of them could be fixed:
+
+  **A sampled normal can belong to the wrong surface.** The hydraulic-line
+  sample sits at z = 20.000, exactly where the bend's arc is trimmed by its own
+  end plane. The torus's field and the plane's are both zero there, so `max`
+  ties and the gradient comes back as the *plane's* normal, +Z, while the tube
+  surface at that point is vertical. The ray then runs along the face instead of
+  through the wall, and the crossing it finds is f32 noise: the same seam reads
+  0.0055 mm at 96 px and 0.0096 mm at 256 px. A real feature reports the same
+  number twice, which is the cheapest way to tell the two apart. `thickness.rs`
+  drops samples whose gradient has *collapsed* — `GRADIENT_TOLERANCE` — but the
+  wrong branch of a `max` has a perfectly good unit gradient, so nothing there
+  catches it.
+
+  **And a part with a tangential feature genuinely has no minimum wall.** The
+  timing-pulley number is this kind, and so are the 0.21–0.24 mm spots on the
+  hydraulic line, which are not artefacts at all: they are the ring of material
+  between the inlet boss's outside diameter and its O-ring groove, which is
+  `0.5 − √(1 − (x − 4)²)` mm thick — x along the boss axis, the groove's torus
+  centred at x = 4 with a 1 mm minor radius — and so **tapers to zero** at the
+  groove's rim. Sample nearer the rim, get a smaller number, without limit. The
+  pulley does the same thing where a tooth groove crosses the outside diameter.
+  Every groove, every fillet and every blend that runs off an edge does. No
+  sampling improvement touches it, because the measurement is *correct* — "the
+  thinnest material anywhere" is not the same question as "is there a wall here
+  too thin to make", and only the second is worth interrupting an author about.
+
+Two false alarms in twenty-one shipped parts is not a signal to put in front of
+an agent on every edit; it teaches the agent to ignore the line. So the entry-side
+rule stays where the evidence puts it — in the examples, in this file, and in
+`display-bezel.js`'s own comments — and the kernel goes on building what it was
+asked for. Anything better has to answer the tangency question first, and that
+is a modelling question, not a threshold.
+
 ### `role: "hole"` does not match a conical opening
 
 A countersink rim is an inner boundary of the top face by any reading, and

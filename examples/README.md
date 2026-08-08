@@ -1,6 +1,6 @@
 # Examples
 
-Twenty parts, each a `.js` script that returns a shape. On first run each is
+Twenty-one parts, each a `.js` script that returns a shape. On first run each is
 seeded into parcad's project folder (`~/Documents/parcad`, or
 `PARCAD_PROJECTS_DIR`) as a `<name>.parcad` project folder, where it becomes an
 ordinary project the user can edit, rename, move into a folder or throw away —
@@ -31,6 +31,7 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 | `clevis.js` | threaded rod-end clevis, 10 mm pin | one fork arm authored and the other mirrored; spanner flats as a hexagon across the flats |
 | `cover-plate.js` | bolted cover, turned spigot | revolved geometry: a tapered spigot and four countersunk screws, both cones |
 | `diamond-v19.js` | round brilliant cut, 57 facets | a Fusion 360 recreation, promoted from `fusion360/`: a convex solid as the intersection of its facet half-spaces, agreeing with the export to every published digit |
+| `display-bezel.js` | instrument fascia, seated display module | the only part here that recesses *into* a face rather than cutting through one: a milled seat, and the entry-side overlength that stops it becoming a sealed void |
 | `extrusion-2020.js` | 20x20 T-slot extrusion, 200 mm | four-fold symmetry by rotating the *cutter*; corner fillets among 37 candidate edges |
 | `flange.js` | ASME B16.5 class 150 NPS 2 slip-on flange | a bolt circle, and one cut whose provenance reaches five rims |
 | `heat-sink.js` | 60x60 extruded fin sink | one fin shape placed nine times — one graph node, nine placements |
@@ -49,8 +50,11 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 
 - **Millimetres**, Z up, primitives centred on the origin and placed with
   `.at()`.
-- **Cutters run past the material.** A tool ending exactly on a face leaves a
-  zero-thickness sliver, which is a boolean failure waiting to happen.
+- **Cutters cross every face they meet, at both ends.** Past the material where
+  a tool exits, and proud of it where a tool enters — a recess whose cutter
+  stops a few microns short of the face it enters is not a shallow recess, it is
+  a sealed void under a feather edge. `display-bezel.js` shows both ends;
+  docs/GOTCHAS.md, "A cut needs overlength at both ends", has the measurements.
 - **Selectors carry an `.expect({ count })`.** The number is the assertion: if
   an edit changes what a selector reaches, the build fails at the selector
   rather than producing a quietly different part.
