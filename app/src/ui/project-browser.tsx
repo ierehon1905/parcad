@@ -45,6 +45,7 @@ import { Field } from "./components/Field";
 import { newFolder, newPart } from "./project-actions";
 import { Icon } from "./icons";
 import { tip } from "./tooltip";
+import { useDismiss } from "./use-dismiss";
 
 /**
  * Thumbnails already fetched, so reopening the dialog is not a reload.
@@ -485,17 +486,12 @@ function PartMenu({
 }) {
   const part = at.part;
 
-  // One click anywhere else closes it. Registered on the next frame so the
-  // click that opened the menu is not the click that closes it.
-  useEffect(() => {
-    const frame = requestAnimationFrame(() =>
-      document.addEventListener("pointerdown", onClose, { once: true }),
-    );
-    return () => {
-      cancelAnimationFrame(frame);
-      document.removeEventListener("pointerdown", onClose);
-    };
-  }, []);
+  // Containment, not a one-shot: a pointerdown *inside* the menu must not
+  // dismiss it. Removing the pressed button between pointerdown and click makes
+  // Safari fire the click at the nearest common ancestor instead — so every item
+  // silently did nothing there, while Tauri's older WebKit still delivered it.
+  const menu = useRef<HTMLDivElement>(null);
+  useDismiss(menu, onClose);
 
   const item = (text: string, run: () => void | Promise<void>, danger = false) => (
     <button
@@ -512,6 +508,7 @@ function PartMenu({
 
   return (
     <div
+      ref={menu}
       class="fixed z-10 flex flex-col min-w-[190px] p-[5px] rounded-[9px] border border-line
              bg-panel shadow-[0_12px_34px_rgb(0_0_0/0.5)]"
       style={{ left: `${at.x}px`, top: `${at.y}px` }}
