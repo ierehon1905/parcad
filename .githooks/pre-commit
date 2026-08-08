@@ -1,4 +1,16 @@
 #!/usr/bin/env bash
 # Build, unit tests and the editor-side tests. The corpus is left to pre-push:
 # it takes a minute, and a commit is not yet a claim about the geometry.
+
+# Dates in this history are UTC, and a commit's timezone offset is a statement
+# about where its author was sitting. Git takes that offset from the
+# environment and there is no config for it, so this refuses rather than
+# silently records one.
+if [ "$(date +%z)" != "+0000" ]; then
+  printf '\ncommit refused: your clock is %s, and this repository records UTC.\n' "$(date +%z)" >&2
+  printf 'Commit with:  TZ=UTC git commit ...\n' >&2
+  printf 'Or for the session:  export TZ=UTC\n\n' >&2
+  exit 1
+fi
+
 exec "$(git rev-parse --show-toplevel)/tools/check.sh" --fast
