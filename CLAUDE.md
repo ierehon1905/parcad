@@ -146,11 +146,23 @@ Two traps, both of which have already cost a session:
 - **Preflight zeroes every margin**, which removes the `margin: auto` a browser
   uses to centre a modal `<dialog>`. Add `m-auto` back.
 
-**Comments explain *why*, and are load-bearing.** They're the only place some of
-this knowledge lives (why a subprocess, why a post-condition, why not Release) —
-don't strip them when refactoring. Write a *new* one only for genuinely complex
-logic, a setup unique to this codebase, or a rare corner case. Restating the next
-line is noise.
+**Load-bearing knowledge goes in the code, then in a comment, then in
+`docs/`.** Names and structure first: a thing you were going to explain is
+usually a thing you can make obvious. When it will not go into the code, a
+comment is allowed in exactly two cases:
+
+1. the logic introduced is complex, sets up a scenario unique to this codebase,
+   or covers a rare corner case;
+2. it describes a config field.
+
+Nothing else earns one. Restating the next line is noise, and so is narrating a
+change the diff already shows. Strong suggestion: **keep it to one line** — if
+the reason needs a paragraph, it is too much context for the margin and belongs
+in `docs/` (GOTCHAS, ARCHITECTURE), with a one-line pointer at the code.
+
+The comments already here are the second and third cases in practice — why a
+subprocess, why a post-condition, why not Release — and are the only record of
+some of it. Don't strip them when refactoring.
 
 **Error messages name the fix.** See `OcctError::Crashed`, or `worker_path()`'s
 "build it with … and point PARCAD_OCCT_WORKER at it". An agent-facing tool whose

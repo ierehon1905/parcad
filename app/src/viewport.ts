@@ -1,11 +1,6 @@
 /**
- * The 3D viewport.
- *
- * This is a different renderer from the one the agent looks through, on purpose.
- * The agent's renders are CPU raymarched at a fixed small size for a vision
- * model; this one is GPU triangles at native display resolution, and its job is
- * to be smooth under the mouse. Sharing one renderer between the two would make
- * both worse.
+ * The 3D viewport: GPU triangles at display resolution, deliberately a separate
+ * renderer from the CPU raymarcher the agent looks through (`render.rs`).
  */
 
 import * as THREE from "three";
@@ -21,22 +16,9 @@ export interface Geometry {
   positions: Float32Array;
   normals: Float32Array;
   indices: Uint32Array;
-  /**
-   * Logical edges as polylines, when the backend knows what they are.
-   *
-   * The implicit backend cannot supply these, and the difference is visible: a
-   * screen-space pass can only ever *guess* where an edge is from the pixels
-   * around it, while these are the curve itself.
-   */
+  /** Logical edges as polylines. Absent for the implicit backend, which can only guess at them. */
   edges?: EdgeCurve[];
-  /**
-   * Where each face's triangles sit in `indices`, and which face each run is.
-   *
-   * Absent for the implicit backend and for a mesh preview. Without it a
-   * triangle under the pointer belongs to the solid and to nothing smaller, so
-   * faces simply are not pickable — which is the honest behaviour, rather than
-   * highlighting a patch of triangles and calling it a face.
-   */
+  /** Where each face's triangles sit in `indices`. Absent means faces are unpickable, not mispicked. */
   faceRuns?: FaceRun[];
 }
 
@@ -88,14 +70,7 @@ export interface Bounds {
   max: { x: number; y: number; z: number };
 }
 
-/**
- * A cutting plane, in the same terms the kernel and MCP use.
- *
- * Deliberately the same three fields as `parcad_core::view::Section`, so "cut it
- * on Y at 5, keep above" means one thing whether it is typed here or asked for
- * over MCP. The window resolves nothing — an axis with no position is not a
- * section yet — because here there is a slider to say it with.
- */
+/** A cutting plane, in the same three fields as `parcad_core::view::Section`. */
 export interface SectionPlane {
   axis: "x" | "y" | "z";
   atMm: number;
@@ -105,32 +80,19 @@ export interface SectionPlane {
 /** The cut face, in the raster's own colour. See `CUT_FACE` in render.rs. */
 const CUT_FACE = 0xc99454;
 
-/**
- * The hover highlight, in the two colours it needs to be legible anywhere.
- *
- * The work area is deliberately bright and the part is a mid grey that goes
- * dark where it turns away from the light, so neither a black mark nor a white
- * one survives on its own. A near-black core inside a white halo does: the halo
- * separates it from dark material, the core from the pale background. Vertices
- * invert it — a white disc with a near-black ring — for the same reason, since
- * a filled dot needs its contrast the other way round.
- */
+/** The highlight's two colours: neither survives alone against both a bright background and dark material. */
 const INK = 0x0b0e13;
 const HALO = 0xffffff;
-/** The highlight's two widths, in CSS pixels. See `resize` for the conversion. */
-const HALO_PX = 5.5;
-const CORE_PX = 2.2;
+/** The highlight's three widths, in CSS pixels. See `resize` for the conversion. */
+const GLOW_PX = 4;
+const RING_PX = 2.8;
+const CORE_PX = 1.4;
 
 /** Fusion-style light canvas: dark chrome, bright work area. */
 const BG_TOP = "#e8ecf1";
 const BG_BOTTOM = "#c3ccd8";
 
-/**
- * Diagnostic modes, via `?debug=` in the URL.
- *
- * `normals` paints the raw normal field, which separates "the normals are noisy"
- * from "the surface is bumpy" — the two look alike once shaded.
- */
+/** Diagnostic modes, via `?debug=` in the URL: `normals`, `flat`, `noedge`. */
 const DEBUG = new URLSearchParams(location.search).get("debug") ?? "";
 
 /** How far the pointer may travel between down and up and still be a click. */
@@ -161,32 +123,17 @@ export class Viewport {
   private hoveredEdge?: THREE.LineSegments;
   private selectedEdge?: THREE.LineSegments;
   /**
-   * The hover highlight, built once and re-pointed at whatever is under the
-   * cursor.
-   *
-   * Two fat lines rather than one: a white halo under a near-black core. A
-   * plain black line is invisible against the part's own dark edges and a
-   * plain white one is invisible against the light background, so a highlight
-   * that has to read on both needs both. This is the shape every mechanical
-   * CAD package draws for the same reason.
-   *
-   * `THREE.Line` cannot do it — `linewidth` is ignored by every WebGL driver
-   * that matters, so a halo drawn with it would be exactly as wide as the line
-   * it is meant to surround.
+   * The hover highlight: white core, ink ring, white glow, as `cornerSprite`
+   * draws for corners. `THREE.Line` cannot do it — `linewidth` is ignored by
+   * every WebGL driver that matters, so the layers would come out equal width.
    */
-  private hoverHalo!: Line2;
+  private hoverGlow!: Line2;
+  private hoverRing!: Line2;
   private hoverCore!: Line2;
   /** Where each face's triangles sit, when the kernel said. */
   private faceRuns: FaceRun[] = [];
   private hoveredFace?: FacePick;
-  /**
-   * The lit patch over the hovered face.
-   *
-   * Its geometry is the face's own triangles copied out of the part, so it is
-   * the face exactly rather than a box around it. Additive, so it *lightens*
-   * whatever it lies on instead of painting a flat colour over shading the eye
-   * uses to read the shape.
-   */
+  /** The lit patch over the hovered face: additive, so shading still reads through it. */
   private faceHighlight?: THREE.Mesh;
   private hoveredVertex?: THREE.Points;
   private selectedVertex?: THREE.Points;
@@ -205,23 +152,17 @@ export class Viewport {
     private readonly container: HTMLElement,
     private readonly edgeCallbacks: EdgeCallbacks = {},
   ) {
-    // `stencil` has defaulted to false since three r163, and the section cap is
-    // drawn with a stencil test. Without a stencil buffer that test does not
-    // fail safe — it passes everywhere, and the cap covers the entire viewport.
-    // The composed path renders into its own target and would not have noticed;
-    // the mesh preview draws straight to this canvas and does.
+    // `stencil` defaults to false since three r163, and the cap's stencil test
+    // does not fail safe without a buffer: it passes over the whole viewport.
     this.renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    // Without tone mapping, anything approaching full brightness clips to a flat
-    // white patch and the shape reads as a silhouette with a hole in it.
+    // Without it, near-white clips flat and the shape reads as a hole.
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.0;
-    // Per-material clipping rather than the renderer-wide kind: the cap that
-    // fills the cut is a quad lying *on* the section plane, and a global plane
-    // would clip the cap along with everything else — coplanar, so it would
-    // flicker in and out as the camera moved.
+    // Per-material, not renderer-wide: a global plane would clip the cap that
+    // lies *on* it.
     this.renderer.localClippingEnabled = true;
     container.appendChild(this.renderer.domElement);
 
@@ -237,20 +178,15 @@ export class Viewport {
     this.controls.dampingFactor = 0.12;
 
     this.renderer.domElement.addEventListener("pointermove", this.pickEntity);
-    // WKWebView's WebDriver endpoint currently emits mouse events for an
-    // automated hover. Handling both keeps the real pointer interaction intact
-    // while making that native desktop path inspectable in regression tests.
-    // `setHovered…` is idempotent, so browsers that emit both do no extra work.
+    // WKWebView's WebDriver hover emits mouse events, not pointer ones.
+    // `setHovered…` is idempotent, so a browser emitting both does no extra work.
     this.renderer.domElement.addEventListener("mousemove", this.pickEntity);
     this.renderer.domElement.addEventListener("pointerleave", () => {
       this.setHoveredEdge();
       this.setHoveredVertex();
     });
-    // A click selects, and a selection outlives the pointer leaving the entity —
-    // otherwise the only way to look at an edge is to keep the mouse on it.
-    // An orbit drag ends in a `click` on the canvas as well, and that click
-    // lands wherever the pointer stopped: without the distance test, rotating
-    // the view to see the selected edge from behind is what deselects it.
+    // An orbit drag also ends in a `click`, wherever the pointer stopped, so
+    // without the distance test orbiting to see the selection is what clears it.
     this.renderer.domElement.addEventListener("pointerdown", (event) => {
       this.pointerDownAt = { x: event.clientX, y: event.clientY };
     });
@@ -265,17 +201,15 @@ export class Viewport {
     this.scene.add(this.partGroup);
     this.scene.add(this.camera);
 
-    // Image-based lighting does most of the work. A standard material with no
-    // environment to reflect has nothing to shade *with*, which is what makes
-    // untouched three.js scenes look like flat grey plastic.
+    // Image-based lighting does most of the work: a standard material with no
+    // environment to reflect has nothing to shade *with*.
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     pmrem.compileEquirectangularShader();
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
     this.scene.environmentIntensity = 0.62;
 
-    // One fixed sun for directional definition and the cast shadow. Fixed rather
-    // than camera-attached: a shadow that swings around as you orbit reads as the
-    // part moving, not the camera.
+    // Fixed rather than camera-attached: a shadow that swings as you orbit reads
+    // as the part moving.
     this.sun = new THREE.DirectionalLight(0xffffff, 1.9);
     this.sun.position.set(-0.5, -0.9, 1.4);
     this.sun.castShadow = true;
@@ -284,67 +218,50 @@ export class Viewport {
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
 
-    // A weak fill that rides with the camera, so faces turned away from the sun
-    // stay readable instead of going black when you orbit behind them.
+    // A weak fill riding with the camera, so faces away from the sun stay readable.
     const fill = new THREE.DirectionalLight(0xc9d6ee, 0.45);
     fill.position.set(0, 0, 1);
     this.camera.add(fill);
-    // A DirectionalLight aims from its position at its *target*, and the target
-    // defaults to the world origin — so parenting only the light to the camera
-    // leaves it pointing at the scene centre and the fill stops being a fill.
-    // The target has to travel with it.
+    // A DirectionalLight aims at its *target*, which defaults to the world
+    // origin — parent only the light and it goes on lighting the scene centre.
     fill.target.position.set(0, 0, -1);
     this.camera.add(fill.target);
 
-    // Ambient sky/ground light, on only for the preview. The finished view gets
-    // its ambient from the environment map, but that is a physically-based
-    // feature the preview's cheap material cannot see — without this, any face
-    // turned away from the sun goes almost black.
+    // Preview only: its cheap material cannot see the environment map the
+    // finished view takes its ambient from.
     this.ambient = new THREE.HemisphereLight(0xdfe7f2, 0x6c7382, 2.1);
     this.ambient.visible = false;
     this.scene.add(this.ambient);
 
     this.outline = new OutlineRenderer(this.renderer, this.scene, this.camera);
 
-    // Depth-tested like the ordinary edges, so a highlight on the far side of
-    // the part stays hidden and the solid still reads as solid. Pulled a little
-    // toward the camera so it wins against the base edge it is drawn over
-    // rather than z-fighting with it.
-    const highlight = (color: number, width: number, order: number) => {
+    const highlight = (color: number, width: number, order: number, opacity = 1) => {
       const line = new Line2(
         new LineGeometry(),
         new LineMaterial({
           color,
           linewidth: width,
           transparent: true,
-          polygonOffset: true,
-          polygonOffsetFactor: -6,
-          polygonOffsetUnits: -6,
+          opacity,
+          depthTest: false,
+          depthWrite: false,
         }),
       );
       line.visible = false;
       line.renderOrder = order;
-      // A highlight is never a pick target. Picking runs against the edge and
-      // vertex lists explicitly, so nothing in the app would hit this — but it
-      // sits in the scene, and anything that ever raycasts the scene broadly
-      // would otherwise select the mark instead of the edge it is marking.
+      // Never a pick target: a broad raycast would select the mark, not the edge.
       line.raycast = () => {};
-      // Never a shadow caster: this is annotation about the part, not part of it.
       line.castShadow = false;
       line.receiveShadow = false;
       this.scene.add(line);
       return line;
     };
-    this.hoverHalo = highlight(HALO, HALO_PX, 4);
-    this.hoverCore = highlight(INK, CORE_PX, 5);
+    this.hoverGlow = highlight(HALO, GLOW_PX, 4, 0.55);
+    this.hoverRing = highlight(INK, RING_PX, 5);
+    this.hoverCore = highlight(HALO, CORE_PX, 6);
 
-    // Resizing is *recorded* here and applied by the frame that draws next.
-    // Doing it inline leaves the canvas and the composer's render targets
-    // reallocated and empty until the next animation frame, which is the flash
-    // of background you see while dragging the splitter or the window edge —
-    // and during a drag the observer fires many times per frame, so the same
-    // flash repeats. One resize per frame, immediately followed by the render
-    // that fills it.
+    // Recorded, not applied: resizing inline leaves the render targets empty
+    // until the next frame, which is the flash while dragging the splitter.
     const ro = new ResizeObserver(() => {
       this.pendingResize = true;
     });
@@ -360,25 +277,20 @@ export class Viewport {
     // A pane with no size yet stays pending rather than being marked done.
     if (w === 0 || h === 0) return;
     this.pendingResize = false;
-    // Let three set the CSS size as well as the drawing buffer. Passing
-    // `false` here sizes the buffer to w * devicePixelRatio but leaves the
-    // element's layout size alone, so on a retina display the canvas lays out at
-    // twice its pane and spills off the bottom-right corner.
+    // Let three set the CSS size too: passing `false` lays the canvas out at
+    // twice its pane on a retina display.
     this.renderer.setSize(w, h);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
     this.outline?.setSize(w, h);
 
-    // A fat line is a screen-space quad, so its material has to be told how big
-    // the screen is or its width means nothing. The *drawing buffer*, not the
-    // CSS box: they differ by the device pixel ratio, and passing the CSS size
-    // on a retina display draws every highlight at twice its nominal width.
-    // The widths are then in device pixels, so they are scaled by the same
-    // ratio to keep the highlight the same size to the eye on any display.
+    // A fat line is a screen-space quad, sized against the *drawing buffer* and
+    // not the CSS box — and its width is then in device pixels, hence the ratio.
     const buffer = this.renderer.getDrawingBufferSize(new THREE.Vector2());
     const ratio = this.renderer.getPixelRatio();
     for (const [line, width] of [
-      [this.hoverHalo, HALO_PX],
+      [this.hoverGlow, GLOW_PX],
+      [this.hoverRing, RING_PX],
       [this.hoverCore, CORE_PX],
     ] as const) {
       const material = line?.material as LineMaterial | undefined;
@@ -393,10 +305,8 @@ export class Viewport {
     if (this.pendingResize) this.resize();
     this.controls.update();
     if (this.preview || DEBUG === "noedge" || DEBUG === "normals") {
-      // No edge pass in preview mode. Finding creases from neighbouring pixels
-      // is guesswork, and on a dual-contoured mesh the guess lands on the
-      // zigzag of vertices that stands in for a sharp edge — which is what made
-      // this view look like a bad mesh instead of an honest one.
+      // No edge pass in preview: on a dual-contoured mesh the crease guess lands
+      // on the zigzag of vertices that stands in for a sharp edge.
       this.renderer.render(this.scene, this.camera);
     } else {
       // Only the part gets edges; the grid is scenery, not geometry.
@@ -405,14 +315,9 @@ export class Viewport {
   };
 
   /**
-   * A PNG of what is on screen right now, scaled to fit `size`.
-   *
-   * The renderer has no `preserveDrawingBuffer`, so the canvas is empty by the
-   * time anything reads it — the buffer is cleared after each frame is
-   * presented. Drawing once here, synchronously, and copying immediately is
-   * what makes the read return the picture rather than a transparent
-   * rectangle; turning the flag on instead would cost every frame of every
-   * session for a picture taken on save.
+   * A PNG of what is on screen right now, scaled to fit `size`. Without
+   * `preserveDrawingBuffer` the canvas is empty once a frame is presented, so
+   * the draw and the copy have to be synchronous and adjacent.
    */
   snapshot(size = 512): string {
     this.tickOnce();
@@ -458,36 +363,49 @@ export class Viewport {
     );
     this.edgeRaycaster.setFromCamera(pointer, this.camera);
 
-    // A fixed world-space hit radius feels either tiny on a large part or huge
-    // when zoomed in. Twelve screen pixels make a one-pixel CAD edge practical
-    // to inspect without turning a nearby face click into a different feature.
+    // The hit radius is in screen pixels, not world units, so it means the same
+    // on a large part and a small one.
     const distance = this.camera.position.distanceTo(this.controls.target);
     const visibleHeight = 2 * Math.tan((this.camera.fov * Math.PI) / 360) * distance;
     this.edgeRaycaster.params.Line!.threshold = (visibleHeight / rect.height) * 12;
     this.vertexRaycaster.params.Points!.threshold = (visibleHeight / rect.height) * 9;
 
     this.vertexRaycaster.setFromCamera(pointer, this.camera);
-    const vertexHit = this.vertexRaycaster.intersectObjects(this.vertexMarkers, false)[0];
-    const edgeHit = this.edgeRaycaster.intersectObjects(this.edgeLines, false)[0];
+
+    // Only what is visible is pickable: the lists cover the far side too, and
+    // the marks are drawn without a depth test, so nothing else enforces it.
+    const surface = this.visibleSurface(this.edgeRaycaster);
+    const near = (surface?.distance ?? Infinity) + (visibleHeight / rect.height) * 12;
+    const visible = <T extends THREE.Intersection>(hit?: T) =>
+      hit && hit.distance <= near ? hit : undefined;
+
+    const vertexHit = visible(this.vertexRaycaster.intersectObjects(this.vertexMarkers, false)[0]);
+    const edgeHit = visible(this.edgeRaycaster.intersectObjects(this.edgeLines, false)[0]);
     const vertex = vertexHit?.object as THREE.Points | undefined;
     this.setHoveredVertex(vertex);
     const edge = vertex ? undefined : (edgeHit?.object as THREE.LineSegments | undefined);
     this.setHoveredEdge(edge);
 
-    // A face is what you get when you are not on anything smaller. Corners beat
-    // edges and edges beat faces, because the smaller the entity the harder it
-    // is to put a pointer on and the more specific the thing you meant.
+    // Corners beat edges beat faces: the smaller the entity, the more specific
+    // the thing you meant by pointing at it.
     if (vertex || edge || !this.partMesh || this.faceRuns.length === 0) {
       this.setHoveredFace(undefined);
       return;
     }
-    this.edgeRaycaster.setFromCamera(pointer, this.camera);
-    const surface = this.edgeRaycaster.intersectObject(this.partMesh, false)[0];
     const triangle = surface?.faceIndex;
     this.setHoveredFace(
       triangle === undefined || triangle === null ? undefined : this.faceAt(triangle),
     );
   };
+
+  /** A raycaster ignores clipping planes, so skip hits a section has cut away. */
+  private visibleSurface(raycaster: THREE.Raycaster): THREE.Intersection | undefined {
+    if (!this.partMesh) return undefined;
+    for (const hit of raycaster.intersectObject(this.partMesh, false)) {
+      if (this.clipPlanes.every((plane) => plane.distanceToPoint(hit.point) >= 0)) return hit;
+    }
+    return undefined;
+  }
 
   /** Which face a triangle belongs to, by the runs the kernel reported. */
   private faceAt(triangle: number): FacePick | undefined {
@@ -506,15 +424,7 @@ export class Viewport {
     this.edgeCallbacks.onFaceHover?.(next);
   }
 
-  /**
-   * Lay a lit patch over the hovered face, or take it away.
-   *
-   * The patch is a copy of the face's triangles rather than a re-render of the
-   * part with a second material: the part is one mesh with one material, and
-   * splitting it into a group per face to colour one of them would change what
-   * the renderer draws for every frame in order to change what one hover looks
-   * like.
-   */
+  /** Lay a lit patch over the hovered face: a copy of its triangles, not a second material on the part. */
   private showFaceHighlight(face?: FacePick) {
     if (this.faceHighlight) {
       this.faceHighlight.parent?.remove(this.faceHighlight);
@@ -544,8 +454,7 @@ export class Viewport {
         opacity: 0.22,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
-        // Coplanar with the face it covers, so it needs pulling forward or the
-        // two z-fight into a shimmer as the camera moves.
+        // Coplanar with the face it covers, so it z-fights without this.
         polygonOffset: true,
         polygonOffsetFactor: -4,
         polygonOffsetUnits: -4,
@@ -558,15 +467,9 @@ export class Viewport {
     mesh.receiveShadow = false;
     mesh.raycast = () => {};
 
-    // The white edge around the patch — the same job the halo does for an edge,
-    // separating the lit face from whatever it sits against. `EdgesGeometry`
-    // drops every edge between two near-coplanar triangles, so on a flat face
-    // the tessellation disappears and only the boundary survives. On a curved
-    // one some internal edges remain, which reads as the shading it is drawn
-    // over rather than as noise; and a boundary onto a *tangent* neighbour —
-    // a fillet running out into its wall — has no angle to find and is not
-    // drawn. That is a real limit, and the tint is what carries the highlight
-    // there.
+    // `EdgesGeometry` drops near-coplanar edges, which is what leaves the
+    // patch boundary — except onto a *tangent* neighbour, where there is no
+    // angle to find and the tint alone has to carry the highlight.
     const outline = new THREE.LineSegments(
       new THREE.EdgesGeometry(patch, 25),
       new THREE.LineBasicMaterial({
@@ -604,12 +507,7 @@ export class Viewport {
     this.edgeCallbacks.onSelect?.(next?.userData.edge as EdgeCurve | undefined);
   }
 
-  /**
-   * The base edge's own colour. Gold when it is the pinned selection, otherwise
-   * the ordinary edge grey — the *hover* is drawn by the halo below rather than
-   * by recolouring the line, so an edge under the cursor keeps looking like the
-   * part's edge instead of turning into a different one.
-   */
+  /** Gold when pinned. Hover is drawn by the highlight instead, so the edge keeps looking like an edge. */
   private paintEdge(line?: THREE.LineSegments) {
     if (!line) return;
     const material = line.material as THREE.LineBasicMaterial;
@@ -617,22 +515,17 @@ export class Viewport {
     material.opacity = line === this.selectedEdge ? 1 : 0.85;
   }
 
-  /**
-   * Lay the halo and core over the hovered edge, or put them away.
-   *
-   * The polyline is rebuilt rather than a per-edge highlight being kept for
-   * every edge: a part with a hundred edges would otherwise carry two hundred
-   * fat lines that are invisible almost all of the time.
-   */
+  /** Lay the three layers over the hovered edge. Rebuilt per hover, not kept per edge. */
   private showEdgeHighlight(line?: THREE.LineSegments) {
     const edge = line?.userData.edge as EdgeCurve | undefined;
     if (!edge || edge.points.length < 2) {
-      this.hoverHalo.visible = false;
-      this.hoverCore.visible = false;
+      for (const target of [this.hoverGlow, this.hoverRing, this.hoverCore]) {
+        target.visible = false;
+      }
       return;
     }
     const flat = edge.points.flat();
-    for (const target of [this.hoverHalo, this.hoverCore]) {
+    for (const target of [this.hoverGlow, this.hoverRing, this.hoverCore]) {
       const geometry = new LineGeometry();
       geometry.setPositions(flat);
       target.geometry.dispose();
@@ -661,14 +554,9 @@ export class Viewport {
   }
 
   /**
-   * A corner is drawn only while it is being pointed at.
-   *
-   * Every edge endpoint is a pickable corner, so showing them all put a grey
-   * dot on every vertex of the model at all times — dozens of marks about
-   * nothing, over the one thing the window is for looking at. `material.visible`
-   * rather than `object.visible`, because the renderer skips the first and the
-   * raycaster still sees the object: a corner you cannot see is still a corner
-   * you can hover.
+   * A corner is drawn only while it is pointed at. `material.visible` rather
+   * than `object.visible`: the raycaster still sees the object, so a corner you
+   * cannot see is still a corner you can hover.
    */
   private paintVertex(marker?: THREE.Points) {
     if (!marker) return;
@@ -698,10 +586,8 @@ export class Viewport {
     this.preview = !hasRealEdges;
     this.ambient.visible = this.preview;
 
-    // Mesh preview has no logical edge curves, but it does provide
-    // surface-aware normals for every triangle corner. Preserve those normals:
-    // flat shading turns a smooth cylinder or fillet into visible facets even
-    // when the sampled surface is otherwise accurate enough for previewing.
+    // Smooth shading even in preview: the mesher's normals are surface-aware,
+    // and flat shading would facet a cylinder the sampling got right.
     const mesh = new THREE.Mesh(
       g,
       DEBUG === "normals"
@@ -717,51 +603,37 @@ export class Viewport {
               metalness: 0.1,
               envMapIntensity: 1.0,
               flatShading: DEBUG === "flat",
-              // Push the shaded surface a hair away from the viewer so the edge
-              // lines, which lie exactly on it, win the depth test instead of
-              // stitching in and out of it.
+              // Pushed back a hair so the edge lines lying on it win the depth test.
               polygonOffset: true,
               polygonOffsetFactor: 1,
               polygonOffsetUnits: 1,
             }),
     );
     mesh.castShadow = true;
-    // The part does not receive its own shadow. A hard shadow of the fin thrown
-    // across the base plate is physically right and reads as a mark *on* the
-    // plate — a discoloured patch, or a step that is not there. Fusion makes
-    // the same call: cast onto the ground, never onto yourself. Crevices still
-    // darken, but from ambient occlusion, which follows the geometry rather
-    // than one arbitrary light direction.
+    // Cast onto the ground, never onto itself: a hard shadow of a fin across
+    // its own base plate reads as a step that is not there. Fusion does likewise.
     mesh.receiveShadow = false;
     this.partGroup.add(mesh);
     this.partMesh = mesh;
     this.partBounds = bounds;
 
     if (hasRealEdges) {
-      // Note what is *not* here: `EdgesGeometry`. That finds an edge wherever
-      // two adjacent triangles differ by more than a threshold, which assumes a
-      // tidy triangulation. Dual contouring produces nothing of the sort. These
-      // lines are not inferred from triangles at all; they are the kernel's own
-      // curves, sampled. A straight edge is two points.
+      // Not `EdgesGeometry`: these are the kernel's own curves, sampled, and
+      // inferring them from triangles assumes a tidy triangulation that dual
+      // contouring never produces.
       const renderedEdges = edgeLines(geo.edges!);
       this.partGroup.add(renderedEdges.group);
       this.edgeLines.push(...renderedEdges.lines);
       const renderedVertices = vertexMarkers(verticesFromEdges(geo.edges!));
       this.partGroup.add(renderedVertices.group);
       this.vertexMarkers.push(...renderedVertices.markers);
-      // Only the exact kernel attributes a triangle to a face. Left empty
-      // otherwise, which is what makes faces unpickable rather than wrongly
-      // picked — see `faceRuns` on `Geometry`.
+      // Only the exact kernel attributes a triangle to a face; empty otherwise.
       this.faceRuns = geo.faceRuns ?? [];
     } else {
-      // Show the sampling grid in a restrained weight: it identifies this as a
-      // mesh preview while leaving the smoothed surface readable.
       this.partGroup.add(meshWireframe(g));
     }
-    // Stop guessing at creases once we are being told where they are. The
-    // silhouette half of the pass stays on regardless: the outline of a
-    // cylinder is where the surface turns away from the camera, which is a
-    // property of the view, not of the solid, so no kernel can supply it.
+    // Stop guessing at creases once told where they are. The silhouette half of
+    // the pass stays on: it is a property of the view, so no kernel supplies it.
     this.outline.setCreases(false);
 
     const size = {
@@ -772,9 +644,8 @@ export class Viewport {
     this.placeGround(bounds, size);
     this.aimSun(bounds, size);
 
-    // A new part keeps the plane the last one was cut on. Editing a script and
-    // having the section silently close is worse than either alternative: the
-    // whole reason it is open is to watch one internal feature change.
+    // A new part keeps the plane the last one was cut on: the reason the
+    // section is open is to watch one internal feature change.
     this.applyClipping();
     this.buildCap(this.section);
   }
@@ -782,22 +653,13 @@ export class Viewport {
   /** The plane currently cut, if any — `setSection`'s argument, remembered. */
   private section?: SectionPlane;
 
-  /**
-   * Cut the part open on a plane, or stop.
-   *
-   * The same feature the agent gets through `evaluate_part`'s `section`, and for
-   * the same reason: a bore that stops short, a rib inside a boss, the wall
-   * between two pockets are in no view of the outside. What differs is only the
-   * means — there the raster counts the crossings it clipped away and caps where
-   * the count is odd, here the GPU does the identical parity count in its
-   * stencil buffer while drawing the part's own back and front faces.
-   */
+  /** Cut the part open on a plane, or stop. The window's half of `evaluate_part`'s `section`. */
   setSection(section?: SectionPlane) {
     this.section = section;
     this.clipPlanes.length = 0;
     if (section) {
-      // three.js keeps the half-space where dot(normal, p) + constant > 0, so
-      // the normal points *into* the material that survives.
+      // three keeps dot(normal, p) + constant > 0, so the normal points *into*
+      // the material that survives.
       const sign = section.keep === "below" ? -1 : 1;
       const normal = new THREE.Vector3(
         section.axis === "x" ? sign : 0,
@@ -812,15 +674,7 @@ export class Viewport {
     this.outline.setClippingPlanes(this.clipPlanes);
   }
 
-  /**
-   * Which half to keep so the cut faces the camera.
-   *
-   * `Section::resolve` in the kernel, with an orbiting camera in place of a
-   * fixed view: the half that has to go is the one between the plane and the
-   * viewer. Keep the other one and the section is behind the material that
-   * survives — a part that looks entirely uncut, which is the one way a section
-   * can be wrong without looking wrong.
-   */
+  /** Which half to keep so the cut faces the camera. `Section::resolve`, with an orbiting camera. */
   keepFacingCamera(axis: "x" | "y" | "z"): "below" | "above" {
     const toward = this.camera.position.clone().sub(this.controls.target);
     return toward[axis] > 0 ? "below" : "above";
@@ -836,31 +690,21 @@ export class Viewport {
       for (const m of Array.isArray(material) ? material : [material]) {
         const before = m.clippingPlanes?.length ?? 0;
         m.clippingPlanes = planes;
-        // The part still casts a shadow of the half that is left, not of the
-        // half that went.
+        // Shadow the half that is left, not the half that went.
         m.clipShadows = true;
-        // How many clipping planes there are is compiled *into* the shader, so
-        // a material that already has a program keeps using one with no clip
-        // test in it. Nothing errors; the plane is simply ignored, which is a
-        // section that quietly does not cut.
+        // The plane count is compiled *into* the shader, so without this an
+        // existing program keeps its clip-free version and the section quietly
+        // does not cut.
         if (before !== (planes?.length ?? 0)) m.needsUpdate = true;
       }
     });
   }
 
   /**
-   * Fill the cut with a flat face, so a section reads as solid material.
-   *
-   * Without this the part is a hollow shell: clipping removes the near half of
-   * the *surface* and leaves you looking at the inside of the far half, which is
-   * exactly as misleading as it sounds — an agent reading the same picture would
-   * call a solid boss a thin cup.
-   *
-   * The trick is the standard one. Draw the part's back faces incrementing the
-   * stencil and its front faces decrementing it, both invisibly and both clipped
-   * by the same plane; where the counts do not cancel, the ray was inside
-   * material when it crossed the plane. Then paint a quad on the plane wherever
-   * the stencil is non-zero.
+   * Fill the cut with a flat face, or clipping leaves a hollow shell that reads
+   * as a thin cup. Back faces increment the stencil and front faces decrement
+   * it, both invisible and both clipped, so a count that does not cancel means
+   * the ray crossed the plane inside material — and the quad paints there.
    */
   private buildCap(section?: SectionPlane) {
     if (this.sectionGroup) {
@@ -880,9 +724,8 @@ export class Viewport {
       const material = new THREE.MeshBasicMaterial({
         side,
         clippingPlanes: this.clipPlanes,
-        // Counting, not drawing: no colour, no depth, and no depth test, so a
-        // crossing is counted wherever it is rather than only where it is
-        // nearest.
+        // Counting, not drawing: a crossing counts wherever it is, not only
+        // where it is nearest.
         colorWrite: false,
         depthWrite: false,
         depthTest: false,
@@ -931,11 +774,8 @@ export class Viewport {
     cap.receiveShadow = false;
     group.add(cap);
 
-    // In the scene rather than in `partGroup`: the outline pass hides every
-    // mesh that is not part of what it was asked to outline, which is exactly
-    // what these need — the stencil helpers are the *unclipped* part, and left
-    // visible they would fill the normal buffer with the shape that was cut
-    // away.
+    // In the scene, not `partGroup`: the outline pass hides meshes it was not
+    // asked to outline, and these are the *unclipped* part.
     this.sectionGroup = group;
     this.scene.add(group);
   }
@@ -950,9 +790,8 @@ export class Viewport {
       const rendered = edgeLines(edges, 0xf5b942, 1);
       for (const line of rendered.lines) {
         const material = line.material as THREE.LineBasicMaterial;
-        // Target curves can have been consumed by a fillet, so draw the exact
-        // input over the finished surface instead of letting it disappear behind
-        // the replacement faces. They are not added to the raycast set.
+        // A target curve can have been consumed by a fillet, so it is drawn
+        // over the faces that replaced it. Never added to the raycast set.
         material.depthTest = false;
         line.renderOrder = 2;
       }
@@ -988,9 +827,8 @@ export class Viewport {
     this.faceRuns = [];
     this.hoveredFace = undefined;
     this.faceHighlight = undefined;
-    // The highlight lives on the scene rather than in the part group, so it has
-    // to be put away by hand — a halo left tracing an edge of the part that was
-    // just replaced is a mark about geometry that is no longer there.
+    // The highlight lives on the scene, not in the part group, so it survives
+    // the sweep below and has to be put away by hand.
     this.showEdgeHighlight(undefined);
     this.edgeCallbacks.onHover?.(undefined);
     this.edgeCallbacks.onSelect?.(undefined);
@@ -1006,13 +844,7 @@ export class Viewport {
     }
   }
 
-  /**
-   * Grid and shadow-catcher, sitting on the bottom of the part.
-   *
-   * The shadow is the point. A part floating against a flat background has no
-   * cue for where it sits or how far it stands off; a contact shadow supplies
-   * both for almost nothing.
-   */
+  /** Grid and shadow-catcher at the bottom of the part: the contact shadow is what says where it sits. */
   private placeGround(bounds: Bounds, size: { x: number; y: number; z: number }) {
     const extent = Math.max(size.x, size.y, size.z);
     const step = niceStep(extent / 10);
@@ -1061,8 +893,7 @@ export class Viewport {
     this.sun.target.position.copy(center);
     this.sun.target.updateMatrixWorld();
 
-    // A shadow camera much larger than the part spends all its resolution on
-    // empty space, and the shadow turns to mush.
+    // A shadow camera much larger than the part spends its resolution on empty space.
     const cam = this.sun.shadow.camera;
     cam.left = -radius * 1.6;
     cam.right = radius * 1.6;
@@ -1088,10 +919,8 @@ export class Viewport {
 
     const radius = Math.max(1e-3, Math.hypot(size.x, size.y, size.z) / 2);
 
-    // Fit against whichever field of view is *narrower*. `camera.fov` is the
-    // vertical one, so on a tall narrow pane — which is exactly what a
-    // side-by-side editor leaves — fitting to it alone crops the part off both
-    // sides.
+    // Fit the *narrower* field of view: `camera.fov` is the vertical one, and
+    // fitting to it alone crops the sides off in the pane an editor leaves.
     const vFov = (this.camera.fov * Math.PI) / 180;
     const hFov = 2 * Math.atan(Math.tan(vFov / 2) * this.camera.aspect);
     const fov = Math.min(vFov, hFov);
@@ -1099,9 +928,8 @@ export class Viewport {
 
     const dir = new THREE.Vector3(0.72, -1, 0.62).normalize();
     this.camera.position.copy(center).addScaledVector(dir, distance);
-    // Hug the part. A frustum spanning five orders of magnitude leaves the
-    // depth buffer with almost no precision across the part itself, and the
-    // outline pass reads that buffer.
+    // Hug the part: a frustum spanning five orders of magnitude leaves the
+    // depth buffer, which the outline pass reads, no precision across it.
     this.camera.near = Math.max(distance - radius * 3, distance * 0.02);
     this.camera.far = distance + radius * 6;
     this.camera.updateProjectionMatrix();
@@ -1111,13 +939,7 @@ export class Viewport {
   }
 }
 
-/**
- * Turn logical edges into independently pickable drawables.
- *
- * Parts currently expose tens or low hundreds of B-rep edges. That keeps a
- * separate line primitive per edge much simpler and more useful than colour-ID
- * GPU picking, while still being negligible beside the shaded part.
- */
+/** Turn logical edges into independently pickable drawables — one primitive each, at these counts. */
 function edgeLines(
   edges: EdgeCurve[],
   color = 0x2b3440,
@@ -1137,10 +959,8 @@ function edgeLines(
       new THREE.LineBasicMaterial({ color, transparent: true, opacity }),
     );
     line.userData.edge = edge;
-    // Edges are annotation, not geometry to be lit or to cast shadows.
     line.castShadow = false;
     line.receiveShadow = false;
-    // Depth-tested, so far-side edges stay hidden and the model reads solid.
     line.renderOrder = 1;
     group.add(line);
     lines.push(line);
@@ -1148,15 +968,7 @@ function edgeLines(
   return { group, lines };
 }
 
-/**
- * The corner sprite: a white disc, a near-black ring, and a white glow outside
- * it — drawn once into a canvas and shared by every marker.
- *
- * A `PointsMaterial` square with a colour cannot be this shape, and the glow in
- * particular has no other cheap route: it is what keeps the marker readable
- * where a corner sits against the bright background rather than against the
- * part.
- */
+/** The corner sprite: white disc, ink ring, white glow — a shape a plain `PointsMaterial` cannot be. */
 function cornerSprite(fill: string, ring: string): THREE.Texture {
   const size = 64;
   const canvas = document.createElement("canvas");
@@ -1165,8 +977,7 @@ function cornerSprite(fill: string, ring: string): THREE.Texture {
   const ctx = canvas.getContext("2d")!;
   const centre = size / 2;
 
-  // The glow first, and wider than the ring, so it reads as a halo around the
-  // whole mark rather than as a smudge under it.
+  // The glow first, and wider than the ring, or it is a smudge under the mark.
   ctx.shadowColor = "rgba(255,255,255,0.95)";
   ctx.shadowBlur = 9;
   ctx.fillStyle = "rgba(255,255,255,0.9)";
@@ -1188,13 +999,7 @@ function cornerSprite(fill: string, ring: string): THREE.Texture {
   return texture;
 }
 
-/**
- * The three states a corner can be in, as three shared materials.
- *
- * Shared rather than one per marker: a part has as many corners as it has edge
- * endpoints, and every one of them would otherwise carry its own texture.
- * Built lazily so a module import does not need a DOM.
- */
+/** One material per state, shared by every corner. Lazy, so importing needs no DOM. */
 const VERTEX_MATERIALS: Partial<Record<"hidden" | "hover" | "selected", THREE.PointsMaterial>> = {};
 
 function vertexMaterial(state: "hidden" | "hover" | "selected"): THREE.PointsMaterial {
@@ -1211,6 +1016,7 @@ function vertexMaterial(state: "hidden" | "hover" | "selected"): THREE.PointsMat
           sizeAttenuation: false,
           transparent: true,
           depthWrite: false,
+          depthTest: false,
         });
   made.userData.shared = true;
   VERTEX_MATERIALS[state] = made;
@@ -1228,7 +1034,7 @@ function vertexMarkers(vertices: VertexPoint[]): { group: THREE.Group; markers: 
     marker.userData.vertex = vertex;
     marker.castShadow = false;
     marker.receiveShadow = false;
-    marker.renderOrder = 2;
+    marker.renderOrder = 7;
     group.add(marker);
     markers.push(marker);
   }
@@ -1258,18 +1064,11 @@ function targetVertexMarkers(vertices: TargetVertex[]): THREE.Group {
   return group;
 }
 
-/**
- * The triangle edges of a mesh, drawn faintly over it.
- *
- * Only for the mesh preview. It shows where the mesher sampled densely or
- * sparsely without overpowering the smoothed surface.
- */
+/** Where the mesher sampled densely or sparsely. Preview only. */
 function meshWireframe(g: THREE.BufferGeometry): THREE.LineSegments {
   const lines = new THREE.LineSegments(
     new THREE.WireframeGeometry(g),
     // Faint: at fifty thousand triangles a solid wireframe is a grey wall.
-    // Low opacity lets density itself carry the information — dense where the
-    // mesher subdivided, sparse where it did not.
     new THREE.LineBasicMaterial({ color: 0x2b3440, transparent: true, opacity: 0.45 }),
   );
   lines.castShadow = false;
@@ -1277,21 +1076,7 @@ function meshWireframe(g: THREE.BufferGeometry): THREE.LineSegments {
   return lines;
 }
 
-/**
- * Drop everything under an object.
- *
- * Geometry is *not* disposed here: the stencil helpers share the part's own
- * buffers, and disposing those with the cap would take the part with it.
- */
-/**
- * Free a material unless it is one of the shared ones.
- *
- * The corner materials below are deliberately shared by every marker on the
- * part, so the ordinary "dispose everything under this object" sweep would free
- * them on the first rebuild and every later part would be drawing with a
- * material whose GPU program had been thrown away. Sharing them and freeing
- * them per-object are both reasonable; doing both is not.
- */
+/** Free a material unless it is shared — the corner materials outlive any one part. */
 function releaseMaterial(material: THREE.Material | THREE.Material[] | undefined) {
   if (!material) return;
   if (Array.isArray(material)) {
@@ -1302,6 +1087,7 @@ function releaseMaterial(material: THREE.Material | THREE.Material[] | undefined
   material.dispose();
 }
 
+/** Drop everything under an object. Not geometry: the stencil helpers share the part's buffers. */
 function disposeTree(root: THREE.Object3D) {
   root.traverse((object) => {
     const drawable = object as THREE.Mesh | THREE.LineSegments;
