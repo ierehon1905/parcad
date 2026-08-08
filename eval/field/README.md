@@ -97,6 +97,38 @@ Learned by writing bad ones:
   plausibly and wrongly: `how-many-edges` is the strongest case here because
   `evaluate_part` and `list_entities` disagree by a factor of two.
 
+## The suite is only as reachable as the CLI lets it be
+
+**Known broken, 2026-08-08, Claude Code 2.1.224: a headless `claude -p` does not
+expose an HTTP MCP server's tools, so every trial is VOID.** The server connects
+— the session's own `mcp_servers` says `parcad: connected` — and then no parcad
+tool is ever registered, so `ToolSearch` reports "No matching deferred tools
+found" and the model spends the run asking to be connected to something that is
+already connected.
+
+It is not the app and not the port. Against the same running host, a direct
+Streamable HTTP `initialize` plus `tools/list` returns all fourteen tools. It
+reproduces with `--strict-mcp-config`, without it, with an auto-discovered
+`.mcp.json`, with and without an allow list, and with the nested-session
+environment variables stripped. Sixteen trials of
+`does-the-blend-reach-the-bolts` were paid for and produced no evidence about
+the tool they were meant to measure.
+
+**How to tell this from a real failure**, because the two look nothing alike
+once you know and identical in a summary line: the reply asks the *user* to
+enable or reconnect MCP, `reach` is NO across every arm and both models at once,
+and the strays are whatever the ambient session happens to carry. A genuine
+result never has every trial failing the same way in both models and both arms —
+that uniformity is the tell. Before believing any red run, probe the CLI first:
+
+```bash
+claude -p "Use ToolSearch with query 'select:mcp__parcad__list_projects'. Then say FOUND or NONE." \
+  --model claude-haiku-4-5-20251001 --mcp-config /tmp/probe-mcp.json --strict-mcp-config
+```
+
+FOUND means the harness is live and a red run is about parcad. NONE means the
+run would have measured nothing, and no case should be rewritten off it.
+
 ## The cases
 
 | case | tool under test | what it is for |

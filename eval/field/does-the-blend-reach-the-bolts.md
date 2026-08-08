@@ -2,8 +2,8 @@
 tool: list_entities.faces
 also: evaluate_part
 reach: list_entities
-verdict: (?i)\bno\b|does not|doesn't|clear of|misses
-trap: (?i)\byes\b|\bdoes reach\b|\bruns into\b
+verdict: CLEAR
+trap: FOULED
 quote: face@7|face@13|49\.05
 why: |
   §9's own argument, put to a model. A tag names a node and a node owns several
@@ -26,6 +26,13 @@ why: |
   not in the list. A model that reads the face list gets a fact; a model that
   reasons about radii gets an argument. The two are distinguishable in the
   transcript, which is the point of grading the route rather than the answer.
+
+  The verdict is a coined word rather than YES/NO, and that is the scorer's
+  doing rather than taste: `hit()` wraps the verdict pattern in its own
+  negation detector, so a verdict of "no" can never match un-negated and every
+  correct trial would grade WRONG. The token a right answer states positively
+  is the one to match. CLEAR and FOULED are also the words a machinist would
+  use, and neither occurs by accident in a sentence about geometry.
 ---
 Use the parcad MCP tools. The part is flange.js in the parcad project folder.
 
@@ -39,5 +46,6 @@ actually built. Do not answer from a picture: the two features come within
 2 mm of each other and no render settles it. Name the blend by its face id and
 say what it borders.
 
-End with a one-line verdict: YES or NO, and the ids of every face the blend
+End with a one-line verdict: the single word CLEAR if the blend touches no bolt
+hole, or FOULED if it touches one, followed by the ids of every face the blend
 touches.

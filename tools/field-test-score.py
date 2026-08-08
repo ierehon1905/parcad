@@ -228,11 +228,31 @@ def hit(pattern, text):
     once scored OK on OPEN off the sentence "the port cavities don't open
     directly into the gallery". Every case here asks for its verdict in a fixed
     form at the end, so only the tail is searched.
+
+    **A verdict must be the claim stated positively**, because the negation is
+    this function's job. `verdict: no` cannot work: it would be read as the word
+    "no" appearing un-negated, so every correct trial would grade WRONG and the
+    case would look like a broken tool. A case whose right answer is a refusal
+    needs a word a right answer *asserts* — see does-the-blend-reach-the-bolts,
+    which coins CLEAR and FOULED for exactly this reason.
     """
     if not pattern:
         return None
     tail = text[-700:]
-    hits = re.findall(rf"((?i:do(?:es)? not |don't |no |not |cannot ))?(?:{pattern})", tail)
+    # A bad pattern is a bug in one case's rubric, and it used to take the whole
+    # suite's table down with a traceback forty frames deep — after the trials
+    # had been paid for. Name the offending pattern instead. Inline flags are
+    # how it happens: `(?i)` is legal on its own and illegal once wrapped here,
+    # so it looks fine in the case file until the scorer runs.
+    try:
+        wrapped = re.compile(rf"((?i:do(?:es)? not |don't |no |not |cannot ))?(?:{pattern})")
+    except re.error as e:
+        raise SystemExit(
+            f"the rubric's pattern {pattern!r} is not a regex once the negation "
+            f"detector is wrapped around it ({e}). A bare (?i) at the start is the "
+            f"usual cause: write (?i:...) around the part that needs it instead."
+        ) from None
+    hits = wrapped.findall(tail)
     if not hits:
         return False
     last = hits[-1]
