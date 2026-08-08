@@ -429,6 +429,12 @@ export class Shape {
    * `union(half, half.mirror("x"))`; the reflection on its own is the left-hand
    * version of a right-hand part.
    *
+   * The half has to be a *half*. Mirroring a body that spans the plane puts its
+   * material back over the far side, so a hole cut at +x is refilled by the
+   * reflected copy of the same uncut body — measured, silently, and the part
+   * still builds. Mirror the features and union them onto the full body, or
+   * cut both holes after the union.
+   *
    * Unlike `.scale(-1)` this is a reflection rather than a point inversion, and
    * it costs nothing in either backend: reflections are isometries, so no
    * surface changes type and the implicit field stays exact.
@@ -627,7 +633,14 @@ export function sphere(r: number): Shape {
   return new Shape(() => ({ op: "sphere", r }), []);
 }
 
-/** A cylinder along Z with the given radius and full height. */
+/**
+ * A cylinder along Z with the given radius and full height.
+ *
+ * Centred like every primitive, in Z as well: `cylinder(3, 20)` runs from
+ * z = -10 to z = +10, so a hole through a part that stands on z = 0 is placed
+ * at the middle of its own length, not at the face it enters. `holeFor()` does
+ * that arithmetic, and overshoots both ends.
+ */
 export function cylinder(r: number, h: number): Shape {
   return new Shape(() => ({ op: "cylinder", r, h }), []);
 }

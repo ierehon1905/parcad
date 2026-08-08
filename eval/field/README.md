@@ -16,12 +16,19 @@ reply has ever contained.
 
 ```bash
 mkdir -p /tmp/parcad-field-projects
-cargo build -p parcad-app --bin parcad-app
+cargo build --locked --release -p parcad-app --bin parcad-app
 PARCAD_PROJECTS_DIR=/tmp/parcad-field-projects PARCAD_HTTP_PORT=4344 \
   PARCAD_OCCT_WORKER=$PWD/target/release/parcad-occt-worker \
-  ./target/debug/parcad-app &
+  ./target/release/parcad-app &
 PARCAD_HTTP_PORT=4344 tools/field-suite.sh 3
 ```
+
+**Release, not debug.** A debug binary raymarches a 512 px view in about 70 s
+where the release one takes a fraction of a second, so every case that asks for
+`views` stalls — and with four trials rendering at once the *script sandbox's*
+own 5 s deadline starts firing on scripts that build in microseconds, which
+reads as the model having written a loop. Measured on the same machine and the
+same case: 0.27 s for a three-view `evaluate_part` released, minutes debug.
 
 `PARCAD_PROJECTS_DIR` is not optional politeness: one case saves a part and
 exports a file on purpose, and it should not land in the user's own folder. An
@@ -182,6 +189,11 @@ trials to that: stuck, they went hunting for a shell, found `Monitor` and
 `stray` column names any non-parcad tool a trial reached for — `ToolSearch`
 excepted, because the CLI defers the MCP tools behind it and a trial that cannot
 search cannot reach parcad at all. A strayed trial grades VOID.
+
+**The app killed out from under the round.** `pkill -f parcad-app` from a
+sibling checkout does not know which port it is stopping, and the trials then
+grade VOID with "unable to connect" among their errors — a whole round of it,
+looking exactly like a dead tool. Stop the instance by its pid.
 
 **A trial that runs out of account.** Trials share one session limit and all
 three die at once, mid-measurement, with the limit message as their final text.

@@ -863,6 +863,64 @@ model reads this tool.
 
 ---
 
+## 15. Reading the language itself — measured, and it moved the part
+
+**What it is.** `read_docs`: the DSL reference generated from `app/src/dsl.ts`
+at build time, plus `DSL_GAPS.md`, `GOTCHAS.md` and `OP_ROADMAP.md` compiled
+into the binary. Every export and every public `Shape` method appears, held
+there by `every_name_a_script_can_call_is_in_the_reference`, which compares the
+generated document against the names the QuickJS sandbox actually hands a
+script — two readings of one source, so a parser that stops understanding a
+declaration form fails loudly instead of shortening the document.
+
+**Why it exists.** An outside session connected over MCP, built three parts,
+and wrote `mirror()` down as *impossible*. It is at `dsl.ts:416` with the exact
+`union(half, half.mirror("x"))` idiom in its comment, and `examples/clevis.js`
+is a seeded part whose header says it exists to demonstrate it. That session
+also never found `revolve`, `cone`, `ngon`, `polar`, `repeat`, `countersink`,
+`counterbore`, `tapDrill` or `clearance`, and said so plainly: *output quality
+was a function of which example files I happened to read*. `pillow-block.js`
+meanwhile cited `docs/DSL_GAPS.md` in a comment the reader had no tool to open.
+
+**What was measured.** `eval/field/say-the-symmetry-once.md`, haiku-4-5,
+thinking arm, 4 trials a round. It is the only *authoring* case here: the route
+is the script, so the rubric's new `input: \.mirror\(` looks inside the tool
+arguments, because no tool name and no sentence in the reply can show whether a
+model reached for `mirror` or wrote both halves out with the signs changed.
+
+| | reach `read_docs` | used `mirror` | volume right |
+|---|---|---|---|
+| round A | 4/4 | 4/4 | 0/4 |
+| round B, after two doc fixes | 4/4 | 4/4 | 0/4 |
+
+**The tool's own claim holds: 8/8 found `mirror`, none of them by reading a
+part.** The verdict half does not, and the two rounds say why, which is the
+useful part.
+
+Round A failed in two ways, both silent and both watertight. Two trials wrote
+`half = plate.union(boss).cut(hole)` where `plate` is the *whole* plate, then
+`union(half, half.mirror("x"))` — and the reflected copy put material back over
+the hole it had just cut, leaving each bore 5 mm deep through its boss and
+nothing through the plate. `mirror`'s comment now says the half has to be a
+half; that failure did not recur. The other two placed the cutter as
+`cylinder(r, 20).at(42, 0, 0)` — centred, so it reaches z = 10 on a part that
+stands 11 mm tall, and caps each hole with 1 mm of boss. `cylinder`'s comment
+now says what centring means for a through-hole and names `holeFor`; all four
+of round B did it anyway, identically. That one is not a documentation gap this
+page can close by writing more, and it is the next thing worth a measurement:
+the fix is more likely a refusal or a warning than a sentence.
+
+**Two things about running this suite** that cost most of a session and belong
+next to it. Field trials must run against a **release** app: a debug binary
+raymarches a 512 px view in about 70 s against a fraction of a second, so any
+case that asks for `views` stalls, and under four concurrent trials the script
+sandbox's own 5 s deadline starts firing on scripts that build in
+microseconds. And a `pkill -f parcad-app` from a sibling checkout kills the app
+this round is measuring; the trials then grade VOID with "unable to connect" in
+their errors, which reads exactly like a broken tool.
+
+---
+
 ## Suggested order
 
 1. ~~Point and ray probes~~ — **done**, measured against closed forms, and it

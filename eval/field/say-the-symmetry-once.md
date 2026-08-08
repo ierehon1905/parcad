@@ -19,7 +19,10 @@ why: |
   still open, and the whole point of the reference is that it does not depend on
   which files a session happens to open. The volume is the second half: it is
   measured, not stated anywhere, and it separates a model that used the
-  fastener table from one that drilled a round 5.
+  fastener table from one that drilled a round 5. Two rounds are recorded in
+  docs/PERCEPTION.md §15: 8/8 reached read_docs and used `mirror`, 0/8 got the
+  volume, and the two ways they got it wrong are both worth reading before
+  changing anything here.
 ---
 Use the parcad MCP tools.
 
