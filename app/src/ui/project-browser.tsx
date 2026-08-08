@@ -141,18 +141,7 @@ export function ProjectBrowser() {
     >
       {open && (
       <>
-      <div class="absolute top-3.5 right-[18px]">
-        <Button
-          variant="quiet"
-          layout="font-mono text-[11px]"
-          aria-label="Close"
-          onClick={() => (S.browserOpen.value = false)}
-        >
-          esc
-        </Button>
-      </div>
-
-      <header class="flex items-center gap-3 pl-[18px] pr-[62px] py-3.5 border-b border-line">
+      <header class="flex items-center gap-3 px-[18px] py-3.5 border-b border-line">
         <h2 class="m-0 text-[15px] font-semibold">Parts</h2>
         <Field
           ref={searchBox}
@@ -180,6 +169,16 @@ export function ProjectBrowser() {
         >
           <Icon name="plus" class="size-4 shrink-0" />
           <span>New part</span>
+        </Button>
+        {/* In the row, not floated over it: the reserved padding it used to sit
+            in was two pixels narrower than the button, so the two overlapped. */}
+        <Button
+          variant="quiet"
+          layout="shrink-0 font-mono text-[11px]"
+          aria-label="Close"
+          onClick={() => (S.browserOpen.value = false)}
+        >
+          esc
         </Button>
       </header>
 

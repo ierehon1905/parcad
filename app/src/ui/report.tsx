@@ -12,6 +12,11 @@
  * border and backdrop are visible with no text in them, and an empty panel over
  * an empty viewport reads as a part that failed to draw. No placeholder either:
  * the error beside it already says why there is no part.
+ *
+ * Three lines, and the rest only when it is wrong. A green "watertight" on every
+ * part is furniture you stop reading, which is what makes the red one easy to
+ * miss on the part where it appears; same for the source links. Area and the tag
+ * list went because the script beside the viewport already says both.
  */
 
 import type { ComponentChildren } from "preact";
@@ -40,41 +45,29 @@ export function Report() {
         mm
       </div>
       <div>
-        volume <Strong>{fmt(snapshot.volume_mm3)}</Strong> mm³ · area{" "}
-        <Strong>{fmt(snapshot.area_mm2)}</Strong> mm²
+        <Strong>{fmt(snapshot.volume_mm3)}</Strong> mm³
+        {snapshot.faces !== undefined && (
+          <>
+            {" · "}
+            <Strong>{snapshot.faces}</Strong> faces · <Strong>{snapshot.topological_edges}</Strong>{" "}
+            edges
+          </>
+        )}
       </div>
-      {snapshot.faces !== undefined && (
-        <div>
-          topology <Strong>{snapshot.faces}</Strong> faces ·{" "}
-          <Strong>{snapshot.topological_edges}</Strong> edges
+      <div>
+        <Strong>{snapshot.triangles.toLocaleString()}</Strong> tris{" "}
+        {snapshot.backend === "brep" ? "within " : "on a "}
+        <Strong>{snapshot.resolution_mm.toFixed(3)}</Strong>
+        {snapshot.backend === "brep" ? " mm" : " mm grid"}
+      </div>
+      {!snapshot.watertight && (
+        <div class="text-bad">
+          NOT watertight — {snapshot.non_manifold_edges} bad edges
         </div>
       )}
-      <div>
-        mesh <Strong>{snapshot.triangles.toLocaleString()}</Strong> tris{" "}
-        {snapshot.backend === "brep" ? "within " : "at "}
-        <Strong>{snapshot.resolution_mm.toFixed(3)}</Strong>
-        {snapshot.backend === "brep" ? " mm of the true surface " : " mm grid "}
-        {snapshot.watertight ? (
-          <span class="text-good">watertight</span>
-        ) : (
-          <span class="text-bad">
-            NOT watertight — {snapshot.non_manifold_edges} bad edges
-          </span>
-        )}
-      </div>
-      <div>{snapshot.tags.length ? `tags ${snapshot.tags.join(", ")}` : "no tags"}</div>
-      <div>
-        {linked ? (
-          <span class="text-good">
-            source links <Strong>{linked}</Strong> final curves →{" "}
-            {S.linkedMethods.value.join(", ")}
-          </span>
-        ) : S.lastTreatments.value.length ? (
-          <span class="text-bad">source links: no final treatment curves are available</span>
-        ) : (
-          "source links — no edge treatments"
-        )}
-      </div>
+      {!linked && S.lastTreatments.value.length > 0 && (
+        <div class="text-bad">no final treatment curves are available</div>
+      )}
       {dead > 0 && <div class="text-bad">{dead} unused nodes</div>}
     </Glass>
   );

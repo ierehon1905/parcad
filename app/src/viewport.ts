@@ -114,6 +114,10 @@ const HALO = 0xffffff;
 const GLOW_PX = 4;
 const RING_PX = 2.8;
 const CORE_PX = 1.4;
+/** The source-selected preview. A fat line for the same reason the hover mark
+ *  is one: `linewidth` on a plain `THREE.Line` is ignored by every WebGL
+ *  driver, so it drew one hairline pixel however wide it asked to be. */
+const TARGET_PX = 2.6;
 
 /** Fusion-style light canvas: dark chrome, bright work area. */
 const BG_TOP = "#e8ecf1";
@@ -145,6 +149,8 @@ export class Viewport {
   private readonly vertexMarkers: THREE.Points[] = [];
   /** Gold source-selected entities, separate from the pickable final topology. */
   private targetPreview?: THREE.Group;
+  /** Their fat lines, which carry a screen-space width a resize invalidates. */
+  private targetLines: Line2[] = [];
   private hoveredEdge?: THREE.LineSegments;
   private selectedEdge?: THREE.LineSegments;
   /**
@@ -323,6 +329,18 @@ export class Viewport {
       material.resolution.set(buffer.x, buffer.y);
       material.linewidth = width * ratio;
     }
+    for (const line of this.targetLines) this.fitFatLine(line.material, TARGET_PX);
+  }
+
+  /**
+   * A fat line is a screen-space quad: it needs the drawing buffer's size, and
+   * a width in device pixels. Both callers go through here so a preview built
+   * between two resizes is not sized by a second, slightly different sum.
+   */
+  private fitFatLine(material: LineMaterial, widthPx: number) {
+    const buffer = this.renderer.getDrawingBufferSize(new THREE.Vector2());
+    material.resolution.set(buffer.x, buffer.y);
+    material.linewidth = widthPx * this.renderer.getPixelRatio();
   }
 
   private tick = () => {
@@ -811,23 +829,34 @@ export class Viewport {
     if (edges.length === 0 && vertices.length === 0) return;
 
     const group = new THREE.Group();
-    if (edges.length > 0) {
-      const rendered = edgeLines(edges, goldHex(), 1);
-      for (const line of rendered.lines) {
-        const material = line.material as THREE.LineBasicMaterial;
-        // A target curve can have been consumed by a fillet, so it is drawn
-        // over the faces that replaced it. Never added to the raycast set.
-        material.depthTest = false;
-        line.renderOrder = 2;
-      }
-      group.add(rendered.group);
+    for (const edge of edges) {
+      const geometry = new LineGeometry();
+      geometry.setPositions(edge.points.flat());
+      const line = new Line2(
+        geometry,
+        new LineMaterial({
+          color: goldHex(),
+          depthTest: false,
+          depthWrite: false,
+        }),
+      );
+      this.fitFatLine(line.material, TARGET_PX);
+      // Never a pick target: this is the source's selection, not the topology.
+      line.raycast = () => {};
+      line.renderOrder = 2;
+      this.targetLines.push(line);
+      group.add(line);
     }
+
     if (vertices.length > 0) group.add(targetVertexMarkers(vertices));
     this.targetPreview = group;
     this.partGroup.add(group);
   }
 
   private clearTargetPreview() {
+    // Emptied first: `resize` walks this list, and a disposed material is not
+    // one to be setting a resolution on.
+    this.targetLines.length = 0;
     if (!this.targetPreview) return;
     this.partGroup.remove(this.targetPreview);
     disposeTree(this.targetPreview);
@@ -965,11 +994,9 @@ export class Viewport {
 }
 
 /** Turn logical edges into independently pickable drawables — one primitive each, at these counts. */
-function edgeLines(
-  edges: EdgeCurve[],
-  color = 0x2b3440,
-  opacity = 0.85,
-): { group: THREE.Group; lines: THREE.LineSegments[] } {
+function edgeLines(edges: EdgeCurve[]): { group: THREE.Group; lines: THREE.LineSegments[] } {
+  const color = 0x2b3440;
+  const opacity = 0.85;
   const group = new THREE.Group();
   const lines: THREE.LineSegments[] = [];
   for (const edge of edges) {
