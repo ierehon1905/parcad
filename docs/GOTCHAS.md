@@ -385,9 +385,9 @@ the recess's outer edge meant to lie on that face. Write the gradient the way a
 sketch reads it — `0.235`, where the exact value is `20 / 85 = 0.23529…` — and
 the outer edge runs *inside* the face by `(65 − x) · 0.000294 · cos 13.24°`:
 0.0029 mm at one end of the cut and 0.019 mm at the other. OCCT builds it,
-reports watertight, 11 faces, and removes exactly the cutter's own
-4519.86 mm³ against the 4519.90 the parallelogram computes — the membrane
-survives intact and nothing in the reply mentions it.
+reports watertight and 11 faces, and removes 4519.86 mm³ against the
+parallelogram's exact 4519.87 — the cutter's own volume and not a micron more,
+so the membrane is intact, and nothing in the reply mentions it.
 
 **And the measurement that finds it can miss it.** The field sweep behind
 `measure_wall_thickness` samples the surface from seven rendered views, so it
@@ -412,11 +412,11 @@ returned an unmanufacturable solid rather than saying so. It does not refuse,
 and after measuring it should not:
 
 - **The case a refusal would have to fire on is not the coincident one.** Row 1
-  of the table — exactly coplanar — is correct geometry, byte-for-byte the same
-  result as standing the cutter proud, and it is what a boss trimmed back to a
-  face or a slot cut flush with an underside produces. `examples/v-block.js`
-  ships one: its strap slot's floor is exactly the block's own underside. A
-  refusal on coincidence would refuse that.
+  of the table — exactly coplanar — is correct geometry: same volume, same 11
+  faces, same watertight 28-triangle mesh as standing the cutter proud, and it
+  is what a boss trimmed back to a face or a slot cut flush with an underside
+  produces. `examples/v-block.js` ships one: its strap slot's floor sits exactly
+  on the block's own underside. A refusal on coincidence would refuse that.
 - **What is wrong is *near*-coincidence, and it is a continuum.** 0.004 mm is an
   accident and 0.4 mm is a design; between them is every value, and any
   threshold is a number some part reaches legitimately. The kernel cannot see
@@ -445,7 +445,8 @@ and after measuring it should not:
   timing-pulley number is this kind, and so are the 0.21–0.24 mm spots on the
   hydraulic line, which are not artefacts at all: they are the ring of material
   between the inlet boss's outside diameter and its O-ring groove, which is
-  `0.5 − √(1 − (x − 4)²)` mm thick and **tapers continuously to zero** at the
+  `0.5 − √(1 − (x − 4)²)` mm thick — x along the boss axis, the groove's torus
+  centred at x = 4 with a 1 mm minor radius — and so **tapers to zero** at the
   groove's rim. Sample nearer the rim, get a smaller number, without limit. The
   pulley does the same thing where a tooth groove crosses the outside diameter.
   Every groove, every fillet and every blend that runs off an edge does. No
