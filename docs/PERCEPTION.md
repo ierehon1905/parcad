@@ -123,14 +123,14 @@ cargo build -p parcad-app --bin parcad-app     # the build you mean to test
 PARCAD_PROJECTS_DIR=/tmp/parcad-field-projects PARCAD_HTTP_PORT=4344 \
   PARCAD_OCCT_WORKER=$PWD/target/release/parcad-occt-worker \
   ./target/debug/parcad-app &
-PARCAD_HTTP_PORT=4344 tools/field-suite.sh 3        # every case, both arms
-PARCAD_HTTP_PORT=4344 tools/field-test.sh eval/field/does-the-port-meet.md 4
+PARCAD_HTTP_PORT=4344 field/run-suite.sh 3          # every case, both arms
+PARCAD_HTTP_PORT=4344 field/run-case.sh eval/field/does-the-port-meet.md 4
 ```
 
 Each trial is `claude -p` on Haiku 4.5 — a separate process, its own context,
 every local tool denied so it cannot open the file and read the answer — against
 the MCP server the running app hosts. The suite runs every case in
-`eval/field/` in both thinking arms and prints one table; `field-test.sh` is
+`eval/field/` in both thinking arms and prints one table; `field/run-case.sh` is
 the single case it is built out of, for when a change bears on one tool.
 
 **A trial is graded, not passed.** SOUND is the right answer reached by the
@@ -138,8 +138,8 @@ route the case requires; LUCKY is the right answer without it. Counting the two
 together is the failure this page keeps re-learning at one level up — §3 round 1
 scored 3/4 *correct* while measuring almost nothing, one trial quoting the
 part's own source comment as its proof. The suite's per-case `reach` column is
-the number to read first, and `tools/field-test-score.py --show` prints a
-transcript as prose, because the failures worth finding have all been in it.
+the number to read first, and `field/score.py --show` prints a transcript as
+prose, because the failures worth finding have all been in it.
 
 Five things this cost to learn, all of which will otherwise cost it again:
 
@@ -339,9 +339,9 @@ Two things the rounds settled that no unit test could have:
   safe one.
 - **A right answer is not evidence.** Round 1 scored 3/4 correct while
   measuring almost nothing — one trial quoted the part's own source comment as
-  its proof. `tools/field-test-score.py` prints who *reached* the tool for
-  exactly this reason, and had a bug that scored "DO NOT MEET" as a pass, which
-  is the same failure one level up.
+  its proof. `field/score.py` prints who *reached* the tool for exactly this
+  reason, and had a bug that scored "DO NOT MEET" as a pass, which is the same
+  failure one level up.
 
 **What round 3's one wrong answer asks for next.** It measured 13 mm of material
 between the gallery and a port and was right — at z = 16, near the top of the
@@ -622,8 +622,8 @@ and both trials had the coordinates that say so — `at` and `opposite` share a 
 **The round after it was void, and that is worth recording too.** Rerunning
 `does-the-port-meet.md` against the rounded replies, two of four trials never
 answered: stuck, they went hunting for a shell, found `Monitor` and `Skill` —
-neither on `field-test.sh`'s deny list, which predates them existing — and spent
-the run trying to fix this repo's compiler warnings. The scorer counted them as
+neither on `field/run-case.sh`'s deny list, which predates them existing — and
+spent the run trying to fix this repo's compiler warnings. The scorer counted them as
 trials. A deny list is wrong by default every time the CLI grows a tool, so the
 scorer now prints a `stray` column instead of trusting the list; eval/field's
 README has both failure modes. The §5 round above is unaffected — all four of
@@ -922,7 +922,7 @@ is the inverse of this page's rule.
 ## 13. What the first whole-surface round found
 
 Everything above was measured one tool at a time, on the tool that had just
-changed. `tools/field-suite.sh` puts every tool in front of a model at once, and
+changed. `field/run-suite.sh` puts every tool in front of a model at once, and
 the first round of it is the first evidence about the parts of the surface
 nobody had ever asked a model to use.
 

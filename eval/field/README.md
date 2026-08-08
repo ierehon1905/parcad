@@ -2,10 +2,16 @@
 
 Each file here is one case: a prompt for a small model, and above it a `---`
 fenced rubric saying what the case is for and how to score it.
-`tools/field-suite.sh` runs all of them in both thinking arms and prints one
-table; `tools/field-test.sh` runs one. They are not part of `tools/check.sh` and
+`field/run-suite.sh` runs all of them in both thinking arms and prints one
+table; `field/run-case.sh` runs one. They are not part of `tools/check.sh` and
 never will be: they cost money, they need a running app, and their result is a
 *distribution* rather than a pass or a fail.
+
+**The apparatus lives in `field/` and knows nothing about parcad.** Which server,
+which tools, and that cases live here are all `field/field.toml`; `field/README.md`
+is the method written for someone whose MCP server is not this one. What follows
+is the parcad half — how to run a round against the app, and what each case is
+for.
 
 `eval/cases/` pins what the kernel computes. This pins what a model does with
 it, which is the other half and the half that has actually been wrong — every
@@ -20,8 +26,13 @@ cargo build --locked --release -p parcad-app --bin parcad-app
 PARCAD_PROJECTS_DIR=/tmp/parcad-field-projects PARCAD_HTTP_PORT=4344 \
   PARCAD_OCCT_WORKER=$PWD/target/release/parcad-occt-worker \
   ./target/release/parcad-app &
-PARCAD_HTTP_PORT=4344 tools/field-suite.sh 3
+PARCAD_HTTP_PORT=4344 field/run-suite.sh 3
 ```
+
+`PARCAD_HTTP_PORT` still moves the round because `field.toml` writes the URL as
+`http://127.0.0.1:${PARCAD_HTTP_PORT:-4242}/mcp` — the config expands `${VAR}`
+and `${VAR:-default}` from the environment, so a project keeps the port knob it
+already has.
 
 **Release, not debug.** A debug binary raymarches a 512 px view in about 70 s
 where the release one takes a fraction of a second, so every case that asks for
@@ -206,5 +217,9 @@ and grades them VOID; check them anyway before believing a row of zeroes.
 because it fails silently: the model simply never sees the tool, and the case
 looks like a model that chose not to call it. `save_project` and `export_part`
 sat outside the allow list from the beginning, which is precisely why no case
-had ever tested them. The allow list in `field-test.sh` is the surface under
-test and has to name all of it.
+had ever tested them. `tools` in `field/field.toml` is the surface under test
+and has to name all of it — it is both the runner's allow list and the scorer's
+idea of a legitimate call, one list so the two cannot drift apart. They had:
+`probe_step_export` was allowed and unknown to the scorer, so the first trial
+that ever called it would have graded VOID as a stray, and this case list would
+have read as a model declining to use the tool.

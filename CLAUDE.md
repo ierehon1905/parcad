@@ -40,8 +40,8 @@ cd app && bun run tauri build           # .app + .dmg; run build-worker.sh first
 bun tools/run.ts examples/bracket.js > /tmp/bracket.json   # DSL -> intent graph
 tools/bench-kernel.sh /tmp/bracket.json                    # medians, and the -O level
 cargo run -p parcad-eval               # the geometry + refusal corpus
-tools/field-suite.sh 3                                     # can a model drive this at all?
-tools/field-test.sh eval/field/does-the-port-meet.md 4     # one case of it
+field/run-suite.sh 3                                       # can a model drive this at all?
+field/run-case.sh eval/field/does-the-port-meet.md 4       # one case of it
 cd app && bun test src                 # editor-side units: the selector grammar
 ```
 
@@ -187,9 +187,12 @@ recorded number is worse than no case — that's what `known_defect` is for.
 Whether a model *reads* that output is a separate fact, measured separately, and
 it has been wrong every time it was checked: a probe flag read inverted, a field
 name read as the wrong noun, a tool never called at all, a field the server's
-own instructions named that no reply contains. `tools/field-suite.sh` puts every
+own instructions named that no reply contains. `field/run-suite.sh` puts every
 case in `eval/field/` to a small model over the running app's MCP, in both
-thinking arms, and keeps the transcripts.
+thinking arms, and keeps the transcripts. The harness under `field/` names no
+project — `field/field.toml` does — so it is also the thing to reach for when
+measuring somebody else's MCP server; `field/README.md` is written for that
+reader.
 
 It grades a trial rather than passing it: **SOUND** is a right answer reached by
 the route the case requires, **LUCKY** is a right answer without it, and adding
@@ -197,7 +200,7 @@ the two together is how a suite comes to measure the wrong thing — the most
 instructive trial on record got the right answer by quoting the part's own
 source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 `reach` before `sound`, and read the transcript rather than either
-(`field-test-score.py --show`).
+(`field/score.py --show`).
 
 ## Where things live
 
@@ -237,7 +240,8 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | cutting a part open to see inside it | `view.rs`'s `Section`, then `render.rs` for the agent and `app/src/viewport.ts` for the window |
 | what an agent can see, and what to tell it instead | `docs/PERCEPTION.md` |
 | what an agent can *read* about the language | `app/src-tauri/src/docs.rs` — generated from `dsl.ts`, never written beside it |
-| whether a model can *read* a tool | `eval/field/*.md`, run by `tools/field-suite.sh` |
+| whether a model can *read* a tool | `eval/field/*.md`, run by `field/run-suite.sh` |
+| which server that harness is pointed at | `field/field.toml` — the only file under `field/` that names parcad |
 
 A new op touches `graph.rs` (variant + `children_of`), `sdf.rs`, `measure.rs`
 (its bounds), `backend.rs`, `dsl.ts`, plus a case in `eval/cases/`. Missing
