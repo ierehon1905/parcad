@@ -77,13 +77,18 @@ impl View {
                 Vector3::new(0.0, 0.0, 1.0),
                 Vector3::new(0.0, 1.0, 0.0),
             ),
+            // The two side views were mirrored until the axes were written
+            // down: their screen basis had determinant -1, which is a
+            // reflection and not a camera, so a boss at +Y was drawn on the
+            // left of the `right` view. See docs/GOTCHAS.md, "The side views
+            // were mirrored".
             View::Left => (
-                Vector3::new(0.0, 1.0, 0.0),
+                Vector3::new(0.0, -1.0, 0.0),
                 Vector3::new(0.0, 0.0, 1.0),
                 Vector3::new(-1.0, 0.0, 0.0),
             ),
             View::Right => (
-                Vector3::new(0.0, -1.0, 0.0),
+                Vector3::new(0.0, 1.0, 0.0),
                 Vector3::new(0.0, 0.0, 1.0),
                 Vector3::new(1.0, 0.0, 0.0),
             ),
@@ -112,6 +117,59 @@ impl View {
             .copy_from(&nalgebra::Matrix3::from_columns(&[right, up, toward]));
         m
     }
+
+    /// Where the camera points and which way the image is oriented, in model
+    /// space: (right, up, looking).
+    ///
+    /// Read straight off [`View::rotation`] rather than restated, so a camera
+    /// and the sentence describing it cannot drift apart. `looking` is the
+    /// negation of column 2, which points at the viewer.
+    pub fn axes(self) -> (Vector3<f64>, Vector3<f64>, Vector3<f64>) {
+        let m = self.rotation();
+        (m.column(0).xyz(), m.column(1).xyz(), -m.column(2).xyz())
+    }
+
+    /// The same three axes as a sentence.
+    ///
+    /// **View names are absolute, not part-relative.** `front` looks along +Y
+    /// and shows the XZ plane whichever way the part itself faces, so a part
+    /// whose length runs along X has its side elevation drawn under the name
+    /// `front` — perfectly consistent, and it cost a session two rounds of
+    /// misread images (docs/PERCEPTION.md §2).
+    pub fn orientation(self) -> String {
+        let (right, up, looking) = self.axes();
+        let (Some(l), Some(r), Some(u)) = (axis_word(looking), axis_word(right), axis_word(up))
+        else {
+            return format!(
+                "looks along ({}), with ({}) right and ({}) up",
+                components(looking),
+                components(right),
+                components(up)
+            );
+        };
+        format!(
+            "looks along {l} and shows the {}{} plane, with {r} right and {u} up",
+            &r[1..],
+            &u[1..]
+        )
+    }
+}
+
+/// `+y` for an axis-aligned unit vector, nothing for anything else.
+fn axis_word(v: Vector3<f64>) -> Option<&'static str> {
+    let names = [["+x", "-x"], ["+y", "-y"], ["+z", "-z"]];
+    (0..3).find_map(|i| {
+        let along = v[i];
+        let others = (0..3).filter(|j| *j != i).all(|j| v[j].abs() < 1e-9);
+        (others && along.abs() > 0.5).then(|| names[i][usize::from(along < 0.0)])
+    })
+}
+
+fn components(v: Vector3<f64>) -> String {
+    // The `+ 0.0` turns a component that rounds to -0.0 back into the zero it
+    // is; without it the isometric reads "-0.000" and looks like a direction.
+    let d = |c: f64| (c * 1000.0).round() / 1000.0 + 0.0;
+    format!("{:.3}, {:.3}, {:.3}", d(v.x), d(v.y), d(v.z))
 }
 
 /// A model axis. The planes people actually cut on are the three of them.
@@ -310,4 +368,54 @@ fn fit_transform_f64(bounds: Aabb, rotation: Matrix4<f64>) -> Matrix4<f64> {
     // Read right to left: rotate the world cube into the view orientation, blow
     // it up to the size of the part, then move it onto the part.
     translate * scale * rotation
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The sentence is derived from the camera rather than written beside it, so
+    /// a view that is re-aimed cannot keep describing where it used to point.
+    #[test]
+    fn every_view_says_which_way_it_looks() {
+        for view in View::ALL {
+            let (right, up, looking) = view.axes();
+            assert!((looking + view.rotation().column(2).xyz()).norm() < 1e-12);
+            // A camera is a rotation, so its three screen axes are right-handed
+            // in model space. A determinant of −1 is a mirror, and a mirrored
+            // view is a picture of a part that was never modelled.
+            assert!(
+                (view.rotation().determinant() - 1.0).abs() < 1e-12,
+                "the {} view reflects rather than rotates (det {})",
+                view.name(),
+                view.rotation().determinant()
+            );
+            assert!(
+                right.cross(&up).dot(&looking) < 0.0,
+                "{} is mirrored",
+                view.name()
+            );
+        }
+
+        assert_eq!(
+            View::Front.orientation(),
+            "looks along +y and shows the xz plane, with +x right and +z up"
+        );
+        // Standing at +X looking back at the part, +Y is on your right. It was
+        // reported, and drawn, as -y.
+        assert_eq!(
+            View::Right.orientation(),
+            "looks along -x and shows the yz plane, with +y right and +z up"
+        );
+        assert_eq!(
+            View::Top.orientation(),
+            "looks along -z and shows the xy plane, with +x right and +y up"
+        );
+        // The isometric has no model axis to name, so it gives the numbers.
+        assert_eq!(
+            View::Iso.orientation(),
+            "looks along (-0.577, 0.577, -0.577), with (0.707, 0.707, 0.000) right \
+             and (-0.408, 0.408, 0.816) up"
+        );
+    }
 }

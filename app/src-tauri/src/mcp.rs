@@ -97,6 +97,13 @@ pub struct EvaluateRequest {
     /// `left`, `right`, `top`, `bottom`. Omit to measure without rendering,
     /// which is much faster. Every view shares one framing, so a feature at a
     /// given pixel in one is at a comparable pixel in another.
+    ///
+    /// **These names are absolute, not part-relative.** `front` looks along +Y
+    /// and shows the XZ plane however the part itself is turned, so a part whose
+    /// length runs along X gets its side elevation under the name `front`. Each
+    /// view in the reply carries `axes`, which says in one sentence what that
+    /// image is looking along and which way is up. Read it before deciding a
+    /// feature is on the wrong side.
     #[serde(default)]
     pub views: Option<Vec<String>>,
     /// Colour each view by the tag that owns the surface, instead of shading it.
@@ -294,7 +301,7 @@ impl Parcad {
     /// refusal says what to do instead.
     #[tool(
         name = "evaluate_part",
-        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality and tags. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Use this to check that a script produces the part you intended.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
+        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality and tags. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Use this to check that a script produces the part you intended.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. A tag in `unlocated_tags` owns no point of the finished surface at all: it was buried by a later boolean, or it is on a fillet, which has no field to locate.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
     )]
     async fn evaluate_part(
         &self,
@@ -731,7 +738,13 @@ impl ServerHandler for Parcad {
                  view by the tag \
                  owning each patch of surface, which is how you check that a tag covers what \
                  you think: a tag that is in the model but hidden from that angle comes back \
-                 visible: false rather than missing."
+                 visible: false rather than missing.\n\n\
+                 A picture is for shape and presence; a number is for position and size, and \
+                 where they disagree the number is right. evaluate_part's tag_extents gives \
+                 every tag its own box and centre, measured, in the same reply — reach for it \
+                 rather than deciding from a render whether a feature sits where you meant. \
+                 View names are absolute: front looks along +Y whatever the part's own long \
+                 axis is, and each view's axes field says so."
                 .into(),
         );
         info

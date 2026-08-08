@@ -14,6 +14,51 @@ use crate::graph::{Doc, NodeId, Op, V3};
 use anyhow::Result;
 use fidget::context::Tree;
 
+/// The document as a distance field can lower it.
+///
+/// This backend refuses [`Op::Fillet`] and [`Op::Chamfer`] outright — it has no
+/// logical edges to select — and that refusal is right for geometry and useless
+/// for everything built on top of the field: a picture, a probe, a wall
+/// thickness, a tag's extent. Every part in `examples/` with an edge treatment
+/// would be out of reach, which is most of them. So each treatment is replaced
+/// by an identity node, and the caller is told which ones by node index.
+///
+/// This is not the "refuse rather than approximate" rule being bent. That rule
+/// governs geometry a caller might measure or export, and nothing downstream of
+/// here reaches either. What it does require is that the omission be *stated* —
+/// a picture missing a fillet nobody mentioned would have a caller conclude its
+/// treatment failed, which is the one wrong answer this could produce.
+///
+/// Two details that are load-bearing:
+///
+/// - The identity is a zero `Translate` rather than a removal, so every node
+///   index in the document still means what it meant. A caller holding a
+///   treatment node from a snapshot can still inspect it.
+/// - The tag goes with it. A tag on a fillet node names *the filleted result*;
+///   left on the identity it would name the child's entire surface, and the
+///   region legend would confidently report `top_hole_rims` covering half the
+///   part. A missing entry is recoverable, a wrong one is not.
+pub fn drawable(doc: &Doc) -> (Doc, Vec<NodeId>) {
+    let mut drawable = doc.clone();
+    let mut omitted = Vec::new();
+
+    for (id, node) in drawable.nodes.iter_mut().enumerate() {
+        let child = match node.op {
+            Op::Fillet { child, .. } | Op::Chamfer { child, .. } => child,
+            _ => continue,
+        };
+
+        node.op = Op::Translate {
+            child,
+            by: V3::ZERO,
+        };
+        node.tag = None;
+        omitted.push(id);
+    }
+
+    (drawable, omitted)
+}
+
 /// Lower the whole document to a single distance function.
 pub fn lower(doc: &Doc) -> Result<Tree> {
     let built = lower_all(doc)?;
