@@ -471,6 +471,29 @@ impl Shape {
         found.map(|inner| Self { inner })
     }
 
+    /// How many sealed internal voids the shape's solids enclose.
+    ///
+    /// A solid is bounded by one outer shell; every further shell bounds a
+    /// cavity with no path to the outside. Counted per solid, so a compound of
+    /// several bodies reports the voids inside them, not the bodies.
+    pub fn internal_void_count(&self) -> usize {
+        let mut voids = 0;
+        let mut solids =
+            ffi::TopExp_Explorer_ctor(&self.inner, ffi::TopAbs_ShapeEnum::TopAbs_SOLID);
+        while solids.More() {
+            let mut shells =
+                ffi::TopExp_Explorer_ctor(solids.Current(), ffi::TopAbs_ShapeEnum::TopAbs_SHELL);
+            let mut bounded_by = 0usize;
+            while shells.More() {
+                bounded_by += 1;
+                shells.pin_mut().Next();
+            }
+            voids += bounded_by.saturating_sub(1);
+            solids.pin_mut().Next();
+        }
+        voids
+    }
+
     /// Apply an arbitrary rigid transform, returning a new shape.
     ///
     /// The general escape hatch the rest of the transforms are built on. Unlike

@@ -1526,7 +1526,31 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             for t in tools {
                 let tool = build_node(doc, *t, offset)?;
                 breadcrumb(&format!("subtract node {t} from node {id} ({label})"));
+                let voids_before = acc.shape.internal_void_count();
                 let mut cut = acc.shape.subtract(&tool.shape);
+
+                // A cut that entombs its tool instead of opening the surface.
+                // Topology, not a threshold: an extra closed shell is a cavity
+                // whatever its clearance measures, so exact coincidence and a
+                // proud cutter stay silent. See docs/GOTCHAS.md, the entry end
+                // of the cut rule.
+                let sealed = cut.shape.internal_void_count().saturating_sub(voids_before);
+                if sealed > 0 {
+                    bail!(
+                        "node {id} ({label}) subtracts node {t}, and the cut sealed \
+                         {sealed} closed void(s) inside the part instead of opening its \
+                         surface. The tool broke through no face — it sits entirely \
+                         inside the material, usually a fraction of a millimetre short \
+                         of the face it was meant to enter — so the result is a solid \
+                         block with an unreachable cavity: watertight, plausible in \
+                         every render, and unmanufacturable. Run the cutter proud of \
+                         the material where it enters and past it where it exits, the \
+                         way holeFor(thread, depth, {{ through: true }}) overshoots both \
+                         faces; exactly on a face also cuts clean, but only the exact \
+                         value does. A sealed cavity that is wanted is what shell() \
+                         builds. See docs/GOTCHAS.md"
+                    );
+                }
                 let lineage = if *blend > 0.0 {
                     EdgeLineage::default()
                 } else {
@@ -2465,6 +2489,71 @@ mod tests {
         assert_eq!(target.vertices.len(), 1);
         assert_eq!(target.vertices[0].point, [5.0, 5.0, 5.0]);
         build(&doc).unwrap();
+    }
+
+    /// The coincident-face trap, measured as topology. A cutter 0.004 mm short
+    /// of the face it enters does not make a thin-lidded pocket — it makes no
+    /// pocket at all: one solid, two shells, the tool's own shape sealed inside.
+    /// The two safe rows of the docs/GOTCHAS.md table stay at zero voids, which
+    /// is what lets the refusal fire on the accident and not on `v-block.js`.
+    #[test]
+    fn a_buried_cutter_seals_a_void_and_a_flush_or_proud_one_does_not() {
+        let plate = AdHocShape::make_box_point_point(
+            DVec3::new(-30.0, -20.0, -10.0),
+            DVec3::new(30.0, 20.0, 10.0),
+        )
+        .0;
+        assert_eq!(plate.internal_void_count(), 0);
+
+        let pocket_to = |top: f64| {
+            AdHocShape::make_box_point_point(
+                DVec3::new(-15.0, -10.0, 6.0),
+                DVec3::new(15.0, 10.0, top),
+            )
+            .0
+        };
+
+        // 0.004 mm short of the top face: the shipped field defect.
+        assert_eq!(plate.subtract(&pocket_to(9.996)).shape.internal_void_count(), 1);
+        // Exactly on the face, and 3 mm proud of it: correct open pockets.
+        assert_eq!(plate.subtract(&pocket_to(10.0)).shape.internal_void_count(), 0);
+        assert_eq!(plate.subtract(&pocket_to(13.0)).shape.internal_void_count(), 0);
+        // A blind pocket short of the *far* face is an ordinary feature.
+        assert_eq!(
+            plate
+                .subtract(&AdHocShape::make_box_point_point(
+                    DVec3::new(-15.0, -10.0, 6.0),
+                    DVec3::new(15.0, 10.0, 13.0),
+                ).0)
+                .shape
+                .internal_void_count(),
+            0
+        );
+    }
+
+    #[test]
+    fn a_cut_that_seals_a_void_is_refused_with_the_overshoot_rule() {
+        let doc: Doc = serde_json::from_str(
+            r#"{
+                "root": 2,
+                "nodes": [
+                    { "op": "cuboid", "size": { "x": 60, "y": 40, "z": 20 } },
+                    { "op": "cuboid", "size": { "x": 30, "y": 20, "z": 3.996 } },
+                    { "op": "difference", "base": 0, "tools": [3], "blend": 0.0 },
+                    { "op": "translate", "child": 1, "by": { "x": 0, "y": 0, "z": 7.998 } }
+                ]
+            }"#,
+        )
+        .unwrap();
+
+        let err = match build(&doc) {
+            Ok(_) => panic!("a cut that seals a void must refuse, not build"),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            err.contains("sealed 1 closed void(s)") && err.contains("holeFor"),
+            "the refusal must name the void and the overshoot fix, got: {err}"
+        );
     }
 
     #[test]
