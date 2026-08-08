@@ -1,0 +1,92 @@
+# What this checkout's field harness is pointed at. Copy it, change these few
+# things, and nothing else in field/ needs to know which project it is running
+# in. Paths are relative to this file. `${VAR}` and `${VAR:-default}` are
+# expanded from the environment.
+#
+# field/README.md explains what the harness measures and how to write a case.
+
+# The MCP server's name in the generated client config. It is also the prefix
+# the model sees: tools arrive as `mcp__parcad__probe_part`.
+server = "parcad"
+
+url    = "http://127.0.0.1:${PARCAD_HTTP_PORT:-4242}/mcp"
+
+# Curled before a round starts, only to see something is listening. parcad's app
+# serves its UI at the origin, so that is the cheapest thing to ask for.
+health = "http://127.0.0.1:${PARCAD_HTTP_PORT:-4242}/"
+
+# A directory of `<case>.md` files. README.md in it is skipped.
+cases  = "../eval/field"
+
+# Printed when nothing is listening. "Error messages name the fix" is a rule in
+# CLAUDE.md, and a harness that only says the server is down is half-built.
+hint = '''
+  cargo build -p parcad-app --bin parcad-app
+  PARCAD_OCCT_WORKER=$PWD/target/release/parcad-occt-worker ./target/debug/parcad-app &
+'''
+
+# **The whole agent-facing surface, and it must name all of it.** This one list
+# is both the runner's allow list and the scorer's idea of what a legitimate
+# call looks like. A tool missing here does not fail — it is invisible to the
+# model, and its case reads as a model that chose not to call it.
+# `save_project` and `export_part` sat outside it from the beginning, which is
+# exactly why nothing had ever measured whether a model can put its work where
+# the user will find it.
+tools = [
+  "read_docs",
+  "list_projects", "read_project", "save_project", "evaluate_part",
+  "probe_part", "measure_wall_thickness", "list_entities",
+  "inspect_treatment_target", "check_selector", "export_part",
+  "probe_step_export",
+  # The live-session surface. A session prompt is *supposed* to reach these;
+  # counting them as strays voided the first change-the-open-part trial.
+  "get_session", "open_project", "set_script",
+]
+
+# Arguments `--show` elides. A parcad script is a whole part and drowns every
+# other knob in the transcript; the question there is always which tool.
+bulky_args = ["script"]
+
+# What "the model quoted something a tool measured" looks like in this domain.
+# Only consulted for a case whose rubric has no `quote:` — see field/README.md,
+# "The quote column". Each rule may have:
+#
+#   blob    a regex the joined tool *results* must match, as a precondition
+#   capture regexes run over those results; each captured value is substituted
+#           for `{}` in `final`, and the rule fires if any of them lands
+#   final   a regex the model's answer must match
+#   flags   "i" for case-insensitive matching of `final`
+#
+# Drop the whole section for a server whose cases all carry an explicit `quote`.
+
+[[reads]]
+name = "tag"
+capture = ['\\"surface_of\\":\s*\\"(\w+)\\"', '\\"tag\\":\s*\\"(\w+)\\"']
+final = '\b{}\b'
+
+[[reads]]
+name = "mm"
+capture = ['\\"(?:first_solid|solid|distance|thickness)_mm\\":\s*(\d+)']
+final = '\b{}(?:\.\d+)?\s*mm'
+
+[[reads]]
+name = "medium"
+final = '\bmaterial\b|\bvoid\b'
+
+# Whether the answer carries the omission forward. For a thickness this is not a
+# nicety: a dropped fillet makes the reported minimum an *upper* bound, so a
+# reply that repeats the number without the caveat is confidently optimistic.
+[[reads]]
+name = "caveat"
+blob = 'caveat'
+final = 'fillet|chamfer|upper bound|omitted'
+flags = "i"
+
+# A section that opened nothing is a picture of an uncut part, and a reply that
+# talks about the inside on the strength of one has not looked at anything. Both
+# halves are required: a cut that hit material, and an answer that says it cut.
+[[reads]]
+name = "cut"
+blob = '\\"cut_fraction\\":\s*0\.0*[1-9]'
+final = 'section|cut (face|plane|away)|sectioned'
+flags = "i"
