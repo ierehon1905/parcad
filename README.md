@@ -1,7 +1,6 @@
 # parcad
 
-Parametric CAD you write as code, for people and for agents. The model is a
-document of intent — not a pile of geometry.
+Parametric CAD you write as code — for people, and for agents.
 
 ![A bracket built by the script below, in the parcad viewport](docs/images/bracket.jpg)
 
@@ -19,31 +18,27 @@ return drilled
 ```
 
 You never name an edge by index. You describe it — *the circular rims that open
-onto the top face* — and the same description keeps working after you move a
-hole or add another one.
+onto the top face* — and the description still works after you move a hole.
 
 ## Two kernels, one model
 
-A script builds a small JSON graph. Two independent kernels read it: an
-implicit one (signed distance fields, instant, answers "how much material is
-at this point?") and an exact one (OpenCASCADE — real faces, edges and STEP
-export). Neither is a fallback for the other, and the graph is what keeps a
-script written today working after a kernel swap tomorrow.
+Your script builds a small JSON graph, and two kernels read it: an implicit one
+(signed distance fields, instant) and an exact one (OpenCASCADE — real faces,
+edges, STEP export). Neither is a fallback for the other, and the graph is what
+keeps today's script working after tomorrow's kernel swap.
 
 ![The same manifold block cut open on a plane, cut faces in orange](docs/images/manifold-section.jpg)
 
-Parts get measured, not assumed: volume, wall thickness, whether two bores
-actually meet. That is also what an agent gets — over MCP, from the running
-app, with no screen to look at.
+Parts get measured, not assumed — volume, wall thickness, whether two bores
+actually meet. An agent gets the same numbers over MCP, with no screen to look at.
 
-## Build and run
+## Run it
 
-Needs [Rust](https://rustup.rs/) (the toolchain is pinned), [Bun](https://bun.sh/),
-CMake and a C++ compiler.
+You'll need [Rust](https://rustup.rs/), [Bun](https://bun.sh/), CMake and a C++ compiler.
 
 ```bash
-cargo build --locked --release      # kernel, CLI, app host
-tools/build-worker.sh               # the exact kernel — ~10 min the first time
+cargo build --locked --release
+tools/build-worker.sh     # the exact kernel — about 10 minutes, once
 cd app && bun install --frozen-lockfile && bun run tauri dev
 ```
 
@@ -54,26 +49,21 @@ bun tools/run.ts examples/bracket.js > /tmp/bracket.json
 ./target/release/parcad /tmp/bracket.json --out out --brep --step out/part.step
 ```
 
-The running app also serves its UI and an MCP endpoint on
-<http://127.0.0.1:4242>. Parts live in `~/Documents/parcad` as plain `.js`
-files you can edit anywhere.
+The app serves its UI and an MCP endpoint on <http://127.0.0.1:4242>. Parts live
+in `~/Documents/parcad` as plain `.js` files you can edit anywhere.
 
 ```bash
 claude mcp add --transport http parcad http://127.0.0.1:4242/mcp
 ```
 
-The first tool to call is `read_docs`, which is the whole language and the same
-notes on what the kernel refuses that this repository keeps in `docs/`. If the
-server sits at `⏸ Pending approval` and no trust dialog ever appears, that is a
-workspace inheriting trust from its parent rather than anything to do with
-parcad — docs/GOTCHAS.md has the fix.
+Start with the `read_docs` tool — it hands over the whole language in one call.
 
 ## More
 
-- [examples/](examples/) — nineteen real parts, from a bracket to a hydraulic manifold
+- [examples/](examples/) — twenty-one parts, from a bracket to a hydraulic manifold
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pieces fit, and why
 - [docs/GOTCHAS.md](docs/GOTCHAS.md) — traps that have already cost a day each
-- [docs/ROADMAP.md](docs/ROADMAP.md) — what is missing
+- [docs/NEXT.md](docs/NEXT.md) — what's missing, in order
 
 MIT or Apache-2.0, except `vendor/opencascade`, which is LGPL-2.1.
 See [NOTICE.md](NOTICE.md).
