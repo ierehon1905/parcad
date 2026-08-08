@@ -225,7 +225,9 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | the evaluation cycle, saving, the live session | `app/src/engine.ts` — machinery, not components |
 | what the whole window shares | `app/src/state.ts` — signals; nothing there derives a measurement |
 | the icon for an operation | `app/src/ui/icons.tsx` — one drawing per name, one frame for all of them |
-| the operation palette, and what pressing one writes | `app/src/ui/op-palette.tsx` |
+| which ops the palette offers, and their signatures | `app/src/ops.ts` |
+| what pressing one writes, and where the caret lands | `app/src/snippet.ts` |
+| how the palette is drawn | `app/src/ui/op-palette.tsx` |
 | the kernel and section controls | `app/src/ui/view-tools.tsx` — on the viewport, not the titlebar |
 | any control's tooltip | `tip()` from `app/src/ui/tooltip.tsx`, spread onto the element |
 | how it looks | `app/src/viewport.ts`, `app/src/outline.ts` |
