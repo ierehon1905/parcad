@@ -521,7 +521,7 @@ mod tests {
         let shape = JitShape::from(tree);
         let mut eval = JitShape::new_point_eval();
         let tape = shape.ez_point_tape();
-        let got = eval.eval(&tape, 10.0, 0.0, 0.0).unwrap().0;
+        let got = eval.eval(&tape, 10.0_f32, 0.0, 0.0).unwrap().0;
         assert!((got - 2.8735).abs() < 1e-3, "jit {got}");
     }
 
@@ -553,22 +553,84 @@ mod tests {
         }
     }
 
+    /// Pinned, not fixed: docs/GOTCHAS.md, "A clamped primitive has no gradient
+    /// inside itself".
     #[test]
-    fn cuboid_gradient_on_a_face() {
+    fn cuboid_gradient_is_nan_inside_the_solid() {
         use fidget::{jit::JitShape, types::Grad};
         let shape = JitShape::from(cuboid(V3::new(20.0, 20.0, 20.0)));
         let mut eval = JitShape::new_grad_slice_eval();
         let tape = shape.ez_grad_slice_tape();
-        let g = eval
-            .eval(
-                &tape,
-                &[Grad::new(10.0, 1.0, 0.0, 0.0)],
-                &[Grad::new(0.0, 0.0, 1.0, 0.0)],
-                &[Grad::new(0.0, 0.0, 0.0, 1.0)],
-            )
-            .unwrap()
-            .to_vec();
-        println!("cuboid face gradient: {:?}", g[0]);
+        let mut got = Vec::new();
+        for (x, y, z) in [(10.0f32, 0.0f32, 0.0f32), (9.9, 2.0, 2.0), (10.1, 2.0, 2.0)] {
+            let g = eval
+                .eval(
+                    &tape,
+                    &[Grad::new(x, 1.0, 0.0, 0.0)],
+                    &[Grad::new(y, 0.0, 1.0, 0.0)],
+                    &[Grad::new(z, 0.0, 0.0, 1.0)],
+                )
+                .unwrap()
+                .to_vec();
+            got.push(g[0]);
+        }
+        assert!(
+            got[0].dx.is_nan() && got[1].dx.is_nan(),
+            "the interior gradient became finite — if that is the fix, delete this \
+             test and the fallback it justifies. {:?} {:?}",
+            got[0],
+            got[1]
+        );
+        assert_eq!(
+            (got[2].dx, got[2].dy, got[2].dz),
+            (1.0, 0.0, 0.0),
+            "outside the face the gradient is the outward normal"
+        );
+    }
+
+    /// What the NaN above costs in real output, which is what makes it a pin
+    /// rather than a bug.
+    #[test]
+    fn a_box_is_shaded_by_its_own_faces() {
+        use crate::measure::Aabb;
+        let tree = cuboid(V3::new(20.0, 20.0, 20.0));
+        let bounds = Aabb::from_center_half(V3::new(0.0, 0.0, 0.0), V3::new(15.0, 15.0, 15.0));
+        let tess = crate::mesh::tessellate(&tree, bounds, 5).unwrap();
+        let (positions, normals) = tess.faceted(&tree).unwrap();
+
+        // The fallback is [0, 0, 1], a legitimate top-face normal, so each one
+        // is checked against the wall its own vertex sits on.
+        let (mut wrong, mut checked) = (0, 0);
+        for (p, n) in positions.iter().zip(&normals) {
+            let axis = (0..3)
+                .max_by(|&a, &b| p[a].abs().total_cmp(&p[b].abs()))
+                .unwrap();
+            // An edge or corner vertex has two or three walls and `faceted`
+            // picks one on purpose; only mid-wall vertices have one right answer.
+            let ambiguous = (0..3)
+                .any(|a| a != axis && (p[a].abs() - p[axis].abs()).abs() < 0.5);
+            if ambiguous {
+                continue;
+            }
+            checked += 1;
+            let expected = p[axis].signum();
+            if (n[axis] - expected).abs() > 1e-3 {
+                wrong += 1;
+            }
+        }
+        // Guard against the filter above quietly emptying the test.
+        assert!(
+            checked > normals.len() / 2,
+            "only {checked} of {} normals were on an unambiguous wall",
+            normals.len()
+        );
+        assert_eq!(
+            wrong,
+            0,
+            "{wrong} of {} shading normals do not face the wall their vertex is \
+             on; the interior NaN is reaching real output, not just the probe above",
+            normals.len()
+        );
     }
 
     /// Pins the one place the field is not exact, so that a later change to

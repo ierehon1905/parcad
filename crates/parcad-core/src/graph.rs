@@ -255,9 +255,6 @@ impl V3 {
         (self.x * self.x + self.y * self.y + self.z * self.z).sqrt()
     }
 
-    pub fn max_component(self) -> f64 {
-        self.x.max(self.y).max(self.z)
-    }
 }
 
 impl From<V3> for nalgebra::Vector3<f64> {

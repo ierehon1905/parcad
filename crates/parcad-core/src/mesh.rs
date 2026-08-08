@@ -116,63 +116,14 @@ impl Tessellation {
 
     /// Per-vertex normals taken from the distance field's gradient.
     ///
-    /// Not the usual trick of averaging adjacent triangle normals. The field
-    /// knows the true surface direction at every point, so these are the *exact*
-    /// normals of the shape rather than of its faceted approximation — a coarse
-    /// cylinder still shades as a smooth cylinder. It also keeps genuinely sharp
-    /// edges sharp, because the gradient really does turn a corner there, which
-    /// is precisely where averaged normals smear.
-    pub fn exact_normals(&self, tree: &Tree) -> Result<Vec<[f32; 3]>> {
-        use fidget::shape::EzShape;
-
-        let shape = JitShape::from(tree.clone());
-        let mut eval = JitShape::new_grad_slice_eval();
-        let tape = shape.ez_grad_slice_tape();
-
-        // Forward-mode differentiation: seed each axis with a unit derivative
-        // with respect to itself, and the result carries ∂f/∂x, ∂f/∂y, ∂f/∂z.
-        use fidget::types::Grad;
-        let xs: Vec<Grad> = self
-            .vertices
-            .iter()
-            .map(|v| Grad::new(v[0], 1.0, 0.0, 0.0))
-            .collect();
-        let ys: Vec<Grad> = self
-            .vertices
-            .iter()
-            .map(|v| Grad::new(v[1], 0.0, 1.0, 0.0))
-            .collect();
-        let zs: Vec<Grad> = self
-            .vertices
-            .iter()
-            .map(|v| Grad::new(v[2], 0.0, 0.0, 1.0))
-            .collect();
-
-        let grads = eval.eval(&tape, &xs, &ys, &zs)?;
-
-        Ok(grads
-            .iter()
-            .map(|g| {
-                let len = (g.dx * g.dx + g.dy * g.dy + g.dz * g.dz).sqrt();
-                if len > 1e-9 {
-                    [g.dx / len, g.dy / len, g.dz / len]
-                } else {
-                    // A vanishing gradient means a point equidistant from two
-                    // surfaces; any direction is as wrong as any other.
-                    [0.0, 0.0, 1.0]
-                }
-            })
-            .collect())
-    }
-
     /// Expanded triangles with per-corner normals sampled just off any crease.
     ///
-    /// [`exact_normals`](Self::exact_normals) is exact on faces and *ambiguous on
-    /// edges*, which is the one place it matters. Dual contouring puts vertices
-    /// right on a crease, and a point on a crease has no single normal — it
-    /// belongs to two faces at once, so the gradient returns whichever branch
-    /// `min`/`max` happened to select. The result is a one-cell band of garbage
-    /// normals tracing every sharp edge in the model.
+    /// Reading the gradient at each vertex directly is exact on faces and
+    /// *ambiguous on edges*, which is the one place it matters. Dual contouring
+    /// puts vertices right on a crease, and a point on a crease has no single
+    /// normal — it belongs to two faces at once, so the gradient returns
+    /// whichever branch `min`/`max` happened to select. The result is a one-cell
+    /// band of garbage normals tracing every sharp edge in the model.
     ///
     /// The fix is to stop asking about the crease. Each triangle asks about its
     /// own corners nudged toward its centroid, which lands the sample on the face

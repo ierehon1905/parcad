@@ -431,12 +431,14 @@ export function OpPalette() {
     const escape = (event: KeyboardEvent) => {
       if (event.key === "Escape") open.value = undefined;
     };
+    const resize = () => (open.value = undefined);
     document.addEventListener("pointerdown", down, true);
     document.addEventListener("keydown", escape);
-    window.addEventListener("resize", () => (open.value = undefined));
+    window.addEventListener("resize", resize);
     return () => {
       document.removeEventListener("pointerdown", down, true);
       document.removeEventListener("keydown", escape);
+      window.removeEventListener("resize", resize);
     };
   }, []);
 

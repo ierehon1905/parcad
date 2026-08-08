@@ -25,15 +25,9 @@ pub struct Request {
     /// finished part. Used by the editor's source-to-viewport target preview.
     #[serde(default)]
     pub inspect_target: Option<usize>,
-    /// Tessellation tolerance in mm: the furthest a triangle may sit from the
-    /// true surface. Unlike the implicit backend's grid resolution, this is a
-    /// real error bound, because the true surface is known exactly.
-    ///
-    /// Currently advisory. The `opencascade` bindings hard-code 0.01 mm in
-    /// `Mesher::new` and keep the underlying shape handle private, so there is
-    /// no way to pass this through without going to `opencascade-sys` directly.
-    /// The field stays because the request format should not have to change
-    /// when that is fixed.
+    /// Tessellation tolerance in mm. Advisory: `Mesher::new` hard-codes 0.01 mm
+    /// and the worker reports what it used as `deflection_mm`. The field stays
+    /// so the request format need not change when the binding is widened.
     pub deflection: f64,
     pub step_path: Option<PathBuf>,
     pub stl_path: Option<PathBuf>,

@@ -315,10 +315,6 @@ export interface Session {
   origin: string;
 }
 
-export function getSession(): Promise<Session> {
-  return inTauri ? invoke<Session>("get_session") : get<Session>("session");
-}
-
 /**
  * Tell the host what this window is showing. Called on the evaluation
  * debounce, so `get_session` answers with what the user actually typed rather

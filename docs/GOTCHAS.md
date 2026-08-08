@@ -519,6 +519,30 @@ A countersink rim is an inner boundary of the top face by any reading, and
 instead. Related to the D-bore case in docs/DSL_GAPS.md §6: the term matches a
 narrower thing than its name suggests.
 
+### A clamped primitive has no gradient inside itself
+
+`cuboid` is the standard exact form: `length3` of the three clamped-positive
+terms, plus the negative interior term. Inside the solid all three clamp to
+zero, so the exterior half is `sqrt(0)` — and the derivative of `sqrt` at zero
+is a division by zero. The gradient is **NaN throughout the interior**, not
+merely undefined on the surface. `cylinder` is built the same way and has it
+too.
+
+It is pinned rather than fixed because it is measured not to reach output.
+Both consumers of the gradient normalise behind `len > 1e-9`, which NaN fails,
+so a NaN becomes the `[0, 0, 1]` fallback instead of a NaN normal; and
+`faceted` samples off the crease toward each triangle's own centroid, which
+lands outside the solid. `a_box_is_shaded_by_its_own_faces` measures the cost
+on a real mesh — 0 of 1152 shading normals wrong, checking the 576+ that sit
+unambiguously mid-wall.
+
+The trap is that the weak version of that test passes while proving nothing:
+`[0, 0, 1]` *is* a legitimate top-face normal, so counting axis-aligned normals
+finds no fault however broken the shading is. It has to be checked against the
+wall each vertex is actually on. Fixing the NaN means an epsilon under the
+`sqrt`, which moves the zero level set everywhere — a deliberate change to make
+against `eval/cases/`, not a drive-by.
+
 ### `.at(x, y, h)` vs `.at(x, y, h - wall)`
 
 A latent bug in `examples.ts`: placing a lid at `h` instead of `h - wall` sealed

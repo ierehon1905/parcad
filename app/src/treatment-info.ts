@@ -54,8 +54,6 @@ export interface SourceEdit {
   insert: string;
 }
 
-const METHOD = { fillet: "fillet", chamfer: "chamfer" } as const;
-
 /** How the selector was authored, as source text. */
 export function selectorText(node: TreatmentNode): string | undefined {
   const selector = node.vertices ?? node.selector;
@@ -134,7 +132,7 @@ export function treatmentRows(
 
 /** The heading, e.g. `.fillet` — the authored method, not the graph op. */
 export function treatmentTitle(node: TreatmentNode, method?: string): string {
-  return `.${method ?? METHOD[node.op as keyof typeof METHOD] ?? node.op}`;
+  return `.${method ?? node.op}`;
 }
 
 /**

@@ -107,8 +107,6 @@ export class Viewport {
   private readonly sun: THREE.DirectionalLight;
   private ambient!: THREE.HemisphereLight;
   private outline!: OutlineRenderer;
-  /** @internal exposed for debugging */
-  readonly debugScene = () => this.scene;
   private grid?: THREE.GridHelper;
   private ground?: THREE.Mesh;
   private frame = 0;

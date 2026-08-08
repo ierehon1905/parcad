@@ -1459,27 +1459,6 @@ mod tests {
             }
 
             let overlap = both as f64 / either.max(1) as f64;
-            {
-                let mut a_only=0; let mut b_only=0; let mut ca=0; let mut cb=0;
-                for y in 0..opts.size { for x in 0..opts.size {
-                    let a = marched.image[(y as usize, x as usize)].depth > 0;
-                    let b = rastered.image[(y as usize, x as usize)].depth > 0;
-                    if a && !b { a_only+=1 } if b && !a { b_only+=1 }
-                    ca += usize::from(marched.is_cut(x,y)); cb += usize::from(rastered.is_cut(x,y));
-                }}
-                eprintln!("{}: marched_only {a_only} rastered_only {b_only} cut m {ca} r {cb} plane {:?}", view.name(), marched.cut_plane);
-                if view.name() == "iso" {
-                    for y in (0..opts.size).step_by(4) {
-                        let mut row = String::new();
-                        for x in (0..opts.size).step_by(2) {
-                            let a = marched.image[(y as usize, x as usize)].depth > 0;
-                            let b = rastered.image[(y as usize, x as usize)].depth > 0;
-                            row.push(match (a,b) { (true,true) => '#', (false,true) => 'R', (true,false) => 'M', _ => '.' });
-                        }
-                        eprintln!("{row}");
-                    }
-                }
-            }
             assert!(
                 overlap > 0.97,
                 "the {} view covers different pixels in the two renderers \
