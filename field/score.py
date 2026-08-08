@@ -6,33 +6,10 @@
     field/score.py --show RUNDIR/trial1.jsonl    # one transcript, as prose
     field/score.py --verdict MEET trial*.jsonl   # ad hoc, no rubric
 
-**The verdict is the least interesting column.** What decides whether an
-agent-facing tool works is what stands beside it: `reach` — did the model get to
-the tool the case exists to test — and `quoted` — did a value that tool returned
-survive into the answer. A trial that gets the right verdict without either is a
-trial that guessed, and there is one of those on record, quoting the part's own
-source comment as its evidence.
-
-So a trial is graded, not passed or failed:
-
-    SOUND  right answer, reached every tool the case requires, no sign it was
-           read off the source. The only outcome that is evidence.
-    LUCKY  right answer, wrong route — a required tool was never called, or the
-           reply cites the source. Scored apart from SOUND because counting the
-           two together is how a suite comes to measure the wrong thing.
-    WRONG  the verdict is absent or negated.
-    VOID   the trial is not evidence either way: it strayed to a tool outside
-           the surface under test, it never produced a final answer, or the
-           transport failed under it. Never counted as failure — and never as
-           success either, which is the point: a trial whose server went away
-           mid-run is voided whether its answer was right or wrong, because we
-           cannot say what it would have done. A server *refusing* something is
-           not a transport error and does not void anything; a case may exist
-           to provoke refusals.
-
-Read the transcript when a number here surprises you. This tells you which one
-to open, and nothing more: the failures worth finding have all been in the
-prose, and none of them would survive being turned into a regex.
+SOUND is a right answer by the route the case requires, LUCKY is a right answer
+without it, WRONG is neither, and VOID is a trial that is not evidence either
+way. field/README.md, "a trial is graded, not passed", is the argument; this
+only tells you which transcript to open.
 """
 import argparse
 import collections
@@ -45,30 +22,16 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import config
 
 
-# A trial can die on the shared account limit mid-measurement, or on the server
-# going away under it. It then scores as "reached the tool, quoted nothing",
-# which reads exactly like a model that measured and ignored what it got — and
-# in the worst case it answers *anyway*, from whatever it had, which reads like
-# an ordinary wrong answer. Both are void, not negative.
-#
-# The second one is not hypothetical: a round lost a trial to the server being
-# killed by another process mid-measurement, and it produced a fluent, confident
-# wrong verdict off four stale probes with "the app isn't responding" as its
-# first sentence. Nothing but this pattern and the error count told it apart
-# from a model that reasoned badly.
+# A trial that lost its account or its server answers anyway, fluently, and
+# reads like an ordinary wrong answer. Both are void, not negative.
 DEAD = re.compile(r"usage limit|rate.?limit|credit balance|API Error|"
                   r"exceeded your|Execution error|transport dropped|"
                   r"(is|are)n.t responding|unable to connect|connection refused", re.I)
 
 
-# A verdict derived from the source rather than from a measurement is the
-# failure this whole harness exists to catch, so it gets its own flag rather
-# than being buried in the transcript.
-#
 # The negative form has to be excluded or the flag is useless: a careful reply
-# says "these are measured values, **not derived from the script's variables**",
-# and a bare search for "the script" scores that as cheating. Every trial that
-# actually cheated said it plainly and in the affirmative.
+# says "measured, **not derived from the script's variables**", and every trial
+# that actually cheated said so plainly and in the affirmative.
 CITES = re.compile(r"the script|the source|comment says|source comment|"
                    r"= \d+ [-+] \d+", re.I)
 DISCLAIMS = re.compile(r"\b(not|never|rather than|instead of|without|nor)\b"
@@ -89,9 +52,7 @@ def rubric(path):
     body = text.split("\n---", 1)[0][3:]
     out, key = {}, None
     for line in body.splitlines():
-        # `key: |` opens a block, and every indented line under it belongs to
-        # the key. `why` is usually a paragraph and a rubric that forces it onto
-        # one line is a rubric people stop writing.
+        # `key: |` opens a block; every indented line under it belongs to the key.
         if line.startswith((" ", "\t")) and key:
             out[key] = (out[key] + " " + line.strip()).strip()
         elif ":" in line:
@@ -120,15 +81,7 @@ def listed(rub, key):
 
 
 def routed(row, rub):
-    """Did the trial take the route the case requires?
-
-    Three questions, and a case may ask any of them: which tools were called
-    (`reach`), which arguments were passed at all (`arg`), and what was *in*
-    one (`input`). The third exists because an authoring case's route is the
-    artefact the model wrote, and that is an argument — no tool name and no
-    sentence in the reply can show whether the model reached for the operation
-    the case is about or wrote it out by hand.
-    """
+    """Did the trial take the route the case requires — `reach`, `arg`, `input`?"""
     if not all(t in row["calls"] for t in listed(rub, "reach")):
         return False
     if not all(row["args"].get(a) for a in listed(rub, "arg")):
@@ -137,14 +90,7 @@ def routed(row, rub):
 
 
 def reads_of(rules, blob, final):
-    """Which of the project's "it quoted a measurement" rules fired.
-
-    Each rule is a `[[reads]]` table in field.toml; the shape is documented
-    there. `capture` is what makes this more than a keyword search — the value
-    is pulled out of *this trial's own* tool results and then looked for in the
-    answer, so the rule is answered against what the tool actually returned
-    rather than against a guess at what it would be.
-    """
+    """Which `[[reads]]` rules from field.toml fired — see the shape there."""
     out = []
     for rule in rules:
         flags = re.I if "i" in rule.get("flags", "") else 0
@@ -165,18 +111,10 @@ def reads_of(rules, blob, final):
 
 def summarise(path, cfg):
     calls, final, think, results, errors = [], "", 0, [], []
-    # Whether the CLI ever wrote its closing `result` line. Absent means the
-    # trial is still running or was killed — which is not the same as a trial
-    # that answered nothing, and grading the two alike once cost this suite an
-    # hour of believing a finished case had failed.
+    # No closing `result` line means killed or still running, which grades OPEN
+    # rather than WRONG: a trial that answered nothing is a different fact.
     finished = False
-    # Tool *inputs*, not just names: whether a render was cut open is an
-    # argument, and from the outside a sectioned render and a plain one are the
-    # same call. A case names the arguments its question cannot be answered
-    # without, in the rubric's `arg`.
     args = collections.Counter()
-    # And the inputs themselves, for the cases whose route is what an argument
-    # says rather than which tool carried it.
     inputs = []
     for m in load(path):
         if m.get("type") == "assistant":
@@ -202,31 +140,20 @@ def summarise(path, cfg):
     return {
         "name": pathlib.Path(path).stem,
         "think": think,
-        # Tool calls that came back as errors. One is a model trying something
-        # the server refuses, which is the point of a refusal case. Several,
-        # or any that names the transport, is the harness failing rather than
-        # the model, and the trial is void.
+        # One error is a refusal, which a case may exist to provoke; several, or
+        # any naming the transport, is the harness failing rather than the model.
         "errors": errors,
         "finished": finished,
         "calls": calls,
         "args": args,
         "inputs": " ".join(inputs),
         "n": len(calls),
-        # Values the tools actually handed back are in `blob`, so "did it read
-        # one" is answered against this trial's own measurements.
         "reads": ",".join(reads_of(cfg["reads"], " ".join(results), final)) or "-",
-        # Tool calls that are neither the server's nor the search that loads
-        # them. A trial that reaches for a shell or an editor has stopped
-        # answering the question — one round lost half its trials to exactly
-        # that, each of them trying to fix the host repository's compiler
-        # warnings — and the run summary said nothing. A strayed trial is not
-        # evidence; it is a transcript to read and a deny list to widen.
+        # Anything that is neither the server's nor the search that loads it: a
+        # trial that went somewhere else stopped answering the question.
         "stray": sorted({c for c in calls
                          if c != "ToolSearch" and not c.startswith(cfg["prefix"])
                          and c not in cfg["tools"]}),
-        # A verdict derived from the source rather than from the thing itself is
-        # the failure this whole harness exists to catch, so it gets its own
-        # flag rather than being buried in the transcript.
         "derived": derived(final),
         "final": final,
     }
@@ -235,29 +162,15 @@ def summarise(path, cfg):
 def hit(pattern, text):
     """Did the reply commit to this verdict, unnegated?
 
-    Two ways a loose test scores a failure as a pass, both seen here. The
-    negated verdict contains the verdict — "DO NOT MEET" ends in "MEET" — so
-    take the *last* mention and require no negation in front of it. And a
-    verdict is often an ordinary English word: a trial that answered FLAT FLOOR
-    once scored OK on OPEN off the sentence "the port cavities don't open
-    directly into the gallery". Every case should ask for its verdict in a fixed
-    form at the end, so only the tail is searched.
-
-    **A verdict must be the claim stated positively**, because the negation is
-    this function's job. `verdict: no` cannot work: it would be read as the word
-    "no" appearing un-negated, so every correct trial would grade WRONG and the
-    case would look like a broken tool. A case whose right answer is a refusal
-    needs a word a right answer *asserts* — coin one, as the fillet-boundary
-    case coins CLEAR and FOULED for exactly this reason.
+    "DO NOT MEET" ends in "MEET", so take the last mention and require no
+    negation in front of it — which is why a rubric's verdict must be the claim
+    stated positively. README.md, "State the verdict positively".
     """
     if not pattern:
         return None
     tail = text[-700:]
-    # A bad pattern is a bug in one case's rubric, and it used to take the whole
-    # suite's table down with a traceback forty frames deep — after the trials
-    # had been paid for. Name the offending pattern instead. Inline flags are
-    # how it happens: `(?i)` is legal on its own and illegal once wrapped here,
-    # so it looks fine in the case file until the scorer runs.
+    # A bad rubric pattern used to take the whole table down with a traceback,
+    # after the trials had been paid for. Name the pattern instead.
     try:
         wrapped = re.compile(rf"((?i:do(?:es)? not |don't |no |not |cannot ))?(?:{pattern})")
     except re.error as e:
@@ -325,9 +238,6 @@ def bar(c, n):
 def suite(root, cfg):
     """RUNDIR/<case>/<arm>/trial*.jsonl, plus RUNDIR/<case>/case.md."""
     cases = sorted(p for p in pathlib.Path(root).iterdir() if p.is_dir())
-    # `trials` is one letter per trial in grade order — SOUND, LUCKY, WRONG,
-    # VOID, OPEN — so a case's *distribution* is legible at a glance and 2/3 is
-    # visibly not 3/3. That is the whole reason trials are repeated.
     print(f'{"case":28} {"tests":22} {"arm":6} {"n":>2} {"SLWVO":>7} '
           f'{"sound":>6} {"reach":>6} {"quote":>6} {"trap":>4}')
     per_tool = collections.defaultdict(lambda: [0, 0])   # tool -> [sound, trials]
@@ -336,11 +246,8 @@ def suite(root, cfg):
     for case in cases:
         rub = rubric(case / "case.md") if (case / "case.md").exists() else {}
         facet = rub.get("tool", "?")
-        # A case covers every tool it names, not only its headline one: one case
-        # here is the only thing that has ever exercised list_projects or
-        # export_part, and a coverage table that called those untested because
-        # they are not the case's *subject* would be lying in the one direction
-        # this table exists to prevent.
+        # Every tool a case names, not only its headline one, or the coverage
+        # table lies in the one direction it exists to prevent.
         covers = {facet.split(".")[0]} | {
             x.strip() for k in ("also", "reach")
             for x in rub.get(k, "").split(",") if x.strip()}
@@ -384,12 +291,7 @@ def suite(root, cfg):
 
 
 def show(path, cfg):
-    """One trial as prose: what it thought, what it called, what it answered.
-
-    Every instruction about field tests ends "read the transcript", and until
-    this existed that meant a jq incantation over stream-json. The rule survives
-    being made convenient.
-    """
+    """One trial as prose: what it thought, what it called, what it answered."""
     print(f'=== {path}')
     for m in load(path):
         if m.get("type") == "assistant":
@@ -400,8 +302,6 @@ def show(path, cfg):
                     print(f'  > {" ".join(c["text"].split())[:400]}')
                 elif c["type"] == "tool_use":
                     name = c["name"].replace(cfg["prefix"], "")
-                    # A whole authored artefact as an argument drowns everything
-                    # else; the question is always which tool and which knobs.
                     arg = {k: v for k, v in (c.get("input") or {}).items()
                            if k not in cfg.get("bulky_args", [])}
                     print(f'  CALL {name} {json.dumps(arg)[:300]}')

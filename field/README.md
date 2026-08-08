@@ -344,8 +344,11 @@ Every one of these was learned by writing a bad one.
 
 - **Ask for a verdict in one fixed form, at the end.** Scoring prose is
   hopeless, and a model that will not commit to an answer is itself a finding.
-  Ask for capitals: prose cannot reach a capitalised verdict by accident. The
-  scorer only searches the tail.
+  Ask for capitals: prose cannot reach a capitalised verdict by accident, and a
+  verdict that is an ordinary English word will otherwise be found in ordinary
+  English. A trial that answered FLAT FLOOR once scored a clean OPEN off the
+  sentence "the port cavities don't open directly into the gallery". The scorer
+  searches only the tail for that reason.
 
 - **State the verdict positively.** `verdict: no` cannot work — the scorer's job
   is detecting negation, so a bare "no" reads as an un-negated "no" and every
@@ -452,6 +455,13 @@ Neither produced a verdict and nothing in the summary said why.
 that cannot search cannot reach your server at all. The `stray` column is the
 backstop: any *other* non-server tool call means the trial wandered off, and a
 wandered trial is not evidence about anything.
+
+That deferral has a failure of its own, seen about once per twenty trials and
+only in the non-reasoning arm: the model searches for a tool, is handed its
+schema, treats *loading* it as having *called* it, and searches again — 22 times
+in the worst case on record, before going looking for a shell. It never reached
+the server, so it is not evidence about the server. A trial with a high call
+count and nothing to show for it is that, caught early.
 
 ---
 

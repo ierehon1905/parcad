@@ -1,18 +1,9 @@
 #!/usr/bin/env python3
-"""Everything the harness knows about the server it is pointed at.
+"""`field.toml` resolved: as JSON, or `--shell` for the runners to eval.
 
-    field/config.py            # the resolved config, as JSON
-    field/config.py --shell    # the same, as shell assignments for `eval`
-
-One file reads `field.toml` so the runner and the scorer cannot disagree about
-which tools are on the surface. They did once, in this project: `probe_step_export`
-was on the runner's allow list and absent from the scorer's, so a trial that
-called it would have been graded a stray and voided, and the coverage table
-would never have named it. A tool list with two copies is a tool list with two
-answers.
-
-`FIELD_CONFIG` overrides which file is read, so one checkout can measure two
-servers without editing anything.
+The runner and the scorer read it through here so they cannot disagree about the
+surface — field/README.md, "The config", says what that cost when they did.
+`FIELD_CONFIG` selects a different file.
 """
 import json
 import os
@@ -28,9 +19,6 @@ except ModuleNotFoundError:                                   # Python < 3.11
 DEFAULT = pathlib.Path(__file__).resolve().parent / "field.toml"
 REQUIRED = ("server", "url", "cases", "tools")
 
-# `${VAR}` and `${VAR:-default}` inside a config string, expanded from the
-# environment, so a project can keep using the port knob it already has instead
-# of the harness inventing a second one.
 VAR = re.compile(r"\$\{(\w+)(?::-([^}]*))?\}")
 
 
@@ -51,13 +39,8 @@ def load(path=None):
                          f"see field/README.md, 'The config'.")
 
     cfg["url"] = expand(cfg["url"])
-    # What to curl to see the server is up. Defaults to the MCP endpoint, which
-    # is right for most servers; a project whose MCP path rejects a bare GET at
-    # the TCP level can name something else.
     cfg["health"] = expand(cfg.get("health") or cfg["url"])
-    # Paths in the config are relative to the config file, not to the caller's
-    # working directory, so `field/run-suite.sh` means the same thing from
-    # anywhere.
+    # Relative to the config file, so a run means the same thing from anywhere.
     cfg["cases"] = str((path.parent / expand(cfg["cases"])).resolve())
     cfg["prefix"] = f'mcp__{cfg["server"]}__'
     cfg["allow"] = ",".join(cfg["prefix"] + t for t in cfg["tools"])
