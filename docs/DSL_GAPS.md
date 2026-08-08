@@ -231,10 +231,10 @@ deciding deliberately — a bore wall genuinely is adjacent, so the current
 behaviour may be right and the documentation wrong. Either way `EdgeQuery`
 should say which.
 
-## 4. A blended union aborts the kernel instead of refusing
+## 4. A blended union that cannot build refuses with a measured radius *(was: aborts the kernel)*
 
-Three separate shapes crash OCCT with `SIGABRT` rather than returning a
-refusal, and all three were hit while modelling ordinary parts:
+Three separate shapes used to crash OCCT with `SIGABRT` rather than returning
+a refusal, and all three were hit while modelling ordinary parts:
 
 | shape | first seen | radius that fails |
 |---|---|---|
@@ -248,16 +248,23 @@ and branch different diameters. All three are also what the real part looks
 like, so the examples did not have to lie — but a part that *is* two coaxial
 cylinders has no such escape.
 
-This one matters beyond convenience. "Refuse rather than approximate" is the
-project's rule, and a crash is neither: `host.rs` catches it and reports an
-honest breadcrumb, but the message says "this is usually a dimension the
-operation cannot satisfy", which sends the reader looking for a radius problem
-that is not there.
+**What landed** (after a field session bisected radii by hand, three
+evaluations per number): the fillet boundary catches what OCCT raises
+(`ParcadEdgeTreatment::build` in the vendored wrapper), so these arrive as
+refusals; and the failure path probes below the failed radius — five bounded
+bisection attempts, each held to build + containment + validity — so the
+message names a radius *measured* to build, or says, measured, that none did.
+It also reads the seam: the coaxial hub refuses naming the tangent face-on
+contact and the overlap workaround, and the equal tee refuses naming the
+4-way seam junction at the saddle and 1.13 mm as the largest radius that
+built. `refuse-tangent-blend-union` and `refuse-unblendable-junction` pin
+both, and `refuse-oversized-fillet` pins the same contract on the treatment
+path (5 mm fails on the 10 mm cube; 4.85 mm is measured to build).
 
-**Fix:** pre-check blended unions for coincident-face contact and either offset
-the tool internally or `bail!` with the real reason. Failing that, extend the
-crash message: name coincident faces as a known cause and point at the
-overlap workaround.
+What stays open: the shapes themselves still refuse — a part that *is* two
+coaxial face-touching cylinders still needs the overlap — and a probe that
+segfaults or spins still ends as a crash or a timeout naming the probe, which
+is what the worker process and its deadline are for.
 
 ## 5. Four primitives go a long way — and where they stop (see §0)
 

@@ -36,6 +36,7 @@ pub(crate) mod ffi {
         fn parcad_chamfer_with_history(base: &TopoDS_Shape) -> UniquePtr<ParcadEdgeTreatment>;
         fn add(self: Pin<&mut ParcadEdgeTreatment>, distance: f64, edge: &TopoDS_Edge);
         fn build(self: Pin<&mut ParcadEdgeTreatment>) -> bool;
+        fn failure(self: &ParcadEdgeTreatment) -> String;
         fn result(self: Pin<&mut ParcadEdgeTreatment>) -> &TopoDS_Shape;
         fn generated(
             self: Pin<&mut ParcadEdgeTreatment>,

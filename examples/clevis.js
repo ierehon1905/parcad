@@ -27,7 +27,7 @@ const pinZ = crownT + armH - 9;
 
 // The shank hangs below the crown. It runs up past z = 0 so the crown has
 // something to sit *in* rather than *on*: a blended union of two solids that
-// only touch on a face aborts inside OCCT (docs/GOTCHAS.md).
+// only touch on a face cannot be blended (docs/GOTCHAS.md).
 const shank = cylinder(shankDia / 2, shankLen + 3).at(0, 0, (-shankLen + 3) / 2);
 
 // Spanner flats: a band of everything outside the hexagon, taken off the round

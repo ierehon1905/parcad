@@ -1,13 +1,14 @@
 {
   "name": "refuse-oversized-fillet",
   "script": "eval/scripts/refuse-oversized-fillet.js",
-  "why": "A radius the material cannot take. OCCT segfaults; the contract is that this arrives as a typed Crashed error carrying the breadcrumb of the operation that died, not as a lost session.",
+  "why": "A radius the material cannot take. The fillet boundary catches what OCCT raises, so this arrives as a typed refusal that names the largest radius measured to build — 4.85 mm, which does build when asked for — instead of a crashed worker. The crash supervision this case used to pin lives in host.rs's own test now.",
   "brep": {
     "refuses": {
-      "kind": "crashed",
+      "kind": "rejected",
       "message_contains": [
-        "fillet node",
-        "5 mm on 4 selected edge(s)"
+        "fillets 4 edge(s) by 5 mm",
+        "Largest radius measured to build",
+        "4.85"
       ]
     }
   }

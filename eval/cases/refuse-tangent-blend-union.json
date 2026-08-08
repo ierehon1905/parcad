@@ -1,0 +1,15 @@
+{
+  "name": "refuse-tangent-blend-union",
+  "script": "eval/scripts/refuse-tangent-blend-union.js",
+  "why": "The face-touching family from docs/DSL_GAPS.md §4, previously a SIGABRT the host could only breadcrumb. Caught at the boundary it is a refusal that names tangency as the cause and overlap as the fix, and reports that no smaller radius built — measured, so the message cannot send anyone hunting for a workable radius that does not exist. The tangency sentence keys on OCCT's own wording, so this also goes red if an upgrade rewords the raise and the detection silently stops firing.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "blends by 3 mm",
+        "no corner for a fillet to roll along",
+        "No radius built"
+      ]
+    }
+  }
+}

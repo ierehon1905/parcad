@@ -183,10 +183,12 @@ and tag regions are raymarched from a distance field, a B-rep has none, so
 
 `crates/parcad-occt/src/host.rs` is the reason this crate is split in half.
 
-OCCT signals failure by throwing `Standard_Failure`, which **does not derive
-from `std::exception`**. It escapes the `cxx` bridge's catch and calls
-`std::terminate`. It can also segfault on degenerate input and spin for minutes
-on a pathological fillet. `catch_unwind` helps with none of that.
+OCCT signals failure by throwing `Standard_Failure`. The fillet boundary now
+catches that in C++ — the vendored wrapper's `ParcadEdgeTreatment::build` —
+and returns the kernel's own words, which turned every known abort into a
+refusal. What no catch helps with: OCCT can also segfault on degenerate input
+and spin for minutes on a pathological fillet, and `catch_unwind` covers
+neither.
 
 So: the worker is a separate binary. Every outcome — including the ones OCCT
 expresses by killing the process — comes back as an `OcctError` variant:
@@ -231,9 +233,11 @@ only cuts. Neither can move a bounding-box extreme outward, whatever the shape
 or the selection, so the result must fit inside the solid it started from.
 Without this, `box(10,10,10).edges(">Z").fillet(8)` returned a 14.95 × 14.10 ×
 10.54 mm shape and no error — a radius that does not fit produces a wrong
-answer rather than a refusal. (At radius 5 the same call segfaults instead,
-which the host already turns into a breadcrumbed `Crashed`. Both outcomes are
-in the eval corpus, because they are different failures.)
+answer rather than a refusal. (At radius 5 the same call reports not-done,
+which the caught boundary turns into a refusal naming the largest radius that
+was measured to build. Both outcomes are in the eval corpus, because they are
+different failures; the crash supervision itself is pinned by a host test with
+a worker shim, since no known geometry kills the worker any more.)
 
 Two lowerings exist for the same reason:
 

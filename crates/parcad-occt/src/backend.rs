@@ -78,8 +78,9 @@ fn offset_slip(before: (DVec3, DVec3), after: (DVec3, DVec3), d: f64) -> f64 {
 /// Same argument as [`offset_slip`], applied to fillets and chamfers: OCCT will
 /// return a shape rather than an error for a radius the material cannot take,
 /// and the shape is wrong. Measured — `box(10,10,10).edges(">Z").fillet(8)`
-/// came back 14.95 x 14.10 x 10.54 mm. (At radius 5 the same call segfaults,
-/// which the host already handles; radius 8 is the silent case.)
+/// came back 14.95 x 14.10 x 10.54 mm. (At radius 5 the same call reports
+/// not-done, caught and refused with a measured radius; radius 8 is the
+/// silent case.)
 ///
 /// A fillet removes material at a convex edge and adds it inside a concavity.
 /// Neither moves a bounding-box extreme outward, whatever the shape or the
@@ -514,7 +515,7 @@ impl EdgeLineage {
 /// faces back together, and the arcs of a rim that a face split had chopped up
 /// with them: the bracket loses 16 edges, the timing pulley 280.
 ///
-/// Called *after* `fillet_new_edges`, never before. A blend fillets the edge
+/// Called *after* `blend_seam`, never before. A blend fillets the edge
 /// handles the boolean reported as new, and unifying first invalidates them.
 fn unified(mut shape: Shape) -> Shape {
     shape.clean();
@@ -620,6 +621,186 @@ fn check_blend(
         );
     }
     Ok(())
+}
+
+/// One treatment attempt, held to the standard a suggestion must meet: it
+/// builds, it stays inside the solid it started from, and OpenCASCADE's own
+/// checker accepts the result. Non-mutating, so a caller can probe several
+/// sizes against one input; the `Err` is the kernel's own words.
+fn attempt_treatment(
+    base: &Shape,
+    edges: &[Edge],
+    size: f64,
+    chamfer: bool,
+    before: (DVec3, DVec3),
+) -> Result<Shape, String> {
+    let candidate = if chamfer {
+        base.chamfered_edges(size, edges)?
+    } else {
+        base.filleted_edges(size, edges)?
+    };
+    let slip = growth_slip(before, bbox(&candidate));
+    if slip > SLIP_TOLERANCE_MM {
+        return Err(format!(
+            "the result reaches {slip:.2} mm outside the solid it started from"
+        ));
+    }
+    candidate
+        .check_validity(false)
+        .map_err(|report| format!("the checker rejects it: {} fault(s)", report.lines().count()))?;
+    Ok(candidate)
+}
+
+/// What a bounded search below a failed treatment size measured.
+struct ProbedRepair {
+    /// The largest size that actually built and passed [`attempt_treatment`]'s
+    /// checks. Never interpolated: this exact value was constructed.
+    built: Option<f64>,
+    /// The smallest size measured to fail — the failed request, or a probe.
+    ceiling: f64,
+    /// How far down the probes reached.
+    floor: f64,
+    tried: usize,
+}
+
+/// Bisect below a failed fillet or chamfer size for the largest one that
+/// builds, so the refusal can name a value instead of leaving the caller to
+/// rediscover it by whole evaluations. Runs only on the failure path, which
+/// has already cost more than these probes will; five probes bound it, and the
+/// worker's deadline still covers a probe that spins. The breadcrumb carries
+/// the original failure so a probe that dies keeps it named.
+fn probe_below(
+    base: &Shape,
+    edges: &[Edge],
+    failed: f64,
+    chamfer: bool,
+    before: (DVec3, DVec3),
+    stage: &str,
+) -> ProbedRepair {
+    let mut lo = 0.0f64;
+    let mut hi = failed;
+    let mut floor = failed;
+    let mut tried = 0;
+    for _ in 0..5 {
+        // Two decimals, so the number reported is exactly the number probed.
+        let size = ((lo + hi) * 50.0).round() / 100.0;
+        if size <= lo || size >= hi {
+            break;
+        }
+        breadcrumb(&format!("{stage}: {failed} mm failed; probing {size} mm"));
+        tried += 1;
+        floor = floor.min(size);
+        match attempt_treatment(base, edges, size, chamfer, before) {
+            Ok(_) => lo = size,
+            Err(_) => hi = size,
+        }
+    }
+    ProbedRepair {
+        built: (lo > 0.0).then_some(lo),
+        ceiling: hi,
+        floor,
+        tried,
+    }
+}
+
+/// The measured sentence of a treatment refusal.
+///
+/// Explicit about which direction each number is wrong in, the way
+/// `measure_wall_thickness`'s caveat is: a suggested value was rebuilt and
+/// checked, the untried interval is named as untried, and when nothing built
+/// the dead end is named rather than left to be rediscovered.
+fn repair_sentence(probe: &ProbedRepair, place: &str, noun: &str, write: &str) -> String {
+    match probe.built {
+        Some(built) => format!(
+            " Largest {noun} measured to build on {place}: {built} mm — rebuilt and \
+             checked, not an estimate; {write}. Between {built} and {} mm is untried.",
+            probe.ceiling
+        ),
+        None if probe.tried > 0 => format!(
+            " No {noun} built on {place}: {} probed below it, down to {} mm, and every \
+             one failed, so a smaller {noun} is measured not to be the fix.",
+            probe.tried, probe.floor
+        ),
+        None => String::new(),
+    }
+}
+
+/// A measured observation about a seam that would not blend, when there is one.
+///
+/// Tangent contact is read from the kernel's own refusal: ChFi3d answers a seam
+/// with no corner to roll along — two solids meeting exactly face-on — with
+/// "no suitable edges". A multi-way junction is read from the seam itself: a
+/// vertex where three or more seam edges converge is several members meeting
+/// at one point, whose corner the rolling-ball treatment often cannot solve.
+fn seam_observation(reason: &str, seam: &[Edge]) -> String {
+    if reason.contains("no suitable edges") {
+        return " The solids meet face-on along this seam, which leaves no corner for a \
+                 fillet to roll along — overlap them by a few millimetres instead of \
+                 letting them touch exactly, or drop the blend and treat selected edges. \
+                 See docs/GOTCHAS.md."
+            .into();
+    }
+    let mut incident: BTreeMap<[i64; 3], (usize, DVec3)> = BTreeMap::new();
+    let mut seen = HashSet::new();
+    for edge in seam {
+        let Some(described) = describe_edge(edge.clone()) else {
+            continue;
+        };
+        if !seen.insert(described.key) {
+            continue;
+        }
+        let (start, end) = (edge.start_point(), edge.end_point());
+        if (end - start).length_squared() <= 1e-16 {
+            continue;
+        }
+        for point in [start, end] {
+            incident.entry(vertex_key(point)).or_insert((0, point)).0 += 1;
+        }
+    }
+    match incident.into_values().filter(|(n, _)| *n >= 3).max_by_key(|(n, _)| *n) {
+        Some((ways, at)) => format!(
+            " The seam branches {ways} ways at ({:.1}, {:.1}, {:.1}) — several members \
+             converge there, a corner a blend often cannot solve at any radius; burying \
+             the junction deeper inside one member is the usual way out.",
+            at.x, at.y, at.z
+        ),
+        None => String::new(),
+    }
+}
+
+/// Fillet the seam a boolean created, or refuse with a measured way out.
+fn blend_seam(joined: &BooleanShape, radius: f64, what: &str, stage: &str) -> Result<Shape> {
+    validity_probe(&format!("{stage} before blend"), &joined.shape);
+    let before = bbox(&joined.shape);
+    let mut built = match joined.shape.filleted_edges(radius, &joined.new_edges) {
+        Ok(built) => built,
+        Err(reason) => bail!(
+            "{what} blends by {radius} mm, and OpenCASCADE could not build the \
+             fillet ({reason}).{observed}{measured}",
+            observed = seam_observation(&reason, &joined.new_edges),
+            measured = repair_sentence(
+                &probe_below(&joined.shape, &joined.new_edges, radius, false, before, stage),
+                "this seam",
+                "radius",
+                "write that as the blend",
+            ),
+        ),
+    };
+    validity_probe(&format!("{stage} after blend {radius}"), &built);
+    heal_probe(&mut built, stage);
+    if let Err(refusal) = check_blend(what, radius, before, &built) {
+        bail!(
+            "{refusal}\n{}",
+            repair_sentence(
+                &probe_below(&joined.shape, &joined.new_edges, radius, false, before, stage),
+                "this seam",
+                "radius",
+                "write that as the blend",
+            )
+            .trim_start()
+        );
+    }
+    Ok(built)
 }
 
 fn evolve_edges(edges: Vec<Edge>, result: &BooleanShape) -> Vec<Edge> {
@@ -1318,19 +1499,14 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     ));
                     // The edges a boolean creates are exactly the seam, which is
                     // what `blend` names in the graph.
-                    validity_probe(&format!("union at node {id} before blend"), &joined.shape);
-                    let before = bbox(&joined.shape);
-                    joined.fillet_new_edges(*blend);
-                    validity_probe(&format!("union at node {id} after blend {blend}"), &joined.shape);
-                    heal_probe(&mut joined.shape, &format!("union at node {id}"));
-                    check_blend(
-                        &format!("node {id} ({label}) unions node {c}"),
+                    let shape = blend_seam(
+                        &joined,
                         *blend,
-                        before,
-                        &joined.shape,
+                        &format!("node {id} ({label}) unions node {c}"),
+                        &format!("union at node {id}"),
                     )?;
                     acc = BuiltShape {
-                        shape: unified(joined.shape),
+                        shape: unified(shape),
                         lineage,
                         features,
                     };
@@ -1364,16 +1540,14 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     breadcrumb(&format!(
                         "fillet {blend} mm on edges created by cut at node {id} ({label})"
                     ));
-                    let before = bbox(&cut.shape);
-                    cut.fillet_new_edges(*blend);
-                    check_blend(
-                        &format!("node {id} ({label}) subtracts node {t}"),
+                    let shape = blend_seam(
+                        &cut,
                         *blend,
-                        before,
-                        &cut.shape,
+                        &format!("node {id} ({label}) subtracts node {t}"),
+                        &format!("cut at node {id}"),
                     )?;
                     acc = BuiltShape {
-                        shape: unified(cut.shape),
+                        shape: unified(shape),
                         lineage,
                         features,
                     };
@@ -1991,9 +2165,26 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 "fillet node {id} ({label}) {radius} mm on {count} selected edge(s)"
             ));
             let before = bbox(&solid.shape);
-            let generated = solid
+            let stage = format!("fillet at node {id}");
+            // A cheap handle clone: probes on a failure need the pre-treatment
+            // shape, and success replaces `solid.shape` in place.
+            let input = solid.shape.clone();
+            let generated = match solid
                 .shape
-                .fillet_edges_with_history(*radius, selected.edges);
+                .fillet_edges_with_history(*radius, &selected.edges)
+            {
+                Ok(generated) => generated,
+                Err(reason) => bail!(
+                    "node {id} ({label}) fillets {count} edge(s) by {radius} mm, and \
+                     OpenCASCADE could not build it ({reason}).{measured}",
+                    measured = repair_sentence(
+                        &probe_below(&input, &selected.edges, *radius, false, before, &stage),
+                        "these edges",
+                        "radius",
+                        "reduce the fillet to that, or select fewer edges",
+                    ),
+                ),
+            };
 
             let slip = growth_slip(before, bbox(&solid.shape));
             if slip > SLIP_TOLERANCE_MM {
@@ -2003,7 +2194,13 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                      started from. A fillet can only remove material at a convex edge or \
                      fill a concave one, so this result is wrong rather than merely \
                      surprising. The radius is too large for the material along those \
-                     edges — reduce it, or select fewer edges"
+                     edges — reduce it, or select fewer edges.{measured}",
+                    measured = repair_sentence(
+                        &probe_below(&input, &selected.edges, *radius, false, before, &stage),
+                        "these edges",
+                        "radius",
+                        "reduce the fillet to that",
+                    ),
                 );
             }
             solid.features.add_generated(id, generated);
@@ -2040,9 +2237,26 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 "chamfer node {id} ({label}) {distance} mm on {count} selected edge(s)"
             ));
             let before = bbox(&solid.shape);
-            let generated = solid
+            let stage = format!("chamfer at node {id}");
+            // A cheap handle clone: probes on a failure need the pre-treatment
+            // shape, and success replaces `solid.shape` in place.
+            let input = solid.shape.clone();
+            let generated = match solid
                 .shape
-                .chamfer_edges_with_history(*distance, selected.edges);
+                .chamfer_edges_with_history(*distance, &selected.edges)
+            {
+                Ok(generated) => generated,
+                Err(reason) => bail!(
+                    "node {id} ({label}) chamfers {count} edge(s) by {distance} mm, and \
+                     OpenCASCADE could not build it ({reason}).{measured}",
+                    measured = repair_sentence(
+                        &probe_below(&input, &selected.edges, *distance, true, before, &stage),
+                        "these edges",
+                        "distance",
+                        "reduce the chamfer to that, or select fewer edges",
+                    ),
+                ),
+            };
 
             // Identical argument to the fillet above: cutting a corner off
             // cannot push the part outward.
@@ -2053,7 +2267,13 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                      kernel returned a shape reaching {slip:.2} mm outside the solid it \
                      started from. A chamfer only cuts material away, so this result is \
                      wrong rather than merely surprising. The distance is too large for \
-                     the material along those edges — reduce it, or select fewer edges"
+                     the material along those edges — reduce it, or select fewer edges.{measured}",
+                    measured = repair_sentence(
+                        &probe_below(&input, &selected.edges, *distance, true, before, &stage),
+                        "these edges",
+                        "distance",
+                        "reduce the chamfer to that",
+                    ),
                 );
             }
             solid.features.add_generated(id, generated);

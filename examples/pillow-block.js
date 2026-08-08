@@ -19,8 +19,8 @@ const base = box(baseW, baseD, baseT)
   .tag("base");
 
 // The boss reaches down into the base rather than butting onto its top face.
-// A blended union between two solids that only touch on a face crashes the
-// kernel — see docs/DSL_GAPS.md — and a real housing is one casting anyway.
+// A blended union between two solids that only touch on a face cannot build
+// and is refused — see docs/DSL_GAPS.md — and a real housing is one casting anyway.
 const boss = cylinder(bossDia / 2, baseD)
   .rotate("x", 90)
   .at(0, 0, shaftHeight)

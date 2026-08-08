@@ -1,10 +1,10 @@
 //! Running the kernel somewhere it cannot take us with it.
 //!
-//! OCCT signals failure by throwing `Standard_Failure`, which does not derive
-//! from `std::exception` and so escapes the `cxx` bridge's catch and calls
-//! `std::terminate`. It can also segfault on degenerate input and loop for a
-//! very long time on pathological fillets. None of those are recoverable
-//! in-process, and `catch_unwind` does not help with any of them.
+//! OCCT signals refusal by throwing `Standard_Failure`. The fillet boundary
+//! now catches that in C++ (see the vendored wrapper) and hands it back as an
+//! error, which removed every known abort — but OCCT can also segfault on
+//! degenerate input and loop for a very long time on pathological fillets.
+//! Neither is recoverable in-process, and `catch_unwind` helps with neither.
 //!
 //! So the kernel runs in a child process. A crash costs one worker instead of
 //! the application, and every failure — polite or not — comes back as a value.
@@ -42,8 +42,9 @@ impl std::fmt::Display for OcctError {
                 f,
                 "the geometry kernel crashed while {stage} ({detail}). \
                  This is usually a dimension the operation cannot satisfy — \
-                 a fillet larger than the material, or a boolean between shapes \
-                 that do not overlap."
+                 a fillet larger than the material, a blend across a junction \
+                 where several members meet or touch face-on, or a boolean \
+                 between shapes that do not overlap."
             ),
             OcctError::TimedOut { stage, seconds } => write!(
                 f,
@@ -366,4 +367,45 @@ fn signal_text(status: &std::process::ExitStatus) -> String {
 #[cfg(not(unix))]
 fn signal_text(_status: &std::process::ExitStatus) -> String {
     "stopped for an unknown reason".into()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// The crash supervision, pinned without an input that actually crashes
+    /// OCCT. It used to have one — `refuse-oversized-fillet` — until the
+    /// fillet boundary learned to catch `Standard_Failure` and the whole known
+    /// abort family became polite refusals. Segfaults and runaway loops remain
+    /// possible and uncatchable, which is why this file exists, so its
+    /// machinery is exercised by a worker shim that dies the way OCCT would.
+    #[test]
+    fn a_worker_death_arrives_as_a_typed_crash_carrying_the_breadcrumb() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let shim = std::env::temp_dir().join(format!("parcad-crash-shim-{}.sh", std::process::id()));
+        std::fs::write(
+            &shim,
+            format!("#!/bin/sh\necho '{BREADCRUMB}filleting the doomed edge' >&2\nkill -SEGV $$\n"),
+        )
+        .unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::env::set_var("PARCAD_OCCT_WORKER", &shim);
+
+        let doc: Doc = serde_json::from_str(
+            r#"{"units":"mm","root":0,"nodes":[{"op":"cuboid","size":{"x":1,"y":1,"z":1}}]}"#,
+        )
+        .unwrap();
+        let outcome = evaluate(&doc, &Options::default());
+        std::env::remove_var("PARCAD_OCCT_WORKER");
+        let _ = std::fs::remove_file(&shim);
+
+        match outcome.unwrap_err() {
+            OcctError::Crashed { stage, detail } => {
+                assert_eq!(stage, "filleting the doomed edge");
+                assert!(detail.contains("SIGSEGV"), "detail was: {detail}");
+            }
+            other => panic!("expected Crashed, got: {other}"),
+        }
+    }
 }

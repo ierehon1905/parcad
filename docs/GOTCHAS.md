@@ -226,18 +226,23 @@ afterwards.
 report that, never the request. (We once claimed 0.050 mm quality while meshing
 at 0.010.)
 
-### A blended union of face-touching solids kills the kernel
+### A blended union of face-touching solids is refused — it used to kill the kernel
 
 Two solids that meet *exactly* on a plane — a hub standing on a flange face, a
-gusset landing on a plate — abort OCCT with `SIGABRT` when the union is
-blended, at any radius. Overlap them instead: bury the hub a few millimetres
-into the plate, or take the blend between two solids and union the third on
+gusset landing on a plate — cannot be blended at any radius: the seam has no
+corner for a fillet to roll along, and OCCT raises instead of building. That
+raise used to escape the bridge and take the worker with it (`SIGABRT`, blamed
+on the radius); the fillet boundary now catches it, and the refusal names the
+tangency, the overlap workaround, and — probed, not guessed — that no smaller
+radius built either. Overlap the solids: bury the hub a few millimetres into
+the plate, or take the blend between two solids and union the third on
 unblended. `examples/flange.js` and `examples/motor-mount.js` both carry the
-workaround with a comment, and docs/DSL_GAPS.md §4 has the full table of shapes
-that trigger it.
+workaround with a comment, and docs/DSL_GAPS.md §4 has the full table of
+shapes that trigger it.
 
-The crash is caught and reported with a breadcrumb, so nothing is lost — but
-the message blames the radius, and the radius is not the problem.
+`eval/cases/refuse-tangent-blend-union.json` pins the refusal. It keys on the
+sentence our tangency detection writes, so it also goes red if an OCCT upgrade
+rewords the raise that detection reads.
 
 ### A blend that ends on a face it is tangent to — fixed, and worth knowing anyway
 
@@ -258,7 +263,7 @@ the same shape — every row measured, `blend: 2` throughout, current kernel:
 | 0 (tangent) | valid, watertight — **fixed** by `vendor/occt-sys/patches/0001-tangent-pinch-corner.patch` |
 | 1e-9, 1e-7 | valid, watertight — same fix (the union still builds the tangency vertex here) |
 | 3.8e-5 .. 1e-4 | valid, watertight — always was |
-| 3e-4 .. 2e-3 | SIGABRT, caught and refused (unchanged, see the face-touching family above) |
+| 3e-4 .. 2e-3 | refused, naming a measured fallback (0.25 mm builds at 3e-4, 1.82 mm at 2e-3); a caught SIGABRT before the boundary learned to catch |
 | 3e-3 .. 1.999 | valid, watertight — the fillet runs 1.5 mm off the plate and is trimmed |
 | 2.0 (= the radius) | invalid, refused by the validity gate (unchanged) |
 | 2.001 and up | valid, watertight |
@@ -285,8 +290,8 @@ What stays true and load-bearing:
   containment with `BRepCheck_Analyzer`, and why the worker refuses any welded
   mesh with an open edge as a backstop that does not depend on knowing the
   cause.
-- **The face-touching SIGABRT family above is a different defect** and is
-  still refused, not fixed; docs/DSL_GAPS.md §4 has the table.
+- **The face-touching family above is a different defect** and is still
+  refused, not fixed; docs/DSL_GAPS.md §4 has the table.
 - `eval/cases/tangent-blend.json` and `eval/cases/tangent-blend-retainer.json`
   hold the fix down; `eval/cases/blend-runs-off-the-edge.json` remains the
   control proving overrun was never the problem.

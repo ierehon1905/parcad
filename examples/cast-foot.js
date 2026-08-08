@@ -33,7 +33,7 @@ const rect = (x, y) => [
 const base = extrude(rect(baseX, baseY), baseT, { draft: baseDraft }).at(0, 0, baseT / 2);
 
 // The pedestal starts inside the base rather than on top of it: a blended union
-// of two solids that only touch on a face aborts inside OCCT
+// of two solids that only touch on a face cannot be blended
 // (docs/GOTCHAS.md), and a casting has a generous root radius there anyway.
 const buried = 6;
 const pedestalH = rise - baseT + buried;
