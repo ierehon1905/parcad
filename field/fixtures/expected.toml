@@ -9,6 +9,14 @@ trap = false
 derived = false
 stray = []
 
+[a-rubric-with-no-verdict]
+grade = "REFUSED"
+reached = false
+quoted = false
+trap = false
+derived = false
+stray = []
+
 [a-tool-name-that-does-not-exist]
 grade = "VOID"
 reached = false

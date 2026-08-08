@@ -200,7 +200,17 @@ def grade(row, rub):
     return "SOUND"
 
 
-def score_case(paths, rub, cfg):
+def score_case(paths, rub, cfg, where="this case"):
+    # Without a verdict every trial grades WRONG before the reply is read, so a
+    # case costs a round and returns no signal. One shipped that way unnoticed.
+    if not rub.get("verdict"):
+        raise SystemExit(
+            f"{where} has no `verdict` in its `---` rubric, so every one of its "
+            f"trials would grade WRONG before the reply was read. Add one, stated "
+            f"positively — field/README.md, \"Writing a case\" — or score these "
+            f"transcripts ad hoc with --verdict PATTERN. Scoring is free to rerun; "
+            f"the trials are not."
+        )
     rows = [summarise(p, cfg) for p in sorted(paths)]
     for r in rows:
         r["grade"] = grade(r, rub)
@@ -252,7 +262,7 @@ def suite(root, cfg):
             x.strip() for k in ("also", "reach")
             for x in rub.get(k, "").split(",") if x.strip()}
         for arm in sorted(p for p in case.iterdir() if p.is_dir()):
-            rows = score_case(arm.glob("trial*.jsonl"), rub, cfg)
+            rows = score_case(arm.glob("trial*.jsonl"), rub, cfg, case.name)
             if not rows:
                 continue
             c, reach, quote = tally(rows)

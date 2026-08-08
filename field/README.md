@@ -355,6 +355,11 @@ Every one of these was learned by writing a bad one.
   sentence "the port cavities don't open directly into the gallery". The scorer
   searches only the tail for that reason.
 
+- **A case without `verdict` is refused, not scored.** It is the one field the
+  scorer cannot do without: absent, every trial grades WRONG before the reply is
+  read. You find out at scoring time, which is free to rerun, rather than from a
+  column of WRONG that looks like a finding.
+
 - **State the verdict positively.** `verdict: no` cannot work — the scorer's job
   is detecting negation, so a bare "no" reads as an un-negated "no" and every
   correct trial grades WRONG. If your right answer is a refusal, coin a word the
@@ -536,9 +541,12 @@ plausibly-misspelled tool name, and a pair of trials identical in every column
 but one. The way to find out whether a suite has teeth is to break the thing it
 guards, on purpose, one rule at a time, and see which breakages it notices.
 
-The set now also pins one outcome that is not a grade: a rubric whose verdict
-pattern is not a legal regex must be **refused by name**. It used to be a
-traceback forty frames deep that took the whole table down with it.
+The set now also pins two outcomes that are not grades, both of them rubrics the
+scorer must **refuse by name** rather than score. A verdict pattern that is not a
+legal regex used to be a traceback forty frames deep that took the whole table
+down with it. A rubric with no verdict at all was worse, because it did not
+fail: every trial graded WRONG before the reply was read, and a column of WRONG
+is what a genuinely failing case looks like.
 
 ---
 
