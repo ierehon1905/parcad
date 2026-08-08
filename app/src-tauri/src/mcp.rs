@@ -35,9 +35,8 @@ use std::{
 
 #[derive(Clone)]
 pub struct Parcad {
-    // Read by the dispatch code `#[tool_handler]` generates, which dead-code
-    // analysis does not follow.
-    #[allow(dead_code)]
+    // Named in the `#[tool_handler(router = …)]` attribute below, which is what
+    // makes this the router that is served rather than the macro's own.
     tool_router: ToolRouter<Self>,
 }
 
@@ -741,7 +740,12 @@ impl Parcad {
     }
 }
 
-#[tool_handler]
+// `router = self.tool_router` is load-bearing: without it the macro serves
+// `Self::tool_router()` — the raw generated router — and every adjustment made
+// in `surface()` is built, held in the struct, and never sent. The titles were
+// on the wire as `null` for exactly that reason, while a Rust test read them
+// happily off the instance nobody was serving.
+#[tool_handler(router = self.tool_router)]
 impl ServerHandler for Parcad {
     fn get_info(&self) -> ServerInfo {
         let mut server_info = Implementation::default();
@@ -1025,7 +1029,7 @@ mod tests {
     /// failure this regresses is in docs/GOTCHAS.md.
     #[test]
     fn every_advertised_schema_is_an_object() {
-        let tools = surface().list_all();
+        let tools = Parcad::new().tool_router.list_all();
         assert!(tools.len() >= 15, "expected the whole surface, got {}", tools.len());
 
         for tool in &tools {
@@ -1058,7 +1062,7 @@ mod tests {
     /// as overwriting their part. Every tool here states which it is.
     #[test]
     fn every_tool_says_whether_it_only_looks() {
-        for tool in surface().list_all() {
+        for tool in Parcad::new().tool_router.list_all() {
             let annotations = tool
                 .annotations
                 .as_ref()
@@ -1091,7 +1095,8 @@ mod tests {
     /// read-only replaces a file with nobody asked.
     #[test]
     fn the_tools_that_write_are_the_ones_that_say_so() {
-        let writes: Vec<String> = surface()
+        let writes: Vec<String> = Parcad::new()
+            .tool_router
             .list_all()
             .into_iter()
             .filter(|tool| {
