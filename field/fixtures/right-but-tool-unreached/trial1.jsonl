@@ -1,0 +1,4 @@
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__parcad__evaluate_part","input":{"script":"box(20, 20, 20)"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"{\"topological_edges\": 246, \"total_edges\": 122}"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"The report gives both counts; the deduplicated one is the selectable set."}]}}
+{"type":"result","subtype":"success","result":"The part carries 122 distinct edges a selector can name.\n\nSELECTABLE EDGES = 122"}

@@ -15,6 +15,8 @@
 #     of the same name in docs/GOTCHAS.md.
 #   * The corpus runs last because it is the only step that needs the worker,
 #     and it finds it beside its own executable in target/release.
+#   * `field/selftest.py` is in both paths and costs nothing: it runs no model
+#     and touches no network, it only regrades recorded transcripts.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -50,6 +52,9 @@ if [ "$fast" = 1 ]; then
   step "bun test"
   (cd app && bun test src)
 
+  step "field/selftest.py"
+  field/selftest.py
+
   # No worker here. Building it recompiles parcad-occt under `--features kernel`
   # and relinks 26 MB of statically-bound OpenCASCADE, which is most of a
   # kernel-edit iteration — and nothing in this path runs geometry. The corpus
@@ -66,6 +71,9 @@ cargo test --release --workspace
 
 step "bun test"
 (cd app && bun test src)
+
+step "field/selftest.py"
+field/selftest.py
 
 step "tools/build-worker.sh"
 tools/build-worker.sh

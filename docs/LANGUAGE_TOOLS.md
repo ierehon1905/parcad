@@ -137,7 +137,7 @@ Two caveats to write into it rather than discover later:
   the reachable form; say so in a comment rather than pretending it is the
   elegant one.
 - **Adding the tool is not the same as a model reading it.** Per CLAUDE.md this
-  is not done until `tools/field-suite.sh` says so, and the case writes itself
+  is not done until `field/run-suite.sh` says so, and the case writes itself
   from the table above: ask for a part that needs `sweep` or a clearance hole
   sized from the table, in a prompt that never names either. A model that reads
   only the seeded examples fails it today, which is exactly what makes it

@@ -28,4 +28,4 @@ app/src-tauri/*.step
 # The Tauri sidecar staging copy of the B-rep worker: 26 MB of OpenCASCADE,
 # written by tools/build-worker.sh before every bundle.
 app/src-tauri/binaries/
-tools/__pycache__/
+__pycache__/

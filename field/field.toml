@@ -1,0 +1,76 @@
+# What this checkout's field harness is pointed at, and the only file under
+# field/ that names a project. Paths are relative to this file; `${VAR}` and
+# `${VAR:-default}` are expanded from the environment. field/README.md, "The
+# config", is the rest.
+
+# The server's name in the generated client config, and the prefix the model
+# sees: tools arrive as `mcp__parcad__probe_part`.
+server = "parcad"
+
+url = "http://127.0.0.1:${PARCAD_HTTP_PORT:-4242}/mcp"
+
+# Curled before a round, only to see something is listening. Defaults to `url`.
+health = "http://127.0.0.1:${PARCAD_HTTP_PORT:-4242}/"
+
+# A directory of `<case>.md` files. README.md in it is skipped.
+cases = "../eval/field"
+
+# Printed when nothing is listening.
+hint = '''
+  cargo build -p parcad-app --bin parcad-app
+  PARCAD_OCCT_WORKER=$PWD/target/release/parcad-occt-worker ./target/debug/parcad-app &
+'''
+
+# The whole agent-facing surface. It is both the runner's allow list and the
+# scorer's idea of a legitimate call, and a tool missing from it is invisible
+# rather than failed — README.md, "The config", for why that has bitten twice.
+tools = [
+  "read_docs",
+  "list_projects", "read_project", "save_project", "evaluate_part",
+  "probe_part", "measure_wall_thickness", "list_entities",
+  "inspect_treatment_target", "check_selector", "export_part",
+  "probe_step_export",
+  "get_session", "open_project", "set_script",
+]
+
+# Arguments `score.py --show` elides: a parcad script is a whole part and drowns
+# every other knob.
+bulky_args = ["script"]
+
+# What "the model quoted something a tool measured" looks like here, consulted
+# only for a case whose rubric carries no `quote`. Each rule may have:
+#
+#   blob    a regex the joined tool results must match, as a precondition
+#   capture regexes over those results; each captured value is substituted for
+#           `{}` in `final`, and the rule fires if any of them lands
+#   final   a regex the model's answer must match
+#   flags   "i" for case-insensitive matching of `final`
+
+[[reads]]
+name = "tag"
+capture = ['\\"surface_of\\":\s*\\"(\w+)\\"', '\\"tag\\":\s*\\"(\w+)\\"']
+final = '\b{}\b'
+
+[[reads]]
+name = "mm"
+capture = ['\\"(?:first_solid|solid|distance|thickness)_mm\\":\s*(\d+)']
+final = '\b{}(?:\.\d+)?\s*mm'
+
+[[reads]]
+name = "medium"
+final = '\bmaterial\b|\bvoid\b'
+
+# A dropped fillet makes a reported minimum an *upper* bound, so an answer
+# without the caveat is confidently optimistic.
+[[reads]]
+name = "caveat"
+blob = 'caveat'
+final = 'fillet|chamfer|upper bound|omitted'
+flags = "i"
+
+# Both halves required: a cut that hit material, and an answer that says it cut.
+[[reads]]
+name = "cut"
+blob = '\\"cut_fraction\\":\s*0\.0*[1-9]'
+final = 'section|cut (face|plane|away)|sectioned'
+flags = "i"
