@@ -431,10 +431,37 @@ settled that the estimate did not:
   primitive's own surface at the origin. Same rule as `surface_of` and the
   region legend, and the DSL's natural spelling is the right one.
 
-**Unmeasured on a model.** Whether an agent reads a per-tag box and notices the
-feature is misplaced is the separate fact this page keeps insisting on, and no
-field round has run. `eval/field/` has no case for it yet; one that asks
-*is the cabin on this part where a saloon's cabin belongs* would be the test.
+**Measured on a model, and it is read.** `eval/field/where-is-the-feature.md`
+asks Haiku 4.5 which of the flange's tags names a feature entirely above the
+mid-plane and at what z its surface begins. The flange separates the two routes:
+`hub` is authored as a cylinder placed at `hubTop / 2`, so the *script* says it
+runs from z = 0, and what the kernel built starts at 12.38 because a 3 mm blend
+replaced the bottom of it. A trial that measured says 12.38; a trial that
+derived says 0.
+
+| arm | trials | reached `evaluate_part` | quoted the measured z | SOUND |
+|---|---|---|---|---|
+| thinking off | 2 | 2/2 | 2/2 | 1 (+1 LUCKY) |
+| thinking on | 2 | 2/2 | 2/2 | 2 |
+
+The shape of the winning trial is the argument for the whole page: four
+`ToolSearch` calls, `read_project`, one `evaluate_part`, and *"Perfect! I can
+see the tag extents clearly"* — no probe, no `list_entities`, no second call.
+
+**The round before it is the more useful one, and it was void.** Four trials in
+the reasoning arm, and the app died partway through — every trial scored VOID on
+`unable to connect`, which is the harness failure this repo has already learned
+to print rather than swallow. What they did before it died still counts: two
+reached `evaluate_part`, *none* quoted a tag extent, and the one that had the
+reply in front of it went hunting instead — three rounds of `probe_part`, a
+`list_entities`, eleven calls, and the wrong answer, `HUB starts at 15.85`. A
+field that is present in a reply and not read is the failure mode of every entry
+on this page; four clean trials are not enough to say it is not this one's too.
+
+The region map was re-run after its legend and palette changed —
+`what-is-hidden`, 2/2 SOUND, still reading `visible: false` and the tag missing
+from `regions` altogether. Moving a key out of a frame is not supposed to change
+what a reply says, and this is the check that it did not.
 
 ## 4. Numbered marks — the rest of Set-of-Mark
 
