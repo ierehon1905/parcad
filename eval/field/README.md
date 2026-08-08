@@ -97,37 +97,41 @@ Learned by writing bad ones:
   plausibly and wrongly: `how-many-edges` is the strongest case here because
   `evaluate_part` and `list_entities` disagree by a factor of two.
 
-## The suite is only as reachable as the CLI lets it be
+## One bad output schema takes the whole surface down
 
-**Known broken, 2026-08-08, Claude Code 2.1.224: a headless `claude -p` does not
-expose an HTTP MCP server's tools, so every trial is VOID.** The server connects
-— the session's own `mcp_servers` says `parcad: connected` — and then no parcad
-tool is ever registered, so `ToolSearch` reports "No matching deferred tools
-found" and the model spends the run asking to be connected to something that is
-already connected.
+**This has happened, on 2026-08-07, and it cost a day.** `probe_step_export`
+returned `Json<serde_json::Value>`. A `Value` has no schema, so schemars emitted
+an output schema with no `"type"`, and a client that validates `tools/list`
+rejects **the entire array** over one bad entry. Every model saw no parcad tools
+at all. The server went on answering `tools/list` correctly to anything that
+asked it directly, so the endpoint looked healthy from every angle except the
+only one that mattered.
 
-It is not the app and not the port. Against the same running host, a direct
-Streamable HTTP `initialize` plus `tools/list` returns all fourteen tools. It
-reproduces with `--strict-mcp-config`, without it, with an auto-discovered
-`.mcp.json`, with and without an allow list, and with the nested-session
-environment variables stripped. Sixteen trials of
-`does-the-blend-reach-the-bolts` were paid for and produced no evidence about
-the tool they were meant to measure.
+`tool_output_schemas_are_acceptable_to_a_validating_client` in `mcp.rs` is the
+regression, and it fails with the offending tool's name. But the failure mode is
+worth knowing by sight, because a whole suite of VOIDs is what it looks like from
+here and "the tools do not work" is what it reads as.
 
-**How to tell this from a real failure**, because the two look nothing alike
-once you know and identical in a summary line: the reply asks the *user* to
-enable or reconnect MCP, `reach` is NO across every arm and both models at once,
-and the strays are whatever the ambient session happens to carry. A genuine
-result never has every trial failing the same way in both models and both arms —
-that uniformity is the tell. Before believing any red run, probe the CLI first:
+**The tell is uniformity.** Every trial failing the same way, in both models and
+both arms, with replies that ask the *user* to enable or reconnect MCP. A real
+distribution does not do that — populations disagree, which is the entire reason
+this suite runs two models and two arms. Sixteen trials were paid for before
+anyone noticed they were evidence about a schema.
+
+**The diagnosis that finds it in a minute**, rather than the day it took: ask the
+CLI for the server's health, which is the one path that prints the parse error
+instead of swallowing it. `--mcp-config` reports only `connected`.
 
 ```bash
-claude -p "Use ToolSearch with query 'select:mcp__parcad__list_projects'. Then say FOUND or NONE." \
-  --model claude-haiku-4-5-20251001 --mcp-config /tmp/probe-mcp.json --strict-mcp-config
+CLAUDE_CONFIG_DIR=/tmp/probe-cfg claude mcp add --transport http parcad http://127.0.0.1:4344/mcp
+CLAUDE_CONFIG_DIR=/tmp/probe-cfg claude mcp list
 ```
 
-FOUND means the harness is live and a red run is about parcad. NONE means the
-run would have measured nothing, and no case should be rewritten off it.
+`✔ Connected` means the harness is live and a red run is about parcad.
+`! Connected · tools fetch failed — …` names the malformed schema, and no case
+should be rewritten off a run made in that state. `CLAUDE_CONFIG_DIR` keeps this
+out of the real config; auth does not follow it there, which is fine, because
+`mcp list` never needs to run a model.
 
 ## The cases
 
