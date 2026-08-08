@@ -242,6 +242,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | what an agent can *read* about the language | `app/src-tauri/src/docs.rs` — generated from `dsl.ts`, never written beside it |
 | whether a model can *read* a tool | `eval/field/*.md`, run by `field/run-suite.sh` |
 | which server that harness is pointed at | `field/field.toml` — the only file under `field/` that names parcad |
+| what "SOUND" is still allowed to mean | `field/fixtures/expected.toml`, gated by `field/selftest.py` |
 
 A new op touches `graph.rs` (variant + `children_of`), `sdf.rs`, `measure.rs`
 (its bounds), `backend.rs`, `dsl.ts`, plus a case in `eval/cases/`. Missing

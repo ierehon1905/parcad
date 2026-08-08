@@ -1,0 +1,2 @@
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__parcad__list_entities","input":{"script":"box(20, 20, 20)","kind":"edge"}}]}}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"{\"total_edges\": 122, \"edges\": []}"}]}}

@@ -10,8 +10,13 @@ small model over your live server, with every local tool denied so it cannot
 answer by reading your source, and then grades the *transcript* — the route as
 well as the answer.
 
-It is a few hundred lines of bash and Python and it needs nothing but `claude`,
-`curl` and Python 3.11. The idea is the part worth stealing.
+**What it needs:** `bash`, `curl`, the `claude` CLI, and Python **3.11 or newer**
+— for `tomllib`, which is what makes the config parseable with no dependency at
+all. There is no requirements file and no virtualenv because there is nothing to
+install: every import is `argparse`, `collections`, `json`, `os`, `pathlib`,
+`re`, `shlex`, `sys`, `tomllib`. Checked, not assumed.
+
+The idea is the part worth stealing.
 
 ---
 
@@ -499,6 +504,44 @@ and voids them; check them anyway before believing a row of zeroes.
 
 ---
 
+## Holding the grader still
+
+Everything above is a claim about a scorer, not about a model in the abstract.
+Edit a regex in good faith and every round you have already reported is
+re-graded under you — silently, and after the trials have been paid for. The
+numbers become statements about a scorer that no longer exists.
+
+So the grader has its own fixtures, and they belong in whatever gate you already
+run:
+
+```bash
+field/selftest.py            # every fixture still grades as recorded
+field/selftest.py --update   # re-record, when a change is intended
+```
+
+Each fixture in `field/fixtures/` is one transcript and the grading it must
+receive — grade, `reached`, `quoted`, `trap`, `derived` and the `stray` list.
+Five are real trials lifted off paid rounds; the rest are the minimum JSONL that
+produces an outcome no recorded round happens to contain, and every fixture's
+rubric says which it is in a `source:` line. It runs no model and opens no
+socket, so it costs milliseconds.
+
+**Write the negative fixtures, not just the positive ones.** The first cut of
+this set had SOUND, LUCKY, WRONG and VOID in it and still let three deliberate
+sabotages through: searching the whole reply for the verdict instead of the
+tail, letting any `mcp__*` name count as on-surface, and dropping the check on
+what was *inside* an argument. Each needed a fixture built to fail exactly one
+way — a reply that talks itself out of the right answer, a call to a
+plausibly-misspelled tool name, and a pair of trials identical in every column
+but one. The way to find out whether a suite has teeth is to break the thing it
+guards, on purpose, one rule at a time, and see which breakages it notices.
+
+The set now also pins one outcome that is not a grade: a rubric whose verdict
+pattern is not a legal regex must be **refused by name**. It used to be a
+traceback forty frames deep that took the whole table down with it.
+
+---
+
 ## What this is not
 
 - **It is not a gate.** It costs real money, it needs a live server, and its
@@ -527,6 +570,8 @@ single time it was checked.
 | `run-case.sh` | one case, N trials in parallel, one model, one arm |
 | `run-suite.sh` | every case × models × arms, then one table per model |
 | `score.py` | grades a run directory; `--suite`, `--show`, `--verdict` |
+| `selftest.py` | holds `score.py` to `fixtures/expected.toml`; belongs in your gate |
+| `fixtures/` | one transcript per grading outcome, and the grade it must get |
 
 In this repository the cases live in `eval/field/`, whose README is the
 parcad-specific half: how to start the app for a round, and what each of the

@@ -9,9 +9,11 @@ never will be: they cost money, they need a running app, and their result is a
 
 **The apparatus lives in `field/` and knows nothing about parcad.** Which server,
 which tools, and that cases live here are all `field/field.toml`; `field/README.md`
-is the method written for someone whose MCP server is not this one. What follows
-is the parcad half — how to run a round against the app, and what each case is
-for.
+is the method written for someone whose MCP server is not this one. The grader
+itself is held still by `field/selftest.py`, which `tools/check.sh` runs — every
+number in docs/PERCEPTION.md is a claim about that scorer, so a regex edited
+without re-recording re-grades them all. What follows is the parcad half: how to
+run a round against the app, and what each case is for.
 
 `eval/cases/` pins what the kernel computes. This pins what a model does with
 it, which is the other half and the half that has actually been wrong — every

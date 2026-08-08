@@ -1,0 +1,114 @@
+# Recorded by field/selftest.py --update. A grade that moves here
+# re-grades every round already reported, so read the diff.
+
+[a-rubric-that-is-not-a-regex]
+grade = "REFUSED"
+reached = false
+quoted = false
+trap = false
+derived = false
+stray = []
+
+[a-tool-name-that-does-not-exist]
+grade = "VOID"
+reached = false
+quoted = false
+trap = false
+derived = false
+stray = ["mcp__parcad_list_projects", "mcp__parcad_read_project"]
+
+[no-final-answer]
+grade = "OPEN"
+reached = true
+quoted = false
+trap = false
+derived = false
+stray = []
+
+[right-and-measured]
+grade = "SOUND"
+reached = true
+quoted = true
+trap = false
+derived = false
+stray = []
+
+[right-but-derived-from-source]
+grade = "LUCKY"
+reached = true
+quoted = true
+trap = false
+derived = true
+stray = []
+
+[right-but-tool-unreached]
+grade = "LUCKY"
+reached = false
+quoted = true
+trap = false
+derived = false
+stray = []
+
+[server-went-away]
+grade = "VOID"
+reached = true
+quoted = true
+trap = false
+derived = false
+stray = []
+
+[strayed-to-a-local-tool]
+grade = "VOID"
+reached = false
+quoted = false
+trap = false
+derived = false
+stray = ["ListAgents"]
+
+[the-argument-route-not-taken]
+grade = "LUCKY"
+reached = false
+quoted = true
+trap = false
+derived = false
+stray = []
+
+[the-named-wrong-answer]
+grade = "WRONG"
+reached = true
+quoted = false
+trap = true
+derived = false
+stray = []
+
+[the-part-was-never-cut-open]
+grade = "LUCKY"
+reached = false
+quoted = true
+trap = false
+derived = false
+stray = []
+
+[the-route-is-an-argument]
+grade = "SOUND"
+reached = true
+quoted = true
+trap = false
+derived = false
+stray = []
+
+[the-verdict-is-only-the-tail]
+grade = "WRONG"
+reached = true
+quoted = true
+trap = true
+derived = false
+stray = []
+
+[verdict-absent]
+grade = "WRONG"
+reached = false
+quoted = false
+trap = false
+derived = false
+stray = []

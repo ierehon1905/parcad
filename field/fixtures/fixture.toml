@@ -1,0 +1,44 @@
+# The config the fixtures are graded under. Pinned rather than inherited from
+# field.toml, so repointing this checkout at another server does not silently
+# re-grade the transcripts that hold the grader still.
+
+server = "parcad"
+url = "http://127.0.0.1:0/mcp"
+cases = "."
+
+tools = [
+  "read_docs",
+  "list_projects", "read_project", "save_project", "evaluate_part",
+  "probe_part", "measure_wall_thickness", "list_entities",
+  "inspect_treatment_target", "check_selector", "export_part",
+  "probe_step_export",
+  "get_session", "open_project", "set_script",
+]
+
+bulky_args = ["script"]
+
+[[reads]]
+name = "tag"
+capture = ['\\"surface_of\\":\s*\\"(\w+)\\"', '\\"tag\\":\s*\\"(\w+)\\"']
+final = '\b{}\b'
+
+[[reads]]
+name = "mm"
+capture = ['\\"(?:first_solid|solid|distance|thickness)_mm\\":\s*(\d+)']
+final = '\b{}(?:\.\d+)?\s*mm'
+
+[[reads]]
+name = "medium"
+final = '\bmaterial\b|\bvoid\b'
+
+[[reads]]
+name = "caveat"
+blob = 'caveat'
+final = 'fillet|chamfer|upper bound|omitted'
+flags = "i"
+
+[[reads]]
+name = "cut"
+blob = '\\"cut_fraction\\":\s*0\.0*[1-9]'
+final = 'section|cut (face|plane|away)|sectioned'
+flags = "i"
