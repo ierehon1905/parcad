@@ -1,0 +1,17 @@
+{
+  "name": "refuse-sealed-void",
+  "script": "eval/scripts/refuse-sealed-void.js",
+  "why": "A cutter stopping 0.004 mm short of the face it enters — the field defect behind the entry end of the cut rule in docs/GOTCHAS.md — used to return a watertight, unmanufacturable block with the tool sealed inside as a closed void. The cut now counts shells: a subtract that adds an internal void has removed nothing reachable, whatever the clearance measures, so there is no threshold to defend and the exactly-coincident and proud rows of the GOTCHAS table keep building. The message must name the void and the overshoot fix. B-rep only: the implicit backend has no topology, builds the membrane silently, and at 1 mm contouring cannot even represent it.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "sealed 1 closed void(s)",
+        "broke through no face",
+        "unmanufacturable",
+        "proud of the material where it enters and past it where it exits",
+        "holeFor"
+      ]
+    }
+  }
+}
