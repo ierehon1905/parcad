@@ -69,6 +69,10 @@ const machined = seated.cut(aperture, ...bolts).tag("machined");
 
 // Break the seat's rim, which is the edge the module drops past. Eight of them:
 // four straight sides and the four corner arcs the end mill leaves behind.
+//
+// This selector is also what fails if `over` is ever taken away: with the seat
+// cutter stopping short of the front face there is no rim, `bezel_seat` tracks
+// no edge there, and the build stops by name instead of shipping a void.
 return machined
   .edges({ generatedBy: "bezel_seat", at: { z: "max" } })
   .expect({ count: 8 })

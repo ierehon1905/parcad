@@ -514,6 +514,34 @@ Re-run against `does-the-port-meet.md` afterwards, four trials of Haiku 4.5:
 Rounding a reply is still a change to a reply, and this page's rule is that the
 model reading it is a separate fact from the number being right.
 
+**What the flange round could not show is that the minimum is sometimes not a
+wall.** Swept over every part in `examples/`, it answers sanely for nineteen and
+returns 0.0055 mm for `hydraulic-line.js` and 0.0069 mm for
+`timing-pulley.js`. Both are correct parts, and the two failures are not the
+same failure:
+
+- **A tie in a `max` hands back the wrong surface's normal.** At the seam where
+  a bend's arc is trimmed by its own end plane, the torus's field and the
+  plane's are both zero, so the gradient comes back as the plane's while the
+  surface there is vertical. The ray then runs *along* the face, and what it
+  finds is f32 noise — the same seam reads 0.0055 mm at 96 px and 0.0096 mm at
+  256 px. `GRADIENT_TOLERANCE` is meant to be this guard and cannot be: the
+  wrong branch of a `max` still has a unit gradient. Re-measuring at a second
+  resolution is the cheap discriminator, since a real feature reports twice.
+- **A tangential feature genuinely has no minimum.** The pulley number is this
+  kind, and so are the 0.21–0.24 mm spots on the same hydraulic line, which are
+  exact: the ring between the inlet boss's OD and its O-ring groove is
+  `0.5 − √(1 − (x − 4)²)` mm thick and tapers to zero at the groove rim. Sample
+  nearer the rim, get a smaller number, without limit. Every groove and every
+  run-off blend does this, and no sampling improvement touches it — "the
+  thinnest material anywhere" is a different question from "is there a wall here
+  too thin to make", and this tool answers the first one.
+
+That is why the minimum is *not* in the `evaluate_part` reply, where it would be
+a free thin-wall warning on every edit: two false alarms in twenty-one shipped
+parts teaches a reader to skip the line. docs/GOTCHAS.md, "Nothing refuses a
+coincident cutter face", carries the measurements and what was being decided.
+
 ## 6. Overhang and printability
 
 **What it is.** A per-face angle test against the build direction.

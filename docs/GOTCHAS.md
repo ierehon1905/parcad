@@ -372,10 +372,11 @@ distances from the front face it enters:
 
 Read the bottom three rows as what they are. They are not a pocket with a thin
 lid over it; **they are not a pocket at all.** The part is a solid block with a
-sealed void inside, the front face is unbroken, the extra volume is the lid, and
-the bounding box, the watertightness and `BRepCheck` are exactly what the
-correct part reports. Face count is the only number that moves, and it moves
-*up*.
+sealed void inside it, the front face is unbroken, and the extra volume is the
+lid. Nothing that reads like a failure moves: same bounding box, same
+watertight mesh, fewer triangles than the correct part. What moves is the
+volume, up by the lid, and the face count — also up, because a void adds
+surfaces rather than removing them.
 
 **The microns come from arithmetic, not from typing them.** They cannot arise on
 an axis-aligned face, which is why the trap needs a sloped one. Take a block
@@ -420,23 +421,44 @@ and after measuring it should not:
   accident and 0.4 mm is a design; between them is every value, and any
   threshold is a number some part reaches legitimately. The kernel cannot see
   which one an author meant, because the difference is not in the geometry.
-- **Measuring the outcome instead of the cause does not rescue it either — not
-  today.** The wall sweep is cheap enough to run on every evaluation (10–40 ms
-  at 96 px on these parts), but it reports **0.0055 mm** for
-  `examples/hydraulic-line.js` and **0.0069 mm** for `examples/timing-pulley.js`,
-  two shipped, correct parts. The hydraulic-line sample sits exactly on the seam
-  where a bend's torus meets its straight run: the two fields are tangent there,
-  so the sampled gradient is the wrong surface's normal and the ray it fires
-  runs *along* the face instead of through the wall. That part's true minimum
-  wall is 1.5 mm. Two false alarms in twenty parts is not a signal to put in
-  front of an agent on every edit — it teaches the agent to ignore the line.
+- **Measuring the outcome instead of the cause is the obvious escape, and it
+  does not work either.** Cost is not the obstacle: the wall sweep runs in
+  10–40 ms at 96 px on these parts, cheap enough for every evaluation. Trust is.
+  Swept over every part in `examples/` it answers sanely for nineteen and
+  returns **0.0055 mm** for `hydraulic-line.js` and **0.0069 mm** for
+  `timing-pulley.js`, both correct parts. Two false alarms, two different
+  causes, and only one of them could be fixed:
 
-The honest shape of a fix is therefore neither a refusal nor a threshold. It is
-to make the wall measurement trustworthy first — reject a sample whose normal is
-not the surface's, which is what `thickness.rs` already claims to do and does not
-— and only then to consider putting the measured minimum in the evaluation
-reply, where it needs no threshold at all because it is a measurement rather
-than a judgement.
+  **A sampled normal can belong to the wrong surface.** The hydraulic-line
+  sample sits at z = 20.000, exactly where the bend's arc is trimmed by its own
+  end plane. The torus's field and the plane's are both zero there, so `max`
+  ties and the gradient comes back as the *plane's* normal, +Z, while the tube
+  surface at that point is vertical. The ray then runs along the face instead of
+  through the wall, and the crossing it finds is f32 noise: the same seam reads
+  0.0055 mm at 96 px and 0.0096 mm at 256 px. A real feature reports the same
+  number twice, which is the cheapest way to tell the two apart. `thickness.rs`
+  drops samples whose gradient has *collapsed* — `GRADIENT_TOLERANCE` — but the
+  wrong branch of a `max` has a perfectly good unit gradient, so nothing there
+  catches it.
+
+  **And a part with a tangential feature genuinely has no minimum wall.** The
+  timing-pulley number is this kind, and so are the 0.21–0.24 mm spots on the
+  hydraulic line, which are not artefacts at all: they are the ring of material
+  between the inlet boss's outside diameter and its O-ring groove, which is
+  `0.5 − √(1 − (x − 4)²)` mm thick and **tapers continuously to zero** at the
+  groove's rim. Sample nearer the rim, get a smaller number, without limit. The
+  pulley does the same thing where a tooth groove crosses the outside diameter.
+  Every groove, every fillet and every blend that runs off an edge does. No
+  sampling improvement touches it, because the measurement is *correct* — "the
+  thinnest material anywhere" is not the same question as "is there a wall here
+  too thin to make", and only the second is worth interrupting an author about.
+
+Two false alarms in twenty-one shipped parts is not a signal to put in front of
+an agent on every edit; it teaches the agent to ignore the line. So the entry-side
+rule stays where the evidence puts it — in the examples, in this file, and in
+`display-bezel.js`'s own comments — and the kernel goes on building what it was
+asked for. Anything better has to answer the tangency question first, and that
+is a modelling question, not a threshold.
 
 ### `role: "hole"` does not match a conical opening
 
