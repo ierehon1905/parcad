@@ -147,6 +147,12 @@ streamable-HTTP URL:
 claude mcp add --transport http parcad http://127.0.0.1:4242/mcp
 ```
 
+A `.mcp.json` in a workspace needs that workspace **explicitly** trusted, and a
+workspace under an already-trusted parent inherits trust without the dialog ever
+firing — so it can never *become* explicitly trusted, and the server stays
+`⏸ Pending approval` forever. Not parcad's bug, and it reads exactly like one;
+the fix is `hasTrustDialogAccepted: true` for that path in `~/.claude.json`.
+
 There is no stdio transport on purpose. A stdio server would be a second process
 with its own kernel and its own idea of what is on screen, which is the split
 that `service.rs` exists to prevent.

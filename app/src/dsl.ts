@@ -6,6 +6,9 @@
  * Rust core evaluates. That split is what lets the same script outlive a change
  * of geometry kernel.
  *
+ * Every length is in millimetres, every primitive is centred on the origin and
+ * placed with `.at(x, y, z)`, and a script ends by returning one shape.
+ *
  * Shapes are values. Reusing one reuses the node, so
  *
  *     const hole = cylinder(3, 40)
@@ -32,14 +35,7 @@ export interface BoolOptions {
   blend?: number;
 }
 
-/**
- * A compact directional query over the logical edges of a shape.
- *
- * `>Z` means furthest in +Z, `<Y` furthest in -Y, and `|X` parallel to X.
- * Join terms with `and`: `>Z and >Y and |X` picks the top edge at positive Y
- * that runs along X. The query is resolved anew after each evaluation, rather
- * than depending on an unstable B-rep edge number.
- */
+/** The outward normal of a face, as `adjacentTo` spells it. */
 export type AxisDirection = "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
 
 /** A topology-aware alternative to the compact directional selector string. */
@@ -56,6 +52,15 @@ export interface EdgeQuery {
   at?: Partial<Record<"x" | "y" | "z", "min" | "max">>;
 }
 
+/**
+ * Either a compact directional query over a shape's logical edges, or the
+ * topology-aware object form above.
+ *
+ * `>Z` means furthest in +Z, `<Y` furthest in -Y, and `|X` parallel to X.
+ * Join terms with `and`: `>Z and >Y and |X` picks the top edge at positive Y
+ * that runs along X. Either form is resolved anew after each evaluation, rather
+ * than depending on an unstable B-rep edge number.
+ */
 export type EdgeSelector = string | EdgeQuery;
 
 /** A positional query over B-rep vertices for a corner treatment. */
@@ -332,6 +337,12 @@ export class VertexSelection {
   }
 }
 
+/**
+ * A solid, or a step on the way to one.
+ *
+ * Every method returns a *new* shape rather than changing this one, so a shape
+ * can be placed twice, cut from two things, or kept as a tool and reused.
+ */
 export class Shape {
   /** @internal */
   constructor(
@@ -373,6 +384,7 @@ export class Shape {
     return this.emit(childIds);
   }
 
+  /** Move by `x`, `y`, `z` millimetres from where the shape currently sits. */
   translate(x: number, y: number, z = 0): Shape {
     return new Shape(
       ([child]) => ({ op: "translate", child, by: { x, y, z } }),
@@ -385,7 +397,15 @@ export class Shape {
     return this.translate(x, y, z);
   }
 
-  /** Rotate about an axis through the origin, right-handed, in degrees. */
+  /**
+   * Rotate about an axis through the origin, in degrees.
+   *
+   * A positive angle is right-handed: seen from the axis's + end looking back
+   * at the origin, the shape turns anticlockwise. Measured, both of them —
+   * `.rotate("z", 90)` carries a feature on +X round to +Y, and
+   * `.rotate("x", 90)` carries one on +Z round to -Y, which is how a cylinder
+   * built along Z ends up lying along Y.
+   */
   rotate(axis: Vec3 | "x" | "y" | "z", degrees: number): Shape {
     const a: Vec3 =
       axis === "x"
@@ -409,6 +429,12 @@ export class Shape {
    * `union(half, half.mirror("x"))`; the reflection on its own is the left-hand
    * version of a right-hand part.
    *
+   * The half has to be a *half*. Mirroring a body that spans the plane puts its
+   * material back over the far side, so a hole cut at +x is refilled by the
+   * reflected copy of the same uncut body — measured, silently, and the part
+   * still builds. Mirror the features and union them onto the full body, or
+   * cut both holes after the union.
+   *
    * Unlike `.scale(-1)` this is a reflection rather than a point inversion, and
    * it costs nothing in either backend: reflections are isometries, so no
    * surface changes type and the implicit field stays exact.
@@ -425,6 +451,13 @@ export class Shape {
     return new Shape(([child]) => ({ op: "mirror", child, normal }), [this]);
   }
 
+  /**
+   * Resize about the origin. One factor scales uniformly.
+   *
+   * Different factors per axis are refused by the exact backend rather than
+   * approximated: a non-uniform scale turns a circle into an ellipse and a
+   * fillet into something no rolling ball ever made.
+   */
   scale(x: number, y = x, z = x): Shape {
     return new Shape(
       ([child]) => ({ op: "scale", child, by: { x, y, z } }),
@@ -547,6 +580,7 @@ export class Shape {
     );
   }
 
+  /** Fuse this shape with the others; `{ blend: r }` rounds where they meet. */
   union(...rest: (Shape | BoolOptions)[]): Shape {
     return union(this, ...rest);
   }
@@ -566,6 +600,7 @@ export class Shape {
     );
   }
 
+  /** Keep only what this shape and the others all occupy. */
   intersect(...rest: (Shape | BoolOptions)[]): Shape {
     return intersect(this, ...rest);
   }
@@ -593,11 +628,19 @@ export function box(x: number, y: number, z: number): Shape {
   return new Shape(() => ({ op: "cuboid", size: { x, y, z } }), []);
 }
 
+/** A ball of radius `r` — a radius, like every other primitive here. */
 export function sphere(r: number): Shape {
   return new Shape(() => ({ op: "sphere", r }), []);
 }
 
-/** A cylinder along Z with the given radius and full height. */
+/**
+ * A cylinder along Z with the given radius and full height.
+ *
+ * Centred like every primitive, in Z as well: `cylinder(3, 20)` runs from
+ * z = -10 to z = +10, so a hole through a part that stands on z = 0 is placed
+ * at the middle of its own length, not at the face it enters. `holeFor()` does
+ * that arithmetic, and overshoots both ends.
+ */
 export function cylinder(r: number, h: number): Shape {
   return new Shape(() => ({ op: "cylinder", r, h }), []);
 }
@@ -1132,6 +1175,14 @@ export function sweep(
   }), []);
 }
 
+/**
+ * Fuse every shape given into one solid.
+ *
+ * `union(a, b, { blend: 3 })` rounds the seam the join creates by 3 mm, which
+ * is a fillet in the exact backend. Two solids that meet *exactly* on a face
+ * abort the kernel when the union is blended, at any radius — overlap them
+ * instead, and see the `gotchas` document before reaching for a blend.
+ */
 export function union(...args: (Shape | BoolOptions)[]): Shape {
   const { shapes, opts } = split(args);
   return new Shape(
@@ -1140,6 +1191,7 @@ export function union(...args: (Shape | BoolOptions)[]): Shape {
   );
 }
 
+/** Keep only the volume every one of these shapes occupies. */
 export function intersect(...args: (Shape | BoolOptions)[]): Shape {
   const { shapes, opts } = split(args);
   return new Shape(
@@ -1157,7 +1209,15 @@ export function repeat(shape: Shape, points: [number, number, number?][]): Shape
   return union(...points.map(([x, y, z]) => shape.at(x, y, z ?? 0)));
 }
 
-/** A centred `cols` x `rows` grid of points with the given spacing. */
+/**
+ * A centred `cols` x `rows` grid of points, `dx` and `dy` apart.
+ *
+ * `dx` is the centre-to-centre **pitch**, not the overall span: the pattern
+ * runs `(cols - 1) * dx` wide, so `grid(3, 1, 20, 0)` puts points at -20, 0 and
+ * +20. Every pattern in `examples/` is 2 x 2, where pitch and span happen to be
+ * the same number — which is exactly why reading it as span builds a part that
+ * is watertight, passes every count, and is the wrong size.
+ */
 export function grid(
   cols: number,
   rows: number,

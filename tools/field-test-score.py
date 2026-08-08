@@ -45,6 +45,7 @@ import sys
 # against it, so a tool added to mcp.rs and not to this set is a tool the suite
 # will never report as untested.
 PARCAD_TOOLS = [
+    "read_docs",
     "list_projects", "read_project", "save_project", "evaluate_part",
     "probe_part", "measure_wall_thickness", "list_entities",
     "inspect_treatment_target", "check_selector", "export_part",
@@ -122,6 +123,28 @@ def load(path):
     return out
 
 
+def listed(rub, key):
+    """A comma-separated rubric field, as a list."""
+    return [t.strip() for t in rub.get(key, "").split(",") if t.strip()]
+
+
+def routed(row, rub):
+    """Did the trial take the route the case requires?
+
+    Three questions, and a case may ask any of them: which tools were called
+    (`reach`), which arguments were passed at all (`arg`), and what was *in*
+    one (`input`). The third exists because an authoring case's route is the
+    script, and a script is an argument — no tool name and no sentence in the
+    reply can show whether the model reached for `mirror` or wrote both halves
+    out by hand.
+    """
+    if not all(t in row["calls"] for t in listed(rub, "reach")):
+        return False
+    if not all(row["args"].get(a) for a in listed(rub, "arg")):
+        return False
+    return not rub.get("input") or bool(re.search(rub["input"], row["inputs"]))
+
+
 def summarise(path):
     calls, final, think, results, errors = [], "", 0, [], []
     # Whether the CLI ever wrote its closing `result` line. Absent means the
@@ -134,11 +157,15 @@ def summarise(path):
     # same call. See docs/PERCEPTION.md §7. A case names the arguments its
     # question cannot be answered without, in the rubric's `arg`.
     args = collections.Counter()
+    # And the inputs themselves, for the cases whose route is what a script
+    # says rather than which tool carried it.
+    inputs = []
     for m in load(path):
         if m.get("type") == "assistant":
             for c in m["message"]["content"]:
                 if c["type"] == "tool_use":
                     calls.append(c["name"].replace("mcp__parcad__", ""))
+                    inputs.append(json.dumps(c.get("input") or {}))
                     for k, v in (c.get("input") or {}).items():
                         if v not in (None, False, "", [], {}):
                             args[k] += 1
@@ -195,6 +222,7 @@ def summarise(path):
         "finished": finished,
         "calls": calls,
         "args": args,
+        "inputs": " ".join(inputs),
         # Any tool that measures the part rather than describing it. A
         # thickness sweep and a ray are the same thing here: the model went and
         # looked at the geometry instead of reading the script.
@@ -266,13 +294,9 @@ def grade(row, rub):
     if (row["stray"] or not row["final"].strip() or DEAD.search(row["final"])
             or any(DEAD.search(e) for e in row["errors"])):
         return "VOID"
-    want = [t.strip() for t in rub.get("reach", "").split(",") if t.strip()]
-    reached = all(t in row["calls"] for t in want)
-    for a in [t.strip() for t in rub.get("arg", "").split(",") if t.strip()]:
-        reached = reached and bool(row["args"].get(a))
     if not hit(rub.get("verdict"), row["final"]):
         return "WRONG"
-    if not reached or row["derived"]:
+    if not routed(row, rub) or row["derived"]:
         return "LUCKY"
     return "SOUND"
 
@@ -281,10 +305,7 @@ def score_case(paths, rub):
     rows = [summarise(p) for p in sorted(paths)]
     for r in rows:
         r["grade"] = grade(r, rub)
-        want = [t.strip() for t in rub.get("reach", "").split(",") if t.strip()]
-        r["reached"] = all(t in r["calls"] for t in want) and all(
-            r["args"].get(a) for a in
-            [t.strip() for t in rub.get("arg", "").split(",") if t.strip()])
+        r["reached"] = routed(r, rub)
         r["quoted"] = bool(re.search(rub["quote"], r["final"])) if rub.get("quote") \
             else r["reads"] != "-"
         r["trap"] = bool(rub.get("trap") and re.search(rub["trap"], r["final"][-700:]))

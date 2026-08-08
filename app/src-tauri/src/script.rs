@@ -150,6 +150,48 @@ pub fn build_graph(source: &str) -> Result<serde_json::Value, String> {
     }
 }
 
+/// Every name the bundled DSL hands a script, and the methods of the classes
+/// among them.
+///
+/// Test-only, and deliberately taken from the *running* bundle rather than from
+/// the TypeScript: it is the second reading that `docs.rs` checks its generated
+/// reference against, and two readings of one source is the whole point.
+#[cfg(test)]
+#[derive(serde::Deserialize)]
+pub struct Surface {
+    pub exports: Vec<String>,
+    pub methods: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+#[cfg(test)]
+pub fn surface() -> Result<Surface, String> {
+    const NAMES: &str = r#"
+(() => {
+  const dsl = globalThis.__parcadDsl;
+  const methods = {};
+  for (const name of Object.keys(dsl)) {
+    const value = dsl[name];
+    const own = typeof value === "function" && value.prototype
+      ? Object.getOwnPropertyNames(value.prototype) : [];
+    // A plain function's prototype carries nothing but its constructor.
+    if (own.length > 1) methods[name] = own;
+  }
+  return JSON.stringify({ exports: Object.keys(dsl), methods });
+})()
+"#;
+
+    let runtime = Runtime::new().map_err(|e| format!("could not start the script sandbox: {e}"))?;
+    let context =
+        Context::full(&runtime).map_err(|e| format!("could not start the script sandbox: {e}"))?;
+    let json = context.with(|ctx| -> Result<String, String> {
+        ctx.eval::<(), _>(DSL_BUNDLE)
+            .map_err(|e| format!("the bundled DSL did not load: {}", describe(&ctx, e)))?;
+        ctx.eval::<String, _>(NAMES)
+            .map_err(|e| format!("reading the DSL's exports: {}", describe(&ctx, e)))
+    })?;
+    serde_json::from_str(&json).map_err(|e| format!("the export list was unreadable: {e}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
