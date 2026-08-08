@@ -83,7 +83,7 @@ Findings that changed decisions on this page:
 | Section view | ✅ `render.rs`, `evaluate_part`'s `section` | §7 — a clipping plane in both renderers, the cut face capped and drawn flat, and `cut_fraction` to say whether it opened anything |
 | **Numbered marks on the render** | ❌ | §4 |
 | **Diff render** | ❌ | §8 |
-| **Face adjacency as text** | ✅ `Shape_faces_json`, `list_entities` | §9 — kind, exact area, centroid, normal and neighbours; whether a model reads it is unmeasured |
+| **Face adjacency as text** | ✅ `Shape_faces_json`, `list_entities` | §9 — kind, exact area, centroid, normal and neighbours; 16/16 SOUND on `does-the-blend-reach-the-bolts` |
 | Adaptive slice summary | ❌ | §10, the salvaged form |
 | ASCII / voxel dump | ❌ | §10, hold, with numbers |
 
@@ -625,7 +625,7 @@ running into: an op that runs, returns a valid solid, and changes nothing.
 existing `framing_bounds` is exactly the right thing to share), and a
 subtraction. The numeric half is worth shipping even without the images.
 
-## 9. Faces as text — built, and unmeasured on a model
+## 9. Faces as text — done, and measured on a model
 
 **What it is.** What `list_entities` does for edges, done for faces: surface
 type, area, centroid, normal, and an `adjacent_to` list of face ids. This is
@@ -650,12 +650,14 @@ adjacency is symmetric, so a neighbour that does not name you back fails
 instead of quietly renumbering. Areas are pinned against closed forms — a
 bore's πdh, a drilled face's a² − πr².
 
-**Not measured: whether a model reads any of it.** That is a separate fact from
-whether the tool works, it has been wrong every time it was checked, and it
-needs a case in `eval/field/`. Until one exists this is a component, not an
-outcome. The obvious case is the §5 failure below, put to a model directly:
-handed a thickness between `plate` and `drilled`, does the face list let it name
-the *right* wall?
+**Measured: 16/16 SOUND**, `does-the-blend-reach-the-bolts`, both models, both
+arms, four trials each. Every trial reached `list_entities` and answered from
+`adjacent` — the blend borders the flange top and the hub wall, no bolt hole —
+against a 1.75 mm margin no render settles. Two things the grades do not show
+and the transcripts do: five of sixteen cited the script's own `blend: 3` and
+`boltCircle` *alongside* the adjacency, four of those Haiku, which is the soft
+half of LUCKY rather than a wrong answer; and one trial read the torus's
+`radius` as its minor when it is the major.
 
 **Still absent: a face selector.** Faces can be read and cannot be named. The
 window's inspector says so in as many words rather than offering a control that
@@ -896,12 +898,11 @@ model reads this tool.
 8. **Numbered marks on the render** (§4, the visual half). The change with the
    best evidence behind it, and it makes the selector loop closeable.
 9. **Diff render** (§8), numeric half first.
-10. ~~Faces as text~~ (§9) — **the tool is built; the reading is not measured**.
-   Kind, exact area, centroid, normal and adjacency on `list_entities` and on
-   hover in the window, with the mesher-to-report face join checked three ways.
-   What remains is a case in `eval/field/` — the §5 wrong-wall failure is the
-   one to write — and then the face *selector*, which is still a change in
-   `selectors.rs`, `selectors.ts` and `eval/selectors.json` together and which
+10. ~~Faces as text~~ (§9) — **done, and read: 16/16 SOUND across both models
+   and both arms.** Kind, exact area, centroid, normal and adjacency on
+   `list_entities` and on hover in the window, with the mesher-to-report face
+   join checked three ways. What remains is the face *selector*, still a change
+   in `selectors.rs`, `selectors.ts` and `eval/selectors.json` together, and it
    wants an op that consumes it.
 11. **Adaptive slice summary** (§10) and the default view set (§2), both worth
    measuring before building.

@@ -190,22 +190,11 @@ pub struct Success {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
-    /// Where each face's triangles sit in `indices`.
-    ///
-    /// The mesher triangulates face by face and concatenates the results, so
-    /// this costs nothing to record and is the only thing that lets a triangle
-    /// be traced back to the face it belongs to. Without it a viewer can say
-    /// "you are pointing at the solid" and no more.
-    ///
-    /// Empty for a shape whose faces carried no triangulation at all, and
-    /// short of `topology.faces` when an individual face had none.
+    /// Where each face's triangles sit in `indices`. Shorter than
+    /// `topology.faces` when a face carried no triangulation.
     #[serde(default)]
     pub face_runs: Vec<FaceRun>,
-    /// What each face is: kind, area, centroid, direction and neighbours.
-    ///
-    /// Indexed by position, and `FaceSummary::face` is the same number
-    /// `face_runs` uses, so the face under a pointer and the face described
-    /// here are the same face. Empty when the shape reported no solid.
+    /// What each face is, indexed by the same face number `face_runs` uses.
     #[serde(default)]
     pub faces: Vec<FaceSummary>,
     /// The deflection the mesher actually used, in mm — the furthest any
@@ -229,49 +218,23 @@ pub struct Success {
     pub stl_path: Option<PathBuf>,
 }
 
-/// One face's triangles, as a span of the shared index buffer.
-///
-/// `start` and `count` are in triangles rather than indices, so a viewer with a
-/// triangle number from a raycast can find its face without dividing by three.
-///
-/// `face` is the face's position in the shape's own face traversal, which is
-/// the order `topology.faces` counts and the order the geometry report walks.
-/// It is deliberately not the run's position in `face_runs`: a face carrying no
-/// triangulation contributes no run, and a viewer that used the position would
-/// name every face after such a gap as its neighbour — a wrong answer that
-/// still counts to a plausible total.
-///
-/// Like `edge@N`, it is valid for one evaluation and describes nothing to write
-/// in a script.
+/// One face's triangles, as a span of the index buffer. `start`/`count` are in
+/// triangles. See docs/GOTCHAS.md for why `face` is not the run's own position.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct FaceRun {
+    /// Position in the shape's face traversal. Ephemeral, like `edge@N`.
     pub face: u32,
     pub start: u32,
     pub count: u32,
 }
 
-/// One face of an evaluated part, said in numbers a reader can act on.
-///
-/// The exact shape `Shape_faces_json` (vendored wrapper) emits, and the compact
-/// companion to [`FaceProbe`]: what a face *is* and where, without the boundary
-/// wires or a B-spline's pole grid. That distinction is the whole point — this
-/// travels with every evaluation, behind a 120 ms editor debounce, and the full
-/// report costs three times the time and four to six times the bytes to write
-/// the geometry this would then throw away. `Shape_faces_json`'s own comment in
-/// the vendored wrapper carries the measurements.
-///
-/// The face's own number is its position in this list, which is the kernel's
-/// face number — the same one [`FaceRun`] carries — so the face under the
-/// pointer and the face described here are the same face. Like `edge@N`, it is
-/// valid for one evaluation and belongs in no script.
+/// One face of an evaluated part, as `Shape_faces_json` emits it. Position in
+/// the list is the kernel's face number, the same one [`FaceRun`] carries.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FaceSummary {
     pub area_mm2: f64,
     pub centroid: [f64; 3],
-    /// Faces sharing at least one edge with this one, by the same numbering.
-    ///
-    /// Named once each however many edges they share, and never including the
-    /// face itself — a seam edge on a closed cylinder lists its own face twice.
+    /// Faces sharing an edge with this one, each named once, never itself.
     pub adjacent: Vec<u32>,
     pub surface: SurfacePlacement,
 }
@@ -281,15 +244,11 @@ pub struct FaceSummary {
 pub struct SurfacePlacement {
     /// `plane`, `cylinder`, `cone`, `sphere`, `torus`, `nurbs`, `other`.
     pub kind: String,
-    /// The outward normal of a plane, or the axis of anything turned about one.
-    ///
-    /// Absent for a sphere, a B-spline and whatever OCCT calls `other`: none of
-    /// them has a single direction, and reporting one would be inventing a fact
-    /// about the surface rather than measuring it.
+    /// A plane's outward normal, or the axis of anything turned about one.
+    /// Absent where the surface has no single direction.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<[f64; 3]>,
-    /// A cylinder's or sphere's radius, a cone's at its origin, or a torus's
-    /// major radius.
+    /// A cylinder's or sphere's radius, a cone's at its origin, a torus's major.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub radius: Option<f64>,
 }
@@ -330,25 +289,13 @@ pub struct SolidProbe {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FaceProbe {
-    /// Exact surface area from the B-rep (BRepGProp), not from a tessellation.
-    ///
-    /// A tessellated area is short by the chord error on every curved face,
-    /// which matters here because this is the number a caller compares against
-    /// a drawing or uses to pick out the face it means.
+    /// Exact from the B-rep (BRepGProp): a tessellated area is short by the
+    /// chord error on every curved face.
     pub area_mm2: f64,
-    /// Centre of mass of the face itself — a point *on* the surface for a
-    /// plane, and inside the curvature for anything that bends. It says where
-    /// the face is, which its surface definition does not: every one of a
-    /// cylinder's coaxial faces shares an origin and an axis.
+    /// Centre of mass, which says where the face is — coaxial faces share an
+    /// origin and an axis, so the surface definition does not.
     pub centroid: [f64; 3],
-    /// Faces sharing at least one edge with this one, as positions in the
-    /// solid's `faces` list.
-    ///
-    /// Named once each however many edges they share, and never including the
-    /// face itself — a seam edge on a closed cylinder lists its own face twice.
-    /// This is the adjacency graph the CAD literature feeds a model alongside a
-    /// render; without it "a plane at z=44" cannot distinguish the top of a
-    /// plate from the floor of a pocket.
+    /// Faces sharing an edge with this one, each named once, never itself.
     pub adjacent: Vec<usize>,
     pub surface: SurfaceProbe,
     pub wires: Vec<WireProbe>,

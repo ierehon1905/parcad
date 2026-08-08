@@ -35,19 +35,8 @@ fn main() {
     }
 }
 
-/// What each face of a built shape is: kind, area, centroid, axis, neighbours.
-///
-/// `Shape_faces_json` rather than the full `Shape_geometry_json` `probe_step`
-/// reads: the boundary wires and a B-spline's pole grid are what a recreation
-/// needs from a foreign file, and three times the time and four to six times
-/// the bytes on every rebuild here for geometry this then throws away. The
-/// writer's own comment carries the measurements.
-///
-/// Returns nothing rather than failing the evaluation. A description of the
-/// faces is an *aid*; the geometry, its measurements and its watertightness are
-/// the answer, and they are already established by the time this runs. A shape
-/// with no solid — which the caller has already refused — has no faces to
-/// describe either, and the empty list says exactly that.
+/// What each face is. Empty rather than fatal: the geometry is the answer, and
+/// a description of it is an aid.
 fn describe_faces(shape: &opencascade::primitives::Shape) -> Vec<FaceSummary> {
     serde_json::from_str(&shape.faces_json()).unwrap_or_default()
 }
@@ -355,11 +344,6 @@ fn run() -> Response {
         };
     }
 
-    // What each face is, measured off the B-rep rather than off the triangles
-    // that were just made from it. This is what turns "you are pointing at face
-    // 7" into "face 7 is the 1240 mm² top plane", and it is the same report
-    // `probe_step` reads from a foreign file — one writer, so a part built here
-    // and a part imported are described in the same nouns.
     breadcrumb("describing the faces");
     let faces = describe_faces(&shape);
 

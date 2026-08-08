@@ -583,17 +583,8 @@ impl Parcad {
         let value = serde_json::to_value(&probe)
             .map_err(|e| invalid(format!("encoding the probe reply: {e}")))?;
 
-        // Text *and* structured content, and no output schema — the same shape
-        // `evaluate_part` returns, for the same reason plus one more.
-        //
-        // `StepProbe` lives in parcad-occt, which has no schemars, so wrapping
-        // it in `Json<serde_json::Value>` was the way to return it at all. That
-        // is what broke: a `Value` has no schema, schemars emits `{}` with no
-        // `"type"`, and a client that validates `tools/list` rejects the whole
-        // array over it. Fourteen tools went dark for one untyped return, and
-        // nothing said so — the server kept answering `tools/list` correctly
-        // while every model saw no parcad tools at all. `tool_output_schemas_are_
-        // acceptable_to_a_validating_client` is the regression.
+        // Not `Json<serde_json::Value>`: a Value has no schema, and one
+        // typeless output schema hides every tool. See docs/GOTCHAS.md.
         let mut result =
             rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(
                 value.to_string(),
@@ -964,29 +955,9 @@ fn invalid(message: impl Into<String>) -> ErrorData {
 mod tests {
     use super::*;
 
-    /// Every tool's output schema must be one a validating client will accept.
-    ///
-    /// This is the regression for the worst failure this surface has had, and
-    /// the one hardest to see: `probe_step_export` returned
-    /// `Json<serde_json::Value>`, a `Value` has no schema, and schemars emitted
-    /// an output schema with no `"type"`. Claude Code validates the whole
-    /// `tools/list` array, so one malformed entry rejected all fourteen tools —
-    /// every model saw *no parcad tools at all*, while the server went on
-    /// answering `tools/list` correctly to anything that asked it directly.
-    ///
-    /// Nothing caught it for a day. The suite that exists to measure this
-    /// surface was not re-run after the tool landed, and when it was, sixteen
-    /// trials read as "models cannot use these tools" rather than "the tools
-    /// never arrived". A schema is not a detail here: an output schema that
-    /// fails validation does not degrade one tool, it removes the product.
-    ///
-    /// Absent is fine — most tools here return `CallToolResult` and declare
-    /// none. Present and typeless is not.
-    ///
-    /// Input schemas are checked on the same argument even though it was an
-    /// output schema that did the damage: the client validates the whole tool
-    /// descriptor, so either half can take the surface down, and only one of
-    /// them has been caught the hard way so far.
+    /// A client validates the whole descriptor, so one typeless schema — input
+    /// or output — hides every tool. Absent is fine; typeless is not. The
+    /// failure this regresses is in docs/GOTCHAS.md.
     #[test]
     fn every_advertised_schema_is_an_object() {
         let tools = Parcad::tool_router().list_all();

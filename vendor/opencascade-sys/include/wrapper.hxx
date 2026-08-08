@@ -724,23 +724,12 @@ inline void write_edge(std::ostringstream &out, const TopoDS_Edge &edge) {
   out << "]}";
 }
 
-// Which other faces share an edge with this one, as indices into the solid's
-// own face order.
-//
-// This is the face-adjacency graph the CAD-specific literature serialises
-// alongside a render, and it is the half of a face description that no amount
-// of per-face measurement substitutes for: "a plane at z=44" does not say
-// whether it is the top of the plate or the bottom of a pocket, and the faces
-// it touches do.
-//
-// `edge_faces` is built once per solid, because doing it per face would walk
-// the whole solid once for each of its faces.
+// Faces sharing an edge with this one, as indices into the solid's face order.
+// `edge_faces` is built once per solid rather than per face.
 inline void write_neighbours(std::ostringstream &out, const TopoDS_Face &face,
                              const TopTools_IndexedMapOfShape &faces,
                              const TopTools_IndexedDataMapOfShapeListOfShape &edge_faces) {
-  // A pair of faces meeting along several edges — a cylinder closed by a seam,
-  // a fillet running into a wall twice — must be named once, not once per
-  // shared edge.
+  // A pair meeting along several edges is named once, not once per edge.
   std::set<int> neighbours;
   const int self = faces.FindIndex(face);
   for (TopExp_Explorer e(face, TopAbs_EDGE); e.More(); e.Next()) {
@@ -765,16 +754,9 @@ inline void write_neighbours(std::ostringstream &out, const TopoDS_Face &face,
   out << "]";
 }
 
-// What kind of surface a face is, and how it is placed — nothing more.
-//
-// `direction` is the outward normal of a plane and the axis of anything turned
-// about one; `radius` is a cylinder's or sphere's, a cone's at its origin, or a
-// torus's major. Both are absent where the surface has no single one, because
-// reporting a direction for a B-spline would be inventing a fact rather than
-// measuring it.
-//
-// Deliberately does not descend into a B-spline: the poles are the expensive
-// part of `write_surface` and a caller reading placements does not want them.
+// Surface kind and placement only. `direction` is a plane's outward normal or
+// the axis of anything turned about one; both it and `radius` are absent where
+// the surface has no single one. Does not descend into a B-spline's poles.
 inline void write_surface_placement(std::ostringstream &out, const TopoDS_Face &face) {
   Handle(Geom_Surface) surf = BRep_Tool::Surface(face);
   while (!surf.IsNull() && surf->DynamicType() == STANDARD_TYPE(Geom_RectangularTrimmedSurface)) {
@@ -817,9 +799,7 @@ inline void write_surface_placement(std::ostringstream &out, const TopoDS_Face &
 inline void write_face(std::ostringstream &out, const TopoDS_Face &face,
                        const TopTools_IndexedMapOfShape &faces,
                        const TopTools_IndexedDataMapOfShapeListOfShape &edge_faces) {
-  // Exact, from the B-rep rather than from a tessellation: an area read off
-  // triangles is short by the chord error on every curved face, which is the
-  // one place a face measurement gets quietly used as a tolerance.
+  // Exact from the B-rep: a tessellated area is short by the chord error.
   GProp_GProps props;
   BRepGProp::SurfaceProperties(face, props);
   const gp_Pnt centroid = props.CentreOfMass();
@@ -865,10 +845,8 @@ inline void write_solid(std::ostringstream &out, const TopoDS_Shape &solid) {
   write_xyz(out, x0, y0, z0);
   out << ",\"bbox_max\":";
   write_xyz(out, x1, y1, z1);
-  // Both maps are indexed in the same explorer order the loop below writes in,
-  // so a map index minus one is the position a reader sees in `faces`. That
-  // correspondence is what makes `adjacent` meaningful, and it is checked from
-  // Rust rather than trusted — see `face_adjacency_is_symmetric_and_indexed_as_written`.
+  // Map order matches the write order below, so index-1 is the reader's
+  // position. Checked by `face_adjacency_is_symmetric_and_indexed_as_written`.
   TopTools_IndexedMapOfShape faces;
   TopExp::MapShapes(solid, TopAbs_FACE, faces);
   TopTools_IndexedDataMapOfShapeListOfShape edge_faces;
@@ -887,21 +865,9 @@ inline void write_solid(std::ostringstream &out, const TopoDS_Shape &solid) {
 
 } // namespace parcad_geometry_json
 
-// Just what each face *is*, for a caller that will not read its boundary.
-//
-// The same measurements `write_face` makes, minus the wires and minus a
-// B-spline's pole grid. Those are what a recreation needs from a foreign STEP
-// file and dead weight on an ordinary rebuild, which is a rebuild per keystroke
-// behind a 120 ms debounce.
-//
-// Measured, best of 25 in-process: a drilled plate of 18 planes and cylinders
-// costs 2.09 ms and 13043 bytes through the full writer against 0.73 ms and
-// 2954 through this one; a six-face twisted loft, 0.46 ms and 5450 bytes
-// against 0.14 ms and 877. Three times the time and four to six times the
-// bytes, for geometry the caller then discards.
-//
-// Two writers rather than one writer with a flag, because the cost is in the
-// writing: a filter would still have built the pole grid before dropping it.
+// What each face of the first solid *is*, without its boundary or pole grid.
+// Why this exists rather than a flag on the full writer, with the measurements:
+// docs/GOTCHAS.md, "Two writers for measured geometry".
 inline rust::String Shape_faces_json(const TopoDS_Shape &shape) {
   using namespace parcad_geometry_json;
   std::ostringstream out;
@@ -909,9 +875,7 @@ inline rust::String Shape_faces_json(const TopoDS_Shape &shape) {
   out << "[";
   int written = 0;
   for (TopExp_Explorer s(shape, TopAbs_SOLID); s.More(); s.Next()) {
-    // The first solid only, and deliberately: the face numbering this feeds
-    // counts the shape's faces, and concatenating a second solid's faces onto
-    // it would renumber them into a claim that is wrong rather than partial.
+    // First solid only: concatenating a second would renumber the faces.
     const TopoDS_Shape &solid = s.Current();
     TopTools_IndexedMapOfShape faces;
     TopExp::MapShapes(solid, TopAbs_FACE, faces);

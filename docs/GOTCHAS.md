@@ -368,6 +368,29 @@ wrong in the same way everywhere is the hardest kind to see.
 - TypeScript: `isLineSegments` doesn't exist on the intersected three.js type.
   Use `isLine` — `LineSegments extends Line`.
 
+## One malformed tool schema hides the entire MCP surface
+
+`probe_step_export` returned `Json<serde_json::Value>`. A `Value` has no schema,
+so schemars emitted an output schema with no `"type"`, and a client that
+validates `tools/list` rejects **the whole array** over one bad entry. Every
+model saw no parcad tools at all, for a day, while the server went on answering
+`tools/list` correctly to anything that asked it directly. Fixed in `c426c465`;
+`every_advertised_schema_is_an_object` in `mcp.rs` is the regression, and it
+covers input schemas too because a client validates the whole descriptor.
+
+**`--mcp-config` cannot report it** — it says `connected` and swallows the parse
+error. `claude mcp list` prints it, and `CLAUDE_CONFIG_DIR` keeps the probe out
+of the real config:
+
+```bash
+CLAUDE_CONFIG_DIR=/tmp/probe-cfg claude mcp add --transport http parcad http://127.0.0.1:4344/mcp
+CLAUDE_CONFIG_DIR=/tmp/probe-cfg claude mcp list
+```
+
+**From the field suite it reads as "no model can use these tools."** The tell is
+uniformity: every trial failing the same way in both models and both arms, which
+a real distribution does not do.
+
 ## A union of pieces that do not touch each other kills the fuse that joins them
 
 `pipe()` builds a tube as runs and bend arcs and unions them. Assembled with
