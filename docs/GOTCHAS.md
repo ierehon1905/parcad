@@ -202,6 +202,22 @@ find target -maxdepth 3 -name "occt-sys-*" -type d -exec rm -rf {} +
 
 ## Geometry
 
+### The `left` and `right` views were mirrored
+
+`View::rotation` hands back the three screen axes as model directions, and for
+both side views that triple had determinant **−1**: a reflection, not a camera.
+A boss standing off a part's +Y face drew at column 94 of 128 in the `left`
+view, where it belongs at 34. Every other view was right, which is why nothing
+noticed — a mirrored picture of a symmetric part is the same picture, and every
+part in `examples/` is symmetric about at least one of these planes.
+
+The fix is one sign on each of the two, and `every_view_says_which_way_it_looks`
+now asserts the determinant. Nothing else about handedness was wrong: the mesh,
+the measurements and the exports were never involved, and `Op::Mirror` is a
+different thing entirely. What it cost was that an agent reading a side view of
+a handed part got the handedness backwards, which is a defect no amount of
+looking harder at the render would have caught.
+
 ### `offset_surface` lies
 
 It returns valid-looking wrong answers rather than failing:

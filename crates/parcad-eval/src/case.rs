@@ -6,6 +6,7 @@
 //! neither. Fields left unset are recorded by `--update` and never checked.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// How far an observation may sit from the recorded value before it is a
 /// failure.
@@ -104,6 +105,20 @@ pub struct Expect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub curves: Option<usize>,
 
+    /// Where each named feature sits, as `[min_x, min_y, min_z, max_x, max_y,
+    /// max_z]` per tag.
+    ///
+    /// The check nothing else here makes. Volume, area and topology are all
+    /// invariant under moving a feature to the wrong end of the part, and a
+    /// script that does exactly that passes every other line in this struct —
+    /// docs/PERCEPTION.md §3 has the model car it was found on.
+    ///
+    /// Opt-in per case, and `record` leaves it alone unless the case already
+    /// has it: a six-number block per tag in every file would bury the one
+    /// number most of them are actually about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<BTreeMap<String, [f64; 6]>>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tolerance: Option<Tolerance>,
 
@@ -152,6 +167,9 @@ pub struct Observed {
     pub faces: Option<usize>,
     pub edges: Option<usize>,
     pub curves: Option<usize>,
+    /// Every tag's own box, and the ones no surface point could be found for.
+    pub tags: BTreeMap<String, [f64; 6]>,
+    pub unlocated_tags: Vec<String>,
 }
 
 /// One assertion that did not hold, phrased so the terminal line is enough to
@@ -221,6 +239,39 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
         }
     }
 
+    // A tag that has moved, gone missing, or changed size. Checked against the
+    // same per-axis tolerance as `size`, because that is what these are.
+    if let Some(want) = &expect.tags {
+        for (tag, want) in want {
+            let Some(got) = observed.tags.get(tag) else {
+                out.push(Mismatch {
+                    field: format!("tags.{tag}"),
+                    detail: if observed.unlocated_tags.iter().any(|t| t == tag) {
+                        "no point of the finished surface belongs to it any more".into()
+                    } else {
+                        format!(
+                            "the part has no such tag; it has {}",
+                            observed.tags.keys().cloned().collect::<Vec<_>>().join(", ")
+                        )
+                    },
+                });
+                continue;
+            };
+            for (i, axis) in ["min.x", "min.y", "min.z", "max.x", "max.y", "max.z"]
+                .iter()
+                .enumerate()
+            {
+                abs_check(
+                    &mut out,
+                    &format!("tags.{tag}.{axis}"),
+                    want[i],
+                    got[i],
+                    tol.size_mm,
+                );
+            }
+        }
+    }
+
     // Topology counts are exact integers or nothing. A face count that is
     // "close" is a different part.
     for (field, want, got) in [
@@ -276,6 +327,16 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
     expect.faces = observed.faces;
     expect.edges = observed.edges;
     expect.curves = observed.curves;
+    // Only where the case already asks about tags. See `Expect::tags`.
+    if expect.tags.is_some() {
+        expect.tags = Some(
+            observed
+                .tags
+                .iter()
+                .map(|(t, b)| (t.clone(), b.map(round3)))
+                .collect(),
+        );
+    }
 }
 
 fn round3(v: f64) -> f64 {

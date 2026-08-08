@@ -186,6 +186,24 @@ pub struct EvaluationSnapshot {
     pub watertight: bool,
     pub non_manifold_edges: usize,
     pub tags: Vec<String>,
+    /// Where each of those tags actually is, measured from the built surface.
+    ///
+    /// The overall `bounds_min` / `bounds_max` / `centroid` above say where the
+    /// *part* is, which a symmetric part answers with zeros however wrong it is.
+    /// These say where each named feature is inside it, and that is the number
+    /// that catches a feature built facing the wrong way, sitting on the wrong
+    /// side of centre, or scaled to something other than what was intended —
+    /// the class of error every other check in this reply passes. See
+    /// docs/PERCEPTION.md §3.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tag_extents: Vec<TagExtent>,
+    /// Tags with no extent to report, and there are only two ways to get here:
+    /// the tag is on a fillet or chamfer, which has no distance field to ask
+    /// (see `unattributed_treatments`), or nothing that node made survived to
+    /// the finished surface. The second is worth acting on — a shape that was
+    /// unioned in and then entirely cut away is usually not what was meant.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unlocated_tags: Vec<String>,
     /// Edge treatments the finished part actually depends on.
     pub treatments: Vec<Treatment>,
     /// Nodes the root does not reach: shapes the script built and never used.
@@ -227,6 +245,31 @@ impl EvaluationSnapshot {
         }
         self
     }
+}
+
+/// One tag's own bounding box, and the middle of it.
+///
+/// A restatement of `parcad_core::tags::TagExtent` for the same reason
+/// [`Region`] restates its core type, plus the two fields a reader would
+/// otherwise have to subtract for itself: `size` and `center` are what the
+/// question *is this feature where I think it is* is actually asked in, and
+/// `PartReport` exists so nothing has to ask a follow-up.
+///
+/// `center` is the middle of the box and not a centre of mass. The surface
+/// points behind it are a sample of the tag's surface rather than of its
+/// material, so a mass centroid computed from them would be weighted by
+/// wherever the mesher happened to put vertices.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct TagExtent {
+    pub tag: String,
+    pub bounds_min: [f64; 3],
+    pub bounds_max: [f64; 3],
+    pub size: [f64; 3],
+    pub center: [f64; 3],
+    /// Surface points attributed to this tag. The box is bounded by these, so
+    /// it can fall short of the tag's true reach by about the distance between
+    /// them — `resolution_mm` — and a low count means a coarser answer.
+    pub surface_points: usize,
 }
 
 /// An edge treatment, as a handle a caller can inspect.
@@ -410,6 +453,8 @@ pub struct RenderedView {
     pub view: String,
     pub width: u32,
     pub height: u32,
+    /// Which way this view looks, in model axes.
+    pub axes: ViewAxes,
     /// Present only for a tag-region map: which tag owns which colour, and how
     /// much of the visible surface each one covers in *this* view.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -421,6 +466,30 @@ pub struct RenderedView {
     /// Where this view was cut open, if it was.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub section: Option<SectionCut>,
+}
+
+/// Where the camera for one view was, said in the part's own axes.
+///
+/// **A view name is absolute, not part-relative.** `front` looks along +Y and
+/// shows the XZ plane whichever way the part faces, so a part whose length runs
+/// along X gets its side elevation drawn under the name `front`. That is
+/// consistent and it is still misleading: a session read `front` as the front of
+/// its car and misread two rounds of images before it clicked. `section` already
+/// reports the plane it resolved for exactly this reason, and this is that
+/// precedent applied to the camera.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ViewAxes {
+    /// Unit vector, in model space, that the camera looks along: `[0, 1, 0]`
+    /// for `front`. Something at a larger coordinate along it is further away.
+    pub looks_along: [f64; 3],
+    /// Model direction that is up in the image — `[0, 0, 1]` for every view but
+    /// `top` and `bottom`.
+    pub up: [f64; 3],
+    /// Model direction that is right in the image.
+    pub right: [f64; 3],
+    /// The same three as a sentence, which is the form that gets read:
+    /// "looks along +y and shows the xz plane, with +x right and +z up".
+    pub summary: String,
 }
 
 /// The plane a view was cut on, and how much of the picture it opened.
@@ -470,52 +539,15 @@ pub struct Renders {
     pub omitted: Vec<usize>,
 }
 
-/// The document as a distance field can draw it.
+/// The document as a distance field can draw it, and the treatments that cost.
 ///
-/// The implicit backend refuses `Fillet` and `Chamfer` outright — it has no
-/// logical edges to select — and that refusal is right for geometry and useless
-/// for a picture: every part in `examples/` with an edge treatment would be
-/// undrawable, which is most of them. So each treatment is replaced by an
-/// identity node, and the caller is told which ones by node index.
-///
-/// This is not the "refuse rather than approximate" rule being bent. That rule
-/// governs geometry a caller might measure or export; nothing here reaches
-/// either. What it does require is that the omission be *stated* — a picture
-/// missing a fillet nobody mentioned would have a caller conclude its treatment
-/// failed, which is the one wrong answer this could produce.
-///
-/// Two details that are load-bearing:
-///
-/// - The identity is a zero `Translate` rather than a removal, so every node
-///   index in the document still means what it meant. A caller holding a
-///   treatment node from a snapshot can still inspect it.
-/// - The tag goes with it. A tag on a fillet node names *the filleted result*;
-///   left on the identity it would name the child's entire surface, and the
-///   region legend would confidently report `top_hole_rims` covering half the
-///   part. A missing entry is recoverable, a wrong one is not.
+/// `parcad_core::sdf::drawable` owns the substitution and the reasoning behind
+/// it — the identity keeps every node index, and the tag goes with the treatment
+/// rather than sliding onto its child. Everything on this side of the wire that
+/// touches the field goes through this door: renders, probes, thicknesses and
+/// tag extents all measure the *unfilleted* part and all say so.
 fn drawable(doc: &Doc) -> (Doc, Vec<usize>) {
-    let mut drawable = doc.clone();
-    let mut omitted = Vec::new();
-
-    for (id, node) in drawable.nodes.iter_mut().enumerate() {
-        let child = match node.op {
-            Op::Fillet { child, .. } | Op::Chamfer { child, .. } => child,
-            _ => continue,
-        };
-
-        node.op = Op::Translate {
-            child,
-            by: parcad_core::graph::V3 {
-                x: 0.0,
-                y: 0.0,
-                z: 0.0,
-            },
-        };
-        node.tag = None;
-        omitted.push(id);
-    }
-
-    (drawable, omitted)
+    parcad_core::sdf::drawable(doc)
 }
 
 /// What one render request asks for.
@@ -624,6 +656,7 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                     view: view.name().to_string(),
                     width: image.width,
                     height: image.height,
+                    axes: axes_of(*view),
                     regions: entries,
                     unclaimed_fraction: unclaimed,
                     section: buffer.cut_plane.map(|cut| SectionCut {
@@ -638,6 +671,16 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
         })
         .collect::<Result<Vec<_>, String>>()
         .map(|views| Renders { views, omitted })
+}
+
+fn axes_of(view: parcad_core::view::View) -> ViewAxes {
+    let (right, up, looking) = view.axes();
+    ViewAxes {
+        looks_along: round_dir([looking.x, looking.y, looking.z]),
+        up: round_dir([up.x, up.y, up.z]),
+        right: round_dir([right.x, right.y, right.z]),
+        summary: view.orientation(),
+    }
 }
 
 /// One line to measure along.
@@ -1070,10 +1113,12 @@ pub fn parse_section(
 fn describe(
     doc: &Doc,
     report: &parcad_core::PartReport,
+    mesh: &Tessellation,
     topology: Option<&parcad_occt::Topology>,
     backend: &str,
     kernel_ms: u64,
 ) -> EvaluationSnapshot {
+    let (extents, unlocated) = tag_extents(doc, mesh, report.bounds);
     EvaluationSnapshot {
         units: report.units.clone(),
         size: round_point([report.size.x, report.size.y, report.size.z]),
@@ -1101,6 +1146,8 @@ fn describe(
         watertight: report.mesh.watertight,
         non_manifold_edges: report.mesh.non_manifold_edges,
         tags: report.tags.clone(),
+        tag_extents: extents,
+        unlocated_tags: unlocated,
         treatments: treatments(doc),
         unused_nodes: report.total_nodes.saturating_sub(report.live_nodes),
         backend: backend.to_string(),
@@ -1110,6 +1157,50 @@ fn describe(
         views: Vec::new(),
         unattributed_treatments: Vec::new(),
     }
+}
+
+/// Locate every tag on the surface the kernel just produced.
+///
+/// The tolerance is half the mesh's own resolution, for the same reason a region
+/// map ties its tolerance to one pixel: what counts as *on* a surface has to
+/// scale with how finely that surface was sampled, or the answer changes when
+/// nothing about the part did. The floor under it is for the exact kernel, whose
+/// deflection is microns while the field it is being compared against is
+/// evaluated in f32 — on a part a few hundred millimetres across, f32's own
+/// rounding is the larger of the two.
+///
+/// A document the field cannot lower is not an error here. It means no tag can
+/// be located, which is what an empty list says; the measurements this sits
+/// beside are the exact kernel's and are unaffected either way.
+fn tag_extents(
+    doc: &Doc,
+    mesh: &Tessellation,
+    bounds: parcad_core::measure::Aabb,
+) -> (Vec<TagExtent>, Vec<String>) {
+    let tolerance = (mesh.resolution_mm * 0.5).max(bounds.radius() * 1e-5);
+    let sample = parcad_core::tags::surface_sample(&mesh.vertices, &mesh.triangles);
+    let (fields, _) = drawable(doc);
+    let Ok(found) = parcad_core::tags::extents(&fields, &sample, tolerance) else {
+        return (Vec::new(), Vec::new());
+    };
+
+    let extents = found
+        .extents
+        .into_iter()
+        .map(|e| {
+            let (min, max) = (e.bounds.min, e.bounds.max);
+            let (size, center) = (e.bounds.size(), e.bounds.center());
+            TagExtent {
+                tag: e.tag,
+                bounds_min: round_point([min.x, min.y, min.z]),
+                bounds_max: round_point([max.x, max.y, max.z]),
+                size: round_point([size.x, size.y, size.z]),
+                center: round_point([center.x, center.y, center.z]),
+                surface_points: e.points,
+            }
+        })
+        .collect();
+    (extents, found.unlocated)
 }
 
 /// The edge treatments the root depends on, in dependency order.
@@ -1284,7 +1375,9 @@ fn evaluate_implicit(doc: &Doc, depth: u8) -> Result<Evaluated, String> {
         face_runs: Vec::new(),
         faces: Vec::new(),
         bounds: report.bounds,
-        snapshot: describe(doc, &report, None, "implicit", 0),
+        // The welded mesh rather than the faceted corners: same surface, and
+        // shared vertices are what make an edge midpoint mean anything.
+        snapshot: describe(doc, &report, &tess, None, "implicit", 0),
         timings: Timings {
             lower_and_mesh_ms,
             normals_ms,
@@ -1298,10 +1391,10 @@ fn evaluate_brep(doc: &Doc) -> Result<Evaluated, String> {
         parcad_occt::evaluate(doc, &parcad_occt::Options::default()).map_err(|e| format!("{e}"))?;
     let kernel_ms = t0.elapsed().as_millis() as u64;
 
-    let report = measure_brep(doc, &s)?;
+    let (report, mesh) = measure_brep(doc, &s)?;
     Ok(Evaluated {
         bounds: report.bounds,
-        snapshot: describe(doc, &report, Some(&s.topology), "brep", kernel_ms),
+        snapshot: describe(doc, &report, &mesh, Some(&s.topology), "brep", kernel_ms),
         positions: s.positions,
         normals: s.normals,
         indices: s.indices,
@@ -1332,13 +1425,17 @@ fn evaluate_mesh_preview(doc: &Doc) -> Result<Evaluated, String> {
     Ok(preview)
 }
 
-/// Measure a B-rep result with the same code that measures an implicit one.
+/// Measure a B-rep result with the same code that measures an implicit one, and
+/// hand back the welded surface it measured.
 ///
 /// Worth doing even though OCCT can report its own mass properties: running the
 /// kernel's mesh through our own watertightness check is an independent test of
 /// the thing we actually hand to a printer. A B-rep can be valid and still
 /// tessellate into a mesh with holes.
-fn measure_brep(doc: &Doc, s: &parcad_occt::Success) -> Result<parcad_core::PartReport, String> {
+fn measure_brep(
+    doc: &Doc,
+    s: &parcad_occt::Success,
+) -> Result<(parcad_core::PartReport, Tessellation), String> {
     let vertices: Vec<[f32; 3]> = s
         .positions
         .chunks_exact(3)
@@ -1367,7 +1464,7 @@ fn measure_brep(doc: &Doc, s: &parcad_occt::Success) -> Result<parcad_core::Part
     let tight = parcad_core::measure::Aabb::from_points(&tess.vertices)
         .ok_or_else(|| "the kernel returned a mesh with no vertices".to_string())?;
 
-    Ok(parcad_core::PartReport {
+    let report = parcad_core::PartReport {
         units: doc.units.clone(),
         bounds: tight,
         size: tight.size(),
@@ -1377,7 +1474,8 @@ fn measure_brep(doc: &Doc, s: &parcad_occt::Success) -> Result<parcad_core::Part
         tags: doc.tags().into_iter().map(|(_, t)| t.to_string()).collect(),
         live_nodes: doc.topo_order().map_err(|e| format!("{e:#}"))?.len(),
         total_nodes: doc.nodes.len(),
-    })
+    };
+    Ok((report, tess))
 }
 
 /// Produce the current part as STL.
@@ -1878,6 +1976,106 @@ mod tests {
         assert!(
             (0.0..=1.0).contains(&unclaimed),
             "unclaimed surface is a fraction, got {unclaimed}"
+        );
+
+        // The drawn key sits beside the part rather than over it, so the frame
+        // is wider than it is tall and the part still occupies the square it
+        // would have had with no legend at all.
+        let (w, h) = (
+            renders.views[0].summary.width,
+            renders.views[0].summary.height,
+        );
+        assert_eq!(h, 128);
+        assert!(w > h, "the legend is drawn inside the frame again: {w}x{h}");
+    }
+
+    /// Every view says where its camera was, because a view name is absolute.
+    ///
+    /// `front` looks along +Y whichever way the part faces, and a session that
+    /// read it as the front of its car misread two rounds of images. The numbers
+    /// and the sentence come off the same matrix, so neither can drift.
+    #[test]
+    fn every_rendered_view_says_which_way_it_looked() {
+        let doc = plate_with_a_hole();
+        let renders = render(
+            &evaluated(&doc),
+            &doc,
+            &RenderSpec {
+                views: &parcad_core::view::View::ALL,
+                size: 64,
+                regions: false,
+                section: None,
+            },
+        )
+        .expect("the plate should render");
+
+        let front = renders
+            .views
+            .iter()
+            .find(|r| r.summary.view == "front")
+            .expect("a front view");
+        assert_eq!(front.summary.axes.looks_along, [0.0, 1.0, 0.0]);
+        assert_eq!(front.summary.axes.up, [0.0, 0.0, 1.0]);
+        assert_eq!(front.summary.axes.right, [1.0, 0.0, 0.0]);
+        assert_eq!(
+            front.summary.axes.summary,
+            "looks along +y and shows the xz plane, with +x right and +z up"
+        );
+
+        for r in &renders.views {
+            let a = &r.summary.axes;
+            let length = |v: [f64; 3]| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            assert!((length(a.looks_along) - 1.0).abs() < 1e-3, "{:?}", a);
+            assert!(!a.summary.is_empty());
+        }
+    }
+
+    /// The number that catches a feature built in the wrong place.
+    ///
+    /// Every other measurement in the reply is symmetric about the origin for
+    /// this plate and would be identical with the bore anywhere along X. The
+    /// per-tag box is the one that says where the bore actually went — and it
+    /// is measured from the built surface, so a bore the kernel did not cut
+    /// would not appear at all.
+    #[test]
+    fn a_tag_is_reported_where_its_own_surface_was_measured() {
+        // The tag goes on the placement, not on the primitive, which is what
+        // `.at(...).tag(...)` writes — a tag names one node, and the node this
+        // one names is the cylinder where it ended up.
+        let doc = doc(serde_json::json!({
+            "root": 3,
+            "nodes": [
+                { "op": "cuboid", "size": { "x": 40, "y": 40, "z": 6 }, "tag": "plate" },
+                { "op": "cylinder", "r": 6, "h": 20 },
+                { "op": "translate", "child": 1, "by": { "x": 12, "y": 0, "z": 0 }, "tag": "bore" },
+                { "op": "difference", "base": 0, "tools": [2], "blend": 0 },
+            ],
+        }));
+
+        let snapshot = evaluate(&doc, 7, Backend::Implicit)
+            .expect("the plate should evaluate")
+            .snapshot;
+        assert!(
+            snapshot.unlocated_tags.is_empty(),
+            "{:?}",
+            snapshot.unlocated_tags
+        );
+
+        let extent = |tag: &str| {
+            snapshot
+                .tag_extents
+                .iter()
+                .find(|e| e.tag == tag)
+                .unwrap_or_else(|| panic!("no extent for {tag}"))
+                .center
+        };
+        // The plate is centred and the bore is not, and the whole part's
+        // centroid barely moves — 40 mm of plate against a Ø12 hole.
+        assert!(extent("plate")[0].abs() < 0.3, "{:?}", extent("plate"));
+        assert!(
+            (extent("bore")[0] - 12.0).abs() < 0.3,
+            "the bore reports its centre at {:?}, not the 12 mm it was moved to",
+            extent("bore")
         );
     }
 

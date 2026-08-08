@@ -3,6 +3,7 @@
 use crate::case::{Observed, RefusalKind};
 use anyhow::{Context, Result};
 use parcad_core::graph::Doc;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::process::Command;
 
@@ -51,16 +52,21 @@ pub fn build_doc(root: &Path, script: &str) -> Result<Doc> {
 /// can still reject a document, so a refusal is a possible outcome.
 pub fn run_implicit(doc: &Doc, depth: u8) -> Outcome {
     match parcad_core::evaluate(doc, depth) {
-        Ok((_, tess, report)) => Outcome::Measured(Observed {
-            size: [report.size.x, report.size.y, report.size.z],
-            volume_mm3: report.mass.volume_mm3,
-            area_mm2: report.mass.area_mm2,
-            triangles: tess.triangles.len(),
-            watertight: report.mesh.watertight,
-            faces: None,
-            edges: None,
-            curves: None,
-        }),
+        Ok((_, tess, report)) => {
+            let (tags, unlocated_tags) = locate_tags(doc, &tess, report.bounds);
+            Outcome::Measured(Observed {
+                size: [report.size.x, report.size.y, report.size.z],
+                volume_mm3: report.mass.volume_mm3,
+                area_mm2: report.mass.area_mm2,
+                triangles: tess.triangles.len(),
+                watertight: report.mesh.watertight,
+                faces: None,
+                edges: None,
+                curves: None,
+                tags,
+                unlocated_tags,
+            })
+        }
         Err(e) => Outcome::Refused {
             kind: RefusalKind::Error,
             // The whole chain: the useful sentence is usually the innermost one.
@@ -113,6 +119,7 @@ pub fn run_brep(doc: &Doc) -> Outcome {
     };
     let mass = parcad_core::measure::mass_properties(&tess.vertices, &tess.triangles);
     let size = bounds.size();
+    let (tags, unlocated_tags) = locate_tags(doc, &tess, bounds);
 
     Outcome::Measured(Observed {
         size: [size.x, size.y, size.z],
@@ -123,7 +130,35 @@ pub fn run_brep(doc: &Doc) -> Outcome {
         faces: Some(s.topology.faces),
         edges: Some(s.topology.edges),
         curves: Some(s.edges.len()),
+        tags,
+        unlocated_tags,
     })
+}
+
+/// Where each tag's own surface sits, by the same call and the same tolerance
+/// the app's reply uses. Kept identical on purpose: a corpus that pins a number
+/// nothing on the wire produces is pinning the wrong number.
+fn locate_tags(
+    doc: &Doc,
+    mesh: &parcad_core::mesh::Tessellation,
+    bounds: parcad_core::measure::Aabb,
+) -> (BTreeMap<String, [f64; 6]>, Vec<String>) {
+    let tolerance = (mesh.resolution_mm * 0.5).max(bounds.radius() * 1e-5);
+    let sample = parcad_core::tags::surface_sample(&mesh.vertices, &mesh.triangles);
+    let (fields, _) = parcad_core::sdf::drawable(doc);
+    let Ok(found) = parcad_core::tags::extents(&fields, &sample, tolerance) else {
+        return (BTreeMap::new(), Vec::new());
+    };
+
+    let boxes = found
+        .extents
+        .into_iter()
+        .map(|e| {
+            let (lo, hi) = (e.bounds.min, e.bounds.max);
+            (e.tag, [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z])
+        })
+        .collect();
+    (boxes, found.unlocated)
 }
 
 /// Whether the exact backend can run at all here.

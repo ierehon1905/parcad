@@ -72,7 +72,9 @@ Findings that changed decisions on this page:
 | Measured dimensions, volume, area | ✅ `PartReport`, `measure.rs` | tight `bounds`, never `framing_bounds` |
 | Multi-view contact sheet | ✅ `render::contact_sheet` | seven orthographic views, one shared framing |
 | Scale bar on every panel | ✅ `render::ScaleBar` | round 1-2-5 lengths, end ticks — the "how big is this" answer without a call |
-| Region colouring with a legend | ✅ `tags.rs` | which tag owns which surface, drawn on the image |
+| Region colouring with a legend | ✅ `tags.rs` | which tag owns which surface; the key sits beside the frame, and colours are hashed from the name so two renders stay comparable |
+| Where each tag is | ✅ `tags::extents`, `evaluate_part`'s `tag_extents` | §3 — one box and one centre per tag, measured from the built surface. The failure class no other check catches |
+| Which way a view looks | ✅ `RenderedView`'s `axes` | §2 — view names are absolute, and saying so found two of them mirrored |
 | Edge listing with geometry | ✅ `list_entities` | centre, direction, length; sampled at 60, with the total — and it disagrees with `evaluate_part`'s `topological_edges`, which double-counts. §13 |
 | Treatment target preview | ✅ `inspect_treatment_target` | plus tags whose edge set is *exactly* the target |
 | Selector syntax check | ✅ `check_selector` | no geometry touched |
@@ -179,6 +181,25 @@ the sort of thing that is invisible until measured.
 **Worth measuring rather than assuming.** This is a claim about our renders, not
 theirs. An eval that asks the same question of the same part at four views and
 seven would settle it.
+
+**A view name is absolute, and now says so — done.** `front` looks along +Y and
+shows the XZ plane whichever way the part faces. A session modelling a car whose
+length ran along X therefore got its *side* elevation under the name `front`,
+and misread two rounds of images before it clicked. Perfectly consistent, and
+still the cheapest misreading on this page to remove: every `RenderedView` now
+carries `axes` — `looks_along`, `up` and `right` as model unit vectors, plus the
+sentence "looks along +y and shows the xz plane, with +x right and +z up". Same
+precedent as `section` reporting its resolved plane, and the numbers and the
+sentence come off the same matrix so neither can drift from the camera.
+
+**Writing the axes down found that two of the views were mirrored.** The screen
+basis for `left` and `right` had determinant −1 — a reflection rather than a
+rotation — so a boss standing off a part's +Y face drew at column 94 of 128 in
+the `left` view where it belongs at 34. Nothing had noticed because a mirrored
+picture of a symmetric part is the same picture, and every part in `examples/`
+is symmetric about at least one of these planes. An agent reading a side view of
+a *handed* part got the handedness backwards, and no amount of looking harder at
+the render would have caught it. docs/GOTCHAS.md has the fix and the pixels.
 
 ## 3. Point and ray probes — **DONE**
 
@@ -357,6 +378,91 @@ mean two things. Its closed forms are pinned in `thickness.rs`'s unit tests —
 a 40 mm shell, an off-centre pocket with a 2 mm wall on one side and 12 mm on
 the other, and a sphere, whose every inward normal is a diameter.
 
+### Where is this tag? — done, and it is the answer to a failure class
+
+Round 3's one wrong answer above could not locate a feature, so it aimed a ray
+at the wrong plane and measured something real, correctly, in the wrong place.
+An external session then produced the sharper version of the same gap and it is
+worth stating in full, because nothing else on this page catches it.
+
+A detailed 1:10 model car passed every automated check this project has —
+watertight, manifold, not one wall below the print threshold after three rounds
+of `measure_wall_thickness` fixes, every `.expect({ count })` matching — and was
+**wrong as an object**: the cabin faced the opposite way from the body, a
+cab-forward greenhouse on a front-engine car. Seven rendered viewpoints did not
+show it. A person glancing at one render caught it in a second.
+
+`tag_extents` on `evaluate_part` is that bug as a number, from the same call:
+
+```
+lower  x -218.000 .. 218.000   centre    0.000
+cabin  x -115.000 .. 100.000   centre   -7.500
+```
+
+Measured, not derived — `tags::extents` bounds the points of the *built* surface
+whose own field vanishes on each tag, so a feature the kernel did not build has
+no extent and says so in `unlocated_tags`. Four things the implementation
+settled that the estimate did not:
+
+- **An extent is inclusive where a colour is exclusive.** `owners_at` gives a
+  point to the nearest tag because a pixel takes one colour and a crossing names
+  one surface. An extent has no such constraint, and under the exclusive rule
+  `examples/flange.js` reported its bore 11.95 mm deep in a part it runs
+  23.9 mm through: both rims that bound it are points where two tagged surfaces
+  genuinely meet, and both were won by the face rather than the bore. Nested
+  tags now report nested boxes, which is what the script says.
+- **The vertex list is not a sample of the surface.** An exact kernel meshes a
+  cylindrical face as two rings of nodes and nothing between — the chordal error
+  it meshes to is entirely circumferential — and both rings are rims. Before
+  `surface_sample` added every triangle edge's midpoint, `bore` came back as a
+  flat ring: a real circle at a real radius, at a single z. The midpoints that
+  are *not* on the surface fix themselves, since a chord's midpoint sits inside
+  the material by more than the attribution tolerance and is claimed by nothing.
+- **The error is two-sided and bounded by the mesh.** On the car above, the
+  exact backend reports −115.000..100.000 to the micron; the implicit one at
+  depth 7, resolution 3.611 mm, reports −113.842..98.262 — short by 1.2 and
+  1.7 mm — and `lower` reads ±91.168 against an authored ±90, over by 1.2. Both
+  are inside the half-cell tolerance, in both directions, which is the honest
+  statement: short because the extreme point of a surface is rarely a sampled
+  one, long because a point within tolerance counts as on it.
+- **A tag names a node, not a placement.** `cylinder(...).at(12, 0, 0).tag()`
+  tags the translation and reports the hole where it is; `cylinder(...).tag()`
+  used later at `.at(12, 0, 0)` tags the primitive, and its extent is the
+  primitive's own surface at the origin. Same rule as `surface_of` and the
+  region legend, and the DSL's natural spelling is the right one.
+
+**Measured on a model, and it is read.** `eval/field/where-is-the-feature.md`
+asks Haiku 4.5 which of the flange's tags names a feature entirely above the
+mid-plane and at what z its surface begins. The flange separates the two routes:
+`hub` is authored as a cylinder placed at `hubTop / 2`, so the *script* says it
+runs from z = 0, and what the kernel built starts at 12.38 because a 3 mm blend
+replaced the bottom of it. A trial that measured says 12.38; a trial that
+derived says 0.
+
+| arm | trials | reached `evaluate_part` | quoted the measured z | SOUND |
+|---|---|---|---|---|
+| thinking off | 2 | 2/2 | 2/2 | 1 (+1 LUCKY) |
+| thinking on | 2 | 2/2 | 2/2 | 2 |
+
+The shape of the winning trial is the argument for the whole page: four
+`ToolSearch` calls, `read_project`, one `evaluate_part`, and *"Perfect! I can
+see the tag extents clearly"* — no probe, no `list_entities`, no second call.
+
+**The round before it is the more useful one, and it was void.** Four trials in
+the reasoning arm, and the app died partway through — every trial scored VOID on
+`unable to connect`, which is the harness failure this repo has already learned
+to print rather than swallow. What they did before it died still counts: two
+reached `evaluate_part`, *none* quoted a tag extent, and the one that had the
+reply in front of it went hunting instead — three rounds of `probe_part`, a
+`list_entities`, eleven calls, and the wrong answer, `HUB starts at 15.85`. A
+field that is present in a reply and not read is the failure mode of every entry
+on this page; four clean trials are not enough to say it is not this one's too.
+
+The region map was re-run after its legend and palette changed —
+`what-is-hidden`, 2/2 SOUND, still reading `visible: false` and the tag missing
+from `regions` altogether. Moving a key out of a frame is not supposed to change
+what a reply says, and this is the check that it did not.
+
 ## 4. Numbered marks — the rest of Set-of-Mark
 
 **What it is.** `tags.rs` already colours a render by which tag owns each
@@ -380,6 +486,42 @@ does not collide — the centroid of the region's pixel mask, nudged inward.
 evaluation, exactly like `edge@N`. It must never look like something to write in
 a script, and the tool description has to say so in the same words
 `list_entities` does.
+
+**The legend is out of the frame, and the colours no longer reshuffle.** Two
+things the same session found, both about the region map rather than the model.
+The legend was drawn down the left edge *over the part*: at 640 px it covered
+roughly the left third and the top half, and their car's nose was at the left,
+so the overlay hid the one region carrying the orientation cue. It is now a
+strip beside the frame — the part keeps pixel (0, 0) and the framing it would
+have had with no legend at all, so a region map and a plain render of the same
+view still line up — and the strip is sized from every tag rather than the ones
+visible here, so the part sits at the same pixels in all seven views. Dropping
+the drawn key entirely was the other option and is worse: the reply names a
+colour as `#e85d4e`, which is not something a reader can match to pixels by eye.
+
+Colours are now hashed from the tag *name* rather than handed out by position.
+The session's working method is comparing a render against the previous one, and
+a palette that reshuffles when a tag is inserted early in a script destroys that
+comparison silently — the two images stop being about the same thing. Hashing
+costs collisions, and two tags sharing a colour is worse than the shuffle it
+replaced, so the tag with the lower hash keeps the slot it wanted and the other
+walks to the first free one; the outcome depends on the set of names, not their
+order. It also changes which *pairs* of palette entries can meet: positional
+assignment only ever used a prefix, so a part with four tags could never draw
+the entry at index 10, and hashing can. The palette therefore had to hold up
+everywhere rather than at the front, and it did not — blue and periwinkle sat at
+ΔE 13.9, and the session separately reported red and salmon at 20.7 as
+indistinguishable across a wheel arch. Four entries were replaced; the minimum
+pairwise separation is now **34.5**, pinned by `no_two_palette_entries_look_alike`.
+
+Authored colour — `.tag(name, { color })`, and a per-render `colors:` override —
+is the session's other request and is **not** built. It is a separate question:
+`tag` is semantic here, it names what a thing *is* and that name does real work
+in `probe_part` and `measure_wall_thickness` output, and colour would be the
+first purely presentational thing in the language. The session flags the tension
+itself. Hashing is the zero-API-surface fix for the problem that actually bit
+them, and the diagnostic case — *put this one feature in screaming magenta and
+everything else grey* — is the half worth revisiting first if it comes back.
 
 **The cheaper half of this is done: a `Crossing` names what it is on.**
 `tags::owners_at` asks of three coordinates what `regions_in` asks of a pixel —
@@ -959,11 +1101,12 @@ their errors, which reads exactly like a broken tool.
    for `tag` and a rewritten tool description alongside it. Measured: 1/4 of
    trials reached `probe_part` before, 8/8 after. The description did more of
    that than either field.
-4. **Where is this tag?** (§3, from round 3's only wrong answer). Bounds and
-   centre of one tagged node's field — `measure::bounds` on a tree `tags.rs`
-   already lowers, so it is an afternoon. A model that cannot locate a feature
-   aims its rays at the wrong plane and measures something real, correctly, in
-   the wrong place, which reads exactly like a right answer.
+4. ~~Where is this tag?~~ (§3) — **done**, as `tag_extents`, and it is the
+   answer to a whole failure class rather than to one wrong trial: a car that
+   passed every automated check with its cabin facing backwards. Measured from
+   the built surface rather than from the graph, which is what makes it a
+   measurement; the estimate was wrong that the rule could be the same
+   exclusive one a region map uses.
 5. ~~Wall thickness~~ (§5) — **done**. It was §3 plus a loop, once the samples
    were walked onto the surface; the caveat needed a sentence rather than a
    list, because this is the one omission that reads *optimistic*.

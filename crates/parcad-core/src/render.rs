@@ -793,7 +793,9 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-const BACKGROUND: [u8; 3] = [22, 24, 28];
+/// Behind the part, and behind anything set beside it — see `tags::with_legend`,
+/// which extends a frame rather than drawing over one.
+pub const BACKGROUND: [u8; 3] = [22, 24, 28];
 /// The cut face. Warm and flat, so it cannot be mistaken for lit grey material
 /// however the part is turned, and light enough that a bore through it reads as
 /// a dark hole rather than as a shadow.
@@ -1327,6 +1329,82 @@ mod tests {
     fn a_rastered_view_lands_where_the_raymarched_one_does() {
         agrees_for(cube());
         agrees_for(ell());
+    }
+
+    /// A camera cannot be a reflection, and this is that claim measured in
+    /// pixels rather than in a determinant.
+    ///
+    /// The part is a cube with a boss standing off its +Y face. Looking along
+    /// -X from the right, +Y is on the right-hand side, so the boss must draw
+    /// there. Both side views had a screen basis of determinant -1 and drew it
+    /// on the wrong side — a plausible picture of a part nobody modelled, which
+    /// on anything handed is the difference between a part that assembles and
+    /// one that does not.
+    #[test]
+    fn a_side_view_puts_a_feature_on_the_side_it_is_on() {
+        let doc = Doc {
+            units: "mm".to_string(),
+            nodes: vec![
+                Node {
+                    op: Op::Cuboid {
+                        size: V3::splat(40.0),
+                    },
+                    tag: None,
+                },
+                Node {
+                    op: Op::Cylinder { r: 5.0, h: 30.0 },
+                    tag: None,
+                },
+                Node {
+                    op: Op::Rotate {
+                        child: 1,
+                        axis: V3::new(1.0, 0.0, 0.0),
+                        degrees: 90.0,
+                    },
+                    tag: None,
+                },
+                Node {
+                    op: Op::Translate {
+                        child: 2,
+                        by: V3::new(0.0, 25.0, 0.0),
+                    },
+                    tag: None,
+                },
+                Node {
+                    op: Op::Union {
+                        children: vec![0, 3],
+                        blend: 0.0,
+                    },
+                    tag: None,
+                },
+            ],
+            root: 4,
+        };
+
+        let tree = crate::sdf::lower(&doc).expect("lower");
+        let bounds = crate::measure::bounds(&doc).expect("bounds");
+        let opts = small(None);
+
+        for (view, boss_side) in [(View::Right, 1.0), (View::Left, -1.0)] {
+            let buf = geometry(&tree, bounds, view, &opts).expect("raymarch");
+            // The boss is the only material past y = +20, so its pixels are
+            // exactly the ones whose model point is out there.
+            let columns: Vec<u32> = (0..buf.size)
+                .flat_map(|x| (0..buf.size).map(move |y| (x, y)))
+                .filter(|(x, y)| buf.model_point(*x, *y).is_some_and(|p| p[1] > 21.0))
+                .map(|(x, _)| x)
+                .collect();
+            assert!(!columns.is_empty(), "the boss is not drawn in {}", view.name());
+
+            let centre = buf.size as f64 / 2.0;
+            let mean = columns.iter().map(|x| *x as f64).sum::<f64>() / columns.len() as f64;
+            assert!(
+                (mean - centre) * boss_side > 10.0,
+                "the {} view draws the +Y boss at column {mean:.0} of {}, not the side it is on",
+                view.name(),
+                buf.size
+            );
+        }
     }
 
     fn agrees_for(doc: Doc) {
