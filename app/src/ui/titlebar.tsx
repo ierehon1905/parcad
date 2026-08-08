@@ -21,7 +21,7 @@
  */
 
 import { useSignal } from "@preact/signals";
-import { useEffect, useRef } from "preact/hooks";
+import { useRef } from "preact/hooks";
 
 import type { McpStatus } from "../backend";
 import * as engine from "../engine";
@@ -29,10 +29,7 @@ import * as S from "../state";
 import { Glass } from "./components/Glass";
 import { Icon, type IconName } from "./icons";
 import { tip } from "./tooltip";
-
-const BUTTON =
-  "flex items-center gap-1.5 px-2 py-1 bg-panel-2 text-ink border border-line " +
-  "rounded-md font-mono text-small cursor-pointer hover:border-accent";
+import { useDismiss } from "./use-dismiss";
 
 export function Titlebar() {
   return (
@@ -137,27 +134,14 @@ function Export() {
   const open = useSignal(false);
   const host = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    const down = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (target && !host.current?.contains(target)) open.value = false;
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") open.value = false;
-    };
-    document.addEventListener("pointerdown", down, true);
-    document.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("pointerdown", down, true);
-      document.removeEventListener("keydown", escape);
-    };
-  }, []);
+  useDismiss(host, () => (open.value = false));
 
   return (
     <div ref={host} class="relative">
       <button
         type="button"
-        class={BUTTON}
+        class="flex items-center gap-1.5 px-2 py-1 bg-panel-2 text-ink border border-line
+               rounded-md font-mono text-small cursor-pointer hover:border-accent"
         {...tip({
           title: "Export",
           key: "⌘E",

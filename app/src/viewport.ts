@@ -80,6 +80,33 @@ export interface SectionPlane {
 /** The cut face, in the raster's own colour. See `CUT_FACE` in render.rs. */
 const CUT_FACE = 0xc99454;
 
+/**
+ * `--color-gold` from the stylesheet rather than a second copy of it.
+ *
+ * Gold means the same thing in the scene as it does in the DOM — *this is the
+ * one you are pointing at* — and the editor's treatment mark and the target
+ * preview already read it from the theme. Every other colour in this file is
+ * the scene's own shading palette and is deliberately not a token: nothing in
+ * the DOM wears them.
+ *
+ * Read lazily, because a custom property does not resolve until the CSS is in.
+ */
+let goldCache: string | undefined;
+function gold(): string {
+  if (goldCache === undefined) {
+    goldCache = getComputedStyle(document.documentElement).getPropertyValue("--color-gold").trim();
+    if (!/^#[0-9a-f]{6}$/i.test(goldCache)) {
+      throw new Error(
+        `--color-gold read as ${goldCache || "nothing"}. The viewport takes it from ` +
+          `the @theme block in app/src/style.css; a renamed or removed token lands here.`,
+      );
+    }
+  }
+  return goldCache;
+}
+
+const goldHex = () => Number.parseInt(gold().slice(1), 16);
+
 /** The highlight's two colours: neither survives alone against both a bright background and dark material. */
 const INK = 0x0b0e13;
 const HALO = 0xffffff;
@@ -509,7 +536,7 @@ export class Viewport {
   private paintEdge(line?: THREE.LineSegments) {
     if (!line) return;
     const material = line.material as THREE.LineBasicMaterial;
-    material.color.setHex(line === this.selectedEdge ? 0xf5b942 : 0x2b3440);
+    material.color.setHex(line === this.selectedEdge ? goldHex() : 0x2b3440);
     material.opacity = line === this.selectedEdge ? 1 : 0.85;
   }
 
@@ -785,7 +812,7 @@ export class Viewport {
 
     const group = new THREE.Group();
     if (edges.length > 0) {
-      const rendered = edgeLines(edges, 0xf5b942, 1);
+      const rendered = edgeLines(edges, goldHex(), 1);
       for (const line of rendered.lines) {
         const material = line.material as THREE.LineBasicMaterial;
         // A target curve can have been consumed by a fillet, so it is drawn
@@ -1009,7 +1036,7 @@ function vertexMaterial(state: "hidden" | "hover" | "selected"): THREE.PointsMat
       ? // Not drawn, but still raycast — see `paintVertex`.
         new THREE.PointsMaterial({ visible: false })
       : new THREE.PointsMaterial({
-          map: cornerSprite(state === "selected" ? "#f5b942" : "#ffffff", "#0b0e13"),
+          map: cornerSprite(state === "selected" ? gold() : "#ffffff", "#0b0e13"),
           size: state === "selected" ? 15 : 13,
           sizeAttenuation: false,
           transparent: true,
@@ -1048,7 +1075,7 @@ function targetVertexMarkers(vertices: TargetVertex[]): THREE.Group {
     const marker = new THREE.Points(
       geometry,
       new THREE.PointsMaterial({
-        color: 0xf5b942,
+        color: goldHex(),
         size: 12,
         sizeAttenuation: false,
         depthTest: false,

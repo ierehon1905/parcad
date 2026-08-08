@@ -25,7 +25,7 @@
  */
 
 import { useSignal } from "@preact/signals";
-import { useEffect, useRef } from "preact/hooks";
+import { useRef } from "preact/hooks";
 
 import { type Op, type OpGroup, OP_GROUPS } from "../ops";
 import { insertSnippet } from "../snippet";
@@ -33,31 +33,13 @@ import { Glass } from "./components/Glass";
 import { Toggle } from "./components/Toggle";
 import { Icon } from "./icons";
 import { tip } from "./tooltip";
+import { useDismiss } from "./use-dismiss";
 
 export function OpPalette() {
   const open = useSignal<string | undefined>(undefined);
   const bar = useRef<HTMLDivElement>(null);
 
-  // Outside click and Escape. On the capture phase so a press on another
-  // group's button closes this one before that button's own handler runs.
-  useEffect(() => {
-    const down = (event: PointerEvent) => {
-      const target = event.target as Node | null;
-      if (target && !bar.current?.contains(target) && !inFlyout(target)) open.value = undefined;
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") open.value = undefined;
-    };
-    const resize = () => (open.value = undefined);
-    document.addEventListener("pointerdown", down, true);
-    document.addEventListener("keydown", escape);
-    window.addEventListener("resize", resize);
-    return () => {
-      document.removeEventListener("pointerdown", down, true);
-      document.removeEventListener("keydown", escape);
-      window.removeEventListener("resize", resize);
-    };
-  }, []);
+  useDismiss(bar, () => (open.value = undefined), { or: inFlyout, onResize: true });
 
   return (
     <div

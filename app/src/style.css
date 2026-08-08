@@ -41,6 +41,10 @@
      its whole job is that it means one thing. */
   --color-gold: #f5b942;
   --color-gold-edge: #8f6d2a;
+  /* Advisory, not a warning: a part that is a loose .js rather than a folder.
+     Duller than gold on purpose — gold means "the one you are pointing at". */
+  --color-note: #d8a657;
+  --color-note-edge: #4a3c1f;
   /* The frosted panels that float over the viewport. Used with an opacity
      modifier — `bg-glass/86` — so one colour covers every one of them. */
   --color-glass: #121419;

@@ -39,13 +39,12 @@ import {
 } from "../projects";
 import * as S from "../state";
 import { Button } from "./components/Button";
+import { Chip } from "./components/Chip";
 import { type Ask, Dialogs, type Failed, type Tell, useDialogs } from "./components/Dialog";
 import { Field } from "./components/Field";
 import { newFolder, newPart } from "./project-actions";
 import { Icon } from "./icons";
 import { tip } from "./tooltip";
-
-const CHIP = "border border-line rounded-xs px-1";
 
 /**
  * Thumbnails already fetched, so reopening the dialog is not a reload.
@@ -393,24 +392,21 @@ function Card({
           {!part.bundle && (
             <>
               {" "}
-              {/* Amber, not the accent: it marks a part that cannot hold a
-                  title or a thumbnail, which is a limitation rather than a
-                  state. */}
-              <span
-                class={`${CHIP} text-[#d8a657] border-[#4a3c1f]`}
+              <Chip
+                variant="note"
                 {...tip({
                   title: "A loose script",
                   text: "A .js file rather than a .parcad folder, so it has no title, description or thumbnail of its own. Convert it from the ··· menu.",
                 })}
               >
                 .js
-              </span>
+              </Chip>
             </>
           )}
           {part.tags.map((tag) => (
             <Fragment key={tag}>
               {" "}
-              <span class={CHIP}>{tag}</span>
+              <Chip>{tag}</Chip>
             </Fragment>
           ))}
         </span>
