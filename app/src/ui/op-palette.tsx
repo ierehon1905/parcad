@@ -29,16 +29,9 @@ import { useEffect, useRef } from "preact/hooks";
 
 import { type Op, type OpGroup, OP_GROUPS } from "../ops";
 import { insertSnippet } from "../snippet";
+import { Toggle } from "./components/Toggle";
 import { Icon } from "./icons";
 import { tip } from "./tooltip";
-
-const GROUP_BUTTON =
-  "flex items-center gap-1.5 px-2 py-1 rounded-md border cursor-pointer " +
-  "text-ink-dim border-transparent hover:text-ink hover:border-line";
-/** The one currently showing its ops. */
-const GROUP_BUTTON_OPEN =
-  "flex items-center gap-1.5 px-2 py-1 rounded-md border cursor-pointer " +
-  "text-accent bg-accent-deep/45 border-accent-edge";
 
 export function OpPalette() {
   const open = useSignal<string | undefined>(undefined);
@@ -75,15 +68,14 @@ export function OpPalette() {
     >
       {OP_GROUPS.map((group) => (
         <div key={group.id} class="relative">
-          <button
-            type="button"
-            class={open.value === group.id ? GROUP_BUTTON_OPEN : GROUP_BUTTON}
+          <Toggle
+            pressed={open.value === group.id}
             {...tip({ title: group.label, text: group.blurb })}
             onClick={() => (open.value = open.value === group.id ? undefined : group.id)}
           >
             <Icon name={group.icon} class="size-5 shrink-0" />
             <span class="text-small">{group.label}</span>
-          </button>
+          </Toggle>
           {open.value === group.id && (
             <Flyout
               group={group}

@@ -39,34 +39,12 @@ import {
   type ProjectPart,
 } from "../projects";
 import * as S from "../state";
+import { Button } from "./components/Button";
+import { Caption, Field } from "./components/Field";
 import { Icon } from "./icons";
 import { tip } from "./tooltip";
 
-/**
- * Class strings that more than one element wears.
- *
- * Shape, then colour — and never both from two sources. Two utilities that set
- * the same property do not resolve by the order they appear in the class
- * attribute; they resolve by their order in the generated stylesheet. So a
- * variant cannot be "the base, plus a different background": whichever of the
- * two Tailwind emits last wins, everywhere, silently. Each variant therefore
- * states its own colours over a base that states none.
- */
-const BUTTON_SHAPE =
-  "px-3 py-1.5 border rounded-md cursor-pointer hover:border-accent " +
-  "disabled:opacity-45 disabled:cursor-default";
-const BUTTON = `${BUTTON_SHAPE} bg-panel-2 text-ink border-line`;
-const BUTTON_PRIMARY = `${BUTTON_SHAPE} bg-accent-deep text-ink border-accent-edge`;
-/** For a button that must not compete with what it sits beside. */
-const BUTTON_QUIET = `${BUTTON_SHAPE} bg-panel-2 text-ink-dim border-line`;
-/** Removal. The only red button in the app. */
-const BUTTON_DANGER = `${BUTTON_SHAPE} bg-panel-2 text-bad border-line`;
-const FIELD =
-  "w-full px-2.5 py-[7px] bg-panel-2 text-ink border border-line rounded-md " +
-  "focus:outline-none focus:border-accent";
 const CHIP = "border border-line rounded-xs px-1";
-/** The uppercase micro-label above a value. */
-const CAPTION = "block mb-1.5 text-ink-dim text-small";
 /** The card a question is asked on, over the dimmed picker. */
 const ASK_BOX =
   "w-[min(420px,84%)] p-[18px] rounded-xl border border-line bg-panel " +
@@ -199,21 +177,21 @@ export function ProjectBrowser() {
       {open && (
       <>
       <div class="absolute top-3.5 right-[18px]">
-        <button
-          type="button"
+        <Button
+          variant="quiet"
+          layout="font-mono text-[11px]"
           aria-label="Close"
-          class={`${BUTTON_QUIET} font-mono text-[11px]`}
           onClick={() => (S.browserOpen.value = false)}
         >
           esc
-        </button>
+        </Button>
       </div>
 
       <header class="flex items-center gap-3 pl-[18px] pr-[62px] py-3.5 border-b border-line">
         <h2 class="m-0 text-[15px] font-semibold">Parts</h2>
-        <input
+        <Field
           ref={searchBox}
-          class={`flex-1 ${FIELD}`}
+          layout="flex-1"
           type="search"
           placeholder="Search parts, folders, tags"
           value={query.value}
@@ -223,22 +201,21 @@ export function ProjectBrowser() {
             if (e.key === "Enter" && shown.length) void choose(shown[0].path);
           }}
         />
-        <button
-          type="button"
-          class={`shrink-0 flex items-center gap-1.5 ${BUTTON}`}
+        <Button
+          layout="shrink-0 flex items-center gap-1.5"
           onClick={() => void newFolder(folder.value, ask, failed, refresh)}
         >
           <Icon name="folder" class="size-4 shrink-0" />
           <span>New folder</span>
-        </button>
-        <button
-          type="button"
-          class={`shrink-0 flex items-center gap-1.5 ${BUTTON_PRIMARY}`}
+        </Button>
+        <Button
+          variant="primary"
+          layout="shrink-0 flex items-center gap-1.5"
           onClick={() => void newPart(folder.value, ask, failed, refresh, choose)}
         >
           <Icon name="plus" class="size-4 shrink-0" />
           <span>New part</span>
-        </button>
+        </Button>
       </header>
 
       <div class="flex h-[calc(100%-108px)]">
@@ -759,10 +736,9 @@ function AskPanel({ request }: { request: Signal<AskRequest | undefined> }) {
     <Scrim>
       <div class={ASK_BOX}>
         <h3 class="m-0 mb-2.5 text-sm">{ask.title}</h3>
-        <label class={CAPTION}>{ask.label}</label>
-        <input
+        <Caption>{ask.label}</Caption>
+        <Field
           ref={input}
-          class={FIELD}
           type="text"
           spellcheck={false}
           value={value.value}
@@ -782,7 +758,7 @@ function AskPanel({ request }: { request: Signal<AskRequest | undefined> }) {
         />
         <p class="min-h-4 mt-1.5 mb-1 text-bad text-[11.5px]">{problem ?? ""}</p>
         {ask.from && (
-          <label class={CAPTION}>
+          <Caption>
             Start from
             <select
               class="w-full mt-1"
@@ -796,15 +772,13 @@ function AskPanel({ request }: { request: Signal<AskRequest | undefined> }) {
                 </option>
               ))}
             </select>
-          </label>
+          </Caption>
         )}
         <div class="flex justify-end gap-2 mt-2.5">
-          <button type="button" class={BUTTON} onClick={() => done(null)}>
-            Cancel
-          </button>
-          <button type="button" class={BUTTON_PRIMARY} disabled={problem !== null} onClick={submit}>
+          <Button onClick={() => done(null)}>Cancel</Button>
+          <Button variant="primary" disabled={problem !== null} onClick={submit}>
             {ask.confirm}
-          </button>
+          </Button>
         </div>
       </div>
     </Scrim>
@@ -826,18 +800,13 @@ function TellPanel({ request }: { request: Signal<TellRequest | undefined> }) {
       <div class={ASK_BOX}>
         <p class="m-0 mb-3.5 whitespace-pre-wrap">{ask.text}</p>
         <div class="flex justify-end gap-2 mt-2.5">
-          <button
-            type="button"
-            ref={ask.confirm ? undefined : focus}
-            class={BUTTON}
-            onClick={() => done(false)}
-          >
+          <Button ref={ask.confirm ? undefined : focus} onClick={() => done(false)}>
             {ask.confirm ? "Cancel" : "OK"}
-          </button>
+          </Button>
           {ask.confirm && (
-            <button type="button" ref={focus} class={BUTTON_DANGER} onClick={() => done(true)}>
+            <Button variant="danger" ref={focus} onClick={() => done(true)}>
               {ask.confirm}
-            </button>
+            </Button>
           )}
         </div>
       </div>

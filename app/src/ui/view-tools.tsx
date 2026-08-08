@@ -36,18 +36,12 @@ import { useComputed, useSignalEffect } from "@preact/signals";
 
 import * as engine from "../engine";
 import * as S from "../state";
+import { SEGMENT_TROUGH, Toggle } from "./components/Toggle";
 import { Icon, type IconName } from "./icons";
 import { tip } from "./tooltip";
 
 /** A row: an icon that names the setting, then the setting. */
 const ROW = "flex items-center gap-2 h-6";
-/** The trough a segmented control sits in. */
-const SEGMENTS = "flex items-center gap-0.5 p-0.5 rounded-md border border-line bg-panel-2/70";
-/** Shape then colour, never both from two sources — see project-browser.tsx. */
-const SEGMENT =
-  "flex items-center gap-1 px-1.5 py-0.5 rounded cursor-pointer text-ink-dim hover:text-ink";
-const SEGMENT_ON =
-  "flex items-center gap-1 px-1.5 py-0.5 rounded cursor-pointer text-accent bg-accent-deep/70";
 
 export function ViewTools() {
   // The plane is handed to three.js, which is not reactive: an effect is the
@@ -187,17 +181,17 @@ function Segments({
   onPick: (value: string) => void;
 }) {
   return (
-    <div class={SEGMENTS}>
+    <div class={SEGMENT_TROUGH}>
       {options.map((option) => (
-        <button
+        <Toggle
           key={option.value}
-          type="button"
-          class={option.value === value ? SEGMENT_ON : SEGMENT}
+          size="segment"
+          pressed={option.value === value}
           onClick={() => onPick(option.value)}
         >
           {option.icon && <Icon name={option.icon} class="size-3.5 shrink-0" />}
           <span>{option.label}</span>
-        </button>
+        </Toggle>
       ))}
     </div>
   );

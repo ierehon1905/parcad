@@ -131,18 +131,27 @@ silently misread. Anything else is rejected at the door.
 and step of the type scale is a `@theme` entry, which Tailwind emits as both a
 utility and a plain custom property — that is what lets the CodeMirror theme and
 the viewport read the same value instead of keeping a second palette in
-TypeScript. Appearance lives on the element as utilities, including for DOM
-built in TypeScript; a shared look is a named constant next to the markup
-(`BUTTON`, `TOOLTIP`), not a class in a stylesheet. The only CSS rules left are
-for elements CodeMirror renders and names itself, because there is nothing there
-to put a class on.
+TypeScript. Appearance lives on the element as utilities.
+
+**A look worn by more than one element is a component, in
+`app/src/ui/components/`.** `Button`, `Toggle`, `Field` — each owns its layout,
+its variants and whatever small logic the variant implies, and a caller passes
+`variant="danger"`, never a class string. A shared class-string constant is what
+this replaced: it hands every caller the chance to append a conflicting utility,
+and it puts the look somewhere the element that wears it does not mention. Ad-hoc
+utilities on a one-off element are still right; a second element wearing the same
+ones is the signal to make the component. The only CSS rules left are for
+elements CodeMirror renders and names itself, because there is nothing there to
+put a class on.
 
 Two traps, both of which have already cost a session:
 
 - **A variant cannot be "the base plus a different colour".** Conflicting
   utilities resolve by their order in the generated stylesheet, not in the class
-  attribute, so `BUTTON + "bg-accent-deep"` silently keeps whichever background
-  Tailwind emitted last. Base states shape; each variant states its own colours.
+  attribute, so a base plus `bg-accent-deep` silently keeps whichever background
+  Tailwind emitted last. This is why a component keeps shape and colour in
+  separate strings and exposes `layout` for position only — a caller can say
+  where a button sits, never what colour it is.
 - **Preflight zeroes every margin**, which removes the `margin: auto` a browser
   uses to centre a modal `<dialog>`. Add `m-auto` back.
 
