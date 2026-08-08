@@ -38,7 +38,8 @@ plus four things this project wrote: `selectorLinter`, `treatmentHover`,
 
 ### The agent
 
-Fourteen MCP tools. `check_selector` is the only one that answers a question
+Fifteen MCP tools — `field/field.toml` lists them, and is the one place that
+does. `check_selector` is the only one that answers a question
 about *the language* rather than about a part, and it is the model for the rest:
 it settles a guess in milliseconds and touches no geometry.
 

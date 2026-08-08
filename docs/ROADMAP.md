@@ -75,14 +75,14 @@ All three currently `bail!` with an explanation rather than approximating.
   and run with `PARCAD_OCCT_WORKER` unset measures the bracket at 55074.791 mm³,
   watertight, which is the corpus value. Not done: signing, notarisation, an
   updater, or any target that is not this machine's.
-- **Debounce is now the bottleneck.** The editor waits 350 ms after the last
-  keystroke, chosen when a rebuild cost 300–450 ms. Kernel time is now 76 ms
-  (enclosure) to ~130 ms (bracket), so you wait longer for the timer than for
-  the geometry. ~120 ms would roughly halve felt latency.
+- ~~**Debounce is the bottleneck.**~~ *Done.* It was 350 ms, chosen when a
+  rebuild cost 300–450 ms; kernel time is now 76 ms (enclosure) to ~130 ms
+  (bracket), so the timer outlasted the geometry. `DEBOUNCE_MS` in
+  `app/src/engine.ts` is 120.
 - **Binary geometry channel.** Tauri `invoke` serialises the mesh to JSON;
   for the bracket that's ~12 000 triangles plus 67 edge polylines, and it shows
-  up as the gap between kernel time and observed time. Only worth doing after
-  the debounce change.
+  up as the gap between kernel time and observed time. Unblocked now the
+  debounce no longer hides it.
 
 ## Perception (the actual thesis)
 
