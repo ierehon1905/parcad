@@ -121,7 +121,7 @@ export function treatmentRows(
       );
     }
     if (target.provenance?.length) {
-      rows.push({ label: "same as", value: target.provenance.map((t) => `${t}`).join(", ") });
+      rows.push({ label: "same as", value: target.provenance.join(", ") });
     }
   } else if (pending) {
     rows.push({ label: "resolves", value: "…" });

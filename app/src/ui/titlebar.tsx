@@ -13,11 +13,8 @@
  * at can be replaced under you by a caller you cannot see. That is a fact about
  * the document, so it sits beside the document's name.
  *
- * Everything the chip says is measured — a request that arrived, a tool that
- * was called — which is why an idle client is reported with the age of its last
- * call rather than as a flat "connected". A client that was killed cannot say
- * goodbye, and claiming it is still there would be the confident wrong answer
- * this codebase refuses everywhere else.
+ * Everything the chip says is measured; `watchMcp` in engine.ts is where that
+ * is decided and why.
  */
 
 import { useSignal } from "@preact/signals";
@@ -199,8 +196,6 @@ const TONE = { live: "text-good", busy: "text-accent", idle: "text-ink-dim" } as
 
 function Agent() {
   const mcp = S.mcp.value;
-  // The host answers this window's every other call too, so a failure to reach
-  // it is not an MCP fact and must not be shown as one.
   if (!mcp) return null;
 
   const chip = describe(mcp);
