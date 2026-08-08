@@ -17,7 +17,7 @@ process.env.PARCAD_HTTP_PORT ??= "4457";
  */
 export const config = {
   runner: "local",
-  specs: ["./bracket.e2e.mjs", "./session.e2e.mjs"],
+  specs: ["./bracket.e2e.mjs", "./part-menu.e2e.mjs", "./session.e2e.mjs"],
   maxInstances: 1,
   capabilities: [{
     browserName: "tauri",
