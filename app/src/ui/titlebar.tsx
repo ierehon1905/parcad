@@ -26,6 +26,7 @@ import { useEffect, useRef } from "preact/hooks";
 import type { McpStatus } from "../backend";
 import * as engine from "../engine";
 import * as S from "../state";
+import { Glass } from "./components/Glass";
 import { Icon, type IconName } from "./icons";
 import { tip } from "./tooltip";
 
@@ -169,10 +170,9 @@ function Export() {
       </button>
 
       {open.value && (
-        <div
-          class="absolute top-full left-0 z-40 mt-1.5 w-[min(380px,86vw)] p-1.5 rounded-xl
-                 border border-line bg-glass/95 backdrop-blur-lg
-                 shadow-[0_18px_44px_rgb(0_0_0/0.55)]"
+        <Glass
+          variant="menu"
+          layout="absolute top-full left-0 z-40 mt-1.5 w-[min(380px,86vw)] p-1.5"
         >
           {EXPORTS.map((entry) => (
             <button
@@ -202,7 +202,7 @@ function Export() {
               </span>
             </button>
           ))}
-        </div>
+        </Glass>
       )}
     </div>
   );

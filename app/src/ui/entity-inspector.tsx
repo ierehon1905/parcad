@@ -14,6 +14,7 @@ import { computed } from "@preact/signals";
 import { directionLabel, fmt, suggestEdgeSelector, treatmentForEdge } from "../engine";
 import { suggestVertexSelector } from "../entities";
 import * as S from "../state";
+import { Glass } from "./components/Glass";
 import { Icon } from "./icons";
 import { tip } from "./tooltip";
 
@@ -52,10 +53,10 @@ export function EntityInspector() {
   const call = vertex ? ".vertices" : ".edges";
 
   return (
-    <div
+    <Glass
+      variant="hud"
       id="edge-inspector"
-      class="min-w-[184px] px-2.5 py-2 rounded-lg border border-line
-             bg-glass/86 backdrop-blur-lg text-ink-dim font-mono text-tiny"
+      layout="min-w-[184px] px-2.5 py-2 text-ink-dim font-mono text-tiny"
     >
       <div class="flex items-center gap-1.5">
         <Icon name={vertex ? "vertices" : "edges"} class="size-4 shrink-0 text-ink-dim" />
@@ -104,7 +105,7 @@ export function EntityInspector() {
         <Icon name="copy" class="size-3.5 shrink-0" />
         <span>copy {vertex ? "vertex " : ""}selector</span>
       </button>
-    </div>
+    </Glass>
   );
 }
 
@@ -140,10 +141,7 @@ function FacePanel({ face }: { face: { face: number; triangles: number } }) {
   const described = S.hoveredFaceSummary.value;
   const axis = axisOf(described?.surface.direction);
   return (
-    <div
-      class="min-w-[184px] px-2.5 py-2 rounded-lg border border-line
-             bg-glass/86 backdrop-blur-lg text-ink-dim font-mono text-tiny"
-    >
+    <Glass variant="hud" layout="min-w-[184px] px-2.5 py-2 text-ink-dim font-mono text-tiny">
       <div class="flex items-center gap-1.5">
         <Icon name="tag" class="size-4 shrink-0 text-ink-dim" />
         <span class="font-sans text-[10px] leading-[1.3] tracking-[0.08em] uppercase text-ink-dim">
@@ -171,7 +169,7 @@ function FacePanel({ face }: { face: { face: number; triangles: number } }) {
       )}
       <div>{face.triangles.toLocaleString()} triangles</div>
       <div class="mt-[5px]">no face selector in the DSL yet — aim at its edges</div>
-    </div>
+    </Glass>
   );
 }
 

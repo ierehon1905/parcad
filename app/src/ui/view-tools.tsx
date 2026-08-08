@@ -37,6 +37,7 @@ import { useComputed, useSignalEffect } from "@preact/signals";
 import * as engine from "../engine";
 import * as S from "../state";
 import { SEGMENT_TROUGH, Toggle } from "./components/Toggle";
+import { Glass } from "./components/Glass";
 import { Icon, type IconName } from "./icons";
 import { tip } from "./tooltip";
 
@@ -77,7 +78,7 @@ export function ViewTools() {
   });
 
   return (
-    <div class="flex flex-col gap-1.5 px-2 py-2 rounded-lg border border-line bg-glass/86 backdrop-blur-lg text-ink-dim text-tiny">
+    <Glass variant="hud" layout="flex flex-col gap-1.5 px-2 py-2 text-ink-dim text-tiny">
       <div
         class={ROW}
         {...tip({
@@ -166,7 +167,7 @@ export function ViewTools() {
           </button>
         </div>
       )}
-    </div>
+    </Glass>
   );
 }
 

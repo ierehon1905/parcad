@@ -29,6 +29,7 @@ import { useEffect, useRef } from "preact/hooks";
 
 import { type Op, type OpGroup, OP_GROUPS } from "../ops";
 import { insertSnippet } from "../snippet";
+import { Glass } from "./components/Glass";
 import { Toggle } from "./components/Toggle";
 import { Icon } from "./icons";
 import { tip } from "./tooltip";
@@ -108,11 +109,10 @@ function inFlyout(node: Node): boolean {
  */
 function Flyout({ group, onChoose }: { group: OpGroup; onChoose: (op: Op) => void }) {
   return (
-    <div
+    <Glass
+      variant="menu"
       data-flyout
-      class="fixed z-40 w-[min(430px,86vw)] max-h-[62vh] overflow-auto p-1.5
-             rounded-xl border border-line bg-glass/95 backdrop-blur-lg
-             shadow-[0_18px_44px_rgb(0_0_0/0.55)]"
+      layout="fixed z-40 w-[min(430px,86vw)] max-h-[62vh] overflow-auto p-1.5"
       ref={(element) => {
         if (!element) return;
         // The parent is the group's own wrapper, which is exactly the button's
@@ -151,6 +151,6 @@ function Flyout({ group, onChoose }: { group: OpGroup; onChoose: (op: Op) => voi
           </span>
         </button>
       ))}
-    </div>
+    </Glass>
   );
 }

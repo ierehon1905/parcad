@@ -26,6 +26,8 @@
 import { signal } from "@preact/signals";
 import { useEffect } from "preact/hooks";
 
+import { Glass } from "./components/Glass";
+
 /** Long enough not to fire while the pointer crosses a toolbar. */
 const DELAY_MS = 300;
 /** Once one tip is up, moving to a neighbour should not wait again. */
@@ -65,10 +67,10 @@ export function TooltipLayer() {
   if (!tip) return null;
 
   return (
-    <div
-      class="fixed z-50 max-w-[34ch] px-2.5 py-2 rounded-lg pointer-events-none
-             border border-line bg-glass/95 backdrop-blur-lg
-             shadow-[0_10px_28px_rgb(0_0_0/0.5)] text-ink-dim text-tiny leading-[1.5]"
+    <Glass
+      variant="tip"
+      layout="fixed z-50 max-w-[34ch] px-2.5 py-2 pointer-events-none
+              text-ink-dim text-tiny leading-[1.5]"
       ref={(element) => {
         if (element) place(element, tip);
       }}
@@ -90,7 +92,7 @@ export function TooltipLayer() {
           {tip.text}
         </div>
       )}
-    </div>
+    </Glass>
   );
 }
 

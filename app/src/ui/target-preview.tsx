@@ -8,6 +8,7 @@
  */
 
 import * as S from "../state";
+import { Glass } from "./components/Glass";
 import { Icon } from "./icons";
 
 export function TargetPreview() {
@@ -15,10 +16,10 @@ export function TargetPreview() {
   if (!preview) return null;
 
   return (
-    <div
+    <Glass
+      variant="target"
       id="target-preview"
-      class="absolute top-3.5 left-3.5 px-2.5 py-2 rounded-lg border border-gold-edge
-             bg-glass/86 backdrop-blur-lg text-gold font-mono text-tiny pointer-events-none"
+      layout="absolute top-3.5 left-3.5 px-2.5 py-2 text-gold font-mono text-tiny pointer-events-none"
     >
       <div class="flex items-center gap-1.5">
         <Icon name="tag" class="size-4 shrink-0 text-ink-dim" />
@@ -28,6 +29,6 @@ export function TargetPreview() {
       </div>
       <div class="mt-1">.{preview.method}</div>
       <div class="text-ink-dim">{preview.detail}</div>
-    </div>
+    </Glass>
   );
 }

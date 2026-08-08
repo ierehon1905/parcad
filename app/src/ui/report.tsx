@@ -17,6 +17,7 @@
 import type { ComponentChildren } from "preact";
 import { fmt } from "../engine";
 import * as S from "../state";
+import { Glass } from "./components/Glass";
 
 export function Report() {
   const snapshot = S.snapshot.value;
@@ -27,10 +28,10 @@ export function Report() {
   const linked = S.linkedEdgeCount.value;
 
   return (
-    <div
-      class="absolute left-3.5 bottom-3.5 max-w-[60%] px-3 py-2.5 rounded-lg
-             border border-line bg-glass/82 backdrop-blur-lg
-             text-ink-dim font-mono text-tiny leading-[1.7] pointer-events-none"
+    <Glass
+      variant="hud"
+      layout="absolute left-3.5 bottom-3.5 max-w-[60%] px-3 py-2.5
+              text-ink-dim font-mono text-tiny leading-[1.7] pointer-events-none"
     >
       <div>
         <Strong>
@@ -75,7 +76,7 @@ export function Report() {
         )}
       </div>
       {dead > 0 && <div class="text-bad">{dead} unused nodes</div>}
-    </div>
+    </Glass>
   );
 }
 
