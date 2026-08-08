@@ -1577,6 +1577,17 @@ pub fn mcp_status() -> crate::mcp::Status {
     crate::mcp::status()
 }
 
+/// Read one of parcad's own documents: the language reference, or the prose the
+/// parts themselves cite.
+///
+/// A capability, not a transport convenience. Which operations exist and which
+/// the kernel refuses is a fact about this application, and a caller who has to
+/// infer it by reading example parts infers a *subset* — measurably, and in the
+/// direction of a worse part.
+pub fn read_docs(topic: Option<&str>) -> Result<crate::docs::Reference, String> {
+    crate::docs::read(topic)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

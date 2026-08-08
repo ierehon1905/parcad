@@ -6,6 +6,7 @@
 //! commands below are therefore adapters and nothing else — any behaviour that
 //! lived here would be a feature the desktop had and the browser did not.
 
+mod docs;
 mod http;
 mod mcp;
 mod projects;

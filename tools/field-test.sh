@@ -104,7 +104,8 @@ cp "$PROMPT" "$RUN/case.md"
 # `stray` column catches it because it ends up somewhere it should not; a run
 # with a high `err` or call count and nothing to show for it is the same thing
 # caught earlier.
-ALLOW="mcp__parcad__list_projects,mcp__parcad__read_project,mcp__parcad__save_project,\
+ALLOW="mcp__parcad__read_docs,\
+mcp__parcad__list_projects,mcp__parcad__read_project,mcp__parcad__save_project,\
 mcp__parcad__evaluate_part,mcp__parcad__probe_part,mcp__parcad__measure_wall_thickness,\
 mcp__parcad__list_entities,mcp__parcad__inspect_treatment_target,\
 mcp__parcad__check_selector,mcp__parcad__export_part,mcp__parcad__probe_step_export,\

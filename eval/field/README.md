@@ -63,6 +63,7 @@ tool:    evaluate_part.section   # what this case exists to test; `x.y` is a fac
 also:    list_projects, ...      # other tools the case exercises, for coverage
 reach:   evaluate_part           # every tool that must be called or the answer is LUCKY
 arg:     section                 # arguments that must be non-empty on some call
+input:   \.mirror\(              # a regex some call's arguments must match
 verdict: OPEN                    # a regex, matched against the tail of the reply only
 trap:    \b60\b                  # the specific wrong answer worth naming, if there is one
 quote:   \b122\b                 # a value from the tool that must survive into the answer
@@ -73,8 +74,12 @@ why:     |                       # what the case is for. Load-bearing: it is the
 
 `arg` exists because a sectioned render and a plain one are the same call from
 the outside — the question "did anyone actually cut the part open" is answered
-by an argument, not a tool name. `trap` exists because a suite should name the
-plausible wrong answer rather than only its absence.
+by an argument, not a tool name. `input` goes one further and asks what was *in*
+the argument, which is the only way to score an **authoring** case: a part is
+written inside a `script`, so whether the model reached for `mirror` or wrote
+both halves out by hand is invisible to every other column, including the reply.
+`trap` exists because a suite should name the plausible wrong answer rather than
+only its absence.
 
 ## What makes a prompt worth adding
 
@@ -150,6 +155,7 @@ out of the real config; auth does not follow it there, which is fine, because
 | [put-it-where-i-can-open-it](put-it-where-i-can-open-it.md) | `save_project`, `list_projects`, `read_project`, `export_part` | The whole CRUD half of the surface, which nothing measured until it was noticed that two of those tools were not even on the runner's allow list. |
 | [rebuild-from-the-export](rebuild-from-the-export.md) | `probe_step_export` | The extraction-to-authoring loop: export a part, treat the file as another company's CAD, probe it, author a recreation from the probed numbers and hold it to them. The quote pins the probe's exact volume, which no script comment or mesh reply states. |
 | [change-the-open-part](change-the-open-part.md) | `get_session`, `open_project`, `set_script` | The live session, driven rather than described: does a model ask what is on screen before assuming, and change it rather than writing a file? **One trial at a time** — there is one screen, and parallel trials fight over it, which is the only case here that is not stateless. |
+| [say-the-symmetry-once](say-the-symmetry-once.md) | `read_docs` | The only *authoring* case: not whether a reference exists but whether reading it changes the part. SOUND needs `.mirror(` in a script the model actually sent, which is why this is the case `input` was added for. |
 
 Record what a round found in docs/PERCEPTION.md rather than here — the case is
 reusable, the result belongs with the design decision it changed.

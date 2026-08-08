@@ -236,6 +236,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | reading a foreign STEP export into authorable numbers | `StepProbe` in `crates/parcad-occt/src/protocol.rs`; CLI `parcad --probe-step`, MCP `probe_step_export`, both over `service::probe_step` — the C++ half is `Shape_geometry_json` in the vendored wrapper |
 | cutting a part open to see inside it | `view.rs`'s `Section`, then `render.rs` for the agent and `app/src/viewport.ts` for the window |
 | what an agent can see, and what to tell it instead | `docs/PERCEPTION.md` |
+| what an agent can *read* about the language | `app/src-tauri/src/docs.rs` — generated from `dsl.ts`, never written beside it |
 | whether a model can *read* a tool | `eval/field/*.md`, run by `tools/field-suite.sh` |
 
 A new op touches `graph.rs` (variant + `children_of`), `sdf.rs`, `measure.rs`

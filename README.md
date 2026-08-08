@@ -58,6 +58,16 @@ The running app also serves its UI and an MCP endpoint on
 <http://127.0.0.1:4242>. Parts live in `~/Documents/parcad` as plain `.js`
 files you can edit anywhere.
 
+```bash
+claude mcp add --transport http parcad http://127.0.0.1:4242/mcp
+```
+
+The first tool to call is `read_docs`, which is the whole language and the same
+notes on what the kernel refuses that this repository keeps in `docs/`. If the
+server sits at `⏸ Pending approval` and no trust dialog ever appears, that is a
+workspace inheriting trust from its parent rather than anything to do with
+parcad — docs/GOTCHAS.md has the fix.
+
 ## More
 
 - [examples/](examples/) — nineteen real parts, from a bracket to a hydraulic manifold
