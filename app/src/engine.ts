@@ -23,6 +23,7 @@ import { setTreatmentHover } from "./editor-marks";
 import { verticesFromEdges } from "./entities";
 import { describeProjects, label as projectLabel, partAt } from "./projects";
 import { instrumentTreatmentCalls, sourceOffset, treatmentAtCursor, treatmentCallRange } from "./source-link";
+import { shortestUniqueSelector } from "./shortest-selector";
 import * as S from "./state";
 import type { EdgeCurve, Evaluated, TargetPreview } from "./state";
 
@@ -164,7 +165,7 @@ function show(result: Evaluated) {
   const snapshot = result.snapshot;
   shownPath = S.openPath.value;
   S.snapshot.value = snapshot;
-  const edges = normalizeEdges(result.edges);
+  const edges = result.edges;
   S.visibleEdges.value = edges;
   S.visibleVertices.value = verticesFromEdges(edges);
   const bounds = boundsOf(snapshot);
@@ -202,31 +203,6 @@ function show(result: Evaluated) {
         .map((treatment) => `.${treatment.source?.method ?? treatment.kind}`),
     ),
   ];
-}
-
-/**
- * Keep the browser-only development artifact usable until it is regenerated.
- * The desktop worker always returns the metadata-rich form; older artifacts
- * contain bare polylines and can still be hovered, just without a direction.
- */
-export function normalizeEdges(edges: EdgeCurve[]): EdgeCurve[] {
-  if (!Array.isArray(edges) || edges.length === 0 || !Array.isArray(edges[0])) return edges;
-
-  return (edges as unknown as number[][][]).map((points, index) => {
-    const center: [number, number, number] = [0, 0, 0];
-    let length = 0;
-    for (let i = 0; i < points.length; i++) {
-      for (let axis = 0; axis < 3; axis++) center[axis] += points[i][axis];
-      if (i > 0)
-        length += Math.hypot(
-          points[i][0] - points[i - 1][0],
-          points[i][1] - points[i - 1][1],
-          points[i][2] - points[i - 1][2],
-        );
-    }
-    for (let axis = 0; axis < 3; axis++) center[axis] /= points.length;
-    return { id: `edge@${index}`, points, center, direction: null, length_mm: length };
-  });
 }
 
 // --------------------------------------------------------- treatment targets
@@ -286,7 +262,7 @@ export async function previewTreatmentAtCursor() {
     const preview = await resolveTarget(treatment.node);
     if (request !== targetPreviewRequest) return;
     const vertices = preview.vertices ?? [];
-    S.viewportRef.current?.setTargetPreview(normalizeEdges(preview.edges), vertices);
+    S.viewportRef.current?.setTargetPreview(preview.edges, vertices);
     const entities = [
       vertices.length > 0 && `${vertices.length} selected corner${vertices.length === 1 ? "" : "s"}`,
       `${preview.edges.length} selected edge${preview.edges.length === 1 ? "" : "s"}`,
@@ -382,52 +358,23 @@ export function directionLabel(direction: [number, number, number]): string {
 
 /**
  * Derive the shortest `>X`, `<Y`, `|Z` conjunction that identifies this
- * currently visible edge. It is a convenience for the inspector, not a hidden
- * ID: if the geometry later becomes ambiguous, the B-rep evaluator refuses.
+ * currently visible edge.
  */
 export function suggestEdgeSelector(edge: EdgeCurve, all: EdgeCurve[]): string | undefined {
-  if (all.length === 0) return undefined;
-  const axes = ["X", "Y", "Z"] as const;
-  const terms: string[] = [];
-  const epsilon = 1e-4;
+  return shortestUniqueSelector(edge, all, (e) => e.center, 1e-4, {
+    of: (e) => (e.direction ? alignedAxis(e.direction) : undefined),
+    matches: (candidate, axis) =>
+      candidate.direction !== null && Math.abs(candidate.direction[axis]) >= ALIGNED,
+  });
+}
 
-  if (edge.direction) {
-    const axis = edge.direction.map(Math.abs).indexOf(Math.max(...edge.direction.map(Math.abs)));
-    if (Math.abs(edge.direction[axis]) >= 0.999) terms.push(`|${axes[axis]}`);
-  }
-  for (let axis = 0; axis < 3; axis++) {
-    const values = all.map((candidate) => candidate.center[axis]);
-    const maximum = Math.max(...values);
-    const minimum = Math.min(...values);
-    if (Math.abs(edge.center[axis] - maximum) <= epsilon) terms.push(`>${axes[axis]}`);
-    if (Math.abs(edge.center[axis] - minimum) <= epsilon) terms.push(`<${axes[axis]}`);
-  }
+/** How square to an axis a direction must be before it is called that axis. */
+const ALIGNED = 0.999;
 
-  const matches = (candidate: EdgeCurve, term: string) => {
-    const axis = axes.indexOf(term[1] as (typeof axes)[number]);
-    if (term[0] === "|") {
-      return candidate.direction !== null && Math.abs(candidate.direction[axis]) >= 0.999;
-    }
-    const values = all.map((other) => other.center[axis]);
-    const extreme = term[0] === ">" ? Math.max(...values) : Math.min(...values);
-    return Math.abs(candidate.center[axis] - extreme) <= epsilon;
-  };
-
-  const selected: string[] = [];
-  let candidates = all;
-  while (candidates.length > 1) {
-    const currentCount = candidates.length;
-    const next = terms
-      .filter((term) => !selected.includes(term))
-      .map((term) => ({ term, candidates: candidates.filter((candidate) => matches(candidate, term)) }))
-      .filter(({ candidates: remaining }) => remaining.length > 0 && remaining.length < currentCount)
-      .sort((a, b) => a.candidates.length - b.candidates.length)[0];
-    if (!next || next.candidates.length >= candidates.length) break;
-    selected.push(next.term);
-    candidates = next.candidates;
-  }
-
-  return candidates.length === 1 && selected.length > 0 ? selected.join(" and ") : undefined;
+function alignedAxis(direction: [number, number, number]): string | undefined {
+  const components = direction.map(Math.abs);
+  const axis = components.indexOf(Math.max(...components));
+  return components[axis] >= ALIGNED ? `|${["X", "Y", "Z"][axis]}` : undefined;
 }
 
 // ------------------------------------------------------------------ errors

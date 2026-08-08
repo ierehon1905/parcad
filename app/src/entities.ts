@@ -1,3 +1,5 @@
+import { shortestUniqueSelector } from "./shortest-selector";
+
 /** Ephemeral B-rep vertex inspection data derived from exact visible edges. */
 export interface VertexPoint {
   /** Valid only for this evaluated shape; never accepted by the modelling DSL. */
@@ -42,39 +44,11 @@ export function verticesFromEdges(edges: readonly EdgeEndpoint[]): VertexPoint[]
 }
 
 /** Suggest the shortest unique directional query accepted by `.vertices(...)`. */
-export function suggestVertexSelector(vertex: VertexPoint, all: readonly VertexPoint[]): string | undefined {
-  if (all.length === 0) return undefined;
-  const axes = ["X", "Y", "Z"] as const;
-  const terms: string[] = [];
-
-  for (let axis = 0; axis < 3; axis++) {
-    const values = all.map((candidate) => candidate.point[axis]);
-    if (Math.abs(vertex.point[axis] - Math.max(...values)) <= EPSILON) terms.push(`>${axes[axis]}`);
-    if (Math.abs(vertex.point[axis] - Math.min(...values)) <= EPSILON) terms.push(`<${axes[axis]}`);
-  }
-
-  const matches = (candidate: VertexPoint, term: string) => {
-    const axis = axes.indexOf(term[1] as (typeof axes)[number]);
-    const values = all.map((other) => other.point[axis]);
-    const extreme = term[0] === ">" ? Math.max(...values) : Math.min(...values);
-    return Math.abs(candidate.point[axis] - extreme) <= EPSILON;
-  };
-
-  const selected: string[] = [];
-  let candidates = all;
-  while (candidates.length > 1) {
-    const currentCount = candidates.length;
-    const next = terms
-      .filter((term) => !selected.includes(term))
-      .map((term) => ({ term, candidates: candidates.filter((candidate) => matches(candidate, term)) }))
-      .filter(({ candidates: remaining }) => remaining.length > 0 && remaining.length < currentCount)
-      .sort((a, b) => a.candidates.length - b.candidates.length)[0];
-    if (!next) break;
-    selected.push(next.term);
-    candidates = next.candidates;
-  }
-
-  return candidates.length === 1 && selected.length > 0 ? selected.join(" and ") : undefined;
+export function suggestVertexSelector(
+  vertex: VertexPoint,
+  all: readonly VertexPoint[],
+): string | undefined {
+  return shortestUniqueSelector(vertex, all, (v) => v.point, EPSILON);
 }
 
 function asPoint(point: number[] | undefined): [number, number, number] | undefined {

@@ -26,6 +26,17 @@ import { listen } from "@tauri-apps/api/event";
  */
 const inTauri = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
 
+const NOT_ANSWERING =
+  "the parcad desktop process is not answering.\n" +
+  "It hosts this page and its geometry backends; start it with:\n" +
+  "  cd app && bun run tauri dev";
+
+const sending = (method: string, body: unknown): RequestInit => ({
+  method,
+  headers: { "content-type": "application/json" },
+  body: JSON.stringify(body),
+});
+
 /**
  * Ask the host over HTTP.
  *
@@ -33,22 +44,13 @@ const inTauri = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
  * port to configure and no cross-origin request to permit. Under `vite dev` the
  * dev server proxies `/api` to the desktop port, which keeps that true.
  */
-async function post<T>(route: string, body: unknown): Promise<T> {
+async function request(route: string, init: RequestInit, refused: string): Promise<Response> {
   let response: Response;
   try {
-    response = await fetch(`/api/${route}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    response = await fetch(`/api/${route}`, init);
   } catch {
-    throw new Error(
-      "the parcad desktop process is not answering.\n" +
-        "It hosts this page and its geometry backends; start it with:\n" +
-        "  cd app && bun run tauri dev",
-    );
+    throw new Error(NOT_ANSWERING);
   }
-
   if (!response.ok) {
     // The service layer writes messages that name the fix. Show them whole
     // rather than replacing them with a status code.
@@ -56,57 +58,20 @@ async function post<T>(route: string, body: unknown): Promise<T> {
       .json()
       .then((body) => (body as { error?: string }).error)
       .catch(() => undefined);
-    throw new Error(detail ?? `the host refused the request (${response.status})`);
+    throw new Error(detail ?? `${refused} (${response.status})`);
   }
-  return response.json() as Promise<T>;
+  return response;
 }
 
-/** Same failure wording as `post`, for the routes that only read. */
-async function send<T>(route: string, init: RequestInit): Promise<T> {
-  let response: Response;
-  try {
-    response = await fetch(`/api/${route}`, init);
-  } catch {
-    throw new Error(
-      "the parcad desktop process is not answering.\n" +
-        "It hosts this page and its geometry backends; start it with:\n" +
-        "  cd app && bun run tauri dev",
-    );
-  }
-  if (!response.ok) {
-    const detail = await response
-      .json()
-      .then((body) => (body as { error?: string }).error)
-      .catch(() => undefined);
-    throw new Error(detail ?? `the host refused the request (${response.status})`);
-  }
-  return response.json() as Promise<T>;
-}
+const send = async <T>(route: string, init: RequestInit): Promise<T> =>
+  (await request(route, init, "the host refused the request")).json() as Promise<T>;
 
+const post = <T>(route: string, body: unknown) => send<T>(route, sending("POST", body));
 const get = <T>(route: string) => send<T>(route, { method: "GET" });
+const put = <T>(route: string, body: unknown) => send<T>(route, sending("PUT", body));
 
-const put = <T>(route: string, body: unknown) =>
-  send<T>(route, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
-async function download(route: string, body: unknown): Promise<Blob> {
-  const response = await fetch(`/api/${route}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) {
-    const detail = await response
-      .json()
-      .then((body) => (body as { error?: string }).error)
-      .catch(() => undefined);
-    throw new Error(detail ?? `the export failed (${response.status})`);
-  }
-  return response.blob();
-}
+const download = async (route: string, body: unknown): Promise<Blob> =>
+  (await request(route, sending("POST", body), "the export failed")).blob();
 
 function save(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
