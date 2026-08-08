@@ -1,0 +1,30 @@
+{
+  "name": "coincident-cutter-entry",
+  "script": "eval/scripts/coincident-cutter-entry.js",
+  "why": "The boundary the sealed-void refusal must never cross. A cutter's outer face exactly on the face it enters is correct geometry — identical to standing it proud — and refuse-sealed-void's check fires 0.004 mm inside it. This pins the coincident row of the docs/GOTCHAS.md table so the topological rule can never quietly grow a tolerance that swallows it; v-block guards the same fact at a cut's exit.",
+  "implicit": {
+    "size": [
+      60.0,
+      40.0,
+      20.0
+    ],
+    "volume_mm3": 45593.523,
+    "area_mm2": 9203.962,
+    "triangles": 10756,
+    "watertight": true
+  },
+  "brep": {
+    "size": [
+      60.0,
+      40.0,
+      20.0
+    ],
+    "volume_mm3": 45600.0,
+    "area_mm2": 9200.0,
+    "triangles": 28,
+    "watertight": true,
+    "faces": 11,
+    "edges": 48,
+    "curves": 24
+  }
+}

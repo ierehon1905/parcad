@@ -26,6 +26,14 @@ out. Everything below could otherwise have lived in our own crate.
 - `Shape::single_solid()` — unwrap a compound holding exactly one solid.
   `BRepFilletAPI_MakeFillet` returns one of these, and the difference is
   invisible until a boolean against it quietly produces nothing.
+- `Shape::internal_void_count()` — how many sealed internal voids the shape's
+  solids enclose: shells beyond each solid's outer boundary, counted per solid
+  so disjoint bodies are not mistaken for cavities. Two `TopExp_Explorer`
+  walks, both already bound. Exists because a subtractive cut whose tool never
+  breaks a face returns a watertight, plausible, unmanufacturable solid — a
+  block with its tool's shape entombed — and the extra shell is the one fact
+  that distinguishes it from a blind pocket without inventing a thickness
+  threshold.
 - `impl Clone for Shape` — several operations take `self` by value while the
   caller still needs the original. Cheap: `TopoDS_Shape` is a handle onto a
   refcounted `TShape`.

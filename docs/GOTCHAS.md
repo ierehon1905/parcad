@@ -431,12 +431,29 @@ past the material where it exits, proud of the material where it enters.
 is the part that does it on a recess, at the entry of its seat and at both ends
 of its aperture.
 
-### Nothing refuses a coincident cutter face, and the table above is why
+### The cut that seals a void is refused; coincidence itself is not, and the table above is why
 
-Refusal is the stance elsewhere in this project, and the obvious reading of the
-0.004 mm case is that the kernel knew the two planes were near-coincident and
-returned an unmanufacturable solid rather than saying so. It does not refuse,
-and after measuring it should not:
+The kernel now refuses one shape of this defect, and it is worth being exact
+about which. It does **not** refuse on coincidence, or on any measured
+clearance. It counts closed shells across a subtract: a cut that *adds* an
+internal void has broken through no face and removed nothing reachable, so the
+result is a solid with a cavity sealed inside it — watertight, plausible in
+every render, unmanufacturable. There is no threshold in that rule, which is
+what makes it safe; row 1 of the table stays at zero voids and goes on
+building. `crates/parcad-occt/src/backend.rs` carries it, and
+`eval/cases/refuse-sealed-void.json` and `coincident-cutter-entry.json` pin the
+accident and the safe row against each other.
+
+Two limits, both real. It is **B-rep only** — the distance field has no
+topology, and at millimetre contouring it cannot represent the membrane at all,
+so the implicit backend builds it silently. And it catches a cut that closes
+behind itself, not a cut that lands thin: a blind hole one micron shy of
+breaking through the *far* face is an ordinary blind hole by every topological
+measure, and stays silent.
+
+The reasoning below is why nothing broader fires, and it is unchanged — a
+refusal keyed on coincidence, or on a thickness threshold, would still be
+wrong:
 
 - **The case a refusal would have to fire on is not the coincident one.** Row 1
   of the table — exactly coplanar — is correct geometry: same volume, same 11
@@ -482,11 +499,18 @@ and after measuring it should not:
   too thin to make", and only the second is worth interrupting an author about.
 
 Two false alarms in twenty-one shipped parts is not a signal to put in front of
-an agent on every edit; it teaches the agent to ignore the line. So the entry-side
-rule stays where the evidence puts it — in the examples, in this file, and in
-`display-bezel.js`'s own comments — and the kernel goes on building what it was
-asked for. Anything better has to answer the tangency question first, and that
-is a modelling question, not a threshold.
+an agent on every edit; it teaches the agent to ignore the line. That is still
+why there is no thin-wall line in every reply, and anything better there has to
+answer the tangency question first — a modelling question, not a threshold.
+
+What the shell count added was a *different question*, which is why it escapes
+both objections above. "Is this wall too thin" is a measurement, and every
+measurement needs a threshold nobody can defend. "Did this subtract open the
+surface or close a cavity" is topology: the accident and the legitimate case
+give different answers, not nearby numbers. Where a defect can be restated as a
+question with a discrete answer, it can be refused; where it cannot, the
+entry-side rule stays where the evidence puts it — in the examples, in this
+file, and in `display-bezel.js`'s own comments.
 
 ### `role: "hole"` does not match a conical opening
 

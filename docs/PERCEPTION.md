@@ -681,8 +681,12 @@ same failure:
 
 That is why the minimum is *not* in the `evaluate_part` reply, where it would be
 a free thin-wall warning on every edit: two false alarms in twenty-one shipped
-parts teaches a reader to skip the line. docs/GOTCHAS.md, "Nothing refuses a
-coincident cutter face", carries the measurements and what was being decided.
+parts teaches a reader to skip the line. docs/GOTCHAS.md, "The cut that seals a
+void is refused", carries the measurements and what was being decided — and the
+part of that defect which *could* be caught, once it was restated as topology
+rather than as a thickness, now refuses at the kernel instead of being reported
+here. The lesson generalises: a perception this page cannot make trustworthy is
+sometimes a refusal the kernel can make exact.
 
 ## 6. Overhang and printability
 
