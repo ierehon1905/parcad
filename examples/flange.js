@@ -24,8 +24,8 @@ const bolts = 4;
 const plate = cylinder(od / 2, thickness).tag("plate");
 
 // The hub is modelled buried to the plate's mid-plane rather than standing on
-// its top face. Two coaxial cylinders that meet exactly on a face abort inside
-// OCCT when the union is blended — at any radius, including 1 mm — and an
+// its top face. Two coaxial cylinders that meet exactly on a face cannot be
+// blended — the kernel refuses at any radius, including 1 mm — and an
 // overlap is both the fix and what a casting actually is. See docs/DSL_GAPS.md.
 const hubTop = throughHub - thickness / 2;
 const hub = cylinder(hubOd / 2, hubTop)

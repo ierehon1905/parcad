@@ -6,13 +6,17 @@
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <Message_ProgressRange.hxx>
+#include <Standard_Failure.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Shape.hxx>
 // OCCT 8.0 moved the NCollection typedef aliases to src/Deprecated and stopped
 // pulling them in transitively; each one now needs including where it is used.
 #include <TopTools_ListOfShape.hxx>
 
+#include "rust/cxx.h"
+
 #include <memory>
+#include <string>
 #include <vector>
 
 class ParcadBoolean {
@@ -73,14 +77,29 @@ class ParcadEdgeTreatment {
     else chamfer_->Add(distance, edge);
   }
 
+  // OCCT signals an unbuildable treatment by raising Standard_Failure, which
+  // nothing above this boundary catches: uncaught, it terminates the process.
+  // Caught here it is an ordinary refusal, and the kernel's own words survive
+  // for the caller (see failure()).
   bool build() {
-    if (fillet_) {
-      fillet_->Build(Message_ProgressRange());
-      return fillet_->IsDone();
+    try {
+      if (fillet_) {
+        fillet_->Build(Message_ProgressRange());
+        return fillet_->IsDone();
+      }
+      chamfer_->Build(Message_ProgressRange());
+      return chamfer_->IsDone();
+    } catch (const Standard_Failure& raised) {
+      const char* message = raised.what();
+      failure_ = std::string(raised.ExceptionType()) + ": " +
+                 ((message && *message) ? message : "no detail");
+      return false;
     }
-    chamfer_->Build(Message_ProgressRange());
-    return chamfer_->IsDone();
   }
+
+  // What Build raised, verbatim, when build() returned false through the catch
+  // above; empty when the builder merely reported not done.
+  rust::String failure() const { return failure_; }
 
   const TopoDS_Shape& result() {
     return fillet_ ? fillet_->Shape() : chamfer_->Shape();
@@ -98,6 +117,7 @@ class ParcadEdgeTreatment {
 
   std::unique_ptr<BRepFilletAPI_MakeFillet> fillet_;
   std::unique_ptr<BRepFilletAPI_MakeChamfer> chamfer_;
+  std::string failure_;
 };
 
 inline std::unique_ptr<ParcadEdgeTreatment> parcad_fillet_with_history(const TopoDS_Shape& base) {

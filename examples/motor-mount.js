@@ -44,8 +44,8 @@ const gusset = intersect(
 
 // The seam blend is taken between the two plates alone, then the gussets are
 // unioned on unblended. A blend across all four solids at once asks OCCT to
-// fillet edges that the gussets land exactly on, and it aborts rather than
-// refusing — see docs/DSL_GAPS.md.
+// fillet edges that the gussets land exactly on, which no radius can do —
+// see docs/DSL_GAPS.md.
 const shell = union(face, foot, { blend: 2 }).tag("shell");
 
 const body = union(shell, gusset.at(-20, 0, 0), gusset.at(20, 0, 0)).tag("body");

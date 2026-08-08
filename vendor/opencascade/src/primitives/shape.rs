@@ -220,6 +220,55 @@ impl Shape {
         self.inner = ffi::TopoDS_Shape_to_owned(filleted_shape);
     }
 
+    /// Fillet selected edges without touching `self`, and say why when the
+    /// kernel cannot.
+    ///
+    /// The infallible forms above abort the process on an unbuildable radius:
+    /// `Build` raises `Standard_Failure`, nothing on the plain bridge path
+    /// catches it, and the uncaught exception calls `std::terminate`. This
+    /// form catches it at the C++ boundary and returns the kernel's own
+    /// words. Non-mutating so a caller can probe several radii against one
+    /// input. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn filleted_edges<T: AsRef<Edge>>(
+        &self,
+        radius: f64,
+        edges: impl IntoIterator<Item = T>,
+    ) -> Result<Self, String> {
+        self.treated_edges(radius, edges, false)
+    }
+
+    /// Chamfer selected edges without touching `self`; the fallible sibling of
+    /// [`Self::filleted_edges`].
+    pub fn chamfered_edges<T: AsRef<Edge>>(
+        &self,
+        distance: f64,
+        edges: impl IntoIterator<Item = T>,
+    ) -> Result<Self, String> {
+        self.treated_edges(distance, edges, true)
+    }
+
+    fn treated_edges<T: AsRef<Edge>>(
+        &self,
+        distance: f64,
+        edges: impl IntoIterator<Item = T>,
+        chamfer: bool,
+    ) -> Result<Self, String> {
+        let mut treatment = if chamfer {
+            history::parcad_chamfer_with_history(&self.inner)
+        } else {
+            history::parcad_fillet_with_history(&self.inner)
+        };
+        for edge in edges {
+            treatment.pin_mut().add(distance, &edge.as_ref().inner);
+        }
+        if !treatment.pin_mut().build() {
+            return Err(treatment_failure(&treatment));
+        }
+        Ok(Self {
+            inner: ffi::TopoDS_Shape_to_owned(treatment.pin_mut().result()),
+        })
+    }
+
     /// Fillet selected edges and retain the result shapes generated from them.
     ///
     /// The generated shapes are exact OCCT history, suitable for transient
@@ -229,7 +278,7 @@ impl Shape {
         &mut self,
         radius: f64,
         edges: impl IntoIterator<Item = T>,
-    ) -> Vec<Self> {
+    ) -> Result<Vec<Self>, String> {
         self.treat_edges_with_history(radius, edges, false)
     }
 
@@ -256,7 +305,7 @@ impl Shape {
         &mut self,
         distance: f64,
         edges: impl IntoIterator<Item = T>,
-    ) -> Vec<Self> {
+    ) -> Result<Vec<Self>, String> {
         self.treat_edges_with_history(distance, edges, true)
     }
 
@@ -265,7 +314,7 @@ impl Shape {
         distance: f64,
         edges: impl IntoIterator<Item = T>,
         chamfer: bool,
-    ) -> Vec<Self> {
+    ) -> Result<Vec<Self>, String> {
         let edges: Vec<Edge> = edges
             .into_iter()
             .map(|edge| edge.as_ref().clone())
@@ -278,7 +327,9 @@ impl Shape {
         for edge in &edges {
             treatment.pin_mut().add(distance, &edge.inner);
         }
-        treatment.pin_mut().build();
+        if !treatment.pin_mut().build() {
+            return Err(treatment_failure(&treatment));
+        }
 
         let mut generated = Vec::new();
         for edge in edges {
@@ -288,7 +339,7 @@ impl Shape {
             }));
         }
         self.inner = ffi::TopoDS_Shape_to_owned(treatment.pin_mut().result());
-        generated
+        Ok(generated)
     }
 
     /// Performs fillet of `radius` on all edges of the shape
@@ -558,5 +609,16 @@ impl Shape {
     pub fn offset_surface(self, offset: f64) -> Self {
         let faces_to_remove: [Face; 0] = [];
         self.hollow(offset, faces_to_remove)
+    }
+}
+
+/// The kernel's own words for a treatment that did not build: what `Build`
+/// raised, or the quiet not-done when it raised nothing.
+fn treatment_failure(treatment: &UniquePtr<history::ParcadEdgeTreatment>) -> String {
+    let raised = treatment.failure();
+    if raised.is_empty() {
+        "the builder reported the command not done and raised nothing".into()
+    } else {
+        raised
     }
 }

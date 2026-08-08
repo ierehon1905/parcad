@@ -4,7 +4,7 @@
 // body is deliberately fatter than the pipe: its sockets have to swallow the
 // pipe OD and still leave a wall, which is why the body diameters are not
 // `pipeOd`. The run and branch bodies differ because a blended union of two
-// equal-radius cylinders crossing at 90° aborts inside OCCT at this size —
+// equal-radius cylinders crossing at 90° is refused at this size —
 // see docs/DSL_GAPS.md; unequal radii is also what a real fitting looks like. A
 // socket cut wider than the body would not be a counterbore at all — it would
 // saw the end off, and the reported bounding box is where that shows up.

@@ -1,0 +1,16 @@
+{
+  "name": "refuse-unblendable-junction",
+  "script": "eval/scripts/refuse-unblendable-junction.js",
+  "why": "The failure that cost the field session three evaluations per radius: a blend across a junction where several members converge. The refusal must name the junction it measured on the seam — four seam edges at one vertex — and a radius measured to build, 1.13 mm, which does build when asked for.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "blends by 2 mm",
+        "branches 4 ways",
+        "Largest radius measured to build",
+        "1.13"
+      ]
+    }
+  }
+}

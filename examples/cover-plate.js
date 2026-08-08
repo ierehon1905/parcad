@@ -24,7 +24,7 @@ const body = box(plate, plate, plateT).at(0, 0, plateT / 2).tag("plate");
 // like every other primitive, so it is placed by its middle.
 //
 // It reaches up into the plate rather than butting onto its underside: a
-// blended union between solids that only touch on a face aborts inside OCCT
+// blended union between solids that only touch on a face is refused
 // (docs/GOTCHAS.md), and a cast cover has a root radius there anyway.
 const spigot = cone(spigotTip / 2, spigotDia / 2, spigotH)
   .at(0, 0, -spigotH / 2 + 2)

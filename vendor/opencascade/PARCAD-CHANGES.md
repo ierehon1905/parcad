@@ -86,6 +86,24 @@ out. Everything below could otherwise have lived in our own crate.
   boundary wires and B-spline pole grids the caller then discards; the
   measurements are in the wrapper's own comment.
 
+- `ParcadEdgeTreatment::build()` (include/history.hxx) catches
+  `Standard_Failure` instead of letting the raise escape the bridge and
+  terminate the process, and the new `failure()` accessor returns what was
+  raised — exception type and message, the kernel's own words. OCCT signals an
+  unbuildable fillet this way routinely (`StdFail_NotDone` from the result
+  accessor, `Standard_Failure("There are no suitable edges…")` from ChFi3d),
+  so an uncaught raise turned an ordinary refusal into a dead worker.
+  `treat_edges_with_history` reads that outcome, which changes
+  `fillet_edges_with_history` / `chamfer_edges_with_history` to
+  `Result<Vec<Shape>, String>`; previously they ignored `build()`'s bool and
+  aborted in `result()`.
+
+- `Shape::filleted_edges` / `Shape::chamfered_edges` — the fallible,
+  non-mutating forms: build the treatment against `&self` and return the new
+  shape, or the reason OpenCASCADE raised. Non-mutating on purpose, so a
+  caller's failure path can probe several radii against one input while
+  composing a refusal that names a radius measured to work.
+
 - `Mesh::faces` — a `FaceRun { face, start, count }` per face, in triangles,
   saying where each face's triangles landed in `indices`. The mesher already
   walks the shape face by face and concatenates the per-face triangulations; the
