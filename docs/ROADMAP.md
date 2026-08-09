@@ -153,7 +153,7 @@ Ordered, because each item is the prerequisite for the next:
    new op, and `docs/DSL_GAPS.md` records it as the thing most missed while
    writing all twelve examples. Renders and region maps are done; see below for
    what drawing them off the wrong backend cost.
-3. **Compare.** The loop in `AI_CAD_PLATFORM.md` is inspect → plan → modify →
+3. **Compare.** The loop an agent actually runs is inspect → plan → modify →
    evaluate → *compare* → verify → explain, and there is no diff. Two graphs in,
    geometry/topology/measurement delta out.
 4. **Lineage through fillet, offset, shell and transforms** — see the provenance

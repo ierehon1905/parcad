@@ -62,6 +62,25 @@ to select every closed circular inner loop bordering an upward-facing face.
 This keeps the four upper hole rims coupled to their geometry as holes move or
 multiply, while excluding lower rims, outside bosses, and open blend arcs.
 
+### Why a plain edge index is the wrong foundation
+
+`op#3.edge[2]` is an ordering convention, not an identity. A Boolean, a fillet
+or a parameter edit can split, merge, delete or reorder the output edges under
+it. This is not a quirk of this kernel: Fusion's own `BRepEdge.tempId` is
+documented as valid only while the owning body is unmodified, and CadQuery's
+positional and nth selectors are useful filters that stay relative. Onshape
+answers it the way this project does, with provenance —
+`qCreatedBy(featureId, EntityType.EDGE)`.
+
+`>X` has the same shape of problem in a smaller way: it means "whatever is
+rightmost in the current result", which is an identity only when rightmost is
+genuinely the design intent.
+
+- [CadQuery selectors](https://cadquery.readthedocs.io/en/stable/selectors.html)
+- [Fusion temporary edge IDs](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/BRepEdge_tempId.htm)
+- [Onshape FeatureScript query examples](https://cad.onshape.com/FsDoc/library.html)
+- [OpenCascade topology naming and evolution](https://dev.opencascade.org/doc/refman/html/_t_naming_8hxx.html)
+
 ### Selector strength is intentional
 
 No one selector kind is universally strongest: each encodes a different kind of
