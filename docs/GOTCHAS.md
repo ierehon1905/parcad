@@ -236,6 +236,19 @@ different thing entirely. What it cost was that an agent reading a side view of
 a handed part got the handedness backwards, which is a defect no amount of
 looking harder at the render would have caught.
 
+### A part can be five bodies and pass every check
+
+`examples/extrusion-2020.js` was in the corpus for months as one watertight
+part with the right volume and 37 edges, and it was five bars: its four
+T-slot chambers overlap at the corners, which severs the core from each
+corner block, and a real profile's diagonal webs were never drawn. Nothing
+measured caught it, because nothing measured *counted*. Watertightness is
+per edge, volume adds, and the face count of five closed pieces is a
+plausible number. `bodies` in `MeshStats` — connected components of the mesh,
+joined by vertex position — is the number that does, and `stands_on` found
+it first by way of the end face being five patches. Both are recorded for
+every case now.
+
 ### `offset_surface` lies
 
 It returns valid-looking wrong answers rather than failing:

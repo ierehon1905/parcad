@@ -1,19 +1,23 @@
 {
   "name": "extrusion-2020",
   "script": "examples/extrusion-2020.js",
-  "why": "A four-fold symmetric profile cut by rotating the cutter, and four corner fillets that each need two extrema to name — thirty-seven edges run along Z.",
+  "why": "A four-fold symmetric profile cut by rotating the cutter, and four corner fillets that each need two extrema to name — thirty-seven edges run along Z. Recorded as one body standing on one patch since the webs were added; before them it was five watertight bars, and nothing here said so.",
   "brep": {
     "size": [
       20.0,
       20.0,
       200.0
     ],
-    "volume_mm3": 33742.013,
-    "area_mm2": 31108.927,
-    "triangles": 440,
+    "volume_mm3": 37481.303,
+    "area_mm2": 33480.045,
+    "triangles": 488,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 187.407,
+    "stands_on_patches": 1,
     "watertight": true,
     "faces": 51,
-    "edges": 246,
-    "curves": 122
+    "edges": 294,
+    "curves": 146
   }
 }

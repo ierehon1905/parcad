@@ -341,6 +341,9 @@ fn summary(r: &parcad_core::PartReport, eval_ms: u128, render_ms: u128) -> Strin
         "bounds  x {:.2}..{:.2}  y {:.2}..{:.2}  z {:.2}..{:.2}\n",
         r.bounds.min.x, r.bounds.max.x, r.bounds.min.y, r.bounds.max.y, r.bounds.min.z, r.bounds.max.z
     ));
+    if let Some(contact) = &r.stands_on {
+        s.push_str(&format!("stands  {}\n", stands_on_text(contact)));
+    }
     s.push_str(&format!(
         "volume  {:.2} mm³   area {:.2} mm²\n",
         r.mass.volume_mm3, r.mass.area_mm2
@@ -350,14 +353,15 @@ fn summary(r: &parcad_core::PartReport, eval_ms: u128, render_ms: u128) -> Strin
         r.mass.centroid.x, r.mass.centroid.y, r.mass.centroid.z
     ));
     s.push_str(&format!(
-        "mesh    {} triangles at {:.3} mm resolution, {}\n",
+        "mesh    {} triangles at {:.3} mm resolution, {}, {}\n",
         r.mesh.triangles,
         r.mesh.resolution_mm,
         if r.mesh.watertight {
             "watertight".to_string()
         } else {
             format!("NOT watertight ({} bad edges)", r.mesh.non_manifold_edges)
-        }
+        },
+        bodies_text(&r.mesh)
     ));
     s.push_str(&format!(
         "graph   {} of {} nodes live{}\n",
@@ -371,6 +375,33 @@ fn summary(r: &parcad_core::PartReport, eval_ms: u128, render_ms: u128) -> Strin
     ));
     s.push_str(&format!("time    {eval_ms} ms evaluate, {render_ms} ms render\n"));
     s
+}
+
+/// "1 body", "1 body, 1 void", or the count that says the part is in pieces.
+fn bodies_text(m: &parcad_core::mesh::MeshStats) -> String {
+    let bodies = if m.bodies == 1 {
+        "1 body".to_string()
+    } else {
+        format!("{} SEPARATE BODIES", m.bodies)
+    };
+    match m.voids {
+        0 => bodies,
+        1 => format!("{bodies}, 1 void"),
+        n => format!("{bodies}, {n} voids"),
+    }
+}
+
+/// "on 26469 mm² at z 0.00, 1 patch, 74% of the footprint" — the line that
+/// tells a stubbed underside from a slab.
+fn stands_on_text(c: &parcad_core::mesh::BedContact) -> String {
+    format!(
+        "on {:.0} mm² at z {:.2}, {} patch{}, {:.0}% of the footprint",
+        c.area_mm2,
+        c.z_mm,
+        c.patches,
+        if c.patches == 1 { "" } else { "es" },
+        c.footprint_fraction * 100.0
+    )
 }
 
 /// The B-rep path.
@@ -491,6 +522,9 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         "bounds   x {:.2}..{:.2}  y {:.2}..{:.2}  z {:.2}..{:.2}",
         bounds.min.x, bounds.max.x, bounds.min.y, bounds.max.y, bounds.min.z, bounds.max.z
     );
+    if let Some(contact) = tess.bed_contact() {
+        println!("stands   {}", stands_on_text(&contact));
+    }
     println!("volume   {:.2} mm³   area {:.2} mm²", mass.volume_mm3, mass.area_mm2);
     println!(
         "topology {} faces, {} edges ({} unique curves)",
@@ -499,14 +533,15 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         s.edges.len()
     );
     println!(
-        "mesh     {} triangles within {:.3} mm of the true surface, {}",
+        "mesh     {} triangles within {:.3} mm of the true surface, {}, {}",
         stats.triangles,
         stats.resolution_mm,
         if stats.watertight {
             "watertight".to_string()
         } else {
             format!("NOT watertight ({} bad edges)", stats.non_manifold_edges)
-        }
+        },
+        bodies_text(&stats)
     );
     println!(
         "timing   build {} ms, mesh {} ms, export {} ms, wall {} ms, render {} ms",

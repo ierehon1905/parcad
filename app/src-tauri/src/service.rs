@@ -185,6 +185,20 @@ pub struct EvaluationSnapshot {
     pub resolution_mm: f64,
     pub watertight: bool,
     pub non_manifold_edges: usize,
+    /// Connected pieces of surface: one for a part, more for pieces drawn
+    /// together. Watertight and the right volume both hold for five bars.
+    #[serde(default = "one_body")]
+    pub bodies: usize,
+    /// Closed surfaces inside another: a shell's cavity. Not a defect by
+    /// itself, which is why it is counted apart from `bodies`.
+    #[serde(default)]
+    pub voids: usize,
+    /// What the part stands on: the surface in its lowest plane and the number
+    /// of separate patches it is in. A printed part rests on that face, and
+    /// eighteen small patches where one slab was meant is the underside defect
+    /// no other number here shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stands_on: Option<parcad_core::mesh::BedContact>,
     pub tags: Vec<String>,
     /// Where each of those tags actually is, measured from the built surface.
     ///
@@ -230,6 +244,10 @@ pub struct EvaluationSnapshot {
     /// one. `inspect_treatment_target` answers what a treatment actually took.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unattributed_treatments: Vec<usize>,
+}
+
+fn one_body() -> usize {
+    1
 }
 
 impl EvaluationSnapshot {
@@ -1145,6 +1163,9 @@ fn describe(
         resolution_mm: round_mm(report.mesh.resolution_mm),
         watertight: report.mesh.watertight,
         non_manifold_edges: report.mesh.non_manifold_edges,
+        bodies: report.mesh.bodies,
+        voids: report.mesh.voids,
+        stands_on: report.stands_on.clone(),
         tags: report.tags.clone(),
         tag_extents: extents,
         unlocated_tags: unlocated,
@@ -1471,6 +1492,7 @@ fn measure_brep(
         framing_bounds: parcad_core::measure::bounds(doc).map_err(|e| format!("{e:#}"))?,
         mass: parcad_core::measure::mass_properties(&tess.vertices, &tess.triangles),
         mesh: tess.stats(),
+        stands_on: tess.bed_contact(),
         tags: doc.tags().into_iter().map(|(_, t)| t.to_string()).collect(),
         live_nodes: doc.topo_order().map_err(|e| format!("{e:#}"))?.len(),
         total_nodes: doc.nodes.len(),

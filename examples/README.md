@@ -32,7 +32,7 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 | `cover-plate.js` | bolted cover, turned spigot | revolved geometry: a tapered spigot and four countersunk screws, both cones |
 | `diamond-v19.js` | round brilliant cut, 57 facets | a Fusion 360 recreation, promoted from `fusion360/`: a convex solid as the intersection of its facet half-spaces, agreeing with the export to every published digit |
 | `display-bezel.js` | instrument fascia, seated display module | the only part here that recesses *into* a face rather than cutting through one: a milled seat, and the entry-side overlength that stops it becoming a sealed void |
-| `extrusion-2020.js` | 20x20 T-slot extrusion, 200 mm | four-fold symmetry by rotating the *cutter*; corner fillets among 37 candidate edges |
+| `extrusion-2020.js` | 20x20 T-slot extrusion, 200 mm | four-fold symmetry by rotating the *cutter*; corner fillets among 37 candidate edges; and the diagonal webs it shipped without, five watertight bars that only the body count and the bed contact told apart from one |
 | `flange.js` | ASME B16.5 class 150 NPS 2 slip-on flange | a bolt circle, and one cut whose provenance reaches five rims |
 | `heat-sink.js` | 60x60 extruded fin sink | one fin shape placed nine times — one graph node, nine placements |
 | `hydraulic-line.js` | bent 12 mm hydraulic line | a routed tube: straight runs and real bend radii, bored along the same route, with a round-bottomed O-ring groove on the inlet boss |

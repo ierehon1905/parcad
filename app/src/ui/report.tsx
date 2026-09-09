@@ -21,6 +21,9 @@
  * The z range sits on the size line because a size alone hides where the part
  * is: a stand whose pegs were placed on the wrong face measured a plausible
  * 45 mm tall and stood 5.5 mm below its own base, and nothing on screen said so.
+ * The fourth line is the other half of that lesson — what the part stands on —
+ * and turns red when that surface is under a tenth of the footprint, which is
+ * what eighteen stubs look like and a slab never does.
  */
 
 import type { ComponentChildren } from "preact";
@@ -66,6 +69,18 @@ export function Report() {
         <Strong>{snapshot.resolution_mm.toFixed(3)}</Strong>
         {snapshot.backend === "brep" ? " mm" : " mm grid"}
       </div>
+      {snapshot.stands_on && (
+        <div class={snapshot.stands_on.footprint_fraction < 0.1 ? "text-bad" : undefined}>
+          stands on <Strong>{fmt(snapshot.stands_on.area_mm2)}</Strong> mm² in{" "}
+          <Strong>{snapshot.stands_on.patches}</Strong>{" "}
+          {snapshot.stands_on.patches === 1 ? "patch" : "patches"}
+        </div>
+      )}
+      {snapshot.bodies > 1 && (
+        <div class="text-bad">
+          <Strong>{snapshot.bodies}</Strong> separate bodies
+        </div>
+      )}
       {!snapshot.watertight && (
         <div class="text-bad">
           NOT watertight — {snapshot.non_manifold_edges} bad edges

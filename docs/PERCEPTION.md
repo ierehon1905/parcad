@@ -710,6 +710,20 @@ that the gyration and elongation numbers come from.
 at 18° from the build plane" is a measurement; "this part will fail to print" is
 a process opinion that depends on a machine we know nothing about.
 
+**Done, the first piece: what the part stands on.** `stands_on` in every
+report and snapshot — the surface lying in the part's lowest plane, in mm², how
+many separate patches it is in, and that area over the bounding footprint. It
+exists because of a part that passed everything else: a plate stand whose pegs
+were placed on the underside plane instead of the top measured a plausible
+45 mm tall, was watertight, had the right volume to within a percent, and stood
+on eighteen stubs of 130 mm² each. Its line reads `on 2320 mm² at z −5.53,
+18 patches, 7% of the footprint`; the corrected part's reads `on 26469 mm² at
+z 0.00, 1 patch, 74%`. The tolerance for "in the plane" is the mesh's own
+resolution, since a dual-contoured plane scatters its vertices by up to a cell.
+Recorded for every measured case in the corpus, and shown on the app's report
+panel, in red under a tenth of the footprint. Still a measurement, not a
+verdict: a stool stands on four patches and is fine.
+
 ## 7. Section view — done
 
 Filed on OP_ROADMAP as §8, as a view concern rather than an op, and the single

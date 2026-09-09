@@ -1,0 +1,39 @@
+{
+  "name": "stands-on-stubs",
+  "script": "eval/scripts/stands-on-stubs.js",
+  "why": "Pins the bed-contact measurement on the case that motivated it: pegs through a plate and out of its underside, watertight and plausibly sized, which only stands_on tells from a slab — three patches at z = -2 totalling three cylinder ends, against one patch of the whole underside when the pegs are placed on the top face.",
+  "implicit": {
+    "depth": 7,
+    "size": [
+      60.0,
+      40.0,
+      32.0
+    ],
+    "volume_mm3": 18296.275,
+    "area_mm2": 8052.549,
+    "triangles": 99038,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 157.941,
+    "stands_on_patches": 3,
+    "watertight": true
+  },
+  "brep": {
+    "size": [
+      60.0,
+      40.0,
+      32.0
+    ],
+    "volume_mm3": 18314.211,
+    "area_mm2": 7959.541,
+    "triangles": 1524,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 150.547,
+    "stands_on_patches": 3,
+    "watertight": true,
+    "faces": 18,
+    "edges": 60,
+    "curves": 24
+  }
+}

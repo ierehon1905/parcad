@@ -63,6 +63,9 @@ pub fn run_implicit(doc: &Doc, depth: u8) -> Outcome {
                 faces: None,
                 edges: None,
                 curves: None,
+                bodies: report.mesh.bodies,
+                voids: report.mesh.voids,
+                stands_on: report.stands_on.clone(),
                 tags,
                 unlocated_tags,
             })
@@ -130,6 +133,9 @@ pub fn run_brep(doc: &Doc) -> Outcome {
         faces: Some(s.topology.faces),
         edges: Some(s.topology.edges),
         curves: Some(s.edges.len()),
+        bodies: stats.bodies,
+        voids: stats.voids,
+        stands_on: tess.bed_contact(),
         tags,
         unlocated_tags,
     })

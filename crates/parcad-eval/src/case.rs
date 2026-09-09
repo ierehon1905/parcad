@@ -93,6 +93,22 @@ pub struct Expect {
     pub area_mm2: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub triangles: Option<usize>,
+    /// What the part stands on: the surface in its lowest plane, and how many
+    /// patches it is in. Recorded for every measured case, because it is the
+    /// one number that changes when a feature is placed on the wrong face of
+    /// the part and nothing else does — see docs/PERCEPTION.md §6.
+    /// Connected pieces of surface. One for a part; the count that says a
+    /// part is several bars drawn together, which watertightness cannot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bodies: Option<usize>,
+    /// Closed surfaces inside another: a shell's cavity. Recorded so a case
+    /// that means to be hollow says so, and one that does not cannot become so.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub voids: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stands_on_mm2: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stands_on_patches: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watertight: Option<bool>,
 
@@ -167,6 +183,9 @@ pub struct Observed {
     pub faces: Option<usize>,
     pub edges: Option<usize>,
     pub curves: Option<usize>,
+    pub bodies: usize,
+    pub voids: usize,
+    pub stands_on: Option<parcad_core::mesh::BedContact>,
     /// Every tag's own box, and the ones no surface point could be found for.
     pub tags: BTreeMap<String, [f64; 6]>,
     pub unlocated_tags: Vec<String>,
@@ -217,6 +236,35 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
     }
     if let Some(want) = expect.volume_mm3 {
         pct_check(&mut out, "volume_mm3", want, observed.volume_mm3, tol.volume_pct);
+    }
+    if let Some(want) = expect.bodies {
+        if observed.bodies != want {
+            out.push(Mismatch {
+                field: "bodies".into(),
+                detail: format!("expected {want}, measured {}", observed.bodies),
+            });
+        }
+    }
+    if let Some(want) = expect.voids {
+        if observed.voids != want {
+            out.push(Mismatch {
+                field: "voids".into(),
+                detail: format!("expected {want}, measured {}", observed.voids),
+            });
+        }
+    }
+    if let Some(want) = expect.stands_on_mm2 {
+        let got = observed.stands_on.as_ref().map_or(0.0, |c| c.area_mm2);
+        pct_check(&mut out, "stands_on_mm2", want, got, tol.volume_pct);
+    }
+    if let Some(want) = expect.stands_on_patches {
+        let got = observed.stands_on.as_ref().map_or(0, |c| c.patches);
+        if got != want {
+            out.push(Mismatch {
+                field: "stands_on_patches".into(),
+                detail: format!("expected {want}, measured {got}"),
+            });
+        }
     }
     if let Some(want) = expect.area_mm2 {
         pct_check(&mut out, "area_mm2", want, observed.area_mm2, tol.volume_pct);
@@ -324,6 +372,10 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
     expect.area_mm2 = Some(round3(observed.area_mm2));
     expect.triangles = Some(observed.triangles);
     expect.watertight = Some(observed.watertight);
+    expect.bodies = Some(observed.bodies);
+    expect.voids = Some(observed.voids);
+    expect.stands_on_mm2 = observed.stands_on.as_ref().map(|c| round3(c.area_mm2));
+    expect.stands_on_patches = observed.stands_on.as_ref().map(|c| c.patches);
     expect.faces = observed.faces;
     expect.edges = observed.edges;
     expect.curves = observed.curves;

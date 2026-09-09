@@ -12,6 +12,10 @@
     "volume_mm3": 9492.285,
     "area_mm2": 4949.91,
     "triangles": 72732,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 713.205,
+    "stands_on_patches": 1,
     "watertight": true
   },
   "brep": {
@@ -23,6 +27,10 @@
     "volume_mm3": 9456.097,
     "area_mm2": 4734.668,
     "triangles": 21574,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 75.149,
+    "stands_on_patches": 1,
     "watertight": true,
     "faces": 1,
     "edges": 4,

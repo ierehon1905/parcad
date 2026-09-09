@@ -45,6 +45,11 @@ pub struct PartReport {
     pub framing_bounds: measure::Aabb,
     pub mass: measure::MassProperties,
     pub mesh: mesh::MeshStats,
+    /// The surface in the part's lowest plane, and how many patches it is in.
+    /// See [`mesh::BedContact`]: the number that catches an underside nothing
+    /// else measures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stands_on: Option<mesh::BedContact>,
     /// Names available to selectors.
     pub tags: Vec<String>,
     /// Number of nodes the root actually depends on. A gap between this and
@@ -86,6 +91,7 @@ pub fn evaluate(
         framing_bounds: bounds,
         mass,
         mesh: tess.stats(),
+        stands_on: tess.bed_contact(),
         tags: doc.tags().into_iter().map(|(_, t)| t.to_string()).collect(),
         live_nodes: doc.topo_order()?.len(),
         total_nodes: doc.nodes.len(),

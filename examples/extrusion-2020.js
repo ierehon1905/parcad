@@ -38,7 +38,22 @@ const slots = around(slot, 4).tag("slots");
 
 const coreHole = cylinder(core / 2, length * 1.2).tag("core_hole");
 
-const profile = bar.cut(slots, coreHole).tag("profile");
+// The webs. Adjacent chambers overlap at each corner, so without them the
+// core and the four corner blocks are five separate bars that happen to be
+// drawn together — and that is how this part shipped: watertight, the right
+// volume, every count in its case green. A real profile has a diagonal web
+// from each core corner to its corner block, and so does this one now; the
+// corpus records that it is one body and stands on one patch, which is what
+// found the missing ones.
+// Drawn along X and turned 45°, which carries +X onto the (1, 1) diagonal;
+// drawn along Y it would land on (-1, 1) and float in the void, and the
+// corpus would report nine bodies — which it did.
+const web = 1.6;
+const webs = around(
+  box(5, web, length).rotate("z", 45).at(4.75, 4.75, 0),
+  4,
+).tag("webs");
+const profile = bar.cut(slots, coreHole).union(webs).tag("profile");
 
 // The four outside corners are broken on a real extrusion — the die has a
 // radius there, and a sharp 20x20 corner is a hazard on a frame.

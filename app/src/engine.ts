@@ -577,7 +577,14 @@ function readmeFor(path: string, source: string): string {
     `- mesh ${snapshot.triangles.toLocaleString()} triangles, ` +
       (snapshot.watertight
         ? "watertight"
-        : `NOT watertight — ${snapshot.non_manifold_edges} bad edges`),
+        : `NOT watertight — ${snapshot.non_manifold_edges} bad edges`) +
+      (snapshot.bodies > 1 ? `, ${snapshot.bodies} SEPARATE BODIES` : ""),
+    ...(snapshot.stands_on
+      ? [
+          `- stands on ${fmt(snapshot.stands_on.area_mm2)} mm² in ${snapshot.stands_on.patches} ` +
+            `${snapshot.stands_on.patches === 1 ? "patch" : "patches"} at z = ${fmt(snapshot.stands_on.z_mm)}`,
+        ]
+      : []),
     ...(snapshot.tags.length ? [`- tags: ${snapshot.tags.join(", ")}`] : []),
     "",
     `Measured by ${kernel} when this part was last saved, not read off the ` +

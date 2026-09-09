@@ -58,6 +58,19 @@ export interface EvaluationSnapshot {
   resolution_mm: number;
   watertight: boolean;
   non_manifold_edges: number;
+  /** Free-standing pieces of surface; one for a part. */
+  bodies: number;
+  /** Closed surfaces inside another: a shell's cavity. */
+  voids: number;
+  /** The surface in the part's lowest plane and how many patches it is in;
+   *  what a printed part rests on. Absent only for an empty mesh. */
+  stands_on?: {
+    z_mm: number;
+    area_mm2: number;
+    patches: number;
+    footprint_fraction: number;
+    tolerance_mm: number;
+  };
   tags: string[];
   treatments: { node: number; op: string; amount_mm: number; continuity?: string }[];
   /** Shapes the root never reaches. Absent when there are none. */
