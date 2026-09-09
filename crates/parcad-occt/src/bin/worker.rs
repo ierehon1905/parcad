@@ -365,7 +365,10 @@ fn run() -> Response {
     let mut stl_path = None;
     if let Some(path) = &request.stl_path {
         breadcrumb("writing STL");
-        match shape.write_stl(path) {
+        // At the mesher's tolerance, so this writes the triangulation already on
+        // the shape; the binding's old 0.001 mm re-meshed every face, and spent
+        // the whole 20 s budget on eighteen filleted bosses.
+        match shape.write_stl(path, BINDING_DEFLECTION_MM) {
             Ok(()) => stl_path = Some(path.clone()),
             Err(e) => {
                 return Response::Error {

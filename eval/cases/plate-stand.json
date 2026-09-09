@@ -1,0 +1,19 @@
+{
+  "name": "plate-stand",
+  "script": "examples/plate-stand.js",
+  "why": "Eighteen cone bosses blended into a plate in one union: the overlap-deeper-than-the-blend rule from docs/GOTCHAS.md, a lineage chamfer over thirty-two slot rims, and the STL export that used to spend the kernel's whole budget re-meshing them.",
+  "brep": {
+    "size": [
+      248.0,
+      143.892,
+      45.077
+    ],
+    "volume_mm3": 212011.01,
+    "area_mm2": 81001.687,
+    "triangles": 245196,
+    "watertight": true,
+    "faces": 252,
+    "edges": 1044,
+    "curves": 468
+  }
+}

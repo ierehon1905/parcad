@@ -60,7 +60,7 @@ Start with the `read_docs` tool — it hands over the whole language in one call
 
 ## More
 
-- [examples/](examples/) — twenty-one parts, from a bracket to a hydraulic manifold
+- [examples/](examples/) — twenty-two parts, from a bracket to a hydraulic manifold
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pieces fit, and why
 - [docs/GOTCHAS.md](docs/GOTCHAS.md) — traps that have already cost a day each
 - [docs/NEXT.md](docs/NEXT.md) — what's missing, in order

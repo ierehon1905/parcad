@@ -402,9 +402,12 @@ impl Shape {
         BooleanShape::fuse(self, other)
     }
 
-    pub fn write_stl<P: AsRef<Path>>(&self, path: P) -> Result<(), Error> {
+    /// Write the shape as STL, meshed to `deflection` where it is not already
+    /// meshed at least that finely. A shape the caller has already meshed at
+    /// this tolerance is written as it stands; a finer request re-meshes it.
+    pub fn write_stl<P: AsRef<Path>>(&self, path: P, deflection: f64) -> Result<(), Error> {
         let mut stl_writer = ffi::StlAPI_Writer_ctor();
-        let triangulation = ffi::BRepMesh_IncrementalMesh_ctor(&self.inner, 0.001);
+        let triangulation = ffi::BRepMesh_IncrementalMesh_ctor(&self.inner, deflection);
         let success = ffi::write_stl(
             stl_writer.pin_mut(),
             triangulation.Shape(),

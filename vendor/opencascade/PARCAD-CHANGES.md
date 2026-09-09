@@ -127,6 +127,15 @@ out. Everything below could otherwise have lived in our own crate.
   run's position would name every face after the gap as its neighbour — wrong,
   but still adding up to a plausible total.
 
+- `Shape::write_stl(path, deflection)` takes the tessellation tolerance
+  instead of hard-coding 0.001 mm. `BRepMesh_IncrementalMesh` re-meshes any
+  face whose existing triangulation is coarser than asked, so the old value
+  threw away the 0.01 mm mesh the caller had just built and rebuilt every
+  face ten times finer: on a plate with eighteen filleted bosses that was
+  1.1 s a boss, against 30 ms to mesh them, and the whole file was still only
+  going to a slicer. Passing the mesher's own tolerance writes the shape as it
+  stands. `Solid::write_stl` and the `adhoc` demo keep their literal.
+
 ## Not added
 
 - `BRepOffsetAPI_MakeOffsetShape`, for a general outward offset. Missing from

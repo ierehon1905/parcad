@@ -266,6 +266,32 @@ shapes that trigger it.
 sentence our tangency detection writes, so it also goes red if an OCCT upgrade
 rewords the raise that detection reads.
 
+### A blended union builds only a blend smaller than the overlap
+
+The entry above says to bury the boss "a few millimetres". The depth is not a
+courtesy: it is the ceiling on the radius. A Ø12 cylinder or cone standing on
+a plate, unioned with `{ blend: 4 }`, buried by
+
+| overlap | largest blend that built |
+|---|---|
+| 0.5 mm | 0.38 mm |
+| 2 mm | 1.88 mm (cylinder), 1.75 mm (cone) |
+| 3 mm | 2.88 mm |
+| 4 mm | 3.88 mm |
+| 5 mm | 4 mm, as asked |
+| 6 mm, its end coplanar with the underside | 5 mm, as asked |
+
+so the buildable radius is the overlap less about a tenth of a millimetre, on
+a seam that has nothing else wrong with it. The refusal measures the radius
+that would build and says to write that — which is the wrong fix here, since
+a deeper boss builds the radius you wanted. Leaning the boss 10° raised each
+ceiling by half again, so the number is not a clean rule to code against, but
+the direction is: **overlap deeper than the blend, then blend.** A boss that
+reaches the far face exactly is fine; one that pokes through it is not.
+
+Measured on `examples/plate-stand.js`, whose pegs are buried 4.5 mm for a 4 mm
+blend inside a 6 mm base.
+
 ### A blend that ends on a face it is tangent to — fixed, and worth knowing anyway
 
 The sibling of the case above, and the origin of a vendored kernel patch. A
@@ -557,6 +583,12 @@ wrong in the same way everywhere is the hardest kind to see.
   `opencascade-sys` already binds every OCCT call we needed.
 - TypeScript: `isLineSegments` doesn't exist on the intersected three.js type.
   Use `isLine` — `LineSegments extends Line`.
+- `Shape::write_stl` **re-meshed at 0.001 mm** — ten times finer than the
+  0.01 mm the worker had just meshed at, so every face was triangulated twice
+  and the second pass cost 1.1 s per filleted boss. Eighteen bosses spent the
+  kernel's whole 20 s budget writing a file for a slicer, and the timeout
+  blamed "an unknown operation". The writer now takes the tolerance; the
+  worker passes the mesher's. `vendor/opencascade/PARCAD-CHANGES.md` has it.
 
 ## One malformed tool schema hides the entire MCP surface
 
