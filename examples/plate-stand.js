@@ -34,7 +34,7 @@ const pegTipD = 6;
 const pegH = 40;          // above the base
 const lean = 10;          // degrees outward, following the plate's edge
 const rootBlend = 4;
-const bury = 4.5;         // into the base: deeper than the blend, or the blend will not build (docs/GOTCHAS.md)
+const bury = 3;           // into the base, so the union has a seam to blend; short of the underside
 
 const slotW = 16;
 // Ends 5 mm short of the peg pads, whose reach is the root plus the blend.
@@ -69,10 +69,11 @@ const base = slab
   .chamfer(0.8)
   .tag("base");
 
-// One peg, standing on z = 0 and reaching `bury` below it. The cone is drawn
-// from where it enters the base, so the root diameter above is the one at the
-// surface rather than the one under it. Leaning, its buried end dips to
-// z = -5.5, still inside a 6 mm base.
+// One peg, standing on z = 0 and reaching `bury` below it; placed on the
+// base's top face, so the buried end stops inside the base and never reaches
+// the underside, which would give the union a second seam there. The cone is
+// drawn from where it enters the base, so the root diameter above is the one
+// at the surface rather than the one under it.
 const taper = (pegRootD - pegTipD) / 2 / pegH;
 const pegLen = pegH + bury;
 const peg = cone(pegRootD / 2 + bury * taper, pegTipD / 2, pegLen)
@@ -86,8 +87,8 @@ const peg = cone(pegRootD / 2 + bury * taper, pegTipD / 2, pegLen)
 // toward +Y and the back row toward -Y, and rotating about X by a negative
 // angle is what carries +Z toward +Y (see Shape.rotate).
 const stations = Array.from({ length: plates + 1 }, (_, i) => (i - plates / 2) * pitch);
-const front = stations.map((x) => peg.rotate("x", -lean).at(x, rowGap / 2, 0));
-const back = stations.map((x) => peg.rotate("x", lean).at(x, -rowGap / 2, 0));
+const front = stations.map((x) => peg.rotate("x", -lean).at(x, rowGap / 2, baseT));
+const back = stations.map((x) => peg.rotate("x", lean).at(x, -rowGap / 2, baseT));
 
 // Unioned flat rather than as two pre-fused rows: pegs do not touch each
 // other, and a fuse that has to bridge eighteen separate lumps at once is the

@@ -266,31 +266,29 @@ shapes that trigger it.
 sentence our tangency detection writes, so it also goes red if an OCCT upgrade
 rewords the raise that detection reads.
 
-### A blended union builds only a blend smaller than the overlap
+### A boss that pokes out of the far face gives the blend a second seam
 
-The entry above says to bury the boss "a few millimetres". The depth is not a
-courtesy: it is the ceiling on the radius. A Ø12 cylinder or cone standing on
-a plate, unioned with `{ blend: 4 }`, buried by
+An earlier version of this entry claimed a blended union builds only a blend
+smaller than the depth the boss overlaps the plate, and had a table to prove
+it. The table was real and the reading was wrong. Every boss in it had been
+placed on the plate's *underside* plane rather than its top, so each one
+passed through the plate and stood out of the far face by exactly the
+"overlap": the union had two seams, the intended one on top and one round a
+stub underneath as long as that overlap. The blend has to build on both, and
+a fillet cannot reach further along the stub than the stub goes — which is
+the ceiling the table measured, 1.88 mm on a 2 mm stub, 3.88 mm on 4 mm.
 
-| overlap | largest blend that built |
-|---|---|
-| 0.5 mm | 0.38 mm |
-| 2 mm | 1.88 mm (cylinder), 1.75 mm (cone) |
-| 3 mm | 2.88 mm |
-| 4 mm | 3.88 mm |
-| 5 mm | 4 mm, as asked |
-| 6 mm, its end coplanar with the underside | 5 mm, as asked |
+With the boss ending *inside* the plate, the intended seam is the only one
+and the radius does not depend on the depth at all: a Ø12 cone buried 0.5, 1
+or 2 mm into a 6 mm plate takes a 4 mm blend every time, measured through
+the app's own kernel.
 
-so the buildable radius is the overlap less about a tenth of a millimetre, on
-a seam that has nothing else wrong with it. The refusal measures the radius
-that would build and says to write that — which is the wrong fix here, since
-a deeper boss builds the radius you wanted. Leaning the boss 10° raised each
-ceiling by half again, so the number is not a clean rule to code against, but
-the direction is: **overlap deeper than the blend, then blend.** A boss that
-reaches the far face exactly is fine; one that pokes through it is not.
-
-Measured on `examples/plate-stand.js`, whose pegs are buried 4.5 mm for a 4 mm
-blend inside a 6 mm base.
+Two things worth keeping from the mistake. The tell was the bounding box:
+the part measured 45.08 mm tall and its lowest z was −5.5, and nobody read
+the low end because the height matched a plausible sum — read both ends. And
+a refusal that names a radius on a seam you did not intend is telling you
+about the seam, not the radius. `examples/plate-stand.js` carried the stubs
+for one commit; its pegs are now placed on the top face and buried 3 mm.
 
 ### A blend that ends on a face it is tangent to — fixed, and worth knowing anyway
 
