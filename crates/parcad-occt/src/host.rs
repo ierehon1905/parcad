@@ -321,6 +321,16 @@ fn run_worker(request: Request, opts: &Options) -> Result<Response, OcctError> {
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status();
+                // The kill closes the worker's stderr, so the reader thread is
+                // about to drain whatever was still in the pipe and finish.
+                // Wait for that rather than race it: under load the last
+                // breadcrumb can be written and not yet read when the deadline
+                // fires. Bounded, so a worker that left a child holding the
+                // pipe open cannot hold this.
+                let drained = std::time::Instant::now();
+                while !crumbs.is_finished() && drained.elapsed() < Duration::from_millis(500) {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
                 let stage = latest
                     .lock()
                     .map(|seen| seen.clone())
@@ -432,16 +442,19 @@ mod tests {
     fn a_timeout_names_the_operation_and_kills_the_worker() {
         let _env = WORKER_ENV.lock().unwrap_or_else(|e| e.into_inner());
         let pid_file = std::env::temp_dir().join(format!("parcad-timeout-shim-{}.pid", std::process::id()));
+        // The breadcrumb first, so a loaded machine cannot leave it unprinted
+        // when the deadline fires; `exec`, so the pid on file is the process
+        // holding the pipe, and killing it closes it.
         let shim = shim(
             "timeout",
             &format!(
-                "echo $$ > '{}'\necho '{BREADCRUMB}writing STL' >&2\nsleep 30\n",
+                "echo '{BREADCRUMB}writing STL' >&2\necho $$ > '{}'\nexec sleep 30\n",
                 pid_file.display()
             ),
         );
         std::env::set_var("PARCAD_OCCT_WORKER", &shim);
         let opts = Options {
-            timeout: Duration::from_millis(500),
+            timeout: Duration::from_millis(1500),
             ..Default::default()
         };
         let outcome = evaluate(&unit_cube(), &opts);
@@ -457,7 +470,7 @@ mod tests {
         let _ = std::fs::remove_file(&pid_file);
         // Reaping is asynchronous; a zombie still answers `kill -0` for a moment.
         let mut alive = true;
-        for _ in 0..50 {
+        for _ in 0..200 {
             alive = Command::new("kill").args(["-0", &pid]).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false);
             if !alive {
                 break;
