@@ -198,7 +198,7 @@ pub struct EvaluationSnapshot {
     /// eighteen small patches where one slab was meant is the underside defect
     /// no other number here shows.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub stands_on: Option<parcad_core::mesh::BedContact>,
+    pub stands_on: Option<StandsOn>,
     pub tags: Vec<String>,
     /// Where each of those tags actually is, measured from the built surface.
     ///
@@ -248,6 +248,34 @@ pub struct EvaluationSnapshot {
 
 fn one_body() -> usize {
     1
+}
+
+/// `parcad_core::mesh::BedContact`, carried here with the schema the MCP
+/// tool needs, rounded like every other number in the snapshot.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct StandsOn {
+    /// Height of the lowest plane, in mm.
+    pub z_mm: f64,
+    /// Surface lying flat in that plane, in mm².
+    pub area_mm2: f64,
+    /// Separate regions of it: one for a slab, one per foot, many for stubs.
+    pub patches: usize,
+    /// `area_mm2` over the bounding footprint: a slab near 1, stubs near 0.
+    pub footprint_fraction: f64,
+    /// How far above the plane a vertex may sit and still count, in mm.
+    pub tolerance_mm: f64,
+}
+
+impl From<&parcad_core::mesh::BedContact> for StandsOn {
+    fn from(c: &parcad_core::mesh::BedContact) -> Self {
+        Self {
+            z_mm: round_mm(c.z_mm),
+            area_mm2: round_mm(c.area_mm2),
+            patches: c.patches,
+            footprint_fraction: (c.footprint_fraction * 1000.0).round() / 1000.0,
+            tolerance_mm: round_mm(c.tolerance_mm),
+        }
+    }
 }
 
 impl EvaluationSnapshot {
@@ -1165,7 +1193,7 @@ fn describe(
         non_manifold_edges: report.mesh.non_manifold_edges,
         bodies: report.mesh.bodies,
         voids: report.mesh.voids,
-        stands_on: report.stands_on.clone(),
+        stands_on: report.stands_on.as_ref().map(StandsOn::from),
         tags: report.tags.clone(),
         tag_extents: extents,
         unlocated_tags: unlocated,
