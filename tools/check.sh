@@ -67,7 +67,13 @@ step "cargo build --locked --release"
 cargo build --locked --release
 
 step "cargo test"
-cargo test --release --workspace
+# `occt-sys` is excluded because it only reaches the test build as a selected
+# member, and a member is built for the target with the release profile —
+# a second unit for its build script, whose run *is* the OpenCASCADE compile.
+# Everything else reaches it as a build-dependency, which the worker build
+# already made. Selected, it compiled OCCT twice per cold checkout: 7 GB and
+# five minutes for a crate with no tests. See docs/GOTCHAS.md.
+cargo test --release --workspace --exclude occt-sys
 
 step "bun test"
 (cd app && bun test src)

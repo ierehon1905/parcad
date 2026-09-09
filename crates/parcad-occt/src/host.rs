@@ -16,7 +16,7 @@ use parcad_core::graph::Doc;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
 #[derive(Debug)]
@@ -244,7 +244,12 @@ fn run_worker(request: Request, opts: &Options) -> Result<Response, OcctError> {
     // Drain stderr on its own thread. Breadcrumbs arrive as the worker moves
     // through the model, so whatever is last when it dies names the culprit.
     let stderr = child.stderr.take();
-    let (crumb_tx, crumb_rx) = mpsc::channel::<String>();
+    // Shared rather than sent: a wedged worker never closes its stderr, so a
+    // channel filled at the end of the trail has nothing in it at the moment a
+    // timeout asks. This used to report "an unknown operation" for every
+    // timeout, with the culprit sitting unread in the reader thread.
+    let latest = Arc::new(Mutex::new(String::from("starting up")));
+    let latest_seen = Arc::clone(&latest);
     // Only the last breadcrumb survives a successful run, which is all a crash
     // report needs. `PARCAD_BREADCRUMBS=1` echoes the whole trail instead, for
     // when the question is what the kernel did rather than where it died.
@@ -259,6 +264,9 @@ fn run_worker(request: Request, opts: &Options) -> Result<Response, OcctError> {
                         eprintln!("[kernel] {stage}");
                     }
                     last = stage.to_string();
+                    if let Ok(mut seen) = latest_seen.lock() {
+                        *seen = last.clone();
+                    }
                 } else if !line.trim().is_empty() {
                     if echo {
                         // Whatever the kernel printed for itself. Deliberately
@@ -271,12 +279,12 @@ fn run_worker(request: Request, opts: &Options) -> Result<Response, OcctError> {
                 }
             }
         }
-        let _ = crumb_tx.send(last.clone());
         (last, noise)
     });
 
     // Wait with a deadline, on another thread so a hung kernel cannot hang us.
     let (done_tx, done_rx) = mpsc::channel();
+    let worker_pid = child.id();
     let child = {
         let handle = std::thread::spawn(move || {
             let out = child.wait_with_output();
@@ -287,10 +295,18 @@ fn run_worker(request: Request, opts: &Options) -> Result<Response, OcctError> {
         match done_rx.recv_timeout(opts.timeout) {
             Ok(()) => handle,
             Err(_) => {
-                // The worker is wedged. Its own process group dies with it; the
-                // last breadcrumb tells us where.
-                let stage = crumb_rx
-                    .recv_timeout(Duration::from_millis(200))
+                // The worker is wedged: kill it, or a runaway OCCT loop keeps a
+                // core for as long as the app runs. The last breadcrumb tells
+                // us where it was.
+                #[cfg(unix)]
+                let _ = Command::new("kill")
+                    .args(["-KILL", &worker_pid.to_string()])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+                let stage = latest
+                    .lock()
+                    .map(|seen| seen.clone())
                     .unwrap_or_else(|_| "an unknown operation".into());
                 return Err(OcctError::TimedOut {
                     stage,
@@ -373,6 +389,67 @@ fn signal_text(_status: &std::process::ExitStatus) -> String {
 mod tests {
     use super::*;
 
+    /// `PARCAD_OCCT_WORKER` is process-wide and cargo runs tests in parallel,
+    /// so every test that points it at a shim holds this while it does.
+    static WORKER_ENV: Mutex<()> = Mutex::new(());
+
+    fn shim(name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = std::env::temp_dir().join(format!("parcad-{name}-shim-{}.sh", std::process::id()));
+        std::fs::write(&path, format!("#!/bin/sh\n{body}")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    fn unit_cube() -> Doc {
+        serde_json::from_str(
+            r#"{"units":"mm","root":0,"nodes":[{"op":"cuboid","size":{"x":1,"y":1,"z":1}}]}"#,
+        )
+        .unwrap()
+    }
+
+    /// A timeout used to report "an unknown operation" every time, because the
+    /// breadcrumb reached the host only when the worker's stderr closed — which
+    /// a wedged worker never does. It also left the worker running.
+    #[test]
+    fn a_timeout_names_the_operation_and_kills_the_worker() {
+        let _env = WORKER_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let pid_file = std::env::temp_dir().join(format!("parcad-timeout-shim-{}.pid", std::process::id()));
+        let shim = shim(
+            "timeout",
+            &format!(
+                "echo $$ > '{}'\necho '{BREADCRUMB}writing STL' >&2\nsleep 30\n",
+                pid_file.display()
+            ),
+        );
+        std::env::set_var("PARCAD_OCCT_WORKER", &shim);
+        let opts = Options {
+            timeout: Duration::from_millis(500),
+            ..Default::default()
+        };
+        let outcome = evaluate(&unit_cube(), &opts);
+        std::env::remove_var("PARCAD_OCCT_WORKER");
+        let _ = std::fs::remove_file(&shim);
+
+        match outcome.unwrap_err() {
+            OcctError::TimedOut { stage, .. } => assert_eq!(stage, "writing STL"),
+            other => panic!("expected TimedOut, got: {other}"),
+        }
+
+        let pid = std::fs::read_to_string(&pid_file).unwrap().trim().to_string();
+        let _ = std::fs::remove_file(&pid_file);
+        // Reaping is asynchronous; a zombie still answers `kill -0` for a moment.
+        let mut alive = true;
+        for _ in 0..50 {
+            alive = Command::new("kill").args(["-0", &pid]).stdout(Stdio::null()).stderr(Stdio::null()).status().map(|s| s.success()).unwrap_or(false);
+            if !alive {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(!alive, "the timed-out worker (pid {pid}) is still running");
+    }
+
     /// The crash supervision, pinned without an input that actually crashes
     /// OCCT. It used to have one — `refuse-oversized-fillet` — until the
     /// fillet boundary learned to catch `Standard_Failure` and the whole known
@@ -381,22 +458,14 @@ mod tests {
     /// machinery is exercised by a worker shim that dies the way OCCT would.
     #[test]
     fn a_worker_death_arrives_as_a_typed_crash_carrying_the_breadcrumb() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let shim = std::env::temp_dir().join(format!("parcad-crash-shim-{}.sh", std::process::id()));
-        std::fs::write(
-            &shim,
-            format!("#!/bin/sh\necho '{BREADCRUMB}filleting the doomed edge' >&2\nkill -SEGV $$\n"),
-        )
-        .unwrap();
-        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let _env = WORKER_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let shim = shim(
+            "crash",
+            &format!("echo '{BREADCRUMB}filleting the doomed edge' >&2\nkill -SEGV $$\n"),
+        );
         std::env::set_var("PARCAD_OCCT_WORKER", &shim);
 
-        let doc: Doc = serde_json::from_str(
-            r#"{"units":"mm","root":0,"nodes":[{"op":"cuboid","size":{"x":1,"y":1,"z":1}}]}"#,
-        )
-        .unwrap();
-        let outcome = evaluate(&doc, &Options::default());
+        let outcome = evaluate(&unit_cube(), &Options::default());
         std::env::remove_var("PARCAD_OCCT_WORKER");
         let _ = std::fs::remove_file(&shim);
 

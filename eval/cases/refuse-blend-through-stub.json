@@ -1,0 +1,15 @@
+{
+  "name": "refuse-blend-through-stub",
+  "script": "eval/scripts/refuse-blend-through-stub.js",
+  "why": "A union blend that fails because the boss pokes out of the far face and the fillet on that stub cannot reach past it. The measured radius in the refusal is real but is the wrong fix; the observation has to name the second loop and where it sits, so the reader moves the boss rather than shrinking the blend. Pins the seam-loop detection, and that a cut's two rims never trigger it (every through-hole case in this corpus blends without the sentence).",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "blends by 4 mm",
+        "2 separate loops, on parallel faces",
+        "out of its far face"
+      ]
+    }
+  }
+}

@@ -768,16 +768,125 @@ fn seam_observation(reason: &str, seam: &[Edge]) -> String {
     }
 }
 
+/// Which boolean made the seam. A cut's seam is two loops whenever the tool
+/// goes through — every through-hole has a rim on each face — so only a
+/// union's second loop is evidence of a member sticking out where it should
+/// not.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SeamOf {
+    Union,
+    Cut,
+}
+
+/// The seam's closed loops, each as the bounding box of its sampled points.
+///
+/// Edges are joined into loops by shared endpoints; a closed edge such as a
+/// full circle is a loop of its own. The explorer can hand the same edge over
+/// twice, and the endpoint join folds the copy into its loop.
+fn seam_loops(seam: &[Edge]) -> Vec<(DVec3, DVec3)> {
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut parent: Vec<usize> = (0..seam.len()).collect();
+    let mut boxes: Vec<Option<(DVec3, DVec3)>> = vec![None; seam.len()];
+    let mut at_vertex: BTreeMap<[i64; 3], usize> = BTreeMap::new();
+    for (i, edge) in seam.iter().enumerate() {
+        let points: Vec<DVec3> = edge.approximation_segments().collect();
+        let (Some(first), Some(last)) = (points.first().copied(), points.last().copied()) else {
+            continue;
+        };
+        let lo = points.iter().fold(first, |a, p| a.min(*p));
+        let hi = points.iter().fold(first, |a, p| a.max(*p));
+        boxes[i] = Some((lo, hi));
+        for point in [first, last] {
+            match at_vertex.get(&vertex_key(point)) {
+                Some(&j) => {
+                    let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+                    parent[a] = b;
+                }
+                None => {
+                    at_vertex.insert(vertex_key(point), i);
+                }
+            }
+        }
+    }
+    let mut loops: BTreeMap<usize, (DVec3, DVec3)> = BTreeMap::new();
+    for i in 0..seam.len() {
+        let Some((lo, hi)) = boxes[i] else { continue };
+        let r = root(&mut parent, i);
+        let entry = loops.entry(r).or_insert((lo, hi));
+        entry.0 = entry.0.min(lo);
+        entry.1 = entry.1.max(hi);
+    }
+    loops.into_values().collect()
+}
+
+/// A union whose seam has two loops on parallel faces at different heights
+/// has one member running through the other and out of its far side. The
+/// blend must then round the stub outside as well, and a fillet cannot reach
+/// past a stub's end — which is what caps the radius, whatever the seam that
+/// was meant looks like. See docs/GOTCHAS.md, "A boss that pokes out of the
+/// far face".
+///
+/// Two loops on one face — a tube's inner and outer rim, or two bosses in one
+/// repeated tool — share their flat axis *and* their position on it, and say
+/// nothing here. A seam on a curved face is not flat and says nothing either.
+fn through_observation(seam: &[Edge]) -> String {
+    const FLAT: f64 = 1e-3;
+    let loops = seam_loops(seam);
+    if loops.len() < 2 {
+        return String::new();
+    }
+    let flat_axis = |lo: DVec3, hi: DVec3| (0..3).find(|&k| hi[k] - lo[k] < FLAT);
+    let mut apart: Option<(DVec3, DVec3)> = None;
+    'pairs: for (i, &(alo, ahi)) in loops.iter().enumerate() {
+        for &(blo, bhi) in loops.iter().skip(i + 1) {
+            let (Some(ka), Some(kb)) = (flat_axis(alo, ahi), flat_axis(blo, bhi)) else { continue };
+            if ka == kb && (alo[ka] - blo[kb]).abs() > FLAT {
+                apart = Some(((alo + ahi) * 0.5, (blo + bhi) * 0.5));
+                break 'pairs;
+            }
+        }
+    }
+    let Some((a, b)) = apart else {
+        return String::new();
+    };
+    format!(
+        " The seam is {} separate loops, on parallel faces around ({:.1}, {:.1}, {:.1}) and \
+         ({:.1}, {:.1}, {:.1}): one solid runs right through the other and out of its far face, \
+         so the blend also has to round the stub left outside, and a fillet cannot reach past a \
+         stub's end — that, not the seam you meant, is what caps the radius. A boss meant to end \
+         inside the other solid should be placed so it does. See docs/GOTCHAS.md.",
+        loops.len(),
+        a.x, a.y, a.z, b.x, b.y, b.z
+    )
+}
+
 /// Fillet the seam a boolean created, or refuse with a measured way out.
-fn blend_seam(joined: &BooleanShape, radius: f64, what: &str, stage: &str) -> Result<Shape> {
+fn blend_seam(
+    joined: &BooleanShape,
+    radius: f64,
+    what: &str,
+    stage: &str,
+    seam_of: SeamOf,
+) -> Result<Shape> {
     validity_probe(&format!("{stage} before blend"), &joined.shape);
     let before = bbox(&joined.shape);
     let mut built = match joined.shape.filleted_edges(radius, &joined.new_edges) {
         Ok(built) => built,
         Err(reason) => bail!(
             "{what} blends by {radius} mm, and OpenCASCADE could not build the \
-             fillet ({reason}).{observed}{measured}",
+             fillet ({reason}).{observed}{through}{measured}",
             observed = seam_observation(&reason, &joined.new_edges),
+            through = if seam_of == SeamOf::Union {
+                through_observation(&joined.new_edges)
+            } else {
+                String::new()
+            },
             measured = repair_sentence(
                 &probe_below(&joined.shape, &joined.new_edges, radius, false, before, stage),
                 "this seam",
@@ -1483,7 +1592,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             for c in it {
                 let other = build_node(doc, c, offset)?;
                 breadcrumb(&format!("union node {id} ({label}) with node {c}"));
-                let mut joined = acc.shape.union(&other.shape);
+                let joined = acc.shape.union(&other.shape);
                 let lineage = if *blend > 0.0 {
                     EdgeLineage::default()
                 } else {
@@ -1504,6 +1613,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                         *blend,
                         &format!("node {id} ({label}) unions node {c}"),
                         &format!("union at node {id}"),
+                        SeamOf::Union,
                     )?;
                     acc = BuiltShape {
                         shape: unified(shape),
@@ -1527,7 +1637,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 let tool = build_node(doc, *t, offset)?;
                 breadcrumb(&format!("subtract node {t} from node {id} ({label})"));
                 let voids_before = acc.shape.internal_void_count();
-                let mut cut = acc.shape.subtract(&tool.shape);
+                let cut = acc.shape.subtract(&tool.shape);
 
                 // A cut that entombs its tool instead of opening the surface.
                 // Topology, not a threshold: an extra closed shell is a cavity
@@ -1569,6 +1679,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                         *blend,
                         &format!("node {id} ({label}) subtracts node {t}"),
                         &format!("cut at node {id}"),
+                        SeamOf::Cut,
                     )?;
                     acc = BuiltShape {
                         shape: unified(shape),

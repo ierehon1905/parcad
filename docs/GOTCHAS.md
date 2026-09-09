@@ -38,6 +38,24 @@ Measured (median of 7):
 `-O2` is chosen: identical speed to `-O3`, 1.2 MB smaller. All 11 regression
 cases produced byte-identical geometry after the change.
 
+### `cargo test --workspace` compiled OpenCASCADE a second time
+
+A cold `tools/check.sh` built OCCT twice: once for the worker, and again
+under `cargo test --release --workspace`, in a second `occt-sys-*` directory
+with a different hash — 7 GB and five minutes each. The features were
+identical both times; what differed was the *unit*. `occt-sys` reaches the
+worker build only as a `[build-dependencies]` entry of `opencascade` and
+`opencascade-sys`, compiled for the host under the build-override profile.
+`--workspace` also selects it as a member in its own right, which is a
+second, target-side unit with a build script of its own to run, and that
+build script is the whole OpenCASCADE compile. The crate has no tests, so
+the gate now passes `--exclude occt-sys` and loses nothing.
+
+The general shape is worth remembering: a crate that is *both* a workspace
+member and somebody's build-dependency gets two build-script runs whenever
+both are selected, and `cargo tree -e features` will not show the difference
+because there is none.
+
 ### A missing `capabilities/` rebuilt the app on every single build
 
 `cargo build` with nothing changed took **16 s**, every time. Not compilation:
