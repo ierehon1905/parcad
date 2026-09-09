@@ -17,6 +17,10 @@
  * part is furniture you stop reading, which is what makes the red one easy to
  * miss on the part where it appears; same for the source links. Area and the tag
  * list went because the script beside the viewport already says both.
+ *
+ * The z range sits on the size line because a size alone hides where the part
+ * is: a stand whose pegs were placed on the wrong face measured a plausible
+ * 45 mm tall and stood 5.5 mm below its own base, and nothing on screen said so.
  */
 
 import type { ComponentChildren } from "preact";
@@ -29,6 +33,8 @@ export function Report() {
   if (!snapshot) return null;
 
   const [sx, sy, sz] = snapshot.size;
+  const [, , zLow] = snapshot.bounds_min;
+  const [, , zHigh] = snapshot.bounds_max;
   const dead = snapshot.unused_nodes ?? 0;
   const linked = S.linkedEdgeCount.value;
 
@@ -42,7 +48,7 @@ export function Report() {
         <Strong>
           {fmt(sx)} × {fmt(sy)} × {fmt(sz)}
         </Strong>{" "}
-        mm
+        mm · z <Strong>{fmt(zLow)}</Strong> to <Strong>{fmt(zHigh)}</Strong>
       </div>
       <div>
         <Strong>{fmt(snapshot.volume_mm3)}</Strong> mm³

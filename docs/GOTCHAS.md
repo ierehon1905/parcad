@@ -605,6 +605,9 @@ wrong in the same way everywhere is the hardest kind to see.
   kernel's whole 20 s budget writing a file for a slicer, and the timeout
   blamed "an unknown operation". The writer now takes the tolerance; the
   worker passes the mesher's. `vendor/opencascade/PARCAD-CHANGES.md` has it.
+  The CLI and the app no longer ask for that file at all: both write the
+  welded viewport mesh themselves, binary, which is a sixth of the bytes and
+  the same triangles on screen and in the slicer.
 
 ## One malformed tool schema hides the entire MCP surface
 

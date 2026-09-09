@@ -341,7 +341,9 @@ export class VertexSelection {
  * A solid, or a step on the way to one.
  *
  * Every method returns a *new* shape rather than changing this one, so a shape
- * can be placed twice, cut from two things, or kept as a tool and reused.
+ * can be placed twice, cut from two things, or kept as a tool and reused. The
+ * one exception is {@link tag}, which names this shape in place: a name
+ * belongs to the node, and a named copy would be a second node built twice.
  */
 export class Shape {
   /** @internal */
@@ -363,6 +365,9 @@ export class Shape {
    * Tags are the only stable way to point at part of a model. They survive any
    * change to dimensions or ordering, because they name the step that made the
    * surface rather than the surface's position in some list.
+   *
+   * Unlike every other method this renames the shape itself and returns it,
+   * so tagging a shape twice keeps the last name, everywhere it is used.
    */
   tag(name: string): Shape {
     this.name = name;

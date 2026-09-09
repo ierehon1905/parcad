@@ -1484,32 +1484,23 @@ fn measure_brep(
 /// at. Exporting from the other one would be a quiet substitution — the two
 /// disagree by the blend bulge, which is millimetres, not rounding.
 ///
-/// The two paths write different flavours: the implicit tessellator writes
-/// binary, OCCT's writer writes ASCII, and OCCT meshes the file to its own
-/// deflection rather than the one the viewport is showing. Both are valid STL,
-/// so this is stated rather than papered over.
+/// Both paths write the triangles the viewport shows, welded, as binary STL.
+/// The exact path used to ask OCCT's own writer for the file instead, which
+/// wrote ASCII — six times the bytes — and, until the tolerance was passed
+/// through, re-meshed every face at a micron on the way.
 pub fn export_stl(doc: &Doc, depth: u8, backend: Backend) -> Result<Export, String> {
-    let bytes = if backend.is_exact() {
-        // The kernel worker writes files, not buffers: it is a separate process
-        // precisely so OCCT cannot take this one down with it, and a pipe back
-        // would be one more thing to lose when it dies. Hand it a scratch path
-        // and read the result.
-        with_scratch_file("stl", |path| {
-            let opts = parcad_occt::Options {
-                stl_path: Some(path.to_path_buf()),
-                ..Default::default()
-            };
-            parcad_occt::evaluate(doc, &opts).map_err(|e| format!("{e}"))?;
-            Ok(())
-        })?
+    let tess = if backend.is_exact() {
+        let built = parcad_occt::evaluate(doc, &parcad_occt::Options::default())
+            .map_err(|e| format!("{e}"))?;
+        measure_brep(doc, &built)?.1
     } else {
-        let (_, tess, _) =
-            parcad_core::evaluate(doc, depth.clamp(3, 9)).map_err(|e| format!("{e:#}"))?;
-        let mut buffer = Vec::new();
-        tess.write_stl(&mut buffer)
-            .map_err(|e| format!("writing STL: {e:#}"))?;
-        buffer
+        parcad_core::evaluate(doc, depth.clamp(3, 9))
+            .map_err(|e| format!("{e:#}"))?
+            .1
     };
+    let mut bytes = Vec::new();
+    tess.write_stl(&mut bytes)
+        .map_err(|e| format!("writing STL: {e:#}"))?;
 
     Ok(Export {
         bytes,

@@ -371,6 +371,19 @@ pub fn render_view(tree: &Tree, bounds: Aabb, view: View, opts: &RenderOptions) 
     Ok(shade(&buf, opts).downsample(opts.ss()))
 }
 
+/// [`render_view`] for a mesh: the exact kernel's surface, drawn by the
+/// rasteriser and shaded by the same code, so a B-rep part gets the same
+/// picture the distance field does.
+pub fn render_surface_view(
+    surface: &Surface,
+    bounds: Aabb,
+    view: View,
+    opts: &RenderOptions,
+) -> Result<Rgb> {
+    let buf = raster(surface, bounds, view, opts)?;
+    Ok(shade(&buf, opts).downsample(opts.ss()))
+}
+
 /// A triangle mesh, in the flat layout the exact kernel returns.
 ///
 /// `indices` may be empty, in which case every three positions are one triangle
@@ -900,6 +913,26 @@ fn round_1_2_5(v: f64) -> f64 {
 }
 
 pub fn contact_sheet(tree: &Tree, bounds: Aabb, opts: &RenderOptions) -> Result<ContactSheet> {
+    contact_sheet_with(bounds, opts, |view| render_view(tree, bounds, view, opts))
+}
+
+/// [`contact_sheet`] for a mesh, so the CLI can show a B-rep part without
+/// starting the app; the mesh is what was measured, so the sheet is too.
+pub fn contact_sheet_of(
+    surface: &Surface,
+    bounds: Aabb,
+    opts: &RenderOptions,
+) -> Result<ContactSheet> {
+    contact_sheet_with(bounds, opts, |view| {
+        render_surface_view(surface, bounds, view, opts)
+    })
+}
+
+fn contact_sheet_with(
+    bounds: Aabb,
+    opts: &RenderOptions,
+    mut render: impl FnMut(View) -> Result<Rgb>,
+) -> Result<ContactSheet> {
     const COLS: u32 = 4;
     let views = View::ALL;
     let rows = (views.len() as u32).div_ceil(COLS);
@@ -922,7 +955,7 @@ pub fn contact_sheet(tree: &Tree, bounds: Aabb, opts: &RenderOptions) -> Result<
         let x = gap + col * (cell + gap);
         let y = gap + row * (cell + gap);
 
-        let mut panel = render_view(tree, bounds, view, opts)?;
+        let mut panel = render(view)?;
         panel.label(
             label_scale * 3,
             label_scale * 3,

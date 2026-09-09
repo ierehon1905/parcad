@@ -10,6 +10,7 @@ use parcad_core::{
     view::{Axis, Keep, Section, View},
 };
 use std::path::PathBuf;
+use std::time::Duration;
 
 struct Args {
     input: PathBuf,
@@ -25,6 +26,9 @@ struct Args {
     geometry: Option<PathBuf>,
     /// Evaluate through the B-rep kernel instead of the distance field.
     brep: bool,
+    /// Seconds the kernel may take before it is stopped; `PARCAD_OCCT_TIMEOUT`
+    /// or 20 when absent. A busy machine is the usual reason to raise it.
+    timeout: Option<f64>,
     /// Write STEP. Implies `--brep`: STEP describes exact surfaces, and the
     /// implicit backend has none to describe.
     step: Option<PathBuf>,
@@ -44,6 +48,7 @@ fn parse_args() -> Result<Args> {
     let mut section = None;
     let mut geometry = None;
     let mut brep = false;
+    let mut timeout = None;
     let mut step = None;
     let mut probe_step = None;
 
@@ -85,6 +90,14 @@ fn parse_args() -> Result<Args> {
                 ))
             }
             "--brep" => brep = true,
+            "--timeout" => {
+                timeout = Some(
+                    it.next()
+                        .context("--timeout needs a number of seconds")?
+                        .parse::<f64>()
+                        .context("--timeout must be a number of seconds")?,
+                )
+            }
             "--step" => step = Some(PathBuf::from(it.next().context("--step needs a path")?)),
             "--probe-step" => {
                 probe_step = Some(PathBuf::from(
@@ -96,7 +109,7 @@ fn parse_args() -> Result<Args> {
                     "usage: parcad <graph.json> [--out DIR] [--depth N] [--size PX]\n\
                      \x20              [--view NAME] [--regions] [--section PLANE]\n\
                      \x20              [--geometry PATH]\n\
-                     \x20              [--brep] [--step PATH]\n\
+                     \x20              [--brep] [--step PATH] [--timeout SECS]\n\
                      \x20      parcad --probe-step FILE.step   # measure a foreign export"
                 );
                 std::process::exit(0);
@@ -117,6 +130,7 @@ fn parse_args() -> Result<Args> {
             section,
             geometry,
             brep,
+            timeout,
             step,
             probe_step: Some(probe),
         });
@@ -132,6 +146,7 @@ fn parse_args() -> Result<Args> {
         section,
         geometry,
         brep: brep || step.is_some(),
+        timeout,
         step,
         probe_step: None,
     })
@@ -323,6 +338,10 @@ fn summary(r: &parcad_core::PartReport, eval_ms: u128, render_ms: u128) -> Strin
         r.size.x, r.size.y, r.size.z
     ));
     s.push_str(&format!(
+        "bounds  x {:.2}..{:.2}  y {:.2}..{:.2}  z {:.2}..{:.2}\n",
+        r.bounds.min.x, r.bounds.max.x, r.bounds.min.y, r.bounds.max.y, r.bounds.min.z, r.bounds.max.z
+    ));
+    s.push_str(&format!(
         "volume  {:.2} mm³   area {:.2} mm²\n",
         r.mass.volume_mm3, r.mass.area_mm2
     ));
@@ -364,7 +383,10 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
     let stl_path = args.out.join("part.stl");
     let opts = parcad_occt::Options {
         step_path: args.step.clone(),
-        stl_path: Some(stl_path.clone()),
+        timeout: args
+            .timeout
+            .map(Duration::from_secs_f64)
+            .unwrap_or_else(parcad_occt::default_timeout),
         ..Default::default()
     };
 
@@ -396,6 +418,42 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
     let bounds = parcad_core::measure::Aabb::from_points(&tess.vertices)
         .context("the kernel returned a mesh with no vertices")?;
     let mass = parcad_core::measure::mass_properties(&tess.vertices, &tess.triangles);
+
+    // The STL is these triangles, welded and binary — the same file the app
+    // exports — rather than OCCT's own ASCII writer's view of the shape.
+    let mut f = std::fs::File::create(&stl_path)
+        .with_context(|| format!("creating {}", stl_path.display()))?;
+    tess.write_stl(&mut f)?;
+
+    // Views from the mesh. The rasteriser shares its framing, shading and
+    // section handling with the raymarched path, so a B-rep part and an
+    // implicit one of the same shape make the same picture.
+    let surface = render::Surface {
+        positions: &s.positions,
+        normals: &s.normals,
+        indices: &s.indices,
+    };
+    let opts = render::RenderOptions {
+        size: args.size,
+        section: args.section,
+        ..Default::default()
+    };
+    let render_started = std::time::Instant::now();
+    let image_path = match args.view {
+        Some(v) => {
+            let img = render::render_surface_view(&surface, bounds, v, &opts)?;
+            let path = args.out.join(format!("{}.png", v.name()));
+            img.write_png(&path)?;
+            path
+        }
+        None => {
+            let sheet = render::contact_sheet_of(&surface, bounds, &opts)?;
+            let path = args.out.join("views.png");
+            sheet.image.write_png(&path)?;
+            path
+        }
+    };
+    let render_ms = render_started.elapsed().as_millis();
 
     if let Some(path) = &args.geometry {
         let payload = serde_json::json!({
@@ -429,6 +487,10 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
     let size = bounds.size();
     println!("backend  b-rep (OpenCASCADE)");
     println!("size     {:.2} x {:.2} x {:.2} mm", size.x, size.y, size.z);
+    println!(
+        "bounds   x {:.2}..{:.2}  y {:.2}..{:.2}  z {:.2}..{:.2}",
+        bounds.min.x, bounds.max.x, bounds.min.y, bounds.max.y, bounds.min.z, bounds.max.z
+    );
     println!("volume   {:.2} mm³   area {:.2} mm²", mass.volume_mm3, mass.area_mm2);
     println!(
         "topology {} faces, {} edges ({} unique curves)",
@@ -447,20 +509,21 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         }
     );
     println!(
-        "timing   build {} ms, mesh {} ms, export {} ms, wall {} ms",
-        s.timings.build_ms, s.timings.mesh_ms, s.timings.export_ms, kernel_ms
+        "timing   build {} ms, mesh {} ms, export {} ms, wall {} ms, render {} ms",
+        s.timings.build_ms, s.timings.mesh_ms, s.timings.export_ms, kernel_ms, render_ms
     );
     println!("  stl      {}", stl_path.display());
+    println!("  image    {}", image_path.display());
     if let Some(p) = &s.step_path {
         println!("  step     {}", p.display());
     }
     if let Some(p) = &args.geometry {
         println!("  geometry {}", p.display());
     }
-    if args.regions || args.view.is_some() {
+    if args.regions {
         println!(
-            "\nnote: renders and tag regions are raymarched from the distance field, \
-             which a B-rep does not have. Drop --brep for those."
+            "\nnote: the tag-region map is raymarched from the distance field, \
+             which a B-rep does not have. Drop --brep for it."
         );
     }
     Ok(())

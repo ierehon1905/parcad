@@ -48,7 +48,9 @@ impl std::fmt::Display for OcctError {
             ),
             OcctError::TimedOut { stage, seconds } => write!(
                 f,
-                "the geometry kernel was still {stage} after {seconds}s and was stopped"
+                "the geometry kernel was still {stage} after {seconds}s and was stopped. \
+                 A part that needs longer, or a machine that is busy building something \
+                 else, can have more: set PARCAD_OCCT_TIMEOUT to a number of seconds"
             ),
             OcctError::Host(m) => write!(f, "{m}"),
         }
@@ -69,11 +71,26 @@ impl Default for Options {
     fn default() -> Self {
         Self {
             deflection: 0.05,
-            timeout: Duration::from_secs(20),
+            timeout: default_timeout(),
             step_path: None,
             stl_path: None,
         }
     }
+}
+
+/// `PARCAD_OCCT_TIMEOUT`, in seconds, or 20.
+///
+/// Twenty seconds is plenty for every part in the corpus on an idle machine
+/// and not enough for the larger ones while a build is running beside the
+/// app, which is when the budget was first hit. The variable exists so that
+/// moment needs an environment change rather than a rebuild.
+pub fn default_timeout() -> Duration {
+    std::env::var("PARCAD_OCCT_TIMEOUT")
+        .ok()
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|s| *s > 0.0)
+        .map(Duration::from_secs_f64)
+        .unwrap_or(Duration::from_secs(20))
 }
 
 const WORKER: &str = "parcad-occt-worker";

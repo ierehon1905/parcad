@@ -136,6 +136,15 @@ out. Everything below could otherwise have lived in our own crate.
   going to a slicer. Passing the mesher's own tolerance writes the shape as it
   stands. `Solid::write_stl` and the `adhoc` demo keep their literal.
 
+- `Mesher::mesh()` negates the normals of a face whose orientation is not
+  `Forward`. The mesher already flipped such a face's triangle winding, and
+  `BRepLib_ToolTriangulatedShape::ComputeNormals` gives the surface's own
+  normals, which for a reversed face point into the material. Measured on a
+  plain box rendered from below through parcad's one-sided shading: the
+  underside came out at 12/255 before and 133/255 after, the same as its top.
+  The face's `TopLoc_Location` is still not applied to the normals (the
+  vertices do get it); no shape parcad builds has been seen to carry one.
+
 ## Not added
 
 - `BRepOffsetAPI_MakeOffsetShape`, for a general outward offset. Missing from

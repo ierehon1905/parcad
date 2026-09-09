@@ -107,10 +107,16 @@ impl Mesher {
 
             ffi::compute_normals(&face.inner, &triangulation_handle);
 
+            // A reversed face's material lies on the other side of its surface,
+            // which is why the winding below is flipped for it; the surface
+            // normals OCCT computes do not know that, so they are flipped here
+            // too. Without this every underside of a box pointed into the
+            // solid and rendered unlit.
+            let flip = if face.orientation() == FaceOrientation::Forward { 1.0 } else { -1.0 };
             // TODO(bschwind) - Why do we start at 1 here?
             for i in 1..(normal_array.Length() as usize) {
                 let normal = ffi::Poly_Triangulation_Normal(triangulation, i as i32);
-                normals.push(dvec3(normal.X(), normal.Y(), normal.Z()));
+                normals.push(dvec3(normal.X(), normal.Y(), normal.Z()) * flip);
             }
 
             let first_triangle = indices.len() / 3;
