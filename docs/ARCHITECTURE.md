@@ -1,5 +1,8 @@
 # Architecture
 
+Written for maintainers and coding agents working on this codebase, not as an
+introduction to CAD.
+
 ## The intent graph is the only contract
 
 `crates/parcad-core/src/graph.rs` defines a `Doc`: an arena of `Node`s, a
@@ -33,48 +36,44 @@ Consequences worth internalising:
 | B-rep | boolean, then fillet the newly-created edges | no bulge; a true fillet |
 
 Both are defensible readings of "round this join by 6 mm". They are not the same
-shape. The desktop mesh preview therefore triangulates the B-rep result: it
-shows the same geometry as the solid view while retaining the triangle overlay.
-The implicit backend remains available for field queries, renders and perception.
+shape. The desktop mesh preview therefore triangulates the B-rep result: it shows
+the same geometry as the solid view while retaining the triangle overlay. The
+implicit backend remains available for field queries, renders and perception.
 
 ### Selected edge and corner treatments are exact-only
 
-`shape.edges(">Z and >Y and |X").fillet(2)` is a B-rep operation. `>Z` and
-`<Z` select edges whose centres are at a global directional extreme; `|X`
-restricts the result to straight edges parallel to X. Terms are combined with
-`and`, and a selector that finds nothing is rejected rather than silently
-falling back to an array position. The implicit evaluator has no logical edges,
-so it explains that the operation needs the B-rep backend instead of rounding
-mesh vertices that happen to be nearby.
+`shape.edges(">Z and >Y and |X").fillet(2)` is a B-rep operation: `>Z` and `<Z`
+select edges whose centres are at a global directional extreme, `|X` restricts
+the result to straight edges parallel to X, terms combine with `and`, and a
+selector that finds nothing is rejected rather than silently falling back to an
+array position. The implicit evaluator has no logical edges, so it explains that
+the operation needs the B-rep backend instead of rounding mesh vertices that
+happen to be nearby.
 
-`shape.vertices(">X and >Y and >Z").fillet(2)` selects the single corner at
-those three global extrema. The 3D OCCT fillet/chamfer builder accepts edges,
-not a vertex, so the backend expands that selected vertex to its exact incident
-edge set just before construction. This keeps the source intent as a corner
-while using the builder's real rolling-ball corner construction rather than an
-approximation. Vertex selectors intentionally support only extrema at present:
-their Boolean provenance has not yet been made durable.
+`shape.vertices(">X and >Y and >Z").fillet(2)` selects the single corner at those
+three extrema. The 3D OCCT builder accepts edges, not a vertex, so the backend
+expands that vertex to its exact incident edge set just before construction — the
+source intent stays a corner while the builder does its real rolling-ball corner
+construction. Vertex selectors support only extrema at present: their Boolean
+provenance has not yet been made durable.
 
-Object selectors express topology facts that directional extrema cannot. For
-example, the bracket uses
+Object selectors express topology facts that directional extrema cannot. The
+bracket's
 `shape.edges({ curve: "circle", role: "hole", adjacentTo: { faceNormal: "+z" } })`
-to select every closed circular inner loop bordering an upward-facing face.
-This keeps the four upper hole rims coupled to their geometry as holes move or
-multiply, while excluding lower rims, outside bosses, and open blend arcs.
+selects every closed circular inner loop bordering an upward-facing face, keeping
+the four upper hole rims coupled to their geometry as holes move or multiply
+while excluding lower rims, outside bosses and open blend arcs.
 
 ### Why a plain edge index is the wrong foundation
 
-`op#3.edge[2]` is an ordering convention, not an identity. A Boolean, a fillet
-or a parameter edit can split, merge, delete or reorder the output edges under
-it. This is not a quirk of this kernel: Fusion's own `BRepEdge.tempId` is
-documented as valid only while the owning body is unmodified, and CadQuery's
-positional and nth selectors are useful filters that stay relative. Onshape
-answers it the way this project does, with provenance —
-`qCreatedBy(featureId, EntityType.EDGE)`.
-
-`>X` has the same shape of problem in a smaller way: it means "whatever is
-rightmost in the current result", which is an identity only when rightmost is
-genuinely the design intent.
+`op#3.edge[2]` is an ordering convention, not an identity: a Boolean, a fillet or
+a parameter edit can split, merge, delete or reorder the output edges under it.
+Not a quirk of this kernel — Fusion's `BRepEdge.tempId` is documented as valid
+only while the owning body is unmodified, and Onshape answers it the way this
+project does, with provenance (`qCreatedBy(featureId, EntityType.EDGE)`). `>X`
+has the same problem in a smaller way: it means "whatever is rightmost in the
+current result", an identity only when rightmost is genuinely the design
+intent.
 
 - [CadQuery selectors](https://cadquery.readthedocs.io/en/stable/selectors.html)
 - [Fusion temporary edge IDs](https://help.autodesk.com/cloudhelp/ENU/Fusion-360-API/files/BRepEdge_tempId.htm)
@@ -84,8 +83,8 @@ genuinely the design intent.
 ### Selector strength is intentional
 
 No one selector kind is universally strongest: each encodes a different kind of
-design intent. An authored reference should say why an entity matters, not
-where it happened to land in a kernel-owned list.
+design intent. An authored reference should say why an entity matters, not where
+it happened to land in a kernel-owned list.
 
 | kind | example | use it when | stability |
 |---|---|---|---|
@@ -98,9 +97,8 @@ where it happened to land in a kernel-owned list.
 | target-preview ID | `target@3.0` or `target-vertex@3.0` | show the exact pre-treatment target under an editor cursor | one preview request only; never script input |
 | treatment history | `edge@42 → .fillet(…)` | click a final curve generated by an exact fillet/chamfer to focus its source call | one evaluation only; never script input |
 
-The source-facing reference is therefore a **named operation tag**, not
-`op#3.edge[2]`. It combines with a topology query and an optional cardinality
-assertion:
+The source-facing reference is therefore a **named operation tag**, combined with
+a topology query and an optional cardinality assertion:
 
 ```js
 drilled.edges({
@@ -111,35 +109,30 @@ drilled.edges({
 }).expect({ count: 4 }).fillet(0.8);
 ```
 
-`expect({ count })` validates the selector result in the exact backend before
-the operation changes the solid. `generatedBy` follows created Boolean section
-edges plus OCCT's modified and deleted edge relations through union and
-difference. Other topology-changing operations currently clear that relation
-and an attempted lookup fails rather than guessing. A raw ordinal remains an
-escape hatch only: it must be explicitly sorted, visually marked fragile, and
-never replace a semantic or provenance reference.
+`expect({ count })` validates the selector result in the exact backend before the
+operation changes the solid. `generatedBy` follows created Boolean section edges
+plus OCCT's modified and deleted edge relations through union and difference;
+other topology-changing operations clear that relation and an attempted lookup
+fails rather than guessing. A raw ordinal remains an escape hatch only: it must
+be explicitly sorted, visually marked fragile, and never replace a semantic or
+provenance reference.
 
 ### Source-to-viewport target preview
 
 Placing the editor caret anywhere in a treatment's selector, expectation, or
-method call (`.fillet`, `.chamfer`, `.smooth`, or `.squircle`) asks the isolated
-worker to resolve that node's target against its **input** B-rep. Those exact
-curves are drawn in gold over the finished part; a `vertices(...)` target also
-draws the exact selected corner point. This matters because a treatment usually
-consumes or replaces its input edges; highlighting final `edge@…` values would
-otherwise suggest a false correspondence. The preview follows parent
-translations, rotations, and scales, and repeats when a graph node is reused.
-It is strictly diagnostic: source selectors remain the authored reference,
-while the returned `target@…` curves and `target-vertex@…` markers are
-ephemeral inspection IDs.
+method call (`.fillet`, `.chamfer`, `.smooth`, `.squircle`) asks the isolated
+worker to resolve that node's target against its **input** B-rep, and draws those
+exact curves in gold over the finished part; a `vertices(...)` target also draws
+the selected corner point. Against the input, because a treatment usually
+consumes or replaces its input edges and highlighting final `edge@…` values would
+suggest a false correspondence. The preview follows parent translations,
+rotations and scales, repeats when a graph node is reused, and is strictly
+diagnostic: source selectors remain the authored reference, `target@…` and
+`target-vertex@…` are ephemeral inspection IDs.
 
-The editor obtains a treatment's source range from its parsed syntax and wraps
-only the evaluated copy of that call with the location. It does not persist the
-location in the intent graph or infer it from `Error.stack`, whose format
-varies between browser JavaScript and Tauri's WebKit runtime. A final curve
-with exact fillet/chamfer history can therefore highlight the same full source
-call in either host; clicking the curve pins that inspection while the user
-reads or edits the code.
+The editor takes a treatment's source range from its parsed syntax — it does not
+persist the location in the intent graph or infer it from `Error.stack`, whose
+format varies between browser JavaScript and Tauri's WebKit runtime.
 
 ### Edge treatments are a feature family, not an edge-selector trick
 
@@ -148,17 +141,12 @@ The current API applies a treatment to an **edge-set or corner-vertex target**:
 ```js
 shape.edges({ generatedBy: "mount_holes", role: "hole" })
   .fillet(0.8, { continuity: "tangent", corner: "rollingBall" });
-
-shape.edges(">Z and >Y and |X")
-  .chamfer(1.0);
-
-shape.vertices(">X and >Y and >Z")
-  .fillet(1.0);
+shape.edges(">Z and >Y and |X").chamfer(1.0);
+shape.vertices(">X and >Y and >Z").fillet(1.0);
 ```
 
 Selection (`edges(...)` or `vertices(...)`) is intentionally separate from the
-geometric recipe: selectors say *what* changes; the treatment says *how*. The
-current contract is:
+geometric recipe: selectors say *what* changes; the treatment says *how*.
 
 | source operation | exact support | extensible recipe |
 |---|---|---|
@@ -166,28 +154,21 @@ current contract is:
 | `.chamfer(distance)` | equal-distance, planar corner | two-distance, distance/angle, miter and blend corners |
 | `.smooth(radius)` / `.squircle(radius)` | declared intent; rejected until a true G2 surface builder exists | curvature-continuous blend shape and weights |
 
-`continuity: "tangent"` is G1; `"curvature"` is G2. The fillet `corner`
-describes how several selected edges are solved at a shared vertex:
-`"rollingBall"` or `"setback"`. Chamfers independently have `"chamfer"`,
-`"miter"`, and `"blend"` corner policies. Unsupported but valid recipes are
-rejected by the exact backend rather than being accepted and ignored.
+`continuity: "tangent"` is G1; `"curvature"` is G2. The fillet `corner` describes
+how several selected edges are solved at a shared vertex: `"rollingBall"` or
+`"setback"`. Chamfers independently have `"chamfer"`, `"miter"` and `"blend"`
+corner policies. Unsupported but valid recipes are rejected by the exact backend
+rather than being accepted and ignored.
 
 `squircle` is an ergonomic alias for `.smooth()`, not a claim that this 3D edge
 treatment is a 2D superellipse. In CAD terms the intended property is G2
 curvature continuity; using that name keeps scripts and agent explanations
 geometrically honest.
 
-This leaves further targets as first-class additions, shared by fillets,
-chamfers, and smooth blends instead of special forms of `EdgeSelector`:
-
-| target family | authoring intent | example use |
-|---|---|---|
-| edge set *(current)* | round selected boundary edges | top rims of all mounting holes |
-| corner / vertex set *(current, extrema)* | solve a named vertex with its incident edges | soften one exterior enclosure corner |
-| full round *(planned)* | replace a center face with a transition between two side-face sets | fully round the web between two parallel faces |
-
-This preserves a stable distinction: selectors say *what* is affected; the
-treatment recipe says *how* it changes.
+Keeping the target separate leaves further targets as first-class additions
+shared by every treatment rather than special forms of `EdgeSelector`: edge sets
+and corner vertices today, and a planned full round, which replaces a centre face
+with a transition between two side-face sets.
 
 ## Two backends, deliberately unequal
 
@@ -202,15 +183,13 @@ and tag regions are raymarched from a distance field, a B-rep has none, so
 
 `crates/parcad-occt/src/host.rs` is the reason this crate is split in half.
 
-OCCT signals failure by throwing `Standard_Failure`. The fillet boundary now
-catches that in C++ — the vendored wrapper's `ParcadEdgeTreatment::build` —
-and returns the kernel's own words, which turned every known abort into a
-refusal. What no catch helps with: OCCT can also segfault on degenerate input
-and spin for minutes on a pathological fillet, and `catch_unwind` covers
-neither.
-
-So: the worker is a separate binary. Every outcome — including the ones OCCT
-expresses by killing the process — comes back as an `OcctError` variant:
+OCCT signals failure by throwing `Standard_Failure`, which the fillet boundary
+catches in C++ — the vendored wrapper's `ParcadEdgeTreatment::build` — returning
+the kernel's own words and turning every known abort into a refusal. What no
+catch helps with: OCCT can also segfault on degenerate input and spin for minutes
+on a pathological fillet, and `catch_unwind` covers neither. So the worker is a
+separate binary, and every outcome — including the ones OCCT expresses by killing
+the process — comes back as an `OcctError` variant:
 
 - `Rejected` — the kernel understood and said no. Actionable.
 - `Crashed` — it died. `stage` is the last **breadcrumb** the worker printed to
@@ -246,23 +225,21 @@ the operation refuses above `SLIP_TOLERANCE_MM` (0.05), naming the millimetre
 error. This turns a class of silent wrongness into a loud refusal, which is
 strictly better than an allow-list of "shapes we think are safe".
 
-Fillet and chamfer get the same treatment through `growth_slip()`, one-sided.
-A fillet removes material at a convex edge and fills a concave one; a chamfer
-only cuts. Neither can move a bounding-box extreme outward, whatever the shape
-or the selection, so the result must fit inside the solid it started from.
-Without this, `box(10,10,10).edges(">Z").fillet(8)` returned a 14.95 × 14.10 ×
-10.54 mm shape and no error — a radius that does not fit produces a wrong
-answer rather than a refusal. (At radius 5 the same call reports not-done,
-which the caught boundary turns into a refusal naming the largest radius that
-was measured to build. Both outcomes are in the eval corpus, because they are
-different failures; the crash supervision itself is pinned by a host test with
-a worker shim, since no known geometry kills the worker any more.)
+Fillet and chamfer get the same treatment through `growth_slip()`, one-sided. A
+fillet removes material at a convex edge and fills a concave one; a chamfer only
+cuts. Neither can move a bounding-box extreme outward, whatever the shape or the
+selection, so the result must fit inside the solid it started from. Without this,
+`box(10,10,10).edges(">Z").fillet(8)` returned a 14.95 × 14.10 × 10.54 mm shape
+and no error — a radius that does not fit produces a wrong answer rather than a
+refusal. At radius 5 the same call reports not-done, which the caught boundary
+turns into a refusal naming the largest radius measured to build; both outcomes
+are in the eval corpus, because they are different failures.
 
 Two lowerings exist for the same reason:
 
-- **`Offset` of a cuboid** is lowered as *grow + fillet all 12 edges to r*.
-  That is not an approximation of a Minkowski sum — for a box it **is** the
-  Minkowski sum, exactly, and it avoids `offset_surface` entirely.
+- **`Offset` of a cuboid** is lowered as *grow + fillet all 12 edges to r*. That
+  is not an approximation of a Minkowski sum — for a box it **is** the Minkowski
+  sum, exactly, and it avoids `offset_surface` entirely.
 - **`Shell`** is `solid − solid.offset_surface(−t)`. The wrapper's `hollow()`
   needs a face to open and produced a *shrunken solid* rather than a hollow one
   (measured: 64×39×22 became a solid 60×35×18 with six faces).
@@ -270,10 +247,10 @@ Two lowerings exist for the same reason:
 ## Meshing: weld before you measure
 
 OCCT triangulates **face by face**, so every shared edge arrives as two
-coincident vertex copies. A perfectly closed solid then reports "NOT watertight
-— 2238 bad edges". `Tessellation::weld(1e-3)` merges coincident vertices and
-drops degenerate triangles; both the CLI and the app call it before computing
-mass properties or stats.
+coincident vertex copies, and a perfectly closed solid then reports "NOT
+watertight — 2238 bad edges". `Tessellation::weld(1e-3)` merges coincident
+vertices and drops degenerate triangles; both the CLI and the app call it before
+computing mass properties or stats.
 
 ## Edges are the kernel's, not inferred
 
@@ -289,10 +266,10 @@ line down it. For the bracket this takes 77 curves down to 67.
 ### One application, two windows
 
 The desktop process hosts its own UI and API on `127.0.0.1:4242`
-(`PARCAD_HTTP_PORT` to move it). A browser pointed at that port is not a
-reduced build: it loads the same frontend bundle Tauri embeds and calls the
-same Rust functions the webview calls, so there is no such thing as a
-browser-only limitation to learn.
+(`PARCAD_HTTP_PORT` to move it). A browser pointed at that port is not a reduced
+build: it loads the same frontend bundle Tauri embeds and calls the same Rust
+functions the webview calls, so there is no such thing as a browser-only
+limitation to learn.
 
 ```
   webview  ──Tauri IPC──┐
@@ -301,7 +278,7 @@ browser-only limitation to learn.
 ```
 
 `service.rs` owns every capability; `lib.rs` and `http.rs` are adapters that add
-nothing. That split is load-bearing. The browser build was previously a frozen
+nothing. That split is load-bearing: the browser build was previously a frozen
 `dev-geometry.json` fixture, and each capability the editor gated on `inTauri` —
 editing, backend choice, exact target preview, both exports — was a difference
 the user had to discover. The frontend now reaches the backend only through
@@ -309,15 +286,13 @@ the user had to discover. The frontend now reaches the backend only through
 
 There is also exactly one description of an evaluation. `service::evaluate`
 builds an `EvaluationSnapshot` — size, bounds, mass, topology counts, mesh
-quality, tags, treatments, unused nodes, the backend that measured it — and
-every transport serialises that same value: MCP returns it as the reply to
-`evaluate_part`, the two windows receive it as the `snapshot` field beside the
-mesh they draw. No transport, and nothing above `backend.ts`, computes a
-measurement of its own. Both halves of that rule have been broken and cost
-something: `mcp.rs` once rebuilt the summary from the raw graph JSON and went
-looking for `smooth` and `squircle` nodes, which have never been ops, and the
-editor once assembled its own from a raw `PartReport`. Two callers looking at
-one part must be reading one set of numbers.
+quality, tags, treatments, unused nodes, the backend that measured it — and every
+transport serialises that same value: MCP as the reply to `evaluate_part`, the
+two windows as the `snapshot` field beside the mesh they draw. No transport, and
+nothing above `backend.ts`, computes a measurement of its own. Both halves of
+that rule have been broken — `mcp.rs` rebuilding the summary from raw graph JSON
+and looking for `smooth` and `squircle` nodes, which have never been ops; the
+editor assembling its own from a raw `PartReport`.
 
 Three constraints on the HTTP half, each deliberate:
 
@@ -331,8 +306,8 @@ Three constraints on the HTTP half, each deliberate:
   socket is an arbitrary-write primitive.
 
 The one honest difference left is where an export lands — a file on the desktop,
-a download in the browser. Same bytes, same kernel; it is a property of the host,
-not of the model.
+a download in the browser. Same bytes, same kernel; a property of the host, not
+of the model.
 
 Under `tauri dev` the UI comes from Vite on 1420, which proxies `/api` to the
 app's port. That keeps every frontend call same-origin, which is what lets the
@@ -350,9 +325,9 @@ something the UI cannot, or measure it differently.
   agent    ──MCP────────┘
 ```
 
-Two things are shaped by the caller being a model rather than a person, both
-from CLAUDE.md and both worth more here than anywhere else — a model cannot ask
-a follow-up question and cannot look at the screen:
+Two things are shaped by the caller being a model, both from CLAUDE.md and both
+worth more here than anywhere else — a model cannot ask a follow-up question and
+cannot look at the screen:
 
 - **Measured values, never requested ones.** `evaluate_part` returns the
   deflection the mesher achieved, bounds taken from the geometry, and real face
@@ -361,50 +336,47 @@ a follow-up question and cannot look at the screen:
   whole. A fillet that does not fit answers with the millimetres it overshot by
   and what to change, rather than "operation failed".
 
-The window says whether that caller is there. An agent reaches the same
-`service.rs` and writes to the same project folder, and nothing on screen would
-otherwise show it: the part being edited can be replaced by a caller the user
-cannot see. `mcp.rs` records what it observes — a request arrived, a client
-handshook and named itself, a session was closed — and `service::mcp_status()`
-hands the same answer to both windows. It is deliberately an observation and not
-a claim: a client killed at the terminal never says goodbye, so the status
-carries the age of the last request and drops a session that has gone quiet for
-fifteen minutes, rather than asserting a connection nobody has heard from. The
+The window says whether that caller is there, because an agent reaches the same
+`service.rs` and writes to the same project folder: the part being edited can be
+replaced by a caller the user cannot see. `mcp.rs` records what it observes — a
+request arrived, a client handshook and named itself, a session was closed — and
+`service::mcp_status()` hands the same answer to both windows. Deliberately an
+observation and not a claim: a client killed at the terminal never says goodbye,
+so the status carries the age of the last request and drops a session quiet for
+fifteen minutes rather than asserting a connection nobody has heard from. The
 count is of *sessions* for the same reason — one client that reconnects opens a
-second one, and the endpoint cannot tell that from a second client.
+second, and the endpoint cannot tell that from a second client.
 
-Selector work is where an agent needs the most help, so it gets two tools that
-have no UI equivalent: `check_selector` parses a term and returns the error
-*and* its span without touching geometry, and `inspect_treatment_target`
-resolves a fillet's input edges against the shape *before* that fillet runs —
-the same question the editor's gold target preview answers, asked in text.
+Selector work is where an agent needs the most help, so it gets two tools with no
+UI equivalent: `check_selector` parses a term and returns the error *and* its
+span without touching geometry, and `inspect_treatment_target` resolves a
+fillet's input edges against the shape *before* that fillet runs — the same
+question the editor's gold target preview answers, asked in text.
 
 ### Scripts from a model run in QuickJS
 
-The editor builds a graph with `new Function` in the webview, which is fine for
-a script a human typed. It is not fine for one a model wrote: that code would
-run in the page, with the Tauri bridge and the user's session in reach.
+The editor builds a graph with `new Function` in the webview, which is fine for a
+script a human typed. It is not fine for one a model wrote: that code would run
+in the page, with the Tauri bridge and the user's session in reach.
 
 `script.rs` therefore evaluates agent-authored scripts in an embedded QuickJS
-realm with no host functions at all. There is no `fetch`, `require`,
-filesystem, or console to remove — `quickjs-libc` is not linked and nothing adds
-them back. What QuickJS *can* still do is never return or allocate without
-bound, so a 5 s interrupt deadline and a 64 MB cap turn both into ordinary
-refusals. See ROADMAP.md for what this closed and what it did not.
+realm with no host functions at all. There is no `fetch`, `require`, filesystem,
+or console to remove — `quickjs-libc` is not linked and nothing adds them back.
+What QuickJS *can* still do is never return or allocate without bound, so a 5 s
+interrupt deadline and a 64 MB cap turn both into ordinary refusals. See
+ROADMAP.md for what this closed and what it did not.
 
-The DSL those scripts run against is `app/src/dsl.ts`, bundled into the binary
-by `build.rs` at compile time. Not a committed copy: a generated artifact that
-is checked in does not fail when its source changes under it, and a stale one
-here would tell an agent that an operation exists which the kernel no longer
-has.
+The DSL those scripts run against is `app/src/dsl.ts`, bundled into the binary by
+`build.rs` at compile time. Not a committed copy: a generated artifact that is
+checked in does not fail when its source changes under it, and a stale one here
+would tell an agent that an operation exists which the kernel no longer has.
 
 ### Projects are files, not fixtures
 
-`projects.rs` owns one directory — `~/Documents/parcad`, or
-`PARCAD_PROJECTS_DIR` — shared by all three callers. The parts that ship are
-*seeded* into it on first run and are then ordinary projects: editable,
-renamable, deletable. Seeding only ever adds what is missing, so a part the user
-deletes stays deleted.
+`projects.rs` owns one directory — `~/Documents/parcad`, or `PARCAD_PROJECTS_DIR`
+— shared by all three callers. The parts that ship are *seeded* into it on first
+run and are then ordinary projects: editable, renamable, deletable. Seeding only
+ever adds what is missing, so a part the user deletes stays deleted.
 
 One project is a `.parcad` folder:
 
@@ -422,49 +394,44 @@ One project is a `.parcad` folder:
 
 The extension is on the *folder* so a bare `ls` says what each entry is without
 descending into it — the layout exists to be read by an agent that landed in the
-directory, and a name that carries its own type is the cheapest way to say so.
-Nothing is registered as a macOS package: hiding the innards from Finder would
-also hide them from the readers this format is for.
+directory. Nothing is registered as a macOS package: hiding the innards from
+Finder would also hide them from the readers this format is for.
 
 **`part.js` is the source of truth; everything beside it is derived.** Deleting
-the README or the preview loses nothing — the next save rewrites them. Nothing
-is cached: no evaluated report is stored, because a stale measurement that looks
-fresh is precisely the confident wrong answer the rest of this codebase refuses.
-The README is written from the report the app just measured, and says which
-kernel measured it and that the script is what to rebuild.
+the README or the preview loses nothing — the next save rewrites them from the
+report the app just measured, naming which kernel measured it. Nothing is cached:
+a stored report is a stale measurement that looks fresh, which is precisely the
+confident wrong answer the rest of this codebase refuses.
 
 A loose `foo.js` stays a project, so an agent or a person can drop a file in
 without ceremony; the picker offers to convert one, which is the only thing that
-ever changes a project's form.
+ever changes a project's form. Removal is a move into `.trash`, not an unlink:
+these are the user's own files, and the thing standing between one and a mis-click
+is a dialog they have already learned to dismiss.
 
-Removal is a move into `.trash`, not an unlink. These are the user's own files
-and the thing standing between one and a mis-click is a dialog they have already
-learned to dismiss.
-
-This is why the app's picker reads the folder over the API instead of globbing
-`examples/` at build time. An "example" that a user cannot open, change and save
-back is a different kind of object from the part they are about to make, and the
+This is why the picker reads the folder over the API instead of globbing
+`examples/` at build time: an "example" a user cannot open, change and save back
+is a different kind of object from the part they are about to make, and the
 difference is invisible until they try. It also gives an agent somewhere to put
-its work: `save_project` writes to the folder the picker lists, so a part
+its work — `save_project` writes to the folder the picker lists, so a part
 written over MCP is one reload away from being on screen.
 
-A project name is a path *inside that folder* and nothing else. `safe()` splits
-on `/` and refuses a segment that is empty, starts with a dot, carries a `.js`
-or `.parcad` extension, or is not exactly one path component — because two of
-the three callers are a socket and a model. It refuses rather than sanitising:
+A project name is a path *inside that folder* and nothing else. `safe()` splits on
+`/` and refuses a segment that is empty, starts with a dot, carries a `.js` or
+`.parcad` extension, or is not exactly one path component — because two of the
+three callers are a socket and a model. It refuses rather than sanitising:
 correcting a name toward a valid one is a guess about what the caller meant, and
 that guess is what a traversal bug is made of. `app/src/projects.ts` repeats the
 check so the picker can mark a bad name on the keystroke that types it, the same
-arrangement as the selector grammar — `safe()` is the copy that has to be
-right.
+arrangement as the selector grammar — `safe()` is the copy that has to be right.
 
 - `app/src/dsl.ts` is the authoring layer and lives in TypeScript, not Rust.
   That's what lets `tools/run.ts` (bun) and the webview run *the same* DSL and
   hand the same JSON to the same core.
-- `app/src/viewport.ts` renders **two visually distinct B-rep views**: the
-  solid gets `MeshStandardMaterial`, real edge lines and a silhouette outline
-  pass; mesh preview gets smooth Lambert shading, a faint triangle overlay and
-  no outline pass. Both display the same B-rep geometry.
+- `app/src/viewport.ts` renders **two visually distinct B-rep views**: the solid
+  gets `MeshStandardMaterial`, real edge lines and a silhouette outline pass;
+  mesh preview gets smooth Lambert shading, a faint triangle overlay and no
+  outline pass. Both display the same B-rep geometry.
 - Timings the app reports include serialising the geometry across whichever
-  transport asked — the Tauri IPC bridge or the HTTP host — which for the
-  bracket (~12 000 triangles + 67 edge curves) is a real fraction of the total.
+  transport asked — the Tauri IPC bridge or the HTTP host — which for the bracket
+  (~12 000 triangles + 67 edge curves) is a real fraction of the total.

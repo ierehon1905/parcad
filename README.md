@@ -2,11 +2,10 @@
 
 Parametric CAD you write as code — for people, and for agents.
 
-**Status: 0.0.1, experimental.** One author so far. The DSL still moves between
-versions, and while every operation here is checked against measured geometry
-([eval/cases/](eval/cases/)), nothing about this project has been through the
-years of abuse that makes a CAD kernel trustworthy. Measure a part before you
-machine it.
+**Status: 0.0.1, experimental.** One author, and the DSL still moves. Every
+operation is checked against measured geometry ([eval/cases/](eval/cases/)), but
+none of it has had the years of abuse that make a CAD kernel trustworthy.
+Measure a part before you machine it.
 
 ![A bracket built by the script below, in the parcad viewport](docs/images/bracket.jpg)
 
@@ -38,27 +37,24 @@ keeps today's script working after tomorrow's kernel swap.
 Parts get measured, not assumed — volume, wall thickness, whether two bores
 actually meet. An agent gets the same numbers over MCP, with no screen to look at.
 
-It is aimed at small mechanical parts — brackets, flanges, manifolds, enclosures,
-heat sinks, the things you print or machine one of. [examples/](examples/) is
-twenty-two of them.
+It is aimed at small mechanical parts — brackets, flanges, manifolds, heat sinks,
+the things you print or machine one of. [examples/](examples/) is twenty-two.
 
 ## Why not CadQuery, build123d or OpenSCAD
 
-Those are good, and much older. Three things here are different. Selectors are
-*descriptive and checked*: `.expect({ count: 4 })` turns a selector that silently
-started matching three edges into a build error, which is the failure mode that
-makes code-CAD fragile. Two kernels read one graph, so a sketch-fast implicit
-preview and an exact B-rep for STEP export are the same model rather than two
-projects. And measurement is a first-class output, not something you eyeball in a
-viewport — which is what makes the MCP surface real rather than a wrapper.
+Those are good, and much older. Three differences. Selectors are *descriptive and
+checked* — `.expect({ count: 4 })` turns a selector that silently started
+matching three edges into a build error, which is the failure mode that makes
+code-CAD fragile. Two kernels read one graph, so the instant preview and the
+exact B-rep behind STEP export are one model, not two projects. And measurement
+is an output rather than something you eyeball, which is what makes the MCP
+surface real instead of a wrapper.
 
 ## Build it
 
-Development is on macOS. On Linux, CI builds and tests the kernel crates, the
-editor-side tests and the grader on every push — but the exact kernel and the
-desktop window are still untried there, so treat OpenCASCADE and the app as
-unverified on Linux and patches welcome. Windows is not supported: the B-rep
-worker's process handling has no Windows arm.
+macOS. On Linux, CI builds the kernel crates on every push, but nobody has built
+the OCCT worker or the window there — patches welcome. Windows is unsupported:
+the worker's process handling has no Windows arm.
 
 You need [Rust](https://rustup.rs/) (the toolchain is pinned; rustup honours it),
 [Bun](https://bun.sh/), CMake, a C++ compiler, `patch(1)` and Python 3.11+. A
@@ -73,10 +69,9 @@ cd app && bun run tauri dev
 ```
 
 `cargo build` produces a *dev* app whatever the profile — Tauri's switch is the
-`custom-protocol` feature its CLI adds, not `--release` — so run the window
-through `tauri dev` or `tauri build`, not by launching the bare binary. And a
-root `cargo build` deliberately does not build OpenCASCADE; `tools/build-worker.sh`
-is what does.
+`custom-protocol` feature, not `--release` — so launch the window through `tauri
+dev` or `tauri build`, never the bare binary. And a root `cargo build`
+deliberately does not build OpenCASCADE; `tools/build-worker.sh` does.
 
 ```bash
 tools/check.sh            # everything that gates a change (~5 min)
@@ -110,11 +105,12 @@ whole language in one call.
 
 ## Licensing
 
-ParCAD's own code is MIT or Apache-2.0, at your option. It is built on components
-that are not: OpenCASCADE and its Rust bindings under `vendor/` are LGPL-2.1, and
-the implicit kernel, [fidget](https://github.com/mkeeter/fidget), is MPL-2.0.
-Building and running from source is unencumbered; **redistributing a binary
-carries obligations** that [NOTICE.md](NOTICE.md) spells out — read it first.
+MIT or Apache-2.0, at your option. Built on components that are not: OpenCASCADE
+and its bindings under `vendor/` are LGPL-2.1, and the implicit kernel
+[fidget](https://github.com/mkeeter/fidget) is MPL-2.0. Building from source is
+unencumbered; **redistributing a binary carries obligations** —
+[NOTICE.md](NOTICE.md) spells them out, including how to swap in your own
+OpenCASCADE.
 
 This software makes use of facilities provided by the Open CASCADE Technology
 software.

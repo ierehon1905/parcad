@@ -1,5 +1,9 @@
 # Working on ParCAD
 
+**This file is written for a coding agent.** A human contributor wants
+[CONTRIBUTING.md](CONTRIBUTING.md), which is the same rules, shorter. The facts
+are identical; only the audience differs.
+
 Read [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), then
 [docs/GOTCHAS.md](docs/GOTCHAS.md). Most of what looks like a bug here has
 already been diagnosed once.

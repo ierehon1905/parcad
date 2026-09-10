@@ -1,13 +1,13 @@
 # Examples
 
-Twenty-two parts, each a `.js` script that returns a shape. On first run each is
-seeded into parcad's project folder (`~/Documents/parcad`, or
-`PARCAD_PROJECTS_DIR`) as a `<name>.parcad` project folder, where it becomes an
-ordinary project the user can edit, rename, move into a folder or throw away —
-this directory is the seed, not the live copy, so editing a part in the app does
-not change it here, and a part the user moves or deletes is not put back.
-Most of them are measured in `eval/cases/`, so an example that stops building
-fails a case rather than surprising someone.
+Twenty-two parts, each a `.js` script that returns a shape. Most are measured in
+`eval/cases/`, so an example that stops building fails a case rather than
+surprising someone.
+
+This directory is the seed, not the live copy. On first run each part is copied
+into `~/Documents/parcad` (or `PARCAD_PROJECTS_DIR`) as a `<name>.parcad`
+folder and becomes an ordinary project. Editing a part in the app does not
+change it here, and a part the user moves or deletes is not put back.
 
 ```bash
 bun tools/run.ts examples/flange.js > /tmp/flange.json   # DSL -> intent graph

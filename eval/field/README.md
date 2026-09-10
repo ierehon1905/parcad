@@ -7,20 +7,23 @@ table; `field/run-case.sh` runs one. They are not part of `tools/check.sh` and
 never will be: they cost money, they need a running app, and their result is a
 *distribution* rather than a pass or a fail.
 
-**The apparatus lives in `field/` and knows nothing about parcad.** Which server,
-which tools, and that cases live here are all `field/field.toml`; `field/README.md`
-is the method written for someone whose MCP server is not this one. The grader
-itself is held still by `field/selftest.py`, which `tools/check.sh` runs — every
-number in docs/PERCEPTION.md is a claim about that scorer, so a regex edited
-without re-recording re-grades them all. What follows is the parcad half: how to
-run a round against the app, and what each case is for.
+**The apparatus lives in `field/` and knows nothing about parcad.** Which
+server, which tools, and that cases live here are all `field/field.toml`;
+[`field/README.md`](../../field/README.md) is the method — the grades, the
+rubric fields, how to read a table, why a round can be void — written for
+someone whose MCP server is not this one. Read it first. The grader itself is
+held still by `field/selftest.py`, which `tools/check.sh` runs: every number in
+docs/PERCEPTION.md is a claim about that scorer, so a regex edited without
+re-recording re-grades them all.
 
 `eval/cases/` pins what the kernel computes. This pins what a model does with
-it, which is the other half and the half that has actually been wrong — every
-time it has been checked, and four times in ways no test in this repo could
-reach: a probe flag read inverted, a field name read as the wrong noun, a tool
-never called at all, and a field the server's own instructions named that no
-reply has ever contained.
+it, which is the half that has actually been wrong — every time it has been
+checked, and four times in ways no test in this repo could reach: a probe flag
+read inverted, a field name read as the wrong noun, a tool never called at all,
+and a field the server's own instructions named that no reply has ever
+contained.
+
+## A round against the app
 
 ```bash
 mkdir -p /tmp/parcad-field-projects
@@ -32,9 +35,8 @@ PARCAD_HTTP_PORT=4344 field/run-suite.sh 3
 ```
 
 `PARCAD_HTTP_PORT` still moves the round because `field.toml` writes the URL as
-`http://127.0.0.1:${PARCAD_HTTP_PORT:-4242}/mcp` — the config expands `${VAR}`
-and `${VAR:-default}` from the environment, so a project keeps the port knob it
-already has.
+`http://127.0.0.1:${PARCAD_HTTP_PORT:-4242}/mcp`, and the config expands
+`${VAR}` from the environment.
 
 **Release, not debug.** A debug binary raymarches a 512 px view in about 70 s
 where the release one takes a fraction of a second, so every case that asks for
@@ -48,79 +50,37 @@ exports a file on purpose, and it should not land in the user's own folder. An
 empty directory is the right thing to pass — the seed parts every other case
 names are copied into it on first run.
 
-## A trial is graded, not passed
+Two parcad-specific ways a round is void rather than negative, on top of the
+ones `field/README.md` lists. `pkill -f parcad-app` from a sibling checkout does
+not know which port it is stopping, and the trials then grade VOID with "unable
+to connect": stop the instance by its pid. And a tool absent from `tools` in
+`field.toml` fails silently — `save_project` and `export_part` sat outside that
+list from the beginning, which is precisely why no case had ever tested them,
+and `probe_step_export` was allowed while unknown to the scorer, so the first
+trial that ever called it would have graded VOID as a stray.
 
-The verdict is the least interesting column, and a suite that reports only the
-verdict measures the wrong thing. Round 1 of PERCEPTION §3 scored 3/4 *correct*
-while measuring almost nothing; one of those trials quoted the part's own source
-comment as its proof. Right answer, no evidence, indistinguishable from work.
+Claude Code 2.1.223 is the version that reported the `--mcp-config` server
+`connected` while registering none of its fourteen tools. The one-call check
+that the CLI itself can see the server, against a run's own config:
+`claude -p "call mcp__parcad__list_projects" --mcp-config <run>/mcp.json`.
 
-So the scorer grades each trial on the route as well as the answer:
+Both kinds of LUCKY have been seen here and the columns tell them apart:
+`does-the-port-meet` produced a trial that never called the tool, and
+`how-many-edges` one that called it, quoted its number and cited the script as
+well.
 
-| | |
-|---|---|
-| **SOUND** | right, reached every tool the rubric requires, no sign it was read off the script. The only outcome that is evidence. |
-| **LUCKY** | right by the wrong route — a required tool was never called, or the reply cites the source. Counted separately from SOUND, because adding the two together is how this suite would come to lie. |
-| **WRONG** | the verdict is absent or negated. |
-| **VOID** | not evidence either way: the trial strayed to a non-parcad tool, or never produced a final answer. Never counted as a failure. |
+## The rubric, and what is parcad about it
 
-Read `SOUND` per case *and* `reach`. A case at 3/3 correct and 0/3 reach is not
-a working tool; it is a question the model can answer without one, and it should
-be rewritten until it cannot.
+`field/README.md` documents every field. Two of them exist for reasons this
+project ran into: `arg` because a sectioned render and a plain one are the same
+call from the outside, and `input` because a part is written inside a `script`
+argument, so whether the model reached for `mirror` or wrote both halves out by
+hand is invisible to every other column, the reply included.
 
-**LUCKY covers two things and the columns tell them apart.** A trial that never
-called the tool (`reach` NO) answered from somewhere else entirely. A trial that
-called it, quoted its number, and *also* cited the script (`src?` yes) got the
-answer from the measurement and the argument from the source — softer, and still
-not evidence, because the same reply on a part whose source and geometry had
-diverged would read identically and be wrong. Both were seen in the first round:
-`does-the-port-meet` produced the first kind, `how-many-edges` the second.
-
-## The rubric
-
-```yaml
-tool:    evaluate_part.section   # what this case exists to test; `x.y` is a facet of x
-also:    list_projects, ...      # other tools the case exercises, for coverage
-reach:   evaluate_part           # every tool that must be called or the answer is LUCKY
-arg:     section                 # arguments that must be non-empty on some call
-input:   \.mirror\(              # a regex some call's arguments must match
-verdict: OPEN                    # a regex, matched against the tail of the reply only
-trap:    \b60\b                  # the specific wrong answer worth naming, if there is one
-quote:   \b122\b                 # a value from the tool that must survive into the answer
-writes:  Field tests/spacer      # this case writes to the project folder
-why:     |                       # what the case is for. Load-bearing: it is the argument
-                                 # for keeping it, and the first thing to read when it goes red.
-```
-
-`arg` exists because a sectioned render and a plain one are the same call from
-the outside — the question "did anyone actually cut the part open" is answered
-by an argument, not a tool name. `input` goes one further and asks what was *in*
-the argument, which is the only way to score an **authoring** case: a part is
-written inside a `script`, so whether the model reached for `mirror` or wrote
-both halves out by hand is invisible to every other column, including the reply.
-`trap` exists because a suite should name the plausible wrong answer rather than
-only its absence.
-
-## What makes a prompt worth adding
-
-Learned by writing bad ones:
-
-- **Name a part in the project folder, not a shape.** The model reads the source
-  through `read_project` anyway; a made-up part just tests the DSL. The two
-  cases that break this rule — a selector question and a refusal question — do
-  so because their subject genuinely is not a part.
-- **Ask for a verdict in one fixed form, at the end.** Scoring prose is
-  hopeless, and a model that will not commit is a finding. The scorer looks only
-  at the tail, and every case here asks for capitals, because prose cannot reach
-  a capitalised verdict by accident.
-- **Forbid deriving it from the script, explicitly.** It will do it anyway
-  sometimes — that is one of the things being measured — but an unstated rule
-  makes the failure unattributable.
-- **Pick a question the source answers *plausibly and wrongly*.** If arithmetic
-  on the script gets the right answer, a trial that cheats looks like a trial
-  that measured. Better still, pick one where a *different parcad tool* answers
-  plausibly and wrongly: `how-many-edges` is the strongest case here because
-  `evaluate_part` and `list_entities` disagree by a factor of two.
+When writing a case here, **name a part in the project folder, not a shape.**
+The model reads the source through `read_project` anyway; a made-up part just
+tests the DSL. The two cases that break this rule — a selector question and a
+refusal question — do so because their subject genuinely is not a part.
 
 ## One bad output schema takes the whole surface down
 
@@ -128,24 +88,14 @@ Learned by writing bad ones:
 returned `Json<serde_json::Value>`. A `Value` has no schema, so schemars emitted
 an output schema with no `"type"`, and a client that validates `tools/list`
 rejects **the entire array** over one bad entry. Every model saw no parcad tools
-at all. The server went on answering `tools/list` correctly to anything that
-asked it directly, so the endpoint looked healthy from every angle except the
-only one that mattered.
+at all, while the endpoint went on answering `tools/list` correctly to anything
+that asked it directly.
 
 `tool_output_schemas_are_acceptable_to_a_validating_client` in `mcp.rs` is the
-regression, and it fails with the offending tool's name. But the failure mode is
-worth knowing by sight, because a whole suite of VOIDs is what it looks like from
-here and "the tools do not work" is what it reads as.
-
-**The tell is uniformity.** Every trial failing the same way, in both models and
-both arms, with replies that ask the *user* to enable or reconnect MCP. A real
-distribution does not do that — populations disagree, which is the entire reason
-this suite runs two models and two arms. Sixteen trials were paid for before
-anyone noticed they were evidence about a schema.
-
-**The diagnosis that finds it in a minute**, rather than the day it took: ask the
-CLI for the server's health, which is the one path that prints the parse error
-instead of swallowing it. `--mcp-config` reports only `connected`.
+regression, and it fails with the offending tool's name. The diagnosis that
+finds it in a minute rather than a day is to ask the CLI for the server's
+health, which is the one path that prints the parse error instead of swallowing
+it — `--mcp-config` reports only `connected`:
 
 ```bash
 CLAUDE_CONFIG_DIR=/tmp/probe-cfg claude mcp add --transport http parcad http://127.0.0.1:4344/mcp
@@ -180,48 +130,3 @@ out of the real config; auth does not follow it there, which is fine, because
 
 Record what a round found in docs/PERCEPTION.md rather than here — the case is
 reusable, the result belongs with the design decision it changed.
-
-## Four ways a round is void rather than negative
-
-All four were learned by mistaking one for a result, and the first three are
-now printed rather than left in the transcripts.
-
-**A CLI that connects and delivers no tools.** Claude Code 2.1.223 reported
-the `--mcp-config` server `connected` while registering none of its tools —
-not directly, not behind ToolSearch — so every trial floundered, strayed and
-graded VOID, on new cases and old alike. The server was healthy: a raw
-`initialize` + `tools/list` exchange returned all fourteen tools. Before
-believing a table of zeroes, run one *previously-green* case as a control; if
-its `reach` is NO too, the round measured the harness, not the tools. A
-one-call check that the CLI itself can see the server:
-`claude -p "call mcp__parcad__list_projects" --mcp-config <run>/mcp.json`.
-
-**A trial that strays.** `--disallowed-tools` is a *deny* list, so every built-in
-the CLI gains is allowed until someone adds it. A §5 round lost two of four
-trials to that: stuck, they went hunting for a shell, found `Monitor` and
-`Skill`, and spent the run trying to fix this repo's compiler warnings. The
-`stray` column names any non-parcad tool a trial reached for — `ToolSearch`
-excepted, because the CLI defers the MCP tools behind it and a trial that cannot
-search cannot reach parcad at all. A strayed trial grades VOID.
-
-**The app killed out from under the round.** `pkill -f parcad-app` from a
-sibling checkout does not know which port it is stopping, and the trials then
-grade VOID with "unable to connect" among their errors — a whole round of it,
-looking exactly like a dead tool. Stop the instance by its pid.
-
-**A trial that runs out of account.** Trials share one session limit and all
-three die at once, mid-measurement, with the limit message as their final text.
-It scores as "reached the tool, quoted nothing", which reads exactly like a
-model that measured and then ignored what it got. The scorer matches those tails
-and grades them VOID; check them anyway before believing a row of zeroes.
-
-**A tool missing from the allow list.** The mirror of the deny list and worse,
-because it fails silently: the model simply never sees the tool, and the case
-looks like a model that chose not to call it. `save_project` and `export_part`
-sat outside the allow list from the beginning, which is precisely why no case
-had ever tested them. `tools` in `field/field.toml` is the surface under test
-and has to name all of it — it is both the runner's allow list and the scorer's
-idea of a legitimate call, one list so the two cannot drift apart. They had:
-`probe_step_export` was allowed and unknown to the scorer, so the first trial
-that ever called it would have graded VOID as a stray, and this case list would
-have read as a model declining to use the tool.
