@@ -85,14 +85,51 @@ No dependency of this project is GPL, AGPL or SSPL.
 Building and running from source is unencumbered. Redistributing a **binary** is
 what triggers obligations, and there are three:
 
-- **LGPL-2.1 §6, relinking.** `parcad-occt-worker` statically links OCCT. A
-  recipient has to be able to relink it against their own build of the library.
-  Only that one executable links it — the application, the CLI and everything
-  else talk to the worker over a pipe and carry no OCCT code — so this is a
-  solvable problem rather than a whole-application one. **It is not yet solved:**
-  which §6 option this project takes has not been decided or written down, and it
-  has to be before a `.dmg` goes anywhere.
+- **LGPL-2.1 §6, relinking.** OCCT is built into `parcad-occt-worker`. Anyone who
+  gets that binary must be able to use their own build of OCCT instead. The next
+  section says how.
 - **MPL-2.0 §3.2**, source availability for fidget and the crates above.
 - **The licence texts themselves** must accompany the binary. `bundle.resources`
   in `app/src-tauri/tauri.conf.json` ships this file, both of ours, and both of
   OCCT's into the bundle's `Resources/`.
+
+## How to use your own OpenCASCADE
+
+The LGPL says you must be able to replace the OpenCASCADE inside this program
+with your own version. Here is how.
+
+OpenCASCADE is not inside the app. It is inside one separate file called
+`parcad-occt-worker`. The app talks to that file and nothing else in the app
+contains OpenCASCADE code. So you only have to rebuild that one file.
+
+**1. Get the source.** All of it is public, including the copy of OpenCASCADE
+this project builds: <https://github.com/ierehon1905/parcad>
+
+**2. Change OpenCASCADE if you want to.** It is in `vendor/occt-sys/OCCT/`. You
+can edit it, or replace it with a different version.
+
+**3. Build a new worker.**
+
+```bash
+tools/build-worker.sh
+```
+
+This takes about ten minutes the first time, because it compiles OpenCASCADE.
+If you already have an OpenCASCADE build, you can point at it instead and skip
+those ten minutes:
+
+```bash
+PARCAD_OCCT_PREBUILT=/path/to/occt-install tools/build-worker.sh
+```
+
+**4. Tell the app to use your worker.**
+
+```bash
+PARCAD_OCCT_WORKER=/path/to/your/parcad-occt-worker
+```
+
+The app reads that variable and runs your file instead of the one it shipped
+with. You do not have to modify the app, and you do not need our permission.
+
+If any of this does not work for you, that is a bug in this project. Please open
+an issue.

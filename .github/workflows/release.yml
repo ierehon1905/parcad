@@ -1,0 +1,114 @@
+# Draft a release from a tag: the desktop app for both Macs, and the headless
+# CLI with its worker.
+#
+# It never publishes. The release is left as a draft for a human to read, check
+# the artefacts of, and press the button on — because shipping a binary is what
+# triggers the LGPL's relinking obligation, and NOTICE.md records that the
+# decision behind it is a deliberate one rather than a side effect of a tag.
+#
+# The corpus runs against the very worker that gets uploaded. A release that
+# builds is not the claim; a release whose geometry is still measured right is.
+#
+# The sidecar is named for the host triple (tools/build-worker.sh), so an
+# arm64 and an x86_64 app have to be built on their own runners. macos-14 is
+# Apple silicon, macos-13 is Intel.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14
+            arch: aarch64
+          - runner: macos-13
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.arch }}
+
+      # No OpenCASCADE cache here on purpose. A finished occt-sys install is
+      # 6.8 GB — 2.0 GB of it static libraries carrying debug info nothing reads
+      # — so caching it costs more than the ten minutes it saves. Releases are
+      # rare; a tag can afford the cold build.
+
+      - name: bun install
+        run: cd app && bun install --frozen-lockfile
+
+      - name: Build the B-rep worker
+        run: tools/build-worker.sh
+
+      - name: Measure the geometry this release would ship
+        run: cargo run --locked --release -p parcad-eval
+
+      - name: Bundle the app
+        run: cd app && bun run tauri build
+
+      - name: Stage the headless CLI beside its worker
+        run: |
+          set -euo pipefail
+          out="parcad-cli-${{ matrix.arch }}-apple-darwin"
+          mkdir -p "$out/licenses"
+          cp target/release/parcad target/release/parcad-occt-worker "$out/"
+          cp LICENSE-MIT LICENSE-APACHE NOTICE.md "$out/licenses/"
+          cp vendor/occt-sys/OCCT/LICENSE_LGPL_21.txt \
+             vendor/occt-sys/OCCT/OCCT_LGPL_EXCEPTION.txt \
+             vendor/opencascade/LICENSE "$out/licenses/"
+          tar czf "$out.tar.gz" "$out"
+
+      - name: Collect the bundles
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          find target/release/bundle -name '*.dmg' -o -name '*.app.tar.gz' \
+            | while read -r f; do cp "$f" "dist/$(basename "${f%.*}")-${{ matrix.arch }}.${f##*.}"; done
+          cp parcad-cli-*.tar.gz dist/
+          ls -lh dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: parcad-${{ matrix.arch }}
+          path: dist/*
+
+  draft:
+    needs: bundle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          files: dist/*
+          body: |
+            **0.0.1, experimental.** Measure a part before you machine it.
+
+            These builds are **not signed or notarised**. macOS will refuse to
+            open them until you clear the quarantine attribute:
+
+                xattr -dr com.apple.quarantine /Applications/ParCAD.app
+
+            The `.dmg` is the app. `parcad-cli-*.tar.gz` is the headless driver
+            and its B-rep worker, with the licence texts beside them.
+
+            Contains LGPL-2.1 and MPL-2.0 components — see NOTICE.md. You may
+            replace the OpenCASCADE inside this program with your own build;
+            NOTICE.md, "How to use your own OpenCASCADE", says how.
