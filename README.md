@@ -54,8 +54,11 @@ viewport — which is what makes the MCP surface real rather than a wrapper.
 
 ## Build it
 
-Development is on macOS. Linux should work and is untested — patches welcome.
-Windows is not supported: the B-rep worker's process handling has no Windows arm.
+Development is on macOS. On Linux, CI builds and tests the kernel crates, the
+editor-side tests and the grader on every push — but the exact kernel and the
+desktop window are still untried there, so treat OpenCASCADE and the app as
+unverified on Linux and patches welcome. Windows is not supported: the B-rep
+worker's process handling has no Windows arm.
 
 You need [Rust](https://rustup.rs/) (the toolchain is pinned; rustup honours it),
 [Bun](https://bun.sh/), CMake, a C++ compiler, `patch(1)` and Python 3.11+. A
