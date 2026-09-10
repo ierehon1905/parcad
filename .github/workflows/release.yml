@@ -86,8 +86,12 @@ jobs:
       - name: Measure the geometry this release would ship
         run: cargo run --locked --release -p parcad-eval
 
+      # --bundles app, not the default "all". The .dmg step drives Finder over
+      # AppleScript to lay out the disk image window, which has no session to
+      # talk to on a headless runner; the .app itself builds fine. A zipped .app
+      # is dragged to Applications exactly the same way.
       - name: Bundle the app
-        run: cd app && bun run tauri build
+        run: cd app && bun run tauri build --bundles app
 
       - name: Stage the headless CLI beside its worker
         run: |
@@ -105,8 +109,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          find target/release/bundle -name '*.dmg' -o -name '*.app.tar.gz' \
-            | while read -r f; do cp "$f" "dist/$(basename "${f%.*}")-${{ matrix.arch }}.${f##*.}"; done
+          app=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
+          test -n "$app" || { echo "no .app was bundled" >&2; exit 1; }
+          # ditto, not zip: it preserves the bundle's symlinks and resource forks,
+          # and an .app that loses those does not launch.
+          ditto -c -k --keepParent "$app" \
+            "dist/$(basename "$app" .app)-${{ matrix.arch }}-apple-darwin.zip"
           cp parcad-cli-*.tar.gz dist/
           ls -lh dist
 
@@ -140,8 +148,9 @@ jobs:
 
                 xattr -dr com.apple.quarantine /Applications/ParCAD.app
 
-            The `.dmg` is the app. `parcad-cli-*.tar.gz` is the headless driver
-            and its B-rep worker, with the licence texts beside them.
+            `ParCAD-*.zip` is the app — unzip it and drag it to Applications.
+            `parcad-cli-*.tar.gz` is the headless driver and its B-rep worker,
+            with the licence texts beside them.
 
             Contains LGPL-2.1 and MPL-2.0 components — see NOTICE.md. You may
             replace the OpenCASCADE inside this program with your own build;
