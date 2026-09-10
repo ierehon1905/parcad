@@ -22,6 +22,10 @@ app/src-tauri/*.step
 # Source archives made for sharing
 /parcad-*-source-*.zip
 
+# Per-developer Claude Code settings: a Stop hook and dev-server configs, both
+# local choices rather than project facts. CLAUDE.md is the tracked half.
+.claude/
+
 # macOS
 .DS_Store
 

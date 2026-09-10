@@ -54,9 +54,9 @@ for a bare binary that carries its UI, or use `tauri build`; docs/GOTCHAS.md has
 the measurements.
 
 `tools/check.sh` is wired to git — `pre-commit` runs `--fast`, `pre-push` runs
-the corpus too — and to Claude Code, as a `Stop` hook in `.claude/settings.json`
-that runs in the background and only interrupts on failure. The git side is a
-local config and does not travel with a clone:
+the corpus too — and can be wired to Claude Code as a `Stop` hook that runs in
+the background and only interrupts on failure. Neither side travels with a
+clone: `.claude/` is untracked, and the git hooks path is a local config.
 
 ```bash
 git config core.hooksPath .githooks
