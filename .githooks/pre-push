@@ -2,14 +2,47 @@
 # The full pass, corpus included. Pushing is the point at which "the geometry is
 # still what it was" stops being someone's memory of having checked.
 #
-# The banner is not decoration. `cargo build --release` is LTO'd and the worker
-# relinks 26 MB of statically-bound OpenCASCADE, so the first minutes produce no
-# output at all; and if the Stop hook's `check.sh --fast` is still running,
-# cargo blocks on the shared target/ build lock before it even starts. Both look
-# exactly like a hung push, and a push killed halfway is a push that never ran
-# the corpus. Saying up front what this costs is what keeps it from being
-# bypassed.
+# Unless nothing that could move geometry is being pushed. A commit that only
+# touches Markdown, the CI workflows, packaging or the licence texts cannot change
+# what the kernel builds, and paying five minutes to prove it is how a gate teaches
+# you to reach for --no-verify — which then skips it on the pushes that matter.
+set -uo pipefail
+root="$(git rev-parse --show-toplevel)"
+
+# stdin: <local ref> <local sha> <remote ref> <remote sha>, one line per ref.
+zero='0000000000000000000000000000000000000000'
+changed=""
+pushing=0
+while read -r _ local_sha _ remote_sha; do
+  [ "$local_sha" = "$zero" ] && continue          # deleting a ref sends no content
+  pushing=1
+  # A tag, or any new ref, whose commit the remote already has: that content was
+  # gated when it was pushed. Nothing to re-check.
+  if [ "$remote_sha" = "$zero" ]; then
+    if git merge-base --is-ancestor "$local_sha" "@{upstream}" 2>/dev/null; then
+      continue
+    fi
+    changed="everything"
+    break
+  fi
+  changed="$changed$(git diff --name-only "$remote_sha" "$local_sha")"$'\n'
+done
+
+# Deleting a ref, or tagging a commit the remote already carries.
+if [ "$pushing" = 0 ] || [ -z "$(printf '%s' "$changed" | tr -d '[:space:]')" ]; then
+  printf '\n\033[1mpre-push\033[0m — \033[2mno new content to check.\033[0m\n'
+  exit 0
+fi
+
+code=$(printf '%s' "$changed" | grep -vE '^(.*\.md|docs/.*|LICENSE-.*|\.github/.*|packaging/.*|\.githooks/.*)?$' | head -1)
+
+if [ -z "$code" ]; then
+  printf '\n\033[1mpre-push\033[0m — docs and CI only, nothing that can move geometry.\n'
+  printf '\033[2mRunning tools/check.sh --fast instead of the full pass.\033[0m\n'
+  exec "$root/tools/check.sh" --fast
+fi
+
 printf '\n\033[1mpre-push\033[0m — tools/check.sh: release build, tests, OCCT worker, eval corpus.\n'
 printf '\033[2mAbout 5 min (measured 4m41s cold). Quiet stretches during the release build\n'
 printf 'and the worker relink are normal. Ctrl-C aborts the push.\033[0m\n'
-exec "$(git rev-parse --show-toplevel)/tools/check.sh"
+exec "$root/tools/check.sh"
