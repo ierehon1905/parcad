@@ -18,7 +18,7 @@ cask "parcad" do
   homepage "https://github.com/ierehon1905/parcad"
 
   depends_on arch: :arm64
-  depends_on macos: ">= :big_sur"
+  depends_on macos: :big_sur
 
   app "ParCAD.app"
 

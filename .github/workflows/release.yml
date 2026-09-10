@@ -164,6 +164,7 @@ jobs:
 
             ```
             brew tap ierehon1905/parcad
+            brew trust ierehon1905/parcad
             brew install --cask parcad
             ```
 

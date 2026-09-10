@@ -54,8 +54,12 @@ surface real instead of a wrapper.
 
 ```bash
 brew tap ierehon1905/parcad
+brew trust ierehon1905/parcad
 brew install --cask parcad
 ```
+
+Homebrew will not load a cask from a third-party tap until you trust it, hence
+the middle line.
 
 Or download the zip from [Releases](https://github.com/ierehon1905/parcad/releases),
 unzip, and drag it to Applications — but the builds are unsigned, so macOS calls
