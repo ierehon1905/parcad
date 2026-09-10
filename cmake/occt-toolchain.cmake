@@ -42,5 +42,10 @@ else ()
 endif ()
 
 # FORCE, because OCCT's CMakeLists sets these itself and would otherwise win.
-set(CMAKE_C_FLAGS_DEBUG   "-g ${_parcad_opt}" CACHE STRING "parcad: optimised debug build" FORCE)
-set(CMAKE_CXX_FLAGS_DEBUG "-g ${_parcad_opt}" CACHE STRING "parcad: optimised debug build" FORCE)
+# No -g. Nothing reads OpenCASCADE's debug symbols: a worker crash is reported
+# from the breadcrumb the C++ prints before it dies (crates/parcad-occt/src/host.rs),
+# and there is no symbolication anywhere in the tree. Generating DWARF for 6,333
+# translation units cost build time on every machine and took the static libraries
+# to 2.0 GB, which is most of why a finished install is 6.8 GB.
+set(CMAKE_C_FLAGS_DEBUG   "${_parcad_opt}" CACHE STRING "parcad: optimised, no debug info" FORCE)
+set(CMAKE_CXX_FLAGS_DEBUG "${_parcad_opt}" CACHE STRING "parcad: optimised, no debug info" FORCE)

@@ -26,6 +26,10 @@ app/src-tauri/*.step
 # local choices rather than project facts. CLAUDE.md is the tracked half.
 .claude/
 
+# CI's cached OpenCASCADE install, restored into the checkout by the release
+# workflow so only the first build compiles it.
+/occt-prebuilt/
+
 # macOS
 .DS_Store
 

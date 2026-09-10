@@ -88,7 +88,7 @@ running two instances. Nothing in the frontend may branch on which transport it
 got; see docs/ARCHITECTURE.md, "One application, two windows".
 
 Root `cargo build` does **not** build OpenCASCADE — that's what `default-members`
-is for. Keep it that way; a cold OCCT build is ~10 minutes. Keep the commands
+is for. Keep it that way; a cold OCCT build is ~5 minutes. Keep the commands
 locked: `rust-toolchain.toml`, `Cargo.lock`, `app/bun.lock` are the reproducible
 inputs. A second checkout (a git worktree) would pay that cold build again for
 byte-identical sources; point `PARCAD_OCCT_PREBUILT` at an existing

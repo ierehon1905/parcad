@@ -9,9 +9,8 @@
 # The corpus runs against the very worker that gets uploaded. A release that
 # builds is not the claim; a release whose geometry is still measured right is.
 #
-# The sidecar is named for the host triple (tools/build-worker.sh), so an
-# arm64 and an x86_64 app have to be built on their own runners. macos-14 is
-# Apple silicon, macos-13 is Intel.
+# The sidecar is named for the host triple (tools/build-worker.sh), so each
+# architecture has to build on its own runner. Only Apple silicon for now.
 name: release
 
 on:
@@ -28,14 +27,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Apple silicon only for now. Intel can come back once the pipeline is
+          # known-good; debugging both at once doubles a 40-minute feedback loop.
           - runner: macos-14
             arch: aarch64
-          - runner: macos-13
-            arch: x86_64
     runs-on: ${{ matrix.runner }}
-    # A cold OpenCASCADE build is ~10 minutes and the bundle a few more. This is
-    # generous, and it is here so a hung cmake cannot burn a runner for six hours.
-    timeout-minutes: 60
+    # A cold OpenCASCADE build is ~5 minutes on 14 cores and far longer on a
+    # 3-vCPU runner. Generous on purpose; it is here so a hung cmake cannot burn
+    # a runner for six hours.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -45,16 +45,43 @@ jobs:
         with:
           key: release-${{ matrix.arch }}
 
-      # No OpenCASCADE cache here on purpose. A finished occt-sys install is
-      # 6.8 GB — 2.0 GB of it static libraries carrying debug info nothing reads
-      # — so caching it costs more than the ten minutes it saves. Releases are
-      # rare; a tag can afford the cold build.
+      # Only the first release build compiles OpenCASCADE. The key carries the
+      # OCCT tree, the patches and the flags, because vendor/occt-sys/build.rs
+      # warns that a mismatched prebuilt install links and is silently wrong.
+      - name: Restore the OpenCASCADE install
+        id: occt
+        uses: actions/cache@v4
+        with:
+          path: occt-prebuilt
+          key: occt-${{ matrix.arch }}-${{ hashFiles('vendor/occt-sys/OCCT/adm/cmake/version.cmake', 'vendor/occt-sys/patches/*', 'cmake/occt-toolchain.cmake', 'vendor/occt-sys/build.rs') }}
+
+      - name: Point the build at the cached install
+        if: steps.occt.outputs.cache-hit == 'true'
+        run: echo "PARCAD_OCCT_PREBUILT=$PWD/occt-prebuilt" >> "$GITHUB_ENV"
 
       - name: bun install
         run: cd app && bun install --frozen-lockfile
 
       - name: Build the B-rep worker
         run: tools/build-worker.sh
+
+      - name: Keep the OpenCASCADE install for the next run
+        if: steps.occt.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          out=$(find target/release/build -type d -path '*occt-sys-*/out' \
+                -exec test -d '{}/lib' -a -d '{}/include' ';' -print | head -1)
+          test -n "$out" || { echo "no finished occt-sys install found" >&2; exit 1; }
+          mkdir -p occt-prebuilt
+          cp -R "$out/lib" "$out/include" occt-prebuilt/
+          # build-worker.sh proves -O2 took effect by reading a flags.make under
+          # the install's build tree. Carry those, or the check silently skips
+          # and the -O0 bug in docs/GOTCHAS.md comes back invisibly.
+          (cd "$out" && find build -name flags.make -path '*TKBO*') | while read -r f; do
+            mkdir -p "occt-prebuilt/$(dirname "$f")"
+            cp "$out/$f" "occt-prebuilt/$f"
+          done
+          du -sh occt-prebuilt
 
       - name: Measure the geometry this release would ship
         run: cargo run --locked --release -p parcad-eval

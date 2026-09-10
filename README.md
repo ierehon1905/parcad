@@ -64,7 +64,7 @@ tree, and a full build wants around 20 GB free.
 ```bash
 cd app && bun install --frozen-lockfile && cd ..   # first: the Rust build shells out to bun
 cargo build --locked --release
-tools/build-worker.sh     # the exact kernel — about 10 minutes, once
+tools/build-worker.sh     # the exact kernel — ~5 min on 14 cores, once
 cd app && bun run tauri dev
 ```
 

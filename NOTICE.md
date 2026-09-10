@@ -114,9 +114,10 @@ can edit it, or replace it with a different version.
 tools/build-worker.sh
 ```
 
-This takes about ten minutes the first time, because it compiles OpenCASCADE.
+This compiles OpenCASCADE the first time — about five minutes on a fast
+machine, considerably longer on few cores.
 If you already have an OpenCASCADE build, you can point at it instead and skip
-those ten minutes:
+that:
 
 ```bash
 PARCAD_OCCT_PREBUILT=/path/to/occt-install tools/build-worker.sh
