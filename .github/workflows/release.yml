@@ -93,10 +93,18 @@ jobs:
       - name: Bundle the app
         run: cd app && bun run tauri build --bundles app
 
+      # Nothing above builds it: build-worker.sh builds the worker, tauri build
+      # builds the app, and parcad-eval is its own binary.
+      - name: Build the headless CLI
+        run: cargo build --locked --release -p parcad-cli
+
       - name: Stage the headless CLI beside its worker
         run: |
           set -euo pipefail
           out="parcad-cli-${{ matrix.arch }}-apple-darwin"
+          for f in target/release/parcad target/release/parcad-occt-worker; do
+            test -f "$f" || { echo "expected $f to exist by now" >&2; exit 1; }
+          done
           mkdir -p "$out/licenses"
           cp target/release/parcad target/release/parcad-occt-worker "$out/"
           cp LICENSE-MIT LICENSE-APACHE NOTICE.md "$out/licenses/"
