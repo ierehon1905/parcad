@@ -50,6 +50,25 @@ exact B-rep behind STEP export are one model, not two projects. And measurement
 is an output rather than something you eyeball, which is what makes the MCP
 surface real instead of a wrapper.
 
+## Install it
+
+```bash
+brew tap ierehon1905/parcad
+brew install --cask parcad
+```
+
+Or download the zip from [Releases](https://github.com/ierehon1905/parcad/releases),
+unzip, and drag it to Applications — but the builds are unsigned, so macOS calls
+them *damaged* and offers only the Trash. They are not damaged; clear the flag
+the download carries and it opens:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/ParCAD.app
+```
+
+Homebrew does that for you, which is the only reason to prefer it. Apple silicon
+only for now.
+
 ## Build it
 
 macOS. On Linux, CI builds the kernel crates on every push, but nobody has built

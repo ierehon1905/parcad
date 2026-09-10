@@ -124,7 +124,9 @@ jobs:
           ditto -c -k --keepParent "$app" \
             "dist/$(basename "$app" .app)-${{ matrix.arch }}-apple-darwin.zip"
           cp parcad-cli-*.tar.gz dist/
+          (cd dist && shasum -a 256 * > SHA256SUMS.txt)
           ls -lh dist
+          cat dist/SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v4
         with:
@@ -149,16 +151,30 @@ jobs:
           draft: true
           files: dist/*
           body: |
+            **macOS will say this app is "damaged" and offer to move it to the
+            Trash. It is not damaged.** These builds are not signed or notarised,
+            so Gatekeeper refuses them on sight. Clear the quarantine flag the
+            download carries and it opens normally:
+
+            ```
+            xattr -dr com.apple.quarantine /Applications/ParCAD.app
+            ```
+
+            Or install it with Homebrew, which does that for you:
+
+            ```
+            brew tap ierehon1905/parcad
+            brew install --cask parcad
+            ```
+
+            ---
+
             **0.0.1, experimental.** Measure a part before you machine it.
 
-            These builds are **not signed or notarised**. macOS will refuse to
-            open them until you clear the quarantine attribute:
-
-                xattr -dr com.apple.quarantine /Applications/ParCAD.app
-
             `ParCAD-*.zip` is the app — unzip it and drag it to Applications.
-            `parcad-cli-*.tar.gz` is the headless driver and its B-rep worker,
-            with the licence texts beside them.
+            Apple silicon only. `parcad-cli-*.tar.gz` is the headless driver and
+            its B-rep worker, with the licence texts beside them.
+            `SHA256SUMS.txt` checksums both.
 
             Contains LGPL-2.1 and MPL-2.0 components — see NOTICE.md. You may
             replace the OpenCASCADE inside this program with your own build;
