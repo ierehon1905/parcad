@@ -6,7 +6,9 @@ which, because the difference matters if you redistribute a binary.
 ## Our own code — MIT OR Apache-2.0
 
 `crates/`, `app/` (both the Rust host and the TypeScript frontend), `tools/`,
-`examples/`, `eval/`, `cmake/` and `docs/`, at your option under either:
+`field/`, `examples/`, `eval/`, `cmake/` and `docs/` — including the screenshots
+in `docs/images/`, which are this application rendering its own examples — at
+your option under either:
 
 - [LICENSE-MIT](LICENSE-MIT) — MIT
 - [LICENSE-APACHE](LICENSE-APACHE) — Apache License 2.0
@@ -26,18 +28,71 @@ Do not move code between this directory and `crates/`; the licences differ.
 
 ## OpenCASCADE itself — LGPL-2.1 with an exception
 
-Not vendored here. `crates/parcad-occt`'s `kernel` feature builds it through
-`opencascade-sys`, which fetches the upstream sources. OCCT is LGPL-2.1 plus an
-additional exception; see <https://dev.opencascade.org/resources/licensing>.
+**Vendored in full**, at [vendor/occt-sys/OCCT](vendor/occt-sys/OCCT): OCCT
+8.0.1, imported from the upstream `V8_0_1` tag, about 15,800 files and 144 MB.
+Nothing is fetched at build time — `vendor/occt-sys/build.rs` stages this tree
+into `OUT_DIR`, applies the two local patches in `vendor/occt-sys/patches/`, and
+runs cmake on the result. Those patches are themselves LGPL-2.1, and
+[PARCAD-CHANGES.md](vendor/occt-sys/PARCAD-CHANGES.md) records what was imported
+and what was dropped.
 
-Only the `parcad-occt-worker` binary links it. The application, the CLI and
-everything else talk to that worker over a pipe, so they carry no OCCT code.
+OCCT is **LGPL-2.1 with the Open CASCADE exception**, both texts in-tree:
+
+- [LICENSE_LGPL_21.txt](vendor/occt-sys/OCCT/LICENSE_LGPL_21.txt)
+- [OCCT_LGPL_EXCEPTION.txt](vendor/occt-sys/OCCT/OCCT_LGPL_EXCEPTION.txt)
+
+The exception lifts the LGPL's treatment of material inlined from header files,
+on one condition: a prominent notice in the supporting documentation saying that
+the software makes use of facilities provided by Open CASCADE Technology. This
+file and [README.md](README.md) both carry it. The exception does **not** waive
+the relinking obligation for linking the library itself.
+
+`OCCT/src/FoundationClasses/TKernel/Standard_Strtod.cxx` carries a separate
+permissive David M. Gay / Lucent notice, retained as it stands: not every file
+under `OCCT/` is LGPL-2.1.
+
+## `vendor/occt-sys` and `vendor/opencascade-sys` — LGPL-2.1
+
+Forks of the `occt-sys` and `opencascade-sys` crates from the same
+[opencascade-rs](https://github.com/bschwind/opencascade-rs) repository, both
+**LGPL-2.1**, each with its own `PARCAD-CHANGES.md`.
+
+Note what that implies, because it is easy to miss: ParCAD-authored C++ lives in
+`vendor/opencascade-sys/include/wrapper.hxx` — `Shape_geometry_json`,
+`Shape_topology_report`, `BRepCheck_report` and others — and is LGPL-2.1 like the
+crate it extends. That is the correct direction for a contribution to an LGPL
+work, but it means those parts are not relicensable as MIT/Apache without being
+reimplemented.
+
+Do not move code between any of these directories and `crates/`; the licences
+differ.
+
+## `fidget` — MPL-2.0
+
+The SDF kernel. [fidget](https://github.com/mkeeter/fidget) 0.5.0 is a direct,
+non-optional dependency of `parcad-core`, so unlike the OCCT chain it is in
+**every** ParCAD binary — the app, the CLI and the eval harness alike. MPL-2.0 is
+file-level copyleft: it does not reach our own code, but distributing a binary
+carries an obligation to make the source of the MPL files available. It is used
+unmodified from crates.io, so naming the upstream and the version discharges it.
+
+`dynasm` and `dynasmrt` arrive with fidget, and `option-ext`, `cssparser`,
+`selectors` and `dtoa-short` arrive through Tauri, all MPL-2.0 on the same terms.
+No dependency of this project is GPL, AGPL or SSPL.
 
 ## What this means for a binary you ship
 
-Building and running from source is unencumbered. Redistributing a **binary**
-that statically links the LGPL parts is what triggers the LGPL's relinking
-obligation — you have to let a recipient replace those parts. Because the OCCT
-side is confined to one separate worker executable, that is a solvable problem
-rather than a whole-application one, but it is a deliberate decision to make
-before shipping, not an afterthought.
+Building and running from source is unencumbered. Redistributing a **binary** is
+what triggers obligations, and there are three:
+
+- **LGPL-2.1 §6, relinking.** `parcad-occt-worker` statically links OCCT. A
+  recipient has to be able to relink it against their own build of the library.
+  Only that one executable links it — the application, the CLI and everything
+  else talk to the worker over a pipe and carry no OCCT code — so this is a
+  solvable problem rather than a whole-application one. **It is not yet solved:**
+  which §6 option this project takes has not been decided or written down, and it
+  has to be before a `.dmg` goes anywhere.
+- **MPL-2.0 §3.2**, source availability for fidget and the crates above.
+- **The licence texts themselves** must accompany the binary. `bundle.resources`
+  in `app/src-tauri/tauri.conf.json` ships this file, both of ours, and both of
+  OCCT's into the bundle's `Resources/`.
