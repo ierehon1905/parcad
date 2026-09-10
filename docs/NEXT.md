@@ -26,39 +26,13 @@ unset, evaluating `examples/bracket.js` over the HTTP host at **55074.791 mm³,
 `eval/cases/bracket.json` records. With the worker deleted from the same bundle
 the evaluation refuses and names the rebuild.
 
-**Done: it ships.** 0.0.1 is public — an arm64 `.app` and the headless CLI with
-its worker, built by `.github/workflows/release.yml`, which runs the corpus
-against the very worker it uploads and leaves a draft for a human. A cold
-OpenCASCADE build is cached, so a release costs about six minutes. The bundle was
-verified from the download rather than the build tree: the worker is inside it
-with the triple stripped, and the shipped binary measured `examples/bracket.js`
-at the recorded 55074.79 mm³.
-
-**Gatekeeper is measured now, and the cheap half is closed.** The bundle left
-`tauri build` with a linker-embedded signature and no `_CodeSignature`, which
-macOS reads not as untrusted but as *damaged* — a dialog whose only button is
-Move to Trash. Ad-hoc signing in CI makes `spctl` say `rejected` instead, the
-ordinary unidentified-developer path a user can pass without a terminal. That is
-the whole free improvement: **every install still needs
-`xattr -dr com.apple.quarantine` once**, Homebrew included — brew 6 quarantines
-what it installs and no longer takes `--no-quarantine`. The tap at
-`ierehon1905/homebrew-parcad` buys a checksummed, versioned install, not relief
-from the dialog. Only an Apple Developer Program membership closes it, which is
-a decision, not a task. There is no updater, and nothing has been built for a
-target that is not this one.
-
-**The cheaper answer may be to stop needing the `.app`.** `http.rs` and `mcp.rs`
-serve the UI and the agent surface, and both are nearly free of Tauri already:
-`service.rs` — the file that decides what the application can do — contains no
-reference to it at all, `mcp.rs` one, and `http.rs` needs the `AppHandle` for a
-single call, `app.asset_resolver()`, to find the embedded frontend. Serve those
-files from `include_dir!` or from disk and `parcad serve` becomes a plain binary
-that hosts the same UI at `127.0.0.1:4242` and the same MCP endpoint, with no
-bundle, no signature, no quarantine, and a Homebrew *formula* rather than a cask.
-It is also the shortest path to Linux, where the hard part is Tauri and not the
-kernel. Keep building the `.app` — it costs one CI step — but the browser window
-is not a lesser one, by this project's own rule, and recommending `serve` would
-retire the whole signing problem instead of paying it off.
+**Still not shipping, and the next step costs money rather than time.** The
+bundle is unsigned and un-notarised, so a second machine meets Gatekeeper before
+it meets the kernel; signing needs an Apple Developer Program membership, which
+is a decision, not a task. There is no updater, and nothing has been built for a
+target that is not this one, where the stripped triple suffix is the assumption
+most likely to break. The `.app` has been run from outside the build tree, never
+from a fresh user account.
 
 **One hazard is free to close and worth closing.** `tauri build` has no
 dependency on `tools/build-worker.sh`. A *missing* staging copy fails the build
