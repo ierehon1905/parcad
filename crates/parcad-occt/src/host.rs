@@ -38,6 +38,23 @@ impl std::fmt::Display for OcctError {
             OcctError::Rejected { stage, message } => {
                 write!(f, "{message} (while {stage})")
             }
+            // A worker killed outright before it ever ran geometry is not a
+            // geometry problem, and on macOS it usually is not even a bug: an
+            // unsigned binary out of a download is SIGKILLed by Gatekeeper, and
+            // this is the first thing anyone running a release build will see.
+            OcctError::Crashed { stage, detail }
+                if stage == "starting up" && detail.contains("signal 9") =>
+            {
+                write!(
+                    f,
+                    "the geometry kernel was killed the moment it started ({detail}), \
+                     before it ran any geometry. On macOS this is the system refusing \
+                     to run a binary it does not trust — clear the quarantine flag the \
+                     download carries:  xattr -dr com.apple.quarantine <the .app or the \
+                     worker binary>.  Otherwise the worker at PARCAD_OCCT_WORKER is not \
+                     executable, or was built for another architecture."
+                )
+            }
             OcctError::Crashed { stage, detail } => write!(
                 f,
                 "the geometry kernel crashed while {stage} ({detail}). \
