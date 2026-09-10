@@ -33,6 +33,9 @@ jobs:
           - runner: macos-13
             arch: x86_64
     runs-on: ${{ matrix.runner }}
+    # A cold OpenCASCADE build is ~10 minutes and the bundle a few more. This is
+    # generous, and it is here so a hung cmake cannot burn a runner for six hours.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

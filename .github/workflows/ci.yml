@@ -15,7 +15,9 @@ name: check
 on:
   push:
     branches: [main]
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE-*']
   pull_request:
+    paths-ignore: ['**.md', 'docs/**', 'LICENSE-*']
 
 concurrency:
   group: check-${{ github.ref }}
@@ -24,6 +26,9 @@ concurrency:
 jobs:
   fast:
     runs-on: ubuntu-latest
+    # This path is 102 crates with no Tauri and no OpenCASCADE in it. If it is
+    # still running after twenty minutes something is wedged, not slow.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
