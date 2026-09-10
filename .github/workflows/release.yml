@@ -119,6 +119,14 @@ jobs:
           mkdir -p dist
           app=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
           test -n "$app" || { echo "no .app was bundled" >&2; exit 1; }
+          # The bundle arrives with a linker-embedded signature but no
+          # _CodeSignature, and macOS reads that inconsistency as a *damaged*
+          # app: the dialog offers only Move to Trash. An ad-hoc signature does
+          # not make it trusted — it is still rejected, unsigned and
+          # unnotarised — but rejected is the ordinary "unidentified developer"
+          # path, which the user can get past. Measured with spctl both ways.
+          codesign --force --deep --sign - "$app"
+          codesign --verify --deep "$app"
           # ditto, not zip: it preserves the bundle's symlinks and resource forks,
           # and an .app that loses those does not launch.
           ditto -c -k --keepParent "$app" \
@@ -151,16 +159,16 @@ jobs:
           draft: true
           files: dist/*
           body: |
-            **macOS will say this app is "damaged" and offer to move it to the
-            Trash. It is not damaged.** These builds are not signed or notarised,
-            so Gatekeeper refuses them on sight. Clear the quarantine flag the
-            download carries and it opens normally:
+            **macOS will refuse to open this the first time.** These builds are
+            not signed with an Apple Developer ID or notarised. Clear the
+            quarantine flag once and it opens normally:
 
             ```
             xattr -dr com.apple.quarantine /Applications/ParCAD.app
             ```
 
-            Or install it with Homebrew, which does that for you:
+            That applies to a Homebrew install too — brew quarantines what it
+            installs, exactly like a browser does.
 
             ```
             brew tap ierehon1905/parcad

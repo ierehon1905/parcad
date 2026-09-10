@@ -1,10 +1,10 @@
 # The Homebrew cask, kept here as the source of truth and copied into the tap
 # repository (ierehon1905/homebrew-parcad) as Casks/parcad.rb on each release.
 #
-# The point of the cask is not convenience: `brew install --cask` clears the
-# quarantine flag, so an unsigned build installs without macOS calling it
-# damaged. Until there is a Developer ID, this is the only install path that
-# does not need a terminal incantation first.
+# The cask does not avoid the quarantine dialog: Homebrew 6 quarantines what it
+# installs and no longer takes --no-quarantine. What it gives is a versioned,
+# checksummed install and an upgrade path. Until there is a Developer ID, every
+# install still needs `xattr -dr com.apple.quarantine` once.
 #
 # sha256 comes from SHA256SUMS.txt on the release.
 cask "parcad" do

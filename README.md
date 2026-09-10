@@ -52,26 +52,24 @@ surface real instead of a wrapper.
 
 ## Install it
 
+Download the zip from [Releases](https://github.com/ierehon1905/parcad/releases),
+unzip, drag it to Applications. Or with Homebrew:
+
 ```bash
 brew tap ierehon1905/parcad
 brew trust ierehon1905/parcad
 brew install --cask parcad
 ```
 
-Homebrew will not load a cask from a third-party tap until you trust it, hence
-the middle line.
-
-Or download the zip from [Releases](https://github.com/ierehon1905/parcad/releases),
-unzip, and drag it to Applications — but the builds are unsigned, so macOS calls
-them *damaged* and offers only the Trash. They are not damaged; clear the flag
-the download carries and it opens:
+**Either way, macOS will refuse to open it the first time.** The builds are not
+signed with an Apple Developer ID or notarised, and Homebrew quarantines what it
+installs like a browser does. Clear the flag once:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/ParCAD.app
 ```
 
-Homebrew does that for you, which is the only reason to prefer it. Apple silicon
-only for now.
+Apple silicon only for now.
 
 ## Build it
 
