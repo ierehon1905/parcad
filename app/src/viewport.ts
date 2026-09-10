@@ -361,20 +361,48 @@ export class Viewport {
    * A PNG of what is on screen right now, scaled to fit `size`. Without
    * `preserveDrawingBuffer` the canvas is empty once a frame is presented, so
    * the draw and the copy have to be synchronous and adjacent.
+   *
+   * A pane with no layout — a hidden webview, or a capture before the first
+   * layout — has never sized the renderer, which leaves three's default
+   * 300 × 150 canvas under a camera whose aspect is still 1, and a copy of
+   * that is the part squashed two to one. Such a thumbnail is drawn at a size
+   * of its own, and the renderer put back afterwards.
    */
   snapshot(size = 512): string {
-    this.tickOnce();
     const canvas = this.renderer.domElement;
-    if (!canvas.width || !canvas.height) return "";
+    const laidOut = this.container.clientWidth > 0 && this.container.clientHeight > 0;
+    let restore: (() => void) | undefined;
+    if (!laidOut) {
+      const ratio = this.renderer.getPixelRatio();
+      const was = { w: canvas.width / ratio, h: canvas.height / ratio, aspect: this.camera.aspect };
+      const w = size;
+      const h = Math.round((size * 3) / 4);
+      this.renderer.setSize(w, h, false);
+      this.outline?.setSize(w, h);
+      this.camera.aspect = w / h;
+      this.camera.updateProjectionMatrix();
+      restore = () => {
+        this.renderer.setSize(was.w, was.h, false);
+        this.outline?.setSize(was.w, was.h);
+        this.camera.aspect = was.aspect;
+        this.camera.updateProjectionMatrix();
+        this.pendingResize = true;
+      };
+    }
+    this.tickOnce();
+    if (!canvas.width || !canvas.height) {
+      restore?.();
+      return "";
+    }
 
     const scale = Math.min(1, size / Math.max(canvas.width, canvas.height));
     const out = document.createElement("canvas");
     out.width = Math.max(1, Math.round(canvas.width * scale));
     out.height = Math.max(1, Math.round(canvas.height * scale));
     const context = out.getContext("2d");
-    if (!context) return "";
-    context.drawImage(canvas, 0, 0, out.width, out.height);
-    return out.toDataURL("image/png");
+    const png = context ? (context.drawImage(canvas, 0, 0, out.width, out.height), out.toDataURL("image/png")) : "";
+    restore?.();
+    return png;
   }
 
   /** One frame, outside the animation loop, for `snapshot` to read. */
