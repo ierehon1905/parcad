@@ -1,0 +1,47 @@
+# The gate a pull request has to pass: tools/check.sh --fast, which is the
+# kernel crates, the editor-side tests and the grader self-test.
+#
+# Not the full tools/check.sh. That builds the B-rep worker — a cold compile of
+# the vendored OpenCASCADE tree, ~10 minutes and several GB — and then runs the
+# eval corpus against it. Making that affordable means caching the OCCT install
+# and restoring it through PARCAD_OCCT_PREBUILT (see vendor/occt-sys/build.rs);
+# it belongs in a nightly job, not on every push.
+#
+# This runs on Linux, which is also the only automated evidence that ParCAD
+# builds anywhere but the author's Mac. A failure here may be a Linux gap rather
+# than a regression — read it that way before reverting anything.
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        # rust-toolchain.toml pins the version; this action honours it.
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: fast
+
+      - uses: oven-sh/setup-bun@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'   # field/selftest.py needs tomllib, so 3.11 or newer
+
+      - name: bun install
+        run: cd app && bun install --frozen-lockfile
+
+      - name: tools/check.sh --fast
+        run: tools/check.sh --fast

@@ -1,6 +1,12 @@
-# parcad
+# ParCAD
 
 Parametric CAD you write as code — for people, and for agents.
+
+**Status: 0.0.1, experimental.** One author so far. The DSL still moves between
+versions, and while every operation here is checked against measured geometry
+([eval/cases/](eval/cases/)), nothing about this project has been through the
+years of abuse that makes a CAD kernel trustworthy. Measure a part before you
+machine it.
 
 ![A bracket built by the script below, in the parcad viewport](docs/images/bracket.jpg)
 
@@ -32,14 +38,46 @@ keeps today's script working after tomorrow's kernel swap.
 Parts get measured, not assumed — volume, wall thickness, whether two bores
 actually meet. An agent gets the same numbers over MCP, with no screen to look at.
 
-## Run it
+It is aimed at small mechanical parts — brackets, flanges, manifolds, enclosures,
+heat sinks, the things you print or machine one of. [examples/](examples/) is
+twenty-two of them.
 
-You'll need [Rust](https://rustup.rs/), [Bun](https://bun.sh/), CMake and a C++ compiler.
+## Why not CadQuery, build123d or OpenSCAD
+
+Those are good, and much older. Three things here are different. Selectors are
+*descriptive and checked*: `.expect({ count: 4 })` turns a selector that silently
+started matching three edges into a build error, which is the failure mode that
+makes code-CAD fragile. Two kernels read one graph, so a sketch-fast implicit
+preview and an exact B-rep for STEP export are the same model rather than two
+projects. And measurement is a first-class output, not something you eyeball in a
+viewport — which is what makes the MCP surface real rather than a wrapper.
+
+## Build it
+
+Development is on macOS. Linux should work and is untested — patches welcome.
+Windows is not supported: the B-rep worker's process handling has no Windows arm.
+
+You need [Rust](https://rustup.rs/) (the toolchain is pinned; rustup honours it),
+[Bun](https://bun.sh/), CMake, a C++ compiler, `patch(1)` and Python 3.11+. A
+clone is a 28 MB pack that expands to 144 MB, most of it a vendored OpenCASCADE
+tree, and a full build wants around 20 GB free.
 
 ```bash
+cd app && bun install --frozen-lockfile && cd ..   # first: the Rust build shells out to bun
 cargo build --locked --release
 tools/build-worker.sh     # the exact kernel — about 10 minutes, once
-cd app && bun install --frozen-lockfile && bun run tauri dev
+cd app && bun run tauri dev
+```
+
+`cargo build` produces a *dev* app whatever the profile — Tauri's switch is the
+`custom-protocol` feature its CLI adds, not `--release` — so run the window
+through `tauri dev` or `tauri build`, not by launching the bare binary. And a
+root `cargo build` deliberately does not build OpenCASCADE; `tools/build-worker.sh`
+is what does.
+
+```bash
+tools/check.sh            # everything that gates a change (~5 min)
+tools/check.sh --fast     # the kernel crates and the editor tests (~4 s)
 ```
 
 Or headless:
@@ -56,14 +94,24 @@ in `~/Documents/parcad` as plain `.js` files you can edit anywhere.
 claude mcp add --transport http parcad http://127.0.0.1:4242/mcp
 ```
 
-Start with the `read_docs` tool — it hands over the whole language in one call.
+Point an agent at it and start with the `read_docs` tool — it hands over the
+whole language in one call.
 
 ## More
 
 - [examples/](examples/) — twenty-two parts, from a bracket to a hydraulic manifold
+- [CONTRIBUTING.md](CONTRIBUTING.md) — the gate, and what a change has to satisfy
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pieces fit, and why
 - [docs/GOTCHAS.md](docs/GOTCHAS.md) — traps that have already cost a day each
 - [docs/NEXT.md](docs/NEXT.md) — what's missing, in order
 
-MIT or Apache-2.0, except `vendor/opencascade`, which is LGPL-2.1.
-See [NOTICE.md](NOTICE.md).
+## Licensing
+
+ParCAD's own code is MIT or Apache-2.0, at your option. It is built on components
+that are not: OpenCASCADE and its Rust bindings under `vendor/` are LGPL-2.1, and
+the implicit kernel, [fidget](https://github.com/mkeeter/fidget), is MPL-2.0.
+Building and running from source is unencumbered; **redistributing a binary
+carries obligations** that [NOTICE.md](NOTICE.md) spells out — read it first.
+
+This software makes use of facilities provided by the Open CASCADE Technology
+software.

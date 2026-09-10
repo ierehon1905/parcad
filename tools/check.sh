@@ -33,6 +33,15 @@ esac
 started=$(date +%s)
 step() { printf '\n\033[1m== %s\033[0m \033[2m(%ss)\033[0m\n' "$1" "$(($(date +%s) - started))"; }
 
+# A clone has no app/node_modules, and the editor-side tests import CodeMirror.
+# Without this the first gate a contributor runs dies inside bun's resolver.
+need_frontend_deps() {
+  [ -d app/node_modules ] || {
+    echo "app/node_modules is missing. Run: (cd app && bun install --frozen-lockfile)" >&2
+    exit 1
+  }
+}
+
 if [ "$fast" = 1 ]; then
   # The kernel crates only. `parcad-app` is left out on purpose: its test binary
   # is slow to link and one of its tests sleeps 5 s by design (the sandbox's
@@ -50,6 +59,7 @@ if [ "$fast" = 1 ]; then
   cargo test --locked -p parcad-core -p parcad-occt -p parcad-cli
 
   step "bun test"
+  need_frontend_deps
   (cd app && bun test src)
 
   step "field/selftest.py"
@@ -76,6 +86,7 @@ step "cargo test"
 cargo test --release --workspace --exclude occt-sys
 
 step "bun test"
+need_frontend_deps
 (cd app && bun test src)
 
 step "field/selftest.py"
