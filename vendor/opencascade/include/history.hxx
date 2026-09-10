@@ -9,9 +9,9 @@
 #include <Standard_Failure.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Shape.hxx>
-// OCCT 8.0 moved the NCollection typedef aliases to src/Deprecated and stopped
-// pulling them in transitively; each one now needs including where it is used.
-#include <TopTools_ListOfShape.hxx>
+// OCCT 8.0 deprecated TopTools_ListOfShape along with the header that defines
+// it; this is the NCollection template it named as the replacement.
+#include <NCollection_List.hxx>
 
 #include "rust/cxx.h"
 
@@ -24,7 +24,7 @@ class ParcadBoolean {
   ParcadBoolean(const TopoDS_Shape& base, const TopoDS_Shape& tool, bool is_cut)
       : cut_(is_cut ? std::unique_ptr<BRepAlgoAPI_Cut>(new BRepAlgoAPI_Cut(base, tool)) : nullptr),
         fuse_(is_cut ? nullptr : std::unique_ptr<BRepAlgoAPI_Fuse>(new BRepAlgoAPI_Fuse(base, tool))) {
-    algorithm().SetToFillHistory(Standard_True);
+    algorithm().SetToFillHistory(true);
     algorithm().Build();
   }
 
@@ -46,7 +46,7 @@ class ParcadBoolean {
                 : static_cast<BRepAlgoAPI_BuilderAlgo&>(*fuse_);
   }
 
-  static std::unique_ptr<std::vector<TopoDS_Shape>> shapes(const TopTools_ListOfShape& shapes) {
+  static std::unique_ptr<std::vector<TopoDS_Shape>> shapes(const NCollection_List<TopoDS_Shape>& shapes) {
     return std::unique_ptr<std::vector<TopoDS_Shape>>(
         new std::vector<TopoDS_Shape>(shapes.begin(), shapes.end()));
   }
@@ -110,7 +110,7 @@ class ParcadEdgeTreatment {
   }
 
  private:
-  static std::unique_ptr<std::vector<TopoDS_Shape>> shapes(const TopTools_ListOfShape& shapes) {
+  static std::unique_ptr<std::vector<TopoDS_Shape>> shapes(const NCollection_List<TopoDS_Shape>& shapes) {
     return std::unique_ptr<std::vector<TopoDS_Shape>>(
         new std::vector<TopoDS_Shape>(shapes.begin(), shapes.end()));
   }

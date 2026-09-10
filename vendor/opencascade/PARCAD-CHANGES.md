@@ -145,6 +145,16 @@ out. Everything below could otherwise have lived in our own crate.
   The face's `TopLoc_Location` is still not applied to the normals (the
   vertices do get it); no shape parcad builds has been seen to carry one.
 
+## Changed
+
+- `include/history.hxx` no longer names `TopTools_ListOfShape` or
+  `Standard_True`, both deprecated in OCCT 8.0 — it includes
+  `NCollection_List.hxx` and spells the type `NCollection_List<TopoDS_Shape>`,
+  which is what that alias' own header names as the replacement. Three
+  `-Wdeprecated-declarations` and one `-W#pragma-messages` per build. The
+  matching change on the other side of the bridge is in
+  `vendor/opencascade-sys/PARCAD-CHANGES.md`.
+
 ## Not added
 
 - `BRepOffsetAPI_MakeOffsetShape`, for a general outward offset. Missing from

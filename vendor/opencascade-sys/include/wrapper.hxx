@@ -43,10 +43,10 @@
 #include <BRepPrimAPI_MakeSphere.hxx>
 #include <BRepTools.hxx>
 #include <BRepTools_WireExplorer.hxx>
-#include <GCE2d_MakeSegment.hxx>
 #include <GCPnts_TangentialDeflection.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <GC_MakeSegment.hxx>
+#include <GC_MakeSegment2d.hxx>
 #include <GProp_GProps.hxx>
 #include <Geom2d_Ellipse.hxx>
 #include <Geom2d_TrimmedCurve.hxx>
@@ -71,15 +71,15 @@
 #include <ShapeUpgrade_UnifySameDomain.hxx>
 #include <Standard_Type.hxx>
 #include <StlAPI_Writer.hxx>
-// OCCT 8.0 moved the NCollection typedef aliases to src/Deprecated and stopped
-// pulling them in transitively. They still ship, but every one now has to be
-// included where it is used.
-#include <BRepCheck_ListOfStatus.hxx>
-#include <TColgp_Array1OfDir.hxx>
-#include <TColgp_Array2OfPnt.hxx>
-#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
-#include <TopTools_IndexedMapOfShape.hxx>
-#include <TopTools_ListOfShape.hxx>
+// OCCT 8.0 deprecated the TColgp_/TopTools_/BRepCheck_ typedef aliases along
+// with the headers that define them; these are the NCollection templates each
+// one named as its replacement, aliased below because cxx can only name a type
+// by a plain identifier.
+#include <BRepCheck_Status.hxx>
+#include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_IndexedMap.hxx>
+#include <NCollection_List.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopAbs_ShapeEnum.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
@@ -106,6 +106,14 @@ template <typename T> std::unique_ptr<std::vector<T>> list_to_vector(const NColl
   return std::unique_ptr<std::vector<T>>(new std::vector<T>(list.begin(), list.end()));
 }
 
+// Collection instantiations. OCCT's own aliases for these are deprecated.
+typedef NCollection_List<TopoDS_Shape> ListOfShape;
+typedef NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> IndexedMapOfShape;
+typedef NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>
+    IndexedDataMapOfShapeListOfShape;
+typedef NCollection_Array1<gp_Dir> Array1OfDir;
+typedef NCollection_Array2<gp_Pnt> Array2OfPnt;
+
 // Handles
 typedef opencascade::handle<Standard_Type> HandleStandardType;
 typedef opencascade::handle<Geom_Curve> HandleGeomCurve;
@@ -131,12 +139,12 @@ inline const HandleStandardType &DynamicType(const HandleGeomSurface &surface) {
 
 inline rust::String type_name(const HandleStandardType &handle) { return std::string(handle->Name()); }
 
-inline std::unique_ptr<gp_Pnt> HandleGeomCurve_Value(const HandleGeomCurve &curve, const Standard_Real U) {
+inline std::unique_ptr<gp_Pnt> HandleGeomCurve_Value(const HandleGeomCurve &curve, const double U) {
   return std::unique_ptr<gp_Pnt>(new gp_Pnt(curve->Value(U)));
 }
 
 inline std::unique_ptr<gp_Pnt> GCPnts_TangentialDeflection_Value(const GCPnts_TangentialDeflection &approximator,
-                                                                 Standard_Integer i) {
+                                                                 int i) {
   return std::unique_ptr<gp_Pnt>(new gp_Pnt(approximator.Value(i)));
 }
 
@@ -146,7 +154,7 @@ inline std::unique_ptr<HandleGeomPlane> new_HandleGeomPlane_from_HandleGeomSurfa
 }
 
 // Collections
-inline void shape_list_append_face(TopTools_ListOfShape &list, const TopoDS_Face &face) { list.Append(face); }
+inline void shape_list_append_face(ListOfShape &list, const TopoDS_Face &face) { list.Append(face); }
 
 // Geometry
 inline const gp_Pnt &handle_geom_plane_location(const HandleGeomPlane &plane) { return plane->Location(); }
@@ -160,7 +168,7 @@ inline std::unique_ptr<HandleGeomSurface> cylinder_to_surface(const HandleGeom_C
   return std::unique_ptr<HandleGeomSurface>(new opencascade::handle<Geom_Surface>(cylinder_handle));
 }
 
-inline std::unique_ptr<HandleGeomBezierSurface> Geom_BezierSurface_ctor(const TColgp_Array2OfPnt &poles) {
+inline std::unique_ptr<HandleGeomBezierSurface> Geom_BezierSurface_ctor(const Array2OfPnt &poles) {
   return std::unique_ptr<HandleGeomBezierSurface>(
       new opencascade::handle<Geom_BezierSurface>(new Geom_BezierSurface(poles)));
 }
@@ -199,10 +207,10 @@ inline std::unique_ptr<HandleGeomTrimmedCurve> GC_MakeSegment_Value(const GC_Mak
   return std::unique_ptr<HandleGeomTrimmedCurve>(new opencascade::handle<Geom_TrimmedCurve>(segment.Value()));
 }
 
-inline std::unique_ptr<HandleGeom2d_TrimmedCurve> GCE2d_MakeSegment_point_point(const gp_Pnt2d &p1,
+inline std::unique_ptr<HandleGeom2d_TrimmedCurve> GC_MakeSegment2d_point_point(const gp_Pnt2d &p1,
                                                                                 const gp_Pnt2d &p2) {
   return std::unique_ptr<HandleGeom2d_TrimmedCurve>(
-      new opencascade::handle<Geom2d_TrimmedCurve>(GCE2d_MakeSegment(p1, p2)));
+      new opencascade::handle<Geom2d_TrimmedCurve>(GC_MakeSegment2d(p1, p2)));
 }
 
 // Arc stuff
@@ -210,7 +218,7 @@ inline std::unique_ptr<HandleGeomTrimmedCurve> GC_MakeArcOfCircle_Value(const GC
   return std::unique_ptr<HandleGeomTrimmedCurve>(new opencascade::handle<Geom_TrimmedCurve>(arc.Value()));
 }
 
-inline std::unique_ptr<gp_Pnt> BRepAdaptor_Curve_value(const BRepAdaptor_Curve &curve, const Standard_Real U) {
+inline std::unique_ptr<gp_Pnt> BRepAdaptor_Curve_value(const BRepAdaptor_Curve &curve, const double U) {
   return std::unique_ptr<gp_Pnt>(new gp_Pnt(curve.Value(U)));
 }
 
@@ -218,8 +226,8 @@ inline std::unique_ptr<gp_Pnt> BRepAdaptor_Curve_value(const BRepAdaptor_Curve &
 inline bool BRepLibBuildCurves3d(const TopoDS_Shape &shape) { return BRepLib::BuildCurves3d(shape); }
 
 inline void MakeThickSolidByJoin(BRepOffsetAPI_MakeThickSolid &make_thick_solid, const TopoDS_Shape &shape,
-                                 const TopTools_ListOfShape &closing_faces, const Standard_Real offset,
-                                 const Standard_Real tolerance) {
+                                 const ListOfShape &closing_faces, const double offset,
+                                 const double tolerance) {
   make_thick_solid.MakeThickSolidByJoin(shape, closing_faces, offset, tolerance);
 }
 
@@ -281,8 +289,8 @@ inline std::unique_ptr<HandleGeomSurface> BRep_Tool_Surface(const TopoDS_Face &f
   return std::unique_ptr<HandleGeomSurface>(new opencascade::handle<Geom_Surface>(BRep_Tool::Surface(face)));
 }
 
-inline std::unique_ptr<HandleGeomCurve> BRep_Tool_Curve(const TopoDS_Edge &edge, Standard_Real &first,
-                                                        Standard_Real &last) {
+inline std::unique_ptr<HandleGeomCurve> BRep_Tool_Curve(const TopoDS_Edge &edge, double &first,
+                                                        double &last) {
   return std::unique_ptr<HandleGeomCurve>(new opencascade::handle<Geom_Curve>(BRep_Tool::Curve(edge, first, last)));
 }
 
@@ -360,17 +368,17 @@ inline bool write_stl(StlAPI_Writer &writer, const TopoDS_Shape &theShape, rust:
 }
 
 inline std::unique_ptr<gp_Dir> Poly_Triangulation_Normal(const Poly_Triangulation &triangulation,
-                                                         const Standard_Integer index) {
+                                                         const int index) {
   return std::unique_ptr<gp_Dir>(new gp_Dir(triangulation.Normal(index)));
 }
 
 inline std::unique_ptr<gp_Pnt> Poly_Triangulation_Node(const Poly_Triangulation &triangulation,
-                                                       const Standard_Integer index) {
+                                                       const int index) {
   return std::unique_ptr<gp_Pnt>(new gp_Pnt(triangulation.Node(index)));
 }
 
 inline std::unique_ptr<gp_Pnt2d> Poly_Triangulation_UV(const Poly_Triangulation &triangulation,
-                                                       const Standard_Integer index) {
+                                                       const int index) {
   return std::unique_ptr<gp_Pnt2d>(new gp_Pnt2d(triangulation.UVNode(index)));
 }
 
@@ -398,21 +406,21 @@ inline void BRepGProp_VolumeProperties(const TopoDS_Shape &shape, GProp_GProps &
 // Fillets
 inline std::unique_ptr<TopoDS_Edge> BRepFilletAPI_MakeFillet2d_add_fillet(BRepFilletAPI_MakeFillet2d &make_fillet,
                                                                           const TopoDS_Vertex &vertex,
-                                                                          Standard_Real radius) {
+                                                                          double radius) {
   return std::unique_ptr<TopoDS_Edge>(new TopoDS_Edge(make_fillet.AddFillet(vertex, radius)));
 }
 
 // Chamfers
 inline std::unique_ptr<TopoDS_Edge>
 BRepFilletAPI_MakeFillet2d_add_chamfer(BRepFilletAPI_MakeFillet2d &make_fillet, const TopoDS_Edge &edge1,
-                                       const TopoDS_Edge &edge2, const Standard_Real dist1, const Standard_Real dist2) {
+                                       const TopoDS_Edge &edge2, const double dist1, const double dist2) {
   return std::unique_ptr<TopoDS_Edge>(new TopoDS_Edge(make_fillet.AddChamfer(edge1, edge2, dist1, dist2)));
 }
 
 inline std::unique_ptr<TopoDS_Edge>
 BRepFilletAPI_MakeFillet2d_add_chamfer_angle(BRepFilletAPI_MakeFillet2d &make_fillet, const TopoDS_Edge &edge,
-                                             const TopoDS_Vertex &vertex, const Standard_Real dist,
-                                             const Standard_Real angle) {
+                                             const TopoDS_Vertex &vertex, const double dist,
+                                             const double angle) {
   return std::unique_ptr<TopoDS_Edge>(new TopoDS_Edge(make_fillet.AddChamfer(edge, vertex, dist, angle)));
 }
 
@@ -422,21 +430,21 @@ inline std::unique_ptr<TopoDS_Wire> outer_wire(const TopoDS_Face &face) {
 }
 
 // Collections
-inline void map_shapes(const TopoDS_Shape &S, const TopAbs_ShapeEnum T, TopTools_IndexedMapOfShape &M) {
+inline void map_shapes(const TopoDS_Shape &S, const TopAbs_ShapeEnum T, IndexedMapOfShape &M) {
   TopExp::MapShapes(S, T, M);
 }
 
 inline void map_shapes_and_ancestors(const TopoDS_Shape &S, const TopAbs_ShapeEnum TS, const TopAbs_ShapeEnum TA,
-                                     TopTools_IndexedDataMapOfShapeListOfShape &M) {
+                                     IndexedDataMapOfShapeListOfShape &M) {
   TopExp::MapShapesAndAncestors(S, TS, TA, M);
 }
 
 inline void map_shapes_and_unique_ancestors(const TopoDS_Shape &S, const TopAbs_ShapeEnum TS, const TopAbs_ShapeEnum TA,
-                                            TopTools_IndexedDataMapOfShapeListOfShape &M) {
+                                            IndexedDataMapOfShapeListOfShape &M) {
   TopExp::MapShapesAndUniqueAncestors(S, TS, TA, M);
 }
 
-inline std::unique_ptr<gp_Dir> TColgp_Array1OfDir_Value(const TColgp_Array1OfDir &array, Standard_Integer index) {
+inline std::unique_ptr<gp_Dir> Array1OfDir_Value(const Array1OfDir &array, int index) {
   return std::unique_ptr<gp_Dir>(new gp_Dir(array.Value(index)));
 }
 
@@ -727,8 +735,8 @@ inline void write_edge(std::ostringstream &out, const TopoDS_Edge &edge) {
 // Faces sharing an edge with this one, as indices into the solid's face order.
 // `edge_faces` is built once per solid rather than per face.
 inline void write_neighbours(std::ostringstream &out, const TopoDS_Face &face,
-                             const TopTools_IndexedMapOfShape &faces,
-                             const TopTools_IndexedDataMapOfShapeListOfShape &edge_faces) {
+                             const IndexedMapOfShape &faces,
+                             const IndexedDataMapOfShapeListOfShape &edge_faces) {
   // A pair meeting along several edges is named once, not once per edge.
   std::set<int> neighbours;
   const int self = faces.FindIndex(face);
@@ -736,7 +744,7 @@ inline void write_neighbours(std::ostringstream &out, const TopoDS_Face &face,
     if (!edge_faces.Contains(e.Current())) {
       continue;
     }
-    const TopTools_ListOfShape &touching = edge_faces.FindFromKey(e.Current());
+    const ListOfShape &touching = edge_faces.FindFromKey(e.Current());
     for (const TopoDS_Shape &neighbour : touching) {
       const int index = faces.FindIndex(neighbour);
       // A seam edge lists its own face twice; a face is not its own neighbour.
@@ -797,8 +805,8 @@ inline void write_surface_placement(std::ostringstream &out, const TopoDS_Face &
 }
 
 inline void write_face(std::ostringstream &out, const TopoDS_Face &face,
-                       const TopTools_IndexedMapOfShape &faces,
-                       const TopTools_IndexedDataMapOfShapeListOfShape &edge_faces) {
+                       const IndexedMapOfShape &faces,
+                       const IndexedDataMapOfShapeListOfShape &edge_faces) {
   // Exact from the B-rep: a tessellated area is short by the chord error.
   GProp_GProps props;
   BRepGProp::SurfaceProperties(face, props);
@@ -847,9 +855,9 @@ inline void write_solid(std::ostringstream &out, const TopoDS_Shape &solid) {
   write_xyz(out, x1, y1, z1);
   // Map order matches the write order below, so index-1 is the reader's
   // position. Checked by `face_adjacency_is_symmetric_and_indexed_as_written`.
-  TopTools_IndexedMapOfShape faces;
+  IndexedMapOfShape faces;
   TopExp::MapShapes(solid, TopAbs_FACE, faces);
-  TopTools_IndexedDataMapOfShapeListOfShape edge_faces;
+  IndexedDataMapOfShapeListOfShape edge_faces;
   TopExp::MapShapesAndAncestors(solid, TopAbs_EDGE, TopAbs_FACE, edge_faces);
 
   out << ",\"faces\":[";
@@ -877,9 +885,9 @@ inline rust::String Shape_faces_json(const TopoDS_Shape &shape) {
   for (TopExp_Explorer s(shape, TopAbs_SOLID); s.More(); s.Next()) {
     // First solid only: concatenating a second would renumber the faces.
     const TopoDS_Shape &solid = s.Current();
-    TopTools_IndexedMapOfShape faces;
+    IndexedMapOfShape faces;
     TopExp::MapShapes(solid, TopAbs_FACE, faces);
-    TopTools_IndexedDataMapOfShapeListOfShape edge_faces;
+    IndexedDataMapOfShapeListOfShape edge_faces;
     TopExp::MapShapesAndAncestors(solid, TopAbs_EDGE, TopAbs_FACE, edge_faces);
 
     for (TopExp_Explorer f(solid, TopAbs_FACE); f.More(); f.Next(), ++written) {
@@ -1010,7 +1018,7 @@ inline int Shape_drop_unused_seam_pcurves(const TopoDS_Shape &shape) {
 // `exact` enables per-point checking. It is slow, and off by default in OCCT,
 // which is why a face carrying a wrecked surface can pass the cheap check.
 inline rust::String BRepCheck_report(const TopoDS_Shape &shape, bool exact) {
-  BRepCheck_Analyzer analyzer(shape, Standard_True, Standard_False, exact);
+  BRepCheck_Analyzer analyzer(shape, true, false, exact);
   if (analyzer.IsValid()) {
     return rust::String("");
   }
@@ -1030,7 +1038,7 @@ inline rust::String BRepCheck_report(const TopoDS_Shape &shape, bool exact) {
       if (result.IsNull()) {
         continue;
       }
-      for (BRepCheck_ListIteratorOfListOfStatus status(result->Status()); status.More(); status.Next()) {
+      for (NCollection_List<BRepCheck_Status>::Iterator status(result->Status()); status.More(); status.Next()) {
         if (status.Value() == BRepCheck_NoError) {
           continue;
         }

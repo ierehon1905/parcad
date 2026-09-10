@@ -116,6 +116,32 @@ later release of it exists, so there is no version to bump to.
   (`a_meshed_faces_triangles_lie_on_the_surface_the_report_describes`) rather
   than assumed, because it is a property of OCCT rather than of this code.
 
+## Changed
+
+- The deprecated spellings OCCT 8.0 warns on are gone from `wrapper.hxx` and
+  from the cxx bridge in `src/lib.rs`. Together they were 178
+  `-Wdeprecated-declarations` and 6 `-W#pragma-messages` on every build of this
+  crate, which is more output than a real warning survives.
+
+  `Standard_Integer`, `Standard_Real`, `Standard_True` and `Standard_False`
+  become `int`, `double`, `true` and `false`; `GCE2d_MakeSegment` becomes
+  `GC_MakeSegment2d` and `BRepCheck_ListIteratorOfListOfStatus` becomes
+  `NCollection_List<BRepCheck_Status>::Iterator`, each the replacement its own
+  header names.
+
+  The `TColgp_`/`TopTools_`/`BRepCheck_` collection aliases moved to
+  `src/Deprecated` in OCCT 8.0 and their headers are deprecated too, so
+  `wrapper.hxx` includes the NCollection templates instead and declares its own
+  aliases for them — cxx can only name a type by a plain identifier, and
+  `NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>,
+  TopTools_ShapeMapHasher>` is not one. Those aliases are what the bridge now
+  names, so the Rust-side types and the helpers over them are renamed with
+  them: `TopTools_ListOfShape` to `ListOfShape`, `TopTools_IndexedMapOfShape`
+  to `IndexedMapOfShape`, `TopTools_IndexedDataMapOfShapeListOfShape` to
+  `IndexedDataMapOfShapeListOfShape`, `TColgp_Array1OfDir` to `Array1OfDir`
+  and `TColgp_Array2OfPnt` to `Array2OfPnt`. No warning is suppressed by a
+  flag; the deprecated API is simply not used.
+
 ## Changed in `build.rs`
 
 - `-std=c++17` instead of `-std=c++11`. OCCT 8.0 headers use constexpr and

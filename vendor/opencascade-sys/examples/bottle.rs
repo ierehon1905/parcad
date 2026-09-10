@@ -12,7 +12,7 @@ use opencascade_sys::ffi::{
     BRepOffsetAPI_MakeThickSolid_ctor, BRepOffsetAPI_ThruSections_ctor,
     BRepPrimAPI_MakeCylinder_ctor, BRepPrimAPI_MakePrism_ctor, BRep_Builder_ctor,
     BRep_Builder_upcast_to_topods_builder, BRep_Tool_Surface, DynamicType, ExplorerCurrentShape,
-    GCE2d_MakeSegment_point_point, GC_MakeArcOfCircle_Value, GC_MakeArcOfCircle_point_point_point,
+    GC_MakeSegment2d_point_point, GC_MakeArcOfCircle_Value, GC_MakeArcOfCircle_point_point_point,
     GC_MakeSegment_Value, GC_MakeSegment_point_point, Geom2d_Ellipse_ctor,
     Geom2d_TrimmedCurve_ctor, Geom_CylindricalSurface_ctor, HandleGeom2d_TrimmedCurve_to_curve,
     MakeThickSolidByJoin, StlAPI_Writer_ctor, TopAbs_ShapeEnum, TopExp_Explorer_ctor,
@@ -173,7 +173,7 @@ pub fn main() {
 
     let ellipse_point_1 = ellipse_value(&ellipse_1, 0.0);
     let ellipse_point_2 = ellipse_value(&ellipse_1, std::f64::consts::PI);
-    let thread_segment = GCE2d_MakeSegment_point_point(&ellipse_point_1, &ellipse_point_2);
+    let thread_segment = GC_MakeSegment2d_point_point(&ellipse_point_1, &ellipse_point_2);
     let thread_segment = HandleGeom2d_TrimmedCurve_to_curve(&thread_segment);
 
     let mut edge_1_on_surface_1 = BRepBuilderAPI_MakeEdge_CurveSurface2d(&arc_1, &cylinder_1);

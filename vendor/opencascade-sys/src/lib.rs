@@ -90,11 +90,11 @@ pub mod ffi {
         pub fn HandleGeomCurve_Value(curve: &HandleGeomCurve, u: f64) -> UniquePtr<gp_Pnt>;
 
         // Collections
-        type TopTools_ListOfShape;
+        type ListOfShape;
 
         #[cxx_name = "construct_unique"]
-        pub fn new_list_of_shape() -> UniquePtr<TopTools_ListOfShape>;
-        pub fn shape_list_append_face(list: Pin<&mut TopTools_ListOfShape>, face: &TopoDS_Face);
+        pub fn new_list_of_shape() -> UniquePtr<ListOfShape>;
+        pub fn shape_list_append_face(list: Pin<&mut ListOfShape>, face: &TopoDS_Face);
         // No `Size()`. OCCT 8.0 moved it to NCollection_BaseList and changed it
         // to `size_t`, and cxx cannot bind a base-class method through a derived
         // type. Nothing called it; if it is ever wanted, add a free-function
@@ -102,79 +102,79 @@ pub mod ffi {
 
         #[cxx_name = "list_to_vector"]
         pub fn shape_list_to_vector(
-            list: &TopTools_ListOfShape,
+            list: &ListOfShape,
         ) -> UniquePtr<CxxVector<TopoDS_Shape>>;
 
-        type TopTools_IndexedMapOfShape;
+        type IndexedMapOfShape;
 
         #[cxx_name = "construct_unique"]
-        pub fn new_indexed_map_of_shape() -> UniquePtr<TopTools_IndexedMapOfShape>;
-        pub fn Extent(self: &TopTools_IndexedMapOfShape) -> i32;
-        pub fn FindKey(self: &TopTools_IndexedMapOfShape, index: i32) -> &TopoDS_Shape;
+        pub fn new_indexed_map_of_shape() -> UniquePtr<IndexedMapOfShape>;
+        pub fn Extent(self: &IndexedMapOfShape) -> i32;
+        pub fn FindKey(self: &IndexedMapOfShape, index: i32) -> &TopoDS_Shape;
 
         pub fn map_shapes(
             shape: &TopoDS_Shape,
             shape_type: TopAbs_ShapeEnum,
-            shape_map: Pin<&mut TopTools_IndexedMapOfShape>,
+            shape_map: Pin<&mut IndexedMapOfShape>,
         );
 
-        type TopTools_IndexedDataMapOfShapeListOfShape;
+        type IndexedDataMapOfShapeListOfShape;
 
         #[cxx_name = "construct_unique"]
         pub fn new_indexed_data_map_of_shape_list_of_shape(
-        ) -> UniquePtr<TopTools_IndexedDataMapOfShapeListOfShape>;
-        pub fn Extent(self: &TopTools_IndexedDataMapOfShapeListOfShape) -> i32;
+        ) -> UniquePtr<IndexedDataMapOfShapeListOfShape>;
+        pub fn Extent(self: &IndexedDataMapOfShapeListOfShape) -> i32;
         pub fn FindKey(
-            self: &TopTools_IndexedDataMapOfShapeListOfShape,
+            self: &IndexedDataMapOfShapeListOfShape,
             index: i32,
         ) -> &TopoDS_Shape;
         pub fn FindFromIndex(
-            self: &TopTools_IndexedDataMapOfShapeListOfShape,
+            self: &IndexedDataMapOfShapeListOfShape,
             index: i32,
-        ) -> &TopTools_ListOfShape;
+        ) -> &ListOfShape;
         pub fn FindIndex(
-            self: &TopTools_IndexedDataMapOfShapeListOfShape,
+            self: &IndexedDataMapOfShapeListOfShape,
             shape: &TopoDS_Shape,
         ) -> i32;
         pub fn FindFromKey<'a>(
-            self: &'a TopTools_IndexedDataMapOfShapeListOfShape,
+            self: &'a IndexedDataMapOfShapeListOfShape,
             shape: &'a TopoDS_Shape,
-        ) -> &'a TopTools_ListOfShape;
+        ) -> &'a ListOfShape;
 
         pub fn map_shapes_and_ancestors(
             shape: &TopoDS_Shape,
             parent_type: TopAbs_ShapeEnum,
             child_type: TopAbs_ShapeEnum,
-            shape_data_map: Pin<&mut TopTools_IndexedDataMapOfShapeListOfShape>,
+            shape_data_map: Pin<&mut IndexedDataMapOfShapeListOfShape>,
         );
         pub fn map_shapes_and_unique_ancestors(
             shape: &TopoDS_Shape,
             parent_type: TopAbs_ShapeEnum,
             child_type: TopAbs_ShapeEnum,
-            shape_data_map: Pin<&mut TopTools_IndexedDataMapOfShapeListOfShape>,
+            shape_data_map: Pin<&mut IndexedDataMapOfShapeListOfShape>,
         );
 
-        type TColgp_Array1OfDir;
+        type Array1OfDir;
         #[cxx_name = "construct_unique"]
-        pub fn TColgp_Array1OfDir_ctor(
+        pub fn Array1OfDir_ctor(
             lower_bound: i32,
             upper_bound: i32,
-        ) -> UniquePtr<TColgp_Array1OfDir>;
-        pub fn Length(self: &TColgp_Array1OfDir) -> i32;
-        pub fn TColgp_Array1OfDir_Value(
-            array: &TColgp_Array1OfDir,
+        ) -> UniquePtr<Array1OfDir>;
+        pub fn Length(self: &Array1OfDir) -> i32;
+        pub fn Array1OfDir_Value(
+            array: &Array1OfDir,
             index: i32,
         ) -> UniquePtr<gp_Dir>;
 
-        type TColgp_Array2OfPnt;
+        type Array2OfPnt;
         #[cxx_name = "construct_unique"]
-        pub fn TColgp_Array2OfPnt_ctor(
+        pub fn Array2OfPnt_ctor(
             row_lower: i32,
             row_upper: i32,
             column_lower: i32,
             column_upper: i32,
-        ) -> UniquePtr<TColgp_Array2OfPnt>;
-        pub fn SetValue(self: Pin<&mut TColgp_Array2OfPnt>, row: i32, column: i32, item: &gp_Pnt);
+        ) -> UniquePtr<Array2OfPnt>;
+        pub fn SetValue(self: Pin<&mut Array2OfPnt>, row: i32, column: i32, item: &gp_Pnt);
 
         // Geometry
         type Geom_TrimmedCurve;
@@ -195,7 +195,7 @@ pub mod ffi {
         ) -> UniquePtr<HandleGeomSurface>;
 
         pub fn Geom_BezierSurface_ctor(
-            poles: &TColgp_Array2OfPnt,
+            poles: &Array2OfPnt,
         ) -> UniquePtr<HandleGeomBezierSurface>;
         pub fn bezier_to_surface(
             bezier_handle: &HandleGeomBezierSurface,
@@ -251,13 +251,13 @@ pub mod ffi {
 
         // Segments
         type GC_MakeSegment;
-        type GCE2d_MakeSegment;
+        type GC_MakeSegment2d;
 
         #[cxx_name = "construct_unique"]
         pub fn GC_MakeSegment_point_point(p1: &gp_Pnt, p2: &gp_Pnt) -> UniquePtr<GC_MakeSegment>;
 
         pub fn GC_MakeSegment_Value(arc: &GC_MakeSegment) -> UniquePtr<HandleGeomTrimmedCurve>;
-        pub fn GCE2d_MakeSegment_point_point(
+        pub fn GC_MakeSegment2d_point_point(
             p1: &gp_Pnt2d,
             p2: &gp_Pnt2d,
         ) -> UniquePtr<HandleGeom2d_TrimmedCurve>;
@@ -652,7 +652,7 @@ pub mod ffi {
         pub fn MakeThickSolidByJoin(
             make_thick_solid: Pin<&mut BRepOffsetAPI_MakeThickSolid>,
             shape: &TopoDS_Shape,
-            closing_faces: &TopTools_ListOfShape,
+            closing_faces: &ListOfShape,
             offset: f64,
             tolerance: f64,
         );
@@ -711,7 +711,7 @@ pub mod ffi {
         pub fn Shape(self: Pin<&mut BRepAlgoAPI_Fuse>) -> &TopoDS_Shape;
         pub fn Build(self: Pin<&mut BRepAlgoAPI_Fuse>, progress: &Message_ProgressRange);
         pub fn IsDone(self: &BRepAlgoAPI_Fuse) -> bool;
-        pub fn SectionEdges(self: Pin<&mut BRepAlgoAPI_Fuse>) -> &TopTools_ListOfShape;
+        pub fn SectionEdges(self: Pin<&mut BRepAlgoAPI_Fuse>) -> &ListOfShape;
         pub fn SetGlue(self: Pin<&mut BRepAlgoAPI_Fuse>, glue: BOPAlgo_GlueEnum);
 
         type BRepAlgoAPI_Cut;
@@ -728,8 +728,8 @@ pub mod ffi {
         pub fn Generated<'a>(
             self: Pin<&'a mut BRepAlgoAPI_Cut>,
             shape: &'a TopoDS_Shape,
-        ) -> &'a TopTools_ListOfShape;
-        pub fn SectionEdges(self: Pin<&mut BRepAlgoAPI_Cut>) -> &TopTools_ListOfShape;
+        ) -> &'a ListOfShape;
+        pub fn SectionEdges(self: Pin<&mut BRepAlgoAPI_Cut>) -> &ListOfShape;
 
         type BRepAlgoAPI_Common;
 
