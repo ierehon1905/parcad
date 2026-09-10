@@ -70,7 +70,7 @@ the code — check before believing either, including this one.
 
 ## 3. Depth over breadth, and the shape question behind it
 
-**The state, measured rather than assumed.** Twenty-one of the author's own
+**The state, measured rather than assumed.** Twenty-one of the reference corpus's
 Fusion documents were exported and counted. Thirteen have surfaces this kernel
 cannot make; fifteen are more than one solid. Loft and Sweep each appear in six
 designs — more than Revolve, which we did build. The counts and their caveats are

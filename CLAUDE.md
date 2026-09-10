@@ -23,7 +23,7 @@ way, from what fighting the language actually cost.
 
 The corollary is the trap this rule exists to catch. Shipping an *operation* is
 not the same as shipping the *outcome*: `loft` landed, was measured exact, and
-moved not one of the author's own models any closer to building, because the
+moved not one part in the reference corpus any closer to building, because the
 sections those models need live in a file nothing could read. When work stops
 short of the outcome, say so plainly — an honest null result is worth more than
 a component reported as progress.
@@ -306,4 +306,5 @@ LGPL-2.1 while our crates are MIT/Apache — don't move code between them.
 
 ## Git
 
-Nothing is force-pushed to `main`, ever. See the user's global rules.
+Nothing is force-pushed to `main`, ever. To undo a bad commit there, push a
+`git revert`.

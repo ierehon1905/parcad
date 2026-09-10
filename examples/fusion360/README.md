@@ -1,6 +1,6 @@
 # Fusion 360 recreation targets
 
-Parts exported from the author's own Fusion 360 documents, kept here so that
+Parts exported from the reference corpus of Fusion 360 documents, kept here so that
 recreating them in parcad's DSL is a measurable exercise rather than an
 impression. Each file records the volume, area, bounding box and face types read
 off the Fusion export, so a recreation either agrees with the original or does
@@ -49,7 +49,7 @@ A target that becomes a faithful recreation gets promoted up one level into
 `eval/cases/`.
 
 The exports themselves (`.step`, `.stl`, `measurements.json`) live in
-`reference/fusion/`, which is gitignored — they are the author's own designs, not
+`reference/fusion/`, which is gitignored — they are real designs, not
 fixtures. Without them the numbers in each header are still the specification;
 only a side-by-side comparison needs the files.
 
@@ -58,6 +58,7 @@ bun tools/run.ts examples/fusion360/retainer-v1.js > /tmp/part.json
 ./target/release/parcad /tmp/part.json --brep --step /tmp/part.step --out /tmp/out
 
 # Measure an export itself: solids, faces with surface data, section polygons.
+# reference/ is gitignored — point this at a STEP file of your own.
 ./target/release/parcad --probe-step reference/fusion/UnTriangle-v3/UnTriangle-v3.step
 ```
 
@@ -99,7 +100,7 @@ while reporting success.
 | `untitled2-v1.js` | Untitled2 v1 | 36,357 mm³ | 1 | 1 | a spline in a revolve section; also two solids |
 | `v2.js` | ваза v2 | 144,242 mm³ | 9 | 8 | spline loft sections; parcad's loft takes polygons |
 | `v3.js` | шар v3 | 515,661 mm³ | 460 | 32 | a sweep around a sphere; parcad's sweep follows runs and circular bends |
-| `v4.js` | v4 v4 | 7,375 mm³ | 3 | 1 | a spline outline in an extrude, then SplitBody |
+| `v4.js` | v4 | 7,375 mm³ | 3 | 1 | a spline outline in an extrude, then SplitBody |
 
 Each throws with its reason. They are deliberately not approximate solids: a stub
 that returned something roughly right would measure as a part and read as

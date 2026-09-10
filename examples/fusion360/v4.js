@@ -1,4 +1,4 @@
-// v4 v4 — Fusion 360 recreation target. DOES NOT BUILD YET.
+// v4 — Fusion 360 recreation target. DOES NOT BUILD YET.
 //
 // Exported from reference/fusion/v4/. Measured in Fusion, so these are the
 // numbers a recreation has to hit:

@@ -500,7 +500,7 @@ the drawn key entirely was the other option and is worse: the reply names a
 colour as `#e85d4e`, which is not something a reader can match to pixels by eye.
 
 Colours are now hashed from the tag *name* rather than handed out by position.
-The session's working method is comparing a render against the previous one, and
+The working method here is comparing a render against the previous one, and
 a palette that reshuffles when a tag is inserted early in a script destroys that
 comparison silently — the two images stop being about the same thing. Hashing
 costs collisions, and two tags sharing a colour is worse than the shuffle it
@@ -510,15 +510,15 @@ order. It also changes which *pairs* of palette entries can meet: positional
 assignment only ever used a prefix, so a part with four tags could never draw
 the entry at index 10, and hashing can. The palette therefore had to hold up
 everywhere rather than at the front, and it did not — blue and periwinkle sat at
-ΔE 13.9, and the session separately reported red and salmon at 20.7 as
+ΔE 13.9, and a trial separately reported red and salmon at 20.7 as
 indistinguishable across a wheel arch. Four entries were replaced; the minimum
 pairwise separation is now **34.5**, pinned by `no_two_palette_entries_look_alike`.
 
 Authored colour — `.tag(name, { color })`, and a per-render `colors:` override —
-is the session's other request and is **not** built. It is a separate question:
+was asked for alongside it and is **not** built. It is a separate question:
 `tag` is semantic here, it names what a thing *is* and that name does real work
 in `probe_part` and `measure_wall_thickness` output, and colour would be the
-first purely presentational thing in the language. The session flags the tension
+first purely presentational thing in the language. The request flagged that tension
 itself. Hashing is the zero-API-surface fix for the problem that actually bit
 them, and the diagnostic case — *put this one feature in screaming magenta and
 everything else grey* — is the half worth revisiting first if it comes back.

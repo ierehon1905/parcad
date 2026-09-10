@@ -74,7 +74,7 @@ it announces itself in the first line of the file.
 ### What twenty-one real Fusion 360 designs actually needed
 
 The list above was derived from parts *we* chose to model, which selects for what
-the language can already do. So twenty-one of the author's own Fusion documents
+the language can already do. So twenty-one Fusion documents from the reference corpus
 were exported and measured instead — a sample of one person's actual CAD rather
 than of our imagination. `examples/fusion360/` carries the ones worth
 recreating, with the measured targets; these are the counts across all 21.

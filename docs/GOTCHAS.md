@@ -600,7 +600,7 @@ against `eval/cases/`, not a drive-by.
 
 ### `.at(x, y, h)` vs `.at(x, y, h - wall)`
 
-A latent bug in `examples.ts`: placing a lid at `h` instead of `h - wall` sealed
+A latent bug in an example: placing a lid at `h` instead of `h - wall` sealed
 the box in *both* backends, so nothing looked wrong. Geometry that is subtly
 wrong in the same way everywhere is the hardest kind to see.
 
