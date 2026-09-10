@@ -206,59 +206,44 @@ with `probe_part` withheld, Haiku 4.5 produced the same 1.5 mm — *derived* fro
 measurement's clothes, and where source and built geometry have diverged that
 derivation is confidently wrong with nothing in the answer saying so.
 
-**A probe says whether there is material, not what it is in.** Asked to prove
-`manifold-block.js`'s drop ports meet the main gallery, a model measured
-correctly — port void z=20 to z=−5, gallery z=+4 to z=−4 — then concluded they
-*did not* meet, inventing a millimetre of material between −4 and −5 its own ray
-had measured as void: two overlapping intervals read as two adjacent ones.
-Re-run with tagged crossings, three of four trials never called `probe_part` at
-all — two answered from `portDepth` arithmetic (one quoting the script's own
-comment as evidence), one from a front view — and the fourth probed four times,
-was handed `tag: "ports"` on every crossing, and answered **DO NOT MEET** on a
-sign error: given `{"distance_mm": 5, "inside": false}` it wrote "the material
-is solid with 5 mm of solid material remaining", and given
-`{"distance_mm": -0.5, "inside": true}` a millimetre lower, "inside a void".
-`inside` read as *inside the void*, exactly inverted, and every step after it
-followed. It had also fired a transverse ray from that point, got zero crossings
-over 50 mm, and never used it. Three things that settled:
+**A probe says whether there is material, not what it is in, and it took three
+rounds of naming before a model read that.** Asked to prove `manifold-block.js`'s
+drop ports meet the main gallery, a model measured correctly — port void z=20 to
+z=−5, gallery z=+4 to z=−4 — and concluded they *did not* meet, inventing a
+millimetre of material between −4 and −5 its own ray had measured as void: two
+overlapping intervals read as two adjacent ones. Then, in order:
 
-- **A field nothing reads is not a feature.** The tag was correct and in front
-  of the one trial that could have used it.
-- **`inside` is the bug.** Inside *what* is ambiguous on a part made of negative
-  space, and a boolean gives a model a coin to flip. `medium: "material" |
-  "void"` is the same information with no free parameter. Same for
+- **`inside` was read inverted.** Handed `{"distance_mm": 5, "inside": false}` a
+  trial wrote "the material is solid with 5 mm of solid material remaining", and
+  a negative distance a millimetre lower as "inside a void". Inside *what* is
+  ambiguous on a part made of negative space, and a boolean gives a model a coin
+  to flip; `medium: "material" | "void"` is the same information with no free
+  parameter, and no trial in either arm has misread it since. Same change for
   `starts_inside`, `ends_inside`, `entering`.
-- **`probe_part` is not being reached** — a tool-description problem no work
-  inside the tool fixes.
+- **`tag` was read as the far side.** Handed a crossing carrying
+  `{"into": "material", "tag": "ports"}`, a model wrote "crosses into **port
+  material**" — the tag taken for the stuff beyond the crossing rather than the
+  face it went through. The field is `surface_of` for that reason. Its first
+  round also settled that a field nothing reads is not a feature: the tag was
+  correct, and in front of the one trial that could have used it.
+- **`probe_part` was not being reached** — 1 of 4 in the first round, and no work
+  inside the tool fixes that. Its description now says *this is the tool for "do
+  these two bores meet", reach for it before you reason from a dimension in the
+  source*. Over nineteen trials in three rounds, half with extended thinking off,
+  reach went 1/4 → **8/8** and correctness to **7/8**. **The most valuable change
+  to a perception tool was not in the tool.**
 
-Both fixed, and the fix measured: nineteen trials over three rounds, half with
-extended thinking off, same prompt throughout.
-
-| round | what changed | reached `probe_part` | correct |
-|---|---|---|---|
-| 1 | tagged crossings | 1/4 | 3/4, all but one by not measuring |
-| 2 | `medium` replaces `inside` | 2/7 | 3/7 |
-| 3 | `surface_of` replaces `tag`, plus the tool description | **8/8** | **7/8** |
-
-Round 2 killed the sign error — no trial in either arm has misread `medium`
-since — and exposed the next one in the same place: handed
-`{"into": "material", "surface_of": "ports"}` under its old name `tag`, a model
-wrote "crosses into **port material**", taking the tag for the stuff on the far
-side rather than the face it went through. Round 3's other half is a tool
-description that says *this is the tool for 'do these two bores meet', reach for
-it before you reason from a dimension in the source*, and 4 of 4 did. **The most
-valuable change to a perception tool was not in the tool.** Two things no unit
-test could settle: every failure mode appeared with thinking on, and round 3's
-only wrong answer is from the *reasoning* arm while its non-reasoning arm went
-4/4; and a right answer is not evidence — `field/score.py` prints who *reached*
-the tool for that reason, and had a bug that scored "DO NOT MEET" as a pass.
-
-That one wrong answer measured 13 mm between the gallery and a port and was
-right — at z = 16, having decided that was where the gallery was. It is at 0. A
-model cannot aim a ray at a feature it cannot locate, and down a port's axis the
-port void and the gallery void are the same air; the transverse measurement is
-decisive — at the gallery's own height the void at x=−22 spans y=−5…+5, the
-port's Ø10 and not the gallery's Ø8 — and the model never thought to fire it.
+**A field name read as the wrong noun is the recurring failure here, and none of
+it is reachable from inside the process.** Every one of these appeared with
+thinking *on*, and the last round's only wrong answer is from the reasoning arm
+while its non-reasoning arm went 4/4. A right answer is not evidence either —
+`field/score.py` prints who *reached* the tool for that reason, and had a bug
+that scored "DO NOT MEET" as a pass. That wrong answer measured 13 mm between
+the gallery and a port and was right, at z = 16, having decided that was where
+the gallery was; it is at 0. A model cannot aim a ray at a feature it cannot
+locate, and down a port's axis the port void and the gallery void are the same
+air — the decisive measurement is transverse, at the gallery's own height, and
+no trial fired one.
 
 **No `eval/cases/` entry, deliberately.** A case there is a two-backend geometry
 comparison — `Observed` is size, volume, area, triangles, topology — and a probe
@@ -436,10 +421,10 @@ ready to print* is the likeliest reason, as in §3 round 3.
 
 **The transcripts say the tag names are not enough**, which the score does not.
 All four named the pair `plate` / `drilled` and then explained it in English, two
-of them wrongly: trial 4 put the wall between "the top surface of the flange"
-and the bolt holes, trial 1 between the plate and "the bore". It is neither —
-the wall is *radial*, OD to bolt hole, and both trials had the coordinates that
-say so (`at` and `opposite` share a z). A tag names a *node*, not a face:
+of them wrongly — one put the wall between "the top surface of the flange" and
+the bolt holes. It is neither: the wall is *radial*, OD to bolt hole, and both
+trials had the coordinates that say so (`at` and `opposite` share a z). A tag
+names a *node*, not a face:
 `plate` is one cylinder owning the OD, the top and the bottom, `drilled` one cut
 owning the bore and all four bolt holes, so `surface_of` narrows to a handful of
 faces and stops and the model fills the rest in from the part it is imagining.

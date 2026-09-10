@@ -7,25 +7,23 @@ off the Fusion export, so a recreation either agrees with the original or does
 not.
 
 **These are seeded as real projects, in a `fusion360` folder.** `seed()` in
-`app/src-tauri/src/projects.rs` walks the seed folder and keeps its structure, so
-this directory arrives in the project list as a folder the user can open, edit,
-rename or throw away like any other. The ones that throw show their reason in the
-editor, which is the point: a target you can open and see blocked is more use
-than a target that only exists in the repository.
-
-`.seeded` records the whole relative path (`fusion360/v2`, not `v2`), so a leaf
-name may repeat across folders and deleting a target still keeps it deleted.
+`app/src-tauri/src/projects.rs` keeps the structure, so this arrives in the
+project list as an ordinary folder. The ones that throw show their reason in the
+editor: a target you can open and see blocked is more use than one that only
+exists in the repository. `.seeded` records the whole relative path
+(`fusion360/v2`, not `v2`), so a leaf name may repeat and a deleted target stays
+deleted.
 
 **A seeded copy is frozen, and for targets that is a trap.** Seeding runs once
 per path and never overwrites, which is right for a part the user has edited and
 wrong for reference material: land a recreation here and the copy in
-`~/Documents/parcad/fusion360` still throws the old reason, in the editor, under
-the same name. It reads as the work not having happened. This has now caught two
-sessions — one of them refreshed the folder *before* the recreation landed and
-reported it fixed, which is worse than not refreshing at all.
+`~/Documents/parcad/fusion360` still throws the old reason, under the same name.
+It reads as the work not having happened. It has caught two sessions, one of
+which refreshed *before* the recreation landed and reported it fixed — worse
+than not refreshing at all.
 
-Nothing detects it, so refresh by hand after changing a target here, and check
-the copy that was refreshed rather than the file in this directory:
+Nothing detects it, so refresh by hand and check the refreshed copy, not the
+file in this directory:
 
 ```bash
 for f in examples/fusion360/*.js; do
@@ -38,11 +36,9 @@ bun tools/run.ts ~/Documents/parcad/fusion360/untriangle-v3.parcad/part.js >/dev
 The `README.md` and `preview.png` go because they are derived from the old
 script; the app rewrites them from measured values on the next save. Skipping the
 second line is how the mistake above happened — the check has to run against the
-user's copy, because that is the file that was wrong.
-
-The real fix is not a shell loop: recreation targets are reference material and
-should not be seeded as ordinary parts at all. That is a change to how `seed()`
-works and is not written yet.
+user's copy, because that is the file that was wrong. The real fix is that
+recreation targets should not be seeded as ordinary parts at all; that is a
+change to `seed()` and is not written yet.
 
 A target that becomes a faithful recreation gets promoted up one level into
 `examples/` proper, and at that point it should also earn a case in
@@ -144,30 +140,18 @@ looking.
 
 ## Exports not carried here
 
-Judged from the measurements, not from the file names.
+Thirteen further exports were measured and set aside, judged from the
+measurements rather than the file names:
 
-| export | why not |
-|---|---|
-| `Demo-lamp-v3` | four solids (Pipe, Shell, Sphere, Revolve): an assembly |
-| `For-the-New-Year-v4` | thirteen solids (Loft, Pipe, Shell): an assembly |
-| `Retainer-v1` | recreated: see retainer-v1.js |
-| `Spunner-v4` | the export failed; there are no measurements to aim at |
-| `Submarine-v7` | ten solids driven from a Canvas image: an assembly |
-| `lamp-v2` | no solid bodies at all, only five surfaces |
-| `v1` | 78 m3 across nine solids - an assembly or a scale mistake, not a part |
-| `v10` | Form (T-spline) body, 575 of 585 faces NURBS |
-| `v14` | empty timeline: imported geometry, so there is no construction to reproduce |
-| `v16` | 76 million m3 across 31 solids: not a part |
-| `v3-v2` | empty timeline: imported geometry |
-| `v4-v4` | eight solids, 112 faces: an assembly |
-| `v5` | 9.8 million m3: not a part |
-| `v7` | Form (T-spline) body, 836 faces |
+- **Four are assemblies** — 4, 8, 10 and 13 solids. Recreating an assembly is a
+  different exercise; parcad models one solid per project.
+- **Two report volumes that are not a part at all** — 9.8 million m³, and 76
+  million m³ across 31 solids. A third is 78 m³ across nine solids, which is an
+  assembly or a scale mistake in the source document.
+- **Two are Form (T-spline) bodies**, 575 of 585 faces NURBS and 836 faces.
+- **Two have empty timelines**: the geometry was imported, so there is no
+  construction to reproduce.
+- One has no solid bodies at all, only five surfaces; one export failed, leaving
+  no measurements to aim at.
 
-Most are assemblies rather than parts, and recreating an assembly is a different
-exercise — parcad models one solid per project. Two have empty timelines, meaning
-the geometry was imported and there is no construction to reproduce. Three report
-volumes in the millions of cubic metres, which is a scale or assembly problem in
-the source document rather than a target.
-
-If one of these is actually wanted, the reason above is the thing to argue with.
-
+If one of these is wanted after all, the reason above is the thing to argue with.
