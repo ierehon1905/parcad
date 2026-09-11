@@ -9,7 +9,7 @@
 # sha256 comes from SHA256SUMS.txt on the release.
 cask "parcad" do
   version "0.0.2"
-  sha256 "REPLACE_AFTER_THE_RELEASE_BUILDS"
+  sha256 "1c9b1ba8c56c803fdbee094530357aef270a4b2f45dd52f15134a26470d7e118"
 
   url "https://github.com/ierehon1905/parcad/releases/download/v#{version}/ParCAD-aarch64-apple-darwin.zip",
       verified: "github.com/ierehon1905/parcad/"
