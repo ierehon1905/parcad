@@ -1716,6 +1716,20 @@ pub fn mcp_status() -> crate::mcp::Status {
     crate::mcp::status()
 }
 
+/// Lay a reference body against a part and measure the fit: both are scripts,
+/// so the reference is usually one line, `return device("macbook-pro-16")
+/// .at(...)`. Refuses when either script does not build, with that script's
+/// own error.
+pub fn check_fit(part: &str, reference: &str) -> Result<parcad_occt::FitReport, String> {
+    let part = parse_graph(crate::script::build_graph(part)?)?;
+    let other = parse_graph(
+        crate::script::build_graph(reference)
+            .map_err(|e| format!("the reference script: {e}"))?,
+    )?;
+    parcad_occt::check_fit(&part, &other, &parcad_occt::Options::default())
+        .map_err(|e| format!("{e}"))
+}
+
 /// Read one of parcad's own documents: the language reference, or the prose the
 /// parts themselves cite.
 ///

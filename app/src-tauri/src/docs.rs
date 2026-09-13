@@ -133,7 +133,7 @@ struct Item {
 
 /// The classes a script calls into. Their methods are half the language, and
 /// they are the half no list of exports mentions.
-const DOCUMENTED_CLASSES: [&str; 3] = ["Shape", "EdgeSelection", "VertexSelection"];
+const DOCUMENTED_CLASSES: [&str; 4] = ["Shape", "EdgeSelection", "VertexSelection", "Line2d"];
 
 /// The language reference, built from `dsl.ts` every time it is asked for.
 pub fn reference() -> String {
@@ -153,6 +153,7 @@ pub fn reference() -> String {
         ("Shape methods", Kind::Method("Shape")),
         ("EdgeSelection — what `.edges(...)` returns", Kind::Method("EdgeSelection")),
         ("VertexSelection — what `.vertices(...)` returns", Kind::Method("VertexSelection")),
+        ("Line2d — what `line2d(...)` returns", Kind::Method("Line2d")),
         ("Values", Kind::Value),
         ("Types", Kind::Type),
     ] {

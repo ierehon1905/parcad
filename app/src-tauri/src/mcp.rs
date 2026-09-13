@@ -224,6 +224,16 @@ pub struct ExportRequest {
     pub filename: Option<String>,
 }
 
+/// Two scripts: the part, and the object it is meant to hold.
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct FitRequest {
+    /// The part, as a parcad script.
+    pub script: String,
+    /// The object laid against it, as a parcad script placed where it sits —
+    /// usually one line, e.g. `return device("macbook-pro-16").at(0, 0, 18.4)`.
+    pub reference: String,
+}
+
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct StepProbeRequest {
     /// Absolute path of the .step / .stp file to measure, on the machine
@@ -656,6 +666,27 @@ impl Parcad {
 
     /// Every project in the shared folder.
     #[tool(
+        name = "check_fit",
+        annotations(title = "Check the fit", read_only_hint = true, open_world_hint = false),
+        description = "Lay a reference object against a part and measure how they sit, on the two exact solids: `verdict` is clear, touching or interfering; `interference_mm3` is the material the two share, which is what would have to be cut away for the object to fit; `clearance_mm` and `closest_mm` say how much room there is and where, when they do not overlap. This is the question 'does the laptop fit in its holder' or 'does the lid clear the boss', and neither a render nor arithmetic on the script can answer it — the script says what was asked for and this measures what was built.\n\nBoth arguments are scripts. The reference is usually one line placing a body from the DEVICES table, e.g. `return device(\"macbook-pro-16\").at(0, 0, 18.4)`, or any shape drawn where the object sits. A holder is right when the reference is `clear` by about the clearance it was drawn with, and wrong when it `interfering` — the volume and the two closest points say where."
+    )]
+    async fn check_fit(
+        &self,
+        Parameters(request): Parameters<FitRequest>,
+    ) -> Result<rmcp::model::CallToolResult, ErrorData> {
+        let report =
+            blocking(move || service::check_fit(&request.script, &request.reference)).await?;
+        let value = serde_json::to_value(&report)
+            .map_err(|e| invalid(format!("encoding the fit report: {e}")))?;
+        let mut result =
+            rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(
+                value.to_string(),
+            )]);
+        result.structured_content = Some(value);
+        Ok(result)
+    }
+
+    #[tool(
         name = "list_projects",
         annotations(title = "List projects", read_only_hint = true, open_world_hint = false),
         description = "List the parts in parcad's project folder. This is the same folder the desktop app and the user see, so anything listed here can be opened in the app, and anything saved here shows up in it. Paths are slash-separated: a part inside a folder is listed as 'Mounts/bracket', and that whole string is the name every other project tool takes. Parts that ship with parcad are seeded into this folder and are ordinary projects."
@@ -752,8 +783,52 @@ impl Parcad {
 // in `surface()` is built, held in the struct, and never sent. The titles were
 // on the wire as `null` for exactly that reason, while a Rust test read them
 // happily off the instance nobody was serving.
+/// What a model needs before its first call and cannot work out from the
+/// schemas. Held under 2048 characters: Claude Code truncates server
+/// instructions there, silently, and the selector paragraph used to be the
+/// part that fell off.
+/// The tool list changes only with the binary.
+const TOOL_LIST_TTL_MS: u64 = 86_400_000;
+
+const INSTRUCTIONS: &str = "parcad builds parts from a small JavaScript DSL and evaluates them with an exact \
+B-rep kernel. Everything is millimetres; primitives are centred on the origin and placed \
+with .at(x, y, z); a script ends by returning a shape.\n\n\
+Start from read_docs: its `dsl` topic is the whole language, generated from the source; \
+`gaps` and `gotchas` are what the kernel refuses and what silently returns a wrong answer. \
+list_projects and read_project show house style; save_project writes to the folder the \
+user opens in the app. Projects nest in folders: a name is a path like 'Mounts/bracket', \
+passed whole.\n\n\
+You share a live screen with the user: get_session reads what is open, open_project and \
+set_script change it in every window. An edit you make is an ordinary edit the user can \
+undo, so read before you write and evaluate before you set_script.\n\n\
+Select edges by intent, never by index: '>Z and >Y and |X', or a query: { curve: \"circle\", \
+role: \"hole\", adjacentTo: { faceNormal: \"+z\" } }; dihedral: \"convex\", \"concave\" or \
+\"smooth\"; parallel: \"z\"; longerThan: 3; on: \"lip\" for one tagged feature's edges, its at \
+extrema measured within that feature; between: [\"arm\", \"hub\"] for the seam where two \
+meet. A tag names a node's faces and survives booleans, fillets and rotations. Fillets skip \
+smooth edges unless asked. Add .expect({ count: n }) so a selector that drifts fails aloud. \
+The edge@N ids from list_entities describe one evaluation and are rejected in scripts.\n\n\
+The kernel refuses rather than approximating; a refusal names the fix and lists the edges \
+it means, so read it and change the script. Every report is measured, never requested: \
+quote its numbers rather than the script's.";
+
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Parcad {
+    /// The generated `list_tools` sends no `ttlMs` and no `cacheScope`, and
+    /// Claude Code's MCP runtime (2.1.268, protocol 2026-07-28) rejects a
+    /// tools/list reply without both — quietly:
+    /// `--mcp-config` reports the server connected, the model sees no tools,
+    /// and every field trial fails the same way while curl sees fifteen tools.
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, ErrorData> {
+        Ok(rmcp::model::ListToolsResult::with_all_items(self.tool_router.list_all())
+            .with_ttl_ms(TOOL_LIST_TTL_MS)
+            .with_cache_scope(rmcp::model::CacheScope::Public))
+    }
+
     fn get_info(&self) -> ServerInfo {
         let mut server_info = Implementation::default();
         server_info.name = "parcad".into();
@@ -767,55 +842,7 @@ impl ServerHandler for Parcad {
         // work out from the schemas: the unit rule, where the origin is,
         // and that a refusal is information rather than a wall to route
         // around.
-        info.instructions = Some(
-            "parcad builds parts from a small JavaScript DSL and evaluates them with an \
-                 exact B-rep kernel.\n\n\
-                 Everything is millimetres. Primitives are centred on the origin and placed \
-                 with .at(x, y, z). A script ends by returning a shape.\n\n\
-                 Start from read_docs: its `dsl` topic is the whole language, generated \
-                 from the DSL source, and its `gaps` and `gotchas` topics are what the \
-                 kernel refuses and what silently returns a wrong answer. Reading parts \
-                 instead teaches you the subset those parts happen to use. \
-                 list_projects and read_project are still worth it for house style — the \
-                 seeded parts are the files the test corpus measures, so they always \
-                 run — and save_project writes back to that same folder, which is what \
-                 the user opens in the app.\n\n\
-                 You share a live screen with the user. get_session reads what is open and \
-                 what they have typed; open_project and set_script change it, in every window \
-                 at once. An edit you make is an ordinary edit — the user can undo it — so \
-                 read get_session before you write, and evaluate before you set_script.\n\n\
-                 Projects nest in folders, so a name is a slash-separated path like \
-                 'Mounts/bracket' — pass the path list_projects gave you, whole. On disk one \
-                 project is a '<name>.parcad' folder holding part.js, which is the source and \
-                 the only authoritative file in it, beside a README.md describing the part and \
-                 a preview image of it. A loose '<name>.js' is a project too. You never need \
-                 to name any of those files: the project tools take the path and find them.\n\n\
-                 Select edges by intent, never by index: a directional selector like \
-                 '>Z and >Y and |X', or a topological one like \
-                 { curve: \"circle\", role: \"hole\", adjacentTo: { faceNormal: \"+z\" } }. \
-                 The edge@N ids from list_entities describe one evaluation and are rejected \
-                 in scripts. Add .expect({ count: n }) so a selector that starts matching a \
-                 different number of edges fails instead of quietly filleting the wrong thing.\n\n\
-                 The kernel refuses rather than approximating — a fillet radius that does not \
-                 fit, a non-uniform scale, a general offset. Those refusals name the fix; read \
-                 them rather than retrying the same call.\n\n\
-                 You can look at the part: evaluate_part takes views: [\"iso\", \"top\", …] and \
-                 returns images with the measurements. Two things to know about them. Renders \
-                 come off the distance field even when the numbers came from the exact kernel, \
-                 so where a picture and a measurement disagree the measurement is right — the \
-                 reply names the one that measured it in backend. And regions: true recolours a \
-                 view by the tag \
-                 owning each patch of surface, which is how you check that a tag covers what \
-                 you think: a tag that is in the model but hidden from that angle comes back \
-                 visible: false rather than missing.\n\n\
-                 A picture is for shape and presence; a number is for position and size, and \
-                 where they disagree the number is right. evaluate_part's tag_extents gives \
-                 every tag its own box and centre, measured, in the same reply — reach for it \
-                 rather than deciding from a render whether a feature sits where you meant. \
-                 View names are absolute: front looks along +Y whatever the part's own long \
-                 axis is, and each view's axes field says so."
-                .into(),
-        );
+        info.instructions = Some(INSTRUCTIONS.to_owned());
         info
     }
 }
@@ -1040,6 +1067,25 @@ mod tests {
     /// A client validates the whole descriptor, so one typeless schema — input
     /// or output — hides every tool. Absent is fine; typeless is not. The
     /// failure this regresses is in docs/GOTCHAS.md.
+    #[test]
+    fn the_instructions_fit_the_client_window() {
+        // Claude Code truncates server instructions at 2048 characters and
+        // says so only in its debug log.
+        assert!(INSTRUCTIONS.len() <= 2048, "{} chars", INSTRUCTIONS.len());
+        assert!(INSTRUCTIONS.contains("between: [\"arm\", \"hub\"]"));
+    }
+
+    #[test]
+    fn the_tool_list_carries_a_ttl_on_the_wire() {
+        let listed = rmcp::model::ListToolsResult::with_all_items(Parcad::new().tool_router.list_all())
+            .with_ttl_ms(TOOL_LIST_TTL_MS)
+            .with_cache_scope(rmcp::model::CacheScope::Public);
+        let wire = serde_json::to_value(&listed).unwrap();
+        assert_eq!(wire["ttlMs"], serde_json::json!(TOOL_LIST_TTL_MS));
+        assert_eq!(wire["cacheScope"], serde_json::json!("public"));
+        assert_eq!(wire["tools"].as_array().unwrap().len(), 16);
+    }
+
     #[test]
     fn every_advertised_schema_is_an_object() {
         let tools = Parcad::new().tool_router.list_all();
