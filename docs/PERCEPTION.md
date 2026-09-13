@@ -510,6 +510,18 @@ measured case in the corpus and shown on the app's report panel, in red under a
 tenth of the footprint. Still a measurement, not a verdict: a stool stands on
 four patches and is fine.
 
+### Bed fit — done, the flat half of printability
+
+Every report now carries `prints_on`: the part's size against the Bambu
+beds (A1 mini, the 256 mm A1/P1/X1, the H2D), lying flat as drawn or turned
+a quarter turn, with the axis and the millimetres by which the others miss.
+The CLI prints it as one line after `stands`. The V holder was designed
+around a 256 mm bed and its report never said whether it fit one until the
+user asked. It is conservative on purpose: a diagonal placement that would
+fit is reported as not fitting, because a slicer's auto-orient is the
+tool for that and this is the tool for "split it or not". Overhangs and
+supports are still §6's open question.
+
 ## 7. Section view — done
 
 Filed on OP_ROADMAP as §8, a view concern rather than an op, and the single

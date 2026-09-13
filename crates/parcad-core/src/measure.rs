@@ -8,6 +8,88 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 /// An axis-aligned bounding box in document space.
+/// A printer bed the report checks a part against, in mm. The names are the
+/// ones a slicer shows, the sizes the makers publish; the Bambu Lab line,
+/// because that is what the parts here are printed on.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Bed {
+    pub name: &'static str,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+}
+
+pub const BEDS: [Bed; 3] = [
+    Bed { name: "Bambu A1 mini", x: 180.0, y: 180.0, z: 180.0 },
+    Bed { name: "Bambu A1 / P1 / X1 (256 mm)", x: 256.0, y: 256.0, z: 256.0 },
+    Bed { name: "Bambu H2D", x: 350.0, y: 320.0, z: 325.0 },
+];
+
+/// Whether a part of this size prints on a bed as it lies — turned a quarter
+/// turn on the bed if that is what fits, never tipped. A part that is too
+/// big says by how much on the axis that fails, so the reader knows whether
+/// a split is a millimetre or a hundred away.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct BedFit {
+    pub bed: &'static str,
+    pub fits: bool,
+    /// How the part lies when it fits: `"as drawn"` or `"turned 90°"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lying: Option<&'static str>,
+    /// Why not, when it does not: the size against the bed on the axis that fails.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub over_by: Option<String>,
+}
+
+pub fn fits_beds(size: V3) -> Vec<BedFit> {
+    BEDS.iter()
+        .map(|bed| {
+            let tall = size.z <= bed.z + 1e-9;
+            let as_drawn = size.x <= bed.x + 1e-9 && size.y <= bed.y + 1e-9;
+            let turned = size.x <= bed.y + 1e-9 && size.y <= bed.x + 1e-9;
+            if tall && (as_drawn || turned) {
+                BedFit {
+                    bed: bed.name,
+                    fits: true,
+                    lying: Some(if as_drawn { "as drawn" } else { "turned 90°" }),
+                    over_by: None,
+                }
+            } else {
+                let over = if !tall {
+                    format!("{:.1} mm tall against {:.0}", size.z, bed.z)
+                } else {
+                    let longest = size.x.max(size.y);
+                    format!("{longest:.1} mm long against {:.0}", bed.x.max(bed.y))
+                };
+                BedFit { bed: bed.name, fits: false, lying: None, over_by: Some(over) }
+            }
+        })
+        .collect()
+}
+
+/// One line for a report: which beds take it flat, and the nearest miss.
+pub fn beds_text(size: V3) -> String {
+    let fits = fits_beds(size);
+    let yes: Vec<String> = fits
+        .iter()
+        .filter(|f| f.fits)
+        .map(|f| match f.lying {
+            Some("turned 90°") => format!("{} turned 90°", f.bed),
+            _ => f.bed.to_string(),
+        })
+        .collect();
+    let no: Vec<String> = fits
+        .iter()
+        .filter(|f| !f.fits)
+        .map(|f| format!("{} ({})", f.bed, f.over_by.clone().unwrap_or_default()))
+        .collect();
+    match (yes.is_empty(), no.is_empty()) {
+        (false, true) => format!("flat on every bed: {}", yes.join("; ")),
+        (false, false) => format!("flat on {}; not {}", yes.join("; "), no.join(", ")),
+        (true, _) => format!("flat on no bed here: {}; split it", no.join(", ")),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct Aabb {
     pub min: V3,
@@ -402,4 +484,17 @@ pub fn mass_properties(vertices: &[[f32; 3]], triangles: &[[usize; 3]]) -> MassP
 fn vertex(vertices: &[[f32; 3]], i: usize) -> [f64; 3] {
     let v = vertices[i];
     [v[0] as f64, v[1] as f64, v[2] as f64]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_half_holder_prints_on_a_256_bed_and_the_whole_only_on_the_h2d() {
+        let half = fits_beds(V3::new(182.85, 233.43, 22.0));
+        assert_eq!(half.iter().map(|f| f.fits).collect::<Vec<_>>(), [false, true, true]);
+        let whole = fits_beds(V3::new(365.7, 233.43, 22.0));
+        assert_eq!(whole.iter().map(|f| f.fits).collect::<Vec<_>>(), [false, false, false]);
+    }
 }

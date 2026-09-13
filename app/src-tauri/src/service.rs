@@ -199,6 +199,10 @@ pub struct EvaluationSnapshot {
     /// no other number here shows.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stands_on: Option<StandsOn>,
+    /// Which printer beds take the part flat as it lies, and by how much the
+    /// others miss: the size against the bed on the axis that fails. A part
+    /// that fits no bed is one to split, and this says so before a slicer does.
+    pub prints_on: Vec<PrintsOn>,
     pub tags: Vec<String>,
     /// Where each of those tags actually is, measured from the built surface.
     ///
@@ -252,6 +256,30 @@ fn one_body() -> usize {
 
 /// `parcad_core::mesh::BedContact`, carried here with the schema the MCP
 /// tool needs, rounded like every other number in the snapshot.
+/// One printer bed against the part's size, from `measure::fits_beds`: lying
+/// flat as drawn or turned a quarter turn, never tipped, so a diagonal
+/// placement that would fit is reported as not fitting.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct PrintsOn {
+    pub bed: String,
+    pub fits: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lying: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub over_by: Option<String>,
+}
+
+impl From<parcad_core::measure::BedFit> for PrintsOn {
+    fn from(fit: parcad_core::measure::BedFit) -> Self {
+        Self {
+            bed: fit.bed.to_string(),
+            fits: fit.fits,
+            lying: fit.lying.map(str::to_string),
+            over_by: fit.over_by,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct StandsOn {
     /// Height of the lowest plane, in mm.
@@ -1194,6 +1222,10 @@ fn describe(
         bodies: report.mesh.bodies,
         voids: report.mesh.voids,
         stands_on: report.stands_on.as_ref().map(StandsOn::from),
+        prints_on: parcad_core::measure::fits_beds(report.size)
+            .into_iter()
+            .map(PrintsOn::from)
+            .collect(),
         tags: report.tags.clone(),
         tag_extents: extents,
         unlocated_tags: unlocated,

@@ -379,6 +379,7 @@ fn summary(r: &parcad_core::PartReport, eval_ms: u128, render_ms: u128) -> Strin
     if let Some(contact) = &r.stands_on {
         s.push_str(&format!("stands  {}\n", stands_on_text(contact)));
     }
+    s.push_str(&format!("prints  {}\n", parcad_core::measure::beds_text(r.size)));
     s.push_str(&format!(
         "volume  {:.2} mm³   area {:.2} mm²\n",
         r.mass.volume_mm3, r.mass.area_mm2
@@ -560,6 +561,7 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
     if let Some(contact) = tess.bed_contact() {
         println!("stands   {}", stands_on_text(&contact));
     }
+    println!("prints   {}", parcad_core::measure::beds_text(size));
     println!("volume   {:.2} mm³   area {:.2} mm²", mass.volume_mm3, mass.area_mm2);
     println!(
         "topology {} faces, {} edges ({} unique curves)",
