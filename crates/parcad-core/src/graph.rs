@@ -784,12 +784,44 @@ impl Op {
                 anyhow::bail!("sweep path points {i} and {} are the same point", i + 1);
             }
         }
-        // The profile's own reach. A bend tighter than this sweeps the inner
-        // side of the section through itself, which OCCT resolves into a
-        // self-intersecting surface rather than an error.
-        let reach = profile
+        // How far the profile reaches toward a bend's centre. A bend tighter
+        // than that sweeps the inner side of the section through itself, which
+        // OCCT resolves into a self-intersecting surface rather than an error.
+        //
+        // On a planar path the profile keeps one axis in the path's plane
+        // and one normal to it, so only its extent *in the plane*, on the
+        // side the bend turns toward, is in the way: a 200 mm wide strip bends
+        // about its width at any radius its 3 mm thickness allows. The frame
+        // is the backend's own — +Y as near global +Z as the first run allows
+        // — carried along the path, which is what a corrected-Frenet pipe
+        // does on a planar spine. A path that leaves its plane falls back to
+        // the profile's full reach.
+        let full_reach = profile
             .iter()
             .fold(0.0f64, |acc, [x, y]| acc.max(x.hypot(*y)));
+        let t0 = (pts[1] - pts[0]).normalize();
+        let v_axis = if t0.z.abs() < 1.0 - 1e-9 {
+            (nalgebra::Vector3::z() - t0 * t0.z).normalize()
+        } else {
+            nalgebra::Vector3::y()
+        };
+        let u_axis = v_axis.cross(&t0);
+        let plane_normal = Self::path_plane_normal(&pts);
+        let in_plane = plane_normal.map(|normal| {
+            let m0 = normal.cross(&t0);
+            (m0.dot(&u_axis), m0.dot(&v_axis))
+        });
+        let reach_toward = |centre: &nalgebra::Vector3<f64>, tangent: &nalgebra::Vector3<f64>| {
+            match (plane_normal, in_plane) {
+                (Some(normal), Some((dx, dy))) => {
+                    let sign = if centre.dot(&normal.cross(tangent)) >= 0.0 { 1.0 } else { -1.0 };
+                    profile
+                        .iter()
+                        .fold(0.0f64, |acc, [x, y]| acc.max(sign * (x * dx + y * dy)))
+                }
+                _ => full_reach,
+            }
+        };
 
         let mut from = pts.clone();
         let mut to: Vec<_> = (0..pts.len()).map(|i| pts[(i + 1).min(pts.len() - 1)]).collect();
@@ -811,9 +843,10 @@ impl Op {
                     "the sweep path turns at point {i}, so it needs a bend radius. Unlike a pipe there is no ball to fill a square corner with — an authored section has no rotationally symmetric stand-in"
                 );
             }
+            let reach = reach_toward(&(v - u), &u);
             if bend <= reach + 1e-9 {
                 anyhow::bail!(
-                    "a bend radius of {bend} mm is inside the profile's own {reach:.2} mm reach, so the inner side of the bend would sweep through itself. Use a bend radius larger than the profile, or a smaller profile"
+                    "a bend radius of {bend} mm is inside the profile's own {reach:.2} mm reach toward the inside of the bend at path point {i}, so the inner side of the bend would sweep through itself. Use a bend radius larger than the profile's extent on that side, or a smaller profile"
                 );
             }
             let tangent = bend * (turn / 2.0).tan();
@@ -857,6 +890,20 @@ impl Op {
             anyhow::bail!("the sweep path has no length");
         }
         Ok(pieces)
+    }
+
+    /// The unit normal of the plane every path point lies in, or `None` when
+    /// the path is collinear or leaves its plane by more than a micron.
+    fn path_plane_normal(pts: &[nalgebra::Vector3<f64>]) -> Option<nalgebra::Vector3<f64>> {
+        let t0 = (pts[1] - pts[0]).normalize();
+        let normal = pts[2..]
+            .iter()
+            .map(|p| t0.cross(&(p - pts[0])))
+            .find(|n| n.norm() > 1e-9)?
+            .normalize();
+        pts.iter()
+            .all(|p| (p - pts[0]).dot(&normal).abs() < 1e-6)
+            .then_some(normal)
     }
 
     /// The top outline of a drafted extrusion, and how far it moved.

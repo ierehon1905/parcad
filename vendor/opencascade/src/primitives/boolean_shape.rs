@@ -1,6 +1,6 @@
 use crate::{
     history::ffi,
-    primitives::{Edge, Shape},
+    primitives::{Edge, Face, Shape},
 };
 use cxx::UniquePtr;
 use opencascade_sys::ffi as sys;
@@ -73,6 +73,19 @@ impl BooleanShape {
             .is_deleted(sys::cast_edge_to_shape(&edge.inner))
     }
 
+    /// Result faces that replace `face` in this Boolean operation. Added for
+    /// parcad, the same relation as `modified` one topology type up; see
+    /// PARCAD-CHANGES.md.
+    pub fn modified_face(&self, face: &Face) -> Vec<Face> {
+        faces(self.history.modified(sys::cast_face_to_shape(&face.inner)))
+    }
+
+    /// Whether `face` was entirely removed by this Boolean operation.
+    pub fn is_deleted_face(&self, face: &Face) -> bool {
+        self.history
+            .is_deleted(sys::cast_face_to_shape(&face.inner))
+    }
+
     pub fn fillet_new_edges(&mut self, radius: f64) {
         self.shape.fillet_edges(radius, &self.new_edges);
     }
@@ -82,7 +95,16 @@ impl BooleanShape {
     }
 }
 
-fn edges(shapes: UniquePtr<cxx::CxxVector<sys::TopoDS_Shape>>) -> Vec<Edge> {
+pub(crate) fn faces(shapes: UniquePtr<cxx::CxxVector<sys::TopoDS_Shape>>) -> Vec<Face> {
+    shapes
+        .iter()
+        .map(|shape| Face {
+            inner: sys::TopoDS_Face_to_owned(sys::TopoDS_cast_to_face(shape)),
+        })
+        .collect()
+}
+
+pub(crate) fn edges(shapes: UniquePtr<cxx::CxxVector<sys::TopoDS_Shape>>) -> Vec<Edge> {
     shapes
         .iter()
         .map(|shape| Edge {

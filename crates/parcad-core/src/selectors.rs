@@ -91,6 +91,47 @@ pub struct EdgeQuery {
     /// of the compact `>Z` and `<Y` syntax.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub at: Option<EdgeExtrema>,
+    /// How the two faces meet along the edge: an outside corner, an inside
+    /// one, or no corner at all. `smooth` edges are the boundaries earlier
+    /// fillets left behind, and a treatment leaves them out unless asked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dihedral: Option<Dihedral>,
+    /// A straight edge parallel to this axis: the object equivalent of the
+    /// compact `|Z`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parallel: Option<Axis>,
+    /// Only edges at least this long, in mm. What keeps a sliver out of a
+    /// cosmetic pass.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub longer_than: Option<f64>,
+    /// Only edges bounding a face that belongs to one of these tagged
+    /// features. A tag names the faces of the node it is on, and those faces
+    /// keep the name through every later boolean, treatment and transform.
+    /// With `on`, `at` extrema are measured among the feature's own edges
+    /// rather than the whole part's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<Names>,
+    /// Only edges with one face from each of two tagged features: the seam
+    /// where one meets the other.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub between: Option<[String; 2]>,
+}
+
+/// One tag or several, as `"lip"` or `["arm", "hub"]` in source.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Names {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl Names {
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        match self {
+            Names::One(name) => std::slice::from_ref(name).iter().map(String::as_str),
+            Names::Many(names) => names.as_slice().iter().map(String::as_str),
+        }
+    }
 }
 
 impl EdgeQuery {
@@ -100,7 +141,36 @@ impl EdgeQuery {
             && self.role.is_none()
             && self.adjacent_to.is_none()
             && self.at.as_ref().is_none_or(EdgeExtrema::is_empty)
+            && self.dihedral.is_none()
+            && self.parallel.is_none()
+            && self.longer_than.is_none()
+            && self.on.is_none()
+            && self.between.is_none()
     }
+
+    /// Every tag the query names, whichever term names it.
+    pub fn named_features(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.on.iter().flat_map(Names::iter).collect();
+        if let Some([a, b]) = &self.between {
+            names.push(a);
+            names.push(b);
+        }
+        names
+    }
+}
+
+/// The angle two faces make along an edge, seen from the material's side.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Dihedral {
+    /// An outside corner: the material turns away. What "break every edge"
+    /// means.
+    Convex,
+    /// An inside corner: a seam, a pocket floor, the root of a boss.
+    Concave,
+    /// No corner: the faces are tangent, within a degree. A fillet's own
+    /// boundary, or a seam on a cylinder.
+    Smooth,
 }
 
 /// Supported exact curve categories.
@@ -167,8 +237,9 @@ pub enum Extreme {
     Max,
 }
 
-/// A document-space cardinal axis.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// A document-space cardinal axis; `"x"`, `"y"` or `"z"` in an edge query.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Axis {
     X,
     Y,
@@ -459,6 +530,41 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn deserializes_angle_direction_and_length_terms() {
+        let selector: EdgeSelector = serde_json::from_str(
+            r#"{"dihedral":"convex","parallel":"z","longerThan":3}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            selector,
+            EdgeSelector::Query(EdgeQuery {
+                dihedral: Some(Dihedral::Convex),
+                parallel: Some(Axis::Z),
+                longer_than: Some(l),
+                ..
+            }) if l == 3.0
+        ));
+        let smooth: EdgeSelector = serde_json::from_str(r#"{"dihedral":"smooth"}"#).unwrap();
+        assert!(matches!(
+            smooth,
+            EdgeSelector::Query(EdgeQuery { dihedral: Some(Dihedral::Smooth), .. })
+        ));
+    }
+
+    #[test]
+    fn deserializes_feature_scopes() {
+        let one: EdgeSelector = serde_json::from_str(r#"{"on":"lip","at":{"z":"max"}}"#).unwrap();
+        assert!(matches!(
+            one,
+            EdgeSelector::Query(EdgeQuery { on: Some(Names::One(ref name)), .. }) if name == "lip"
+        ));
+        let seam: EdgeSelector =
+            serde_json::from_str(r#"{"on":["arm","hub"],"between":["arm","hub"]}"#).unwrap();
+        let EdgeSelector::Query(query) = seam else { panic!() };
+        assert_eq!(query.named_features(), ["arm", "hub", "arm", "hub"]);
     }
 
     #[test]

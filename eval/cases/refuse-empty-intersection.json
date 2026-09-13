@@ -1,0 +1,15 @@
+{
+  "name": "refuse-empty-intersection",
+  "script": "eval/scripts/refuse-empty-intersection.js",
+  "why": "The intersection of two disjoint solids is empty, and empty is not a part. It is the answer to a fit check, so the refusal says so as a measurement — 0 mm3, both extents — instead of the generic no-faces error the worker raises after lowering. B-rep only; the implicit field of an empty intersection is a field with no zero set, refused elsewhere.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "share no volume",
+        "interference is 0 mm",
+        "fit is clear"
+      ]
+    }
+  }
+}

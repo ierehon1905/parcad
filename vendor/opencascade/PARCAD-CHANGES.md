@@ -160,3 +160,52 @@ out. Everything below could otherwise have lived in our own crate.
 - `BRepOffsetAPI_MakeOffsetShape`, for a general outward offset. Missing from
   `opencascade-sys` too, so it needs a new cxx binding and a C++ shim — a larger
   job than this fork.
+
+
+## `Shape::signed_volume`
+
+`BRepGProp::VolumeProperties` was already bound and unused by the crate; this
+exposes its mass with the sign OCCT gives it, which is negative for a solid
+whose faces point inward. parcad's offset lowering uses it to catch the
+inside-out result `MakeThickSolid` returns for a filleted body — the shape a
+later boolean reads as everything except the part.
+
+## `Shape::oriented_outward`
+
+`BRepLib::OrientClosedSolid` through the sys crate's new binding, on the
+single solid this shape is; a compound or a shell passes through. The pair
+with `signed_volume`: measure, then fix.
+
+## `Edge::is_reversed`
+
+The edge's `TopAbs_Orientation`, through the already-bound shape accessor. An
+edge explored from a face carries the composed orientation, so this is the
+wire's direction of travel on that face, and with the face's outward normal it
+gives the side the face lies on. parcad reads the dihedral angle of every
+edge from it: convex, concave, or tangent-continuous.
+
+## Face history: `BooleanShape::modified_face`, `is_deleted_face`, `Treatment`
+
+The boolean history already answered what an *edge* became; `Modified` and
+`IsDeleted` are shape-generic in OCCT, so the same question is now asked of
+faces. `ParcadEdgeTreatment` gains the same two calls, and
+`fillet_edges_with_history` / `chamfer_edges_with_history` return a
+`Treatment` that keeps the builder alive: what each treated edge generated,
+and what any input face or edge became. `Face: Clone` and `Edge::from_shape`
+are the small pieces that let parcad carry named faces through a transform.
+This is what lets a tag mean "these faces" after every later operation.
+
+## `Shape::into_unified` and `Unification`
+
+`clean()` — the same-domain unify pass after every boolean — now has a form
+that keeps `ShapeUpgrade_UnifySameDomain::History()`: which face or edge of
+the input a merged face or edge came from, through `BRepTools_History`. The
+boolean's own history stops at the boolean, and the coplanar faces the unify
+pass merges are new to it; this is the missing half that lets a name on a face
+survive a union whose faces it shares.
+
+## `Shape::least_distance_to`
+
+`BRepExtrema_DistShapeShape` through the sys crate's new binding: the least
+distance between two shapes and the points it joins. The clearance half of
+parcad's fit check.

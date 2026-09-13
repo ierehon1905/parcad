@@ -22,9 +22,12 @@ Consequences worth internalising:
   named regions. For exact edge operations, a directional selector such as
   `>Z and >Y and |X` is resolved against the current B-rep; it is not an OCCT
   edge number. In the implicit backend a tag resolves to a *region of the
-  visible surface*; in the B-rep backend it will resolve to a *set of faces*.
-  Same name, both times. This avoids pretending that a transient topology index
-  can survive a model edit.
+  visible surface*; in the B-rep backend it resolves to a *set of faces* — the
+  faces of the tagged node's result, followed through every later boolean,
+  fillet, chamfer and rigid motion by the kernel's own history, and lost
+  through offset, shell and intersection, which report none. Same name, both
+  times. This avoids pretending that a transient topology index can survive a
+  model edit.
 - **A node's meaning can differ per backend and that is allowed** — but it must
   be documented. See "blend" below.
 
@@ -63,6 +66,30 @@ bracket's
 selects every closed circular inner loop bordering an upward-facing face, keeping
 the four upper hole rims coupled to their geometry as holes move or multiply
 while excluding lower rims, outside bosses and open blend arcs.
+
+Every selectable edge also knows the angle its two faces make, read from the
+face's outward normal and the edge's direction of travel in that face's wire:
+`dihedral: "convex"` is an outside corner — "break every edge" —
+`"concave"` an inside one, `"smooth"` no corner at all, the boundary an
+earlier fillet left or a cylinder's seam. `parallel: "z"` is the object form
+of `|Z`, and `longerThan` keeps a sliver out of a cosmetic pass. **A fillet or
+chamfer leaves smooth edges out unless asked for them by name**: a rolling
+ball has nothing to build on where two faces already meet tangent, and
+selecting one was the commonest way a cosmetic pass failed, with a message
+that named only a count. Every treatment failure and every `expect` mismatch
+now lists the edges it means, shortest first — position, length, curve kind,
+corner — which is what turns a bisection into an edit.
+
+A query can also say *where* to look. `on: "lip"` keeps only edges bounding a
+face of that feature, and with `on` the `at` extrema are measured among the
+feature's own edges rather than the document's, so `{ on: "cup", at: { z:
+"max" } }` is the cup's top rim wherever the rest of the part reaches.
+`between: ["arm", "hub"]` keeps edges with one face from each: the seam, and
+only the seam, after the union that made it. Both read the face lineage
+described under tags above; a name with no live faces is refused with the
+names that have some. A face merged from two features at a coplanar join
+carries both names, so `on` reaches across such a join; the boundary the
+merge erased is not one a name can keep.
 
 ### Why a plain edge index is the wrong foundation
 

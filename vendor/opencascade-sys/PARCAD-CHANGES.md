@@ -152,6 +152,21 @@ later release of it exists, so there is no version to bump to.
   both now sit on XCAF — so `TKDE`, `TKXCAF`, `TKVCAF`, `TKCAF`, `TKLCAF`,
   `TKCDF`, `TKV3d` and `TKService` are linked too.
 
+## Added: `BRepLib_orient_closed_solid`
+
+`BRepLib::OrientClosedSolid` on a `TopoDS_Solid`, returned as a shape; any
+other shape type passes through untouched. `BRepOffsetAPI_MakeThickSolid`
+hands back the offset of a filleted body with every face pointing inward —
+a negative volume under `BRepGProp::VolumeProperties` — and `ShapeFix_Shape`
+leaves it that way. parcad's offset lowering measures the sign and calls this.
+
+## Added: `BRepExtrema_least_distance`
+
+`BRepExtrema_DistShapeShape` between two shapes: the least distance and the
+two points it is measured between, or a negative number when the search does
+not converge. parcad's fit check reports it as the clearance between a part
+and the object it is meant to hold.
+
 ## Not changed
 
 Everything else is upstream 0.2.0 verbatim. The OCCT it builds against is **not**

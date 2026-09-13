@@ -17,6 +17,16 @@ impl AsRef<Face> for Face {
     }
 }
 
+impl Clone for Face {
+    /// A cheap handle clone, like `Shape`'s. Added for parcad; see
+    /// PARCAD-CHANGES.md.
+    fn clone(&self) -> Self {
+        Self {
+            inner: ffi::TopoDS_Face_to_owned(&self.inner),
+        }
+    }
+}
+
 impl Face {
     fn from_make_face(make_face: UniquePtr<ffi::BRepBuilderAPI_MakeFace>) -> Self {
         let face = make_face.Face();

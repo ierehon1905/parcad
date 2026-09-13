@@ -1,0 +1,23 @@
+{
+  "name": "scoped-corner",
+  "script": "eval/scripts/scoped-corner.js",
+  "why": "Tags name faces, and the names survive: a seam selected as `between` two features after the union that made it, a rim selected `on` a feature after a blend trimmed it, and upright edges selected `on` a feature after a rotation. The three counts are the assertions; the volume is the kernel's number held against regression. B-rep only: edge treatments are exact-only.",
+  "brep": {
+    "size": [
+      69.761,
+      62.441,
+      25.0
+    ],
+    "volume_mm3": 28675.101,
+    "area_mm2": 7595.305,
+    "triangles": 6492,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 2392.215,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 14,
+    "edges": 62,
+    "curves": 28
+  }
+}

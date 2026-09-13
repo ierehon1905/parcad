@@ -9,6 +9,9 @@
 //! This code runs only inside the worker process. It is allowed to die.
 
 use anyhow::{bail, Result};
+use opencascade::primitives::{Treatment, Unification};
+use parcad_core::selectors::{Dihedral, Names};
+use std::collections::HashMap;
 use glam::{DMat3, DVec3};
 use opencascade::{
     adhoc::AdHocShape,
@@ -148,6 +151,16 @@ struct SelectableEdge {
     curve: EdgeCurveKind,
     circle: Option<CircleInfo>,
     adjacent_faces: Vec<AdjacentFaceInfo>,
+    /// Along the curve's own parameter direction at its first point; a face
+    /// that traverses the edge backwards negates it.
+    start_tangent: DVec3,
+    /// Along the sampled curve, in mm.
+    length: f64,
+    /// How the two faces meet here, once the adjacent faces are known.
+    dihedral: Option<Dihedral>,
+    /// The turn between the two outward normals, in degrees: 0 is flat, 90 a
+    /// box edge, whichever way it turns.
+    angle_deg: f64,
     /// A direction-independent key. OCCT's explorer can visit the same edge
     /// through both adjacent faces; a fillet builder must receive it once.
     key: Vec<[i64; 3]>,
@@ -192,6 +205,98 @@ struct AdjacentFaceInfo {
     normal: DVec3,
     /// A point on both the edge and this face, at which `normal` was measured.
     at: DVec3,
+    /// The edge's direction of travel in this face's wire, at `at`. With the
+    /// outward normal it says which side of the edge the face lies on:
+    /// `normal × along` points into the face.
+    along: DVec3,
+    /// Which face this is, by its boundary: see [`face_key`].
+    face_key: FaceKey,
+}
+
+/// A face named by the sorted keys of its edges. Faces are matched across
+/// operations by geometry, like edges, so a tracked face still finds itself
+/// after a transform has copied it; two faces of one valid solid never share
+/// a whole boundary.
+type FaceKey = Vec<Vec<[i64; 3]>>;
+
+fn face_key(face: &Face) -> FaceKey {
+    let mut keys: Vec<Vec<[i64; 3]>> = face
+        .edges()
+        .filter_map(|edge| describe_edge(edge).map(|described| described.key))
+        .collect();
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+/// Two faces within a degree of each other are one surface as far as a
+/// rolling ball is concerned.
+const SMOOTH_COS: f64 = 0.999_847_7;
+
+impl SelectableEdge {
+    /// Read the dihedral angle off the two adjacent faces. The material lies
+    /// on the inside of both outward normals; stepping into the first face
+    /// and asking whether that lands behind the second face's plane tells an
+    /// outside corner from an inside one.
+    fn classify(&mut self) {
+        let [a, b] = match self.adjacent_faces.as_slice() {
+            [a, b] => [a, b],
+            _ => return,
+        };
+        let cos = a.normal.dot(b.normal).clamp(-1.0, 1.0);
+        self.angle_deg = cos.acos().to_degrees();
+        self.dihedral = Some(if cos >= SMOOTH_COS {
+            Dihedral::Smooth
+        } else if a.normal.cross(a.along).dot(b.normal) < 0.0 {
+            Dihedral::Convex
+        } else {
+            Dihedral::Concave
+        });
+    }
+}
+
+/// A few edges, shortest first, the way a person would point at them: where,
+/// how long, straight or not, and what kind of corner. For the messages that
+/// used to say only how many.
+fn list_edges(edges: &[SelectableEdge], limit: usize) -> String {
+    let mut sorted: Vec<&SelectableEdge> = edges.iter().collect();
+    sorted.sort_by(|a, b| a.length.total_cmp(&b.length));
+    let mut out = String::new();
+    for edge in sorted.iter().take(limit) {
+        let kind = match edge.curve {
+            EdgeCurveKind::Line => "line",
+            EdgeCurveKind::Circle => "arc",
+            EdgeCurveKind::Other => "curve",
+        };
+        let corner = match edge.dihedral {
+            Some(Dihedral::Convex) => format!("convex {:.0}°", edge.angle_deg),
+            Some(Dihedral::Concave) => format!("concave {:.0}°", edge.angle_deg),
+            Some(Dihedral::Smooth) => "smooth, tangent-continuous".to_owned(),
+            None => "corner not measured".to_owned(),
+        };
+        out.push_str(&format!(
+            "\n  {:.2} mm {kind} at ({:.2}, {:.2}, {:.2}), {corner}",
+            edge.length, edge.centre.x, edge.centre.y, edge.centre.z
+        ));
+    }
+    if edges.len() > limit {
+        out.push_str(&format!("\n  … and {} more", edges.len() - limit));
+    }
+    out
+}
+
+/// The same listing for edges already handed to a builder, described against
+/// the shape they came from. Only computed on a failure.
+fn selection_listing(shape: &Shape, edges: &[Edge]) -> String {
+    let keys: HashSet<Vec<[i64; 3]>> = edges
+        .iter()
+        .filter_map(|edge| describe_edge(edge.clone()).map(|described| described.key))
+        .collect();
+    let described: Vec<SelectableEdge> = selectable_edges(shape)
+        .into_iter()
+        .filter(|edge| keys.contains(&edge.key))
+        .collect();
+    format!(" The edges, shortest first:{}", list_edges(&described, 6))
 }
 
 fn axis_vector(axis: Axis) -> DVec3 {
@@ -226,6 +331,12 @@ fn describe_edge(edge: Edge) -> Option<SelectableEdge> {
     let (start, end) = (*points.first()?, *points.last()?);
     let key = edge_key(&points);
     let circle = is_circular(&points);
+    let length: f64 = points.windows(2).map(|w| (w[1] - w[0]).length()).sum();
+    let start_tangent = points
+        .windows(2)
+        .map(|w| w[1] - w[0])
+        .find(|step| step.length_squared() > 1e-16)
+        .map_or(DVec3::X, |step| step.normalize());
     let chord = end - start;
     if chord.length_squared() < 1e-16 {
         // A closed curve such as a circular rim has no one direction, but can
@@ -244,6 +355,10 @@ fn describe_edge(edge: Edge) -> Option<SelectableEdge> {
             },
             circle,
             adjacent_faces: Vec::new(),
+            start_tangent,
+            length,
+            dihedral: None,
+            angle_deg: 0.0,
             key,
         });
     }
@@ -270,6 +385,10 @@ fn describe_edge(edge: Edge) -> Option<SelectableEdge> {
         },
         circle,
         adjacent_faces: Vec::new(),
+        start_tangent,
+        length,
+        dihedral: None,
+        angle_deg: 0.0,
         key,
     })
 }
@@ -344,6 +463,7 @@ fn selectable_edges(shape: &Shape) -> Vec<SelectableEdge> {
 
     let mut adjacent_faces: HashMap<Vec<[i64; 3]>, Vec<AdjacentFaceInfo>> = HashMap::new();
     for face in shape.faces() {
+        let key = face_key(&face);
         for edge in face.edges() {
             // `normal_at_center` is not defined for every curved OCCT face.
             // This point is on both the face and its edge, so it is also the
@@ -353,6 +473,7 @@ fn selectable_edges(shape: &Shape) -> Vec<SelectableEdge> {
             if normal.length_squared() < 1e-16 {
                 continue;
             }
+            let reversed = edge.is_reversed();
             let Some(edge) = describe_edge(edge) else {
                 continue;
             };
@@ -362,6 +483,8 @@ fn selectable_edges(shape: &Shape) -> Vec<SelectableEdge> {
                 .push(AdjacentFaceInfo {
                     normal: normal.normalize(),
                     at,
+                    along: if reversed { -edge.start_tangent } else { edge.start_tangent },
+                    face_key: key.clone(),
                 });
         }
     }
@@ -375,6 +498,7 @@ fn selectable_edges(shape: &Shape) -> Vec<SelectableEdge> {
                 return None;
             }
             edge.adjacent_faces = adjacent_faces.remove(&edge.key).unwrap_or_default();
+            edge.classify();
             Some(edge)
         })
         .collect()
@@ -430,6 +554,10 @@ fn vertex_key(point: DVec3) -> [i64; 3] {
 #[derive(Default)]
 struct EdgeLineage {
     by_source: BTreeMap<String, Vec<Edge>>,
+    /// The faces each tag names: every face of the tagged node's result,
+    /// followed through what came after. This is what a tag *means* in the
+    /// exact backend, and what an `on:` or `between:` query reads.
+    faces_by_source: BTreeMap<String, Vec<Face>>,
 }
 
 impl EdgeLineage {
@@ -443,6 +571,9 @@ impl EdgeLineage {
                     .map(|edge| edge.edge)
                     .collect(),
             );
+            lineage
+                .faces_by_source
+                .insert(tag.to_owned(), shape.faces().collect());
         }
         lineage
     }
@@ -464,7 +595,226 @@ impl EdgeLineage {
                 .or_insert_with(Vec::new)
                 .extend(result.new_edges().cloned());
         }
-        Self { by_source }
+        let mut faces_by_source = BTreeMap::new();
+        for (source, faces) in self.faces_by_source.into_iter().chain(other.faces_by_source) {
+            let evolved = evolve_faces(faces, result);
+            if !evolved.is_empty() {
+                faces_by_source
+                    .entry(source)
+                    .or_insert_with(Vec::new)
+                    .extend(evolved);
+            }
+        }
+        if let Some(tag) = tag {
+            faces_by_source
+                .entry(tag.to_owned())
+                .or_insert_with(Vec::new)
+                .extend(result.shape.faces());
+        }
+        Self {
+            by_source,
+            faces_by_source,
+        }
+    }
+
+    /// Carry every name through a fillet or chamfer. Faces and edges the
+    /// treatment trimmed follow its history; the faces it made from an edge
+    /// take the names of the faces that edge lay between, so a blend along
+    /// the seam of `arm` and `hub` is part of both; and the treatment's own
+    /// tag names everything it left, its new edges included.
+    fn through_treatment(self, treatment: &mut Treatment, result: &Shape, tag: Option<&str>) -> Self {
+        // Who owned each treated edge, read off the input faces before they
+        // change: an edge belongs to a feature when one of its faces does.
+        let owners_of_edge: HashMap<Vec<[i64; 3]>, Vec<String>> = {
+            let mut owners: HashMap<Vec<[i64; 3]>, Vec<String>> = HashMap::new();
+            for (source, faces) in &self.faces_by_source {
+                for face in faces {
+                    for key in face_key(face) {
+                        let names = owners.entry(key).or_default();
+                        if !names.iter().any(|name| name == source) {
+                            names.push(source.clone());
+                        }
+                    }
+                }
+            }
+            owners
+        };
+
+        let mut by_source: BTreeMap<String, Vec<Edge>> = BTreeMap::new();
+        for (source, edges) in self.by_source {
+            let evolved: Vec<Edge> = edges
+                .into_iter()
+                .flat_map(|edge| {
+                    let modified = treatment.modified_edge(&edge);
+                    if modified.is_empty() && !treatment.is_deleted_edge(&edge) {
+                        vec![edge]
+                    } else {
+                        modified
+                    }
+                })
+                .collect();
+            if !evolved.is_empty() {
+                by_source.insert(source, evolved);
+            }
+        }
+        let mut faces_by_source: BTreeMap<String, Vec<Face>> = BTreeMap::new();
+        for (source, faces) in self.faces_by_source {
+            let evolved: Vec<Face> = faces
+                .into_iter()
+                .flat_map(|face| {
+                    let modified = treatment.modified_face(&face);
+                    if modified.is_empty() && !treatment.is_deleted_face(&face) {
+                        vec![face]
+                    } else {
+                        modified
+                    }
+                })
+                .collect();
+            if !evolved.is_empty() {
+                faces_by_source.insert(source, evolved);
+            }
+        }
+        for (edge, made) in &treatment.generated {
+            let Some(key) = describe_edge(edge.clone()).map(|described| described.key) else {
+                continue;
+            };
+            let Some(owners) = owners_of_edge.get(&key) else {
+                continue;
+            };
+            for shape in made {
+                if shape.shape_type() != opencascade::primitives::ShapeType::Face {
+                    continue;
+                }
+                for owner in owners {
+                    faces_by_source
+                        .entry(owner.clone())
+                        .or_default()
+                        .push(Face::from_shape(shape));
+                }
+            }
+        }
+        if let Some(tag) = tag {
+            faces_by_source
+                .entry(tag.to_owned())
+                .or_default()
+                .extend(result.faces());
+            by_source.entry(tag.to_owned()).or_default().extend(
+                treatment
+                    .generated
+                    .iter()
+                    .flat_map(|(_, made)| made.iter().flat_map(|shape| shape.edges())),
+            );
+        }
+        Self {
+            by_source,
+            faces_by_source,
+        }
+    }
+
+    /// Carry every name through the same-domain merge after a boolean.
+    fn through_unify(self, unification: &Unification) -> Self {
+        let mut by_source: BTreeMap<String, Vec<Edge>> = BTreeMap::new();
+        for (source, edges) in self.by_source {
+            let evolved: Vec<Edge> = edges
+                .into_iter()
+                .flat_map(|edge| {
+                    let modified = unification.modified_edge(&edge);
+                    if modified.is_empty() && !unification.is_deleted_edge(&edge) {
+                        vec![edge]
+                    } else {
+                        modified
+                    }
+                })
+                .collect();
+            if !evolved.is_empty() {
+                by_source.insert(source, evolved);
+            }
+        }
+        let mut faces_by_source: BTreeMap<String, Vec<Face>> = BTreeMap::new();
+        for (source, faces) in self.faces_by_source {
+            let evolved: Vec<Face> = faces
+                .into_iter()
+                .flat_map(|face| {
+                    let modified = unification.modified_face(&face);
+                    if modified.is_empty() && !unification.is_deleted_face(&face) {
+                        vec![face]
+                    } else {
+                        modified
+                    }
+                })
+                .collect();
+            if !evolved.is_empty() {
+                faces_by_source.insert(source, evolved);
+            }
+        }
+        Self {
+            by_source,
+            faces_by_source,
+        }
+    }
+
+    /// Carry every name through a rigid motion or a uniform scale: move each
+    /// tracked sub-shape the same way, then trade the moved copy for the
+    /// result's own face or edge with the same geometry. The trade matters:
+    /// a later boolean answers `Modified` only for the very sub-shapes it was
+    /// given, and a copy, however exactly placed, is not one of them — which
+    /// is how a mirrored cup lost its name at the union that followed.
+    fn through_transform(self, result: &Shape, transform: impl Fn(Shape) -> Shape) -> Self {
+        let own_faces: HashMap<FaceKey, Face> = result
+            .faces()
+            .map(|face| (face_key(&face), face))
+            .collect();
+        let own_edges: HashMap<Vec<[i64; 3]>, Edge> = selectable_edges(result)
+            .into_iter()
+            .map(|edge| (edge.key, edge.edge))
+            .collect();
+        Self {
+            by_source: self
+                .by_source
+                .into_iter()
+                .filter_map(|(source, edges)| {
+                    let rebound: Vec<Edge> = edges
+                        .into_iter()
+                        .filter_map(|edge| {
+                            let moved = Edge::from_shape(&transform(Shape::from(edge)));
+                            describe_edge(moved)
+                                .and_then(|described| own_edges.get(&described.key))
+                                .cloned()
+                        })
+                        .collect();
+                    (!rebound.is_empty()).then_some((source, rebound))
+                })
+                .collect(),
+            faces_by_source: self
+                .faces_by_source
+                .into_iter()
+                .filter_map(|(source, faces)| {
+                    let rebound: Vec<Face> = faces
+                        .into_iter()
+                        .filter_map(|face| {
+                            let moved = Face::from_shape(&transform(Shape::from(face)));
+                            own_faces.get(&face_key(&moved)).cloned()
+                        })
+                        .collect();
+                    (!rebound.is_empty()).then_some((source, rebound))
+                })
+                .collect(),
+        }
+    }
+
+    /// Which tags each live face carries, keyed the way an adjacent-face
+    /// record is.
+    fn face_tags(&self) -> HashMap<FaceKey, Vec<String>> {
+        let mut tags: HashMap<FaceKey, Vec<String>> = HashMap::new();
+        for (source, faces) in &self.faces_by_source {
+            for face in faces {
+                let names = tags.entry(face_key(face)).or_default();
+                if !names.iter().any(|name| name == source) {
+                    names.push(source.clone());
+                }
+            }
+        }
+        tags
     }
 
     fn keys(&self, source: &str) -> Result<HashSet<Vec<[i64; 3]>>> {
@@ -520,6 +870,15 @@ impl EdgeLineage {
 fn unified(mut shape: Shape) -> Shape {
     shape.clean();
     shape
+}
+
+/// `unified`, with every name followed through the merge. The faces a fuse
+/// leaves coplanar are merged here, after the boolean whose history the
+/// lineage already read, and a tag on one of them used to end at this line.
+fn unified_tracked(shape: Shape, lineage: EdgeLineage) -> (Shape, EdgeLineage) {
+    let unification = shape.into_unified();
+    let lineage = lineage.through_unify(&unification);
+    (unification.shape, lineage)
 }
 
 /// Run OpenCASCADE's healing pass over a blend result, under
@@ -912,6 +1271,20 @@ fn blend_seam(
     Ok(built)
 }
 
+fn evolve_faces(faces: Vec<Face>, result: &BooleanShape) -> Vec<Face> {
+    faces
+        .into_iter()
+        .flat_map(|face| {
+            let modified = result.modified_face(&face);
+            if modified.is_empty() && !result.is_deleted_face(&face) {
+                vec![face]
+            } else {
+                modified
+            }
+        })
+        .collect()
+}
+
 fn evolve_edges(edges: Vec<Edge>, result: &BooleanShape) -> Vec<Edge> {
     edges
         .into_iter()
@@ -1025,7 +1398,7 @@ fn select_edges(
     lineage: &EdgeLineage,
     id: NodeId,
     label: &str,
-) -> Result<Vec<Edge>> {
+) -> Result<Vec<SelectableEdge>> {
     let edges = selectable_edges(shape);
     if edges.is_empty() {
         bail!("node {id} ({label}) cannot select {selector:?}: the shape has no usable edges");
@@ -1033,7 +1406,7 @@ fn select_edges(
 
     let (minima, maxima) = extrema(&edges);
 
-    let selected: Vec<Edge> = match selector {
+    let selected: Vec<SelectableEdge> = match selector {
         EdgeSelector::Directional(source) => {
             let terms = parse_edge_selector(source).map_err(|e| {
                 anyhow::anyhow!("node {id} ({label}) has invalid edge selector {source:?}: {e}")
@@ -1057,13 +1430,12 @@ fn select_edges(
                         }
                     })
                 })
-                .map(|edge| edge.edge)
                 .collect()
         }
         EdgeSelector::Query(query) => {
             if query.is_empty() {
                 bail!(
-                    "node {id} ({label}) has an empty edge query; specify generatedBy, curve, adjacentTo, or at"
+                    "node {id} ({label}) has an empty edge query; specify generatedBy, curve, adjacentTo, at, dihedral, parallel, longerThan, on, or between"
                 );
             }
             let generated_by = query
@@ -1071,7 +1443,27 @@ fn select_edges(
                 .as_deref()
                 .map(|source| lineage.keys(source))
                 .transpose()?;
-            select_query(edges, query, minima, maxima, generated_by.as_ref())
+            let named = query.named_features();
+            let face_tags = if named.is_empty() {
+                None
+            } else {
+                for name in &named {
+                    if !lineage.faces_by_source.contains_key(*name) {
+                        let known: Vec<&str> =
+                            lineage.faces_by_source.keys().map(String::as_str).collect();
+                        bail!(
+                            "node {id} ({label}) selector names the feature {name:?}, which has no \
+                             live faces here. A tag names the faces of the node it is on; they \
+                             survive booleans, fillets, chamfers and rigid motions, and are lost \
+                             through offset, shell and intersection. Features with faces at this \
+                             point: {}",
+                            if known.is_empty() { "none".to_owned() } else { known.join(", ") }
+                        );
+                    }
+                }
+                Some(lineage.face_tags())
+            };
+            select_query(edges, query, minima, maxima, generated_by.as_ref(), face_tags.as_ref())
         }
     };
 
@@ -1092,8 +1484,46 @@ fn select_query(
     minima: [f64; 3],
     maxima: [f64; 3],
     generated_by: Option<&HashSet<Vec<[i64; 3]>>>,
-) -> Vec<Edge> {
-    edges
+    face_tags: Option<&HashMap<FaceKey, Vec<String>>>,
+) -> Vec<SelectableEdge> {
+    let tags_of = |face: &AdjacentFaceInfo| -> &[String] {
+        face_tags
+            .and_then(|tags| tags.get(&face.face_key))
+            .map_or(&[], Vec::as_slice)
+    };
+    // Everything but the extrema first: with `on`, the extremes are the
+    // feature's own, so they are measured over what survives the other terms.
+    let scoped = query.on.is_some();
+    let candidates: Vec<SelectableEdge> = edges
+        .into_iter()
+        .filter(|edge| {
+            let on_matches = query.on.as_ref().is_none_or(|names| {
+                edge.adjacent_faces.iter().any(|face| {
+                    tags_of(face)
+                        .iter()
+                        .any(|tag| names.iter().any(|name| name == tag))
+                })
+            });
+            let between_matches = query.between.as_ref().is_none_or(|[a, b]| {
+                let has = |face: &AdjacentFaceInfo, name: &str| {
+                    tags_of(face).iter().any(|tag| tag == name)
+                };
+                edge.adjacent_faces.iter().enumerate().any(|(i, first)| {
+                    edge.adjacent_faces
+                        .iter()
+                        .enumerate()
+                        .any(|(j, second)| i != j && has(first, a) && has(second, b))
+                })
+            });
+            on_matches && between_matches
+        })
+        .collect();
+    let (minima, maxima) = if scoped {
+        extrema(&candidates)
+    } else {
+        (minima, maxima)
+    };
+    candidates
         .into_iter()
         .filter(|edge| {
             let curve_matches = match query.curve {
@@ -1116,19 +1546,31 @@ fn select_query(
                 .as_ref()
                 .is_none_or(|at| matches_extrema(edge, at, minima, maxima));
             let provenance_matches = generated_by.is_none_or(|keys| keys.contains(&edge.key));
+            let dihedral_matches = query
+                .dihedral
+                .is_none_or(|wanted| edge.dihedral == Some(wanted));
+            let parallel_matches = query.parallel.is_none_or(|axis| {
+                edge.direction.is_some_and(|direction| {
+                    direction.dot(axis_vector(axis)).abs() >= PARALLEL_TOLERANCE
+                })
+            });
+            let length_matches = query.longer_than.is_none_or(|least| edge.length >= least);
             curve_matches
                 && role_matches
                 && adjacent_matches
                 && extrema_matches
                 && provenance_matches
+                && dihedral_matches
+                && parallel_matches
+                && length_matches
         })
-        .map(|edge| edge.edge)
         .collect()
 }
 
 fn check_edge_expectation(
     expectation: EdgeExpectation,
-    actual: usize,
+    matched: &[SelectableEdge],
+    left_out: usize,
     selector: &EdgeSelector,
     id: NodeId,
     label: &str,
@@ -1136,11 +1578,22 @@ fn check_edge_expectation(
     if expectation.count == 0 {
         bail!("node {id} ({label}) has an edge expectation of zero; an edge treatment must select at least one edge");
     }
+    let actual = matched.len();
     if actual != expectation.count {
+        let left = if left_out > 0 {
+            format!(
+                " ({left_out} tangent-continuous edge(s) left out: a treatment skips them \
+                 unless asked with dihedral: \"smooth\")"
+            )
+        } else {
+            String::new()
+        };
         bail!(
-            "node {id} ({label}) selector {selector:?} expected {} edge(s), but matched {actual}. \
-             The model's topology changed; inspect the current edges and update the selector or expectation",
+            "node {id} ({label}) selector {selector:?} expected {} edge(s), but matched {actual}{left}. \
+             The model's topology changed; inspect the current edges and update the selector or expectation. \
+             The edges matched, shortest first:{}",
             expectation.count,
+            list_edges(matched, 12),
         );
     }
     Ok(())
@@ -1231,11 +1684,35 @@ fn select_edge_target(
     match target {
         EdgeTarget::Edges { selector, expect } => {
             let selected = select_edges(shape, selector, lineage, id, label)?;
+            // A tangent-continuous edge is the boundary an earlier fillet
+            // left, or a cylinder's seam: the faces already meet without a
+            // corner, and a rolling ball has nothing to build on there. It
+            // was the commonest way a cosmetic pass failed, with a message
+            // that named only a count. Left out unless asked for by name.
+            let asked_smooth = matches!(
+                selector,
+                EdgeSelector::Query(query) if query.dihedral == Some(Dihedral::Smooth)
+            );
+            let (kept, smooth): (Vec<SelectableEdge>, Vec<SelectableEdge>) = selected
+                .into_iter()
+                .partition(|edge| asked_smooth || edge.dihedral != Some(Dihedral::Smooth));
+            if kept.is_empty() {
+                bail!(
+                    "node {id} ({label}) selector {selector:?} matched {} edge(s), and every \
+                     one is tangent-continuous — the boundary an earlier fillet or a \
+                     cylinder's seam leaves, where the faces already meet without a corner \
+                     — so there is nothing to round or chamfer. Select the sharp edges \
+                     instead, or ask for these with dihedral: \"smooth\". The edges, \
+                     shortest first:{}",
+                    smooth.len(),
+                    list_edges(&smooth, 6),
+                );
+            }
             if let Some(expectation) = expect {
-                check_edge_expectation(*expectation, selected.len(), selector, id, label)?;
+                check_edge_expectation(*expectation, &kept, smooth.len(), selector, id, label)?;
             }
             Ok(ResolvedEdgeTarget {
-                edges: selected,
+                edges: kept.into_iter().map(|edge| edge.edge).collect(),
                 vertices: Vec::new(),
             })
         }
@@ -1449,6 +1926,53 @@ pub fn build(doc: &Doc) -> Result<Shape> {
 /// The keys describe exact curves in this one evaluation. They let the desktop
 /// focus an authored fillet or chamfer after a viewport click; they are never
 /// accepted as graph input, and disappear as soon as the model is rebuilt.
+/// Lay `reference` against `doc` and measure how they sit: the volume they
+/// share, and when they share none, the least distance between them.
+pub fn check_fit(doc: &Doc, reference: &Doc) -> Result<crate::protocol::FitReport> {
+    doc.topo_order()?;
+    reference.topo_order()?;
+    breadcrumb("building the part");
+    let part = build_node(doc, doc.root, DVec3::ZERO)?.shape;
+    breadcrumb("building the reference");
+    let other = build_node(reference, reference.root, DVec3::ZERO)?.shape;
+    let (p0, p1) = bbox(&part);
+    let (r0, r1) = bbox(&other);
+
+    breadcrumb("intersecting the two");
+    let mut common = AdHocShape(part.clone());
+    common.intersect(&other);
+    let interference = if common.0.faces().count() == 0 {
+        0.0
+    } else {
+        common.0.signed_volume().abs()
+    };
+
+    let (verdict, clearance, closest) = if interference > 1e-6 {
+        ("interfering", None, None)
+    } else {
+        breadcrumb("measuring the clearance");
+        match part.least_distance_to(&other) {
+            Some((distance, on_part, on_other)) => (
+                if distance <= 1e-6 { "touching" } else { "clear" },
+                Some(distance),
+                Some([on_part.to_array(), on_other.to_array()]),
+            ),
+            None => bail!(
+                "the two solids do not overlap, and the kernel could not measure the \
+                 distance between them"
+            ),
+        }
+    };
+    Ok(crate::protocol::FitReport {
+        verdict: verdict.to_owned(),
+        interference_mm3: interference,
+        clearance_mm: clearance,
+        closest_mm: closest,
+        part_bounds: [p0.to_array(), p1.to_array()],
+        reference_bounds: [r0.to_array(), r1.to_array()],
+    })
+}
+
 pub fn build_with_treatment_edges(doc: &Doc) -> Result<(Shape, BTreeMap<Vec<[i64; 3]>, NodeId>)> {
     doc.topo_order()?;
     let built = build_node(doc, doc.root, DVec3::ZERO)?;
@@ -1478,6 +2002,26 @@ impl BuiltShape {
             lineage,
             features: TreatmentFeatures::default(),
         }
+    }
+
+    /// Give this node's result its own tag, on top of whatever names it
+    /// carried in. A tag lands on the outermost node of a chain —
+    /// `box(...).at(...).tag("low")` tags the translation — so a transform
+    /// that only passed its child through lost every name authored that way.
+    fn named(mut self, tag: Option<&str>) -> Self {
+        if let Some(tag) = tag {
+            self.lineage.by_source.entry(tag.to_owned()).or_default().extend(
+                selectable_edges(&self.shape)
+                    .into_iter()
+                    .map(|edge| edge.edge),
+            );
+            self.lineage
+                .faces_by_source
+                .entry(tag.to_owned())
+                .or_default()
+                .extend(self.shape.faces());
+        }
+        self
     }
 }
 
@@ -1580,7 +2124,9 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             )
         }
 
-        Op::Translate { child, by } => build_node(doc, *child, offset + v(*by))?,
+        Op::Translate { child, by } => {
+            build_node(doc, *child, offset + v(*by))?.named(node.tag.as_deref())
+        }
 
         Op::Union { children, blend } => {
             let mut it = children.iter().copied();
@@ -1621,8 +2167,9 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                         features,
                     };
                 } else {
+                    let (shape, lineage) = unified_tracked(joined.shape, lineage);
                     acc = BuiltShape {
-                        shape: unified(joined.shape),
+                        shape,
                         lineage,
                         features,
                     };
@@ -1637,7 +2184,30 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 let tool = build_node(doc, *t, offset)?;
                 breadcrumb(&format!("subtract node {t} from node {id} ({label})"));
                 let voids_before = acc.shape.internal_void_count();
+                let faces_before = acc.shape.faces().count();
                 let cut = acc.shape.subtract(&tool.shape);
+
+                // A cut that touches nothing. The tool made no new edge and
+                // took no face, so it lies wholly outside the material — a
+                // hole pattern drawn past the edge of the part, a cutter for
+                // a feature that has since moved. It used to pass silently
+                // and show up, one evaluation later, as a missing hole.
+                if cut.new_edges().next().is_none()
+                    && cut.shape.faces().count() == faces_before
+                {
+                    let (a0, a1) = bbox(&acc.shape);
+                    let (t0, t1) = bbox(&tool.shape);
+                    bail!(
+                        "node {id} ({label}) subtracts node {t}, and the cut removed \
+                         nothing: the tool spans x {:.2}..{:.2}, y {:.2}..{:.2}, \
+                         z {:.2}..{:.2} and the material x {:.2}..{:.2}, y {:.2}..{:.2}, \
+                         z {:.2}..{:.2}, and they meet nowhere. A cutter that misses is \
+                         usually placed against the wrong feature or drawn for a part \
+                         that has since changed size; a cut that is meant to do nothing \
+                         is a tool to leave out",
+                        t0.x, t1.x, t0.y, t1.y, t0.z, t1.z, a0.x, a1.x, a0.y, a1.y, a0.z, a1.z
+                    );
+                }
 
                 // A cut that entombs its tool instead of opening the surface.
                 // Topology, not a threshold: an extra closed shell is a cavity
@@ -1687,8 +2257,9 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                         features,
                     };
                 } else {
+                    let (shape, lineage) = unified_tracked(cut.shape, lineage);
                     acc = BuiltShape {
-                        shape: unified(cut.shape),
+                        shape,
                         lineage,
                         features,
                     };
@@ -1718,8 +2289,26 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 // Intersection mutates in place here and reports no new edges,
                 // so it goes through the ad-hoc wrapper rather than the boolean
                 // result type the other two use.
+                let (a0, a1) = bbox(&acc.shape);
+                let (b0, b1) = bbox(&other.shape);
                 let mut met = AdHocShape(acc.shape);
                 met.intersect(&other.shape);
+                // Two solids with nothing in common intersect to nothing, and
+                // an empty solid is not a part. Said here, with both extents,
+                // rather than as "no faces" three stages later: when the
+                // question was whether two bodies interfere, this is the
+                // answer, and it is zero.
+                if met.0.faces().count() == 0 {
+                    bail!(
+                        "node {id} ({label}) intersects node {c}, and the two share no \
+                         volume: x {:.2}..{:.2}, y {:.2}..{:.2}, z {:.2}..{:.2} against \
+                         x {:.2}..{:.2}, y {:.2}..{:.2}, z {:.2}..{:.2} meet nowhere, so \
+                         their common solid is empty and their interference is 0 mm³. \
+                         If this was a fit check, that is its answer and the fit is \
+                         clear; a part needs material, so move one of them",
+                        a0.x, a1.x, a0.y, a1.y, a0.z, a1.z, b0.x, b1.x, b0.y, b1.y, b0.z, b1.z
+                    );
+                }
                 let mut features = acc.features;
                 features.extend(other.features);
                 acc = BuiltShape {
@@ -2067,11 +2656,15 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     .map(|(node, shape)| (node, place(reflect(shape))))
                     .collect(),
             };
+            let lineage = inner
+                .lineage
+                .through_transform(&shape, |shape| place(reflect(shape)));
             BuiltShape {
                 shape,
-                lineage: EdgeLineage::default(),
+                lineage,
                 features,
             }
+            .named(node.tag.as_deref())
         }
 
         Op::Rotate {
@@ -2107,14 +2700,22 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             } else {
                 features.translated(offset)
             };
-            // Transforms do not yet carry authored provenance selectors, but
-            // inspection can keep exact generated curves in lockstep with the
-            // result without making a geometric nearest-edge guess.
+            let axis_dir = dir.normalize();
+            let radians = degrees.to_radians();
+            let lineage = inner.lineage.through_transform(&shape, |shape| {
+                let turned = shape.rotated(DVec3::ZERO, axis_dir, radians);
+                if offset == DVec3::ZERO {
+                    turned
+                } else {
+                    turned.translated(offset)
+                }
+            });
             BuiltShape {
                 shape,
-                lineage: EdgeLineage::default(),
+                lineage,
                 features,
             }
+            .named(node.tag.as_deref())
         }
 
         Op::Scale { child, by } => {
@@ -2153,11 +2754,20 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             } else {
                 features.translated(offset)
             };
+            let lineage = inner.lineage.through_transform(&shape, |shape| {
+                let scaled = shape.scaled_uniform(DVec3::ZERO, uniform);
+                if offset == DVec3::ZERO {
+                    scaled
+                } else {
+                    scaled.translated(offset)
+                }
+            });
             BuiltShape {
                 shape,
-                lineage: EdgeLineage::default(),
+                lineage,
                 features,
             }
+            .named(node.tag.as_deref())
         }
         Op::Offset { child, distance } => {
             if *distance <= 0.0 {
@@ -2203,7 +2813,35 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             let before = bbox(&solid.shape);
 
             breadcrumb(&format!("offset node {id} ({label}) by {distance} mm"));
-            let grown = solid.shape.offset_surface(*distance);
+            // A treated body arrives as a compound around its one solid, and
+            // the thick-solid builder wants the solid itself.
+            let input = solid.shape.single_solid().unwrap_or_else(|| solid.shape.clone());
+            let mut grown = input.offset_surface(*distance);
+
+            // The thick-solid offset of anything with a fillet on it comes
+            // back with its faces oriented inward: right size, right shape,
+            // and every later boolean treats it as the whole of space minus
+            // the part, so a cut with it removes everything and a union with
+            // it keeps nothing. The bounding box cannot see that; the sign
+            // of the volume can, and `BRepLib::OrientClosedSolid` is the
+            // kernel's own way to turn it right side out (shape healing does
+            // not). Measured on `box(50,30,20).edges("|Z").fillet(5)
+            // .offset(1)`, which cut nothing out of a box until this was here.
+            grown = grown.single_solid().unwrap_or(grown);
+            if grown.signed_volume() < 0.0 {
+                breadcrumb(&format!("offset node {id} ({label}) came back inside out; reorienting"));
+                grown = grown.oriented_outward();
+                if grown.signed_volume() < 0.0 {
+                    bail!(
+                        "node {id} ({label}) offsets a {} by {distance} mm, and the kernel \
+                         returned a solid whose faces point inward, which could not be \
+                         turned right side out. A later boolean would treat it as \
+                         everything but the part. Offset the primitives before combining \
+                         or treating them, or draw the grown shape directly",
+                        op_name(&doc.node(*child)?.op)
+                    );
+                }
+            }
 
             let slip = offset_slip(before, bbox(&grown), *distance);
             if slip > SLIP_TOLERANCE_MM {
@@ -2304,20 +2942,21 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             // A cheap handle clone: probes on a failure need the pre-treatment
             // shape, and success replaces `solid.shape` in place.
             let input = solid.shape.clone();
-            let generated = match solid
+            let mut treatment = match solid
                 .shape
                 .fillet_edges_with_history(*radius, &selected.edges)
             {
-                Ok(generated) => generated,
+                Ok(treatment) => treatment,
                 Err(reason) => bail!(
                     "node {id} ({label}) fillets {count} edge(s) by {radius} mm, and \
-                     OpenCASCADE could not build it ({reason}).{measured}",
+                     OpenCASCADE could not build it ({reason}).{measured}{listing}",
                     measured = repair_sentence(
                         &probe_below(&input, &selected.edges, *radius, false, before, &stage),
                         "these edges",
                         "radius",
                         "reduce the fillet to that, or select fewer edges",
                     ),
+                    listing = selection_listing(&input, &selected.edges),
                 ),
             };
 
@@ -2338,10 +2977,22 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     ),
                 );
             }
-            solid.features.add_generated(id, generated);
+            let lineage = std::mem::take(&mut solid.lineage).through_treatment(
+                &mut treatment,
+                &solid.shape,
+                node.tag.as_deref(),
+            );
+            solid.features.add_generated(
+                id,
+                treatment
+                    .generated
+                    .into_iter()
+                    .flat_map(|(_, made)| made)
+                    .collect(),
+            );
             BuiltShape {
                 shape: solid.shape,
-                lineage: EdgeLineage::default(),
+                lineage,
                 features: solid.features,
             }
         }
@@ -2376,20 +3027,21 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             // A cheap handle clone: probes on a failure need the pre-treatment
             // shape, and success replaces `solid.shape` in place.
             let input = solid.shape.clone();
-            let generated = match solid
+            let mut treatment = match solid
                 .shape
                 .chamfer_edges_with_history(*distance, &selected.edges)
             {
-                Ok(generated) => generated,
+                Ok(treatment) => treatment,
                 Err(reason) => bail!(
                     "node {id} ({label}) chamfers {count} edge(s) by {distance} mm, and \
-                     OpenCASCADE could not build it ({reason}).{measured}",
+                     OpenCASCADE could not build it ({reason}).{measured}{listing}",
                     measured = repair_sentence(
                         &probe_below(&input, &selected.edges, *distance, true, before, &stage),
                         "these edges",
                         "distance",
                         "reduce the chamfer to that, or select fewer edges",
                     ),
+                    listing = selection_listing(&input, &selected.edges),
                 ),
             };
 
@@ -2411,10 +3063,22 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     ),
                 );
             }
-            solid.features.add_generated(id, generated);
+            let lineage = std::mem::take(&mut solid.lineage).through_treatment(
+                &mut treatment,
+                &solid.shape,
+                node.tag.as_deref(),
+            );
+            solid.features.add_generated(
+                id,
+                treatment
+                    .generated
+                    .into_iter()
+                    .flat_map(|(_, made)| made)
+                    .collect(),
+            );
             BuiltShape {
                 shape: solid.shape,
-                lineage: EdgeLineage::default(),
+                lineage,
                 features: solid.features,
             }
         }
@@ -2457,6 +3121,7 @@ mod tests {
                 face_normal: AxisDirection::PosZ,
             }),
             at: None,
+            ..Default::default()
         });
 
         let selected =
@@ -2490,6 +3155,7 @@ mod tests {
                 face_normal: AxisDirection::PosZ,
             }),
             at: None,
+            ..Default::default()
         });
 
         let selected = select_edges(&later_cut.shape, &selector, &lineage, 0, "later_cut").unwrap();
@@ -2523,6 +3189,7 @@ mod tests {
         };
         let both = select_edges(&cut.shape, &rim_query(None), &lineage, 0, "drilled").unwrap();
         assert_eq!(both.len(), 2);
+        let both: Vec<Edge> = both.into_iter().map(|edge| edge.edge).collect();
         assert_eq!(lineage.equivalent_sources(&both), ["hole"]);
 
         let top = select_edges(
@@ -2538,24 +3205,87 @@ mod tests {
         assert_eq!(top.len(), 1);
         // `hole` also owns the bottom rim, so it is not a replacement for a
         // selector that picked only the top one.
+        let top: Vec<Edge> = top.into_iter().map(|edge| edge.edge).collect();
         assert!(lineage.equivalent_sources(&top).is_empty());
     }
 
     #[test]
-    fn edge_expectation_reports_a_topology_change() {
-        let selector = EdgeSelector::Directional(">Z and |X".to_owned());
+    fn edge_expectation_reports_a_topology_change_and_lists_the_edges() {
+        let shape = AdHocShape::make_box_point_point(
+            DVec3::new(-5.0, -5.0, -5.0),
+            DVec3::new(5.0, 5.0, 5.0),
+        )
+        .0;
+        let selector = EdgeSelector::Query(EdgeQuery {
+            curve: Some(CurveKind::Line),
+            ..Default::default()
+        });
+        let matched = select_edges(&shape, &selector, &EdgeLineage::default(), 0, "box").unwrap();
         let error = check_edge_expectation(
             EdgeExpectation { count: 4 },
-            6,
+            &matched,
+            0,
             &selector,
             7,
             "top_hole_rims",
         )
-        .unwrap_err();
+        .unwrap_err()
+        .to_string();
 
-        assert!(error
-            .to_string()
-            .contains("expected 4 edge(s), but matched 6"));
+        assert!(error.contains("expected 4 edge(s), but matched 12"), "{error}");
+        assert!(error.contains("shortest first"), "{error}");
+        assert!(error.contains("10.00 mm line at"), "{error}");
+        assert!(error.contains("convex 90°"), "{error}");
+    }
+
+    fn cube_at(x: f64) -> Doc {
+        serde_json::from_str(&format!(
+            r#"{{"units":"mm","root":1,"nodes":[{{"op":"cuboid","size":{{"x":10,"y":10,"z":10}}}},{{"op":"translate","child":0,"by":{{"x":{x},"y":0,"z":0}}}}]}}"#
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn check_fit_measures_a_gap_then_an_overlap() {
+        let clear = check_fit(&cube_at(0.0), &cube_at(13.0)).unwrap();
+        assert_eq!(clear.verdict, "clear");
+        assert!((clear.clearance_mm.unwrap() - 3.0).abs() < 1e-6, "{clear:?}");
+        assert_eq!(clear.interference_mm3, 0.0);
+        let [on_part, on_reference] = clear.closest_mm.unwrap();
+        assert!((on_part[0] - 5.0).abs() < 1e-6 && (on_reference[0] - 8.0).abs() < 1e-6);
+
+        let touching = check_fit(&cube_at(0.0), &cube_at(10.0)).unwrap();
+        assert_eq!(touching.verdict, "touching");
+        assert!(touching.clearance_mm.unwrap().abs() < 1e-6);
+
+        let overlap = check_fit(&cube_at(0.0), &cube_at(9.5)).unwrap();
+        assert_eq!(overlap.verdict, "interfering");
+        assert!((overlap.interference_mm3 - 50.0).abs() < 1e-6, "{overlap:?}");
+        assert!(overlap.clearance_mm.is_none());
+        assert_eq!(overlap.part_bounds, [[-5.0, -5.0, -5.0], [5.0, 5.0, 5.0]]);
+    }
+
+    #[test]
+    fn a_box_edge_is_convex_and_a_pocket_floor_edge_is_concave() {
+        let block = AdHocShape::make_box_point_point(
+            DVec3::new(-20.0, -20.0, 0.0),
+            DVec3::new(20.0, 20.0, 10.0),
+        )
+        .0;
+        let pocket = AdHocShape::make_box_point_point(
+            DVec3::new(-5.0, -5.0, 5.0),
+            DVec3::new(5.0, 5.0, 11.0),
+        )
+        .0;
+        let shape = block.subtract(&pocket).shape;
+        let edges = selectable_edges(&shape);
+        let convex = edges.iter().filter(|e| e.dihedral == Some(Dihedral::Convex)).count();
+        let concave = edges.iter().filter(|e| e.dihedral == Some(Dihedral::Concave)).count();
+        // Twelve outer edges plus the pocket's four mouth edges are outside
+        // corners; its four floor edges and the four upright corners between
+        // its walls are inside ones.
+        assert_eq!((convex, concave), (16, 8), "{:?}", edges.iter().map(|e| (e.centre, e.dihedral)).collect::<Vec<_>>());
+        assert!(edges.iter().all(|e| (e.angle_deg - 90.0).abs() < 1e-6));
     }
 
     #[test]

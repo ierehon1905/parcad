@@ -29,7 +29,7 @@ tools = [
   "list_projects", "read_project", "save_project", "evaluate_part",
   "probe_part", "measure_wall_thickness", "list_entities",
   "inspect_treatment_target", "check_selector", "export_part",
-  "probe_step_export",
+  "probe_step_export", "check_fit",
   "get_session", "open_project", "set_script",
 ]
 

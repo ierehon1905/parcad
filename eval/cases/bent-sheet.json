@@ -1,0 +1,32 @@
+{
+  "name": "bent-sheet",
+  "script": "eval/scripts/bent-sheet.js",
+  "why": "A 200 mm wide strip bent twice at 6 mm. The bend check used to measure the profile's reach as the hypot of every point, 100 mm, and refused this; the reach that matters is the 1.5 mm toward the inside of the bend, in the path's plane. Pappus gives 141 096 mm3. Implicit refuses a swept section by name, as every sweep case does.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": [
+        "no exact distance field",
+        "B-rep backend"
+      ]
+    }
+  },
+  "brep": {
+    "size": [
+      101.5,
+      200.0,
+      112.652
+    ],
+    "volume_mm3": 141092.746,
+    "area_mm2": 96674.629,
+    "triangles": 272,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 18800.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 22,
+    "edges": 88,
+    "curves": 44
+  }
+}

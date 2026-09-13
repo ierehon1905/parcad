@@ -14,6 +14,7 @@ pub(crate) mod ffi {
         type TopoDS_Edge = opencascade_sys::ffi::TopoDS_Edge;
         type ParcadBoolean;
         type ParcadEdgeTreatment;
+        type ParcadUnify;
 
         fn parcad_cut_with_history(
             base: &TopoDS_Shape,
@@ -42,5 +43,18 @@ pub(crate) mod ffi {
             self: Pin<&mut ParcadEdgeTreatment>,
             original: &TopoDS_Edge,
         ) -> UniquePtr<CxxVector<TopoDS_Shape>>;
+        fn modified(
+            self: Pin<&mut ParcadEdgeTreatment>,
+            original: &TopoDS_Shape,
+        ) -> UniquePtr<CxxVector<TopoDS_Shape>>;
+        fn is_deleted(self: Pin<&mut ParcadEdgeTreatment>, original: &TopoDS_Shape) -> bool;
+
+        fn parcad_unify_with_history(shape: &TopoDS_Shape) -> UniquePtr<ParcadUnify>;
+        fn result(self: &ParcadUnify) -> &TopoDS_Shape;
+        fn modified(
+            self: &ParcadUnify,
+            original: &TopoDS_Shape,
+        ) -> UniquePtr<CxxVector<TopoDS_Shape>>;
+        fn is_deleted(self: &ParcadUnify, original: &TopoDS_Shape) -> bool;
     }
 }

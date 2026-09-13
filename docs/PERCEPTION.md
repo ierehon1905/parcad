@@ -838,6 +838,33 @@ which reads exactly like a broken tool.
 
 ---
 
+## 16. Does it fit — done, and read by a small model
+
+The question a holder exists to answer, and the one every tool above
+sidesteps: lay the object in the part and say whether it fits. `check_fit`
+(MCP) and `parcad --fit` (CLI) take two scripts, build both on the exact
+kernel, and report `clear`, `touching` or `interfering`, the volume the two
+share, and when they share none the clearance and the two points it is
+measured between (`BRepExtrema_DistShapeShape`, exact). The reference is
+usually one line from the `DEVICES` table: `return device("macbook-pro-16")
+.at(0, 0, 18.4)`. The V holder at rest touches; lifted half a millimetre it is
+clear by 0.500; sunk one it shares 27 653 mm³, which is the floor area the
+report already gave, times one — the cross-check that says the number is
+real.
+
+Measured on a model the day it landed: `eval/field/does-the-laptop-fit.md`
+asks for the clearance of a laptop placed 0.5 mm above a tray's floor, a
+number the script does not contain. Haiku, four trials, thinking on: 4/4
+SOUND, 4/4 reached `check_fit`, 4/4 quoted 0.5. It took three rounds to
+get there and the tool was right in all three; the case was wrong twice —
+a tray whose cutter missed, which every trial repaired from the refusal,
+and a height given in prose, which three of four re-derived. The rubric
+now carries the number and the reference script is handed over verbatim.
+Two more cases landed with the selector work: `which-edges-are-the-seam`
+(4/4 right, 2 SOUND, every trial reaching for `between`) and
+`which-upright-edges-round` (3/4 SOUND, the fourth right without
+evaluating).
+
 ## Suggested order
 
 Done, and what each cost is in its own section: point and ray probes and

@@ -278,7 +278,7 @@ impl Shape {
         &mut self,
         radius: f64,
         edges: impl IntoIterator<Item = T>,
-    ) -> Result<Vec<Self>, String> {
+    ) -> Result<Treatment, String> {
         self.treat_edges_with_history(radius, edges, false)
     }
 
@@ -305,7 +305,7 @@ impl Shape {
         &mut self,
         distance: f64,
         edges: impl IntoIterator<Item = T>,
-    ) -> Result<Vec<Self>, String> {
+    ) -> Result<Treatment, String> {
         self.treat_edges_with_history(distance, edges, true)
     }
 
@@ -314,7 +314,7 @@ impl Shape {
         distance: f64,
         edges: impl IntoIterator<Item = T>,
         chamfer: bool,
-    ) -> Result<Vec<Self>, String> {
+    ) -> Result<Treatment, String> {
         let edges: Vec<Edge> = edges
             .into_iter()
             .map(|edge| edge.as_ref().clone())
@@ -334,12 +334,19 @@ impl Shape {
         let mut generated = Vec::new();
         for edge in edges {
             let shapes = treatment.pin_mut().generated(&edge.inner);
-            generated.extend(shapes.iter().map(|shape| Self {
-                inner: ffi::TopoDS_Shape_to_owned(shape),
-            }));
+            let made: Vec<Self> = shapes
+                .iter()
+                .map(|shape| Self {
+                    inner: ffi::TopoDS_Shape_to_owned(shape),
+                })
+                .collect();
+            generated.push((edge, made));
         }
         self.inner = ffi::TopoDS_Shape_to_owned(treatment.pin_mut().result());
-        Ok(generated)
+        Ok(Treatment {
+            generated,
+            history: treatment,
+        })
     }
 
     /// Performs fillet of `radius` on all edges of the shape
@@ -446,6 +453,39 @@ impl Shape {
         let upgraded_shape = upgrader.Shape();
 
         self.inner = ffi::TopoDS_Shape_to_owned(upgraded_shape);
+    }
+
+    /// The least distance to `other`, and the two points it is measured
+    /// between; `None` when the search fails. Zero when the shapes touch or
+    /// overlap. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn least_distance_to(&self, other: &Shape) -> Option<(f64, DVec3, DVec3)> {
+        let mut on_self = make_point(DVec3::ZERO);
+        let mut on_other = make_point(DVec3::ZERO);
+        let distance = ffi::BRepExtrema_least_distance(
+            &self.inner,
+            &other.inner,
+            on_self.pin_mut(),
+            on_other.pin_mut(),
+        );
+        (distance >= 0.0).then(|| {
+            (
+                distance,
+                dvec3(on_self.X(), on_self.Y(), on_self.Z()),
+                dvec3(on_other.X(), on_other.Y(), on_other.Z()),
+            )
+        })
+    }
+
+    /// `clean()` with its history kept: the unified shape, and what every
+    /// face and edge of this one became. Added for parcad; see
+    /// PARCAD-CHANGES.md.
+    pub fn into_unified(self) -> Unification {
+        ffi::Shape_drop_unused_seam_pcurves(&self.inner);
+        let history = history::parcad_unify_with_history(&self.inner);
+        let shape = Shape {
+            inner: ffi::TopoDS_Shape_to_owned(history.result()),
+        };
+        Unification { shape, history }
     }
 
     /// Unwrap a compound that contains exactly one solid.
@@ -635,6 +675,89 @@ impl Shape {
     pub fn offset_surface(self, offset: f64) -> Self {
         let faces_to_remove: [Face; 0] = [];
         self.hollow(offset, faces_to_remove)
+    }
+
+    /// The same solid with its faces turned to point outward, when it is a
+    /// single closed solid; anything else comes back unchanged. Added for
+    /// parcad; see PARCAD-CHANGES.md.
+    pub fn oriented_outward(&self) -> Self {
+        let fixed = ffi::BRepLib_orient_closed_solid(&self.inner);
+        Self {
+            inner: ffi::TopoDS_Shape_to_owned(&fixed),
+        }
+    }
+
+    /// The enclosed volume with its sign: negative when the shape's faces are
+    /// oriented inward, which is what an inside-out solid looks like to every
+    /// later boolean. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn signed_volume(&self) -> f64 {
+        let mut props = ffi::GProp_GProps_ctor();
+        ffi::BRepGProp_VolumeProperties(&self.inner, props.pin_mut());
+        props.Mass()
+    }
+}
+
+/// A fillet or chamfer that built, with its history still alive. Added for
+/// parcad; see PARCAD-CHANGES.md. `generated` is what each treated edge became
+/// (its new faces, usually one); the methods answer what any input face or
+/// edge became, which is what lets a name survive the treatment.
+pub struct Treatment {
+    pub generated: Vec<(Edge, Vec<Shape>)>,
+    history: UniquePtr<history::ParcadEdgeTreatment>,
+}
+
+impl Treatment {
+    pub fn modified_edge(&mut self, edge: &Edge) -> Vec<Edge> {
+        super::boolean_shape::edges(
+            self.history
+                .pin_mut()
+                .modified(ffi::cast_edge_to_shape(&edge.inner)),
+        )
+    }
+
+    pub fn is_deleted_edge(&mut self, edge: &Edge) -> bool {
+        self.history
+            .pin_mut()
+            .is_deleted(ffi::cast_edge_to_shape(&edge.inner))
+    }
+
+    pub fn modified_face(&mut self, face: &Face) -> Vec<Face> {
+        super::boolean_shape::faces(
+            self.history
+                .pin_mut()
+                .modified(ffi::cast_face_to_shape(&face.inner)),
+        )
+    }
+
+    pub fn is_deleted_face(&mut self, face: &Face) -> bool {
+        self.history
+            .pin_mut()
+            .is_deleted(ffi::cast_face_to_shape(&face.inner))
+    }
+}
+
+/// A same-domain unify pass that built, with its history alive: the merged
+/// shape, and the answer to what any input face or edge became.
+pub struct Unification {
+    pub shape: Shape,
+    history: UniquePtr<history::ParcadUnify>,
+}
+
+impl Unification {
+    pub fn modified_edge(&self, edge: &Edge) -> Vec<Edge> {
+        super::boolean_shape::edges(self.history.modified(ffi::cast_edge_to_shape(&edge.inner)))
+    }
+
+    pub fn is_deleted_edge(&self, edge: &Edge) -> bool {
+        self.history.is_deleted(ffi::cast_edge_to_shape(&edge.inner))
+    }
+
+    pub fn modified_face(&self, face: &Face) -> Vec<Face> {
+        super::boolean_shape::faces(self.history.modified(ffi::cast_face_to_shape(&face.inner)))
+    }
+
+    pub fn is_deleted_face(&self, face: &Face) -> bool {
+        self.history.is_deleted(ffi::cast_face_to_shape(&face.inner))
     }
 }
 

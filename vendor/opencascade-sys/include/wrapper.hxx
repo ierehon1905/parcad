@@ -8,6 +8,7 @@
 #include <BOPAlgo_GlueEnum.hxx>
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAlgoAPI_Common.hxx>
+#include <BRepExtrema_DistShapeShape.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Section.hxx>
@@ -461,6 +462,34 @@ inline std::unique_ptr<TopoDS_Shape> ShapeFix_repair(const TopoDS_Shape &shape, 
   fixer.SetMaxTolerance(max_tolerance);
   fixer.Perform();
   return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(fixer.Shape()));
+}
+
+// The least distance between two shapes and where it is measured. Added for
+// parcad's fit check: with an interference of zero, this is the clearance,
+// exact rather than sampled. Returns a negative number when the search fails.
+inline double BRepExtrema_least_distance(const TopoDS_Shape &a, const TopoDS_Shape &b, gp_Pnt &on_a,
+                                         gp_Pnt &on_b) {
+  BRepExtrema_DistShapeShape search(a, b);
+  search.Perform();
+  if (!search.IsDone() || search.NbSolution() < 1) {
+    return -1.0;
+  }
+  on_a = search.PointOnShape1(1);
+  on_b = search.PointOnShape2(1);
+  return search.Value();
+}
+
+// BRepLib::OrientClosedSolid: turn a solid whose faces point inward right side
+// out. Added for parcad: `BRepOffsetAPI_MakeThickSolid` returns the offset of
+// a filleted body that way, and ShapeFix does not correct it. A shape that is
+// not a single closed solid is returned as it came.
+inline std::unique_ptr<TopoDS_Shape> BRepLib_orient_closed_solid(const TopoDS_Shape &shape) {
+  if (shape.ShapeType() != TopAbs_SOLID) {
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(shape));
+  }
+  TopoDS_Solid solid = TopoDS::Solid(shape);
+  BRepLib::OrientClosedSolid(solid);
+  return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(solid));
 }
 
 // Topology report: every face -> wire -> edge -> vertex, with geometry types,

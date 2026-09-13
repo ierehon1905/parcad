@@ -1,0 +1,23 @@
+{
+  "name": "device-body",
+  "script": "eval/scripts/device-body.js",
+  "why": "A real object from the DEVICES table, grown by a clearance: 355.7 x 248.1 x 16.8 published, so the cutter measures 357.7 x 250.1 x 18.8 exactly, with both radii grown by the same millimetre. B-rep only: the radii are fillets.",
+  "brep": {
+    "size": [
+      357.7,
+      250.1,
+      18.8
+    ],
+    "volume_mm3": 1660754.773,
+    "area_mm2": 194880.642,
+    "triangles": 12244,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 82268.968,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 26,
+    "edges": 112,
+    "curves": 56
+  }
+}

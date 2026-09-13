@@ -1,0 +1,23 @@
+{
+  "name": "edges-by-angle",
+  "script": "eval/scripts/edges-by-angle.js",
+  "why": "Edges selected by dihedral angle and direction instead of document extrema: the one concave edge of an L bracket, then its five convex edges along Y, with the fillet's own tangent lines excluded by the term rather than by luck. The counts are the assertion; the volume is the kernel's number held against regression. B-rep only: edge treatments are exact-only.",
+  "brep": {
+    "size": [
+      60.0,
+      40.0,
+      40.0
+    ],
+    "volume_mm3": 35964.678,
+    "area_mm2": 9557.33,
+    "triangles": 324,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 2240.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 14,
+    "edges": 72,
+    "curves": 36
+  }
+}

@@ -36,6 +36,9 @@ struct Args {
     /// instead of evaluating a graph. The reverse of `--step`: what another
     /// CAD system built, measured so a recreation has numbers to hit.
     probe_step: Option<PathBuf>,
+    /// Lay this second graph against the part and measure the fit instead of
+    /// evaluating: interference volume, or clearance when there is none.
+    fit: Option<PathBuf>,
 }
 
 fn parse_args() -> Result<Args> {
@@ -51,6 +54,7 @@ fn parse_args() -> Result<Args> {
     let mut timeout = None;
     let mut step = None;
     let mut probe_step = None;
+    let mut fit = None;
 
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -99,6 +103,7 @@ fn parse_args() -> Result<Args> {
                 )
             }
             "--step" => step = Some(PathBuf::from(it.next().context("--step needs a path")?)),
+            "--fit" => fit = Some(PathBuf::from(it.next().context("--fit needs a reference graph")?)),
             "--probe-step" => {
                 probe_step = Some(PathBuf::from(
                     it.next().context("--probe-step needs a .step file")?,
@@ -110,6 +115,7 @@ fn parse_args() -> Result<Args> {
                      \x20              [--view NAME] [--regions] [--section PLANE]\n\
                      \x20              [--geometry PATH]\n\
                      \x20              [--brep] [--step PATH] [--timeout SECS]\n\
+                     \x20              [--fit REFERENCE.json]   # measure the fit instead\n\
                      \x20      parcad --probe-step FILE.step   # measure a foreign export"
                 );
                 std::process::exit(0);
@@ -133,6 +139,7 @@ fn parse_args() -> Result<Args> {
             timeout,
             step,
             probe_step: Some(probe),
+            fit: None,
         });
     }
 
@@ -149,6 +156,7 @@ fn parse_args() -> Result<Args> {
         timeout,
         step,
         probe_step: None,
+        fit,
     })
 }
 
@@ -224,6 +232,33 @@ fn main() -> Result<()> {
         .with_context(|| format!("reading {}", args.input.display()))?;
     let doc: Doc = serde_json::from_str(&text)
         .with_context(|| format!("parsing {} as an intent graph", args.input.display()))?;
+
+    // Fit mode: the part against the object it holds, measured on the exact
+    // solids. JSON to stdout, the sentence to stderr, like the probe.
+    if let Some(path) = &args.fit {
+        let text = std::fs::read_to_string(path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        let reference: Doc = serde_json::from_str(&text)
+            .with_context(|| format!("parsing {} as an intent graph", path.display()))?;
+        let mut opts = parcad_occt::Options::default();
+        if let Some(secs) = args.timeout {
+            opts.timeout = std::time::Duration::from_secs_f64(secs);
+        }
+        let report = parcad_occt::check_fit(&doc, &reference, &opts)
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        match (&report.clearance_mm, &report.closest_mm) {
+            (Some(gap), Some([a, b])) => eprintln!(
+                "fit      {}: clearance {gap:.3} mm, between ({:.2}, {:.2}, {:.2}) on the part and ({:.2}, {:.2}, {:.2}) on the reference",
+                report.verdict, a[0], a[1], a[2], b[0], b[1], b[2]
+            ),
+            _ => eprintln!(
+                "fit      {}: {:.3} mm³ shared — material that would have to go for the reference to fit",
+                report.verdict, report.interference_mm3
+            ),
+        }
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
 
     std::fs::create_dir_all(&args.out)
         .with_context(|| format!("creating {}", args.out.display()))?;

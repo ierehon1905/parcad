@@ -567,6 +567,17 @@ pub mod ffi {
             max_tolerance: f64,
         ) -> UniquePtr<TopoDS_Shape>;
 
+        // BRepExtrema_DistShapeShape — added for parcad, see PARCAD-CHANGES.md.
+        pub fn BRepExtrema_least_distance(
+            a: &TopoDS_Shape,
+            b: &TopoDS_Shape,
+            on_a: Pin<&mut gp_Pnt>,
+            on_b: Pin<&mut gp_Pnt>,
+        ) -> f64;
+
+        // BRepLib::OrientClosedSolid — added for parcad, see PARCAD-CHANGES.md.
+        pub fn BRepLib_orient_closed_solid(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+
         // BRepCheck — added for parcad, see PARCAD-CHANGES.md.
         // Empty string means valid; otherwise one line per fault.
         pub fn BRepCheck_report(shape: &TopoDS_Shape, exact: bool) -> String;

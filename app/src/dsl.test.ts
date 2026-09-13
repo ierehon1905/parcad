@@ -8,9 +8,13 @@ import {
   clearance,
   counterbore,
   cylinder,
+  device,
+  DEVICES,
   extrude,
   grid,
   holeFor,
+  hull,
+  line2d,
   ngon,
   polar,
   pipe,
@@ -19,6 +23,7 @@ import {
   tapDrill,
   torus,
   union,
+  vesaPattern,
 } from "./dsl";
 
 /**
@@ -305,5 +310,93 @@ describe("torus and pipe", () => {
       "does not fit",
     );
     expect(() => pipe([[0, 0, 0], [10, 0, 0], [10, 40, 0]], 10, { bend: 15 })).toThrow("10.00 mm");
+  });
+});
+
+describe("device", () => {
+  test("grows every dimension and both radii by the clearance", () => {
+    const body = DEVICES["macbook-pro-16"];
+    const doc = build(device("macbook-pro-16", { clearance: 1 }));
+    const nodes = Object.values(doc.nodes) as Array<{ op: string; size?: { x: number; y: number; z: number }; radius?: number }>;
+    const cuboid = nodes.find((n) => n.op === "cuboid");
+    expect(cuboid?.size).toEqual({ x: body.length + 2, y: body.width + 2, z: body.thickness + 2 });
+    const radii = nodes.filter((n) => n.op === "fillet").map((n) => n.radius).sort();
+    expect(radii).toEqual([body.edgeRadius + 1, body.edgeRadius + 1, body.cornerRadius + 1].sort());
+  });
+
+  test("names the table when the device is not in it", () => {
+    expect(() => device("thinkpad-x1")).toThrow(/DEVICES has macbook-air-13/);
+  });
+
+  test("every entry in the table is a body its own radii fit", () => {
+    // Clearance grows thickness and edge radius alike, so only the table can
+    // break this; each entry is checked once, here, rather than one refusal
+    // at a time.
+    for (const [name, body] of Object.entries(DEVICES)) {
+      expect(2 * body.edgeRadius, name).toBeLessThan(body.thickness);
+      expect(2 * body.cornerRadius, name).toBeLessThan(Math.min(body.length, body.width));
+      expect(body.source, name).toMatch(/spec/);
+    }
+  });
+});
+
+describe("vesaPattern", () => {
+  test("is the square pattern centred on the origin", () => {
+    expect(vesaPattern(100).map(([x, y]) => [Math.abs(x), Math.abs(y)])).toEqual([
+      [50, 50], [50, 50], [50, 50], [50, 50],
+    ]);
+    expect(vesaPattern(75).length).toBe(4);
+  });
+
+  test("refuses a size that is not a VESA pattern", () => {
+    expect(() => vesaPattern(90 as 75)).toThrow(/75, 100 or 200/);
+  });
+});
+
+describe("line2d", () => {
+  test("offsets to the left of travel and meets another line where geometry says", () => {
+    const base = line2d([0, 0], [10, 0]);
+    expect(base.offset(2).from).toEqual([0, 2]);
+    expect(base.offset(-2).to).toEqual([10, -2]);
+    const up = line2d([4, -5], 90);
+    expect(up.meet(base).map((v) => +v.toFixed(9))).toEqual([4, 0]);
+    expect(base.pointAt(3)).toEqual([3, 0]);
+    expect(+line2d([0, 0], [3, 4]).length().toFixed(9)).toBe(5);
+  });
+
+  test("refuses parallel lines and degenerate ones", () => {
+    expect(() => line2d([0, 0], [1, 0]).meet(line2d([0, 1], [1, 1]))).toThrow(/parallel/);
+    expect(() => line2d([1, 1], [1, 1])).toThrow(/distinct/);
+  });
+
+  test("reads y at x and x at y along a slope", () => {
+    const slope = line2d([0, 0], [10, 5]);
+    expect(slope.yAt(4)).toBe(2);
+    expect(slope.xAt(2)).toBe(4);
+  });
+});
+
+describe("hull", () => {
+  test("is the anticlockwise convex outline with inside points dropped", () => {
+    const outline = hull([[0, 0], [10, 0], [10, 10], [0, 10], [5, 5], [2, 3]]);
+    expect(outline).toEqual([[0, 0], [10, 0], [10, 10], [0, 10]]);
+    // Anticlockwise: the signed area is positive.
+    let area = 0;
+    for (let i = 0; i < outline.length; i++) {
+      const [x1, y1] = outline[i], [x2, y2] = outline[(i + 1) % outline.length];
+      area += x1 * y2 - x2 * y1;
+    }
+    expect(area).toBeGreaterThan(0);
+  });
+
+  test("a fan from a band's cross-section to a corner is convex by construction", () => {
+    const fan = hull([[95.9, -79.1], [130.9, -43.3], [122.85, -124.05], [182.85, -129.05], [182.85, -29.05]]);
+    expect(fan.length).toBe(5);
+    expect(() => build(extrude(fan, 10))).not.toThrow();
+  });
+
+  test("refuses fewer than three distinct points, and collinear ones", () => {
+    expect(() => hull([[0, 0], [1, 1]])).toThrow(/three distinct/);
+    expect(() => hull([[0, 0], [1, 1], [2, 2]])).toThrow(/collinear/);
   });
 });

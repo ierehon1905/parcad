@@ -158,6 +158,10 @@ queries but the compact string form has no equivalent). The former is the more
 useful: "break every convex edge" is a real manufacturing instruction and
 currently inexpressible.
 
+**Landed (2026-09-12):** `edges({ dihedral: "convex", parallel: "z" })` says
+it, and `{ on: "profile", dihedral: "convex", parallel: "z" }` scopes it to
+one feature's faces; [SELECTORS.md](SELECTORS.md).
+
 ## 3. `adjacentTo: { faceNormal }` over-matches on cylindrical faces
 
 A rim is adjacent to its own bore wall as well as to the flat face it sits in,
@@ -317,6 +321,96 @@ Not asked for: a constraint solver — see OP_ROADMAP, "What is deliberately not
 this list". The gap is not that dimensions cannot be related, it is that the
 *operations* are kernel-shaped rather than shop-shaped, so the author translates
 before they can start relating them.
+
+## 9. What a laptop holder cost (2026-09-12)
+
+A VESA-mounted V tray for a 16" MacBook Pro, built by a model over the CLI in
+one session: a disc hub with the 75 and 100 patterns, two tapered arms, an
+L-shaped lip at each front corner carved by cutting the laptop's own shape out
+of a block, split at the centreline for a 256 mm bed. It builds, measured. The
+part is `v-holder.parcad` in the project folder of the machine it was made on.
+What it cost, worst first, each one reproduced on a small shape before being
+recorded here:
+
+- **Selecting edges is the structural problem.** Every failed evaluation but one
+  was a selector reaching more than the intent named, and the language has no
+  way to name less than the whole solid after a boolean. Argued in
+  [SELECTORS.md](SELECTORS.md) rather than here; the short form is that queries
+  need a scope, edges need to know their dihedral angle, and errors need to name
+  the edge. All three landed the same day: `dihedral`, `parallel`,
+  `longerThan`, smooth edges skipped by treatments, failures listing their
+  edges, and then `on` and `between` over faces that keep their tag through
+  booleans, treatments and rigid motions, with `at` measured within the
+  feature. What remains is in [SELECTORS.md](SELECTORS.md) §3.
+- **`.offset()` of a filleted body was unusable by any later boolean — FIXED.**
+  The natural way to wrap a real object is to grow it by the clearance and cut
+  it out: `holder.cut(laptop.offset(1))`. With a fillet anywhere on the body
+  the cut, and a union, returned "the result has no faces", which blamed the
+  boolean. The offset alone measured right, so the bounding-box post-condition
+  could not see it: the thick-solid builder returns the grown body inside out.
+  The lowering now measures the sign of the volume and reorients with the
+  kernel's own `OrientClosedSolid`; `eval/cases/offset-filleted-cutter` holds
+  the pocket against its closed form. GOTCHAS, "`offset_surface` lies".
+- **A cut that removed nothing was silent — FIXED.** Four VESA 100 holes fell
+  outside a Ø120 hub and vanished; the face count said so one evaluation later.
+  A subtract that makes no edge and takes no face now refuses, naming both
+  extents (`refuse-missed-cut`). B-rep only: the implicit field has no topology
+  to count.
+- **An empty intersection was an error, not a zero — FIXED, twice.** The
+  refusal now says 0 mm³ with both extents (`refuse-empty-intersection`), and
+  the question it stood in for has its own tool: `check_fit` (MCP), `--fit`
+  (CLI) lays a reference body against the part on the exact solids and reports
+  `clear`, `touching` or `interfering`, the shared volume, and the clearance
+  with the two points it is measured between. The V holder at rest: touching;
+  lifted 0.5 mm: clear by 0.500; sunk 1 mm: 27 653 mm³ shared, which is the
+  floor area the report already gave, times one. A second solid that is
+  measured against and never joined is exactly what this is.
+- **`sweep` refused every bent sheet — FIXED.** A 200 × 3 strip could not bend
+  at 6 mm because `Op::sweep_spine` measured the profile's reach as the hypot
+  of every point, 100 mm. On a planar path the profile keeps one axis in the
+  plane, so only its extent toward the inside of the bend is in the way: the
+  check now measures that, in the backend's own frame, and falls back to the
+  full reach off-plane. `bent-sheet` measures the strip against Pappus to
+  4 mm³ in 141 000.
+- **Every position is arithmetic about geometry that already exists.** The
+  chevron's point is placed by iterating where two arm centrelines must meet
+  for their inner edges to cross at a chosen spot; the cups are placed from a
+  unit vector, its normal, a point on the arm's outer edge and where that edge
+  crosses the laptop's side. About 25 lines of the script derive points that
+  are already on some shape, and two of the session's four authoring mistakes
+  were in those lines. Wanted: points and lines *from* entities — a corner of
+  the laptop, an edge of the arm as a line, `pointAt`, `meet`, `offset` — and
+  placement relative to one; `hull(points)` for a convex outline. The
+  shape-side half of what Fusion does with a sketch on a face, which the
+  reference corpus used in 15 of 21 designs. §8's "place against geometry, not
+  coordinates", with the cost measured.
+
+  **Landed, the arithmetic half:** `line2d(from, to)` with `pointAt`,
+  `offset`, `meet`, `yAt`/`xAt`, and `hull(points)` for a convex outline that
+  `extrude` accepts by construction. The V holder's fan is now five named
+  points read off two lines, and measures the same 302 406 mm³. **Not landed,
+  and not landable as the language stands:** a line taken *from a built
+  edge*. A script runs before the kernel does, so nothing in it can ask where
+  an edge ended up; `list_entities` and `check_fit` are the measured route,
+  one evaluation later. A sketch on a face would need the graph itself to
+  carry construction geometry, which is OP_ROADMAP's "construction plane" row.
+- **Real objects were guesses — FIXED, as far as a table can fix it.** The
+  laptop's plan corner radius and bottom edge radius were assumed at 12 and
+  5 mm in a script. `DEVICES` in `dsl.ts` now holds four MacBooks with their
+  published sizes and those radii, labelled as read off photographs;
+  `device(name, { clearance })` is the grown body a holder cuts out of itself,
+  and `vesaPattern(size)` the four points. The V holder reads the table and
+  measures the same 302 406 mm³ it did with the literals. The radii are still
+  the honest weak point: a caliper on one machine would settle them for
+  everyone.
+- **Two printable halves need a flag and two evaluations**, because a graph has
+  one solid. The honest design was one half plus `.mirror("x")`, so this is the
+  multi-body row of §0 again, from the cheap end.
+
+Not the tool's fault, and worth keeping: the hub was drawn too small for the
+100 pattern, and the report's "stands on … 1 patch" line plus the face count
+caught it without a picture. Both drafts were checked at both ends of the
+bounding box before delivery.
 
 ## What is genuinely good
 

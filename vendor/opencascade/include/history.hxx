@@ -18,6 +18,8 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <BRepTools_History.hxx>
+#include <ShapeUpgrade_UnifySameDomain.hxx>
 
 class ParcadBoolean {
  public:
@@ -109,6 +111,17 @@ class ParcadEdgeTreatment {
     return fillet_ ? shapes(fillet_->Generated(original)) : shapes(chamfer_->Generated(original));
   }
 
+  // The boolean's contract, for a treatment: what a face or edge of the input
+  // became, and whether it is gone. What lets a name on a face outlive the
+  // fillet that trims it.
+  std::unique_ptr<std::vector<TopoDS_Shape>> modified(const TopoDS_Shape& original) {
+    return fillet_ ? shapes(fillet_->Modified(original)) : shapes(chamfer_->Modified(original));
+  }
+
+  bool is_deleted(const TopoDS_Shape& original) {
+    return fillet_ ? fillet_->IsDeleted(original) : chamfer_->IsDeleted(original);
+  }
+
  private:
   static std::unique_ptr<std::vector<TopoDS_Shape>> shapes(const NCollection_List<TopoDS_Shape>& shapes) {
     return std::unique_ptr<std::vector<TopoDS_Shape>>(
@@ -126,4 +139,35 @@ inline std::unique_ptr<ParcadEdgeTreatment> parcad_fillet_with_history(const Top
 
 inline std::unique_ptr<ParcadEdgeTreatment> parcad_chamfer_with_history(const TopoDS_Shape& base) {
   return std::unique_ptr<ParcadEdgeTreatment>(new ParcadEdgeTreatment(base, true));
+}
+
+// The same-domain unify pass parcad runs after every boolean, with its
+// history kept. Merging the coplanar faces a fuse leaves behind is what makes
+// a union read as one part, and it is also where a named face used to vanish:
+// the boolean's history stops at the boolean, and the merged face is new.
+// Settings match `Shape::clean` exactly; the pcurve pre-pass is the caller's.
+class ParcadUnify {
+ public:
+  explicit ParcadUnify(const TopoDS_Shape& shape) : unify_(shape, true, true, true) {
+    unify_.AllowInternalEdges(false);
+    unify_.SetLinearTolerance(1.0e-4);
+    unify_.SetAngularTolerance(1.0e-4);
+    unify_.Build();
+  }
+
+  const TopoDS_Shape& result() const { return unify_.Shape(); }
+
+  std::unique_ptr<std::vector<TopoDS_Shape>> modified(const TopoDS_Shape& original) const {
+    const NCollection_List<TopoDS_Shape>& list = unify_.History()->Modified(original);
+    return std::unique_ptr<std::vector<TopoDS_Shape>>(new std::vector<TopoDS_Shape>(list.begin(), list.end()));
+  }
+
+  bool is_deleted(const TopoDS_Shape& original) const { return unify_.History()->IsRemoved(original); }
+
+ private:
+  ShapeUpgrade_UnifySameDomain unify_;
+};
+
+inline std::unique_ptr<ParcadUnify> parcad_unify_with_history(const TopoDS_Shape& shape) {
+  return std::unique_ptr<ParcadUnify>(new ParcadUnify(shape));
 }

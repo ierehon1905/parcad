@@ -1,0 +1,23 @@
+{
+  "name": "offset-filleted-cutter",
+  "script": "eval/scripts/offset-filleted-cutter.js",
+  "why": "Growing a filleted body by a clearance and cutting it out is how a holder wraps a real object. MakeThickSolid returns that grown body inside out, and the cut then removed everything; the offset now checks the sign of its volume and reorients. The closed form is 162 070 mm3 to a few mm3 of fillet arithmetic; the pocket is 11 deep with 6 mm corners. B-rep only: edge fillets are exact-only.",
+  "brep": {
+    "size": [
+      100.0,
+      60.0,
+      30.0
+    ],
+    "volume_mm3": 162071.497,
+    "area_mm2": 23266.079,
+    "triangles": 2124,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 6000.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 23,
+    "edges": 104,
+    "curves": 52
+  }
+}

@@ -50,6 +50,29 @@ export interface EdgeQuery {
   adjacentTo?: { faceNormal: AxisDirection };
   /** Match edge centres at the requested document extrema. */
   at?: Partial<Record<"x" | "y" | "z", "min" | "max">>;
+  /**
+   * How the two faces meet along the edge: `convex` is an outside corner —
+   * what "break every edge" means — `concave` an inside one, and `smooth` no
+   * corner at all: the boundary an earlier fillet left, or a cylinder's
+   * seam. A fillet or chamfer leaves smooth edges out unless asked for them
+   * by name, because there is nothing there for a rolling ball to build on.
+   */
+  dihedral?: "convex" | "concave" | "smooth";
+  /** A straight edge parallel to this axis: the object form of `|Z`. */
+  parallel?: "x" | "y" | "z";
+  /** Only edges at least this long, in mm: what keeps a sliver out of a cosmetic pass. */
+  longerThan?: number;
+  /**
+   * Only edges of one or more named features. A tag names the faces of the
+   * node it is on, and those faces keep the name through every later
+   * boolean, fillet, chamfer and rigid motion — so `{ on: "lip", at: { z:
+   * "max" } }` is the lip's own top rim, its extremes measured among the
+   * lip's edges rather than the whole part's. Lost through offset, shell and
+   * intersection.
+   */
+  on?: string | string[];
+  /** Only edges with one face from each of two features: the seam where one meets the other. */
+  between?: [string, string];
 }
 
 /**
@@ -151,12 +174,38 @@ function assertEdgeSelector(selector: EdgeSelector) {
     !selector.curve &&
     !selector.role &&
     !selector.adjacentTo &&
+    !selector.dihedral &&
+    !selector.parallel &&
+    selector.longerThan === undefined &&
+    !selector.on &&
+    !selector.between &&
     (!selector.at || !Object.values(selector.at).some(Boolean))
   ) {
-    throw new Error("edge query is empty; specify generatedBy, curve, role, adjacentTo, or at");
+    throw new Error(
+      "edge query is empty; specify generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on, or between",
+    );
+  }
+  const names = [
+    ...(selector.on === undefined ? [] : Array.isArray(selector.on) ? selector.on : [selector.on]),
+    ...(selector.between ?? []),
+  ];
+  if (names.some((name) => typeof name !== "string" || !name.trim())) {
+    throw new Error("on and between must name tagged features");
+  }
+  if (selector.between !== undefined && selector.between.length !== 2) {
+    throw new Error("between takes exactly two feature names, e.g. between: [\"arm\", \"hub\"]");
   }
   if (selector.generatedBy !== undefined && !selector.generatedBy.trim()) {
     throw new Error("generatedBy must name a tagged operation");
+  }
+  if (selector.dihedral !== undefined && !["convex", "concave", "smooth"].includes(selector.dihedral)) {
+    throw new Error(`dihedral must be "convex", "concave" or "smooth", not ${JSON.stringify(selector.dihedral)}`);
+  }
+  if (selector.parallel !== undefined && !["x", "y", "z"].includes(selector.parallel)) {
+    throw new Error(`parallel must be "x", "y" or "z", not ${JSON.stringify(selector.parallel)}`);
+  }
+  if (selector.longerThan !== undefined && !(selector.longerThan > 0)) {
+    throw new Error("longerThan must be a length in mm greater than zero");
   }
 }
 
@@ -863,6 +912,233 @@ export function holeFor(
   const past = options.through ? over : 0;
   const length = depth + over + past;
   return cylinder(diameter / 2, length).at(0, 0, over - length / 2);
+}
+
+// ---------------------------------------------------------------------------
+// Real objects. The things a holder wraps, measured once, so a part fits the
+// object rather than a model's recollection of it. The V holder for a 16"
+// MacBook Pro shipped with two radii guessed in a script; the guess now lives
+// here, labelled as one, where a better measurement replaces it everywhere.
+// ---------------------------------------------------------------------------
+
+/** A device's body: the box it is, and the two radii that make a cutter fit it. */
+export interface DeviceBody {
+  /** Along the front edge, mm. */
+  length: number;
+  /** Front to back, mm. */
+  width: number;
+  /** Closed, mm. */
+  thickness: number;
+  /** Its corners in plan, mm. */
+  cornerRadius: number;
+  /** Its top and bottom edges, mm. */
+  edgeRadius: number;
+  /** Where each number came from. The radii are the honest weak point. */
+  source: string;
+}
+
+/**
+ * Devices a holder is likely to wrap. Sizes are the maker's published ones;
+ * the radii are read off photographs and say so, to about a millimetre.
+ * Exported so a missing device is obviously absent rather than approximated.
+ */
+export const DEVICES: Record<string, DeviceBody> = {
+  "macbook-air-13": {
+    length: 304.1, width: 215.0, thickness: 11.3, cornerRadius: 11, edgeRadius: 3,
+    source: "Apple tech specs, M2/M3 (2022-24); radii from photographs, +-1 mm",
+  },
+  "macbook-air-15": {
+    length: 340.4, width: 237.6, thickness: 11.5, cornerRadius: 11, edgeRadius: 3,
+    source: "Apple tech specs, M2/M3 (2023-24); radii from photographs, +-1 mm",
+  },
+  "macbook-pro-14": {
+    length: 312.6, width: 221.2, thickness: 15.5, cornerRadius: 12, edgeRadius: 5,
+    source: "Apple tech specs, M1 Pro to M4 (2021-24); radii from photographs, +-1 mm",
+  },
+  "macbook-pro-16": {
+    length: 355.7, width: 248.1, thickness: 16.8, cornerRadius: 12, edgeRadius: 5,
+    source: "Apple tech specs, M1 Pro to M4 (2021-24); radii from photographs, +-1 mm",
+  },
+};
+
+/**
+ * A device's body as a solid, centred on the origin like every primitive, its
+ * front edge toward -Y. `device("macbook-pro-16")` is the laptop;
+ * `device("macbook-pro-16", { clearance: 1 })` is the cutter that leaves a
+ * millimetre all round it — grown outward, its corner and edge radii grown
+ * with it, which is what `.offset()` would do and what a holder cuts out of
+ * itself to wrap the real thing.
+ */
+export function device(name: string, options: { clearance?: number } = {}): Shape {
+  const body = DEVICES[name];
+  if (!body) {
+    throw new Error(
+      `unknown device ${JSON.stringify(name)}; DEVICES has ${Object.keys(DEVICES).join(", ")}`,
+    );
+  }
+  const clearance = options.clearance ?? 0;
+  if (!(clearance >= 0)) throw new Error("device clearance must be zero or more, in mm");
+  const thickness = body.thickness + 2 * clearance;
+  const edge = body.edgeRadius + clearance;
+  if (2 * edge >= thickness) {
+    throw new Error(
+      `device ${name} is ${thickness} mm thick with this clearance, too thin for its ${edge} mm edge radius twice over`,
+    );
+  }
+  const slab = box(body.length + 2 * clearance, body.width + 2 * clearance, thickness)
+    .edges("|Z")
+    .expect({ count: 4 })
+    .fillet(body.cornerRadius + clearance);
+  if (edge <= 0) return slab;
+  return slab
+    .edges(">Z")
+    .expect({ count: 8 })
+    .fillet(edge)
+    .edges("<Z")
+    .expect({ count: 8 })
+    .fillet(edge);
+}
+
+/**
+ * The square VESA mounting patterns, as four points for `repeat()`: MIS-D at
+ * 75 and 100 mm on M4, MIS-E/F at 200 mm on M6. Centred on the origin, the
+ * way a monitor arm's plate is; pick rows off the list with `filter` when a
+ * bracket only reaches one of them.
+ */
+export function vesaPattern(size: 75 | 100 | 200): [number, number][] {
+  if (size !== 75 && size !== 100 && size !== 200) {
+    throw new Error(`vesaPattern takes 75, 100 or 200 (mm between holes), not ${size}`);
+  }
+  return grid(2, 2, size, size);
+}
+
+// ---------------------------------------------------------------------------
+// Drawing in the plane. The arithmetic every placed feature otherwise repeats
+// by hand: a point some distance along an edge, where two edges meet, a line
+// moved sideways by a wall thickness, the convex outline through a few
+// points. Pure arithmetic on numbers the script already has — a script runs
+// before the kernel does, so nothing here can ask the built part where an
+// edge ended up; list_entities and check_fit are the measured route for that.
+// ---------------------------------------------------------------------------
+
+/** A straight line in the XY plane through two points, with a direction. */
+export class Line2d {
+  constructor(
+    readonly from: [number, number],
+    readonly to: [number, number],
+  ) {
+    if (Math.hypot(to[0] - from[0], to[1] - from[1]) < 1e-9) {
+      throw new Error("a line needs two distinct points");
+    }
+  }
+
+  /** Unit direction from `from` toward `to`. */
+  direction(): [number, number] {
+    const dx = this.to[0] - this.from[0], dy = this.to[1] - this.from[1];
+    const len = Math.hypot(dx, dy);
+    return [dx / len, dy / len];
+  }
+
+  /** Unit normal, the direction turned a quarter turn anticlockwise: left of travel. */
+  normal(): [number, number] {
+    const [dx, dy] = this.direction();
+    return [-dy, dx];
+  }
+
+  /** The point `distance` mm along the line from `from`; negative goes back. */
+  pointAt(distance: number): [number, number] {
+    const [dx, dy] = this.direction();
+    return [this.from[0] + dx * distance, this.from[1] + dy * distance];
+  }
+
+  /** Length of the segment `from` to `to`. */
+  length(): number {
+    return Math.hypot(this.to[0] - this.from[0], this.to[1] - this.from[1]);
+  }
+
+  /**
+   * The same line moved sideways by `distance`, to the left of its travel;
+   * negative moves it right. A wall's inner face from its outer one, the
+   * edge of a band from its centreline.
+   */
+  offset(distance: number): Line2d {
+    const [nx, ny] = this.normal();
+    return new Line2d(
+      [this.from[0] + nx * distance, this.from[1] + ny * distance],
+      [this.to[0] + nx * distance, this.to[1] + ny * distance],
+    );
+  }
+
+  /**
+   * Where this line crosses `other`, extended as far as needed in both
+   * directions. Throws when they are parallel, which is the answer in that
+   * case rather than a point far away.
+   */
+  meet(other: Line2d): [number, number] {
+    const [ax, ay] = this.from, [bx, by] = this.to;
+    const [cx, cy] = other.from, [dx, dy] = other.to;
+    const denominator = (bx - ax) * (dy - cy) - (by - ay) * (dx - cx);
+    if (Math.abs(denominator) < 1e-12) {
+      throw new Error("the two lines are parallel and never meet");
+    }
+    const t = ((cx - ax) * (dy - cy) - (cy - ay) * (dx - cx)) / denominator;
+    return [ax + t * (bx - ax), ay + t * (by - ay)];
+  }
+
+  /** The line's y at a given x, for a line that is not vertical. */
+  yAt(x: number): number {
+    const [dx, dy] = this.direction();
+    if (Math.abs(dx) < 1e-12) throw new Error("a vertical line has no single y at an x");
+    return this.from[1] + ((x - this.from[0]) / dx) * dy;
+  }
+
+  /** The line's x at a given y, for a line that is not horizontal. */
+  xAt(y: number): number {
+    const [dx, dy] = this.direction();
+    if (Math.abs(dy) < 1e-12) throw new Error("a horizontal line has no single x at a y");
+    return this.from[0] + ((y - this.from[1]) / dy) * dx;
+  }
+}
+
+/** A line through two points, or from a point in a direction at an angle in degrees. */
+export function line2d(from: [number, number], to: [number, number]): Line2d;
+export function line2d(from: [number, number], angleDegrees: number): Line2d;
+export function line2d(from: [number, number], toOrAngle: [number, number] | number): Line2d {
+  if (typeof toOrAngle === "number") {
+    const a = (toOrAngle * Math.PI) / 180;
+    return new Line2d(from, [from[0] + Math.cos(a), from[1] + Math.sin(a)]);
+  }
+  return new Line2d(from, toOrAngle);
+}
+
+/**
+ * The convex outline through a set of points, anticlockwise, ready for
+ * `extrude`. What a fan, a flare or a gusset is: "the shape that joins these
+ * corners", with the convexity `extrude` demands guaranteed by construction
+ * rather than checked after. Points inside the hull are dropped; three
+ * distinct points that are not collinear are the least it accepts.
+ */
+export function hull(points: [number, number][]): [number, number][] {
+  const unique = points
+    .map(([x, y]): [number, number] => [x, y])
+    .sort((a, b) => a[0] - b[0] || a[1] - b[1])
+    .filter((p, i, all) => i === 0 || Math.hypot(p[0] - all[i - 1][0], p[1] - all[i - 1][1]) > 1e-9);
+  if (unique.length < 3) throw new Error("a hull needs at least three distinct points");
+  const cross = (o: [number, number], a: [number, number], b: [number, number]) =>
+    (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const lower: [number, number][] = [];
+  for (const p of unique) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 1e-9) lower.pop();
+    lower.push(p);
+  }
+  const upper: [number, number][] = [];
+  for (const p of [...unique].reverse()) {
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 1e-9) upper.pop();
+    upper.push(p);
+  }
+  const outline = [...lower.slice(0, -1), ...upper.slice(0, -1)];
+  if (outline.length < 3) throw new Error("the points are collinear; a hull needs an area");
+  return outline;
 }
 
 /** A point in an extruded outline: `[x, y]`, in the plane the shape is drawn on. */

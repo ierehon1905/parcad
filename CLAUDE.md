@@ -225,6 +225,8 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | crash handling, timeouts, breadcrumbs | `crates/parcad-occt/src/host.rs` |
 | the authoring DSL | `app/src/dsl.ts` (shared with `tools/run.ts`) |
 | drill and clearance sizes | `METRIC_FASTENERS` in `app/src/dsl.ts` — never a literal in a part |
+| lines, offsets, intersections and convex outlines in the plane | `line2d`, `Line2d`, `hull` in `app/src/dsl.ts` — arithmetic on numbers the script has; nothing reads the built part |
+| the real objects a holder wraps | `DEVICES` in `app/src/dsl.ts`, via `device(name, { clearance })` — sizes published, radii labelled as read off photographs |
 | what the app can do at all | `app/src-tauri/src/service.rs` — never a transport file |
 | the IPC, HTTP and MCP adapters | `app/src-tauri/src/lib.rs`, `http.rs`, `mcp.rs` |
 | the sandbox agent scripts run in | `app/src-tauri/src/script.rs` |
@@ -248,9 +250,11 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | what "still correct" means | `eval/cases/*.json`, `eval/scripts/*.js` |
 | the seed parts | `examples/*.js` — indexed in `examples/README.md`; copied into the project folder on first run, not read by the picker. Changing one does **not** change the user's copy: see `examples/fusion360/README.md`, "A seeded copy is frozen" |
 | what the DSL makes hard | `docs/DSL_GAPS.md` |
+| why edge selection needs a scope, and what replaces it | `docs/SELECTORS.md` |
 | which op to add next, and why not the others | `docs/OP_ROADMAP.md` |
 | which of all the open fronts to do first | `docs/NEXT.md` |
 | measuring a part without looking at it | `crates/parcad-core/src/probe.rs`, `thickness.rs` |
+| whether the part fits the thing it holds | `check_fit` (MCP), `parcad --fit REFERENCE.json` (CLI), both over `service::check_fit` and `backend::check_fit`; the reference is a script, usually `device(...)` |
 | reading a foreign STEP export into authorable numbers | `StepProbe` in `crates/parcad-occt/src/protocol.rs`; CLI `parcad --probe-step`, MCP `probe_step_export`, both over `service::probe_step` — the C++ half is `Shape_geometry_json` in the vendored wrapper |
 | cutting a part open to see inside it | `view.rs`'s `Section`, then `render.rs` for the agent and `app/src/viewport.ts` for the window |
 | what an agent can see, and what to tell it instead | `docs/PERCEPTION.md` |

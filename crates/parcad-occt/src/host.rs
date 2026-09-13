@@ -180,6 +180,7 @@ pub fn evaluate(doc: &Doc, opts: &Options) -> Result<Success, OcctError> {
         Request {
             doc: Some(doc.clone()),
             probe_step: None,
+            fit_against: None,
             inspect_target: None,
             deflection: opts.deflection,
             step_path: opts.step_path.clone(),
@@ -206,6 +207,7 @@ pub fn probe_step(path: &std::path::Path, opts: &Options) -> Result<crate::proto
         Request {
             doc: None,
             probe_step: Some(path.to_path_buf()),
+            fit_against: None,
             inspect_target: None,
             deflection: opts.deflection,
             step_path: None,
@@ -221,6 +223,34 @@ pub fn probe_step(path: &std::path::Path, opts: &Options) -> Result<crate::proto
     }
 }
 
+/// Measure how a part sits against the object it is meant to hold: the volume
+/// the two solids share, or the clearance between them when they share none.
+/// Both are built in the isolated kernel, like an evaluation.
+pub fn check_fit(
+    doc: &Doc,
+    reference: &Doc,
+    opts: &Options,
+) -> Result<crate::protocol::FitReport, OcctError> {
+    match run_worker(
+        Request {
+            doc: Some(doc.clone()),
+            probe_step: None,
+            fit_against: Some(reference.clone()),
+            inspect_target: None,
+            deflection: opts.deflection,
+            step_path: None,
+            stl_path: None,
+        },
+        opts,
+    )? {
+        Response::Fit(report) => Ok(*report),
+        Response::Error { stage, message } => Err(OcctError::Rejected { stage, message }),
+        _ => Err(OcctError::Host(
+            "the kernel returned the wrong reply kind for a fit request".into(),
+        )),
+    }
+}
+
 /// Resolve the exact B-rep entities targeted by one edge or vertex treatment.
 pub fn inspect_edge_target(
     doc: &Doc,
@@ -231,6 +261,7 @@ pub fn inspect_edge_target(
         Request {
             doc: Some(doc.clone()),
             probe_step: None,
+            fit_against: None,
             inspect_target: Some(node),
             deflection: opts.deflection,
             step_path: None,

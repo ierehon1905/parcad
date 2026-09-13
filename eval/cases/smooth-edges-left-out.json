@@ -1,0 +1,23 @@
+{
+  "name": "smooth-edges-left-out",
+  "script": "eval/scripts/smooth-edges-left-out.js",
+  "why": "A treatment skips tangent-continuous edges unless asked for them: after two corners are rounded, |Z also matches their four tangent lines, and filleting those failed at every radius with a message that named a count. The expectation of 2 is the assertion that they are left out and the two sharp corners are what gets rounded.",
+  "brep": {
+    "size": [
+      40.0,
+      30.0,
+      20.0
+    ],
+    "volume_mm3": 23749.707,
+    "area_mm2": 5054.604,
+    "triangles": 252,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1187.485,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 10,
+    "edges": 48,
+    "curves": 24
+  }
+}

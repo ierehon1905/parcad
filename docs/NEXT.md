@@ -80,6 +80,34 @@ Two honest readings, which are different products:
 below item 3 should be started until it is: the two readings disagree about what
 is worth building next, so building either first is a bet placed early.
 
+## After the laptop holder — what one part's worth of friction left open
+
+On 2026-09-12 a model built a VESA-mounted V holder for a 16" MacBook Pro
+and the day's cost went into [DSL_GAPS.md](DSL_GAPS.md) §9 and
+[SELECTORS.md](SELECTORS.md). Most of it was fixed the same day: selectors
+by angle, feature and length, four kernel defects, a table of real objects,
+a fit check, lines and hulls in the plane, and three field cases that a
+small model reads SOUND. What is left, in the order it would pay:
+
+1. **A sketch the model can see.** The one input that moved the design was
+   a drawing over the render, done on a phone through a throwaway page. In
+   the app it is a canvas over the viewport, a PNG beside `part.js`, and one
+   MCP call that returns it. Half a day.
+2. **The rest of the selector proposal**: `faces()` as a query, `any`, and
+   the compact string lowering to the object form so there is one spec.
+   SELECTORS.md §3 lists them. A day.
+3. **Construction geometry in the graph.** `line2d` and `hull` are
+   arithmetic on the script's own numbers; a line taken *from a built edge*
+   needs the graph to carry it, which is OP_ROADMAP's construction-plane row
+   and the real "place against geometry". A week, and the product call in
+   §3 above applies.
+4. **Measure the radii.** `DEVICES` carries corner and edge radii read off
+   photographs, labelled so. A caliper on each machine settles them for
+   everyone. An hour with the hardware.
+5. **Two solids that stay two.** `check_fit` measures a reference that is
+   never joined; a part printed in two halves still needs a flag and two
+   evaluations. The multibody row of DSL_GAPS §0, from its cheap end.
+
 ## The small win, whenever there is room for one
 
 **Arcs in a section.** `Edge::arc` is already bound; it unlocks sealing grooves,

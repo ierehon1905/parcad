@@ -1,6 +1,7 @@
 use crate::primitives::{make_axis_2, make_point};
 use cxx::UniquePtr;
 use glam::{dvec3, DVec3};
+use crate::primitives::Shape;
 use opencascade_sys::ffi;
 
 pub struct Edge {
@@ -63,6 +64,23 @@ impl Edge {
         );
 
         Self::from_make_edge(make_edge)
+    }
+
+    /// Whether this edge runs against its curve's parameter direction in the
+    /// wire it was taken from. Added for parcad: with the owning face's
+    /// outward normal, the wire direction says which side of the edge that
+    /// face lies on, which is what tells a convex edge from a concave one.
+    pub fn is_reversed(&self) -> bool {
+        ffi::cast_edge_to_shape(&self.inner).Orientation() == ffi::TopAbs_Orientation::TopAbs_REVERSED
+    }
+
+    /// The edge a shape is, when that shape is one. Added for parcad, the
+    /// way back from `Shape::from(edge)` after a transform.
+    pub fn from_shape(shape: &Shape) -> Self {
+        let edge = ffi::TopoDS_cast_to_edge(&shape.inner);
+        Self {
+            inner: ffi::TopoDS_Edge_to_owned(edge),
+        }
     }
 
     pub fn start_point(&self) -> DVec3 {

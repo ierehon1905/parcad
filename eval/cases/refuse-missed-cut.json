@@ -1,0 +1,15 @@
+{
+  "name": "refuse-missed-cut",
+  "script": "eval/scripts/refuse-missed-cut.js",
+  "why": "A cut whose tool lies wholly outside the material made no edge and took no face, and used to pass silently: four VESA holes drawn past the edge of a hub vanished that way. The refusal names both extents. B-rep only: the implicit field has no topology to count and a miss there is a no-op by construction.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "removed nothing",
+        "meet nowhere",
+        "tool to leave out"
+      ]
+    }
+  }
+}

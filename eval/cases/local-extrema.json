@@ -1,0 +1,23 @@
+{
+  "name": "local-extrema",
+  "script": "eval/scripts/local-extrema.js",
+  "why": "With `on`, extrema are the feature's own: the highest edges of the low block are 20 mm below the part's highest, and a document-global `at` would have found nothing there. Count 3 is the assertion, the fourth top edge being the inside corner against the tall block. The tall block is wider so no side faces merge: a face the unify pass makes from two features carries both names, and an `on` query reaches across such a join — measured here first, when equal widths made the tall block's top edges the low block's.",
+  "brep": {
+    "size": [
+      80.0,
+      40.0,
+      30.0
+    ],
+    "volume_mm3": 59906.39,
+    "area_mm2": 11105.941,
+    "triangles": 130,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 2800.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 13,
+    "edges": 62,
+    "curves": 31
+  }
+}

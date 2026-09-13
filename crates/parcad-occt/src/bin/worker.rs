@@ -257,6 +257,16 @@ fn run() -> Response {
             message: "the request carries no document and no probe; nothing to do".into(),
         };
     };
+    if let Some(reference) = request.fit_against {
+        breadcrumb("checking the fit");
+        return match backend::check_fit(&doc, &reference) {
+            Ok(report) => Response::Fit(Box::new(report)),
+            Err(e) => Response::Error {
+                stage: "checking the fit".into(),
+                message: format!("{e:#}"),
+            },
+        };
+    }
     if let Some(node) = request.inspect_target {
         breadcrumb(&format!("resolving target for node {node}"));
         return match backend::inspect_edge_target(&doc, node) {

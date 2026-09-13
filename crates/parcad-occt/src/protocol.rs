@@ -21,6 +21,10 @@ pub struct Request {
     /// application with it.
     #[serde(default)]
     pub probe_step: Option<PathBuf>,
+    /// Lay this second document against `doc` and measure the fit instead of
+    /// evaluating: interference volume, and the clearance when there is none.
+    #[serde(default)]
+    pub fit_against: Option<Doc>,
     /// If present, resolve this selected-edge treatment instead of building the
     /// finished part. Used by the editor's source-to-viewport target preview.
     #[serde(default)]
@@ -258,6 +262,26 @@ pub struct SurfacePlacement {
 /// `Shape_geometry_json` emits, so the two schemas are the same schema and a
 /// drift fails loudly here. `face_types` and `polygon` are derived on the
 /// worker side after that parse.
+/// How a part and the object it is meant to hold sit against each other,
+/// measured on the two exact solids. The answer to "does it fit", as a number
+/// with a place, rather than a picture to squint at.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FitReport {
+    /// `"clear"`, `"touching"`, or `"interfering"`.
+    pub verdict: String,
+    /// Volume the two solids share, mm³ — the material that would have to be
+    /// removed for the object to fit. Zero when they do not overlap.
+    pub interference_mm3: f64,
+    /// Least distance between the two when they do not overlap, mm; zero when
+    /// they touch, absent when they interfere.
+    pub clearance_mm: Option<f64>,
+    /// Where that clearance is measured: a point on the part, then one on the
+    /// reference. Absent when they interfere.
+    pub closest_mm: Option<[[f64; 3]; 2]>,
+    pub part_bounds: [[f64; 3]; 2],
+    pub reference_bounds: [[f64; 3]; 2],
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StepProbe {
     pub solids: Vec<SolidProbe>,
@@ -403,6 +427,7 @@ pub enum Response {
     Ok(Box<Success>),
     TargetPreview(TargetPreview),
     StepProbe(Box<StepProbe>),
+    Fit(Box<FitReport>),
     /// The worker understood the request and refused it — a bad radius, an
     /// unsupported operation, a boolean that produced nothing.
     Error {

@@ -7,11 +7,11 @@
     "size": [
       70.0,
       45.0,
-      28.0
+      26.0
     ],
-    "volume_mm3": 22130.037,
-    "area_mm2": 22299.689,
-    "triangles": 45368,
+    "volume_mm3": 16216.31,
+    "area_mm2": 16914.82,
+    "triangles": 30096,
     "bodies": 1,
     "voids": 0,
     "stands_on_mm2": 3028.217,
@@ -22,18 +22,18 @@
     "size": [
       70.0,
       45.0,
-      28.0
+      26.0
     ],
-    "volume_mm3": 22136.263,
-    "area_mm2": 22218.311,
-    "triangles": 4988,
+    "volume_mm3": 16267.722,
+    "area_mm2": 17036.13,
+    "triangles": 3976,
     "bodies": 1,
     "voids": 0,
     "stands_on_mm2": 2496.0,
     "stands_on_patches": 1,
     "watertight": true,
-    "faces": 53,
-    "edges": 214,
-    "curves": 98
+    "faces": 52,
+    "edges": 220,
+    "curves": 102
   }
 }

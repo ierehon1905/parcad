@@ -238,8 +238,20 @@ It returns valid-looking wrong answers rather than failing:
   `clean()` does not help.
 - `offset_surface(+3)` can return an **inside-out** solid; the next offset then
   runs backwards (74×49×32 instead of 66×41×24).
+- On **any body with a fillet on it** it returns that inside-out solid every
+  time: right size, right shape, every face pointing in, and a later cut or
+  union reads it as all of space minus the part — `box(50,30,20).edges("|Z")
+  .fillet(5).offset(1)` cut *nothing* out of a block until this was caught.
+  The bounding box cannot see it. `Shape::signed_volume` (`BRepGProp`) can:
+  it comes back negative, and `Shape::oriented_outward`
+  (`BRepLib::OrientClosedSolid`) turns it right side out; `ShapeFix` does
+  not. Both are parcad additions to the vendored crates. Feed the builder the
+  solid, not the compound a treatment wraps it in — `single_solid()` first —
+  or the offset of a compound is a compound and the reorientation passes it
+  through untouched.
 
-This is why every offset carries a bounding-box post-condition. Don't remove it.
+This is why every offset carries a bounding-box post-condition *and* a sign
+check. Don't remove either.
 
 ### A filleted box is a `Compound`, not a `Solid`
 
@@ -366,6 +378,26 @@ drilled along X match `adjacentTo: { faceNormal: "+z" }`. On a part with
 cross-drillings — `examples/manifold-block.js` — the "opens onto the top face"
 query silently picked up two extra rims. Use `at: { z: "max" }` there; the
 face-normal form is fine when every hole is drilled along one axis.
+
+### A name on a face ends at `clean()`, and a moved copy is not the face it copies
+
+Two ways face provenance died before it worked, both measured on the V holder:
+
+- **The boolean's history stops at the boolean.** `unified()` runs
+  `ShapeUpgrade_UnifySameDomain` afterwards, and the coplanar faces it merges —
+  a cup's side face with the fan's — are new faces the boolean never saw. The
+  cup's outer corner had no tagged face and `{ on: "cup" }` missed it. The fix
+  is `Shape::into_unified`, which keeps the unify pass's own
+  `BRepTools_History`, and `unified_tracked` in `backend.rs`, which follows
+  every name through it.
+- **`Modified(S)` answers only for the sub-shape it was given.** Carrying a
+  tracked face through a rotation by transforming it separately produces an
+  exactly placed *copy*; the next boolean reports it neither modified nor
+  deleted, the copy survives with its old boundary, and after the union it
+  matches nothing. `through_transform` therefore trades each moved copy for
+  the transformed shape's own face or edge with the same geometry before any
+  later operation asks. The mirrored cup is what found this: the unmirrored
+  one kept its name and the mirrored one lost it at the same union.
 
 ### `generatedBy` names the cut, not the tool
 
@@ -574,6 +606,24 @@ CLAUDE_CONFIG_DIR=/tmp/probe-cfg claude mcp list
 **From the field suite it reads as "no model can use these tools."** The tell is
 uniformity: every trial failing the same way in both models and both arms, which
 a real distribution does not do.
+
+## A tools/list reply without `ttlMs` and `cacheScope` hides the surface too
+
+Same symptom as the malformed schema above, different cause, found the same
+way. Claude Code 2.1.268 negotiates MCP protocol 2026-07-28 and validates
+every `tools/list` reply against a schema in which `ttlMs` (a number) and
+`cacheScope` (`public` or `private`) are required; rmcp 3.1 leaves both off
+the wire when unset. `--mcp-config` said `connected`, the model saw no
+parcad tools, every field trial failed the same way, and curl saw fifteen
+tools. `claude mcp list` did not show it either this time — only
+`claude -p --debug`, in `~/.claude/debug/`, with `tools/list failed (Invalid
+result …)`. `mcp.rs` now writes its own `list_tools` with both fields;
+`the_tool_list_carries_a_ttl_on_the_wire` pins them.
+
+Found beside it: the client truncates server `instructions` at 2048
+characters and says so only in that debug log. Ours were 3511, and the
+paragraph that fell off was the one about selectors.
+`the_instructions_fit_the_client_window` holds the length.
 
 ## A union of pieces that do not touch each other kills the fuse that joins them
 
