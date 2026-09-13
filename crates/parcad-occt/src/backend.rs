@@ -1454,9 +1454,10 @@ fn select_edges(
                         bail!(
                             "node {id} ({label}) selector names the feature {name:?}, which has no \
                              live faces here. A tag names the faces of the node it is on; they \
-                             survive booleans, fillets, chamfers and rigid motions, and are lost \
-                             through offset, shell and intersection. Features with faces at this \
-                             point: {}",
+                             survive booleans, fillets, chamfers and rigid motions, and a name \
+                             carried into an offset, a shell or an intersection is lost there, \
+                             though that node's own tag still names its result. Features with \
+                             faces at this point: {}",
                             if known.is_empty() { "none".to_owned() } else { known.join(", ") }
                         );
                     }
@@ -2317,7 +2318,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     features,
                 };
             }
-            acc
+            acc.named(node.tag.as_deref())
         }
 
         Op::Sphere { r } => {
@@ -2806,7 +2807,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 // The fillet builder returns a compound wrapping the solid.
                 // Left as a compound, the boolean in a later `shell` or `cut`
                 // succeeds and produces nothing at all.
-                return Ok(BuiltShape::untracked(grown.single_solid().unwrap_or(grown)));
+                return Ok(BuiltShape::untracked(grown.single_solid().unwrap_or(grown)).named(node.tag.as_deref()));
             }
 
             let solid = build_node(doc, *child, offset)?;
@@ -2860,6 +2861,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 lineage: EdgeLineage::default(),
                 features: solid.features,
             }
+            .named(node.tag.as_deref())
         }
 
         Op::Shell { child, thickness } => {
@@ -2904,6 +2906,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 lineage: EdgeLineage::default(),
                 features: solid.features,
             }
+            .named(node.tag.as_deref())
         }
 
         Op::Fillet {
