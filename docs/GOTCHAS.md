@@ -243,29 +243,43 @@ union(sphere(10), sphere(10).rotate("x", 90))
 ```
 
 The fuse returns **4188.79 mm³ exactly** (`BRepGProp`), already one face, and
-`UnifySameDomain` changes nothing. `BRepMesh` then triangulates that face as 198
+`BRepCheck` calls it valid. `BRepMesh` then triangulated that face as 198
 triangles enclosing **727.70 mm³**, a 10 × 20 × 20 closed fragment: watertight,
 one body. Every number the report shows is read off the mesh, as are the
 preview and the STL, so all of them described the sliver; only a STEP export
 was right.
 
-| union with `sphere(10)` | result |
-|---|---|
-| itself, or turned about Z, or 180° about X | right |
-| turned 90° about X, also both moved to x=5 | closed fragment, 727.70 mm³ |
-| turned 37° or 89° about X | open mesh, refused by the watertight backstop |
-| `cylinder(5,20)` ∪ itself turned 45° about Z | open mesh, refused |
-| `torus(10,2)` ∪ itself turned 30° about Z | "a mesh with no vertices" |
-| any of these moved 0.01 mm | right |
+The common factor is an operand unioned with a rotated or mirrored copy of
+itself, so both share one curved surface with different parameterisations —
+which a figurine does every time a copy lands on the original. It is three
+defects, each in a representation rather than the geometry:
 
-The common factor is two operands sharing a curved surface with different
-parameterisations, which a figurine does every time a mirrored or rotated copy
-lands on the original. The worker now compares the mesh's enclosed volume with
-the solid's and refuses past `2 · area · deflection`, the most a tessellation
-within that deflection can account for. The whole corpus sits inside the bound.
-`eval/cases/refuse-coincident-sphere-mesh.json` pins it. It does not fix the
-mesher. Remeshing the face is the next thing to try, and the torus row still
-refuses with a message that names no fix.
+| union with its copy | before | cause | after |
+|---|---|---|---|
+| `sphere(10)` turned 90° about X, or also moved | closed fragment, 727.70 mm³ | copy's seam left on the face as an INTERNAL wire; BRepMesh meshes only the region it cuts off | 4188.79 mm³ B-rep, mesh 4182.71 mm³ — plain `sphere(10)`'s |
+| `sphere(10)` turned 37° or 89° about X | open mesh (4 / 2 edges) | same | same |
+| `cylinder(5,20)` turned 45° about Z | open mesh, B-rep 523.60 mm³ | `Shape_drop_unused_seam_pcurves` dropped a seam pcurve the other half of the split side still used — pcurves are per surface, not per face | 1570.80 mm³, 3 faces, mesh = plain cylinder's |
+| `torus(10,2)` turned 30° about Z | "a mesh with no vertices" | `UnifySameDomain` welds the halves into one face with no wires; BRepMesh skips it | 789.57 mm³ B-rep, mesh 786.57 |
+
+The fixes are in the vendored crates (see their PARCAD-CHANGES.md): after every
+unify, `parcad_tidy_faces` drops INTERNAL edges and rebuilds a wireless face
+with its natural bounds, and the seam pass keeps a seam another face on the
+same surface borders. `AllowInternalEdges(false)` does not strip existing
+internal edges; it only stops the unifier making new ones. Measured over
+sphere, cylinder, torus and cone, each unioned with itself turned 30/45/89/90/120/180°
+about X, Y and Z and mirrored in each plane: all 84 build and pass both
+backstops. In the corpus only `tangent-blend` moved — two internal imprint
+lines on its side walls gone, 50 edges to 48, volume unchanged.
+`ShapeFix_Shape` also rebounds the torus but leaves the sphere's internal wire;
+`ShapeUpgrade_ShapeDivideClosed` makes the sphere BRepCheck-invalid; a finer
+angular deflection meshes the same fragment.
+
+The worker keeps three backstops behind this: a mesh that does not close; a
+face the mesher left untriangulated; and a closed mesh whose enclosed volume
+differs from the solid's by more than `2 · area · deflection`, the most a
+tessellation within that deflection can account for. Each names the fix for a
+cause not yet repaired: overlap the operands by 0.01 mm instead of letting a
+copy coincide. `eval/cases/coincident-*-union*.json` hold the four rows down.
 
 Two guards were tried first and taken out because the defect never reached
 them: a union volume floor (result ≥ larger operand) and a volume check across

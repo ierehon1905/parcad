@@ -209,3 +209,26 @@ survive a union whose faces it shares.
 `BRepExtrema_DistShapeShape` through the sys crate's new binding: the least
 distance between two shapes and the points it joins. The clearance half of
 parcad's fit check.
+
+## `parcad_tidy_faces`, after every unify
+
+`include/history.hxx` rewrites two face representations BRepMesh cannot
+triangulate, after `ShapeUpgrade_UnifySameDomain` in both `clean()` and
+`into_unified()` (whose history now merges the rewrite's, so a name follows
+the rebuilt face and a dropped edge reads as deleted). Geometry is untouched;
+both are what a union of an operand with a rotated copy of itself leaves:
+
+- INTERNAL / EXTERNAL edges in a face are dropped. A sphere unioned with
+  itself turned about X keeps the copy's seam on the one result face as an
+  internal wire, and BRepMesh meshed only the region that wire cuts off: a
+  closed 727.70 mm³ fragment of an exact 4188.79 mm³ solid.
+  `AllowInternalEdges(false)` does not remove them; it only stops the unifier
+  making new ones.
+- A face with no wires at all is rebuilt with its surface's natural bounds.
+  The unifier welds two halves of a torus into exactly that, which BRepCheck
+  accepts and BRepMesh skips.
+
+Across the eval corpus the only shape that changed is `tangent-blend`, which
+loses two internal imprint lines on its side walls (50 edges to 48; volume
+unchanged). See docs/GOTCHAS.md, "A correct solid can mesh as a closed
+fragment of itself".

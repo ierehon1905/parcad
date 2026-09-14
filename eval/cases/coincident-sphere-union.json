@@ -1,0 +1,23 @@
+{
+  "name": "coincident-sphere-union",
+  "script": "eval/scripts/coincident-sphere-union.js",
+  "why": "A ball unioned with itself turned a quarter about X. The fuse was always exact (4188.79 mm³, one face), but the copy's seam stayed on that face as an internal wire and BRepMesh meshed only the region it cut off: a watertight 727.70 mm³ fragment, then a refusal from the worker's volume backstop. Internal edges are now dropped after the unify pass, and the recorded mesh is exactly what plain sphere(10) meshes to: 4182.71 mm³ in 10106 triangles, 20 mm each way. Goes red if the seam comes back, as a volume a fifth of this or as the backstop's refusal. docs/GOTCHAS.md has the table.",
+  "brep": {
+    "size": [
+      19.995,
+      19.988,
+      20.0
+    ],
+    "volume_mm3": 4182.713,
+    "area_mm2": 1255.665,
+    "triangles": 10106,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 0.0,
+    "stands_on_patches": 0,
+    "watertight": true,
+    "faces": 1,
+    "edges": 6,
+    "curves": 0
+  }
+}

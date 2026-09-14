@@ -1,0 +1,23 @@
+{
+  "name": "coincident-sphere-union-oblique",
+  "script": "eval/scripts/coincident-sphere-union-oblique.js",
+  "why": "coincident-sphere-union at 37 degrees, where the internal seam wire made the mesher produce an open fragment (4 edges bordering one triangle) instead of a closed one, refused by the watertight backstop rather than the volume one. Same cause, same fix; recorded because the two backstops caught it differently and a fix for one angle is not evidence for the other. Exact B-rep 4188.79 mm³; the mesh matches plain sphere(10).",
+  "brep": {
+    "size": [
+      19.995,
+      19.988,
+      20.0
+    ],
+    "volume_mm3": 4182.713,
+    "area_mm2": 1255.665,
+    "triangles": 10106,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 0.0,
+    "stands_on_patches": 0,
+    "watertight": true,
+    "faces": 1,
+    "edges": 6,
+    "curves": 0
+  }
+}

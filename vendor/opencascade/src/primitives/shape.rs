@@ -450,9 +450,8 @@ impl Shape {
         upgrader.pin_mut().SetAngularTolerance(1.0e-4);
         upgrader.pin_mut().Build();
 
-        let upgraded_shape = upgrader.Shape();
-
-        self.inner = ffi::TopoDS_Shape_to_owned(upgraded_shape);
+        // Faces the mesher cannot read, rewritten; see `parcad_tidy_faces`.
+        self.inner = history::parcad_tidy_faces_of(upgrader.Shape());
     }
 
     /// The least distance to `other`, and the two points it is measured

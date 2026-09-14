@@ -362,10 +362,28 @@ fn run() -> Response {
                  exported or measured, so it is refused here rather than handed on. \
                  The one cause this backstop has caught — a blend ending against a \
                  face its boss is exactly tangent to — is fixed by a vendored kernel \
-                 patch, so reaching this message means something new produced it; \
-                 please report the script: see docs/GOTCHAS.md",
+                 patch. The other known cause is two operands sharing a curved surface, \
+                 a rotated or mirrored copy landing on the original: overlap them by \
+                 0.01 mm instead of letting them coincide. Otherwise something new \
+                 produced this; please report the script: see docs/GOTCHAS.md",
                 stats.non_manifold_edges,
                 stats.triangles * 3,
+            ),
+        };
+    }
+
+    if mesh.faces.len() < topology.faces {
+        return Response::Error {
+            stage: "tessellating".into(),
+            message: format!(
+                "the kernel built a solid with {} faces, but the mesher could triangulate \
+                 only {} of them, so the preview, the STL and every measurement would be \
+                 missing a surface; refused rather than shown. Seen when two operands \
+                 share a curved surface — a torus or sphere unioned with a rotated or \
+                 mirrored copy of itself. Overlap them by 0.01 mm instead of letting them \
+                 coincide, or leave out the copy that adds nothing",
+                topology.faces,
+                mesh.faces.len(),
             ),
         };
     }

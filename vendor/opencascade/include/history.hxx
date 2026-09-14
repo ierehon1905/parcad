@@ -20,6 +20,17 @@
 #include <vector>
 #include <BRepTools_History.hxx>
 #include <ShapeUpgrade_UnifySameDomain.hxx>
+#include <BRepBuilderAPI_MakeFace.hxx>
+#include <BRepTools_ReShape.hxx>
+#include <BRep_Builder.hxx>
+#include <BRep_Tool.hxx>
+#include <Geom_Surface.hxx>
+#include <Precision.hxx>
+#include <TopExp_Explorer.hxx>
+#include <TopoDS.hxx>
+#include <TopoDS_Face.hxx>
+#include <TopoDS_Iterator.hxx>
+#include <TopoDS_Wire.hxx>
 
 class ParcadBoolean {
  public:
@@ -141,6 +152,84 @@ inline std::unique_ptr<ParcadEdgeTreatment> parcad_chamfer_with_history(const To
   return std::unique_ptr<ParcadEdgeTreatment>(new ParcadEdgeTreatment(base, true));
 }
 
+// Two face representations BRepMesh cannot triangulate, rewritten without
+// touching geometry, with what became of each face and edge in `history`.
+//
+// - INTERNAL edges: a union of two operands sharing one curved surface (a
+//   sphere and its rotated copy) keeps the copy's seam imprinted on the result
+//   face as an internal wire. It bounds no material, but BRepMesh meshes only
+//   the region it cuts off: 4188.79 mm³ of sphere as a closed 727.70 mm³ piece.
+// - No wires at all: UnifySameDomain welds two halves of a torus into a face
+//   of the whole surface with no boundary, which BRepMesh skips entirely.
+//   Rebuilt with the surface's natural bounds (its seams).
+//
+// Returns `shape` itself when neither occurs. See docs/GOTCHAS.md, "A correct
+// solid can mesh as a closed fragment of itself". Added for parcad.
+inline TopoDS_Shape parcad_tidy_faces(const TopoDS_Shape& shape, BRepTools_History& history) {
+  BRepTools_ReShape reshape;
+  BRep_Builder builder;
+  bool changed = false;
+  for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next()) {
+    const TopoDS_Face face = TopoDS::Face(f.Current().Oriented(TopAbs_FORWARD));
+    if (reshape.IsRecorded(face)) {
+      continue;
+    }
+    if (!TopoDS_Iterator(face).More()) {
+      Handle(Geom_Surface) surface = BRep_Tool::Surface(face);
+      double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+      surface->Bounds(u0, u1, v0, v1);
+      if (Precision::IsInfinite(u0) || Precision::IsInfinite(u1) || Precision::IsInfinite(v0) ||
+          Precision::IsInfinite(v1)) {
+        continue;
+      }
+      BRepBuilderAPI_MakeFace bounded(surface, u0, u1, v0, v1, BRep_Tool::Tolerance(face));
+      if (!bounded.IsDone()) {
+        continue;
+      }
+      reshape.Replace(face, bounded.Face());
+      history.AddModified(face, bounded.Face());
+      changed = true;
+      continue;
+    }
+    bool has_internal = false;
+    for (TopExp_Explorer e(face, TopAbs_EDGE); e.More() && !has_internal; e.Next()) {
+      TopAbs_Orientation o = e.Current().Orientation();
+      has_internal = o == TopAbs_INTERNAL || o == TopAbs_EXTERNAL;
+    }
+    if (!has_internal) {
+      continue;
+    }
+    TopoDS_Face rebuilt = TopoDS::Face(face.EmptyCopied());
+    for (TopoDS_Iterator w(face); w.More(); w.Next()) {
+      if (w.Value().ShapeType() != TopAbs_WIRE) {
+        builder.Add(rebuilt, w.Value());
+        continue;
+      }
+      TopoDS_Wire wire;
+      builder.MakeWire(wire);
+      bool kept = false;
+      for (TopoDS_Iterator e(w.Value()); e.More(); e.Next()) {
+        TopAbs_Orientation o = e.Value().Orientation();
+        if (o == TopAbs_INTERNAL || o == TopAbs_EXTERNAL) {
+          history.Remove(e.Value());
+          continue;
+        }
+        builder.Add(wire, e.Value());
+        kept = true;
+      }
+      if (kept) {
+        wire.Orientation(w.Value().Orientation());
+        wire.Closed(w.Value().Closed());
+        builder.Add(rebuilt, wire);
+      }
+    }
+    reshape.Replace(face, rebuilt);
+    history.AddModified(face, rebuilt);
+    changed = true;
+  }
+  return changed ? reshape.Apply(shape) : shape;
+}
+
 // The same-domain unify pass parcad runs after every boolean, with its
 // history kept. Merging the coplanar faces a fuse leaves behind is what makes
 // a union read as one part, and it is also where a named face used to vanish:
@@ -153,9 +242,12 @@ class ParcadUnify {
     unify_.SetLinearTolerance(1.0e-4);
     unify_.SetAngularTolerance(1.0e-4);
     unify_.Build();
+    BRepTools_History tidied;
+    result_ = parcad_tidy_faces(unify_.Shape(), tidied);
+    unify_.History()->Merge(tidied);
   }
 
-  const TopoDS_Shape& result() const { return unify_.Shape(); }
+  const TopoDS_Shape& result() const { return result_; }
 
   std::unique_ptr<std::vector<TopoDS_Shape>> modified(const TopoDS_Shape& original) const {
     const NCollection_List<TopoDS_Shape>& list = unify_.History()->Modified(original);
@@ -166,8 +258,14 @@ class ParcadUnify {
 
  private:
   ShapeUpgrade_UnifySameDomain unify_;
+  TopoDS_Shape result_;
 };
 
 inline std::unique_ptr<ParcadUnify> parcad_unify_with_history(const TopoDS_Shape& shape) {
   return std::unique_ptr<ParcadUnify>(new ParcadUnify(shape));
+}
+
+inline std::unique_ptr<TopoDS_Shape> parcad_tidy_faces_of(const TopoDS_Shape& shape) {
+  BRepTools_History unused;
+  return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(parcad_tidy_faces(shape, unused)));
 }
