@@ -1,0 +1,68 @@
+{
+  "name": "two-boxes",
+  "script": "eval/scripts/two-boxes.js",
+  "why": "The smallest part in several bodies, held to numbers read off the script: 1000 and 2000 mm³ boxes 15 mm apart, never fused. The part-level bodies count of 2 is the intent here, and each named body is in one piece; a fuse creeping in would read as 1 body of 3000 mm³, and a body going missing as a volume short by exactly its own.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": [
+        "returns 2 bodies",
+        "needs the B-rep backend"
+      ]
+    },
+    "depth": 6
+  },
+  "brep": {
+    "size": [
+      45.0,
+      10.0,
+      10.0
+    ],
+    "volume_mm3": 3000.0,
+    "area_mm2": 1600.0,
+    "triangles": 24,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 300.0,
+    "stands_on_patches": 2,
+    "watertight": true,
+    "faces": 12,
+    "edges": 48,
+    "curves": 24,
+    "named_bodies": {
+      "left": {
+        "size": [
+          10.0,
+          10.0,
+          10.0
+        ],
+        "volume_mm3": 1000.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "right": {
+        "size": [
+          20.0,
+          10.0,
+          10.0
+        ],
+        "volume_mm3": 2000.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "left/right": {
+        "verdict": "clear",
+        "clearance_mm": 15.0,
+        "interference_mm3": 0.0
+      }
+    }
+  }
+}

@@ -1,0 +1,68 @@
+{
+  "name": "split-halves",
+  "script": "eval/scripts/split-halves.js",
+  "why": "A part printed in two halves — the shape DSL_GAPS §9 said needed a flag and two evaluations. Each half is 23800 minus a 735.419 mm³ circular segment of the bore, 23064.581 mm³ by the closed form in the script, the two sum to the one-piece block less the kerf, and the clearance between them is the 0.5 mm kerf exactly. Eight faces each: five of the box, the bore's arc, and the cut plane in two strips because the bore's chord parts it. The right half is the left mirrored, so a mirror that stopped reflecting would put the two on top of each other and read as interfering.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": [
+        "returns 2 bodies",
+        "needs the B-rep backend"
+      ]
+    },
+    "depth": 6
+  },
+  "brep": {
+    "size": [
+      60.0,
+      40.0,
+      20.0
+    ],
+    "volume_mm3": 46131.075,
+    "area_mm2": 10401.727,
+    "triangles": 312,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 2306.554,
+    "stands_on_patches": 2,
+    "watertight": true,
+    "faces": 16,
+    "edges": 72,
+    "curves": 36,
+    "named_bodies": {
+      "left": {
+        "size": [
+          29.75,
+          40.0,
+          20.0
+        ],
+        "volume_mm3": 23065.538,
+        "faces": 8,
+        "edges": 36,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "right": {
+        "size": [
+          29.75,
+          40.0,
+          20.0
+        ],
+        "volume_mm3": 23065.538,
+        "faces": 8,
+        "edges": 36,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "left/right": {
+        "verdict": "clear",
+        "clearance_mm": 0.5,
+        "interference_mm3": 0.0
+      }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 //! Script in, observation out, once per backend.
 
-use crate::case::{Observed, RefusalKind};
+use crate::case::{BetweenExpect, BodyExpect, Observed, RefusalKind};
 use anyhow::{Context, Result};
 use parcad_core::graph::Doc;
 use std::collections::BTreeMap;
@@ -68,6 +68,8 @@ pub fn run_implicit(doc: &Doc, depth: u8) -> Outcome {
                 stands_on: report.stands_on.clone(),
                 tags,
                 unlocated_tags,
+                named_bodies: BTreeMap::new(),
+                between_bodies: BTreeMap::new(),
             })
         }
         Err(e) => Outcome::Refused {
@@ -138,6 +140,41 @@ pub fn run_brep(doc: &Doc) -> Outcome {
         stands_on: tess.bed_contact(),
         tags,
         unlocated_tags,
+        // The same slice-and-measure the app's reply uses, for the same
+        // reason `locate_tags` is: a corpus pinning numbers the wire never
+        // carries is pinning the wrong numbers.
+        named_bodies: parcad_occt::measure_bodies(&s)
+            .into_iter()
+            .map(|b| {
+                let size = b.bounds.size();
+                (
+                    b.name,
+                    BodyExpect {
+                        size: [size.x, size.y, size.z],
+                        volume_mm3: b.mass.volume_mm3,
+                        faces: b.faces,
+                        edges: b.edges,
+                        watertight: b.stats.watertight,
+                        pieces: b.stats.bodies,
+                        voids: b.stats.voids,
+                    },
+                )
+            })
+            .collect(),
+        between_bodies: s
+            .between
+            .iter()
+            .map(|f| {
+                (
+                    format!("{}/{}", f.a, f.b),
+                    BetweenExpect {
+                        verdict: f.verdict.clone(),
+                        clearance_mm: f.clearance_mm,
+                        interference_mm3: f.interference_mm3,
+                    },
+                )
+            })
+            .collect(),
     })
 }
 

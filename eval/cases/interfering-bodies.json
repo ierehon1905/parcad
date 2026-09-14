@@ -1,0 +1,72 @@
+{
+  "name": "interfering-bodies",
+  "script": "eval/scripts/interfering-bodies.js",
+  "why": "Two bodies drawn through each other are reported, not refused: the boss's lower 5 mm lies inside the plate, so the pair is `interfering` by π·25·5 = 392.699 mm³ with no clearance to report, while each body alone is intact. The interference is exact (BRepGProp on the common solid) and holds at the corpus tolerance; the boss's own 1570.796 mm³ is read off its 0.01 mm mesh, which polygonises a Ø10 cylinder 0.13% short, hence the wider volume tolerance. The part-level bodies and voids are the count of two closed mesh shells that cross each other, recorded as measured and not to be read as the part's piece count — between_bodies is.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": [
+        "returns 2 bodies",
+        "needs the B-rep backend"
+      ]
+    },
+    "depth": 6
+  },
+  "brep": {
+    "size": [
+      40.0,
+      40.0,
+      25.0
+    ],
+    "volume_mm3": 17568.747,
+    "area_mm2": 5584.988,
+    "triangles": 292,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 1600.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 9,
+    "edges": 30,
+    "curves": 14,
+    "named_bodies": {
+      "boss": {
+        "size": [
+          9.995,
+          9.998,
+          20.0
+        ],
+        "volume_mm3": 1568.747,
+        "faces": 3,
+        "edges": 6,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "plate": {
+        "size": [
+          40.0,
+          40.0,
+          10.0
+        ],
+        "volume_mm3": 16000.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "plate/boss": {
+        "verdict": "interfering",
+        "interference_mm3": 392.699
+      }
+    },
+    "tolerance": {
+      "size_mm": 0.01,
+      "volume_pct": 0.2,
+      "triangles_pct": 5.0
+    }
+  }
+}

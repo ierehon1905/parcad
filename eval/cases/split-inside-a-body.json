@@ -1,0 +1,68 @@
+{
+  "name": "split-inside-a-body",
+  "script": "eval/scripts/split-inside-a-body.js",
+  "why": "The accidental split the old bodies count could not separate from an intended second body: `split` is one named body of 800 mm³ in two pieces, so its own pieces reads 2 while `whole` reads 1, and the part-level count is 3 free-standing pieces for a part that names two bodies. The 20 mm clearance is from the cube's face at x = 5 to the nearer bar's at x = 25.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": [
+        "returns 2 bodies",
+        "needs the B-rep backend"
+      ]
+    },
+    "depth": 6
+  },
+  "brep": {
+    "size": [
+      40.0,
+      10.0,
+      10.0
+    ],
+    "volume_mm3": 1800.0,
+    "area_mm2": 1320.0,
+    "triangles": 36,
+    "bodies": 3,
+    "voids": 0,
+    "stands_on_mm2": 180.0,
+    "stands_on_patches": 3,
+    "watertight": true,
+    "faces": 18,
+    "edges": 72,
+    "curves": 36,
+    "named_bodies": {
+      "split": {
+        "size": [
+          10.0,
+          10.0,
+          10.0
+        ],
+        "volume_mm3": 800.0,
+        "faces": 12,
+        "edges": 48,
+        "watertight": true,
+        "pieces": 2,
+        "voids": 0
+      },
+      "whole": {
+        "size": [
+          10.0,
+          10.0,
+          10.0
+        ],
+        "volume_mm3": 1000.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "whole/split": {
+        "verdict": "clear",
+        "clearance_mm": 20.0,
+        "interference_mm3": 0.0
+      }
+    }
+  }
+}

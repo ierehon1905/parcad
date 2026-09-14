@@ -1,0 +1,68 @@
+{
+  "name": "lidded-box",
+  "script": "examples/lidded-box.js",
+  "why": "The seeded two-body part, and the one the field case asks about: a base of 48000 - 56·36·18 = 11712 mm³ and a lid of 7200 + 55.4·35.4·4 = 15044.64 mm³, never fused. The lip is drawn 0.3 mm inside the pocket and the lid stands 0.5 above the rim, so the closest the two come is 0.3 mm — the number a reader of the script gets wrong by quoting the standoff. The base's rim is not a patch of the bed: the part stands on the base's whole 2400 mm² underside alone.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": [
+        "returns 2 bodies",
+        "needs the B-rep backend"
+      ]
+    },
+    "depth": 6
+  },
+  "brep": {
+    "size": [
+      60.0,
+      40.0,
+      23.5
+    ],
+    "volume_mm3": 26756.641,
+    "area_mm2": 18238.4,
+    "triangles": 56,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 2400.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 22,
+    "edges": 96,
+    "curves": 48,
+    "named_bodies": {
+      "base": {
+        "size": [
+          60.0,
+          40.0,
+          20.0
+        ],
+        "volume_mm3": 11712.0,
+        "faces": 11,
+        "edges": 48,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "lid": {
+        "size": [
+          60.0,
+          40.0,
+          7.0
+        ],
+        "volume_mm3": 15044.641,
+        "faces": 11,
+        "edges": 48,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "base/lid": {
+        "verdict": "clear",
+        "clearance_mm": 0.3,
+        "interference_mm3": 0.0
+      }
+    }
+  }
+}

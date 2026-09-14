@@ -1,6 +1,7 @@
 # Examples
 
-Twenty-two parts, each a `.js` script that returns a shape. Most are measured in
+Twenty-three parts, each a `.js` script that returns a shape — or, for one of
+them, two named shapes. Most are measured in
 `eval/cases/`, so an example that stops building fails a case rather than
 surprising someone.
 
@@ -22,6 +23,7 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 | `bracket.js` | the whole language: blended union, a hole pattern, three kinds of selector |
 | `enclosure.js` | `shell()` and `offset()`, and opening a face by cutting one away |
 | `edge-fillets.js` | directional edge selectors on their own |
+| `lidded-box.js` | a part in two bodies: `return { base, lid }`, measured per body and between them |
 
 ## Parts
 
@@ -38,6 +40,7 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 | `hydraulic-line.js` | bent 12 mm hydraulic line | a routed tube: straight runs and real bend radii, bored along the same route, with a round-bottomed O-ring groove on the inlet boss |
 | `hex-standoff.js` | M3 hex standoff, 5.5 AF | a prism from three intersecting slabs, which is exact |
 | `knurled-knob.js` | 30 mm knurled knob, D-bore | a D-bore by intersection; a dish cut with a large sphere; 24 flutes |
+| `lidded-box.js` | open box and its lipped lid, printed as two parts | two bodies that stay two, never fused; the lip is drawn 0.3 mm inside the pocket and `between_bodies` measures exactly that on the built solids |
 | `manifold-block.js` | hydraulic manifold, cross-drilled | galleries that have to actually intersect; position-based rim selection |
 | `motor-mount.js` | NEMA 17 mount with gussets | a standard interface, and gussets that must be unioned unblended |
 | `pillow-block.js` | 20 mm bore pillow block | a bore-carrying boss on a base; slots whose ends are arcs, not holes |

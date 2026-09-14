@@ -142,6 +142,17 @@ pub struct Expect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<BTreeMap<String, [f64; 6]>>,
 
+    /// Each named body of a part that returns several, measured alone. B-rep
+    /// only. Recorded whenever the part has bodies, because a body's own
+    /// `pieces` is the one number that tells an accidental split from a
+    /// second body that was meant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub named_bodies: Option<BTreeMap<String, BodyExpect>>,
+    /// How each pair of named bodies sits, keyed `"a/b"` in the script's
+    /// order: the verdict, and the clearance or the shared volume.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub between_bodies: Option<BTreeMap<String, BetweenExpect>>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tolerance: Option<Tolerance>,
 
@@ -160,6 +171,31 @@ impl Expect {
     pub fn tolerance_or(&self, fallback: Tolerance) -> Tolerance {
         self.tolerance.clone().unwrap_or(fallback)
     }
+}
+
+/// One named body's own measurements. Held to the same tolerances as the
+/// part's: `size_mm` per axis, `volume_pct` on volume, exact topology.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BodyExpect {
+    pub size: [f64; 3],
+    pub volume_mm3: f64,
+    pub faces: usize,
+    pub edges: usize,
+    pub watertight: bool,
+    /// Free-standing pieces inside this body: one when it is intact.
+    pub pieces: usize,
+    pub voids: usize,
+}
+
+/// Two named bodies against each other, on the exact solids.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BetweenExpect {
+    /// `clear`, `touching` or `interfering`.
+    pub verdict: String,
+    /// Absent when the two overlap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance_mm: Option<f64>,
+    pub interference_mm3: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -196,6 +232,10 @@ pub struct Observed {
     /// Every tag's own box, and the ones no surface point could be found for.
     pub tags: BTreeMap<String, [f64; 6]>,
     pub unlocated_tags: Vec<String>,
+    /// Each named body alone, and each pair of them; both empty for a
+    /// one-solid part and for the implicit backend.
+    pub named_bodies: BTreeMap<String, BodyExpect>,
+    pub between_bodies: BTreeMap<String, BetweenExpect>,
 }
 
 /// One assertion that did not hold, phrased so the terminal line is enough to
@@ -327,6 +367,74 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
         }
     }
 
+    if let Some(want) = &expect.named_bodies {
+        for (name, want) in want {
+            let Some(got) = observed.named_bodies.get(name) else {
+                out.push(Mismatch {
+                    field: format!("named_bodies.{name}"),
+                    detail: format!(
+                        "the part has no such body; it has {}",
+                        observed.named_bodies.keys().cloned().collect::<Vec<_>>().join(", ")
+                    ),
+                });
+                continue;
+            };
+            for (i, axis) in ["x", "y", "z"].iter().enumerate() {
+                abs_check(&mut out, &format!("named_bodies.{name}.size.{axis}"), want.size[i], got.size[i], tol.size_mm);
+            }
+            pct_check(&mut out, &format!("named_bodies.{name}.volume_mm3"), want.volume_mm3, got.volume_mm3, tol.volume_pct);
+            for (field, want, got) in [
+                ("faces", want.faces, got.faces),
+                ("edges", want.edges, got.edges),
+                ("pieces", want.pieces, got.pieces),
+                ("voids", want.voids, got.voids),
+                ("watertight", want.watertight as usize, got.watertight as usize),
+            ] {
+                if want != got {
+                    out.push(Mismatch {
+                        field: format!("named_bodies.{name}.{field}"),
+                        detail: format!("expected {want}, measured {got}"),
+                    });
+                }
+            }
+        }
+        for name in observed.named_bodies.keys() {
+            if !want.contains_key(name) {
+                out.push(Mismatch {
+                    field: format!("named_bodies.{name}"),
+                    detail: "the part has a body the case does not record".into(),
+                });
+            }
+        }
+    }
+    if let Some(want) = &expect.between_bodies {
+        for (pair, want) in want {
+            let Some(got) = observed.between_bodies.get(pair) else {
+                out.push(Mismatch {
+                    field: format!("between_bodies.{pair}"),
+                    detail: "no such pair was measured".into(),
+                });
+                continue;
+            };
+            if want.verdict != got.verdict {
+                out.push(Mismatch {
+                    field: format!("between_bodies.{pair}.verdict"),
+                    detail: format!("expected {}, measured {}", want.verdict, got.verdict),
+                });
+            }
+            // A clearance is a length: the same tolerance as a size.
+            match (want.clearance_mm, got.clearance_mm) {
+                (Some(w), Some(g)) => abs_check(&mut out, &format!("between_bodies.{pair}.clearance_mm"), w, g, tol.size_mm),
+                (None, None) => {}
+                (w, g) => out.push(Mismatch {
+                    field: format!("between_bodies.{pair}.clearance_mm"),
+                    detail: format!("expected {w:?}, measured {g:?}"),
+                }),
+            }
+            pct_check(&mut out, &format!("between_bodies.{pair}.interference_mm3"), want.interference_mm3, got.interference_mm3, tol.volume_pct);
+        }
+    }
+
     // Topology counts are exact integers or nothing. A face count that is
     // "close" is a different part.
     for (field, want, got) in [
@@ -386,6 +494,40 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
     expect.faces = observed.faces;
     expect.edges = observed.edges;
     expect.curves = observed.curves;
+    // Bodies are recorded whenever the part has them: a case about a part in
+    // several bodies is about those bodies.
+    expect.named_bodies = (!observed.named_bodies.is_empty()).then(|| {
+        observed
+            .named_bodies
+            .iter()
+            .map(|(name, b)| {
+                (
+                    name.clone(),
+                    BodyExpect {
+                        size: b.size.map(round3),
+                        volume_mm3: round3(b.volume_mm3),
+                        ..b.clone()
+                    },
+                )
+            })
+            .collect()
+    });
+    expect.between_bodies = (!observed.between_bodies.is_empty()).then(|| {
+        observed
+            .between_bodies
+            .iter()
+            .map(|(pair, f)| {
+                (
+                    pair.clone(),
+                    BetweenExpect {
+                        verdict: f.verdict.clone(),
+                        clearance_mm: f.clearance_mm.map(round3),
+                        interference_mm3: round3(f.interference_mm3),
+                    },
+                )
+            })
+            .collect()
+    });
     // Only where the case already asks about tags. See `Expect::tags`.
     if expect.tags.is_some() {
         expect.tags = Some(
