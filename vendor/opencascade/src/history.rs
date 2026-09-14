@@ -56,5 +56,7 @@ pub(crate) mod ffi {
             original: &TopoDS_Shape,
         ) -> UniquePtr<CxxVector<TopoDS_Shape>>;
         fn is_deleted(self: &ParcadUnify, original: &TopoDS_Shape) -> bool;
+
+        fn parcad_tidy_faces_of(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
     }
 }

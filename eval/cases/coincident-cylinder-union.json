@@ -1,0 +1,23 @@
+{
+  "name": "coincident-cylinder-union",
+  "script": "eval/scripts/coincident-cylinder-union.js",
+  "why": "A cylinder unioned with itself turned about its axis: the fuse splits the side into two faces sharing one surface, and a pcurve is stored per surface, not per face. The seam-pcurve pre-pass before unify saw each piece use the old seam once and dropped a representation the other piece needed — BRepCheck invalid, B-rep volume 523.60 mm³ of 1570.80, 14 open mesh edges. It now keeps any seam another face on the same surface still borders. Holds the whole cylinder: 3 faces, 1570.80 mm³ exact, the same mesh as plain cylinder(5, 20).",
+  "brep": {
+    "size": [
+      9.995,
+      9.998,
+      20.0
+    ],
+    "volume_mm3": 1568.747,
+    "area_mm2": 784.988,
+    "triangles": 280,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 78.437,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 3,
+    "edges": 6,
+    "curves": 2
+  }
+}

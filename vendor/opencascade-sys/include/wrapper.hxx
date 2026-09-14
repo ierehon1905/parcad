@@ -999,8 +999,12 @@ inline int Shape_drop_unused_seam_pcurves(const TopoDS_Shape &shape) {
   int dropped = 0;
   BRep_Builder builder;
   ShapeBuild_Edge sbe;
+  IndexedDataMapOfShapeListOfShape edge_faces;
+  TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces);
   for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next()) {
     const TopoDS_Face &face = TopoDS::Face(f.Current());
+    TopLoc_Location face_loc;
+    const Handle(Geom_Surface) &face_surface = BRep_Tool::Surface(face, face_loc);
     // Only cylindrical faces, and below only line generators: that is the
     // configuration this heals — a plane-tangent cut leaving half a seam.
     // On doubly periodic surfaces a boolean legitimately leaves a full
@@ -1039,6 +1043,21 @@ inline int Shape_drop_unused_seam_pcurves(const TopoDS_Shape &shape) {
          it.More(); it.Next()) {
       if (it.Value() != 1) {
         continue; // a genuine seam, or something stranger — leave it alone
+      }
+      // Two pieces of one split cylinder share its surface, so a pcurve is
+      // stored per surface, not per face: a seam each piece uses once is still
+      // using both representations, and dropping one broke the other piece.
+      bool shared_surface = false;
+      for (const TopoDS_Shape &other : edge_faces.FindFromKey(it.Key())) {
+        TopLoc_Location other_loc;
+        if (!other.IsSame(face) &&
+            BRep_Tool::Surface(TopoDS::Face(other), other_loc) == face_surface &&
+            other_loc == face_loc) {
+          shared_surface = true;
+        }
+      }
+      if (shared_surface) {
+        continue;
       }
       TopoDS_Edge edge = TopoDS::Edge(it.Key());
       edge.Orientation(orient.Find(it.Key()));

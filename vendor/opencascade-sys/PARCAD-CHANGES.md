@@ -65,6 +65,14 @@ later release of it exists, so there is no version to bump to.
   torus-gland groove by 168 mesh edges. Representation data only; geometry
   is untouched.
 
+  It also skips a seam edge that another face *on the same surface* borders.
+  A pcurve is stored per surface, not per face, so when a fuse splits one
+  cylinder's side into two faces (a cylinder unioned with itself turned about
+  its axis), each piece uses the old seam once and both representations are
+  live; dropping one left the other piece's boundary on the wrong side of the
+  period — BRepCheck invalid, 523.60 mm³ of a 1570.80 mm³ cylinder, and an
+  open mesh. `eval/cases/coincident-cylinder-union.json`.
+
 - `BRepOffsetAPI_ThruSections_ruled_ctor(is_solid, ruled)` — the existing
   ctor pins OCCT's second argument at its default (a smooth surface fitted
   through the sections); the lofting op needs to choose ruled walls

@@ -1,0 +1,23 @@
+{
+  "name": "coincident-torus-union",
+  "script": "eval/scripts/coincident-torus-union.js",
+  "why": "A torus unioned with itself turned about its axis. The fuse is right (two faces, 789.57 mm³ exact), but UnifySameDomain merges them into a face of the whole toroidal surface with no wire at all — valid to BRepCheck, invisible to BRepMesh, which left it untriangulated and the reply read 'a mesh with no vertices'. A wireless face is now rebuilt with the surface's natural bounds. If it comes back the worker refuses by counting untriangulated faces and names the 0.01 mm overlap.",
+  "brep": {
+    "size": [
+      23.995,
+      23.998,
+      3.998
+    ],
+    "volume_mm3": 786.57,
+    "area_mm2": 788.654,
+    "triangles": 9810,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 17.4,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 1,
+    "edges": 4,
+    "curves": 0
+  }
+}
