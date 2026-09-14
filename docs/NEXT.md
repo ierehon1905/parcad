@@ -41,6 +41,35 @@ confidently with it — the exact shape of wrongness this project refuses
 everywhere else, currently held by a sentence in a document rather than by the
 build.
 
+**Next: Homebrew installs a tool, not a window.** Decided 2026-09-14. The
+cask ships the `.app`, and a cask is the wrong container for what Homebrew
+users of this actually want: the MCP server up at login and the UI on
+<http://127.0.0.1:4242>, which the browser already gets whole. A cask is also
+the container that gets quarantined, so the `xattr` line in the README is a
+cost of the packaging, not of the code. The plan, in order:
+
+1. **A host crate with no Tauri in it.** `service`, `projects`, `script`,
+   `session`, `docs`, `http` and `mcp` move from `app/src-tauri` to
+   `crates/parcad-host`; the desktop app keeps only the IPC adapter and the
+   window. The HTTP host takes its frontend from an `Assets` provider — the
+   Tauri resolver in the app, an embedded copy of `app/dist` in the CLI — so
+   there is still exactly one frontend build.
+2. **`parcad serve`** in the CLI: seed the project folder, bind the port,
+   print the URLs, run until stopped. Same router, same MCP, same session.
+3. **A formula in place of the cask**, pointed at the
+   `parcad-cli-<arch>-apple-darwin.tar.gz` the release workflow already
+   stages: `parcad` and the worker in `libexec`, a `bin/parcad` env script,
+   a `service` block for `brew services start parcad`. Bottles are not
+   needed; a prebuilt-binary formula is the ordinary shape for a tap.
+4. **Measure, do not assume, the project folder from a launchd agent.**
+   `~/Documents` is behind a TCC prompt for a bundle; whether a bare binary
+   started by `brew services` gets the prompt, a silent refusal, or the
+   folder is a fact about macOS to establish on a clean account before the
+   README promises it. `PARCAD_PROJECTS_DIR` is the way out if it refuses.
+
+The zip on Releases stays for whoever wants a dock icon. What this does not
+do: sign anything, or move the product call in §3.
+
 ## 2. One live session the agent can drive — built
 
 `session.rs` beside `service.rs`; `open_project` / `set_script` / `get_session`
