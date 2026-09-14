@@ -1,7 +1,7 @@
 {
   "name": "ellipsoid",
   "script": "eval/scripts/ellipsoid.js",
-  "why": "Non-uniform scale in the exact kernel, against a closed form: the ellipsoid of semi-axes 20, 10, 5 is 4188.790 mm3. The backend refuses unless the B-rep volume equals the child's times the determinant, which is also what caught BRepGProp's fixed-order integration misreading B-spline faces (an elliptic cylinder by 0.86%); Shape::signed_volume integrates adaptively since. The mesh volume recorded here sits a tessellation under the closed form, as the plain sphere's does.",
+  "why": "Non-uniform scale in the exact kernel, against a closed form: the ellipsoid of semi-axes 20, 10, 5 is 4188.790 mm3. The backend refuses unless the B-rep volume equals the child's times the determinant, which is also what caught BRepGProp's fixed-order integration misreading B-spline faces (an elliptic cylinder by 0.86%); Shape::signed_volume integrates adaptively since. The mesh volume recorded here sits a tessellation under the closed form, as the plain sphere's does. Its bed contact is the handful of triangles at the tangent point, so that area is held to 1%: GCC on x86_64 meshes it 0.25% smaller.",
   "implicit": {
     "depth": 6,
     "size": [
@@ -34,6 +34,12 @@
     "watertight": true,
     "faces": 1,
     "edges": 4,
-    "curves": 0
+    "curves": 0,
+    "tolerance": {
+      "size_mm": 0.01,
+      "volume_pct": 0.05,
+      "triangles_pct": 5.0,
+      "stands_on_pct": 1.0
+    }
   }
 }

@@ -27,7 +27,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PARCAD_OCCT_PREBUILT");
     if let Ok(prebuilt) = std::env::var("PARCAD_OCCT_PREBUILT") {
         let dir = PathBuf::from(&prebuilt);
-        let lib = dir.join(LIB_DIR);
+        let lib = installed_lib_dir(&dir);
         let include = dir.join(INCLUDE_DIR);
         assert!(
             lib.is_dir() && include.is_dir(),
@@ -97,12 +97,23 @@ fn main() {
 
     println!(
         "cargo:rustc-env=OCCT_LIB_PATH={}",
-        dst.join(LIB_DIR).to_str().expect("path is valid Unicode")
+        installed_lib_dir(&dst).to_str().expect("path is valid Unicode")
     );
     println!(
         "cargo:rustc-env=OCCT_INCLUDE_PATH={}",
         dst.join(INCLUDE_DIR).to_str().expect("path is valid Unicode")
     );
+}
+
+/// Where the static libraries landed. OCCT's MSVC install appends a letter per
+/// configuration — `libd` for the Debug build this always is (see
+/// cmake/occt-toolchain.cmake) — and every other toolchain installs to `lib`.
+fn installed_lib_dir(install: &Path) -> PathBuf {
+    ["", "d", "i"]
+        .iter()
+        .map(|letter| install.join(format!("{LIB_DIR}{letter}")))
+        .find(|dir| dir.join("TKernel.lib").is_file() || dir.join("libTKernel.a").is_file())
+        .unwrap_or_else(|| install.join(LIB_DIR))
 }
 
 /// Every `*.patch` in `patches/`, in filename order.

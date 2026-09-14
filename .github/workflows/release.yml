@@ -92,15 +92,20 @@ jobs:
       - name: Build the B-rep worker
         run: tools/build-worker.sh
 
+      # Even when the worker failed: its OCCT install is still an hour of
+      # Windows build, and the next attempt should not pay for it again.
       - name: Keep the OpenCASCADE install for the next run
-        if: steps.occt.outputs.cache-hit != 'true'
+        id: keep
+        if: ${{ !cancelled() && steps.occt.outputs.cache-hit != 'true' }}
         run: |
           set -euo pipefail
+          # lib/, or libd/ from an MSVC build; vendor/occt-sys/build.rs reads either.
           out=$(find target/release/build -type d -path '*occt-sys-*/out' \
-                -exec test -d '{}/lib' -a -d '{}/include' ';' -print | head -1)
-          test -n "$out" || { echo "no finished occt-sys install found" >&2; exit 1; }
+                -exec test -d '{}/include' ';' -print | head -1)
+          test -n "$out" && ls "$out"/lib*/*TKernel* >/dev/null 2>&1 \
+            || { echo "no finished occt-sys install found" >&2; exit 1; }
           mkdir -p occt-prebuilt
-          cp -R "$out/lib" "$out/include" occt-prebuilt/
+          cp -R "$out"/lib* "$out/include" occt-prebuilt/
           # build-worker.sh proves -O2 took effect by reading a flags.make under
           # the install's build tree. Carry those, or the check silently skips
           # and the -O0 bug in docs/GOTCHAS.md comes back invisibly.
@@ -111,10 +116,9 @@ jobs:
           du -sh occt-prebuilt
 
       # Saved here rather than by actions/cache's post step, which saves only
-      # when the whole job succeeds: a bundling failure would otherwise throw
-      # away an hour of Windows OpenCASCADE build.
+      # when the whole job succeeds.
       - name: Save the OpenCASCADE install
-        if: steps.occt.outputs.cache-hit != 'true'
+        if: ${{ !cancelled() && steps.keep.outcome == 'success' }}
         uses: actions/cache/save@v4
         with:
           path: occt-prebuilt

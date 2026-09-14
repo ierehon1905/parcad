@@ -25,6 +25,11 @@ pub struct Tolerance {
     /// Relative, in percent. Triangle counts move with the OCCT version and the
     /// meshing depth, so they are a drift signal, not a contract.
     pub triangles_pct: f64,
+    /// Relative, in percent, for `stands_on_mm2`; `volume_pct` when absent. A
+    /// part resting on a curve or a saddle stands on whichever triangles the
+    /// mesher happened to lay near the bed, and that moves between compilers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stands_on_pct: Option<f64>,
 }
 
 impl Tolerance {
@@ -34,6 +39,7 @@ impl Tolerance {
             size_mm: 0.01,
             volume_pct: 0.05,
             triangles_pct: 5.0,
+            stands_on_pct: None,
         }
     }
 
@@ -43,6 +49,7 @@ impl Tolerance {
             size_mm: 0.05,
             volume_pct: 1.0,
             triangles_pct: 5.0,
+            stands_on_pct: None,
         }
     }
 }
@@ -255,7 +262,7 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
     }
     if let Some(want) = expect.stands_on_mm2 {
         let got = observed.stands_on.as_ref().map_or(0.0, |c| c.area_mm2);
-        pct_check(&mut out, "stands_on_mm2", want, got, tol.volume_pct);
+        pct_check(&mut out, "stands_on_mm2", want, got, tol.stands_on_pct.unwrap_or(tol.volume_pct));
     }
     if let Some(want) = expect.stands_on_patches {
         let got = observed.stands_on.as_ref().map_or(0, |c| c.patches);

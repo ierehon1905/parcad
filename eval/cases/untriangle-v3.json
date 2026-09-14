@@ -1,7 +1,7 @@
 {
   "name": "untriangle-v3",
   "script": "examples/fusion360/untriangle-v3.js",
-  "why": "A Fusion 360 recreation held to the export's own numbers: three quarter-twisted bars closed into a triangle, rebuilt as ruled lofts plus corner prisms. The export's B-rep measures 24799.94 mm3 exactly (BRepGProp); the clean parametric construction is 24800.00 exactly, +0.00024%, and every one of the twelve twisted walls is the bilinear patch through the same four corners as Fusion's, matched to 1.2e-4 mm — the export's own vertex scatter. The numbers recorded here are the runner's mesh-measured ones; their 0.4 mm3 gap to the exact volume is tessellation chord error on the saddle walls. The export carries one of the document's two bodies (Body12); this is that body.",
+  "why": "A Fusion 360 recreation held to the export's own numbers: three quarter-twisted bars closed into a triangle, rebuilt as ruled lofts plus corner prisms. The export's B-rep measures 24799.94 mm3 exactly (BRepGProp); the clean parametric construction is 24800.00 exactly, +0.00024%, and every one of the twelve twisted walls is the bilinear patch through the same four corners as Fusion's, matched to 1.2e-4 mm — the export's own vertex scatter. The numbers recorded here are the runner's mesh-measured ones; their 0.4 mm3 gap to the exact volume is tessellation chord error on the saddle walls. The export carries one of the document's two bodies (Body12); this is that body. The bed contact picks up saddle-wall triangles lying within the mesh's resolution of the flat end, so it is held to 2%: GCC on x86_64 meshes it 0.54% larger.",
   "implicit": {
     "refuses": {
       "kind": "error",
@@ -27,6 +27,12 @@
     "watertight": true,
     "faces": 30,
     "edges": 132,
-    "curves": 66
+    "curves": 66,
+    "tolerance": {
+      "size_mm": 0.01,
+      "volume_pct": 0.05,
+      "triangles_pct": 5.0,
+      "stands_on_pct": 2.0
+    }
   }
 }
