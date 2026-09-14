@@ -53,19 +53,39 @@ const RUNNER: &str = r#"
   const dsl = globalThis.__parcadDsl;
   const source = globalThis.__parcadSource;
   const names = Object.keys(dsl);
+  const lines = source.split("\n");
+
+  // QuickJS names the script `<input>` in a stack, counting the two lines
+  // `new Function` wraps it in; the first such frame is the script's own call.
+  const HEADER = 2;
+  const lineOf = (stack) => {
+    const m = /<input>:(\d+):(\d+)/.exec(stack || "");
+    const line = m ? Number(m[1]) - HEADER : 0;
+    return line >= 1 && line <= lines.length ? line : undefined;
+  };
+  const failed = (what, e) => {
+    const message = (e && e.message) || String(e);
+    const line = lineOf(e && e.stack);
+    if (line === undefined) return JSON.stringify({ error: what + ":\n" + message });
+    const text = lines[line - 1].trim();
+    return JSON.stringify({
+      error: what + " at line " + line + ":\n" + message + "\n  " + line + " | " + text,
+      line,
+    });
+  };
 
   let fn;
   try {
     fn = new Function(...names, source);
   } catch (e) {
-    return JSON.stringify({ error: "the script did not parse:\n" + (e && e.message || String(e)) });
+    return failed("the script did not parse", e);
   }
 
   let result;
   try {
     result = fn(...names.map((n) => dsl[n]));
   } catch (e) {
-    return JSON.stringify({ error: "the script threw:\n" + (e && e.message || String(e)) });
+    return failed("the script threw", e);
   }
 
   if (!(result instanceof dsl.Shape)) {
@@ -75,11 +95,11 @@ const RUNNER: &str = r#"
   }
 
   try {
-    return JSON.stringify({ graph: dsl.build(result) });
+    const stacks = [];
+    const graph = dsl.build(result, undefined, stacks);
+    return JSON.stringify({ graph, lines: Array.from(graph.nodes, (_, i) => lineOf(stacks[i]) ?? null) });
   } catch (e) {
-    return JSON.stringify({
-      error: "building the intent graph failed:\n" + (e && e.message || String(e)),
-    });
+    return failed("building the intent graph failed", e);
   }
 })()
 "#;
@@ -87,7 +107,43 @@ const RUNNER: &str = r#"
 #[derive(serde::Deserialize)]
 struct Outcome {
     graph: Option<serde_json::Value>,
+    #[serde(default)]
+    lines: Vec<Option<u32>>,
     error: Option<String>,
+}
+
+/// A script's graph, and the line of the script that made each node.
+pub struct Script {
+    pub graph: serde_json::Value,
+    lines: Vec<Option<u32>>,
+}
+
+impl Script {
+    /// Name the script line beside every `node N (label)` a refusal mentions,
+    /// so a message about node 80 points at the line that wrote it.
+    pub fn locate(&self, message: String) -> String {
+        let mut out = String::with_capacity(message.len() + 16);
+        let mut rest = message.as_str();
+        while let Some(at) = rest.find("node ") {
+            let (before, after) = rest.split_at(at + 5);
+            out.push_str(before);
+            let digits = after.chars().take_while(char::is_ascii_digit).count();
+            let line = after[..digits]
+                .parse::<usize>()
+                .ok()
+                .and_then(|node| self.lines.get(node).copied().flatten());
+            match (line, after[digits..].strip_prefix(" (")) {
+                (Some(line), Some(label)) => {
+                    out.push_str(&after[..digits]);
+                    out.push_str(&format!(" (line {line}, "));
+                    rest = label;
+                }
+                _ => rest = after,
+            }
+        }
+        out.push_str(rest);
+        out
+    }
 }
 
 /// Run a DSL script and return the intent graph it builds.
@@ -95,6 +151,11 @@ struct Outcome {
 /// Blocking, and meant to be: it is CPU-bound and short. Callers on an async
 /// runtime hand it to a blocking thread.
 pub fn build_graph(source: &str) -> Result<serde_json::Value, String> {
+    build(source).map(|script| script.graph)
+}
+
+/// [`build_graph`], keeping which line made each node.
+pub fn build(source: &str) -> Result<Script, String> {
     let runtime = Runtime::new().map_err(|e| format!("could not start the script sandbox: {e}"))?;
     runtime.set_memory_limit(MEMORY_LIMIT_BYTES);
 
@@ -144,7 +205,10 @@ pub fn build_graph(source: &str) -> Result<serde_json::Value, String> {
         .map_err(|e| format!("the sandbox returned something unreadable: {e}"))?;
 
     match (outcome.graph, outcome.error) {
-        (Some(graph), _) => Ok(graph),
+        (Some(graph), _) => Ok(Script {
+            graph,
+            lines: outcome.lines,
+        }),
         (None, Some(error)) => Err(error),
         (None, None) => Err("the sandbox returned neither a graph nor an error".into()),
     }
@@ -270,6 +334,33 @@ mod tests {
         assert!(
             error.contains("return body.cut(hole)"),
             "unhelpful refusal: {error}"
+        );
+    }
+
+    /// The line arithmetic depends on how QuickJS wraps `new Function`; this
+    /// goes red if that ever changes, rather than every line being off by one.
+    #[test]
+    fn an_error_names_the_line_of_the_script_that_caused_it() {
+        let threw = build_graph("const a = 1;\nconst b = 2;\nnope();\nreturn box(1,1,1);")
+            .expect_err("nope is not defined");
+        assert!(threw.contains("at line 3:") && threw.contains("3 | nope();"), "{threw}");
+
+        let refused = build_graph("const a = 1;\n\nreturn box(1,1,1).fillet(1, {});")
+            .expect_err("an empty edge query");
+        assert!(refused.contains("at line 3:"), "a DSL refusal points at the calling line: {refused}");
+
+        let unparsed = build_graph("const a = 1;\nreturn box(1,1;").expect_err("does not parse");
+        assert!(unparsed.contains("at line 2:"), "{unparsed}");
+    }
+
+    #[test]
+    fn a_kernel_message_is_told_which_line_made_each_node() {
+        let script = build("const plate = box(80, 60, 8);\nconst hole = cylinder(3, 40);\n\nreturn plate.cut(hole).tag(\"body\");")
+            .expect("builds");
+        let located = script.locate("node 2 (body) subtracts node 1 (untagged), and node 9 (x)".into());
+        assert_eq!(
+            located,
+            "node 2 (line 4, body) subtracts node 1 (line 2, untagged), and node 9 (x)"
         );
     }
 

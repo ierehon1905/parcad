@@ -395,6 +395,9 @@ export class VertexSelection {
  * belongs to the node, and a named copy would be a second node built twice.
  */
 export class Shape {
+  /** @internal Where the script made this shape: the call stack, as the engine prints it. */
+  readonly createdAt = new Error().stack;
+
   /** @internal */
   constructor(
     private readonly emit: Emit,
@@ -1601,7 +1604,11 @@ export interface Doc {
  * node with several parents — the graph stays a DAG and the core evaluates the
  * shared work once.
  */
-export function build(root: Shape, treatments?: TreatmentSource[]): Doc {
+export function build(
+  root: Shape,
+  treatments?: TreatmentSource[],
+  stacks?: (string | undefined)[],
+): Doc {
   const nodes: Record<string, unknown>[] = [];
   const ids = new Map<Shape, number>();
 
@@ -1618,6 +1625,7 @@ export function build(root: Shape, treatments?: TreatmentSource[]): Doc {
     nodes.push(node);
     ids.set(s, id);
     if (s.treatmentCall) treatments?.push({ node: id, ...s.treatmentCall });
+    if (stacks) stacks[id] = s.createdAt;
     return id;
   };
 

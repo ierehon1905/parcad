@@ -460,9 +460,9 @@ impl Parcad {
         let budget = budget(request.timeout_s);
 
         let (snapshot, pngs) = blocking(move || {
-            let graph = script::build_graph(&request.script)?;
-            let doc = service::parse_graph(graph)?;
-            let evaluated = service::evaluate_within(&doc, 7, backend, budget)?;
+            let built = script::build(&request.script)?;
+            let doc = service::parse_graph(built.graph.clone())?;
+            let evaluated = service::evaluate_within(&doc, 7, backend, budget).map_err(|e| built.locate(e))?;
 
             // Render after measuring, so a part that cannot be built fails on
             // the geometry rather than after spending a raymarch on it.
@@ -475,7 +475,8 @@ impl Parcad {
                     regions,
                     section,
                 },
-            )?;
+            )
+            .map_err(|e| built.locate(e))?;
             let stem = render_stem(&request.script, size, regions, section.is_some());
             let (summaries, pngs) = renders
                 .views
@@ -523,9 +524,9 @@ impl Parcad {
         Parameters(request): Parameters<ScriptRequest>,
     ) -> Result<rmcp::handler::server::wrapper::Json<service::Entities>, ErrorData> {
         let entities = blocking(move || {
-            let graph = script::build_graph(&request.script)?;
-            let doc = service::parse_graph(graph)?;
-            let evaluated = service::evaluate(&doc, 7, service::Backend::Brep)?;
+            let built = script::build(&request.script)?;
+            let doc = service::parse_graph(built.graph.clone())?;
+            let evaluated = service::evaluate(&doc, 7, service::Backend::Brep).map_err(|e| built.locate(e))?;
             Ok(service::entities(&evaluated))
         })
         .await?;
@@ -544,9 +545,9 @@ impl Parcad {
         Parameters(request): Parameters<InspectRequest>,
     ) -> Result<rmcp::handler::server::wrapper::Json<service::TreatmentTarget>, ErrorData> {
         let target = blocking(move || {
-            let graph = script::build_graph(&request.script)?;
-            let doc = service::parse_graph(graph)?;
-            let preview = service::inspect_edge_target(&doc, request.node)?;
+            let built = script::build(&request.script)?;
+            let doc = service::parse_graph(built.graph.clone())?;
+            let preview = service::inspect_edge_target(&doc, request.node).map_err(|e| built.locate(e))?;
             Ok(service::treatment_target(&preview))
         })
         .await?;
@@ -569,9 +570,9 @@ impl Parcad {
         Parameters(request): Parameters<ProbeRequest>,
     ) -> Result<rmcp::handler::server::wrapper::Json<service::ProbeReport>, ErrorData> {
         let report = blocking(move || {
-            let graph = script::build_graph(&request.script)?;
-            let doc = service::parse_graph(graph)?;
-            service::probe(&doc, &request.points, &request.rays)
+            let built = script::build(&request.script)?;
+            let doc = service::parse_graph(built.graph.clone())?;
+            service::probe(&doc, &request.points, &request.rays).map_err(|e| built.locate(e))
         })
         .await?;
 
@@ -593,9 +594,9 @@ impl Parcad {
         Parameters(request): Parameters<ThicknessRequest>,
     ) -> Result<rmcp::handler::server::wrapper::Json<service::ThicknessReport>, ErrorData> {
         let report = blocking(move || {
-            let graph = script::build_graph(&request.script)?;
-            let doc = service::parse_graph(graph)?;
-            service::wall_thickness(&doc, request.threshold_mm, request.resolution)
+            let built = script::build(&request.script)?;
+            let doc = service::parse_graph(built.graph.clone())?;
+            service::wall_thickness(&doc, request.threshold_mm, request.resolution).map_err(|e| built.locate(e))
         })
         .await?;
 
@@ -675,12 +676,12 @@ impl Parcad {
 
         let budget = budget(request.timeout_s);
         let exported = blocking(move || {
-            let graph = script::build_graph(&request.script)?;
-            let doc = service::parse_graph(graph)?;
+            let built = script::build(&request.script)?;
+            let doc = service::parse_graph(built.graph.clone())?;
             let export = if format == "step" {
-                service::export_step_within(&doc, budget)?
+                service::export_step_within(&doc, budget).map_err(|e| built.locate(e))?
             } else {
-                service::export_stl_within(&doc, 7, service::Backend::Brep, budget)?
+                service::export_stl_within(&doc, 7, service::Backend::Brep, budget).map_err(|e| built.locate(e))?
             };
 
             let dir = export_dir();
@@ -1207,9 +1208,9 @@ fn keep_render(stem: &str, view: &str, png: &[u8]) -> Option<String> {
 
 /// The picker's thumbnail for a script: the iso view of its exact build.
 fn preview_of(script: &str) -> Result<Vec<u8>, String> {
-    let graph = script::build_graph(script)?;
-    let doc = service::parse_graph(graph)?;
-    let evaluated = service::evaluate(&doc, 7, service::Backend::Brep)?;
+    let built = script::build(script)?;
+    let doc = service::parse_graph(built.graph.clone())?;
+    let evaluated = service::evaluate(&doc, 7, service::Backend::Brep).map_err(|e| built.locate(e))?;
     let views = service::parse_views(&["iso".to_string()])?;
     let renders = service::render(
         &evaluated,
@@ -1262,9 +1263,43 @@ where
 }
 
 /// The service layer's refusals are already written for whoever caused them.
-/// Pass them through whole rather than replacing them with a code.
+/// Pass them through whole, with what a program can read out of them as `data`.
 fn invalid(message: impl Into<String>) -> ErrorData {
-    ErrorData::invalid_params(message.into(), None)
+    let message = message.into();
+    let data = error_data(&message);
+    ErrorData::invalid_params(message, Some(data))
+}
+
+/// The parts of a refusal a caller can act on without parsing prose: `kind`,
+/// the script `line`, the graph `node` and the `stage` the kernel was at.
+/// Read from the message, which stays the whole explanation and names the fix.
+fn error_data(message: &str) -> serde_json::Value {
+    let number_after = |marker: &str| -> Option<u64> {
+        let at = message.find(marker)? + marker.len();
+        let digits: String = message[at..].chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok()
+    };
+    let kind = if message.starts_with("the script") || message.starts_with("building the intent graph") {
+        "script"
+    } else if message.contains("and was stopped") {
+        "timeout"
+    } else if message.contains("kernel crashed") || message.contains("was killed") {
+        "kernel_crashed"
+    } else if message.contains("node ") || message.contains("(while ") {
+        "refused"
+    } else {
+        "invalid_request"
+    };
+    let stage = message.rfind("(while ").and_then(|at| {
+        let rest = &message[at + 7..];
+        rest.find(')').map(|end| rest[..end].to_string())
+    });
+    serde_json::json!({
+        "kind": kind,
+        "line": number_after("at line ").or_else(|| number_after("(line ")),
+        "node": number_after("node "),
+        "stage": stage,
+    })
 }
 
 #[cfg(test)]
@@ -1374,5 +1409,21 @@ mod tests {
             .map(|tool| tool.name.to_string())
             .collect();
         assert_eq!(writes, ["export_part", "save_project"]);
+    }
+
+    #[test]
+    fn a_refusal_carries_what_a_program_can_act_on() {
+        let data = error_data(
+            "node 12 (line 7, body) blends by 3 mm, and there is no corner (while lowering the graph)",
+        );
+        assert_eq!(data["kind"], "refused");
+        assert_eq!(data["line"], 7);
+        assert_eq!(data["node"], 12);
+        assert_eq!(data["stage"], "lowering the graph");
+
+        let data = error_data("the script threw at line 3:\nnope is not defined\n  3 | nope();");
+        assert_eq!(data["kind"], "script");
+        assert_eq!(data["line"], 3);
+        assert!(data["node"].is_null());
     }
 }

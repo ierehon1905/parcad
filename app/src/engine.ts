@@ -142,6 +142,7 @@ export async function run() {
     }
     void captureFirstThumbnail();
   } catch (e) {
+    e = e instanceof Error ? new Error(locateNodes(e.message)) : e;
     showError(e);
     S.setStatus(shownPath === undefined ? "failed" : "failed · showing the last part that built", "failed");
     if (revision !== undefined) {
@@ -173,21 +174,73 @@ function buildGraph(source: string): BuiltGraph {
   let fn: (...args: unknown[]) => unknown;
   try {
     const executable = instrumentTreatmentCalls(S.editor().state, source);
-    fn = new Function(...names, `${executable}\n//# sourceURL=parcad-editor.js`) as (
+    fn = new Function(...names, `${executable}\n//# sourceURL=${SCRIPT_URL}`) as (
       ...args: unknown[]
     ) => unknown;
   } catch (e) {
-    throw new Error(`the script did not parse:\n${(e as Error).message}`);
+    throw atLine("the script did not parse", e, source);
   }
 
-  const result = fn(...names.map((n) => api[n]));
+  let result: unknown;
+  try {
+    result = fn(...names.map((n) => api[n]));
+  } catch (e) {
+    throw atLine("the script threw", e, source);
+  }
   if (!(result instanceof Shape)) {
     throw new Error(
       "the script must return a shape.\n" + "End it with something like:  return body.cut(hole)",
     );
   }
   const treatments: dsl.TreatmentSource[] = [];
-  return { graph: dsl.build(result, treatments), source, treatments };
+  const stacks: (string | undefined)[] = [];
+  const graph = dsl.build(result, treatments, stacks);
+  nodeLines = stacks.map(lineOf);
+  return { graph, source, treatments };
+}
+
+const SCRIPT_URL = "parcad-editor.js";
+
+/**
+ * Lines `new Function` puts above the script, which differs by engine: the
+ * webview is JavaScriptCore, a browser tab may be V8. Measured, not assumed.
+ */
+const HEADER_LINES = (() => {
+  try {
+    new Function(`throw new Error()\n//# sourceURL=${SCRIPT_URL}`)();
+  } catch (e) {
+    const line = Number(new RegExp(`${SCRIPT_URL}:(\\d+)`).exec(String((e as Error).stack))?.[1]);
+    return Number.isFinite(line) ? line - 1 : undefined;
+  }
+  return undefined;
+})();
+
+function lineOf(stack: string | undefined): number | undefined {
+  if (HEADER_LINES === undefined || !stack) return undefined;
+  const line = Number(new RegExp(`${SCRIPT_URL}:(\\d+)`).exec(stack)?.[1]) - HEADER_LINES;
+  return line >= 1 ? line : undefined;
+}
+
+/** The script line that made each node of the last graph built. */
+let nodeLines: (number | undefined)[] = [];
+
+function atLine(what: string, e: unknown, source: string): Error {
+  const message = e instanceof Error ? e.message : String(e);
+  const line = lineOf(e instanceof Error ? e.stack : undefined);
+  const text = line === undefined ? undefined : source.split("\n")[line - 1];
+  return new Error(
+    text === undefined
+      ? `${what}:\n${message}`
+      : `${what} at line ${line}:\n${message}\n  ${line} | ${text.trim()}`,
+  );
+}
+
+/** Name the script line beside each `node N (label)` in a kernel refusal. */
+function locateNodes(message: string): string {
+  return message.replace(/node (\d+) \(/g, (whole, node: string) => {
+    const line = nodeLines[Number(node)];
+    return line === undefined ? whole : `node ${node} (line ${line}, `;
+  });
 }
 
 function show(result: Evaluated) {
