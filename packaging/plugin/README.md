@@ -6,10 +6,10 @@ Homebrew formula, so the plugin works only after the formula is installed.
 
 | file | read by |
 |---|---|
-| `.claude-plugin/plugin.json` | Claude Code; declares the server inline through `bin/parcad-mcp` |
+| `.claude-plugin/plugin.json` | Claude Code; declares the server inline through `scripts/parcad-mcp` (not `bin/`, which Claude Code adds to the Bash PATH) |
 | `.codex-plugin/plugin.json` | Codex; points at `codex.mcp.json` |
 | `codex.mcp.json` | Codex only. Not `.mcp.json`: Claude Code loads that name on its own and would start the server twice. `env_vars` is required: Codex starts a server with PATH and little else, so without it `PARCAD_PROJECTS_DIR` is dropped and the agent reads the default folder |
-| `bin/parcad-mcp` | finds `parcad` when a client started from the Dock has no shell PATH, and names the install command when it is missing |
+| `scripts/parcad-mcp` | finds `parcad` when a client started from the Dock has no shell PATH, and names the install command when it is missing |
 | `skills/parcad/SKILL.md` | both; tells the model to use these tools and what to do when they are absent |
 
 The marketplaces that list it are at the repository root:
@@ -28,13 +28,18 @@ The marketplaces that list it are at the repository root:
 
 ## Official directories
 
-Each directory has its own review; submit after a release that includes `parcad mcp`.
-
-- **Claude Code**: submit the form at `clau.de/plugin-directory-submission`.
-  Approved plugins are pinned to a commit in Anthropic's catalog.
-- **Codex**: submit through the OpenAI Platform flow (Plugins → Submit and publish).
-  Until then, `codex plugin marketplace add ierehon1905/parcad` and
-  `codex plugin add parcad@parcad` install from this repository.
+- **Claude Code**: the submission form lists a plugin in the community
+  marketplace, `anthropics/claude-plugins-community`, installed as
+  `parcad@claude-community`. An individual submits at
+  <https://platform.claude.com/plugins/submit>; a Team or Enterprise
+  organisation at claude.ai's directory settings. Approved plugins are pinned to
+  a commit, and the pin follows new commits. The curated
+  `claude-plugins-official` takes no applications.
+- **Codex**: the public directory does not take local stdio servers without an
+  arrangement with OpenAI, and asks for a verified developer identity and
+  privacy and terms URLs. Until then, `codex plugin marketplace add
+  ierehon1905/parcad` and `codex plugin add parcad@parcad` install from this
+  repository.
 - **MCP Registry** (`registry.modelcontextprotocol.io`): not done. It lists
   npm, PyPI, NuGet, OCI and MCPB packages, not a Homebrew formula. Listing
   there means publishing one of those too, most likely an `.mcpb` bundle of the
