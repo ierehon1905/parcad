@@ -11,6 +11,35 @@ only, and links rather than repeats.
 3. **Go deep, not wide** — be the best tool for precision parts rather than a
    weaker Fusion.
 
+## The queue, as of 2026-09-14
+
+One session at a time, because each rewrites the same core files (`graph.rs`,
+`backend.rs`, `sdf.rs`, `dsl.ts`):
+
+1. **Parts with more than one solid** — running. The cheap end of DSL_GAPS §0's
+   multi-body row: named solids in one part, never fused, measured per body.
+2. **One engine.** Decided: the exact kernel becomes the only one, and the
+   implicit backend (`sdf.rs`, fidget) is deleted once nothing needs it. Today it
+   refuses 33 of the 41 parts in a real project folder (every edge treatment,
+   loft, sweep, helix); `blend` means a different shape in it; and
+   `probe_part` and `measure_wall_thickness` run on it, so they measure a part
+   with its fillets dropped and call the answer an upper bound. The exact kernel
+   is already interactive — median 105 ms per example, 23 of 24 under 550 ms,
+   `plate-stand` at 3.3 s. The work: point probes, rays, wall thickness, renders
+   and tag regions on OpenCASCADE (a solid classifier, a ray–surface
+   intersection, the mesh), then speed where `tools/bench-kernel.sh` says the
+   time goes (a warm worker instead of a spawn per request, reused sub-shapes,
+   a coarser mesh while typing), then the deletion. The field suite has to read
+   the moved tools SOUND before the old path goes.
+3. **Threads that close** — diagnose the helical cut that opens at three turns
+   (OP_ROADMAP §5).
+4. **Curves in sections and paths** — arcs and splines in the profile type; four
+   of `eval/targets/fusion360/` wait on it.
+5. **A playground in the browser** — the exact kernel built for WebAssembly on
+   GitHub Pages, the corpus run against that build first.
+6. **A measured parts library** — fasteners, bearings, boards, devices, each
+   held by eval cases, and a way for one part to import another.
+
 ---
 
 ## 1. Shipping — the bundle carries its kernel; nothing else about shipping works
