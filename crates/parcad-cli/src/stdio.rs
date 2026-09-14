@@ -36,8 +36,8 @@ struct Relay {
     /// The host's `Mcp-Session-Id`, for clients on a protocol that keeps one.
     session: Mutex<Option<String>>,
     stdout: Mutex<std::io::Stdout>,
-    /// The client's `initialize`, replayed to a host that took over the port
-    /// so a session-keeping client is not left holding a dead session id.
+    /// The client's `initialize`, replayed whenever the host no longer knows
+    /// the session, so a session-keeping client is not left holding a dead id.
     handshake: Mutex<Option<Value>>,
 }
 
@@ -161,7 +161,23 @@ impl Relay {
             let session = self.session.lock().unwrap().clone();
             exchange(self.port, "POST", message, &protocol, session.as_deref())
         };
+        let had_session = self.session.lock().unwrap().is_some();
         match attempt() {
+            // The host forgets a session left idle past rmcp's keep-alive, five
+            // minutes by default, while the client still holds its id.
+            Ok(reply)
+                if reply.code == 404
+                    && had_session
+                    && message["method"] != "initialize"
+                    && reply.text.contains("Session not found") =>
+            {
+                eprintln!("parcad mcp: the host no longer knows this session");
+                self.reinitialize()?;
+                attempt().map_err(|e| match e {
+                    Exchange::Unreachable(address) => anyhow::anyhow!("no parcad answers on {address}"),
+                    Exchange::Failed(e) => e,
+                })
+            }
             Ok(reply) => Ok(reply),
             Err(Exchange::Failed(e)) => Err(e),
             Err(Exchange::Unreachable(address)) => {
@@ -185,8 +201,8 @@ impl Relay {
         ensure_host(self.port, "parcad mcp", "until the client disconnects")
     }
 
-    /// Repeat the client's handshake against a new host, answering nobody, so
-    /// the requests after it carry a session that host issued.
+    /// Repeat the client's handshake, answering nobody, so the requests after
+    /// it carry a session the host knows.
     fn reinitialize(&self) -> Result<()> {
         let Some(handshake) = self.handshake.lock().unwrap().clone() else {
             return Ok(());
@@ -208,7 +224,7 @@ impl Relay {
             fresh.as_deref(),
         )?;
         eprintln!(
-            "parcad mcp: session {stale} ended with its host; continuing as {}",
+            "parcad mcp: session {stale} is gone; continuing as {}",
             fresh.as_deref().unwrap_or("a new one")
         );
         *self.session.lock().unwrap() = fresh;
