@@ -1,12 +1,26 @@
 #!/bin/sh
-# Launches `parcad mcp` for a plugin. A client started from the Dock does not
-# inherit a shell's PATH, so Homebrew's prefix is looked in by name as well.
-for candidate in "$PARCAD_BIN" "$(command -v parcad 2>/dev/null)" /opt/homebrew/bin/parcad /usr/local/bin/parcad "$HOME/.cargo/bin/parcad"; do
+# Starts `parcad mcp` from whichever parcad is installed, so the plugin, the
+# MCP bundle and a hand-written config all run the same one. Paths are listed by
+# name because a client started from the Dock does not inherit a shell's PATH.
+# A copy beside this script (the MCP bundle's own) is used only when nothing is
+# installed.
+here=$(cd "$(dirname "$0")" && pwd)
+for candidate in \
+  "$PARCAD_BIN" \
+  "$(command -v parcad 2>/dev/null)" \
+  /opt/homebrew/bin/parcad \
+  /usr/local/bin/parcad \
+  /Applications/ParCAD.app/Contents/MacOS/parcad \
+  "$HOME/Applications/ParCAD.app/Contents/MacOS/parcad"; do
   if [ -n "$candidate" ] && [ -x "$candidate" ]; then
     exec "$candidate" mcp "$@"
   fi
 done
-echo "parcad is not installed, so its MCP server cannot start. Install it:
+if [ -x "$here/parcad" ]; then
+  PARCAD_SEED_DIR=${PARCAD_SEED_DIR:-$here/examples} exec "$here/parcad" mcp "$@"
+fi
+echo "parcad is not installed, so its MCP server cannot start. Install either
   brew tap ierehon1905/parcad && brew trust ierehon1905/parcad && brew install parcad
-then restart this session. A parcad elsewhere is found through PARCAD_BIN=/path/to/parcad." >&2
+or the app from https://github.com/ierehon1905/parcad/releases, then restart this
+session. A parcad elsewhere is found through PARCAD_BIN=/path/to/parcad." >&2
 exit 1

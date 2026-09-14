@@ -1,15 +1,16 @@
 # The ParCAD plugin
 
 One plugin directory, installable in Claude Code and in Codex. It carries the
-MCP server and a skill, and nothing else. The server is `parcad mcp` from the
-Homebrew formula, so the plugin works only after the formula is installed.
+MCP server and a skill, and no binaries: the server is `parcad mcp` from an
+installed parcad, the Homebrew formula or the app, which both carry the same
+`parcad`.
 
 | file | read by |
 |---|---|
 | `.claude-plugin/plugin.json` | Claude Code; declares the server inline through `scripts/parcad-mcp` (not `bin/`, which Claude Code adds to the Bash PATH) |
 | `.codex-plugin/plugin.json` | Codex; points at `codex.mcp.json` |
-| `codex.mcp.json` | Codex only. Not `.mcp.json`: Claude Code loads that name on its own and would start the server twice. `env_vars` is required: Codex starts a server with PATH and little else, so without it `PARCAD_PROJECTS_DIR` is dropped and the agent reads the default folder |
-| `scripts/parcad-mcp` | finds `parcad` when a client started from the Dock has no shell PATH, and names the install command when it is missing |
+| `codex.mcp.json` | Codex only. Not `.mcp.json`: Claude Code loads that name on its own and would start the server twice. `env_vars` is required: Codex starts a server with PATH and little else, so without it `PARCAD_PROJECTS_DIR` is dropped and the agent reads the default folder. It runs `parcad` from PATH rather than the launcher: Codex 0.147 expands no plugin-root variable in an MCP command and resolves no relative path, so an app-only install is not found there |
+| `scripts/parcad-mcp` | the one launcher, shared with the MCP bundle: `PARCAD_BIN`, PATH, Homebrew, then `ParCAD.app`, and a copy beside itself last — which only the bundle has. Names both installs when it finds none |
 | `skills/parcad/SKILL.md` | both; tells the model to use these tools and what to do when they are absent |
 
 The marketplaces that list it are at the repository root:

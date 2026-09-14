@@ -48,7 +48,7 @@ field/run-suite.sh 3                                       # can a model drive t
 field/run-case.sh eval/field/does-the-port-meet.md 4       # one case of it
 cd app && bun test src                 # editor-side units: the selector grammar
 parcad serve                           # the app with no window: UI, API and MCP on 4242
-parcad tools; parcad call evaluate_part --set script=@examples/bracket.js   # the running host, from a shell
+parcad tools; parcad call evaluate_part --set script=@examples/bracket.js   # every MCP tool, from a shell
 ```
 
 **`cargo build` produces a *dev* app, whatever the profile.** Tauri's
@@ -237,8 +237,8 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | what the app can do at all | `crates/parcad-host/src/service.rs` — never a transport file |
 | the HTTP and MCP hosts | `crates/parcad-host/src/http.rs`, `mcp.rs` — no Tauri in the crate; the app and `parcad serve` both embed it |
 | the IPC adapter, the window | `app/src-tauri/src/lib.rs` — the only file that knows there is a webview |
-| the host without a window, and its tools from a shell | `parcad serve`, `parcad tools`, `parcad call` in `crates/parcad-cli/src/main.rs` and `call.rs` — the CLI is an MCP client of the running host, so parity with `mcp.rs` is by construction |
-| MCP over stdio, for clients that launch servers | `parcad mcp` in `crates/parcad-cli/src/stdio.rs`, a relay to the running host that becomes the host when there is none |
+| the host without a window, and its tools from a shell | `parcad serve`, `parcad tools`, `parcad call` in `crates/parcad-cli/src/main.rs` and `call.rs` — the CLI is an MCP client of the running host (or one it hosts for the command), so parity with `mcp.rs` is by construction |
+| MCP over stdio, for clients that launch servers | `parcad mcp` in `crates/parcad-cli/src/stdio.rs`, a relay to the running host that becomes the host when there is none; `packaging/plugin/scripts/parcad-mcp` is the one launcher that finds an installed `parcad` |
 | the Claude Code and Codex plugin | `packaging/plugin/`, listed by `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`; its README says how to release and submit it |
 | the MCP bundle and its registry entry | `packaging/mcpb/` — packed by the release workflow; its README is the per-release checklist |
 | the sandbox agent scripts run in | `crates/parcad-host/src/script.rs` |

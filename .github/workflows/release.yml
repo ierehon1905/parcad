@@ -93,10 +93,9 @@ jobs:
       - name: Bundle the app
         run: cd app && bun run tauri build --bundles app
 
-      # Nothing above builds it: build-worker.sh builds the worker, tauri build
-      # builds the app, and parcad-eval is its own binary. After `tauri build`
-      # on purpose: that step wrote app/dist, which this one embeds so that
-      # `parcad serve` carries the UI.
+      # `tauri build` already built it: its beforeBuildCommand builds the CLI
+      # right after app/dist, which the CLI embeds so `parcad serve` carries the
+      # UI, and the app bundle carries that same binary. This asserts both.
       - name: Build the headless CLI
         run: |
           test -f app/dist/index.html || { echo "app/dist is missing; parcad serve would carry no UI" >&2; exit 1; }
@@ -119,8 +118,9 @@ jobs:
              vendor/opencascade/LICENSE "$out/licenses/"
           tar czf "$out.tar.gz" "$out"
 
-      # The same files as the tarball, as an MCP bundle: what Claude Desktop
-      # installs in one click and what the MCP Registry lists. The registry
+      # The same files as the tarball plus the plugin's launcher, as an MCP
+      # bundle: what Claude Desktop installs and what the MCP Registry lists. The
+      # launcher prefers an installed parcad and uses the bundled one last. The registry
       # refuses a bundle whose URL does not contain "mcp", hence the name.
       # The official packer, not zip: `zip` writes directory entries that the
       # mcpb unpacker fails on, and the packer validates the manifest too.
@@ -130,7 +130,7 @@ jobs:
           staged="parcad-cli-${{ matrix.arch }}-apple-darwin"
           bundle="parcad-mcp-${{ matrix.arch }}-apple-darwin"
           cp -R "$staged" "$bundle"
-          cp packaging/mcpb/manifest.json "$bundle/"
+          cp packaging/mcpb/manifest.json packaging/plugin/scripts/parcad-mcp "$bundle/"
           cp app/src-tauri/icons/icon.png "$bundle/"
           bunx @anthropic-ai/mcpb@2.1.2 pack "$bundle" "$bundle.mcpb"
 

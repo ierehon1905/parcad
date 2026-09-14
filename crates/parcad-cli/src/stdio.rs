@@ -36,8 +36,6 @@ struct Relay {
     /// The host's `Mcp-Session-Id`, for clients on a protocol that keeps one.
     session: Mutex<Option<String>>,
     stdout: Mutex<std::io::Stdout>,
-    /// Whether this process has already started a host of its own.
-    hosting: Mutex<bool>,
     /// The client's `initialize`, replayed to a host that took over the port
     /// so a session-keeping client is not left holding a dead session id.
     handshake: Mutex<Option<Value>>,
@@ -64,7 +62,6 @@ pub fn run(args: impl Iterator<Item = String>) -> Result<()> {
         protocol: Mutex::new(LEGACY_PROTOCOL.into()),
         session: Mutex::new(None),
         stdout: Mutex::new(std::io::stdout()),
-        hosting: Mutex::new(false),
         handshake: Mutex::new(None),
     });
     if listening(port) {
@@ -184,35 +181,8 @@ impl Relay {
         }
     }
 
-    /// Host the application in this process, unless it already does, and wait
-    /// until the port answers — whoever ends up holding it.
     fn take_over(&self) -> Result<()> {
-        let mut hosting = self.hosting.lock().unwrap();
-        if !*hosting {
-            *hosting = true;
-            let port = self.port;
-            eprintln!(
-                "parcad mcp: no parcad on 127.0.0.1:{port}; hosting one in this process \
-                 until the client disconnects"
-            );
-            std::thread::spawn(move || {
-                if let Err(e) = crate::host(port) {
-                    eprintln!("parcad mcp: {e:#}");
-                }
-            });
-        }
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while !listening(self.port) {
-            if Instant::now() > deadline {
-                anyhow::bail!(
-                    "started a host on 127.0.0.1:{} but it never answered; stderr above says \
-                     why. Run `parcad serve` in a terminal to see it fail on its own.",
-                    self.port
-                );
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        Ok(())
+        ensure_host(self.port, "parcad mcp", "until the client disconnects")
     }
 
     /// Repeat the client's handshake against a new host, answering nobody, so
@@ -261,6 +231,40 @@ impl Relay {
         let _ = stdout.write_all(b"\n");
         let _ = stdout.flush();
     }
+}
+
+/// Make sure a host answers on `port`: the one already running, or one this
+/// process starts on a thread of its own and keeps for as long as it lives.
+/// `who` and `lifetime` only word the line on stderr.
+pub fn ensure_host(port: u16, who: &str, lifetime: &str) -> Result<()> {
+    static HOSTING: Mutex<bool> = Mutex::new(false);
+    if listening(port) {
+        return Ok(());
+    }
+    {
+        let mut hosting = HOSTING.lock().unwrap();
+        if !*hosting {
+            *hosting = true;
+            eprintln!("{who}: no parcad on 127.0.0.1:{port}; hosting one in this process {lifetime}");
+            let who = who.to_string();
+            std::thread::spawn(move || {
+                if let Err(e) = crate::host(port) {
+                    eprintln!("{who}: {e:#}");
+                }
+            });
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !listening(port) {
+        if Instant::now() > deadline {
+            anyhow::bail!(
+                "started a host on 127.0.0.1:{port} but it never answered; stderr above says \
+                 why. Run `parcad serve` in a terminal to see it fail on its own."
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
 }
 
 fn listening(port: u16) -> bool {

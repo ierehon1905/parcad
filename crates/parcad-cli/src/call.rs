@@ -5,6 +5,7 @@
 //! `/mcp` a shell can do too — the same names, the same arguments, the same
 //! reply. Parity is by construction: there is no second list of tools to keep
 //! in step, and a tool added to `mcp.rs` is on the command line the same day.
+//! With no host running, the command hosts one for as long as it runs.
 //!
 //! Streamable HTTP over a loopback socket, written out by hand. The exchange is
 //! three POSTs of JSON, and a client library would bring an HTTP stack the CLI
@@ -29,7 +30,7 @@ pub fn tools(args: impl Iterator<Item = String>) -> Result<()> {
             other => bail!("unknown argument {other:?}; usage: parcad tools [--json]"),
         }
     }
-    let mut client = Client::connect(parcad_host::http::port())?;
+    let mut client = Client::connect_or_host(parcad_host::http::port())?;
     let listed = client.request("tools/list", json!({}))?;
     if raw {
         println!("{}", serde_json::to_string_pretty(&listed)?);
@@ -125,7 +126,7 @@ pub fn call(args: impl Iterator<Item = String>) -> Result<()> {
         }
     }
 
-    let mut client = Client::connect(parcad_host::http::port())?;
+    let mut client = Client::connect_or_host(parcad_host::http::port())?;
     let result = client.request(
         "tools/call",
         json!({ "name": tool, "arguments": arguments }),
@@ -225,6 +226,13 @@ struct Client {
 }
 
 impl Client {
+    /// The running host, or one hosted by this command for as long as it runs,
+    /// so a tool works from a shell whether or not the app is open.
+    fn connect_or_host(port: u16) -> Result<Self> {
+        crate::stdio::ensure_host(port, "parcad", "for this command")?;
+        Self::connect(port)
+    }
+
     fn connect(port: u16) -> Result<Self> {
         let mut client = Client {
             port,

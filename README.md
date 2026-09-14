@@ -119,15 +119,17 @@ in `~/Documents/parcad` as plain `.js` files you can edit anywhere.
 
 ## Use it from an agent
 
-As a plugin, which brings the MCP server and a skill that says how to use it.
-It needs the Homebrew `parcad` installed:
+Every route below runs the same `parcad`: the one Homebrew installs, which the
+desktop app carries too. Install either first.
+
+As a plugin, which brings the MCP server and a skill that says how to use it:
 
 ```text
 /plugin marketplace add ierehon1905/parcad
 /plugin install parcad@parcad
 ```
 
-In Codex:
+In Codex, which finds `parcad` on PATH, so the Homebrew install:
 
 ```bash
 codex plugin marketplace add ierehon1905/parcad
@@ -148,6 +150,10 @@ codex mcp add parcad -- parcad mcp
 agent shares the live session with your window. When none is running it hosts
 one itself, for as long as the client stays connected. A client that connects
 by URL can use `http://127.0.0.1:4242/mcp` directly while a host is up.
+
+The same tools are on the command line, with the same names and arguments —
+`parcad tools` lists them, `parcad call evaluate_part --set script=@part.js`
+calls one — and they work whether or not the app is open.
 
 Start the agent on the `read_docs` tool, which hands over the whole language in
 one call.

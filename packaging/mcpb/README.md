@@ -6,8 +6,10 @@ it with the official `mcpb` packer, because a plain `zip` writes directory
 entries its unpacker fails on. `server.json` lists that bundle in the MCP
 Registry as `io.github.ierehon1905/parcad`.
 
-The bundle runs `parcad mcp` from its own directory, with the worker and the
-seed parts beside it, so it needs no Homebrew install.
+The bundle starts through `packaging/plugin/scripts/parcad-mcp`, the plugin's
+own launcher, so it runs the installed parcad (Homebrew or the app) whenever
+there is one. The `parcad`, worker and seed parts it carries are used only when
+nothing is installed, which is what lets a registry install work on a bare Mac.
 
 ## On each release
 
