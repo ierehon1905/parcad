@@ -1,0 +1,64 @@
+{
+  "name": "thickness-under-a-fillet",
+  "script": "eval/scripts/thickness-under-a-fillet.js",
+  "why": "A fillet is in what the thickness sweep measures. The plate is 8 thick with its top edges rounded at r = 2, so a ray straight down through the middle runs 8 mm; a ray up from the underside at x = 14 leaves through the fillet at z = 2 + sqrt(2^2 - 1^2) = 3.732, so the wall there is 4 + 3.732 = 7.732 mm; and under the round the wall thins toward 6 at the wall, a limit no sample lands on exactly. The sweep's minimum is therefore held between the two closed forms: at least 6, the limit, and at most 7.5, which the default sample spacing (a hundredth of the diagonal, 0.45 mm here) guarantees since the underside sample nearest the wall reads 2 + sqrt(4 * 0.45 - 0.45^2) + 4 = 7.26. The old field dropped the fillet and reported 8 as an upper bound; this reports the number.",
+  "brep": {
+    "size": [
+      30.0,
+      30.0,
+      8.0
+    ],
+    "volume_mm3": 7099.127,
+    "area_mm2": 2654.45,
+    "triangles": 116,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 900.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 10,
+    "edges": 40,
+    "curves": 20,
+    "perception": {
+      "rays": [
+        {
+          "origin": [
+            0.0,
+            0.0,
+            100.0
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "crossings": 2,
+          "first_solid_mm": 8.0
+        },
+        {
+          "origin": [
+            14.0,
+            0.0,
+            -100.0
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "crossings": 2,
+          "first_solid_mm": 7.7320508
+        }
+      ],
+      "thickness": {
+        "at_least_mm": 6.0,
+        "at_most_mm": 7.5,
+        "tolerance_mm": 0.001,
+        "between": [
+          "body",
+          "body"
+        ]
+      }
+    }
+  }
+}

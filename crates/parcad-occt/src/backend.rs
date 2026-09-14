@@ -224,9 +224,9 @@ struct AdjacentFaceInfo {
 /// operations by geometry, like edges, so a tracked face still finds itself
 /// after a transform has copied it; two faces of one valid solid never share
 /// a whole boundary.
-type FaceKey = Vec<Vec<[i64; 3]>>;
+pub(crate) type FaceKey = Vec<Vec<[i64; 3]>>;
 
-fn face_key(face: &Face) -> FaceKey {
+pub(crate) fn face_key(face: &Face) -> FaceKey {
     let mut keys: Vec<Vec<[i64; 3]>> = face
         .edges()
         .filter_map(|edge| describe_edge(edge).map(|described| described.key))
@@ -1233,17 +1233,23 @@ fn through_observation(seam: &[Edge]) -> String {
 }
 
 /// Fillet the seam a boolean created, or refuse with a measured way out.
+/// Fillet the seam a boolean just made, carrying every name through the
+/// fillet the way an authored treatment does. Names used to stop here: a
+/// blended union dropped its lineage, so `plate` and `wall` had no faces
+/// left on the bracket and every tag extent on it read as unlocated.
 fn blend_seam(
     joined: &BooleanShape,
+    lineage: EdgeLineage,
     radius: f64,
     what: &str,
     stage: &str,
     seam_of: SeamOf,
-) -> Result<Shape> {
+) -> Result<(Shape, EdgeLineage)> {
     validity_probe(&format!("{stage} before blend"), &joined.shape);
     let before = bbox(&joined.shape);
-    let mut built = match joined.shape.filleted_edges(radius, &joined.new_edges) {
-        Ok(built) => built,
+    let mut built = joined.shape.clone();
+    let mut treatment = match built.fillet_edges_with_history(radius, &joined.new_edges) {
+        Ok(treatment) => treatment,
         Err(reason) => bail!(
             "{what} blends by {radius} mm, and OpenCASCADE could not build the \
              fillet ({reason}).{observed}{through}{measured}",
@@ -1275,7 +1281,8 @@ fn blend_seam(
             .trim_start()
         );
     }
-    Ok(built)
+    let lineage = lineage.through_treatment(&mut treatment, &built, None);
+    Ok((built, lineage))
 }
 
 fn evolve_faces(faces: Vec<Face>, result: &BooleanShape) -> Vec<Face> {
@@ -1996,6 +2003,41 @@ pub struct BuiltPart {
     /// Each named body, in the order the script named them. Empty for a
     /// one-solid part, whose body is `shape`.
     pub bodies: Vec<(String, Shape)>,
+    /// What every tag names on each body's finished surface, one entry per
+    /// body in `bodies`' order, or exactly one for a one-solid part. This is
+    /// the lineage handed out: the faces the kernel's own history says a tag
+    /// still owns, which is what a region map, a tag extent and a ray
+    /// crossing's `surface_of` are read from.
+    pub names: Vec<NamedFaces>,
+}
+
+/// Every tag's live faces on one finished body, in the order the tags were
+/// authored (node order), each name once. A tag with no faces left is
+/// present with an empty list, so "unlocated" is a fact the reader can state.
+pub struct NamedFaces {
+    pub tags: Vec<(String, Vec<Face>)>,
+}
+
+impl NamedFaces {
+    fn of(doc: &Doc, lineage: &EdgeLineage) -> Self {
+        let mut seen = HashSet::new();
+        let tags = doc
+            .tags()
+            .into_iter()
+            .filter(|(_, name)| seen.insert(name.to_string()))
+            .map(|(_, name)| {
+                (
+                    name.to_owned(),
+                    lineage
+                        .faces_by_source
+                        .get(name)
+                        .cloned()
+                        .unwrap_or_default(),
+                )
+            })
+            .collect();
+        Self { tags }
+    }
 }
 
 /// Build the finished part, keeping each named body apart from the compound
@@ -2006,6 +2048,7 @@ pub fn build_part(doc: &Doc) -> Result<BuiltPart> {
         let built = build_node(doc, doc.root, DVec3::ZERO)?;
         validity_probe("final shape", &built.shape);
         return Ok(BuiltPart {
+            names: vec![NamedFaces::of(doc, &built.lineage)],
             shape: built.shape,
             treatment_owners: built.features.edge_owners(),
             bodies: Vec::new(),
@@ -2014,15 +2057,18 @@ pub fn build_part(doc: &Doc) -> Result<BuiltPart> {
     let built = build_bodies(doc, named, DVec3::ZERO)?;
     let mut features = TreatmentFeatures::default();
     let mut bodies = Vec::with_capacity(built.len());
+    let mut names = Vec::with_capacity(built.len());
     for (name, body) in built {
         validity_probe(&format!("body {name}"), &body.shape);
         features.extend(body.features);
+        names.push(NamedFaces::of(doc, &body.lineage));
         bodies.push((name, body.shape));
     }
     Ok(BuiltPart {
         shape: compound_of(bodies.iter().map(|(_, shape)| shape)),
         treatment_owners: features.edge_owners(),
         bodies,
+        names,
     })
 }
 
@@ -2232,12 +2278,9 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                 let other = build_node(doc, c, offset)?;
                 breadcrumb(&format!("union node {id} ({label}) with node {c}"));
                 let joined = acc.shape.union(&other.shape);
-                let lineage = if *blend > 0.0 {
-                    EdgeLineage::default()
-                } else {
-                    acc.lineage
-                        .through_boolean(other.lineage, &joined, node.tag.as_deref())
-                };
+                let lineage = acc
+                    .lineage
+                    .through_boolean(other.lineage, &joined, node.tag.as_deref());
                 let mut features = acc.features;
                 features.extend(other.features);
 
@@ -2247,15 +2290,17 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     ));
                     // The edges a boolean creates are exactly the seam, which is
                     // what `blend` names in the graph.
-                    let shape = blend_seam(
+                    let (shape, lineage) = blend_seam(
                         &joined,
+                        lineage,
                         *blend,
                         &format!("node {id} ({label}) unions node {c}"),
                         &format!("union at node {id}"),
                         SeamOf::Union,
                     )?;
+                    let (shape, lineage) = unified_tracked(shape, lineage);
                     acc = BuiltShape {
-                        shape: unified(shape),
+                        shape,
                         lineage,
                         features,
                     };
@@ -2324,12 +2369,9 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                          builds. See docs/GOTCHAS.md"
                     );
                 }
-                let lineage = if *blend > 0.0 {
-                    EdgeLineage::default()
-                } else {
-                    acc.lineage
-                        .through_boolean(tool.lineage, &cut, node.tag.as_deref())
-                };
+                let lineage = acc
+                    .lineage
+                    .through_boolean(tool.lineage, &cut, node.tag.as_deref());
                 let mut features = acc.features;
                 features.extend(tool.features);
 
@@ -2337,15 +2379,17 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     breadcrumb(&format!(
                         "fillet {blend} mm on edges created by cut at node {id} ({label})"
                     ));
-                    let shape = blend_seam(
+                    let (shape, lineage) = blend_seam(
                         &cut,
+                        lineage,
                         *blend,
                         &format!("node {id} ({label}) subtracts node {t}"),
                         &format!("cut at node {id}"),
                         SeamOf::Cut,
                     )?;
+                    let (shape, lineage) = unified_tracked(shape, lineage);
                     acc = BuiltShape {
-                        shape: unified(shape),
+                        shape,
                         lineage,
                         features,
                     };

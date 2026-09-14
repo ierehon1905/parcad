@@ -214,6 +214,17 @@ boolean's own history stops at the boolean, and the coplanar faces the unify
 pass merges are new to it; this is the missing half that lets a name on a face
 survive a union whose faces it shares.
 
+## `Shape::classify_point`, `distance_to_point`, `ray_caster`, `bounds_optimal`
+
+The perception primitives, over the sys crate's new bindings of the same
+names: which side of the boundary a point is on (`BRepClass3d`), how far it is
+from the boundary and where (`BRepExtrema_DistShapeShape` against a vertex),
+every place a line meets the boundary with the direction it crosses the
+material (`BRepIntCurveSurface_Inter`, loaded once as a `RayCaster` and fired
+many times), and a tag's exact extent (`BRepBndLib::AddOptimal`). These are
+what parcad's probes, wall-thickness sweep and tag extents run on now that the
+exact kernel is the only one; they used to read a distance field.
+
 ## `Shape::least_distance_to`
 
 `BRepExtrema_DistShapeShape` through the sys crate's new binding: the least

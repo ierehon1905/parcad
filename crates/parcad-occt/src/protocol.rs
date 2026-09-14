@@ -29,12 +29,160 @@ pub struct Request {
     /// finished part. Used by the editor's source-to-viewport target preview.
     #[serde(default)]
     pub inspect_target: Option<usize>,
+    /// If present, build the part and answer these questions of the exact
+    /// solid instead of replying with its mesh: points, rays, a thickness
+    /// sweep. Measured on the finished solid, treatments included.
+    #[serde(default)]
+    pub perceive: Option<Perceive>,
     /// Tessellation tolerance in mm. Advisory: `Mesher::new` hard-codes 0.01 mm
     /// and the worker reports what it used as `deflection_mm`. The field stays
     /// so the request format need not change when the binding is widened.
     pub deflection: f64,
     pub step_path: Option<PathBuf>,
     pub stl_path: Option<PathBuf>,
+}
+
+/// What to ask of the built solid. Every answer is measured on the exact
+/// B-rep — a point against its classifier, a line against its surfaces — so
+/// there is no field to fall short at a corner and no treatment left out.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Perceive {
+    /// Points to classify and measure the distance to the boundary from.
+    #[serde(default)]
+    pub points: Vec<[f64; 3]>,
+    /// Lines to find every boundary crossing along.
+    #[serde(default)]
+    pub rays: Vec<RayLine>,
+    /// Sweep the whole surface for the thinnest material.
+    #[serde(default)]
+    pub thickness: Option<ThicknessSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RayLine {
+    pub origin: [f64; 3],
+    /// Need not be a unit vector.
+    pub direction: [f64; 3],
+    /// How far to follow it, mm. Absent means the whole part from this origin.
+    #[serde(default)]
+    pub max_distance: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThicknessSpec {
+    /// Cap on the surface points a ray is fired from. The candidates — every
+    /// node of the exact tessellation, plus the middle of every triangle and
+    /// edge on a planar face — are decimated evenly down to this.
+    pub max_samples: usize,
+    /// Samples at or below this are counted and listed individually.
+    #[serde(default)]
+    pub threshold_mm: Option<f64>,
+}
+
+/// The answers, in the order the questions were asked.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Perceived {
+    pub points: Vec<PointResult>,
+    pub rays: Vec<RayResult>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thickness: Option<ThicknessResult>,
+}
+
+/// Which side of the boundary a point is on, from `BRepClass3d`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PointWhere {
+    Inside,
+    Outside,
+    /// Within the classification tolerance of a face.
+    OnBoundary,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PointResult {
+    pub point: [f64; 3],
+    pub state: PointWhere,
+    /// Signed distance to the nearest boundary, mm: negative inside, zero on
+    /// it. Exact — `BRepExtrema` against the surfaces, not a field.
+    pub distance_mm: f64,
+    /// The boundary point that distance is measured to.
+    pub nearest: [f64; 3],
+    /// For a part in several bodies: the body the point is inside, or the
+    /// nearest one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RayResult {
+    pub origin: [f64; 3],
+    /// Normalised.
+    pub direction: [f64; 3],
+    pub max_distance: f64,
+    pub starts_inside: bool,
+    pub ends_inside: bool,
+    pub hits: Vec<RayHitResult>,
+    /// Material along the ray, mm; summed over bodies where there are several.
+    pub solid_mm: f64,
+    /// The first complete run of material, absent when the ray began inside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_solid_mm: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RayHitResult {
+    pub distance: f64,
+    pub point: [f64; 3],
+    /// The ray passes into material here; otherwise out of it.
+    pub entering: bool,
+    /// Tags of the face crossed, innermost first. Empty where no tagged node
+    /// owns it.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThicknessResult {
+    /// Surface points that produced a measurement.
+    pub samples: usize,
+    /// Surface points that did not: a line that left material at once (a
+    /// tangency, or a normal the mesher could not give) or never left it.
+    pub discarded: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<ThicknessSample>,
+    pub below_threshold: usize,
+    /// The worst places, spatially separated, worst first.
+    pub thin_spots: Vec<ThicknessSample>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThicknessSample {
+    /// Material along the inward normal from `at` to `opposite`, mm.
+    pub thickness_mm: f64,
+    pub at: [f64; 3],
+    pub opposite: [f64; 3],
+    /// Unit vector into the material at `at`.
+    pub inward: [f64; 3],
+    /// Tags of the face `at` is on, then of the face `opposite` is on.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub opposite_tags: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+/// Where one tag's surface is on the finished part: the exact bounds of the
+/// faces the kernel's lineage says it owns.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TagBounds {
+    pub tag: String,
+    pub min: [f64; 3],
+    pub max: [f64; 3],
+    /// How many faces of the finished part carry this name.
+    pub faces: usize,
 }
 
 /// Counts of the logical topology.
@@ -226,6 +374,15 @@ pub struct Success {
     /// reference. Empty unless there are at least two bodies.
     #[serde(default)]
     pub between: Vec<BodyFit>,
+    /// Where each tag's own surface is, from the faces the kernel's lineage
+    /// gives it, bounded exactly. One entry per tag that owns a face of the
+    /// finished part; the rest are in `unlocated_tags`.
+    #[serde(default)]
+    pub tag_extents: Vec<TagBounds>,
+    /// Tags no face of the finished part carries: everything the node made
+    /// was cut away or buried, or the name is spelled differently.
+    #[serde(default)]
+    pub unlocated_tags: Vec<String>,
     pub timings: Timings,
     pub step_path: Option<PathBuf>,
     pub stl_path: Option<PathBuf>,
@@ -286,6 +443,11 @@ pub struct FaceSummary {
     /// several. Set by the worker after the parse; absent for a one-solid part.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// The tags this face carries, innermost first: the node that made it,
+    /// then every enclosing tagged node. Set by the worker from the lineage
+    /// after the parse; empty for a face no tagged node owns.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 /// What kind of surface a face is, and how it is placed.
@@ -479,6 +641,7 @@ pub enum Response {
     TargetPreview(TargetPreview),
     StepProbe(Box<StepProbe>),
     Fit(Box<FitReport>),
+    Perceived(Box<Perceived>),
     /// The worker understood the request and refused it — a bad radius, an
     /// unsupported operation, a boolean that produced nothing.
     Error {

@@ -4,7 +4,7 @@ reach: measure_wall_thickness
 verdict: 6\.3
 trap: 19\.1
 quote: 6\.3
-why: The thinnest wall names no variable in the script, and `thickness = 19.1` is sitting one line away from being the wrong answer. The part is chamfered, so the reported minimum is an upper bound and the reply must carry that.
+why: The thinnest wall names no variable in the script, and `thickness = 19.1` is sitting one line away from being the wrong answer. The part is chamfered; the sweep now measures the exact solid with the chamfer in it, so the reply carries the number and a `note` on how a sampled ray minimum can be read, and no caveat about a treatment left out.
 ---
 Use the parcad MCP tools. The part is flange.js in the parcad project folder.
 

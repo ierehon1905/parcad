@@ -1,0 +1,91 @@
+{
+  "name": "probe-bored-block",
+  "script": "eval/scripts/probe-bored-block.js",
+  "why": "The probe's closed forms, on the exact solid. A 40 mm plate with a Ø12 bore: a ray along X at y = 0 crosses the boundary at x = -20, -6, 6 and 20, so its first run of material is (40 - 12) / 2 = 14 mm and the material along it 28, and the faces read plate, bore, bore, plate by the tags on the nodes that made them. Straight down the bore's axis there is nothing to cross. The origin is 6 mm from the bore's wall and in void; (19, 0, 0) is 1 mm inside the +X face; (0, 0, 100) is above the bore, where the nearest boundary is the bore's rim at sqrt(97^2 + 6^2) = 97.185 rather than the top face, which has a hole there. Every distance is BRepExtrema against the surfaces and every crossing an intersection with them, so these hold to the micron; the old field read a corner short by construction and could not name a face it had no lineage for.",
+  "brep": {
+    "size": [
+      40.0,
+      40.0,
+      6.0
+    ],
+    "volume_mm3": 8922.169,
+    "area_mm2": 4160.188,
+    "triangles": 324,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1487.028,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 7,
+    "edges": 30,
+    "curves": 14,
+    "perception": {
+      "rays": [
+        {
+          "origin": [
+            -100.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "crossings": 4,
+          "first_solid_mm": 14.0,
+          "solid_mm": 28.0,
+          "surfaces": [
+            "plate",
+            "bore",
+            "bore",
+            "plate"
+          ]
+        },
+        {
+          "origin": [
+            0.0,
+            0.0,
+            -100.0
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            1.0
+          ],
+          "crossings": 0,
+          "solid_mm": 0.0
+        }
+      ],
+      "points": [
+        {
+          "at": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "state": "outside",
+          "distance_mm": 6.0
+        },
+        {
+          "at": [
+            19.0,
+            0.0,
+            0.0
+          ],
+          "state": "inside",
+          "distance_mm": -1.0
+        },
+        {
+          "at": [
+            0.0,
+            0.0,
+            100.0
+          ],
+          "state": "outside",
+          "distance_mm": 97.18539
+        }
+      ]
+    }
+  }
+}

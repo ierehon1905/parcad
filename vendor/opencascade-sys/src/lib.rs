@@ -905,6 +905,37 @@ pub mod ffi {
         pub fn BRepIntCurveSurface_Inter_point(
             intersector: &BRepIntCurveSurface_Inter,
         ) -> UniquePtr<gp_Pnt>;
+        // Ray casting against a loaded shape — added for parcad, see
+        // PARCAD-CHANGES.md.
+        pub fn BRepIntCurveSurface_Inter_load(
+            intersector: Pin<&mut BRepIntCurveSurface_Inter>,
+            shape: &TopoDS_Shape,
+            tolerance: f64,
+        );
+        pub fn BRepIntCurveSurface_Inter_init_line(
+            intersector: Pin<&mut BRepIntCurveSurface_Inter>,
+            line: &gp_Lin,
+        );
+        pub fn BRepIntCurveSurface_Inter_w(intersector: &BRepIntCurveSurface_Inter) -> f64;
+        pub fn BRepIntCurveSurface_Inter_transition(intersector: &BRepIntCurveSurface_Inter) -> i32;
+        pub fn BRepIntCurveSurface_Inter_state(intersector: &BRepIntCurveSurface_Inter) -> i32;
+
+        // IndexedMapOfShape::FindIndex — added for parcad, see PARCAD-CHANGES.md.
+        pub fn IndexedMapOfShape_find_index(map: &IndexedMapOfShape, shape: &TopoDS_Shape) -> i32;
+
+        // BRepClass3d_SolidClassifier — added for parcad, see PARCAD-CHANGES.md.
+        pub fn BRepClass3d_classify(shape: &TopoDS_Shape, x: f64, y: f64, z: f64, tolerance: f64) -> i32;
+
+        // BRepBndLib::AddOptimal — added for parcad, see PARCAD-CHANGES.md.
+        pub fn Shape_bounds_optimal(
+            shape: &TopoDS_Shape,
+            x0: &mut f64,
+            y0: &mut f64,
+            z0: &mut f64,
+            x1: &mut f64,
+            y1: &mut f64,
+            z1: &mut f64,
+        ) -> bool;
 
         // BRepFeat
         type BRepFeat_MakeCylindricalHole;

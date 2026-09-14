@@ -544,11 +544,13 @@ parallelogram's exact 4519.87 — the cutter's own volume and not a micron more,
 the membrane is intact and nothing in the reply mentions it.
 
 **And the measurement that finds it can miss it.** `measure_wall_thickness`
-samples from seven rendered views, so it reports a membrane only when a sample
-lands on one: on the sloped case above its default 96 px reported a minimum of
-10.82 mm and *nothing* under a 1 mm threshold, while 256 px reported 0.0104 mm —
-the formula's value there to six places. Raise `resolution` before believing a
-clean answer; docs/PERCEPTION.md §5 has the other direction it is wrong in.
+fires from sampled surface points, so it reports a membrane only when a sample
+lands on one: on the sloped case above, when it sampled seven rendered views at
+96 px it reported a minimum of 10.82 mm and *nothing* under a 1 mm threshold,
+while 256 px reported 0.0104 mm — the formula's value there to six places. It
+now samples the exact tessellation's nodes and a grid over every triangle, and
+the same rule holds: raise `max_samples` before believing a clean answer;
+docs/PERCEPTION.md §5 has the other direction it is wrong in.
 
 So the rule has two ends: **a cutter crosses every face it meets** — past the
 material where it exits, proud of the material where it enters. `holeFor` and

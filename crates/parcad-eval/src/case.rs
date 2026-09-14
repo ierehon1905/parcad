@@ -153,6 +153,13 @@ pub struct Expect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub between_bodies: Option<BTreeMap<String, BetweenExpect>>,
 
+    /// Closed forms measured on the exact solid: rays, points and a thickness
+    /// sweep. B-rep only, opt-in per case, and never written by `--update` —
+    /// every number here is derived by hand and the case's `why` says how, so
+    /// a drift is a defect rather than a value to re-record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub perception: Option<PerceptionExpect>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tolerance: Option<Tolerance>,
 
@@ -171,6 +178,178 @@ impl Expect {
     pub fn tolerance_or(&self, fallback: Tolerance) -> Tolerance {
         self.tolerance.clone().unwrap_or(fallback)
     }
+}
+
+/// What the perception primitives must report for a part. Rays and points
+/// are exact intersections and distances and are held to `size_mm`; a
+/// thickness minimum is a sampled one and carries its own tolerance.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PerceptionExpect {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rays: Vec<RayExpect>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub points: Vec<PointExpect>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thickness: Option<ThicknessExpect>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RayExpect {
+    pub origin: [f64; 3],
+    pub direction: [f64; 3],
+    /// How many surface crossings the line makes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crossings: Option<usize>,
+    /// The first complete run of material along it, mm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_solid_mm: Option<f64>,
+    /// All the material along it, mm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub solid_mm: Option<f64>,
+    /// The innermost tag of each face crossed, in order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surfaces: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PointExpect {
+    pub at: [f64; 3],
+    /// `inside`, `outside` or `on_boundary`.
+    pub state: String,
+    /// Signed distance to the boundary, mm: negative inside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub distance_mm: Option<f64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThicknessExpect {
+    /// Samples to fire; the sweep's default when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_samples: Option<usize>,
+    /// The thinnest sample must be within `tolerance_mm` of this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_mm: Option<f64>,
+    /// Or within these bounds, for a minimum whose closed form is a limit the
+    /// samples approach rather than land on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_least_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_most_mm: Option<f64>,
+    #[serde(default = "default_thickness_tolerance")]
+    pub tolerance_mm: f64,
+    /// The innermost tags of the two faces the thinnest wall lies between,
+    /// in either order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub between: Option<[String; 2]>,
+}
+
+fn default_thickness_tolerance() -> f64 {
+    0.01
+}
+
+/// Judge a perception reply against its expectation.
+pub fn check_perception(
+    expect: &PerceptionExpect,
+    answer: &parcad_occt::Perceived,
+    tol: &Tolerance,
+) -> Vec<Mismatch> {
+    let mut out = Vec::new();
+    for (i, want) in expect.rays.iter().enumerate() {
+        let Some(got) = answer.rays.get(i) else {
+            out.push(Mismatch { field: format!("perception.rays[{i}]"), detail: "no answer".into() });
+            continue;
+        };
+        if let Some(n) = want.crossings {
+            if got.hits.len() != n {
+                out.push(Mismatch {
+                    field: format!("perception.rays[{i}].crossings"),
+                    detail: format!("expected {n}, measured {}", got.hits.len()),
+                });
+            }
+        }
+        match (want.first_solid_mm, got.first_solid_mm) {
+            (Some(w), Some(g)) => abs_check(&mut out, &format!("perception.rays[{i}].first_solid_mm"), w, g, tol.size_mm),
+            (Some(w), None) => out.push(Mismatch {
+                field: format!("perception.rays[{i}].first_solid_mm"),
+                detail: format!("expected {w}, but the ray found no complete run of material"),
+            }),
+            (None, _) => {}
+        }
+        if let Some(w) = want.solid_mm {
+            abs_check(&mut out, &format!("perception.rays[{i}].solid_mm"), w, got.solid_mm, tol.size_mm);
+        }
+        if let Some(want_surfaces) = &want.surfaces {
+            let got_surfaces: Vec<&str> = got.hits.iter().map(|h| h.tags.first().map_or("", String::as_str)).collect();
+            if got_surfaces != want_surfaces.iter().map(String::as_str).collect::<Vec<_>>() {
+                out.push(Mismatch {
+                    field: format!("perception.rays[{i}].surfaces"),
+                    detail: format!("expected {want_surfaces:?}, measured {got_surfaces:?}"),
+                });
+            }
+        }
+    }
+    for (i, want) in expect.points.iter().enumerate() {
+        let Some(got) = answer.points.get(i) else {
+            out.push(Mismatch { field: format!("perception.points[{i}]"), detail: "no answer".into() });
+            continue;
+        };
+        let state = match got.state {
+            parcad_occt::protocol::PointWhere::Inside => "inside",
+            parcad_occt::protocol::PointWhere::Outside => "outside",
+            parcad_occt::protocol::PointWhere::OnBoundary => "on_boundary",
+        };
+        if state != want.state {
+            out.push(Mismatch {
+                field: format!("perception.points[{i}].state"),
+                detail: format!("expected {}, measured {state}", want.state),
+            });
+        }
+        if let Some(w) = want.distance_mm {
+            abs_check(&mut out, &format!("perception.points[{i}].distance_mm"), w, got.distance_mm, tol.size_mm);
+        }
+    }
+    if let Some(want) = &expect.thickness {
+        match answer.thickness.as_ref().and_then(|t| t.min.as_ref()) {
+            None => out.push(Mismatch { field: "perception.thickness".into(), detail: "nothing was measured".into() }),
+            Some(min) => {
+                if let Some(w) = want.min_mm {
+                    abs_check(&mut out, "perception.thickness.min_mm", w, min.thickness_mm, want.tolerance_mm);
+                }
+                if let Some(lo) = want.at_least_mm {
+                    if min.thickness_mm < lo - want.tolerance_mm {
+                        out.push(Mismatch {
+                            field: "perception.thickness.at_least_mm".into(),
+                            detail: format!("expected at least {lo}, measured {:.4}", min.thickness_mm),
+                        });
+                    }
+                }
+                if let Some(hi) = want.at_most_mm {
+                    if min.thickness_mm > hi + want.tolerance_mm {
+                        out.push(Mismatch {
+                            field: "perception.thickness.at_most_mm".into(),
+                            detail: format!("expected at most {hi}, measured {:.4}", min.thickness_mm),
+                        });
+                    }
+                }
+                if let Some(between) = &want.between {
+                    let mut got = [
+                        min.tags.first().cloned().unwrap_or_default(),
+                        min.opposite_tags.first().cloned().unwrap_or_default(),
+                    ];
+                    got.sort();
+                    let mut want_sorted = between.clone();
+                    want_sorted.sort();
+                    if got != want_sorted {
+                        out.push(Mismatch {
+                            field: "perception.thickness.between".into(),
+                            detail: format!("expected {between:?}, measured {got:?} at {:?}", min.at),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out
 }
 
 /// One named body's own measurements. Held to the same tolerances as the

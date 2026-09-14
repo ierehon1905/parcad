@@ -59,15 +59,15 @@ is the failure a render hides.
 | Measured dimensions, volume, area | ✅ `PartReport`, `measure.rs` | tight `bounds`, never `framing_bounds` |
 | Multi-view contact sheet | ✅ `render::contact_sheet` | seven orthographic views, one shared framing |
 | Scale bar on every panel | ✅ `render::ScaleBar` | round 1-2-5 lengths, end ticks |
-| Region colouring with a legend | ✅ `tags.rs` | which tag owns which surface; key beside the frame, colours hashed from the name so two renders stay comparable |
-| Where each tag is | ✅ `tags::extents`, `evaluate_part`'s `tag_extents` | §3 — one box and one centre per tag, from the built surface |
+| Region colouring with a legend | ✅ `tags::regions_by_face` | which tag owns which face, from the kernel's face lineage; key beside the frame, colours hashed from the name so two renders stay comparable |
+| Where each tag is | ✅ `perceive::tag_extents`, `evaluate_part`'s `tag_extents` | §3 — one box and one centre per tag, the exact bounds of the faces that carry it |
 | Which way a view looks | ✅ `RenderedView`'s `axes` | §2 — view names are absolute, and saying so found two of them mirrored |
 | Edge listing with geometry | ✅ `list_entities` | centre, direction, length; sampled at 60, with the total — and it disagrees with `evaluate_part`'s `topological_edges`, which double-counts. §13 |
 | Treatment target preview | ✅ `inspect_treatment_target` | plus tags whose edge set is *exactly* the target |
 | Selector syntax check | ✅ `check_selector` | no geometry touched |
 | Depth + normal per pixel | ~ `render::GeometryBuffer` | exists, and `model_point` ties a pixel to a millimetre — not exposed |
-| Point and ray probe | ✅ `probe.rs`, `probe_part` | §3 — signed distance at a point, every crossing along a ray, the wall thickness between them |
-| Wall thickness / minimum feature | ✅ `thickness.rs`, `measure_wall_thickness` | §5 — a ray from every sampled surface point, both faces named; optimistic where a fillet was dropped, and it says so |
+| Point and ray probe | ✅ `perceive.rs`, `probe_part` | §3 — exact distance at a point, every crossing along a ray with the face it went through, the wall thickness between them, on the B-rep with every treatment in it |
+| Wall thickness / minimum feature | ✅ `perceive.rs`, `measure_wall_thickness` | §5 — a ray from every sampled surface point against the exact surfaces, both faces named |
 | **Overhang and printability** | ❌ | §6 |
 | Section view | ✅ `render.rs`, `evaluate_part`'s `section` | §7 — a clipping plane in both renderers, the cut face capped and drawn flat, and `cut_fraction` to say whether it opened anything |
 | **Numbered marks on the render** | ❌ | §4 |
@@ -162,42 +162,51 @@ a symmetric part is the same picture and every part in `examples/` is symmetric
 about at least one of these planes; an agent reading a side view of a *handed*
 part got the handedness backwards. docs/GOTCHAS.md has the fix and the pixels.
 
-## 3. Point and ray probes — **DONE**
+## 3. Point and ray probes — **DONE**, and moved onto the exact kernel
 
-`crates/parcad-core/src/probe.rs`, reached as `probe_part`. `distance_at(points)`
-returns the signed distance at each — the sign alone answers "is this point
-inside the part", which previously needed a render and a guess.
-`ray(origin, direction, max)` returns every crossing along the line, in order,
-plus `solid_mm` and `first_solid_mm`. Two crossings on one ray *is* a wall
-thickness, measured; [CADSmith][cadsmith]'s gap-at-the-joint failure is one ray
-cast.
+`crates/parcad-occt/src/perceive.rs`, reached as `probe_part`. A point is
+classified against the solid (`BRepClass3d_SolidClassifier`) and measured to
+its nearest boundary point (`BRepExtrema_DistShapeShape`): the word `medium` —
+material, void, or surface — answers "is this point inside the part", which
+previously needed a render and a guess. A ray is intersected with every face
+it meets (`BRepIntCurveSurface_Inter`), so each crossing is a point on an exact
+surface, carries the tags of the face it went through, and says whether the
+line passed *into* material or out of it. Two crossings on one ray *is* a wall
+thickness, measured; [CADSmith][cadsmith]'s gap-at-the-joint failure is one
+ray cast.
 
-- **Bisect on the sign, not on the distance.** The field is exact for primitives
-  and cheap booleans and an **under**-estimate at corners by construction
-  (OP_ROADMAP §1 — an overestimate deletes geometry, because the octree prunes
-  on it). A sphere trace on such a field converges and never lands, so the march
-  floors its step at `EPS` to let a sign change happen, then bisects on the
-  sign: exact where the magnitude is not, so thicknesses are right even where
-  the field around them is conservative. A distance at a point stays a lower
-  bound, and says so.
-- **A ray that grazes a surface can march forever**, reading a near-zero
-  distance and advancing `EPS` a step — real geometry, not a bug, so it is
-  capped and reported (`incomplete`). Past the last crossing the answer is
-  *unknown*, not *nothing there*.
-- **The field has no fillets, and the report has to say so.** `drawable()`
-  replaces every `Fillet` and `Chamfer` with an identity so a part can be drawn
-  at all; a probe goes through the same door and so measures the **sharp**
-  corner. `omitted_treatments` names every treatment dropped.
-- **No length means "all the way through".** The default reach comes from the
-  origin and the framing bounds and is reported as `max_distance_mm`.
+Until 2026-09-14 the same tool ran on a distance field, and three things it
+had to say about itself are no longer true and no longer said:
 
-**Measured, not assumed.** Unit tests pin closed forms: a 40 mm cube shelled to
-5 mm reads a 5.000 mm wall and 10 mm across two walls; service tests use the
-40 mm plate with a Ø12 bore, wall beside the bore 14 mm. On generated geometry —
-`examples/hex-standoff.js`, 5.5 across the flats, 2.5 tap drill — a ray across a
-flat crosses at ±2.75 and ±1.25 and reports `first_solid_mm` 1.4999993 against a
-closed form of exactly 1.5, a ray down the bore finds nothing, and the point at
-the origin reads +1.25 from the bore wall.
+- **A distance was a lower bound near a corner**, because the field could not
+  over-estimate. It is the distance now, at a corner as on a face: inside a
+  cube whose top edges are rounded at r = 3, the point (8, 0, 9) reads
+  3 − √5 = 0.764 from the fillet's arc where the field read 1 to a corner
+  that is not there.
+- **Every fillet and chamfer was absent** — `drawable()` replaced each with an
+  identity, and `omitted_treatments` named them. The exact solid has them, so
+  the field is gone from the reply rather than always empty.
+- **A grazing ray could march forever** and had to say `incomplete`. An
+  intersection has no march; a tangent contact is reported as neither an
+  entry nor an exit.
+
+Two things about the exact answer are worth knowing. A ray through an edge is
+reported once per face sharing it, so the walk keeps only crossings that
+alternate in and out, and a hit within 0.1 µm of a face boundary is what the
+intersector classifies as on it. And a part in several bodies is asked body by
+body, each crossing and point naming its `body`; `solid_mm` sums over them.
+
+**Measured, not assumed, and pinned in `eval/cases/` now that there is one
+kernel to pin against.** `probe-bored-block` holds the 40 mm plate with a Ø12
+bore to its closed forms — crossings at x = −20, −6, 6, 20, so 14 mm of wall
+and 28 in all, named plate, bore, bore, plate; the origin 6.000 from the wall
+in void; a point above the bore 97.185 from the rim it is nearest, not the top
+face it is above. `probe-port-meets-gallery` holds the manifold below,
+`two-boxes` a ray and two points across a part in two bodies, and
+`shelled-box` a ray through both walls of a shell. The same forms are unit
+tests in `perceive.rs` and `service.rs`. `probe_part` has no `resolution` and
+no march; what it has is a `timeout_s`, because the part is built in the
+worker like an evaluation.
 
 **What a model does with it is the separate fact.** Asked for that same wall
 with `probe_part` withheld, Haiku 4.5 produced the same 1.5 mm — *derived* from
@@ -245,13 +254,11 @@ locate, and down a port's axis the port void and the gallery void are the same
 air — the decisive measurement is transverse, at the gallery's own height, and
 no trial fired one.
 
-**No `eval/cases/` entry, deliberately.** A case there is a two-backend geometry
-comparison — `Observed` is size, volume, area, triangles, topology — and a probe
-is neither a geometry nor available on both backends. §5 landed and the answer
-is still no: a thickness is implicit-only for the same reason, and the B-rep
-backend has none to disagree with. Closed forms are pinned in the unit tests
-instead — for `thickness.rs`, a 40 mm shell, an off-centre pocket with a 2 mm
-wall on one side and 12 mm on the other, and a sphere.
+**In `eval/cases/` now.** A case there used to be a two-backend geometry
+comparison, and a probe was available on one backend only; with the exact
+kernel the only one, a case carries an optional `perception` block — rays,
+points, a thickness minimum — held to closed forms written by hand and never
+rewritten by `--update`, with the derivation in the case's `why`.
 
 ### Where is this tag? — done, and it answers a failure class
 
@@ -267,29 +274,27 @@ lower  x -218.000 .. 218.000   centre    0.000
 cabin  x -115.000 .. 100.000   centre   -7.500
 ```
 
-`tags::extents` bounds the points of the *built* surface whose own field
-vanishes on each tag, so a feature the kernel did not build has no extent and
-says so in `unlocated_tags`. Four things the implementation settled:
+`perceive::tag_extents` bounds the faces of the finished part that carry each
+tag — the faces the kernel's own history says the tag still owns, followed
+through every boolean, blend, fillet and unify — with `BRepBndLib::AddOptimal`
+on the exact geometry, so the box is the surface's own reach: `examples/
+flange.js` reports its bore 23.900 deep to the micron, where a sample of the
+mesh once reported it as a flat ring and then as 11.95. A tag no face carries
+has no extent and says so in `unlocated_tags`. What the move settled:
 
-- **An extent is inclusive where a colour is exclusive.** `owners_at` gives a
-  point to the nearest tag, because a pixel takes one colour. Under that rule
-  `examples/flange.js` reported its bore 11.95 mm deep in a part it runs
-  23.9 mm through: both bounding rims are points where two tagged surfaces
-  genuinely meet, and both were won by the face. Nested tags now report nested
-  boxes.
-- **The vertex list is not a sample of the surface.** An exact kernel meshes a
-  cylindrical face as two rings of nodes and nothing between — the chordal error
-  is entirely circumferential — and both rings are rims, so before
-  `surface_sample` added every triangle edge's midpoint, `bore` came back as a
-  flat ring at a single z. Midpoints *not* on the surface fix themselves: a
-  chord's midpoint sits inside the material by more than the attribution
-  tolerance and is claimed by nothing.
-- **The error is two-sided and bounded by the mesh.** On the car, the exact
-  backend reports −115.000..100.000 to the micron; the implicit one at depth 7,
-  resolution 3.611 mm, reports −113.842..98.262 — short by 1.2 and 1.7 mm — and
-  `lower` reads ±91.168 against an authored ±90, over by 1.2. Short because the
-  extreme point of a surface is rarely a sampled one, long because a point
-  within tolerance counts as on it.
+- **An extent is inclusive where a colour is exclusive.** A face carries every
+  tag its lineage gives it, innermost first; a pixel takes one colour and gets
+  the innermost, so a union's or a cut's own tag shows no pixels of its own in
+  a region map while its box covers everything it names. Nested tags report
+  nested boxes, which is what the script says.
+- **A coplanar merge carries a face across two features.** The bracket's
+  `plate` reaches z = 40 because its −X face merged with the wall's at the
+  union and the merged face carries both names — the same face `on: "plate"`
+  would select. The box is of the faces, not of the primitive.
+- **A blend carries names now.** A blended union or cut used to drop its
+  lineage, so every tag on `examples/bracket.js` came back unlocated; the seam
+  fillet is followed like an authored one, and the blend's faces take the
+  names of the faces its edge lay between. The corpus's geometry did not move.
 - **A tag names a node, not a placement.** `cylinder(...).at(12, 0, 0).tag()`
   tags the translation and reports the hole where it is; `cylinder(...).tag()`
   used later at `.at(12, 0, 0)` tags the primitive, and its extent is the
@@ -384,30 +389,35 @@ change.
 The smallest amount of material anywhere, and where it is; the check every part
 in `examples/` silently assumes and none verify. **Done**, as `thickness.rs` and
 `measure_wall_thickness`: minimum, the point, the two surfaces it lies between —
-named through `tags::owners_at` — and a count of samples below a caller-supplied
+named by the faces' own tags — and a count of samples below a caller-supplied
 threshold, so "one bad spot" and "the whole wall is thin" are distinguishable.
-Surface points and normals come free from the `GeometryBuffer`, one per hit
-pixel across all seven views, and the loop is `probe::rays`: compiling the field
-once per ray is fine for a handful and ruinous for thousands.
+Since 2026-09-14 it runs on the exact solid: the samples are the kernel's
+tessellation nodes, which lie on the surface with the surface's normal, plus
+a grid over every triangle at a hundredth of the part's diagonal, and each
+ray is intersected with the exact faces (`perceive.rs`, one loaded
+`BRepIntCurveSurface_Inter` per body).
 
-- **The omission is stated as prose, not as a list.** `omitted_treatments`
-  carries node indices as everywhere else, and a `caveat` string beside it says
-  *which way the error runs*: the sharp corner has more material, so the
-  reported minimum is an upper bound. A list of indices makes an answer vaguer;
-  only this one makes it optimistic, and the field name cannot say so. Sampling
-  the B-rep surface instead is still the real fix, and is still not done.
-- **Surface samples need refining before they are surface samples.**
-  `model_point` reads back a *quantised* depth, landing within a voxel of the
-  surface — far enough out that the inward ray starts in void, or far enough in
-  that every wall reads short by the same bias. Two Newton steps along the
-  gradient close it. But a field built from `abs` or `sqrt` has no derivative
-  where it is exactly zero, so a point landed perfectly on the surface returns
-  `NaN`: success and failure look identical. The last *usable* normal is kept,
-  never the last one evaluated.
+- **The fillet is in the number.** The old sweep ran on a field with every
+  treatment dropped and carried a `caveat` saying its minimum was an upper
+  bound; `eval/cases/thickness-under-a-fillet` is the case that sentence was
+  about, and now measures it: a plate 8 thick with its top edges rounded at
+  r = 2 reads 7.732 straight up at x = 14 (4 + 2 + √3) and its sweep minimum
+  sits between the 6 the wall thins to and 7.5. `omitted_treatments` and
+  `caveat` are gone from the reply because they are no longer true, and
+  `eval/field/how-thin-is-it.md` no longer asks a model to reproduce them.
+- **A grid point on a curved triangle is on the chord**, within the mesher's
+  0.01 mm of the surface on one side or the other, so the sweep measures from
+  where its line actually enters the material — just ahead of the sample, or
+  just behind it — and a node needs neither correction.
+- **The minimum is a sampled minimum, exact at its own point.** The manifold's
+  outboard wall reads 5.000012 from a sample a fraction of a degree off the
+  port's generator, where the normal tilts; the 5.000 at the generator is a
+  limit. `max_samples` (default 6000, replacing the old render `resolution`)
+  narrows it and never widens it, and the reply's `note` says so.
 - **A ray thickness is not an inscribed sphere**, and the difference is signed:
   they agree on a wall with parallel faces, and in a concave corner the ray
   crosses to whatever is straight across, further than the sphere that fits.
-  Upper bound again, stated in the module rather than discovered later.
+  Stated in the reply's `note` rather than discovered later.
 
 **Measured on a model**, `eval/field/how-thin-is-it.md`, four trials of Haiku
 4.5 with thinking on, against the flange: *what is the thinnest material in this
@@ -756,15 +766,17 @@ spanning −3…+3 — a blind hole halfway in — evaluated it, read
 leaves the user a broken file", and this script *built*. The gate that exists
 catches the rarer failure.
 
-Two smaller ones worth not rediscovering. `regions` omits treatment tags
-entirely rather than reporting them `visible: false`, which the server
-instructions promise it does not do — `bore_lead_in` is a chamfer, `drawable()`
-replaces it with an identity, and no pixel is ever attributed to it. And a
-*vertex* selector that is empty is refused with "edge selector is empty", the
-wrong noun, on the one path where the two grammars differ.
+Two smaller ones worth not rediscovering. `regions` used to omit treatment
+tags entirely rather than reporting them `visible: false` — `bore_lead_in` is
+a chamfer, `drawable()` replaced it with an identity, and no pixel was ever
+attributed to it; since the region map colours by the kernel's face lineage
+every tag is listed, and a chamfer's faces carry the names of the faces its
+edge lay between. And a *vertex* selector that is empty is refused with "edge
+selector is empty", the wrong noun, on the one path where the two grammars
+differ.
 
 **What did not fail is worth recording too.** `measure_wall_thickness` went 6/6
-including the caveat's direction, and the `rendered_by` regression — the server
+including the direction of the caveat it carried then, and the `rendered_by` regression — the server
 instructions naming a field no reply contains — is 12/12 clean across both
 rounds. Both are §3's and §5's rewritten tool descriptions still holding.
 

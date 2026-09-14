@@ -127,8 +127,11 @@ pub struct EvaluateRequest {
     pub views: Option<Vec<String>>,
     /// Colour each view by the tag that owns the surface, instead of shading it.
     /// The reply then names every tag's colour and its share of the visible
-    /// surface — including tags that are in the model but hidden from this
-    /// angle, which is what tells you whether an edit is invisible or absent.
+    /// surface — every tag in the model, with the ones hidden from this angle
+    /// marked `visible: false`, which is what tells you whether an edit is
+    /// invisible or absent. A face carries every tag its history gives it,
+    /// innermost first, and is coloured for the innermost; a fillet's faces
+    /// take the names of the faces its edge lay between.
     #[serde(default)]
     pub regions: Option<bool>,
     /// Cut the part open on a plane before drawing it, so the views show the
@@ -192,6 +195,10 @@ pub struct ProbeRequest {
     /// Lines to measure along.
     #[serde(default)]
     pub rays: Vec<service::RayRequest>,
+    /// Seconds the kernel may take to build the part, 1 to 600. Defaults to
+    /// 20, or PARCAD_OCCT_TIMEOUT.
+    #[serde(default)]
+    pub timeout_s: Option<f64>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -203,10 +210,17 @@ pub struct ThicknessRequest {
     /// is reported and nothing is counted.
     #[serde(default)]
     pub threshold_mm: Option<f64>,
-    /// How finely the surface is sampled, 32 to 256. Higher finds smaller thin
-    /// features and costs more. The default, 96, is right for most parts.
+    /// How many surface points a ray is fired from, 200 to 100000; the
+    /// default, 6000, puts one about every hundredth of the part's diagonal.
+    /// The minimum is exact at every sampled point and may sit between two of
+    /// them, so more samples narrow it; a part with many small faces (a knurl,
+    /// a thread) wants more.
     #[serde(default)]
-    pub resolution: Option<u32>,
+    pub max_samples: Option<usize>,
+    /// Seconds the kernel may take to build and sweep the part, 1 to 600.
+    /// Defaults to 20, or PARCAD_OCCT_TIMEOUT.
+    #[serde(default)]
+    pub timeout_s: Option<f64>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -430,7 +444,7 @@ impl Parcad {
     #[tool(
         name = "evaluate_part",
         annotations(title = "Build and measure a part", read_only_hint = true, open_world_hint = false),
-        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality, `bodies` (free-standing pieces: one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in.\n\nA part that is meant to be several solids — a base and its lid, a clamp in two halves — returns an object of named shapes, `return { base, lid }`, and the reply then carries `named_bodies`: each body measured alone (size, bounds, volume, faces, `watertight`, `pieces` — 1 when that body is intact, more when its own booleans left it split, the defect the part-level `bodies` cannot tell from a second body that was meant) and `between_bodies`: every pair measured on the exact solids, `clear` with a `clearance_mm` and the two `closest_mm` points, `touching`, or `interfering` with the mm³ they share. Read `between_bodies` for whether a lid clears its base or a clip is drawn through what it clips onto; for such a part `bodies` should equal the number of named bodies. Bodies are never fused, and selectors, tags and treatments work inside one body only. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Each view in the reply also carries `path`, the same image as a PNG file on this machine, and `markdown`, that file as an image line for your reply: the user does not see the pictures a tool returns in every client, so paste `markdown` whenever they should see the part. A build is kept per script: asking again with other views, exporting, or putting the script on screen reuses it (`reused_build`), so render after measuring rather than instead of it. `timeout_s` gives a heavy part longer than the default 20 s. Use this to check that a script produces the part you intended.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. A tag in `unlocated_tags` owns no point of the finished surface at all: it was buried by a later boolean, or it is on a fillet, which has no field to locate.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
+        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality, `bodies` (free-standing pieces: one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in.\n\nA part that is meant to be several solids — a base and its lid, a clamp in two halves — returns an object of named shapes, `return { base, lid }`, and the reply then carries `named_bodies`: each body measured alone (size, bounds, volume, faces, `watertight`, `pieces` — 1 when that body is intact, more when its own booleans left it split, the defect the part-level `bodies` cannot tell from a second body that was meant) and `between_bodies`: every pair measured on the exact solids, `clear` with a `clearance_mm` and the two `closest_mm` points, `touching`, or `interfering` with the mm³ they share. Read `between_bodies` for whether a lid clears its base or a clip is drawn through what it clips onto; for such a part `bodies` should equal the number of named bodies. Bodies are never fused, and selectors, tags and treatments work inside one body only. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Each view in the reply also carries `path`, the same image as a PNG file on this machine, and `markdown`, that file as an image line for your reply: the user does not see the pictures a tool returns in every client, so paste `markdown` whenever they should see the part. A build is kept per script: asking again with other views, exporting, or putting the script on screen reuses it (`reused_build`), so render after measuring rather than instead of it. `timeout_s` gives a heavy part longer than the default 20 s. Use this to check that a script produces the part you intended.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. Each box is the exact extent of the faces the kernel's own history says the tag still owns, and `faces` is how many. A tag in `unlocated_tags` owns no face of the finished part at all: everything it made was cut away or buried by a later boolean.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
     )]
     async fn evaluate_part(
         &self,
@@ -503,10 +517,7 @@ impl Parcad {
                 })
                 .unzip::<_, _, Vec<_>, Vec<_>>();
 
-            Ok((
-                evaluated.snapshot.with_views(summaries, renders.omitted),
-                pngs,
-            ))
+            Ok((evaluated.snapshot.with_views(summaries), pngs))
         })
         .await?;
 
@@ -533,7 +544,7 @@ impl Parcad {
     #[tool(
         name = "list_entities",
         annotations(title = "List a part's edges and faces", read_only_hint = true, open_world_hint = false),
-        description = "List what a part is made of, as text rather than a picture: its visible edges with their centres, directions and lengths, and its faces with what each one is (plane, cylinder, cone, sphere, torus), its exact area, a point on it, its outward normal or axis, and the faces it touches. For a part in several named bodies each edge and face also says which `body` it is on.\n\nUse the edges to work out which directional or topological selector picks the edges you mean. Use the faces to work out the *shape* of the part without looking at it — `adjacent` is the half that carries it, because a plane at z=44 could be the top of a plate or the floor of a pocket and what it borders is what tells them apart. A cylindrical face bordering two planes is a through hole; bordering one is a blind one.\n\nThe returned edge@N and face@N ids describe one evaluation and must never appear in a script — there is no face selector in the DSL, so a face is something to read, and the way to act on one is the edges around it."
+        description = "List what a part is made of, as text rather than a picture: its visible edges with their centres, directions and lengths, and its faces with what each one is (plane, cylinder, cone, sphere, torus), its exact area, a point on it, its outward normal or axis, the faces it touches, and `tags`, the names the face carries — innermost first, the node that made it and then every tagged node it survived through — which is what `on:` and `between:` select by. For a part in several named bodies each edge and face also says which `body` it is on.\n\nUse the edges to work out which directional or topological selector picks the edges you mean. Use the faces to work out the *shape* of the part without looking at it — `adjacent` is the half that carries it, because a plane at z=44 could be the top of a plate or the floor of a pocket and what it borders is what tells them apart. A cylindrical face bordering two planes is a through hole; bordering one is a blind one.\n\nThe returned edge@N and face@N ids describe one evaluation and must never appear in a script — there is no face selector in the DSL, so a face is something to read, and the way to act on one is the edges around it."
     )]
     async fn list_entities(
         &self,
@@ -579,16 +590,17 @@ impl Parcad {
     #[tool(
         name = "probe_part",
         annotations(title = "Probe a part along rays and points", read_only_hint = true, open_world_hint = false),
-        description = "Measure a part along rays and at points instead of looking at it. This is the tool for every question of the form 'is there material here', 'how thick is that', 'does this hole break through', 'do these two bores meet' — a render cannot settle any of them, and neither can arithmetic on the script: the script says what was asked for, and this says what was built. Reach for it before you reason from a dimension in the source.\n\nEach point reports `medium`, either \"material\" or \"void\", plus the distance to the nearest surface (negative in material). Each ray reports every crossing in order, each with the `medium` it passed `into` and `surface_of`, the tag of the node whose surface that face belongs to — read those names down the list and they name the features the line went through, which is how you tell two voids that meet from two that do not. Also `solid_mm`, and `first_solid_mm`, which is a wall thickness, measured.\n\nA ray that reports no crossings at all crossed nothing but void: that is a positive result, not a failed measurement. Runs against the distance field, so fillets and chamfers are absent from what it measures and are named in `omitted_treatments`."
+        description = "Measure a part along rays and at points instead of looking at it. This is the tool for every question of the form 'is there material here', 'how thick is that', 'does this hole break through', 'do these two bores meet' — a render cannot settle any of them, and neither can arithmetic on the script: the script says what was asked for, and this says what was built. Reach for it before you reason from a dimension in the source.\n\nEach point reports `medium`, either \"material\" or \"void\", plus the distance to the nearest surface (negative in material). Each ray reports every crossing in order, each with the `medium` it passed `into` and `surface_of`, the tag of the node whose surface that face belongs to — read those names down the list and they name the features the line went through, which is how you tell two voids that meet from two that do not. Also `solid_mm`, and `first_solid_mm`, which is a wall thickness, measured.\n\nA ray that reports no crossings at all crossed nothing but void: that is a positive result, not a failed measurement. Everything is measured on the exact solid — every fillet and chamfer is in it, and a distance near a corner is the true distance — so there is nothing left out to allow for. For a part in several bodies each crossing and point also says which `body`."
     )]
     async fn probe_part(
         &self,
         Parameters(request): Parameters<ProbeRequest>,
     ) -> Result<rmcp::handler::server::wrapper::Json<service::ProbeReport>, ErrorData> {
+        let budget = budget(request.timeout_s);
         let report = blocking(move || {
             let built = script::build(&request.script)?;
             let doc = service::parse_graph(built.graph.clone())?;
-            service::probe(&doc, &request.points, &request.rays).map_err(|e| built.locate(e))
+            service::probe(&doc, &request.points, &request.rays, budget).map_err(|e| built.locate(e))
         })
         .await?;
 
@@ -603,16 +615,18 @@ impl Parcad {
     #[tool(
         name = "measure_wall_thickness",
         annotations(title = "Find the thinnest wall", read_only_hint = true, open_world_hint = false),
-        description = "Find the thinnest material anywhere in the part, and where it is. Use this before saying a part is ready to print, cast or mill, and any time you cut a pocket, a bore or a shell into something — it is the check that catches a wall you thinned without meaning to. Unlike probe_part it needs no guess about where to look: it fires a ray inward from thousands of points over the whole surface and reports the worst.\n\nReports `thinnest` — the thickness in mm, the point, and `surface_of` and `opposite_surface_of`, the tags of the two faces the material lies between, which is what tells you *which* wall is thin. Pass `threshold_mm` (the process minimum, e.g. 1.2 for a print) and it also reports `below_threshold`, how many samples failed it, plus `thin_spots`, the distinct places they are: one bad corner and a wall that is thin all over are different problems and this is how you tell them apart.\n\nRuns against the distance field, so fillets and chamfers are not in what was measured. That error has a direction — the sharp corner it measured has MORE material than the real part — so where `omitted_treatments` is non-empty the reported minimum is an upper bound and the true one is at or below it. `caveat` says so in the reply."
+        description = "Find the thinnest material anywhere in the part, and where it is. Use this before saying a part is ready to print, cast or mill, and any time you cut a pocket, a bore or a shell into something — it is the check that catches a wall you thinned without meaning to. Unlike probe_part it needs no guess about where to look: it fires a ray inward from thousands of points over the whole surface and reports the worst.\n\nReports `thinnest` — the thickness in mm, the point, and `surface_of` and `opposite_surface_of`, the tags of the two faces the material lies between, which is what tells you *which* wall is thin. Pass `threshold_mm` (the process minimum, e.g. 1.2 for a print) and it also reports `below_threshold`, how many samples failed it, plus `thin_spots`, the distinct places they are: one bad corner and a wall that is thin all over are different problems and this is how you tell them apart.\n\nMeasured on the exact solid with every fillet and chamfer in it: a rounded edge is in the number, not a caveat beside it. Two things about the number are in the reply's `note`: it is a ray thickness, at or above the inscribed-sphere thickness in a concave corner, and it is exact at each of the thousands of points sampled, so the true thinnest point can sit between two samples — raise `max_samples` to narrow that. A minimum that tapers toward zero at a groove rim or a run-off blend is real material geometry, not a defect: docs/GOTCHAS.md, in `read_docs`, has the two shipped parts it happens on."
     )]
     async fn measure_wall_thickness(
         &self,
         Parameters(request): Parameters<ThicknessRequest>,
     ) -> Result<rmcp::handler::server::wrapper::Json<service::ThicknessReport>, ErrorData> {
+        let budget = budget(request.timeout_s);
         let report = blocking(move || {
             let built = script::build(&request.script)?;
             let doc = service::parse_graph(built.graph.clone())?;
-            service::wall_thickness(&doc, request.threshold_mm, request.resolution).map_err(|e| built.locate(e))
+            service::wall_thickness(&doc, request.threshold_mm, request.max_samples, budget)
+                .map_err(|e| built.locate(e))
         })
         .await?;
 

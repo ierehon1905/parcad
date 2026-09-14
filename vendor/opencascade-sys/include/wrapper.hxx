@@ -33,6 +33,8 @@
 #include <BRepGProp.hxx>
 #include <BRepGProp_Face.hxx>
 #include <BRepIntCurveSurface_Inter.hxx>
+#include <BRepClass3d_SolidClassifier.hxx> // PARCAD: point-in-solid
+#include <GeomAdaptor_Curve.hxx>           // PARCAD: ray casting against a loaded shape
 #include <BRepLib.hxx>
 #include <BRepLib_ToolTriangulatedShape.hxx>
 #include <BRepMesh_IncrementalMesh.hxx>
@@ -341,6 +343,90 @@ inline std::unique_ptr<TopoDS_Face> BRepIntCurveSurface_Inter_face(const BRepInt
 
 inline std::unique_ptr<gp_Pnt> BRepIntCurveSurface_Inter_point(const BRepIntCurveSurface_Inter &intersector) {
   return std::unique_ptr<gp_Pnt>(new gp_Pnt(intersector.Pnt()));
+}
+
+// Ray casting against a loaded shape — added for parcad, see PARCAD-CHANGES.md.
+// `Init(shape, line, tol)` reloads the face list for every line; a thickness
+// sweep fires thousands of lines at one shape, so the load is split out.
+inline void BRepIntCurveSurface_Inter_load(BRepIntCurveSurface_Inter &intersector, const TopoDS_Shape &shape,
+                                           double tolerance) {
+  intersector.Load(shape, tolerance);
+}
+
+inline void BRepIntCurveSurface_Inter_init_line(BRepIntCurveSurface_Inter &intersector, const gp_Lin &line) {
+  occ::handle<Geom_Line> geom_line = new Geom_Line(line);
+  GeomAdaptor_Curve curve(geom_line);
+  intersector.Init(curve);
+}
+
+// Parameter of the current hit along the line, in the line's own units.
+inline double BRepIntCurveSurface_Inter_w(const BRepIntCurveSurface_Inter &intersector) { return intersector.W(); }
+
+// Which way the line crosses the *material* at the current hit: 0 entering,
+// 1 leaving, 2 tangent. The intersector reports the crossing against the
+// surface's own normal, and a reversed face's material lies on the other side
+// of its surface, so the face orientation is folded in here.
+inline int BRepIntCurveSurface_Inter_transition(const BRepIntCurveSurface_Inter &intersector) {
+  const bool reversed = intersector.Face().Orientation() == TopAbs_REVERSED;
+  switch (intersector.Transition()) {
+    case IntCurveSurface_In:
+      return reversed ? 1 : 0;
+    case IntCurveSurface_Out:
+      return reversed ? 0 : 1;
+    default:
+      return 2;
+  }
+}
+
+// Where the current hit lies on its face: 0 inside the face, 1 on its
+// boundary, 2 elsewhere (never reported by the iterator, kept for completeness).
+inline int BRepIntCurveSurface_Inter_state(const BRepIntCurveSurface_Inter &intersector) {
+  switch (intersector.State()) {
+    case TopAbs_IN:
+      return 0;
+    case TopAbs_ON:
+      return 1;
+    default:
+      return 2;
+  }
+}
+
+// Position of a sub-shape in a map, 1-based as OCCT counts, 0 when absent —
+// added for parcad, see PARCAD-CHANGES.md. `TopExp::MapShapes` over faces
+// lists them in `TopExp_Explorer` order, so index-1 is the face number the
+// mesher and the face report use.
+inline int IndexedMapOfShape_find_index(const IndexedMapOfShape &map, const TopoDS_Shape &shape) {
+  return map.FindIndex(shape);
+}
+
+// Point-in-solid — added for parcad, see PARCAD-CHANGES.md. 0 inside, 1
+// outside, 2 on the boundary within `tolerance`, 3 undecidable.
+inline int BRepClass3d_classify(const TopoDS_Shape &shape, double x, double y, double z, double tolerance) {
+  BRepClass3d_SolidClassifier classifier(shape, gp_Pnt(x, y, z), tolerance);
+  switch (classifier.State()) {
+    case TopAbs_IN:
+      return 0;
+    case TopAbs_OUT:
+      return 1;
+    case TopAbs_ON:
+      return 2;
+    default:
+      return 3;
+  }
+}
+
+// Tight bounds of a shape from its exact geometry — added for parcad, see
+// PARCAD-CHANGES.md. `BRepBndLib::AddOptimal` without triangulation and
+// without tolerance enlargement. False for a shape with no extent.
+inline bool Shape_bounds_optimal(const TopoDS_Shape &shape, double &x0, double &y0, double &z0, double &x1,
+                                 double &y1, double &z1) {
+  Bnd_Box box;
+  BRepBndLib::AddOptimal(shape, box, /*useTriangulation*/ false, /*useShapeTolerance*/ false);
+  if (box.IsVoid()) {
+    return false;
+  }
+  box.Get(x0, y0, z0, x1, y1, z1);
+  return true;
 }
 
 // BRepFeat

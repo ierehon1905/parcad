@@ -212,6 +212,69 @@ pub fn regions_in(buf: &GeometryBuffer, doc: &Doc, opts: &RenderOptions) -> Resu
     })
 }
 
+/// Attribute an already-rendered view to its tags by the face under each
+/// pixel, which is the exact kernel's answer to "whose surface is this".
+///
+/// `owner_of_face[f]` is the tag (an index into `names`) that face `f` of the
+/// part belongs to — the innermost of the tags its lineage gives it, since a
+/// pixel takes one colour — or `None` for a face no tagged node owns. The
+/// buffer's own face numbers come from [`crate::render::raster`], so the
+/// picture and its legend cannot disagree about where a face is. A fillet's
+/// faces carry the names of the faces its edge lay between, so a treatment
+/// is attributed rather than left unclaimed.
+pub fn regions_by_face(
+    buf: &GeometryBuffer,
+    owner_of_face: &[Option<usize>],
+    names: &[String],
+    opts: &RenderOptions,
+) -> Result<RegionMap> {
+    let colors = assign_colors(names);
+    let mut image = render::shade(buf, opts);
+    let mut counts = vec![0usize; names.len()];
+    let mut unclaimed = 0usize;
+
+    for y in 0..buf.size {
+        for x in 0..buf.size {
+            // A cut face is the inside of the material, not a surface any
+            // node owns; counted, a sectioned map would read as unnamed.
+            if buf.is_cut(x, y) || buf.model_point(x, y).is_none() {
+                continue;
+            }
+            let owner = buf
+                .face_at(x, y)
+                .and_then(|f| owner_of_face.get(f as usize).copied().flatten());
+            match owner {
+                Some(i) if i < names.len() => {
+                    counts[i] += 1;
+                    let shaded = image.get(x, y);
+                    image.set(x, y, mix(shaded, colors[i], 0.62));
+                }
+                _ => unclaimed += 1,
+            }
+        }
+    }
+
+    let image = image.downsample(opts.supersample.clamp(1, 4));
+    let total = (counts.iter().sum::<usize>() + unclaimed).max(1) as f64;
+    let legend = names
+        .iter()
+        .enumerate()
+        .map(|(i, name)| RegionEntry {
+            tag: name.clone(),
+            color: hex(colors[i]),
+            pixels: counts[i],
+            fraction: counts[i] as f64 / total,
+            visible: counts[i] > 0,
+        })
+        .collect();
+
+    Ok(RegionMap {
+        image: with_legend(image, names, &colors, &counts, opts),
+        legend,
+        unclaimed_pixels: unclaimed,
+    })
+}
+
 /// Which tag owns each of these points, if any.
 ///
 /// The same question [`regions_in`] asks of a pixel, asked of three

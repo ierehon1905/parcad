@@ -220,7 +220,8 @@ pub struct EvaluationSnapshot {
     /// that fits no bed is one to split, and this says so before a slicer does.
     pub prints_on: Vec<PrintsOn>,
     pub tags: Vec<String>,
-    /// Where each of those tags actually is, measured from the built surface.
+    /// Where each of those tags actually is: the exact bounds of the faces the
+    /// kernel's lineage says the tag still owns on the finished part.
     ///
     /// The overall `bounds_min` / `bounds_max` / `centroid` above say where the
     /// *part* is, which a symmetric part answers with zeros however wrong it is.
@@ -231,11 +232,10 @@ pub struct EvaluationSnapshot {
     /// docs/PERCEPTION.md §3.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub tag_extents: Vec<TagExtent>,
-    /// Tags with no extent to report, and there are only two ways to get here:
-    /// the tag is on a fillet or chamfer, which has no distance field to ask
-    /// (see `unattributed_treatments`), or nothing that node made survived to
-    /// the finished surface. The second is worth acting on — a shape that was
-    /// unioned in and then entirely cut away is usually not what was meant.
+    /// Tags no face of the finished part carries: nothing that node made
+    /// survived to the surface, or the name is spelled differently. Worth
+    /// acting on — a shape that was unioned in and then entirely cut away is
+    /// usually not what was meant.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unlocated_tags: Vec<String>,
     /// Edge treatments the finished part actually depends on.
@@ -258,17 +258,6 @@ pub struct EvaluationSnapshot {
     /// asked for. The pixels ride with the reply; this says what each one shows.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<RenderedView>,
-    /// Treatment nodes a region map could not attribute to their tag.
-    ///
-    /// Only region maps are affected, and only in their *legend*. The surface
-    /// drawn is the measured one, fillets included; but "which node owns this
-    /// point" is answered by asking whose distance field vanishes there, and a
-    /// treatment has no distance field. So a fillet's own surface belongs to
-    /// nothing, and lands in `unclaimed_fraction` rather than being handed to a
-    /// neighbouring tag — a wrong attribution being much worse than a missing
-    /// one. `inspect_treatment_target` answers what a treatment actually took.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub unattributed_treatments: Vec<usize>,
 }
 
 fn one_body() -> usize {
@@ -450,10 +439,9 @@ impl EvaluationSnapshot {
     /// Takes the summaries a transport has already split from their pixels, so
     /// that saying what an image shows and carrying the image are separate
     /// decisions.
-    pub fn with_views(mut self, views: Vec<RenderedView>, unattributed: Vec<usize>) -> Self {
+    pub fn with_views(mut self, views: Vec<RenderedView>) -> Self {
         if !views.is_empty() {
             self.views = views;
-            self.unattributed_treatments = unattributed;
         }
         self
     }
@@ -461,16 +449,13 @@ impl EvaluationSnapshot {
 
 /// One tag's own bounding box, and the middle of it.
 ///
-/// A restatement of `parcad_core::tags::TagExtent` for the same reason
-/// [`Region`] restates its core type, plus the two fields a reader would
-/// otherwise have to subtract for itself: `size` and `center` are what the
-/// question *is this feature where I think it is* is actually asked in, and
-/// `PartReport` exists so nothing has to ask a follow-up.
+/// A restatement of `parcad_occt::TagBounds` plus the two fields a reader
+/// would otherwise have to subtract for itself: `size` and `center` are what
+/// the question *is this feature where I think it is* is actually asked in,
+/// and `PartReport` exists so nothing has to ask a follow-up.
 ///
-/// `center` is the middle of the box and not a centre of mass. The surface
-/// points behind it are a sample of the tag's surface rather than of its
-/// material, so a mass centroid computed from them would be weighted by
-/// wherever the mesher happened to put vertices.
+/// `center` is the middle of the box and not a centre of mass: the box is the
+/// tag's surface, not its material.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct TagExtent {
     pub tag: String,
@@ -478,10 +463,9 @@ pub struct TagExtent {
     pub bounds_max: [f64; 3],
     pub size: [f64; 3],
     pub center: [f64; 3],
-    /// Surface points attributed to this tag. The box is bounded by these, so
-    /// it can fall short of the tag's true reach by about the distance between
-    /// them — `resolution_mm` — and a low count means a coarser answer.
-    pub surface_points: usize,
+    /// How many faces of the finished part carry this tag. The box is the
+    /// exact extent of those faces, from the kernel, not a sample.
+    pub faces: usize,
 }
 
 /// An edge treatment, as a handle a caller can inspect.
@@ -545,6 +529,11 @@ pub struct FaceEntity {
     pub radius_mm: Option<f64>,
     /// The `face@N` ids this face shares an edge with.
     pub adjacent: Vec<String>,
+    /// The tags this face carries, innermost first — the node that made it,
+    /// then every tagged node it was carried through. What `on:` and
+    /// `between:` select by, and what a region map colours by.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
     /// The named body this face is on, for a part that returns several.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
@@ -618,6 +607,7 @@ fn face_entity(index: usize, face: &parcad_occt::protocol::FaceSummary) -> FaceE
         direction: face.surface.direction.map(round_dir),
         radius_mm: face.surface.radius.map(round_mm),
         adjacent: face.adjacent.iter().map(|n| format!("face@{n}")).collect(),
+        tags: face.tags.clone(),
         body: face.body.clone(),
     }
 }
@@ -754,28 +744,18 @@ pub struct Region {
     pub pixels: usize,
     /// Share of the part's visible surface in this view, 0 to 1.
     pub fraction: f64,
-    /// Whether the tag appears at all here. A tag that is genuinely in the model
-    /// but hidden from this angle is the case worth stating: without it, a
-    /// caller concludes its edit did nothing.
+    /// Whether any pixel here is coloured for this tag. A tag that is genuinely
+    /// in the model but hidden from this angle is the case worth stating:
+    /// without it, a caller concludes its edit did nothing. A pixel takes its
+    /// face's innermost tag, so a union's or a cut's own tag — whose faces all
+    /// carry a name authored nearer the primitive — colours no pixel and
+    /// reads false while its box in `tag_extents` covers everything it names.
     pub visible: bool,
 }
 
 /// Everything one render request produced.
 pub struct Renders {
     pub views: Vec<Render>,
-    /// Treatment nodes a region map could not attribute. See [`drawable`].
-    pub omitted: Vec<usize>,
-}
-
-/// The document as a distance field can draw it, and the treatments that cost.
-///
-/// `parcad_core::sdf::drawable` owns the substitution and the reasoning behind
-/// it — the identity keeps every node index, and the tag goes with the treatment
-/// rather than sliding onto its child. Everything on this side of the wire that
-/// touches the field goes through this door: renders, probes, thicknesses and
-/// tag extents all measure the *unfilleted* part and all say so.
-fn drawable(doc: &Doc) -> (Doc, Vec<usize>) {
-    parcad_core::sdf::drawable(doc)
 }
 
 /// What one render request asks for.
@@ -792,12 +772,11 @@ pub struct RenderSpec<'a> {
 
 /// Draw the part.
 ///
-/// Renders come off the distance field, never off the mesh, so what a caller
-/// sees is the shape rather than the mesher's approximation of it. The
-/// consequence is stated rather than hidden: a part *measured* through the exact
-/// kernel is *drawn* through the implicit one, and the two disagree by the blend
-/// bulge — millimetres, not rounding. [`EvaluationSnapshot::backend`] carries that,
-/// and [`Renders::omitted`] carries the treatments no field can draw at all.
+/// Renders come off the exact kernel's tessellation, within `resolution_mm` of
+/// the surface it measured, so the picture and the numbers describe one solid.
+/// A region map colours each pixel by the face under it, and a face's tag is
+/// what the kernel's own lineage says, so a fillet is coloured for the faces
+/// its edge lay between rather than left unclaimed.
 ///
 /// Framing is shared across every view (see `parcad_core::view`), so a feature at
 /// a given pixel in the front view is at a comparable pixel in the top view, and
@@ -814,10 +793,20 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
         section,
     } = *spec;
 
+    // The kernel's face number per triangle, from the runs the mesher recorded.
+    let mut triangle_faces = vec![parcad_core::render::NO_FACE; evaluated.indices.len() / 3];
+    for run in &evaluated.face_runs {
+        for t in run.start..run.start + run.count {
+            if let Some(slot) = triangle_faces.get_mut(t as usize) {
+                *slot = run.face;
+            }
+        }
+    }
     let surface = parcad_core::render::Surface {
         positions: &evaluated.positions,
         normals: &evaluated.normals,
         indices: &evaluated.indices,
+        faces: if evaluated.face_runs.is_empty() { &[] } else { &triangle_faces },
     };
     let bounds = evaluated.bounds;
 
@@ -828,14 +817,22 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
         ..Default::default()
     };
 
-    // Only the region map needs the distance field, and only to say which node
-    // owns a point — the surface itself is the exact one either way.
-    let (fields, omitted) = if regions {
-        let (fields, omitted) = drawable(doc);
-        (Some(fields), omitted)
-    } else {
-        (None, Vec::new())
+    // Every tag the script wrote, in the order it wrote them, whether or not
+    // any face still carries it; and each face's innermost tag, which is the
+    // one a pixel is coloured for.
+    let names: Vec<String> = {
+        let mut seen = std::collections::HashSet::new();
+        doc.tags()
+            .into_iter()
+            .filter(|(_, t)| seen.insert(t.to_string()))
+            .map(|(_, t)| t.to_string())
+            .collect()
     };
+    let owner_of_face: Vec<Option<usize>> = evaluated
+        .faces
+        .iter()
+        .map(|f| f.tags.first().and_then(|t| names.iter().position(|n| n == t)))
+        .collect();
 
     views
         .iter()
@@ -844,8 +841,7 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                 .map_err(|e| format!("drawing the {} view: {e:#}", view.name()))?;
 
             let (image, entries, unclaimed) = if regions {
-                let fields = fields.as_ref().expect("regions implies a field document");
-                let map = parcad_core::tags::regions_in(&buffer, fields, &opts)
+                let map = parcad_core::tags::regions_by_face(&buffer, &owner_of_face, &names, &opts)
                     .map_err(|e| format!("rendering the {} region map: {e:#}", view.name()))?;
 
                 // Reported as a fraction of visible surface, like every other
@@ -900,7 +896,7 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
             })
         })
         .collect::<Result<Vec<_>, String>>()
-        .map(|views| Renders { views, omitted })
+        .map(|views| Renders { views })
 }
 
 fn axes_of(view: parcad_core::view::View) -> ViewAxes {
@@ -932,12 +928,6 @@ pub struct ProbeReport {
     pub units: String,
     pub points: Vec<PointProbe>,
     pub rays: Vec<RayProbe>,
-    /// Edge treatments the field cannot represent, by node index. See
-    /// [`drawable`] — the same caveat renders carry, and it matters more here:
-    /// a probe near a filleted edge is measuring the *unfilleted* corner, which
-    /// is material that is not there.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub omitted_treatments: Vec<usize>,
 }
 
 /// What a probe found itself in.
@@ -953,20 +943,28 @@ pub struct ProbeReport {
 pub enum Medium {
     Material,
     Void,
+    /// On the boundary itself, to within a tenth of a micron.
+    Surface,
 }
 
-/// The field at one point.
+/// The solid at one point.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct PointProbe {
     pub point: [f64; 3],
-    /// Whether this point is in solid material or in empty space. The answer to
-    /// "is there material here", on its own and in a word.
+    /// Whether this point is in solid material, in empty space, or on the
+    /// surface between them. The answer to "is there material here", on its
+    /// own and in a word.
     pub medium: Medium,
-    /// Distance to the nearest surface: negative in material, positive in void,
-    /// which is the same fact as `medium` with a magnitude attached. Exact on a
-    /// face; near an edge it is short of the true distance, never over it. The
-    /// sign is right either way.
+    /// Distance to the nearest surface: negative in material, positive in
+    /// void, zero on the surface. Exact — measured to the kernel's surfaces,
+    /// at a corner as on a face.
     pub distance_mm: f64,
+    /// The point on the surface that distance is measured to.
+    pub nearest: [f64; 3],
+    /// For a part in several bodies: the body the point is in, or the
+    /// nearest one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 /// What one ray crossed.
@@ -991,11 +989,6 @@ pub struct RayProbe {
     /// because that run's near face is behind the origin.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub first_solid_mm: Option<f64>,
-    /// The march ran out of steps, which happens where a ray runs very nearly
-    /// tangent to a surface. Anything past the last crossing is unknown rather
-    /// than absent.
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub incomplete: bool,
 }
 
 /// One surface crossing.
@@ -1006,9 +999,10 @@ pub struct Crossing {
     /// What the ray passed *into* here. Read down the list and it spells out
     /// the line: material, void, material.
     pub into: Medium,
-    /// The tag of the node this face belongs to — the same question a region
-    /// map answers for a pixel. This is what makes a crossing readable rather
-    /// than deducible: two voids that meet are one void along the ray, and only
+    /// The tag of the node this face belongs to — the innermost of the names
+    /// the kernel's lineage gives the face, the same answer a region map
+    /// gives for a pixel. This is what makes a crossing readable rather than
+    /// deducible: two voids that meet are one void along the ray, and only
     /// the name says which feature each face bounded.
     ///
     /// `surface_of` and not `tag`, because a bare `tag` gets read as the name of
@@ -1016,10 +1010,17 @@ pub struct Crossing {
     /// turning `{"into": "material", "tag": "ports"}` into "crosses into port
     /// material"; it names the surface, and the field name has to say so.
     ///
-    /// Absent where no tagged node's surface passes through the point: an
-    /// untagged node, or a fillet, which has no field to own anything.
+    /// Absent where no tagged node owns the face.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_of: Option<String>,
+    /// Every tag the face carries, innermost first, when there is more than
+    /// the one `surface_of` names: a blend along the seam of `arm` and `hub`
+    /// is part of both.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub also_on: Vec<String>,
+    /// For a part in several bodies: which body's face this is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 /// Measure the part along lines and at points, without drawing anything.
@@ -1033,116 +1034,100 @@ pub struct Crossing {
 /// reconstructed from the distances — down a shared void the distances alone
 /// cannot tell the two features apart.
 ///
-/// **Implicit backend only, and that is a real limitation, not a default.** The
-/// probes run against the distance field, so a filleted or chamfered edge is
-/// not there to be measured — `omitted_treatments` names every treatment the
-/// field dropped, exactly as a region map does. Near such an edge the field
-/// describes the sharp corner, which has *more* material than the real part.
+/// Measured on the exact solid, in the kernel: a point against its classifier
+/// and its surfaces, a line against every face it crosses. A fillet or a
+/// chamfer is in what gets measured, and a distance near a corner is the
+/// distance.
 pub fn probe(
     doc: &Doc,
     points: &[[f64; 3]],
     rays: &[RayRequest],
+    budget: Option<std::time::Duration>,
 ) -> Result<ProbeReport, String> {
-    use parcad_core::graph::V3;
-
     if points.is_empty() && rays.is_empty() {
         return Err(
             "nothing to probe; pass points to test for material, or rays to measure along"
                 .to_string(),
         );
     }
-
-    let (fields, omitted) = drawable(doc);
-    let tree = parcad_core::sdf::lower(&fields).map_err(|e| format!("{e:#}"))?;
-    let bounds = parcad_core::measure::bounds(&fields).map_err(|e| format!("{e:#}"))?;
-
-    let v3 = |p: [f64; 3]| V3::new(p[0], p[1], p[2]);
-    let arr = |v: V3| round_point([v.x, v.y, v.z]);
-    let medium = |in_material: bool| {
-        if in_material {
-            Medium::Material
-        } else {
-            Medium::Void
-        }
+    let spec = parcad_occt::Perceive {
+        points: points.to_vec(),
+        rays: rays
+            .iter()
+            .map(|r| parcad_occt::RayLine {
+                origin: r.origin,
+                direction: r.direction,
+                max_distance: r.max_distance,
+            })
+            .collect(),
+        thickness: None,
     };
-
-    let probed = parcad_core::probe::distance_at(&tree, &points.iter().map(|p| v3(*p)).collect::<Vec<_>>())
-        .map_err(|e| format!("probing points: {e:#}"))?;
-
-    // Marched first, kept whole, and only then turned into a reply. The
-    // crossing positions are wanted at full precision for the tag query below,
-    // where the tolerance is itself a hair — rounding them for the caller and
-    // then asking which surface they are on would spend most of that tolerance
-    // on the rounding.
-    let marched = rays
-        .iter()
-        .map(|request| {
-            let origin = v3(request.origin);
-            // Far enough to leave the part from wherever the ray starts. A
-            // caller that gave no length meant "all the way through", and
-            // making it work that out from the bounds is the follow-up question
-            // this service exists to avoid.
-            let reach = {
-                let c = bounds.center();
-                let to_center = V3::new(origin.x - c.x, origin.y - c.y, origin.z - c.z).length();
-                (to_center + bounds.radius()) * 1.05 + 1.0
-            };
-            let max = request.max_distance.unwrap_or(reach);
-
-            parcad_core::probe::ray(&tree, origin, v3(request.direction), max)
-                .map_err(|e| format!("{e:#}"))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-
-    // Name every crossing at once. The question is `tags::owners_at`'s — whose
-    // field vanishes here — and asking it for all the rays together costs one
-    // tape per tag instead of one per crossing.
-    //
-    // The tolerance is a hair, because a crossing is bisected onto the surface
-    // rather than stepped near it: what it has to absorb is f32 evaluation
-    // noise, which grows with the coordinates, not any error in the position.
-    let crossings: Vec<V3> = marched.iter().flat_map(|p| p.hits.iter().map(|h| h.point)).collect();
-    let owners = parcad_core::tags::owners_at(&fields, &crossings, (bounds.radius() * 1e-4).max(1e-3))
-        .map_err(|e| format!("naming crossings: {e:#}"))?;
-    let mut owners = owners.into_iter();
-
-    let rays: Vec<RayProbe> = marched
-        .iter()
-        .map(|p| RayProbe {
-            origin: arr(p.origin),
-            direction: round_dir([p.direction.x, p.direction.y, p.direction.z]),
-            max_distance_mm: round_mm(p.max_distance),
-            starts_in: medium(p.starts_inside),
-            ends_in: medium(p.ends_inside),
-            crossings: p
-                .hits
-                .iter()
-                .map(|h| Crossing {
-                    distance_mm: round_mm(h.distance),
-                    point: arr(h.point),
-                    into: medium(h.entering),
-                    surface_of: owners.next().flatten(),
-                })
-                .collect(),
-            solid_mm: round_mm(p.solid_mm),
-            first_solid_mm: p.first_solid_mm.map(round_mm),
-            incomplete: p.steps_exhausted,
-        })
-        .collect();
+    let answer = perceive(doc, &spec, budget)?;
 
     Ok(ProbeReport {
         units: doc.units.clone(),
-        points: probed
-            .into_iter()
-            .map(|p| PointProbe {
-                point: arr(p.point),
-                medium: medium(p.inside),
-                distance_mm: round_mm(p.distance),
+        points: answer.points.iter().map(point_probe).collect(),
+        rays: answer.rays.iter().map(ray_probe).collect(),
+    })
+}
+
+fn perceive(
+    doc: &Doc,
+    spec: &parcad_occt::Perceive,
+    budget: Option<std::time::Duration>,
+) -> Result<parcad_occt::Perceived, String> {
+    let mut opts = parcad_occt::Options::default();
+    if let Some(budget) = budget {
+        opts.timeout = budget;
+    }
+    parcad_occt::perceive(doc, spec, &opts).map_err(|e| format!("{e}"))
+}
+
+fn medium(inside: bool) -> Medium {
+    if inside {
+        Medium::Material
+    } else {
+        Medium::Void
+    }
+}
+
+fn point_probe(p: &parcad_occt::PointResult) -> PointProbe {
+    use parcad_occt::protocol::PointWhere;
+    PointProbe {
+        point: round_point(p.point),
+        medium: match p.state {
+            PointWhere::Inside => Medium::Material,
+            PointWhere::Outside => Medium::Void,
+            PointWhere::OnBoundary => Medium::Surface,
+        },
+        distance_mm: round_mm(p.distance_mm),
+        nearest: round_point(p.nearest),
+        body: p.body.clone(),
+    }
+}
+
+fn ray_probe(r: &parcad_occt::RayResult) -> RayProbe {
+    RayProbe {
+        origin: round_point(r.origin),
+        direction: round_dir(r.direction),
+        max_distance_mm: round_mm(r.max_distance),
+        starts_in: medium(r.starts_inside),
+        ends_in: medium(r.ends_inside),
+        crossings: r
+            .hits
+            .iter()
+            .map(|h| Crossing {
+                distance_mm: round_mm(h.distance),
+                point: round_point(h.point),
+                into: medium(h.entering),
+                surface_of: h.tags.first().cloned(),
+                also_on: h.tags.iter().skip(1).cloned().collect(),
+                body: h.body.clone(),
             })
             .collect(),
-        rays,
-        omitted_treatments: omitted,
-    })
+        solid_mm: round_mm(r.solid_mm),
+        first_solid_mm: r.first_solid_mm.map(round_mm),
+    }
 }
 
 /// One place the part is thin, with both faces named.
@@ -1163,6 +1148,9 @@ pub struct ThinSpot {
     /// thin one is a hole that is nearly through the side.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opposite_surface_of: Option<String>,
+    /// For a part in several bodies: which body this wall is in.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 /// Where the part is thinnest, and how much of it is thin.
@@ -1187,38 +1175,34 @@ pub struct ThicknessReport {
     /// Distinct thin places, worst first, spread out rather than clustered.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub thin_spots: Vec<ThinSpot>,
-    /// Edge treatments the distance field cannot carry, by node index — as in
-    /// [`ProbeReport`], and read with `caveat`.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub omitted_treatments: Vec<usize>,
-    /// Spelled out in words when there are omitted treatments, because the
-    /// error here has a *direction*: a fillet removes material, so the sharp
-    /// corner this measured is thicker than the real part. A list of node
-    /// indices does not say that, and this is the one measurement whose
-    /// omission is optimistic. See docs/PERCEPTION.md §5.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub caveat: Option<String>,
+    /// How the minimum can be wrong, and which way. A ray thickness is not
+    /// an inscribed sphere: in a concave corner the ray crosses to whatever
+    /// is straight across, further than the sphere that fits, so the number
+    /// is at or above the inscribed one. And it is a sampled minimum: exact
+    /// for every point it fired from, and the true thinnest point may lie
+    /// between two samples. More samples narrow that; nothing widens it.
+    pub note: &'static str,
 }
+
+/// Samples a sweep fires by default. Enough to put a ray every hundredth of
+/// the part's diagonal on a plate; a knurl wants more, and `max_samples`
+/// lets a caller ask.
+const DEFAULT_THICKNESS_SAMPLES: usize = 6000;
 
 /// Find the thinnest material in the part, and where it is.
 ///
 /// A ray from every sampled surface point, back along its own inward normal —
-/// `parcad_core::thickness` is the loop, and this names the two faces each
+/// `parcad_occt::perceive` is the loop — and this names the two faces each
 /// measurement lies between so the answer reads as "2.1 mm between `body` and
-/// `main_bore`" rather than as a pair of coordinates.
-///
-/// **Implicit backend only**, with the same caveat probes carry and one extra
-/// turn of the screw: the field has no fillets, so near a rounded edge this
-/// measures the sharp corner, which has *more* material than the part does. A
-/// minimum is therefore an upper bound wherever a treatment was dropped, and
-/// `caveat` says so in the payload rather than only here.
+/// `main_bore`" rather than as a pair of coordinates. Measured on the exact
+/// solid, treatments included: a rounded edge is in the number, not a caveat
+/// beside it.
 pub fn wall_thickness(
     doc: &Doc,
     threshold_mm: Option<f64>,
-    resolution: Option<u32>,
+    max_samples: Option<usize>,
+    budget: Option<std::time::Duration>,
 ) -> Result<ThicknessReport, String> {
-    use parcad_core::graph::V3;
-
     if let Some(t) = threshold_mm {
         if !(t > 0.0) || !t.is_finite() {
             return Err(format!(
@@ -1227,69 +1211,42 @@ pub fn wall_thickness(
         }
     }
 
-    let (fields, omitted) = drawable(doc);
-    let tree = parcad_core::sdf::lower(&fields).map_err(|e| format!("{e:#}"))?;
-    let bounds = parcad_core::measure::bounds(&fields).map_err(|e| format!("{e:#}"))?;
-    if bounds.is_empty() {
-        return Err("the part is empty, so it has no thickness to measure".to_string());
-    }
-
-    let opts = parcad_core::thickness::Options {
-        // Clamped rather than rejected: the cost is a ray per hit pixel per
-        // view, and the useful range is narrow enough that a caller asking for
-        // 4000 wants detail rather than an hour.
-        resolution: resolution.unwrap_or(96).clamp(32, 256),
-        threshold_mm,
+    let spec = parcad_occt::Perceive {
+        thickness: Some(parcad_occt::ThicknessSpec {
+            // Clamped rather than rejected: the cost is a ray per sample, and
+            // the useful range is narrow enough that a caller asking for a
+            // million wants detail rather than an hour.
+            max_samples: max_samples.unwrap_or(DEFAULT_THICKNESS_SAMPLES).clamp(200, 100_000),
+            threshold_mm,
+        }),
         ..Default::default()
     };
-    let report =
-        parcad_core::thickness::measure(&tree, bounds, &opts).map_err(|e| format!("{e:#}"))?;
+    let answer = perceive(doc, &spec, budget)?;
+    let Some(report) = answer.thickness else {
+        return Err("the kernel measured no thickness".to_string());
+    };
 
-    // Name both faces of every spot reported, in one pass — same query, same
-    // tolerance and same reasoning as the ray crossings above.
-    let reported: Vec<parcad_core::thickness::Sample> = report
-        .min
-        .into_iter()
-        .chain(report.thin_spots.iter().copied())
-        .collect();
-    let points: Vec<V3> = reported
-        .iter()
-        .flat_map(|s| [s.at, s.opposite])
-        .collect();
-    let owners = parcad_core::tags::owners_at(&fields, &points, (bounds.radius() * 1e-4).max(1e-3))
-        .map_err(|e| format!("naming surfaces: {e:#}"))?;
-
-    let mut spots = reported.iter().zip(owners.chunks(2)).map(|(s, o)| ThinSpot {
+    let spot = |s: &parcad_occt::ThicknessSample| ThinSpot {
         thickness_mm: round_mm(s.thickness_mm),
-        at: round_point([s.at.x, s.at.y, s.at.z]),
-        opposite: round_point([s.opposite.x, s.opposite.y, s.opposite.z]),
-        surface_of: o[0].clone(),
-        opposite_surface_of: o[1].clone(),
-    });
-
-    let thinnest = report.min.is_some().then(|| spots.next()).flatten();
-    let thin_spots: Vec<ThinSpot> = spots.collect();
-
-    let caveat = (!omitted.is_empty()).then(|| {
-        format!(
-            "{} edge treatment(s) are missing from what was measured, because the distance \
-             field cannot represent a fillet or a chamfer. Near a treated edge this measured \
-             the sharp corner, which has more material than the finished part — so the \
-             thinnest value here is an upper bound, and the real minimum is at or below it.",
-            omitted.len()
-        )
-    });
+        at: round_point(s.at),
+        opposite: round_point(s.opposite),
+        surface_of: s.tags.first().cloned(),
+        opposite_surface_of: s.opposite_tags.first().cloned(),
+        body: s.body.clone(),
+    };
 
     Ok(ThicknessReport {
         units: doc.units.clone(),
-        thinnest,
+        thinnest: report.min.as_ref().map(spot),
         samples: report.samples,
         discarded: report.discarded,
         threshold_mm,
         below_threshold: report.below_threshold,
-        thin_spots,
-        omitted_treatments: omitted,
-        caveat,
+        thin_spots: report.thin_spots.iter().map(spot).collect(),
+        note: "a ray thickness, measured on the exact solid with every fillet and chamfer \
+               in it; at or above the inscribed-sphere thickness in a concave corner, and \
+               exact at each sampled point — the true thinnest point may lie between two \
+               samples, so raise max_samples to narrow it",
     })
 }
 
@@ -1343,13 +1300,12 @@ pub fn parse_section(
 fn describe(
     doc: &Doc,
     report: &parcad_core::PartReport,
-    mesh: &Tessellation,
     topology: Option<&parcad_occt::Topology>,
     (named_bodies, between_bodies): (Vec<BodyReport>, Vec<BodyFit>),
+    (extents, unlocated): (Vec<TagExtent>, Vec<String>),
     backend: &str,
     kernel_ms: u64,
 ) -> EvaluationSnapshot {
-    let (extents, unlocated) = tag_extents(doc, mesh, report.bounds);
     EvaluationSnapshot {
         units: report.units.clone(),
         size: round_point([report.size.x, report.size.y, report.size.z]),
@@ -1393,55 +1349,36 @@ fn describe(
         backend: backend.to_string(),
         kernel_ms,
         reused_build: false,
-        // Nothing is drawn unless a caller asks: a raymarch costs far more than
-        // the measurements above, and most calls only want the numbers.
+        // Nothing is drawn unless a caller asks: a render costs more than the
+        // measurements above, and most calls only want the numbers.
         views: Vec::new(),
-        unattributed_treatments: Vec::new(),
     }
 }
 
-/// Locate every tag on the surface the kernel just produced.
-///
-/// The tolerance is half the mesh's own resolution, for the same reason a region
-/// map ties its tolerance to one pixel: what counts as *on* a surface has to
-/// scale with how finely that surface was sampled, or the answer changes when
-/// nothing about the part did. The floor under it is for the exact kernel, whose
-/// deflection is microns while the field it is being compared against is
-/// evaluated in f32 — on a part a few hundred millimetres across, f32's own
-/// rounding is the larger of the two.
-///
-/// A document the field cannot lower is not an error here. It means no tag can
-/// be located, which is what an empty list says; the measurements this sits
-/// beside are the exact kernel's and are unaffected either way.
-fn tag_extents(
-    doc: &Doc,
-    mesh: &Tessellation,
-    bounds: parcad_core::measure::Aabb,
-) -> (Vec<TagExtent>, Vec<String>) {
-    let tolerance = (mesh.resolution_mm * 0.5).max(bounds.radius() * 1e-5);
-    let sample = parcad_core::tags::surface_sample(&mesh.vertices, &mesh.triangles);
-    let (fields, _) = drawable(doc);
-    let Ok(found) = parcad_core::tags::extents(&fields, &sample, tolerance) else {
-        return (Vec::new(), Vec::new());
-    };
-
-    let extents = found
-        .extents
-        .into_iter()
+/// Every tag's extent as the kernel measured it, restated with its size and
+/// centre and rounded like every other length in a reply.
+fn tag_extents(s: &parcad_occt::Success) -> (Vec<TagExtent>, Vec<String>) {
+    let extents = s
+        .tag_extents
+        .iter()
         .map(|e| {
-            let (min, max) = (e.bounds.min, e.bounds.max);
-            let (size, center) = (e.bounds.size(), e.bounds.center());
+            let size = [e.max[0] - e.min[0], e.max[1] - e.min[1], e.max[2] - e.min[2]];
+            let center = [
+                (e.max[0] + e.min[0]) / 2.0,
+                (e.max[1] + e.min[1]) / 2.0,
+                (e.max[2] + e.min[2]) / 2.0,
+            ];
             TagExtent {
-                tag: e.tag,
-                bounds_min: round_point([min.x, min.y, min.z]),
-                bounds_max: round_point([max.x, max.y, max.z]),
-                size: round_point([size.x, size.y, size.z]),
-                center: round_point([center.x, center.y, center.z]),
-                surface_points: e.points,
+                tag: e.tag.clone(),
+                bounds_min: round_point(e.min),
+                bounds_max: round_point(e.max),
+                size: round_point(size),
+                center: round_point(center),
+                faces: e.faces,
             }
         })
         .collect();
-    (extents, found.unlocated)
+    (extents, s.unlocated_tags.clone())
 }
 
 /// The edge treatments the root depends on, in dependency order.
@@ -1767,9 +1704,16 @@ fn evaluate_implicit(doc: &Doc, depth: u8) -> Result<Evaluated, String> {
         face_runs: Vec::new(),
         faces: Vec::new(),
         bounds: report.bounds,
-        // The welded mesh rather than the faceted corners: same surface, and
-        // shared vertices are what make an edge midpoint mean anything.
-        snapshot: describe(doc, &report, &tess, None, (Vec::new(), Vec::new()), "implicit", 0),
+        // A field has no faces for a tag to own, so no tag is located.
+        snapshot: describe(
+            doc,
+            &report,
+            None,
+            (Vec::new(), Vec::new()),
+            (Vec::new(), Vec::new()),
+            "implicit",
+            0,
+        ),
         timings: Timings {
             lower_and_mesh_ms,
             normals_ms,
@@ -1781,13 +1725,13 @@ fn evaluate_brep(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evalu
     let built = build_exact(doc, budget, false)?;
     let s = &*built.success;
 
-    let (report, mesh) = measure_brep(doc, s)?;
+    let (report, _) = measure_brep(doc, s)?;
     let mut snapshot = describe(
         doc,
         &report,
-        &mesh,
         Some(&s.topology),
         body_reports(s),
+        tag_extents(s),
         "brep",
         built.wall_ms,
     );
@@ -2186,6 +2130,20 @@ mod tests {
         assert_eq!(treatments[0].continuity.as_deref(), Some("curvature"));
     }
 
+    /// The exact kernel, for every test below that needs geometry.
+    ///
+    /// Those are `#[ignore]`d because they need the worker binary, which
+    /// `cargo test` does not build: run them with
+    /// `PARCAD_OCCT_WORKER=$PWD/target/release/parcad-occt-worker cargo test -p
+    /// parcad-host -- --ignored`, which is what `tools/check.sh` does once it
+    /// has built the worker.
+    const NEEDS_WORKER: &str = "needs the kernel worker: tools/build-worker.sh, then \
+        PARCAD_OCCT_WORKER=$PWD/target/release/parcad-occt-worker cargo test -p parcad-host -- --ignored";
+
+    fn brep(doc: &Doc) -> Evaluated {
+        evaluate(doc, 7, Backend::Brep).expect("the part should build")
+    }
+
     /// The window and an agent must be reading one description of one part.
     ///
     /// The IPC and HTTP transports serialise an `Evaluated`, MCP serialises the
@@ -2194,9 +2152,11 @@ mod tests {
     /// `topology` or `backend` at the top level would be a second account of the
     /// part for the editor to read instead — which is exactly what this replaced.
     #[test]
+    #[ignore = "needs the kernel worker"]
     fn the_window_and_an_agent_are_handed_the_same_description() {
+        let _ = NEEDS_WORKER;
         let doc = plate_with_a_hole();
-        let evaluated = evaluate(&doc, 6, Backend::Implicit).expect("the plate should evaluate");
+        let evaluated = brep(&doc);
 
         let mcp = serde_json::to_value(&evaluated.snapshot).expect("the snapshot serialises");
         let window = serde_json::to_value(&evaluated).expect("the evaluation serialises");
@@ -2211,12 +2171,13 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(
             keys,
-            ["edges", "indices", "normals", "positions", "snapshot", "timings"]
+            ["edges", "face_runs", "faces", "indices", "normals", "positions", "snapshot", "timings"]
         );
     }
 
     /// A shape the root never reaches is a line the author meant to use.
     #[test]
+    #[ignore = "needs the kernel worker"]
     fn a_shape_the_root_never_reaches_is_counted_as_unused() {
         let doc = doc(serde_json::json!({
             "root": 0,
@@ -2225,8 +2186,7 @@ mod tests {
                 { "op": "sphere", "r": 4 },
             ],
         }));
-        let evaluated = evaluate(&doc, 5, Backend::Implicit).expect("the cuboid should evaluate");
-        assert_eq!(evaluated.snapshot.unused_nodes, 1);
+        assert_eq!(brep(&doc).snapshot.unused_nodes, 1);
     }
 
     /// A part with a named hole through it, for the perception tests: the hole
@@ -2244,18 +2204,12 @@ mod tests {
         }))
     }
 
-    /// Renders are of an *evaluation*, so the test evaluates first. The
-    /// implicit backend is used to keep this hermetic — the raster path takes a
-    /// mesh and does not care which kernel produced it.
-    fn evaluated(doc: &Doc) -> Evaluated {
-        evaluate(doc, 6, Backend::Implicit).expect("the plate should evaluate")
-    }
-
     #[test]
+    #[ignore = "needs the kernel worker"]
     fn a_render_comes_back_as_a_png_of_the_size_asked_for() {
         let doc = plate_with_a_hole();
         let renders = render(
-            &evaluated(&doc),
+            &brep(&doc),
             &doc,
             &RenderSpec {
                 views: &[parcad_core::view::View::Iso, parcad_core::view::View::Top],
@@ -2293,9 +2247,10 @@ mod tests {
     /// `cut_fraction` is the difference between "the part is solid there" and
     /// "the section missed" — two conclusions from one identical-looking image.
     #[test]
+    #[ignore = "needs the kernel worker"]
     fn a_sectioned_view_says_which_plane_it_cut_and_how_much_it_opened() {
         let doc = plate_with_a_hole();
-        let evaluated = evaluated(&doc);
+        let evaluated = brep(&doc);
         let spec = |section| RenderSpec {
             views: &[parcad_core::view::View::Front],
             size: 128,
@@ -2319,8 +2274,6 @@ mod tests {
             .section
             .as_ref()
             .expect("a sectioned view reports its plane");
-        // Rounded to the micron like every other length in a reply, so a
-        // measured bounding-box centre of -4.8e-6 is reported as the 0 it is.
         assert_eq!((cut.axis.as_str(), cut.at_mm), ("y", 0.0));
         // The front view looks from -Y, so the half in the way is the one below.
         assert_eq!(cut.keep, "above");
@@ -2358,14 +2311,20 @@ mod tests {
         assert!(renders.views[0].summary.section.is_none());
     }
 
+    /// A region map colours each pixel by the face under it, and a face's tag
+    /// is what the kernel's lineage says: the plate's top face is `plate`, the
+    /// wall of the hole is `bore` — a subtracted tool owning the hole it made
+    /// is the point of tagging a cutter at all.
     #[test]
+    #[ignore = "needs the kernel worker"]
     fn a_region_map_names_every_tag_and_what_it_covers() {
         let doc = plate_with_a_hole();
+        let evaluated = brep(&doc);
         let renders = render(
-            &evaluated(&doc),
+            &evaluated,
             &doc,
             &RenderSpec {
-                views: &[parcad_core::view::View::Top],
+                views: &[parcad_core::view::View::Iso, parcad_core::view::View::Top],
                 size: 128,
                 regions: true,
                 section: None,
@@ -2373,34 +2332,28 @@ mod tests {
         )
         .expect("the plate should render");
 
-        let regions = renders.views[0]
-            .summary
-            .regions
-            .as_ref()
-            .expect("a region map reports its legend");
-        let visible: Vec<_> = regions
-            .iter()
-            .filter(|r| r.visible)
-            .map(|r| r.tag.as_str())
-            .collect();
-
-        // Both tags own surface from above: the plate's top face, and the wall
-        // of the bore it was cut with. A subtracted tool owning the hole it made
-        // is the point of tagging a cutter at all.
+        let legend = |i: usize| {
+            renders.views[i]
+                .summary
+                .regions
+                .as_ref()
+                .expect("a region map reports its legend")
+        };
+        // From the corner both surfaces show: the plate's faces and the
+        // wall of the bore.
+        let visible: Vec<_> = legend(0).iter().filter(|r| r.visible).map(|r| r.tag.as_str()).collect();
         assert_eq!(visible, ["plate", "bore"]);
         assert!(
-            regions.iter().all(|r| r.color.starts_with('#')),
-            "a legend without colours cannot be read against the image: {regions:?}"
+            legend(0).iter().all(|r| r.color.starts_with('#')),
+            "a legend without colours cannot be read against the image: {:?}",
+            legend(0)
         );
-
-        let unclaimed = renders.views[0]
-            .summary
-            .unclaimed_fraction
-            .expect("a fraction");
-        assert!(
-            (0.0..=1.0).contains(&unclaimed),
-            "unclaimed surface is a fraction, got {unclaimed}"
-        );
+        // Straight down, the bore's wall is edge-on: not one pixel is its,
+        // and the legend says so rather than dropping the tag. Nothing is
+        // unclaimed either way, because every face has a name.
+        let bore = legend(1).iter().find(|r| r.tag == "bore").expect("every tag is listed");
+        assert!(!bore.visible && bore.pixels == 0, "{bore:?}");
+        assert_eq!(renders.views[1].summary.unclaimed_fraction, Some(0.0));
 
         // The drawn key sits beside the part rather than over it, so the frame
         // is wider than it is tall and the part still occupies the square it
@@ -2413,16 +2366,50 @@ mod tests {
         assert!(w > h, "the legend is drawn inside the frame again: {w}x{h}");
     }
 
+    /// A fillet's faces are coloured for the faces its edge lay between, so
+    /// a treatment is attributed rather than left unclaimed, and a tag on the
+    /// treatment itself names what it left.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn a_fillet_is_attributed_to_the_faces_it_rounded() {
+        let doc = doc(serde_json::json!({
+            "root": 1,
+            "nodes": [
+                { "op": "cuboid", "size": { "x": 20, "y": 20, "z": 20 }, "tag": "body" },
+                { "op": "fillet", "child": 0, "radius": 3, "selector": ">Z", "tag": "top_rim" },
+            ],
+        }));
+        let evaluated = brep(&doc);
+        // Every face carries `body`; the rounded ones also carry `top_rim`,
+        // and `body` is the innermost, so it is what the map colours by.
+        assert!(evaluated.faces.iter().all(|f| f.tags.first().map(String::as_str) == Some("body")));
+        assert!(evaluated.faces.iter().any(|f| f.tags.iter().any(|t| t == "top_rim")));
+
+        let renders = render(
+            &evaluated,
+            &doc,
+            &RenderSpec {
+                views: &[parcad_core::view::View::Iso],
+                size: 128,
+                regions: true,
+                section: None,
+            },
+        )
+        .expect("the cube should render");
+        assert_eq!(renders.views[0].summary.unclaimed_fraction, Some(0.0));
+    }
+
     /// Every view says where its camera was, because a view name is absolute.
     ///
     /// `front` looks along +Y whichever way the part faces, and a session that
     /// read it as the front of its car misread two rounds of images. The numbers
     /// and the sentence come off the same matrix, so neither can drift.
     #[test]
+    #[ignore = "needs the kernel worker"]
     fn every_rendered_view_says_which_way_it_looked() {
         let doc = plate_with_a_hole();
         let renders = render(
-            &evaluated(&doc),
+            &brep(&doc),
             &doc,
             &RenderSpec {
                 views: &parcad_core::view::View::ALL,
@@ -2459,10 +2446,11 @@ mod tests {
     /// Every other measurement in the reply is symmetric about the origin for
     /// this plate and would be identical with the bore anywhere along X. The
     /// per-tag box is the one that says where the bore actually went — and it
-    /// is measured from the built surface, so a bore the kernel did not cut
-    /// would not appear at all.
+    /// is the exact extent of the faces the kernel says the tag owns, so it
+    /// reads 6.000..18.000 rather than a mesh spacing short of that.
     #[test]
-    fn a_tag_is_reported_where_its_own_surface_was_measured() {
+    #[ignore = "needs the kernel worker"]
+    fn a_tag_is_reported_where_its_own_faces_are() {
         // The tag goes on the placement, not on the primitive, which is what
         // `.at(...).tag(...)` writes — a tag names one node, and the node this
         // one names is the cylinder where it ended up.
@@ -2476,9 +2464,7 @@ mod tests {
             ],
         }));
 
-        let snapshot = evaluate(&doc, 7, Backend::Implicit)
-            .expect("the plate should evaluate")
-            .snapshot;
+        let snapshot = brep(&doc).snapshot;
         assert!(
             snapshot.unlocated_tags.is_empty(),
             "{:?}",
@@ -2491,63 +2477,20 @@ mod tests {
                 .iter()
                 .find(|e| e.tag == tag)
                 .unwrap_or_else(|| panic!("no extent for {tag}"))
-                .center
         };
-        // The plate is centred and the bore is not, and the whole part's
-        // centroid barely moves — 40 mm of plate against a Ø12 hole.
-        assert!(extent("plate")[0].abs() < 0.3, "{:?}", extent("plate"));
-        assert!(
-            (extent("bore")[0] - 12.0).abs() < 0.3,
-            "the bore reports its centre at {:?}, not the 12 mm it was moved to",
-            extent("bore")
-        );
-    }
-
-    /// The surface a region map colours is the measured one, fillets included.
-    /// Only *attribution* steps over a treatment, because a fillet has no
-    /// distance field to ask. Checked on the pure function so the test needs no
-    /// kernel: the identity keeps the node index, and drops the tag.
-    #[test]
-    fn attribution_steps_over_a_treatment_and_takes_its_tag_with_it() {
-        let treated = doc(serde_json::json!({
-            "root": 2,
-            "nodes": [
-                { "op": "cuboid", "size": { "x": 20, "y": 20, "z": 20 }, "tag": "body" },
-                { "op": "cylinder", "r": 4, "h": 40, "tag": "bore" },
-                {
-                    "op": "fillet",
-                    "child": 0,
-                    "radius": 2,
-                    "selector": ">Z",
-                    "tag": "top_rim",
-                },
-            ],
-        }));
-
-        let (fields, unattributed) = drawable(&treated);
-        assert_eq!(unattributed, [2], "the fillet node is named");
-        assert_eq!(
-            fields.nodes.len(),
-            treated.nodes.len(),
-            "node indices must keep meaning what they meant"
-        );
-
-        // The tag goes with the treatment. Left on the identity it would name
-        // the *unfilleted* cube, and the legend would report `top_rim` owning
-        // the whole part — worse than not listing it at all.
-        let tags: Vec<_> = fields
-            .tags()
-            .into_iter()
-            .map(|(_, t)| t.to_string())
-            .collect();
-        assert_eq!(tags, ["body", "bore"]);
-        assert!(matches!(fields.nodes[2].op, Op::Translate { child: 0, .. }));
+        assert_eq!(extent("plate").center, [0.0, 0.0, 0.0]);
+        assert_eq!(extent("bore").center, [12.0, 0.0, 0.0]);
+        assert_eq!(extent("bore").bounds_min, [6.0, -6.0, -3.0]);
+        assert_eq!(extent("bore").bounds_max, [18.0, 6.0, 3.0]);
+        assert_eq!(extent("bore").faces, 1);
     }
 
     /// The number the tool exists for. The plate is 40 wide with a 12mm bore,
     /// so a ray across it at mid-height crosses 14mm of material, then air,
-    /// then 14mm again — a closed form, not a reading off a picture.
+    /// then 14mm again — a closed form, and now an exact one: the crossings
+    /// are intersections with the kernel's own surfaces.
     #[test]
+    #[ignore = "needs the kernel worker"]
     fn a_ray_across_the_plate_measures_the_wall_beside_the_bore() {
         let report = probe(
             &plate_with_a_hole(),
@@ -2557,50 +2500,24 @@ mod tests {
                 direction: [1.0, 0.0, 0.0],
                 max_distance: None,
             }],
+            None,
         )
         .expect("the plate should probe");
 
         let ray = &report.rays[0];
         assert_eq!(ray.crossings.len(), 4, "two walls, four faces: {ray:?}");
         assert_eq!((ray.starts_in, ray.ends_in), (Medium::Void, Medium::Void));
-        assert!(
-            (ray.first_solid_mm.unwrap() - 14.0).abs() < 0.01,
-            "wall beside the bore, got {:?}",
-            ray.first_solid_mm
-        );
-        assert!((ray.solid_mm - 28.0).abs() < 0.01, "got {}", ray.solid_mm);
+        assert_eq!(ray.first_solid_mm, Some(14.0));
+        assert_eq!(ray.solid_mm, 28.0);
 
         // Given no length, the ray still crossed the whole part: a caller that
         // omitted it meant "all the way through", not "nowhere".
         assert!(ray.max_distance_mm > 100.0);
-    }
 
-    /// The crossings name the surfaces they are on, so the four faces read as
-    /// plate, bore, bore, plate rather than as four positions.
-    #[test]
-    fn a_crossing_names_the_feature_it_is_on() {
-        let report = probe(
-            &plate_with_a_hole(),
-            &[],
-            &[RayRequest {
-                origin: [-100.0, 0.0, 0.0],
-                direction: [1.0, 0.0, 0.0],
-                max_distance: None,
-            }],
-        )
-        .expect("the plate should probe");
-
-        let named: Vec<_> = report.rays[0]
-            .crossings
-            .iter()
-            .map(|c| c.surface_of.as_deref())
-            .collect();
-        assert_eq!(
-            named,
-            [Some("plate"), Some("bore"), Some("bore"), Some("plate")],
-            "{:?}",
-            report.rays[0].crossings
-        );
+        // The crossings name the surfaces they are on, so the four faces read
+        // as plate, bore, bore, plate rather than as four positions.
+        let named: Vec<_> = ray.crossings.iter().map(|c| c.surface_of.as_deref()).collect();
+        assert_eq!(named, [Some("plate"), Some("bore"), Some("bore"), Some("plate")]);
     }
 
     /// A blind port down Z meeting a gallery along X — the manifold of
@@ -2631,6 +2548,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs the kernel worker"]
     fn crossings_tell_two_voids_that_meet_apart() {
         let report = probe(
             &manifold(),
@@ -2641,6 +2559,7 @@ mod tests {
                 direction: [0.0, 1.0, 0.0],
                 max_distance: None,
             }],
+            None,
         )
         .expect("the manifold should probe");
 
@@ -2667,7 +2586,7 @@ mod tests {
         // And it is the port's Ø10, not the gallery's Ø8 — the arithmetic the
         // name saves a caller from having to do.
         let void = ray.crossings[2].distance_mm - ray.crossings[1].distance_mm;
-        assert!((void - 10.0).abs() < 0.01, "got {void}");
+        assert_eq!(void, 10.0);
     }
 
     /// The manifold's thinnest wall is the 5 mm left outboard of the port —
@@ -2675,13 +2594,16 @@ mod tests {
     /// Nothing asked about that wall; the sweep is what found it, which is the
     /// difference between this and `probe_part`.
     #[test]
+    #[ignore = "needs the kernel worker"]
     fn the_thinnest_wall_is_found_without_being_asked_about() {
-        let report =
-            wall_thickness(&manifold(), Some(6.0), None).expect("the manifold should measure");
+        let report = wall_thickness(&manifold(), Some(6.0), None, None)
+            .expect("the manifold should measure");
 
         let thinnest = report.thinnest.expect("a thinnest place");
+        // A sampled minimum: exact at its own point, which sits within a
+        // sample of the port's outboard generator, where the wall is 5.000.
         assert!(
-            (thinnest.thickness_mm - 5.0).abs() < 0.2,
+            (thinnest.thickness_mm - 5.0).abs() < 1e-3,
             "thinnest measured {} mm, expected 5: {thinnest:?}",
             thinnest.thickness_mm
         );
@@ -2700,18 +2622,18 @@ mod tests {
 
         assert!(report.below_threshold > 0);
         assert!(report.samples > 500, "only {} samples", report.samples);
-        // Nothing was filleted, so nothing is hidden and nothing is claimed.
-        assert!(report.omitted_treatments.is_empty());
-        assert!(report.caveat.is_none());
+        assert!(report.note.contains("exact solid"));
     }
 
-    /// The dangerous case, and the reason `caveat` is prose rather than a list
-    /// of node indices: a fillet the field dropped means the corner measured
-    /// here has more material than the finished part, so the minimum reported
-    /// is an upper bound. Every other omission in this file makes an answer
-    /// vaguer; this one makes it optimistic.
+    /// The case the old field got wrong by construction, and the reason this
+    /// runs on the kernel: a fillet is in what gets measured. A 30 × 30 × 8
+    /// plate with its top edges rounded at r = 2 is 8 mm thick from the top
+    /// face and thinner from the underside beneath the round, down to 6 at
+    /// the walls. The sweep's minimum is below 8; the old sweep read 8 and
+    /// called it an upper bound.
     #[test]
-    fn a_dropped_fillet_makes_the_minimum_an_upper_bound_and_says_so() {
+    #[ignore = "needs the kernel worker"]
+    fn a_fillet_is_in_what_the_sweep_measures() {
         let treated = doc(serde_json::json!({
             "root": 1,
             "nodes": [
@@ -2720,22 +2642,10 @@ mod tests {
             ],
         }));
 
-        let report = wall_thickness(&treated, None, Some(48)).expect("it should measure");
-
-        assert_eq!(report.omitted_treatments, vec![1]);
-        let caveat = report.caveat.expect("a caveat naming the direction of the error");
-        assert!(
-            caveat.contains("upper bound") && caveat.contains("more material"),
-            "{caveat}"
-        );
-        // And it measured the *unfilleted* block, which is the thing the caveat
-        // is about: 8 mm through the plate, with the rounded edge absent.
+        let report = wall_thickness(&treated, None, None, None).expect("it should measure");
         let thinnest = report.thinnest.expect("a thinnest place");
-        assert!(
-            (thinnest.thickness_mm - 8.0).abs() < 0.3,
-            "got {} mm",
-            thinnest.thickness_mm
-        );
+        assert!(thinnest.thickness_mm < 7.5 && thinnest.thickness_mm >= 6.0, "{thinnest:?}");
+        assert_eq!(thinnest.at[2], -4.0, "measured from the underside: {thinnest:?}");
     }
 
     /// Nothing a transport serialises carries an f32's rounding error widened
@@ -2743,6 +2653,7 @@ mod tests {
     /// the defect only exists in the text: the f64 is a perfectly good number
     /// and `serde_json` is right to print all of it.
     #[test]
+    #[ignore = "needs the kernel worker"]
     fn a_reply_carries_no_digits_the_kernel_did_not_measure() {
         let doc = plate_with_a_hole();
         let json = serde_json::to_string(
@@ -2754,6 +2665,7 @@ mod tests {
                     direction: [1.0, 0.0, 0.0],
                     max_distance: None,
                 }],
+                None,
             )
             .expect("the plate should probe"),
         )
@@ -2774,7 +2686,7 @@ mod tests {
 
     #[test]
     fn a_threshold_that_is_not_a_length_is_refused_by_name() {
-        let err = wall_thickness(&plate_with_a_hole(), Some(0.0), None).unwrap_err();
+        let err = wall_thickness(&plate_with_a_hole(), Some(0.0), None, None).unwrap_err();
         assert!(err.contains("threshold_mm"), "{err}");
     }
 
@@ -2782,6 +2694,7 @@ mod tests {
     /// "Does this hole go all the way through" is the question, and an empty
     /// crossing list is the answer to it.
     #[test]
+    #[ignore = "needs the kernel worker"]
     fn a_ray_down_the_bore_finds_no_material() {
         let report = probe(
             &plate_with_a_hole(),
@@ -2791,6 +2704,7 @@ mod tests {
                 direction: [0.0, 0.0, 1.0],
                 max_distance: None,
             }],
+            None,
         )
         .expect("the plate should probe");
 
@@ -2798,19 +2712,23 @@ mod tests {
         assert_eq!(report.rays[0].solid_mm, 0.0);
 
         // The centre of the bore is 6mm from its wall; a point well clear of
-        // the part is far from everything. Both outside, which is the sign
+        // the part is far from everything. Both in void, which is the word
         // answering the question on its own.
         assert_eq!(report.points[0].medium, Medium::Void);
         assert_eq!(report.points[1].medium, Medium::Void);
-        assert!((report.points[0].distance_mm - 6.0).abs() < 0.01);
+        assert_eq!(report.points[0].distance_mm, 6.0);
+        assert_eq!(report.points[0].nearest[0].abs(), 6.0);
     }
 
-    /// A probe measures the field, and the field has no fillets. Saying so is
-    /// the whole difference between a measurement and a wrong measurement: near
-    /// a rounded edge this reports the sharp corner, which has material the
-    /// real part does not.
+    /// A distance near a rounded edge is the distance to the round. Inside a
+    /// 20 mm cube whose top edges are filleted at r = 3, the point (8, 0, 9)
+    /// is 1 mm from where the sharp top face would be and 2 from the side —
+    /// and 3 − √5 = 0.764 from the fillet's arc, centred at (7, 0, 7). The
+    /// old field reported the sharp corner's 1 and named the fillet it had
+    /// dropped; this reports 0.764 and has nothing to name.
     #[test]
-    fn a_probe_names_the_treatments_it_could_not_measure() {
+    #[ignore = "needs the kernel worker"]
+    fn a_distance_near_a_fillet_is_measured_to_the_fillet() {
         let treated = doc(serde_json::json!({
             "root": 1,
             "nodes": [
@@ -2819,13 +2737,17 @@ mod tests {
             ],
         }));
 
-        let report = probe(&treated, &[[0.0, 0.0, 0.0]], &[]).expect("the cube should probe");
-        assert_eq!(report.omitted_treatments, [1]);
+        let report = probe(&treated, &[[8.0, 0.0, 9.0]], &[], None).expect("the cube should probe");
+        let p = &report.points[0];
+        assert_eq!(p.medium, Medium::Material);
+        // To the micron, which is what the reply is rounded to.
+        let expected = -(3.0 - 5.0f64.sqrt());
+        assert!((p.distance_mm - expected).abs() < 1e-3, "{p:?}, expected {expected}");
     }
 
     #[test]
     fn a_probe_with_nothing_to_measure_says_what_to_pass() {
-        let error = probe(&plate_with_a_hole(), &[], &[]).expect_err("nothing was asked");
+        let error = probe(&plate_with_a_hole(), &[], &[], None).expect_err("nothing was asked");
         assert!(
             error.contains("points") && error.contains("rays"),
             "the refusal must name both, got: {error}"
@@ -2860,6 +2782,3 @@ mod tests {
         );
     }
 }
-
-
-

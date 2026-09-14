@@ -70,9 +70,9 @@ construction: a body never enters another body's lineage, and a treatment
 cannot take the group as its child.
 
 The implicit backend refuses a part in several bodies by name, the way it
-refuses a loft; `sdf.rs` says why. What ran on the field — region maps,
-`tag_extents`, `probe_part`, `measure_wall_thickness` — is therefore absent or
-refused for such a part until those move onto the exact kernel.
+refuses a loft; `sdf.rs` says why. Region maps, `tag_extents`, `probe_part`
+and `measure_wall_thickness` run on the exact kernel, body by body: a
+crossing, a point and a thin spot each name the `body` they are in.
 
 ### `blend` means two different things
 
@@ -83,8 +83,10 @@ refused for such a part until those move onto the exact kernel.
 
 Both are defensible readings of "round this join by 6 mm". They are not the same
 shape. The desktop mesh preview therefore triangulates the B-rep result: it shows
-the same geometry as the solid view while retaining the triangle overlay. The
-implicit backend remains available for field queries, renders and perception.
+the same geometry as the solid view while retaining the triangle overlay.
+Perception — probes, wall thickness, tag extents, region maps — runs on the
+exact solid too (`crates/parcad-occt/src/perceive.rs`), so nothing an agent
+reads is measured on the other reading of the shape.
 
 ### Selected edge and corner treatments are exact-only
 

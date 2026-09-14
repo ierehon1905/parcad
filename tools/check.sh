@@ -95,6 +95,19 @@ field/selftest.py
 step "tools/build-worker.sh"
 tools/build-worker.sh
 
+# The kernel's own tests — probes, the thickness sweep, face lineage — run
+# in-process against OpenCASCADE, so they need the `kernel` feature. Release,
+# so they share the OCCT the worker was just built against rather than
+# compiling it again in the test profile.
+step "cargo test --release -p parcad-occt --features kernel --lib"
+cargo test --locked --release -p parcad-occt --features kernel --lib
+
+# The host tests that need geometry are `#[ignore]`d, because `cargo test`
+# above cannot find a worker; now there is one.
+step "cargo test -p parcad-host -- --ignored"
+PARCAD_OCCT_WORKER="$PWD/target/release/parcad-occt-worker" \
+  cargo test --locked --release -p parcad-host -- --ignored
+
 step "eval corpus"
 cargo run -q -p parcad-eval
 

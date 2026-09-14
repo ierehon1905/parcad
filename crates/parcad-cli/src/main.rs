@@ -557,12 +557,8 @@ fn stands_on_text(c: &parcad_core::mesh::BedContact) -> String {
     )
 }
 
-/// The B-rep path.
-///
-/// Deliberately not a drop-in for the implicit one. The raymarched renders and
-/// the tag-region map both need a distance field to sample, and a B-rep has
-/// none — so this produces geometry, measurements and exports, and says so
-/// rather than quietly emitting fewer files than asked for.
+/// The B-rep path: geometry, measurements, exports, renders off the exact
+/// tessellation, and a region map off the kernel's face lineage.
 fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
     let stl_path = args.out.join("part.stl");
     let opts = parcad_occt::Options {
@@ -612,10 +608,19 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
     // Views from the mesh. The rasteriser shares its framing, shading and
     // section handling with the raymarched path, so a B-rep part and an
     // implicit one of the same shape make the same picture.
+    let mut triangle_faces = vec![render::NO_FACE; s.indices.len() / 3];
+    for run in &s.face_runs {
+        for t in run.start..run.start + run.count {
+            if let Some(slot) = triangle_faces.get_mut(t as usize) {
+                *slot = run.face;
+            }
+        }
+    }
     let surface = render::Surface {
         positions: &s.positions,
         normals: &s.normals,
         indices: &s.indices,
+        faces: &triangle_faces,
     };
     let opts = render::RenderOptions {
         size: args.size,
@@ -638,6 +643,52 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         }
     };
     let render_ms = render_started.elapsed().as_millis();
+
+    // Tag regions: which named node owns which face of the visible surface,
+    // from the kernel's own face lineage.
+    let mut region_path = None;
+    if args.regions {
+        let v = args.view.unwrap_or(parcad_core::view::View::Iso);
+        let names: Vec<String> = {
+            let mut seen = std::collections::HashSet::new();
+            doc.tags()
+                .into_iter()
+                .filter(|(_, t)| seen.insert(t.to_string()))
+                .map(|(_, t)| t.to_string())
+                .collect()
+        };
+        let owner_of_face: Vec<Option<usize>> = s
+            .faces
+            .iter()
+            .map(|f| f.tags.first().and_then(|t| names.iter().position(|n| n == t)))
+            .collect();
+        let buffer = render::raster(&surface, bounds, v, &opts)?;
+        let map = parcad_core::tags::regions_by_face(&buffer, &owner_of_face, &names, &opts)?;
+        let path = args.out.join(format!("regions-{}.png", v.name()));
+        map.image.write_png(&path)?;
+        std::fs::write(
+            args.out.join("regions.json"),
+            serde_json::to_string_pretty(&map.legend)?,
+        )?;
+        println!("tags in the {} view", v.name());
+        for e in &map.legend {
+            if e.visible {
+                println!(
+                    "  {:<10} {}  {:>5.1}% of visible surface",
+                    e.tag,
+                    e.color,
+                    e.fraction * 100.0
+                );
+            } else {
+                println!("  {:<10} not visible from here", e.tag);
+            }
+        }
+        if map.unclaimed_pixels > 0 {
+            println!("  {} pixels claimed by no tag", map.unclaimed_pixels);
+        }
+        println!();
+        region_path = Some(path);
+    }
 
     if let Some(path) = &args.geometry {
         let payload = serde_json::json!({
@@ -742,11 +793,8 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
     if let Some(p) = &args.geometry {
         println!("  geometry {}", p.display());
     }
-    if args.regions {
-        println!(
-            "\nnote: the tag-region map is raymarched from the distance field, \
-             which a B-rep does not have. Drop --brep for it."
-        );
+    if let Some(p) = region_path {
+        println!("  regions  {}", p.display());
     }
     Ok(())
 }

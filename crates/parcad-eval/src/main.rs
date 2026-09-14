@@ -212,7 +212,20 @@ fn judge(
         }
         // Required to build, and did.
         (None, Outcome::Measured(o)) => {
-            let bad = case::check(expect, &o, backend.fallback_tolerance());
+            let mut bad = case::check(expect, &o, backend.fallback_tolerance());
+            if let (Backend::Brep, Some(perception)) = (backend, &expect.perception) {
+                match run::perceive(doc, perception) {
+                    Ok(answer) => bad.extend(case::check_perception(
+                        perception,
+                        &answer,
+                        &expect.tolerance_or(backend.fallback_tolerance()),
+                    )),
+                    Err(message) => bad.push(Mismatch {
+                        field: "perception".into(),
+                        detail: message,
+                    }),
+                }
+            }
             let summary = format!(
                 "{:.2} x {:.2} x {:.2} mm, {:.2} mm³, {} tris{}",
                 o.size[0],

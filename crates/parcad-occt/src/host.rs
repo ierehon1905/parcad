@@ -184,6 +184,7 @@ pub fn evaluate(doc: &Doc, opts: &Options) -> Result<Success, OcctError> {
             probe_step: None,
             fit_against: None,
             inspect_target: None,
+            perceive: None,
             deflection: opts.deflection,
             step_path: opts.step_path.clone(),
             stl_path: opts.stl_path.clone(),
@@ -211,6 +212,7 @@ pub fn probe_step(path: &std::path::Path, opts: &Options) -> Result<crate::proto
             probe_step: Some(path.to_path_buf()),
             fit_against: None,
             inspect_target: None,
+            perceive: None,
             deflection: opts.deflection,
             step_path: None,
             stl_path: None,
@@ -239,6 +241,7 @@ pub fn check_fit(
             probe_step: None,
             fit_against: Some(reference.clone()),
             inspect_target: None,
+            perceive: None,
             deflection: opts.deflection,
             step_path: None,
             stl_path: None,
@@ -249,6 +252,35 @@ pub fn check_fit(
         Response::Error { stage, message } => Err(OcctError::Rejected { stage, message }),
         _ => Err(OcctError::Host(
             "the kernel returned the wrong reply kind for a fit request".into(),
+        )),
+    }
+}
+
+/// Ask questions of the exact solid: classify points, cross rays, sweep for
+/// the thinnest wall. Built in the isolated kernel like an evaluation, and
+/// measured on the finished solid, treatments included.
+pub fn perceive(
+    doc: &Doc,
+    spec: &crate::protocol::Perceive,
+    opts: &Options,
+) -> Result<crate::protocol::Perceived, OcctError> {
+    match run_worker(
+        Request {
+            doc: Some(doc.clone()),
+            probe_step: None,
+            fit_against: None,
+            inspect_target: None,
+            perceive: Some(spec.clone()),
+            deflection: opts.deflection,
+            step_path: None,
+            stl_path: None,
+        },
+        opts,
+    )? {
+        Response::Perceived(answer) => Ok(*answer),
+        Response::Error { stage, message } => Err(OcctError::Rejected { stage, message }),
+        _ => Err(OcctError::Host(
+            "the kernel returned the wrong reply kind for a perception request".into(),
         )),
     }
 }
@@ -265,6 +297,7 @@ pub fn inspect_edge_target(
             probe_step: None,
             fit_against: None,
             inspect_target: Some(node),
+            perceive: None,
             deflection: opts.deflection,
             step_path: None,
             stl_path: None,

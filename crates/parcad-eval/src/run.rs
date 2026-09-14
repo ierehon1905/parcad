@@ -204,6 +204,23 @@ fn locate_tags(
     (boxes, found.unlocated)
 }
 
+/// Ask the exact kernel the case's perception questions.
+pub fn perceive(doc: &Doc, expect: &crate::case::PerceptionExpect) -> std::result::Result<parcad_occt::Perceived, String> {
+    let spec = parcad_occt::Perceive {
+        points: expect.points.iter().map(|p| p.at).collect(),
+        rays: expect
+            .rays
+            .iter()
+            .map(|r| parcad_occt::RayLine { origin: r.origin, direction: r.direction, max_distance: None })
+            .collect(),
+        thickness: expect.thickness.as_ref().map(|t| parcad_occt::ThicknessSpec {
+            max_samples: t.max_samples.unwrap_or(6000),
+            threshold_mm: None,
+        }),
+    };
+    parcad_occt::perceive(doc, &spec, &parcad_occt::Options::default()).map_err(|e| e.to_string())
+}
+
 /// Whether the exact backend can run at all here.
 ///
 /// Checked once up front so that a missing worker reports as "skipped, build it

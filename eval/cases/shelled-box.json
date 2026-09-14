@@ -1,7 +1,7 @@
 {
   "name": "shelled-box",
   "script": "eval/scripts/shelled-box.js",
-  "why": "17112 mm3 is a hollow box; roughly 21600 is the shrunken solid that hollow() used to return. The volume is what tells those two apart.",
+  "why": "17112 mm3 is a hollow box; roughly 21600 is the shrunken solid that hollow() used to return. The volume is what tells those two apart. The perception block holds the shell's wall itself: a ray along X at the origin enters the outer wall at -32, leaves it at -30, re-enters at 30 and leaves at 32, so the first run of material is the 2 mm wall and 4 mm in all, and the thickness sweep's minimum is that wall, 2.000, exact on the flat faces.",
   "implicit": {
     "depth": 6,
     "size": [
@@ -34,6 +34,29 @@
     "watertight": true,
     "faces": 12,
     "edges": 48,
-    "curves": 24
+    "curves": 24,
+    "perception": {
+      "rays": [
+        {
+          "origin": [
+            -100,
+            0,
+            0
+          ],
+          "direction": [
+            1,
+            0,
+            0
+          ],
+          "crossings": 4,
+          "first_solid_mm": 2.0,
+          "solid_mm": 4.0
+        }
+      ],
+      "thickness": {
+        "min_mm": 2.0,
+        "tolerance_mm": 0.001
+      }
+    }
   }
 }

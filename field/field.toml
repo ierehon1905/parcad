@@ -61,14 +61,6 @@ final = '\b{}(?:\.\d+)?\s*mm'
 name = "medium"
 final = '\bmaterial\b|\bvoid\b'
 
-# A dropped fillet makes a reported minimum an *upper* bound, so an answer
-# without the caveat is confidently optimistic.
-[[reads]]
-name = "caveat"
-blob = 'caveat'
-final = 'fillet|chamfer|upper bound|omitted'
-flags = "i"
-
 # Both halves required: a cut that hit material, and an answer that says it cut.
 [[reads]]
 name = "cut"

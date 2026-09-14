@@ -226,9 +226,24 @@ pub struct GeometryBuffer {
     /// fraction — would otherwise attribute the inside of the material to
     /// nothing and report the part as mostly unnamed.
     pub cut: Vec<bool>,
+    /// One entry per pixel: which face of the part is drawn there, by the
+    /// kernel's own face number, or [`NO_FACE`] where nothing is or the pixel
+    /// is cut face. Empty when the surface carried no face numbers.
+    pub face: Vec<u32>,
 }
 
+/// The face number of a pixel that shows no face.
+pub const NO_FACE: u32 = u32::MAX;
+
 impl GeometryBuffer {
+    /// Which face is under this pixel, when the surface said.
+    pub fn face_at(&self, x: u32, y: u32) -> Option<u32> {
+        self.face
+            .get((y * self.size + x) as usize)
+            .copied()
+            .filter(|f| *f != NO_FACE)
+    }
+
     /// The point on the part under this pixel, if the pixel hit anything.
     ///
     /// On a cut pixel this is the point on the cutting plane, which is *inside*
@@ -328,6 +343,7 @@ pub fn geometry(
         depth_samples,
         cut_plane,
         cut: Vec::new(),
+        face: Vec::new(),
     };
     // A cut face is only ever *seen* when the material went toward the viewer.
     // Cut the far half away instead and the plane is behind what survives; cut
@@ -393,6 +409,10 @@ pub struct Surface<'a> {
     pub positions: &'a [f32],
     pub normals: &'a [f32],
     pub indices: &'a [u32],
+    /// The kernel's face number of each triangle, in triangle order, so a
+    /// pixel can say which face it shows. Empty when there are no faces to
+    /// name — the buffer's `face` is then empty too.
+    pub faces: &'a [u32],
 }
 
 impl Surface<'_> {
@@ -507,12 +527,13 @@ pub fn raster(
     let mut crossings = vec![0u32; if clip.is_some() { (size * size) as usize } else { 0 }];
 
     let mut image = voxel::Image::new(voxel::RenderSize::new(size, size, depth_samples));
+    let mut face = vec![NO_FACE; if surface.faces.is_empty() { 0 } else { (size * size) as usize }];
     let project = |p: [f32; 3]| {
         let q = model_to_screen.transform_point(&nalgebra::Point3::new(p[0], p[1], p[2]));
         [q.x, q.y, q.z]
     };
 
-    for tri in surface.triangles() {
+    for (t, tri) in surface.triangles().into_iter().enumerate() {
         let corners = tri.map(|i| surface.vertex(i));
         let screen = corners.map(|(p, _)| project(p));
         let normals = corners.map(|(_, n)| {
@@ -592,6 +613,9 @@ pub fn raster(
                     continue;
                 }
                 *pixel = voxel::GeometryPixel { normal: n, depth };
+                if let Some(slot) = face.get_mut((y * size + x) as usize) {
+                    *slot = surface.faces.get(t).copied().unwrap_or(NO_FACE);
+                }
             }
         }
     }
@@ -639,6 +663,9 @@ pub fn raster(
                             depth: d,
                         };
                         cut[i] = true;
+                        if let Some(slot) = face.get_mut(i) {
+                            *slot = NO_FACE;
+                        }
                     }
                 }
             }
@@ -652,6 +679,7 @@ pub fn raster(
         depth_samples,
         cut_plane,
         cut,
+        face,
     })
 }
 
@@ -1117,6 +1145,7 @@ mod tests {
             positions: &positions,
             normals: &normals,
             indices: &[],
+            faces: &[],
         };
         let bounds = crate::measure::bounds(&doc).expect("bounds");
         let centre = 64;
@@ -1197,6 +1226,7 @@ mod tests {
             positions: &positions,
             normals: &normals,
             indices: &[],
+            faces: &[],
         };
         let bounds = crate::measure::bounds(&doc).expect("bounds");
 
@@ -1243,6 +1273,7 @@ mod tests {
                     positions: &positions,
                     normals: &normals,
                     indices: &[],
+                    faces: &[],
                 },
                 bounds,
                 view,
@@ -1326,6 +1357,7 @@ mod tests {
                 positions: &positions,
                 normals: &normals,
                 indices: &[],
+                faces: &[],
             },
             bounds,
             View::Front,
@@ -1474,6 +1506,7 @@ mod tests {
                     positions: &positions,
                     normals: &normals,
                     indices: &indices,
+                    faces: &[],
                 },
                 bounds,
                 view,

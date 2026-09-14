@@ -708,6 +708,160 @@ impl Shape {
         ffi::BRepGProp_VolumeProperties_eps(&self.inner, props.pin_mut(), 1e-7);
         props.Mass()
     }
+
+    /// Which side of the solid's boundary a point is on, `BRepClass3d`. Added
+    /// for parcad; see PARCAD-CHANGES.md.
+    pub fn classify_point(&self, point: DVec3, tolerance: f64) -> PointState {
+        match ffi::BRepClass3d_classify(&self.inner, point.x, point.y, point.z, tolerance) {
+            0 => PointState::Inside,
+            1 => PointState::Outside,
+            2 => PointState::OnBoundary,
+            _ => PointState::Unknown,
+        }
+    }
+
+    /// The least distance from a point to this shape's boundary, and the
+    /// point on the boundary it is measured to. Unsigned: pair it with
+    /// [`Shape::classify_point`] for a sign. Added for parcad.
+    pub fn distance_to_point(&self, point: DVec3) -> Option<(f64, DVec3)> {
+        let probe: Shape = Vertex::new(point).into();
+        probe
+            .least_distance_to(self)
+            .map(|(distance, _, on_shape)| (distance, on_shape))
+    }
+
+    /// Load this shape for repeated ray casts. Added for parcad.
+    pub fn ray_caster(&self, tolerance: f64) -> RayCaster {
+        let mut inner = ffi::BRepIntCurveSurface_Inter_ctor();
+        ffi::BRepIntCurveSurface_Inter_load(inner.pin_mut(), &self.inner, tolerance);
+        RayCaster {
+            inner,
+            faces: self.face_map(),
+        }
+    }
+
+    /// Every face of this shape, numbered in traversal order — the numbering
+    /// `Mesh::faces` and `faces_json` use. Added for parcad.
+    pub fn face_map(&self) -> FaceMap {
+        let mut inner = ffi::new_indexed_map_of_shape();
+        ffi::map_shapes(
+            &self.inner,
+            ffi::TopAbs_ShapeEnum::TopAbs_FACE,
+            inner.pin_mut(),
+        );
+        FaceMap { inner }
+    }
+
+    /// Tight bounds from the exact geometry, `BRepBndLib::AddOptimal` with no
+    /// triangulation and no tolerance gap. `None` for a shape with no extent.
+    /// Added for parcad.
+    pub fn bounds_optimal(&self) -> Option<(DVec3, DVec3)> {
+        let (mut x0, mut y0, mut z0, mut x1, mut y1, mut z1) = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0);
+        ffi::Shape_bounds_optimal(
+            &self.inner,
+            &mut x0,
+            &mut y0,
+            &mut z0,
+            &mut x1,
+            &mut y1,
+            &mut z1,
+        )
+        .then(|| (dvec3(x0, y0, z0), dvec3(x1, y1, z1)))
+    }
+}
+
+/// Where a point lies relative to a solid. Added for parcad.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PointState {
+    Inside,
+    Outside,
+    /// Within the classification tolerance of a face.
+    OnBoundary,
+    Unknown,
+}
+
+/// Which way a line crosses the material at a hit. Added for parcad.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Crossing {
+    Entering,
+    Leaving,
+    /// The line grazes the surface without passing through it.
+    Tangent,
+}
+
+/// A shape's faces by traversal number. Added for parcad.
+pub struct FaceMap {
+    inner: UniquePtr<ffi::IndexedMapOfShape>,
+}
+
+impl FaceMap {
+    /// The face's 0-based traversal number, or `None` for a face that is not
+    /// a sub-shape of the mapped shape (a copy, however exactly placed).
+    pub fn index_of(&self, face: &Face) -> Option<usize> {
+        let found = ffi::IndexedMapOfShape_find_index(&self.inner, ffi::cast_face_to_shape(&face.inner));
+        (found > 0).then(|| found as usize - 1)
+    }
+
+    pub fn len(&self) -> usize {
+        self.inner.Extent() as usize
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+/// One place a line meets a shape's boundary. Added for parcad.
+pub struct RayHit {
+    /// Parameter along the line from its origin, in the direction's units —
+    /// millimetres for a unit direction. Negative behind the origin.
+    pub distance: f64,
+    pub point: DVec3,
+    /// Traversal number of the face hit, in the shape's own face order.
+    pub face: usize,
+    pub crossing: Crossing,
+    /// The hit lies on the face's boundary rather than inside it, which is
+    /// where a neighbouring face reports the same hit again.
+    pub on_boundary: bool,
+}
+
+/// A shape held ready for many lines, `BRepIntCurveSurface_Inter` loaded
+/// once. Added for parcad; see PARCAD-CHANGES.md.
+pub struct RayCaster {
+    inner: UniquePtr<ffi::BRepIntCurveSurface_Inter>,
+    faces: FaceMap,
+}
+
+impl RayCaster {
+    /// Every hit along the infinite line through `origin` in `direction`,
+    /// sorted by parameter, hits behind the origin included.
+    pub fn cast(&mut self, origin: DVec3, direction: DVec3) -> Vec<RayHit> {
+        let line = ffi::gp_Lin_ctor(&make_point(origin), &make_dir(direction));
+        ffi::BRepIntCurveSurface_Inter_init_line(self.inner.pin_mut(), &line);
+
+        let mut hits = Vec::new();
+        while self.inner.More() {
+            let point = ffi::BRepIntCurveSurface_Inter_point(&self.inner);
+            let face = ffi::BRepIntCurveSurface_Inter_face(&self.inner);
+            let face = Face {
+                inner: ffi::TopoDS_Face_to_owned(&face),
+            };
+            hits.push(RayHit {
+                distance: ffi::BRepIntCurveSurface_Inter_w(&self.inner),
+                point: dvec3(point.X(), point.Y(), point.Z()),
+                face: self.faces.index_of(&face).unwrap_or(usize::MAX),
+                crossing: match ffi::BRepIntCurveSurface_Inter_transition(&self.inner) {
+                    0 => Crossing::Entering,
+                    1 => Crossing::Leaving,
+                    _ => Crossing::Tangent,
+                },
+                on_boundary: ffi::BRepIntCurveSurface_Inter_state(&self.inner) == 1,
+            });
+            self.inner.pin_mut().Next();
+        }
+        hits.sort_by(|a, b| a.distance.total_cmp(&b.distance));
+        hits
+    }
 }
 
 /// A fillet or chamfer that built, with its history still alive. Added for

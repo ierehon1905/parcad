@@ -5,7 +5,8 @@
 //! learns on the way is announced on stderr as a breadcrumb, because when the
 //! kernel terminates the process there is no return value left to carry it.
 
-use parcad_occt::backend;
+use parcad_occt::backend::{self, NamedFaces};
+use parcad_occt::perceive;
 use parcad_occt::protocol::{
     breadcrumb, edge_curve, BodyFit, BodySpan, EdgeCurve, FaceRun, FaceSummary, Request,
     Response, Success, TargetPreview, Timings, Topology,
@@ -36,10 +37,13 @@ fn main() {
     }
 }
 
-/// What each face is. Empty rather than fatal: the geometry is the answer, and
-/// a description of it is an aid.
-fn describe_faces(shape: &opencascade::primitives::Shape) -> Vec<FaceSummary> {
-    serde_json::from_str(&shape.faces_json()).unwrap_or_default()
+/// What each face is, and which tags it carries.
+fn describe_faces(shape: &opencascade::primitives::Shape, names: &NamedFaces) -> Vec<FaceSummary> {
+    let mut faces = perceive::describe_faces(shape);
+    for (face, tags) in faces.iter_mut().zip(perceive::face_tags(shape, names)) {
+        face.tags = tags;
+    }
+    faces
 }
 
 /// Sample the logical edges worth drawing into polylines.
@@ -313,22 +317,35 @@ fn run() -> Response {
     let shape = &part.shape;
     let build_ms = t0.elapsed().as_millis() as u64;
 
+    if let Some(spec) = &request.perceive {
+        breadcrumb("measuring the solid");
+        return match perceive::perceive(&perceive::bodies_of(&part), spec) {
+            Ok(answer) => Response::Perceived(Box::new(answer)),
+            Err(e) => Response::Error {
+                stage: "measuring the solid".into(),
+                message: format!("{e:#}"),
+            },
+        };
+    }
+
     let t1 = Instant::now();
     let mut whole = Assembled::default();
     if part.bodies.is_empty() {
-        match measure(shape, &part.treatment_owners, "") {
+        match measure(shape, &part.names[0], &part.treatment_owners, "") {
             Ok(measured) => whole.append(None, measured),
             Err(refusal) => return refusal,
         }
     } else {
-        for (name, body) in &part.bodies {
-            match measure(body, &part.treatment_owners, &format!("body `{name}`: ")) {
+        for ((name, body), names) in part.bodies.iter().zip(&part.names) {
+            match measure(body, names, &part.treatment_owners, &format!("body `{name}`: ")) {
                 Ok(measured) => whole.append(Some(name), measured),
                 Err(refusal) => return refusal,
             }
         }
     }
     let mesh_ms = t1.elapsed().as_millis() as u64;
+    breadcrumb("locating the tags");
+    let (tag_extents, unlocated_tags) = perceive::tag_extents(&part, &perceive::bodies_of(&part));
 
     let mut between = Vec::new();
     for (i, (a, first)) in part.bodies.iter().enumerate() {
@@ -414,6 +431,8 @@ fn run() -> Response {
         topology,
         bodies,
         between,
+        tag_extents,
+        unlocated_tags,
         timings: Timings {
             build_ms,
             mesh_ms,
@@ -438,6 +457,7 @@ struct Measured {
 /// exactly as they always have.
 fn measure(
     shape: &opencascade::primitives::Shape,
+    names: &NamedFaces,
     treatment_owners: &BTreeMap<Vec<[i64; 3]>, usize>,
     who: &str,
 ) -> Result<Measured, Response> {
@@ -541,7 +561,7 @@ fn measure(
     }
 
     breadcrumb("describing the faces");
-    let faces = describe_faces(shape);
+    let faces = describe_faces(shape, names);
     Ok(Measured {
         mesh,
         faces,

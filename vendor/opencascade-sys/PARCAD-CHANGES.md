@@ -190,6 +190,35 @@ error estimate. The fixed-order integration behind the plain form is exact on
 analytic faces and not on B-splines: the elliptic cylinder `Shape_scaled_axes`
 makes of `cylinder(5, 20)` read 3168.66 mm³ against an exact 3141.59.
 
+## Added: ray casting, point classification and exact bounds
+
+The three primitives parcad's perception runs on once the exact kernel is the
+only one — probes, wall thickness and tag extents used to be read off a
+distance field the B-rep does not have.
+
+- `BRepIntCurveSurface_Inter_load(intersector, shape, tol)` and
+  `BRepIntCurveSurface_Inter_init_line(intersector, line)`: the two halves of
+  the already-bound `Init(shape, line, tol)`, split because that call reloads
+  the shape's face list for every line and a thickness sweep fires thousands
+  of lines at one shape. `_w` is the hit's parameter along the line, `_state`
+  where it lies on its face, and `_transition` which way the line crosses the
+  *material* — the intersector reports the crossing against the surface's own
+  normal, so a reversed face's answer is flipped here rather than by every
+  caller.
+- `IndexedMapOfShape_find_index(map, shape)`: `FindIndex` on the already-bound
+  map, so a hit's face can be named by its traversal number — the number the
+  mesher's face runs and the face report both use — with a hash lookup rather
+  than a geometric comparison per hit.
+- `BRepClass3d_classify(shape, x, y, z, tol)`: `BRepClass3d_SolidClassifier`,
+  as a small integer for inside, outside, on the boundary, or undecidable.
+- `Shape_bounds_optimal(shape, …)`: `BRepBndLib::AddOptimal` off the exact
+  geometry, no triangulation and no tolerance gap, so a tag's extent is the
+  surface's own reach and not the mesh's.
+
+Two new includes for them: `BRepClass3d_SolidClassifier.hxx` and
+`GeomAdaptor_Curve.hxx`. Both classes are in `TKTopAlgo` / `TKG3d`, which
+`build.rs` already links.
+
 ## Not changed
 
 Everything else is upstream 0.2.0 verbatim. The OCCT it builds against is **not**
