@@ -77,7 +77,7 @@ jobs:
       # warns that a mismatched prebuilt install links and is silently wrong.
       - name: Restore the OpenCASCADE install
         id: occt
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: occt-prebuilt
           key: occt-${{ matrix.triple }}-${{ hashFiles('vendor/occt-sys/OCCT/adm/cmake/version.cmake', 'vendor/occt-sys/patches/*', 'cmake/occt-toolchain.cmake', 'vendor/occt-sys/build.rs') }}
@@ -88,12 +88,6 @@ jobs:
 
       - name: bun install
         run: cd app && bun install --frozen-lockfile
-
-      # Before the worker, not after: testing parcad-occt without its kernel
-      # feature makes cargo delete the worker binary it finds beside the tests,
-      # and the corpus then skips every case. See docs/GOTCHAS.md.
-      - name: Unit tests
-        run: cargo test --locked --release -p parcad-core -p parcad-occt -p parcad-host
 
       - name: Build the B-rep worker
         run: tools/build-worker.sh
@@ -115,6 +109,16 @@ jobs:
             cp "$out/$f" "occt-prebuilt/$f"
           done
           du -sh occt-prebuilt
+
+      # Saved here rather than by actions/cache's post step, which saves only
+      # when the whole job succeeds: a bundling failure would otherwise throw
+      # away an hour of Windows OpenCASCADE build.
+      - name: Save the OpenCASCADE install
+        if: steps.occt.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: occt-prebuilt
+          key: ${{ steps.occt.outputs.cache-primary-key }}
 
       - name: Measure the geometry this release would ship
         run: cargo run --locked --release -p parcad-eval
@@ -166,8 +170,11 @@ jobs:
           staged="parcad-cli-${{ matrix.triple }}"
           bundle="parcad-mcp-${{ matrix.triple }}"
           cp -R "$staged" "$bundle"
-          cp packaging/mcpb/manifest.json packaging/plugin/scripts/parcad-mcp "$bundle/"
-          cp app/src-tauri/icons/icon.png "$bundle/"
+          cp packaging/plugin/scripts/parcad-mcp app/src-tauri/icons/icon.png "$bundle/"
+          # The manifest names darwin; each bundle carries binaries for one platform.
+          platform=$([ "$RUNNER_OS" = Linux ] && echo linux || echo darwin)
+          jq --arg p "$platform" '.compatibility.platforms = [$p]' \
+            packaging/mcpb/manifest.json > "$bundle/manifest.json"
           bunx @anthropic-ai/mcpb@2.1.2 pack "$bundle" "$bundle.mcpb"
 
       - name: Collect the bundles
@@ -201,6 +208,12 @@ jobs:
           cp parcad-cli-*.tar.gz parcad-cli-*.zip parcad-mcp-*.mcpb dist/ 2>/dev/null || true
           ls parcad-cli-* >/dev/null
           ls -lh dist
+
+      # Last, once the worker is staged: testing parcad-occt without its kernel
+      # feature makes cargo delete the worker binary beside the tests, and the
+      # corpus then skips every case. See docs/GOTCHAS.md.
+      - name: Unit tests
+        run: cargo test --locked --release -p parcad-core -p parcad-occt -p parcad-host
 
       - uses: actions/upload-artifact@v4
         with:

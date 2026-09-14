@@ -10,6 +10,8 @@ for candidate in \
   "$(command -v parcad 2>/dev/null)" \
   /opt/homebrew/bin/parcad \
   /usr/local/bin/parcad \
+  /home/linuxbrew/.linuxbrew/bin/parcad \
+  "$HOME/.linuxbrew/bin/parcad" \
   /Applications/ParCAD.app/Contents/MacOS/parcad \
   "$HOME/Applications/ParCAD.app/Contents/MacOS/parcad"; do
   if [ -n "$candidate" ] && [ -x "$candidate" ]; then

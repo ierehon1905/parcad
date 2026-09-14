@@ -190,7 +190,14 @@ export function tip(content: { title?: string; code?: string; key?: string; text
   return {
     "data-tip-title": content.title,
     "data-tip-code": content.code,
-    "data-tip-key": content.key,
+    "data-tip-key": content.key && keyForPlatform(content.key),
     "data-tip": content.text,
   };
+}
+
+/** Shortcuts are written the Mac way, `⇧⌘E`; everywhere else that key reads `Ctrl+Shift+E`. */
+function keyForPlatform(key: string): string {
+  if (typeof navigator === "undefined" || /Mac|iPhone|iPad/.test(navigator.userAgent)) return key;
+  const rest = key.replace(/[⌘⇧]/g, "");
+  return [key.includes("⌘") && "Ctrl", key.includes("⇧") && "Shift", rest].filter(Boolean).join("+");
 }
