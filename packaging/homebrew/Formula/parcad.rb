@@ -14,7 +14,7 @@ class Parcad < Formula
   homepage "https://github.com/ierehon1905/parcad"
   version "0.0.3"
   url "https://github.com/ierehon1905/parcad/releases/download/v#{version}/parcad-cli-aarch64-apple-darwin.tar.gz"
-  sha256 "REPLACE-WITH-THE-SHA256-FROM-SHA256SUMS.txt"
+  sha256 "cad4f8ce4c8dd5a7631078917bcb17bd4289c4af83772fdb2aa1a467f8645582"
   # The Rust crates are MIT or Apache-2.0; the statically linked OpenCASCADE
   # inside the worker is LGPL-2.1 with its exception. The texts are installed
   # beside the binaries, and NOTICE.md says how to relink your own OCCT.
