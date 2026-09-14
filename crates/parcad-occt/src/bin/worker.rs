@@ -227,6 +227,21 @@ fn probe_step(path: &std::path::Path) -> Response {
 /// was used.
 const BINDING_DEFLECTION_MM: f64 = 0.01;
 
+/// Signed enclosed volume and surface area of a triangle mesh, in mm³ and mm².
+fn volume_and_area(mesh: &opencascade::mesh::Mesh) -> (f64, f64) {
+    let (mut volume, mut area) = (0.0, 0.0);
+    for t in mesh.indices.chunks_exact(3) {
+        let (a, b, c) = (
+            mesh.vertices[t[0]],
+            mesh.vertices[t[1]],
+            mesh.vertices[t[2]],
+        );
+        volume += a.dot(b.cross(c)) / 6.0;
+        area += (b - a).cross(c - a).length() / 2.0;
+    }
+    (volume, area)
+}
+
 fn run() -> Response {
     breadcrumb("reading the request");
     let mut input = Vec::new();
@@ -349,7 +364,31 @@ fn run() -> Response {
                  face its boss is exactly tangent to — is fixed by a vendored kernel \
                  patch, so reaching this message means something new produced it; \
                  please report the script: see docs/GOTCHAS.md",
-                stats.non_manifold_edges, stats.triangles * 3,
+                stats.non_manifold_edges,
+                stats.triangles * 3,
+            ),
+        };
+    }
+
+    // The second backstop: a closed mesh of the wrong solid. See docs/GOTCHAS.md,
+    // "A correct solid can mesh as a closed fragment of itself".
+    breadcrumb("comparing the mesh's volume with the solid's");
+    let (mesh_volume, mesh_area) = volume_and_area(&mesh);
+    let solid_volume = shape.signed_volume();
+    let allowed = 2.0 * mesh_area * BINDING_DEFLECTION_MM + 1e-6 * solid_volume.abs();
+    if (mesh_volume - solid_volume).abs() > allowed {
+        return Response::Error {
+            stage: "tessellating".into(),
+            message: format!(
+                "the kernel built a solid of {solid_volume:.1} mm³ but its mesh encloses \
+                 {mesh_volume:.1} mm³ — more than {allowed:.1} mm³ apart, the most a \
+                 {BINDING_DEFLECTION_MM} mm tessellation can differ. The mesh is closed, \
+                 so it is a surface missing from the preview, the STL and every \
+                 measurement, and it is refused rather than shown. Seen when two operands \
+                 share a curved surface — a sphere unioned with a rotated or mirrored copy \
+                 of itself, pieces of one radius meeting along it. Overlap them instead of \
+                 letting them coincide: move or grow one by 0.01 mm, or leave out the copy \
+                 that adds nothing"
             ),
         };
     }
@@ -535,7 +574,10 @@ mod tests {
         .unwrap();
 
         // Source -> viewport: the intent resolves the four exact input rims.
-        assert_eq!(backend::inspect_edge_target(&doc, 7).unwrap().edges.len(), 4);
+        assert_eq!(
+            backend::inspect_edge_target(&doc, 7).unwrap().edges.len(),
+            4
+        );
         // Viewport -> source: every selected rim produces two visible final
         // boundary curves. The inspector must preserve all eight links, not
         // merely a single sample.
