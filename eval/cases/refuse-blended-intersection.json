@@ -5,7 +5,9 @@
   "brep": {
     "refuses": {
       "kind": "rejected",
-      "message_contains": ["blends an intersection"]
+      "message_contains": [
+        "blends an intersection"
+      ]
     }
   }
 }

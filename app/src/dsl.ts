@@ -506,8 +506,7 @@ export class Shape {
    * cut both holes after the union.
    *
    * Unlike `.scale(-1)` this is a reflection rather than a point inversion, and
-   * it costs nothing in either backend: reflections are isometries, so no
-   * surface changes type and the implicit field stays exact.
+   * it costs nothing: reflections are isometries, so no surface changes type.
    */
   mirror(axis: Vec3 | "x" | "y" | "z"): Shape {
     const normal: Vec3 =
@@ -725,8 +724,8 @@ export function cylinder(r: number, h: number): Shape {
  * diameter and inside diameter, so a 2 mm cord on a 20 mm ID is
  * `torus(20 / 2 + 2 / 2, 2 / 2)`, and it is worth writing the halves out.
  *
- * `minor >= major` is refused: that torus passes through its own axis, and the
- * two backends do not agree on what the resulting solid is.
+ * `minor >= major` is refused: that torus passes through its own axis and
+ * encloses a lens-shaped double region, which is not the groove anybody meant.
  */
 export function torus(
   major: number,
@@ -763,9 +762,9 @@ export type SectionPoint = [number, number];
  * arrive from anywhere:
  *
  * - **radius >= 0** — a section that crosses the axis sweeps through itself.
- * - **convex** — a re-entrant section has no exact distance field, so it is
- *   refused instead of being approximated differently by each backend. Build a
- *   stepped profile as a union of convex revolves; that is how it is turned.
+ * - **convex** — a re-entrant section is refused rather than built, since on
+ *   one the kernel's vertex pairing is a silent guess. Build a stepped profile
+ *   as a union of convex revolves; that is how it is turned.
  */
 export function revolve(profile: SectionPoint[]): Shape {
   if (profile.length < 3) {
@@ -1356,11 +1355,10 @@ function alignedX(axis: PathPoint): PathPoint {
  * A round tube of `diameter` following a path: hydraulic line, hose, wire.
  *
  * This is the honest half of what Fusion calls Sweep, and it is a bigger half
- * than it first looks. A sweep along a *spline* has no exact distance field —
- * the implicit backend would have to solve for the nearest point on the path,
- * which for a cubic is a quintic — but the two path elements a tube is actually
- * made of do: a straight run is a cylinder, and a bend is a partial torus.
- * Both are exact in both backends, so a routed tube is exact.
+ * than it first looks. A sweep along a *spline* has no path type in the graph
+ * yet, but the two path elements a tube is actually made of do: a straight
+ * run is a cylinder, and a bend is a partial torus. Both are exact, so a
+ * routed tube is exact.
  *
  * `bend` is the centreline bend radius, which is how tube is specified and how
  * a bender is set. Without it the corners are square and filled with a ball of
@@ -1368,10 +1366,9 @@ function alignedX(axis: PathPoint): PathPoint {
  * not a shape anybody can make. With it, the runs are trimmed back to their
  * tangent points and an arc joins them, which is the real part.
  *
- * Two options leave that exactness behind, and make the pipe B-rep only (the
- * implicit backend refuses it by name): `taper`, which shrinks or grows the
- * tube along its length — a strand of hair, a tail, a horn — and a
- * `{ helix }` path in place of the points — a spring or a coil. A tapered
+ * Two options take the tube off those two surfaces: `taper`, which shrinks
+ * or grows the tube along its length — a strand of hair, a tail, a horn — and
+ * a `{ helix }` path in place of the points — a spring or a coil. A tapered
  * pipe along a path of points needs a `bend` at every corner, because the
  * ball that fills a square corner cannot taper.
  *
@@ -1490,13 +1487,6 @@ export interface LoftSection {
 /**
  * Skin a solid through two or more convex outlines stacked along +Z.
  *
- * This is a B-rep-only operation, and deliberately so: a loft between
- * arbitrary outlines has no exact distance field, and an approximate one
- * would mean probes and wall-thickness checks confidently measuring a part
- * that does not exist. The implicit backend refuses a lofted part by name
- * and points here; everything that runs on the distance field — probes,
- * wall thickness, raymarched renders and sections — is unavailable for it.
- *
  * By default the walls are ruled: straight lines between consecutive
  * sections, so the surface is exactly the skin of its sections and a
  * two-section loft of an outline and its inset is the same solid a drafted
@@ -1567,10 +1557,7 @@ export function loft(
  * square wire wound into a coil, a thread-like ridge. `taper` scales the
  * profile about the path from 1 at the start to `taper` at the end.
  *
- * Like `loft` this is B-rep only: the implicit backend refuses it by name,
- * and a swept part loses the capabilities that run on the distance field.
- * A *round* section should stay a `pipe()`, which is exact in both backends
- * until it tapers or winds into a helix.
+ * A *round* section should stay a `pipe()`.
  */
 export function sweep(
   profile: OutlinePoint[],

@@ -5,11 +5,10 @@
 // 20*tan(5°) = 1.750, so the top is 36.500 square and the volume is
 // 29282.008 mm3.
 //
-// It is worth checking rather than assuming, because the two backends build a
-// draft by unrelated means. OCCT lofts between the outline and its inset copy;
-// the implicit field tilts each wall's half-plane out of vertical. If the inset
-// and the tilt ever disagreed by a fraction of a degree, nothing would look
-// wrong — the number here is what says so.
+// It is worth checking rather than assuming, because OCCT lofts between the
+// outline and its inset copy, and the inset is computed in the graph. If the
+// inset were off by a fraction of a degree, nothing would look wrong — the
+// number here is what says so.
 return extrude(
   [
     [-20, -20],

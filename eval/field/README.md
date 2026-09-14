@@ -38,8 +38,9 @@ PARCAD_HTTP_PORT=4344 field/run-suite.sh 3
 `http://127.0.0.1:${PARCAD_HTTP_PORT:-4242}/mcp`, and the config expands
 `${VAR}` from the environment.
 
-**Release, not debug.** A debug binary raymarches a 512 px view in about 70 s
-where the release one takes a fraction of a second, so every case that asks for
+**Release, not debug.** A debug binary was measured at about 70 s per 512 px
+view when renders were raymarched, where the release one takes a fraction of a
+second, so every case that asks for
 `views` stalls — and with four trials rendering at once the *script sandbox's*
 own 5 s deadline starts firing on scripts that build in microseconds, which
 reads as the model having written a loop. Measured on the same machine and the
@@ -113,14 +114,14 @@ out of the real config; auth does not follow it there, which is fine, because
 | case | tool under test | what it is for |
 |---|---|---|
 | [does-the-port-meet](does-the-port-meet.md) | `probe_part` | Two voids that intersect. The measurement is a transverse ray and the answer is a surface name; PERCEPTION §3 and §4 are both arguments from what this found. |
-| [how-thin-is-it](how-thin-is-it.md) | `measure_wall_thickness` | The thinnest wall, which no variable names. `thickness = 19.1` is the wrong answer sitting one line away, and the part is chamfered, which the exact sweep measures rather than caveats. PERCEPTION §5. |
+| [how-thin-is-it](how-thin-is-it.md) | `measure_wall_thickness` | The thinnest wall, which no variable names. `thickness = 19.1` is the wrong answer sitting one line away, and the back-face countersinks thin the 6.3 mm ligament to 4.8, which the exact sweep measures where the field-sampled one caveated. PERCEPTION §5. |
 | [what-is-inside](what-is-inside.md) | `evaluate_part` + `section` | A feature in no view of the outside. The file's comments describe both cases, so quoting them is not an answer. PERCEPTION §7. |
 | [how-many-edges](how-many-edges.md) | `list_entities` | Sampling and truncation. 60 shown of 122, and `evaluate_part` says 246 for the same part — the one case where the trap is another tool being wrong. |
 | [does-the-blend-reach-the-bolts](does-the-blend-reach-the-bolts.md) | `list_entities` faces | Face adjacency, on the question a tag cannot answer: `plate` owns the OD *and* the top *and* the back. The margin is 1.75 mm, so no render settles it, and `blend: 3` in the source is not the 49.05 the ball actually rolled at. PERCEPTION §9. |
 | [which-selector-holds](which-selector-holds.md) | `check_selector` | Three selectors where intuition and the grammar disagree in both directions. The cheapest tool on the surface and the one most likely to be skipped as unnecessary. |
 | [what-does-the-fillet-touch](what-does-the-fillet-touch.md) | `inspect_treatment_target` | What a treatment resolves to against the real shape, versus what the script's `.expect(...)` and its comment claim. The length is the part the source cannot fake. |
 | [what-is-hidden](what-is-hidden.md) | `evaluate_part` + `regions` | `visible: false` — a flag, read the right way round. The regression for the class that cost PERCEPTION §3 two rounds. |
-| [where-is-the-feature](where-is-the-feature.md) | `evaluate_part` + `tag_extents` | Where a named feature sits, on a part whose script and built solid disagree about it: `hub` reads from z = 0 in the source and starts at 12.38 in the metal, so the quote separates measuring from deriving. The failure class is a car that passed every other check facing backwards — PERCEPTION §3. |
+| [where-is-the-feature](where-is-the-feature.md) | `evaluate_part` + `tag_extents` | Where a named feature sits, on a part whose script and built solid disagree about it: `hub` reads from z = 0 in the source and begins at 9.55 in the metal — the foot of the blend that carries its name — so the quote separates measuring from deriving. The failure class is a car that passed every other check facing backwards — PERCEPTION §3. |
 | [which-backend-measured](which-backend-measured.md) | `evaluate_part` | The regression for a field the server instructions name that the reply does not contain. That has happened; nothing but a field test can see it. |
 | [how-big-can-the-fillet-be](how-big-can-the-fillet-be.md) | `evaluate_part` refusals | "Error messages name the fix" is a rule in CLAUDE.md. Whether a model can act on one is a separate fact from whether it reads well to us. |
 | [put-it-where-i-can-open-it](put-it-where-i-can-open-it.md) | `save_project`, `list_projects`, `read_project`, `export_part` | The whole CRUD half of the surface, which nothing measured until it was noticed that two of those tools were not even on the runner's allow list. |

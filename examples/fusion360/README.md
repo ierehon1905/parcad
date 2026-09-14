@@ -73,7 +73,7 @@ the document's *second* body, while the header recorded the first (see below).
 
 The diamond needed no new op at all. Fusion built it with BoundaryFill, but the
 solid is convex, so it *is* the intersection of its 57 facet half-spaces — an
-intersection of rotated boxes, exact in both backends. The blocker recorded in
+intersection of rotated boxes, exact. The blocker recorded in
 its header was the construction Fusion happened to use, not what the shape
 requires; the audit that found this is the reason each remaining target below
 names the *geometry* it is blocked on rather than the Fusion feature list.
@@ -117,13 +117,6 @@ rotates its sections up a helix, and one needs Patch, which stays out by
 decision. The next enabling change is a richer section type — arcs first,
 splines after — not another sweep or loft variant. See `docs/DSL_GAPS.md` and
 `docs/OP_ROADMAP.md`.
-
-A loft or sweep in a part also has a measured cost on the agent side: those
-nodes have no exact distance field, the implicit backend refuses them by name,
-and every capability that runs on the field — probes, wall thickness,
-raymarched renders and sections — is unavailable for that part. The B-rep
-still builds, measures and exports it; what is lost is inspection without
-looking.
 
 ## Exports not carried here
 

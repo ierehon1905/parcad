@@ -5,7 +5,9 @@
   "brep": {
     "refuses": {
       "kind": "rejected",
-      "message_contains": ["expected 99 edge(s), but matched"]
+      "message_contains": [
+        "expected 99 edge(s), but matched"
+      ]
     }
   }
 }

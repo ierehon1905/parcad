@@ -49,8 +49,7 @@ impossible, check the layer that would implement it, not the layer above.
   helix is its screw motion. Five cases hold it to closed forms at 1e-6 of
   BRepGProp — `helical-spring`, `square-coil`, `left-hand-hook`,
   `tapered-strand`, `spiral-horn` — and `refuse-coil-through-itself` holds the
-  pitch check. B-rep only: the implicit backend refuses both by name. The
-  taper is linear in *length* along runs and bends but in *turn angle* on a
+  pitch check. The taper is linear in *length* along runs and bends but in *turn angle* on a
   helix, measured: `spiral-horn` reads 811.62 mm³, where length would give
   614.81.
 
@@ -74,8 +73,8 @@ impossible, check the layer that would implement it, not the layer above.
   the two printable halves §9 asked for, held to the closed form of the kerf.
   Not here, by decision: joints, mates, constraints, assembly hierarchy,
   instancing across parts, motion — a body sits where its script put it, and
-  the fit between two is measured, not solved. B-rep only: the implicit
-  backend refuses it by name. Nothing selects across bodies: a tag lives in the
+  the fit between two is measured, not solved. Nothing selects across bodies:
+  a tag lives in the
   body that made it, and a treatment cannot take the group as its child.
 
 What a mainstream tool has that this still does not, with the cost of each here,
@@ -88,7 +87,7 @@ is in [OP_ROADMAP.md](OP_ROADMAP.md).
 | **arcs in a section** | an O-ring groove, a bearing seat — a radius in section rather than a chamfer | `Edge::arc` is bound; the profile is a `Vec<[f64; 2]>` of straight segments, so an arc has nowhere to live |
 | **a thread that closes** | real threads — every "threaded" hole in the corpus is drawn as its tap drill | the helix exists (above); a helical groove cut through its coaxial cylinder over three or more turns returns an open surface, refused. Needs the boolean diagnosed, not a new op |
 | **involute and other authored curves** | a spur gear, a cam, a real GT2 flank (`timing-pulley.js` approximates it and says so) | curve construction in the graph, on top of the section type |
-| **re-entrant (non-convex) sections** | a stepped hub in one operation | refused deliberately: no exact distance field. A union of convex revolves is exact, and is how the part is turned anyway |
+| **re-entrant (non-convex) sections** | a stepped hub in one operation | refused deliberately: on one the kernel's vertex pairing is a silent guess. A union of convex revolves is exact, and is how the part is turned anyway |
 | **variable-radius and unequal-distance treatments** | a casting fillet that tapers, an asymmetric chamfer for a weld prep | `Fillet`/`Chamfer` take one scalar |
 | **assembly: joints, mates, constraints** | a pillow block *and* its bearing, placed by a fit rather than by coordinates | the bodies exist (above) and the fit between them is measured; nothing yet *places* one against another — a solver, which is the wide reading of NEXT.md §3 |
 
@@ -112,9 +111,9 @@ recreating, with the measured targets. Designs counted once each, not per use.
 | `CircularPattern` | 9 | yes (`polar`) |
 | `Combine` | 7 | yes (booleans) |
 | `Revolve` | 6 | yes |
-| `Loft` | 6 | yes — B-rep only; the implicit backend refuses it by name |
+| `Loft` | 6 | yes |
 | `Mirror` | 6 | yes (`.mirror()`) |
-| `Sweep` | 6 | yes — B-rep only; a round profile is `pipe()`, exact in both |
+| `Sweep` | 6 | yes — a round profile is `pipe()` |
 | `Sphere` | 5 | yes |
 | **`SplitBody`** | **5** | **no** |
 | `Move` | 5 | yes (`.at()`) |
@@ -150,17 +149,7 @@ priorities, not a specification, and reproducible from
 
 ### What `Revolve` cost
 
-**The implicit field is a bound outside a convex corner**, not an exact distance.
-The exact nearest-segment formula was written first and rejected: under interval
-arithmetic its clamped projection loses the correlation between its own terms,
-the octree could no longer prove a cell empty, and a plain tube meshed to 31k
-triangles at depth 6 instead of about 1k, with NaN vertices at depth 7. The
-half-plane form is exact on the surface and inside and underestimates outside a
-corner, which is safe for the mesher in the way an overestimate would not be.
-`sdf::revolve` says so, and a unit test pins the under-read so that making it
-exact later is a deliberate edit.
-
-Also: **`role: "hole"` does not recognise a conical opening.** A countersink rim
+**`role: "hole"` does not recognise a conical opening.** A countersink rim
 is an inner boundary of the top face by any reading, and the term drops it, so
 `cover-plate.js` selects on `curve` and position instead. Same cause as §6.
 
@@ -394,8 +383,7 @@ recorded here:
 - **A cut that removed nothing was silent — FIXED.** Four VESA 100 holes fell
   outside a Ø120 hub and vanished; the face count said so one evaluation later.
   A subtract that makes no edge and takes no face now refuses, naming both
-  extents (`refuse-missed-cut`). B-rep only: the implicit field has no topology
-  to count.
+  extents (`refuse-missed-cut`).
 - **An empty intersection was an error, not a zero — FIXED, twice.** The
   refusal now says 0 mm³ with both extents (`refuse-empty-intersection`), and
   the question it stood in for has its own tool: `check_fit` (MCP), `--fit`

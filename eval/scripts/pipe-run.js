@@ -12,8 +12,8 @@
 // So 130 mm of run at r = 5 is pi*25*130 - 2*166.667 + 2*130.900 = 10138.64
 // mm3, and a first pass that treats the runs as disjoint reads 3% high.
 //
-// That is what a polyline sweep *is*, and why it can be exact in both backends
-// where a swept spline cannot: capsules, not a sweep solver.
+// That is what a polyline sweep *is*, and why its volume has a closed form
+// where a swept spline's does not: capsules, not a sweep solver.
 return pipe(
   [
     [0, 0, 0],

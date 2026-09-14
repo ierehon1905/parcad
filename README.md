@@ -193,8 +193,9 @@ one call.
 ## Licensing
 
 MIT or Apache-2.0, at your option. Built on components that are not: OpenCASCADE
-and its bindings under `vendor/` are LGPL-2.1, and the implicit kernel
-[fidget](https://github.com/mkeeter/fidget) is MPL-2.0. Building from source is
+and its bindings under `vendor/` are LGPL-2.1, and one file of our own,
+`crates/parcad-core/src/occlusion.rs`, is MPL-2.0 because it was ported from
+[fidget](https://github.com/mkeeter/fidget). Building from source is
 unencumbered; **redistributing a binary carries obligations** —
 [NOTICE.md](NOTICE.md) spells them out, including how to swap in your own
 OpenCASCADE.

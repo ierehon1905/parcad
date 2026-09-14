@@ -1,13 +1,6 @@
-//! Meshing: turning the distance function into triangles.
-//!
-//! Uses fidget's manifold dual contouring, which gives watertight output and
-//! keeps sharp features rather than rounding them off at the sampling grid.
+//! The triangle mesh the kernel hands back, and what is measured off it.
 
-use crate::measure::Aabb;
 use anyhow::Result;
-use fidget::context::Tree;
-use fidget::jit::JitShape;
-use fidget::mesh::{Octree, Settings};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
@@ -15,9 +8,9 @@ use std::io::Write;
 pub struct Tessellation {
     pub vertices: Vec<[f32; 3]>,
     pub triangles: Vec<[usize; 3]>,
-    /// Edge length of the finest octree cell, in mm. This is the scale of the
-    /// mesher's error, and the reason measurements taken from this mesh are
-    /// approximate.
+    /// The furthest any triangle sits from the true surface, in mm. This is
+    /// the scale of the mesher's error, and the reason measurements taken
+    /// from this mesh are approximate.
     pub resolution_mm: f64,
 }
 
@@ -75,10 +68,8 @@ impl Tessellation {
     /// Measure what the part stands on. `None` only for an empty mesh.
     ///
     /// A triangle counts when all three corners lie within the mesh's
-    /// resolution of the lowest vertex, which is exact for a B-rep mesh
-    /// (deflection 0.01 mm) and one cell for a dual-contoured one, whose
-    /// vertices on a flat face scatter by up to a cell. Patches are joined
-    /// through vertices at the same position, so an unwelded mesh is fine.
+    /// resolution of the lowest vertex. Patches are joined through vertices
+    /// at the same position, so an unwelded mesh is fine.
     pub fn bed_contact(&self) -> Option<BedContact> {
         let z_min = self
             .vertices
@@ -134,10 +125,6 @@ impl Tessellation {
     /// own, so two faces meeting at an edge each emit their own copy of the
     /// vertices along it. The surface has no gap, but the *index* graph does,
     /// and an unwelded check reports a solid part as riddled with holes.
-    ///
-    /// The implicit backend does not need this — dual contouring emits one
-    /// vertex per cell and shares it — which is exactly why the check passed
-    /// there and failed here on a part that is fine.
     ///
     /// `tolerance` should sit below anything the modelling cares about and well
     /// above float noise; a micron is right for millimetre parts.
@@ -351,84 +338,6 @@ impl Tessellation {
         (bad == 0, bad)
     }
 
-    /// Per-vertex normals taken from the distance field's gradient.
-    ///
-    /// Expanded triangles with per-corner normals sampled just off any crease.
-    ///
-    /// Reading the gradient at each vertex directly is exact on faces and
-    /// *ambiguous on edges*, which is the one place it matters. Dual contouring
-    /// puts vertices right on a crease, and a point on a crease has no single
-    /// normal — it belongs to two faces at once, so the gradient returns
-    /// whichever branch `min`/`max` happened to select. The result is a one-cell
-    /// band of garbage normals tracing every sharp edge in the model.
-    ///
-    /// The fix is to stop asking about the crease. Each triangle asks about its
-    /// own corners nudged toward its centroid, which lands the sample on the face
-    /// that triangle actually lies in. Two triangles meeting at an edge then
-    /// disagree — correctly, that is what a sharp edge *is* — while triangles on
-    /// a smooth patch still agree and shade smoothly.
-    ///
-    /// Costs 3x the vertices, since corners can no longer be shared. At these
-    /// mesh sizes that is not worth avoiding.
-    pub fn faceted(&self, tree: &Tree) -> Result<(Vec<[f32; 3]>, Vec<[f32; 3]>)> {
-        use fidget::shape::EzShape;
-        use fidget::types::Grad;
-
-        /// How far from the corner toward the centroid to sample. Big enough to
-        /// clear the crease, small enough that curvature has not turned much.
-        const NUDGE: f32 = 0.32;
-
-        let n = self.triangles.len() * 3;
-        let mut positions = Vec::with_capacity(n);
-        let mut xs = Vec::with_capacity(n);
-        let mut ys = Vec::with_capacity(n);
-        let mut zs = Vec::with_capacity(n);
-
-        for t in &self.triangles {
-            let vs = [
-                self.vertices[t[0]],
-                self.vertices[t[1]],
-                self.vertices[t[2]],
-            ];
-            let c = [
-                (vs[0][0] + vs[1][0] + vs[2][0]) / 3.0,
-                (vs[0][1] + vs[1][1] + vs[2][1]) / 3.0,
-                (vs[0][2] + vs[1][2] + vs[2][2]) / 3.0,
-            ];
-
-            for v in vs {
-                positions.push(v);
-                let s = [
-                    v[0] + (c[0] - v[0]) * NUDGE,
-                    v[1] + (c[1] - v[1]) * NUDGE,
-                    v[2] + (c[2] - v[2]) * NUDGE,
-                ];
-                xs.push(Grad::new(s[0], 1.0, 0.0, 0.0));
-                ys.push(Grad::new(s[1], 0.0, 1.0, 0.0));
-                zs.push(Grad::new(s[2], 0.0, 0.0, 1.0));
-            }
-        }
-
-        let shape = JitShape::from(tree.clone());
-        let mut eval = JitShape::new_grad_slice_eval();
-        let tape = shape.ez_grad_slice_tape();
-        let grads = eval.eval(&tape, &xs, &ys, &zs)?;
-
-        let normals = grads
-            .iter()
-            .map(|g| {
-                let len = (g.dx * g.dx + g.dy * g.dy + g.dz * g.dz).sqrt();
-                if len > 1e-9 {
-                    [g.dx / len, g.dy / len, g.dz / len]
-                } else {
-                    [0.0, 0.0, 1.0]
-                }
-            })
-            .collect();
-
-        Ok((positions, normals))
-    }
-
     /// Write a binary STL. This is the format a slicer wants.
     pub fn write_stl<W: Write>(&self, w: &mut W) -> Result<()> {
         w.write_all(&[0u8; 80])?;
@@ -460,48 +369,4 @@ impl Tessellation {
         }
         Ok(())
     }
-}
-
-/// Tessellate a distance function over the given bounds.
-///
-/// `depth` is the octree subdivision depth: the finest cell is the fitted cube
-/// divided by `2^depth`, so each extra level halves the error and roughly
-/// quadruples the triangle count.
-pub fn tessellate(tree: &Tree, bounds: Aabb, depth: u8) -> Result<Tessellation> {
-    let shape = JitShape::from(tree.clone());
-    let bound_shape = shape
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("shape has unbound variables; every parameter must be resolved before meshing"))?;
-
-    // The octree lives in the world cube [-1, 1]³ and samples the model through
-    // `world_to_model`, so it inherits this framing exactly.
-    let world_to_model = crate::view::mesh_transform(bounds);
-
-    let settings = Settings {
-        depth,
-        world_to_model,
-        ..Default::default()
-    };
-
-    let octree = Octree::build(&bound_shape, &settings)
-        .ok_or_else(|| anyhow::anyhow!("meshing was cancelled"))?;
-    let mesh = octree.walk_dual();
-
-    // The octree applies `world_to_model` to its sample points as it descends, so
-    // the vertices it hands back are already in millimetres. Transforming them
-    // again here would scale the part by the fit factor a second time.
-    let vertices = mesh.vertices.iter().map(|v| [v.x, v.y, v.z]).collect();
-
-    let triangles = mesh.triangles.iter().map(|t| [t.x, t.y, t.z]).collect();
-
-    // One world unit spans `scale` mm, the world cube is 2 units across, and it
-    // is divided into 2^depth cells along each axis.
-    let scale = crate::view::mesh_scale(bounds);
-    let resolution_mm = 2.0 * scale / (1u64 << depth) as f64;
-
-    Ok(Tessellation {
-        vertices,
-        triangles,
-        resolution_mm,
-    })
 }

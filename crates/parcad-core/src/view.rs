@@ -295,9 +295,9 @@ impl Cut {
     /// `+1` where the plane's own axis coordinate grows into removed material,
     /// `-1` where it grows into kept material.
     ///
-    /// Every geometric use of a cut — the half-space distance field, the
-    /// screen-space clip test, the direction the cut face looks in — is this
-    /// sign times something, so it is worth having once.
+    /// Every geometric use of a cut — the screen-space clip test, the
+    /// viewport's clipping plane, the direction the cut face looks in — is
+    /// this sign times something, so it is worth having once.
     pub fn sense(self) -> f64 {
         match self.keep {
             Keep::Below => 1.0,

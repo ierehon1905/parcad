@@ -4,17 +4,16 @@ A bucket of parts with expected measurements, plus the refusals that are
 supposed to happen. Run it:
 
 ```bash
-cargo run -p parcad-eval                          # everything, both backends
+cargo run -p parcad-eval                          # everything
 cargo run -p parcad-eval -- --case bracket        # substring match on the name
-cargo run -p parcad-eval -- --backend brep        # implicit | brep | both
 cargo run -p parcad-eval -- --update              # re-record from what was measured
-tools/build-worker.sh                             # the B-rep cases need the worker
+tools/build-worker.sh                             # every case needs the worker
 ```
 
 Cases run the **DSL script**, not a checked-in graph, so `app/src/dsl.ts` is
 under test too: a graph fixture goes stale without anyone noticing, and one here
-already had. Without the worker the B-rep cases report `SKIP` once with the
-reason, rather than failing every case with the same message.
+already had. Without the worker the cases report `SKIP` once with the reason,
+rather than failing every case with the same message.
 
 ## A case
 
@@ -23,7 +22,6 @@ reason, rather than failing every case with the same message.
   "name": "shelled-box",
   "script": "eval/scripts/shelled-box.js",
   "why": "17112 mm3 is a hollow box; roughly 21600 is the shrunken solid ...",
-  "implicit": { "depth": 6, "size": [64.0, 39.0, 22.0], "volume_mm3": 17097.62 },
   "brep": { "size": [64.0, 39.0, 22.0], "volume_mm3": 17112.0, "faces": 12 }
 }
 ```
@@ -31,14 +29,18 @@ reason, rather than failing every case with the same message.
 `why` is for the person reading a red line six months from now and deciding
 whether it is a regression or an intended change; it is the field most worth
 writing carefully. Every measurement is optional — a case asserts only what it
-is about, a field left out is recorded by `--update` and never checked, and
-silence about a backend is not a claim that the backend works.
+is about, a field left out is recorded by `--update` and never checked, and a
+case with no `brep` block is not a claim that the part builds. The key is
+`brep` because for a long time an `implicit` half sat beside it, measured by a
+distance-field backend that has since been deleted; the exact kernel is the
+only one, and every case runs on it.
 
-**Tolerances differ per backend, deliberately.** The exact path gets 0.01 mm and
-0.05 % on volume; the implicit path gets 0.05 mm and 1 %, because its error is
-dual contouring at the chosen `depth` rather than a defect. Override with a
-`tolerance` block on either side. Topology counts (`faces`, `edges`, `curves`)
-are never tolerated — a face count that is close is a different part.
+**Tolerances are exact-kernel tolerances:** 0.01 mm per axis and 0.05 % on
+volume, overridable with a `tolerance` block. Topology counts (`faces`,
+`edges`, `curves`) are never tolerated — a face count that is close is a
+different part. A `perception` block holds closed forms derived by hand for
+rays, points and a thickness sweep; `--update` never writes it, so a drift
+there is a defect rather than a value to re-record.
 
 ## A refusal
 
@@ -52,7 +54,7 @@ are never tolerated — a face count that is close is a different part.
 ```
 
 `kind` is one of `rejected`, `crashed`, `timedout`, `host`, or `error` (the
-implicit backend and the graph layer). `crashed` is a legitimate expectation:
+graph layer, before the kernel sees the part). `crashed` is a legitimate expectation:
 OCCT segfaults on some impossible fillets, and what is asserted is that the
 outcome arrives as a typed error with a breadcrumb, not that OCCT survives.
 

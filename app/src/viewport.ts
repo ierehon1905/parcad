@@ -1,6 +1,6 @@
 /**
  * The 3D viewport: GPU triangles at display resolution, deliberately a separate
- * renderer from the CPU raymarcher the agent looks through (`render.rs`).
+ * renderer from the CPU rasteriser the agent looks through (`render.rs`).
  */
 
 import * as THREE from "three";

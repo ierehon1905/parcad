@@ -1,28 +1,24 @@
-//! parcad core: intent graph in, geometry and perception out.
-//!
-//! The pipeline is
+//! parcad core: the intent graph, and what is measured and drawn off the
+//! mesh a kernel returns for it.
 //!
 //! ```text
-//!   Doc  ──lower──>  distance function  ──┬──>  triangles  ──>  STL, mass properties
-//!  (intent)            (this backend)     └──>  renders    ──>  what an agent sees
+//!   Doc  ──(parcad-occt)──>  B-rep  ──>  triangles  ──┬──>  STL, mass properties
+//!  (intent)                                          └──>  renders, region maps
 //! ```
 //!
-//! [`graph`] is deliberately ignorant of how shapes are computed. Everything
-//! kernel-specific lives in [`sdf`].
+//! [`graph`] is deliberately ignorant of how shapes are computed; the one
+//! kernel lives in the `parcad-occt` crate, behind a process boundary.
 
 pub mod font;
 pub mod graph;
 pub mod measure;
 pub mod mesh;
-pub mod probe;
+mod occlusion;
 pub mod render;
-pub mod sdf;
 pub mod selectors;
 pub mod tags;
-pub mod thickness;
 pub mod view;
 
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
 /// Everything cheap that can be said about a part, in one structure.
@@ -56,46 +52,4 @@ pub struct PartReport {
     /// `total_nodes` means the document has dead nodes.
     pub live_nodes: usize,
     pub total_nodes: usize,
-}
-
-/// Evaluate a document: lower it, mesh it, and measure the result.
-pub fn evaluate(
-    doc: &graph::Doc,
-    depth: u8,
-) -> Result<(fidget::context::Tree, mesh::Tessellation, PartReport)> {
-    if doc.units != "mm" {
-        anyhow::bail!("document is in {:?}, but only \"mm\" is supported", doc.units);
-    }
-
-    let tree = sdf::lower(doc)?;
-    let bounds = measure::bounds(doc)?;
-
-    if bounds.is_empty() {
-        anyhow::bail!(
-            "the part is empty — check for an intersection of shapes that do not overlap"
-        );
-    }
-
-    let tess = mesh::tessellate(&tree, bounds, depth)?;
-    let mass = measure::mass_properties(&tess.vertices, &tess.triangles);
-
-    // Dimensions come off the geometry, not off the conservative graph bound.
-    let tight = measure::Aabb::from_points(&tess.vertices).ok_or_else(|| {
-        anyhow::anyhow!("the part produced no geometry — every solid may have been cut away")
-    })?;
-
-    let report = PartReport {
-        units: doc.units.clone(),
-        bounds: tight,
-        size: tight.size(),
-        framing_bounds: bounds,
-        mass,
-        mesh: tess.stats(),
-        stands_on: tess.bed_contact(),
-        tags: doc.tags().into_iter().map(|(_, t)| t.to_string()).collect(),
-        live_nodes: doc.topo_order()?.len(),
-        total_nodes: doc.nodes.len(),
-    };
-
-    Ok((tree, tess, report))
 }

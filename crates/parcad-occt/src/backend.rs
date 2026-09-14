@@ -1,16 +1,15 @@
 //! Lowering the intent graph onto OCCT.
 //!
-//! The same [`Doc`](parcad_core::graph::Doc) the implicit backend consumes. Where
-//! the two differ is instructive: a `blend` on a union is a smooth-minimum of two
-//! distance fields there, and here it is "do the boolean, then fillet the edges
-//! the boolean created". Different mechanism, same intent — which is the whole
-//! reason the graph does not mention either one.
+//! The [`Doc`](parcad_core::graph::Doc) says what a part is; this file says how
+//! OCCT builds it. A `blend` on a union is "do the boolean, then fillet the
+//! edges the boolean created" — mechanism, not intent, which is the whole
+//! reason the graph does not mention it.
 //!
 //! This code runs only inside the worker process. It is allowed to die.
 
 use anyhow::{bail, Result};
 use opencascade::primitives::{Treatment, Unification};
-use parcad_core::selectors::{Dihedral, Names};
+use parcad_core::selectors::Dihedral;
 use std::collections::HashMap;
 use glam::{DMat3, DVec3};
 use opencascade::{
@@ -2662,9 +2661,8 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 "revolve node {id} ({label}) of a {}-point section",
                 profile.len()
             ));
-            // The graph owns the rules; the backend only reports where they
-            // were broken. Both backends call the same check, so an accepted
-            // profile means the same thing here and in the implicit field.
+            // The graph owns the rules; the kernel only reports where they
+            // were broken.
             Op::validate_profile(profile)
                 .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
 
@@ -2742,7 +2740,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 bail!("node {id} ({label}) extrudes by {height}, which is not a thickness");
             }
             // The graph owns the rules, including how much draft this outline
-            // can carry, so the two backends refuse the same parts.
+            // can carry, so the refusal is decided before the kernel builds.
             let (_, top) = Op::draft_inset(profile, *height, *draft)
                 .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
 
@@ -2876,9 +2874,8 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                     None => format!("{} path points", path.len()),
                 }
             ));
-            // One resolver for both backends: what it refuses here, the
-            // implicit evaluator refuses with the same words before pointing
-            // at this backend.
+            // One resolver, shared with the bounds: what it refuses here, the
+            // graph refuses with the same words.
             let (section, spine) =
                 Op::validate_sweep(profile, *circle, path, *bend, helix.as_ref(), *taper)
                     .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
@@ -3051,9 +3048,9 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 // `gp_Trsf::SetMirror` is bound for an *axis* only, which is a
                 // half turn about a line rather than a reflection in a plane.
                 // The reflection is that half turn composed with a point
-                // inversion: -(2nn^T - I) = I - 2nn^T, the Householder matrix
-                // the implicit backend uses. Both halves are already bound, and
-                // both are exact, so no surface changes type.
+                // inversion: -(2nn^T - I) = I - 2nn^T, the Householder matrix.
+                // Both halves are already bound, and both are exact, so no
+                // surface changes type.
                 shape
                     .scaled_uniform(DVec3::ZERO, -1.0)
                     .rotated(DVec3::ZERO, n, std::f64::consts::PI)
@@ -3314,7 +3311,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                      OCCT's thick-solid offset is exact on a single primitive but \
                      silently discards parts of a boolean result, so this is \
                      refused rather than shown. Offset the primitives before \
-                     combining them, or use the implicit backend",
+                     combining them",
                     op_name(&doc.node(*child)?.op)
                 );
             }
@@ -3340,8 +3337,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             // 64x39x22 box shelled by 2 mm comes back a *solid* 60x35x18 box.
             // That failure is the tool. A shrunken solid is exactly the cavity
             // this needs, so shelling is "the shape, minus itself moved inward",
-            // which leaves the outer surface untouched by construction. Same
-            // thing the implicit backend means by `|f + t/2| - t/2`.
+            // which leaves the outer surface untouched by construction.
             breadcrumb(&format!(
                 "shrink node {id} ({label}) by {thickness} mm to form the cavity"
             ));
@@ -3357,7 +3353,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                     "node {id} ({label}) shells a {} by {thickness} mm, and the \
                      cavity came back {slip:.2} mm from where it must be — OCCT \
                      drops parts of a boolean when offsetting it. Shell the solid \
-                     before combining it with others, or use the implicit backend",
+                     before combining it with others",
                     op_name(&doc.node(*child)?.op)
                 );
             }

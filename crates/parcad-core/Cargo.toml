@@ -9,6 +9,5 @@ description = "Kernel-agnostic intent graph, geometry evaluation and perception 
 anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-fidget = { version = "0.5", default-features = false, features = ["jit", "mesh", "raster"] }
 nalgebra = "0.35"
 image = { version = "0.25", default-features = false, features = ["png"] }

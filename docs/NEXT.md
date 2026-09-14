@@ -14,25 +14,34 @@ only, and links rather than repeats.
 ## The queue, as of 2026-09-14
 
 One session at a time, because each rewrites the same core files (`graph.rs`,
-`backend.rs`, `sdf.rs`, `dsl.ts`):
+`backend.rs`, `dsl.ts`):
 
 1. **Parts with more than one solid** — done 2026-09-14. `return { base, lid }`,
-   measured per body and between bodies, one STEP solid per body; the implicit
-   backend refuses it by name, and probes, tag extents and wall thickness wait
-   on item 2 for such a part.
-2. **One engine** — running. Decided: the exact kernel becomes the only one, and the
-   implicit backend (`sdf.rs`, fidget) is deleted once nothing needs it. Today it
-   refuses 33 of the 41 parts in a real project folder (every edge treatment,
-   loft, sweep, helix); `blend` means a different shape in it; and
-   `probe_part` and `measure_wall_thickness` run on it, so they measure a part
-   with its fillets dropped and call the answer an upper bound. The exact kernel
-   is already interactive — median 105 ms per example, 23 of 24 under 550 ms,
-   `plate-stand` at 3.3 s. The work: point probes, rays, wall thickness, renders
-   and tag regions on OpenCASCADE (a solid classifier, a ray–surface
-   intersection, the mesh), then speed where `tools/bench-kernel.sh` says the
-   time goes (a warm worker instead of a spawn per request, reused sub-shapes,
-   a coarser mesh while typing), then the deletion. The field suite has to read
-   the moved tools SOUND before the old path goes.
+   measured per body and between bodies, one STEP solid per body; probes, tag
+   extents and wall thickness run per body since item 2.
+2. **One engine** — done 2026-09-15. The exact kernel is the only one; the
+   implicit backend (`sdf.rs`, fidget) is deleted. It had refused 33 of the 41
+   parts in a real project folder, read `blend` as a different shape, and
+   measured probes and wall thickness with every fillet dropped. What replaced
+   it, in `crates/parcad-occt/src/perceive.rs`: point classification and
+   distance (`BRepClass3d_SolidClassifier`, `BRepExtrema` against the boundary
+   faces), rays as intersections with every face met (`BRepIntCurveSurface_Inter`,
+   transition folded through face orientation), a thickness sweep over the
+   tessellation's nodes and a barycentric grid on every triangle, tag extents
+   from face lineage, and renders and region maps off the tessellation with a
+   pixel-per-face map. Five corpus cases hold closed forms — a Ø12 bore in a 40
+   mm plate reads 14 and 28 mm along X and a point 100 mm up reads √(97²+6²) =
+   97.185 to the bore's rim; a wall under an r = 2 fillet reads 4 + 2 + √3 =
+   7.732 where the field read 8 as an upper bound. Speed: the worker is
+   long-lived (`Frame`/`@reply` on stdin/stderr, a pool of two, crash isolation
+   kept — a dead worker is replaced, a hung one killed) and keeps a per-subtree
+   `BuildCache`, so a second identical build of `plate-stand` is 475 ms wall
+   against 3223 cold and a root-level edit 697 (212 in the kernel); the corpus
+   numbers did not move. The window has no kernel toggle; `--brep` and
+   `--depth` say they do nothing. The field suite read every perception case
+   SOUND before the deletion: does-the-port-meet 8/8, does-the-laptop-fit 8/8,
+   which-backend-measured 8/8, how-thin-is-it 8/8, what-is-hidden 8/8,
+   where-is-the-feature 8/8, what-is-inside 6/8 SOUND and 2/8 LUCKY.
 3. **Threads that close** — diagnose the helical cut that opens at three turns
    (OP_ROADMAP §5).
 4. **Curves in sections and paths** — arcs and splines in the profile type; four
@@ -205,9 +214,7 @@ small model reads SOUND. What is left, in the order it would pay:
    to closed forms — two boxes, the two printable halves, an interfering
    pair, a body split inside itself, and the seeded `lidded-box`; the field
    case `does-the-lid-clear` asks a model the question and has not yet been
-   run. Joints and mates stay out; the §3 call is not moved. The implicit
-   backend refuses it by name, so `tag_extents`, region maps and the probes
-   are absent for such a part until they move onto the exact kernel.
+   run. Joints and mates stay out; the §3 call is not moved.
 
 ## After the unicorn — two outside models' reports, checked against the code
 
@@ -266,8 +273,8 @@ it in `backend`.
 ## The small win, whenever there is room for one
 
 **Arcs in a section.** `Edge::arc` is already bound; it unlocks sealing grooves,
-bearing seats and radiused shoulders, and it is exact in both backends, which is
-the bar an op has to clear here. It fits the narrow reading without committing to
+bearing seats and radiused shoulders, and it is exact, which is the bar an op
+has to clear here. It fits the narrow reading without committing to
 it, and the evidence is now a part rather than a table:
 `examples/hydraulic-line.js` carries a round-bottomed groove because a torus is
 the only section available, and says so in its header. Top row of

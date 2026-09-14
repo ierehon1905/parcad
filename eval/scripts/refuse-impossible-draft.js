@@ -3,8 +3,8 @@
 //
 // The refusal has to name the angle that *would* work, because that is the
 // caller's next question, and it has to be measured rather than estimated —
-// the graph bisects for it. Both backends refuse from the same function, so a
-// draft that builds in one can never fail in the other.
+// the graph bisects for it, in the same function that computes the inset the
+// kernel lofts to.
 return extrude(
   [
     [-5, -5],

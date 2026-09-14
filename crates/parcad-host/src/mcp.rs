@@ -473,7 +473,7 @@ impl Parcad {
             let evaluated = service::evaluate(&doc, budget).map_err(|e| built.locate(e))?;
 
             // Render after measuring, so a part that cannot be built fails on
-            // the geometry rather than after spending a raymarch on it.
+            // the geometry rather than after spending a render on it.
             let renders = service::render(
                 &evaluated,
                 &doc,
@@ -530,7 +530,7 @@ impl Parcad {
     #[tool(
         name = "list_entities",
         annotations(title = "List a part's edges and faces", read_only_hint = true, open_world_hint = false),
-        description = "List what a part is made of, as text rather than a picture: its visible edges with their centres, directions and lengths, and its faces with what each one is (plane, cylinder, cone, sphere, torus), its exact area, a point on it, its outward normal or axis, the faces it touches, and `tags`, the names the face carries — innermost first, the node that made it and then every tagged node it survived through — which is what `on:` and `between:` select by. For a part in several named bodies each edge and face also says which `body` it is on.\n\nUse the edges to work out which directional or topological selector picks the edges you mean. Use the faces to work out the *shape* of the part without looking at it — `adjacent` is the half that carries it, because a plane at z=44 could be the top of a plate or the floor of a pocket and what it borders is what tells them apart. A cylindrical face bordering two planes is a through hole; bordering one is a blind one.\n\nThe returned edge@N and face@N ids describe one evaluation and must never appear in a script — there is no face selector in the DSL, so a face is something to read, and the way to act on one is the edges around it."
+        description = "List what a part is made of, as text rather than a picture: its visible edges with their centres, directions and lengths, and its faces with what each one is (plane, cylinder, cone, sphere, torus), its exact area, a point on it, its outward normal or axis, and the faces it touches. For a part in several named bodies each edge and face also says which `body` it is on.\n\nUse the edges to work out which directional or topological selector picks the edges you mean. Use the faces to work out the *shape* of the part without looking at it — `adjacent` is the half that carries it, because a plane at z=44 could be the top of a plate or the floor of a pocket and what it borders is what tells them apart. A cylindrical face bordering two planes is a through hole; bordering one is a blind one.\n\nThe returned edge@N and face@N ids describe one evaluation and must never appear in a script — there is no face selector in the DSL, so a face is something to read, and the way to act on one is the edges around it."
     )]
     async fn list_entities(
         &self,
@@ -960,7 +960,9 @@ The edge@N ids from list_entities describe one evaluation and are rejected in sc
 The kernel refuses rather than approximating; a refusal names the fix and lists the edges \
 it means, so read it and change the script. Every report is measured, never requested: \
 quote its numbers rather than the script's. The user may not see a tool's pictures: to \
-show them a view, put its `markdown` line in your reply.";
+show them a view, put its `markdown` line in your reply.\n\n\
+Which tag owns what a view shows: evaluate_part with regions: true. What is inside: \
+evaluate_part with a section. Where a tag is: tag_extents, in every evaluate_part reply.";
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Parcad {

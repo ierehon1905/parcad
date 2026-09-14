@@ -7,10 +7,11 @@ tool most people who would use this have used; the comparison is about the
 
 The deciding rule is the project's, not Fusion's:
 
-> **An op ships when both backends can be honest about it.** OCCT can build far
-> more than the implicit field can describe exactly. Anything where the two would
-> disagree about where the surface is gets refused, restricted to the case where
-> they agree, or left out — never approximated in one of them.
+> **An op ships when the kernel can be honest about it, and a closed form can
+> check it.** OCCT builds far more than it can be trusted with. Anything whose
+> result cannot be measured against something independent — a closed-form
+> volume, a containment box, a fitted curve's deviation — gets refused,
+> restricted to the case that can, or left out, never approximated.
 
 That rule is why this list is short rather than a wish list, and why some entries
 are marked *hold* with a reason instead of a plan.
@@ -34,10 +35,10 @@ are marked *hold* with a reason instead of a plan.
 | Offset face / Thicken | ✅ `.offset()` | whole-body offset, not per face |
 | Hole | ✅ `holeFor` `tapDrill` `clearance` `counterbore` | ISO metric coarse, M2–M20 |
 | Draft | ✅ `extrude(..., { draft })` | §1 |
-| Sweep | ✅ `sweep(profile, path, { bend, taper })`, `pipe(path, dia, { bend, taper })` | runs and bend arcs or a `{ helix }`; authored profile, helix and taper are B-rep only, an untapered round profile on runs and bends exact in both; no spline path |
-| Loft | ✅ `loft(sections, { smooth })` | B-rep only — the implicit backend refuses it by name; §4 |
+| Sweep | ✅ `sweep(profile, path, { bend, taper })`, `pipe(path, dia, { bend, taper })` | runs and bend arcs or a `{ helix }`; no spline path |
+| Loft | ✅ `loft(sections, { smooth })` | §4 |
 | Section view | ✅ viewport plane, `section` on `evaluate_part` | §8 |
-| Coil | ✅ `pipe({ helix }, dia)`, `sweep(profile, { helix })` | B-rep only; §5 |
+| Coil | ✅ `pipe({ helix }, dia)`, `sweep(profile, { helix })` | §5 |
 | **Thread** | ❌ | the helix exists, the thread cut does not close — §5 |
 | **Rib / Web** | ❌ | sugar over what exists — §6 |
 | **Split body / face** | ❌ | a different request from the section view; §8 |
@@ -52,16 +53,8 @@ are marked *hold* with a reason instead of a plan.
 
 `extrude(profile, height, { draft })` and `ngon(..., { draft })`; `revolve` does
 not take it. An angle the outline cannot carry is refused, naming the maximum.
-`drafted-boss` in `eval/cases/` holds both backends to the closed form for a
+`drafted-boss` in `eval/cases/` holds the kernel to the closed form for a
 square frustum (29282.008 mm³); `refuse-impossible-draft` holds the refusal.
-
-**The drafted field takes a plain `max`, and has to.** The undrafted one
-combines the wall and end-cap terms the way `cylinder` does,
-`hypot(max(a,0), max(b,0))`, which is exact *because the walls meet the ends at
-a right angle*. Under draft they do not, and that combination then **over**-reads
-outside an obtuse rim — an overestimate, the one error an implicit field must
-never make, because the octree prunes on it. The plain `max` underestimates
-there like every other corner.
 
 ## 2. Arcs in a section — the enabling change
 
@@ -77,7 +70,7 @@ max extends to it unchanged. `Edge::arc` is already bound, so the B-rep side is 
 different `Edge` constructor in the same loop. **Cost:** medium.
 
 A **torus primitive** was the cheap down payment and shipped:
-`torus(major, minor, { sweep })`, exact in both backends, an arc of it being a
+`torus(major, minor, { sweep })`, one periodic face, an arc of it being a
 pipe bend. `eval/cases/torus.json` checks volume *and* area against the closed
 form; `eval/cases/torus-gland.json` checks the O-ring groove that used to
 segfault in `UnifySameDomain` before OCCT 8.0.1 was vendored (docs/GOTCHAS.md).
@@ -92,7 +85,8 @@ profile type — which is the argument for it, made by a part rather than a tabl
 A path is made of straight runs and circular bends — what a tube bender does and
 what CAM posts — and that is what both forms take.
 
-`pipe(points, diameter, { bend })` is exact in both backends. Without a bend
+`pipe(points, diameter, { bend })` is a union of cylinders and partial tori,
+every one of them exact. Without a bend
 radius the corners are square and filled with a ball — inside the swept envelope,
 fine for clearance, not a shape anybody can make; with one, a bend that will not
 fit refuses, naming the largest radius the corner takes
@@ -103,13 +97,11 @@ the obvious one — two perpendicular runs overlap in a quarter of a Steinmetz
 solid, and the ball that fills the corner is three quarters redundant.
 
 `sweep(profile, path, { bend })` takes a convex outline along the same path
-model, in the second honesty class §4 defines: **B-rep only, refused by name in
-the implicit backend**, because an authored section along a bent path has no
-exact field the way a circle's does. `swept-channel` holds it against Pappus's
-closed form (9141.59 mm³, read 0.005% under by tessellation, the same effect
-`bent-tube` records). A *round* profile should stay a `pipe()`.
+model. `swept-channel` holds it against Pappus's closed form (9141.59 mm³,
+read 0.005% under by tessellation, the same effect `bent-tube` records). A
+*round* profile should stay a `pipe()`.
 
-**Since added:** a helical path and a linear taper, both B-rep only (§5).
+**Since added:** a helical path and a linear taper (§5).
 
 **Still out:** a spline path. There is no spline type in the graph to sweep
 along, which is the section-and-path authoring gap that also blocks the Fusion
@@ -122,12 +114,14 @@ sweep each appear in more of the owner's real documents than revolve, which we
 did build (DSL_GAPS, "What twenty-one real Fusion 360 designs actually needed")
 — and the way it was lifted matters more than the op:
 
-**The implicit backend refuses a loft by name; it does not approximate one.** An
-approximate distance field would be the worst outcome available: probes, wall
-thickness, renders and sections all run on the field, so a field that is quietly
-wrong means an agent confidently measuring a part that does not exist.
-`loft-frustum` asserts that refusal's wording alongside the B-rep's closed-form
-agreement (a 40→20 mm square prismatoid, 28000 mm³ exactly).
+**Refuse rather than approximate, even here.** While the implicit backend
+existed it refused a loft by name rather than fit a distance field to one — an
+approximate field would have meant probes and wall thickness confidently
+measuring a part that does not exist — and the cost was that a lofted part lost
+every field-backed capability at once. Both went with the field: probes, wall
+thickness, renders and sections run on the exact solid, so a loft is inspected
+like any other op. `loft-frustum` holds the closed form (a 40→20 mm square
+prismatoid, 28000 mm³ exactly).
 
 `loft(sections, { smooth })` takes two or more convex polygon outlines stacked
 along +Z. Sections must share a point count, because vertex pairing is by outline
@@ -140,16 +134,6 @@ bounding box by more than the slip tolerance is refused
 Sections stay convex for the extrude/revolve reason plus loft's own: on a
 re-entrant outline the kernel's vertex pairing is a silent guess.
 
-**The measured cost, which the owner should weigh.** A part containing a loft or
-an authored-profile sweep loses every field-backed capability at once:
-`probe_part`, `measure_wall_thickness`, raymarched renders and the section view —
-the whole of what an agent can do without looking. The freeform parts these ops
-exist for are exactly the parts an agent can no longer inspect. The plausible way
-back is a signed distance derived from the B-rep tessellation the worker already
-produces: the mesher reports the deflection it achieved, so a mesh-derived field
-carries a *known, reported* error bound rather than a silent one. Future work,
-deliberately not smuggled in here.
-
 ## 5. Coils — **DONE**; threads — still held, now by a measurement
 
 The hold was lifted by a model building a unicorn, which needed a spiral horn,
@@ -160,8 +144,7 @@ line in a cylinder's or cone's parameter space; its fitted 3D curve is
 *measured* against the exact helix (1e-8 mm on the corpus) and refused past
 1e-4 mm. Five eval cases hold volume to closed forms at about 1e-6 of
 BRepGProp, and the graph refuses a pitch that runs a turn into the next and a
-section that crosses the axis at either end. The implicit backend refuses all
-of it by name, with the capability cost §4 records.
+section that crosses the axis at either end.
 
 A **thread** is still not here, and the reason is no longer the op. A groove
 swept along a helix and cut from a cylinder on the same axis builds at one and
@@ -220,8 +203,7 @@ purpose, and `v-block.js`'s exact 90° vee is what it buys.
 Done, in this order: the hole standards table (which found the export-collision
 hazard on the way through), draft, torus, `pipe()`, the `UnifySameDomain`
 segfault fix by vendoring OCCT 8.0.1, then loft and sweep of an authored profile
-— B-rep only with a named implicit refusal, the hold lifted as the product
-decision recorded in §4 with the capability cost that came with it.
+— the hold lifted as the product decision recorded in §4.
 
 1. **Arcs in a section** (§2) — the general version of what the torus does for
    one shape: grooves, seats, radiused shoulders. `examples/hydraulic-line.js`'s

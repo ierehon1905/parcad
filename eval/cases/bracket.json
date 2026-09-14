@@ -2,16 +2,6 @@
   "name": "bracket",
   "script": "examples/bracket.js",
   "why": "The golden multi-feature part: blended union, four holes, and three independent edge treatments selected by provenance, spatial extrema and a corner vertex.",
-  "implicit": {
-    "refuses": {
-      "kind": "error",
-      "message_contains": [
-        "needs the B-rep backend",
-        "no logical edges to select"
-      ]
-    },
-    "depth": 6
-  },
   "brep": {
     "size": [
       80.0,

@@ -227,7 +227,6 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | you want to change | file |
 |---|---|
 | the graph schema / a new op | `crates/parcad-core/src/graph.rs` |
-| how an op becomes an SDF | `crates/parcad-core/src/sdf.rs` |
 | how an op becomes a B-rep | `crates/parcad-occt/src/backend.rs` |
 | crash handling, timeouts, breadcrumbs, the worker pool | `crates/parcad-occt/src/host.rs` |
 | what a worker keeps between requests | `backend::BuildCache` and the serve loop in `crates/parcad-occt/src/bin/worker.rs` |
@@ -258,7 +257,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | which ops the palette offers, and their signatures | `app/src/ops.ts` |
 | what pressing one writes, and where the caret lands | `app/src/snippet.ts` |
 | how the palette is drawn | `app/src/ui/op-palette.tsx` |
-| the kernel and section controls | `app/src/ui/view-tools.tsx` — on the viewport, not the titlebar |
+| the section controls | `app/src/ui/view-tools.tsx` — on the viewport, not the titlebar |
 | any control's tooltip | `tip()` from `app/src/ui/tooltip.tsx`, spread onto the element |
 | how it looks | `app/src/viewport.ts`, `app/src/outline.ts` |
 | colours, type, the design tokens | `@theme` in `app/src/style.css` — never a literal in a component |
@@ -278,10 +277,10 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | which server that harness is pointed at | `field/field.toml` — the only file under `field/` that names parcad |
 | what "SOUND" is still allowed to mean | `field/fixtures/expected.toml`, gated by `field/selftest.py` |
 
-A new op touches `graph.rs` (variant + `children_of`), `sdf.rs`, `measure.rs`
-(its bounds), `backend.rs`, `dsl.ts`, plus a case in `eval/cases/`. Missing
+A new op touches `graph.rs` (variant + `children_of`), `measure.rs` (its
+bounds), `backend.rs`, `dsl.ts`, plus a case in `eval/cases/`. Missing
 `children_of` is silent — the node just never gets evaluated. Rust will find the
-other three for you: every one of those matches is exhaustive.
+other two for you: every one of those matches is exhaustive.
 
 **The frontend is Preact, and two things in it are deliberately not.** Every
 panel, button and tooltip is a component under `app/src/ui/`, reading signals
@@ -299,9 +298,10 @@ not a refactor.
 
 **A control that cannot do anything is deleted, not dimmed.** The titlebar
 carried a mesh-detail slider for a long time, disabled under B-rep. Reading the
-host settled it: `Backend::is_exact` covers *both* kernels the window offers, so
-the slider moved a number nothing read, in either mode. Dimming it under one
-kernel had disguised a defect as a mode. See `DEPTH` in `app/src/state.ts`.
+host settled it: the slider moved a number nothing read, in either of the two
+kernels the window then offered. Dimming it under one kernel had disguised a
+defect as a mode. The kernel toggle itself went the same way when the second
+kernel did.
 
 **The selector grammar is parsed twice on purpose.** The kernel must own a
 parser, because a graph can arrive from anywhere and the editor is never the

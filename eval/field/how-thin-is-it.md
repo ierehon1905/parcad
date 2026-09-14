@@ -1,10 +1,10 @@
 ---
 tool: measure_wall_thickness
 reach: measure_wall_thickness
-verdict: 6\.3
-trap: 19\.1
-quote: 6\.3
-why: The thinnest wall names no variable in the script, and `thickness = 19.1` is sitting one line away from being the wrong answer. The part is chamfered; the sweep now measures the exact solid with the chamfer in it, so the reply carries the number and a `note` on how a sampled ray minimum can be read, and no caveat about a treatment left out.
+verdict: 4\.8
+trap: 19\.1|6\.3
+quote: 4\.8
+why: The thinnest wall names no variable in the script, and `thickness = 19.1` is sitting one line away from being the wrong answer. The flange's four bolt holes are countersunk on the back face by a 1.5 mm chamfer, so the ligament between a hole and the outside diameter thins from 6.3 mm — (152.4 − 120.7) / 2 − 19.1 / 2 — to 76.2 − (60.35 + 9.55 + 1.5) = 4.80 at the back face, approached where the countersink's rim meets it; the sweep on the exact solid reports 4.81 there. The field-sampled sweep dropped the chamfer and reported the 6.3 with a caveat that the true minimum was at or below it; that value is the second trap now.
 ---
 Use the parcad MCP tools. The part is flange.js in the parcad project folder.
 

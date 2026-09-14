@@ -1,7 +1,7 @@
 //! What a case asserts, and how an observation is judged against it.
 //!
-//! One `Expect` struct serves both backends. Every field is optional, so a case
-//! asserts only what it is actually about: the shell case cares about volume,
+//! Every field of `Expect` is optional, so a case asserts only what it is
+//! actually about: the shell case cares about volume,
 //! the bracket case cares about topology counts, a refusal case cares about
 //! neither. Fields left unset are recorded by `--update` and never checked.
 
@@ -9,21 +9,16 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 /// How far an observation may sit from the recorded value before it is a
-/// failure.
-///
-/// Two defaults exist because the two backends are not equally precise, and
-/// pretending otherwise would either make the exact backend untestable or make
-/// the implicit one permanently red. `Expect::size_mm` on the exact path is a
-/// real dimension; on the implicit path it is dual contouring at the chosen
-/// depth, and its error is documented behaviour rather than a defect.
+/// failure. `size_mm` is a real dimension: the kernel's answers are exact
+/// surfaces, and the default is a hundredth of a millimetre.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tolerance {
     /// Absolute, in mm, applied per axis to `size`.
     pub size_mm: f64,
     /// Relative, in percent, applied to volume and area.
     pub volume_pct: f64,
-    /// Relative, in percent. Triangle counts move with the OCCT version and the
-    /// meshing depth, so they are a drift signal, not a contract.
+    /// Relative, in percent. Triangle counts move with the OCCT version, so
+    /// they are a drift signal, not a contract.
     pub triangles_pct: f64,
     /// Relative, in percent, for `stands_on_mm2`; `volume_pct` when absent. A
     /// part resting on a curve or a saddle stands on whichever triangles the
@@ -33,21 +28,10 @@ pub struct Tolerance {
 }
 
 impl Tolerance {
-    /// For the B-rep backend, whose answers are exact surfaces.
     pub fn exact() -> Self {
         Self {
             size_mm: 0.01,
             volume_pct: 0.05,
-            triangles_pct: 5.0,
-            stands_on_pct: None,
-        }
-    }
-
-    /// For the implicit backend, whose answers are a contoured field.
-    pub fn approximate() -> Self {
-        Self {
-            size_mm: 0.05,
-            volume_pct: 1.0,
             triangles_pct: 5.0,
             stands_on_pct: None,
         }
@@ -66,7 +50,7 @@ pub enum RefusalKind {
     Crashed,
     TimedOut,
     Host,
-    /// The implicit backend, or the graph layer, returned an `anyhow` error.
+    /// The graph layer refused the document before the kernel saw it.
     Error,
 }
 
@@ -87,10 +71,6 @@ pub struct Expect {
     /// Set when this case must fail. Mutually exclusive with the measurements.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refuses: Option<Refusal>,
-
-    /// Meshing depth for the implicit backend; ignored by the exact one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub depth: Option<u8>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size: Option<[f64; 3]>,
@@ -119,8 +99,8 @@ pub struct Expect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watertight: Option<bool>,
 
-    /// B-rep only: OCCT's own face and edge counts, and the number of unique
-    /// edge curves left after seam filtering.
+    /// OCCT's own face and edge counts, and the number of unique edge curves
+    /// left after seam filtering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub faces: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -129,7 +109,8 @@ pub struct Expect {
     pub curves: Option<usize>,
 
     /// Where each named feature sits, as `[min_x, min_y, min_z, max_x, max_y,
-    /// max_z]` per tag.
+    /// max_z]` per tag: the exact bounds of the faces the kernel's lineage
+    /// gives that tag, the same numbers `tag_extents` carries on the wire.
     ///
     /// The check nothing else here makes. Volume, area and topology are all
     /// invariant under moving a feature to the wrong end of the part, and a
@@ -142,8 +123,8 @@ pub struct Expect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<BTreeMap<String, [f64; 6]>>,
 
-    /// Each named body of a part that returns several, measured alone. B-rep
-    /// only. Recorded whenever the part has bodies, because a body's own
+    /// Each named body of a part that returns several, measured alone.
+    /// Recorded whenever the part has bodies, because a body's own
     /// `pieces` is the one number that tells an accidental split from a
     /// second body that was meant.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -154,7 +135,7 @@ pub struct Expect {
     pub between_bodies: Option<BTreeMap<String, BetweenExpect>>,
 
     /// Closed forms measured on the exact solid: rays, points and a thickness
-    /// sweep. B-rep only, opt-in per case, and never written by `--update` —
+    /// sweep. Opt-in per case, and never written by `--update` —
     /// every number here is derived by hand and the case's `why` says how, so
     /// a drift is a defect rather than a value to re-record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -388,8 +369,9 @@ pub struct Case {
     /// regression or an intended change.
     pub why: String,
 
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub implicit: Option<Expect>,
+    /// What the kernel must measure. Keyed `brep` in the file, from the years
+    /// a case carried an `implicit` half beside it; a case without one asserts
+    /// nothing about the part.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub brep: Option<Expect>,
 }
@@ -412,7 +394,7 @@ pub struct Observed {
     pub tags: BTreeMap<String, [f64; 6]>,
     pub unlocated_tags: Vec<String>,
     /// Each named body alone, and each pair of them; both empty for a
-    /// one-solid part and for the implicit backend.
+    /// one-solid part.
     pub named_bodies: BTreeMap<String, BodyExpect>,
     pub between_bodies: BTreeMap<String, BetweenExpect>,
 }
@@ -625,7 +607,7 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
         match got {
             None => out.push(Mismatch {
                 field: field.into(),
-                detail: format!("expected {want}, but this backend reports no topology"),
+                detail: format!("expected {want}, but no topology was reported"),
             }),
             Some(got) if got != want => out.push(Mismatch {
                 field: field.into(),
@@ -658,8 +640,8 @@ pub fn check_refusal(refusal: &Refusal, kind: RefusalKind, message: &str) -> Vec
     out
 }
 
-/// Overwrite the measurements with what was observed, leaving `why`, `depth`
-/// and any explicit tolerance alone.
+/// Overwrite the measurements with what was observed, leaving `why` and any
+/// explicit tolerance alone.
 pub fn record(expect: &mut Expect, observed: &Observed) {
     expect.size = Some(observed.size.map(round3));
     expect.volume_mm3 = Some(round3(observed.volume_mm3));

@@ -1,17 +1,7 @@
 {
   "name": "tapered-strand",
   "script": "eval/scripts/tapered-strand.js",
-  "why": "A tapered pipe against the frustum formula along a bent path: a 6 mm tube scaled to 0.25 along 30 mm of run, a 10 mm quarter bend and 30 mm of run is pi * 9 * 75.708 * (1 + 0.25 + 0.0625) / 3 = 936.509 mm3, which holds because the scale is linear in length along the whole spine and the section stays centred on it. The exact B-rep reads 936.5089 through BRepGProp. A law that followed each edge's own parameter would have read differently, since the arc and runs differ in length. The implicit half refuses by name; an untapered pipe stays exact there.",
-  "implicit": {
-    "refuses": {
-      "kind": "error",
-      "message_contains": [
-        "no exact distance field",
-        "tapered pipe",
-        "B-rep backend"
-      ]
-    }
-  },
+  "why": "A tapered pipe against the frustum formula along a bent path: a 6 mm tube scaled to 0.25 along 30 mm of run, a 10 mm quarter bend and 30 mm of run is pi * 9 * 75.708 * (1 + 0.25 + 0.0625) / 3 = 936.509 mm3, which holds because the scale is linear in length along the whole spine and the section stays centred on it. The exact B-rep reads 936.5089 through BRepGProp. A law that followed each edge's own parameter would have read differently, since the arc and runs differ in length.",
   "brep": {
     "size": [
       41.645,

@@ -1,23 +1,7 @@
 {
   "name": "drafted-boss",
   "script": "eval/scripts/drafted-boss.js",
-  "why": "Draft, against the closed form for a square frustum: 29282.008 mm3. The lofted B-rep and the tilted implicit field are built by unrelated means and must land on the same number.",
-  "implicit": {
-    "depth": 7,
-    "size": [
-      40.0,
-      40.0,
-      20.0
-    ],
-    "volume_mm3": 29282.003,
-    "area_mm2": 6032.13,
-    "triangles": 12726,
-    "bodies": 1,
-    "voids": 0,
-    "stands_on_mm2": 1601.255,
-    "stands_on_patches": 1,
-    "watertight": true
-  },
+  "why": "Draft, against the closed form for a square frustum: 29282.008 mm3. OCCT lofts between the outline and the inset the graph computes, and must land on it.",
   "brep": {
     "size": [
       40.0,

@@ -1,9 +1,9 @@
 //! The intent graph: what the user *asked for*, independent of any geometry kernel.
 //!
 //! Nothing in this module knows how a shape is actually computed. A script builds
-//! one of these, and a backend (see [`crate::sdf`]) turns it into geometry. That
-//! separation is what lets an exact B-rep backend land later without invalidating
-//! a single script.
+//! one of these, and a kernel (the `parcad-occt` crate) turns it into geometry.
+//! That separation is what let the exact B-rep kernel land, and later become
+//! the only one, without invalidating a single script.
 
 use crate::selectors::{EdgeExpectation, EdgeSelector, VertexSelector};
 use serde::{Deserialize, Serialize};
@@ -352,8 +352,8 @@ impl From<V3> for nalgebra::Vector3<f64> {
 }
 
 /// An operation. Primitives are centred on the origin; place them with
-/// [`Op::Translate`]. Centred primitives keep the distance fields exact and make
-/// symmetry the default rather than something you have to ask for.
+/// [`Op::Translate`]. Centred primitives make symmetry the default rather than
+/// something you have to ask for.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
@@ -382,11 +382,10 @@ pub enum Op {
     ///
     /// - **radius >= 0.** A profile crossing the axis sweeps through itself, and
     ///   what comes back is neither the shape asked for nor an error.
-    /// - **convex.** A convex section has an exact distance field (the max of
-    ///   its half-planes inside, the nearest-segment distance outside); a
-    ///   re-entrant one does not, and approximating it would put the two
-    ///   backends quietly out of step. A stepped profile is authored as a union
-    ///   of convex revolves, which is also how it is turned.
+    /// - **convex.** A re-entrant section is refused rather than built: a
+    ///   stepped profile is authored as a union of convex revolves, which is
+    ///   also how it is turned, and keeps every section one the checks can
+    ///   reason about.
     Revolve {
         /// `[radius, z]` pairs, anticlockwise, first point not repeated.
         profile: Vec<[f64; 2]>,
@@ -444,14 +443,10 @@ pub enum Op {
 
     /// Skin a solid through two or more convex outlines stacked along +Z.
     ///
-    /// This is the op that was held while the implicit backend had no honest
-    /// answer for it, and the resolution is not an approximate field: a loft
-    /// between two arbitrary outlines has no closed-form distance, so the
-    /// implicit evaluator *refuses it by name* and points at the B-rep
-    /// backend, which builds it exactly. A part containing a loft therefore
-    /// loses every capability that runs on the distance field — probes, wall
-    /// thickness, raymarched renders and sections — and that trade is the
-    /// documented cost of the op, not a bug.
+    /// This is the op that was held while a second, implicit kernel had no
+    /// honest answer for it — a loft between two arbitrary outlines has no
+    /// closed-form distance, and that kernel refused it by name rather than
+    /// approximate. The exact kernel builds it, and is the only one now.
     ///
     /// Sections are convex for the same reason extrude and revolve sections
     /// are, plus one of loft's own: OCCT matches section vertices to build the
@@ -476,11 +471,9 @@ pub enum Op {
     /// circular bends — the same path a `pipe` takes, with an authored
     /// section in place of the circle.
     ///
-    /// Like [`Op::Loft`] this is B-rep only, and refused by name in the
-    /// implicit evaluator: a swept surface along a bent path has no exact
-    /// distance field. The path model is deliberately the one a bender or a
-    /// router can follow — runs and tangent arcs — rather than a spline,
-    /// whose distance has no closed form even for the B-rep's checks.
+    /// The path model is deliberately the one a bender or a router can
+    /// follow — runs and tangent arcs — rather than a spline, whose reach the
+    /// kernel's checks could not bound in closed form.
     ///
     /// The spine is either that path or a [`Helix`] — a spring, a coil, a
     /// spiral horn — and the section is either an authored outline or a circle
@@ -548,9 +541,8 @@ pub enum Op {
 
     /// Reflect in the plane through the origin whose normal is `normal`.
     ///
-    /// A reflection is an isometry, so unlike [`Op::Scale`] it costs nothing in
-    /// either backend: the implicit field is exact through it, and the B-rep
-    /// keeps every surface type. It is a separate op because it cannot be sugar
+    /// A reflection is an isometry, so unlike [`Op::Scale`] it costs nothing:
+    /// the B-rep keeps every surface type. It is a separate op because it cannot be sugar
     /// over a scale of -1 — non-uniform scale is refused, correctly, and a
     /// uniform -1 is a point inversion rather than a reflection.
     ///
@@ -585,9 +577,7 @@ pub enum Op {
 
     /// Round the B-rep edges matched by `selector`.
     ///
-    /// This is deliberately an exact-backend operation. A distance field has no
-    /// B-rep edges to select, so the implicit evaluator reports that distinction
-    /// rather than pretending to round an arbitrary run of mesh vertices.
+    /// Selects logical edges of the B-rep, never mesh vertices.
     Fillet {
         child: NodeId,
         radius: f64,
@@ -901,11 +891,10 @@ impl Op {
     /// Check a [`Op::Revolve`] profile, and report the signed area.
     ///
     /// The sign is the winding: positive is anticlockwise in the (radius, z)
-    /// plane. Both backends call this before building anything, because every
-    /// rejected case here is one that produces a *plausible* solid rather than
-    /// an error — a profile crossing the axis sweeps through itself, and a
-    /// re-entrant one meshes fine while the two backends disagree about where
-    /// its surface is.
+    /// plane. Called before anything is built, because every rejected case
+    /// here is one that produces a *plausible* solid rather than an error — a
+    /// profile crossing the axis sweeps through itself, and a re-entrant one
+    /// builds a solid whose vertex pairing is a silent guess.
     pub fn validate_profile(profile: &[[f64; 2]]) -> anyhow::Result<f64> {
         for (i, [r, _]) in profile.iter().enumerate() {
             if *r < 0.0 {
@@ -928,9 +917,8 @@ impl Op {
     /// Check a [`Op::Torus`]'s radii.
     ///
     /// `minor >= major` is the spindle torus, which passes through its own axis
-    /// and encloses a lens-shaped double region. OCCT builds one, the implicit
-    /// field describes the other, and neither is what anybody drawing an O-ring
-    /// groove meant — so it is refused rather than picked between.
+    /// and encloses a lens-shaped double region, which is not what anybody
+    /// drawing an O-ring groove meant — so it is refused.
     pub fn validate_torus(major: f64, minor: f64, sweep: f64) -> anyhow::Result<()> {
         if !major.is_finite() || !minor.is_finite() || major <= 0.0 || minor <= 0.0 {
             anyhow::bail!("a torus needs positive major and minor radii; got {major} and {minor}");
@@ -950,10 +938,8 @@ impl Op {
 
     /// Check an [`Op::Loft`]'s sections.
     ///
-    /// Shared by both backends even though only one builds the shape: the
-    /// implicit evaluator refuses a loft *after* validation, so an authoring
-    /// mistake reads as the mistake it is rather than as "use the other
-    /// backend".
+    /// Validated before the kernel sees it, so an authoring mistake reads as
+    /// the mistake it is rather than as a kernel refusal.
     pub fn validate_loft(sections: &[LoftSection]) -> anyhow::Result<()> {
         if sections.len() < 2 {
             anyhow::bail!(
@@ -1007,7 +993,7 @@ impl Op {
     }
 
     /// Check every field of an [`Op::Sweep`] together and resolve its section
-    /// and spine — the one entry point both backends and the bounds call, so
+    /// and spine — the one entry point the kernel and the bounds call, so
     /// they refuse the same sweeps with the same words.
     pub fn validate_sweep<'a>(
         profile: &'a [[f64; 2]],
@@ -1263,9 +1249,8 @@ impl Op {
 
     /// The top outline of a drafted extrusion, and how far it moved.
     ///
-    /// Both backends call this and neither computes it: the implicit field only
-    /// needs the tilt, the B-rep needs the polygon, and if they disagreed about
-    /// when a draft collapses the two would refuse different parts.
+    /// Computed here rather than in the kernel, so the refusal for a draft that
+    /// collapses the outline is decided once, from the graph.
     ///
     /// The inset is a half-plane intersection rather than a per-vertex offset,
     /// because on a convex outline that is the definition — and it degrades the
@@ -1350,7 +1335,7 @@ impl Op {
             if cross.abs() > 1e-12 {
                 match turn {
                     Some(previous) if previous * cross < 0.0 => anyhow::bail!(
-                        "{} profile is not convex at point {}. A re-entrant section has no exact distance field, so it is refused rather than approximated; {}",
+                        "{} profile is not convex at point {}. A re-entrant section is refused rather than approximated; {}",
                         kind.op(),
                         (i + 1) % n,
                         kind.workaround()

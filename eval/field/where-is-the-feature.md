@@ -2,7 +2,7 @@
 tool: evaluate_part.tag_extents
 reach: evaluate_part
 verdict: HUB
-quote: 12\.[34]
+quote: 9\.5
 why: |
   The failure class docs/PERCEPTION.md §3 was built for: a part whose every
   other measurement is right and whose *feature* is in the wrong place. Nothing
@@ -11,15 +11,13 @@ why: |
   so a model asked to locate one had to reason from the script or squint at a
   render, and PERCEPTION records it doing both, confidently, wrong.
 
-  The flange is the cheapest part to ask it on, because the script and the built
-  solid disagree in a way that separates the two routes. `hub` is authored as a
-  15.85 mm cylinder placed at `hubTop / 2`, so its z range *in the source* is
-  0 to 15.85 — it appears to reach the flange's mid-plane exactly. What the
-  kernel built is different: a 3 mm blend at the hub root replaced the bottom of
-  that cylinder, and the hub's own surface does not start until z = 12.38.
-
-  So the verdict is HUB either way and is not the interesting column. `quote` is:
-  a trial that measured says 12.3-something, and a trial that derived says 0.
+  The script places the hub's cylinder from z = 0, so a derivation says 0.
+  What the kernel built begins at the plate's top face, z = 19.1 / 2 = 9.55:
+  the 3 mm blend replaced the bottom of the hub's wall, and the blend's own
+  faces carry the hub's name because the hub's wall was one of the two faces
+  their seam lay between. A tag's extent is the extent of the faces that carry
+  it, so `hub` reads z 9.55..15.85 — the blend's foot to the hub's top. The
+  field-sampled extent, which could not see the blend, used to put it at 12.4.
 ---
 Use the parcad MCP tools. The part is flange.js in the parcad project folder.
 

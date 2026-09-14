@@ -41,8 +41,8 @@ fn main() {
                 s.edges.len() - straight,
                 s.edges.iter().map(|e| e.points.len()).sum::<usize>()
             );
-            // Sanity: the numbers should match what the implicit backend
-            // reports for the same graph, or one of the two is wrong.
+            // Sanity: the mesh's extent should match the reported bounds, or
+            // one of the two is wrong.
             let mut lo = [f32::MAX; 3];
             let mut hi = [f32::MIN; 3];
             for p in s.positions.chunks_exact(3) {

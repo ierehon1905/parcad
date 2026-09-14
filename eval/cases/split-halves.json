@@ -2,16 +2,6 @@
   "name": "split-halves",
   "script": "eval/scripts/split-halves.js",
   "why": "A part printed in two halves — the shape DSL_GAPS §9 said needed a flag and two evaluations. Each half is 23800 minus a 735.419 mm³ circular segment of the bore, 23064.581 mm³ by the closed form in the script, the two sum to the one-piece block less the kerf, and the clearance between them is the 0.5 mm kerf exactly. Eight faces each: five of the box, the bore's arc, and the cut plane in two strips because the bore's chord parts it. The right half is the left mirrored, so a mirror that stopped reflecting would put the two on top of each other and read as interfering.",
-  "implicit": {
-    "refuses": {
-      "kind": "error",
-      "message_contains": [
-        "returns 2 bodies",
-        "needs the B-rep backend"
-      ]
-    },
-    "depth": 6
-  },
   "brep": {
     "size": [
       60.0,

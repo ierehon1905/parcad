@@ -498,6 +498,12 @@ pub struct EdgeEntity {
 /// model with no vision at all. `adjacent` is the half that carries the part's
 /// shape rather than its dimensions — "a plane at z=44" does not distinguish
 /// the top of a plate from the floor of a pocket, and what it touches does.
+///
+/// Deliberately without the face's tags, which the wire carries for region
+/// maps. Listed here they were measured to divert a model: asked which tags
+/// a view cannot see, or where a tagged feature begins, every trial of a
+/// round read the answer off face centroids in this list instead of the
+/// region map or `tag_extents`, and read it wrong (docs/PERCEPTION.md §9).
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct FaceEntity {
     /// `face@N`, spelled like `edge@N` and just as ephemeral: valid for this
@@ -517,11 +523,6 @@ pub struct FaceEntity {
     pub radius_mm: Option<f64>,
     /// The `face@N` ids this face shares an edge with.
     pub adjacent: Vec<String>,
-    /// The tags this face carries, innermost first — the node that made it,
-    /// then every tagged node it was carried through. What `on:` and
-    /// `between:` select by, and what a region map colours by.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub tags: Vec<String>,
     /// The named body this face is on, for a part that returns several.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
@@ -595,7 +596,6 @@ fn face_entity(index: usize, face: &parcad_occt::protocol::FaceSummary) -> FaceE
         direction: face.surface.direction.map(round_dir),
         radius_mm: face.surface.radius.map(round_mm),
         adjacent: face.adjacent.iter().map(|n| format!("face@{n}")).collect(),
-        tags: face.tags.clone(),
         body: face.body.clone(),
     }
 }

@@ -438,9 +438,7 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         .with_context(|| format!("creating {}", stl_path.display()))?;
     tess.write_stl(&mut f)?;
 
-    // Views from the mesh. The rasteriser shares its framing, shading and
-    // section handling with the raymarched path, so a B-rep part and an
-    // implicit one of the same shape make the same picture.
+    // Views from the mesh, by the same rasteriser the agent's renders use.
     let mut triangle_faces = vec![render::NO_FACE; s.indices.len() / 3];
     for run in &s.face_runs {
         for t in run.start..run.start + run.count {

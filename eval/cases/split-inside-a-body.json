@@ -2,16 +2,6 @@
   "name": "split-inside-a-body",
   "script": "eval/scripts/split-inside-a-body.js",
   "why": "The accidental split the old bodies count could not separate from an intended second body: `split` is one named body of 800 mm³ in two pieces, so its own pieces reads 2 while `whole` reads 1, and the part-level count is 3 free-standing pieces for a part that names two bodies. The 20 mm clearance is from the cube's face at x = 5 to the nearer bar's at x = 25.",
-  "implicit": {
-    "refuses": {
-      "kind": "error",
-      "message_contains": [
-        "returns 2 bodies",
-        "needs the B-rep backend"
-      ]
-    },
-    "depth": 6
-  },
   "brep": {
     "size": [
       40.0,

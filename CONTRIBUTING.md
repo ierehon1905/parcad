@@ -60,9 +60,8 @@ the fix.**
 
 ## Traps
 
-- **A new op touches six places**: `graph.rs` (variant *and* `children_of`),
-  `sdf.rs`, `measure.rs`, `backend.rs`, `app/src/dsl.ts`, and a case in
-  `eval/cases/`. A missing `children_of` arm is silent — the node just never gets
+- **A new op touches five places**: `graph.rs` (variant *and* `children_of`),
+  `measure.rs`, `backend.rs`, `app/src/dsl.ts`, and a case in `eval/cases/`. A missing `children_of` arm is silent — the node just never gets
   evaluated. Exhaustive matches find the rest.
 - **The selector grammar is parsed twice on purpose**, in `selectors.rs` and
   `app/src/selectors.ts`. Neither is the specification; `eval/selectors.json` is,

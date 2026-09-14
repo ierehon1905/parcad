@@ -1,7 +1,7 @@
 {
   "name": "refuse-all-smooth",
   "script": "eval/scripts/refuse-all-smooth.js",
-  "why": "When every edge a selector matched is tangent-continuous there is nothing to round; the refusal must say so, name the fix, and list the edges it looked at, shortest first \u2014 the listing every treatment failure now carries.",
+  "why": "When every edge a selector matched is tangent-continuous there is nothing to round; the refusal must say so, name the fix, and list the edges it looked at, shortest first — the listing every treatment failure now carries.",
   "brep": {
     "refuses": {
       "kind": "rejected",

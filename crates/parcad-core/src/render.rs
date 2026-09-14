@@ -1,17 +1,14 @@
 //! Rendering — the visual half of perception.
 //!
-//! Renders come straight off the distance function rather than off the mesh, so
-//! what an agent sees is the actual shape, not the mesher's approximation of it.
+//! Renders come off the exact kernel's tessellation, within its deflection of
+//! the surface it measured, drawn by a small rasteriser with a depth buffer.
 //! Shading uses ambient occlusion, which is not decoration: creases and pockets
 //! are close to invisible under flat lighting.
 
 use crate::measure::Aabb;
-use crate::view::{Axis, Cut, Section, View};
+use crate::occlusion::{blur_ssao, compute_ssao};
+use crate::view::{Cut, Section, View};
 use anyhow::Result;
-use fidget::context::Tree;
-use fidget::jit::JitShape;
-use fidget::raster::{effects, voxel};
-use fidget::render::{CancelToken, ThreadPool};
 
 /// An RGB image, row-major from the top-left.
 pub struct Rgb {
@@ -205,13 +202,82 @@ impl RenderOptions {
     }
 }
 
+/// One pixel of a [`GeometryBuffer`]: the surface normal drawn there and how
+/// far toward the viewer it sits, in voxel units. Depth 0 is empty; the
+/// fractional part is always zero.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct GeometryPixel {
+    pub normal: [f32; 3],
+    pub depth: u32,
+}
+
+/// A square image of [`GeometryPixel`]s, row-major, indexed `(y, x)`.
+pub struct DepthImage {
+    size: u32,
+    depth_samples: u32,
+    pixels: Vec<GeometryPixel>,
+}
+
+impl DepthImage {
+    pub fn new(size: u32, depth_samples: u32) -> Self {
+        Self {
+            size,
+            depth_samples,
+            pixels: vec![GeometryPixel::default(); (size * size) as usize],
+        }
+    }
+
+    pub fn width(&self) -> usize {
+        self.size as usize
+    }
+
+    pub fn height(&self) -> usize {
+        self.size as usize
+    }
+
+    pub fn depth(&self) -> usize {
+        self.depth_samples as usize
+    }
+}
+
+impl std::ops::Index<(usize, usize)> for DepthImage {
+    type Output = GeometryPixel;
+    fn index(&self, (y, x): (usize, usize)) -> &GeometryPixel {
+        &self.pixels[y * self.size as usize + x]
+    }
+}
+
+impl std::ops::IndexMut<(usize, usize)> for DepthImage {
+    fn index_mut(&mut self, (y, x): (usize, usize)) -> &mut GeometryPixel {
+        &mut self.pixels[y * self.size as usize + x]
+    }
+}
+
+/// Screen (pixel x, pixel y, voxel depth) to model millimetres, for a square
+/// image `size` across and `depth` deep framed by `view_transform`.
+///
+/// The image's centre maps to the world origin — a pixel above the geometric
+/// centre, since rows count downward — and the world cube spans two units
+/// across the smallest dimension, with y flipped. Kept to the letter of the
+/// framing renders had before the rasteriser was the only renderer, so a
+/// picture taken then lands on the same pixels now.
+fn screen_to_model(bounds: Aabb, view: View, size: u32, depth: u32) -> nalgebra::Matrix4<f32> {
+    let m = size.min(depth) as f32;
+    let scale = 2.0 / m;
+    let centre = nalgebra::Vector3::new(size as f32 / 2.0, size as f32 / 2.0 - 1.0, depth as f32 / 2.0);
+    let mut screen_to_world = nalgebra::Matrix4::<f32>::identity();
+    screen_to_world.append_translation_mut(&(-centre));
+    screen_to_world.append_nonuniform_scaling_mut(&nalgebra::Vector3::new(scale, -scale, scale));
+    crate::view::view_transform(bounds, view) * screen_to_world
+}
+
 /// Depth and normal at every pixel, plus the transform back to model space.
 ///
 /// Keeping this around rather than going straight to colour is what makes the
 /// rest of perception possible: the depth buffer turns any pixel into a point on
 /// the part, which is how a render gets tied back to the graph.
 pub struct GeometryBuffer {
-    pub image: voxel::Image,
+    pub image: DepthImage,
     /// Screen (pixel x, pixel y, voxel depth) to model millimetres.
     pub screen_to_model: nalgebra::Matrix4<f32>,
     pub size: u32,
@@ -294,102 +360,7 @@ impl GeometryBuffer {
     }
 }
 
-/// Evaluate the shape into a depth/normal buffer for one view.
-pub fn geometry(
-    tree: &Tree,
-    bounds: Aabb,
-    view: View,
-    opts: &RenderOptions,
-) -> Result<GeometryBuffer> {
-    // A section on this side is an intersection with a half-space, which is the
-    // one clip a distance field does exactly and for free. The cut face then
-    // arrives as ordinary surface and needs no capping — the field has no inside
-    // to leak through.
-    let cut_plane = opts.section.map(|s| s.resolve(bounds, view));
-    let tree = match cut_plane {
-        Some(cut) => tree.clone().max(half_space(cut)),
-        None => tree.clone(),
-    };
-
-    let shape = JitShape::from(tree);
-    let bound_shape = shape.try_into().map_err(|_| {
-        anyhow::anyhow!("shape has unbound variables; every parameter must be resolved before rendering")
-    })?;
-
-    let ss = opts.ss();
-    let size = opts.size * ss;
-    let depth_samples = opts.depth_samples * ss;
-
-    let cfg = voxel::RenderConfig {
-        image_size: voxel::RenderSize::new(size, size, depth_samples),
-        world_to_model: crate::view::view_transform(bounds, view),
-        tile_sizes: None,
-        threads: Some(&ThreadPool::Global),
-        cancel: CancelToken::new(),
-    };
-
-    let image = cfg
-        .run(bound_shape)
-        .ok_or_else(|| anyhow::anyhow!("render of the {} view was cancelled", view.name()))?;
-
-    // Dual contouring leaves occasional back-facing normals at sharp features;
-    // smoothing them stops the shading from speckling.
-    let image = effects::denoise_normals(&image, None);
-
-    let mut buf = GeometryBuffer {
-        image,
-        screen_to_model: cfg.mat(),
-        size,
-        depth_samples,
-        cut_plane,
-        cut: Vec::new(),
-        face: Vec::new(),
-    };
-    // A cut face is only ever *seen* when the material went toward the viewer.
-    // Cut the far half away instead and the plane is behind what survives; cut
-    // on a plane the view runs along and it is edge-on, a sliver a pixel wide
-    // that no one can read. Both are left unmarked, which is also what the
-    // rasteriser does — the two paths have to agree about this or a caller gets
-    // a different picture depending on which backend drew it.
-    let faces_viewer = cut_plane
-        .is_some_and(|cut| cut.normal().dot(&view.rotation().column(2).xyz()) > 1e-9);
-    if let (Some(cut), true) = (cut_plane, faces_viewer) {
-        // Which pixels are cut face is read back off the depth buffer rather
-        // than tracked through the render: a point is on the cut exactly when it
-        // lies on the plane, and the tolerance is one voxel of depth, since that
-        // is the only thing quantising it.
-        let tol = 1.5 * buf.screen_to_model.column(2).norm() as f64;
-        buf.cut = (0..size * size)
-            .map(|i| {
-                let (x, y) = (i % size, i / size);
-                buf.model_point(x, y).is_some_and(|p| {
-                    cut.removed_depth([p[0] as f64, p[1] as f64, p[2] as f64]).abs() <= tol
-                })
-            })
-            .collect();
-    }
-    Ok(buf)
-}
-
-/// The half-space a [`Cut`] keeps, as a distance field.
-fn half_space(cut: Cut) -> Tree {
-    let axis = match cut.axis {
-        Axis::X => Tree::x(),
-        Axis::Y => Tree::y(),
-        Axis::Z => Tree::z(),
-    };
-    (axis - cut.at_mm) * cut.sense()
-}
-
-/// Render one view of the shape.
-pub fn render_view(tree: &Tree, bounds: Aabb, view: View, opts: &RenderOptions) -> Result<Rgb> {
-    let buf = geometry(tree, bounds, view, opts)?;
-    Ok(shade(&buf, opts).downsample(opts.ss()))
-}
-
-/// [`render_view`] for a mesh: the exact kernel's surface, drawn by the
-/// rasteriser and shaded by the same code, so a B-rep part gets the same
-/// picture the distance field does.
+/// Render one view of a mesh.
 pub fn render_surface_view(
     surface: &Surface,
     bounds: Aabb,
@@ -403,8 +374,7 @@ pub fn render_surface_view(
 /// A triangle mesh, in the flat layout the exact kernel returns.
 ///
 /// `indices` may be empty, in which case every three positions are one triangle
-/// with its own corners — which is how the implicit tessellator emits flat
-/// shading.
+/// with its own corners.
 pub struct Surface<'a> {
     pub positions: &'a [f32],
     pub normals: &'a [f32],
@@ -444,20 +414,11 @@ impl Surface<'_> {
     }
 }
 
-/// Render a *mesh* into the same buffer the raymarcher produces.
-///
-/// This exists because the two backends do not agree about the shape, and the
-/// picture must show the one that was measured. A blended union is a polynomial
-/// smooth-minimum in the distance field and a rolling-ball fillet in the exact
-/// kernel; on `examples/bracket.js` that is 3 mm of extra material in Y and a
-/// bounding box 81.5 × 63.0 where the part is 80 × 60. The desktop mesh preview
-/// hit exactly this and was fixed the same way — depict what was evaluated,
-/// never the other backend's idea of it.
+/// Rasterise a mesh into a depth/normal buffer.
 ///
 /// The output is a [`GeometryBuffer`], not an image, so everything downstream —
 /// shading, ambient occlusion, silhouette outlines, tag attribution, and
-/// `model_point` — is the code that already existed and cannot drift from the
-/// raymarched path.
+/// `model_point` — reads one buffer whatever asked for the picture.
 pub fn raster(
     surface: &Surface,
     bounds: Aabb,
@@ -468,17 +429,7 @@ pub fn raster(
     let size = opts.size * ss;
     let depth_samples = opts.depth_samples * ss;
 
-    // Built exactly as in `geometry`, and used only for its matrix: framing has
-    // to be identical across the two paths or a feature would land on different
-    // pixels depending on which backend drew it.
-    let cfg = voxel::RenderConfig {
-        image_size: voxel::RenderSize::new(size, size, depth_samples),
-        world_to_model: crate::view::view_transform(bounds, view),
-        tile_sizes: None,
-        threads: Some(&ThreadPool::Global),
-        cancel: CancelToken::new(),
-    };
-    let screen_to_model = cfg.mat();
+    let screen_to_model = screen_to_model(bounds, view, size, depth_samples);
     let model_to_screen = screen_to_model
         .try_inverse()
         .ok_or_else(|| anyhow::anyhow!("the view transform is not invertible"))?;
@@ -515,18 +466,14 @@ pub fn raster(
     // count means the ray was still in material when it reached the plane, so
     // that pixel is cut face; the mesh is closed, so parity is the whole test.
     //
-    // Not a signed winding number, which is the textbook answer and is wrong
-    // here. Signing the count needs each crossing's facing, the only source of
-    // facing is the mesh's own normals, and dual contouring does not have one to
-    // give at a sharp feature: on a plain cube, the normal it reports along a
-    // vertical edge is the *top face's*, which signs an exit as an entry and
-    // leaves half the part looking capped. Parity needs no normals at all. Its
-    // one weakness — a pixel sample landing exactly on a shared triangle edge
-    // gets counted twice — takes an exact float coincidence, where the normals
-    // above are wrong on every part with a sharp edge, which is all of them.
+    // Not a signed winding number, which is the textbook answer and was wrong
+    // here when the mesh came off a dual contourer with no reliable normal at
+    // a sharp feature. Parity needs no normals at all. Its one weakness — a
+    // pixel sample landing exactly on a shared triangle edge gets counted
+    // twice — takes an exact float coincidence.
     let mut crossings = vec![0u32; if clip.is_some() { (size * size) as usize } else { 0 }];
 
-    let mut image = voxel::Image::new(voxel::RenderSize::new(size, size, depth_samples));
+    let mut image = DepthImage::new(size, depth_samples);
     let mut face = vec![NO_FACE; if surface.faces.is_empty() { 0 } else { (size * size) as usize }];
     let project = |p: [f32; 3]| {
         let q = model_to_screen.transform_point(&nalgebra::Point3::new(p[0], p[1], p[2]));
@@ -569,7 +516,7 @@ pub fn raster(
             for x in x0..x1 {
                 // Sample *on* the integer pixel coordinate, not at the pixel
                 // centre. That is where `model_point` reads a pixel back, and
-                // where the raymarcher samples; a half-pixel offset here costs
+                // where the camera samples; a half-pixel offset here costs
                 // about 4% of coverage on a 128-pixel view, which looks like
                 // nothing and is a systematically shifted picture.
                 let (px, py) = (x as f32, y as f32);
@@ -608,11 +555,11 @@ pub fn raster(
                 }
 
                 let pixel = &mut image[(y as usize, x as usize)];
-                // Larger depth is nearer the viewer, matching the raymarcher.
+                // Larger depth is nearer the viewer.
                 if depth <= pixel.depth {
                     continue;
                 }
-                *pixel = voxel::GeometryPixel { normal: n, depth };
+                *pixel = GeometryPixel { normal: n, depth };
                 if let Some(slot) = face.get_mut((y * size + x) as usize) {
                     *slot = surface.faces.get(t).copied().unwrap_or(NO_FACE);
                 }
@@ -658,7 +605,7 @@ pub fn raster(
                     // plane, so the cap wins — and wins ties, which is what puts
                     // it in front of a face lying exactly on the section.
                     if d >= pixel.depth {
-                        *pixel = voxel::GeometryPixel {
+                        *pixel = GeometryPixel {
                             normal: [normal.x, normal.y, normal.z],
                             depth: d,
                         };
@@ -692,14 +639,9 @@ pub fn raster(
 /// coplanar-looking surfaces at different depths from merging into one blob.
 pub fn shade(buf: &GeometryBuffer, opts: &RenderOptions) -> Rgb {
     let size = buf.size;
-    let ao = if opts.ssao {
-        Some(effects::blur_ssao(
-            &effects::compute_ssao(&buf.image, None),
-            None,
-        ))
-    } else {
-        None
-    };
+    let ao = opts
+        .ssao
+        .then(|| blur_ssao(&compute_ssao(&buf.image), size as usize, size as usize));
 
     // Directions point from the surface toward each light, in view space:
     // +X right, +Y up, +Z toward the viewer.
@@ -723,7 +665,7 @@ pub fn shade(buf: &GeometryBuffer, opts: &RenderOptions) -> Rgb {
             light += dot(n, rim).max(0.0) * 0.16;
 
             if let Some(ao) = &ao {
-                let v = ao[(y as usize, x as usize)];
+                let v = ao[(y * size + x) as usize];
                 if v.is_finite() {
                     light *= v * 0.62 + 0.38;
                 }
@@ -940,12 +882,7 @@ fn round_1_2_5(v: f64) -> f64 {
     snapped * decade
 }
 
-pub fn contact_sheet(tree: &Tree, bounds: Aabb, opts: &RenderOptions) -> Result<ContactSheet> {
-    contact_sheet_with(bounds, opts, |view| render_view(tree, bounds, view, opts))
-}
-
-/// [`contact_sheet`] for a mesh, so the CLI can show a B-rep part without
-/// starting the app; the mesh is what was measured, so the sheet is too.
+/// The sheet for a mesh, so the CLI can show a part without starting the app.
 pub fn contact_sheet_of(
     surface: &Surface,
     bounds: Aabb,
@@ -1021,90 +958,106 @@ fn contact_sheet_with(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::graph::{Doc, Node, Op, V3};
-    use crate::view::Keep;
+    use crate::graph::V3;
+    use crate::view::{Axis, Keep};
 
-    /// One box, which both backends agree about exactly — no blends, no
-    /// treatments, nothing either one has to approximate.
-    fn cube() -> Doc {
-        Doc {
-            nodes: vec![Node {
-                op: Op::Cuboid {
-                    size: V3::new(20.0, 30.0, 12.0),
-                },
-                tag: None,
-            }],
-            root: 0,
-            units: "mm".to_string(),
+    /// A triangle mesh in the flat layout the rasteriser takes: expanded
+    /// corners, each with its face's normal, built by hand so these tests
+    /// need no kernel. Every closed shape below is exact, which is what lets
+    /// a section's parity count and a framing check be held to a millimetre.
+    #[derive(Default)]
+    struct Mesh {
+        positions: Vec<f32>,
+        normals: Vec<f32>,
+    }
+
+    impl Mesh {
+        fn triangle(&mut self, a: [f32; 3], b: [f32; 3], c: [f32; 3], normal: [f32; 3]) {
+            for p in [a, b, c] {
+                self.positions.extend(p);
+                self.normals.extend(normal);
+            }
+        }
+
+        fn quad(&mut self, a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3], normal: [f32; 3]) {
+            self.triangle(a, b, c, normal);
+            self.triangle(a, c, d, normal);
+        }
+
+        /// An axis-aligned box, faces wound outward.
+        fn cuboid(&mut self, centre: [f32; 3], size: [f32; 3]) {
+            let (lo, hi) = (
+                [centre[0] - size[0] / 2.0, centre[1] - size[1] / 2.0, centre[2] - size[2] / 2.0],
+                [centre[0] + size[0] / 2.0, centre[1] + size[1] / 2.0, centre[2] + size[2] / 2.0],
+            );
+            let p = |x: usize, y: usize, z: usize| {
+                [
+                    if x == 0 { lo[0] } else { hi[0] },
+                    if y == 0 { lo[1] } else { hi[1] },
+                    if z == 0 { lo[2] } else { hi[2] },
+                ]
+            };
+            self.quad(p(0, 0, 0), p(0, 1, 0), p(1, 1, 0), p(1, 0, 0), [0.0, 0.0, -1.0]);
+            self.quad(p(0, 0, 1), p(1, 0, 1), p(1, 1, 1), p(0, 1, 1), [0.0, 0.0, 1.0]);
+            self.quad(p(0, 0, 0), p(1, 0, 0), p(1, 0, 1), p(0, 0, 1), [0.0, -1.0, 0.0]);
+            self.quad(p(0, 1, 0), p(0, 1, 1), p(1, 1, 1), p(1, 1, 0), [0.0, 1.0, 0.0]);
+            self.quad(p(0, 0, 0), p(0, 0, 1), p(0, 1, 1), p(0, 1, 0), [-1.0, 0.0, 0.0]);
+            self.quad(p(1, 0, 0), p(1, 1, 0), p(1, 1, 1), p(1, 0, 1), [1.0, 0.0, 0.0]);
+        }
+
+        /// A closed cylinder about Z, wound outward, or inward for a cavity.
+        fn cylinder(&mut self, centre: [f32; 3], r: f32, h: f32, inward: bool) {
+            let n = 64;
+            let (z0, z1) = (centre[2] - h / 2.0, centre[2] + h / 2.0);
+            let s = if inward { -1.0 } else { 1.0 };
+            for i in 0..n {
+                let (a0, a1) = (
+                    i as f32 / n as f32 * std::f32::consts::TAU,
+                    (i + 1) as f32 / n as f32 * std::f32::consts::TAU,
+                );
+                let (x0, y0) = (centre[0] + r * a0.cos(), centre[1] + r * a0.sin());
+                let (x1, y1) = (centre[0] + r * a1.cos(), centre[1] + r * a1.sin());
+                let mid = (a0 + a1) / 2.0;
+                let normal = [s * mid.cos(), s * mid.sin(), 0.0];
+                let (p00, p10, p11, p01) = ([x0, y0, z0], [x1, y1, z0], [x1, y1, z1], [x0, y0, z1]);
+                if inward {
+                    self.quad(p00, p01, p11, p10, normal);
+                    self.triangle([centre[0], centre[1], z1], p11, p01, [0.0, 0.0, -1.0]);
+                    self.triangle([centre[0], centre[1], z0], p00, p10, [0.0, 0.0, 1.0]);
+                } else {
+                    self.quad(p00, p10, p11, p01, normal);
+                    self.triangle([centre[0], centre[1], z1], p01, p11, [0.0, 0.0, 1.0]);
+                    self.triangle([centre[0], centre[1], z0], p10, p00, [0.0, 0.0, -1.0]);
+                }
+            }
+        }
+
+        fn surface(&self) -> Surface<'_> {
+            Surface {
+                positions: &self.positions,
+                normals: &self.normals,
+                indices: &[],
+                faces: &[],
+            }
         }
     }
 
-    /// A plate and an upright, sharing a face — the bracket's shape, with the
-    /// blend set to zero so both backends agree about it exactly.
-    fn ell() -> Doc {
-        Doc {
-            nodes: vec![
-                Node {
-                    op: Op::Cuboid {
-                        size: V3::new(80.0, 60.0, 8.0),
-                    },
-                    tag: None,
-                },
-                Node {
-                    op: Op::Cuboid {
-                        size: V3::new(8.0, 60.0, 40.0),
-                    },
-                    tag: None,
-                },
-                Node {
-                    op: Op::Translate {
-                        child: 1,
-                        by: V3::new(-36.0, 0.0, 20.0),
-                    },
-                    tag: None,
-                },
-                Node {
-                    op: Op::Union {
-                        children: vec![0, 2],
-                        blend: 0.0,
-                    },
-                    tag: None,
-                },
-            ],
-            root: 3,
-            units: "mm".to_string(),
-        }
+    fn bounds(centre: [f32; 3], size: [f32; 3]) -> Aabb {
+        Aabb::from_center_half(
+            V3::new(centre[0] as f64, centre[1] as f64, centre[2] as f64),
+            V3::new(size[0] as f64 / 2.0, size[1] as f64 / 2.0, size[2] as f64 / 2.0),
+        )
     }
 
-    /// A 40 mm cube with a bore that never reaches a face.
+    /// A 40 mm cube with a Ø16 × 20 cavity that reaches no face.
     ///
     /// The part §7 exists for: from every one of the seven views this is a plain
     /// cube, and no amount of orbiting finds the cavity.
-    fn cube_with_a_buried_bore() -> Doc {
-        Doc {
-            nodes: vec![
-                Node {
-                    op: Op::Cuboid {
-                        size: V3::new(40.0, 40.0, 40.0),
-                    },
-                    tag: Some("block".into()),
-                },
-                Node {
-                    op: Op::Cylinder { r: 8.0, h: 20.0 },
-                    tag: Some("cavity".into()),
-                },
-                Node {
-                    op: Op::Difference {
-                        base: 0,
-                        tools: vec![1],
-                        blend: 0.0,
-                    },
-                    tag: None,
-                },
-            ],
-            root: 2,
-            units: "mm".to_string(),
-        }
+    fn cube_with_a_buried_bore() -> Mesh {
+        let mut mesh = Mesh::default();
+        mesh.cuboid([0.0; 3], [40.0; 3]);
+        mesh.cylinder([0.0; 3], 8.0, 20.0, true);
+        mesh
     }
 
     fn small(section: Option<Section>) -> RenderOptions {
@@ -1117,18 +1070,6 @@ mod tests {
         }
     }
 
-    /// Expanded triangle corners with their own normals — what the app hands the
-    /// rasteriser. Real normals, because sectioning reads the facing of every
-    /// crossing off them.
-    fn mesh_of(doc: &Doc) -> (Vec<f32>, Vec<f32>) {
-        let (tree, tess, _) = crate::evaluate(doc, 6).expect("evaluate");
-        let (positions, normals) = tess.faceted(&tree).expect("normals");
-        (
-            positions.iter().flat_map(|v| *v).collect(),
-            normals.iter().flat_map(|n| *n).collect(),
-        )
-    }
-
     /// The claim §7 rests on, measured: a section is the only picture in which
     /// an internal feature exists at all.
     ///
@@ -1139,18 +1080,11 @@ mod tests {
     /// other view, which is the whole argument.
     #[test]
     fn a_section_is_where_a_buried_bore_becomes_visible() {
-        let doc = cube_with_a_buried_bore();
-        let (positions, normals) = mesh_of(&doc);
-        let surface = Surface {
-            positions: &positions,
-            normals: &normals,
-            indices: &[],
-            faces: &[],
-        };
-        let bounds = crate::measure::bounds(&doc).expect("bounds");
+        let mesh = cube_with_a_buried_bore();
+        let bounds = bounds([0.0; 3], [40.0; 3]);
         let centre = 64;
 
-        let solid = raster(&surface, bounds, View::Front, &small(None)).expect("raster");
+        let solid = raster(&mesh.surface(), bounds, View::Front, &small(None)).expect("raster");
         let p = solid.model_point(centre, centre).expect("the cube is drawn");
         assert!(
             (p[1] + 20.0).abs() < 1.0,
@@ -1163,7 +1097,7 @@ mod tests {
             at_mm: None,
             keep: None,
         }));
-        let cut = raster(&surface, bounds, View::Front, &opts).expect("raster");
+        let cut = raster(&mesh.surface(), bounds, View::Front, &opts).expect("raster");
 
         // The near half went, and it went on the side the viewer is on.
         assert_eq!(
@@ -1220,23 +1154,14 @@ mod tests {
     /// never touched it.
     #[test]
     fn a_section_clear_of_the_part_reports_that_it_cut_nothing() {
-        let doc = cube_with_a_buried_bore();
-        let (positions, normals) = mesh_of(&doc);
-        let surface = Surface {
-            positions: &positions,
-            normals: &normals,
-            indices: &[],
-            faces: &[],
-        };
-        let bounds = crate::measure::bounds(&doc).expect("bounds");
-
+        let mesh = cube_with_a_buried_bore();
+        let bounds = bounds([0.0; 3], [40.0; 3]);
         let opts = small(Some(Section {
             axis: Axis::Y,
             at_mm: Some(-60.0),
             keep: Some(Keep::Above),
         }));
-        let cut = raster(&surface, bounds, View::Front, &opts).expect("raster");
-
+        let cut = raster(&mesh.surface(), bounds, View::Front, &opts).expect("raster");
         assert_eq!(
             cut.cut_fraction(),
             0.0,
@@ -1244,156 +1169,96 @@ mod tests {
         );
     }
 
-    /// The two renderers must cut the same part the same way.
-    ///
-    /// They do it by unrelated means — the rasteriser counts the crossings it
-    /// threw away and caps where that count is odd, the raymarcher
-    /// intersects the field with a half-space and never sees an inside at all —
-    /// so agreement here is evidence, not tautology.
-    #[test]
-    fn both_renderers_take_the_same_section() {
-        let doc = cube_with_a_buried_bore();
-        let tree = crate::sdf::lower(&doc).expect("lower");
-        let bounds = crate::measure::bounds(&doc).expect("bounds");
-        let (positions, normals) = mesh_of(&doc);
-
-        let opts = small(Some(Section {
-            axis: Axis::Z,
-            at_mm: None,
-            keep: None,
-        }));
-
-        // Views that look along the cut, since a section is only visible from
-        // the side the material was taken from. The edge-on case has its own
-        // test below.
-        for view in [View::Top, View::Iso, View::Bottom] {
-            let marched = geometry(&tree, bounds, view, &opts).expect("raymarch");
-            let rastered = raster(
-                &Surface {
-                    positions: &positions,
-                    normals: &normals,
-                    indices: &[],
-                    faces: &[],
-                },
-                bounds,
-                view,
-                &opts,
-            )
-            .expect("raster");
-
-            let (mut both, mut either, mut cut_both, mut cut_either) = (0usize, 0, 0usize, 0);
-            for y in 0..opts.size {
-                for x in 0..opts.size {
-                    let a = marched.image[(y as usize, x as usize)].depth > 0;
-                    let b = rastered.image[(y as usize, x as usize)].depth > 0;
-                    both += usize::from(a && b);
-                    either += usize::from(a || b);
-                    let (ca, cb) = (marched.is_cut(x, y), rastered.is_cut(x, y));
-                    cut_both += usize::from(ca && cb);
-                    cut_either += usize::from(ca || cb);
-                }
-            }
-
-            let overlap = both as f64 / either.max(1) as f64;
-            assert!(
-                overlap > 0.97,
-                "the sectioned {} view covers different pixels in the two renderers \
-                 (intersection over union {overlap:.3})",
-                view.name()
-            );
-
-            assert!(
-                cut_either > 0,
-                "the {} view should have a cut face at all",
-                view.name()
-            );
-            // Looser than the coverage test above, and it has to be: the two
-            // decide what is cut face by different means, one from the plane
-            // equation and one from a point's distance to the plane, so they
-            // disagree along the outline of the cut by a pixel. How much cut
-            // face there is, which is the number a caller reads, has to match
-            // much more closely than that.
-            let cut_overlap = cut_both as f64 / cut_either.max(1) as f64;
-            assert!(
-                cut_overlap > 0.90,
-                "the two renderers put the cut face of the {} view in different places \
-                 (intersection over union {cut_overlap:.3})",
-                view.name()
-            );
-            let (a, b) = (marched.cut_fraction(), rastered.cut_fraction());
-            assert!(
-                (a - b).abs() < 0.05,
-                "the {} view is {:.1}% cut face to one renderer and {:.1}% to the other",
-                view.name(),
-                a * 100.0,
-                b * 100.0
-            );
-        }
-    }
-
     /// A section the view runs along still cuts, and shows no cut face.
     ///
     /// Worth pinning down because it is the mistake a caller makes first — ask
-    /// for a section on Z and look at it from the front — and because the answer
-    /// has to be the same from both renderers. The plane is edge-on there, so
-    /// the cut face is a sliver a pixel wide that says nothing; `cut_fraction`
-    /// reporting zero is what tells a caller to look from the top instead.
+    /// for a section on Z and look at it from the front. The plane is edge-on
+    /// there, so the cut face is a sliver a pixel wide that says nothing;
+    /// `cut_fraction` reporting zero is what tells a caller to look from the
+    /// top instead.
     #[test]
     fn a_section_seen_edge_on_shows_no_cut_face() {
-        let doc = cube_with_a_buried_bore();
-        let tree = crate::sdf::lower(&doc).expect("lower");
-        let bounds = crate::measure::bounds(&doc).expect("bounds");
-        let (positions, normals) = mesh_of(&doc);
-
+        let mesh = cube_with_a_buried_bore();
+        let bounds = bounds([0.0; 3], [40.0; 3]);
         let opts = small(Some(Section {
             axis: Axis::Z,
             at_mm: None,
             keep: Some(Keep::Below),
         }));
-
-        let marched = geometry(&tree, bounds, View::Front, &opts).expect("raymarch");
-        let rastered = raster(
-            &Surface {
-                positions: &positions,
-                normals: &normals,
-                indices: &[],
-                faces: &[],
-            },
-            bounds,
-            View::Front,
-            &opts,
-        )
-        .expect("raster");
-
-        for (name, buf) in [("raymarched", &marched), ("rastered", &rastered)] {
-            assert_eq!(
-                buf.cut_fraction(),
-                0.0,
-                "the {name} view is looking along the plane, so there is no cut face to show"
-            );
-            // The material still went, though. Half a 40 mm cube is 20 mm tall.
-            let top = (0..buf.size)
-                .flat_map(|y| (0..buf.size).map(move |x| (x, y)))
-                .filter_map(|(x, y)| buf.model_point(x, y))
-                .fold(f32::MIN, |hi, p| hi.max(p[2]));
-            assert!(
-                top < 1.0,
-                "the {name} view should have lost everything above z = 0, but reaches {top}"
-            );
-        }
+        let buf = raster(&mesh.surface(), bounds, View::Front, &opts).expect("raster");
+        assert_eq!(
+            buf.cut_fraction(),
+            0.0,
+            "the view is looking along the plane, so there is no cut face to show"
+        );
+        // The material still went, though. Half a 40 mm cube is 20 mm tall.
+        let top = (0..buf.size)
+            .flat_map(|y| (0..buf.size).map(move |x| (x, y)))
+            .filter_map(|(x, y)| buf.model_point(x, y))
+            .fold(f32::MIN, |hi, p| hi.max(p[2]));
+        assert!(
+            top < 1.0,
+            "the view should have lost everything above z = 0, but reaches {top}"
+        );
     }
 
-    /// The rasteriser and the raymarcher must frame a part identically.
+    /// Every view frames the part the way `view.rs` says it does: the pixel
+    /// at the centre of the frame reads back the near face along the view's
+    /// own line of sight, and the part fills the share of the frame the
+    /// bounding sphere allows.
     ///
-    /// This is the property the whole of `view` exists to provide — a feature at
-    /// a given pixel in one view is at a comparable pixel in another — and it
-    /// now has to hold across two renderers as well. A projection that is
-    /// subtly off produces a picture that looks entirely plausible, which is
-    /// exactly the failure that made this test worth writing.
+    /// Measured against the camera itself rather than against a second
+    /// renderer, which is what it was checked against when there were two.
     #[test]
-    fn a_rastered_view_lands_where_the_raymarched_one_does() {
-        agrees_for(cube());
-        agrees_for(ell());
+    fn a_rastered_view_frames_the_part_as_the_camera_says() {
+        let size = [20.0, 30.0, 12.0];
+        let mut mesh = Mesh::default();
+        mesh.cuboid([0.0; 3], size);
+        let bounds = bounds([0.0; 3], size);
+        let opts = small(None);
+
+        for view in View::ALL {
+            let buf = raster(&mesh.surface(), bounds, view, &opts).expect("raster");
+            let (_, _, looking) = view.axes();
+            let p = buf.model_point(64, 64).expect("the cube fills the centre");
+            let p = nalgebra::Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64);
+            // The near face is the one the camera reaches first along its line
+            // of sight: the half-size against that axis, with the sign that
+            // faces the camera.
+            let along = p.dot(&looking);
+            let expected = -match view {
+                View::Iso => {
+                    // The nearest corner region: the centre ray meets the cube
+                    // where its three faces are equidistant along the line of
+                    // sight — whichever face the ray hits first.
+                    let half = nalgebra::Vector3::new(10.0, 15.0, 6.0);
+                    (0..3).map(|i| half[i] / looking[i].abs()).fold(f64::INFINITY, f64::min)
+                }
+                _ => {
+                    let axis = (0..3).find(|i| looking[*i].abs() > 0.5).unwrap();
+                    [10.0, 15.0, 6.0][axis] / looking[axis].abs()
+                }
+            };
+            assert!(
+                (along - expected).abs() < 1.0,
+                "the {} view's centre pixel reads {along:.2} along the line of sight, expected {expected:.2}",
+                view.name()
+            );
+
+            // The frame fits the bounding sphere with a 6% margin, so a cube
+            // never reaches the frame edge and always covers more than its
+            // inscribed share of it.
+            let drawn = (0..buf.size)
+                .flat_map(|y| (0..buf.size).map(move |x| (x, y)))
+                .filter(|(x, y)| buf.model_point(*x, *y).is_some())
+                .count();
+            let share = drawn as f64 / (buf.size * buf.size) as f64;
+            assert!(
+                (0.05..0.95).contains(&share),
+                "the {} view draws the cube over {share:.2} of the frame",
+                view.name()
+            );
+        }
     }
 
     /// A camera cannot be a reflection, and this is that claim measured in
@@ -1407,51 +1272,17 @@ mod tests {
     /// one that does not.
     #[test]
     fn a_side_view_puts_a_feature_on_the_side_it_is_on() {
-        let doc = Doc {
-            units: "mm".to_string(),
-            nodes: vec![
-                Node {
-                    op: Op::Cuboid {
-                        size: V3::splat(40.0),
-                    },
-                    tag: None,
-                },
-                Node {
-                    op: Op::Cylinder { r: 5.0, h: 30.0 },
-                    tag: None,
-                },
-                Node {
-                    op: Op::Rotate {
-                        child: 1,
-                        axis: V3::new(1.0, 0.0, 0.0),
-                        degrees: 90.0,
-                    },
-                    tag: None,
-                },
-                Node {
-                    op: Op::Translate {
-                        child: 2,
-                        by: V3::new(0.0, 25.0, 0.0),
-                    },
-                    tag: None,
-                },
-                Node {
-                    op: Op::Union {
-                        children: vec![0, 3],
-                        blend: 0.0,
-                    },
-                    tag: None,
-                },
-            ],
-            root: 4,
+        let mut mesh = Mesh::default();
+        mesh.cuboid([0.0; 3], [40.0; 3]);
+        mesh.cuboid([0.0, 25.0, 0.0], [10.0, 30.0, 10.0]);
+        let bounds = Aabb {
+            min: V3::new(-20.0, -20.0, -20.0),
+            max: V3::new(20.0, 40.0, 20.0),
         };
-
-        let tree = crate::sdf::lower(&doc).expect("lower");
-        let bounds = crate::measure::bounds(&doc).expect("bounds");
         let opts = small(None);
 
         for (view, boss_side) in [(View::Right, 1.0), (View::Left, -1.0)] {
-            let buf = geometry(&tree, bounds, view, &opts).expect("raymarch");
+            let buf = raster(&mesh.surface(), bounds, view, &opts).expect("raster");
             // The boss is the only material past y = +20, so its pixels are
             // exactly the ones whose model point is out there.
             let columns: Vec<u32> = (0..buf.size)
@@ -1472,65 +1303,59 @@ mod tests {
         }
     }
 
-    fn agrees_for(doc: Doc) {
-        let tree = crate::sdf::lower(&doc).expect("lower");
-        let bounds = crate::measure::bounds(&doc).expect("bounds");
-        let (_, tess, _) = crate::evaluate(&doc, 6).expect("evaluate");
-
+    /// Ambient occlusion darkens a pocket and leaves an open face alone.
+    ///
+    /// The pass is what makes a bore read as a bore; this pins that it does
+    /// something, in the direction it should, and that it is deterministic —
+    /// two renders of one part are the same picture, which is what lets a
+    /// caller compare a render against the last one.
+    #[test]
+    fn occlusion_darkens_the_floor_of_a_pocket_and_repeats_exactly() {
+        // A 40 mm cube whose top face is pierced by a slot 5 wide and 15
+        // deep. Narrow, so the floor's centre is within the occlusion radius
+        // of both walls; the top is four strips around the opening, since a
+        // whole top face would sit over the slot in the depth buffer.
+        let (s, w, d) = (20.0f32, 2.5f32, 15.0f32);
+        let (top, floor) = (s, s - d);
+        let mut mesh = Mesh::default();
+        mesh.quad([-s, -s, -s], [-s, s, -s], [s, s, -s], [s, -s, -s], [0.0, 0.0, -1.0]);
+        mesh.quad([-s, -s, -s], [s, -s, -s], [s, -s, top], [-s, -s, top], [0.0, -1.0, 0.0]);
+        mesh.quad([-s, s, -s], [-s, s, top], [s, s, top], [s, s, -s], [0.0, 1.0, 0.0]);
+        mesh.quad([-s, -s, -s], [-s, -s, top], [-s, s, top], [-s, s, -s], [-1.0, 0.0, 0.0]);
+        mesh.quad([s, -s, -s], [s, s, -s], [s, s, top], [s, -s, top], [1.0, 0.0, 0.0]);
+        for (x0, x1, y0, y1) in [(-s, -w, -s, s), (w, s, -s, s), (-w, w, -s, -w), (-w, w, w, s)] {
+            mesh.quad([x0, y0, top], [x1, y0, top], [x1, y1, top], [x0, y1, top], [0.0, 0.0, 1.0]);
+        }
+        mesh.quad([-w, -w, floor], [-w, w, floor], [w, w, floor], [w, -w, floor], [0.0, 0.0, 1.0]);
+        mesh.quad([-w, -w, floor], [-w, -w, top], [-w, w, top], [-w, w, floor], [1.0, 0.0, 0.0]);
+        mesh.quad([w, -w, floor], [w, w, floor], [w, w, top], [w, -w, top], [-1.0, 0.0, 0.0]);
+        mesh.quad([-w, -w, floor], [w, -w, floor], [w, -w, top], [-w, -w, top], [0.0, 1.0, 0.0]);
+        mesh.quad([-w, w, floor], [-w, w, top], [w, w, top], [w, w, floor], [0.0, -1.0, 0.0]);
+        let bounds = bounds([0.0; 3], [40.0; 3]);
         let opts = RenderOptions {
             size: 128,
             depth_samples: 128,
-            ssao: false,
+            ssao: true,
             supersample: 1,
             section: None,
         };
 
-        let positions: Vec<f32> = tess
-            .vertices
-            .iter()
-            .flat_map(|v| [v[0], v[1], v[2]])
-            .collect();
-        let indices: Vec<u32> = tess
-            .triangles
-            .iter()
-            .flat_map(|t| [t[0] as u32, t[1] as u32, t[2] as u32])
-            .collect();
-        // Normals do not affect coverage, and this test is about where the part
-        // lands rather than how it is lit.
-        let normals = vec![0.0; positions.len()];
+        let buf = raster(&mesh.surface(), bounds, View::Top, &opts).expect("raster");
+        let at_floor = buf.model_point(64, 64).expect("the slot floor is drawn");
+        assert!((at_floor[2] - floor).abs() < 1.0, "the centre pixel should show the floor at z = {floor}, not {at_floor:?}");
+        let ao = blur_ssao(&compute_ssao(&buf.image), buf.size as usize, buf.size as usize);
+        // The floor's centre sits at the bottom of a well; the top face's
+        // open corner region sees the whole sky.
+        let at = |x: u32, y: u32| ao[(y * buf.size + x) as usize];
+        let (floor, open) = (at(64, 64), at(36, 36));
+        assert!(floor < open, "the pocket floor ({floor:.3}) should be darker than the open face ({open:.3})");
+        assert!(open > 0.9, "an open face is barely occluded, not {open:.3}");
 
-        for view in View::ALL {
-            let marched = geometry(&tree, bounds, view, &opts).expect("raymarch");
-            let rastered = raster(
-                &Surface {
-                    positions: &positions,
-                    normals: &normals,
-                    indices: &indices,
-                    faces: &[],
-                },
-                bounds,
-                view,
-                &opts,
-            )
-            .expect("raster");
-
-            let (mut both, mut either) = (0usize, 0usize);
-            for y in 0..opts.size as usize {
-                for x in 0..opts.size as usize {
-                    let a = marched.image[(y, x)].depth > 0;
-                    let b = rastered.image[(y, x)].depth > 0;
-                    both += usize::from(a && b);
-                    either += usize::from(a || b);
-                }
-            }
-
-            let overlap = both as f64 / either.max(1) as f64;
-            assert!(
-                overlap > 0.97,
-                "the {} view covers different pixels in the two renderers \
-                 (intersection over union {overlap:.3}); the projection disagrees",
-                view.name()
-            );
-        }
+        let again = raster(&mesh.surface(), bounds, View::Top, &opts).expect("raster");
+        let ao_again = blur_ssao(&compute_ssao(&again.image), again.size as usize, again.size as usize);
+        assert_eq!(ao.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), ao_again.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+        let a = shade(&buf, &opts);
+        let b = shade(&again, &opts);
+        assert_eq!(a.data, b.data, "two renders of one part must be one picture");
     }
 }

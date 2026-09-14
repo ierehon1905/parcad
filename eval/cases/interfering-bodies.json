@@ -2,16 +2,6 @@
   "name": "interfering-bodies",
   "script": "eval/scripts/interfering-bodies.js",
   "why": "Two bodies drawn through each other are reported, not refused: the boss's lower 5 mm lies inside the plate, so the pair is `interfering` by π·25·5 = 392.699 mm³ with no clearance to report, while each body alone is intact. The interference is exact (BRepGProp on the common solid) and holds at the corpus tolerance; the boss's own 1570.796 mm³ is read off its 0.01 mm mesh, which polygonises a Ø10 cylinder 0.13% short, hence the wider volume tolerance. The part-level bodies and voids are the count of two closed mesh shells that cross each other, recorded as measured and not to be read as the part's piece count — between_bodies is.",
-  "implicit": {
-    "refuses": {
-      "kind": "error",
-      "message_contains": [
-        "returns 2 bodies",
-        "needs the B-rep backend"
-      ]
-    },
-    "depth": 6
-  },
   "brep": {
     "size": [
       40.0,

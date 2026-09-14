@@ -1,23 +1,7 @@
 {
   "name": "scaled-box",
   "script": "eval/scripts/scaled-box.js",
-  "why": "Uniform scale is the one scale the exact backend accepts, and 8000 mm3 is checkable by hand.",
-  "implicit": {
-    "depth": 6,
-    "size": [
-      20.0,
-      20.0,
-      20.0
-    ],
-    "volume_mm3": 7998.908,
-    "area_mm2": 2395.386,
-    "triangles": 89304,
-    "bodies": 1,
-    "voids": 0,
-    "stands_on_mm2": 403.024,
-    "stands_on_patches": 1,
-    "watertight": true
-  },
+  "why": "Uniform scale is the one scale the kernel accepts, and 8000 mm3 is checkable by hand.",
   "brep": {
     "size": [
       20.0,

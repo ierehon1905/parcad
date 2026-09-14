@@ -1,17 +1,14 @@
 {
   "name": "refuse-non-convex-outline",
   "script": "eval/scripts/refuse-non-convex-outline.js",
-  "why": "Both backends must refuse a re-entrant extrude outline for the same reason they refuse a re-entrant revolve section, and both must name the union of convex prisms that replaces it. The rule lives in the graph layer so it cannot drift between them.",
-  "implicit": {
-    "refuses": {
-      "kind": "error",
-      "message_contains": ["not convex", "union of convex prisms"]
-    }
-  },
+  "why": "A re-entrant extrude outline must be refused for the same reason a re-entrant revolve section is, naming the union of convex prisms that replaces it. The rule lives in the graph layer, before the kernel.",
   "brep": {
     "refuses": {
       "kind": "rejected",
-      "message_contains": ["not convex", "union of convex prisms"]
+      "message_contains": [
+        "not convex",
+        "union of convex prisms"
+      ]
     }
   }
 }

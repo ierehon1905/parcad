@@ -63,7 +63,7 @@ export const OP_GROUPS: OpGroup[] = [
         name: "sphere",
         icon: "sphere",
         signature: "sphere(radius)",
-        detail: "Exact in both backends.",
+        detail: "A ball, exact.",
         snippet: "sphere(8)",
       },
       {
@@ -118,7 +118,7 @@ export const OP_GROUPS: OpGroup[] = [
         icon: "pipe",
         signature: "pipe(path, diameter, { bend, taper })",
         detail:
-          "A round tube along straight runs joined by tangent arcs, or along { helix: { radius, pitch, turns } } — a spring. Exact in both backends until it tapers or winds: those are B-rep only.",
+          "A round tube along straight runs joined by tangent arcs, or along { helix: { radius, pitch, turns } } — a spring. Optionally tapering.",
         snippet: "pipe([[0, 0, 0], [40, 0, 0], [40, 30, 0]], 8, { bend: 10 })",
       },
       {
@@ -126,7 +126,7 @@ export const OP_GROUPS: OpGroup[] = [
         icon: "sweep",
         signature: "sweep(profile, path, { bend, taper })",
         detail:
-          "An authored section along the same run-and-bend path or a { helix }, optionally tapering. B-rep only: the implicit backend refuses it by name.",
+          "An authored section along the same run-and-bend path or a { helix }, optionally tapering.",
         snippet:
           "sweep([[-3, -3], [3, -3], [3, 3], [-3, 3]], [[0, 0, 0], [40, 0, 0], [40, 25, 0]], { bend: 8 })",
       },

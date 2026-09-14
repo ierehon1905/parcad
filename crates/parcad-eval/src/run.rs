@@ -1,4 +1,4 @@
-//! Script in, observation out, once per backend.
+//! Script in, observation out.
 
 use crate::case::{BetweenExpect, BodyExpect, Observed, RefusalKind};
 use anyhow::{Context, Result};
@@ -48,38 +48,6 @@ pub fn build_doc(root: &Path, script: &str) -> Result<Doc> {
         .with_context(|| format!("parsing the graph {script} produced"))
 }
 
-/// Measure through the distance field. Total by contract, but the graph layer
-/// can still reject a document, so a refusal is a possible outcome.
-pub fn run_implicit(doc: &Doc, depth: u8) -> Outcome {
-    match parcad_core::evaluate(doc, depth) {
-        Ok((_, tess, report)) => {
-            let (tags, unlocated_tags) = locate_tags(doc, &tess, report.bounds);
-            Outcome::Measured(Observed {
-                size: [report.size.x, report.size.y, report.size.z],
-                volume_mm3: report.mass.volume_mm3,
-                area_mm2: report.mass.area_mm2,
-                triangles: tess.triangles.len(),
-                watertight: report.mesh.watertight,
-                faces: None,
-                edges: None,
-                curves: None,
-                bodies: report.mesh.bodies,
-                voids: report.mesh.voids,
-                stands_on: report.stands_on.clone(),
-                tags,
-                unlocated_tags,
-                named_bodies: BTreeMap::new(),
-                between_bodies: BTreeMap::new(),
-            })
-        }
-        Err(e) => Outcome::Refused {
-            kind: RefusalKind::Error,
-            // The whole chain: the useful sentence is usually the innermost one.
-            message: format!("{e:#}"),
-        },
-    }
-}
-
 /// Measure through OpenCASCADE, in the isolated worker.
 pub fn run_brep(doc: &Doc) -> Outcome {
     let opts = parcad_occt::Options::default();
@@ -124,7 +92,7 @@ pub fn run_brep(doc: &Doc) -> Outcome {
     };
     let mass = parcad_core::measure::mass_properties(&tess.vertices, &tess.triangles);
     let size = bounds.size();
-    let (tags, unlocated_tags) = locate_tags(doc, &tess, bounds);
+    let (tags, unlocated_tags) = locate_tags(&s);
 
     Outcome::Measured(Observed {
         size: [size.x, size.y, size.z],
@@ -178,30 +146,19 @@ pub fn run_brep(doc: &Doc) -> Outcome {
     })
 }
 
-/// Where each tag's own surface sits, by the same call and the same tolerance
-/// the app's reply uses. Kept identical on purpose: a corpus that pins a number
+/// Where each tag's faces sit, as the kernel reports them and the app's
+/// reply carries them. Kept identical on purpose: a corpus that pins a number
 /// nothing on the wire produces is pinning the wrong number.
-fn locate_tags(
-    doc: &Doc,
-    mesh: &parcad_core::mesh::Tessellation,
-    bounds: parcad_core::measure::Aabb,
-) -> (BTreeMap<String, [f64; 6]>, Vec<String>) {
-    let tolerance = (mesh.resolution_mm * 0.5).max(bounds.radius() * 1e-5);
-    let sample = parcad_core::tags::surface_sample(&mesh.vertices, &mesh.triangles);
-    let (fields, _) = parcad_core::sdf::drawable(doc);
-    let Ok(found) = parcad_core::tags::extents(&fields, &sample, tolerance) else {
-        return (BTreeMap::new(), Vec::new());
-    };
-
-    let boxes = found
-        .extents
-        .into_iter()
+fn locate_tags(s: &parcad_occt::Success) -> (BTreeMap<String, [f64; 6]>, Vec<String>) {
+    let boxes = s
+        .tag_extents
+        .iter()
         .map(|e| {
-            let (lo, hi) = (e.bounds.min, e.bounds.max);
-            (e.tag, [lo.x, lo.y, lo.z, hi.x, hi.y, hi.z])
+            let (lo, hi) = (e.min, e.max);
+            (e.tag.clone(), [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]])
         })
         .collect();
-    (boxes, found.unlocated)
+    (boxes, s.unlocated_tags.clone())
 }
 
 /// Ask the exact kernel the case's perception questions.

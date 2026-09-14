@@ -1,11 +1,13 @@
 {
   "name": "refuse-inward-offset",
   "script": "eval/scripts/refuse-inward-offset.js",
-  "why": "The exact backend only grows. An inward offset has different failure modes and is refused rather than routed through the same path.",
+  "why": "The kernel only grows. An inward offset has different failure modes and is refused rather than routed through the same path.",
   "brep": {
     "refuses": {
       "kind": "rejected",
-      "message_contains": ["only grows"]
+      "message_contains": [
+        "only grows"
+      ]
     }
   }
 }

@@ -1,7 +1,7 @@
 {
   "name": "bracket-with-boss",
   "script": "eval/scripts/bracket-with-boss.js",
-  "why": "Selector drift. An unrelated boss must not change what the three treatments select; the expect({ count }) calls fail loudly in the exact backend if it does.",
+  "why": "Selector drift. An unrelated boss must not change what the three treatments select; the expect({ count }) calls fail loudly if it does.",
   "brep": {
     "size": [
       80.0,

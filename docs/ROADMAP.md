@@ -69,19 +69,20 @@ Each is blocked on a specific missing binding, not on design, and each
 
 ## Perception (the actual thesis)
 
-The reason for keeping the implicit backend is that it can answer questions a
-B-rep cannot. Barely started:
+The implicit backend was kept for a long time on the argument that it could
+answer questions a B-rep cannot — field probes, slice stacks, ray arrays. It
+turned out the exact kernel answers every one of them, with the fillets in
+(docs/PERCEPTION.md §3, §5), and the field went. Barely started:
 
 - An **eval harness**. The deterministic half exists: `crates/parcad-eval` runs
-  `eval/cases/*.json` through both backends and checks measurements, topology
-  counts and required refusals. Missing is the half that makes it a *perception*
+  `eval/cases/*.json` and checks measurements, topology counts, closed-form
+  probes and required refusals. Missing is the half that makes it a *perception*
   harness — ablation of the channels an agent is given, so "does it still get
   this right without renders?" is a measurable question. That needs a bundle
   format, a question set with expected answers, and a runner that grades a
   model's replies.
-- **Non-human perception modes**: field probes, slice stacks, ray arrays,
-  printability fields. Cheap on an SDF and impossible on a B-rep, and the point
-  of having both.
+- **Non-human perception modes** beyond probes and rays: slice stacks,
+  printability fields.
 
 ### Built: one live session the agent can drive
 
@@ -198,7 +199,7 @@ because that desktop browser refuses a path or query on localhost.
 These live in `eval/cases/*.json` and are checked rather than described:
 
 ```bash
-cargo run -p parcad-eval              # every case, both backends
+cargo run -p parcad-eval              # every case
 cargo run -p parcad-eval -- --update  # re-record after an intended change
 ```
 
@@ -207,10 +208,9 @@ The table that used to sit here was hand-maintained and had drifted — it claim
 and 28, and a 26 mm enclosure that is 28 mm. That is the whole argument for the
 corpus: nobody edits a prose table when a face count moves.
 
-Where the two backends disagree, the implicit column's error is not a bug — it is
-dual contouring at the chosen depth, and each case carries a looser tolerance for
-that path than for the exact one. It is also exactly why the B-rep backend
-exists. The corpus asserts the refusals too: a negative scale, blended
+While there were two backends each case carried an `implicit` half with a
+looser tolerance, dual contouring's; those halves went with the backend. The
+corpus asserts the refusals too: a negative scale, blended
 intersection, inward offset and a wrong `expect({ count })` must each fail with a
 named variant *and* with the words a reader needs to fix it, because "refuse
 rather than approximate" is worth nothing if the refusal does not say what to do

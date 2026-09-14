@@ -10,24 +10,23 @@ introduction to CAD.
 That is the whole design.
 
 ```
-  script (TS)  ──build()──>  Doc (JSON)  ──┬── sdf::lower  ──> fidget tree ──> mesh, renders, regions
-                                           └── occt lower  ──> TopoDS_Shape ──> mesh, edges, STEP
+  script (TS)  ──build()──>  Doc (JSON)  ──occt lower──>  TopoDS_Shape  ──┬──> mesh ──> renders, regions, STL
+                                                                        ├──> edges, STEP
+                                                                        └──> probes, thickness, tag extents
 ```
 
 Consequences worth internalising:
 
 - **Primitives are centred on the origin.** Placement is a separate `Translate`
-  node. This keeps distance fields exact and makes symmetry the default.
+  node. This makes symmetry the default.
 - **Tags and selectors, never indices.** A `tag` on a node is the anchor for
   named regions. For exact edge operations, a directional selector such as
   `>Z and >Y and |X` is resolved against the current B-rep; it is not an OCCT
-  edge number. In the implicit backend a tag resolves to a *region of the
-  visible surface*; in the B-rep backend it resolves to a *set of faces* — the
-  faces of the tagged node's result, followed through every later boolean,
-  fillet, chamfer and rigid motion by the kernel's own history, and lost
-  through offset, shell and intersection, which report none. Same name, both
-  times. This avoids pretending that a transient topology index can survive a
-  model edit.
+  edge number. A tag resolves to a *set of faces* — the faces of the tagged
+  node's result, followed through every later boolean, blend, fillet, chamfer
+  and rigid motion by the kernel's own history, and lost through offset, shell
+  and intersection, which report none. This avoids pretending that a transient
+  topology index can survive a model edit.
 - **A node's meaning can differ per backend and that is allowed** — but it must
   be documented. See "blend" below.
 
@@ -69,24 +68,19 @@ extrema all resolve inside the body being built and never across two, by
 construction: a body never enters another body's lineage, and a treatment
 cannot take the group as its child.
 
-The implicit backend refuses a part in several bodies by name, the way it
-refuses a loft; `sdf.rs` says why. Region maps, `tag_extents`, `probe_part`
-and `measure_wall_thickness` run on the exact kernel, body by body: a
-crossing, a point and a thin spot each name the `body` they are in.
+Region maps, `tag_extents`, `probe_part` and `measure_wall_thickness` run
+body by body: a crossing, a point and a thin spot each name the `body` they
+are in.
 
-### `blend` means two different things
+### `blend` is a boolean, then a fillet
 
-| backend | how it's done | visible difference |
-|---|---|---|
-| implicit | smooth-minimum of the two fields | the join **bulges** by roughly `k/4` |
-| B-rep | boolean, then fillet the newly-created edges | no bulge; a true fillet |
-
-Both are defensible readings of "round this join by 6 mm". They are not the same
-shape. Everything a user or an agent sees or measures is the B-rep reading:
-the window draws the exact kernel's tessellation and perception — probes, wall
-thickness, tag extents, region maps — runs on the exact solid
-(`crates/parcad-occt/src/perceive.rs`), so nothing is measured on the other
-reading of the shape.
+A `blend` is "do the boolean, then fillet the edges the boolean created": no
+bulge, a true rolling-ball fillet, and the seam's faces carry the lineage of
+the faces the edge lay between. The other defensible reading of "round this
+join by 6 mm" — a smooth-minimum of two distance fields, which bulges by
+roughly `k/4` — was what the deleted implicit backend built, and the reason
+renders once depicted a part 3 mm wider than the one measured. There is one
+reading now, and everything a user or an agent sees or measures is it.
 
 ### Selected edge and corner treatments are exact-only
 
@@ -94,9 +88,8 @@ reading of the shape.
 select edges whose centres are at a global directional extreme, `|X` restricts
 the result to straight edges parallel to X, terms combine with `and`, and a
 selector that finds nothing is rejected rather than silently falling back to an
-array position. The implicit evaluator has no logical edges, so it explains that
-the operation needs the B-rep backend instead of rounding mesh vertices that
-happen to be nearby.
+array position. Selection is on the kernel's logical edges, never on mesh
+vertices that happen to be nearby.
 
 `shape.vertices(">X and >Y and >Z").fillet(2)` selects the single corner at those
 three extrema. The 3D OCCT builder accepts edges, not a vertex, so the backend
@@ -242,16 +235,27 @@ shared by every treatment rather than special forms of `EdgeSelector`: edge sets
 and corner vertices today, and a planned full round, which replaces a centre face
 with a transition between two side-face sets.
 
-## Two backends, deliberately unequal — and now one
+## One kernel, and what the second one left behind
 
-`parcad_core::evaluate` is the implicit path and is *total*: it always returns
-something. `parcad_occt::evaluate` is the exact path and is allowed to refuse.
+For most of this project's life there were two backends: an implicit one —
+every op lowered to a signed distance function, evaluated and meshed by
+[fidget](https://github.com/mkeeter/fidget) — and the exact one. The implicit
+path was *total*, it always returned something, and that was its undoing: it
+refused every edge treatment, loft, sweep and helix by name (33 of 41 parts
+in a real project folder), read `blend` as a different shape, dropped fillets
+from every probe and wall-thickness answer and called the result an upper
+bound. Once probes, rays, thickness, tag extents and renders all ran on the
+exact solid and the field suite read them SOUND, `sdf.rs`, fidget and the
+`implicit` half of every eval case were deleted (docs/NEXT.md, item 2).
 
-Nothing a user or an agent reaches runs on the implicit path any more: the
-window evaluates with the exact kernel and has no toggle, every MCP tool
-measures the exact solid, and the CLI's `--brep` and `--depth` are accepted
-and say they do nothing. The eval corpus still runs its `implicit` half, which
-is what keeps `sdf.rs` compiling until docs/NEXT.md's last step deletes it.
+What stayed in `parcad-core` from that side is the part that never depended on
+a field: the rasteriser and its section capping (`render.rs`), the region
+colouring (`tags.rs`), mesh statistics and STL (`mesh.rs`), and the ambient
+occlusion pass (`occlusion.rs`, ported from fidget and MPL-2.0 for that reason
+— NOTICE.md). Everything geometric lives in `parcad-occt`, behind the worker.
+
+`parcad_occt::evaluate` is allowed to refuse, and the CLI's `--brep` and
+`--depth` still parse and say they do nothing.
 
 ## The B-rep kernel runs in a child process
 

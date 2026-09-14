@@ -1,17 +1,7 @@
 {
   "name": "two-boxes",
   "script": "eval/scripts/two-boxes.js",
-  "why": "The smallest part in several bodies, held to numbers read off the script: 1000 and 2000 mm\u00b3 boxes 15 mm apart, never fused. The part-level bodies count of 2 is the intent here, and each named body is in one piece; a fuse creeping in would read as 1 body of 3000 mm\u00b3, and a body going missing as a volume short by exactly its own. Probed per body: a ray along X from the left crosses left, left, right, right at x = -5, 5, 20 and 40, 10 mm of material first and 30 in all; (30, 0, 0) is inside the right box, 5 mm from its nearest face; (12.5, 0, 0) sits in the 15 mm gap, 7.5 from each.",
-  "implicit": {
-    "refuses": {
-      "kind": "error",
-      "message_contains": [
-        "returns 2 bodies",
-        "needs the B-rep backend"
-      ]
-    },
-    "depth": 6
-  },
+  "why": "The smallest part in several bodies, held to numbers read off the script: 1000 and 2000 mm³ boxes 15 mm apart, never fused. The part-level bodies count of 2 is the intent here, and each named body is in one piece; a fuse creeping in would read as 1 body of 3000 mm³, and a body going missing as a volume short by exactly its own. Probed per body: a ray along X from the left crosses left, left, right, right at x = -5, 5, 20 and 40, 10 mm of material first and 30 in all; (30, 0, 0) is inside the right box, 5 mm from its nearest face; (12.5, 0, 0) sits in the 15 mm gap, 7.5 from each.",
   "brep": {
     "size": [
       45.0,

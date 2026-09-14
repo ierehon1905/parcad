@@ -1,23 +1,7 @@
 {
   "name": "rotated-box",
   "script": "eval/scripts/rotated-box.js",
-  "why": "A rotation with a closed-form answer: 21.213 mm across, 1200 mm3. The implicit gap here is dual contouring alone, with no kernel disagreement mixed in.",
-  "implicit": {
-    "depth": 6,
-    "size": [
-      21.191,
-      21.191,
-      6.0
-    ],
-    "volume_mm3": 1197.673,
-    "area_mm2": 773.92,
-    "triangles": 28112,
-    "bodies": 1,
-    "voids": 0,
-    "stands_on_mm2": 210.314,
-    "stands_on_patches": 1,
-    "watertight": true
-  },
+  "why": "A rotation with a closed-form answer: 21.213 mm across, 1200 mm3. Only planes, so the kernel lands on it exactly.",
   "brep": {
     "size": [
       21.213,

@@ -7,8 +7,8 @@ which, because the difference matters if you redistribute a binary.
 
 `crates/`, `app/` (both the Rust host and the TypeScript frontend), `tools/`,
 `field/`, `examples/`, `eval/`, `cmake/` and `docs/` — including the screenshots
-in `docs/images/`, which are this application rendering its own examples — at
-your option under either:
+in `docs/images/`, which are this application rendering its own examples — with
+one file excepted below, at your option under either:
 
 - [LICENSE-MIT](LICENSE-MIT) — MIT
 - [LICENSE-APACHE](LICENSE-APACHE) — Apache License 2.0
@@ -67,18 +67,20 @@ reimplemented.
 Do not move code between any of these directories and `crates/`; the licences
 differ.
 
-## `fidget` — MPL-2.0
+## `crates/parcad-core/src/occlusion.rs` — MPL-2.0
 
-The SDF kernel. [fidget](https://github.com/mkeeter/fidget) 0.5.0 is a direct,
-non-optional dependency of `parcad-core`, so unlike the OCCT chain it is in
-**every** ParCAD binary — the app, the CLI and the eval harness alike. MPL-2.0 is
-file-level copyleft: it does not reach our own code, but distributing a binary
-carries an obligation to make the source of the MPL files available. It is used
-unmodified from crates.io, so naming the upstream and the version discharges it.
+The ambient-occlusion pass an agent's renders are shaded with is a port of
+`effects.rs` from [fidget-raster](https://github.com/mkeeter/fidget) 0.5.0 by
+Matt Keeter, made when ParCAD stopped depending on fidget as its implicit
+kernel. MPL-2.0 is file-level copyleft: that one file stays MPL-2.0, says so in
+its header, and is in **every** ParCAD binary — the app, the CLI and the eval
+harness alike. It does not reach our other code, but distributing a binary
+carries an obligation to make that file's source available, which this
+repository does. Do not move code between it and the MIT/Apache files.
 
-`dynasm` and `dynasmrt` arrive with fidget, and `option-ext`, `cssparser`,
-`selectors` and `dtoa-short` arrive through Tauri, all MPL-2.0 on the same terms.
-No dependency of this project is GPL, AGPL or SSPL.
+`option-ext`, `cssparser`, `selectors` and `dtoa-short` arrive through Tauri,
+all MPL-2.0 on the same terms. No dependency of this project is GPL, AGPL or
+SSPL.
 
 ## What this means for a binary you ship
 
@@ -88,7 +90,7 @@ what triggers obligations, and there are three:
 - **LGPL-2.1 §6, relinking.** OCCT is built into `parcad-occt-worker`. Anyone who
   gets that binary must be able to use their own build of OCCT instead. The next
   section says how.
-- **MPL-2.0 §3.2**, source availability for fidget and the crates above.
+- **MPL-2.0 §3.2**, source availability for `occlusion.rs` and the crates above.
 - **The licence texts themselves** must accompany the binary. `bundle.resources`
   in `app/src-tauri/tauri.conf.json` ships this file, both of ours, and both of
   OCCT's into the bundle's `Resources/`.

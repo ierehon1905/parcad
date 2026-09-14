@@ -1,17 +1,7 @@
 {
   "name": "left-hand-hook",
   "script": "eval/scripts/left-hand-hook.js",
-  "why": "Handedness, pinned where volume cannot see it: half a left-handed turn from +X spends itself at y <= 0 (y = -11 to +0.08, the end discs leaning), and a marker ball at y = +20 turns that position into a size, 32 mm deep in Y where the right-handed helix measures 21.08 with the identical volume. Closed form pi * 0.5 * sqrt((20 pi)^2 + 25) + 4/3 pi = 103.197 mm3; the exact B-rep reads 99.0080 + 4.1888 through BRepGProp. Two bodies on purpose. The implicit half refuses by name.",
-  "implicit": {
-    "refuses": {
-      "kind": "error",
-      "message_contains": [
-        "no exact distance field",
-        "helix",
-        "B-rep backend"
-      ]
-    }
-  },
+  "why": "Handedness, pinned where volume cannot see it: half a left-handed turn from +X spends itself at y <= 0 (y = -11 to +0.08, the end discs leaning), and a marker ball at y = +20 turns that position into a size, 32 mm deep in Y where the right-handed helix measures 21.08 with the identical volume. Closed form pi * 0.5 * sqrt((20 pi)^2 + 25) + 4/3 pi = 103.197 mm3; the exact B-rep reads 99.0080 + 4.1888 through BRepGProp. Two bodies on purpose.",
   "brep": {
     "size": [
       21.997,

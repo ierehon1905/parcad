@@ -570,12 +570,9 @@ safe; row 1 of the table stays at zero voids and goes on building.
 `eval/cases/refuse-sealed-void.json` and `coincident-cutter-entry.json` pin the
 accident and the safe row against each other.
 
-Two limits, both real. It is **B-rep only** — the distance field has no topology,
-and at millimetre contouring it cannot represent the membrane at all, so the
-implicit backend builds it silently. And it catches a cut that closes behind
-itself, not a cut that lands thin: a blind hole one micron shy of breaking
-through the *far* face is an ordinary blind hole by every topological measure,
-and stays silent.
+One limit, real. It catches a cut that closes behind itself, not a cut that
+lands thin: a blind hole one micron shy of breaking through the *far* face is
+an ordinary blind hole by every topological measure, and stays silent.
 
 Nothing broader fires, and both reasons still hold. Row 1 of the table is correct
 geometry — what a boss trimmed back to a face or a slot cut flush with an

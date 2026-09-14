@@ -357,11 +357,11 @@ pub struct Success {
     pub deflection_mm: f64,
     /// Logical edges, each a polyline sampled along the true curve.
     ///
-    /// This is the payload the implicit backend cannot produce at any
-    /// resolution. There, a sharp edge exists only as a zigzag of mesh vertices
-    /// and has to be *inferred* in screen space; here the curve is a first-class
-    /// object and gets sampled directly. A straight edge comes back as two
-    /// points, and draws as a straight line, because it is one.
+    /// A mesh alone cannot produce this at any resolution: there a sharp edge
+    /// exists only as a zigzag of vertices and has to be *inferred* in screen
+    /// space; here the curve is a first-class object and gets sampled
+    /// directly. A straight edge comes back as two points, and draws as a
+    /// straight line, because it is one.
     pub edges: Vec<EdgeCurve>,
     pub topology: Topology,
     /// The named bodies of a part that returns several, in the script's

@@ -1,7 +1,4 @@
-// The loft primitive against a closed form, and the honesty split that came
-// with it: the B-rep builds this exactly, the implicit backend must refuse by
-// name rather than approximate — a quietly wrong field would let a probe
-// confidently measure a part that does not exist.
+// The loft primitive against a closed form.
 //
 // Ruled walls between a 40 mm and a 20 mm square, 30 mm apart, make a
 // prismatoid: V = h/6 * (A_bottom + 4*A_mid + A_top)

@@ -542,10 +542,9 @@ a `section` and nothing about the part changes: it is how the picture is drawn.
 
 **One `Section`, two renderers.** `view::Section` is an axis, a position and a
 side, and both defaults resolve *per view*, because the half that has to go
-depends on where you are looking from. The raymarcher gets this almost free:
-intersecting the field with a half-space is exact and the cut arrives as
-ordinary surface. The rasteriser, which is what an agent's renders come off, has
-to cap the hole the clip leaves or a solid boss draws as a thin cup.
+depends on where you are looking from. The window clips on the GPU; the
+rasteriser, which is what an agent's renders come off, has to cap the hole
+the clip leaves or a solid boss draws as a thin cup.
 
 **Capping is a parity count, and the textbook answer was wrong here.** Each
 pixel counts the crossings the clip threw away; odd means the ray was still in
@@ -670,9 +669,10 @@ z=13.0   solids=2  ...                      ← the boss splits here
 
 Forty tokens instead of ten thousand, and the transitions are the interesting
 part — so choose the heights adaptively at topology changes rather than every
-centimetre. `sdf.rs` gives the occupancy test and `tags.rs`'s region pass
-already does connected-component work on a pixel mask; a slice is that mask
-taken on a plane instead of a view. Medium, and it should wait behind §3 and §5.
+centimetre. The kernel's point classifier (`perceive.rs`) gives the occupancy
+test; a slice is a mask of it taken on a plane, and counting its components is
+what the region pass already does on a view. Medium, and it should wait behind
+§3 and §5.
 
 ## 11. Let the agent render its own — hold, but not for long
 
@@ -852,10 +852,11 @@ documentation gap this page can close by writing more, and the fix is more
 likely a refusal or a warning than a sentence.
 
 **Two things about running this suite** that cost most of a session. Field
-trials must run against a **release** app: a debug binary raymarches a 512 px
-view in about 70 s against a fraction of a second, so any case that asks for
-`views` stalls, and under four concurrent trials the script sandbox's own 5 s
-deadline starts firing on scripts that build in microseconds. And a
+trials must run against a **release** app: a debug binary was measured at
+about 70 s per 512 px view when renders were raymarched, against a fraction of
+a second in release, so any case that asks for `views` stalls, and under four
+concurrent trials the script sandbox's own 5 s deadline starts firing on
+scripts that build in microseconds. And a
 `pkill -f parcad-app` from a sibling checkout kills the app this round is
 measuring; the trials then grade VOID with "unable to connect" in their errors,
 which reads exactly like a broken tool.

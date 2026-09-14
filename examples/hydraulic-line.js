@@ -3,8 +3,8 @@
 //
 // `pipe` routes 12 mm tube through 20 mm bends — straight runs and partial
 // tori, both exact, which is as much of "sweep" as can be built honestly here.
-// What is still not expressible is a path that curves continuously: a spline
-// has no exact distance field, so it is not offered rather than fitted.
+// What is still not expressible is a path that curves continuously: there is
+// no spline in the graph's path type yet, so it is not offered rather than fitted.
 //
 // The inlet boss carries its O-ring groove. That used to be impossible: the
 // coaxial seams a torus cut leaves in a cylinder wall segfaulted
