@@ -549,6 +549,10 @@ pub struct RenderedView {
     /// attach. Set by the transport that kept it; the pixels ride inline too.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// `path` as a Markdown image, to paste into a reply. Codex shows the user
+    /// no picture a tool returns, but renders this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub markdown: Option<String>,
 }
 
 /// Where the camera for one view was, said in the part's own axes.
@@ -749,6 +753,7 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                         cut_fraction: round_fraction(buffer.cut_fraction()),
                     }),
                     path: None,
+                    markdown: None,
                 },
                 png,
             })

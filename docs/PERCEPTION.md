@@ -877,6 +877,33 @@ Two more cases landed with the selector work: `which-edges-are-the-seam`
 `which-upright-edges-round` (3/4 SOUND, the fourth right without
 evaluating).
 
+## 17. Showing the user — the model sees, the user may not
+
+Every section above is about what the *model* can see. A separate fact: in
+Codex the model receives `evaluate_part`'s PNGs (its session log carries them
+as image inputs, and it named the background colour right) while the user
+sees none of them, so a Codex session asked to show a part fell back to
+computer use. The Codex app does render a Markdown image with a local path in
+the model's reply, so each kept view now also carries `markdown`, that line
+ready to paste, and the server instructions say to paste it. A tag-region map
+gets none: it is for the model to read.
+
+Measured on 2026-09-14, "make a plate … show me what it looks like",
+graded by `eval/field/show-me-the-part.md` (an image line naming a plain or
+section render):
+
+| client | without the field (0.0.5) | with it |
+|---|---|---|
+| Codex 0.147, gpt-5.6 | 1/2, and that one a region map | 5/5 |
+| Claude Code, Haiku, both thinking arms | 0/8 | 4/8 |
+
+The Haiku failures are the failure itself: "the top view shows the four holes
+clearly" about a picture the user never had. Several trials instead put the
+part on the live screen with `set_script`, which *is* a way to show it where
+the app is open, and the case grades that WRONG — read those transcripts
+before reading the score. Renders live in the temp directory, so a chat's
+images outlast the machine's temp cleaning only by days.
+
 ## Suggested order
 
 Done, and what each cost is in its own section: point and ray probes and

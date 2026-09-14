@@ -422,7 +422,7 @@ impl Parcad {
     #[tool(
         name = "evaluate_part",
         annotations(title = "Build and measure a part", read_only_hint = true, open_world_hint = false),
-        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality, `bodies` (one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Each view in the reply also carries `path`, the same image as a PNG file on this machine, to attach or show the user. A build is kept per script: asking again with other views, exporting, or putting the script on screen reuses it (`reused_build`), so render after measuring rather than instead of it. `timeout_s` gives a heavy part longer than the default 20 s. Use this to check that a script produces the part you intended.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. A tag in `unlocated_tags` owns no point of the finished surface at all: it was buried by a later boolean, or it is on a fillet, which has no field to locate.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
+        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality, `bodies` (one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Each view in the reply also carries `path`, the same image as a PNG file on this machine, and `markdown`, that file as an image line for your reply: the user does not see the pictures a tool returns in every client, so paste `markdown` whenever they should see the part. A build is kept per script: asking again with other views, exporting, or putting the script on screen reuses it (`reused_build`), so render after measuring rather than instead of it. `timeout_s` gives a heavy part longer than the default 20 s. Use this to check that a script produces the part you intended.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. A tag in `unlocated_tags` owns no point of the finished surface at all: it was buried by a later boolean, or it is on a fillet, which has no field to locate.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
     )]
     async fn evaluate_part(
         &self,
@@ -483,6 +483,14 @@ impl Parcad {
                 .into_iter()
                 .map(|mut render| {
                     render.summary.path = keep_render(&stem, &render.summary.view, &render.png);
+                    // A tag-region map is for the caller to read, not a picture of the part.
+                    if !regions {
+                        render.summary.markdown = render
+                            .summary
+                            .path
+                            .as_deref()
+                            .map(|path| markdown_image(&render.summary.view, path));
+                    }
                     (render.summary, render.png)
                 })
                 .unzip::<_, _, Vec<_>, Vec<_>>();
@@ -939,7 +947,8 @@ smooth edges unless asked. Add .expect({ count: n }) so a selector that drifts f
 The edge@N ids from list_entities describe one evaluation and are rejected in scripts.\n\n\
 The kernel refuses rather than approximating; a refusal names the fix and lists the edges \
 it means, so read it and change the script. Every report is measured, never requested: \
-quote its numbers rather than the script's.";
+quote its numbers rather than the script's. The user may not see a tool's pictures: to \
+show them a view, put its `markdown` line in your reply.";
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Parcad {
@@ -1204,6 +1213,16 @@ fn keep_render(stem: &str, view: &str, png: &[u8]) -> Option<String> {
     let path = dir.join(format!("{stem}-{view}.png"));
     std::fs::write(&path, png).ok()?;
     Some(path.to_string_lossy().to_string())
+}
+
+/// A kept render as a Markdown image. A destination with a space or a
+/// parenthesis only parses inside angle brackets.
+fn markdown_image(view: &str, path: &str) -> String {
+    if path.contains([' ', '(', ')']) {
+        format!("![{view} view](<{path}>)")
+    } else {
+        format!("![{view} view]({path})")
+    }
 }
 
 /// The picker's thumbnail for a script: the iso view of its exact build.
