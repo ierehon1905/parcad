@@ -1,18 +1,15 @@
-# Fusion 360 recreation targets
+# Fusion 360 recreations
 
-Parts exported from the reference corpus of Fusion 360 documents, kept here so that
-recreating them in parcad's DSL is a measurable exercise rather than an
+Parts exported from the reference corpus of Fusion 360 documents and recreated
+in parcad's DSL, so that each one is a measurable agreement rather than an
 impression. Each file records the volume, area, bounding box and face types read
 off the Fusion export, so a recreation either agrees with the original or does
 not.
 
 **These are seeded as real projects, in a `fusion360` folder.** `seed()` in
 `crates/parcad-host/src/projects.rs` keeps the structure, so this arrives in the
-project list as an ordinary folder. The ones that throw show their reason in the
-editor: a target you can open and see blocked is more use than one that only
-exists in the repository. `.seeded` records the whole relative path
-(`fusion360/v2`, not `v2`), so a leaf name may repeat and a deleted target stays
-deleted.
+project list as an ordinary folder. Only recreations that build are here;
+targets that still throw are in `eval/targets/fusion360/`.
 
 **A seeded copy is frozen, and for targets that is a trap.** Seeding runs once
 per path and never overwrites, which is right for a part the user has edited and
@@ -36,12 +33,11 @@ bun tools/run.ts ~/Documents/parcad/fusion360/untriangle-v3.parcad/part.js >/dev
 The `README.md` and `preview.png` go because they are derived from the old
 script; the app rewrites them from measured values on the next save. Skipping the
 second line is how the mistake above happened — the check has to run against the
-user's copy, because that is the file that was wrong. The real fix is that
-recreation targets should not be seeded as ordinary parts at all; that is a
-change to `seed()` and is not written yet.
+user's copy, because that is the file that was wrong. Targets no longer
+reach the folder at all; they moved out of `examples/`.
 
-A target that becomes a faithful recreation gets promoted up one level into
-`examples/` proper, and at that point it should also earn a case in
+A target that becomes a faithful recreation moves here from
+`eval/targets/fusion360/`, and at that point it should also earn a case in
 `eval/cases/`.
 
 The exports themselves (`.step`, `.stl`, `measurements.json`) live in
@@ -89,18 +85,9 @@ while reporting success.
 
 ## Targets that do not build yet
 
-| file | part | Fusion volume | faces | NURBS | blocked on |
-|---|---|---|---|---|---|
-| `spiral-v1.js` | Spiral v1 | 406,116 mm³ | 3 | 0 | a loft whose sections rotate as they rise; also two solids |
-| `steam-top-4-holed-v1-v6.js` | Steam Top 4 Holed v1 v6 | 8,976 mm³ | 39 | 10 | Patch — out by decision: surface logic |
-| `untitled2-v1.js` | Untitled2 v1 | 36,357 mm³ | 1 | 1 | a spline in a revolve section; also two solids |
-| `v2.js` | ваза v2 | 144,242 mm³ | 9 | 8 | spline loft sections; parcad's loft takes polygons |
-| `v3.js` | шар v3 | 515,661 mm³ | 460 | 32 | a sweep around a sphere; parcad's sweep follows runs and circular bends |
-| `v4.js` | v4 | 7,375 mm³ | 3 | 1 | a spline outline in an extrude, then SplitBody |
-
-Each throws with its reason. They are deliberately not approximate solids: a stub
-that returned something roughly right would measure as a part and read as
-progress, which is worse than nothing.
+Six more exports are measured but not buildable, and they live in
+`eval/targets/fusion360/`, which is not seeded: a part that only throws is a
+TODO, not an example. That README lists what each is blocked on.
 
 The wall moved when `loft` and `sweep` landed, and again when the probe read
 UnTriangle's export properly. What that recreation taught, in order of worth:

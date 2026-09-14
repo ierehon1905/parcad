@@ -27,5 +27,5 @@
 throw new Error(
   "v2 is a Fusion recreation target, not a part yet: " +
     "parcad's loft takes polygon sections and this vase is lofted through spline outlines. " +
-    "See examples/fusion360/README.md.",
+    "See eval/targets/fusion360/README.md.",
 );

@@ -26,5 +26,5 @@
 throw new Error(
   "v4 is a Fusion recreation target, not a part yet: " +
     "its outline is a spline, which extrude() cannot take, and parcad also has no " +
-    "SplitBody. See examples/fusion360/README.md.",
+    "SplitBody. See eval/targets/fusion360/README.md.",
 );

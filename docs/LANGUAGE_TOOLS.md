@@ -51,7 +51,7 @@ across all 20 seed parts:
 | `counterbore` | no example |
 | `clearance` | no example |
 | `METRIC_FASTENERS` | no example |
-| `revolve` | only `fusion360/untitled2-v1.js` |
+| `revolve` | only `eval/targets/fusion360/untitled2-v1.js`, which does not build |
 | `loft` | only `fusion360/untriangle-v3.js` |
 
 A model whose only route to the vocabulary is reading example parts cannot

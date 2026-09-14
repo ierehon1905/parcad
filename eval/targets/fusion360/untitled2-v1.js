@@ -27,5 +27,5 @@
 throw new Error(
   "untitled2-v1 is a Fusion recreation target, not a part yet: " +
     "revolve() takes a polygon section and this profile is a spline. " +
-    "See examples/fusion360/README.md.",
+    "See eval/targets/fusion360/README.md.",
 );

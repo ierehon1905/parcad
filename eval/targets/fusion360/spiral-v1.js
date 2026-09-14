@@ -25,5 +25,5 @@
 throw new Error(
   "spiral-v1 is a Fusion recreation target, not a part yet: " +
     "parcad's loft stacks sections along +Z and this spiral's sections rotate as they rise " +
-    "(and it is two solids). See examples/fusion360/README.md.",
+    "(and it is two solids). See eval/targets/fusion360/README.md.",
 );

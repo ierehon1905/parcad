@@ -26,5 +26,5 @@
 throw new Error(
   "v3 is a Fusion recreation target, not a part yet: " +
     "parcad's sweep follows straight runs and circular bends, and this part sweeps " +
-    "around a sphere into NURBS. See examples/fusion360/README.md.",
+    "around a sphere into NURBS. See eval/targets/fusion360/README.md.",
 );

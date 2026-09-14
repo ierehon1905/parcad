@@ -24,5 +24,5 @@
 
 throw new Error(
   "steam-top-4-holed-v1-v6 is a Fusion recreation target, not a part yet: " +
-    "parcad has no Patch. See examples/fusion360/README.md.",
+    "parcad has no Patch. See eval/targets/fusion360/README.md.",
 );
