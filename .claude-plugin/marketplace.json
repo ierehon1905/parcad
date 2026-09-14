@@ -1,0 +1,16 @@
+{
+  "name": "parcad",
+  "owner": { "name": "Leon Minasyan", "url": "https://github.com/ierehon1905" },
+  "description": "ParCAD: parametric CAD as code, with an MCP server for the model that writes it.",
+  "plugins": [
+    {
+      "name": "parcad",
+      "source": "./packaging/plugin",
+      "displayName": "ParCAD",
+      "description": "Model 3D-printable parts in a JavaScript DSL on an exact B-rep kernel, over MCP.",
+      "homepage": "https://github.com/ierehon1905/parcad",
+      "license": "MIT OR Apache-2.0",
+      "category": "design"
+    }
+  ]
+}

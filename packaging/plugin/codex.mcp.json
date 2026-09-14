@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "parcad": {
+      "command": "parcad",
+      "args": ["mcp"],
+      "env_vars": ["PARCAD_PROJECTS_DIR", "PARCAD_HTTP_PORT", "PARCAD_OCCT_WORKER", "PARCAD_OCCT_TIMEOUT"]
+    }
+  }
+}

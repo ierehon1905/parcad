@@ -1,0 +1,12 @@
+#!/bin/sh
+# Launches `parcad mcp` for a plugin. A client started from the Dock does not
+# inherit a shell's PATH, so Homebrew's prefix is looked in by name as well.
+for candidate in "$PARCAD_BIN" "$(command -v parcad 2>/dev/null)" /opt/homebrew/bin/parcad /usr/local/bin/parcad "$HOME/.cargo/bin/parcad"; do
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then
+    exec "$candidate" mcp "$@"
+  fi
+done
+echo "parcad is not installed, so its MCP server cannot start. Install it:
+  brew tap ierehon1905/parcad && brew trust ierehon1905/parcad && brew install parcad
+then restart this session. A parcad elsewhere is found through PARCAD_BIN=/path/to/parcad." >&2
+exit 1

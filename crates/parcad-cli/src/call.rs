@@ -274,92 +274,167 @@ impl Client {
     /// One POST to `/mcp`. Returns the response's content type and the
     /// JSON-RPC message in it, which is absent for an accepted notification.
     fn post(&mut self, body: &Value) -> Result<(String, Option<Value>)> {
-        let address = format!("127.0.0.1:{}", self.port);
-        let mut stream = TcpStream::connect(&address).with_context(|| {
-            format!(
+        let reply = exchange(
+            self.port,
+            "POST",
+            body,
+            PROTOCOL,
+            self.session.as_deref(),
+        )
+        .map_err(|e| match e {
+            Exchange::Unreachable(address) => anyhow::anyhow!(
                 "no parcad is listening on {address}. Start one — `parcad serve`, \
                  `brew services start parcad`, or the desktop app — or name its port \
                  with PARCAD_HTTP_PORT."
-            )
+            ),
+            Exchange::Failed(e) => e,
         })?;
-        let payload = serde_json::to_vec(body)?;
-        let mut request = format!(
-            "POST /mcp HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\n\
-             Accept: application/json, text/event-stream\r\nContent-Length: {}\r\n\
-             MCP-Protocol-Version: {PROTOCOL}\r\nConnection: close\r\n",
-            payload.len()
-        );
-        if let Some(session) = &self.session {
-            request.push_str(&format!("Mcp-Session-Id: {session}\r\n"));
-        }
-        // SEP-2243: from protocol 2026-07-28 the method, and for a tool call
-        // its name, are repeated in headers so a proxy can route without
-        // reading the body. The host refuses a request without them.
-        if let Some(method) = body["method"].as_str() {
-            request.push_str(&format!("Mcp-Method: {method}\r\n"));
-            if method == "tools/call" {
-                if let Some(name) = body["params"]["name"].as_str() {
-                    request.push_str(&format!("Mcp-Name: {name}\r\n"));
-                }
-            }
-        }
-        request.push_str("\r\n");
-        stream.write_all(request.as_bytes())?;
-        stream.write_all(&payload)?;
-
-        let mut raw = Vec::new();
-        stream.read_to_end(&mut raw)?;
-        let (head, body) = split_response(&raw)?;
-        let status = head.lines().next().unwrap_or("");
-        let code: u16 = status
-            .split_whitespace()
-            .nth(1)
-            .and_then(|c| c.parse().ok())
-            .unwrap_or(0);
-        let header = |name: &str| -> Option<String> {
-            head.lines().skip(1).find_map(|line| {
-                let (key, value) = line.split_once(':')?;
-                key.trim()
-                    .eq_ignore_ascii_case(name)
-                    .then(|| value.trim().to_string())
-            })
-        };
-        if let Some(session) = header("mcp-session-id") {
+        if let Some(session) = reply.header("mcp-session-id") {
             self.session = Some(session);
         }
-        let body = if header("transfer-encoding").is_some_and(|v| v.contains("chunked")) {
-            dechunk(body)?
-        } else {
-            body.to_vec()
-        };
-        let text = String::from_utf8_lossy(&body).into_owned();
-        if !(200..300).contains(&code) {
+        if !(200..300).contains(&reply.code) {
             // A refusal is a JSON-RPC error in the body, written for whoever
             // caused it; pass its message through whole rather than the wrapper.
-            if let Some(message) = serde_json::from_str::<Value>(&text)
+            if let Some(message) = serde_json::from_str::<Value>(&reply.text)
                 .ok()
                 .and_then(|m| m["error"]["message"].as_str().map(str::to_string))
             {
                 bail!("{message}");
             }
-            bail!("the host answered {status}: {}", text.trim());
+            bail!("the host answered {}: {}", reply.code, reply.text.trim());
         }
-        let content_type = header("content-type").unwrap_or_default();
-        let message = if content_type.starts_with("text/event-stream") {
-            // The last message on the stream is the reply; the ones before it
-            // are notifications the CLI has no use for.
-            text.lines()
-                .filter_map(|line| line.strip_prefix("data:"))
-                .filter_map(|data| serde_json::from_str::<Value>(data.trim()).ok())
-                .filter(|message| message.get("id").is_some())
-                .next_back()
-        } else if text.trim().is_empty() {
-            None
-        } else {
-            Some(serde_json::from_str(&text).context("the host's reply was not JSON")?)
-        };
+        let content_type = reply.header("content-type").unwrap_or_default();
+        // The last message on a stream is the reply; the ones before it are
+        // notifications the CLI has no use for.
+        let message = reply
+            .messages()?
+            .into_iter()
+            .rfind(|message| message.get("id").is_some());
         Ok((content_type, message))
     }
+}
+
+/// Why an exchange with the host did not produce a reply.
+pub enum Exchange {
+    /// Nothing accepted the connection: no host is running on that port.
+    Unreachable(String),
+    Failed(anyhow::Error),
+}
+
+impl<E: Into<anyhow::Error>> From<E> for Exchange {
+    fn from(e: E) -> Self {
+        Exchange::Failed(e.into())
+    }
+}
+
+/// An HTTP reply from `/mcp`, whatever its status.
+pub struct Reply {
+    pub code: u16,
+    head: String,
+    pub text: String,
+}
+
+impl Reply {
+    pub fn header(&self, name: &str) -> Option<String> {
+        self.head.lines().skip(1).find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            key.trim()
+                .eq_ignore_ascii_case(name)
+                .then(|| value.trim().to_string())
+        })
+    }
+
+    /// Every JSON-RPC message in the body, read as plain JSON or as an event
+    /// stream according to its content type.
+    pub fn messages(&self) -> Result<Vec<Value>> {
+        let content_type = self.header("content-type").unwrap_or_default();
+        if content_type.starts_with("text/event-stream") {
+            return Ok(self
+                .text
+                .lines()
+                .filter_map(|line| line.strip_prefix("data:"))
+                .filter_map(|data| serde_json::from_str::<Value>(data.trim()).ok())
+                .collect());
+        }
+        if self.text.trim().is_empty() {
+            return Ok(Vec::new());
+        }
+        match serde_json::from_str(&self.text).context("the host's reply was not JSON")? {
+            Value::Array(batch) => Ok(batch),
+            message => Ok(vec![message]),
+        }
+    }
+}
+
+/// One request to `/mcp` on the loopback host, sent and read whole.
+pub fn exchange(
+    port: u16,
+    verb: &str,
+    body: &Value,
+    protocol: &str,
+    session: Option<&str>,
+) -> Result<Reply, Exchange> {
+    let address = format!("127.0.0.1:{port}");
+    let mut stream = match TcpStream::connect(&address) {
+        Ok(stream) => stream,
+        Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => {
+            return Err(Exchange::Unreachable(address))
+        }
+        Err(e) => return Err(Exchange::Failed(e.into())),
+    };
+    let payload = if body.is_null() {
+        Vec::new()
+    } else {
+        serde_json::to_vec(body)?
+    };
+    let mut request = format!(
+        "{verb} /mcp HTTP/1.1\r\nHost: {address}\r\nContent-Type: application/json\r\n\
+         Accept: application/json, text/event-stream\r\nContent-Length: {}\r\n\
+         MCP-Protocol-Version: {protocol}\r\nConnection: close\r\n",
+        payload.len()
+    );
+    if let Some(session) = session {
+        request.push_str(&format!("Mcp-Session-Id: {session}\r\n"));
+    }
+    // SEP-2243: from protocol 2026-07-28 the method, and for a tool call its
+    // name, are repeated in headers so a proxy can route without reading the
+    // body. The host refuses a request without them.
+    if let Some(method) = body["method"].as_str() {
+        request.push_str(&format!("Mcp-Method: {method}\r\n"));
+        if method == "tools/call" {
+            if let Some(name) = body["params"]["name"].as_str() {
+                request.push_str(&format!("Mcp-Name: {name}\r\n"));
+            }
+        }
+    }
+    request.push_str("\r\n");
+    stream.write_all(request.as_bytes())?;
+    stream.write_all(&payload)?;
+
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw)?;
+    let (head, body) = split_response(&raw)?;
+    let code = head
+        .lines()
+        .next()
+        .and_then(|status| status.split_whitespace().nth(1))
+        .and_then(|c| c.parse().ok())
+        .unwrap_or(0);
+    let mut reply = Reply {
+        code,
+        head,
+        text: String::new(),
+    };
+    let body = if reply
+        .header("transfer-encoding")
+        .is_some_and(|v| v.contains("chunked"))
+    {
+        dechunk(body)?
+    } else {
+        body.to_vec()
+    };
+    reply.text = String::from_utf8_lossy(&body).into_owned();
+    Ok(reply)
 }
 
 fn split_response(raw: &[u8]) -> Result<(String, &[u8])> {

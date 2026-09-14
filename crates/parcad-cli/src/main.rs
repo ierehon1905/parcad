@@ -6,6 +6,7 @@
 //! And the application itself, without a window, plus its tools from the shell:
 //!
 //!     parcad serve [--port N]
+//!     parcad mcp [--port N]
 //!     parcad tools
 //!     parcad call <tool> [JSON] [--set key=value]...
 //!
@@ -13,6 +14,7 @@
 //! sandbox MCP runs scripts in, so `bun tools/run.ts` is not a prerequisite.
 
 mod call;
+mod stdio;
 mod ui;
 
 use anyhow::{Context, Result};
@@ -132,6 +134,7 @@ fn parse_args() -> Result<Args> {
             "-h" | "--help" => {
                 eprintln!(
                     "usage: parcad serve [--port N]              # host the UI and MCP, no window\n\
+                     \x20      parcad mcp [--port N]                # MCP over stdio, for a client to launch\n\
                      \x20      parcad tools                        # what the running host offers\n\
                      \x20      parcad call <tool> [JSON] [--set key=value | key=@file | key:=json]\n\
                      \x20      parcad <graph.json | part.js> [--out DIR] [--depth N] [--size PX]\n\
@@ -255,7 +258,13 @@ fn serve(args: impl Iterator<Item = String>) -> Result<()> {
             other => anyhow::bail!("unknown argument {other:?}; usage: parcad serve [--port N]"),
         }
     }
+    host(port)
+}
 
+/// Seed the project folder and host the application on `port` until the
+/// listener stops. `parcad serve` is this on the main thread; `parcad mcp` runs
+/// it on a thread of its own when it finds no host to relay to.
+fn host(port: u16) -> Result<()> {
     // Seed before the host comes up: the frontend asks for the project list
     // as it loads, and an empty first launch would look like a fresh install
     // with nothing in it.
@@ -294,6 +303,7 @@ fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("serve") => return serve(args),
+        Some("mcp") => return stdio::run(args),
         Some("tools") => return call::tools(args),
         Some("call") => return call::call(args),
         _ => {}

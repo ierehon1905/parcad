@@ -117,12 +117,40 @@ bun tools/run.ts examples/bracket.js > /tmp/bracket.json
 The app serves its UI and an MCP endpoint on <http://127.0.0.1:4242>. Parts live
 in `~/Documents/parcad` as plain `.js` files you can edit anywhere.
 
-```bash
-claude mcp add --transport http parcad http://127.0.0.1:4242/mcp
+## Use it from an agent
+
+As a plugin, which brings the MCP server and a skill that says how to use it.
+It needs the Homebrew `parcad` installed:
+
+```text
+/plugin marketplace add ierehon1905/parcad
+/plugin install parcad@parcad
 ```
 
-Point an agent at it and start with the `read_docs` tool — it hands over the
-whole language in one call.
+In Codex:
+
+```bash
+codex plugin marketplace add ierehon1905/parcad
+codex plugin add parcad@parcad
+```
+
+Or add the server by hand, in any client that launches stdio servers:
+
+```bash
+claude mcp add parcad -- parcad mcp
+```
+
+```bash
+codex mcp add parcad -- parcad mcp
+```
+
+`parcad mcp` relays to the app or `parcad serve` when one is running, so the
+agent shares the live session with your window. When none is running it hosts
+one itself, for as long as the client stays connected. A client that connects
+by URL can use `http://127.0.0.1:4242/mcp` directly while a host is up.
+
+Start the agent on the `read_docs` tool, which hands over the whole language in
+one call.
 
 ## More
 

@@ -1,0 +1,12 @@
+{
+  "name": "parcad",
+  "interface": { "displayName": "ParCAD" },
+  "plugins": [
+    {
+      "name": "parcad",
+      "source": { "source": "local", "path": "./packaging/plugin" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Design"
+    }
+  ]
+}

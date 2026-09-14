@@ -1,0 +1,26 @@
+{
+  "name": "parcad",
+  "displayName": "ParCAD",
+  "version": "0.0.2",
+  "description": "Parametric CAD you write as code: model 3D-printable parts in a JavaScript DSL, evaluated by an exact B-rep kernel, measured rather than eyeballed.",
+  "author": {
+    "name": "Leon Minasyan",
+    "url": "https://github.com/ierehon1905"
+  },
+  "homepage": "https://github.com/ierehon1905/parcad",
+  "repository": "https://github.com/ierehon1905/parcad",
+  "license": "MIT OR Apache-2.0",
+  "keywords": [
+    "cad",
+    "3d-printing",
+    "step",
+    "stl",
+    "mcp",
+    "parametric"
+  ],
+  "mcpServers": {
+    "parcad": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/parcad-mcp"
+    }
+  }
+}
