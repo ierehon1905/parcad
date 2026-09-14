@@ -67,7 +67,8 @@ impl std::fmt::Display for OcctError {
                 f,
                 "the geometry kernel was still {stage} after {seconds}s and was stopped. \
                  A part that needs longer, or a machine that is busy building something \
-                 else, can have more: set PARCAD_OCCT_TIMEOUT to a number of seconds"
+                 else, can have more: over MCP pass timeout_s (up to 600) and call again, \
+                 or set PARCAD_OCCT_TIMEOUT to a number of seconds for every caller"
             ),
             OcctError::Host(m) => write!(f, "{m}"),
         }

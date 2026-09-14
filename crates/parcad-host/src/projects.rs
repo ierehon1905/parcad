@@ -59,6 +59,12 @@ const BUNDLE: &str = "parcad";
 /// user's own files; losing one to a mis-click in a list is not recoverable,
 /// and a hidden folder they can rummage through is.
 const TRASH: &str = ".trash";
+/// Earlier scripts, kept before something replaced them: `.history/<path>/`,
+/// one file per version named by its Unix time in milliseconds. At the root
+/// rather than in the bundle so a loose `.js` has history too.
+const HISTORY: &str = ".history";
+/// Versions kept per project; the oldest go first.
+const HISTORY_KEPT: usize = 50;
 /// What has already been seeded, one name per line.
 ///
 /// A list rather than a flag: a parcad that ships a new part should still add
@@ -419,6 +425,108 @@ pub fn write_preview_data_url(path: &str, data_url: &str) -> Result<(), String> 
         .decode(payload)
         .map_err(|e| format!("decoding the preview image: {e}"))?;
     write_preview(path, &png)
+}
+
+/// Where the preview is, when the project has one.
+pub fn preview_path(path: &str) -> Option<String> {
+    locate(path)
+        .ok()?
+        .in_bundle(PREVIEW)
+        .filter(|file| file.is_file())
+        .map(|file| file.to_string_lossy().to_string())
+}
+
+/// One kept version of a project's script.
+#[derive(serde::Serialize, Debug, Clone, schemars::JsonSchema)]
+pub struct Snapshot {
+    /// The id to restore it by: its Unix time in milliseconds.
+    pub id: String,
+    /// The file, which is plain JavaScript.
+    pub path: String,
+    pub bytes: u64,
+    /// The script's first line, to tell versions apart without reading each.
+    pub first_line: String,
+}
+
+fn history_dir(path: &str) -> Result<PathBuf, String> {
+    safe(path)?;
+    Ok(dir().join(HISTORY).join(path))
+}
+
+/// Keep the project's script as it is on disk, before a save replaces it.
+/// `None` when there is nothing yet to keep.
+pub fn snapshot(path: &str) -> Result<Option<String>, String> {
+    match read(path) {
+        Ok(script) => keep(path, &script).map(Some),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Keep a script as a version of `path` — the on-screen text an agent is
+/// about to replace, which may never have been saved. A script identical to
+/// the newest version is not kept twice.
+pub fn keep(path: &str, script: &str) -> Result<String, String> {
+    let dir = history_dir(path)?;
+    let kept = snapshots(path)?;
+    if let Some(newest) = kept.first() {
+        if std::fs::read_to_string(&newest.path).is_ok_and(|text| text == script) {
+            return Ok(newest.path.clone());
+        }
+    }
+    create_dir(&dir)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let newest = kept
+        .first()
+        .and_then(|s| s.id.parse::<u128>().ok())
+        .unwrap_or(0);
+    let file = dir.join(format!("{}.js", now.max(newest + 1)));
+    write_file(&file, script)?;
+    for old in kept.iter().skip(HISTORY_KEPT - 1) {
+        let _ = std::fs::remove_file(&old.path);
+    }
+    Ok(file.to_string_lossy().to_string())
+}
+
+/// Every kept version of a project, newest first.
+pub fn snapshots(path: &str) -> Result<Vec<Snapshot>, String> {
+    let dir = history_dir(path)?;
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return Ok(Vec::new());
+    };
+    let mut out: Vec<(u128, Snapshot)> = entries
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let file = entry.path();
+            let id = file.file_name()?.to_str()?.strip_suffix(".js")?.to_string();
+            let order = id.parse::<u128>().ok()?;
+            let text = std::fs::read_to_string(&file).ok()?;
+            Some((
+                order,
+                Snapshot {
+                    id,
+                    path: file.to_string_lossy().to_string(),
+                    bytes: text.len() as u64,
+                    first_line: text.lines().next().unwrap_or("").chars().take(120).collect(),
+                },
+            ))
+        })
+        .collect();
+    out.sort_by(|a, b| b.0.cmp(&a.0));
+    Ok(out.into_iter().map(|(_, s)| s).collect())
+}
+
+/// One kept version's script.
+pub fn read_snapshot(path: &str, id: &str) -> Result<String, String> {
+    let found = snapshots(path)?
+        .into_iter()
+        .find(|s| s.id == id)
+        .ok_or_else(|| {
+            format!("{path:?} has no snapshot {id:?}; list_snapshots gives the ids that exist")
+        })?;
+    std::fs::read_to_string(&found.path).map_err(|e| format!("reading {}: {e}", found.path))
 }
 
 pub fn preview(path: &str) -> Result<Vec<u8>, String> {
@@ -1065,6 +1173,30 @@ mod tests {
             write_preview("flange", b"png").expect("a loose part has nowhere to put it");
             write_readme("flange", "# flange").expect("nor a readme");
             assert!(preview("flange").is_err());
+        })
+    }
+
+    #[test]
+    fn a_save_keeps_the_version_it_replaces_once() {
+        scoped(|_| {
+            write("knob", "return box(1,1,1);").unwrap();
+            let first = snapshot("knob").unwrap().expect("there was a script to keep");
+            write("knob", "return box(2,2,2);").unwrap();
+            let second = snapshot("knob").unwrap();
+            assert_eq!(snapshot("knob").unwrap(), second, "unchanged text is not kept twice");
+            let kept = snapshots("knob").unwrap();
+            assert_eq!(kept.len(), 2);
+            assert_eq!(read_snapshot("knob", &kept[1].id).unwrap(), "return box(1,1,1);");
+            assert_eq!(kept[1].path, first);
+            assert!(list().unwrap().iter().all(|p| !p.contains("history")), "history stays out of the picker");
+        })
+    }
+
+    #[test]
+    fn a_project_that_does_not_exist_has_nothing_to_keep() {
+        scoped(|_| {
+            assert_eq!(snapshot("new-part").unwrap(), None);
+            assert!(snapshots("new-part").unwrap().is_empty());
         })
     }
 }

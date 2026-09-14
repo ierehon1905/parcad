@@ -137,6 +137,12 @@ pub struct EvaluateRequest {
     /// Pixels per side, 128 to 1024. Defaults to 512.
     #[serde(default)]
     pub image_size: Option<u32>,
+    /// Seconds the kernel may take, 1 to 600. Defaults to 20, or
+    /// PARCAD_OCCT_TIMEOUT. A part that timed out can be asked again with
+    /// more; a build that finishes is kept, so the next call on the same
+    /// script — a render, an export, the window — does not wait again.
+    #[serde(default)]
+    pub timeout_s: Option<f64>,
 }
 
 /// Where to cut a part open for the picture.
@@ -222,6 +228,11 @@ pub struct ExportRequest {
     /// `part.step` / `part.stl`.
     #[serde(default)]
     pub filename: Option<String>,
+    /// Seconds the kernel may take, 1 to 600. Defaults to 20, or
+    /// PARCAD_OCCT_TIMEOUT. Reuses the build of an earlier evaluate_part on
+    /// the same script when there is one.
+    #[serde(default)]
+    pub timeout_s: Option<f64>,
 }
 
 /// Two scripts: the part, and the object it is meant to hold.
@@ -276,6 +287,24 @@ pub struct SetScriptRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+pub struct RestoreRequest {
+    /// The project path, as `list_projects` gives it.
+    pub name: String,
+    /// The snapshot's `id`, from `list_snapshots`.
+    pub id: String,
+    /// How long to wait for a window to show it, as in `set_script`.
+    #[serde(default)]
+    pub wait_s: Option<f64>,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct SnapshotList {
+    name: String,
+    /// Newest first. Each is a plain `.js` file at `path`.
+    snapshots: Vec<projects::Snapshot>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
 pub struct OpenRequest {
     /// A project path exactly as `list_projects` gives it: slash-separated
     /// folder names and no extension, such as `bracket` or `Mounts/bracket`.
@@ -318,6 +347,11 @@ pub struct Exported {
     path: String,
     bytes: usize,
     format: String,
+    /// The part in the file, measured off the build that wrote it: size,
+    /// volume, `watertight`, `bodies`, `voids`, and for STL the mesh
+    /// `deflection_mm`. A file with bodies above 1 or watertight false is not
+    /// ready to print whatever the slicer says.
+    measured: service::ExportMeasured,
 }
 
 #[derive(Serialize, schemars::JsonSchema)]
@@ -340,6 +374,20 @@ pub struct Project {
 pub struct Saved {
     name: String,
     path: String,
+    /// Whether the saved script builds in the exact kernel.
+    built: bool,
+    /// Why it does not, when it does not. The file is saved either way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    /// The thumbnail written beside `part.js`, which the app's picker shows.
+    /// Absent for a loose `.js` project, which has nowhere to keep one, and
+    /// for a script that does not build.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview: Option<String>,
+    /// The previous `part.js`, kept before it was replaced; see
+    /// `list_snapshots`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    snapshot: Option<String>,
 }
 
 // -------------------------------------------------------------------- tools
@@ -374,7 +422,7 @@ impl Parcad {
     #[tool(
         name = "evaluate_part",
         annotations(title = "Build and measure a part", read_only_hint = true, open_world_hint = false),
-        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality, `bodies` (one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Use this to check that a script produces the part you intended.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. A tag in `unlocated_tags` owns no point of the finished surface at all: it was buried by a later boolean, or it is on a fillet, which has no field to locate.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
+        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality, `bodies` (one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Each view in the reply also carries `path`, the same image as a PNG file on this machine, to attach or show the user. A build is kept per script: asking again with other views, exporting, or putting the script on screen reuses it (`reused_build`), so render after measuring rather than instead of it. `timeout_s` gives a heavy part longer than the default 20 s. Use this to check that a script produces the part you intended.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. A tag in `unlocated_tags` owns no point of the finished surface at all: it was buried by a later boolean, or it is on a fillet, which has no field to locate.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
     )]
     async fn evaluate_part(
         &self,
@@ -409,11 +457,12 @@ impl Parcad {
             ));
         }
         let size = request.image_size.unwrap_or(512).clamp(128, 1024);
+        let budget = budget(request.timeout_s);
 
         let (snapshot, pngs) = blocking(move || {
             let graph = script::build_graph(&request.script)?;
             let doc = service::parse_graph(graph)?;
-            let evaluated = service::evaluate(&doc, 7, backend)?;
+            let evaluated = service::evaluate_within(&doc, 7, backend, budget)?;
 
             // Render after measuring, so a part that cannot be built fails on
             // the geometry rather than after spending a raymarch on it.
@@ -427,10 +476,14 @@ impl Parcad {
                     section,
                 },
             )?;
+            let stem = render_stem(&request.script, size, regions, section.is_some());
             let (summaries, pngs) = renders
                 .views
                 .into_iter()
-                .map(|render| (render.summary, render.png))
+                .map(|mut render| {
+                    render.summary.path = keep_render(&stem, &render.summary.view, &render.png);
+                    (render.summary, render.png)
+                })
                 .unzip::<_, _, Vec<_>, Vec<_>>();
 
             Ok((
@@ -591,7 +644,7 @@ impl Parcad {
     #[tool(
         name = "export_part",
         annotations(title = "Export a part to a file", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Export a part as STEP (exact surfaces, for CAD) or STL (a mesh, for printing) and return the absolute path written. STEP requires the exact backend. Files are written to the parcad export directory; the filename must have no directory part."
+        description = "Export a part as STEP (exact surfaces, for CAD) or STL (a mesh, for printing) and return the absolute path written. STEP requires the exact backend. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer."
     )]
     async fn export_part(
         &self,
@@ -620,13 +673,14 @@ impl Parcad {
             None => format!("part.{format}"),
         };
 
+        let budget = budget(request.timeout_s);
         let exported = blocking(move || {
             let graph = script::build_graph(&request.script)?;
             let doc = service::parse_graph(graph)?;
             let export = if format == "step" {
-                service::export_step(&doc)?
+                service::export_step_within(&doc, budget)?
             } else {
-                service::export_stl(&doc, 7, service::Backend::Brep)?
+                service::export_stl_within(&doc, 7, service::Backend::Brep, budget)?
             };
 
             let dir = export_dir();
@@ -640,6 +694,7 @@ impl Parcad {
                 path: path.to_string_lossy().to_string(),
                 bytes: export.bytes.len(),
                 format,
+                measured: export.measured,
             })
         })
         .await?;
@@ -738,17 +793,33 @@ impl Parcad {
     #[tool(
         name = "save_project",
         annotations(title = "Save project", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Write a part to parcad's project folder so the user can open it in the app. Evaluate it first: saving a script that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed."
+        description = "Write a part to parcad's project folder so the user can open it in the app. Evaluate it first: saving a script that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not — the file is saved regardless), the `preview` thumbnail written for the app's picker, and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back."
     )]
     async fn save_project(
         &self,
         Parameters(request): Parameters<SaveRequest>,
     ) -> Result<rmcp::handler::server::wrapper::Json<Saved>, ErrorData> {
-        let path = projects::write(&request.name, &request.script).map_err(invalid)?;
-        Ok(rmcp::handler::server::wrapper::Json(Saved {
-            name: request.name,
-            path,
-        }))
+        let saved = blocking(move || {
+            let snapshot = projects::snapshot(&request.name)?;
+            let path = projects::write(&request.name, &request.script)?;
+            let (built, error, preview) = match preview_of(&request.script) {
+                Ok(png) => match projects::write_preview(&request.name, &png) {
+                    Ok(()) => (true, None, projects::preview_path(&request.name)),
+                    Err(_) => (true, None, None),
+                },
+                Err(e) => (false, Some(e), None),
+            };
+            Ok(Saved {
+                name: request.name,
+                path,
+                built,
+                error,
+                preview,
+                snapshot,
+            })
+        })
+        .await?;
+        Ok(rmcp::handler::server::wrapper::Json(saved))
     }
 
     /// What is on the user's screen right now.
@@ -789,7 +860,46 @@ impl Parcad {
         &self,
         Parameters(request): Parameters<SetScriptRequest>,
     ) -> Result<rmcp::handler::server::wrapper::Json<session::Live>, ErrorData> {
+        keep_screen(&request.script);
         let set = session::set_script(request.script, session::AGENT_ORIGIN).map_err(invalid)?;
+        Ok(rmcp::handler::server::wrapper::Json(
+            shown(set, request.wait_s).await,
+        ))
+    }
+
+    /// The versions kept before each replace.
+    #[tool(
+        name = "list_snapshots",
+        annotations(title = "List a project's earlier versions", read_only_hint = true, open_world_hint = false),
+        description = "List the earlier versions of a project's script that parcad kept, newest first: one is kept automatically before save_project overwrites part.js, and one before set_script replaces the script on screen — including text the user typed and never saved. Each has an `id`, the `path` of a plain .js file, its size and its first line. Use restore_snapshot to put one back on screen; the 50 newest are kept per project."
+    )]
+    async fn list_snapshots(
+        &self,
+        Parameters(request): Parameters<ProjectRequest>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<SnapshotList>, ErrorData> {
+        let snapshots = projects::snapshots(&request.name).map_err(invalid)?;
+        Ok(rmcp::handler::server::wrapper::Json(SnapshotList {
+            name: request.name,
+            snapshots,
+        }))
+    }
+
+    /// Put an earlier version back on screen.
+    #[tool(
+        name = "restore_snapshot",
+        annotations(title = "Restore an earlier version", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        description = "Put a kept version of a project back in the editor, as an ordinary edit the user can undo. Opens the project first if another one is on screen. Like set_script it changes the screen only — call save_project to write it — keeps the current text as a snapshot first, and waits for a window to report showing it."
+    )]
+    async fn restore_snapshot(
+        &self,
+        Parameters(request): Parameters<RestoreRequest>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<session::Live>, ErrorData> {
+        let script = projects::read_snapshot(&request.name, &request.id).map_err(invalid)?;
+        if session::get().name.as_deref() != Some(request.name.as_str()) {
+            session::open(&request.name, session::AGENT_ORIGIN).map_err(invalid)?;
+        }
+        keep_screen(&script);
+        let set = session::set_script(script, session::AGENT_ORIGIN).map_err(invalid)?;
         Ok(rmcp::handler::server::wrapper::Json(
             shown(set, request.wait_s).await,
         ))
@@ -1050,6 +1160,75 @@ async fn record(
 
 // ------------------------------------------------------------------ helpers
 
+/// Keep what is on screen before an agent replaces it with `next`. Best effort:
+/// failing to keep a version must not block the edit, which Cmd-Z still undoes.
+fn keep_screen(next: &str) {
+    let on_screen = session::get();
+    if let Some(name) = on_screen.name {
+        if !on_screen.script.is_empty() && on_screen.script != next {
+            let _ = projects::keep(&name, &on_screen.script);
+        }
+    }
+}
+
+/// A caller's `timeout_s`, bounded; `None` keeps the host's default.
+fn budget(timeout_s: Option<f64>) -> Option<std::time::Duration> {
+    timeout_s.map(|s| std::time::Duration::from_secs_f64(s.clamp(1.0, 600.0)))
+}
+
+/// Where renders are kept: beside exports, so one variable moves both.
+fn render_dir() -> PathBuf {
+    export_dir().join("renders")
+}
+
+/// A name for one script's renders that is stable across calls, so asking
+/// again replaces the file rather than filling the folder.
+fn render_stem(script: &str, size: u32, regions: bool, section: bool) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    script.hash(&mut hasher);
+    format!(
+        "{:016x}-{size}{}{}",
+        hasher.finish(),
+        if regions { "-regions" } else { "" },
+        if section { "-section" } else { "" }
+    )
+}
+
+/// Write one rendered view where a person can open it, and say where. A
+/// render that cannot be written still rides inline, so this never fails the call.
+fn keep_render(stem: &str, view: &str, png: &[u8]) -> Option<String> {
+    let dir = render_dir();
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(format!("{stem}-{view}.png"));
+    std::fs::write(&path, png).ok()?;
+    Some(path.to_string_lossy().to_string())
+}
+
+/// The picker's thumbnail for a script: the iso view of its exact build.
+fn preview_of(script: &str) -> Result<Vec<u8>, String> {
+    let graph = script::build_graph(script)?;
+    let doc = service::parse_graph(graph)?;
+    let evaluated = service::evaluate(&doc, 7, service::Backend::Brep)?;
+    let views = service::parse_views(&["iso".to_string()])?;
+    let renders = service::render(
+        &evaluated,
+        &doc,
+        &service::RenderSpec {
+            views: &views,
+            size: 512,
+            regions: false,
+            section: None,
+        },
+    )?;
+    renders
+        .views
+        .into_iter()
+        .next()
+        .map(|r| r.png)
+        .ok_or_else(|| "the iso view drew nothing".to_string())
+}
+
 /// The session after a change, once a window has shown it or the wait is over.
 async fn shown(changed: session::Session, wait_s: Option<f64>) -> session::Live {
     let budget = std::time::Duration::from_secs_f64(wait_s.unwrap_or(20.0).clamp(0.0, 60.0));
@@ -1111,7 +1290,7 @@ mod tests {
         let wire = serde_json::to_value(&listed).unwrap();
         assert_eq!(wire["ttlMs"], serde_json::json!(TOOL_LIST_TTL_MS));
         assert_eq!(wire["cacheScope"], serde_json::json!("public"));
-        assert_eq!(wire["tools"].as_array().unwrap().len(), 16);
+        assert_eq!(wire["tools"].as_array().unwrap().len(), 18);
     }
 
     #[test]

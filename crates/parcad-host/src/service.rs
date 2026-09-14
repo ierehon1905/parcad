@@ -233,6 +233,11 @@ pub struct EvaluationSnapshot {
     /// the blend bulge, which is millimetres rather than rounding.
     pub backend: String,
     pub kernel_ms: u64,
+    /// True when this came from a build already made for the same graph — by
+    /// an earlier evaluate, export or window — rather than a new one.
+    /// `kernel_ms` is then what that build took.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub reused_build: bool,
     /// Images rendered alongside these measurements, in the order they were
     /// asked for. The pixels ride with the reply; this says what each one shows.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -540,6 +545,10 @@ pub struct RenderedView {
     /// Where this view was cut open, if it was.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub section: Option<SectionCut>,
+    /// The same image as a PNG file, for a person to open or a caller to
+    /// attach. Set by the transport that kept it; the pixels ride inline too.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 /// Where the camera for one view was, said in the part's own axes.
@@ -739,6 +748,7 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                         keep: cut.keep.name().to_string(),
                         cut_fraction: round_fraction(buffer.cut_fraction()),
                     }),
+                    path: None,
                 },
                 png,
             })
@@ -1233,6 +1243,7 @@ fn describe(
         unused_nodes: report.total_nodes.saturating_sub(report.live_nodes),
         backend: backend.to_string(),
         kernel_ms,
+        reused_build: false,
         // Nothing is drawn unless a caller asks: a raymarch costs far more than
         // the measurements above, and most calls only want the numbers.
         views: Vec::new(),
@@ -1369,6 +1380,39 @@ pub struct Export {
     pub bytes: Vec<u8>,
     pub filename: &'static str,
     pub content_type: &'static str,
+    /// What was written, measured off the same build the bytes came from.
+    pub measured: ExportMeasured,
+}
+
+/// The part an export describes, so a caller need not evaluate it again to
+/// know whether the file is fit to print.
+#[derive(Serialize, Clone, Debug, schemars::JsonSchema)]
+pub struct ExportMeasured {
+    pub size: [f64; 3],
+    pub volume_mm3: f64,
+    pub watertight: bool,
+    pub bodies: usize,
+    pub voids: usize,
+    /// For STL, the furthest any triangle in the file sits from the true
+    /// surface, in mm. Absent for STEP, whose surfaces are exact.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deflection_mm: Option<f64>,
+    /// True when the file came from a build already made for this graph.
+    pub reused_build: bool,
+}
+
+impl ExportMeasured {
+    fn of(report: &parcad_core::PartReport, deflection_mm: Option<f64>, reused_build: bool) -> Self {
+        Self {
+            size: round_point([report.size.x, report.size.y, report.size.z]),
+            volume_mm3: round_mm(report.mass.volume_mm3),
+            watertight: report.mesh.watertight,
+            bodies: report.mesh.bodies,
+            voids: report.mesh.voids,
+            deflection_mm: deflection_mm.map(round_mm),
+            reused_build,
+        }
+    }
 }
 
 /// Which geometry backend a request asked for.
@@ -1416,11 +1460,112 @@ pub fn parse_graph(graph: serde_json::Value) -> Result<Doc, String> {
 /// person — so the alternate `{:#}` form is used to keep the whole context chain
 /// rather than just the outermost message.
 pub fn evaluate(doc: &Doc, depth: u8, backend: Backend) -> Result<Evaluated, String> {
+    evaluate_within(doc, depth, backend, None)
+}
+
+/// [`evaluate`], with the kernel's time budget chosen by the caller rather than
+/// `PARCAD_OCCT_TIMEOUT`.
+pub fn evaluate_within(
+    doc: &Doc,
+    depth: u8,
+    backend: Backend,
+    budget: Option<std::time::Duration>,
+) -> Result<Evaluated, String> {
     match backend {
-        Backend::Preview => evaluate_mesh_preview(doc),
+        Backend::Preview => evaluate_mesh_preview(doc, budget),
         Backend::Implicit => evaluate_implicit(doc, depth),
-        Backend::Brep => evaluate_brep(doc),
+        Backend::Brep => evaluate_brep(doc, budget),
     }
+}
+
+// ------------------------------------------------------------- build cache
+
+/// One exact build of a graph, as the worker returned it.
+struct Build {
+    key: String,
+    success: std::sync::Arc<parcad_occt::Success>,
+    /// The STEP file, once something has asked for it.
+    step: Option<std::sync::Arc<Vec<u8>>>,
+    wall_ms: u64,
+}
+
+/// Recent builds, newest first. A model's turn is evaluate, then render or
+/// export or set_script, and the window then evaluates the same graph again:
+/// every one of those was a fresh worker, and on a figurine each was most of
+/// the 20 s budget. Keyed by the whole serialised graph, so a hit is the same
+/// part and never a similar one; failures are not kept, because a timeout is a
+/// fact about the machine at the time.
+static BUILDS: std::sync::LazyLock<std::sync::Mutex<std::collections::VecDeque<Build>>> =
+    std::sync::LazyLock::new(Default::default);
+
+/// Builds kept: a handful of graphs, a few megabytes of mesh each.
+const BUILDS_KEPT: usize = 8;
+
+struct Built {
+    success: std::sync::Arc<parcad_occt::Success>,
+    step: Option<std::sync::Arc<Vec<u8>>>,
+    wall_ms: u64,
+    reused: bool,
+}
+
+fn build_exact(
+    doc: &Doc,
+    budget: Option<std::time::Duration>,
+    want_step: bool,
+) -> Result<Built, String> {
+    let key = serde_json::to_string(doc).map_err(|e| format!("encoding the graph: {e}"))?;
+    {
+        let mut builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = builds
+            .iter()
+            .position(|b| b.key == key && (b.step.is_some() || !want_step))
+        {
+            let hit = builds.remove(i).expect("the index was just found");
+            let built = Built {
+                success: hit.success.clone(),
+                step: hit.step.clone(),
+                wall_ms: hit.wall_ms,
+                reused: true,
+            };
+            builds.push_front(hit);
+            return Ok(built);
+        }
+    }
+
+    let t0 = std::time::Instant::now();
+    let mut opts = parcad_occt::Options::default();
+    if let Some(budget) = budget {
+        opts.timeout = budget;
+    }
+    let (success, step) = if want_step {
+        let mut success = None;
+        let bytes = with_scratch_file("step", |path| {
+            opts.step_path = Some(path.to_path_buf());
+            success = Some(parcad_occt::evaluate(doc, &opts).map_err(|e| format!("{e}"))?);
+            Ok(())
+        })?;
+        (success.expect("the export ran"), Some(std::sync::Arc::new(bytes)))
+    } else {
+        (parcad_occt::evaluate(doc, &opts).map_err(|e| format!("{e}"))?, None)
+    };
+    let wall_ms = t0.elapsed().as_millis() as u64;
+
+    let success = std::sync::Arc::new(success);
+    let mut builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
+    builds.retain(|b| b.key != key);
+    builds.push_front(Build {
+        key,
+        success: success.clone(),
+        step: step.clone(),
+        wall_ms,
+    });
+    builds.truncate(BUILDS_KEPT);
+    Ok(Built {
+        success,
+        step,
+        wall_ms,
+        reused: false,
+    })
 }
 
 /// Resolve a fillet or chamfer's input edges without applying that treatment.
@@ -1466,22 +1611,22 @@ fn evaluate_implicit(doc: &Doc, depth: u8) -> Result<Evaluated, String> {
     })
 }
 
-fn evaluate_brep(doc: &Doc) -> Result<Evaluated, String> {
-    let t0 = std::time::Instant::now();
-    let s =
-        parcad_occt::evaluate(doc, &parcad_occt::Options::default()).map_err(|e| format!("{e}"))?;
-    let kernel_ms = t0.elapsed().as_millis() as u64;
+fn evaluate_brep(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evaluated, String> {
+    let built = build_exact(doc, budget, false)?;
+    let s = &*built.success;
 
-    let (report, mesh) = measure_brep(doc, &s)?;
+    let (report, mesh) = measure_brep(doc, s)?;
+    let mut snapshot = describe(doc, &report, &mesh, Some(&s.topology), "brep", built.wall_ms);
+    snapshot.reused_build = built.reused;
     Ok(Evaluated {
         bounds: report.bounds,
-        snapshot: describe(doc, &report, &mesh, Some(&s.topology), "brep", kernel_ms),
-        positions: s.positions,
-        normals: s.normals,
-        indices: s.indices,
-        face_runs: s.face_runs,
-        faces: s.faces,
-        edges: s.edges,
+        snapshot,
+        positions: s.positions.clone(),
+        normals: s.normals.clone(),
+        indices: s.indices.clone(),
+        face_runs: s.face_runs.clone(),
+        faces: s.faces.clone(),
+        edges: s.edges.clone(),
         timings: Timings {
             lower_and_mesh_ms: s.timings.build_ms + s.timings.mesh_ms,
             normals_ms: 0,
@@ -1496,8 +1641,8 @@ fn evaluate_brep(doc: &Doc) -> Result<Evaluated, String> {
 /// available for field operations and headless perception; it is not used for
 /// an interactive comparison against a B-rep solid because smooth booleans can
 /// add or remove material by design.
-fn evaluate_mesh_preview(doc: &Doc) -> Result<Evaluated, String> {
-    let mut preview = evaluate_brep(doc)?;
+fn evaluate_mesh_preview(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evaluated, String> {
+    let mut preview = evaluate_brep(doc, budget)?;
     preview.edges.clear();
     // A tessellation view has no topology to show — which is different from
     // having none, and is why these go absent rather than to zero.
@@ -1571,14 +1716,23 @@ fn measure_brep(
 /// wrote ASCII — six times the bytes — and, until the tolerance was passed
 /// through, re-meshed every face at a micron on the way.
 pub fn export_stl(doc: &Doc, depth: u8, backend: Backend) -> Result<Export, String> {
-    let tess = if backend.is_exact() {
-        let built = parcad_occt::evaluate(doc, &parcad_occt::Options::default())
-            .map_err(|e| format!("{e}"))?;
-        measure_brep(doc, &built)?.1
+    export_stl_within(doc, depth, backend, None)
+}
+
+pub fn export_stl_within(
+    doc: &Doc,
+    depth: u8,
+    backend: Backend,
+    budget: Option<std::time::Duration>,
+) -> Result<Export, String> {
+    let (tess, report, reused) = if backend.is_exact() {
+        let built = build_exact(doc, budget, false)?;
+        let (report, tess) = measure_brep(doc, &built.success)?;
+        (tess, report, built.reused)
     } else {
-        parcad_core::evaluate(doc, depth.clamp(3, 9))
-            .map_err(|e| format!("{e:#}"))?
-            .1
+        let (_, tess, report) =
+            parcad_core::evaluate(doc, depth.clamp(3, 9)).map_err(|e| format!("{e:#}"))?;
+        (tess, report, false)
     };
     let mut bytes = Vec::new();
     tess.write_stl(&mut bytes)
@@ -1588,6 +1742,7 @@ pub fn export_stl(doc: &Doc, depth: u8, backend: Backend) -> Result<Export, Stri
         bytes,
         filename: "part.stl",
         content_type: "model/stl",
+        measured: ExportMeasured::of(&report, Some(report.mesh.resolution_mm), reused),
     })
 }
 
@@ -1597,19 +1752,22 @@ pub fn export_stl(doc: &Doc, depth: u8, backend: Backend) -> Result<Export, Stri
 /// implicit backend has none to describe. Meshing first would produce a file
 /// that opens in every CAD package and is useless in all of them.
 pub fn export_step(doc: &Doc) -> Result<Export, String> {
-    let bytes = with_scratch_file("step", |path| {
-        let opts = parcad_occt::Options {
-            step_path: Some(path.to_path_buf()),
-            ..Default::default()
-        };
-        parcad_occt::evaluate(doc, &opts).map_err(|e| format!("{e}"))?;
-        Ok(())
-    })?;
+    export_step_within(doc, None)
+}
+
+pub fn export_step_within(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Export, String> {
+    let built = build_exact(doc, budget, true)?;
+    let bytes = built.step.as_ref().expect("asked for STEP").as_ref().clone();
+    if bytes.is_empty() {
+        return Err("the step export produced no bytes; the kernel returned without writing a file".into());
+    }
+    let (report, _) = measure_brep(doc, &built.success)?;
 
     Ok(Export {
         bytes,
         filename: "part.step",
         content_type: "application/step",
+        measured: ExportMeasured::of(&report, None, built.reused),
     })
 }
 
