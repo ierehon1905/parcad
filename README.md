@@ -52,8 +52,9 @@ surface real instead of a wrapper.
 
 ## Install it
 
-With Homebrew, which installs the host and no window — the whole app is in
-your browser at <http://127.0.0.1:4242>, and MCP for an agent is at `/mcp`:
+With Homebrew, on macOS or Linux (Linux from 0.0.6), which installs the host
+and no window — the whole app is in your browser at <http://127.0.0.1:4242>,
+and MCP for an agent is at `/mcp`:
 
 ```bash
 brew tap ierehon1905/parcad
@@ -62,7 +63,13 @@ brew install parcad
 brew services start parcad      # up at login; or run `parcad serve` in a terminal
 ```
 
-Nothing on that path is quarantined. The same `parcad` is the headless driver
+On Windows, from 0.0.6, the desktop app through winget:
+
+```powershell
+winget install ParCAD.ParCAD
+```
+
+Nothing on the Homebrew path is quarantined. The same `parcad` is the headless driver
 (`parcad part.js --brep`), and a client of the running host: `parcad tools`
 lists what an agent can call over MCP and `parcad call <tool>` calls it from
 a shell.
@@ -147,6 +154,11 @@ In Codex, which finds `parcad` on PATH, so the Homebrew install:
 codex plugin marketplace add ierehon1905/parcad
 codex plugin add parcad@parcad
 ```
+
+In Cursor or VS Code, with `parcad` on PATH:
+
+[![Install in Cursor](https://cursor.com/deeplink/mcp-install-dark.svg)](https://cursor.com/install-mcp?name=parcad&config=eyJjb21tYW5kIjoicGFyY2FkIiwiYXJncyI6WyJtY3AiXX0%3D)
+[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_parcad-0098FF?logo=visualstudiocode&logoColor=white)](https://vscode.dev/redirect/mcp/install?name=parcad&config=%7B%22name%22%3A%22parcad%22%2C%22command%22%3A%22parcad%22%2C%22args%22%3A%5B%22mcp%22%5D%7D)
 
 Or add the server by hand, in any client that launches stdio servers:
 

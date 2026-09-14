@@ -1,0 +1,140 @@
+# After a release is published: fill each package manager's manifest from the
+# release's own SHA256SUMS.txt (packaging/render.py) and send it where it goes.
+#
+# release.yml only drafts; a human publishes. This runs on that publish, so no
+# channel ever points at files nobody has looked at.
+#
+# A channel whose credential is not set says so and skips, so the workflow is
+# safe before any account exists. A manual run renders and validates a tag
+# without pushing anything unless `push` is ticked. packaging/README.md lists
+# the secrets.
+name: publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish, e.g. v0.0.6
+        required: true
+      push:
+        description: Push to the channels (otherwise render and validate only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+  PUSH: ${{ github.event_name == 'release' || inputs.push }}
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Render the manifests from the release's checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release download "$TAG" --pattern SHA256SUMS.txt --dir release
+          python3 packaging/render.py --version "$TAG" --sums release/SHA256SUMS.txt --out rendered
+          ruby -c rendered/homebrew/Formula/parcad.rb
+          for f in rendered/winget/*.yaml; do ruby -ryaml -e 'YAML.load_file(ARGV[0])' "$f"; done
+          jq empty rendered/mcpb/server.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manifests
+          path: rendered/
+
+  homebrew:
+    needs: render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: manifests
+          path: rendered
+
+      - name: Push the formula to the tap
+        env:
+          # A fine-grained token with contents:write on ierehon1905/homebrew-parcad.
+          TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TOKEN" ]; then
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set; the formula is in this run's manifests artifact to copy by hand."
+            exit 0
+          fi
+          git clone "https://x-access-token:$TOKEN@github.com/ierehon1905/homebrew-parcad.git" tap
+          cp rendered/homebrew/Formula/parcad.rb tap/Formula/parcad.rb
+          cd tap
+          if git diff --quiet; then echo "the tap already carries $TAG"; exit 0; fi
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com \
+            commit -am "parcad ${TAG#v}"
+          if [ "$PUSH" = true ]; then git push; else git show --stat HEAD; fi
+
+  winget:
+    needs: render
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: manifests
+          path: rendered
+
+      - name: Submit to winget-pkgs
+        env:
+          # Komac needs a classic token with public_repo; fine-grained tokens
+          # cannot open the pull request (russellbanks/Komac#310).
+          GITHUB_TOKEN: ${{ secrets.WINGET_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$GITHUB_TOKEN" ]; then
+            echo "::notice::WINGET_TOKEN is not set; the manifests are in this run's manifests artifact."
+            exit 0
+          fi
+          curl -sfL https://github.com/russellbanks/Komac/releases/download/v2.16.0/komac-2.16.0-x86_64-unknown-linux-gnu.tar.gz | tar xz
+          version="${TAG#v}"
+          dry=""; [ "$PUSH" = true ] || dry="--dry-run"
+          # The first version goes in as the manifests rendered here; after
+          # that Komac reads the new installer itself and carries the rest over.
+          if ./komac list ParCAD.ParCAD > /dev/null 2>&1; then
+            ./komac update ParCAD.ParCAD --version "$version" \
+              --urls "https://github.com/ierehon1905/parcad/releases/download/$TAG/ParCAD_${version}_x64_en-US.msi" \
+              --submit $dry
+          else
+            ./komac submit rendered/winget --yes $dry
+          fi
+
+  mcp-registry:
+    needs: render
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write   # the registry's GitHub OIDC login; no secret needed
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: manifests
+          path: rendered
+
+      - name: Publish to the MCP Registry
+        run: |
+          set -euo pipefail
+          curl -sfL "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+          cd rendered/mcpb
+          ../../mcp-publisher validate
+          if [ "$PUSH" != true ]; then echo "validated; not publishing a manual dry run"; exit 0; fi
+          ../../mcp-publisher login github-oidc
+          ../../mcp-publisher publish

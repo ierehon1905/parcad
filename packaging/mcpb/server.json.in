@@ -1,0 +1,29 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.ierehon1905/parcad",
+  "title": "ParCAD",
+  "description": "Parametric CAD as code: model 3D-printable parts on an exact B-rep kernel, measured.",
+  "websiteUrl": "https://github.com/ierehon1905/parcad",
+  "repository": { "url": "https://github.com/ierehon1905/parcad", "source": "github" },
+  "version": "{{version}}",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/ierehon1905/parcad/releases/download/v{{version}}/parcad-mcp-aarch64-apple-darwin.mcpb",
+      "fileSha256": "{{sha256:parcad-mcp-aarch64-apple-darwin.mcpb}}",
+      "transport": { "type": "stdio" }
+    },
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/ierehon1905/parcad/releases/download/v{{version}}/parcad-mcp-x86_64-unknown-linux-gnu.mcpb",
+      "fileSha256": "{{sha256:parcad-mcp-x86_64-unknown-linux-gnu.mcpb}}",
+      "transport": { "type": "stdio" }
+    },
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/ierehon1905/parcad/releases/download/v{{version}}/parcad-mcp-x86_64-pc-windows-msvc.mcpb",
+      "fileSha256": "{{sha256:parcad-mcp-x86_64-pc-windows-msvc.mcpb}}",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}

@@ -1,27 +1,34 @@
-# The Homebrew formula, kept here as the source of truth and copied into the
-# tap repository (ierehon1905/homebrew-parcad) as Formula/parcad.rb on each
-# release. It replaced a cask on 2026-09-14: a cask installs a window, and what
-# a Homebrew user of this wants is the host — MCP up at login, the UI in a
-# browser — which `parcad serve` is. A formula is also never quarantined, so
-# the `xattr` step the .app needs does not exist on this path.
+# The Homebrew formula, rendered by packaging/render.py from the release's
+# SHA256SUMS.txt and pushed to the tap repository (ierehon1905/homebrew-parcad)
+# as Formula/parcad.rb by .github/workflows/publish.yml. It replaced a cask on
+# 2026-09-14: a cask installs a window, and what a Homebrew user of this wants
+# is the host — MCP up at login, the UI in a browser — which `parcad serve` is.
+# A formula is also never quarantined, so the `xattr` step the .app needs does
+# not exist on this path.
 #
-# The tarball is the one .github/workflows/release.yml stages: `parcad`, its
-# B-rep worker, the seed parts and the licence texts. sha256 comes from
-# SHA256SUMS.txt on the release. Nothing here is built from source — a cold
-# OpenCASCADE compile is not something to ask of an install.
+# The archives are the ones .github/workflows/release.yml stages: `parcad`, its
+# B-rep worker, the seed parts and the licence texts. Nothing here is built from
+# source — a cold OpenCASCADE compile is not something to ask of an install.
 class Parcad < Formula
   desc "Parametric CAD you write as code, with an MCP server for the model that writes it"
   homepage "https://github.com/ierehon1905/parcad"
-  version "0.0.5"
-  url "https://github.com/ierehon1905/parcad/releases/download/v#{version}/parcad-cli-aarch64-apple-darwin.tar.gz"
-  sha256 "4b9884ae036812b55fdbdab1640a4b42ed28d2cf6961eb5cf19a2f3defa38f6c"
+  version "{{version}}"
   # The Rust crates are MIT or Apache-2.0; the statically linked OpenCASCADE
   # inside the worker is LGPL-2.1 with its exception. The texts are installed
   # beside the binaries, and NOTICE.md says how to relink your own OCCT.
   license any_of: ["MIT", "Apache-2.0"]
 
-  depends_on arch: :arm64
-  depends_on :macos
+  # One build per platform: Apple silicon, and x86_64 Linux on Homebrew on Linux.
+  on_macos do
+    depends_on arch: :arm64
+    url "https://github.com/ierehon1905/parcad/releases/download/v#{version}/parcad-cli-aarch64-apple-darwin.tar.gz"
+    sha256 "{{sha256:parcad-cli-aarch64-apple-darwin.tar.gz}}"
+  end
+  on_linux do
+    depends_on arch: :x86_64
+    url "https://github.com/ierehon1905/parcad/releases/download/v#{version}/parcad-cli-x86_64-unknown-linux-gnu.tar.gz"
+    sha256 "{{sha256:parcad-cli-x86_64-unknown-linux-gnu.tar.gz}}"
+  end
 
   def install
     # Both binaries in libexec: the host finds its worker beside itself, and
