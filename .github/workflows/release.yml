@@ -94,9 +94,13 @@ jobs:
         run: cd app && bun run tauri build --bundles app
 
       # Nothing above builds it: build-worker.sh builds the worker, tauri build
-      # builds the app, and parcad-eval is its own binary.
+      # builds the app, and parcad-eval is its own binary. After `tauri build`
+      # on purpose: that step wrote app/dist, which this one embeds so that
+      # `parcad serve` carries the UI.
       - name: Build the headless CLI
-        run: cargo build --locked --release -p parcad-cli
+        run: |
+          test -f app/dist/index.html || { echo "app/dist is missing; parcad serve would carry no UI" >&2; exit 1; }
+          cargo build --locked --release -p parcad-cli
 
       - name: Stage the headless CLI beside its worker
         run: |
@@ -107,6 +111,8 @@ jobs:
           done
           mkdir -p "$out/licenses"
           cp target/release/parcad target/release/parcad-occt-worker "$out/"
+          # The Homebrew formula seeds the project folder from these.
+          cp -R examples "$out/examples"
           cp LICENSE-MIT LICENSE-APACHE NOTICE.md "$out/licenses/"
           cp vendor/occt-sys/OCCT/LICENSE_LGPL_21.txt \
              vendor/occt-sys/OCCT/OCCT_LGPL_EXCEPTION.txt \
@@ -167,13 +173,15 @@ jobs:
             xattr -dr com.apple.quarantine /Applications/ParCAD.app
             ```
 
-            That applies to a Homebrew install too — brew quarantines what it
-            installs, exactly like a browser does.
+            Homebrew installs the host instead of the app, and nothing on that
+            path is quarantined — the whole app is in your browser at
+            http://127.0.0.1:4242, MCP at /mcp:
 
             ```
             brew tap ierehon1905/parcad
             brew trust ierehon1905/parcad
-            brew install --cask parcad
+            brew install parcad
+            brew services start parcad
             ```
 
             ---
@@ -181,9 +189,9 @@ jobs:
             **0.0.1, experimental.** Measure a part before you machine it.
 
             `ParCAD-*.zip` is the app — unzip it and drag it to Applications.
-            Apple silicon only. `parcad-cli-*.tar.gz` is the headless driver and
-            its B-rep worker, with the licence texts beside them.
-            `SHA256SUMS.txt` checksums both.
+            Apple silicon only. `parcad-cli-*.tar.gz` is what Homebrew installs:
+            the headless driver, `parcad serve`, its B-rep worker, the seed
+            parts and the licence texts. `SHA256SUMS.txt` checksums both.
 
             Contains LGPL-2.1 and MPL-2.0 components — see NOTICE.md. You may
             replace the OpenCASCADE inside this program with your own build;

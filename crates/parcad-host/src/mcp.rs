@@ -1045,7 +1045,7 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, String> + Send + 'static,
 {
-    match tauri::async_runtime::spawn_blocking(work).await {
+    match tokio::task::spawn_blocking(work).await {
         Ok(result) => result.map_err(invalid),
         Err(e) => Err(ErrorData::internal_error(
             format!("the evaluation task did not finish: {e}"),

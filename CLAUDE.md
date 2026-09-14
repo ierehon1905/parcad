@@ -47,6 +47,8 @@ cargo run -p parcad-eval               # the geometry + refusal corpus
 field/run-suite.sh 3                                       # can a model drive this at all?
 field/run-case.sh eval/field/does-the-port-meet.md 4       # one case of it
 cd app && bun test src                 # editor-side units: the selector grammar
+parcad serve                           # the app with no window: UI, API and MCP on 4242
+parcad tools; parcad call evaluate_part --set script=@examples/bracket.js   # the running host, from a shell
 ```
 
 **`cargo build` produces a *dev* app, whatever the profile.** Tauri's
@@ -68,13 +70,18 @@ git config core.hooksPath .githooks
 
 **`--fast` builds no worker and runs no geometry.** It is the kernel crates in
 the `test` profile — incremental, opt-level 2 — and it deliberately skips
-`parcad-app` (a 5 s sleep in its sandbox test) and `tools/build-worker.sh`
-(relinking 26 MB of OpenCASCADE). Both belong to the full run. Release is
+`parcad-host`'s tests (a 5 s sleep in the sandbox test), `parcad-app`, and
+`tools/build-worker.sh` (relinking 26 MB of OpenCASCADE). Both belong to the full run. Release is
 compiled hard and slowly on purpose; never reach for it to make an edit-test
 loop faster, and see the profile comments in `Cargo.toml` before changing it.
 
 **The running app also serves MCP at <http://127.0.0.1:4242/mcp>** — the same
-`service.rs` the UI uses. Scripts from an agent run in `script.rs`'s QuickJS
+`service.rs` the UI uses. **So does `parcad serve`**, which is the same host
+with no window: the Homebrew formula runs it as a service, and
+`brew services start parcad` is how a machine gets MCP at login. The CLI is
+also a client of whichever is running — `parcad tools` lists what `/mcp`
+offers and `parcad call <tool>` calls it, same names, same arguments, same
+reply — so a shell can do everything a model can. Scripts from an agent run in `script.rs`'s QuickJS
 sandbox, never in the webview; that is a hard rule, and docs/ROADMAP.md records
 why. Parts live in one shared folder (`~/Documents/parcad`, or
 `PARCAD_PROJECTS_DIR`) that the app, the user and MCP all read and write —
@@ -227,10 +234,12 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | drill and clearance sizes | `METRIC_FASTENERS` in `app/src/dsl.ts` — never a literal in a part |
 | lines, offsets, intersections and convex outlines in the plane | `line2d`, `Line2d`, `hull` in `app/src/dsl.ts` — arithmetic on numbers the script has; nothing reads the built part |
 | the real objects a holder wraps | `DEVICES` in `app/src/dsl.ts`, via `device(name, { clearance })` — sizes published, radii labelled as read off photographs |
-| what the app can do at all | `app/src-tauri/src/service.rs` — never a transport file |
-| the IPC, HTTP and MCP adapters | `app/src-tauri/src/lib.rs`, `http.rs`, `mcp.rs` |
-| the sandbox agent scripts run in | `app/src-tauri/src/script.rs` |
-| where parts are stored | `app/src-tauri/src/projects.rs` — a `.parcad` folder per part |
+| what the app can do at all | `crates/parcad-host/src/service.rs` — never a transport file |
+| the HTTP and MCP hosts | `crates/parcad-host/src/http.rs`, `mcp.rs` — no Tauri in the crate; the app and `parcad serve` both embed it |
+| the IPC adapter, the window | `app/src-tauri/src/lib.rs` — the only file that knows there is a webview |
+| the host without a window, and its tools from a shell | `parcad serve`, `parcad tools`, `parcad call` in `crates/parcad-cli/src/main.rs` and `call.rs` — the CLI is an MCP client of the running host, so parity with `mcp.rs` is by construction |
+| the sandbox agent scripts run in | `crates/parcad-host/src/script.rs` |
+| where parts are stored | `crates/parcad-host/src/projects.rs` — a `.parcad` folder per part |
 | the parts picker: folders, new part, rename, trash | `app/src/ui/project-browser.tsx`, rules in `app/src/projects.ts` |
 | how the frontend calls the backend | `app/src/backend.ts` — the only module that knows there are two |
 | the selector grammar | `selectors.rs` **and** `app/src/selectors.ts` — see below |
@@ -258,7 +267,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | reading a foreign STEP export into authorable numbers | `StepProbe` in `crates/parcad-occt/src/protocol.rs`; CLI `parcad --probe-step`, MCP `probe_step_export`, both over `service::probe_step` — the C++ half is `Shape_geometry_json` in the vendored wrapper |
 | cutting a part open to see inside it | `view.rs`'s `Section`, then `render.rs` for the agent and `app/src/viewport.ts` for the window |
 | what an agent can see, and what to tell it instead | `docs/PERCEPTION.md` |
-| what an agent can *read* about the language | `app/src-tauri/src/docs.rs` — generated from `dsl.ts`, never written beside it |
+| what an agent can *read* about the language | `crates/parcad-host/src/docs.rs` — generated from `dsl.ts`, never written beside it |
 | whether a model can *read* a tool | `eval/field/*.md`, run by `field/run-suite.sh` |
 | which server that harness is pointed at | `field/field.toml` — the only file under `field/` that names parcad |
 | what "SOUND" is still allowed to mean | `field/fixtures/expected.toml`, gated by `field/selftest.py` |

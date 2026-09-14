@@ -43,11 +43,11 @@ need_frontend_deps() {
 }
 
 if [ "$fast" = 1 ]; then
-  # The kernel crates only. `parcad-app` is left out on purpose: its test binary
-  # is slow to link and one of its tests sleeps 5 s by design (the sandbox's
-  # endless-script timeout), which together are the whole difference between a
-  # 0.3 s loop and a 6 s one. Nothing here reaches the app, so the app is not
-  # what a fast loop is checking.
+  # The kernel crates only. `parcad-host` and `parcad-app` are left out on
+  # purpose: the host's test binary is slow to link and one of its tests sleeps
+  # 5 s by design (the sandbox's endless-script timeout), which together are
+  # the whole difference between a 0.3 s loop and a 6 s one. The CLI depends on
+  # the host, so its library is still compiled here; only its tests are not.
   # One cargo invocation, not a build followed by a test: `cargo test` builds
   # every lib and bin it needs anyway, and a separate `cargo build` only adds a
   # second link of the same crates.

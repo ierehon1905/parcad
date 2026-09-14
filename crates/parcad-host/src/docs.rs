@@ -22,7 +22,7 @@ use serde::Serialize;
 
 /// The authoring layer itself. Every name a script can call is in here, and so
 /// is the JSDoc that says what it means.
-const DSL_SOURCE: &str = include_str!("../../src/dsl.ts");
+const DSL_SOURCE: &str = include_str!("../../../app/src/dsl.ts");
 
 /// One thing a caller can ask to read.
 struct Topic {

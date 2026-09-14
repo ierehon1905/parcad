@@ -3009,21 +3009,14 @@ dependencies = [
 name = "parcad-app"
 version = "0.0.2"
 dependencies = [
- "anyhow",
- "axum",
  "base64 0.22.1",
- "parcad-core",
+ "parcad-host",
  "parcad-occt",
- "rmcp",
- "rquickjs",
- "schemars 1.2.2",
- "serde",
  "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-wdio-webdriver",
  "tokio",
- "tokio-stream",
 ]
 
 [[package]]
@@ -3031,9 +3024,12 @@ name = "parcad-cli"
 version = "0.0.2"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "parcad-core",
+ "parcad-host",
  "parcad-occt",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -3057,6 +3053,24 @@ dependencies = [
  "parcad-occt",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "parcad-host"
+version = "0.0.2"
+dependencies = [
+ "anyhow",
+ "axum",
+ "base64 0.22.1",
+ "parcad-core",
+ "parcad-occt",
+ "rmcp",
+ "rquickjs",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

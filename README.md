@@ -52,18 +52,26 @@ surface real instead of a wrapper.
 
 ## Install it
 
-Download the zip from [Releases](https://github.com/ierehon1905/parcad/releases),
-unzip, drag it to Applications. Or with Homebrew:
+With Homebrew, which installs the host and no window — the whole app is in
+your browser at <http://127.0.0.1:4242>, and MCP for an agent is at `/mcp`:
 
 ```bash
 brew tap ierehon1905/parcad
 brew trust ierehon1905/parcad
-brew install --cask parcad
+brew install parcad
+brew services start parcad      # up at login; or run `parcad serve` in a terminal
 ```
 
-**Either way, macOS will refuse to open it the first time.** The builds are not
-signed with an Apple Developer ID or notarised, and Homebrew quarantines what it
-installs like a browser does. Clear the flag once:
+Nothing on that path is quarantined. The same `parcad` is the headless driver
+(`parcad part.js --brep`), and a client of the running host: `parcad tools`
+lists what an agent can call over MCP and `parcad call <tool>` calls it from
+a shell.
+
+Or the desktop app: download the zip from
+[Releases](https://github.com/ierehon1905/parcad/releases), unzip, drag it
+to Applications. **macOS will refuse to open it the first time**, and again
+after each update — the build is not signed with an Apple Developer ID or
+notarised. Clear the flag:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/ParCAD.app

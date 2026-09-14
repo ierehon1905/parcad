@@ -4,16 +4,11 @@
 //! There are two viewports. The Tauri webview reaches `service` over IPC; a
 //! browser reaches the same functions over the local port `http` hosts. The
 //! commands below are therefore adapters and nothing else — any behaviour that
-//! lived here would be a feature the desktop had and the browser did not.
+//! lived here would be a feature the desktop had and the browser did not. The
+//! capabilities and both hosts are `parcad-host`, which `parcad serve` embeds
+//! too, with no window.
 
-mod docs;
-mod http;
-mod mcp;
-mod projects;
-mod script;
-mod service;
-mod session;
-
+use parcad_host::{http, mcp, projects, service, session};
 use service::{Backend, Evaluated};
 
 #[tauri::command]
@@ -259,6 +254,30 @@ fn warn_if_the_window_awaits_a_dev_server<R: tauri::Runtime>(app: &tauri::AppHan
     );
 }
 
+/// The frontend Tauri already carries, offered to the HTTP host.
+///
+/// Resolving through Tauri's asset resolver rather than a static directory keeps
+/// exactly one copy of the frontend in the app: the browser is served the same
+/// bytes the webview loads.
+struct TauriAssets<R: tauri::Runtime>(tauri::AppHandle<R>);
+
+impl<R: tauri::Runtime> http::Assets for TauriAssets<R> {
+    fn get(&self, path: &str) -> Option<http::Asset> {
+        let asset = self.0.asset_resolver().get(path.to_string())?;
+        Some(http::Asset {
+            mime_type: asset.mime_type,
+            bytes: asset.bytes,
+        })
+    }
+
+    fn how_to_embed(&self) -> String {
+        "Under `tauri dev` the UI is served by Vite: open http://localhost:1420 instead — \
+         it proxies /api to this port.\n\
+         To serve the UI from here, build the frontend first: cd app && bun run build"
+            .into()
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
@@ -276,7 +295,15 @@ pub fn run() {
             if let Err(e) = projects::seed() {
                 eprintln!("parcad: could not prepare the project folder: {e}");
             }
-            http::serve(app.handle().clone());
+            // A failure to bind is not fatal — the window works regardless —
+            // but it must be visible, because the symptom otherwise is a
+            // browser tab that cannot connect and nothing explaining why.
+            let assets = std::sync::Arc::new(TauriAssets(app.handle().clone()));
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = http::serve(http::port(), assets).await {
+                    eprintln!("parcad: {e}\nThe desktop window still works.");
+                }
+            });
             // After the host, so the message can point at it as the way out.
             warn_if_the_window_awaits_a_dev_server(app.handle());
             // One broadcast, two transports: browsers get SSE from the HTTP

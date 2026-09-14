@@ -90,7 +90,7 @@ offsets.
 
 ### 2. One generated language index — **the agent half is done**
 
-`app/src-tauri/src/docs.rs` derives the reference from `dsl.ts` on every request:
+`crates/parcad-host/src/docs.rs` derives the reference from `dsl.ts` on every request:
 every export and every method of `Shape`, `EdgeSelection` and `VertexSelection`,
 with real signatures, parameter names and JSDoc, grouped and prefaced by the
 file's own module comment. It is served as `read_docs`, whose `dsl` topic is that

@@ -7,7 +7,7 @@ off the Fusion export, so a recreation either agrees with the original or does
 not.
 
 **These are seeded as real projects, in a `fusion360` folder.** `seed()` in
-`app/src-tauri/src/projects.rs` keeps the structure, so this arrives in the
+`crates/parcad-host/src/projects.rs` keeps the structure, so this arrives in the
 project list as an ordinary folder. The ones that throw show their reason in the
 editor: a target you can open and see blocked is more use than one that only
 exists in the repository. `.seeded` records the whole relative path

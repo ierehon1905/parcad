@@ -1,0 +1,33 @@
+[package]
+name = "parcad-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "What parcad can do, and the HTTP and MCP hosts that expose it — no window"
+
+[build-dependencies]
+serde_json.workspace = true
+
+[dependencies]
+parcad-core = { path = "../parcad-core" }
+# Default features only: this pulls in the host half, which spawns a worker and
+# reads its reply. No OpenCASCADE is linked into a host binary.
+parcad-occt = { path = "../parcad-occt" }
+# The UI and API are hosted on a loopback port so a browser is the same
+# application rather than a reduced one. Whoever embeds this crate owns the
+# tokio reactor — Tauri runs one, the CLI starts one — and only the listener is
+# added here.
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
+# `rt` is for `spawn_blocking`; `sync` is for the session broadcast channel;
+# `tokio-stream` adapts a broadcast receiver into the SSE stream browsers watch
+# for session events.
+tokio = { version = "1", default-features = false, features = ["net", "sync", "rt"] }
+tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+rmcp = { version = "3.1.0", features = ["server", "transport-streamable-http-server", "macros", "schemars"] }
+rquickjs = { version = "0.12.2", features = ["bindgen"] }
+schemars = "1.2.2"
+# Images travel base64-encoded in an MCP reply; the protocol has no binary frame.
+base64 = "0.22"

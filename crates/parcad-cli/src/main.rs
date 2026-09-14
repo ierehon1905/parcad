@@ -2,6 +2,18 @@
 //! agent (or a person) would want to look at.
 //!
 //!     parcad <graph.json> [--out DIR] [--depth N] [--size PX] [--view NAME]
+//!
+//! And the application itself, without a window, plus its tools from the shell:
+//!
+//!     parcad serve [--port N]
+//!     parcad tools
+//!     parcad call <tool> [JSON] [--set key=value]...
+//!
+//! A `.js` script is accepted wherever a graph is: it is built in the same
+//! sandbox MCP runs scripts in, so `bun tools/run.ts` is not a prerequisite.
+
+mod call;
+mod ui;
 
 use anyhow::{Context, Result};
 use parcad_core::{
@@ -85,13 +97,13 @@ fn parse_args() -> Result<Args> {
             }
             "--regions" => regions = true,
             "--section" => {
-                let spec = it.next().context("--section needs a plane, e.g. z or y@5:above")?;
+                let spec = it
+                    .next()
+                    .context("--section needs a plane, e.g. z or y@5:above")?;
                 section = Some(parse_section(&spec)?);
             }
             "--geometry" => {
-                geometry = Some(PathBuf::from(
-                    it.next().context("--geometry needs a path")?,
-                ))
+                geometry = Some(PathBuf::from(it.next().context("--geometry needs a path")?))
             }
             "--brep" => brep = true,
             "--timeout" => {
@@ -103,15 +115,26 @@ fn parse_args() -> Result<Args> {
                 )
             }
             "--step" => step = Some(PathBuf::from(it.next().context("--step needs a path")?)),
-            "--fit" => fit = Some(PathBuf::from(it.next().context("--fit needs a reference graph")?)),
+            "--fit" => {
+                fit = Some(PathBuf::from(
+                    it.next().context("--fit needs a reference graph")?,
+                ))
+            }
             "--probe-step" => {
                 probe_step = Some(PathBuf::from(
                     it.next().context("--probe-step needs a .step file")?,
                 ))
             }
+            "--version" => {
+                println!("parcad {}", env!("CARGO_PKG_VERSION"));
+                std::process::exit(0);
+            }
             "-h" | "--help" => {
                 eprintln!(
-                    "usage: parcad <graph.json> [--out DIR] [--depth N] [--size PX]\n\
+                    "usage: parcad serve [--port N]              # host the UI and MCP, no window\n\
+                     \x20      parcad tools                        # what the running host offers\n\
+                     \x20      parcad call <tool> [JSON] [--set key=value | key=@file | key:=json]\n\
+                     \x20      parcad <graph.json | part.js> [--out DIR] [--depth N] [--size PX]\n\
                      \x20              [--view NAME] [--regions] [--section PLANE]\n\
                      \x20              [--geometry PATH]\n\
                      \x20              [--brep] [--step PATH] [--timeout SECS]\n\
@@ -178,9 +201,10 @@ fn parse_section(spec: &str) -> Result<Section> {
     let (axis, at_mm) = match plane.split_once('@') {
         Some((axis, at)) => (
             axis,
-            Some(at.parse().with_context(|| {
-                format!("{at:?} in --section is not a position in mm")
-            })?),
+            Some(
+                at.parse()
+                    .with_context(|| format!("{at:?} in --section is not a position in mm"))?,
+            ),
         ),
         None => (plane, None),
     };
@@ -194,7 +218,86 @@ fn parse_section(spec: &str) -> Result<Section> {
     Ok(Section { axis, at_mm, keep })
 }
 
+/// A part from disk: an intent graph as JSON, or a `.js` script built into one
+/// in the same sandbox MCP uses, so the two never disagree about what a script
+/// means.
+fn load_doc(path: &std::path::Path) -> Result<Doc> {
+    let text =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    if path.extension().is_some_and(|e| e == "js") {
+        let graph = parcad_host::script::build_graph(&text)
+            .map_err(|e| anyhow::anyhow!("building {}: {e}", path.display()))?;
+        return serde_json::from_value(graph)
+            .with_context(|| format!("the graph {} built is not an intent graph", path.display()));
+    }
+    serde_json::from_str(&text)
+        .with_context(|| format!("parsing {} as an intent graph", path.display()))
+}
+
+/// The application without its window: seed the project folder, host the UI,
+/// the API and MCP on the port, and stay up until stopped.
+///
+/// This is what `brew services start parcad` runs. It is the same router and
+/// the same `service` the desktop app uses — a browser on the port is the whole
+/// application, and a model on `/mcp` sees the same parts.
+fn serve(args: impl Iterator<Item = String>) -> Result<()> {
+    let mut port = parcad_host::http::port();
+    let mut args = args;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--port" => {
+                port = args
+                    .next()
+                    .context("--port needs a number")?
+                    .parse()
+                    .context("--port must be a port number")?
+            }
+            other => anyhow::bail!("unknown argument {other:?}; usage: parcad serve [--port N]"),
+        }
+    }
+
+    // Seed before the host comes up: the frontend asks for the project list
+    // as it loads, and an empty first launch would look like a fresh install
+    // with nothing in it.
+    if let Err(e) = parcad_host::projects::seed() {
+        eprintln!(
+            "parcad: could not prepare the project folder {}: {e}\n\
+             Point PARCAD_PROJECTS_DIR at a folder this process may write.",
+            parcad_host::projects::dir().display()
+        );
+    }
+    eprintln!(
+        "parcad: parts in {}",
+        parcad_host::projects::dir().display()
+    );
+    if !ui::carries_ui() {
+        eprintln!(
+            "parcad: this binary was built without app/dist, so it hosts the API and MCP \
+             but no UI. Build the frontend and rebuild: cd app && bun run build && \
+             cargo build --release -p parcad-cli"
+        );
+    }
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("starting the async runtime")?;
+    runtime
+        .block_on(parcad_host::http::serve(
+            port,
+            std::sync::Arc::new(ui::Embedded),
+        ))
+        .map_err(anyhow::Error::msg)
+}
+
 fn main() -> Result<()> {
+    let mut args = std::env::args().skip(1);
+    match args.next().as_deref() {
+        Some("serve") => return serve(args),
+        Some("tools") => return call::tools(args),
+        Some("call") => return call::call(args),
+        _ => {}
+    }
     let args = parse_args()?;
 
     // Probe mode: measure a foreign export instead of evaluating a graph. The
@@ -228,24 +331,18 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    let text = std::fs::read_to_string(&args.input)
-        .with_context(|| format!("reading {}", args.input.display()))?;
-    let doc: Doc = serde_json::from_str(&text)
-        .with_context(|| format!("parsing {} as an intent graph", args.input.display()))?;
+    let doc = load_doc(&args.input)?;
 
     // Fit mode: the part against the object it holds, measured on the exact
     // solids. JSON to stdout, the sentence to stderr, like the probe.
     if let Some(path) = &args.fit {
-        let text = std::fs::read_to_string(path)
-            .with_context(|| format!("reading {}", path.display()))?;
-        let reference: Doc = serde_json::from_str(&text)
-            .with_context(|| format!("parsing {} as an intent graph", path.display()))?;
+        let reference = load_doc(path)?;
         let mut opts = parcad_occt::Options::default();
         if let Some(secs) = args.timeout {
             opts.timeout = std::time::Duration::from_secs_f64(secs);
         }
-        let report = parcad_occt::check_fit(&doc, &reference, &opts)
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let report =
+            parcad_occt::check_fit(&doc, &reference, &opts).map_err(|e| anyhow::anyhow!("{e}"))?;
         match (&report.clearance_mm, &report.closest_mm) {
             (Some(gap), Some([a, b])) => eprintln!(
                 "fit      {}: clearance {gap:.3} mm, between ({:.2}, {:.2}, {:.2}) on the part and ({:.2}, {:.2}, {:.2}) on the reference",
@@ -374,12 +471,20 @@ fn summary(r: &parcad_core::PartReport, eval_ms: u128, render_ms: u128) -> Strin
     ));
     s.push_str(&format!(
         "bounds  x {:.2}..{:.2}  y {:.2}..{:.2}  z {:.2}..{:.2}\n",
-        r.bounds.min.x, r.bounds.max.x, r.bounds.min.y, r.bounds.max.y, r.bounds.min.z, r.bounds.max.z
+        r.bounds.min.x,
+        r.bounds.max.x,
+        r.bounds.min.y,
+        r.bounds.max.y,
+        r.bounds.min.z,
+        r.bounds.max.z
     ));
     if let Some(contact) = &r.stands_on {
         s.push_str(&format!("stands  {}\n", stands_on_text(contact)));
     }
-    s.push_str(&format!("prints  {}\n", parcad_core::measure::beds_text(r.size)));
+    s.push_str(&format!(
+        "prints  {}\n",
+        parcad_core::measure::beds_text(r.size)
+    ));
     s.push_str(&format!(
         "volume  {:.2} mm³   area {:.2} mm²\n",
         r.mass.volume_mm3, r.mass.area_mm2
@@ -409,7 +514,9 @@ fn summary(r: &parcad_core::PartReport, eval_ms: u128, render_ms: u128) -> Strin
             format!(", tags: {}", r.tags.join(", "))
         }
     ));
-    s.push_str(&format!("time    {eval_ms} ms evaluate, {render_ms} ms render\n"));
+    s.push_str(&format!(
+        "time    {eval_ms} ms evaluate, {render_ms} ms render\n"
+    ));
     s
 }
 
@@ -562,7 +669,10 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         println!("stands   {}", stands_on_text(&contact));
     }
     println!("prints   {}", parcad_core::measure::beds_text(size));
-    println!("volume   {:.2} mm³   area {:.2} mm²", mass.volume_mm3, mass.area_mm2);
+    println!(
+        "volume   {:.2} mm³   area {:.2} mm²",
+        mass.volume_mm3, mass.area_mm2
+    );
     println!(
         "topology {} faces, {} edges ({} unique curves)",
         s.topology.faces,

@@ -1,10 +1,12 @@
 //! The same application, reachable from a browser.
 //!
-//! The desktop process hosts its own UI and API on a local port. A browser
-//! pointed at that port loads the identical frontend bundle and calls the
-//! identical `service` functions the webview calls over IPC — so "the browser
-//! version" is not a second implementation with fewer features, it is a second
-//! window onto this one.
+//! The process hosts its own UI and API on a local port. A browser pointed at
+//! that port loads the identical frontend bundle and calls the identical
+//! `service` functions the webview calls over IPC — so "the browser version"
+//! is not a second implementation with fewer features, it is a second window
+//! onto this one. Two processes host it: the desktop app, whose Tauri runtime
+//! already carries the frontend, and `parcad serve`, which carries a copy of
+//! the same build and no window.
 //!
 //! Three deliberate constraints:
 //!
@@ -32,7 +34,25 @@ use axum::{
 };
 use serde::Deserialize;
 use serde_json::json;
-use tauri::{AppHandle, Runtime};
+use std::sync::Arc;
+
+/// Where the frontend's bytes come from.
+///
+/// The desktop app answers from Tauri's asset resolver, `parcad serve` from a
+/// copy of `app/dist` embedded when the CLI was built. The router does not
+/// know which, and that is what keeps the frontend one build: neither host can
+/// serve a different bundle from the other's.
+pub trait Assets: Send + Sync + 'static {
+    fn get(&self, path: &str) -> Option<Asset>;
+    /// What to do when `get` has nothing. The fix differs by host — a dev
+    /// server to open, or a binary to rebuild — so the host says it.
+    fn how_to_embed(&self) -> String;
+}
+
+pub struct Asset {
+    pub mime_type: String,
+    pub bytes: Vec<u8>,
+}
 
 /// The port the UI and API are hosted on, overridable for a second instance.
 pub fn port() -> u16 {
@@ -82,12 +102,18 @@ struct SaveRequest {
 #[serde(tag = "op", rename_all = "lowercase")]
 enum ProjectOp {
     /// A new part, refusing to overwrite one that is there.
-    Create { script: String },
+    Create {
+        script: String,
+    },
     /// A new empty folder.
     Folder,
-    Rename { to: String },
+    Rename {
+        to: String,
+    },
     /// The readable name, which is not the path.
-    Title { title: String },
+    Title {
+        title: String,
+    },
     /// Loose `.js` to `.parcad` folder.
     Convert,
 }
@@ -97,34 +123,30 @@ struct StepRequest {
     graph: serde_json::Value,
 }
 
-/// Start the host, and say plainly on stderr whether it came up.
+/// Host the application on `port` until the listener stops, saying on stderr
+/// where it is.
 ///
-/// A failure to bind is not fatal — the desktop window works regardless — but it
-/// must be visible, because the symptom otherwise is a browser tab that cannot
-/// connect and nothing anywhere explaining why. The usual cause is a second
-/// instance already holding the port, which the message names.
-pub fn serve<R: Runtime>(app: AppHandle<R>) {
-    let port = port();
-    tauri::async_runtime::spawn(async move {
-        let router = router(app);
-        let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
-        match tokio::net::TcpListener::bind(address).await {
-            Ok(listener) => {
-                eprintln!("parcad: UI and API hosted on http://127.0.0.1:{port}");
-                if let Err(e) = axum::serve(listener, router).await {
-                    eprintln!("parcad: the HTTP host stopped: {e}");
-                }
-            }
-            Err(e) => eprintln!(
-                "parcad: could not host on 127.0.0.1:{port}: {e}\n\
-                 The desktop window still works. If another parcad is already running, \
-                 use that one, or start this instance with PARCAD_HTTP_PORT=<other port>."
-            ),
-        }
-    });
+/// A failure to bind comes back as the error rather than a log line, because
+/// the two callers disagree about how bad it is: the desktop window works
+/// regardless, while `parcad serve` has nothing else to do. The usual cause is
+/// a second instance already holding the port, which the message names.
+pub async fn serve(port: u16, assets: Arc<dyn Assets>) -> Result<(), String> {
+    let router = router(assets);
+    let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+    let listener = tokio::net::TcpListener::bind(address).await.map_err(|e| {
+        format!(
+            "could not host on 127.0.0.1:{port}: {e}\n\
+             If another parcad is already running, use that one, or start this \
+             instance with PARCAD_HTTP_PORT=<other port>."
+        )
+    })?;
+    eprintln!("parcad: UI and API hosted on http://127.0.0.1:{port}, MCP at /mcp");
+    axum::serve(listener, router)
+        .await
+        .map_err(|e| format!("the HTTP host stopped: {e}"))
 }
 
-fn router<R: Runtime>(app: AppHandle<R>) -> Router {
+fn router(assets: Arc<dyn Assets>) -> Router {
     Router::new()
         .route("/api/health", get(health))
         // Whether a model is connected to the MCP endpoint below. Read by both
@@ -165,7 +187,7 @@ fn router<R: Runtime>(app: AppHandle<R>) -> Router {
         // Everything else is the frontend. Registered last and as a fallback so
         // no asset name can ever shadow an API route.
         .fallback(asset)
-        .with_state(app)
+        .with_state(assets)
 }
 
 async fn health() -> impl IntoResponse {
@@ -226,7 +248,7 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, String> + Send + 'static,
 {
-    match tauri::async_runtime::spawn_blocking(work).await {
+    match tokio::task::spawn_blocking(work).await {
         Ok(result) => result.map_err(Failed),
         Err(e) => Err(Failed(format!("the evaluation task did not finish: {e}"))),
     }
@@ -351,36 +373,31 @@ async fn project_preview(Path(name): Path<String>) -> Result<Response, Failed> {
     Ok(([(header::CONTENT_TYPE, "image/png")], png).into_response())
 }
 
-/// Serve the frontend bundle Tauri already carries.
+/// Serve the frontend bundle the host carries.
 ///
-/// Resolving through Tauri's asset resolver rather than a static directory keeps
-/// exactly one copy of the frontend: the browser is served the same bytes the
-/// webview loads, so the two hosts cannot drift to different builds.
-async fn asset<R: Runtime>(State(app): State<AppHandle<R>>, uri: Uri) -> Response {
+/// Resolving through the host's own copy rather than a directory on disk keeps
+/// exactly one frontend: the browser is served the same bytes the webview
+/// loads, so the two cannot drift to different builds.
+async fn asset(State(assets): State<Arc<dyn Assets>>, uri: Uri) -> Response {
     let path = match uri.path() {
-        "/" => "index.html".to_string(),
-        other => other.trim_start_matches('/').to_string(),
+        "/" => "index.html",
+        other => other.trim_start_matches('/'),
     };
 
     // A client-side route or a reloaded deep link is not a missing file.
-    let resolved = app
-        .asset_resolver()
-        .get(path)
-        .or_else(|| app.asset_resolver().get("index.html".into()));
+    let resolved = assets.get(path).or_else(|| assets.get("index.html"));
 
     match resolved {
         Some(asset) => ([(header::CONTENT_TYPE, asset.mime_type)], asset.bytes).into_response(),
-        // In `tauri dev` the frontend is served by Vite and only bundled at
-        // build time, so there may be nothing to resolve. Say where it is
+        // There may be nothing to resolve — under `tauri dev` Vite serves the
+        // UI, and a CLI built before the frontend carries none. Say what to do
         // instead of returning a bare 404.
         None => (
             StatusCode::NOT_FOUND,
             [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
             format!(
-                "parcad is running, but no frontend bundle is embedded in this binary.\n\
-                 Under `tauri dev` the UI is served by Vite: open http://localhost:1420 \
-                 instead — it proxies /api to this port.\n\
-                 To serve the UI from here, build the frontend first: cd app && bun run build\n",
+                "parcad is running, but this process carries no frontend bundle.\n{}\n",
+                assets.how_to_embed()
             ),
         )
             .into_response(),

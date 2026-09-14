@@ -259,7 +259,7 @@ matched at all".
   `hex-standoff.js` and `clevis.js` take their drill sizes from the table rather
   than shadowing it. The cost lands on parts already saved in someone's project
   folder, not only on the ones here. **Fix:** the places that compile a script
-  (`tools/run.ts`, `app/src/engine.ts`, `app/src-tauri/src/script.rs`) should
+  (`tools/run.ts`, `app/src/engine.ts`, `crates/parcad-host/src/script.rs`) should
   catch the redeclaration and name the builtin that was shadowed. "`hole` is a
   parcad builtin — rename your local" is a one-line fix for the reader; "Cannot
   declare a const variable twice" is not.

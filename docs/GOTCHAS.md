@@ -143,10 +143,12 @@ not answering" and keeps the last good geometry on screen. That is the app havin
 exited, not a failed evaluation — `tauri dev` restarting on a rebuild is the
 usual cause.
 
-### The MCP server only exists while the app is running
+### The MCP server only exists while a host is running
 
-It is hosted by the desktop process, not a separate binary, so a client connects
-only when parcad is open. Point it at the streamable-HTTP URL:
+It is hosted by the desktop process or by `parcad serve`, never by a binary a
+client launches, so a client connects only while one of those is up —
+`brew services start parcad` is how it stays up. Point the client at the
+streamable-HTTP URL:
 
 ```bash
 claude mcp add --transport http parcad http://127.0.0.1:4242/mcp
@@ -229,6 +231,45 @@ per edge, volume adds, and the face count of five closed pieces is a plausible
 number. `bodies` in `MeshStats` (connected components of the mesh, joined by
 vertex position) is the number that does, and `stands_on` found it first by way
 of the end face being five patches. Both are recorded for every case now.
+
+### A correct solid can mesh as a closed fragment of itself
+
+A model building a unicorn over MCP (2026-09-14) reported that "unions lost the
+body" while the report said built and watertight. Reproduced, the union is not
+the defect:
+
+```js
+union(sphere(10), sphere(10).rotate("x", 90))
+```
+
+The fuse returns **4188.79 mm³ exactly** (`BRepGProp`), already one face, and
+`UnifySameDomain` changes nothing. `BRepMesh` then triangulates that face as 198
+triangles enclosing **727.70 mm³**, a 10 × 20 × 20 closed fragment: watertight,
+one body. Every number the report shows is read off the mesh, as are the
+preview and the STL, so all of them described the sliver; only a STEP export
+was right.
+
+| union with `sphere(10)` | result |
+|---|---|
+| itself, or turned about Z, or 180° about X | right |
+| turned 90° about X, also both moved to x=5 | closed fragment, 727.70 mm³ |
+| turned 37° or 89° about X | open mesh, refused by the watertight backstop |
+| `cylinder(5,20)` ∪ itself turned 45° about Z | open mesh, refused |
+| `torus(10,2)` ∪ itself turned 30° about Z | "a mesh with no vertices" |
+| any of these moved 0.01 mm | right |
+
+The common factor is two operands sharing a curved surface with different
+parameterisations, which a figurine does every time a mirrored or rotated copy
+lands on the original. The worker now compares the mesh's enclosed volume with
+the solid's and refuses past `2 · area · deflection`, the most a tessellation
+within that deflection can account for. The whole corpus sits inside the bound.
+`eval/cases/refuse-coincident-sphere-mesh.json` pins it. It does not fix the
+mesher. Remeshing the face is the next thing to try, and the torus row still
+refuses with a message that names no fix.
+
+Two guards were tried first and taken out because the defect never reached
+them: a union volume floor (result ≥ larger operand) and a volume check across
+`UnifySameDomain`. Both read the exact B-rep, which was never wrong.
 
 ### `offset_surface` lies
 
@@ -624,6 +665,20 @@ Found beside it: the client truncates server `instructions` at 2048
 characters and says so only in that debug log. Ours were 3511, and the
 paragraph that fell off was the one about selectors.
 `the_instructions_fit_the_client_window` holds the length.
+
+## Protocol 2026-07-28 has no session, and refuses a request that acts as if it did
+
+The other side of the same version, met writing `parcad call`. rmcp 3.1
+serves 2026-07-28 statelessly (SEP-2567): there is no `Mcp-Session-Id`, and
+every request after `initialize` must carry, in `params._meta`,
+`io.modelcontextprotocol/protocolVersion` and
+`io.modelcontextprotocol/clientCapabilities`, or it is refused with
+"request _meta is missing". Every POST must also repeat its method in an
+`Mcp-Method` header and, for `tools/call`, the tool in `Mcp-Name`
+(SEP-2243) — the body alone gets "missing required Mcp-Method header". Both
+rules are gated on the `MCP-Protocol-Version` header the client sends; the
+older versions keep their session and want neither. `call.rs` in the CLI
+speaks the new one only, and says so.
 
 ## A union of pieces that do not touch each other kills the fuse that joins them
 

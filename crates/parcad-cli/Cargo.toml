@@ -12,5 +12,12 @@ path = "src/main.rs"
 [dependencies]
 parcad-core = { path = "../parcad-core" }
 parcad-occt = { path = "../parcad-occt" }
+# `parcad serve`: the same HTTP host, MCP server and project folder the desktop
+# app runs, without the window. The frontend it serves is `app/dist`, embedded
+# by build.rs.
+parcad-host = { path = "../parcad-host" }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread"] }
+# `parcad call` writes the images a tool returns; they travel base64-encoded.
+base64 = "0.22"
 anyhow.workspace = true
 serde_json.workspace = true

@@ -290,7 +290,18 @@ line down it. For the bracket this takes 77 curves down to 67.
 
 ## The app
 
-### One application, two windows
+### One application, two windows, and one with none
+
+The capabilities and both hosts are `crates/parcad-host`, a crate with no
+Tauri in it. `app/src-tauri` embeds it and adds a window and an IPC adapter;
+`parcad serve` embeds it and adds nothing, which is what the Homebrew formula
+runs as a service. The frontend reaches the router through an `Assets`
+provider — Tauri's resolver in the app, a copy of `app/dist` compiled into the
+CLI — so there is still exactly one frontend build and no host can serve a
+different one. `parcad tools` and `parcad call` are then an MCP client of
+whichever host is running: the CLI does not carry a second list of tools, it
+asks `/mcp` for the one there is.
+
 
 The desktop process hosts its own UI and API on `127.0.0.1:4242`
 (`PARCAD_HTTP_PORT` to move it). A browser pointed at that port is not a reduced
@@ -300,7 +311,7 @@ limitation to learn.
 
 ```
   webview  ──Tauri IPC──┐
-                        ├──> app/src-tauri/src/service.rs ──> core / OCCT worker
+                        ├──> crates/parcad-host/src/service.rs ──> core / OCCT worker
   browser  ──HTTP────────┘
 ```
 

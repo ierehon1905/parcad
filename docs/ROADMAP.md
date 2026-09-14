@@ -9,7 +9,7 @@ access, including the Tauri `invoke` bridge.** Fine for a script a human typed
 into their own editor; not fine the moment an agent authors one, which is the
 entire point of the project.
 
-`app/src-tauri/src/script.rs` takes QuickJS in Rust rather than a webview worker,
+`crates/parcad-host/src/script.rs` takes QuickJS in Rust rather than a webview worker,
 because it needs no window open and shares no origin with the editor. The realm
 is created empty: QuickJS without `quickjs-libc` has no `fetch`, no `require`, no
 filesystem and no console, and nothing in that file adds a host function. It is
@@ -88,7 +88,7 @@ B-rep cannot. Barely started:
 
 MCP used to be stateless by construction — `save_project` wrote a file and
 stopped, no event reached any window, and the open editor was a correct but stale
-view of the folder until a reload. `app/src-tauri/src/session.rs` holds the
+view of the folder until a reload. `crates/parcad-host/src/session.rs` holds the
 session beside `service.rs`: `name`, `script`, `revision`, the id of whichever
 viewer originated the change, and a broadcast channel. `open_project`,
 `set_script` and `get_session` adapt it on the MCP side; SSE at
