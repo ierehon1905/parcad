@@ -42,8 +42,11 @@ echo "sidecar staged:   app/src-tauri/binaries/parcad-occt-worker-$triple$exe"
 # A PARCAD_OCCT_PREBUILT install was compiled elsewhere; its flags live under
 # its own build tree, not this checkout's target/.
 flag_root="${PARCAD_OCCT_PREBUILT:+$PARCAD_OCCT_PREBUILT/build}"
-flags=$(find ${flag_root:-target/release/build/occt-sys-*/out/build} -name flags.make -path "*TKBO*" 2>/dev/null | head -1)
-if [ -n "$flags" ]; then
+flags=$(find ${flag_root:-target/release/build/occt-sys-*/out/build} -name flags.make -path "*TKBO*" 2>/dev/null | head -1 || true)
+if [ -z "$flags" ]; then
+  # A Visual Studio build writes .vcxproj files, not flags.make.
+  echo "opencascade:      optimisation not checked (no flags.make under the OCCT build)"
+else
   if grep -q '^CXX_FLAGS =.*-O[123s]' "$flags"; then
     echo "opencascade:      optimised ($(grep -o -- '-O[123s]' "$flags" | head -1))"
   else
