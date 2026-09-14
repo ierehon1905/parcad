@@ -1,0 +1,17 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.ierehon1905/parcad",
+  "title": "ParCAD",
+  "description": "Parametric CAD as code: model 3D-printable parts on an exact B-rep kernel, measured.",
+  "websiteUrl": "https://github.com/ierehon1905/parcad",
+  "repository": { "url": "https://github.com/ierehon1905/parcad", "source": "github" },
+  "version": "0.0.4",
+  "packages": [
+    {
+      "registryType": "mcpb",
+      "identifier": "https://github.com/ierehon1905/parcad/releases/download/v0.0.4/parcad-mcp-aarch64-apple-darwin.mcpb",
+      "fileSha256": "REPLACE-WITH-THE-SHA256-FROM-SHA256SUMS.txt",
+      "transport": { "type": "stdio" }
+    }
+  ]
+}

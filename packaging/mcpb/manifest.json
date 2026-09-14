@@ -1,0 +1,29 @@
+{
+  "manifest_version": "0.3",
+  "name": "parcad",
+  "display_name": "ParCAD",
+  "version": "0.0.4",
+  "description": "Parametric CAD you write as code: model 3D-printable parts in a JavaScript DSL, evaluated by an exact B-rep kernel.",
+  "long_description": "ParCAD builds parts from a small JavaScript DSL and evaluates them with OpenCASCADE. Every report is measured from the geometry: bounds, volume, what the part stands on, whether it fits the object it holds. Parts are saved to ~/Documents/parcad, and the whole app is in your browser at http://127.0.0.1:4242 while the extension runs. Apple silicon Macs only.",
+  "author": { "name": "Leon Minasyan", "url": "https://github.com/ierehon1905" },
+  "homepage": "https://github.com/ierehon1905/parcad",
+  "repository": { "type": "git", "url": "https://github.com/ierehon1905/parcad" },
+  "license": "MIT OR Apache-2.0",
+  "keywords": ["cad", "3d-printing", "step", "stl", "parametric"],
+  "icon": "icon.png",
+  "server": {
+    "type": "binary",
+    "entry_point": "parcad",
+    "mcp_config": {
+      "command": "${__dirname}/parcad",
+      "args": ["mcp"],
+      "env": {
+        "PARCAD_OCCT_WORKER": "${__dirname}/parcad-occt-worker",
+        "PARCAD_SEED_DIR": "${__dirname}/examples"
+      }
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin"]
+  }
+}

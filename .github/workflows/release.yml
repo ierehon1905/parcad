@@ -119,6 +119,21 @@ jobs:
              vendor/opencascade/LICENSE "$out/licenses/"
           tar czf "$out.tar.gz" "$out"
 
+      # The same files as the tarball, as an MCP bundle: what Claude Desktop
+      # installs in one click and what the MCP Registry lists. The registry
+      # refuses a bundle whose URL does not contain "mcp", hence the name.
+      # The official packer, not zip: `zip` writes directory entries that the
+      # mcpb unpacker fails on, and the packer validates the manifest too.
+      - name: Pack the MCP bundle
+        run: |
+          set -euo pipefail
+          staged="parcad-cli-${{ matrix.arch }}-apple-darwin"
+          bundle="parcad-mcp-${{ matrix.arch }}-apple-darwin"
+          cp -R "$staged" "$bundle"
+          cp packaging/mcpb/manifest.json "$bundle/"
+          cp app/src-tauri/icons/icon.png "$bundle/"
+          bunx @anthropic-ai/mcpb@2.1.2 pack "$bundle" "$bundle.mcpb"
+
       - name: Collect the bundles
         run: |
           set -euo pipefail
@@ -137,7 +152,7 @@ jobs:
           # and an .app that loses those does not launch.
           ditto -c -k --keepParent "$app" \
             "dist/$(basename "$app" .app)-${{ matrix.arch }}-apple-darwin.zip"
-          cp parcad-cli-*.tar.gz dist/
+          cp parcad-cli-*.tar.gz parcad-mcp-*.mcpb dist/
           (cd dist && shasum -a 256 * > SHA256SUMS.txt)
           ls -lh dist
           cat dist/SHA256SUMS.txt
@@ -191,7 +206,9 @@ jobs:
             `ParCAD-*.zip` is the app — unzip it and drag it to Applications.
             Apple silicon only. `parcad-cli-*.tar.gz` is what Homebrew installs:
             the headless driver, `parcad serve`, its B-rep worker, the seed
-            parts and the licence texts. `SHA256SUMS.txt` checksums both.
+            parts and the licence texts. `parcad-mcp-*.mcpb` is the same
+            host as an MCP bundle, for Claude Desktop and the MCP Registry.
+            `SHA256SUMS.txt` checksums all three.
 
             Contains LGPL-2.1 and MPL-2.0 components — see NOTICE.md. You may
             replace the OpenCASCADE inside this program with your own build;

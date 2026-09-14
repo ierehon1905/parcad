@@ -240,6 +240,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | the host without a window, and its tools from a shell | `parcad serve`, `parcad tools`, `parcad call` in `crates/parcad-cli/src/main.rs` and `call.rs` — the CLI is an MCP client of the running host, so parity with `mcp.rs` is by construction |
 | MCP over stdio, for clients that launch servers | `parcad mcp` in `crates/parcad-cli/src/stdio.rs`, a relay to the running host that becomes the host when there is none |
 | the Claude Code and Codex plugin | `packaging/plugin/`, listed by `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`; its README says how to release and submit it |
+| the MCP bundle and its registry entry | `packaging/mcpb/` — packed by the release workflow; its README is the per-release checklist |
 | the sandbox agent scripts run in | `crates/parcad-host/src/script.rs` |
 | where parts are stored | `crates/parcad-host/src/projects.rs` — a `.parcad` folder per part |
 | the parts picker: folders, new part, rename, trash | `app/src/ui/project-browser.tsx`, rules in `app/src/projects.ts` |

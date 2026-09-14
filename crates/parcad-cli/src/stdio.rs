@@ -273,19 +273,31 @@ fn listening(port: u16) -> bool {
 
 #[cfg(test)]
 mod tests {
-    /// A plugin's version is what tells an installed copy to update, and
+    /// A packaged version is what tells an installed copy to update, and
     /// nothing else would notice it lagging a release.
     #[test]
-    fn plugin_manifests_carry_the_crate_version() {
-        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packaging/plugin");
-        for manifest in [".claude-plugin/plugin.json", ".codex-plugin/plugin.json"] {
+    fn packaging_manifests_carry_the_crate_version() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packaging");
+        for manifest in [
+            "plugin/.claude-plugin/plugin.json",
+            "plugin/.codex-plugin/plugin.json",
+            "mcpb/manifest.json",
+            "mcpb/server.json",
+        ] {
             let text = std::fs::read_to_string(format!("{root}/{manifest}")).unwrap();
             let json: serde_json::Value = serde_json::from_str(&text).unwrap();
             assert_eq!(
                 json["version"],
                 env!("CARGO_PKG_VERSION"),
-                "packaging/plugin/{manifest} names another version; set it to the workspace's"
+                "packaging/{manifest} names another version; set it to the workspace's"
             );
         }
+        let server = std::fs::read_to_string(format!("{root}/mcpb/server.json")).unwrap();
+        let tag = format!("/download/v{}/", env!("CARGO_PKG_VERSION"));
+        assert!(
+            server.contains(&tag),
+            "packaging/mcpb/server.json points at another release's bundle; name v{} and its sha256",
+            env!("CARGO_PKG_VERSION")
+        );
     }
 }

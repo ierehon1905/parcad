@@ -3007,7 +3007,7 @@ dependencies = [
 
 [[package]]
 name = "parcad-app"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "base64 0.22.1",
  "parcad-host",
@@ -3021,7 +3021,7 @@ dependencies = [
 
 [[package]]
 name = "parcad-cli"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -3034,7 +3034,7 @@ dependencies = [
 
 [[package]]
 name = "parcad-core"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "fidget",
@@ -3046,7 +3046,7 @@ dependencies = [
 
 [[package]]
 name = "parcad-eval"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "parcad-core",
@@ -3057,7 +3057,7 @@ dependencies = [
 
 [[package]]
 name = "parcad-host"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "axum",
@@ -3075,7 +3075,7 @@ dependencies = [
 
 [[package]]
 name = "parcad-occt"
-version = "0.0.3"
+version = "0.0.4"
 dependencies = [
  "anyhow",
  "glam 0.23.0",

@@ -40,7 +40,5 @@ The marketplaces that list it are at the repository root:
   privacy and terms URLs. Until then, `codex plugin marketplace add
   ierehon1905/parcad` and `codex plugin add parcad@parcad` install from this
   repository.
-- **MCP Registry** (`registry.modelcontextprotocol.io`): not done. It lists
-  npm, PyPI, NuGet, OCI and MCPB packages, not a Homebrew formula. Listing
-  there means publishing one of those too, most likely an `.mcpb` bundle of the
-  release tarball.
+- **MCP Registry**: listed from the release's `.mcpb` bundle, not from this
+  plugin; `packaging/mcpb/README.md` says how.
