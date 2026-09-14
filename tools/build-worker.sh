@@ -12,21 +12,25 @@ cd "$(dirname "$0")/.."
 
 cargo build --locked -p parcad-occt --features kernel --release --bins
 
+triple=$(rustc -vV | awk '/^host: /{print $2}')
+exe=""
+case "$triple" in *windows*) exe=".exe" ;; esac
+worker="target/release/parcad-occt-worker$exe"
+
 # Beside every application binary, which is where host::worker_path looks.
 for dir in target/debug target/release; do
-  [ -d "$dir" ] && cp target/release/parcad-occt-worker "$dir/" 2>/dev/null || true
+  [ -d "$dir" ] && cp "$worker" "$dir/" 2>/dev/null || true
 done
-echo "worker installed: $(ls -la target/release/parcad-occt-worker | awk '{print $5" bytes"}')"
+echo "worker installed: $(ls -la "$worker" | awk '{print $5" bytes"}')"
 
 # And where Tauri looks, which is not the same place or the same name. An
 # `externalBin` entry names the file without its target triple and the bundler
 # demands the file on disk carry one, so this copy exists purely to satisfy
 # `tauri build`. It is a build artifact of the size of a geometry kernel and is
 # gitignored; without it the bundle silently ships no worker.
-triple=$(rustc -vV | awk '/^host: /{print $2}')
 mkdir -p app/src-tauri/binaries
-cp target/release/parcad-occt-worker "app/src-tauri/binaries/parcad-occt-worker-$triple"
-echo "sidecar staged:   app/src-tauri/binaries/parcad-occt-worker-$triple"
+cp "$worker" "app/src-tauri/binaries/parcad-occt-worker-$triple$exe"
+echo "sidecar staged:   app/src-tauri/binaries/parcad-occt-worker-$triple$exe"
 
 # Check OpenCASCADE actually got optimised.
 #

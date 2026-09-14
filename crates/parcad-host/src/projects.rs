@@ -89,10 +89,12 @@ pub fn dir() -> PathBuf {
         .join("parcad")
 }
 
+/// The platform's own answer, not `$HOME/Documents`: Windows sets no `HOME` and
+/// may redirect Documents into OneDrive, and Linux names it in `user-dirs.dirs`.
 fn dirs_documents() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    let documents = home.join("Documents");
-    documents.is_dir().then_some(documents).or(Some(home))
+    dirs::document_dir()
+        .filter(|documents| documents.is_dir())
+        .or_else(dirs::home_dir)
 }
 
 // ------------------------------------------------------------------ the tree

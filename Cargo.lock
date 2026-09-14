@@ -3062,6 +3062,7 @@ dependencies = [
  "anyhow",
  "axum",
  "base64 0.22.1",
+ "dirs",
  "parcad-core",
  "parcad-occt",
  "rmcp",

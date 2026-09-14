@@ -47,5 +47,7 @@ endif ()
 # and there is no symbolication anywhere in the tree. Generating DWARF for 6,333
 # translation units cost build time on every machine and took the static libraries
 # to 2.0 GB, which is most of why a finished install is 6.8 GB.
+# Under MSVC this also drops the Debug default /MDd: the runtime then comes from
+# the /MD the cmake crate puts in CMAKE_CXX_FLAGS, which is the one Rust links.
 set(CMAKE_C_FLAGS_DEBUG   "${_parcad_opt}" CACHE STRING "parcad: optimised, no debug info" FORCE)
 set(CMAKE_CXX_FLAGS_DEBUG "${_parcad_opt}" CACHE STRING "parcad: optimised, no debug info" FORCE)

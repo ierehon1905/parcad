@@ -145,7 +145,8 @@ fn worker_path() -> Result<PathBuf, OcctError> {
         .parent()
         .ok_or_else(|| OcctError::Host("the running executable has no directory".into()))?;
 
-    let names = [WORKER.to_string(), format!("{WORKER}-{TRIPLE}")];
+    let exe_suffix = std::env::consts::EXE_SUFFIX;
+    let names = [format!("{WORKER}{exe_suffix}"), format!("{WORKER}-{TRIPLE}{exe_suffix}")];
     if let Some(found) = names.iter().map(|n| dir.join(n)).find(|p| p.exists()) {
         return Ok(found);
     }
@@ -370,6 +371,12 @@ fn run_worker(request: Request, opts: &Options) -> Result<Response, OcctError> {
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status();
+                #[cfg(windows)]
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &worker_pid.to_string()])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
                 // The kill closes the worker's stderr, so the reader thread is
                 // about to drain whatever was still in the pipe and finish.
                 // Wait for that rather than race it: under load the last
@@ -429,7 +436,7 @@ static REPLY_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
 /// Turn an exit status into something worth reading.
 fn describe_exit(status: &std::process::ExitStatus, noise: &[String]) -> String {
     let mut detail = match status.code() {
-        Some(c) => format!("exit code {c}"),
+        Some(c) => windows_crash_text(c).unwrap_or_else(|| format!("exit code {c}")),
         None => signal_text(status),
     };
 
@@ -459,6 +466,24 @@ fn signal_text(status: &std::process::ExitStatus) -> String {
 #[cfg(not(unix))]
 fn signal_text(_status: &std::process::ExitStatus) -> String {
     "stopped for an unknown reason".into()
+}
+
+/// Windows has no signals: a process that faults exits with the NTSTATUS of the
+/// fault as its code, which as a decimal integer names nothing.
+fn windows_crash_text(code: i32) -> Option<String> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let what = match code as u32 {
+        0xC000_0005 => "an access violation, the Windows SIGSEGV",
+        0xC000_00FD => "a stack overflow",
+        0xC000_0409 => "a fast-fail abort, which is how an uncaught C++ exception ends",
+        0xC000_001D => "an illegal instruction",
+        // abort() under the MSVC runtime.
+        3 => "abort(), which is how an uncaught C++ exception ends",
+        _ => return None,
+    };
+    Some(format!("killed by {what} (exit code {:#010X})", code as u32))
 }
 
 #[cfg(all(test, unix))]

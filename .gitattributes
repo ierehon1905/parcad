@@ -1,0 +1,3 @@
+# LF on every checkout, Windows included: the OCCT patch series applies with
+# `patch -p1`, which rejects a hunk against a CRLF copy of the file it patches.
+* text=auto eol=lf

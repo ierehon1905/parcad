@@ -38,7 +38,11 @@ fn main() {
     println!("cargo:rustc-link-lib=static=TKXSBase");
 
     if is_windows {
-        println!("cargo:rustc-link-lib=dylib=user32");
+        // The system libraries OCCT's own CMake lists for TKernel and TKService
+        // (CSF_user32, CSF_advapi32, CSF_gdi32, CSF_wsock32, CSF_psapi).
+        for lib in ["user32", "advapi32", "gdi32", "ws2_32", "psapi"] {
+            println!("cargo:rustc-link-lib=dylib={lib}");
+        }
     }
 
     let mut build = cxx_build::bridge("src/lib.rs");
@@ -51,8 +55,9 @@ fn main() {
         .cpp(true)
         // OCCT 8.0 requires C++17 — its headers use constexpr and mutable-state
         // idioms that a C++11 compile rejects outright. Upstream asked for
-        // c++11 because it shipped OCCT 7.7.
-        .flag_if_supported("-std=c++17")
+        // c++11 because it shipped OCCT 7.7. `std` rather than a `-std=` flag,
+        // which MSVC ignores with a warning and compiles as C++14.
+        .std("c++17")
         .define("_USE_MATH_DEFINES", "TRUE")
         .include(occt_include_path())
         .include("include")
