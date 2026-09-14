@@ -39,6 +39,29 @@ impossible, check the layer that would implement it, not the layer above.
   one: `view.rs`'s `Section`, the viewport plane control, and `section` on
   `evaluate_part`, with the part untouched and every measurement still of the
   whole solid. OP_ROADMAP §8, docs/PERCEPTION.md §7.
+- **a helix, and a taper along a sweep** — `pipe({ helix: { radius, pitch,
+  turns, endRadius, hand } }, d, { taper })` and the same path and option on
+  `sweep(profile, …)`. Asked for by a model building a unicorn over MCP, which
+  faked a mane, a tail and a spiral horn out of stacked primitives. The helix is
+  a line in a cylinder's (or, with `endRadius`, a cone's) parameter space, its
+  fitted 3D curve measured within 1e-8 mm of the exact helix and refused past
+  1e-4; the sweep is `BRepOffsetAPI_MakePipeShell` in Frenet mode, which on a
+  helix is its screw motion. Five cases hold it to closed forms at 1e-6 of
+  BRepGProp — `helical-spring`, `square-coil`, `left-hand-hook`,
+  `tapered-strand`, `spiral-horn` — and `refuse-coil-through-itself` holds the
+  pitch check. B-rep only: the implicit backend refuses both by name. The
+  taper is linear in *length* along runs and bends but in *turn angle* on a
+  helix, measured: `spiral-horn` reads 811.62 mm³, where length would give
+  614.81.
+
+  **Threads are still not here, and this is why.** A groove swept along a
+  helix and cut from a cylinder on the same axis builds at one and two turns
+  and comes back with an open surface at three or more (8 unclosed mesh edges
+  for a round groove, 117 for a V at eight turns), which the watertight
+  backstop refuses; a V ridge unioned onto a core at eight turns fails the same
+  way, with 1043. Unions that do not wrap a coaxial surface —
+  a spring on a plate, a tapered spiral on a cone — build and close. The cause
+  is undiagnosed; the tap drill stays the honest drawing of a threaded hole.
 
 What a mainstream tool has that this still does not, with the cost of each here,
 is in [OP_ROADMAP.md](OP_ROADMAP.md).
@@ -48,7 +71,7 @@ is in [OP_ROADMAP.md](OP_ROADMAP.md).
 | wanted | needed for | what it takes |
 |---|---|---|
 | **arcs in a section** | an O-ring groove, a bearing seat — a radius in section rather than a chamfer | `Edge::arc` is bound; the profile is a `Vec<[f64; 2]>` of straight segments, so an arc has nowhere to live |
-| **helix** | real threads — every "threaded" hole in the corpus is drawn as its tap drill; a knurl; a spring | a helical path type. `MakePipe` is bound and `sweep()` uses it, but the graph's path model is runs and circular bends |
+| **a thread that closes** | real threads — every "threaded" hole in the corpus is drawn as its tap drill | the helix exists (above); a helical groove cut through its coaxial cylinder over three or more turns returns an open surface, refused. Needs the boolean diagnosed, not a new op |
 | **involute and other authored curves** | a spur gear, a cam, a real GT2 flank (`timing-pulley.js` approximates it and says so) | curve construction in the graph, on top of the section type |
 | **re-entrant (non-convex) sections** | a stepped hub in one operation | refused deliberately: no exact distance field. A union of convex revolves is exact, and is how the part is turned anyway |
 | **variable-radius and unequal-distance treatments** | a casting fillet that tapers, an asymmetric chamfer for a weld prep | `Fillet`/`Chamfer` take one scalar |

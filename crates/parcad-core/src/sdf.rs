@@ -10,7 +10,7 @@
 //! [`Op::Offset`] and [`Op::Shell`] are only correct on an exact field, and the
 //! octree mesher gets to take much larger steps.
 
-use crate::graph::{Doc, NodeId, Op, V3};
+use crate::graph::{Doc, NodeId, Op, SweepSection, SweepSpine, V3};
 use anyhow::Result;
 use fidget::context::Tree;
 
@@ -210,11 +210,30 @@ fn lower_node(doc: &Doc, id: NodeId, built: &[Option<Tree>]) -> Result<Tree> {
                 "the loft at node {id} has no exact distance field — a skin between arbitrary outlines has no closed form. Evaluate this part with the B-rep backend, which builds it exactly"
             )
         }
-        Op::Sweep { profile, path, bend } => {
-            Op::sweep_spine(profile, path, *bend)?;
-            anyhow::bail!(
-                "the sweep at node {id} has no exact distance field — an authored section along a bent path has no closed form. Evaluate this part with the B-rep backend, which builds it exactly; a round section can stay implicit as pipe()"
-            )
+        Op::Sweep {
+            profile,
+            circle,
+            path,
+            bend,
+            helix,
+            taper,
+        } => {
+            let (section, spine) =
+                Op::validate_sweep(profile, *circle, path, *bend, helix.as_ref(), *taper)?;
+            match (spine, section) {
+                (SweepSpine::Helix(_), _) => anyhow::bail!(
+                    "the helical sweep at node {id} has no exact distance field — the nearest point on a helix has no closed form. Evaluate this part with the B-rep backend, which builds it to a measured tolerance"
+                ),
+                (_, SweepSection::Circle(_)) => anyhow::bail!(
+                    "the tapered pipe at node {id} has no exact distance field — a round section that changes size along runs and bends has no closed form here. Evaluate this part with the B-rep backend, which builds it exactly; an untapered pipe() stays implicit, and so does a straight taper built as cone()"
+                ),
+                _ if *taper != 1.0 => anyhow::bail!(
+                    "the tapered sweep at node {id} has no exact distance field — a section that changes size along a path has no closed form. Evaluate this part with the B-rep backend, which builds it exactly"
+                ),
+                _ => anyhow::bail!(
+                    "the sweep at node {id} has no exact distance field — an authored section along a bent path has no closed form. Evaluate this part with the B-rep backend, which builds it exactly; a round section can stay implicit as pipe()"
+                ),
+            }
         }
     })
 }

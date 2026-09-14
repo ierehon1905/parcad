@@ -18,6 +18,7 @@ import {
   ngon,
   polar,
   pipe,
+  sweep,
   repeat,
   revolve,
   tapDrill,
@@ -310,6 +311,30 @@ describe("torus and pipe", () => {
       "does not fit",
     );
     expect(() => pipe([[0, 0, 0], [10, 0, 0], [10, 40, 0]], 10, { bend: 15 })).toThrow("10.00 mm");
+  });
+
+  test("a helical or tapered pipe is one round sweep, not runs and arcs", () => {
+    const spring = build(pipe({ helix: { radius: 10, pitch: 5, height: 15, hand: "left" } }, 2));
+    expect(spring.nodes).toHaveLength(1);
+    expect(spring.nodes[0]).toMatchObject({
+      op: "sweep",
+      circle: 1,
+      helix: { radius: 10, pitch: 5, turns: 3, hand: "left" },
+    });
+    expect(spring.nodes[0].path).toBeUndefined();
+
+    const strand = build(pipe([[0, 0, 0], [40, 0, 0], [40, 40, 0]], 6, { bend: 10, taper: 0.25 }));
+    expect(strand.nodes).toHaveLength(1);
+    expect(strand.nodes[0]).toMatchObject({ op: "sweep", circle: 3, bend: 10, taper: 0.25 });
+
+    // Untapered stays the exact composition.
+    expect(build(pipe([[0, 0, 0], [0, 0, 40]], 6)).nodes[0].op).toBe("cylinder");
+  });
+
+  test("a helix or taper that is not one is refused before the graph", () => {
+    expect(() => pipe({ helix: { radius: 10, pitch: 5 } }, 2)).toThrow("turns or height");
+    expect(() => pipe({ helix: { radius: 10, pitch: 5, turns: 2 } }, 2, { bend: 3 })).toThrow("no corners");
+    expect(() => sweep([[0, 0], [1, 0], [0, 1]], [[0, 0, 0], [0, 0, 9]], { taper: 0 })).toThrow("more than 0");
   });
 });
 

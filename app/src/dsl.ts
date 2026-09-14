@@ -1208,6 +1208,90 @@ export function ngon(
 /** A point on a routed path: `[x, y, z]`. */
 export type PathPoint = [number, number, number];
 
+/**
+ * A helical path for `pipe` and `sweep`, in place of a list of points: a
+ * spring, a coil, a thread's path, a spiral horn.
+ *
+ * The axis is +Z and the helix is centred on the origin like every primitive:
+ * it starts at `[radius, 0, -height / 2]` and rises to `height / 2`. Give
+ * `turns` or `height` (= `pitch * turns`). `endRadius` changes the radius
+ * linearly with the turn angle — a conical helix, which a horn is — and
+ * `hand: "left"` winds it the other way (right-handed, the default, turns
+ * anticlockwise seen from above as it rises, like a standard thread).
+ *
+ * The kernel sweeps a curve fitted to the exact helix and measures how far
+ * the two differ, refusing past 0.0001 mm. It refuses a pitch so tight the
+ * turns would sweep through each other, and a radius so small the section
+ * would cross the axis, naming the limit either way. Place and turn the
+ * result with `.at()` and `.rotate()`. Build time grows with turns — about
+ * 0.2 s a turn for a round wire — and a boolean between a helix of three or
+ * more turns and a cylinder on the same axis (a thread cut) has come back
+ * with an open surface, which the kernel refuses; see the `gaps` document.
+ */
+export interface HelixPath {
+  helix: {
+    radius: number;
+    pitch: number;
+    turns?: number;
+    height?: number;
+    endRadius?: number;
+    hand?: "right" | "left";
+  };
+}
+
+/** Options shared by `pipe` and `sweep`. */
+export interface SweepOptions {
+  /** Centreline bend radius at every corner of a path of points. */
+  bend?: number;
+  /**
+   * The section's size at the end of the path relative to its start: `0.2`
+   * ends at a fifth of the size, `2` at double, scaled about the path itself.
+   * Linear in length along a path of points; on a helix, linear in turn
+   * angle, which is the same thing unless `endRadius` narrows it. Must be
+   * more than 0; end on a small scale such as `0.05` for a point. A tapered
+   * part is B-rep only.
+   */
+  taper?: number;
+}
+
+/** Check a `{ helix }` path and lower it to the graph's helix. */
+function helixSpine(path: HelixPath, fn: string): Record<string, unknown> {
+  const h = path.helix;
+  if (!h || typeof h !== "object") {
+    throw new Error(`${fn} takes a path of [x, y, z] points or { helix: { radius, pitch, turns } }`);
+  }
+  if (!(h.radius > 0) || !(h.pitch > 0)) {
+    throw new Error(`a ${fn} helix needs a positive radius and pitch; got radius ${h.radius}, pitch ${h.pitch}`);
+  }
+  if ((h.turns === undefined) === (h.height === undefined)) {
+    throw new Error(`a ${fn} helix takes turns or height (= pitch * turns), exactly one of them`);
+  }
+  const turns = h.turns ?? (h.height as number) / h.pitch;
+  if (!(turns > 0)) throw new Error(`a ${fn} helix needs a positive number of turns; got ${turns}`);
+  if (h.endRadius !== undefined && !(h.endRadius > 0)) {
+    throw new Error(`a ${fn} helix endRadius must be positive; got ${h.endRadius}`);
+  }
+  if (h.hand !== undefined && h.hand !== "right" && h.hand !== "left") {
+    throw new Error(`a ${fn} helix hand is "right" or "left"; got ${JSON.stringify(h.hand)}`);
+  }
+  return {
+    radius: h.radius,
+    pitch: h.pitch,
+    turns,
+    ...(h.endRadius !== undefined && h.endRadius !== h.radius ? { endRadius: h.endRadius } : {}),
+    ...(h.hand === "left" ? { hand: "left" } : {}),
+  };
+}
+
+function checkTaper(taper: number, fn: string): number {
+  if (!(taper > 0) || !Number.isFinite(taper)) {
+    throw new Error(
+      `a ${fn} taper of ${taper} is not a scale: it is the section's size at the end relative to the start, and must be more than 0 — end on a small scale such as 0.05 for a point`,
+    );
+  }
+  return taper;
+}
+
 // Vector arithmetic for `pipe`. Deliberately not exported: every export becomes
 // a reserved word inside a part script, and `add`, `cross` and `unit` are names
 // a part would plausibly want for itself.
@@ -1265,18 +1349,41 @@ function alignedX(axis: PathPoint): PathPoint {
  * not a shape anybody can make. With it, the runs are trimmed back to their
  * tangent points and an arc joins them, which is the real part.
  *
- * What is still not offered: a spline path, and a profile that is not a circle.
+ * Two options leave that exactness behind, and make the pipe B-rep only (the
+ * implicit backend refuses it by name): `taper`, which shrinks or grows the
+ * tube along its length — a strand of hair, a tail, a horn — and a
+ * `{ helix }` path in place of the points — a spring or a coil. A tapered
+ * pipe along a path of points needs a `bend` at every corner, because the
+ * ball that fills a square corner cannot taper.
+ *
+ * What is still not offered: a spline path, and a profile that is not a circle
+ * (that is `sweep`).
  */
 export function pipe(
-  points: PathPoint[],
+  points: PathPoint[] | HelixPath,
   diameter: number,
-  options: { bend?: number } = {},
+  options: SweepOptions = {},
 ): Shape {
-  if (points.length < 2) throw new Error("a pipe needs at least 2 path points");
   if (!(diameter > 0)) throw new Error("pipe diameter must be positive");
   const r = diameter / 2;
   const bend = options.bend ?? 0;
   if (bend < 0) throw new Error("pipe bend radius must be positive");
+  const taper = checkTaper(options.taper ?? 1, "pipe");
+  if (!Array.isArray(points)) {
+    if (bend > 0) throw new Error("a helical pipe has no corners to bend; drop the bend option");
+    const helix = helixSpine(points, "pipe");
+    return new Shape(() => ({ op: "sweep", circle: r, helix, ...(taper !== 1 ? { taper } : {}) }), []);
+  }
+  if (points.length < 2) throw new Error("a pipe needs at least 2 path points");
+  if (taper !== 1) {
+    return new Shape(() => ({
+      op: "sweep",
+      circle: r,
+      path: points.map(([x, y, z]) => ({ x, y, z })),
+      ...(bend > 0 ? { bend } : {}),
+      taper,
+    }), []);
+  }
 
   const legs: PathPoint[] = points.map(([x, y, z]) => [x, y, z]);
   for (let i = 0; i < legs.length - 1; i++) {
@@ -1434,25 +1541,41 @@ export function loft(
  * profile is drawn perpendicular to the first run, its +Y kept as close to
  * global +Z as that run allows.
  *
+ * The path may instead be `{ helix: { radius, pitch, turns } }` (see
+ * `HelixPath`): the profile is then drawn perpendicular to the helix at its
+ * start, +X pointing away from the axis and +Y as near +Z as the helix's
+ * slope allows, and it keeps that attitude to the axis all the way up — a
+ * square wire wound into a coil, a thread-like ridge. `taper` scales the
+ * profile about the path from 1 at the start to `taper` at the end.
+ *
  * Like `loft` this is B-rep only: the implicit backend refuses it by name,
  * and a swept part loses the capabilities that run on the distance field.
- * A *round* section should stay a `pipe()`, which is exact in both backends.
+ * A *round* section should stay a `pipe()`, which is exact in both backends
+ * until it tapers or winds into a helix.
  */
 export function sweep(
   profile: OutlinePoint[],
-  path: PathPoint[],
-  options: { bend?: number } = {},
+  path: PathPoint[] | HelixPath,
+  options: SweepOptions = {},
 ): Shape {
-  if (!Array.isArray(path) || path.length < 2) {
-    throw new Error("a sweep path needs at least 2 points");
-  }
   const bend = options.bend ?? 0;
   if (bend < 0) throw new Error("sweep bend radius must be positive");
+  const taper = checkTaper(options.taper ?? 1, "sweep");
+  const tapered = taper !== 1 ? { taper } : {};
+  if (!Array.isArray(path)) {
+    if (bend > 0) throw new Error("a helical sweep has no corners to bend; drop the bend option");
+    const helix = helixSpine(path, "sweep");
+    return new Shape(() => ({ op: "sweep", profile, helix, ...tapered }), []);
+  }
+  if (path.length < 2) {
+    throw new Error("a sweep path needs at least 2 points, or { helix: { radius, pitch, turns } }");
+  }
   return new Shape(() => ({
     op: "sweep",
     profile,
     path: path.map(([x, y, z]) => ({ x, y, z })),
     ...(bend > 0 ? { bend } : {}),
+    ...tapered,
   }), []);
 }
 

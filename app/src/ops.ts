@@ -116,17 +116,17 @@ export const OP_GROUPS: OpGroup[] = [
       {
         name: "pipe",
         icon: "pipe",
-        signature: "pipe(path, diameter, { bend })",
+        signature: "pipe(path, diameter, { bend, taper })",
         detail:
-          "A round tube along straight runs joined by tangent arcs. Exact in both backends — keep a round section here rather than in sweep().",
+          "A round tube along straight runs joined by tangent arcs, or along { helix: { radius, pitch, turns } } — a spring. Exact in both backends until it tapers or winds: those are B-rep only.",
         snippet: "pipe([[0, 0, 0], [40, 0, 0], [40, 30, 0]], 8, { bend: 10 })",
       },
       {
         name: "sweep",
         icon: "sweep",
-        signature: "sweep(profile, path, { bend })",
+        signature: "sweep(profile, path, { bend, taper })",
         detail:
-          "An authored section along the same run-and-bend path. B-rep only: the implicit backend refuses it by name.",
+          "An authored section along the same run-and-bend path or a { helix }, optionally tapering. B-rep only: the implicit backend refuses it by name.",
         snippet:
           "sweep([[-3, -3], [3, -3], [3, 3], [-3, 3]], [[0, 0, 0], [40, 0, 0], [40, 25, 0]], { bend: 8 })",
       },

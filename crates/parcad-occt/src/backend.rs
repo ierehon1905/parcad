@@ -17,11 +17,12 @@ use opencascade::{
     adhoc::AdHocShape,
     angle::Angle,
     primitives::{BooleanShape, Edge, Face, Shape, Solid, Wire},
+    sweep::{Helix as SweptHelix, SweepFrame},
 };
 use parcad_core::{
     graph::{
-        ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, NodeId, Op, SpinePiece,
-        V3,
+        ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, Hand, NodeId, Op,
+        SpinePiece, SweepSection, SweepSpine, V3,
     },
     selectors::{
         parse_edge_selector, parse_vertex_selector, Axis, AxisDirection, CurveKind,
@@ -100,6 +101,11 @@ fn growth_slip(before: (DVec3, DVec3), after: (DVec3, DVec3)) -> f64 {
 /// Five times the mesher's deflection: loose enough not to trip on
 /// tessellation, far tighter than any real geometry error.
 const SLIP_TOLERANCE_MM: f64 = 0.05;
+
+/// How far a helical sweep's fitted spine may stray from the exact helix, and
+/// how many points along it that is measured at.
+const HELIX_TOLERANCE_MM: f64 = 1e-4;
+const HELIX_SAMPLES: i32 = 4000;
 
 /// Follow a chain of translations down to the node underneath.
 ///
@@ -2519,77 +2525,165 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             BuiltShape::primitive(placed, node.tag.as_deref())
         }
 
-        Op::Sweep { profile, path, bend } => {
+        Op::Sweep {
+            profile,
+            circle,
+            path,
+            bend,
+            helix,
+            taper,
+        } => {
             breadcrumb(&format!(
-                "sweep node {id} ({label}) of a {}-point profile along {} path points",
-                profile.len(),
-                path.len()
+                "sweep node {id} ({label}) of a {} along {}, taper {taper}",
+                if profile.is_empty() {
+                    format!("round section of radius {circle}")
+                } else {
+                    format!("{}-point profile", profile.len())
+                },
+                match helix {
+                    Some(h) => format!(
+                        "a helix of radius {} to {}, pitch {}, {} turns",
+                        h.radius,
+                        h.end_radius(),
+                        h.pitch,
+                        h.turns
+                    ),
+                    None => format!("{} path points", path.len()),
+                }
             ));
             // One resolver for both backends: what it refuses here, the
             // implicit evaluator refuses with the same words before pointing
             // at this backend.
-            let pieces = Op::sweep_spine(profile, path, *bend)
-                .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+            let (section, spine) =
+                Op::validate_sweep(profile, *circle, path, *bend, helix.as_ref(), *taper)
+                    .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
 
             let p3 = |p: &parcad_core::graph::V3| DVec3::new(p.x, p.y, p.z);
-            let spine_edges: Vec<Edge> = pieces
-                .iter()
-                .map(|piece| match piece {
-                    SpinePiece::Run { from, to } => Edge::segment(p3(from), p3(to)),
-                    SpinePiece::Bend { from, mid, to } => Edge::arc(p3(from), p3(mid), p3(to)),
-                })
-                .collect();
-            let spine = Wire::from_edges(&spine_edges);
+            let (spine_wire, start, tangent, envelope) = match &spine {
+                SweepSpine::Path(pieces) => {
+                    let spine_edges: Vec<Edge> = pieces
+                        .iter()
+                        .map(|piece| match piece {
+                            SpinePiece::Run { from, to } => Edge::segment(p3(from), p3(to)),
+                            SpinePiece::Bend { from, mid, to } => {
+                                Edge::arc(p3(from), p3(mid), p3(to))
+                            }
+                        })
+                        .collect();
+                    // The first piece is always a run: validation trims a
+                    // corner strictly short of the leg before it.
+                    let (start, tangent) = match pieces[0] {
+                        SpinePiece::Run { from, to } => {
+                            (p3(&from), (p3(&to) - p3(&from)).normalize())
+                        }
+                        SpinePiece::Bend { .. } => bail!(
+                            "node {id} ({label}): sweep spine unexpectedly starts with a bend"
+                        ),
+                    };
+                    let (mut lo, mut hi) = (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN));
+                    for p in path {
+                        lo = lo.min(p3(p));
+                        hi = hi.max(p3(p));
+                    }
+                    (Wire::from_edges(&spine_edges), start, tangent, (lo, hi))
+                }
+                SweepSpine::Helix(h) => {
+                    let exact = SweptHelix {
+                        start_radius: h.radius,
+                        end_radius: h.end_radius(),
+                        pitch: h.pitch,
+                        turns: h.turns,
+                        left_handed: h.hand == Hand::Left,
+                    };
+                    let wire = exact
+                        .spine()
+                        .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+                    // The kernel sweeps a B-spline fitted to the helix, not
+                    // the helix; how far apart the two are is measured here.
+                    let deviation = exact.deviation(&wire, HELIX_SAMPLES);
+                    breadcrumb(&format!(
+                        "helix spine of node {id} strays at most {deviation:.2e} mm from the exact helix"
+                    ));
+                    if !(deviation <= HELIX_TOLERANCE_MM) {
+                        bail!(
+                            "node {id} ({label}): the helix's fitted curve strays {deviation:.2e} mm from the exact helix, over the {HELIX_TOLERANCE_MM:e} mm this backend accepts. Fewer turns per sweep, or a union of shorter helices, keeps the fit inside it"
+                        );
+                    }
+                    let theta = 2.0 * std::f64::consts::PI * h.turns;
+                    let hand = if exact.left_handed { -1.0 } else { 1.0 };
+                    let tangent = DVec3::new(
+                        (exact.end_radius - exact.start_radius) / theta,
+                        hand * exact.start_radius,
+                        h.height() / theta,
+                    )
+                    .normalize();
+                    let r = exact.start_radius.max(exact.end_radius);
+                    let half = h.height() / 2.0;
+                    (
+                        wire,
+                        DVec3::new(exact.start_radius, 0.0, -half),
+                        tangent,
+                        (DVec3::new(-r, -r, -half), DVec3::new(r, r, half)),
+                    )
+                }
+            };
 
-            // The profile is authored in 2D; place it at the path's start,
-            // perpendicular to the first run, with its +Y as close to global
-            // +Z as that run allows — the same convention a drawing's section
-            // view uses. The first piece is always a run: validation trims a
-            // corner strictly short of the leg before it.
-            let start = match pieces[0] {
-                SpinePiece::Run { from, .. } => p3(&from),
-                SpinePiece::Bend { from, .. } => p3(&from),
-            };
-            let tangent = match pieces[0] {
-                SpinePiece::Run { from, to } => (p3(&to) - p3(&from)).normalize(),
-                SpinePiece::Bend { .. } => bail!(
-                    "node {id} ({label}): sweep spine unexpectedly starts with a bend"
-                ),
-            };
+            // The profile is authored in 2D; place it at the spine's start,
+            // perpendicular to it, with its +Y as close to global +Z as the
+            // tangent allows — the same convention a drawing's section view
+            // uses. On a helix +X is turned to point away from the axis.
             let v_axis = if tangent.z.abs() < 1.0 - 1e-9 {
                 (DVec3::Z - tangent * tangent.z).normalize()
             } else {
                 DVec3::Y
             };
-            let u_axis = v_axis.cross(tangent);
-            let section: Vec<DVec3> = profile
-                .iter()
-                .map(|[x, y]| start + u_axis * *x + v_axis * *y)
-                .collect();
-            let section_edges: Vec<Edge> = section
-                .iter()
-                .enumerate()
-                .filter_map(|(i, a)| {
-                    let b = section[(i + 1) % section.len()];
-                    (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
-                })
-                .collect();
-            let face = Face::from_wire(&Wire::from_edges(&section_edges));
+            let mut u_axis = v_axis.cross(tangent);
+            if matches!(spine, SweepSpine::Helix(_)) && u_axis.x < 0.0 {
+                u_axis = -u_axis;
+            }
+            let section_wire = match section {
+                SweepSection::Outline(points) => {
+                    let placed: Vec<DVec3> = points
+                        .iter()
+                        .map(|[x, y]| start + u_axis * *x + v_axis * *y)
+                        .collect();
+                    let edges: Vec<Edge> = placed
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, a)| {
+                            let b = placed[(i + 1) % placed.len()];
+                            (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
+                        })
+                        .collect();
+                    Wire::from_edges(&edges)
+                }
+                SweepSection::Circle(r) => Wire::from_edges([&Edge::circle(start, tangent, r)]),
+            };
 
-            let swept = Shape::sweep_profile_along(&face, &spine);
-            let swept = swept.single_solid().unwrap_or(swept);
+            let frame = match &spine {
+                SweepSpine::Path(_) => SweepFrame::CorrectedFrenet,
+                SweepSpine::Helix(_) => SweepFrame::Frenet,
+            };
+            let swept = match (&spine, *taper == 1.0, section) {
+                // The original sweep, untouched: MakePipe's corrected Frenet
+                // frame along runs and arcs.
+                (SweepSpine::Path(_), true, SweepSection::Outline(_)) => {
+                    let face = Face::from_wire(&section_wire);
+                    Shape::sweep_profile_along(&face, &spine_wire)
+                }
+                _ => Shape::sweep_shell(&section_wire, &spine_wire, frame, *taper)
+                    .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?,
+            };
+            let mut swept = swept.single_solid().unwrap_or(swept);
+            if swept.signed_volume() < 0.0 {
+                swept = swept.oriented_outward();
+            }
 
             // Same bargain as the loft above: the graph told the pipeline the
-            // sweep stays within the profile's reach of the path, so measure
+            // sweep stays within the section's reach of the spine, so measure
             // that on the result instead of assuming OCCT agreed.
-            let reach = profile
-                .iter()
-                .fold(0.0f64, |acc, [x, y]| acc.max(x.hypot(*y)));
-            let (mut lo, mut hi) = (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN));
-            for p in path {
-                lo = lo.min(p3(p));
-                hi = hi.max(p3(p));
-            }
+            let reach = section.reach() * taper.max(1.0);
+            let (lo, hi) = envelope;
             let after = bbox(&swept);
             let bulge = ((lo - DVec3::splat(reach)) - after.0)
                 .max(after.1 - (hi + DVec3::splat(reach)))
@@ -2598,7 +2692,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             if bulge > SLIP_TOLERANCE_MM {
                 bail!(
                     "node {id} ({label}) swept a shape that reaches {bulge:.2} mm \
-                     outside the envelope its path and profile allow, so the \
+                     outside the envelope its spine and section allow, so the \
                      kernel's frame turned the section somewhere along the way. \
                      Shorten the runs between bends or enlarge the bend radius, \
                      and report this shape — it should not happen on a tangent \

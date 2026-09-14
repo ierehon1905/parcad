@@ -271,6 +271,27 @@ Two guards were tried first and taken out because the defect never reached
 them: a union volume floor (result ≥ larger operand) and a volume check across
 `UnifySameDomain`. Both read the exact B-rep, which was never wrong.
 
+### A helix cut through its own cylinder opens past two turns
+
+A groove swept along a helix and cut from a cylinder on the same axis, at the
+helix's radius — which is what a modelled thread is — builds and closes at one
+and two turns and does not at three:
+
+| `cylinder(3, 10).cut(pipe({ helix: { radius: 3, pitch: 2, turns } }, 1))` | result |
+|---|---|
+| 1 or 2 turns (also inside a 20 mm cylinder) | watertight, one body |
+| 3 or 4 turns (also inside a 20 mm cylinder) | 8 mesh edges border one face; refused |
+| a V groove, 8 turns | 117 open edges; refused |
+| a V ridge unioned onto a core, 8 turns | 1043 open edges; refused |
+
+Every row reported done. The watertight backstop is what refuses them, so no
+wrong part escapes, but nothing names a fix. The sweep alone is right — the
+same helices measure to the tube formula at 1e-6 — and booleans that do not
+wrap a coaxial surface close: a spring on a plate, a tapered conical spiral on
+a cone. Whether the defect is in the boolean or only in the mesh is not yet
+known; the unicorn's sphere union above is the precedent for it being the
+mesh. `docs/DSL_GAPS.md` keeps threads on the missing list for this.
+
 ### `offset_surface` lies
 
 It returns valid-looking wrong answers rather than failing:

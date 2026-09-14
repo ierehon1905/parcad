@@ -5,6 +5,7 @@ pub mod angle;
 pub(crate) mod history;
 pub mod mesh;
 pub mod primitives;
+pub mod sweep;
 pub mod workplane;
 
 #[derive(Error, Debug)]

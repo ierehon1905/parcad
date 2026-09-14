@@ -1,0 +1,33 @@
+{
+  "name": "square-coil",
+  "script": "eval/scripts/square-coil.js",
+  "why": "An authored section wound on a helix, left-handed, against the tube formula: a 2 mm square on a radius-10, pitch-5 helix for 2.75 turns is 4 * 2.75 * sqrt((20 pi)^2 + 25) = 693.335 mm3; the exact B-rep reads 693.3357 through BRepGProp. The Frenet frame of a helix is its screw motion, so the square keeps its attitude to the axis: four B-spline walls, two flat ends, and a size no wider than the square's corner reaches (11.0003 mm). The implicit half refuses by name.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": [
+        "no exact distance field",
+        "helix",
+        "B-rep backend"
+      ]
+    }
+  },
+  "brep": {
+    "size": [
+      22.0,
+      22.0,
+      15.744
+    ],
+    "volume_mm3": 693.075,
+    "area_mm2": 1394.357,
+    "triangles": 6348,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 0.0,
+    "stands_on_patches": 0,
+    "watertight": true,
+    "faces": 6,
+    "edges": 24,
+    "curves": 12
+  }
+}
