@@ -558,7 +558,7 @@ fn vertex_key(point: DVec3) -> [i64; 3] {
 /// These are live OCCT sub-shapes, not sampled viewport IDs. A Boolean tells us
 /// which input edges it modified or deleted, so this relation can be updated
 /// without guessing at a result-array order.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct EdgeLineage {
     by_source: BTreeMap<String, Vec<Edge>>,
     /// The faces each tag names: every face of the tagged node's result,
@@ -2101,6 +2101,7 @@ fn compound_of<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> Shape {
     opencascade::primitives::Compound::from_shapes(shapes).into()
 }
 
+#[derive(Clone)]
 struct BuiltShape {
     shape: Shape,
     lineage: EdgeLineage,
@@ -2151,7 +2152,7 @@ impl BuiltShape {
 /// They are kept as shapes, rather than edge indexes, so an outer transform or
 /// a later Boolean can either carry an unchanged edge through exactly or make
 /// it disappear from the final lookup. No geometric nearest-edge guess is made.
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct TreatmentFeatures {
     generated: Vec<(NodeId, Shape)>,
 }
@@ -2213,6 +2214,200 @@ impl TreatmentFeatures {
     }
 }
 
+/// Built subtrees kept from one build to the next, so an edit rebuilds what
+/// it changed and the operations above it, and nothing beside it.
+///
+/// Keyed by what a subtree *is* — every op and tag in it, with child indices
+/// replaced by the children's own keys so an inserted line elsewhere in the
+/// script does not renumber it out of the cache — and by the translation
+/// pushed down into it. A hit is a clone of the handles; OpenCASCADE never
+/// mutates an operand, so a shape built once serves every later boolean, and
+/// its lineage's faces and edges are the same sub-shapes a history will be
+/// asked about. Entries unused for two builds are dropped, which bounds the
+/// cache at roughly two parts' worth of intermediate geometry.
+#[derive(Default)]
+pub struct BuildCache {
+    entries: HashMap<CacheKey, CacheEntry>,
+    generation: u64,
+}
+
+type CacheKey = (String, [i64; 3]);
+
+struct CacheEntry {
+    built: BuiltShape,
+    /// The generation that last built or reused this node.
+    used: u64,
+    /// The keys of the nodes built directly under it. A hit on a node is a
+    /// use of everything beneath it, or the part below the root would age
+    /// out while the root kept hitting and an edit at the root would rebuild
+    /// it all.
+    deps: Vec<CacheKey>,
+}
+
+impl BuildCache {
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// The cache, the per-build memo of subtree keys, and a stack of the keys
+/// built or reused under the node currently being built.
+struct Reuse {
+    cache: BuildCache,
+    memo: Vec<Option<String>>,
+    under: Vec<Vec<CacheKey>>,
+}
+
+thread_local! {
+    static REUSE: std::cell::RefCell<Option<Reuse>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Run `build` with `cache` installed for every node it builds, then age the
+/// cache: what this build did not touch is one build older, and what two
+/// builds have not touched is gone.
+pub fn with_reuse<T>(cache: &mut BuildCache, doc: &Doc, build: impl FnOnce() -> T) -> T {
+    let taken = std::mem::take(cache);
+    REUSE.with(|slot| {
+        *slot.borrow_mut() = Some(Reuse {
+            cache: taken,
+            memo: vec![None; doc.nodes.len()],
+            under: vec![Vec::new()],
+        })
+    });
+    let out = build();
+    let mut kept = REUSE
+        .with(|slot| slot.borrow_mut().take())
+        .expect("the cache installed above is still there")
+        .cache;
+    kept.generation += 1;
+    let generation = kept.generation;
+    kept.entries.retain(|_, entry| generation - entry.used <= 2);
+    *cache = kept;
+    out
+}
+
+/// Mark a hit node and everything beneath it as used this generation.
+fn touch(cache: &mut BuildCache, key: &CacheKey) {
+    let generation = cache.generation;
+    let mut pending = vec![key.clone()];
+    while let Some(key) = pending.pop() {
+        let Some(entry) = cache.entries.get_mut(&key) else { continue };
+        if entry.used == generation {
+            continue;
+        }
+        entry.used = generation;
+        pending.extend(entry.deps.iter().cloned());
+    }
+}
+
+/// What a subtree is, as text: its op with the child indices blanked, its
+/// tag, and its children's keys in order. Memoised per node for one build.
+fn subtree_key(doc: &Doc, id: NodeId, memo: &mut Vec<Option<String>>) -> Result<String> {
+    if let Some(Some(key)) = memo.get(id) {
+        return Ok(key.clone());
+    }
+    let node = doc.node(id)?;
+    let mut op = serde_json::to_value(&node.op)?;
+    if let serde_json::Value::Object(fields) = &mut op {
+        for field in ["child", "base"] {
+            if let Some(v) = fields.get_mut(field) {
+                *v = serde_json::Value::String("#".into());
+            }
+        }
+        for field in ["tools", "children"] {
+            if let Some(serde_json::Value::Array(items)) = fields.get_mut(field) {
+                for item in items.iter_mut() {
+                    *item = serde_json::Value::String("#".into());
+                }
+            }
+        }
+        if let Some(serde_json::Value::Array(bodies)) = fields.get_mut("bodies") {
+            for body in bodies.iter_mut() {
+                if let Some(v) = body.get_mut("child") {
+                    *v = serde_json::Value::String("#".into());
+                }
+            }
+        }
+    }
+    let children = doc
+        .children_of(id)?
+        .into_iter()
+        .map(|child| subtree_key(doc, child, memo))
+        .collect::<Result<Vec<_>>>()?;
+    let key = format!("{}|{:?}|[{}]", op, node.tag, children.join(","));
+    if let Some(slot) = memo.get_mut(id) {
+        *slot = Some(key.clone());
+    }
+    Ok(key)
+}
+
+fn offset_key(offset: DVec3) -> [i64; 3] {
+    [
+        (offset.x * 1e6).round() as i64,
+        (offset.y * 1e6).round() as i64,
+        (offset.z * 1e6).round() as i64,
+    ]
+}
+
+/// Build one node, or take it from the installed cache when the same subtree
+/// at the same offset was built before.
+fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
+    let key = REUSE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let Some(reuse) = slot.as_mut() else {
+            return Ok::<_, anyhow::Error>(None);
+        };
+        Ok(Some((subtree_key(doc, id, &mut reuse.memo)?, offset_key(offset))))
+    })?;
+    let Some(key) = key else {
+        return build_node_afresh(doc, id, offset);
+    };
+    let hit = REUSE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let reuse = slot.as_mut()?;
+        let built = reuse.cache.entries.get(&key)?.built.clone();
+        touch(&mut reuse.cache, &key);
+        if let Some(frame) = reuse.under.last_mut() {
+            frame.push(key.clone());
+        }
+        Some(built)
+    });
+    if let Some(built) = hit {
+        breadcrumb(&format!("node {id} reused from the last build"));
+        return Ok(built);
+    }
+    REUSE.with(|slot| {
+        if let Some(reuse) = slot.borrow_mut().as_mut() {
+            reuse.under.push(Vec::new());
+        }
+    });
+    let built = build_node_afresh(doc, id, offset);
+    REUSE.with(|slot| {
+        if let Some(reuse) = slot.borrow_mut().as_mut() {
+            let deps = reuse.under.pop().unwrap_or_default();
+            if let Ok(built) = &built {
+                let generation = reuse.cache.generation;
+                reuse.cache.entries.insert(
+                    key.clone(),
+                    CacheEntry {
+                        built: built.clone(),
+                        used: generation,
+                        deps,
+                    },
+                );
+                if let Some(frame) = reuse.under.last_mut() {
+                    frame.push(key);
+                }
+            }
+        }
+    });
+    built
+}
+
 /// Build one node, with `offset` accumulated from enclosing translations.
 ///
 /// Translation is carried down and applied at the primitives rather than moving
@@ -2221,7 +2416,7 @@ impl TreatmentFeatures {
 /// offset down side-steps that, and is valid because translation commutes with
 /// the booleans. It does *not* commute with rotation or scaling, so those two
 /// build their child at the origin and move the result afterwards.
-fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
+fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
     let node = doc.node(id)?;
     let label = node.tag.as_deref().unwrap_or("untagged");
 

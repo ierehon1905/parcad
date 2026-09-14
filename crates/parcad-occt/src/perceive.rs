@@ -117,6 +117,10 @@ pub fn face_tags(shape: &Shape, names: &NamedFaces) -> Vec<Vec<String>> {
 /// Where every tag is: the exact bounds of the faces of the finished part
 /// that carry it, over every body, each face counted once. A tag no face
 /// carries is unlocated.
+///
+/// Each face is bounded once and its box folded into every tag it carries,
+/// rather than a compound bounded per tag: a face carries every enclosing
+/// tag, so bounding per tag measured the same blend surfaces once per name.
 pub fn tag_extents(part: &BuiltPart, bodies: &[Body]) -> (Vec<TagBounds>, Vec<String>) {
     let mut found: Vec<TagBounds> = Vec::new();
     let mut unlocated: Vec<String> = Vec::new();
@@ -124,27 +128,32 @@ pub fn tag_extents(part: &BuiltPart, bodies: &[Body]) -> (Vec<TagBounds>, Vec<St
     let Some(first) = part.names.first() else {
         return (found, unlocated);
     };
-    // Each body's faces, grouped by the tags they carry.
-    let mut owned: HashMap<&str, Vec<Shape>> = HashMap::new();
+    let mut owned: HashMap<&str, (usize, DVec3, DVec3)> = HashMap::new();
     for body in bodies {
         for (i, face) in body.shape.faces().enumerate() {
-            let Some(tags) = body.face_tags.get(i) else { continue };
+            let Some(tags) = body.face_tags.get(i).filter(|t| !t.is_empty()) else {
+                continue;
+            };
+            let Some((lo, hi)) = Shape::from(face.clone()).bounds_optimal() else {
+                continue;
+            };
             for tag in tags {
-                owned.entry(tag.as_str()).or_default().push(Shape::from(face.clone()));
+                let entry = owned
+                    .entry(tag.as_str())
+                    .or_insert((0, DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)));
+                entry.0 += 1;
+                entry.1 = entry.1.min(lo);
+                entry.2 = entry.2.max(hi);
             }
         }
     }
     for (tag, _) in &first.tags {
-        let faces = owned.get(tag.as_str()).map(Vec::as_slice).unwrap_or(&[]);
-        let bounds = (!faces.is_empty())
-            .then(|| Shape::from(Compound::from_shapes(faces)).bounds_optimal())
-            .flatten();
-        match bounds {
-            Some((lo, hi)) => found.push(TagBounds {
+        match owned.get(tag.as_str()) {
+            Some((faces, lo, hi)) => found.push(TagBounds {
                 tag: tag.clone(),
                 min: lo.to_array(),
                 max: hi.to_array(),
-                faces: faces.len(),
+                faces: *faces,
             }),
             None => unlocated.push(tag.clone()),
         }

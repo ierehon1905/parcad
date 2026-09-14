@@ -650,6 +650,20 @@ pub enum Response {
     },
 }
 
+/// One request to a serving worker: a line of stdin, and where to leave the
+/// reply. `reply` first, so a shell can read it off the line without a JSON
+/// parser.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Frame {
+    pub reply: String,
+    pub request: Request,
+}
+
+/// What a serving worker prints to stderr, followed by the reply path, once
+/// the reply is on disk. The host reads stderr anyway, for breadcrumbs, and
+/// stdout is OCCT's.
+pub const REPLY: &str = "@reply ";
+
 /// Marker the worker prints to stderr before each risky step.
 ///
 /// When OCCT takes the process down there is no error value to return, so the

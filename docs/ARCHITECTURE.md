@@ -274,7 +274,38 @@ take, this is the difference between a bad answer and a dead session.
 
 **The reply travels via a temp file, not stdout.** OCCT writes progress banners
 to stdout — the STEP writer alone emits hundreds of kilobytes — so stdout is a
-channel we neither control nor can parse.
+channel we neither control nor can parse. The worker announces each reply with
+an `@reply <path>` line on stderr, beside its breadcrumbs.
+
+### One worker serves many requests
+
+A worker used to be started per request and exit with its reply. It now
+serves: started once, kept in a pool of at most two while idle (a window and
+an agent are two callers at once), and handed request after request as
+`Frame`s, one per line of stdin. A worker that crashes or is killed at the
+deadline leaves the pool; the next request starts a fresh one, and the
+supervision is what it was — `host.rs`'s tests still drive a shim that hangs
+and one that dies, plus one that answers twice and one that dies between
+answers.
+
+What the worker keeps between requests is a **build cache**
+(`backend::BuildCache`): every subtree it built, keyed by what the subtree is
+— its ops and tags with child indices blanked, and its children's keys — and
+by the translation pushed down into it. An edit rebuilds the nodes it changed
+and the operations above them; a probe or a thickness sweep of the part just
+built builds nothing; an evaluate of an unchanged part is its mesh alone. A hit
+counts as a use of everything beneath it, and what two builds have not touched
+is dropped. Measured on `examples/plate-stand.js`, whose blended union is
+2.7 s of its 3.2 s build: the same part again 475 ms, a ray probe 122 ms,
+and a change to the slot chamfer at the root 697 ms against 3.2 s cold. An
+edit to a peg still costs the blend above it, which is where the time is. A
+cached build answers an edited graph byte-for-byte as a fresh worker does;
+status, volume, topology and every tag extent, measured on five example parts each edited at the root, edited at a leaf, and unchanged.
+
+The process floor — spawn, request, reply file — was never the cost: 11 ms
+warm on the smallest part. The tag extents and face report added to every
+reply are, at 14 ms on the bracket and 123 ms on the plate stand, and both
+are computed once per body rather than once per tag.
 
 ### The feature split
 

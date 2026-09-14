@@ -10,8 +10,15 @@
 //! the application, and every failure — polite or not — comes back as a value.
 //! For an agent that will routinely ask for a fillet larger than the material
 //! can take, this is the difference between a bad answer and a dead session.
+//!
+//! A worker serves many requests before it dies: it is started once, kept in
+//! a small pool while idle, and handed request after request, so the part it
+//! built for the window is still in its build cache when the agent's probe
+//! arrives and an edit rebuilds only the subtrees it changed. A worker that
+//! crashes or is stopped for taking too long is not returned to the pool, and
+//! the next request starts a fresh one.
 
-use crate::protocol::{Request, Response, Success, TargetPreview, BREADCRUMB};
+use crate::protocol::{Frame, Request, Response, Success, TargetPreview, BREADCRUMB, REPLY};
 use parcad_core::graph::Doc;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -312,150 +319,49 @@ pub fn inspect_edge_target(
     }
 }
 
-/// Send one request to the expendable kernel process and return its raw reply.
+/// Send one request to a kernel worker and return its raw reply.
+///
+/// The worker is taken from a small pool of warm ones, or started; a worker
+/// that answers goes back to the pool, and one that dies or is stopped does
+/// not. Every outcome still arrives as a value: the process boundary is
+/// unchanged, only crossed less often.
 fn run_worker(request: Request, opts: &Options) -> Result<Response, OcctError> {
-    let payload = serde_json::to_vec(&request)
-        .map_err(|e| OcctError::Host(format!("cannot encode the request: {e}")))?;
-
-    // The response travels via a file, not stdout. OCCT writes its own
-    // progress banners to stdout — the STEP writer alone emits hundreds of
-    // kilobytes — so stdout is a channel we do not control and cannot parse.
+    let path = worker_path()?;
     let reply_path = std::env::temp_dir().join(format!(
         "parcad-occt-{}-{}.json",
         std::process::id(),
         REPLY_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
+    let frame = serde_json::to_vec(&Frame {
+        reply: reply_path.to_string_lossy().into_owned(),
+        request,
+    })
+    .map_err(|e| OcctError::Host(format!("cannot encode the request: {e}")))?;
 
-    let mut child = Command::new(worker_path()?)
-        .arg(&reply_path)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| OcctError::Host(format!("cannot start the kernel worker: {e}")))?;
-
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| OcctError::Host("the worker has no stdin".into()))?
-        .write_all(&payload)
-        .map_err(|e| OcctError::Host(format!("cannot send work to the kernel: {e}")))?;
-
-    // Drain stderr on its own thread. Breadcrumbs arrive as the worker moves
-    // through the model, so whatever is last when it dies names the culprit.
-    let stderr = child.stderr.take();
-    // Shared rather than sent: a wedged worker never closes its stderr, so a
-    // channel filled at the end of the trail has nothing in it at the moment a
-    // timeout asks. This used to report "an unknown operation" for every
-    // timeout, with the culprit sitting unread in the reader thread.
-    let latest = Arc::new(Mutex::new(String::from("starting up")));
-    let latest_seen = Arc::clone(&latest);
-    // Only the last breadcrumb survives a successful run, which is all a crash
-    // report needs. `PARCAD_BREADCRUMBS=1` echoes the whole trail instead, for
-    // when the question is what the kernel did rather than where it died.
-    let echo = std::env::var("PARCAD_BREADCRUMBS").is_ok_and(|v| v != "0");
-    let crumbs = std::thread::spawn(move || {
-        let mut last = String::from("starting up");
-        let mut noise = Vec::new();
-        if let Some(err) = stderr {
-            for line in BufReader::new(err).lines().map_while(Result::ok) {
-                if let Some(stage) = line.strip_prefix(BREADCRUMB) {
-                    if echo {
-                        eprintln!("[kernel] {stage}");
-                    }
-                    last = stage.to_string();
-                    if let Ok(mut seen) = latest_seen.lock() {
-                        *seen = last.clone();
-                    }
-                } else if !line.trim().is_empty() {
-                    if echo {
-                        // Whatever the kernel printed for itself. Deliberately
-                        // not a breadcrumb: the last breadcrumb has to keep
-                        // naming the operation that died, and a debug trace
-                        // must not displace it.
-                        eprintln!("[kernel] {line}");
-                    }
-                    noise.push(line);
-                }
-            }
-        }
-        (last, noise)
-    });
-
-    // Wait with a deadline, on another thread so a hung kernel cannot hang us.
-    let (done_tx, done_rx) = mpsc::channel();
-    let worker_pid = child.id();
-    let child = {
-        let handle = std::thread::spawn(move || {
-            let out = child.wait_with_output();
-            let _ = done_tx.send(());
-            out
-        });
-
-        match done_rx.recv_timeout(opts.timeout) {
-            Ok(()) => handle,
-            Err(_) => {
-                // The worker is wedged: kill it, or a runaway OCCT loop keeps a
-                // core for as long as the app runs. The last breadcrumb tells
-                // us where it was.
-                #[cfg(unix)]
-                let _ = Command::new("kill")
-                    .args(["-KILL", &worker_pid.to_string()])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-                #[cfg(windows)]
-                let _ = Command::new("taskkill")
-                    .args(["/F", "/T", "/PID", &worker_pid.to_string()])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-                // The kill closes the worker's stderr, so the reader thread is
-                // about to drain whatever was still in the pipe and finish.
-                // Wait for that rather than race it: under load the last
-                // breadcrumb can be written and not yet read when the deadline
-                // fires. Bounded, so a worker that left a child holding the
-                // pipe open cannot hold this.
-                let drained = std::time::Instant::now();
-                while !crumbs.is_finished() && drained.elapsed() < Duration::from_millis(500) {
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                let stage = latest
-                    .lock()
-                    .map(|seen| seen.clone())
-                    .unwrap_or_else(|_| "an unknown operation".into());
-                return Err(OcctError::TimedOut {
-                    stage,
-                    seconds: opts.timeout.as_secs(),
-                });
-            }
+    // A pooled worker can have died since it was last used, and its stdin is
+    // the first thing to notice. One fresh start covers that; a fresh worker
+    // that will not take a request is the host's problem to report.
+    let pooled = Worker::take(&path).and_then(|mut worker| worker.send(&frame).is_ok().then_some(worker));
+    let mut worker = match pooled {
+        Some(worker) => worker,
+        None => {
+            let mut worker = Worker::spawn(&path)?;
+            worker
+                .send(&frame)
+                .map_err(|e| OcctError::Host(format!("cannot send work to the kernel: {e}")))?;
+            worker
         }
     };
 
-    let output = child
-        .join()
-        .map_err(|_| OcctError::Host("the waiting thread panicked".into()))?
-        .map_err(|e| OcctError::Host(format!("cannot collect the kernel's output: {e}")))?;
-
-    let (stage, noise) = crumbs
-        .join()
-        .unwrap_or_else(|_| ("an unknown operation".into(), Vec::new()));
-
-    if !output.status.success() {
-        return Err(OcctError::Crashed {
-            stage,
-            detail: describe_exit(&output.status, &noise),
-        });
-    }
-
-    let raw = std::fs::read(&reply_path).map_err(|e| {
-        OcctError::Host(format!(
-            "the kernel exited cleanly but left no reply at {}: {e}",
-            reply_path.display()
-        ))
-    })?;
+    let outcome = worker.wait_for_reply(&reply_path, opts.timeout);
+    let raw = match outcome {
+        Ok(raw) => {
+            worker.release();
+            raw
+        }
+        Err(e) => return Err(e),
+    };
     let _ = std::fs::remove_file(&reply_path);
-
     serde_json::from_slice::<Response>(&raw).map_err(|e| {
         OcctError::Host(format!(
             "the kernel wrote {} bytes this host could not read ({e})",
@@ -465,6 +371,198 @@ fn run_worker(request: Request, opts: &Options) -> Result<Response, OcctError> {
 }
 
 static REPLY_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Warm workers with nothing to do. A window and an agent make two callers
+/// at once, and a third would wait on one of them rather than start a
+/// process it would then throw away.
+const MAX_IDLE: usize = 2;
+
+static IDLE: Mutex<Vec<Worker>> = Mutex::new(Vec::new());
+
+/// What the stderr reader hands the caller. Breadcrumbs update a shared slot
+/// instead, so a timeout can read the last one while the worker is wedged.
+enum Event {
+    Reply(String),
+    Eof,
+}
+
+/// A serving worker process: its stdin, the reader of its stderr, and the
+/// last breadcrumb it printed.
+struct Worker {
+    path: PathBuf,
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    events: mpsc::Receiver<Event>,
+    latest: Arc<Mutex<String>>,
+    noise: Arc<Mutex<Vec<String>>>,
+}
+
+impl Worker {
+    fn spawn(path: &std::path::Path) -> Result<Worker, OcctError> {
+        let mut child = Command::new(path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| OcctError::Host(format!("cannot start the kernel worker: {e}")))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| OcctError::Host("the worker has no stdin".into()))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| OcctError::Host("the worker has no stderr".into()))?;
+
+        // Breadcrumbs arrive as the worker moves through the model, so whatever
+        // is last when it dies names the culprit. Shared rather than sent: a
+        // wedged worker never closes its stderr, so a channel filled at the
+        // end of the trail has nothing in it at the moment a timeout asks.
+        let latest = Arc::new(Mutex::new(String::from("starting up")));
+        let noise = Arc::new(Mutex::new(Vec::new()));
+        let (events, receiver) = mpsc::channel();
+        // Only the last breadcrumb survives a successful run, which is all a
+        // crash report needs. `PARCAD_BREADCRUMBS=1` echoes the whole trail
+        // instead, for when the question is what the kernel did rather than
+        // where it died.
+        let echo = std::env::var("PARCAD_BREADCRUMBS").is_ok_and(|v| v != "0");
+        let (latest_seen, noise_seen) = (Arc::clone(&latest), Arc::clone(&noise));
+        std::thread::spawn(move || {
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                if let Some(stage) = line.strip_prefix(BREADCRUMB) {
+                    if echo {
+                        eprintln!("[kernel] {stage}");
+                    }
+                    if let Ok(mut seen) = latest_seen.lock() {
+                        *seen = stage.to_string();
+                    }
+                } else if let Some(reply) = line.strip_prefix(REPLY) {
+                    if events.send(Event::Reply(reply.to_string())).is_err() {
+                        break;
+                    }
+                } else if !line.trim().is_empty() {
+                    if echo {
+                        // Whatever the kernel printed for itself. Deliberately
+                        // not a breadcrumb: the last breadcrumb has to keep
+                        // naming the operation that died, and a debug trace
+                        // must not displace it.
+                        eprintln!("[kernel] {line}");
+                    }
+                    if let Ok(mut seen) = noise_seen.lock() {
+                        seen.push(line);
+                    }
+                }
+            }
+            let _ = events.send(Event::Eof);
+        });
+
+        Ok(Worker {
+            path: path.to_path_buf(),
+            child,
+            stdin,
+            events: receiver,
+            latest,
+            noise,
+        })
+    }
+
+    /// An idle worker running `path`, if the pool has one that is still alive.
+    fn take(path: &std::path::Path) -> Option<Worker> {
+        let mut idle = IDLE.lock().unwrap_or_else(|e| e.into_inner());
+        while let Some(i) = idle.iter().position(|w| w.path == path) {
+            let mut worker = idle.remove(i);
+            if worker.child.try_wait().ok().flatten().is_none() {
+                return Some(worker);
+            }
+        }
+        None
+    }
+
+    /// Back to the pool for the next request, or dropped when the pool is
+    /// full — dropping kills it.
+    fn release(self) {
+        let mut idle = IDLE.lock().unwrap_or_else(|e| e.into_inner());
+        if idle.len() < MAX_IDLE {
+            idle.push(self);
+        }
+    }
+
+    fn send(&mut self, frame: &[u8]) -> std::io::Result<()> {
+        if let Ok(mut seen) = self.latest.lock() {
+            *seen = "starting up".into();
+        }
+        if let Ok(mut seen) = self.noise.lock() {
+            seen.clear();
+        }
+        self.stdin.write_all(frame)?;
+        self.stdin.write_all(b"\n")?;
+        self.stdin.flush()
+    }
+
+    fn stage(&self) -> String {
+        self.latest
+            .lock()
+            .map(|seen| seen.clone())
+            .unwrap_or_else(|_| "an unknown operation".into())
+    }
+
+    /// The reply's bytes, or how the worker failed to produce them.
+    fn wait_for_reply(&mut self, reply_path: &std::path::Path, timeout: Duration) -> Result<Vec<u8>, OcctError> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.events.recv_timeout(remaining) {
+                Ok(Event::Reply(path)) => {
+                    if std::path::Path::new(&path) != reply_path {
+                        // A reply to an earlier, abandoned request. Nothing
+                        // waits for it; the one we sent is still to come.
+                        let _ = std::fs::remove_file(&path);
+                        continue;
+                    }
+                    return std::fs::read(reply_path).map_err(|e| {
+                        OcctError::Host(format!(
+                            "the kernel announced a reply at {} but left none: {e}",
+                            reply_path.display()
+                        ))
+                    });
+                }
+                Ok(Event::Eof) | Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let status = self.child.wait().map_err(|e| {
+                        OcctError::Host(format!("cannot collect the kernel's exit status: {e}"))
+                    })?;
+                    let noise = self.noise.lock().map(|n| n.clone()).unwrap_or_default();
+                    return Err(OcctError::Crashed {
+                        stage: self.stage(),
+                        detail: describe_exit(&status, &noise),
+                    });
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    // The worker is wedged: kill it, or a runaway OCCT loop
+                    // keeps a core for as long as the app runs. The kill closes
+                    // its stderr, so the reader drains what was still in the
+                    // pipe and sends Eof; wait for that rather than race it —
+                    // under load the last breadcrumb can be written and not
+                    // yet read when the deadline fires. Bounded, so a worker
+                    // that left a child holding the pipe open cannot hold this.
+                    let _ = self.child.kill();
+                    let _ = self.events.recv_timeout(Duration::from_millis(500));
+                    let _ = self.child.wait();
+                    return Err(OcctError::TimedOut {
+                        stage: self.stage(),
+                        seconds: timeout.as_secs(),
+                    });
+                }
+            }
+        }
+    }
+}
+
+impl Drop for Worker {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
 
 /// Turn an exit status into something worth reading.
 fn describe_exit(status: &std::process::ExitStatus, noise: &[String]) -> String {
@@ -566,6 +664,7 @@ mod tests {
         };
         let outcome = evaluate(&unit_cube(), &opts);
         std::env::remove_var("PARCAD_OCCT_WORKER");
+        IDLE.lock().unwrap_or_else(|e| e.into_inner()).clear();
         let _ = std::fs::remove_file(&shim);
 
         match outcome.unwrap_err() {
@@ -587,6 +686,65 @@ mod tests {
         assert!(!alive, "the timed-out worker (pid {pid}) is still running");
     }
 
+    /// A serving shim: answers every frame on stdin with a refusal naming its
+    /// own pid, so a caller can tell one process from another.
+    fn serving_shim(name: &str, requests_before_exit: Option<usize>) -> PathBuf {
+        let limit = requests_before_exit
+            .map(|n| format!("[ \"$served\" -ge {n} ] && exit 0\n"))
+            .unwrap_or_default();
+        shim(
+            name,
+            &format!(
+                "echo '{BREADCRUMB}serving' >&2\nserved=0\nwhile IFS= read -r line; do\n\
+                 reply=$(printf '%s' \"$line\" | sed -E 's/^\\{{\"reply\":\"([^\"]+)\".*/\\1/')\n\
+                 printf '{{\"status\":\"error\",\"stage\":\"shim\",\"message\":\"served by pid %s\"}}' $$ > \"$reply\"\n\
+                 echo '{REPLY}'\"$reply\" >&2\nserved=$((served + 1))\n{limit}done\n"
+            ),
+        )
+    }
+
+    fn pid_that_served(outcome: Result<Success, OcctError>) -> String {
+        match outcome.unwrap_err() {
+            OcctError::Rejected { message, .. } => message
+                .strip_prefix("served by pid ")
+                .expect("the shim names its pid")
+                .to_string(),
+            other => panic!("expected the shim's refusal, got: {other}"),
+        }
+    }
+
+    /// Two requests, one process: the second is answered by the worker the
+    /// first one started, which is what keeps a build cache warm.
+    #[test]
+    fn a_worker_answers_the_next_request_without_being_started_again() {
+        let _env = WORKER_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let shim = serving_shim("reuse", None);
+        std::env::set_var("PARCAD_OCCT_WORKER", &shim);
+        let first = pid_that_served(evaluate(&unit_cube(), &Options::default()));
+        let second = pid_that_served(evaluate(&unit_cube(), &Options::default()));
+        std::env::remove_var("PARCAD_OCCT_WORKER");
+        IDLE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        let _ = std::fs::remove_file(&shim);
+        assert_eq!(first, second, "the second request started a new worker");
+    }
+
+    /// A pooled worker that died while idle is replaced without the caller
+    /// seeing anything but an answer.
+    #[test]
+    fn a_worker_that_died_while_idle_is_replaced() {
+        let _env = WORKER_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let shim = serving_shim("replace", Some(1));
+        std::env::set_var("PARCAD_OCCT_WORKER", &shim);
+        let first = pid_that_served(evaluate(&unit_cube(), &Options::default()));
+        // The shim exits after its first reply; give it a moment to be gone.
+        std::thread::sleep(Duration::from_millis(100));
+        let second = pid_that_served(evaluate(&unit_cube(), &Options::default()));
+        std::env::remove_var("PARCAD_OCCT_WORKER");
+        IDLE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        let _ = std::fs::remove_file(&shim);
+        assert_ne!(first, second, "a dead worker was handed the request");
+    }
+
     /// The crash supervision, pinned without an input that actually crashes
     /// OCCT. It used to have one — `refuse-oversized-fillet` — until the
     /// fillet boundary learned to catch `Standard_Failure` and the whole known
@@ -604,6 +762,7 @@ mod tests {
 
         let outcome = evaluate(&unit_cube(), &Options::default());
         std::env::remove_var("PARCAD_OCCT_WORKER");
+        IDLE.lock().unwrap_or_else(|e| e.into_inner()).clear();
         let _ = std::fs::remove_file(&shim);
 
         match outcome.unwrap_err() {

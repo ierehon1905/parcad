@@ -229,7 +229,9 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | the graph schema / a new op | `crates/parcad-core/src/graph.rs` |
 | how an op becomes an SDF | `crates/parcad-core/src/sdf.rs` |
 | how an op becomes a B-rep | `crates/parcad-occt/src/backend.rs` |
-| crash handling, timeouts, breadcrumbs | `crates/parcad-occt/src/host.rs` |
+| crash handling, timeouts, breadcrumbs, the worker pool | `crates/parcad-occt/src/host.rs` |
+| what a worker keeps between requests | `backend::BuildCache` and the serve loop in `crates/parcad-occt/src/bin/worker.rs` |
+| probes, wall thickness, tag extents on the exact solid | `crates/parcad-occt/src/perceive.rs` |
 | the authoring DSL | `app/src/dsl.ts` (shared with `tools/run.ts`) |
 | drill and clearance sizes | `METRIC_FASTENERS` in `app/src/dsl.ts` — never a literal in a part |
 | lines, offsets, intersections and convex outlines in the plane | `line2d`, `Line2d`, `hull` in `app/src/dsl.ts` — arithmetic on numbers the script has; nothing reads the built part |
@@ -266,7 +268,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | why edge selection needs a scope, and what replaces it | `docs/SELECTORS.md` |
 | which op to add next, and why not the others | `docs/OP_ROADMAP.md` |
 | which of all the open fronts to do first | `docs/NEXT.md` |
-| measuring a part without looking at it | `crates/parcad-core/src/probe.rs`, `thickness.rs` |
+| measuring a part without looking at it | `crates/parcad-occt/src/perceive.rs`, reached as `probe_part` and `measure_wall_thickness` |
 | whether the part fits the thing it holds | `check_fit` (MCP), `parcad --fit REFERENCE.json` (CLI), both over `service::check_fit` and `backend::check_fit`; the reference is a script, usually `device(...)` |
 | reading a foreign STEP export into authorable numbers | `StepProbe` in `crates/parcad-occt/src/protocol.rs`; CLI `parcad --probe-step`, MCP `probe_step_export`, both over `service::probe_step` — the C++ half is `Shape_geometry_json` in the vendored wrapper |
 | cutting a part open to see inside it | `view.rs`'s `Section`, then `render.rs` for the agent and `app/src/viewport.ts` for the window |

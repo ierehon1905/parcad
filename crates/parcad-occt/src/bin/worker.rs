@@ -1,47 +1,89 @@
-//! The isolated kernel worker: one request on stdin, one response on stdout.
+//! The isolated kernel worker: requests on stdin, each reply in a file.
 //!
 //! This process exists to be expendable. It talks to OCCT directly and may be
 //! terminated by it at any point; the host treats that as data. Everything it
 //! learns on the way is announced on stderr as a breadcrumb, because when the
 //! kernel terminates the process there is no return value left to carry it.
+//!
+//! Started with no argument it serves: one [`Frame`] per line of stdin, the
+//! reply written where the frame says and announced with a `@reply` line on
+//! stderr, until stdin closes. What it keeps between requests is the build
+//! cache, so an edit rebuilds the subtrees it changed and a probe of a part
+//! just built builds nothing. With a reply path as its one argument it serves
+//! the single request on stdin and exits, which is the form a shell can drive.
 
-use parcad_occt::backend::{self, NamedFaces};
+use parcad_occt::backend::{self, BuildCache};
 use parcad_occt::perceive;
 use parcad_occt::protocol::{
-    breadcrumb, edge_curve, BodyFit, BodySpan, EdgeCurve, FaceRun, FaceSummary, Request,
-    Response, Success, TargetPreview, Timings, Topology,
+    breadcrumb, edge_curve, BodyFit, BodySpan, EdgeCurve, FaceRun, FaceSummary, Frame,
+    Request, Response, Success, TargetPreview, Timings, Topology, REPLY,
 };
 use std::collections::BTreeMap;
-use std::io::Read;
+use std::io::{BufRead, Read};
 use std::time::Instant;
 
 fn main() {
-    // Argument one is where to leave the reply. Not stdout: OCCT prints its own
-    // banners there and we cannot stop it, so stdout is discarded and the
-    // protocol gets a channel nobody else writes to.
-    let Some(reply_path) = std::env::args().nth(1) else {
-        eprintln!("usage: parcad-occt-worker <reply.json>  (request arrives on stdin)");
-        std::process::exit(2);
-    };
+    let mut cache = BuildCache::default();
+    if let Some(reply_path) = std::env::args().nth(1) {
+        let mut input = Vec::new();
+        let request = std::io::stdin()
+            .read_to_end(&mut input)
+            .map_err(|e| format!("cannot read stdin: {e}"))
+            .and_then(|_| {
+                serde_json::from_slice::<Request>(&input).map_err(|e| format!("the request is not valid: {e}"))
+            });
+        let response = match request {
+            Ok(request) => run(request, &mut cache),
+            Err(message) => Response::Error {
+                stage: "reading the request".into(),
+                message,
+            },
+        };
+        write_reply(&reply_path, &response);
+        return;
+    }
 
-    let response = run();
-    let json = serde_json::to_string(&response).unwrap_or_else(|e| {
+    // Serving. A line that does not parse is answered where it asked to be
+    // answered when it said, and skipped when it did not; the host reads the
+    // absence of a reply as the worker having died, which is the truth of it.
+    let stdin = std::io::stdin();
+    for line in stdin.lock().lines() {
+        let Ok(line) = line else { break };
+        if line.trim().is_empty() {
+            continue;
+        }
+        let frame: Frame = match serde_json::from_str(&line) {
+            Ok(frame) => frame,
+            Err(e) => {
+                eprintln!("a frame this worker could not read ({e}); dropping it");
+                continue;
+            }
+        };
+        let response = run(frame.request, &mut cache);
+        write_reply(&frame.reply, &response);
+        eprintln!("{REPLY}{}", frame.reply);
+    }
+}
+
+/// Not stdout: OCCT prints its own banners there and we cannot stop it, so
+/// stdout is discarded and the protocol gets a channel nobody else writes to.
+fn write_reply(reply_path: &str, response: &Response) {
+    let json = serde_json::to_string(response).unwrap_or_else(|e| {
         format!(
             r#"{{"status":"error","stage":"replying","message":"cannot encode the response: {e}"}}"#
         )
     });
-
-    if let Err(e) = std::fs::write(&reply_path, json) {
+    if let Err(e) = std::fs::write(reply_path, json) {
         eprintln!("cannot write the reply to {reply_path}: {e}");
         std::process::exit(3);
     }
 }
 
 /// What each face is, and which tags it carries.
-fn describe_faces(shape: &opencascade::primitives::Shape, names: &NamedFaces) -> Vec<FaceSummary> {
-    let mut faces = perceive::describe_faces(shape);
-    for (face, tags) in faces.iter_mut().zip(perceive::face_tags(shape, names)) {
-        face.tags = tags;
+fn describe_faces(body: &perceive::Body) -> Vec<FaceSummary> {
+    let mut faces = perceive::describe_faces(body.shape);
+    for (face, tags) in faces.iter_mut().zip(&body.face_tags) {
+        face.tags = tags.clone();
     }
     faces
 }
@@ -247,26 +289,8 @@ fn volume_and_area(mesh: &opencascade::mesh::Mesh) -> (f64, f64) {
     (volume, area)
 }
 
-fn run() -> Response {
+fn run(request: Request, cache: &mut BuildCache) -> Response {
     breadcrumb("reading the request");
-    let mut input = Vec::new();
-    if let Err(e) = std::io::stdin().read_to_end(&mut input) {
-        return Response::Error {
-            stage: "reading the request".into(),
-            message: format!("cannot read stdin: {e}"),
-        };
-    }
-
-    let request: Request = match serde_json::from_slice(&input) {
-        Ok(r) => r,
-        Err(e) => {
-            return Response::Error {
-                stage: "reading the request".into(),
-                message: format!("the request is not valid: {e}"),
-            }
-        }
-    };
-
     if let Some(path) = &request.probe_step {
         return probe_step(path);
     }
@@ -279,7 +303,7 @@ fn run() -> Response {
     };
     if let Some(reference) = request.fit_against {
         breadcrumb("checking the fit");
-        return match backend::check_fit(&doc, &reference) {
+        return match backend::with_reuse(cache, &doc, || backend::check_fit(&doc, &reference)) {
             Ok(report) => Response::Fit(Box::new(report)),
             Err(e) => Response::Error {
                 stage: "checking the fit".into(),
@@ -289,7 +313,7 @@ fn run() -> Response {
     }
     if let Some(node) = request.inspect_target {
         breadcrumb(&format!("resolving target for node {node}"));
-        return match backend::inspect_edge_target(&doc, node) {
+        return match backend::with_reuse(cache, &doc, || backend::inspect_edge_target(&doc, node)) {
             Ok(target) => Response::TargetPreview(TargetPreview {
                 node,
                 edges: target.edges,
@@ -305,7 +329,7 @@ fn run() -> Response {
 
     breadcrumb("lowering the graph");
     let t0 = Instant::now();
-    let part = match backend::build_part(&doc) {
+    let part = match backend::with_reuse(cache, &doc, || backend::build_part(&doc)) {
         Ok(part) => part,
         Err(e) => {
             return Response::Error {
@@ -329,23 +353,19 @@ fn run() -> Response {
     }
 
     let t1 = Instant::now();
+    breadcrumb("naming the faces");
+    let bodies = perceive::bodies_of(&part);
     let mut whole = Assembled::default();
-    if part.bodies.is_empty() {
-        match measure(shape, &part.names[0], &part.treatment_owners, "") {
-            Ok(measured) => whole.append(None, measured),
+    for body in &bodies {
+        let who = body.name.map(|name| format!("body `{name}`: ")).unwrap_or_default();
+        match measure(body, &part.treatment_owners, &who) {
+            Ok(measured) => whole.append(body.name, measured),
             Err(refusal) => return refusal,
-        }
-    } else {
-        for ((name, body), names) in part.bodies.iter().zip(&part.names) {
-            match measure(body, names, &part.treatment_owners, &format!("body `{name}`: ")) {
-                Ok(measured) => whole.append(Some(name), measured),
-                Err(refusal) => return refusal,
-            }
         }
     }
     let mesh_ms = t1.elapsed().as_millis() as u64;
     breadcrumb("locating the tags");
-    let (tag_extents, unlocated_tags) = perceive::tag_extents(&part, &perceive::bodies_of(&part));
+    let (tag_extents, unlocated_tags) = perceive::tag_extents(&part, &bodies);
 
     let mut between = Vec::new();
     for (i, (a, first)) in part.bodies.iter().enumerate() {
@@ -456,11 +476,11 @@ struct Measured {
 /// body in a refusal and is empty for a one-solid part, whose refusals read
 /// exactly as they always have.
 fn measure(
-    shape: &opencascade::primitives::Shape,
-    names: &NamedFaces,
+    body: &perceive::Body,
     treatment_owners: &BTreeMap<Vec<[i64; 3]>, usize>,
     who: &str,
 ) -> Result<Measured, Response> {
+    let shape = body.shape;
     breadcrumb("counting topology");
     let topology = Topology {
         faces: shape.faces().count(),
@@ -561,7 +581,7 @@ fn measure(
     }
 
     breadcrumb("describing the faces");
-    let faces = describe_faces(shape, names);
+    let faces = describe_faces(body);
     Ok(Measured {
         mesh,
         faces,
