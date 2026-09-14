@@ -90,6 +90,14 @@ install links and is silently wrong, like any stale prebuilt library.
 `tools/build-worker.sh` knows to check optimisation flags under the prebuilt
 directory when the variable is set.
 
+## The library directory is found, not assumed
+
+OCCT's install rules add a per-configuration letter to the library directory
+under MSVC, so the Debug-configured build this crate always runs installs to
+`libd/` on Windows and to `lib/` everywhere else. `build.rs` exports whichever
+of `lib`, `libd`, `libi` holds `TKernel`, for a fresh build and for
+`PARCAD_OCCT_PREBUILT` alike.
+
 ## Changes to OCCT itself
 
 Two patches.
