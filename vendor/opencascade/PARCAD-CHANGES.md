@@ -154,6 +154,16 @@ out. Everything below could otherwise have lived in our own crate.
   `-Wdeprecated-declarations` and one `-W#pragma-messages` per build. The
   matching change on the other side of the bridge is in
   `vendor/opencascade-sys/PARCAD-CHANGES.md`.
+- `ParcadBoolean` builds its boolean once, in parallel. It used the
+  `BRepAlgoAPI_Fuse(S1, S2)` / `BRepAlgoAPI_Cut(S1, S2)` constructors, which
+  call `Build()` themselves, and then called `Build()` again — every fuse and
+  cut ran twice (`SetToFillHistory(true)` between them was already the
+  default). It now default-constructs, `SetArguments` / `SetTools`, and sets
+  `SetRunParallel(true)`: OCCT's global parallel mode is off, so the
+  face/face and curve-on-surface loops ran on one core. Measured on a
+  530-node sculpture of overlapping spheres, cones and pipes (M4 Max): build
+  13.3 s → 3.2 s, with volume, area, topology and the exported STL
+  byte-identical; the `parcad-eval` corpus is 110/110 unchanged.
 
 ## Not added
 

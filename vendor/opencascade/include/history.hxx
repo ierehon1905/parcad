@@ -2,6 +2,7 @@
 
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
+#include <BRepAlgoAPI_BooleanOperation.hxx>
 #include <BRepAlgoAPI_BuilderAlgo.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
@@ -34,10 +35,20 @@
 
 class ParcadBoolean {
  public:
+  // The (base, tool) constructors run the boolean themselves, so building
+  // after them did the whole operation twice; start empty and build once.
   ParcadBoolean(const TopoDS_Shape& base, const TopoDS_Shape& tool, bool is_cut)
-      : cut_(is_cut ? std::unique_ptr<BRepAlgoAPI_Cut>(new BRepAlgoAPI_Cut(base, tool)) : nullptr),
-        fuse_(is_cut ? nullptr : std::unique_ptr<BRepAlgoAPI_Fuse>(new BRepAlgoAPI_Fuse(base, tool))) {
+      : cut_(is_cut ? std::unique_ptr<BRepAlgoAPI_Cut>(new BRepAlgoAPI_Cut()) : nullptr),
+        fuse_(is_cut ? nullptr : std::unique_ptr<BRepAlgoAPI_Fuse>(new BRepAlgoAPI_Fuse())) {
+    NCollection_List<TopoDS_Shape> arguments, tools;
+    arguments.Append(base);
+    tools.Append(tool);
+    algorithm().SetArguments(arguments);
+    algorithm().SetTools(tools);
     algorithm().SetToFillHistory(true);
+    // OCCT's global default is serial; the face/face and edge/face loops are
+    // written for OSD_Parallel, and matched serial on every part measured.
+    algorithm().SetRunParallel(true);
     algorithm().Build();
   }
 
@@ -54,9 +65,9 @@ class ParcadBoolean {
   bool is_deleted(const TopoDS_Shape& original) const { return algorithm().IsDeleted(original); }
 
  private:
-  BRepAlgoAPI_BuilderAlgo& algorithm() const {
-    return cut_ ? static_cast<BRepAlgoAPI_BuilderAlgo&>(*cut_)
-                : static_cast<BRepAlgoAPI_BuilderAlgo&>(*fuse_);
+  BRepAlgoAPI_BooleanOperation& algorithm() const {
+    return cut_ ? static_cast<BRepAlgoAPI_BooleanOperation&>(*cut_)
+                : static_cast<BRepAlgoAPI_BooleanOperation&>(*fuse_);
   }
 
   static std::unique_ptr<std::vector<TopoDS_Shape>> shapes(const NCollection_List<TopoDS_Shape>& shapes) {
