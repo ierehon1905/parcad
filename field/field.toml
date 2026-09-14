@@ -31,6 +31,7 @@ tools = [
   "inspect_treatment_target", "check_selector", "export_part",
   "probe_step_export", "check_fit",
   "get_session", "open_project", "set_script",
+  "list_snapshots", "restore_snapshot",
 ]
 
 # Arguments `score.py --show` elides: a parcad script is a whole part and drowns
