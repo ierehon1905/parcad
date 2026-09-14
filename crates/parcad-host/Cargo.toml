@@ -21,7 +21,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 # `rt` is for `spawn_blocking`; `sync` is for the session broadcast channel;
 # `tokio-stream` adapts a broadcast receiver into the SSE stream browsers watch
 # for session events.
-tokio = { version = "1", default-features = false, features = ["net", "sync", "rt"] }
+tokio = { version = "1", default-features = false, features = ["net", "sync", "rt", "time"] }
 tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
 serde.workspace = true
 serde_json.workspace = true

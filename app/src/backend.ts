@@ -291,10 +291,32 @@ export function pushSession(
   name: string | null,
   script: string,
   origin: string,
+  base: number | null,
 ): Promise<Session> {
   return inTauri
-    ? invoke<Session>("push_session", { name, script, origin })
-    : post<Session>("session", { name, script, origin });
+    ? invoke<Session>("push_session", { name, script, origin, base })
+    : post<Session>("session", { name, script, origin, base });
+}
+
+/** The session as the host holds it, for a window that has just loaded. */
+export function getSession(): Promise<Session> {
+  return inTauri ? invoke<Session>("get_session") : get<Session>("session");
+}
+
+/** What this window put on screen, so an agent can tell shown from sent. */
+export interface Shown {
+  id: string;
+  revision: number;
+  built: boolean;
+  error?: string;
+  volume_mm3?: number;
+}
+
+export function reportShown(shown: Shown): Promise<unknown> {
+  const report = { ...shown, kind: inTauri ? "desktop" : "browser" };
+  return inTauri
+    ? invoke("report_shown", { shown: report })
+    : post("session/shown", report);
 }
 
 /**
@@ -304,12 +326,12 @@ export function pushSession(
  * origin cannot open an EventSource against `/api`. Callers never learn which:
  * that is this module's whole job.
  */
-export function subscribeSession(onEvent: (session: Session) => void): void {
+export function subscribeSession(viewer: string, onEvent: (session: Session) => void): void {
   if (inTauri) {
     void listen<Session>("session-changed", (event) => onEvent(event.payload));
     return;
   }
-  const events = new EventSource("/api/session/events");
+  const events = new EventSource(`/api/session/events?viewer=${encodeURIComponent(viewer)}`);
   events.onmessage = (event) => onEvent(JSON.parse(event.data) as Session);
 }
 

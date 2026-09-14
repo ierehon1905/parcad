@@ -158,6 +158,7 @@ fn router(assets: Arc<dyn Assets>) -> Router {
         // broadcast as a Tauri event instead — one broadcast, two transports.
         .route("/api/session", get(get_session).post(push_session))
         .route("/api/session/events", get(session_events))
+        .route("/api/session/shown", post(session_shown))
         .route("/api/evaluate", post(evaluate))
         .route("/api/inspect-edge-target", post(inspect_edge_target))
         .route("/api/export/stl", post(export_stl))
@@ -211,14 +212,33 @@ struct SessionPush {
     /// The pushing viewer's own id, echoed in the broadcast so that viewer can
     /// ignore its reflection.
     origin: String,
+    /// The revision the script was edited from; see `session::push`.
+    #[serde(default)]
+    base: Option<u64>,
 }
 
 async fn get_session() -> impl IntoResponse {
-    Json(session::get())
+    Json(session::live())
 }
 
 async fn push_session(Json(request): Json<SessionPush>) -> impl IntoResponse {
-    Json(session::push(request.name, request.script, request.origin))
+    Json(session::push(request.name, request.script, request.origin, request.base))
+}
+
+async fn session_shown(Json(shown): Json<session::Shown>) -> impl IntoResponse {
+    session::report_shown(shown);
+    Json(json!({}))
+}
+
+/// Forgets a tab's report when its event stream is dropped.
+struct Departure(Option<String>);
+
+impl Drop for Departure {
+    fn drop(&mut self) {
+        if let Some(id) = &self.0 {
+            session::forget_viewer(id);
+        }
+    }
 }
 
 /// Session changes as they happen, for a browser tab to watch.
@@ -226,15 +246,28 @@ async fn push_session(Json(request): Json<SessionPush>) -> impl IntoResponse {
 /// SSE rather than a websocket: the traffic is one-way, `EventSource`
 /// reconnects on its own, and the reply stays ordinary HTTP under the same
 /// no-CORS rule as everything else here.
-async fn session_events() -> impl IntoResponse {
+async fn session_events(uri: Uri) -> impl IntoResponse {
     use axum::response::sse::{Event, KeepAlive, Sse};
     use tokio_stream::StreamExt;
 
-    let events = tokio_stream::wrappers::BroadcastStream::new(session::subscribe())
+    // `?viewer=<id>`: the tab's viewer id, so its report goes when it does.
+    let viewer = uri.query().and_then(|q| {
+        q.split('&')
+            .find_map(|pair| pair.strip_prefix("viewer="))
+            .map(str::to_string)
+    });
+    let departure = Departure(viewer);
+    // The current state first: `EventSource` reconnects on its own, and a tab
+    // that was away for an edit would otherwise wait for the next one to see it.
+    let current = tokio_stream::once(session::get());
+    let changes = tokio_stream::wrappers::BroadcastStream::new(session::subscribe())
         // A lagged tab missed intermediate states, never the final one — the
         // next event carries the whole session, so skipping is correct.
-        .filter_map(|event| event.ok())
-        .map(|event| Event::default().json_data(&event));
+        .filter_map(|event| event.ok());
+    let events = current.chain(changes).map(move |event| {
+        let _ = &departure;
+        Event::default().json_data(&event)
+    });
 
     Sse::new(events).keep_alive(KeepAlive::default())
 }

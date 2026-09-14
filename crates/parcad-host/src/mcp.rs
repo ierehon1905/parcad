@@ -268,6 +268,22 @@ pub struct SetScriptRequest {
     /// The DSL source to put on screen, whole — this replaces the open
     /// document, it does not append to it.
     pub script: String,
+    /// How long to wait, in seconds, for a window to report that it evaluated
+    /// this revision. 0 to 60; defaults to 20. The reply comes as soon as one
+    /// does, or when the time is up with `viewers` saying where each window got.
+    #[serde(default)]
+    pub wait_s: Option<f64>,
+}
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct OpenRequest {
+    /// A project path exactly as `list_projects` gives it: slash-separated
+    /// folder names and no extension, such as `bracket` or `Mounts/bracket`.
+    pub name: String,
+    /// How long to wait, in seconds, for a window to report that it evaluated
+    /// the opened part. 0 to 60; defaults to 20.
+    #[serde(default)]
+    pub wait_s: Option<f64>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -739,26 +755,27 @@ impl Parcad {
     #[tool(
         name = "get_session",
         annotations(title = "Read the open editor", read_only_hint = true, open_world_hint = false),
-        description = "Read the live session: which project is open in the parcad window and the script as it currently stands in the editor, including anything the user has typed since you last looked. Call this before editing — the on-screen script may differ from the file on disk, and editing from a stale copy silently reverts the user's work. `name` is null until something is opened; `revision` increases with every change. The editor pushes its document a moment after typing stops, so the very last keystrokes can lag by about half a second."
+        description = "Read the live session: which project is open in the parcad window and the script as it currently stands in the editor, including anything the user has typed since you last looked. Call this before editing — the on-screen script may differ from the file on disk, and editing from a stale copy silently reverts the user's work. `name` is null until something is opened; `revision` increases with every change. The editor pushes its document a moment after typing stops, so the very last keystrokes can lag by about half a second.\n\n`viewers` is what each open window is actually drawing, as the window reported it: the `revision` it last evaluated, whether that `built`, the `error` if not, and the `volume_mm3` it measured. A window below the session's revision has not caught up; one with built: false is still drawing an older part beside that error. An empty list means no window is open, so nobody is looking."
     )]
     async fn get_session(
         &self,
-    ) -> Result<rmcp::handler::server::wrapper::Json<session::Session>, ErrorData> {
-        Ok(rmcp::handler::server::wrapper::Json(session::get()))
+    ) -> Result<rmcp::handler::server::wrapper::Json<session::Live>, ErrorData> {
+        Ok(rmcp::handler::server::wrapper::Json(session::live()))
     }
 
     /// Put a project on the user's screen.
     #[tool(
         name = "open_project",
         annotations(title = "Open a project on screen", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Open a project in the parcad window: the app loads it from disk and every open window switches to it, exactly as if the user had picked it. Takes a path from list_projects. Returns the session with the loaded script. Use this before set_script when the part you want to change is not the one on screen — get_session tells you which that is."
+        description = "Open a project in the parcad window: the app loads it from disk and every open window switches to it, exactly as if the user had picked it. Takes a path from list_projects. Returns the session with the loaded script. Use this before set_script when the part you want to change is not the one on screen — get_session tells you which that is. Like set_script, the reply waits for a window to report evaluating it and carries `viewers`."
     )]
     async fn open_project(
         &self,
-        Parameters(request): Parameters<ProjectRequest>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<session::Session>, ErrorData> {
+        Parameters(request): Parameters<OpenRequest>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<session::Live>, ErrorData> {
+        let opened = session::open(&request.name, session::AGENT_ORIGIN).map_err(invalid)?;
         Ok(rmcp::handler::server::wrapper::Json(
-            session::open(&request.name, session::AGENT_ORIGIN).map_err(invalid)?,
+            shown(opened, request.wait_s).await,
         ))
     }
 
@@ -766,14 +783,15 @@ impl Parcad {
     #[tool(
         name = "set_script",
         annotations(title = "Replace the script on screen", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Replace the script in the open editor. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing — there is no lock, and you must not wait for one. It edits the screen only: nothing is written to disk until the user saves or you call save_project. Evaluate the script first with evaluate_part; putting a script that does not build in front of the user replaces their working part with an error. Read get_session first and base your edit on the script it returns, or you will silently revert what the user typed since you last looked."
+        description = "Replace the script in the open editor. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing — there is no lock, and you must not wait for one. It edits the screen only: nothing is written to disk until the user saves or you call save_project. Evaluate the script first with evaluate_part; putting a script that does not build in front of the user replaces their working part with an error. Read get_session first and base your edit on the script it returns, or you will silently revert what the user typed since you last looked.\n\nThe reply waits (up to `wait_s`, default 20 s) until a window reports evaluating this revision, and its `viewers` says what each window showed: built with which `volume_mm3`, or the `error` it hit. Do not tell the user the part is on screen unless a viewer reports this `revision` with built: true. Setting the same script again makes every window evaluate it again — the way to recover a window that is showing something stale."
     )]
     async fn set_script(
         &self,
         Parameters(request): Parameters<SetScriptRequest>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<session::Session>, ErrorData> {
+    ) -> Result<rmcp::handler::server::wrapper::Json<session::Live>, ErrorData> {
+        let set = session::set_script(request.script, session::AGENT_ORIGIN).map_err(invalid)?;
         Ok(rmcp::handler::server::wrapper::Json(
-            session::set_script(request.script, session::AGENT_ORIGIN).map_err(invalid)?,
+            shown(set, request.wait_s).await,
         ))
     }
 }
@@ -1031,6 +1049,16 @@ async fn record(
 }
 
 // ------------------------------------------------------------------ helpers
+
+/// The session after a change, once a window has shown it or the wait is over.
+async fn shown(changed: session::Session, wait_s: Option<f64>) -> session::Live {
+    let budget = std::time::Duration::from_secs_f64(wait_s.unwrap_or(20.0).clamp(0.0, 60.0));
+    let viewers = session::wait_until_shown(changed.revision, budget).await;
+    session::Live {
+        session: session::get(),
+        viewers,
+    }
+}
 
 /// Where exports land. One directory, so no call can choose a location.
 fn export_dir() -> PathBuf {

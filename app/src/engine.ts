@@ -93,11 +93,20 @@ export async function run() {
 
   // Tell the host what this window is showing, on the same debounce. Without
   // this an agent's get_session would report the last thing it wrote itself
-  // rather than what the user has typed since. Fire and forget: geometry must
-  // not wait on it, and pushing even a script that will fail to build below is
-  // the point — a broken draft is still what is on screen.
+  // rather than what the user has typed since. Pushing even a script that will
+  // fail to build below is the point — a broken draft is still what is on
+  // screen. Awaited, because the revision it answers with is what the report
+  // after the evaluation names.
   const source = S.editor().state.doc.toString();
-  void backend.pushSession(S.openPath.value ?? null, source, viewerId).catch(() => {});
+  const name = S.openPath.value ?? null;
+  const pushed = await backend
+    .pushSession(name, source, viewerId, sessionRevision)
+    .catch(() => undefined);
+  let revision: number | undefined;
+  if (pushed && pushed.script === source && (pushed.name ?? null) === name) {
+    revision = pushed.revision;
+    sessionRevision = Math.max(sessionRevision ?? 0, pushed.revision);
+  }
 
   try {
     const built = buildGraph(source);
@@ -121,10 +130,30 @@ export async function run() {
         ? result.snapshot.kernel_ms
         : result.timings.lower_and_mesh_ms + result.timings.normals_ms;
     S.setStatus(`${result.snapshot.triangles.toLocaleString()} tris · ${ms} ms`);
+    if (revision !== undefined) {
+      void backend
+        .reportShown({
+          id: viewerId,
+          revision,
+          built: true,
+          volume_mm3: result.snapshot.volume_mm3,
+        })
+        .catch(() => {});
+    }
     void captureFirstThumbnail();
   } catch (e) {
     showError(e);
-    S.setStatus("failed", "failed");
+    S.setStatus(shownPath === undefined ? "failed" : "failed · showing the last part that built", "failed");
+    if (revision !== undefined) {
+      void backend
+        .reportShown({
+          id: viewerId,
+          revision,
+          built: false,
+          error: e instanceof Error ? e.message : String(e),
+        })
+        .catch(() => {});
+    }
   } finally {
     running = false;
     if (dirty) schedule();
@@ -640,8 +669,12 @@ export async function runExport(format: "stl" | "step") {
  */
 const viewerId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 
+/** The newest session revision this window has seen; a push says it built on it. */
+let sessionRevision: number | null = null;
+
 export function subscribeSession(): void {
-  backend.subscribeSession((session) => {
+  backend.subscribeSession(viewerId, (session) => {
+    sessionRevision = Math.max(sessionRevision ?? 0, session.revision);
     if (session.origin === viewerId) return;
 
     const editor = S.editor();
@@ -685,9 +718,9 @@ export function subscribeSession(): void {
         changes: { from, to: toCurrent, insert: next.slice(from, toNext) },
         annotations: isolateHistory.of("full"),
       });
-    } else if (opened) {
-      // Same text, different part — a rename-shaped case the dispatch above
-      // would otherwise cover. The evaluation still needs to follow.
+    } else {
+      // Same text: a different part of the same source, or a caller asking every
+      // window to evaluate again. Either way the report has to name this revision.
       schedule();
     }
   });
@@ -722,6 +755,17 @@ export async function start() {
     return;
   }
 
-  await openProject(projects.initial);
+  // Follow the session when it has a part open: a reloaded window that opened
+  // its own default would push that name and move every other window off it.
+  const session = await backend.getSession().catch(() => undefined);
+  const current = projects.parts.some((part) => part.path === session?.name);
+  await openProject(current && session?.name ? session.name : projects.initial);
+  if (current && session) {
+    sessionRevision = session.revision;
+    const editor = S.editor();
+    if (editor.state.doc.toString() !== session.script) {
+      editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: session.script } });
+    }
+  }
   void run();
 }

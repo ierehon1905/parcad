@@ -183,13 +183,23 @@ fn mcp_status() -> mcp::Status {
 /// `/api` — its origin is `tauri://localhost` — so it pushes here and receives
 /// broadcasts as the Tauri event the setup hook below forwards.
 #[tauri::command]
-fn get_session() -> session::Session {
-    session::get()
+fn get_session() -> session::Live {
+    session::live()
 }
 
 #[tauri::command]
-fn push_session(name: Option<String>, script: String, origin: String) -> session::Session {
-    session::push(name, script, origin)
+fn push_session(
+    name: Option<String>,
+    script: String,
+    origin: String,
+    base: Option<u64>,
+) -> session::Session {
+    session::push(name, script, origin, base)
+}
+
+#[tauri::command]
+fn report_shown(shown: session::Shown) {
+    session::report_shown(shown);
 }
 
 /// Where the frontend should send API calls, injected before it loads.
@@ -347,6 +357,7 @@ pub fn run() {
             mcp_status,
             get_session,
             push_session,
+            report_shown,
             host_port
         ])
         .run(tauri::generate_context!())
