@@ -10,7 +10,7 @@
     {
       "registryType": "mcpb",
       "identifier": "https://github.com/ierehon1905/parcad/releases/download/v0.0.4/parcad-mcp-aarch64-apple-darwin.mcpb",
-      "fileSha256": "REPLACE-WITH-THE-SHA256-FROM-SHA256SUMS.txt",
+      "fileSha256": "8eedd89d2f47fb58f5ff390db08664393d1952f9f81a996983172d4cab3a4893",
       "transport": { "type": "stdio" }
     }
   ]
