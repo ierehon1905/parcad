@@ -82,11 +82,11 @@ crossing, a point and a thin spot each name the `body` they are in.
 | B-rep | boolean, then fillet the newly-created edges | no bulge; a true fillet |
 
 Both are defensible readings of "round this join by 6 mm". They are not the same
-shape. The desktop mesh preview therefore triangulates the B-rep result: it shows
-the same geometry as the solid view while retaining the triangle overlay.
-Perception — probes, wall thickness, tag extents, region maps — runs on the
-exact solid too (`crates/parcad-occt/src/perceive.rs`), so nothing an agent
-reads is measured on the other reading of the shape.
+shape. Everything a user or an agent sees or measures is the B-rep reading:
+the window draws the exact kernel's tessellation and perception — probes, wall
+thickness, tag extents, region maps — runs on the exact solid
+(`crates/parcad-occt/src/perceive.rs`), so nothing is measured on the other
+reading of the shape.
 
 ### Selected edge and corner treatments are exact-only
 
@@ -242,14 +242,16 @@ shared by every treatment rather than special forms of `EdgeSelector`: edge sets
 and corner vertices today, and a planned full round, which replaces a centre face
 with a transition between two side-face sets.
 
-## Two backends, deliberately unequal
+## Two backends, deliberately unequal — and now one
 
 `parcad_core::evaluate` is the implicit path and is *total*: it always returns
 something. `parcad_occt::evaluate` is the exact path and is allowed to refuse.
 
-The CLI keeps them honest by **not** pretending `--brep` is a drop-in: renders
-and tag regions are raymarched from a distance field, a B-rep has none, so
-`run_brep` prints a note rather than silently emitting fewer files.
+Nothing a user or an agent reaches runs on the implicit path any more: the
+window evaluates with the exact kernel and has no toggle, every MCP tool
+measures the exact solid, and the CLI's `--brep` and `--depth` are accepted
+and say they do nothing. The eval corpus still runs its `implicit` half, which
+is what keeps `sdf.rs` compiling until docs/NEXT.md's last step deletes it.
 
 ## The B-rep kernel runs in a child process
 
@@ -299,8 +301,9 @@ is dropped. Measured on `examples/plate-stand.js`, whose blended union is
 2.7 s of its 3.2 s build: the same part again 475 ms, a ray probe 122 ms,
 and a change to the slot chamfer at the root 697 ms against 3.2 s cold. An
 edit to a peg still costs the blend above it, which is where the time is. A
-cached build answers an edited graph byte-for-byte as a fresh worker does;
-status, volume, topology and every tag extent, measured on five example parts each edited at the root, edited at a leaf, and unchanged.
+cached build answers an edited graph exactly as a fresh worker does — status,
+volume, topology and every tag extent, measured on five example parts each
+edited at the root, edited at a leaf, and unchanged.
 
 The process floor — spawn, request, reply file — was never the cost: 11 ms
 warm on the smallest part. The tag extents and face report added to every
@@ -542,10 +545,11 @@ arrangement as the selector grammar — `safe()` is the copy that has to be righ
 - `app/src/dsl.ts` is the authoring layer and lives in TypeScript, not Rust.
   That's what lets `tools/run.ts` (bun) and the webview run *the same* DSL and
   hand the same JSON to the same core.
-- `app/src/viewport.ts` renders **two visually distinct B-rep views**: the solid
-  gets `MeshStandardMaterial`, real edge lines and a silhouette outline pass;
-  mesh preview gets smooth Lambert shading, a faint triangle overlay and no
-  outline pass. Both display the same B-rep geometry.
+- `app/src/viewport.ts` draws the solid with `MeshStandardMaterial`, the
+  kernel's own edge lines and a silhouette outline pass. A second look — smooth
+  Lambert shading with a triangle overlay and no edges — is still in the file
+  for geometry that arrives without edge curves, which nothing now sends; the
+  kernel toggle that used to ask for it is gone.
 - Timings the app reports include serialising the geometry across whichever
   transport asked — the Tauri IPC bridge or the HTTP host — which for the bracket
   (~12 000 triangles + 67 edge curves) is a real fraction of the total.

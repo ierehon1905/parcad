@@ -7,11 +7,11 @@
 //! — the browser build used to be a frozen geometry fixture, and every `if
 //! (!inTauri)` in the editor was a feature the two hosts disagreed about.
 //!
-//! Two backends sit behind one entry point, because the intent graph was built
-//! for exactly this. `implicit` is fast, total, and approximate — every graph
-//! evaluates, and the answer is a distance field sampled onto a grid. `brep` is
-//! exact and partial — it refuses operations it cannot do faithfully, and what
-//! it returns has real faces, real edges, and nominal dimensions.
+//! One kernel sits behind the entry point: the exact B-rep one, which refuses
+//! operations it cannot do faithfully, and whose every answer has real faces,
+//! real edges and nominal dimensions. There used to be a second, implicit one
+//! beside it for the window and the perception tools; docs/NEXT.md records
+//! why it went.
 
 use parcad_core::{
     graph::{Doc, Op},
@@ -31,32 +31,21 @@ pub struct Evaluated {
     positions: Vec<f32>,
     /// Surface normals, flattened xyz.
     normals: Vec<f32>,
-    /// Triangle indices. Empty when each triangle carries its own corners,
-    /// which is how the implicit path gets flat shading.
+    /// Triangle indices.
     indices: Vec<u32>,
-    /// Logical edge curves, each a polyline. Empty for a mesh preview, which
-    /// deliberately draws its triangles instead of solid-model edges.
+    /// Logical edge curves, each a polyline.
     edges: Vec<parcad_occt::EdgeCurve>,
     /// Where each face's triangles sit in `indices`, and which face each run is.
-    ///
-    /// Empty for the implicit backend and for a mesh preview: a distance field
-    /// has no faces to attribute a triangle to, and saying "face 3" about one
-    /// would be inventing topology the model does not have.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     face_runs: Vec<parcad_occt::protocol::FaceRun>,
-    /// What each face is: kind, area, centroid, direction and neighbours.
-    ///
-    /// Empty for the implicit backend, which has no faces at all — see
-    /// `face_runs`. Kept beside the triangles rather than in the snapshot
-    /// because it is as long as the part has faces, and the snapshot is the
-    /// thing a caller reads.
+    /// What each face is: kind, area, centroid, direction, neighbours and
+    /// tags. Kept beside the triangles rather than in the snapshot because it
+    /// is as long as the part has faces, and the snapshot is the thing a
+    /// caller reads.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub faces: Vec<parcad_occt::protocol::FaceSummary>,
     /// What the part is — the one artifact every transport serialises.
     pub snapshot: EvaluationSnapshot,
-    /// How long this run took. A fact about the evaluation rather than about
-    /// the part, which is why it sits beside the snapshot rather than in it.
-    timings: Timings,
     /// The measured bounds, unrounded, for the renderer to frame with.
     ///
     /// Not serialised: [`EvaluationSnapshot`] already states the bounds for
@@ -174,8 +163,8 @@ pub struct EvaluationSnapshot {
     pub volume_mm3: f64,
     pub area_mm2: f64,
     pub centroid: [f64; 3],
-    /// Exact-kernel counts. Absent for the implicit backend, which has no
-    /// topology — different from having none.
+    /// The kernel's own counts. Optional on the wire for the readers written
+    /// when a field-sampled evaluation had none; every reply now carries them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub faces: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -197,9 +186,7 @@ pub struct EvaluationSnapshot {
     #[serde(default)]
     pub voids: usize,
     /// Each named body of a part that returns several, measured on its own
-    /// with the same code that measured the whole. Empty for a one-solid
-    /// part, and for the implicit backend, whose one field has no body in it
-    /// to measure apart — the whole is what it reports.
+    /// with the same code that measured the whole. Empty for a one-solid part.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub named_bodies: Vec<BodyReport>,
     /// How every pair of named bodies sits, measured on the exact solids the
@@ -245,8 +232,9 @@ pub struct EvaluationSnapshot {
     /// it is almost always a line that was meant to be cut with or unioned in.
     #[serde(skip_serializing_if = "is_zero")]
     pub unused_nodes: usize,
-    /// Which backend produced this. Worth stating plainly: the two disagree by
-    /// the blend bulge, which is millimetres rather than rounding.
+    /// Which kernel produced this: `brep`, the only one. Kept on the wire
+    /// because readers ask for it by name — `eval/field/which-backend-measured`
+    /// is the regression for a field the instructions name and the reply lacks.
     pub backend: String,
     pub kernel_ms: u64,
     /// True when this came from a build already made for the same graph — by
@@ -1300,10 +1288,9 @@ pub fn parse_section(
 fn describe(
     doc: &Doc,
     report: &parcad_core::PartReport,
-    topology: Option<&parcad_occt::Topology>,
+    topology: &parcad_occt::Topology,
     (named_bodies, between_bodies): (Vec<BodyReport>, Vec<BodyFit>),
     (extents, unlocated): (Vec<TagExtent>, Vec<String>),
-    backend: &str,
     kernel_ms: u64,
 ) -> EvaluationSnapshot {
     EvaluationSnapshot {
@@ -1326,8 +1313,8 @@ fn describe(
             report.mass.centroid.y,
             report.mass.centroid.z,
         ]),
-        faces: topology.map(|t| t.faces),
-        topological_edges: topology.map(|t| t.edges),
+        faces: Some(topology.faces),
+        topological_edges: Some(topology.edges),
         triangles: report.mesh.triangles,
         resolution_mm: round_mm(report.mesh.resolution_mm),
         watertight: report.mesh.watertight,
@@ -1346,7 +1333,7 @@ fn describe(
         unlocated_tags: unlocated,
         treatments: treatments(doc),
         unused_nodes: report.total_nodes.saturating_sub(report.live_nodes),
-        backend: backend.to_string(),
+        backend: "brep".to_string(),
         kernel_ms,
         reused_build: false,
         // Nothing is drawn unless a caller asks: a render costs more than the
@@ -1445,18 +1432,6 @@ fn treatments(doc: &Doc) -> Vec<Treatment> {
         .collect()
 }
 
-/// How long an evaluation took, for the window's status line.
-///
-/// Time in the exact kernel is deliberately not here: it is
-/// [`EvaluationSnapshot::kernel_ms`], stated once, where every transport reads
-/// the same number. These two are the implicit path's halves, which nothing but
-/// the status line has ever wanted.
-#[derive(Serialize)]
-pub struct Timings {
-    lower_and_mesh_ms: u64,
-    normals_ms: u64,
-}
-
 /// An exported file, held in memory rather than written.
 ///
 /// The desktop writes these bytes to a path the user picked; the browser
@@ -1518,67 +1493,42 @@ impl ExportMeasured {
     }
 }
 
-/// Which geometry backend a request asked for.
-///
-/// Parsed once, here, so an unknown name is one error message rather than one
-/// per transport.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Backend {
-    Preview,
-    Implicit,
-    Brep,
-}
-
-impl Backend {
-    pub fn parse(name: Option<&str>) -> Result<Self, String> {
-        match name.unwrap_or("implicit") {
-            "preview" => Ok(Self::Preview),
-            // Keep the SDF evaluator reachable by callers that use the service
-            // directly. The app's mesh-preview control uses the B-rep mesh so it
-            // cannot invent or omit geometry relative to the solid model.
-            "implicit" => Ok(Self::Implicit),
-            "brep" => Ok(Self::Brep),
-            other => Err(format!(
-                "unknown backend {other:?}; expected \"preview\", \"implicit\", or \"brep\""
-            )),
-        }
-    }
-
-    /// Whether this backend meshes an exact solid, and so has no grid to
-    /// coarsen and no use for a requested depth.
-    fn is_exact(self) -> bool {
-        matches!(self, Self::Brep | Self::Preview)
-    }
-}
-
 /// Read an intent graph, naming the fix if it will not parse.
 pub fn parse_graph(graph: serde_json::Value) -> Result<Doc, String> {
     serde_json::from_value(graph).map_err(|e| format!("the graph is not valid: {e}"))
 }
 
-/// Evaluate an intent graph into displayable geometry.
+/// Evaluate an intent graph into displayable geometry, with the kernel's time
+/// budget chosen by the caller or, when `None`, by `PARCAD_OCCT_TIMEOUT`.
 ///
 /// Errors come back as strings for the UI to show verbatim. They are written to
 /// be read by whoever caused them — which increasingly means a model, not a
 /// person — so the alternate `{:#}` form is used to keep the whole context chain
 /// rather than just the outermost message.
-pub fn evaluate(doc: &Doc, depth: u8, backend: Backend) -> Result<Evaluated, String> {
-    evaluate_within(doc, depth, backend, None)
-}
+pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evaluated, String> {
+    let built = build_exact(doc, budget, false)?;
+    let s = &*built.success;
 
-/// [`evaluate`], with the kernel's time budget chosen by the caller rather than
-/// `PARCAD_OCCT_TIMEOUT`.
-pub fn evaluate_within(
-    doc: &Doc,
-    depth: u8,
-    backend: Backend,
-    budget: Option<std::time::Duration>,
-) -> Result<Evaluated, String> {
-    match backend {
-        Backend::Preview => evaluate_mesh_preview(doc, budget),
-        Backend::Implicit => evaluate_implicit(doc, depth),
-        Backend::Brep => evaluate_brep(doc, budget),
-    }
+    let (report, _) = measure_brep(doc, s)?;
+    let mut snapshot = describe(
+        doc,
+        &report,
+        &s.topology,
+        body_reports(s),
+        tag_extents(s),
+        built.wall_ms,
+    );
+    snapshot.reused_build = built.reused;
+    Ok(Evaluated {
+        bounds: report.bounds,
+        snapshot,
+        positions: s.positions.clone(),
+        normals: s.normals.clone(),
+        indices: s.indices.clone(),
+        face_runs: s.face_runs.clone(),
+        faces: s.faces.clone(),
+        edges: s.edges.clone(),
+    })
 }
 
 // ------------------------------------------------------------- build cache
@@ -1681,96 +1631,7 @@ pub fn inspect_edge_target(doc: &Doc, node: usize) -> Result<parcad_occt::Target
         .map_err(|e| format!("{e}"))
 }
 
-fn evaluate_implicit(doc: &Doc, depth: u8) -> Result<Evaluated, String> {
-    let t0 = std::time::Instant::now();
-    let (tree, tess, report) =
-        parcad_core::evaluate(doc, depth.clamp(3, 9)).map_err(|e| format!("{e:#}"))?;
-    let lower_and_mesh_ms = t0.elapsed().as_millis() as u64;
-
-    let t1 = std::time::Instant::now();
-    let (positions, normals) = tess
-        .faceted(&tree)
-        .map_err(|e| format!("could not compute normals: {e:#}"))?;
-    let normals_ms = t1.elapsed().as_millis() as u64;
-
-    Ok(Evaluated {
-        positions: positions.iter().flat_map(|v| *v).collect(),
-        normals: normals.iter().flat_map(|n| *n).collect(),
-        // Corners cannot be shared once each triangle has its own normals.
-        indices: Vec::new(),
-        edges: Vec::new(),
-        // A distance field has no faces to attribute a triangle to, and so none
-        // to describe either.
-        face_runs: Vec::new(),
-        faces: Vec::new(),
-        bounds: report.bounds,
-        // A field has no faces for a tag to own, so no tag is located.
-        snapshot: describe(
-            doc,
-            &report,
-            None,
-            (Vec::new(), Vec::new()),
-            (Vec::new(), Vec::new()),
-            "implicit",
-            0,
-        ),
-        timings: Timings {
-            lower_and_mesh_ms,
-            normals_ms,
-        },
-    })
-}
-
-fn evaluate_brep(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evaluated, String> {
-    let built = build_exact(doc, budget, false)?;
-    let s = &*built.success;
-
-    let (report, _) = measure_brep(doc, s)?;
-    let mut snapshot = describe(
-        doc,
-        &report,
-        Some(&s.topology),
-        body_reports(s),
-        tag_extents(s),
-        "brep",
-        built.wall_ms,
-    );
-    snapshot.reused_build = built.reused;
-    Ok(Evaluated {
-        bounds: report.bounds,
-        snapshot,
-        positions: s.positions.clone(),
-        normals: s.normals.clone(),
-        indices: s.indices.clone(),
-        face_runs: s.face_runs.clone(),
-        faces: s.faces.clone(),
-        edges: s.edges.clone(),
-        timings: Timings {
-            lower_and_mesh_ms: s.timings.build_ms + s.timings.mesh_ms,
-            normals_ms: 0,
-        },
-    })
-}
-
-/// Tessellate the exact B-rep model but omit its logical edges.
-///
-/// This keeps the preview's triangle overlay while guaranteeing that its
-/// geometry is the same part the solid view shows. The SDF backend remains
-/// available for field operations and headless perception; it is not used for
-/// an interactive comparison against a B-rep solid because smooth booleans can
-/// add or remove material by design.
-fn evaluate_mesh_preview(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evaluated, String> {
-    let mut preview = evaluate_brep(doc, budget)?;
-    preview.edges.clear();
-    // A tessellation view has no topology to show — which is different from
-    // having none, and is why these go absent rather than to zero.
-    preview.snapshot.faces = None;
-    preview.snapshot.topological_edges = None;
-    Ok(preview)
-}
-
-/// Measure a B-rep result with the same code that measures an implicit one, and
-/// hand back the welded surface it measured.
+/// Measure a B-rep result off its welded mesh, and hand back that surface.
 ///
 /// Worth doing even though OCCT can report its own mass properties: running the
 /// kernel's mesh through our own watertightness check is an independent test of
@@ -1794,8 +1655,7 @@ fn measure_brep(
     // Weld before measuring. OCCT triangulates face by face, so every shared
     // edge arrives as two coincident copies of its vertices; the surface has no
     // gap but the index graph does, and an unwelded check calls a perfectly
-    // closed solid non-manifold. The implicit backend never needed this because
-    // dual contouring emits one vertex per cell and shares it.
+    // closed solid non-manifold.
     let tess = Tessellation {
         vertices,
         triangles,
@@ -1823,35 +1683,16 @@ fn measure_brep(
     Ok((report, tess))
 }
 
-/// Produce the current part as STL.
+/// Produce the current part as STL: the triangles the viewport shows, welded,
+/// as binary STL.
 ///
-/// Follows whichever backend is on screen, so the file matches what was looked
-/// at. Exporting from the other one would be a quiet substitution — the two
-/// disagree by the blend bulge, which is millimetres, not rounding.
-///
-/// Both paths write the triangles the viewport shows, welded, as binary STL.
-/// The exact path used to ask OCCT's own writer for the file instead, which
-/// wrote ASCII — six times the bytes — and, until the tolerance was passed
-/// through, re-meshed every face at a micron on the way.
-pub fn export_stl(doc: &Doc, depth: u8, backend: Backend) -> Result<Export, String> {
-    export_stl_within(doc, depth, backend, None)
-}
-
-pub fn export_stl_within(
-    doc: &Doc,
-    depth: u8,
-    backend: Backend,
-    budget: Option<std::time::Duration>,
-) -> Result<Export, String> {
-    let (tess, report, bodies, reused) = if backend.is_exact() {
-        let built = build_exact(doc, budget, false)?;
-        let (report, tess) = measure_brep(doc, &built.success)?;
-        (tess, report, body_reports(&built.success), built.reused)
-    } else {
-        let (_, tess, report) =
-            parcad_core::evaluate(doc, depth.clamp(3, 9)).map_err(|e| format!("{e:#}"))?;
-        (tess, report, (Vec::new(), Vec::new()), false)
-    };
+/// OCCT's own writer used to write the file instead, which wrote ASCII — six
+/// times the bytes — and, until the tolerance was passed through, re-meshed
+/// every face at a micron on the way.
+pub fn export_stl(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Export, String> {
+    let built = build_exact(doc, budget, false)?;
+    let (report, tess) = measure_brep(doc, &built.success)?;
+    let (bodies, reused) = (body_reports(&built.success), built.reused);
     let mut bytes = Vec::new();
     tess.write_stl(&mut bytes)
         .map_err(|e| format!("writing STL: {e:#}"))?;
@@ -1864,11 +1705,7 @@ pub fn export_stl_within(
     })
 }
 
-/// Produce the current part as STEP.
-///
-/// B-rep only, and unavoidably so: STEP describes exact surfaces, and the
-/// implicit backend has none to describe. Meshing first would produce a file
-/// that opens in every CAD package and is useless in all of them.
+/// Produce the current part as STEP, the exact surfaces.
 pub fn export_step(doc: &Doc) -> Result<Export, String> {
     export_step_within(doc, None)
 }
@@ -2141,7 +1978,7 @@ mod tests {
         PARCAD_OCCT_WORKER=$PWD/target/release/parcad-occt-worker cargo test -p parcad-host -- --ignored";
 
     fn brep(doc: &Doc) -> Evaluated {
-        evaluate(doc, 7, Backend::Brep).expect("the part should build")
+        evaluate(doc, None).expect("the part should build")
     }
 
     /// The window and an agent must be reading one description of one part.
@@ -2171,7 +2008,7 @@ mod tests {
         keys.sort_unstable();
         assert_eq!(
             keys,
-            ["edges", "face_runs", "faces", "indices", "normals", "positions", "snapshot", "timings"]
+            ["edges", "face_runs", "faces", "indices", "normals", "positions", "snapshot"]
         );
     }
 

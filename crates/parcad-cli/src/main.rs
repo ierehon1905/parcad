@@ -1,7 +1,7 @@
 //! Headless driver. Takes an intent graph as JSON and produces everything an
 //! agent (or a person) would want to look at.
 //!
-//!     parcad <graph.json> [--out DIR] [--depth N] [--size PX] [--view NAME]
+//!     parcad <graph.json> [--out DIR] [--size PX] [--view NAME]
 //!
 //! And the application itself, without a window, plus its tools from the shell:
 //!
@@ -29,7 +29,6 @@ use std::time::Duration;
 struct Args {
     input: PathBuf,
     out: PathBuf,
-    depth: u8,
     size: u32,
     view: Option<View>,
     /// Also produce the tag-region map for the chosen view.
@@ -38,13 +37,10 @@ struct Args {
     section: Option<Section>,
     /// Dump viewport-ready geometry as JSON to this path.
     geometry: Option<PathBuf>,
-    /// Evaluate through the B-rep kernel instead of the distance field.
-    brep: bool,
     /// Seconds the kernel may take before it is stopped; `PARCAD_OCCT_TIMEOUT`
     /// or 20 when absent. A busy machine is the usual reason to raise it.
     timeout: Option<f64>,
-    /// Write STEP. Implies `--brep`: STEP describes exact surfaces, and the
-    /// implicit backend has none to describe.
+    /// Write STEP, the exact surfaces.
     step: Option<PathBuf>,
     /// Read a foreign STEP export and print its measured geometry as JSON,
     /// instead of evaluating a graph. The reverse of `--step`: what another
@@ -58,13 +54,13 @@ struct Args {
 fn parse_args() -> Result<Args> {
     let mut input = None;
     let mut out = PathBuf::from("out");
-    let mut depth = 6u8;
+
     let mut size = 512u32;
     let mut view = None;
     let mut regions = false;
     let mut section = None;
     let mut geometry = None;
-    let mut brep = false;
+
     let mut timeout = None;
     let mut step = None;
     let mut probe_step = None;
@@ -74,12 +70,12 @@ fn parse_args() -> Result<Args> {
     while let Some(arg) = it.next() {
         match arg.as_str() {
             "--out" => out = it.next().context("--out needs a directory")?.into(),
+            // Two flags from when there were two kernels. Both still parse
+            // and neither does anything: the exact kernel is the only one, and
+            // its mesh has no depth to set.
             "--depth" => {
-                depth = it
-                    .next()
-                    .context("--depth needs a number")?
-                    .parse()
-                    .context("--depth must be an integer")?
+                let _ = it.next().context("--depth needs a number")?;
+                eprintln!("note: --depth is ignored; the exact kernel meshes to a deflection, not a grid");
             }
             "--size" => {
                 size = it
@@ -107,7 +103,7 @@ fn parse_args() -> Result<Args> {
             "--geometry" => {
                 geometry = Some(PathBuf::from(it.next().context("--geometry needs a path")?))
             }
-            "--brep" => brep = true,
+            "--brep" => eprintln!("note: --brep is the only kernel now and needs no flag"),
             "--timeout" => {
                 timeout = Some(
                     it.next()
@@ -137,10 +133,9 @@ fn parse_args() -> Result<Args> {
                      \x20      parcad mcp [--port N]                # MCP over stdio, for a client to launch\n\
                      \x20      parcad tools                        # what the running host offers\n\
                      \x20      parcad call <tool> [JSON] [--set key=value | key=@file | key:=json]\n\
-                     \x20      parcad <graph.json | part.js> [--out DIR] [--depth N] [--size PX]\n\
+                     \x20      parcad <graph.json | part.js> [--out DIR] [--size PX]\n\
                      \x20              [--view NAME] [--regions] [--section PLANE]\n\
-                     \x20              [--geometry PATH]\n\
-                     \x20              [--brep] [--step PATH] [--timeout SECS]\n\
+                     \x20              [--geometry PATH] [--step PATH] [--timeout SECS]\n\
                      \x20              [--fit REFERENCE.json]   # measure the fit instead\n\
                      \x20      parcad --probe-step FILE.step   # measure a foreign export"
                 );
@@ -155,13 +150,11 @@ fn parse_args() -> Result<Args> {
         return Ok(Args {
             input: input.unwrap_or_default(),
             out,
-            depth,
             size,
             view,
             regions,
             section,
             geometry,
-            brep,
             timeout,
             step,
             probe_step: Some(probe),
@@ -172,13 +165,11 @@ fn parse_args() -> Result<Args> {
     Ok(Args {
         input: input.context("expected a graph JSON file; try --help")?,
         out,
-        depth,
         size,
         view,
         regions,
         section,
         geometry,
-        brep: brep || step.is_some(),
         timeout,
         step,
         probe_step: None,
@@ -369,165 +360,7 @@ fn main() -> Result<()> {
 
     std::fs::create_dir_all(&args.out)
         .with_context(|| format!("creating {}", args.out.display()))?;
-
-    if args.brep {
-        return run_brep(&args, &doc);
-    }
-
-    let started = std::time::Instant::now();
-    let (tree, tess, report) = parcad_core::evaluate(&doc, args.depth)?;
-    let eval_ms = started.elapsed().as_millis();
-
-    // STL for a slicer.
-    let stl_path = args.out.join("part.stl");
-    let mut f = std::fs::File::create(&stl_path)
-        .with_context(|| format!("creating {}", stl_path.display()))?;
-    tess.write_stl(&mut f)?;
-
-    // Renders.
-    let opts = render::RenderOptions {
-        size: args.size,
-        section: args.section,
-        ..Default::default()
-    };
-    let render_started = std::time::Instant::now();
-    let image_path = match args.view {
-        Some(v) => {
-            let img = render::render_view(&tree, report.bounds, v, &opts)?;
-            let path = args.out.join(format!("{}.png", v.name()));
-            img.write_png(&path)?;
-            path
-        }
-        None => {
-            let sheet = render::contact_sheet(&tree, report.bounds, &opts)?;
-            let path = args.out.join("views.png");
-            sheet.image.write_png(&path)?;
-            path
-        }
-    };
-    let render_ms = render_started.elapsed().as_millis();
-
-    // Tag regions: which named node owns which piece of the visible surface.
-    let mut region_path = None;
-    if args.regions {
-        let v = args.view.unwrap_or(parcad_core::view::View::Iso);
-        let map = parcad_core::tags::regions(&doc, report.bounds, v, &opts)?;
-        let path = args.out.join(format!("regions-{}.png", v.name()));
-        map.image.write_png(&path)?;
-        std::fs::write(
-            args.out.join("regions.json"),
-            serde_json::to_string_pretty(&map.legend)?,
-        )?;
-
-        println!("tags in the {} view", v.name());
-        for e in &map.legend {
-            if e.visible {
-                println!(
-                    "  {:<10} {}  {:>5.1}% of visible surface",
-                    e.tag,
-                    e.color,
-                    e.fraction * 100.0
-                );
-            } else {
-                println!("  {:<10} not visible from here", e.tag);
-            }
-        }
-        if map.unclaimed_pixels > 0 {
-            println!("  {} pixels claimed by no tag", map.unclaimed_pixels);
-        }
-        println!();
-        region_path = Some(path);
-    }
-
-    // Geometry in the shape the viewport expects. Lets the frontend be developed
-    // and looked at without the desktop shell in the way.
-    if let Some(path) = &args.geometry {
-        let (positions, normals) = tess.faceted(&tree)?;
-        let payload = serde_json::json!({
-            "positions": positions.iter().flatten().collect::<Vec<_>>(),
-            "normals": normals.iter().flatten().collect::<Vec<_>>(),
-            "indices": Vec::<u32>::new(),
-            "edges": Vec::<Vec<[f32; 3]>>::new(),
-            "topology": serde_json::Value::Null,
-            "backend": "implicit",
-            "report": report,
-            "timings": { "lower_and_mesh_ms": eval_ms, "normals_ms": 0, "kernel_ms": 0 },
-        });
-        std::fs::write(path, serde_json::to_string(&payload)?)
-            .with_context(|| format!("writing {}", path.display()))?;
-        println!("  geometry {}", path.display());
-    }
-
-    // The report, both as a file and as something readable on the terminal.
-    let report_path = args.out.join("report.json");
-    std::fs::write(&report_path, serde_json::to_string_pretty(&report)?)?;
-
-    println!("{}", summary(&report, eval_ms, render_ms));
-    println!("  stl     {}", stl_path.display());
-    println!("  image   {}", image_path.display());
-    println!("  report  {}", report_path.display());
-    if let Some(p) = region_path {
-        println!("  regions {}", p.display());
-    }
-
-    Ok(())
-}
-
-fn summary(r: &parcad_core::PartReport, eval_ms: u128, render_ms: u128) -> String {
-    let mut s = String::new();
-    s.push_str(&format!(
-        "size    {:.2} x {:.2} x {:.2} mm\n",
-        r.size.x, r.size.y, r.size.z
-    ));
-    s.push_str(&format!(
-        "bounds  x {:.2}..{:.2}  y {:.2}..{:.2}  z {:.2}..{:.2}\n",
-        r.bounds.min.x,
-        r.bounds.max.x,
-        r.bounds.min.y,
-        r.bounds.max.y,
-        r.bounds.min.z,
-        r.bounds.max.z
-    ));
-    if let Some(contact) = &r.stands_on {
-        s.push_str(&format!("stands  {}\n", stands_on_text(contact)));
-    }
-    s.push_str(&format!(
-        "prints  {}\n",
-        parcad_core::measure::beds_text(r.size)
-    ));
-    s.push_str(&format!(
-        "volume  {:.2} mm³   area {:.2} mm²\n",
-        r.mass.volume_mm3, r.mass.area_mm2
-    ));
-    s.push_str(&format!(
-        "centre  ({:.2}, {:.2}, {:.2}) mm\n",
-        r.mass.centroid.x, r.mass.centroid.y, r.mass.centroid.z
-    ));
-    s.push_str(&format!(
-        "mesh    {} triangles at {:.3} mm resolution, {}, {}\n",
-        r.mesh.triangles,
-        r.mesh.resolution_mm,
-        if r.mesh.watertight {
-            "watertight".to_string()
-        } else {
-            format!("NOT watertight ({} bad edges)", r.mesh.non_manifold_edges)
-        },
-        bodies_text(&r.mesh)
-    ));
-    s.push_str(&format!(
-        "graph   {} of {} nodes live{}\n",
-        r.live_nodes,
-        r.total_nodes,
-        if r.tags.is_empty() {
-            String::new()
-        } else {
-            format!(", tags: {}", r.tags.join(", "))
-        }
-    ));
-    s.push_str(&format!(
-        "time    {eval_ms} ms evaluate, {render_ms} ms render\n"
-    ));
-    s
+    run_brep(&args, &doc)
 }
 
 /// "1 body", "1 body, 1 void", or the count that says the part is in pieces.

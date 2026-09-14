@@ -32,7 +32,7 @@ for graph in "$@"; do
 
   builds=(); meshes=(); walls=()
   for _ in $(seq "$RUNS"); do
-    line=$(./target/release/parcad "$graph" --brep --out "$OUT" 2>&1 | grep '^timing' || true)
+    line=$(./target/release/parcad "$graph" --out "$OUT" 2>&1 | grep '^timing' || true)
     [ -z "$line" ] && continue
     builds+=("$(sed -E 's/.*build ([0-9]+) ms.*/\1/' <<<"$line")")
     meshes+=("$(sed -E 's/.*mesh ([0-9]+) ms.*/\1/' <<<"$line")")

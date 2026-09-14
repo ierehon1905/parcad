@@ -1,18 +1,18 @@
 /**
- * Logical edges, recovered in screen space.
+ * Silhouettes and creases, recovered in screen space.
  *
- * A user cares about the edges and faces of the *part*, not about the triangles
- * we happened to approximate it with. An implicit model has no face or edge
- * records to draw, so they have to be found — and the one thing that must not
+ * The kernel's own edge curves are drawn as lines; this pass is what draws the
+ * outline a curved surface has *against the background* and against a face
+ * behind it, which no edge record describes — and the one thing that must not
  * leak into the answer is the tessellation.
  *
  * Two discontinuities, each chosen so that mesh density cannot fake it:
  *
- * - **Normals.** The vertex normals come from the distance field's gradient, not
- *   from facets, so they vary smoothly across a curved patch however coarsely it
- *   is triangulated, and jump only where the surface genuinely creases. This is
- *   why the same idea fails with `EdgesGeometry`: that works on facet normals,
- *   where a coarse cylinder is all creases.
+ * - **Normals.** The vertex normals are the mesher's, taken from the surface at
+ *   each node rather than from facets, so they vary smoothly across a curved
+ *   patch however coarsely it is triangulated, and jump only where the surface
+ *   genuinely creases. This is why the same idea fails with `EdgesGeometry`:
+ *   that works on facet normals, where a coarse cylinder is all creases.
  *
  * - **Depth, second difference.** `|left + right - 2*centre|` is zero for any
  *   flat surface at *any* angle to the camera, because a plane is linear in

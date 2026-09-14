@@ -16,7 +16,7 @@ export interface Geometry {
   positions: Float32Array;
   normals: Float32Array;
   indices: Uint32Array;
-  /** Logical edges as polylines. Absent for the implicit backend, which can only guess at them. */
+  /** Logical edges as polylines, the kernel's own. */
   edges?: EdgeCurve[];
   /** Where each face's triangles sit in `indices`. Absent means faces are unpickable, not mispicked. */
   faceRuns?: FaceRun[];

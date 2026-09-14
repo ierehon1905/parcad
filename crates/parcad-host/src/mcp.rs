@@ -106,12 +106,6 @@ pub struct EvaluateRequest {
     /// millimetres; primitives are centred on the origin and placed with
     /// `.at(x, y, z)`.
     pub script: String,
-    /// `brep` (default) is the exact kernel: real faces and edges, and it
-    /// refuses what it cannot do faithfully. `implicit` is a sampled distance
-    /// field: it always returns something, approximately, and has no logical
-    /// edges, so it cannot do edge treatments.
-    #[serde(default)]
-    pub backend: Option<String>,
     /// Also draw the part, from these viewpoints: `iso`, `front`, `back`,
     /// `left`, `right`, `top`, `bottom`. Omit to measure without rendering,
     /// which is much faster. Every view shares one framing, so a feature at a
@@ -237,8 +231,7 @@ pub struct SelectorRequest {
 pub struct ExportRequest {
     /// A parcad DSL script ending in a returned shape.
     pub script: String,
-    /// `step` for exact surfaces, or `stl` for a mesh. STEP requires the
-    /// exact backend; there is nothing to describe in a distance field.
+    /// `step` for exact surfaces, or `stl` for a mesh.
     pub format: String,
     /// File name to write, without any directory part. Defaults to
     /// `part.step` / `part.stl`.
@@ -450,13 +443,6 @@ impl Parcad {
         &self,
         Parameters(request): Parameters<EvaluateRequest>,
     ) -> Result<rmcp::model::CallToolResult, ErrorData> {
-        // The exact kernel by default. `Backend::parse` defaults to the
-        // implicit one, which is right for the editor — it always returns
-        // something while you type — and wrong here: a caller that did not
-        // choose wants real faces and edges, and would otherwise be told its
-        // fillet needs a backend it never asked to leave.
-        let backend = service::Backend::parse(Some(request.backend.as_deref().unwrap_or("brep")))
-            .map_err(invalid)?;
         let views =
             service::parse_views(request.views.as_deref().unwrap_or(&[])).map_err(invalid)?;
         let regions = request.regions.unwrap_or(false);
@@ -484,7 +470,7 @@ impl Parcad {
         let (snapshot, pngs) = blocking(move || {
             let built = script::build(&request.script)?;
             let doc = service::parse_graph(built.graph.clone())?;
-            let evaluated = service::evaluate_within(&doc, 7, backend, budget).map_err(|e| built.locate(e))?;
+            let evaluated = service::evaluate(&doc, budget).map_err(|e| built.locate(e))?;
 
             // Render after measuring, so a part that cannot be built fails on
             // the geometry rather than after spending a raymarch on it.
@@ -553,7 +539,7 @@ impl Parcad {
         let entities = blocking(move || {
             let built = script::build(&request.script)?;
             let doc = service::parse_graph(built.graph.clone())?;
-            let evaluated = service::evaluate(&doc, 7, service::Backend::Brep).map_err(|e| built.locate(e))?;
+            let evaluated = service::evaluate(&doc, None).map_err(|e| built.locate(e))?;
             Ok(service::entities(&evaluated))
         })
         .await?;
@@ -675,7 +661,7 @@ impl Parcad {
     #[tool(
         name = "export_part",
         annotations(title = "Export a part to a file", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Export a part as STEP (exact surfaces, for CAD) or STL (a mesh, for printing) and return the absolute path written. STEP requires the exact backend. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one solid per body in STEP, every body's triangles in one STL — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone, which is what a slicer wants when the halves print separately."
+        description = "Export a part as STEP (exact surfaces, for CAD) or STL (a mesh, for printing) and return the absolute path written. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one solid per body in STEP, every body's triangles in one STL — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone, which is what a slicer wants when the halves print separately."
     )]
     async fn export_part(
         &self,
@@ -714,7 +700,7 @@ impl Parcad {
             let export = if format == "step" {
                 service::export_step_within(&doc, budget).map_err(|e| built.locate(e))?
             } else {
-                service::export_stl_within(&doc, 7, service::Backend::Brep, budget).map_err(|e| built.locate(e))?
+                service::export_stl(&doc, budget).map_err(|e| built.locate(e))?
             };
 
             let dir = export_dir();
@@ -1255,7 +1241,7 @@ fn markdown_image(view: &str, path: &str) -> String {
 fn preview_of(script: &str) -> Result<Vec<u8>, String> {
     let built = script::build(script)?;
     let doc = service::parse_graph(built.graph.clone())?;
-    let evaluated = service::evaluate(&doc, 7, service::Backend::Brep).map_err(|e| built.locate(e))?;
+    let evaluated = service::evaluate(&doc, None).map_err(|e| built.locate(e))?;
     let views = service::parse_views(&["iso".to_string()])?;
     let renders = service::render(
         &evaluated,

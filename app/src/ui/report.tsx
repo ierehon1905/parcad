@@ -3,10 +3,9 @@
  *
  * Every value here comes out of the `EvaluationSnapshot` the host built. This
  * component selects and labels; it never derives. The one thing it does decide
- * is wording, and one distinction there is load-bearing: "resolution" means
- * different things per backend, and the difference matters. A grid spacing is
- * where samples were *taken*; a deflection is a bound on how far the result can
- * be from the truth. They are labelled apart for that reason.
+ * is wording: "within 0.010 mm" is a deflection, a bound on how far any
+ * triangle sits from the true surface, and it is said that way so it is not
+ * read as a grid spacing.
  *
  * Hidden when there is nothing measured, rather than standing empty — the
  * border and backdrop are visible with no text in them, and an empty panel over
@@ -64,10 +63,8 @@ export function Report() {
         )}
       </div>
       <div>
-        <Strong>{snapshot.triangles.toLocaleString()}</Strong> tris{" "}
-        {snapshot.backend === "brep" ? "within " : "on a "}
-        <Strong>{snapshot.resolution_mm.toFixed(3)}</Strong>
-        {snapshot.backend === "brep" ? " mm" : " mm grid"}
+        <Strong>{snapshot.triangles.toLocaleString()}</Strong> tris within{" "}
+        <Strong>{snapshot.resolution_mm.toFixed(3)}</Strong> mm
       </div>
       {snapshot.stands_on && (
         <div class={snapshot.stands_on.footprint_fraction < 0.1 ? "text-bad" : undefined}>

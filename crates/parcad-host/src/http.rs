@@ -23,7 +23,7 @@
 
 use crate::mcp;
 use crate::projects;
-use crate::service::{self, Backend};
+use crate::service;
 use crate::session;
 use axum::{
     extract::{Path, State},
@@ -65,13 +65,6 @@ pub fn port() -> u16 {
 #[derive(Deserialize)]
 struct EvaluateRequest {
     graph: serde_json::Value,
-    #[serde(default = "default_depth")]
-    depth: u8,
-    backend: Option<String>,
-}
-
-fn default_depth() -> u8 {
-    7
 }
 
 #[derive(Deserialize)]
@@ -288,9 +281,8 @@ where
 }
 
 async fn evaluate(Json(request): Json<EvaluateRequest>) -> Result<Response, Failed> {
-    let backend = Backend::parse(request.backend.as_deref()).map_err(Failed)?;
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
-    let evaluated = blocking(move || service::evaluate(&doc, request.depth, backend)).await?;
+    let evaluated = blocking(move || service::evaluate(&doc, None)).await?;
     Ok(Json(evaluated).into_response())
 }
 
@@ -301,9 +293,8 @@ async fn inspect_edge_target(Json(request): Json<InspectRequest>) -> Result<Resp
 }
 
 async fn export_stl(Json(request): Json<EvaluateRequest>) -> Result<Response, Failed> {
-    let backend = Backend::parse(request.backend.as_deref()).map_err(Failed)?;
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
-    let export = blocking(move || service::export_stl(&doc, request.depth, backend)).await?;
+    let export = blocking(move || service::export_stl(&doc, None)).await?;
     Ok(download(export))
 }
 

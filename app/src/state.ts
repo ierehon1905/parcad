@@ -50,8 +50,7 @@ export interface EvaluationSnapshot {
   volume_mm3: number;
   area_mm2: number;
   centroid: [number, number, number];
-  /** Exact-kernel counts. Absent for the implicit backend and for a mesh
-   *  preview, where the question does not apply — different from zero. */
+  /** The kernel's own counts. */
   faces?: number;
   topological_edges?: number;
   triangles: number;
@@ -94,7 +93,8 @@ export interface EvaluationSnapshot {
   treatments: { node: number; op: string; amount_mm: number; continuity?: string }[];
   /** Shapes the root never reaches. Absent when there are none. */
   unused_nodes?: number;
-  backend: "implicit" | "brep";
+  /** Which kernel measured this: `brep`, the only one. */
+  backend: "brep";
   kernel_ms: number;
 }
 
@@ -157,24 +157,17 @@ export interface Evaluated {
   positions: number[];
   normals: number[];
   indices: number[];
-  /** Logical edge curves. Omitted in mesh-preview mode. */
+  /** Logical edge curves. */
   edges: EdgeCurve[];
   /**
    * Where each face's triangles sit in `indices`, and which face each run is.
-   *
-   * Absent for the implicit backend and for a mesh preview, which have no faces
-   * to attribute a triangle to — the viewport treats that as "faces are not
+   * Optional on the wire; the viewport treats its absence as "faces are not
    * pickable here" rather than guessing at one.
    */
   face_runs?: FaceRun[];
   /** What each face is. Indexed by the kernel's own face number. */
   faces?: FaceSummary[];
   snapshot: EvaluationSnapshot;
-  /** The implicit path's two halves. Kernel time is in the snapshot. */
-  timings: {
-    lower_and_mesh_ms: number;
-    normals_ms: number;
-  };
 }
 
 export interface TargetPreview {
@@ -270,26 +263,10 @@ export const targetPreview = signal<
 
 // ------------------------------------------------------------- the view
 
-/** Which kernel evaluates the graph, in the spelling `backend.evaluate` wants. */
-export const kernel = signal("brep");
-
-/**
- * The sampling depth the evaluate call still carries, and why it is a constant.
- *
- * `service.rs` takes a depth because its *implicit* backend samples a distance
- * field on a grid. This window never selects that backend: both of the kernels
- * it offers — `brep` and `preview` — mesh an exact solid, which the host states
- * itself in `Backend::is_exact`, "no grid to coarsen and no use for a requested
- * depth". Preview meshes the B-rep on purpose, so the window cannot invent or
- * omit geometry relative to the solid model.
- *
- * There used to be a detail slider in the titlebar wired to this. It moved a
- * number that nothing read, in either mode, every time it was dragged — the
- * exact shape of confident wrongness this project refuses everywhere else — so
- * it is gone rather than dimmed. If the implicit backend is ever offered here
- * again, this becomes a signal again and the control comes back with it.
- */
-export const DEPTH = 7;
+// There is no kernel to choose and no mesh depth to set: the window evaluates
+// with the exact kernel, whose mesh is a deflection bound and not a grid. A
+// kernel toggle and a detail slider both lived here once and are gone rather
+// than dimmed — see CLAUDE.md, "A control that cannot do anything is deleted".
 export const sectionAxis = signal<"" | "x" | "y" | "z">("");
 export const sectionAt = signal(0);
 export const sectionKeep = signal<"below" | "above">("below");

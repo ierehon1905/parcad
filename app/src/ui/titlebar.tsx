@@ -115,7 +115,7 @@ const EXPORTS: { format: "stl" | "step"; icon: IconName; label: string; key: str
       label: "STL mesh",
       key: "⌘E",
       detail:
-        "Triangles, meshed by whichever kernel the viewport is showing. For printing, and for a quick look somewhere else.",
+        "The triangles the viewport shows, welded. For printing, and for a quick look somewhere else.",
     },
     {
       format: "step",
@@ -123,7 +123,7 @@ const EXPORTS: { format: "stl" | "step"; icon: IconName; label: string; key: str
       label: "STEP solid",
       key: "⇧⌘E",
       detail:
-        "Exact surfaces from the B-rep kernel, whatever the viewport happens to be drawing — a mesh cannot be turned back into surfaces after the fact. For a machine shop, and for another CAD program.",
+        "Exact surfaces from the B-rep kernel — a mesh cannot be turned back into surfaces after the fact. For a machine shop, and for another CAD program.",
     },
   ];
 

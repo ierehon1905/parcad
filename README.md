@@ -25,12 +25,12 @@ return drilled
 You never name an edge by index. You describe it — *the circular rims that open
 onto the top face* — and the description still works after you move a hole.
 
-## Two kernels, one model
+## One graph, one exact kernel
 
-Your script builds a small JSON graph, and two kernels read it: an implicit one
-(signed distance fields, instant) and an exact one (OpenCASCADE — real faces,
-edges, STEP export). Neither is a fallback for the other, and the graph is what
-keeps today's script working after tomorrow's kernel swap.
+Your script builds a small JSON graph, and an exact kernel reads it —
+OpenCASCADE: real faces and edges, STEP export, and a refusal rather than an
+approximation when it cannot do something faithfully. The graph is what keeps
+today's script working after tomorrow's kernel swap.
 
 ![The same manifold block cut open on a plane, cut faces in orange](docs/images/manifold-section.jpg)
 
@@ -45,10 +45,10 @@ the things you print or machine one of. [examples/](examples/) is twenty-two.
 Those are good, and much older. Three differences. Selectors are *descriptive and
 checked* — `.expect({ count: 4 })` turns a selector that silently started
 matching three edges into a build error, which is the failure mode that makes
-code-CAD fragile. Two kernels read one graph, so the instant preview and the
-exact B-rep behind STEP export are one model, not two projects. And measurement
-is an output rather than something you eyeball, which is what makes the MCP
-surface real instead of a wrapper.
+code-CAD fragile. What you see, what you measure and what you export come off
+one exact B-rep, so the preview and the STEP file are one model, not two
+projects. And measurement is an output rather than something you eyeball,
+which is what makes the MCP surface real instead of a wrapper.
 
 ## Install it
 
@@ -70,7 +70,7 @@ winget install ParCAD.ParCAD
 ```
 
 Nothing on the Homebrew path is quarantined. The same `parcad` is the headless driver
-(`parcad part.js --brep`), and a client of the running host: `parcad tools`
+(`parcad part.js`), and a client of the running host: `parcad tools`
 lists what an agent can call over MCP and `parcad call <tool>` calls it from
 a shell.
 
@@ -130,7 +130,7 @@ Or headless:
 
 ```bash
 bun tools/run.ts examples/bracket.js > /tmp/bracket.json
-./target/release/parcad /tmp/bracket.json --out out --brep --step out/part.step
+./target/release/parcad /tmp/bracket.json --out out --step out/part.step
 ```
 
 The app serves its UI and an MCP endpoint on <http://127.0.0.1:4242>. Parts live

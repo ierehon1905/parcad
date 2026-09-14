@@ -1,5 +1,5 @@
 /**
- * The one way the editor reaches the geometry backends.
+ * The one way the editor reaches the host.
  *
  * There are two transports and deliberately no third behaviour. Inside the
  * desktop webview a call goes over Tauri IPC; in a browser it goes to the API
@@ -28,7 +28,7 @@ const inTauri = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
 
 const NOT_ANSWERING =
   "the parcad desktop process is not answering.\n" +
-  "It hosts this page and its geometry backends; start it with:\n" +
+  "It hosts this page and its geometry kernel; start it with:\n" +
   "  cd app && bun run tauri dev";
 
 const sending = (method: string, body: unknown): RequestInit => ({
@@ -335,10 +335,8 @@ export function subscribeSession(viewer: string, onEvent: (session: Session) => 
   events.onmessage = (event) => onEvent(JSON.parse(event.data) as Session);
 }
 
-export function evaluate<T>(graph: unknown, depth: number, backend: string): Promise<T> {
-  return inTauri
-    ? invoke<T>("evaluate", { graph, depth, backend })
-    : post<T>("evaluate", { graph, depth, backend });
+export function evaluate<T>(graph: unknown): Promise<T> {
+  return inTauri ? invoke<T>("evaluate", { graph }) : post<T>("evaluate", { graph });
 }
 
 export function inspectEdgeTarget<T>(graph: unknown, node: number): Promise<T> {
@@ -361,16 +359,11 @@ export function inspectEdgeTarget<T>(graph: unknown, node: number): Promise<T> {
  * from the project folder. It has to: this window knows which part is open and
  * not where that folder lives.
  */
-export async function exportStl(
-  graph: unknown,
-  depth: number,
-  backend: string,
-  project: string | undefined,
-): Promise<string> {
+export async function exportStl(graph: unknown, project: string | undefined): Promise<string> {
   if (inTauri && project) {
-    return invoke<string>("export_stl", { graph, depth, project, backend });
+    return invoke<string>("export_stl", { graph, project });
   }
-  save(await download("export/stl", { graph, depth, backend }), "part.stl");
+  save(await download("export/stl", { graph }), "part.stl");
   return "part.stl";
 }
 

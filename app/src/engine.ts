@@ -110,11 +110,7 @@ export async function run() {
 
   try {
     const built = buildGraph(source);
-    const result = await backend.evaluate<Evaluated>(
-      built.graph,
-      S.DEPTH,
-      S.kernel.value,
-    );
+    const result = await backend.evaluate<Evaluated>(built.graph);
 
     S.lastGraph.value = built.graph;
     S.lastSource.value = built.source;
@@ -125,11 +121,7 @@ export async function run() {
     show(result);
     previewTreatmentAtCursor();
     clearError();
-    const ms =
-      result.snapshot.backend === "brep"
-        ? result.snapshot.kernel_ms
-        : result.timings.lower_and_mesh_ms + result.timings.normals_ms;
-    S.setStatus(`${result.snapshot.triangles.toLocaleString()} tris · ${ms} ms`);
+    S.setStatus(`${result.snapshot.triangles.toLocaleString()} tris · ${result.snapshot.kernel_ms} ms`);
     if (revision !== undefined) {
       void backend
         .reportShown({
@@ -645,7 +637,6 @@ function readmeFor(path: string, source: string): string {
     intro.push(trimmed.replace(/^\/+\s?/, ""));
   }
 
-  const kernel = snapshot.backend === "brep" ? "the exact B-rep kernel" : "the implicit backend";
   return [
     `# ${titleFor(path)}`,
     "",
@@ -684,7 +675,7 @@ function readmeFor(path: string, source: string): string {
       : []),
     ...(snapshot.tags.length ? [`- tags: ${snapshot.tags.join(", ")}`] : []),
     "",
-    `Measured by ${kernel} when this part was last saved, not read off the ` +
+    "Measured by the exact B-rep kernel when this part was last saved, not read off the " +
       "script. `part.js` beside this file is the source and the only thing here " +
       "that is authoritative — rebuild it rather than trusting these numbers if " +
       "it has been edited since.",
@@ -707,7 +698,7 @@ export async function runExport(format: "stl" | "step") {
     const name =
       format === "step"
         ? await backend.exportStep(graph, project)
-        : await backend.exportStl(graph, S.DEPTH, S.kernel.value, project);
+        : await backend.exportStl(graph, project);
     // The whole path, not the file name. On the desktop it is where the file
     // actually is, and the file manager has just been opened on it; saying only
     // "exported part.stl" is what made the old export impossible to find.

@@ -9,16 +9,11 @@
 //! too, with no window.
 
 use parcad_host::{http, mcp, projects, service, session};
-use service::{Backend, Evaluated};
+use service::Evaluated;
 
 #[tauri::command]
-fn evaluate(
-    graph: serde_json::Value,
-    depth: u8,
-    backend: Option<String>,
-) -> Result<Evaluated, String> {
-    let backend = Backend::parse(backend.as_deref())?;
-    service::evaluate(&service::parse_graph(graph)?, depth, backend)
+fn evaluate(graph: serde_json::Value) -> Result<Evaluated, String> {
+    service::evaluate(&service::parse_graph(graph)?, None)
 }
 
 #[tauri::command]
@@ -31,14 +26,8 @@ fn inspect_edge_target(
 
 /// Write the current part out as a binary STL, beside the part it came from.
 #[tauri::command]
-fn export_stl(
-    graph: serde_json::Value,
-    depth: u8,
-    project: String,
-    backend: Option<String>,
-) -> Result<String, String> {
-    let backend = Backend::parse(backend.as_deref())?;
-    let export = service::export_stl(&service::parse_graph(graph)?, depth, backend)?;
+fn export_stl(graph: serde_json::Value, project: String) -> Result<String, String> {
+    let export = service::export_stl(&service::parse_graph(graph)?, None)?;
     write_and_reveal(&export, &project, "stl")
 }
 
