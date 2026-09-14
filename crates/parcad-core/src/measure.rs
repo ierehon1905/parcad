@@ -3,7 +3,7 @@
 //! An agent should not have to squint at a render to learn a dimension. Anything
 //! that can be answered as a number is answered as a number.
 
-use crate::graph::{Doc, NodeId, Op, V3};
+use crate::graph::{Doc, NodeId, Op, SweepSpine, V3};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -272,19 +272,37 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
             Aabb { min: lo, max: hi }
         }
 
-        // Every swept point lies within the profile's reach of the spine, and
-        // the spine — runs trimmed to their tangent points, arcs inside each
-        // corner's own triangle — lies inside the box over the path points.
-        Op::Sweep { profile, path, bend } => {
-            Op::sweep_spine(profile, path, *bend)?;
-            let reach = profile
-                .iter()
-                .fold(0.0f64, |acc, [x, y]| acc.max(x.hypot(*y)));
-            let (mut lo, mut hi) = (V3::splat(f64::MAX), V3::splat(f64::MIN));
-            for p in path {
-                lo = V3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
-                hi = V3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
-            }
+        // Every swept point lies within the section's reach — at the larger
+        // end of a taper — of the spine. A path's spine (runs trimmed to their
+        // tangent points, arcs inside each corner's own triangle) lies inside
+        // the box over its points; a helix's inside the cylinder of its larger
+        // radius, over its height about z = 0.
+        Op::Sweep {
+            profile,
+            circle,
+            path,
+            bend,
+            helix,
+            taper,
+        } => {
+            let (section, spine) =
+                Op::validate_sweep(profile, *circle, path, *bend, helix.as_ref(), *taper)?;
+            let reach = section.reach() * taper.max(1.0);
+            let (lo, hi) = match spine {
+                SweepSpine::Helix(helix) => {
+                    let r = helix.radius.max(helix.end_radius());
+                    let h = helix.height() / 2.0;
+                    (V3::new(-r, -r, -h), V3::new(r, r, h))
+                }
+                SweepSpine::Path(_) => {
+                    let (mut lo, mut hi) = (V3::splat(f64::MAX), V3::splat(f64::MIN));
+                    for p in path {
+                        lo = V3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
+                        hi = V3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
+                    }
+                    (lo, hi)
+                }
+            };
             Aabb {
                 min: V3::new(lo.x - reach, lo.y - reach, lo.z - reach),
                 max: V3::new(hi.x + reach, hi.y + reach, hi.z + reach),

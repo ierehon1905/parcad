@@ -1,0 +1,33 @@
+{
+  "name": "helical-spring",
+  "script": "eval/scripts/helical-spring.js",
+  "why": "A helical pipe against the tube formula: a 2 mm wire on a radius-10, pitch-5, three-turn helix is pi * 1^2 * 3 * sqrt((20 pi)^2 + 25) = 594.048 mm3, area 1194.380 mm2. The exact B-rep reads 594.0481 and 1194.3795 through BRepGProp (a STEP round trip through probe_step_export); the volume recorded here is the mesh's, 0.55% under, which is a 1 mm tube's facets at 0.01 mm deflection and not the solid. The spine is a B-spline fitted to a line on a cylinder's parameter space, measured within 1e-8 mm of the exact helix; a spine past 1e-4 mm is refused. The implicit half is the contract: refuse by name, never approximate.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": [
+        "no exact distance field",
+        "helix",
+        "B-rep backend"
+      ]
+    }
+  },
+  "brep": {
+    "size": [
+      21.998,
+      22.0,
+      16.993
+    ],
+    "volume_mm3": 590.784,
+    "area_mm2": 1193.119,
+    "triangles": 61408,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 0.0,
+    "stands_on_patches": 0,
+    "watertight": true,
+    "faces": 3,
+    "edges": 6,
+    "curves": 2
+  }
+}

@@ -243,3 +243,32 @@ kernel instead of refusing it.
 `Shape::signed_volume` integrates adaptively to a 1e-7 relative error rather
 than with `BRepGProp`'s fixed-order default, which misreads B-spline faces —
 the scaled shapes above among them.
+
+## `sweep`: `Helix`, `Shape::sweep_shell`, `SweepFrame`
+
+A second cxx bridge beside `history.rs` — `src/sweep.rs` and
+`include/sweep.hxx`, compiled by `build.rs` — so the whole addition is two new
+files and one line in each of `build.rs` and `lib.rs`. Nothing in
+`opencascade-sys` changed; every OCCT class it uses is reached from the C++
+side only, and the toolkits (`TKOffset`, `TKGeomAlgo`, `TKTopAlgo`) were
+already linked.
+
+- `Helix::spine` — a helix about +Z as a one-edge wire: a `Geom2d_Line` on a
+  `Geom_CylindricalSurface` (or a `Geom_ConicalSurface`, when the end radius
+  differs), made into an edge and given a 3D curve by
+  `BRepLib::BuildCurve3d(edge, 1e-7, GeomAbs_C2, 14, 1000)`.
+- `Helix::deviation` — the largest distance, over evenly spaced parameters,
+  between that fitted 3D curve and the analytic helix at the same parameter.
+  The curve is an approximation; this is how far, measured, so the caller can
+  refuse instead of assuming.
+- `Shape::sweep_shell(profile, spine, frame, scale_end)` —
+  `BRepOffsetAPI_MakePipeShell` with a corrected-Frenet, Frenet or fixed-+Z
+  binormal trihedron, `Add` or (when `scale_end != 1`) `SetLaw` with a
+  `Law_Linear` from 1 to `scale_end` over [0, 1], then `Build` and
+  `MakeSolid`. `Standard_Failure` is caught at the C++ boundary and returned
+  as the `Err` string rather than terminating the process.
+
+The law's parameter is worth knowing: `BRepFill_Sweep` maps it across spine
+edges by curvilinear length at the edge boundaries but linearly in each edge's
+own curve parameter inside one, which is length on a line or an arc and turn
+angle on the helix edge above.

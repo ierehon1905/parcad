@@ -207,7 +207,7 @@ Measured, in the order it would pay:
 7. **Snapshots before an agent's replace — true, none exist.** Undo in the
    editor is the only history, and it does not survive a reload.
 8. **Organic shapes — as reported.** There is no ellipsoid: non-uniform scale is
-   refused in B-rep, by design. There is no helix, and no tapered sweep.
+   refused in B-rep, by design. A helix and a tapered sweep now exist (`pipe({ helix }, d, { taper })`, B-rep only; docs/OP_ROADMAP.md §5).
    A blended union and `loft { smooth }` do exist. §3's product call applies,
    and so does item 1: figurines are the workload that shares curved surfaces.
 

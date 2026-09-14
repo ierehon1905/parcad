@@ -1,0 +1,17 @@
+{
+  "name": "refuse-coil-through-itself",
+  "script": "eval/scripts/refuse-coil-through-itself.js",
+  "why": "A helix whose pitch does not clear its own section sweeps each turn through the next, and OCCT returns that self-intersecting solid as if it were a spring. The shared helix check must refuse it in both backends before either builds, naming the pitch that clears.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": ["helix pitch", "sweep through the next", "Use a pitch above"]
+    }
+  },
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": ["helix pitch", "sweep through the next", "Use a pitch above"]
+    }
+  }
+}

@@ -215,6 +215,39 @@ mod tests {
     }
 
     #[test]
+    fn a_sweep_written_before_helices_round_trips_unchanged() {
+        let json = r#"{"op":"sweep","profile":[[-1.0,-1.0],[1.0,-1.0],[1.0,1.0],[-1.0,1.0]],"path":[{"x":0.0,"y":0.0,"z":0.0},{"x":9.0,"y":0.0,"z":0.0}]}"#;
+        let op: Op = serde_json::from_str(json).unwrap();
+        assert_eq!(serde_json::to_string(&op).unwrap(), json);
+    }
+
+    fn horn(end: f64, taper: f64) -> anyhow::Result<()> {
+        let helix = Helix { radius: 12.0, end_radius: Some(end), pitch: 10.0, turns: 3.0, hand: Hand::Right };
+        Op::validate_sweep(&[], 2.0, &[], 0.0, Some(&helix), taper).map(|_| ())
+    }
+
+    #[test]
+    fn a_horn_is_checked_against_the_axis_at_both_ends() {
+        // 2 mm of section on a 1.5 mm radius crosses the axis, unless the taper
+        // has shrunk it by the time the helix gets there.
+        let err = horn(1.5, 1.0).unwrap_err().to_string();
+        assert!(err.contains("at its end") && err.contains("above 2.00 mm"), "{err}");
+        horn(1.5, 0.1).unwrap();
+    }
+
+    #[test]
+    fn a_coil_through_its_own_turns_names_the_pitch_that_clears() {
+        let helix = Helix { radius: 10.0, end_radius: None, pitch: 2.0, turns: 3.0, hand: Hand::Left };
+        let err = Op::validate_sweep(&[], 1.0, &[], 0.0, Some(&helix), 1.0).unwrap_err().to_string();
+        assert!(err.contains("Use a pitch above 2.00 mm"), "{err}");
+        let loose = Helix { pitch: 2.1, ..helix };
+        Op::validate_sweep(&[], 1.0, &[], 0.0, Some(&loose), 1.0).unwrap();
+        // A single turn has no neighbour to run into.
+        let single = Helix { turns: 1.0, ..helix };
+        Op::validate_sweep(&[], 1.0, &[], 0.0, Some(&single), 1.0).unwrap();
+    }
+
+    #[test]
     fn vertex_target_preserves_the_authored_corner_intent() {
         let op: Op = serde_json::from_str(
             r#"{"op":"fillet","child":0,"radius":2,"vertices":">X and >Y and >Z","expect":{"count":1}}"#,
@@ -393,19 +426,38 @@ pub enum Op {
     /// distance field. The path model is deliberately the one a bender or a
     /// router can follow — runs and tangent arcs — rather than a spline,
     /// whose distance has no closed form even for the B-rep's checks.
+    ///
+    /// The spine is either that path or a [`Helix`] — a spring, a coil, a
+    /// spiral horn — and the section is either an authored outline or a circle
+    /// of radius `circle`, which is what a tapered or helical `pipe()` lowers
+    /// to. `taper` scales the section along the spine.
     Sweep {
         /// `[x, y]` pairs, anticlockwise, first point not repeated. Drawn in
-        /// the plane perpendicular to the first run, with the outline's +Y
-        /// kept as close to global +Z as the first run allows.
+        /// the plane perpendicular to the spine's start, with the outline's +Y
+        /// kept as close to global +Z as that tangent allows; on a helix, +X
+        /// points away from the axis. Empty when `circle` is given.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         profile: Vec<[f64; 2]>,
+        /// Radius of a round section centred on the spine, in place of
+        /// `profile`.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        circle: f64,
         /// Waypoints of the swept spine. Corners between runs are replaced by
-        /// arcs of radius `bend`.
+        /// arcs of radius `bend`. Empty when `helix` is given.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         path: Vec<V3>,
         /// Bend radius at every interior corner. Required as soon as the path
         /// has one; it must clear the profile's own extent, or the inner side
         /// of the bend sweeps through itself.
         #[serde(default, skip_serializing_if = "is_zero")]
         bend: f64,
+        /// A helical spine in place of `path`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        helix: Option<Helix>,
+        /// Scale of the section at the spine's end, from 1 at its start,
+        /// linear along the spine's length and about the spine itself.
+        #[serde(default = "unit_scale", skip_serializing_if = "is_unit_scale")]
+        taper: f64,
     },
 
     /// Union. `blend` > 0 rounds the join by that radius.
@@ -527,6 +579,107 @@ fn is_false(value: &bool) -> bool {
 pub enum SpinePiece {
     Run { from: V3, to: V3 },
     Bend { from: V3, mid: V3, to: V3 },
+}
+
+/// A helical [`Op::Sweep`] spine about +Z, centred on the origin like every
+/// primitive: it starts at `(radius, 0, -height / 2)` and ends at `height / 2`,
+/// `height = pitch * turns`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Helix {
+    /// Distance from the axis to the spine at the start.
+    pub radius: f64,
+    /// Distance from the axis at the end; the radius changes linearly with
+    /// the turn angle, which is a conical helix — a spiral horn. Omitted means
+    /// `radius`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_radius: Option<f64>,
+    /// Rise along +Z per full turn.
+    pub pitch: f64,
+    /// Number of turns; need not be whole.
+    pub turns: f64,
+    #[serde(default, skip_serializing_if = "Hand::is_right")]
+    pub hand: Hand,
+}
+
+/// Which way a [`Helix`] winds: right-handed turns anticlockwise seen from +Z
+/// as it rises, which is a standard thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Hand {
+    #[default]
+    Right,
+    Left,
+}
+
+impl Hand {
+    fn is_right(&self) -> bool {
+        *self == Hand::Right
+    }
+}
+
+impl Helix {
+    pub fn end_radius(&self) -> f64 {
+        self.end_radius.unwrap_or(self.radius)
+    }
+
+    pub fn height(&self) -> f64 {
+        self.pitch * self.turns
+    }
+}
+
+/// An [`Op::Sweep`]'s section, whichever way it was given.
+#[derive(Debug, Clone, Copy)]
+pub enum SweepSection<'a> {
+    Outline(&'a [[f64; 2]]),
+    Circle(f64),
+}
+
+impl SweepSection<'_> {
+    /// The farthest the section reaches from the spine, at scale 1.
+    pub fn reach(&self) -> f64 {
+        match self {
+            Self::Outline(points) => points.iter().fold(0.0f64, |acc, [x, y]| acc.max(x.hypot(*y))),
+            Self::Circle(r) => *r,
+        }
+    }
+
+    /// The farthest the section reaches along the in-plane direction `(dx, dy)`.
+    fn reach_along(&self, dx: f64, dy: f64) -> f64 {
+        match self {
+            Self::Outline(points) => points
+                .iter()
+                .fold(0.0f64, |acc, [x, y]| acc.max(x * dx + y * dy)),
+            Self::Circle(r) => r * dx.hypot(dy),
+        }
+    }
+
+    /// The section's extent along its own +Y: `(lowest, highest)`.
+    fn y_extent(&self) -> (f64, f64) {
+        match self {
+            Self::Outline(points) => points
+                .iter()
+                .fold((f64::MAX, f64::MIN), |(lo, hi), [_, y]| (lo.min(*y), hi.max(*y))),
+            Self::Circle(r) => (-r, *r),
+        }
+    }
+}
+
+/// The spine an [`Op::Sweep`] resolved to.
+#[derive(Debug, Clone)]
+pub enum SweepSpine {
+    Path(Vec<SpinePiece>),
+    Helix(Helix),
+}
+
+fn unit_scale() -> f64 {
+    1.0
+}
+
+/// Serde helper: an untapered sweep, and a graph written before tapers
+/// existed, keep round-tripping unchanged.
+fn is_unit_scale(value: &f64) -> bool {
+    *value == 1.0
 }
 
 /// Move every edge of an anticlockwise convex polygon inward by `distance`, by
@@ -770,6 +923,127 @@ impl Op {
         bend: f64,
     ) -> anyhow::Result<Vec<SpinePiece>> {
         Self::validate_outline(profile)?;
+        Self::path_spine(SweepSection::Outline(profile), path, bend, 1.0)
+    }
+
+    /// Check every field of an [`Op::Sweep`] together and resolve its section
+    /// and spine — the one entry point both backends and the bounds call, so
+    /// they refuse the same sweeps with the same words.
+    pub fn validate_sweep<'a>(
+        profile: &'a [[f64; 2]],
+        circle: f64,
+        path: &[V3],
+        bend: f64,
+        helix: Option<&Helix>,
+        taper: f64,
+    ) -> anyhow::Result<(SweepSection<'a>, SweepSpine)> {
+        let section = match (profile.is_empty(), circle) {
+            (false, c) if c == 0.0 => {
+                Self::validate_outline(profile)?;
+                SweepSection::Outline(profile)
+            }
+            (true, c) if c.is_finite() && c > 0.0 => SweepSection::Circle(c),
+            (true, c) if c == 0.0 => anyhow::bail!(
+                "a sweep needs a section: a convex `profile` outline, or a `circle` radius for a round one"
+            ),
+            (true, c) => anyhow::bail!("a sweep's round section has radius {c}, which is not a radius"),
+            (false, _) => anyhow::bail!(
+                "a sweep takes one section — a `profile` outline or a `circle` radius, not both"
+            ),
+        };
+        if !taper.is_finite() || taper <= 0.0 {
+            anyhow::bail!(
+                "a sweep taper of {taper} is not a scale. It is the section's size at the end of the spine relative to its start, and must be more than 0 — a section scaled to nothing cannot close a solid; end on a small scale such as 0.05 for a point"
+            );
+        }
+        // A tapered section is never larger than its bigger end.
+        let grow = taper.max(1.0);
+        let spine = match helix {
+            Some(helix) => {
+                if !path.is_empty() || bend != 0.0 {
+                    anyhow::bail!(
+                        "a sweep follows a `path` of points or a `helix`, not both; drop the path (and its bend) to sweep along the helix"
+                    );
+                }
+                Self::validate_helix(helix, &section, taper)?;
+                SweepSpine::Helix(*helix)
+            }
+            None => SweepSpine::Path(Self::path_spine(section, path, bend, grow)?),
+        };
+        Ok((section, spine))
+    }
+
+    /// Refuse a helix that is not one, or that sweeps its section through the
+    /// axis or through its own neighbouring turn.
+    ///
+    /// On a helix the radius and the taper's scale are both linear in the turn
+    /// angle — the scale follows the spine's curve parameter, which the helix
+    /// is built to keep proportional to that angle — so the axis needs
+    /// checking only at the two ends, and a horn that narrows no faster than
+    /// its section shrinks is accepted.
+    fn validate_helix(helix: &Helix, section: &SweepSection, taper: f64) -> anyhow::Result<()> {
+        let Helix { radius, pitch, turns, .. } = *helix;
+        let end = helix.end_radius();
+        for (name, value) in [("radius", radius), ("end radius", end), ("pitch", pitch), ("turns", turns)] {
+            if !value.is_finite() || value <= 0.0 {
+                anyhow::bail!(
+                    "a helix {name} of {value} must be more than 0{}",
+                    if name == "pitch" {
+                        ". A flat spiral (pitch 0) is not a helix this sweep can build; a single flat ring is a torus()"
+                    } else {
+                        ""
+                    }
+                );
+            }
+        }
+        let reach = section.reach();
+        let radius_at = |s: f64| radius + (end - radius) * s;
+        let scale_at = |s: f64| 1.0 + (taper - 1.0) * s;
+        // The section crossing the axis sweeps through itself, and so does the
+        // inner side of a coil tighter than the section: a helix's radius of
+        // curvature is never less than its radius.
+        for (at, s) in [("start", 0.0), ("end", 1.0)] {
+            let (r, rho) = (radius_at(s), reach * scale_at(s));
+            if rho >= r - 1e-9 {
+                anyhow::bail!(
+                    "at its {at} the swept section reaches {rho:.2} mm from the helix, but the helix is only {r} mm from its axis there, so the section would sweep through the axis and itself. Use a helix radius above {rho:.2} mm at the {at}, a smaller section, or a smaller taper"
+                );
+            }
+        }
+        // Consecutive turns stand `pitch` apart along the axis. The section is
+        // perpendicular to the spine, so its height in the axial plane is its
+        // Y extent stretched by the helix's slope, and a little more on the
+        // coil's inside: `1 + c² / (r (r - reach))` bounds both.
+        if turns > 1.0 {
+            let c = pitch / (2.0 * std::f64::consts::PI);
+            let (lo, hi) = section.y_extent();
+            let half = |s: f64, extent: f64| {
+                let (r, g) = (radius_at(s), scale_at(s));
+                extent.max(0.0) * g * (1.0 + c * c / (r * (r - reach * g)))
+            };
+            const STEPS: usize = 256;
+            let span = 1.0 - 1.0 / turns;
+            let needed = (0..=STEPS)
+                .map(|i| {
+                    let s = span * i as f64 / STEPS as f64;
+                    half(s, hi) + half(s + 1.0 / turns, -lo)
+                })
+                .fold(0.0f64, f64::max);
+            if pitch <= needed + 1e-9 {
+                anyhow::bail!(
+                    "a helix pitch of {pitch} mm is inside the swept section's own {needed:.2} mm height along the axis, so each turn would sweep through the next. Use a pitch above {needed:.2} mm, a smaller section, or one turn or less"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn path_spine(
+        section: SweepSection,
+        path: &[V3],
+        bend: f64,
+        grow: f64,
+    ) -> anyhow::Result<Vec<SpinePiece>> {
         if path.len() < 2 {
             anyhow::bail!("a sweep path needs at least 2 points; got {}", path.len());
         }
@@ -796,9 +1070,7 @@ impl Op {
         // — carried along the path, which is what a corrected-Frenet pipe
         // does on a planar spine. A path that leaves its plane falls back to
         // the profile's full reach.
-        let full_reach = profile
-            .iter()
-            .fold(0.0f64, |acc, [x, y]| acc.max(x.hypot(*y)));
+        let full_reach = section.reach() * grow;
         let t0 = (pts[1] - pts[0]).normalize();
         let v_axis = if t0.z.abs() < 1.0 - 1e-9 {
             (nalgebra::Vector3::z() - t0 * t0.z).normalize()
@@ -815,9 +1087,7 @@ impl Op {
             match (plane_normal, in_plane) {
                 (Some(normal), Some((dx, dy))) => {
                     let sign = if centre.dot(&normal.cross(tangent)) >= 0.0 { 1.0 } else { -1.0 };
-                    profile
-                        .iter()
-                        .fold(0.0f64, |acc, [x, y]| acc.max(sign * (x * dx + y * dy)))
+                    section.reach_along(sign * dx, sign * dy) * grow
                 }
                 _ => full_reach,
             }
@@ -839,9 +1109,14 @@ impl Op {
                 anyhow::bail!("the sweep path doubles back on itself at point {i}");
             }
             if bend <= 0.0 {
-                anyhow::bail!(
-                    "the sweep path turns at point {i}, so it needs a bend radius. Unlike a pipe there is no ball to fill a square corner with — an authored section has no rotationally symmetric stand-in"
-                );
+                match section {
+                    SweepSection::Outline(_) => anyhow::bail!(
+                        "the sweep path turns at point {i}, so it needs a bend radius. Unlike a pipe there is no ball to fill a square corner with — an authored section has no rotationally symmetric stand-in"
+                    ),
+                    SweepSection::Circle(_) => anyhow::bail!(
+                        "the tapered pipe's path turns at point {i}, so it needs a bend radius: the ball that fills a square pipe corner cannot taper. Give {{ bend }} larger than the tube's radius"
+                    ),
+                }
             }
             let reach = reach_toward(&(v - u), &u);
             if bend <= reach + 1e-9 {

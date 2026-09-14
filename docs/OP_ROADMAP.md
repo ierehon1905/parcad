@@ -34,10 +34,11 @@ are marked *hold* with a reason instead of a plan.
 | Offset face / Thicken | ✅ `.offset()` | whole-body offset, not per face |
 | Hole | ✅ `holeFor` `tapDrill` `clearance` `counterbore` | ISO metric coarse, M2–M20 |
 | Draft | ✅ `extrude(..., { draft })` | §1 |
-| Sweep | ✅ `sweep(profile, path, { bend })`, `pipe(path, dia, { bend })` | runs and bend arcs; authored profile is B-rep only, round profile exact in both; no spline path |
+| Sweep | ✅ `sweep(profile, path, { bend, taper })`, `pipe(path, dia, { bend, taper })` | runs and bend arcs or a `{ helix }`; authored profile, helix and taper are B-rep only, an untapered round profile on runs and bends exact in both; no spline path |
 | Loft | ✅ `loft(sections, { smooth })` | B-rep only — the implicit backend refuses it by name; §4 |
 | Section view | ✅ viewport plane, `section` on `evaluate_part` | §8 |
-| **Coil / Thread** | ❌ | hold, and probably for good — §5 |
+| Coil | ✅ `pipe({ helix }, dia)`, `sweep(profile, { helix })` | B-rep only; §5 |
+| **Thread** | ❌ | the helix exists, the thread cut does not close — §5 |
 | **Rib / Web** | ❌ | sugar over what exists — §6 |
 | **Split body / face** | ❌ | a different request from the section view; §8 |
 | Sheet metal, Surface/T-spline, Mesh, Simulation, CAM | ❌ | out of scope by design |
@@ -107,9 +108,11 @@ exact field the way a circle's does. `swept-channel` holds it against Pappus's
 closed form (9141.59 mm³, read 0.005% under by tessellation, the same effect
 `bent-tube` records). A *round* profile should stay a `pipe()`.
 
+**Since added:** a helical path and a linear taper, both B-rep only (§5).
+
 **Still out:** a spline path. There is no spline type in the graph to sweep
 along, which is the section-and-path authoring gap that also blocks the Fusion
-targets; a profile that twists or scales along the path is out with it.
+targets; a profile that twists along the path is out with it.
 
 ## 4. Loft — **DONE**, and the hold lifted deliberately
 
@@ -146,17 +149,27 @@ produces: the mesher reports the deflection it achieved, so a mesh-derived field
 carries a *known, reported* error bound rather than a silent one. Future work,
 deliberately not smuggled in here.
 
-## 5. Threads and coils — hold, deliberately
+## 5. Coils — **DONE**; threads — still held, now by a measurement
 
-The helical sweep is out for the reason in §3, doubly so; and a "thread" faked
-from a stack of tori is the silent approximation this project refuses, in the
-failure mode most likely to reach a part that gets made. Every threaded hole in
-`examples/` is drawn as its tap drill and says so, which is what a machine shop
-drawing does.
+The hold was lifted by a model building a unicorn, which needed a spiral horn,
+a tapering mane and a tail and faked them from stacked primitives. What shipped
+is the honest version: `{ helix: { radius, pitch, turns, endRadius, hand } }`
+as a path for `pipe` and `sweep`, and `taper` on both. The helix is a straight
+line in a cylinder's or cone's parameter space; its fitted 3D curve is
+*measured* against the exact helix (1e-8 mm on the corpus) and refused past
+1e-4 mm. Five eval cases hold volume to closed forms at about 1e-6 of
+BRepGProp, and the graph refuses a pitch that runs a turn into the next and a
+section that crosses the axis at either end. The implicit backend refuses all
+of it by name, with the capability cost §4 records.
 
-The useful improvement is not geometry: a **thread annotation on the node**, so
-`PartReport` can say "M6 × 1, 12 deep" for a hole whose geometry is honestly a
-5 mm drill. A reporting change, and worth more than fake helices.
+A **thread** is still not here, and the reason is no longer the op. A groove
+swept along a helix and cut from a cylinder on the same axis builds at one and
+two turns and returns an open surface at three or more, which the watertight
+backstop refuses (docs/DSL_GAPS.md has the counts). Faking one from tori stays
+refused for the old reason. So the **thread annotation on the node** — a
+`PartReport` that says "M6 × 1, 12 deep" for a hole whose geometry is honestly
+a 5 mm drill — is still the more useful next step for machined parts, and the
+boolean is what to diagnose before a modelled thread.
 
 ## 6. Rib / Web — sugar, not an op
 

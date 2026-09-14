@@ -1,0 +1,33 @@
+{
+  "name": "spiral-horn",
+  "script": "eval/scripts/spiral-horn.js",
+  "why": "A conical helix with a taper, the spiral horn: radius 12 to 1.5 over three turns of pitch 10, a 4 mm section tapered to 0.1. Radius and scale are both linear in turn angle on a helix, so V = 4 pi * integral of g(t)^2 sqrt(k^2 + (12 + k t)^2 + c^2) dt = 811.620 mm3 by quadrature of that closed-form integrand; the exact B-rep reads 811.6192 through BRepGProp. Scale linear in arc length instead would be 614.81 — the tripwire for the law's parameterisation changing. The untapered section would cross the axis at the narrow end; the graph checks both ends, so this builds. The implicit half refuses by name.",
+  "implicit": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": [
+        "no exact distance field",
+        "helix",
+        "B-rep backend"
+      ]
+    }
+  },
+  "brep": {
+    "size": [
+      25.967,
+      23.941,
+      32.124
+    ],
+    "volume_mm3": 808.586,
+    "area_mm2": 1103.775,
+    "triangles": 61130,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 0.0,
+    "stands_on_patches": 0,
+    "watertight": true,
+    "faces": 3,
+    "edges": 6,
+    "curves": 2
+  }
+}
