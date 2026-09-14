@@ -16,9 +16,11 @@ only, and links rather than repeats.
 One session at a time, because each rewrites the same core files (`graph.rs`,
 `backend.rs`, `sdf.rs`, `dsl.ts`):
 
-1. **Parts with more than one solid** — running. The cheap end of DSL_GAPS §0's
-   multi-body row: named solids in one part, never fused, measured per body.
-2. **One engine.** Decided: the exact kernel becomes the only one, and the
+1. **Parts with more than one solid** — done 2026-09-14. `return { base, lid }`,
+   measured per body and between bodies, one STEP solid per body; the implicit
+   backend refuses it by name, and probes, tag extents and wall thickness wait
+   on item 2 for such a part.
+2. **One engine** — running. Decided: the exact kernel becomes the only one, and the
    implicit backend (`sdf.rs`, fidget) is deleted once nothing needs it. Today it
    refuses 33 of the 41 parts in a real project folder (every edge treatment,
    loft, sweep, helix); `blend` means a different shape in it; and
