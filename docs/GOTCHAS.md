@@ -757,3 +757,30 @@ regress, and `examples/hydraulic-line.js` now carries the groove in a real part.
 What that part cannot do is a *catalogue* gland: a torus cut is a circle in
 section, and a standard gland is rectangular and wider than the cord. The blocker
 moved from the kernel to the section — docs/DSL_GAPS.md, "arcs in a section".
+
+## A release build of the app compiled the host three times
+
+Measured on 2026-09-14, from an empty `target/`, running release.yml's cargo
+steps in order on a 14-core M4 Pro (two runs each):
+
+| | `tauri build` step | whole sequence |
+|---|---|---|
+| as it was | 213 s, 193 s | 326 s, 294 s |
+| `crate-type = ["rlib"]` only | 143 s, 145 s | 225 s, 229 s |
+| and the CLI in tauri's own cargo invocation | 81 s, 80 s | 191 s, 185 s |
+
+Two independent causes. `parcad-app` declared `["staticlib", "cdylib", "rlib"]`,
+Tauri's template default: the first two exist for iOS and Android, and on a
+desktop build each is a full thin-LTO link of the whole app. And
+`beforeBuildCommand` built `parcad-cli` in its own `cargo build` before tauri
+ran another for `parcad-app`. Features unify per invocation, so the second saw
+different features on `serde`, `libc`, `syn`, `tokio` and 94 more crates and
+rebuilt all of them — and a later `cargo build -p parcad-cli` step rebuilt 93
+again for the same reason.
+
+CI now overrides `beforeBuildCommand` to the frontend alone and hands tauri
+`-- -p parcad-app -p parcad-cli`, so one invocation builds both. The override is
+CI's, not tauri.conf.json's: a plain `bun run tauri build` still has to produce
+the `parcad` the macOS bundle carries, and `tauri dev` reads the same runner
+configuration. Do not add a `cargo build -p parcad-cli` after it; assert the
+binary exists instead.

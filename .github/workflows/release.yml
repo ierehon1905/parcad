@@ -127,16 +127,19 @@ jobs:
       - name: Measure the geometry this release would ship
         run: cargo run --locked --release -p parcad-eval
 
+      # CLI and app in one cargo invocation; separately they rebuilt 98 crates (docs/GOTCHAS.md).
       - name: Bundle the app
-        run: cd app && bun run tauri build --bundles ${{ matrix.bundles }}
+        run: |
+          cd app && bun run tauri build --bundles ${{ matrix.bundles }} \
+            --config '{"build":{"beforeBuildCommand":"bun run build"}}' \
+            -- -p parcad-app -p parcad-cli --locked
 
-      # `tauri build` already built it: its beforeBuildCommand builds the CLI
-      # right after app/dist, which the CLI embeds so `parcad serve` carries the
-      # UI, and the app bundle carries that same binary. This asserts both.
-      - name: Build the headless CLI
+      # Asserted, not built: building parcad-cli alone would recompile the host (docs/GOTCHAS.md).
+      - name: Check the headless CLI was built with its UI
         run: |
           test -f app/dist/index.html || { echo "app/dist is missing; parcad serve would carry no UI" >&2; exit 1; }
-          cargo build --locked --release -p parcad-cli
+          exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
+          test -f "target/release/parcad$exe" || { echo "tauri build did not build parcad-cli" >&2; exit 1; }
 
       - name: Stage the headless CLI beside its worker
         run: |

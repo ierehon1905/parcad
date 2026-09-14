@@ -7,7 +7,8 @@ description = "parcad desktop application"
 
 [lib]
 name = "parcad_app_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
+# rlib only: staticlib and cdylib are mobile-only and each cost a full LTO link (docs/GOTCHAS.md).
+crate-type = ["rlib"]
 
 [features]
 # The embedded WebDriver server belongs only in the debug binary that the
