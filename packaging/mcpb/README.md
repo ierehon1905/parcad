@@ -22,9 +22,13 @@ nothing is installed, which is what lets a registry install work on a bare Mac.
 
 ```bash
 mcp-publisher validate
-mcp-publisher login github    # once per machine, as the owner of ierehon1905
+MCP_GITHUB_TOKEN="$(gh auth token --user ierehon1905)" mcp-publisher login github
 mcp-publisher publish
 ```
+
+Log in right before publishing: the registry's token expires within the hour,
+and a stale one fails the publish with a 401. The token route needs no browser;
+plain `mcp-publisher login github` is a device-code flow that needs a terminal.
 
 The registry refuses a bundle URL without "mcp" in it, which is why the file is
 not called `parcad-*.mcpb`. It also checks `fileSha256` against the download.
