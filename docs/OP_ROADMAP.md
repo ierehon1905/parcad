@@ -25,7 +25,7 @@ are marked *hold* with a reason instead of a plan.
 | Extrude a sketch profile | ✅ `extrude`, `ngon` | convex outlines; see *Draft* and *Arcs* |
 | Revolve a sketch profile | ✅ `revolve`, `cone`, `countersink` | convex sections |
 | Combine (join / cut / intersect) | ✅ `union` `cut` `intersect` | plus `blend` for a rounded seam |
-| Move / Copy, Rotate, Scale | ✅ `.at()` `.rotate()` `.scale()` | non-uniform scale is refused in B-rep, deliberately |
+| Move / Copy, Rotate, Scale | ✅ `.at()` `.rotate()` `.scale()` | non-uniform scale builds exact B-splines (`BRepBuilderAPI_GTransform`), held to the determinant |
 | Mirror | ✅ `.mirror()` | |
 | Rectangular / circular pattern | ✅ `grid` `polar` `around` `repeat` | DSL helpers, not graph ops — the graph shares one node |
 | Fillet / Chamfer | ✅ `.fillet()` `.chamfer()` with selectors | constant radius / equal distance |

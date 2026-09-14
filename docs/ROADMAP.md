@@ -31,13 +31,12 @@ trip per debounced build.
 
 ## Kernel capabilities not yet reachable
 
-Each is blocked on a specific missing binding, not on design, and all three
-`bail!` with an explanation rather than approximating.
+Each is blocked on a specific missing binding, not on design, and each
+`bail!`s with an explanation rather than approximating.
 
 | want | blocked on |
 |---|---|
 | general outward `offset` on a boolean result | `BRepOffsetAPI_MakeOffsetShape` — absent from `opencascade-sys` too, so it needs a new cxx binding plus C++ shim |
-| non-uniform `scale` | `gp_GTrsf` / `BRepBuilderAPI_GTransform`, unbound |
 | blended **intersection** | the bindings' intersection reports no new edges to fillet |
 
 ## Product
@@ -211,7 +210,7 @@ corpus: nobody edits a prose table when a face count moves.
 Where the two backends disagree, the implicit column's error is not a bug — it is
 dual contouring at the chosen depth, and each case carries a looser tolerance for
 that path than for the exact one. It is also exactly why the B-rep backend
-exists. The corpus asserts the refusals too: non-uniform scale, blended
+exists. The corpus asserts the refusals too: a negative scale, blended
 intersection, inward offset and a wrong `expect({ count })` must each fail with a
 named variant *and* with the words a reader needs to fix it, because "refuse
 rather than approximate" is worth nothing if the refusal does not say what to do

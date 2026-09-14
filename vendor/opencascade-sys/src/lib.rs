@@ -575,6 +575,10 @@ pub mod ffi {
             on_b: Pin<&mut gp_Pnt>,
         ) -> f64;
 
+        // BRepBuilderAPI_GTransform, axis-aligned scale — added for parcad, see
+        // PARCAD-CHANGES.md.
+        pub fn Shape_scaled_axes(shape: &TopoDS_Shape, x: f64, y: f64, z: f64) -> UniquePtr<TopoDS_Shape>;
+
         // BRepLib::OrientClosedSolid — added for parcad, see PARCAD-CHANGES.md.
         pub fn BRepLib_orient_closed_solid(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
 
@@ -1044,6 +1048,12 @@ pub mod ffi {
         pub fn BRepGProp_LinearProperties(shape: &TopoDS_Shape, props: Pin<&mut GProp_GProps>);
         pub fn BRepGProp_SurfaceProperties(shape: &TopoDS_Shape, props: Pin<&mut GProp_GProps>);
         pub fn BRepGProp_VolumeProperties(shape: &TopoDS_Shape, props: Pin<&mut GProp_GProps>);
+        // Adaptive, to a relative error — added for parcad, see PARCAD-CHANGES.md.
+        pub fn BRepGProp_VolumeProperties_eps(
+            shape: &TopoDS_Shape,
+            props: Pin<&mut GProp_GProps>,
+            eps: f64,
+        ) -> f64;
 
         type BRepGProp_Face;
 

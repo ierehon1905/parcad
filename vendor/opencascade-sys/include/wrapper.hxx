@@ -17,6 +17,8 @@
 #include <BRepBuilderAPI_MakeVertex.hxx>
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Transform.hxx>
+#include <BRepBuilderAPI_GTransform.hxx>
+#include <gp_GTrsf.hxx>
 #include <Bnd_Box.hxx>
 #include <BRepBndLib.hxx>
 #include <BRepCheck.hxx>
@@ -404,6 +406,12 @@ inline void BRepGProp_VolumeProperties(const TopoDS_Shape &shape, GProp_GProps &
   BRepGProp::VolumeProperties(shape, props);
 }
 
+// The adaptive form, to a relative error `eps`. Added for parcad: the fixed-order
+// default misreads a B-spline solid — an elliptic cylinder by 0.86%.
+inline double BRepGProp_VolumeProperties_eps(const TopoDS_Shape &shape, GProp_GProps &props, double eps) {
+  return BRepGProp::VolumeProperties(shape, props, eps);
+}
+
 // Fillets
 inline std::unique_ptr<TopoDS_Edge> BRepFilletAPI_MakeFillet2d_add_fillet(BRepFilletAPI_MakeFillet2d &make_fillet,
                                                                           const TopoDS_Vertex &vertex,
@@ -477,6 +485,22 @@ inline double BRepExtrema_least_distance(const TopoDS_Shape &a, const TopoDS_Sha
   on_a = search.PointOnShape1(1);
   on_b = search.PointOnShape2(1);
   return search.Value();
+}
+
+// BRepBuilderAPI_GTransform with an axis-aligned scale about the origin. Added
+// for parcad: the one affine map gp_Trsf cannot hold. The builder converts every
+// surface to its exact B-spline form. An empty shape when it fails.
+inline std::unique_ptr<TopoDS_Shape> Shape_scaled_axes(const TopoDS_Shape &shape, double x, double y,
+                                                       double z) {
+  gp_GTrsf scale;
+  scale.SetValue(1, 1, x);
+  scale.SetValue(2, 2, y);
+  scale.SetValue(3, 3, z);
+  BRepBuilderAPI_GTransform builder(shape, scale, true);
+  if (!builder.IsDone()) {
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape());
+  }
+  return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(builder.Shape()));
 }
 
 // BRepLib::OrientClosedSolid: turn a solid whose faces point inward right side

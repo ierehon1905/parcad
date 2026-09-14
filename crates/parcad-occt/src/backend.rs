@@ -2720,26 +2720,69 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
         }
 
         Op::Scale { child, by } => {
-            // `gp_Trsf` is a similarity transform: one factor, all axes. A
-            // non-uniform scale is not a harder version of the same thing — it
-            // turns a cylinder into an elliptical one and a fillet's arc into an
-            // ellipse, so the exact surfaces change type. Refusing beats
-            // quietly rounding x, y and z to their average.
-            let uniform = by.x;
-            if (by.y - uniform).abs() > 1e-9 || (by.z - uniform).abs() > 1e-9 {
+            if by.x <= 0.0 || by.y <= 0.0 || by.z <= 0.0 {
                 bail!(
-                    "node {id} ({label}) scales by ({}, {}, {}), and the B-rep \
-                     backend can only scale uniformly — a non-uniform scale turns \
-                     circles into ellipses, which needs surface types OCCT's \
-                     similarity transform cannot produce. The implicit backend \
-                     does this one",
+                    "node {id} ({label}) scales by ({}, {}, {}), and every factor must be \
+                     positive — a negative one is a reflection, which is mirror()",
                     by.x,
                     by.y,
                     by.z
                 );
             }
-            if uniform <= 0.0 {
-                bail!("node {id} ({label}) scales by {uniform}, which is not a size");
+            let uniform = by.x;
+            if (by.y - uniform).abs() > 1e-9 || (by.z - uniform).abs() > 1e-9 {
+                // `gp_Trsf` is a similarity and cannot stretch one axis; the
+                // general transform can, converting every surface to B-splines.
+                let factors = v(*by);
+                let inner = build_node(doc, *child, DVec3::ZERO)?;
+                breadcrumb(&format!("scale node {id} ({label}) by {factors}"));
+                let stretch = |shape: Shape| -> Option<Shape> {
+                    let scaled = shape.scaled_axes(factors)?;
+                    Some(if offset == DVec3::ZERO { scaled } else { scaled.translated(offset) })
+                };
+                let refused = || {
+                    anyhow::anyhow!(
+                        "node {id} ({label}) scales by ({}, {}, {}), and OpenCASCADE's general \
+                         transform could not convert the {} underneath. Scale the primitives \
+                         before combining or treating them",
+                        by.x,
+                        by.y,
+                        by.z,
+                        doc.node(*child).map(|n| op_name(&n.op)).unwrap_or("shape")
+                    )
+                };
+                let shape = stretch(inner.shape.clone()).ok_or_else(refused)?;
+                // A linear map scales every volume by its determinant, exactly.
+                let expected = inner.shape.signed_volume() * factors.x * factors.y * factors.z;
+                let measured = shape.signed_volume();
+                if (measured - expected).abs() > expected.abs() * 1e-4 + 1e-6 {
+                    bail!(
+                        "node {id} ({label}) scales by ({}, {}, {}), and the kernel returned \
+                         {measured:.3} mm³ where the scale makes {expected:.3} exactly. \
+                         Refused rather than shown; scale the primitives before combining \
+                         or treating them",
+                        by.x,
+                        by.y,
+                        by.z
+                    );
+                }
+                let features = TreatmentFeatures {
+                    generated: inner
+                        .features
+                        .generated
+                        .into_iter()
+                        .filter_map(|(node, part)| Some((node, stretch(part)?)))
+                        .collect(),
+                };
+                let lineage = inner
+                    .lineage
+                    .through_transform(&shape, |part| stretch(part.clone()).unwrap_or(part));
+                return Ok(BuiltShape {
+                    shape,
+                    lineage,
+                    features,
+                }
+                .named(node.tag.as_deref()));
             }
             let inner = build_node(doc, *child, DVec3::ZERO)?;
             breadcrumb(&format!("scale node {id} ({label}) by {uniform}"));

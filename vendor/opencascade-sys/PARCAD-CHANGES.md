@@ -167,6 +167,21 @@ two points it is measured between, or a negative number when the search does
 not converge. parcad's fit check reports it as the clearance between a part
 and the object it is meant to hold.
 
+## Added: `Shape_scaled_axes`
+
+`BRepBuilderAPI_GTransform` with a diagonal `gp_GTrsf`: a different scale on
+each axis, about the origin, returning an empty shape when the builder fails.
+`gp_Trsf` is a similarity and cannot stretch one axis; the general transform
+converts every surface to its exact B-spline form, which is how a sphere
+becomes an ellipsoid.
+
+## Added: `BRepGProp_VolumeProperties_eps`
+
+`BRepGProp::VolumeProperties` with its relative-error argument, returning the
+error estimate. The fixed-order integration behind the plain form is exact on
+analytic faces and not on B-splines: the elliptic cylinder `Shape_scaled_axes`
+makes of `cylinder(5, 20)` read 3168.66 mm³ against an exact 3141.59.
+
 ## Not changed
 
 Everything else is upstream 0.2.0 verbatim. The OCCT it builds against is **not**

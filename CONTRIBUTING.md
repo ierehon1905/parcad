@@ -49,8 +49,8 @@ what `known_defect` is for.
 a model *reads* that output is measured separately, by `field/run-suite.sh`, and
 it has been wrong every time it was checked.
 
-**Refuse rather than approximate.** Non-uniform scale, blended intersection and
-general offsets all `bail!` with a reason. Don't add a "close enough" path.
+**Refuse rather than approximate.** Blended intersection and general offsets
+both `bail!` with a reason. Don't add a "close enough" path.
 
 **Report measured values, not requested ones**, and **make error messages name
 the fix.**

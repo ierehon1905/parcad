@@ -563,6 +563,18 @@ impl Shape {
         self.transformed(&transform)
     }
 
+    /// Scale about the origin by a different factor on each axis, or `None` when
+    /// OCCT's general transform fails. Every surface comes back as its exact
+    /// B-spline conversion — an ellipsoid is a rational B-spline, not an
+    /// approximation of one. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn scaled_axes(&self, by: DVec3) -> Option<Self> {
+        let scaled = ffi::Shape_scaled_axes(&self.inner, by.x, by.y, by.z);
+        let shape = Self {
+            inner: ffi::TopoDS_Shape_to_owned(&scaled),
+        };
+        (shape.faces().count() > 0).then_some(shape)
+    }
+
     /// Scale about `origin` by one factor in every direction.
     ///
     /// Uniform only, because `gp_Trsf` is a similarity transform and cannot
@@ -692,7 +704,9 @@ impl Shape {
     /// later boolean. Added for parcad; see PARCAD-CHANGES.md.
     pub fn signed_volume(&self) -> f64 {
         let mut props = ffi::GProp_GProps_ctor();
-        ffi::BRepGProp_VolumeProperties(&self.inner, props.pin_mut());
+        // Adaptive to 1e-7 relative: the fixed-order default is not exact on
+        // B-spline faces, and every caller compares this against a closed form.
+        ffi::BRepGProp_VolumeProperties_eps(&self.inner, props.pin_mut(), 1e-7);
         props.Mass()
     }
 }

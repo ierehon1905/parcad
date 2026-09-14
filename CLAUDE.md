@@ -192,8 +192,8 @@ errors only say what failed is half-built.
 `Request::deflection`; tight bounds from geometry over `framing_bounds`.
 `PartReport` exists so nothing has to ask a follow-up question.
 
-**Refuse rather than approximate.** Non-uniform scale, blended intersection and
-general offsets all `bail!` with a reason. That's correct — don't add a "close
+**Refuse rather than approximate.** Blended intersection and general offsets
+both `bail!` with a reason. That's correct — don't add a "close
 enough" path.
 
 **Never claim geometry is correct without measuring it.** OCCT returns

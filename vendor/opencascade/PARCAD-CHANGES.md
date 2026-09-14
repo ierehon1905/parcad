@@ -209,3 +209,14 @@ survive a union whose faces it shares.
 `BRepExtrema_DistShapeShape` through the sys crate's new binding: the least
 distance between two shapes and the points it joins. The clearance half of
 parcad's fit check.
+
+## `Shape::scaled_axes`
+
+A different scale factor on each axis, through the sys crate's new
+`Shape_scaled_axes` (`BRepBuilderAPI_GTransform`). `None` when the builder
+fails. What lets parcad's `scale(x, y, z)` build an ellipsoid in the exact
+kernel instead of refusing it.
+
+`Shape::signed_volume` integrates adaptively to a 1e-7 relative error rather
+than with `BRepGProp`'s fixed-order default, which misreads B-spline faces —
+the scaled shapes above among them.

@@ -1,0 +1,11 @@
+{
+  "name": "refuse-negative-scale",
+  "script": "eval/scripts/refuse-negative-scale.js",
+  "why": "A negative scale factor is a reflection. The exact backend refuses it and names mirror().",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": ["which is mirror()"]
+    }
+  }
+}

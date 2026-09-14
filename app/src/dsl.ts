@@ -509,11 +509,14 @@ export class Shape {
   }
 
   /**
-   * Resize about the origin. One factor scales uniformly.
+   * Resize about the origin. One factor scales uniformly; three stretch each
+   * axis, so `sphere(10).scale(2, 1, 0.5)` is an ellipsoid of semi-axes 20, 10
+   * and 5 — a figurine's body or head.
    *
-   * Different factors per axis are refused by the exact backend rather than
-   * approximated: a non-uniform scale turns a circle into an ellipse and a
-   * fillet into something no rolling ball ever made.
+   * A stretched shape's surfaces become exact B-splines: its circles are
+   * ellipses, so a selector asking for `curve: "circle"` no longer finds them.
+   * Fillet after stretching, not before. Every factor must be positive; a
+   * reflection is `mirror`.
    */
   scale(x: number, y = x, z = x): Shape {
     return new Shape(
