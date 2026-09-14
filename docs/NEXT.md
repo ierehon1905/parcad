@@ -194,9 +194,18 @@ small model reads SOUND. What is left, in the order it would pay:
 4. **Measure the radii.** `DEVICES` carries corner and edge radii read off
    photographs, labelled so. A caliper on each machine settles them for
    everyone. An hour with the hardware.
-5. **Two solids that stay two.** `check_fit` measures a reference that is
-   never joined; a part printed in two halves still needs a flag and two
-   evaluations. The multibody row of DSL_GAPS §0, from its cheap end.
+5. **Two solids that stay two — done, from the cheap end.** `return { base,
+   lid }` builds a root-only `Op::Bodies`; the worker builds, meshes and
+   checks each body on its own, the reply measures each (`named_bodies`, with
+   a per-body `pieces` count for the accidental split) and every pair on the
+   exact solids (`between_bodies`, the `check_fit` measurement), STEP writes a
+   solid per body, and `export_part` takes a `body`. Five corpus cases hold it
+   to closed forms — two boxes, the two printable halves, an interfering
+   pair, a body split inside itself, and the seeded `lidded-box`; the field
+   case `does-the-lid-clear` asks a model the question and has not yet been
+   run. Joints and mates stay out; the §3 call is not moved. The implicit
+   backend refuses it by name, so `tag_extents`, region maps and the probes
+   are absent for such a part until they move onto the exact kernel.
 
 ## After the unicorn — two outside models' reports, checked against the code
 

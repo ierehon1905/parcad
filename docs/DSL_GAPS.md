@@ -62,6 +62,21 @@ impossible, check the layer that would implement it, not the layer above.
   way, with 1043. Unions that do not wrap a coaxial surface —
   a spring on a plate, a tapered spiral on a cone — build and close. The cause
   is undiagnosed; the tap drill stays the honest drawing of a threaded hole.
+- **several bodies that stay several** — `return { base, lid }`, an object of
+  named shapes in place of one, lowered to a root-only `Op::Bodies`. The cheap
+  end of the multi-body row, and deliberately only that: the bodies are built,
+  measured and exported together and never fused, each is measured alone
+  (`named_bodies`, with its own `pieces` count for the accidental split the
+  part-level `bodies` could not name), and every pair is measured on the exact
+  solids (`between_bodies`: the `check_fit` verdict, clearance and shared
+  volume). STEP writes a solid per body; STL one file, or one body by name.
+  `examples/lidded-box.js` is the seeded one; `split-halves` in the corpus is
+  the two printable halves §9 asked for, held to the closed form of the kerf.
+  Not here, by decision: joints, mates, constraints, assembly hierarchy,
+  instancing across parts, motion — a body sits where its script put it, and
+  the fit between two is measured, not solved. B-rep only: the implicit
+  backend refuses it by name. Nothing selects across bodies: a tag lives in the
+  body that made it, and a treatment cannot take the group as its child.
 
 What a mainstream tool has that this still does not, with the cost of each here,
 is in [OP_ROADMAP.md](OP_ROADMAP.md).
@@ -75,7 +90,7 @@ is in [OP_ROADMAP.md](OP_ROADMAP.md).
 | **involute and other authored curves** | a spur gear, a cam, a real GT2 flank (`timing-pulley.js` approximates it and says so) | curve construction in the graph, on top of the section type |
 | **re-entrant (non-convex) sections** | a stepped hub in one operation | refused deliberately: no exact distance field. A union of convex revolves is exact, and is how the part is turned anyway |
 | **variable-radius and unequal-distance treatments** | a casting fillet that tapers, an asymmetric chamfer for a weld prep | `Fillet`/`Chamfer` take one scalar |
-| **multi-body / assembly** | a pillow block *and* its bearing, any fit check | the graph has one root and one solid |
+| **assembly: joints, mates, constraints** | a pillow block *and* its bearing, placed by a fit rather than by coordinates | the bodies exist (above) and the fit between them is measured; nothing yet *places* one against another — a solver, which is the wide reading of NEXT.md §3 |
 
 Deliberately absent and staying absent: anything that lets a part be
 *approximately* right. A "thread" that is a stack of tori, or a cone faked from a
@@ -122,9 +137,11 @@ loft's vertex pairing being silently normalised. Recreated — see
 `examples/fusion360/README.md`.) `Thicken`, `Stitch` and `Patch` are the
 surface-modelling side of that wall, out by decision.
 
-**15 of the 21 are multi-solid**, which the one-root-one-solid graph cannot hold
-at all. Some is assemblies proper and some is construction bodies that never get
-combined, so the row is softer than 15/21 sounds — but it is not 1-in-20 either.
+**15 of the 21 are multi-solid.** Some is assemblies proper and some is
+construction bodies that never get combined, so the row is softer than 15/21
+sounds — but it is not 1-in-20 either. The graph can now hold several solids
+(`return { base, lid }`, above); what it cannot do is the assembly half, where
+a body is *placed* by a joint rather than by its own coordinates.
 
 In proportion: one author, 21 documents, skewed toward decorative and 3D-printed
 work rather than the machined fittings `examples/` covers. Evidence about
@@ -426,9 +443,12 @@ recorded here:
   measures the same 302 406 mm³ it did with the literals. The radii are still
   the honest weak point: a caliper on one machine would settle them for
   everyone.
-- **Two printable halves need a flag and two evaluations**, because a graph has
-  one solid. The honest design was one half plus `.mirror("x")`, so this is the
-  multi-body row of §0 again, from the cheap end.
+- **Two printable halves need a flag and two evaluations — FIXED**, from the
+  cheap end of the multi-body row of §0: `return { left, right: left.mirror("x") }`
+  is one evaluation, measured per half and between them.
+  `eval/cases/split-halves.json` holds exactly that shape — a bored block split
+  with a 0.5 mm kerf — to the closed form of each half and to the kerf as the
+  measured clearance.
 
 Not the tool's fault, and worth keeping: the hub was drawn too small for the
 100 pattern, and the report's "stands on … 1 patch" line plus the face count

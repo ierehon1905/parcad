@@ -31,6 +31,49 @@ Consequences worth internalising:
 - **A node's meaning can differ per backend and that is allowed** — but it must
   be documented. See "blend" below.
 
+### A part may be several bodies, and they stay several
+
+A script that returns an object of shapes — `return { base, lid }` — builds a
+graph whose root is `Op::Bodies`, a list of `{ name, child }` over each body's
+own subgraph. That op is the root or nothing: `Doc::topo_order` refuses one
+anywhere else, because a boolean or a treatment over the group would have to
+fuse the bodies to mean anything, and "these stay separate" is the one thing
+the op says. Nothing joins, mates or constrains one body to another; each sits
+where its script placed it, which is the cheap end of multi-body and all of it
+that exists. Joints, assembly hierarchy and instancing across parts are out by
+decision, in [OP_ROADMAP.md](OP_ROADMAP.md).
+
+The B-rep worker builds each body with the same `build_node` a one-solid part
+uses, meshes and checks each one on its own — a body whose mesh does not close
+is refused naming the body — and concatenates the meshes into one reply, with
+each body's run of triangles recorded in `Success::bodies`. Host-side,
+`parcad_occt::measure_bodies` cuts that run back out and measures it with the
+code that measures a whole part, so a body's volume and the part's are the same
+kind of number and the bodies sum to the part; the same function serves the
+app's snapshot (`named_bodies`) and the eval corpus. Every pair is measured on
+the exact solids with `fit_between`, the measurement behind `check_fit`, and
+reported as `between_bodies`: `clear` by a clearance, `touching`, or
+`interfering` by a shared volume — a clip drawn through the body it clips onto
+is a design error the number states outright. STEP writes the compound, which
+OCCT's writer turns into one solid per body; STL writes every body's triangles
+into one file, and `export_part`'s `body` picks one body out by rebuilding the
+graph with that body as the root.
+
+The part-level `bodies` count keeps its meaning — free-standing closed pieces
+of the whole mesh, one for a part — and for a part in named bodies it should
+equal their number. Which of those pieces is an *accident* is a per-body
+question: each `named_bodies` entry carries `pieces`, one when that body is
+intact, which is what separates a union that quietly left a body in two from a
+second body that was meant. Tags, `on:`/`between:` queries and directional
+extrema all resolve inside the body being built and never across two, by
+construction: a body never enters another body's lineage, and a treatment
+cannot take the group as its child.
+
+The implicit backend refuses a part in several bodies by name, the way it
+refuses a loft; `sdf.rs` says why. What ran on the field — region maps,
+`tag_extents`, `probe_part`, `measure_wall_thickness` — is therefore absent or
+refused for such a part until those move onto the exact kernel.
+
 ### `blend` means two different things
 
 | backend | how it's done | visible difference |

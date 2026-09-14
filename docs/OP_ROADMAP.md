@@ -43,7 +43,8 @@ are marked *hold* with a reason instead of a plan.
 | **Split body / face** | ❌ | a different request from the section view; §8 |
 | Sheet metal, Surface/T-spline, Mesh, Simulation, CAM | ❌ | out of scope by design |
 | Sketch constraints, timeline, parameters | n/a | the DSL is the parametric model; JS is a better parameter table |
-| Assemblies / joints | ❌ | one graph has one root — a real gap, not a near-term one |
+| Several bodies in one part | ✅ `return { base, lid }` | never fused; each measured alone and every pair measured on the exact solids; STEP a solid per body; B-rep only |
+| Assemblies / joints | ❌ | a body is placed by its own coordinates, never by a mate — a solver, and the wide reading of NEXT.md §3 |
 
 ---
 
@@ -199,8 +200,10 @@ window. The part is untouched — every measurement in the reply is still of the
 whole solid. docs/PERCEPTION.md §7 records how it works and the two ways it can
 quietly cut nothing.
 
-**Splitting a body into two *parts* is still not here**, and is a different
-request. `intersect(part, box(...))` does it and hands back one body, not two.
+**Splitting a body into two *parts*** is two intersections returned as two
+bodies — `return { left: part.intersect(box(...)), right: ... }` — measured
+per half and against each other; `eval/cases/split-halves.json` is that shape.
+There is no one-call split op, and a mirrored half is the usual second body.
 
 ---
 
