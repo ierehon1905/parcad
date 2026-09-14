@@ -7,9 +7,8 @@
 # and restoring it through PARCAD_OCCT_PREBUILT (see vendor/occt-sys/build.rs);
 # it belongs in a nightly job, not on every push.
 #
-# This runs on Linux, which is also the only automated evidence that ParCAD
-# builds anywhere but the author's Mac. A failure here may be a Linux gap rather
-# than a regression — read it that way before reverting anything.
+# This runs on Linux. The worker, the corpus and the bundles on macOS, Linux and
+# Windows are release.yml's, which a manual dispatch runs as a build test.
 name: check
 
 on:

@@ -1879,10 +1879,14 @@ pub fn reveal(path: &str) -> Result<(), String> {
 pub fn probe_step(path: &str, keep_faces: bool) -> Result<parcad_occt::StepProbe, String> {
     let p = std::path::Path::new(path);
     if !p.is_absolute() {
+        let example = if cfg!(windows) {
+            r"C:\Users\you\exports\part.step"
+        } else {
+            "/Users/you/exports/part.step"
+        };
         return Err(format!(
             "{path:?} is not an absolute path. This tool reads a file from the \
-             machine parcad runs on, so give the export's full path, e.g. \
-             /Users/you/exports/part.step"
+             machine parcad runs on, so give the export's full path, e.g. {example}"
         ));
     }
     if !p.exists() {
@@ -1959,7 +1963,8 @@ mod tests {
 
     #[test]
     fn probe_step_refuses_a_missing_file_and_names_the_fix() {
-        let error = probe_step("/definitely/not/here.step", true).unwrap_err();
+        let missing = std::env::temp_dir().join("parcad-definitely-not-here.step");
+        let error = probe_step(missing.to_str().unwrap(), true).unwrap_err();
         assert!(error.contains("no file at"), "{error}");
         assert!(error.contains(".step"), "{error}");
     }

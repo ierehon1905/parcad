@@ -160,25 +160,53 @@ jobs:
             tar czf "$out.tar.gz" "$out"
           fi
 
+      # The archive, not the build tree: unpacked somewhere else, with no
+      # PARCAD_OCCT_WORKER, it has to find its own worker and measure the
+      # bracket at the volume eval/cases/bracket.json records.
+      - name: Run the staged CLI from outside the build tree
+        run: |
+          set -euo pipefail
+          exe=""; [ "$RUNNER_OS" = Windows ] && exe=.exe
+          name="parcad-cli-${{ matrix.triple }}"
+          away="$RUNNER_TEMP/unpacked"
+          mkdir -p "$away"
+          if [ "$RUNNER_OS" = Windows ]; then 7z x -o"$away" "$name.zip" > /dev/null; else tar xzf "$name.tar.gz" -C "$away"; fi
+          cd "$away/$name"
+          PARCAD_PROJECTS_DIR="$away/projects" PARCAD_HTTP_PORT=4390 \
+            ./parcad$exe call evaluate_part --set script=@examples/bracket.js > reply.json
+          jq '{volume_mm3, faces, watertight, backend}' reply.json
+          jq -e '.backend == "brep" and .faces == 22 and .watertight and (.volume_mm3 - 55074.791 | fabs) < 30' reply.json > /dev/null
+
       # The same files as the tarball plus the plugin's launcher, as an MCP
       # bundle: what Claude Desktop installs and what the MCP Registry lists. The
       # launcher prefers an installed parcad and uses the bundled one last. The registry
       # refuses a bundle whose URL does not contain "mcp", hence the name.
       # The official packer, not zip: `zip` writes directory entries that the
       # mcpb unpacker fails on, and the packer validates the manifest too.
-      # Not on Windows: the launcher is a POSIX shell script.
+      # The launcher is a POSIX shell script, so a Windows bundle starts its own
+      # parcad.exe directly and does not look for an installed one.
       - name: Pack the MCP bundle
-        if: runner.os != 'Windows'
         run: |
           set -euo pipefail
           staged="parcad-cli-${{ matrix.triple }}"
           bundle="parcad-mcp-${{ matrix.triple }}"
           cp -R "$staged" "$bundle"
-          cp packaging/plugin/scripts/parcad-mcp app/src-tauri/icons/icon.png "$bundle/"
-          # The manifest names darwin; each bundle carries binaries for one platform.
-          platform=$([ "$RUNNER_OS" = Linux ] && echo linux || echo darwin)
-          jq --arg p "$platform" '.compatibility.platforms = [$p]' \
-            packaging/mcpb/manifest.json > "$bundle/manifest.json"
+          cp app/src-tauri/icons/icon.png "$bundle/"
+          case "$RUNNER_OS" in
+            Windows)
+              jq '.compatibility.platforms = ["win32"]
+                  | .server.entry_point = "parcad.exe"
+                  | .server.mcp_config = {command: "${__dirname}/parcad.exe", args: ["mcp"],
+                                          env: {PARCAD_SEED_DIR: "${__dirname}/examples"}}' \
+                packaging/mcpb/manifest.json > "$bundle/manifest.json"
+              ;;
+            *)
+              cp packaging/plugin/scripts/parcad-mcp "$bundle/"
+              platform=$([ "$RUNNER_OS" = Linux ] && echo linux || echo darwin)
+              jq --arg p "$platform" '.compatibility.platforms = [$p]' \
+                packaging/mcpb/manifest.json > "$bundle/manifest.json"
+              ;;
+          esac
           bunx @anthropic-ai/mcpb@2.1.2 pack "$bundle" "$bundle.mcpb"
 
       - name: Collect the bundles
@@ -257,7 +285,7 @@ jobs:
             **Windows SmartScreen will warn the same way** — the installer is
             unsigned. Choose *More info*, then *Run anyway*.
 
-            Homebrew installs the host instead of the app, on macOS and Linux —
+            On a Mac, Homebrew installs the host instead of the app —
             the whole app is in your browser at http://127.0.0.1:4242, MCP at
             /mcp:
 

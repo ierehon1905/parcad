@@ -67,28 +67,40 @@ Nothing on that path is quarantined. The same `parcad` is the headless driver
 lists what an agent can call over MCP and `parcad call <tool>` calls it from
 a shell.
 
-Or the desktop app: download the zip from
-[Releases](https://github.com/ierehon1905/parcad/releases), unzip, drag it
-to Applications. **macOS will refuse to open it the first time**, and again
-after each update — the build is not signed with an Apple Developer ID or
-notarised. Clear the flag:
+Or the desktop app, from
+[Releases](https://github.com/ierehon1905/parcad/releases):
+
+| platform | download |
+|---|---|
+| macOS, Apple silicon | `ParCAD-aarch64-apple-darwin.zip` — unzip, drag to Applications |
+| Linux x86_64 | `.deb` or `.AppImage` |
+| Windows x86_64 | `.msi` or `-setup.exe` |
+
+Each platform's build measures the whole eval corpus with the worker it ships
+before it is uploaded. None of them is signed. **macOS will refuse to open the
+app the first time**, and again after each update. Clear the flag:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/ParCAD.app
 ```
 
-Apple silicon only for now.
+Windows SmartScreen warns the same way: *More info*, then *Run anyway*. Every
+platform also has a `parcad-cli-*` archive — `parcad`, its worker beside it and
+the seed parts — for running the host without a window. Keep the two binaries
+together.
 
 ## Build it
 
-macOS. On Linux, CI builds the kernel crates on every push, but nobody has built
-the OCCT worker or the window there — patches welcome. Windows is unsupported:
-the worker's process handling has no Windows arm.
+macOS, Linux and Windows. Day-to-day development is on macOS; the release
+workflow builds and measures on all three, and Linux on arm64 builds too.
 
 You need [Rust](https://rustup.rs/) (the toolchain is pinned; rustup honours it),
 [Bun](https://bun.sh/), CMake, a C++ compiler, `patch(1)` and Python 3.11+. A
 clone is a 28 MB pack that expands to 144 MB, most of it a vendored OpenCASCADE
-tree, and a full build wants around 20 GB free.
+tree, and a full build wants around 20 GB free. On Linux the window also needs
+WebKitGTK (`libwebkit2gtk-4.1-dev`), and `libclang-dev` for the script sandbox's
+bindings. On Windows, use MSVC (Visual Studio Build Tools) and run the scripts
+from Git Bash, which also provides `patch`.
 
 ```bash
 cd app && bun install --frozen-lockfile && cd ..   # first: the Rust build shells out to bun

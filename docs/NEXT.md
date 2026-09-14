@@ -29,10 +29,22 @@ the evaluation refuses and names the rebuild.
 **Still not shipping, and the next step costs money rather than time.** The
 bundle is unsigned and un-notarised, so a second machine meets Gatekeeper before
 it meets the kernel; signing needs an Apple Developer Program membership, which
-is a decision, not a task. There is no updater, and nothing has been built for a
-target that is not this one, where the stripped triple suffix is the assumption
-most likely to break. The `.app` has been run from outside the build tree, never
-from a fresh user account.
+is a decision, not a task. There is no updater. The `.app` has been run from
+outside the build tree, never from a fresh user account.
+
+**Done 2026-09-14: Linux and Windows build, measure and bundle.** `release.yml`
+runs macOS arm64, Linux x86_64 (Ubuntu 22.04, for glibc reach) and Windows
+x86_64 (MSVC), and on each one measures all 110 corpus cases with the worker it
+uploads. Windows needed `taskkill` for a wedged worker, NTSTATUS crash codes,
+the `.exe` names, C++17 asked for through `cc` rather than a flag MSVC ignores,
+LF checkouts for the patch series, and OCCT's `libd/` install directory. Linux
+x86_64 moved three mesh-derived numbers, now held to tolerances their cases
+explain. Linux arm64 builds in Docker and measures 109 of 110: the fillet
+bisection in `refuse-unblendable-junction` lands on 1.25 mm rather than 1.13,
+because a 1.25 mm blend builds under that compiler. It is not a release target
+yet, so the case still records 1.13. Not yet done: the Linux and Windows
+bundles have not been opened on a desktop, the Homebrew formula is macOS only,
+and nothing is signed on any platform.
 
 **One hazard is free to close and worth closing.** `tauri build` has no
 dependency on `tools/build-worker.sh`. A *missing* staging copy fails the build

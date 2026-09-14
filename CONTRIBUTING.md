@@ -21,9 +21,12 @@ git config core.hooksPath .githooks                # a clone does not get the ga
 export TZ=UTC                                      # commits are recorded in UTC; the hook refuses others
 ```
 
-Development is on macOS. Linux builds the kernel crates in CI, but nobody has
-built the OCCT worker or the desktop window there. Windows is unsupported — the
-worker's process handling has no Windows arm.
+Development is on macOS. CI's `check` job runs `--fast` on Linux; the release
+workflow (dispatch it with `gh workflow run release.yml --ref <branch>`) builds the
+worker, measures the corpus and bundles the app on macOS, Linux x86_64 and
+Windows x86_64. Mesh-derived numbers — bed contact on a curve, triangle counts —
+can move between compilers; a case gives those a `tolerance` of its own and says
+why, and never loosens `volume_pct` to do it.
 
 ## The gate
 
