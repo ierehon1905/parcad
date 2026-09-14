@@ -15,6 +15,19 @@
  *     plate.cut(hole.at(20, 0, 0), hole.at(-20, 0, 0))
  *
  * produces one cylinder with two placements, not two cylinders.
+ *
+ * A part that is several solids — a box and its lid, a clamp in two halves,
+ * a holder and the object it holds — returns an object of named shapes
+ * instead of one:
+ *
+ *     return { base, lid }
+ *
+ * The bodies are built, measured and exported together and never fused. The
+ * report then measures each body by name and every pair against each other
+ * (`clear` by how much, or `interfering` by how many mm³), STEP writes one
+ * solid per body, and STL writes them all into one file. Nothing joins or
+ * constrains one body to another: each sits exactly where its script placed
+ * it. Selectors, tags and treatments work inside a body, never across two.
  */
 
 import { parseEdgeSelector, parseVertexSelector } from "./selectors";
@@ -1724,14 +1737,27 @@ export interface Doc {
 }
 
 /**
+ * What a script may return: one shape, or an object naming each body of a
+ * part that stays in several — `return { base, lid }`.
+ */
+export type Part = Shape | Record<string, Shape>;
+
+// The runners (engine.ts, tools/run.ts, script.rs) say the same thing when a
+// script returns neither; not exported, because an export is a reserved word.
+const RETURN_HINT =
+  "the script must return a shape, or an object of named shapes for a part in several bodies.\n" +
+  "End it with something like:  return body.cut(hole)   or   return { base, lid }";
+
+/**
  * Flatten a shape into the JSON graph.
  *
  * Nodes are memoised by identity, so a shape used in several places becomes one
  * node with several parents — the graph stays a DAG and the core evaluates the
- * shared work once.
+ * shared work once. An object of shapes becomes one `bodies` root over each
+ * body's own subgraph; a shape shared between two bodies is still one node.
  */
 export function build(
-  root: Shape,
+  root: Part,
   treatments?: TreatmentSource[],
   stacks?: (string | undefined)[],
 ): Doc {
@@ -1755,6 +1781,40 @@ export function build(
     return id;
   };
 
-  const rootId = visit(root);
+  if (root instanceof Shape) {
+    const rootId = visit(root);
+    return { units: "mm", root: rootId, nodes };
+  }
+
+  if (Array.isArray(root)) {
+    throw new Error(
+      "the script returned an array; bodies need names, so return an object instead: " +
+        "return { left, right }",
+    );
+  }
+  if (typeof root !== "object" || root === null) throw new Error(RETURN_HINT);
+  const entries = Object.entries(root);
+  if (entries.length === 0) {
+    throw new Error(
+      "the script returned an empty object; return one shape, or name each body: return { base, lid }",
+    );
+  }
+  const bodies = entries.map(([name, shape]) => {
+    if (!(shape instanceof Shape)) {
+      throw new Error(
+        `body "${name}" is not a shape (it is ${describe(shape)}); every value in the returned object must be one`,
+      );
+    }
+    if (!name.trim()) throw new Error("a body has an empty name; name each body: return { base, lid }");
+    return { name, child: visit(shape) };
+  });
+  const rootId = nodes.length;
+  nodes.push({ op: "bodies", bodies });
   return { units: "mm", root: rootId, nodes };
+}
+
+function describe(value: unknown): string {
+  if (value === null) return "null";
+  if (Array.isArray(value)) return "an array";
+  return typeof value === "object" ? "a plain object" : `a ${typeof value}`;
 }

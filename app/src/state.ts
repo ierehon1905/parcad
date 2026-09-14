@@ -58,10 +58,29 @@ export interface EvaluationSnapshot {
   resolution_mm: number;
   watertight: boolean;
   non_manifold_edges: number;
-  /** Free-standing pieces of surface; one for a part. */
+  /** Free-standing pieces of surface; one for a part, and for a part that
+   *  returns several named bodies, their number when each is intact. */
   bodies: number;
   /** Closed surfaces inside another: a shell's cavity. */
   voids: number;
+  /** Each named body of a part that returns several, measured alone.
+   *  Absent for a one-solid part. */
+  named_bodies?: {
+    name: string;
+    volume_mm3: number;
+    faces: number;
+    watertight: boolean;
+    /** Free-standing pieces inside this body: one when it is intact. */
+    pieces: number;
+  }[];
+  /** How each pair of named bodies sits, on the exact solids. */
+  between_bodies?: {
+    a: string;
+    b: string;
+    verdict: "clear" | "touching" | "interfering";
+    interference_mm3: number;
+    clearance_mm?: number;
+  }[];
   /** The surface in the part's lowest plane and how many patches it is in;
    *  what a printed part rests on. Absent only for an empty mesh. */
   stands_on?: {

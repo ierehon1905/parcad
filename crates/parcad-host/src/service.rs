@@ -185,14 +185,30 @@ pub struct EvaluationSnapshot {
     pub resolution_mm: f64,
     pub watertight: bool,
     pub non_manifold_edges: usize,
-    /// Connected pieces of surface: one for a part, more for pieces drawn
-    /// together. Watertight and the right volume both hold for five bars.
+    /// Connected pieces of surface, measured over the whole part: one for a
+    /// part, more for pieces drawn together. Watertight and the right volume
+    /// both hold for five bars. For a part that returns several named bodies
+    /// this should equal `named_bodies.len()`; each entry's own `pieces`
+    /// says whether that body is in one piece.
     #[serde(default = "one_body")]
     pub bodies: usize,
     /// Closed surfaces inside another: a shell's cavity. Not a defect by
     /// itself, which is why it is counted apart from `bodies`.
     #[serde(default)]
     pub voids: usize,
+    /// Each named body of a part that returns several, measured on its own
+    /// with the same code that measured the whole. Empty for a one-solid
+    /// part, and for the implicit backend, whose one field has no body in it
+    /// to measure apart — the whole is what it reports.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub named_bodies: Vec<BodyReport>,
+    /// How every pair of named bodies sits, measured on the exact solids the
+    /// way `check_fit` measures a part against a reference: `interfering`
+    /// with a shared volume is a clip drawn through the body it clips onto;
+    /// `clear` by a clearance is the fit the design asked for. Empty unless
+    /// the exact kernel measured at least two bodies.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub between_bodies: Vec<BodyFit>,
     /// What the part stands on: the surface in its lowest plane and the number
     /// of separate patches it is in. A printed part rests on that face, and
     /// eighteen small patches where one slab was meant is the underside defect
@@ -257,6 +273,123 @@ pub struct EvaluationSnapshot {
 
 fn one_body() -> usize {
     1
+}
+
+/// One named body of a part that returns several, measured alone.
+///
+/// The same measurements the part-level snapshot carries, off this body's
+/// own slice of the mesh: `parcad_occt::measure_bodies` cuts the slice and
+/// runs the whole-part code on it, so a body's volume and the part's are the
+/// same kind of number and the bodies' volumes sum to the part's.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct BodyReport {
+    pub name: String,
+    pub size: [f64; 3],
+    pub bounds_min: [f64; 3],
+    pub bounds_max: [f64; 3],
+    pub volume_mm3: f64,
+    pub area_mm2: f64,
+    pub centroid: [f64; 3],
+    pub faces: usize,
+    pub topological_edges: usize,
+    pub triangles: usize,
+    pub watertight: bool,
+    pub non_manifold_edges: usize,
+    /// Free-standing pieces inside this one named body: one when it is
+    /// intact. Two is the accidental split — a body whose own booleans left
+    /// it in parts — which the part-level `bodies` count cannot tell from a
+    /// second body that was meant.
+    pub pieces: usize,
+    pub voids: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stands_on: Option<StandsOn>,
+}
+
+impl From<&parcad_occt::MeasuredBody> for BodyReport {
+    fn from(b: &parcad_occt::MeasuredBody) -> Self {
+        let size = b.bounds.size();
+        Self {
+            name: b.name.clone(),
+            size: round_point([size.x, size.y, size.z]),
+            bounds_min: round_point([b.bounds.min.x, b.bounds.min.y, b.bounds.min.z]),
+            bounds_max: round_point([b.bounds.max.x, b.bounds.max.y, b.bounds.max.z]),
+            volume_mm3: round_mm(b.mass.volume_mm3),
+            area_mm2: round_mm(b.mass.area_mm2),
+            centroid: round_point([b.mass.centroid.x, b.mass.centroid.y, b.mass.centroid.z]),
+            faces: b.faces,
+            topological_edges: b.edges,
+            triangles: b.stats.triangles,
+            watertight: b.stats.watertight,
+            non_manifold_edges: b.stats.non_manifold_edges,
+            pieces: b.stats.bodies,
+            voids: b.stats.voids,
+            stands_on: b.stands_on.as_ref().map(StandsOn::from),
+        }
+    }
+}
+
+/// Two named bodies and how they sit against each other, on the exact solids.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct BodyFit {
+    pub a: String,
+    pub b: String,
+    /// `clear`, `touching` or `interfering`.
+    pub verdict: String,
+    /// Volume the two share, mm³; zero unless they interfere.
+    pub interference_mm3: f64,
+    /// Least distance between them when they do not overlap; absent when
+    /// they interfere.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clearance_mm: Option<f64>,
+    /// A point on `a`, then one on `b`, where that clearance is measured.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closest_mm: Option<[[f64; 3]; 2]>,
+}
+
+impl From<&parcad_occt::BodyFit> for BodyFit {
+    fn from(f: &parcad_occt::BodyFit) -> Self {
+        Self {
+            a: f.a.clone(),
+            b: f.b.clone(),
+            verdict: f.verdict.clone(),
+            interference_mm3: round_mm(f.interference_mm3),
+            clearance_mm: f.clearance_mm.map(round_mm),
+            closest_mm: f.closest_mm.map(|[a, b]| [round_point(a), round_point(b)]),
+        }
+    }
+}
+
+/// What the exact kernel measured per body and between bodies, for the
+/// snapshot and for an export's `measured`.
+fn body_reports(s: &parcad_occt::Success) -> (Vec<BodyReport>, Vec<BodyFit>) {
+    (
+        parcad_occt::measure_bodies(s).iter().map(BodyReport::from).collect(),
+        s.between.iter().map(BodyFit::from).collect(),
+    )
+}
+
+/// The document of one named body on its own: the same graph with that
+/// body's node as the root. What `export_part` builds when asked for one
+/// body, so a body's file comes from the kernel run that would build it,
+/// not from a slice of the compound.
+pub fn body_doc(doc: &Doc, body: &str) -> Result<Doc, String> {
+    let Some(bodies) = doc.bodies() else {
+        return Err(format!(
+            "this part is one solid, so there is no body called {body:?} to pick out; \
+             leave `body` out, or return an object of named shapes such as \
+             `return {{ base, lid }}`"
+        ));
+    };
+    let Some(found) = bodies.iter().find(|b| b.name == body) else {
+        let names: Vec<_> = bodies.iter().map(|b| format!("{:?}", b.name)).collect();
+        return Err(format!(
+            "no body called {body:?}; the part's bodies are {}",
+            names.join(", ")
+        ));
+    };
+    let mut alone = doc.clone();
+    alone.root = found.child;
+    Ok(alone)
 }
 
 /// `parcad_core::mesh::BedContact`, carried here with the schema the MCP
@@ -381,6 +514,9 @@ pub struct EdgeEntity {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub direction: Option<[f32; 3]>,
     pub length_mm: f32,
+    /// The named body this edge is on, for a part that returns several.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 /// One evaluated face, for a caller that cannot point at one.
@@ -409,6 +545,9 @@ pub struct FaceEntity {
     pub radius_mm: Option<f64>,
     /// The `face@N` ids this face shares an edge with.
     pub adjacent: Vec<String>,
+    /// The named body this face is on, for a part that returns several.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 /// The selectable edges of an evaluation.
@@ -460,6 +599,7 @@ fn entity(edge: &parcad_occt::EdgeCurve) -> EdgeEntity {
         center: edge.center,
         direction: edge.direction,
         length_mm: edge.length_mm,
+        body: edge.body.clone(),
     }
 }
 
@@ -478,6 +618,7 @@ fn face_entity(index: usize, face: &parcad_occt::protocol::FaceSummary) -> FaceE
         direction: face.surface.direction.map(round_dir),
         radius_mm: face.surface.radius.map(round_mm),
         adjacent: face.adjacent.iter().map(|n| format!("face@{n}")).collect(),
+        body: face.body.clone(),
     }
 }
 
@@ -1204,6 +1345,7 @@ fn describe(
     report: &parcad_core::PartReport,
     mesh: &Tessellation,
     topology: Option<&parcad_occt::Topology>,
+    (named_bodies, between_bodies): (Vec<BodyReport>, Vec<BodyFit>),
     backend: &str,
     kernel_ms: u64,
 ) -> EvaluationSnapshot {
@@ -1236,6 +1378,8 @@ fn describe(
         non_manifold_edges: report.mesh.non_manifold_edges,
         bodies: report.mesh.bodies,
         voids: report.mesh.voids,
+        named_bodies,
+        between_bodies,
         stands_on: report.stands_on.as_ref().map(StandsOn::from),
         prints_on: parcad_core::measure::fits_beds(report.size)
             .into_iter()
@@ -1348,6 +1492,7 @@ fn treatments(doc: &Doc) -> Vec<Treatment> {
                 | Op::Extrude { .. }
                 | Op::Loft { .. }
                 | Op::Sweep { .. }
+                | Op::Bodies { .. }
                 | Op::Union { .. }
                 | Op::Difference { .. }
                 | Op::Intersection { .. }
@@ -1396,8 +1541,17 @@ pub struct ExportMeasured {
     pub size: [f64; 3],
     pub volume_mm3: f64,
     pub watertight: bool,
+    /// Free-standing pieces in the file; for a part in several named bodies,
+    /// their number when every body is intact.
     pub bodies: usize,
     pub voids: usize,
+    /// The named bodies the file holds — a solid each in STEP, all of their
+    /// triangles in one STL — each measured alone. Empty for a one-solid file.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub named_bodies: Vec<BodyReport>,
+    /// How those bodies sit against each other, as `evaluate_part` reports.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub between_bodies: Vec<BodyFit>,
     /// For STL, the furthest any triangle in the file sits from the true
     /// surface, in mm. Absent for STEP, whose surfaces are exact.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1407,13 +1561,20 @@ pub struct ExportMeasured {
 }
 
 impl ExportMeasured {
-    fn of(report: &parcad_core::PartReport, deflection_mm: Option<f64>, reused_build: bool) -> Self {
+    fn of(
+        report: &parcad_core::PartReport,
+        (named_bodies, between_bodies): (Vec<BodyReport>, Vec<BodyFit>),
+        deflection_mm: Option<f64>,
+        reused_build: bool,
+    ) -> Self {
         Self {
             size: round_point([report.size.x, report.size.y, report.size.z]),
             volume_mm3: round_mm(report.mass.volume_mm3),
             watertight: report.mesh.watertight,
             bodies: report.mesh.bodies,
             voids: report.mesh.voids,
+            named_bodies,
+            between_bodies,
             deflection_mm: deflection_mm.map(round_mm),
             reused_build,
         }
@@ -1608,7 +1769,7 @@ fn evaluate_implicit(doc: &Doc, depth: u8) -> Result<Evaluated, String> {
         bounds: report.bounds,
         // The welded mesh rather than the faceted corners: same surface, and
         // shared vertices are what make an edge midpoint mean anything.
-        snapshot: describe(doc, &report, &tess, None, "implicit", 0),
+        snapshot: describe(doc, &report, &tess, None, (Vec::new(), Vec::new()), "implicit", 0),
         timings: Timings {
             lower_and_mesh_ms,
             normals_ms,
@@ -1621,7 +1782,15 @@ fn evaluate_brep(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evalu
     let s = &*built.success;
 
     let (report, mesh) = measure_brep(doc, s)?;
-    let mut snapshot = describe(doc, &report, &mesh, Some(&s.topology), "brep", built.wall_ms);
+    let mut snapshot = describe(
+        doc,
+        &report,
+        &mesh,
+        Some(&s.topology),
+        body_reports(s),
+        "brep",
+        built.wall_ms,
+    );
     snapshot.reused_build = built.reused;
     Ok(Evaluated {
         bounds: report.bounds,
@@ -1730,14 +1899,14 @@ pub fn export_stl_within(
     backend: Backend,
     budget: Option<std::time::Duration>,
 ) -> Result<Export, String> {
-    let (tess, report, reused) = if backend.is_exact() {
+    let (tess, report, bodies, reused) = if backend.is_exact() {
         let built = build_exact(doc, budget, false)?;
         let (report, tess) = measure_brep(doc, &built.success)?;
-        (tess, report, built.reused)
+        (tess, report, body_reports(&built.success), built.reused)
     } else {
         let (_, tess, report) =
             parcad_core::evaluate(doc, depth.clamp(3, 9)).map_err(|e| format!("{e:#}"))?;
-        (tess, report, false)
+        (tess, report, (Vec::new(), Vec::new()), false)
     };
     let mut bytes = Vec::new();
     tess.write_stl(&mut bytes)
@@ -1747,7 +1916,7 @@ pub fn export_stl_within(
         bytes,
         filename: "part.stl",
         content_type: "model/stl",
-        measured: ExportMeasured::of(&report, Some(report.mesh.resolution_mm), reused),
+        measured: ExportMeasured::of(&report, bodies, Some(report.mesh.resolution_mm), reused),
     })
 }
 
@@ -1772,7 +1941,7 @@ pub fn export_step_within(doc: &Doc, budget: Option<std::time::Duration>) -> Res
         bytes,
         filename: "part.step",
         content_type: "application/step",
-        measured: ExportMeasured::of(&report, None, built.reused),
+        measured: ExportMeasured::of(&report, body_reports(&built.success), None, built.reused),
     })
 }
 

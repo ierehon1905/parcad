@@ -700,6 +700,36 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         },
         bodies_text(&stats)
     );
+    for body in parcad_occt::measure_bodies(&s) {
+        let size = body.bounds.size();
+        println!(
+            "body     {}: {:.2} x {:.2} x {:.2} mm, {:.2} mm³, {} faces, {}{}",
+            body.name,
+            size.x,
+            size.y,
+            size.z,
+            body.mass.volume_mm3,
+            body.faces,
+            if body.stats.watertight { "watertight" } else { "NOT watertight" },
+            if body.stats.bodies == 1 {
+                String::new()
+            } else {
+                format!(", in {} PIECES", body.stats.bodies)
+            },
+        );
+    }
+    for fit in &s.between {
+        match fit.clearance_mm {
+            Some(gap) => println!(
+                "between  {} and {}: {}, clearance {gap:.3} mm",
+                fit.a, fit.b, fit.verdict
+            ),
+            None => println!(
+                "between  {} and {}: {}, {:.3} mm³ shared",
+                fit.a, fit.b, fit.verdict, fit.interference_mm3
+            ),
+        }
+    }
     println!(
         "timing   build {} ms, mesh {} ms, export {} ms, wall {} ms, render {} ms",
         s.timings.build_ms, s.timings.mesh_ms, s.timings.export_ms, kernel_ms, render_ms

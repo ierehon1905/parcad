@@ -247,6 +247,61 @@ mod tests {
         Op::validate_sweep(&[], 1.0, &[], 0.0, Some(&single), 1.0).unwrap();
     }
 
+    fn two_bodies(root: NodeId) -> Doc {
+        serde_json::from_value(serde_json::json!({
+            "root": root,
+            "nodes": [
+                { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+                { "op": "translate", "child": 0, "by": { "x": 30, "y": 0, "z": 0 } },
+                { "op": "bodies", "bodies": [
+                    { "name": "left", "child": 0 },
+                    { "name": "right", "child": 1 }
+                ] },
+                { "op": "translate", "child": 2, "by": { "x": 1, "y": 0, "z": 0 } }
+            ]
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_bodies_root_names_its_bodies_and_orders_every_one() {
+        let doc = two_bodies(2);
+        let names: Vec<_> = doc.bodies().unwrap().iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["left", "right"]);
+        let order = doc.topo_order().unwrap();
+        assert_eq!(order.last(), Some(&2));
+        assert!(order.contains(&0) && order.contains(&1));
+        assert!(two_bodies(1).bodies().is_none());
+    }
+
+    #[test]
+    fn bodies_under_an_operation_are_refused_by_name() {
+        // A translation of the group: the one shape of graph a script could
+        // never write, and the one every backend would otherwise fuse.
+        let err = two_bodies(3).topo_order().unwrap_err().to_string();
+        assert!(err.contains("not the root"), "{err}");
+        assert!(err.contains("return { base, lid }"), "{err}");
+    }
+
+    #[test]
+    fn bodies_need_distinct_non_empty_names() {
+        let mut doc = two_bodies(2);
+        let Op::Bodies { bodies } = &mut doc.nodes[2].op else { unreachable!() };
+        bodies[1].name = "left".into();
+        let err = doc.topo_order().unwrap_err().to_string();
+        assert!(err.contains("both named \"left\""), "{err}");
+
+        let Op::Bodies { bodies } = &mut doc.nodes[2].op else { unreachable!() };
+        bodies[1].name = " ".into();
+        let err = doc.topo_order().unwrap_err().to_string();
+        assert!(err.contains("empty name"), "{err}");
+
+        let Op::Bodies { bodies } = &mut doc.nodes[2].op else { unreachable!() };
+        bodies.clear();
+        let err = doc.topo_order().unwrap_err().to_string();
+        assert!(err.contains("returns no bodies"), "{err}");
+    }
+
     #[test]
     fn vertex_target_preserves_the_authored_corner_intent() {
         let op: Op = serde_json::from_str(
@@ -558,6 +613,31 @@ pub enum Op {
         #[serde(default, skip_serializing_if = "ChamferRecipe::is_default")]
         recipe: ChamferRecipe,
     },
+
+    /// Several solids that stay several: a part finished as named bodies.
+    ///
+    /// Written only by a script that returns an object of shapes —
+    /// `return { base, lid }` — and only ever the root. The bodies are built,
+    /// measured and exported together and never fused: a lid drawn 0.3 mm
+    /// clear of its base stays 0.3 mm clear, and the report says so per body
+    /// and between each pair. Nothing here joins, mates or constrains one
+    /// body to another; each sits where its own script placed it.
+    ///
+    /// A `Bodies` node anywhere but the root is refused by
+    /// [`Doc::topo_order`]. The one thing the op means is "these are separate
+    /// parts", and a boolean or a treatment over the group would have to
+    /// fuse them to mean anything, which is the opposite.
+    Bodies {
+        bodies: Vec<NamedBody>,
+    },
+}
+
+/// One body of an [`Op::Bodies`] root: the name a script gave it, and the
+/// node that is that body's finished solid.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamedBody {
+    pub name: String,
+    pub child: NodeId,
 }
 
 /// One [`Op::Loft`] section: a convex outline lying in the plane at `z`.
@@ -1370,7 +1450,59 @@ impl Doc {
             }
         }
 
+        self.validate_bodies(&order)?;
         Ok(order)
+    }
+
+    /// The named bodies of a part that returns several, or `None` for the
+    /// ordinary one-solid document.
+    pub fn bodies(&self) -> Option<&[NamedBody]> {
+        match &self.nodes.get(self.root)?.op {
+            Op::Bodies { bodies } => Some(bodies),
+            _ => None,
+        }
+    }
+
+    /// A [`Op::Bodies`] node is the root or nothing, and its names are what
+    /// a reader will look a body up by, so they have to be present and
+    /// distinct. Checked with the cycle check because every backend goes
+    /// through [`Doc::topo_order`] first.
+    fn validate_bodies(&self, live: &[NodeId]) -> anyhow::Result<()> {
+        for &id in live {
+            let Op::Bodies { bodies } = &self.nodes[id].op else {
+                continue;
+            };
+            if id != self.root {
+                anyhow::bail!(
+                    "node {id} groups several bodies but is not the root: a part's bodies are \
+                     the last thing a script returns, as `return {{ base, lid }}`, and cannot \
+                     be unioned, cut, moved or filleted as a group — operate on each body \
+                     before returning them"
+                );
+            }
+            if bodies.is_empty() {
+                anyhow::bail!(
+                    "the part returns no bodies. Return one shape, or an object naming each \
+                     body: `return {{ base, lid }}`"
+                );
+            }
+            let mut seen = std::collections::HashSet::new();
+            for body in bodies {
+                if body.name.trim().is_empty() {
+                    anyhow::bail!(
+                        "a body has an empty name; every body is looked up by name, so name \
+                         each one: `return {{ base, lid }}`"
+                    );
+                }
+                if !seen.insert(body.name.as_str()) {
+                    anyhow::bail!(
+                        "two bodies are both named {:?}; give each body its own name",
+                        body.name
+                    );
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Direct dependencies of a node.
@@ -1384,6 +1516,7 @@ impl Doc {
             | Op::Extrude { .. }
             | Op::Loft { .. }
             | Op::Sweep { .. } => vec![],
+            Op::Bodies { bodies } => bodies.iter().map(|b| b.child).collect(),
             Op::Union { children, .. } | Op::Intersection { children, .. } => children.clone(),
             Op::Difference { base, tools, .. } => {
                 let mut v = vec![*base];

@@ -101,8 +101,10 @@ pub fn service() -> axum::Router {
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct EvaluateRequest {
     /// A parcad DSL script. It must end by returning a shape, e.g.
-    /// `return body.cut(hole)`. Units are millimetres; primitives are centred
-    /// on the origin and placed with `.at(x, y, z)`.
+    /// `return body.cut(hole)`, or an object of named shapes for a part that
+    /// stays in several bodies, e.g. `return { base, lid }`. Units are
+    /// millimetres; primitives are centred on the origin and placed with
+    /// `.at(x, y, z)`.
     pub script: String,
     /// `brep` (default) is the exact kernel: real faces and edges, and it
     /// refuses what it cannot do faithfully. `implicit` is a sampled distance
@@ -228,6 +230,12 @@ pub struct ExportRequest {
     /// `part.step` / `part.stl`.
     #[serde(default)]
     pub filename: Option<String>,
+    /// For a part that returns several bodies (`return { base, lid }`): the
+    /// name of the one body to write on its own, e.g. `lid`. Omit to write
+    /// every body into one file — a solid per body in STEP, all of their
+    /// triangles in one STL. Refused by name when the part has no such body.
+    #[serde(default)]
+    pub body: Option<String>,
     /// Seconds the kernel may take, 1 to 600. Defaults to 20, or
     /// PARCAD_OCCT_TIMEOUT. Reuses the build of an earlier evaluate_part on
     /// the same script when there is one.
@@ -349,8 +357,8 @@ pub struct Exported {
     format: String,
     /// The part in the file, measured off the build that wrote it: size,
     /// volume, `watertight`, `bodies`, `voids`, and for STL the mesh
-    /// `deflection_mm`. A file with bodies above 1 or watertight false is not
-    /// ready to print whatever the slicer says.
+    /// `deflection_mm`. A file with watertight false, or with more bodies
+    /// than the part names, is not ready to print whatever the slicer says.
     measured: service::ExportMeasured,
 }
 
@@ -422,7 +430,7 @@ impl Parcad {
     #[tool(
         name = "evaluate_part",
         annotations(title = "Build and measure a part", read_only_hint = true, open_world_hint = false),
-        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality, `bodies` (one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Each view in the reply also carries `path`, the same image as a PNG file on this machine, and `markdown`, that file as an image line for your reply: the user does not see the pictures a tool returns in every client, so paste `markdown` whenever they should see the part. A build is kept per script: asking again with other views, exporting, or putting the script on screen reuses it (`reused_build`), so render after measuring rather than instead of it. `timeout_s` gives a heavy part longer than the default 20 s. Use this to check that a script produces the part you intended.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. A tag in `unlocated_tags` owns no point of the finished surface at all: it was buried by a later boolean, or it is on a fillet, which has no field to locate.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
+        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality, `bodies` (free-standing pieces: one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in.\n\nA part that is meant to be several solids — a base and its lid, a clamp in two halves — returns an object of named shapes, `return { base, lid }`, and the reply then carries `named_bodies`: each body measured alone (size, bounds, volume, faces, `watertight`, `pieces` — 1 when that body is intact, more when its own booleans left it split, the defect the part-level `bodies` cannot tell from a second body that was meant) and `between_bodies`: every pair measured on the exact solids, `clear` with a `clearance_mm` and the two `closest_mm` points, `touching`, or `interfering` with the mm³ they share. Read `between_bodies` for whether a lid clears its base or a clip is drawn through what it clips onto; for such a part `bodies` should equal the number of named bodies. Bodies are never fused, and selectors, tags and treatments work inside one body only. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Each view in the reply also carries `path`, the same image as a PNG file on this machine, and `markdown`, that file as an image line for your reply: the user does not see the pictures a tool returns in every client, so paste `markdown` whenever they should see the part. A build is kept per script: asking again with other views, exporting, or putting the script on screen reuses it (`reused_build`), so render after measuring rather than instead of it. `timeout_s` gives a heavy part longer than the default 20 s. Use this to check that a script produces the part you intended.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. A tag in `unlocated_tags` owns no point of the finished surface at all: it was buried by a later boolean, or it is on a fillet, which has no field to locate.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
     )]
     async fn evaluate_part(
         &self,
@@ -525,7 +533,7 @@ impl Parcad {
     #[tool(
         name = "list_entities",
         annotations(title = "List a part's edges and faces", read_only_hint = true, open_world_hint = false),
-        description = "List what a part is made of, as text rather than a picture: its visible edges with their centres, directions and lengths, and its faces with what each one is (plane, cylinder, cone, sphere, torus), its exact area, a point on it, its outward normal or axis, and the faces it touches.\n\nUse the edges to work out which directional or topological selector picks the edges you mean. Use the faces to work out the *shape* of the part without looking at it — `adjacent` is the half that carries it, because a plane at z=44 could be the top of a plate or the floor of a pocket and what it borders is what tells them apart. A cylindrical face bordering two planes is a through hole; bordering one is a blind one.\n\nThe returned edge@N and face@N ids describe one evaluation and must never appear in a script — there is no face selector in the DSL, so a face is something to read, and the way to act on one is the edges around it."
+        description = "List what a part is made of, as text rather than a picture: its visible edges with their centres, directions and lengths, and its faces with what each one is (plane, cylinder, cone, sphere, torus), its exact area, a point on it, its outward normal or axis, and the faces it touches. For a part in several named bodies each edge and face also says which `body` it is on.\n\nUse the edges to work out which directional or topological selector picks the edges you mean. Use the faces to work out the *shape* of the part without looking at it — `adjacent` is the half that carries it, because a plane at z=44 could be the top of a plate or the floor of a pocket and what it borders is what tells them apart. A cylindrical face bordering two planes is a through hole; bordering one is a blind one.\n\nThe returned edge@N and face@N ids describe one evaluation and must never appear in a script — there is no face selector in the DSL, so a face is something to read, and the way to act on one is the edges around it."
     )]
     async fn list_entities(
         &self,
@@ -653,7 +661,7 @@ impl Parcad {
     #[tool(
         name = "export_part",
         annotations(title = "Export a part to a file", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Export a part as STEP (exact surfaces, for CAD) or STL (a mesh, for printing) and return the absolute path written. STEP requires the exact backend. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer."
+        description = "Export a part as STEP (exact surfaces, for CAD) or STL (a mesh, for printing) and return the absolute path written. STEP requires the exact backend. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one solid per body in STEP, every body's triangles in one STL — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone, which is what a slicer wants when the halves print separately."
     )]
     async fn export_part(
         &self,
@@ -685,7 +693,10 @@ impl Parcad {
         let budget = budget(request.timeout_s);
         let exported = blocking(move || {
             let built = script::build(&request.script)?;
-            let doc = service::parse_graph(built.graph.clone())?;
+            let mut doc = service::parse_graph(built.graph.clone())?;
+            if let Some(body) = &request.body {
+                doc = service::body_doc(&doc, body)?;
+            }
             let export = if format == "step" {
                 service::export_step_within(&doc, budget).map_err(|e| built.locate(e))?
             } else {
@@ -748,7 +759,7 @@ impl Parcad {
     #[tool(
         name = "check_fit",
         annotations(title = "Check the fit", read_only_hint = true, open_world_hint = false),
-        description = "Lay a reference object against a part and measure how they sit, on the two exact solids: `verdict` is clear, touching or interfering; `interference_mm3` is the material the two share, which is what would have to be cut away for the object to fit; `clearance_mm` and `closest_mm` say how much room there is and where, when they do not overlap. This is the question 'does the laptop fit in its holder' or 'does the lid clear the boss', and neither a render nor arithmetic on the script can answer it — the script says what was asked for and this measures what was built.\n\nBoth arguments are scripts. The reference is usually one line placing a body from the DEVICES table, e.g. `return device(\"macbook-pro-16\").at(0, 0, 18.4)`, or any shape drawn where the object sits. A holder is right when the reference is `clear` by about the clearance it was drawn with, and wrong when it `interfering` — the volume and the two closest points say where."
+        description = "Lay a reference object against a part and measure how they sit, on the two exact solids: `verdict` is clear, touching or interfering; `interference_mm3` is the material the two share, which is what would have to be cut away for the object to fit; `clearance_mm` and `closest_mm` say how much room there is and where, when they do not overlap. This is the question 'does the laptop fit in its holder' or 'does the lid clear the boss', and neither a render nor arithmetic on the script can answer it — the script says what was asked for and this measures what was built.\n\nBoth arguments are scripts. The reference is usually one line placing a body from the DEVICES table, e.g. `return device(\"macbook-pro-16\").at(0, 0, 18.4)`, or any shape drawn where the object sits. A holder is right when the reference is `clear` by about the clearance it was drawn with, and wrong when it `interfering` — the volume and the two closest points say where. When both objects are bodies of one part — `return { holder, laptop }` — evaluate_part already measures the pair in `between_bodies`, with the same verdict and numbers, and no second call is needed."
     )]
     async fn check_fit(
         &self,
@@ -929,7 +940,8 @@ const TOOL_LIST_TTL_MS: u64 = 86_400_000;
 
 const INSTRUCTIONS: &str = "parcad builds parts from a small JavaScript DSL and evaluates them with an exact \
 B-rep kernel. Everything is millimetres; primitives are centred on the origin and placed \
-with .at(x, y, z); a script ends by returning a shape.\n\n\
+with .at(x, y, z); a script ends by returning a shape, or { base, lid } for a part that \
+stays in several bodies, measured per body and between them.\n\n\
 Start from read_docs: its `dsl` topic is the whole language, generated from the source; \
 `gaps` and `gotchas` are what the kernel refuses and what silently returns a wrong answer. \
 list_projects and read_project show house style; save_project writes to the folder the \

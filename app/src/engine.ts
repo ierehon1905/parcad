@@ -187,14 +187,15 @@ function buildGraph(source: string): BuiltGraph {
   } catch (e) {
     throw atLine("the script threw", e, source);
   }
-  if (!(result instanceof Shape)) {
+  if (!(result instanceof Shape) && (typeof result !== "object" || result === null)) {
     throw new Error(
-      "the script must return a shape.\n" + "End it with something like:  return body.cut(hole)",
+      "the script must return a shape, or an object of named shapes for a part in several bodies.\n" +
+        "End it with something like:  return body.cut(hole)   or   return { base, lid }",
     );
   }
   const treatments: dsl.TreatmentSource[] = [];
   const stacks: (string | undefined)[] = [];
-  const graph = dsl.build(result, treatments, stacks);
+  const graph = dsl.build(result as dsl.Part, treatments, stacks);
   nodeLines = stacks.map(lineOf);
   return { graph, source, treatments };
 }
@@ -660,7 +661,21 @@ function readmeFor(path: string, source: string): string {
       (snapshot.watertight
         ? "watertight"
         : `NOT watertight — ${snapshot.non_manifold_edges} bad edges`) +
-      (snapshot.bodies > 1 ? `, ${snapshot.bodies} SEPARATE BODIES` : ""),
+      (snapshot.bodies > (snapshot.named_bodies?.length ?? 1)
+        ? `, ${snapshot.bodies} SEPARATE BODIES`
+        : ""),
+    ...(snapshot.named_bodies ?? []).map(
+      (body) =>
+        `- body ${body.name}: ${fmt(body.volume_mm3)} mm³, ${body.faces} faces` +
+        (body.pieces > 1 ? `, in ${body.pieces} PIECES` : ""),
+    ),
+    ...(snapshot.between_bodies ?? []).map(
+      (pair) =>
+        `- ${pair.a} and ${pair.b}: ${pair.verdict}` +
+        (pair.clearance_mm !== undefined
+          ? ` by ${fmt(pair.clearance_mm)} mm`
+          : `, ${fmt(pair.interference_mm3)} mm³ shared`),
+    ),
     ...(snapshot.stands_on
       ? [
           `- stands on ${fmt(snapshot.stands_on.area_mm2)} mm² in ${snapshot.stands_on.patches} ` +

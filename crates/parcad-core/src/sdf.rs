@@ -120,6 +120,16 @@ fn lower_node(doc: &Doc, id: NodeId, built: &[Option<Tree>]) -> Result<Tree> {
             acc
         }
 
+        // Refused by name, like a loft: the field could be the min of the
+        // bodies' fields, but this backend is being retired and per-body
+        // measurement is the exact kernel's, so nothing here pretends to it.
+        Op::Bodies { bodies } => anyhow::bail!(
+            "the part at node {id} returns {} bodies, which needs the B-rep backend: the \
+             implicit backend has one distance field and no body in it to measure apart. \
+             Evaluate with backend \"brep\", which measures each body and every pair",
+            bodies.len()
+        ),
+
         Op::Intersection { children, blend } => {
             let mut it = children.iter().copied();
             let first = it

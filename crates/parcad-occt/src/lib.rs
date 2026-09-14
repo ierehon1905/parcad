@@ -19,12 +19,13 @@
 
 #[cfg(feature = "kernel")]
 pub mod backend;
+pub mod bodies;
 pub mod host;
 pub mod protocol;
 
+pub use bodies::{measure_bodies, MeasuredBody};
 pub use host::{check_fit, evaluate, inspect_edge_target, probe_step, OcctError, Options, default_timeout};
 pub use protocol::{
-    CurveProbe, EdgeCurve, FaceProbe, FitReport, SolidProbe, StepProbe, Success, SurfaceProbe,
-    TargetPreview,
-    TargetVertex, Timings, Topology, WireProbe,
+    BodyFit, BodySpan, CurveProbe, EdgeCurve, FaceProbe, FitReport, SolidProbe, StepProbe,
+    Success, SurfaceProbe, TargetPreview, TargetVertex, Timings, Topology, WireProbe,
 };

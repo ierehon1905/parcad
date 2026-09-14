@@ -88,9 +88,9 @@ const RUNNER: &str = r#"
     return failed("the script threw", e);
   }
 
-  if (!(result instanceof dsl.Shape)) {
+  if (!(result instanceof dsl.Shape) && (typeof result !== "object" || result === null)) {
     return JSON.stringify({
-      error: "the script must return a shape.\nEnd it with something like:  return body.cut(hole)",
+      error: "the script must return a shape, or an object of named shapes for a part in several bodies.\nEnd it with something like:  return body.cut(hole)   or   return { base, lid }",
     });
   }
 

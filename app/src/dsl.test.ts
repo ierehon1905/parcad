@@ -21,6 +21,7 @@ import {
   sweep,
   repeat,
   revolve,
+  Shape,
   tapDrill,
   torus,
   union,
@@ -423,5 +424,40 @@ describe("hull", () => {
   test("refuses fewer than three distinct points, and collinear ones", () => {
     expect(() => hull([[0, 0], [1, 1]])).toThrow(/three distinct/);
     expect(() => hull([[0, 0], [1, 1], [2, 2]])).toThrow(/collinear/);
+  });
+});
+
+describe("bodies", () => {
+  test("an object of shapes becomes one bodies root over each body's subgraph", () => {
+    const base = box(60, 40, 20).tag("base");
+    const lid = box(60, 40, 3).at(0, 0, 21).tag("lid");
+    const doc = build({ base, lid });
+    const root = doc.nodes[doc.root];
+    expect(root.op).toBe("bodies");
+    const bodies = root.bodies as { name: string; child: number }[];
+    expect(bodies.map((b) => b.name)).toEqual(["base", "lid"]);
+    expect(doc.nodes[bodies[0].child].tag).toBe("base");
+    expect(doc.nodes[bodies[1].child].tag).toBe("lid");
+    // The root is the last node, after every body.
+    expect(doc.root).toBe(doc.nodes.length - 1);
+  });
+
+  test("a shape shared between two bodies is still one node", () => {
+    const bore = cylinder(3, 40);
+    const doc = build({ left: box(20, 20, 20).cut(bore), right: box(20, 20, 20).at(30, 0, 0).cut(bore) });
+    expect(doc.nodes.filter((n) => n.op === "cylinder")).toHaveLength(1);
+  });
+
+  test("one shape still builds the graph it always did", () => {
+    const doc = build(box(1, 2, 3));
+    expect(doc.nodes.some((n) => n.op === "bodies")).toBe(false);
+    expect(doc.root).toBe(0);
+  });
+
+  test("refuses an array, an empty object, a non-shape body and an empty name, naming the fix", () => {
+    expect(() => build([box(1, 1, 1)] as unknown as Record<string, Shape>)).toThrow(/return \{ left, right \}/);
+    expect(() => build({})).toThrow(/return \{ base, lid \}/);
+    expect(() => build({ a: box(1, 1, 1), b: 5 as unknown as Shape })).toThrow(/body "b" is not a shape \(it is a number\)/);
+    expect(() => build({ " ": box(1, 1, 1) })).toThrow(/empty name/);
   });
 });

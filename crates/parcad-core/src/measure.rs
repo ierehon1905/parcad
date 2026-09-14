@@ -332,6 +332,20 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
             acc.expand(*blend)
         }
 
+        // Bodies are never fused, but they are framed and meshed together, and
+        // the box round all of them is exact for that.
+        Op::Bodies { bodies } => {
+            let mut it = bodies.iter();
+            let first = it
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("the part at node {id} has no bodies"))?;
+            let mut acc = get(first.child)?;
+            for body in it {
+                acc = acc.union(get(body.child)?);
+            }
+            acc
+        }
+
         Op::Intersection { children, blend } => {
             let mut it = children.iter().copied();
             let first = it

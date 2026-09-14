@@ -181,6 +181,33 @@ impl Tessellation {
         }
     }
 
+    /// The triangles in `range` as a mesh of their own, carrying only the
+    /// vertices they use — so its bounds, its bed contact and its footprint are
+    /// this piece's and not the whole part's.
+    ///
+    /// Taken before welding: `weld` drops degenerate triangles, which would
+    /// shift every range a caller had recorded on the unwelded buffer.
+    pub fn restricted_to(&self, range: std::ops::Range<usize>) -> Tessellation {
+        let mut remap: Vec<Option<usize>> = vec![None; self.vertices.len()];
+        let mut vertices = Vec::new();
+        let triangles = self.triangles[range]
+            .iter()
+            .map(|t| {
+                t.map(|i| {
+                    *remap[i].get_or_insert_with(|| {
+                        vertices.push(self.vertices[i]);
+                        vertices.len() - 1
+                    })
+                })
+            })
+            .collect();
+        Tessellation {
+            vertices,
+            triangles,
+            resolution_mm: self.resolution_mm,
+        }
+    }
+
     pub fn stats(&self) -> MeshStats {
         let (watertight, non_manifold_edges) = self.edge_check();
         let (bodies, voids) = self.bodies_and_voids();

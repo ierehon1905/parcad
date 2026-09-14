@@ -7,9 +7,10 @@
 
 use parcad_occt::backend;
 use parcad_occt::protocol::{
-    breadcrumb, edge_curve, EdgeCurve, FaceRun, FaceSummary, Request, Response, Success,
-    TargetPreview, Timings, Topology,
+    breadcrumb, edge_curve, BodyFit, BodySpan, EdgeCurve, FaceRun, FaceSummary, Request,
+    Response, Success, TargetPreview, Timings, Topology,
 };
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::time::Instant;
 
@@ -300,8 +301,8 @@ fn run() -> Response {
 
     breadcrumb("lowering the graph");
     let t0 = Instant::now();
-    let (shape, treatment_owners) = match backend::build_with_treatment_edges(&doc) {
-        Ok(s) => s,
+    let part = match backend::build_part(&doc) {
+        Ok(part) => part,
         Err(e) => {
             return Response::Error {
                 stage: "lowering the graph".into(),
@@ -309,110 +310,48 @@ fn run() -> Response {
             }
         }
     };
+    let shape = &part.shape;
     let build_ms = t0.elapsed().as_millis() as u64;
 
-    breadcrumb("counting topology");
-    let topology = Topology {
-        faces: shape.faces().count(),
-        edges: shape.edges().count(),
-    };
-    if topology.faces == 0 {
-        return Response::Error {
-            stage: "lowering the graph".into(),
-            message: "the result has no faces — the operations cancelled all the material away"
-                .into(),
-        };
-    }
-
-    breadcrumb("tessellating");
     let t1 = Instant::now();
-    let mesh = shape.mesh();
-    let edges = edge_curves(&shape, &treatment_owners);
+    let mut whole = Assembled::default();
+    if part.bodies.is_empty() {
+        match measure(shape, &part.treatment_owners, "") {
+            Ok(measured) => whole.append(None, measured),
+            Err(refusal) => return refusal,
+        }
+    } else {
+        for (name, body) in &part.bodies {
+            match measure(body, &part.treatment_owners, &format!("body `{name}`: ")) {
+                Ok(measured) => whole.append(Some(name), measured),
+                Err(refusal) => return refusal,
+            }
+        }
+    }
     let mesh_ms = t1.elapsed().as_millis() as u64;
 
-    // The backstop, behind whatever the construction sites caught. A shape whose
-    // triangles do not close is not a solid, whatever `IsDone()` said, and this
-    // check does not depend on understanding why OCCT produced one — which
-    // matters, because that list is only as complete as the bugs already met.
-    //
-    // Weld first, for the reason `Tessellation::weld` documents.
-    let stats = parcad_core::mesh::Tessellation {
-        vertices: mesh
-            .vertices
-            .iter()
-            .map(|v| [v.x as f32, v.y as f32, v.z as f32])
-            .collect(),
-        triangles: mesh
-            .indices
-            .chunks_exact(3)
-            .map(|c| [c[0], c[1], c[2]])
-            .collect(),
-        resolution_mm: BINDING_DEFLECTION_MM,
+    let mut between = Vec::new();
+    for (i, (a, first)) in part.bodies.iter().enumerate() {
+        for (b, second) in &part.bodies[i + 1..] {
+            breadcrumb(&format!("measuring body {a} against body {b}"));
+            match backend::fit_between(first, second) {
+                Ok(fit) => between.push(BodyFit {
+                    a: a.clone(),
+                    b: b.clone(),
+                    verdict: fit.verdict,
+                    interference_mm3: fit.interference_mm3,
+                    clearance_mm: fit.clearance_mm,
+                    closest_mm: fit.closest_mm,
+                }),
+                Err(e) => {
+                    return Response::Error {
+                        stage: format!("measuring body {a} against body {b}"),
+                        message: format!("{e:#}"),
+                    }
+                }
+            }
+        }
     }
-    .weld(1e-3)
-    .stats();
-    if !stats.watertight {
-        return Response::Error {
-            stage: "tessellating".into(),
-            message: format!(
-                "the kernel built a shape whose surface does not close: {} of its \
-                 {} mesh edges border one face instead of two. OpenCASCADE reported \
-                 every operation done, so the defect is in the geometry it returned, \
-                 not in the request. A solid that will not close cannot be printed, \
-                 exported or measured, so it is refused here rather than handed on. \
-                 The one cause this backstop has caught — a blend ending against a \
-                 face its boss is exactly tangent to — is fixed by a vendored kernel \
-                 patch. The other known cause is two operands sharing a curved surface, \
-                 a rotated or mirrored copy landing on the original: overlap them by \
-                 0.01 mm instead of letting them coincide. Otherwise something new \
-                 produced this; please report the script: see docs/GOTCHAS.md",
-                stats.non_manifold_edges,
-                stats.triangles * 3,
-            ),
-        };
-    }
-
-    if mesh.faces.len() < topology.faces {
-        return Response::Error {
-            stage: "tessellating".into(),
-            message: format!(
-                "the kernel built a solid with {} faces, but the mesher could triangulate \
-                 only {} of them, so the preview, the STL and every measurement would be \
-                 missing a surface; refused rather than shown. Seen when two operands \
-                 share a curved surface — a torus or sphere unioned with a rotated or \
-                 mirrored copy of itself. Overlap them by 0.01 mm instead of letting them \
-                 coincide, or leave out the copy that adds nothing",
-                topology.faces,
-                mesh.faces.len(),
-            ),
-        };
-    }
-
-    // The second backstop: a closed mesh of the wrong solid. See docs/GOTCHAS.md,
-    // "A correct solid can mesh as a closed fragment of itself".
-    breadcrumb("comparing the mesh's volume with the solid's");
-    let (mesh_volume, mesh_area) = volume_and_area(&mesh);
-    let solid_volume = shape.signed_volume();
-    let allowed = 2.0 * mesh_area * BINDING_DEFLECTION_MM + 1e-6 * solid_volume.abs();
-    if (mesh_volume - solid_volume).abs() > allowed {
-        return Response::Error {
-            stage: "tessellating".into(),
-            message: format!(
-                "the kernel built a solid of {solid_volume:.1} mm³ but its mesh encloses \
-                 {mesh_volume:.1} mm³ — more than {allowed:.1} mm³ apart, the most a \
-                 {BINDING_DEFLECTION_MM} mm tessellation can differ. The mesh is closed, \
-                 so it is a surface missing from the preview, the STL and every \
-                 measurement, and it is refused rather than shown. Seen when two operands \
-                 share a curved surface — a sphere unioned with a rotated or mirrored copy \
-                 of itself, pieces of one radius meeting along it. Overlap them instead of \
-                 letting them coincide: move or grow one by 0.01 mm, or leave out the copy \
-                 that adds nothing"
-            ),
-        };
-    }
-
-    breadcrumb("describing the faces");
-    let faces = describe_faces(&shape);
 
     let t2 = Instant::now();
     let mut step_path = None;
@@ -448,31 +387,33 @@ fn run() -> Response {
     let export_ms = t2.elapsed().as_millis() as u64;
 
     breadcrumb("done");
+    let Assembled {
+        positions,
+        normals,
+        indices,
+        face_runs,
+        faces,
+        mut edges,
+        topology,
+        bodies,
+    } = whole;
+    // One numbering across every body, in the same key order a one-solid
+    // part's edges have always had.
+    edges.sort_by_key(|edge| edge_key(&edge.points));
+    for (index, edge) in edges.iter_mut().enumerate() {
+        edge.id = format!("edge@{index}");
+    }
     Response::Ok(Box::new(Success {
-        positions: mesh
-            .vertices
-            .iter()
-            .flat_map(|v| [v.x as f32, v.y as f32, v.z as f32])
-            .collect(),
-        normals: mesh
-            .normals
-            .iter()
-            .flat_map(|n| [n.x as f32, n.y as f32, n.z as f32])
-            .collect(),
-        indices: mesh.indices.iter().map(|i| *i as u32).collect(),
-        face_runs: mesh
-            .faces
-            .iter()
-            .map(|run| FaceRun {
-                face: run.face as u32,
-                start: run.start as u32,
-                count: run.count as u32,
-            })
-            .collect(),
+        positions,
+        normals,
+        indices,
+        face_runs,
         faces,
         edges,
         deflection_mm: BINDING_DEFLECTION_MM,
         topology,
+        bodies,
+        between,
         timings: Timings {
             build_ms,
             mesh_ms,
@@ -481,6 +422,203 @@ fn run() -> Response {
         step_path,
         stl_path,
     }))
+}
+
+/// One shape meshed, checked and described: a one-solid part, or one named
+/// body of several.
+struct Measured {
+    mesh: opencascade::mesh::Mesh,
+    faces: Vec<FaceSummary>,
+    edges: Vec<EdgeCurve>,
+    topology: Topology,
+}
+
+/// Mesh a shape and refuse it if the mesh is not the solid. `who` names the
+/// body in a refusal and is empty for a one-solid part, whose refusals read
+/// exactly as they always have.
+fn measure(
+    shape: &opencascade::primitives::Shape,
+    treatment_owners: &BTreeMap<Vec<[i64; 3]>, usize>,
+    who: &str,
+) -> Result<Measured, Response> {
+    breadcrumb("counting topology");
+    let topology = Topology {
+        faces: shape.faces().count(),
+        edges: shape.edges().count(),
+    };
+    if topology.faces == 0 {
+        return Err(Response::Error {
+            stage: "lowering the graph".into(),
+            message: format!(
+                "{who}the result has no faces — the operations cancelled all the material away"
+            ),
+        });
+    }
+
+    breadcrumb("tessellating");
+    let mesh = shape.mesh();
+    let edges = edge_curves(shape, treatment_owners);
+
+    // The backstop, behind whatever the construction sites caught. A shape whose
+    // triangles do not close is not a solid, whatever `IsDone()` said, and this
+    // check does not depend on understanding why OCCT produced one — which
+    // matters, because that list is only as complete as the bugs already met.
+    //
+    // Weld first, for the reason `Tessellation::weld` documents.
+    let stats = parcad_core::mesh::Tessellation {
+        vertices: mesh
+            .vertices
+            .iter()
+            .map(|v| [v.x as f32, v.y as f32, v.z as f32])
+            .collect(),
+        triangles: mesh
+            .indices
+            .chunks_exact(3)
+            .map(|c| [c[0], c[1], c[2]])
+            .collect(),
+        resolution_mm: BINDING_DEFLECTION_MM,
+    }
+    .weld(1e-3)
+    .stats();
+    if !stats.watertight {
+        return Err(Response::Error {
+            stage: "tessellating".into(),
+            message: format!(
+                "{who}the kernel built a shape whose surface does not close: {} of its \
+                 {} mesh edges border one face instead of two. OpenCASCADE reported \
+                 every operation done, so the defect is in the geometry it returned, \
+                 not in the request. A solid that will not close cannot be printed, \
+                 exported or measured, so it is refused here rather than handed on. \
+                 The one cause this backstop has caught — a blend ending against a \
+                 face its boss is exactly tangent to — is fixed by a vendored kernel \
+                 patch. The other known cause is two operands sharing a curved surface, \
+                 a rotated or mirrored copy landing on the original: overlap them by \
+                 0.01 mm instead of letting them coincide. Otherwise something new \
+                 produced this; please report the script: see docs/GOTCHAS.md",
+                stats.non_manifold_edges,
+                stats.triangles * 3,
+            ),
+        });
+    }
+
+    if mesh.faces.len() < topology.faces {
+        return Err(Response::Error {
+            stage: "tessellating".into(),
+            message: format!(
+                "{who}the kernel built a solid with {} faces, but the mesher could triangulate \
+                 only {} of them, so the preview, the STL and every measurement would be \
+                 missing a surface; refused rather than shown. Seen when two operands \
+                 share a curved surface — a torus or sphere unioned with a rotated or \
+                 mirrored copy of itself. Overlap them by 0.01 mm instead of letting them \
+                 coincide, or leave out the copy that adds nothing",
+                topology.faces,
+                mesh.faces.len(),
+            ),
+        });
+    }
+
+    // The second backstop: a closed mesh of the wrong solid. See docs/GOTCHAS.md,
+    // "A correct solid can mesh as a closed fragment of itself".
+    breadcrumb("comparing the mesh's volume with the solid's");
+    let (mesh_volume, mesh_area) = volume_and_area(&mesh);
+    let solid_volume = shape.signed_volume();
+    let allowed = 2.0 * mesh_area * BINDING_DEFLECTION_MM + 1e-6 * solid_volume.abs();
+    if (mesh_volume - solid_volume).abs() > allowed {
+        return Err(Response::Error {
+            stage: "tessellating".into(),
+            message: format!(
+                "{who}the kernel built a solid of {solid_volume:.1} mm³ but its mesh encloses \
+                 {mesh_volume:.1} mm³ — more than {allowed:.1} mm³ apart, the most a \
+                 {BINDING_DEFLECTION_MM} mm tessellation can differ. The mesh is closed, \
+                 so it is a surface missing from the preview, the STL and every \
+                 measurement, and it is refused rather than shown. Seen when two operands \
+                 share a curved surface — a sphere unioned with a rotated or mirrored copy \
+                 of itself, pieces of one radius meeting along it. Overlap them instead of \
+                 letting them coincide: move or grow one by 0.01 mm, or leave out the copy \
+                 that adds nothing"
+            ),
+        });
+    }
+
+    breadcrumb("describing the faces");
+    let faces = describe_faces(shape);
+    Ok(Measured {
+        mesh,
+        faces,
+        edges,
+        topology,
+    })
+}
+
+/// The reply's buffers, one body appended after another. Face numbers,
+/// triangle starts and face adjacency all shift by what came before, so
+/// every index in the reply reads against the whole part; appending a single
+/// unnamed body changes nothing, which is what keeps a one-solid reply as it
+/// was.
+#[derive(Default)]
+struct Assembled {
+    positions: Vec<f32>,
+    normals: Vec<f32>,
+    indices: Vec<u32>,
+    face_runs: Vec<FaceRun>,
+    faces: Vec<FaceSummary>,
+    edges: Vec<EdgeCurve>,
+    topology: Topology,
+    bodies: Vec<BodySpan>,
+}
+
+impl Assembled {
+    fn append(&mut self, body: Option<&str>, measured: Measured) {
+        let Measured {
+            mesh,
+            mut faces,
+            mut edges,
+            topology,
+        } = measured;
+        let vertex_offset = (self.positions.len() / 3) as u32;
+        let face_offset = self.topology.faces as u32;
+        let triangle_offset = (self.indices.len() / 3) as u32;
+
+        self.positions.extend(
+            mesh.vertices
+                .iter()
+                .flat_map(|v| [v.x as f32, v.y as f32, v.z as f32]),
+        );
+        self.normals.extend(
+            mesh.normals
+                .iter()
+                .flat_map(|n| [n.x as f32, n.y as f32, n.z as f32]),
+        );
+        self.indices
+            .extend(mesh.indices.iter().map(|i| *i as u32 + vertex_offset));
+        self.face_runs.extend(mesh.faces.iter().map(|run| FaceRun {
+            face: run.face as u32 + face_offset,
+            start: run.start as u32 + triangle_offset,
+            count: run.count as u32,
+        }));
+        for face in &mut faces {
+            for adjacent in &mut face.adjacent {
+                *adjacent += face_offset;
+            }
+            face.body = body.map(str::to_owned);
+        }
+        self.faces.extend(faces);
+        for edge in &mut edges {
+            edge.body = body.map(str::to_owned);
+        }
+        self.edges.extend(edges);
+        if let Some(name) = body {
+            self.bodies.push(BodySpan {
+                name: name.to_owned(),
+                faces: topology.faces,
+                edges: topology.edges,
+                triangle_start: triangle_offset as usize,
+                triangle_count: mesh.indices.len() / 3,
+            });
+        }
+        self.topology.faces += topology.faces;
+        self.topology.edges += topology.edges;
+    }
 }
 
 #[cfg(test)]

@@ -32,9 +32,17 @@ try {
 }
 
 const result = fn(...names.map((n) => (dsl as Record<string, unknown>)[n]));
-if (!(result instanceof Shape)) {
-  console.error(`${file} must return a shape, e.g.  return body.cut(hole)`);
+if (!(result instanceof Shape) && (typeof result !== "object" || result === null)) {
+  console.error(
+    `${file} must return a shape, or an object of named shapes for a part in several bodies, ` +
+      "e.g.  return body.cut(hole)   or   return { base, lid }",
+  );
   process.exit(1);
 }
 
-console.log(JSON.stringify(build(result), null, 2));
+try {
+  console.log(JSON.stringify(build(result as dsl.Part), null, 2));
+} catch (e) {
+  console.error(`${file}: ${(e as Error).message}`);
+  process.exit(1);
+}

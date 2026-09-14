@@ -142,6 +142,7 @@ fn op_name(op: &Op) -> &'static str {
         Op::Shell { .. } => "shell",
         Op::Fillet { .. } => "fillet",
         Op::Chamfer { .. } => "chamfer",
+        Op::Bodies { .. } => "bodies",
     }
 }
 
@@ -1928,11 +1929,6 @@ pub fn build(doc: &Doc) -> Result<Shape> {
     Ok(shape)
 }
 
-/// Build a final shape with ephemeral ownership for treatment-generated edges.
-///
-/// The keys describe exact curves in this one evaluation. They let the desktop
-/// focus an authored fillet or chamfer after a viewport click; they are never
-/// accepted as graph input, and disappear as soon as the model is rebuilt.
 /// Lay `reference` against `doc` and measure how they sit: the volume they
 /// share, and when they share none, the least distance between them.
 pub fn check_fit(doc: &Doc, reference: &Doc) -> Result<crate::protocol::FitReport> {
@@ -1942,12 +1938,18 @@ pub fn check_fit(doc: &Doc, reference: &Doc) -> Result<crate::protocol::FitRepor
     let part = build_node(doc, doc.root, DVec3::ZERO)?.shape;
     breadcrumb("building the reference");
     let other = build_node(reference, reference.root, DVec3::ZERO)?.shape;
-    let (p0, p1) = bbox(&part);
-    let (r0, r1) = bbox(&other);
+    fit_between(&part, &other)
+}
+
+/// How two exact solids sit against each other. The measurement behind
+/// [`check_fit`], and behind the pairwise report of a part in several bodies.
+pub fn fit_between(part: &Shape, other: &Shape) -> Result<crate::protocol::FitReport> {
+    let (p0, p1) = bbox(part);
+    let (r0, r1) = bbox(other);
 
     breadcrumb("intersecting the two");
     let mut common = AdHocShape(part.clone());
-    common.intersect(&other);
+    common.intersect(other);
     let interference = if common.0.faces().count() == 0 {
         0.0
     } else {
@@ -1958,7 +1960,7 @@ pub fn check_fit(doc: &Doc, reference: &Doc) -> Result<crate::protocol::FitRepor
         ("interfering", None, None)
     } else {
         breadcrumb("measuring the clearance");
-        match part.least_distance_to(&other) {
+        match part.least_distance_to(other) {
             Some((distance, on_part, on_other)) => (
                 if distance <= 1e-6 { "touching" } else { "clear" },
                 Some(distance),
@@ -1980,11 +1982,77 @@ pub fn check_fit(doc: &Doc, reference: &Doc) -> Result<crate::protocol::FitRepor
     })
 }
 
-pub fn build_with_treatment_edges(doc: &Doc) -> Result<(Shape, BTreeMap<Vec<[i64; 3]>, NodeId>)> {
+/// A finished part: the shape the worker meshes and exports, and when the
+/// script returned several bodies, each of them on its own as well.
+pub struct BuiltPart {
+    /// The whole part — one solid, or a compound of every body.
+    pub shape: Shape,
+    /// Ephemeral ownership of treatment-generated edges, keyed by exact curve.
+    ///
+    /// The keys describe curves in this one evaluation. They let the desktop
+    /// focus an authored fillet or chamfer after a viewport click; they are
+    /// never accepted as graph input, and disappear when the model is rebuilt.
+    pub treatment_owners: BTreeMap<Vec<[i64; 3]>, NodeId>,
+    /// Each named body, in the order the script named them. Empty for a
+    /// one-solid part, whose body is `shape`.
+    pub bodies: Vec<(String, Shape)>,
+}
+
+/// Build the finished part, keeping each named body apart from the compound
+/// that carries them all.
+pub fn build_part(doc: &Doc) -> Result<BuiltPart> {
     doc.topo_order()?;
-    let built = build_node(doc, doc.root, DVec3::ZERO)?;
-    validity_probe("final shape", &built.shape);
-    Ok((built.shape, built.features.edge_owners()))
+    let Some(named) = doc.bodies() else {
+        let built = build_node(doc, doc.root, DVec3::ZERO)?;
+        validity_probe("final shape", &built.shape);
+        return Ok(BuiltPart {
+            shape: built.shape,
+            treatment_owners: built.features.edge_owners(),
+            bodies: Vec::new(),
+        });
+    };
+    let built = build_bodies(doc, named, DVec3::ZERO)?;
+    let mut features = TreatmentFeatures::default();
+    let mut bodies = Vec::with_capacity(built.len());
+    for (name, body) in built {
+        validity_probe(&format!("body {name}"), &body.shape);
+        features.extend(body.features);
+        bodies.push((name, body.shape));
+    }
+    Ok(BuiltPart {
+        shape: compound_of(bodies.iter().map(|(_, shape)| shape)),
+        treatment_owners: features.edge_owners(),
+        bodies,
+    })
+}
+
+pub fn build_with_treatment_edges(doc: &Doc) -> Result<(Shape, BTreeMap<Vec<[i64; 3]>, NodeId>)> {
+    let part = build_part(doc)?;
+    Ok((part.shape, part.treatment_owners))
+}
+
+/// Each body of an [`Op::Bodies`] root built on its own. Bodies share
+/// nothing at build time: a tag in one is not a name the other can select by,
+/// and an extremum in one is measured without the other in the frame.
+fn build_bodies(
+    doc: &Doc,
+    bodies: &[parcad_core::graph::NamedBody],
+    offset: DVec3,
+) -> Result<Vec<(String, BuiltShape)>> {
+    bodies
+        .iter()
+        .map(|body| {
+            breadcrumb(&format!("body {} (node {})", body.name, body.child));
+            Ok((body.name.clone(), build_node(doc, body.child, offset)?))
+        })
+        .collect()
+}
+
+/// One shape holding every body, so the whole part can be meshed, measured
+/// against a reference and written to STEP as a single object — OCCT's STEP
+/// writer turns a compound into one file with a solid per body.
+fn compound_of<'a>(shapes: impl IntoIterator<Item = &'a Shape>) -> Shape {
+    opencascade::primitives::Compound::from_shapes(shapes).into()
 }
 
 struct BuiltShape {
@@ -2133,6 +2201,24 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
 
         Op::Translate { child, by } => {
             build_node(doc, *child, offset + v(*by))?.named(node.tag.as_deref())
+        }
+
+        // Reached only as the root, and only from callers that want the
+        // whole part as one shape — `check_fit`'s two operands. The worker
+        // goes through `build_part`, which keeps each body as well.
+        Op::Bodies { bodies } => {
+            let built = build_bodies(doc, bodies, offset)?;
+            let mut features = TreatmentFeatures::default();
+            for (_, body) in &built {
+                features.extend(TreatmentFeatures {
+                    generated: body.features.generated.clone(),
+                });
+            }
+            BuiltShape {
+                shape: compound_of(built.iter().map(|(_, body)| &body.shape)),
+                lineage: EdgeLineage::default(),
+                features,
+            }
         }
 
         Op::Union { children, blend } => {
@@ -3403,6 +3489,72 @@ mod tests {
         assert!((overlap.interference_mm3 - 50.0).abs() < 1e-6, "{overlap:?}");
         assert!(overlap.clearance_mm.is_none());
         assert_eq!(overlap.part_bounds, [[-5.0, -5.0, -5.0], [5.0, 5.0, 5.0]]);
+    }
+
+    /// Two cubes 3 mm apart as named bodies, the second tagged `far`, and a
+    /// treatment on the first selecting by that tag when `treated` is set.
+    fn two_body_doc(treated: bool) -> Doc {
+        let mut nodes = vec![
+            serde_json::json!({"op":"cuboid","size":{"x":10,"y":10,"z":10}}),
+            serde_json::json!({"op":"cuboid","size":{"x":10,"y":10,"z":10},"tag":"far"}),
+            serde_json::json!({"op":"translate","child":1,"by":{"x":13,"y":0,"z":0}}),
+        ];
+        let near = if treated {
+            nodes.push(serde_json::json!({
+                "op":"fillet","child":0,"radius":1,
+                "selector":{"on":"far","dihedral":"convex"}
+            }));
+            3
+        } else {
+            0
+        };
+        nodes.push(serde_json::json!({"op":"bodies","bodies":[
+            {"name":"near","child":near},{"name":"far","child":2}
+        ]}));
+        serde_json::from_value(serde_json::json!({
+            "units":"mm","root":nodes.len()-1,"nodes":nodes
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_part_in_bodies_builds_each_body_apart_and_the_compound_of_them() {
+        let part = build_part(&two_body_doc(false)).unwrap();
+        assert_eq!(part.bodies.len(), 2);
+        assert_eq!(part.bodies[0].0, "near");
+        assert_eq!(part.bodies[1].0, "far");
+        // Each body is its own closed solid; the compound holds both, unfused.
+        assert!((part.bodies[0].1.signed_volume() - 1000.0).abs() < 1e-6);
+        assert!((part.bodies[1].1.signed_volume() - 1000.0).abs() < 1e-6);
+        assert!((part.shape.signed_volume() - 2000.0).abs() < 1e-6);
+        assert_eq!(part.shape.faces().count(), 12);
+        assert!(part.shape.single_solid().is_none(), "two solids must not unwrap to one");
+
+        let fit = fit_between(&part.bodies[0].1, &part.bodies[1].1).unwrap();
+        assert_eq!(fit.verdict, "clear");
+        assert!((fit.clearance_mm.unwrap() - 3.0).abs() < 1e-6, "{fit:?}");
+    }
+
+    #[test]
+    fn a_tag_in_one_body_is_not_a_name_the_other_body_can_select_by() {
+        // The fillet in `near` asks for `far`'s faces. Nothing of `far` was
+        // ever in `near`'s lineage, so this must refuse by name rather than
+        // reach across and round the wrong cube.
+        let err = match build_part(&two_body_doc(true)) {
+            Ok(_) => panic!("a tag from another body selected something"),
+            Err(e) => e.to_string(),
+        };
+        assert!(err.contains("far"), "{err}");
+        assert!(!err.contains("fillet built"), "{err}");
+        // And the same tag is selectable inside its own body.
+        let mut doc = two_body_doc(true);
+        let Op::Fillet { child, .. } = &mut doc.nodes[3].op else { unreachable!() };
+        *child = 2;
+        let Op::Bodies { bodies } = &mut doc.nodes[4].op else { unreachable!() };
+        bodies[0].child = 0;
+        bodies[1].child = 3;
+        let part = build_part(&doc).unwrap();
+        assert!(part.bodies[1].1.signed_volume() < 1000.0, "the far cube's edges were rounded");
     }
 
     #[test]

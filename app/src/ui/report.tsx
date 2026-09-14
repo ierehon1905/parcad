@@ -76,11 +76,35 @@ export function Report() {
           {snapshot.stands_on.patches === 1 ? "patch" : "patches"}
         </div>
       )}
-      {snapshot.bodies > 1 && (
+      {snapshot.bodies > (snapshot.named_bodies?.length ?? 1) && (
         <div class="text-bad">
           <Strong>{snapshot.bodies}</Strong> separate bodies
+          {snapshot.named_bodies && ` for ${snapshot.named_bodies.length} named`}
         </div>
       )}
+      {snapshot.named_bodies?.map((body) => (
+        <div key={body.name} class={body.pieces > 1 || !body.watertight ? "text-bad" : undefined}>
+          {body.name}: <Strong>{fmt(body.volume_mm3)}</Strong> mm³
+          {body.pieces > 1 && ` in ${body.pieces} pieces`}
+        </div>
+      ))}
+      {snapshot.between_bodies?.map((pair) => (
+        <div key={`${pair.a}/${pair.b}`} class={pair.verdict === "interfering" ? "text-bad" : undefined}>
+          {pair.a} · {pair.b}: {pair.verdict}
+          {pair.clearance_mm !== undefined && (
+            <>
+              {" by "}
+              <Strong>{fmt(pair.clearance_mm)}</Strong> mm
+            </>
+          )}
+          {pair.verdict === "interfering" && (
+            <>
+              {", "}
+              <Strong>{fmt(pair.interference_mm3)}</Strong> mm³ shared
+            </>
+          )}
+        </div>
+      ))}
       {!snapshot.watertight && (
         <div class="text-bad">
           NOT watertight — {snapshot.non_manifold_edges} bad edges

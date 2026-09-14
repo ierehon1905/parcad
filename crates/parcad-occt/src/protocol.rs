@@ -41,7 +41,7 @@ pub struct Request {
 ///
 /// The number an implicit model cannot produce at all, and the foundation for
 /// face selection, dimensioning, and drawing clean edges.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Topology {
     pub faces: usize,
     pub edges: usize,
@@ -78,6 +78,10 @@ pub struct EdgeCurve {
     /// edge reference. Absent for ordinary model edges and for preview targets.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub treatment_node: Option<usize>,
+    /// Which named body this edge belongs to, for a part that returns several.
+    /// Absent for a one-solid part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 /// One exact pre-treatment corner selected by a vertex-targeted treatment.
@@ -163,6 +167,7 @@ pub fn edge_curve(points: Vec<[f32; 3]>) -> Option<EdgeCurve> {
         direction,
         length_mm,
         treatment_node: None,
+        body: None,
     })
 }
 
@@ -211,9 +216,51 @@ pub struct Success {
     /// points, and draws as a straight line, because it is one.
     pub edges: Vec<EdgeCurve>,
     pub topology: Topology,
+    /// The named bodies of a part that returns several, in the script's
+    /// order, each with its own topology and its span of the mesh. Empty for
+    /// a one-solid part: the whole reply is then that body.
+    #[serde(default)]
+    pub bodies: Vec<BodySpan>,
+    /// How every pair of named bodies sits against each other, measured on
+    /// the exact solids the way `check_fit` measures a part against a
+    /// reference. Empty unless there are at least two bodies.
+    #[serde(default)]
+    pub between: Vec<BodyFit>,
     pub timings: Timings,
     pub step_path: Option<PathBuf>,
     pub stl_path: Option<PathBuf>,
+}
+
+/// One named body's share of a [`Success`]: its own face and edge counts,
+/// and where its triangles sit in the shared buffers. The mesh is built body
+/// by body and concatenated, so a body's triangles are one contiguous run and
+/// a host can measure the body with the code that measures the whole.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BodySpan {
+    pub name: String,
+    pub faces: usize,
+    pub edges: usize,
+    /// First triangle of this body in `indices`, counted in triangles.
+    pub triangle_start: usize,
+    pub triangle_count: usize,
+}
+
+/// Two named bodies of one part, and how they sit: the fit report's verdict,
+/// shared volume and clearance, between a pair rather than against a
+/// reference. A clip that overlaps the body it is meant to clip onto is a
+/// design error the volume states outright.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BodyFit {
+    pub a: String,
+    pub b: String,
+    /// `"clear"`, `"touching"`, or `"interfering"`.
+    pub verdict: String,
+    pub interference_mm3: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance_mm: Option<f64>,
+    /// A point on `a`, then one on `b`, where the clearance is measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closest_mm: Option<[[f64; 3]; 2]>,
 }
 
 /// One face's triangles, as a span of the index buffer. `start`/`count` are in
@@ -235,6 +282,10 @@ pub struct FaceSummary {
     /// Faces sharing an edge with this one, each named once, never itself.
     pub adjacent: Vec<u32>,
     pub surface: SurfacePlacement,
+    /// Which named body this face belongs to, for a part that returns
+    /// several. Set by the worker after the parse; absent for a one-solid part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 /// What kind of surface a face is, and how it is placed.
