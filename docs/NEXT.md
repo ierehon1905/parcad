@@ -164,52 +164,48 @@ On 2026-09-14 a Codex session built a figurine over MCP (`selene-unicorn`,
 change. Each claim was checked against the code before it went here, because
 the last outside report called two shipped ops impossible. The reports ranked
 trust in the result first, then the window, then speed, then organic shapes.
-Measured, in the order it would pay:
+Measured, then fixed the same day. What each became:
 
-1. **"Unions lost the body" — true, but it was the mesh. Refused now; not
-   fixed.** The B-rep was exact, and its tessellation was a watertight fragment
-   that every reported number, the preview and the STL were read from.
-   [GOTCHAS.md](GOTCHAS.md), "A correct solid can mesh as a closed fragment of
-   itself". Left: remesh instead of refusing, and give the torus variant's
-   "mesh with no vertices" a fix to name.
-2. **The window keeps the old model — true, and there are four concrete
-   causes.** No viewer acknowledges a revision, and `set_script` returns before
-   any window has evaluated.
-   - A failed evaluation leaves the previous solid on screen beside the error
-     (`showError` in `engine.ts` clears it only when the project changed).
-   - The SSE stream sends no current state on (re)connect, so an edit made while
-     disconnected is missed.
-   - A reloaded window opens `bracket` or the first project, ignoring the
-     session, and its first run pushes that name to every other window.
-   - A viewer's fire-and-forget push, carrying the source it started with, can
-     land after the agent's and overwrite it.
-
-   The fix is a `rendered_revision` per viewer that `get_session` reports, plus
-   a state-on-connect. A refresh tool alone would paper over all four.
-3. **Renders are not files — true.** `evaluate_part` returns base64 PNGs
-   inline. `render.rs` has `write_png`, and no tool calls it. MCP `save_project`
-   writes `part.js` and no `preview.png`, so a part an agent saves has no
-   thumbnail until a window opens it. Both reports named this their top item.
-   Returning paths beside the inline images is small.
-   [PERCEPTION.md](PERCEPTION.md) §11 is the related hold.
-4. **Nothing is cached, and the 20 s budget is per worker — true.** Evaluate,
-   export and render each rebuild from the script. The timeout error does name
-   `PARCAD_OCCT_TIMEOUT`, but an MCP caller cannot pass a budget, and there is
-   no job id or progress. A cache keyed by graph hash in the host removes most
-   of the waiting before any async-job machinery is worth building.
-5. **Errors are prose — partly true.** "unknown operation" is only `host.rs`'s
-   fallback stage name when a crash left no breadcrumb. The real gap is that
-   script errors carry **no line number** (`script.rs` formats the message and
-   drops the stack), and every MCP error is `invalid_params` with no data. Line
-   numbers come first; node ids already appear in prose.
-6. **`export_part` omits quality — true.** It returns format, path and bytes,
-   but not watertightness, body count or the STL's deflection.
-7. **Snapshots before an agent's replace — true, none exist.** Undo in the
-   editor is the only history, and it does not survive a reload.
-8. **Organic shapes — as reported.** There is no ellipsoid: non-uniform scale is
-   refused in B-rep, by design. A helix and a tapered sweep now exist (`pipe({ helix }, d, { taper })`, B-rep only; docs/OP_ROADMAP.md §5).
-   A blended union and `loft { smooth }` do exist. §3's product call applies,
-   and so does item 1: figurines are the workload that shares curved surfaces.
+1. **"Unions lost the body": true, and it was the mesh. Fixed.** The B-rep was
+   exact, and its tessellation was a watertight fragment that every number, the
+   preview and the STL read. Three representation defects left by a union with
+   a rotated copy of itself are now repaired after every unify. The worker
+   compares mesh volume with solid volume, and refuses a face the mesher
+   skipped, as backstops. [GOTCHAS.md](GOTCHAS.md), "A correct solid can mesh
+   as a closed fragment of itself".
+2. **The window kept the old model: true, four causes, all closed.** Windows
+   report the revision they evaluated, whether it `built`, and its volume.
+   `set_script` and `open_project` wait for that report and return it as
+   `viewers`. The event stream sends the current state on connect. A reloaded
+   window follows the session. A push based on a replaced revision is refused.
+   Setting the same script again re-evaluates everywhere. Measured by
+   `eval/field/did-the-window-draw-it.md`: 6/6 SOUND, both arms.
+3. **Renders were not files: fixed.** Every view `evaluate_part` draws is also
+   a PNG with its `path` in the reply. `save_project` writes `preview.png` and
+   says whether the script built.
+4. **Nothing was cached: fixed.** The last eight exact builds are kept by
+   graph, so evaluate → render → export → window is one kernel run
+   (`reused_build`). `evaluate_part` and `export_part` take `timeout_s`, and the
+   timeout refusal names it. **No job ids or progress.** With the cache and a
+   caller's budget, nothing measured yet needs them.
+5. **Errors lacked a place: fixed.** A script error names its line and quotes
+   it, in the sandbox and the window. `node N (label)` in a kernel refusal reads
+   `node N (line L, label)`. MCP errors carry `data`: `kind`, `line`, `node`,
+   `stage`.
+6. **`export_part` omitted quality: fixed.** It returns `measured`: size, volume,
+   `watertight`, `bodies`, `voids`, and the STL's `deflection_mm`.
+7. **No snapshots: fixed.** `save_project` keeps the `part.js` it replaces, and
+   `set_script` keeps the on-screen text, saved or not, under
+   `.history/<part>/`. `list_snapshots` and `restore_snapshot` bring either
+   back, 50 per part.
+8. **Organic shapes.** `scale(x, y, z)` builds an exact ellipsoid through
+   `BRepBuilderAPI_GTransform`, held to the determinant (`eval/cases/ellipsoid`).
+   It also exposed `BRepGProp`'s fixed-order integral misreading B-spline
+   faces. `pipe` and `sweep` take a `{ helix }` path (with `endRadius`, a
+   horn) and a `taper`, B-rep only, each held to a closed form
+   ([OP_ROADMAP.md](OP_ROADMAP.md) §5). **Threads are still refused.** A
+   coaxial helical cut opens past two turns, and the cause is not diagnosed
+   ([GOTCHAS.md](GOTCHAS.md)).
 
 Already true and misreported: `preview_ready` / `exact_ready` do not apply,
 because the window runs one exact kernel per evaluation and the snapshot names
