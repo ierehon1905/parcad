@@ -762,21 +762,35 @@ export type SectionPoint = [number, number];
  * - `[x, y]` — a corner (`[radius, z]` in a revolve). Consecutive corners are
  *   joined by a straight edge.
  * - `{ at: [x, y], round: r }` — a corner rounded by a tangent arc of radius
- *   `r`, which trims both straight edges that meet there. A rounded rectangle
- *   is four of these; `round` only joins two straight edges.
+ *   `r`. `at` is the *sharp* corner, where the two straight edges would meet,
+ *   not where the arc starts: the round trims both edges back itself. A
+ *   40 × 20 plate with 5 mm corner radii is exactly four entries,
+ *   `{ at: [±20, ±10], round: 5 }`, anticlockwise. `round` only joins two
+ *   straight edges.
  *
  * Between two corners, one entry says how that stretch is drawn instead of a
  * straight edge (after the last corner, it draws the closing stretch back to
  * the first):
  *
  * - `{ through: [x, y] }` — a circular arc from the corner before to the
- *   corner after, passing through this point. The unambiguous way to draw an
- *   arc: a half circle between `[10, -5]` and `[10, 5]` bulging to +X is
- *   `{ through: [15, 0] }`. A full circle is two arcs between two corners.
+ *   corner after, passing through this point, which must lie *on* the arc.
+ *   The unambiguous way to draw an arc: a half circle between `[10, -5]` and
+ *   `[10, 5]` bulging to +X is `{ through: [15, 0] }` — the chord's midpoint
+ *   moved out by the radius. A full circle is two arcs between two corners.
  * - `{ radius: r }` — the shorter circular arc of radius `r` between the two
- *   corners. Positive bulges *out* of an anticlockwise section (the arc turns
- *   left as you travel), negative bends *in*. `r` must be at least half the
+ *   corners. Positive bulges *out* of the section and negative bends *in*,
+ *   whichever way round the corners are listed. `r` must be at least half the
  *   distance between the corners; exactly half is a half circle.
+ *
+ * A slot (stadium) `L` long overall and `w` wide, along X, has its four
+ * corners where the straight sides end, at `x = ±(L − w) / 2`, `y = ±w / 2`,
+ * and its half-circle ends reach `x = ±L / 2`:
+ * `[[-a, -w/2], [a, -w/2], { through: [L/2, 0] }, [a, w/2], [-a, w/2], { through: [-L/2, 0] }]`
+ * with `a = (L − w) / 2`.
+ *
+ * A section is **one** closed boundary, with no holes: a hole, slot or pocket
+ * is a second shape cut out of the first (`plate.cut(extrude(slot, h))`),
+ * never a second loop listed after the first.
  * - `{ spline: [[x, y], ...], start?: [dx, dy], end?: [dx, dy] }` — a smooth
  *   curve from the corner before, *through* these points, to the corner
  *   after: a cubic parameterised by chord length. `start` and `end` are the

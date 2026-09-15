@@ -110,7 +110,18 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    Fusion's volumes. `v2`'s sections turned out to be a square, circle, turned
    square and a point — they build, but OCCT's smooth fit is 2% short in area;
    `v3` is an ornament of cones, `v4` a fitted curve under a mismatched header.
-   `hydraulic-line` draws its gland as the catalogue section.
+   `hydraulic-line` draws its gland as the catalogue section. The field case
+   `draw-the-round-ends` (a gasket with 5 mm corner radii and a round-ended
+   slot, 14 faces and 2000 mm³ only with true arcs) read 1/8 SOUND on the
+   first docs — every trial found `SectionEntry`, and the failures were
+   `{ radius }` bulging inward on a clockwise listing, `{ at }` read as the
+   arc's start, a hole listed as a second loop, and a "30 mm overall" slot
+   drawn 40 long. `radius` now bulges out whichever way the corners run, and
+   the docs say what `at` is, that a section has no holes, and where a slot's
+   corners sit; the second round read 8/8 SOUND (4/4 in each thinking arm),
+   every trial drawing arcs rather than filleting a box. The slot arithmetic
+   in the docs is close to what this case asks, so the second round measures
+   the docs being read more than the vocabulary being inferred.
 5. **A playground in the browser** — the exact kernel built for WebAssembly on
    GitHub Pages, the corpus run against that build first.
 6. **A measured parts library** — fasteners, bearings, boards, devices, each

@@ -39,8 +39,9 @@ pub enum SectionEntry {
     /// The stretch to the next corner is a circular arc through this point.
     Through(P2),
     /// The stretch to the next corner is a circular arc of this radius, the
-    /// shorter of the two: positive turns left (bulges out of an anticlockwise
-    /// section), negative turns right.
+    /// shorter of the two: positive bulges out of the section, negative bends
+    /// into it, whichever way the corners are listed (with only two corners,
+    /// positive turns left).
     Radius(f64),
     /// The stretch to the next corner is a smooth cubic through these points.
     /// As the only entry of a section, a closed smooth curve through them.
@@ -984,6 +985,13 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
         }
     }
 
+    let corner_area: f64 = (0..n)
+        .map(|k| {
+            let (a, b) = (at(k), at(k + 1));
+            a[0] * b[1] - b[0] * a[1]
+        })
+        .sum();
+    let winding = if corner_area < 0.0 { -1.0 } else { 1.0 };
     let mut segments = Vec::new();
     for k in 0..n {
         let mut from = at(k);
@@ -1028,7 +1036,9 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
                 let rise = (r * r - half * half).max(0.0).sqrt();
                 let dir = [(to[0] - from[0]) / chord, (to[1] - from[1]) / chord];
                 let left = [-dir[1], dir[0]];
-                let sign = r.signum();
+                // Positive bulges out of the section whichever way its corners
+                // run: a clockwise listing turns the other way to get there.
+                let sign = r.signum() * winding;
                 let midchord = [(from[0] + to[0]) / 2.0, (from[1] + to[1]) / 2.0];
                 // The shorter arc: centre on the side it turns toward, the arc
                 // itself bulging the other way.
@@ -1232,6 +1242,10 @@ mod tests {
         let segment = 36.0 * (2.0 * half - (2.0 * half).sin()) / 2.0;
         assert!(close(bulge.area, 100.0 + segment, 1e-9), "{}", bulge.area);
         assert!(close(dent.area, 100.0 - segment, 1e-9), "{}", dent.area);
+        // The same corners listed clockwise: positive still bulges out. A
+        // model wrote a slot this way round and got its ends bent inward.
+        let clockwise = resolve(&entries(r#"[[0,10],{"radius":6},[10,10],[10,0],[0,0]]"#), "p").unwrap();
+        assert!(close(clockwise.area, -(100.0 + segment), 1e-9), "{}", clockwise.area);
     }
 
     #[test]
