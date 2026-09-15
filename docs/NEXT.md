@@ -122,10 +122,81 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    every trial drawing arcs rather than filleting a box. The slot arithmetic
    in the docs is close to what this case asks, so the second round measures
    the docs being read more than the vocabulary being inferred.
-5. **A playground in the browser** — the exact kernel built for WebAssembly on
-   GitHub Pages, the corpus run against that build first.
+5. **A playground in the browser** — running since 2026-09-15 on branch
+   `playground` (a background session in its own worktree under
+   `.claude/worktrees/`). The exact kernel built for WebAssembly, measured
+   against the corpus in Node first; a third transport in `app/src/backend.ts`
+   running it in a Web Worker; a static build and a Pages workflow that runs the
+   corpus against the wasm build before deploying. The session does not enable
+   Pages, push or deploy: the owner decides that.
 6. **A measured parts library** — fasteners, bearings, boards, devices, each
    held by eval cases, and a way for one part to import another.
+
+### Waiting on a decision
+
+- **Publish the playground**: enable GitHub Pages for the repository and run
+  the deploy, once item 5 is reviewed and merged.
+- **A tag inside a tagged copy.** A tag on a move or mirror now outranks the tags
+  inside what it copied (item 3a). The session also let the copy's name beat a
+  *feature* tag inside the copy — a mirrored part's bore walls read the copy's
+  name, not `bore`. Keep, or let feature tags inside a copy keep their names.
+- **`crates/parcad-core/src/occlusion.rs` is MPL-2.0**, a close port of
+  fidget-raster's ambient occlusion, disclosed in NOTICE.md. Keep, or rewrite it
+  independently if no MPL file should live in `crates/`.
+- **Reuse checks deferred ("later")**: whether cargo-dist or GoReleaser should
+  replace `packaging/render.py` + `publish.yml` given the separate OCCT worker
+  and the Tauri app; whether an existing mesh renderer should replace the
+  software rasteriser in `render.rs`.
+- **Signing**: SignPath Foundation (free) for Windows; Apple Developer ID ($99/yr)
+  for the `.app`. Neither is started.
+
+## Release state, as of 0.0.6 (2026-09-15)
+
+| channel | how it is fed | state |
+|---|---|---|
+| GitHub Release | tag `v*` → `release.yml` drafts every platform's files; a human reads and publishes | 0.0.6 published, latest |
+| MCP Registry | `publish.yml` on publish, GitHub OIDC, no secret | 0.0.6 listed with macOS, Linux and Windows bundles |
+| Homebrew tap | `publish.yml` needs `HOMEBREW_TAP_TOKEN` (fine-grained, contents on `ierehon1905/homebrew-parcad`); without it render the formula with `packaging/render.py` and push it to the tap by hand | 0.0.6 pushed by hand; `brew audit --strict` clean; upgraded and tested on the owner's machine |
+| winget | `publish.yml` needs `WINGET_TOKEN` (classic, `public_repo`) for Komac; the first version was submitted by hand | [microsoft/winget-pkgs#435026](https://github.com/microsoft/winget-pkgs/pull/435026) from the fork `ierehon1905/winget-pkgs`: CLA signed, every validation stage passed, awaiting a moderator. Its description discloses it was AI-generated |
+
+Neither secret is set, so both of those jobs skip with a notice until the owner
+adds them. A release needs the build test first: dispatch `release.yml` on
+`main` and tag only when all three platforms are green — 0.0.6's first test
+found a clearance measured twice that timed the 20-turn thread case out on every
+runner.
+
+## How a queue item is run
+
+Each item above ran as one background agent session in its own git worktree,
+then was reviewed here before it reached `main`. What made that work, and what
+a new session should keep doing:
+
+- **The brief** names the item in this file, the docs to read first, and asks
+  for *prior art evaluated and why chosen or rejected* before any design
+  (OCCT samples, CadQuery/build123d, FreeCAD, established tools), with licence
+  fit: MIT/Apache crates; Apache code portable with attribution; LGPL read
+  only, and every change to `vendor/` recorded in its PARCAD-CHANGES.md; MPL
+  file-level.
+- **Safety rules in every brief**: start a host with scratch
+  `PARCAD_PROJECTS_DIR` and `PARCAD_SEED_DIR` before any `parcad call` or
+  `parcad tools` — a bare `parcad` command hosts against `~/Documents/parcad` and
+  seeds parts into it, which one session did; never push, never touch `main`,
+  never force-push, no repository settings; commit with `TZ=UTC`; wait for long
+  commands to finish (a session once stopped "waiting" on a background gate that
+  was gone); build native with `PARCAD_OCCT_PREBUILT` pointed at an existing
+  `target/release/build/occt-sys-*/out`.
+- **Evidence asked for**: closed forms with independent derivations in
+  `eval/cases/`, the corpus unchanged except where a case says why, a field
+  case run for anything a model reads, and renders of what was built.
+- **Review before merge**: re-derive the recorded numbers by hand; diff every
+  existing case's expectations against `main`; check `~/Documents/parcad` and
+  its `.seeded` were not touched; rebase on `origin/main` and run `tools/check.sh`;
+  try the feature on a part the session did not write; look at the renders; then
+  fast-forward `main` through the pre-push gate. Remove the worktree afterwards —
+  each holds 5–9 GB of `target/`.
+- **Outward-facing actions** (a pull request, fork, comment or submission outside
+  the owner's repositories) get an explicit yes for that action first, and say
+  up front that they were AI-generated.
 
 ---
 
