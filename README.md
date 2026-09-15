@@ -25,6 +25,8 @@ return drilled
 You never name an edge by index. You describe it — *the circular rims that open
 onto the top face* — and the description still works after you move a hole.
 
+![Fillet, chamfer, blended union, intersect, loft, sweep, helix, revolve, shell, draft, polar pattern and mirror, each built by the exact kernel](docs/images/features.png)
+
 ## One graph, one exact kernel
 
 Your script builds a small JSON graph, and an exact kernel reads it —
@@ -36,6 +38,12 @@ today's script working after tomorrow's kernel swap.
 
 Parts get measured, not assumed — volume, wall thickness, whether two bores
 actually meet. An agent gets the same numbers over MCP, with no screen to look at.
+
+And when it does look, it gets pictures made for reading: views that share one
+scale, sections through the inside, and every surface coloured by the tag that
+built it.
+
+![What an agent is shown: four views at one scale, two sections, and faces coloured by tag](docs/images/agent-view.png)
 
 It is aimed at small mechanical parts — brackets, flanges, manifolds, heat sinks,
 the things you print or machine one of. [examples/](examples/) is twenty-two.
