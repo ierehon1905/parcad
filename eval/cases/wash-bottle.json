@@ -1,0 +1,23 @@
+{
+  "name": "wash-bottle",
+  "script": "examples/wash-bottle.js",
+  "why": "Curves in a real part: a turned body drawn as one section with a rounded base corner, a spline shoulder and a through-arc bead, hollowed by a second curved section, with a pipe along a spline spout bored by the same spline. One body, no voids: the bore meets the cavity and opens at the tip, which the section view shows; a bore sealed at both ends would read as a void, one sealed at the tip only would not, which is why the section is the other half of this check.",
+  "brep": {
+    "size": [
+      113.278,
+      63.99,
+      132.0
+    ],
+    "volume_mm3": 52923.177,
+    "area_mm2": 51641.625,
+    "triangles": 148748,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 2123.178,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 16,
+    "edges": 64,
+    "curves": 18
+  }
+}

@@ -1,6 +1,6 @@
 # Examples
 
-Twenty-four parts, each a `.js` script that returns a shape — or, for two of
+Twenty-five parts, each a `.js` script that returns a shape — or, for two of
 them, two named shapes. Most are measured in
 `eval/cases/`, so an example that stops building fails a case rather than
 surprising someone.
@@ -37,7 +37,7 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 | `extrusion-2020.js` | 20x20 T-slot extrusion, 200 mm | four-fold symmetry by rotating the *cutter*; corner fillets among 37 candidate edges; and the diagonal webs it shipped without, five watertight bars that only the body count and the bed contact told apart from one |
 | `flange.js` | ASME B16.5 class 150 NPS 2 slip-on flange | a bolt circle, and one cut whose provenance reaches five rims |
 | `heat-sink.js` | 60x60 extruded fin sink | one fin shape placed nine times — one graph node, nine placements |
-| `hydraulic-line.js` | bent 12 mm hydraulic line | a routed tube: straight runs and real bend radii, bored along the same route, with a round-bottomed O-ring groove on the inlet boss |
+| `hydraulic-line.js` | bent 12 mm hydraulic line | a routed tube: straight runs and real bend radii, bored along the same route, with a catalogue O-ring gland on the inlet boss — a rectangular revolve section with rounded floor corners |
 | `hex-standoff.js` | M3 hex standoff, 5.5 AF | a prism from three intersecting slabs, which is exact |
 | `knurled-knob.js` | 30 mm knurled knob, D-bore | a D-bore by intersection; a dish cut with a large sphere; 24 flutes |
 | `lidded-box.js` | open box and its lipped lid, printed as two parts | two bodies that stay two, never fused; the lip is drawn 0.3 mm inside the pocket and `between_bodies` measures exactly that on the built solids |
@@ -50,6 +50,7 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 | `shaft-coupler.js` | 8-to-10 mm rigid coupler | two blind bores meeting at a web; radial grub screws breaking into them |
 | `timing-pulley.js` | 20-tooth GT2 pulley | **approximate** — and says so; see docs/DSL_GAPS.md §5 |
 | `v-block.js` | 50 mm toolroom V-block | a 90° vee cut by a rotated cube, so the angle cannot drift |
+| `wash-bottle.js` | wash bottle with a curved spout | curves in section and path: a rounded base corner, a spline shoulder and an arc bead in one revolve section, a second section for the cavity, and a spout that is `pipe({ spline })` bored along the same spline |
 
 ## Conventions every one of them follows
 

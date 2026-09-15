@@ -92,14 +92,26 @@ impossible, check the layer that would implement it, not the layer above.
 What a mainstream tool has that this still does not, with the cost of each here,
 is in [OP_ROADMAP.md](OP_ROADMAP.md).
 
+- **arcs and splines in a section, re-entrant sections, spline paths** —
+  one section type for `extrude`, `revolve`, `loft` and `sweep`: corners, `{ at,
+  round }`, `{ through }` and `{ radius }` arcs, `{ spline }`, `{ bezier }` and
+  `{ bspline }` curves, a loft that ends on `{ z, point }`, and `{ spline }` as a
+  `pipe`/`sweep` path. Resolved in `parcad-core/src/section.rs` into exact
+  arcs and B-spline poles, not polygons; OP_ROADMAP §2 has the prior art, the
+  twelve closed forms and what it did and did not move. A re-entrant section
+  builds, because the refusal's reason ("no exact distance field", then
+  "vertex pairing is a silent guess") went with the implicit kernel and the
+  loft's compatibility pass; `re-entrant-loft` holds the pairing to a frustum's
+  closed form. `examples/hydraulic-line.js` draws its gland as the catalogue
+  section now.
+
 ### Still missing
 
 | wanted | needed for | what it takes |
 |---|---|---|
-| **arcs in a section** | an O-ring groove, a bearing seat — a radius in section rather than a chamfer | `Edge::arc` is bound; the profile is a `Vec<[f64; 2]>` of straight segments, so an arc has nowhere to live |
 | **thread forms past the basic 60° profile** | a trapezoidal lead screw, a buttress or bottle-cap thread, a tapered pipe thread, a rounded root | `Op::Thread` sweeps one trapezoid; another profile is another tooth and its own closed form, a taper a conical core and helix |
-| **involute and other authored curves** | a spur gear, a cam, a real GT2 flank (`timing-pulley.js` approximates it and says so) | curve construction in the graph, on top of the section type |
-| **re-entrant (non-convex) sections** | a stepped hub in one operation | refused deliberately: on one the kernel's vertex pairing is a silent guess. A union of convex revolves is exact, and is how the part is turned anyway |
+| **involute and other constructed curves** | a spur gear, a cam, a real GT2 flank (`timing-pulley.js` approximates it and says so) | the section type carries arcs and splines now, but an involute is neither: a spline through sampled involute points is the approximation this refuses, so it needs its own curve entry and its own closed form |
+| **draft on a curved or re-entrant outline** | a moulded boss with rounded corners in one op | the drafted top is a half-plane inset, which only a convex polygon has; draft the polygon and fillet its vertical edges |
 | **variable-radius and unequal-distance treatments** | a casting fillet that tapers, an asymmetric chamfer for a weld prep | `Fillet`/`Chamfer` take one scalar |
 | **assembly: joints, mates, constraints** | a pillow block *and* its bearing, placed by a fit rather than by coordinates | the bodies exist (above) and the fit between them is measured; nothing yet *places* one against another — a solver, which is the wide reading of NEXT.md §3 |
 
@@ -142,7 +154,10 @@ the 21 have NURBS faces; in the worst (`v10`) it is 575 of 585. `Loft` and
 count lifted the hold on both (OP_ROADMAP §3–4). What the counts could not say,
 and the recreation targets did, is that the ops alone were not the wall: every
 still-blocked target fails on *spline sketch geometry in the section or path*,
-which the profile type cannot hold. (UnTriangle v3 looked blocked the same way
+which the profile type could not hold — until it could, and one of the four
+moved (`untitled2-v1`); the probe showed the other three were blocked on a
+different fit, an ornament and a mismatched export (eval/targets/fusion360/README.md).
+(UnTriangle v3 looked blocked the same way
 and was not: its "NURBS" walls probe as ruled patches, and the real obstacle was
 loft's vertex pairing being silently normalised. Recreated — see
 `examples/fusion360/README.md`.) `Thicken`, `Stitch` and `Patch` are the

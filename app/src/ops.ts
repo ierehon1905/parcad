@@ -96,21 +96,21 @@ export const OP_GROUPS: OpGroup[] = [
     id: "profile",
     label: "Profile",
     icon: "extrude",
-    blurb: "A shape you draw rather than pick. Outlines are convex; union two of them for an L.",
+    blurb: "A shape you draw rather than pick: corners, arcs ({ through }, { radius }), rounded corners ({ at, round }) and splines.",
     ops: [
       {
         name: "extrude",
         icon: "extrude",
         signature: "extrude(outline, height, { draft })",
-        detail: "A closed convex [x, y] outline given a thickness along Z, centred in Z.",
-        snippet: "extrude([[-10, -5], [10, -5], [10, 5], [-10, 5]], 3)",
+        detail: "A closed [x, y] outline of corners, arcs and splines given a thickness along Z, centred in Z.",
+        snippet: "extrude([[-10, -5], [10, -5], { through: [15, 0] }, [10, 5], [-10, 5], { through: [-15, 0] }], 3)",
       },
       {
         name: "revolve",
         icon: "revolve",
         signature: "revolve(section)",
         detail:
-          "A convex [radius, z] section spun a full turn about Z. Radii must be at or above zero.",
+          "A [radius, z] section of corners, arcs and splines spun a full turn about Z. Radii must be at or above zero.",
         snippet: "revolve([[0, -5], [8, -5], [8, 5], [0, 5]])",
       },
       {
@@ -118,7 +118,7 @@ export const OP_GROUPS: OpGroup[] = [
         icon: "pipe",
         signature: "pipe(path, diameter, { bend, taper })",
         detail:
-          "A round tube along straight runs joined by tangent arcs, or along { helix: { radius, pitch, turns } } — a spring. Optionally tapering.",
+          "A round tube along straight runs joined by tangent arcs, along { helix: { radius, pitch, turns } } — a spring — or along { spline: [[x, y, z], ...] }. Optionally tapering.",
         snippet: "pipe([[0, 0, 0], [40, 0, 0], [40, 30, 0]], 8, { bend: 10 })",
       },
       {
@@ -126,7 +126,7 @@ export const OP_GROUPS: OpGroup[] = [
         icon: "sweep",
         signature: "sweep(profile, path, { bend, taper })",
         detail:
-          "An authored section along the same run-and-bend path or a { helix }, optionally tapering.",
+          "An authored section along the same run-and-bend path, a { helix } or a { spline }, optionally tapering.",
         snippet:
           "sweep([[-3, -3], [3, -3], [3, 3], [-3, 3]], [[0, 0, 0], [40, 0, 0], [40, 25, 0]], { bend: 8 })",
       },
@@ -135,7 +135,7 @@ export const OP_GROUPS: OpGroup[] = [
         icon: "loft",
         signature: "loft(sections, { smooth })",
         detail:
-          "Sections must rise strictly in z and carry the same number of outline points, because walls pair vertices by index. B-rep only.",
+          "Sections must rise strictly in z and resolve to the same number of edges, because walls pair them by index; the first or last may be { z, point }.",
         snippet:
           "loft([\n" +
           "  { z: 0, outline: [[-12, -12], [12, -12], [12, 12], [-12, 12]] },\n" +

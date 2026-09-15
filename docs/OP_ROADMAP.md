@@ -23,8 +23,8 @@ are marked *hold* with a reason instead of a plan.
 | Fusion 360 | parcad | note |
 |---|---|---|
 | Box / Sphere / Cylinder primitives | ✅ `box` `sphere` `cylinder` | centred on the origin, placed with `.at()` |
-| Extrude a sketch profile | ✅ `extrude`, `ngon` | convex outlines; see *Draft* and *Arcs* |
-| Revolve a sketch profile | ✅ `revolve`, `cone`, `countersink` | convex sections |
+| Extrude a sketch profile | ✅ `extrude`, `ngon` | lines, arcs, rounded corners and splines, re-entrant allowed; §2 |
+| Revolve a sketch profile | ✅ `revolve`, `cone`, `countersink` | the same section type; §2 |
 | Combine (join / cut / intersect) | ✅ `union` `cut` `intersect` | plus `blend` for a rounded seam |
 | Move / Copy, Rotate, Scale | ✅ `.at()` `.rotate()` `.scale()` | non-uniform scale builds exact B-splines (`BRepBuilderAPI_GTransform`), held to the determinant |
 | Mirror | ✅ `.mirror()` | |
@@ -35,7 +35,7 @@ are marked *hold* with a reason instead of a plan.
 | Offset face / Thicken | ✅ `.offset()` | whole-body offset, not per face |
 | Hole | ✅ `holeFor` `tapDrill` `clearance` `counterbore` | ISO metric coarse, M2–M20 |
 | Draft | ✅ `extrude(..., { draft })` | §1 |
-| Sweep | ✅ `sweep(profile, path, { bend, taper })`, `pipe(path, dia, { bend, taper })` | runs and bend arcs or a `{ helix }`; no spline path |
+| Sweep | ✅ `sweep(profile, path, { bend, taper })`, `pipe(path, dia, { bend, taper })` | runs and bend arcs, a `{ helix }` or a `{ spline }` |
 | Loft | ✅ `loft(sections, { smooth })` | §4 |
 | Section view | ✅ viewport plane, `section` on `evaluate_part` | §8 |
 | Coil | ✅ `pipe({ helix }, dia)`, `sweep(profile, { helix })` | §5 |
@@ -56,29 +56,71 @@ not take it. An angle the outline cannot carry is refused, naming the maximum.
 `drafted-boss` in `eval/cases/` holds the kernel to the closed form for a
 square frustum (29282.008 mm³); `refuse-impossible-draft` holds the refusal.
 
-## 2. Arcs in a section — the enabling change
+## 2. Arcs and splines in a section — **DONE**
 
 An arc in the section is what makes an O-ring groove, a bearing seat, a radiused
-shoulder. It is also what makes `Op::Fillet` unnecessary for turned work: a
-radius authored in section is exact, where a rolling-ball fillet on the solid is
-a surface fit.
+shoulder, and a radius authored in section is exact where a rolling-ball fillet
+on the solid is a surface fit. It shipped with splines, as one section type
+(`crates/parcad-core/src/section.rs`, `SectionEntry` in the DSL):
 
-**What it takes.** The profile type stops being `Vec<[f64; 2]>` and becomes a
-list of segments and arcs. Convexity still decides: a convex arc bulging outward
-has an exact field (distance to the centre, minus the radius), and the half-plane
-max extends to it unchanged. `Edge::arc` is already bound, so the B-rep side is a
-different `Edge` constructor in the same loop. **Cost:** medium.
+- a section is a list of corners `[x, y]`, closed by itself; `{ at, round }`
+  is a corner rounded between its two straight edges;
+- between two corners, `{ through: [x, y] }` or `{ radius: r }` is a circular
+  arc, `{ spline: points, start, end }` a chord-length cubic through points,
+  `{ bezier: controls }` and `{ bspline: poles, degree }` curves by control
+  points; `[{ spline: points }]` alone is a closed C2 curve;
+- the same type is the profile of `extrude`, `revolve`, `loft` (whose first or
+  last section may be `{ z, point }`) and `sweep`, and `pipe`/`sweep` take
+  `{ spline: [[x, y, z], ...] }` as a path.
 
-A **torus primitive** was the cheap down payment and shipped:
-`torus(major, minor, { sweep })`, one periodic face, an arc of it being a
-pipe bend. `eval/cases/torus.json` checks volume *and* area against the closed
-form; `eval/cases/torus-gland.json` checks the O-ring groove that used to
-segfault in `UnifySameDomain` before OCCT 8.0.1 was vendored (docs/GOTCHAS.md).
+**Prior art, and why this spelling.** CadQuery (`lineTo`, `threePointArc`,
+`radiusArc`, `spline` over `GeomAPI_Interpolate`, `close`) and build123d
+(`Polyline`, `ThreePointArc`, `RadiusArc`, `Spline`, `Bezier`,
+`FilletPolyline`, `make_face`) were read for the vocabulary, and SVG's path
+commands for what a model already knows (`C` is the cubic Bézier; the `A`
+command's large-arc and sweep flags were rejected as the classic way to get an
+arc on the wrong side). A section is data rather than a builder chain because
+the graph carries it verbatim and every export name is a reserved word: not
+one new export was added. Three-point arcs (`GC_MakeArcOfCircle`) are the
+unambiguous form; `radius` exists because drawings dimension arcs that way,
+with the sign saying which side. Everything resolves **in the core**, not the
+kernel: arcs become three points and a centre, every curve a clamped B-spline
+with explicit poles, and the kernel builds exactly those poles
+(`Edge::bspline`). That is why `spline` is its own documented interpolation
+rather than `GeomAPI_Interpolate`, whose end-tangent estimate lives in C++ —
+bounds, area, the axis check and a sweep's reach need the curve before the
+kernel runs. A polygon takes the old construction bit for bit: all 94
+surviving corpus cases re-recorded unchanged.
 
-**What the torus still cannot be is a catalogue gland.** That section is
-rectangular and wider than the cord; a torus cut is a circle. The round bottom in
-`examples/hydraulic-line.js` is the honest shape, and the rest waits on the
-profile type — which is the argument for it, made by a part rather than a table.
+**Convexity lifted.** Extrude, revolve, loft and sweep sections may be
+re-entrant; the reason recorded for refusing them was the implicit kernel's
+missing distance field, and a prism or a revolution pairs nothing. A loft pairs
+edges by index with `CheckCompatibility` off, so a re-entrant section pairs as
+literally as a convex one. A polygon that crosses itself is refused by name in
+the graph; a curve that crosses its outline by `BRepCheck`
+(`SelfIntersectingWire`) on the section face. Draft still takes a convex
+polygon, because its inset is a half-plane intersection.
+
+**Measured**, exact B-rep read off each part's STEP: `stadium-extrude`
+4000 + 500π = 5570.796327; `rounded-plate` 3961.371669; `domed-revolve`
+8000π/3 = 8377.580410; `revolved-fillet-shoulder` Pappus 6169.962838;
+`circle-section-ring` 2π²Rr² = 4934.802201; `parabola-bezier` Archimedes' 400;
+`loft-to-a-point` 1000π; `swept-stadium-bend` Pappus 2611.421237;
+`stepped-shaft` 1720π; `l-plate` 2700; `re-entrant-loft` 5250 (a frustum of an L); `spline-pipe-straight` 848.229790 against
+848.230016 (the pipe shell's fit). Edges from arcs select as `curve: "circle"`,
+from curves as `curve: "spline"` (`curve-edges-by-kind`). `hydraulic-line`'s
+gland is a catalogue section now, its cut 283.712922 mm³ against Pappus to the
+last printed digit.
+
+**What it moved.** One Fusion target, `untitled2-v1`, both bodies from the
+export's degree-5 pole rows (examples/fusion360/README.md). The other three it
+was supposed to unblock were not waiting on curves once probed.
+
+**Still out:** an involute or other *constructed* curve (a gear needs the
+curve itself, and a spline through sampled involute points is exactly the
+approximation this refuses), a section with holes (cut a second solid), a
+periodic or rational B-spline entry, tangent continuity asked for across a
+corner, and draft on a curved outline.
 
 ## 3. Sweep — **DONE**, in two honesty classes
 
@@ -103,9 +145,10 @@ read 0.005% under by tessellation, the same effect `bent-tube` records). A
 
 **Since added:** a helical path and a linear taper (§5).
 
-**Still out:** a spline path. There is no spline type in the graph to sweep
-along, which is the section-and-path authoring gap that also blocks the Fusion
-targets; a profile that twists along the path is out with it.
+**Since added:** a spline path, `{ spline: [[x, y, z], ...] }`, the chord-length
+cubic of §2, refused where it bends tighter than the section reaches (the
+radius and where are in the message). **Still out:** a profile that twists
+along the path.
 
 ## 4. Loft — **DONE**, and the hold lifted deliberately
 
@@ -123,16 +166,17 @@ thickness, renders and sections run on the exact solid, so a loft is inspected
 like any other op. `loft-frustum` holds the closed form (a 40→20 mm square
 prismatoid, 28000 mm³ exactly).
 
-`loft(sections, { smooth })` takes two or more convex polygon outlines stacked
-along +Z. Sections must share a point count, because vertex pairing is by outline
-index and taken literally: a rotated outline authors a *twisted* wall on purpose,
+`loft(sections, { smooth })` takes two or more outlines stacked along +Z, with
+arcs and curves since §2, and a point as the first or last section. Sections
+must resolve to the same edge count, because pairing is by index and taken
+literally: a rotated outline authors a *twisted* wall on purpose,
 which is what recreated UnTriangle v3, held to a closed form by
 `eval/cases/twisted-loft.json`. `smooth: true` is Fusion's look, one surface
 fitted through all sections, and a fit that bulges past the sections' own
 bounding box by more than the slip tolerance is refused
 (`eval/cases/refuse-bulging-loft.json`), so the graph's cheap bounds stay honest.
-Sections stay convex for the extrude/revolve reason plus loft's own: on a
-re-entrant outline the kernel's vertex pairing is a silent guess.
+Sections may be re-entrant since §2: with the compatibility pass off the
+pairing is the author's, re-entrant or not.
 
 ## 5. Coils — **DONE**; threads — **DONE**, after the measurement that held them was re-run
 
@@ -210,9 +254,8 @@ hazard on the way through), draft, torus, `pipe()`, the `UnifySameDomain`
 segfault fix by vendoring OCCT 8.0.1, then loft and sweep of an authored profile
 — the hold lifted as the product decision recorded in §4.
 
-1. **Arcs in a section** (§2) — the general version of what the torus does for
-   one shape: grooves, seats, radiused shoulders. `examples/hydraulic-line.js`'s
-   groove is round-bottomed because a torus is all there is; a gland section is
-   rectangular and wider than the cord, and this is what would let one be drawn.
-2. Everything else: hold, with the reason recorded above rather than the
-   intention.
+Then arcs and splines in a section (§2), which drew `hydraulic-line.js`'s
+gland as the catalogue section it had to approximate with a torus.
+
+Everything else: hold, with the reason recorded above rather than the
+intention.

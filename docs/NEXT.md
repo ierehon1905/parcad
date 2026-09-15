@@ -97,8 +97,20 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    what-is-hidden 8/8 SOUND; what-is-inside 7/8 SOUND, 1 WRONG — a trial that
    read its x = −22 section as two separate circles, on a picture measured
    pixel-identical before and after the change.
-4. **Curves in sections and paths** — arcs and splines in the profile type; four
-   of `eval/targets/fusion360/` wait on it.
+4. **Curves in sections and paths** — done 2026-09-15. One section type for
+   extrude, revolve, loft and sweep: corners, rounded corners, through and
+   radius arcs, spline, Bézier and B-spline curves, a loft that ends on a
+   point, a spline sweep path — resolved to exact arcs and B-spline poles in
+   `section.rs`, never polygonised, with polygons on their old path (94 corpus
+   cases re-recorded unchanged). Re-entrant sections build; a crossed polygon
+   is refused by name, a crossed curve by BRepCheck. Twelve closed-form cases
+   (OP_ROADMAP §2) and four refusals; `curve: "spline"` selects curve edges.
+   Of the four Fusion targets said to wait on it, one moved: `untitled2-v1`,
+   both bodies from the export's degree-5 poles, +0.008% and +0.0004% on
+   Fusion's volumes. `v2`'s sections turned out to be a square, circle, turned
+   square and a point — they build, but OCCT's smooth fit is 2% short in area;
+   `v3` is an ornament of cones, `v4` a fitted curve under a mismatched header.
+   `hydraulic-line` draws its gland as the catalogue section.
 5. **A playground in the browser** — the exact kernel built for WebAssembly on
    GitHub Pages, the corpus run against that build first.
 6. **A measured parts library** — fasteners, bearings, boards, devices, each

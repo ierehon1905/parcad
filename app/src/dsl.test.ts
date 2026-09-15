@@ -13,6 +13,7 @@ import {
   extrude,
   grid,
   holeFor,
+  loft,
   hull,
   line2d,
   ngon,
@@ -169,6 +170,46 @@ describe("revolve", () => {
     expect(() => revolve([[-1, 0], [2, 0], [0, 3]])).toThrow(">= 0");
     expect(() => cone(5, 5, 0)).toThrow("height must be positive");
     expect(() => countersink(6, 200)).toThrow("between 0 and 180");
+  });
+});
+
+describe("sections with curves", () => {
+  test("arc, round and curve entries reach the graph verbatim", () => {
+    const profile = [
+      { at: [0, 0] as [number, number], round: 1 },
+      [10, 0] as [number, number],
+      { through: [12, 5] as [number, number] },
+      [10, 10] as [number, number],
+      { spline: [[5, 12]] as [number, number][], start: [-1, 0] as [number, number] },
+      [0, 10] as [number, number],
+    ];
+    expect(build(extrude(profile, 2)).nodes[0].profile).toEqual(profile);
+  });
+
+  test("a closed spline alone is a section, a lone arc is not", () => {
+    expect(() => extrude([{ spline: [[0, 0], [10, 0], [5, 8]] }], 2)).not.toThrow();
+    expect(() => extrude([{ through: [0, 1] }], 2)).toThrow("no corners");
+  });
+
+  test("a misspelt entry names the vocabulary", () => {
+    expect(() => extrude([[0, 0], [5, 0], { thru: [5, 5] } as never, [0, 5]], 2)).toThrow('unknown key "thru"');
+    expect(() => revolve([[0, 0], [5, 0], { radius: 0 }, [0, 5]])).toThrow("non-zero");
+    expect(() => extrude([[0, 0], [5, 0], { bezier: [[2, 3]], degree: 2 } as never, [0, 5]], 2)).toThrow("bspline only");
+  });
+
+  test("a loft may end on a point, and only end on one", () => {
+    const circle: [number, number][] | object[] = [[10, 0], { through: [0, 10] }, [-10, 0], { through: [0, -10] }];
+    const doc = build(loft([{ z: 0, outline: circle as never }, { z: 10, point: [0, 0] }]));
+    expect(doc.nodes[0].sections).toEqual([{ outline: circle, z: 0 }, { z: 10, point: [0, 0] }]);
+    expect(() =>
+      loft([{ z: 0, point: [0, 0] }, { z: 5, point: [0, 0] }, { z: 10, outline: circle as never }]),
+    ).toThrow("only the first or last");
+  });
+
+  test("pipe and sweep take a spline path", () => {
+    const spline = [[0, 0, 0], [10, 5, 0], [20, 0, 0]] as [number, number, number][];
+    expect(build(pipe({ spline }, 2)).nodes[0]).toMatchObject({ op: "sweep", circle: 1, spline: [{ x: 0, y: 0, z: 0 }, { x: 10, y: 5, z: 0 }, { x: 20, y: 0, z: 0 }] });
+    expect(() => sweep([[0, 0], [1, 0], [0, 1]], { spline: spline.slice(0, 2) })).toThrow("at least 3");
   });
 });
 

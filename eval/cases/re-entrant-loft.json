@@ -1,0 +1,23 @@
+{
+  "name": "re-entrant-loft",
+  "script": "eval/scripts/re-entrant-loft.js",
+  "why": "A re-entrant loft section, allowed since sections no longer need to be convex: a ruled loft between an L and the L at half size is the frustum h/3 (A1 + A2 + sqrt(A1 A2)) = 5250 mm3 exactly, every wall planar. A pairing that slipped one vertex would twist the walls into saddles and read short: the twisted-loft tripwire applied to a non-convex outline.",
+  "brep": {
+    "size": [
+      30.0,
+      25.0,
+      20.0
+    ],
+    "volume_mm3": 5250.0,
+    "area_mm2": 2293.045,
+    "triangles": 634,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 450.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 8,
+    "edges": 36,
+    "curves": 18
+  }
+}
