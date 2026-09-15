@@ -523,6 +523,15 @@ export function watchMcp(): () => void {
   return () => window.clearInterval(handle);
 }
 
+// ------------------------------------------------------------ the kernel
+
+/** Follow a kernel that arrives over the network; a no-op when there is a host. */
+export function watchKernel(): () => void {
+  return backend.watchKernelLoad((load) => {
+    S.kernelLoad.value = load.phase === "ready" ? undefined : load;
+  });
+}
+
 // --------------------------------------------------------------- the part
 
 /** Re-read the project folder without opening anything. */

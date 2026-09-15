@@ -4,6 +4,7 @@
 # Node
 node_modules/
 app/dist/
+app/dist-playground/
 
 # Tauri generated
 app/src-tauri/gen/schemas/

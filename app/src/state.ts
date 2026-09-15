@@ -25,7 +25,7 @@
 import { computed, signal } from "@preact/signals";
 import type { EditorView } from "codemirror";
 import type * as dsl from "./dsl";
-import type { McpStatus } from "./backend";
+import type { KernelLoad, McpStatus } from "./backend";
 import type { VertexPoint } from "./entities";
 import type { Projects } from "./projects";
 import type { Viewport } from "./viewport";
@@ -225,6 +225,12 @@ export const errorText = signal("");
 
 /** Whether a model is on the third transport. Undefined until first answered. */
 export const mcp = signal<McpStatus | undefined>(undefined);
+
+/**
+ * How far a kernel that has to be downloaded has got. Undefined whenever the
+ * kernel is simply there, which is always under the two host transports.
+ */
+export const kernelLoad = signal<KernelLoad | undefined>(undefined);
 
 // ------------------------------------------------------------- the selection
 

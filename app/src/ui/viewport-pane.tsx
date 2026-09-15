@@ -20,6 +20,7 @@ import * as engine from "../engine";
 import * as S from "../state";
 import { Viewport } from "../viewport";
 import { EntityInspector } from "./entity-inspector";
+import { KernelLoading } from "./kernel-loading";
 import { Report } from "./report";
 import { TargetPreview } from "./target-preview";
 import { ViewTools } from "./view-tools";
@@ -75,6 +76,7 @@ export function ViewportPane() {
 
       <TargetPreview />
       <Report />
+      <KernelLoading />
     </section>
   );
 }

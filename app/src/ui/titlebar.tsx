@@ -60,7 +60,7 @@ function OpenPart() {
         title: "Browse parts",
         key: "⌘O",
         code: path,
-        text: "One folder, shared by this window, the Finder and every agent on the MCP endpoint.",
+        text: "Every part there is. Where they are kept, and who else reads them, is the line at the foot of the picker.",
       })}
       onClick={() => (S.browserOpen.value = true)}
     >

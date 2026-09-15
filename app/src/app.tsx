@@ -21,6 +21,7 @@ import { ViewportPane } from "./ui/viewport-pane";
 
 export function App() {
   useEffect(() => engine.watchMcp(), []);
+  useEffect(() => engine.watchKernel(), []);
   useEffect(keys, []);
 
   return (

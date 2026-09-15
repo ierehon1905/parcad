@@ -1,12 +1,16 @@
 /**
  * The one way the editor reaches the host.
  *
- * There are two transports and deliberately no third behaviour. Inside the
+ * There are three transports and deliberately no third behaviour. Inside the
  * desktop webview a call goes over Tauri IPC; in a browser it goes to the API
  * the desktop process hosts on a local port, which lands in the same Rust
- * functions. Nothing above this module may branch on which one it got — the
- * browser build used to serve a frozen geometry fixture, and every feature the
- * editor gated on `inTauri` was a difference the user had to learn.
+ * functions; and in the playground build there is no host at all, so the same
+ * Rust — `parcad_occt::serve` and `parcad_evaluation`, compiled to WebAssembly
+ * — runs in a Web Worker in the tab (`page/kernel.ts`) and parts live in the
+ * browser's storage (`page/store.ts`). Nothing above this module may branch on
+ * which one it got — the browser build used to serve a frozen geometry
+ * fixture, and every feature the editor gated on `inTauri` was a difference
+ * the user had to learn.
  *
  * The one honest difference is where an export goes, and it is about the host,
  * not the model: the desktop writes a file, the browser downloads one. Both are
@@ -25,6 +29,20 @@ import { listen } from "@tauri-apps/api/event";
  * check, and the two hosts start to differ again.
  */
 const inTauri = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
+
+/**
+ * The playground: a static site with the kernel in the page. Fixed when the
+ * site is built (`vite build --mode playground`), so the desktop bundle carries
+ * none of it, and not exported for the same reason `inTauri` is not.
+ */
+const inPage = import.meta.env.VITE_PARCAD_PAGE === "1";
+
+// The condition is repeated rather than read from `inPage` so the bundler can see
+// it is constant and leave the page's modules out of every other build.
+const page = (): Promise<typeof import("./page")> =>
+  import.meta.env.VITE_PARCAD_PAGE === "1"
+    ? import("./page")
+    : Promise.reject(new Error("the page kernel exists only in the playground build"));
 
 const NOT_ANSWERING =
   "the parcad desktop process is not answering.\n" +
@@ -119,6 +137,7 @@ export interface ProjectList {
 }
 
 export function listProjects(): Promise<ProjectList> {
+  if (inPage) return page().then((p) => p.store.list());
   return inTauri ? invoke<ProjectList>("list_projects") : get<ProjectList>("projects");
 }
 
@@ -133,7 +152,9 @@ export function listProjects(): Promise<ProjectList> {
 const route = (name: string) => name.split("/").map(encodeURIComponent).join("/");
 
 export async function readProject(name: string): Promise<string> {
-  const project = inTauri
+  const project = inPage
+    ? await (await page()).store.read(name)
+    : inTauri
     ? await invoke<{ script: string }>("read_project", { name })
     : await get<{ script: string }>(`projects/${route(name)}`);
   return project.script;
@@ -158,7 +179,9 @@ export async function saveProject(
   derived: Derived = {},
 ): Promise<string> {
   const body = { script, readme: derived.readme, preview: derived.preview };
-  const saved = inTauri
+  const saved = inPage
+    ? await (await page()).store.save(name, script, derived.preview)
+    : inTauri
     ? await invoke<{ path: string }>("save_project", { name, ...body })
     : await put<{ path: string }>(`projects/${route(name)}`, body);
   return saved.path;
@@ -166,14 +189,18 @@ export async function saveProject(
 
 /** Refuses to overwrite. "New part" and "save" must not be the same call. */
 export async function createProject(name: string, script: string): Promise<string> {
-  const made = inTauri
+  const made = inPage
+    ? await (await page()).store.create(name, script)
+    : inTauri
     ? await invoke<{ path: string }>("create_project", { name, script })
     : await post<{ path: string }>(`projects/${route(name)}`, { op: "create", script });
   return made.path;
 }
 
 export async function createFolder(name: string): Promise<string> {
-  const made = inTauri
+  const made = inPage
+    ? await (await page()).store.createFolder(name)
+    : inTauri
     ? await invoke<{ path: string }>("create_folder", { name })
     : await post<{ path: string }>(`projects/${route(name)}`, { op: "folder" });
   return made.path;
@@ -181,7 +208,9 @@ export async function createFolder(name: string): Promise<string> {
 
 /** Renames or moves; the two are one operation on disk and one here. */
 export async function renameProject(name: string, to: string): Promise<string> {
-  const moved = inTauri
+  const moved = inPage
+    ? await (await page()).store.rename(name, to)
+    : inTauri
     ? await invoke<{ path: string }>("rename_project", { name, to })
     : await post<{ path: string }>(`projects/${route(name)}`, { op: "rename", to });
   return moved.path;
@@ -189,6 +218,7 @@ export async function renameProject(name: string, to: string): Promise<string> {
 
 /** The readable name, which is not the path. */
 export async function setProjectTitle(name: string, title: string): Promise<void> {
+  if (inPage) return (await page()).store.setTitle(name, title);
   if (inTauri) {
     await invoke("set_project_title", { name, title });
     return;
@@ -198,7 +228,9 @@ export async function setProjectTitle(name: string, title: string): Promise<void
 
 /** Moves to the project folder's `.trash`. Not an unlink — say so in the UI. */
 export async function deleteProject(name: string): Promise<string> {
-  const gone = inTauri
+  const gone = inPage
+    ? await (await page()).store.remove(name)
+    : inTauri
     ? await invoke<{ trashed: string }>("delete_project", { name })
     : await send<{ trashed: string }>(`projects/${route(name)}`, { method: "DELETE" });
   return gone.trashed;
@@ -206,6 +238,7 @@ export async function deleteProject(name: string): Promise<string> {
 
 /** Loose `.js` to `.parcad` folder, keeping the script byte for byte. */
 export async function convertProject(name: string): Promise<string> {
+  if (inPage) throw new Error(`${JSON.stringify(name)} is already a project folder.`);
   const made = inTauri
     ? await invoke<{ path: string }>("convert_project", { name })
     : await post<{ path: string }>(`projects/${route(name)}`, { op: "convert" });
@@ -220,6 +253,7 @@ export async function convertProject(name: string): Promise<string> {
  * and its modified time, which the picker reports — to store a picture.
  */
 export async function saveProjectPreview(name: string, preview: string): Promise<void> {
+  if (inPage) return (await page()).store.setPreview(name, preview);
   if (inTauri) {
     await invoke("save_project_preview", { name, preview });
     return;
@@ -234,6 +268,7 @@ export async function saveProjectPreview(name: string, preview: string): Promise
  */
 export async function projectPreview(name: string): Promise<string | null> {
   try {
+    if (inPage) return await (await page()).store.preview(name);
     if (inTauri) return await invoke<string>("project_preview", { name });
     const response = await fetch(`/api/preview/${route(name)}`);
     if (!response.ok) return null;
@@ -260,6 +295,8 @@ export interface McpStatus {
 }
 
 export function mcpStatus(): Promise<McpStatus> {
+  // No host, so no endpoint: refused like an unreachable one, which hides the chip.
+  if (inPage) return Promise.reject(new Error("the playground has no MCP endpoint"));
   return inTauri ? invoke<McpStatus>("mcp_status") : get<McpStatus>("mcp");
 }
 
@@ -293,6 +330,8 @@ export function pushSession(
   origin: string,
   base: number | null,
 ): Promise<Session> {
+  // One window and no agent: the session is this tab's own, and nothing echoes.
+  if (inPage) return Promise.resolve({ name, script, revision: (base ?? 0) + 1, origin });
   return inTauri
     ? invoke<Session>("push_session", { name, script, origin, base })
     : post<Session>("session", { name, script, origin, base });
@@ -300,6 +339,7 @@ export function pushSession(
 
 /** The session as the host holds it, for a window that has just loaded. */
 export function getSession(): Promise<Session> {
+  if (inPage) return Promise.reject(new Error("the playground shares no session"));
   return inTauri ? invoke<Session>("get_session") : get<Session>("session");
 }
 
@@ -313,6 +353,7 @@ export interface Shown {
 }
 
 export function reportShown(shown: Shown): Promise<unknown> {
+  if (inPage) return Promise.resolve();
   const report = { ...shown, kind: inTauri ? "desktop" : "browser" };
   return inTauri
     ? invoke("report_shown", { shown: report })
@@ -327,6 +368,7 @@ export function reportShown(shown: Shown): Promise<unknown> {
  * that is this module's whole job.
  */
 export function subscribeSession(viewer: string, onEvent: (session: Session) => void): void {
+  if (inPage) return;
   if (inTauri) {
     void listen<Session>("session-changed", (event) => onEvent(event.payload));
     return;
@@ -335,11 +377,13 @@ export function subscribeSession(viewer: string, onEvent: (session: Session) => 
   events.onmessage = (event) => onEvent(JSON.parse(event.data) as Session);
 }
 
-export function evaluate<T>(graph: unknown): Promise<T> {
+export async function evaluate<T>(graph: unknown): Promise<T> {
+  if (inPage) return json<T>(await (await page()).kernel.call({ op: "evaluate", graph }));
   return inTauri ? invoke<T>("evaluate", { graph }) : post<T>("evaluate", { graph });
 }
 
-export function inspectEdgeTarget<T>(graph: unknown, node: number): Promise<T> {
+export async function inspectEdgeTarget<T>(graph: unknown, node: number): Promise<T> {
+  if (inPage) return json<T>(await (await page()).kernel.call({ op: "inspect-edge-target", graph, node }));
   return inTauri
     ? invoke<T>("inspect_edge_target", { graph, node })
     : post<T>("inspect-edge-target", { graph, node });
@@ -363,7 +407,7 @@ export async function exportStl(graph: unknown, project: string | undefined): Pr
   if (inTauri && project) {
     return invoke<string>("export_stl", { graph, project });
   }
-  save(await download("export/stl", { graph }), "part.stl");
+  save(inPage ? await pageExport("export-stl", graph, "model/stl") : await download("export/stl", { graph }), "part.stl");
   return "part.stl";
 }
 
@@ -371,6 +415,46 @@ export async function exportStep(graph: unknown, project: string | undefined): P
   if (inTauri && project) {
     return invoke<string>("export_step", { graph, project });
   }
-  save(await download("export/step", { graph }), "part.step");
+  save(inPage ? await pageExport("export-step", graph, "application/step") : await download("export/step", { graph }), "part.step");
   return "part.step";
+}
+
+type PageReply = { json: unknown } | { bytes: Uint8Array };
+
+function json<T>(reply: PageReply): T {
+  if (!("json" in reply)) throw new Error("the kernel answered with bytes where a reply was expected");
+  return reply.json as T;
+}
+
+async function pageExport(op: string, graph: unknown, type: string): Promise<Blob> {
+  const reply = await (await page()).kernel.call({ op, graph });
+  if (!("bytes" in reply)) throw new Error("the kernel answered without the file");
+  return new Blob([reply.bytes as BlobPart], { type });
+}
+
+/**
+ * How far the kernel has got to arriving, for a page that has to download it.
+ * The two host transports have their kernel before the window opens, so this
+ * never calls back for them.
+ */
+export interface KernelLoad {
+  phase: "downloading" | "compiling" | "ready" | "failed";
+  received: number;
+  total: number;
+  error?: string;
+}
+
+export function watchKernelLoad(listener: (load: KernelLoad) => void): () => void {
+  if (!inPage) return () => {};
+  let stop = () => {};
+  let stopped = false;
+  void page().then((p) => {
+    if (stopped) return;
+    stop = p.kernel.watchLoad(listener);
+    p.kernel.preload();
+  });
+  return () => {
+    stopped = true;
+    stop();
+  };
 }

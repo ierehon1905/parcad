@@ -430,6 +430,43 @@ The one honest difference left is where an export lands — a file on the deskto
 a download in the browser. Same bytes, same kernel; a property of the host, not
 of the model.
 
+### A third transport with no host: the playground
+
+`vite build --mode playground` builds the same frontend as a static site, and
+`backend.ts` then answers every call inside the tab instead of over a socket:
+
+```
+  webview  ──Tauri IPC──┐
+  browser  ──HTTP───────┼──> service.rs ──> parcad_evaluation ──┐
+  agent    ──MCP────────┘                  OCCT worker process ├─ parcad_occt::serve
+  playground ──Web Worker──> parcad-wasm.wasm ─────────────────┘
+```
+
+The kernel is not a reimplementation. `crates/parcad-wasm` compiles
+`parcad_occt::serve::run` — the function the native worker's stdin loop calls —
+and `parcad_evaluation::evaluated`, the function `service::evaluate` calls, with
+the patched OpenCASCADE, to one WebAssembly module (`playground/build-kernel.sh`).
+Four exported calls mirror the four HTTP routes the editor uses: evaluate,
+inspect an edge target, export STL, export STEP. The same Node build of the
+worker is what the eval corpus measures, and it passes it (playground/README.md
+has every number that moved).
+
+What `host.rs` does for a process, `app/src/page/kernel.ts` does for a Web
+Worker: one call at a time, the last `@stage` breadcrumb kept, a worker that
+traps terminated and reported as a crash naming that stage, one still running
+at the deadline (60 s, the desktop's 20 s times the measured slowdown)
+terminated as timed out, and the next call starting a fresh worker from the
+module already compiled. The module is downloaded after first paint, and the
+viewport says what is downloading and how big it is.
+
+The project folder is IndexedDB (`app/src/page/store.ts`), seeded from
+`examples/` at build time under the names `projects.rs` gives them and answering
+in the same shapes. What needs a host is absent rather than dimmed: no MCP
+endpoint answers, so the titlebar chip never appears; there is no shared session
+to subscribe to; an export is a download, which the browser transport already
+did. Nothing outside `backend.ts` knows which of the three it got — the loading
+state is a signal that simply never fires under a host.
+
 Under `tauri dev` the UI comes from Vite on 1420, which proxies `/api` to the
 app's port. That keeps every frontend call same-origin, which is what lets the
 app ship no CORS configuration at all.
