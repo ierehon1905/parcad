@@ -61,6 +61,17 @@
   --text-body: 13px;
   --text-small: 12px;
   --text-tiny: 11.5px;
+
+  /* An indeterminate progress bar: a third of the track sliding across it. */
+  --animate-slide-across: slide-across 1.2s ease-in-out infinite;
+  @keyframes slide-across {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(300%);
+    }
+  }
 }
 
 @layer base {
