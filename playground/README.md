@@ -42,6 +42,45 @@ possible: `OCCT_SOURCE=/your/occt EMSDK=… playground/build-kernel.sh`, then th
 site build below. The patches in `vendor/occt-sys/patches` are applied to
 whatever tree `OCCT_SOURCE` names.
 
+## The site
+
+```bash
+cd app && bun install --frozen-lockfile
+bun x vite build --mode playground     # app/dist-playground, for https://<owner>.github.io/parcad/
+bun x vite preview --mode playground   # or any static server, with the files under /parcad/
+bun x vite --mode playground           # the same, live, while editing the frontend
+```
+
+`PARCAD_PLAYGROUND_BASE` changes the base path; `PARCAD_KERNEL_DIR` points at a
+kernel built somewhere other than `target/wasm/web`. The build copies the kernel
+under `kernel/<content hash>/`, so a deploy never pairs one build's JavaScript
+with another's module, and ships `licenses/` (NOTICE.md says why).
+`.github/workflows/playground.yml` does all of this on a manual dispatch — the
+corpus against the WebAssembly worker first — and deploys with
+`actions/deploy-pages`.
+
+What a visitor gets: 25 MB of files, of which the page itself is 1.2 MB of
+JavaScript (361 KB gzipped) and paints before the kernel starts downloading. The
+kernel is 19.7 MB, 6.4 MB as GitHub Pages gzips it. On a local static server the
+first part is on screen 650 ms after navigation; throttled to 40 Mbit/s with no
+compression it took 5.6 s, and at that speed the gzipped file is about 1.3 s of
+it. Checked in headless Chrome and headless Firefox against `python3 -m
+http.server` serving the files under `/parcad/` (Firefox: 350 ms of kernel time
+for the bracket, the same 6822 triangles); not yet in Safari or on a phone.
+
+**A visitor can** open any of the 28 seed parts, edit them with the real editor
+and op palette, see every change built by the exact kernel with the report,
+section view, edge and face inspection, and the gold treatment-target preview;
+read refusals that name the fix; save parts, make new ones and folders, rename
+and delete them, all in that browser's storage; and export STEP and STL as
+downloads.
+
+**A visitor cannot** reach MCP (there is no endpoint, so the chip never shows),
+share a live session with another window or an agent, keep parts as files or see
+them anywhere but that browser, or give a heavy part more than 60 s. Nothing
+leaves the tab: scripts run in the page as they do in the desktop editor, and
+the kernel runs in a Web Worker beside it.
+
 ## What had to change for WebAssembly
 
 - **Exceptions are native Wasm EH** (`-fwasm-exceptions`), because Rust's
@@ -61,6 +100,23 @@ whatever tree `OCCT_SOURCE` names.
   cross-origin-isolation header to need — which GitHub Pages cannot send.
 - **Memory** grows from 64 MB up to the 4 GB wasm32 ceiling; the shadow stack is
   16 MB because OpenCASCADE recurses deeply.
+
+## Why this and not a ready-made OpenCASCADE for the web
+
+| option | what it is | why not |
+|---|---|---|
+| [opencascade.js](https://github.com/donalffons/opencascade.js) | Emscripten build of OCCT 7.x with Embind bindings for JavaScript | parcad's kernel is 4,600 lines of Rust against its own wrapper and two OCCT patches; using it means rewriting `backend.rs` in JavaScript, a second definition of every operation, on an older OCCT |
+| [replicad](https://github.com/sgenoud/replicad) | a TypeScript CAD library shipping a trimmed OCCT wasm, now OCCT 8, in a no-exceptions build (19 MB) and a native-Wasm-EH build (22 MB) | the same rewrite; its with-exceptions build is the evidence that native Wasm EH is the affordable way to keep `Standard_Failure` catchable |
+| [occt-wasm](https://github.com/andymai/occt-wasm) | OCCT 8.0.1, `-fwasm-exceptions`, `-flto`, `wasm-opt -O4`, ~4.5 MB brotli, structured errors | a TypeScript API over OCCT again; its size is what this build lands at too (4.3 MB brotli) without LTO |
+| CascadeStudio, bitbybit | editors built on opencascade.js | products on the first row, not a kernel to reuse |
+| CadQuery / build123d on Pyodide | OCP (pybind11 OCCT) under Pyodide | a Python runtime and its own OCCT build to carry, for none of parcad's code |
+| **this** | OCCT and parcad's own Rust compiled together by Emscripten for `wasm32-unknown-emscripten` | one definition of an evaluation, the patched kernel, and the corpus runs against it unchanged |
+
+`wasm32-unknown-emscripten` rather than a C++-only module with Rust on
+`wasm32-unknown-unknown`: the cxx bridge, the `cc` crate and OCCT all compile
+with emcc as they do natively, and Rust's standard library on this target
+already unwinds with Wasm exceptions. Threads were left out rather than served
+through a `coi-serviceworker` shim, because nothing in the worker is parallel.
 
 ## Is it the same kernel? The corpus says so
 
@@ -142,3 +198,13 @@ One cold build per process, median of five, the same request to each build:
 | `examples/bracket.js` | 57 / 8 / 85 ms | 184 / 32 / 309 ms |
 | `examples/plate-stand.js` | 2800 / 342 / 3302 ms | 3960 / 750 / 4995 ms |
 | `examples/screw-top-jar.js` (threads, two bodies) | 326 / 125 / 2066 ms | 1247 / 234 / 5739 ms |
+
+Under Node, wall time includes starting the runtime and compiling the module.
+In headless Chrome, the bracket's first build in a fresh worker reports 263 ms
+of kernel time against the native host's 133 ms, and its snapshot is equal to
+the native host's in every field but that one.
+
+A refusal whose number comes from a wrong solid can differ: `box(10,10,10)
+.edges(">Z").fillet(8)` returns a shape reaching 4.86 mm outside its box natively
+and 4.70 mm in wasm. Both refuse with the same fix — the largest radius measured
+to build, 4.75 mm, is the same.

@@ -122,13 +122,26 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    every trial drawing arcs rather than filleting a box. The slot arithmetic
    in the docs is close to what this case asks, so the second round measures
    the docs being read more than the vocabulary being inferred.
-5. **A playground in the browser** — running since 2026-09-15 on branch
-   `playground` (a background session in its own worktree under
-   `.claude/worktrees/`). The exact kernel built for WebAssembly, measured
-   against the corpus in Node first; a third transport in `app/src/backend.ts`
-   running it in a Web Worker; a static build and a Pages workflow that runs the
-   corpus against the wasm build before deploying. The session does not enable
-   Pages, push or deploy: the owner decides that.
+5. **A playground in the browser** — built 2026-09-15, not yet published. The
+   vendored, patched OpenCASCADE and parcad's own Rust compile together with
+   Emscripten 6.0.9 for `wasm32-unknown-emscripten` (`playground/build-kernel.sh`,
+   native Wasm exceptions, single-threaded): the worker under Node, which the
+   corpus drives unchanged and passes 113 of 113 (67 s; native 27 s), and
+   `crates/parcad-wasm`, which runs `parcad_occt::serve` and
+   `parcad_evaluation` — moved out of the worker binary and `service.rs` so
+   there is one definition of each — in a Web Worker behind a third transport in
+   `backend.ts`, with parts in IndexedDB. Recording the corpus under both builds,
+   topology and every refusal are identical and only tessellation moves: at most
+   1.7e-4 in volume or area. `re-entrant-loft` holds its triangle count to 260%,
+   traced to one Delaunay insertion of a point on the link it splits (GOTCHAS,
+   "A planar wall meshes two ways"). The kernel is 19.7 MB, 6.4 MB gzipped, 4.3
+   MB brotli; the bracket's snapshot in headless Chrome equals the native host's
+   field for field, first part on screen 650 ms after navigation locally. Pages is
+   enabled (source: GitHub Actions) and `.github/workflows/playground.yml` is
+   dispatched by hand; headless Chrome and
+   headless Firefox build the bracket from a plain static server, Safari is
+   untested, and on a phone it has not been opened. playground/README.md has the
+   recipe, the table and what a visitor can and cannot do.
 6. **A measured parts library** — fasteners, bearings, boards, devices, each
    held by eval cases, and a way for one part to import another.
 

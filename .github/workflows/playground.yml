@@ -1,0 +1,120 @@
+# Build the browser playground and publish it to GitHub Pages: the editor with
+# the exact kernel compiled to WebAssembly, at https://<owner>.github.io/parcad/.
+#
+# The corpus runs first, against the same WebAssembly build of the worker the
+# site's module is linked from, and the site is only built if it passes. Clang
+# for wasm32 is a different compiler from the one the corpus was recorded with,
+# and a page that measures parts wrong in front of visitors is worse than no
+# page. playground/README.md has the recipe this follows and what it measured.
+#
+# Manual only: Pages has to be enabled for the repository (Settings → Pages →
+# Source: GitHub Actions) before the deploy job can succeed, and deploying on
+# every push to main is a decision to make then — add `push: branches: [main]`.
+name: playground
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: playground
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  EMSDK_VERSION: '6.0.9'
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    # A cold wasm OpenCASCADE is ~5 minutes on 14 cores; a 4-vCPU runner takes
+    # several times that. Generous, so a wedged cmake cannot burn six hours.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # rust-toolchain.toml pins the compiler; the wasm target is added to it.
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Rust target for Emscripten
+        run: rustup target add wasm32-unknown-emscripten
+
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Restore the Emscripten SDK
+        id: emsdk
+        uses: actions/cache@v4
+        with:
+          path: emsdk
+          key: emsdk-${{ env.EMSDK_VERSION }}-${{ runner.os }}
+
+      # From the official repository at the pinned tag, never a third-party action.
+      - name: Install the Emscripten SDK
+        if: steps.emsdk.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$EMSDK_VERSION" https://github.com/emscripten-core/emsdk.git emsdk
+          emsdk/emsdk install "$EMSDK_VERSION"
+          emsdk/emsdk activate "$EMSDK_VERSION"
+
+      # The key carries everything the wasm OCCT is built from, for the reason
+      # vendor/occt-sys/build.rs gives: a mismatched install links and is wrong.
+      - name: Restore the WebAssembly OpenCASCADE
+        id: occt
+        uses: actions/cache/restore@v4
+        with:
+          path: target/wasm/occt
+          key: occt-wasm-${{ env.EMSDK_VERSION }}-${{ hashFiles('vendor/occt-sys/OCCT/adm/cmake/version.cmake', 'vendor/occt-sys/patches/*', 'cmake/occt-toolchain.cmake', 'playground/occt-emscripten.cmake', 'playground/build-kernel.sh', 'vendor/opencascade-sys/build.rs') }}
+
+      - name: Build OpenCASCADE for wasm32
+        if: steps.occt.outputs.cache-hit != 'true'
+        run: EMSDK=$PWD/emsdk playground/build-kernel.sh occt
+
+      - name: Keep the WebAssembly OpenCASCADE for the next run
+        if: steps.occt.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: target/wasm/occt
+          key: ${{ steps.occt.outputs.cache-primary-key }}
+
+      - name: Build the worker and the browser kernel
+        run: EMSDK=$PWD/emsdk playground/build-kernel.sh worker
+
+      - name: bun install
+        run: cd app && bun install --frozen-lockfile
+
+      - name: The corpus, against the WebAssembly build
+        run: PARCAD_OCCT_WORKER=$PWD/playground/node-worker.sh cargo run --locked -q --release -p parcad-eval
+
+      - name: Build the site
+        env:
+          PARCAD_PLAYGROUND_BASE: /${{ github.event.repository.name }}/
+        run: |
+          cd app && bun x vite build --mode playground
+          du -sh dist-playground
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app/dist-playground
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
