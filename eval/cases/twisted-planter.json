@@ -1,24 +1,24 @@
 {
   "name": "twisted-planter",
   "script": "examples/twisted-planter.js",
-  "why": "The part the web playground opens first, so it has to build, and read right, on a stranger's first visit. Two bodies. The planter: a ruled star loft twisted 60° through nine sections, cut hollow by the same star inset 3 mm at the same section heights, with seven drains through a flat base of 12·½·34·26.52·sin 30° − 7·π·2.5² = 2567.6 mm² (read 2567.96). The saucer: one revolved section with rounded corners plus six 30 × 2 × 3 mm radial ridges, exactly 1080 mm³ more than the section alone, set between the drains so the planter stands 3 mm clear of the saucer floor and water can leave; between_bodies reads the two touching on the ridges and nowhere else. measure_wall_thickness reads the wall at 2.0 mm with the rim edge rounded; on the sharp rim it reports hundredths of a millimetre at the edge itself, where the flared facet meets the flat top at an acute angle, which is a ray leaving through the top face and not a thin wall. A 0.6 mm rim fillet built but cost a third of the build and 30k triangles in the browser, and a chamfer would not build on the twisted facets, so the rim is left sharp.",
+  "why": "The part the web playground opens first, so it has to build, and read right, on a stranger's first visit. Two bodies. The planter: a ruled star loft twisted 60° through nine sections, cut hollow by the same star inset 3 mm at the same section heights, with seven drains through a flat base of 12·½·34·26.52·sin 30° − 7·π·2.5² = 2567.6 mm² (read 2567.96). The saucer: one revolved section with rounded corners and two rings with semicircular tops drawn into it, 3.5 mm proud of the floor — past the ~2.7 mm capillary length of water, so the gap under the base drains rather than holding a film — each cut by six radial notches, the inner six in line with the drains and the outer six between them. between_bodies reads the planter touching the rings at z = 5.5 and nowhere else. measure_wall_thickness reads the planter's wall at 2.0 mm with its rim edge rounded; on the sharp rim it reports hundredths of a millimetre at the edge itself, where the flared facet meets the flat top at an acute angle, which is a ray leaving through the top face and not a thin wall. Tried and dropped for the browser's first build: filleted spiral arms (18.7 s cold in a tab under load, 4.5 s in Node) and a rounded rim (a third of the build, 30k triangles).",
   "brep": {
     "size": [
       104.0,
       97.809,
-      95.0
+      95.5
     ],
-    "volume_mm3": 87523.832,
-    "area_mm2": 73919.769,
-    "triangles": 61524,
+    "volume_mm3": 89096.091,
+    "area_mm2": 74587.388,
+    "triangles": 83388,
     "bodies": 2,
     "voids": 0,
     "stands_on_mm2": 5280.166,
     "stands_on_patches": 1,
     "watertight": true,
-    "faces": 239,
-    "edges": 1022,
-    "curves": 500,
+    "faces": 269,
+    "edges": 1166,
+    "curves": 572,
     "named_bodies": {
       "planter": {
         "size": [
@@ -39,9 +39,9 @@
           87.998,
           12.0
         ],
-        "volume_mm3": 18342.541,
-        "faces": 37,
-        "edges": 164,
+        "volume_mm3": 19914.8,
+        "faces": 67,
+        "edges": 308,
         "watertight": true,
         "pieces": 1,
         "voids": 0
