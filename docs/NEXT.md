@@ -194,6 +194,11 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
   name — "Refuse rather than approximate" — and then the OCCT step that loses
   the solid wants finding. Repro: `examples/twisted-planter.js` history, or
   two such bumps 8 mm apart on a plate.
+- **A tag on a union of many curved solids makes it crawl.** The same saucer
+  (a dish unioned with 37 revolved B-spline bumps, 39 nodes) builds in 1.3 s
+  untagged and runs past 120 s with `.tag("saucer")` on the union — the graphs
+  differ only by that tag, so it is the lineage bookkeeping, not the boolean.
+  The example drops the tag; the body is named by `return { saucer }` anyway.
 - **`.smooth()` / `.squircle()` are declared and refused.** The DSL has had the
   curvature-continuous (G2) blend since the treatment recipes landed
   (`app/src/dsl.ts`, ARCHITECTURE "edge treatments"); the kernel rejects it until
