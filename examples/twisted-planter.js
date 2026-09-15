@@ -10,7 +10,6 @@ const twist = 60; // degrees, base to rim
 const layers = 8;
 const wall = 3; // inset across the star; the facets' own wall measures 2.0 mm
 const floor = 3;
-const footHeight = 2;
 
 // At height z: the star's tip radius, flaring fastest near the base, and its turn.
 const radiusAt = (z) => 34 + 18 * Math.sin((z / height) * (Math.PI / 2));
@@ -32,7 +31,6 @@ const outside = loft(levels.map((z) => star(z, 0)));
 const cavity = loft([floor, ...levels.filter((z) => z > floor), height + 1].map((z) => star(z, wall)));
 
 const drain = cylinder(2.5, 3 * floor);
-const foot = cylinder(4, footHeight).at(0, 0, -footHeight / 2);
 
 const planter = outside
   .cut(
@@ -40,12 +38,19 @@ const planter = outside
     drain,
     ...polar(6, 14).map(([x, y]) => drain.at(x, y)),
   )
-  .union(...polar(3, 20, { start: 90 }).map(([x, y]) => foot.at(x, y)))
   .tag("planter");
 
 // Wide enough that the 34 mm star base sits inside with room for runoff.
 const saucerRadius = 42;
 const saucerFloor = 2;
+const ridgeHeight = 3;
+
+// The planter stands on six radial ridges, set between its drains, so water
+// runs out underneath instead of being sealed in by a flat base.
+const ridge = box(30, 2, ridgeHeight)
+  .at(21, 0, saucerFloor + ridgeHeight / 2)
+  .rotate("z", 30);
+
 const saucer = revolve([
   [0, 0],
   { at: [saucerRadius + 2, 0], round: 3 },
@@ -53,9 +58,9 @@ const saucer = revolve([
   [saucerRadius, 12],
   { at: [saucerRadius, saucerFloor], round: 2 },
   [0, saucerFloor],
-]).tag("saucer");
+]).union(around(ridge, 6)).tag("saucer");
 
 return {
-  planter: planter.at(0, 0, saucerFloor + footHeight),
+  planter: planter.at(0, 0, saucerFloor + ridgeHeight),
   saucer,
 };
