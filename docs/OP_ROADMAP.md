@@ -39,7 +39,7 @@ are marked *hold* with a reason instead of a plan.
 | Loft | ✅ `loft(sections, { smooth })` | §4 |
 | Section view | ✅ viewport plane, `section` on `evaluate_part` | §8 |
 | Coil | ✅ `pipe({ helix }, dia)`, `sweep(profile, { helix })` | §5 |
-| **Thread** | ❌ | the helix exists, the thread cut does not close — §5 |
+| Thread | ✅ `threadedRod` `threadedHole` | ISO 68-1 basic 60° profile, named sizes or `{ diameter, pitch }`, a clearance for printing; measured against its closed form — §5 |
 | **Rib / Web** | ❌ | sugar over what exists — §6 |
 | **Split body / face** | ❌ | a different request from the section view; §8 |
 | Sheet metal, Surface/T-spline, Mesh, Simulation, CAM | ❌ | out of scope by design |
@@ -134,7 +134,7 @@ bounding box by more than the slip tolerance is refused
 Sections stay convex for the extrude/revolve reason plus loft's own: on a
 re-entrant outline the kernel's vertex pairing is a silent guess.
 
-## 5. Coils — **DONE**; threads — still held, now by a measurement
+## 5. Coils — **DONE**; threads — **DONE**, after the measurement that held them was re-run
 
 The hold was lifted by a model building a unicorn, which needed a spiral horn,
 a tapering mane and a tail and faked them from stacked primitives. What shipped
@@ -146,14 +146,19 @@ line in a cylinder's or cone's parameter space; its fitted 3D curve is
 BRepGProp, and the graph refuses a pitch that runs a turn into the next and a
 section that crosses the axis at either end.
 
-A **thread** is still not here, and the reason is no longer the op. A groove
-swept along a helix and cut from a cylinder on the same axis builds at one and
-two turns and returns an open surface at three or more, which the watertight
-backstop refuses (docs/DSL_GAPS.md has the counts). Faking one from tori stays
-refused for the old reason. So the **thread annotation on the node** — a
+A **thread** was held back for a measurement: a helical groove cut through its
+coaxial cylinder opened past two turns. Diagnosed, it was never the boolean —
+parcad's seam-pcurve pass dropped a pcurve the groove's other strips of the
+same cylinder still used, and a guard for a different part had fixed it on main
+before the helix merged (docs/GOTCHAS.md). What shipped is `Op::Thread`, as
+`threadedRod` and `threadedHole`: the ISO 68-1 basic profile, swept in the
+axial plane along a helix of one edge per turn (FreeCAD's construction, chosen
+over cq_warehouse's ruled faces, bd_warehouse's lofted loops and the MakeBottle
+tutorial's `ThruSections` by measurement — GOTCHAS "Threads"), measured against
+its closed form on every build. The **thread annotation on the node** — a
 `PartReport` that says "M6 × 1, 12 deep" for a hole whose geometry is honestly
-a 5 mm drill — is still the more useful next step for machined parts, and the
-boolean is what to diagnose before a modelled thread.
+a 5 mm drill — is still worth having for machined parts, where the tap drill
+remains the right drawing.
 
 ## 6. Rib / Web — sugar, not an op
 

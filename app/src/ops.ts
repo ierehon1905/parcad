@@ -354,6 +354,22 @@ export const OP_GROUPS: OpGroup[] = [
         snippet: 'holeFor("M5", 12, { through: true })',
       },
       {
+        name: "threadedHole",
+        icon: "thread",
+        signature: "threadedHole(size, depth, { through, clearance, hand })",
+        detail:
+          "A modelled ISO internal thread, for a part that is printed or must show its thread. Cut it. For a hole a machinist taps, holeFor with { tapped: true }.",
+        snippet: 'threadedHole("M8", 10, { through: true, clearance: 0.2 })',
+      },
+      {
+        name: "threadedRod",
+        icon: "thread",
+        signature: "threadedRod(size, length, { clearance, hand })",
+        detail:
+          "A modelled ISO external thread along Z, centred like a cylinder: a bolt, a stud, a jar neck. Mates with a threadedHole a whole number of pitches away.",
+        snippet: 'threadedRod("M8", 20, { clearance: 0.2 })',
+      },
+      {
         name: "counterbore",
         icon: "counterbore",
         signature: "counterbore(thread)",

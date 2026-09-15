@@ -1,0 +1,58 @@
+{
+  "name": "thread-m8-3-turns",
+  "script": "eval/scripts/thread-m8-3-turns.js",
+  "why": "Three turns of ISO M8 x 1.25, right- and left-handed, as two bodies. Closed form, derived in the script from the ISO 68-1 basic profile (core at the basic minor radius 3.323418, tooth 3P/4 wide there and P/8 at r = 4): a horizontal slice of a screw-symmetric solid has one area at every height, so V = pi r1^2 L + 2 pi L / P * integral r w(r) dr = 155.098715 mm3 per body at L = 3.75, for either hand. The exact B-rep reads it within 3e-6 (BRepGProp on a STEP round trip), and the kernel refuses any thread whose built volume is more than 2e-5 from this form, so that check runs on every build; the volumes recorded here are the meshes', about 0.15% under the solid because a 0.68 mm tooth's facets at 0.01 mm deflection cut its curved flanks. Before the construction was chosen, the same rod built with a core shorter than the swept tooth, or squared by a common with a cylinder, came back valid, closed and 16-100% short; the topology recorded here is the construction that measured right (docs/GOTCHAS.md, 'Threads').",
+  "brep": {
+    "size": [
+      28.0,
+      7.999,
+      3.75
+    ],
+    "volume_mm3": 309.734,
+    "area_mm2": 443.619,
+    "triangles": 5064,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 82.585,
+    "stands_on_patches": 2,
+    "watertight": true,
+    "faces": 38,
+    "edges": 156,
+    "curves": 78,
+    "named_bodies": {
+      "left": {
+        "size": [
+          8.0,
+          7.998,
+          3.75
+        ],
+        "volume_mm3": 154.867,
+        "faces": 19,
+        "edges": 78,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "right": {
+        "size": [
+          8.0,
+          7.998,
+          3.75
+        ],
+        "volume_mm3": 154.867,
+        "faces": 19,
+        "edges": 78,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "right/left": {
+        "verdict": "clear",
+        "clearance_mm": 12.009,
+        "interference_mm3": 0.0
+      }
+    }
+  }
+}

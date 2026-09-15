@@ -23,6 +23,8 @@ import {
   revolve,
   Shape,
   tapDrill,
+  threadedHole,
+  threadedRod,
   torus,
   union,
   vesaPattern,
@@ -259,6 +261,23 @@ describe("fasteners", () => {
   test("tapped drills the tap size, not the clearance", () => {
     const tapped = build(holeFor("M8", 12, { tapped: true }));
     expect((tapped.nodes.find((n) => n.op === "cylinder")!.r as number) * 2).toBe(6.8);
+  });
+
+  test("a threaded rod is centred and shrinks by its clearance; a threaded hole hangs below its face and grows", () => {
+    const rod = build(threadedRod("M8", 20, { clearance: 0.2 })).nodes[0];
+    expect(rod).toEqual({ op: "thread", diameter: 8, pitch: 1.25, from: -10, to: 10, shift: -0.2 });
+    const hole = build(threadedHole("M2.5", 6, { through: true, hand: "left", clearance: 0.1 })).nodes[0];
+    expect(hole).toEqual({ op: "thread", diameter: 2.5, pitch: 0.45, from: -6.5, to: 0.5, hand: "left", shift: 0.1 });
+    // The tooth's phase is anchored at z = 0 of the node, so nothing is translated.
+    expect(build(threadedHole("M6", 8)).nodes).toHaveLength(1);
+    const tripod = build(threadedRod({ diameter: 6.35, pitch: 25.4 / 20 }, 9)).nodes[0];
+    expect(tripod.pitch).toBe(1.27);
+    expect(build(threadedRod("M8", 10, { pitch: 1 })).nodes[0].pitch).toBe(1);
+  });
+
+  test("a thread refuses a size it cannot read", () => {
+    expect(() => threadedRod("M7", 10)).toThrow("Known sizes");
+    expect(() => threadedHole("M6", 8, { clearance: -0.1 })).toThrow("radial allowance");
   });
 });
 

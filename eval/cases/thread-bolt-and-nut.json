@@ -1,0 +1,58 @@
+{
+  "name": "thread-bolt-and-nut",
+  "script": "eval/scripts/thread-bolt-and-nut.js",
+  "why": "A printed M8 pair: a bolt and a 13 x 13 x 8 nut, each with 0.2 mm clearance, in phase (the bolt's end and the nut's face whole pitches from the tooth's origin). Closed forms, derived in the script: bolt 738.740412 mm3, nut 983.731029 mm3 (exact B-rep reads 738.74 and 983.73 through probe_step_export; the recorded volumes are the meshes'). The flank gap: a radial shift c on each part is c/2 across a 30-degree flank, c in total, shortened by the lead angle to c (2/sqrt3) / sqrt(4/3 + (P/2 pi r)^2) = 0.19976 mm at the nut's crest, which between_bodies reads as 0.200 and clear. The same nut 0.4 of a pitch out of phase reads interfering.",
+  "brep": {
+    "size": [
+      13.0,
+      13.0,
+      25.0
+    ],
+    "volume_mm3": 1721.812,
+    "area_mm2": 1750.901,
+    "triangles": 17622,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 36.872,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 108,
+    "edges": 444,
+    "curves": 222,
+    "named_bodies": {
+      "bolt": {
+        "size": [
+          7.599,
+          7.598,
+          20.0
+        ],
+        "volume_mm3": 737.548,
+        "faces": 71,
+        "edges": 286,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "nut": {
+        "size": [
+          13.0,
+          13.0,
+          8.0
+        ],
+        "volume_mm3": 984.264,
+        "faces": 37,
+        "edges": 158,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "bolt/nut": {
+        "verdict": "clear",
+        "clearance_mm": 0.2,
+        "interference_mm3": 0.0
+      }
+    }
+  }
+}

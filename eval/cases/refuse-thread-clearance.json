@@ -1,0 +1,15 @@
+{
+  "name": "refuse-thread-clearance",
+  "script": "eval/scripts/refuse-thread-clearance.js",
+  "why": "A thread clearance of half the tooth depth or more leaves a bolt and nut that would strip or not engage; the graph refuses it before the kernel builds, naming the depth and the usual range.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "tooth depth",
+        "Keep the clearance under",
+        "printed thread"
+      ]
+    }
+  }
+}

@@ -282,6 +282,12 @@ already linked.
   between that fitted 3D curve and the analytic helix at the same parameter.
   The curve is an approximation; this is how far, measured, so the caller can
   refuse instead of assuming.
+- `HelixByTurn::spine` — a cylindrical helix of a whole number of turns as a
+  wire of one edge per turn, each a `Geom2d_Line` segment on the same
+  `Geom_CylindricalSurface` with its own `BuildCurve3d` fit: FreeCAD's
+  `makeLongHelix` construction. Every ISO coarse thread swept along it reads
+  its closed form within 1e-5, where the one-edge spine reads up to 3e-5.
+  `HelixByTurn::deviation` measures it against the analytic helix turn by turn.
 - `Shape::sweep_shell(profile, spine, frame, scale_end)` —
   `BRepOffsetAPI_MakePipeShell` with a corrected-Frenet, Frenet or fixed-+Z
   binormal trihedron, `Add` or (when `scale_end != 1`) `SetLaw` with a

@@ -3,7 +3,7 @@
 //! An agent should not have to squint at a render to learn a dimension. Anything
 //! that can be answered as a number is answered as a number.
 
-use crate::graph::{Doc, NodeId, Op, SweepSpine, V3};
+use crate::graph::{Doc, NodeId, Op, SweepSpine, ThreadForm, V3};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -314,6 +314,14 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
         // Conservative for a partial sweep: an arc is inside the whole ring,
         // and a box that is too large is the error this function is allowed to
         // make.
+        // The squared-off solid reaches the major radius, from `from` to `to`.
+        Op::Thread { diameter, pitch, from, to, hand, shift } => {
+            let form = ThreadForm { diameter: *diameter, pitch: *pitch, shift: *shift, hand: *hand };
+            form.validate(*from, *to)?;
+            let r = form.major_radius();
+            Aabb { min: V3::new(-r, -r, *from), max: V3::new(r, r, *to) }
+        }
+
         Op::Torus { major, minor, sweep } => {
             Op::validate_torus(*major, *minor, *sweep)?;
             Aabb::from_center_half(V3::ZERO, V3::new(major + minor, major + minor, *minor))

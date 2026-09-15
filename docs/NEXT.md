@@ -42,11 +42,22 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    SOUND before the deletion: does-the-port-meet 8/8, does-the-laptop-fit 8/8,
    which-backend-measured 8/8, how-thin-is-it 8/8, what-is-hidden 8/8,
    where-is-the-feature 8/8, what-is-inside 6/8 SOUND and 2/8 LUCKY.
-3. **Threads that close** — running. Diagnose the helical cut that opens at
-   three turns (OP_ROADMAP §5), starting from the constructions that already
-   close on OpenCASCADE: its MakeBottle tutorial, cq/bd_warehouse, FreeCAD.
+3. **Threads that close** — done 2026-09-15. The helical cut that "opened at
+   three turns" was parcad's own seam-pcurve pass, not the boolean, and was
+   already fixed on main by a guard added for a different part; the helix
+   commit's worker opens by the recorded counts and closes with only that
+   guard applied (GOTCHAS, "A helix cut through its own cylinder").
+   `threadedRod` and `threadedHole` ship as `Op::Thread`, the ISO 68-1 basic
+   profile swept along a helix of one edge per turn — FreeCAD's construction,
+   chosen over cq_warehouse's ruled faces, bd_warehouse's lofted loops and
+   OCCT's MakeBottle `ThruSections` by measurement — and every build is held to
+   the slab closed form at 2e-5. Two finishes that looked equivalent returned
+   valid closed solids 16–100% short (GOTCHAS, "Threads"). Cases:
+   `thread-m8-{3,8,20}-turns` (both hands), `thread-bolt-and-nut` (0.2 mm
+   clearance read back as 0.200), `helical-groove`, `refuse-thread-clearance`,
+   and the seeded `screw-top-jar`.
 3a. **Two render faults several bodies exposed** — found in the 2026-09-15
-   renders, fixed after threads:
+   renders, next:
    - A mirrored or moved copy is coloured by its original's tag:
      `split-halves` paints the right half `left` (`right` 0 pixels), because a
      face takes the innermost tag its lineage carries. Decided: the tag nearest
@@ -277,9 +288,8 @@ Measured, then fixed the same day. What each became:
    It also exposed `BRepGProp`'s fixed-order integral misreading B-spline
    faces. `pipe` and `sweep` take a `{ helix }` path (with `endRadius`, a
    horn) and a `taper`, B-rep only, each held to a closed form
-   ([OP_ROADMAP.md](OP_ROADMAP.md) §5). **Threads are still refused.** A
-   coaxial helical cut opens past two turns, and the cause is not diagnosed
-   ([GOTCHAS.md](GOTCHAS.md)).
+   ([OP_ROADMAP.md](OP_ROADMAP.md) §5). Threads are
+   `threadedRod` and `threadedHole`, held to closed forms (queue item 3).
 
 Already true and misreported: `preview_ready` / `exact_ready` do not apply,
 because the window runs one exact kernel per evaluation and the snapshot names

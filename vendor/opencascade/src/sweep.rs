@@ -55,6 +55,46 @@ impl Helix {
     }
 }
 
+/// A cylindrical helix about +Z of a whole number of turns, starting at angle
+/// 0 at height `z0`, as a wire of one edge per turn.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct HelixByTurn {
+    pub radius: f64,
+    pub pitch: f64,
+    pub turns: i32,
+    pub left_handed: bool,
+    pub z0: f64,
+}
+
+impl HelixByTurn {
+    /// The helix as a wire of `turns` edges, each a line on the cylinder's
+    /// parameter space with its own fitted 3D curve.
+    pub fn spine(&self) -> Result<Wire, String> {
+        let inner = ffi::parcad_helix_spine_by_turn(
+            self.radius,
+            self.pitch,
+            self.turns,
+            self.left_handed,
+            self.z0,
+        )
+        .map_err(|e| e.what().to_string())?;
+        Ok(Wire { inner })
+    }
+
+    /// The largest distance, `samples` parameters per turn, between `spine`'s
+    /// fitted curves and this analytic helix.
+    pub fn deviation(&self, spine: &Wire, samples: i32) -> f64 {
+        ffi::parcad_helix_by_turn_deviation(
+            &spine.inner,
+            self.radius,
+            self.pitch,
+            self.left_handed,
+            self.z0,
+            samples,
+        )
+    }
+}
+
 impl Shape {
     /// Sweep a closed `profile` wire along `spine` into a solid, scaling it
     /// about the spine from 1 at the start to `scale_end` at the end.
@@ -98,6 +138,23 @@ pub(crate) mod ffi {
             pitch: f64,
             turns: f64,
             left_handed: bool,
+            samples: i32,
+        ) -> f64;
+
+        fn parcad_helix_spine_by_turn(
+            radius: f64,
+            pitch: f64,
+            turns: i32,
+            left_handed: bool,
+            z0: f64,
+        ) -> Result<UniquePtr<TopoDS_Wire>>;
+
+        fn parcad_helix_by_turn_deviation(
+            spine: &TopoDS_Wire,
+            radius: f64,
+            pitch: f64,
+            left_handed: bool,
+            z0: f64,
             samples: i32,
         ) -> f64;
 

@@ -843,10 +843,11 @@ export type Fit = "close" | "normal" | "free";
 /**
  * ISO metric coarse fasteners: everything a hole needs, by thread designation.
  *
- * `tap` is the drill for a coarse-pitch tapped hole; `close`/`normal`/`free`
- * are ISO 273's three clearance series; `head` is the head diameter of a socket
- * head cap screw (ISO 4762) and `csink` that of a 90° countersunk socket screw
- * (ISO 10642). Diameters in mm, always.
+ * `pitch` is the ISO 261 coarse pitch; `tap` is the drill for a coarse-pitch
+ * tapped hole; `close`/`normal`/`free` are ISO 273's three clearance series;
+ * `head` is the head diameter of a socket head cap screw (ISO 4762) and
+ * `csink` that of a 90° countersunk socket screw (ISO 10642). Millimetres,
+ * always.
  *
  * Exported so a caller can see the whole table rather than discover a missing
  * size one refusal at a time — and so a size that is not here is obviously
@@ -854,19 +855,19 @@ export type Fit = "close" | "normal" | "free";
  */
 export const METRIC_FASTENERS: Record<
   string,
-  { tap: number; close: number; normal: number; free: number; head: number; csink: number }
+  { pitch: number; tap: number; close: number; normal: number; free: number; head: number; csink: number }
 > = {
-  M2: { tap: 1.6, close: 2.2, normal: 2.4, free: 2.6, head: 3.8, csink: 4.0 },
-  M2_5: { tap: 2.05, close: 2.7, normal: 2.9, free: 3.1, head: 4.5, csink: 5.0 },
-  M3: { tap: 2.5, close: 3.2, normal: 3.4, free: 3.6, head: 5.5, csink: 6.0 },
-  M4: { tap: 3.3, close: 4.3, normal: 4.5, free: 4.8, head: 7.0, csink: 8.0 },
-  M5: { tap: 4.2, close: 5.3, normal: 5.5, free: 5.8, head: 8.5, csink: 10.0 },
-  M6: { tap: 5.0, close: 6.4, normal: 6.6, free: 7.0, head: 10.0, csink: 12.0 },
-  M8: { tap: 6.8, close: 8.4, normal: 9.0, free: 10.0, head: 13.0, csink: 16.0 },
-  M10: { tap: 8.5, close: 10.5, normal: 11.0, free: 12.0, head: 16.0, csink: 20.0 },
-  M12: { tap: 10.2, close: 13.0, normal: 13.5, free: 14.5, head: 18.0, csink: 24.0 },
-  M16: { tap: 14.0, close: 17.0, normal: 17.5, free: 18.5, head: 24.0, csink: 32.0 },
-  M20: { tap: 17.5, close: 21.0, normal: 22.0, free: 24.0, head: 30.0, csink: 40.0 },
+  M2: { pitch: 0.4, tap: 1.6, close: 2.2, normal: 2.4, free: 2.6, head: 3.8, csink: 4.0 },
+  M2_5: { pitch: 0.45, tap: 2.05, close: 2.7, normal: 2.9, free: 3.1, head: 4.5, csink: 5.0 },
+  M3: { pitch: 0.5, tap: 2.5, close: 3.2, normal: 3.4, free: 3.6, head: 5.5, csink: 6.0 },
+  M4: { pitch: 0.7, tap: 3.3, close: 4.3, normal: 4.5, free: 4.8, head: 7.0, csink: 8.0 },
+  M5: { pitch: 0.8, tap: 4.2, close: 5.3, normal: 5.5, free: 5.8, head: 8.5, csink: 10.0 },
+  M6: { pitch: 1, tap: 5.0, close: 6.4, normal: 6.6, free: 7.0, head: 10.0, csink: 12.0 },
+  M8: { pitch: 1.25, tap: 6.8, close: 8.4, normal: 9.0, free: 10.0, head: 13.0, csink: 16.0 },
+  M10: { pitch: 1.5, tap: 8.5, close: 10.5, normal: 11.0, free: 12.0, head: 16.0, csink: 20.0 },
+  M12: { pitch: 1.75, tap: 10.2, close: 13.0, normal: 13.5, free: 14.5, head: 18.0, csink: 24.0 },
+  M16: { pitch: 2, tap: 14.0, close: 17.0, normal: 17.5, free: 18.5, head: 24.0, csink: 32.0 },
+  M20: { pitch: 2.5, tap: 17.5, close: 21.0, normal: 22.0, free: 24.0, head: 30.0, csink: 40.0 },
 };
 
 function fastener(thread: string) {
@@ -908,9 +909,9 @@ export function counterbore(thread: string): { diameter: number; depth: number }
  * A hole cutter along Z for a named fastener, entering at z = 0 going down.
  *
  * `holeFor("M6", 12)` is a blind clearance hole 12 mm deep; `{ tapped: true }`
- * drills it for a coarse thread instead, which is how every threaded hole in
- * `examples/` is drawn — there is no thread op, and a stack of tori pretending
- * to be one is the approximation this project refuses.
+ * drills it for a coarse thread instead — the right drawing for a hole a
+ * machinist will tap. A hole whose thread is printed or must be modelled is
+ * `threadedHole`.
  *
  * The cutter always overshoots the face it enters by 0.5 mm, and `through`
  * overshoots the far side too. That is not tidiness: a tool ending exactly on a
@@ -930,6 +931,115 @@ export function holeFor(
   const past = options.through ? over : 0;
   const length = depth + over + past;
   return cylinder(diameter / 2, length).at(0, 0, over - length / 2);
+}
+
+/** A thread named from `METRIC_FASTENERS` ("M8", coarse pitch) or given outright. */
+export type ThreadSize = string | { diameter: number; pitch: number };
+
+/** Options shared by `threadedRod` and `threadedHole`. */
+export interface ThreadOptions {
+  /** `"right"` (the default, and nearly every screw) or `"left"`. */
+  hand?: "right" | "left";
+  /**
+   * Radial allowance in mm, default 0 (the ISO basic profile exactly). A rod
+   * shrinks by it and a hole grows by it, every diameter by twice the value.
+   * A printed pair needs one on both parts: two parts given `c` each sit `c`
+   * apart across the flanks and `2c` at crest and root, which
+   * `between_bodies` reads back. 0.2 is a starting point for FDM with a
+   * 0.4 mm nozzle, not a measured fit; tune it on the printer.
+   */
+  clearance?: number;
+  /** A fine pitch in place of the coarse one a named size carries: `{ pitch: 1 }` on "M8". */
+  pitch?: number;
+}
+
+function threadForm(size: ThreadSize, options: ThreadOptions, fn: string) {
+  let diameter: number;
+  let pitch: number;
+  if (typeof size === "string") {
+    const entry = fastener(size);
+    diameter = Number(size.trim().toUpperCase().replace("M", "").replace("_", "."));
+    pitch = options.pitch ?? entry.pitch;
+  } else if (size && typeof size === "object") {
+    diameter = size.diameter;
+    pitch = options.pitch ?? size.pitch;
+  } else {
+    throw new Error(`${fn} takes a size such as "M8" or { diameter, pitch }; got ${JSON.stringify(size)}`);
+  }
+  if (!(diameter > 0) || !(pitch > 0)) {
+    throw new Error(`${fn} needs a positive diameter and pitch; got diameter ${diameter}, pitch ${pitch}`);
+  }
+  const clearance = options.clearance ?? 0;
+  if (!(clearance >= 0)) {
+    throw new Error(`${fn} clearance is a radial allowance of 0 or more; got ${clearance}`);
+  }
+  if (options.hand !== undefined && options.hand !== "right" && options.hand !== "left") {
+    throw new Error(`${fn} hand is "right" or "left"; got ${JSON.stringify(options.hand)}`);
+  }
+  return { diameter, pitch, clearance, hand: options.hand ?? "right" };
+}
+
+/**
+ * An external screw thread along Z, centred on the origin like `cylinder`:
+ * a bolt's thread, a knob's stud, a jar's neck.
+ *
+ * `threadedRod("M8", 20)` is 20 mm of M8 × 1.25 with the ISO 68-1 basic
+ * profile — 60° flanks, a core at the basic minor diameter (6.647 mm for M8),
+ * flats of P/8 at the crest and P/4 at the root — squared off at both ends.
+ * `threadedRod({ diameter: 6.35, pitch: 25.4 / 20 }, 9)` is a 1/4"-20 tripod
+ * screw's thread (the same 60° basic profile). Union a head or a shank on to
+ * it; it is an ordinary solid from here on.
+ *
+ * The tooth crosses +X at z = 0 of the rod's own frame, whatever its length,
+ * so a rod and a `threadedHole` of the same size and hand mate where they sit
+ * a whole number of pitches apart along Z (or rotated by 360° × offset /
+ * pitch). The kernel measures every thread against its closed-form volume
+ * and refuses one that reads more than 2e-5 off.
+ */
+export function threadedRod(size: ThreadSize, length: number, options: ThreadOptions = {}): Shape {
+  if (!(length > 0)) throw new Error("threadedRod length must be positive");
+  const t = threadForm(size, options, "threadedRod");
+  return new Shape(() => ({
+    op: "thread",
+    diameter: t.diameter,
+    pitch: t.pitch,
+    from: -length / 2,
+    to: length / 2,
+    ...(t.hand === "left" ? { hand: "left" } : {}),
+    ...(t.clearance > 0 ? { shift: -t.clearance } : {}),
+  }), []);
+}
+
+/**
+ * The cutter for an internal screw thread along Z, entering at z = 0 going
+ * down like `holeFor`: a nut, a cap, a threaded boss. Cut it, do not union it.
+ *
+ * `part.cut(threadedHole("M8", 10, { through: true }).at(x, y, top))` taps
+ * the ISO basic profile into the part: a bore at the minor diameter and the
+ * thread out to the major. It overshoots the entry face by 0.5 mm and, with
+ * `through`, the far face too. The tooth crosses +X at z = 0 of the cutter's
+ * frame — the entry face — so a `threadedRod` mates with it a whole number of
+ * pitches away along Z. For a part a machinist will tap, draw
+ * `holeFor(size, depth, { tapped: true })` instead.
+ */
+export function threadedHole(
+  size: ThreadSize,
+  depth: number,
+  options: ThreadOptions & { through?: boolean } = {},
+): Shape {
+  if (!(depth > 0)) throw new Error("threadedHole depth must be positive");
+  const t = threadForm(size, options, "threadedHole");
+  const over = 0.5;
+  const past = options.through ? over : 0;
+  return new Shape(() => ({
+    op: "thread",
+    diameter: t.diameter,
+    pitch: t.pitch,
+    from: -(depth + past),
+    to: over,
+    ...(t.hand === "left" ? { hand: "left" } : {}),
+    ...(t.clearance > 0 ? { shift: t.clearance } : {}),
+  }), []);
 }
 
 // ---------------------------------------------------------------------------
@@ -1242,9 +1352,8 @@ export type PathPoint = [number, number, number];
  * turns would sweep through each other, and a radius so small the section
  * would cross the axis, naming the limit either way. Place and turn the
  * result with `.at()` and `.rotate()`. Build time grows with turns — about
- * 0.2 s a turn for a round wire — and a boolean between a helix of three or
- * more turns and a cylinder on the same axis (a thread cut) has come back
- * with an open surface, which the kernel refuses; see the `gaps` document.
+ * 0.2 s a turn for a round wire. A screw thread is not a sweep: use
+ * `threadedRod` or `threadedHole`, which build the ISO profile and measure it.
  */
 export interface HelixPath {
   helix: {

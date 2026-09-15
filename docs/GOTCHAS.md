@@ -285,26 +285,82 @@ Two guards were tried first and taken out because the defect never reached
 them: a union volume floor (result ≥ larger operand) and a volume check across
 `UnifySameDomain`. Both read the exact B-rep, which was never wrong.
 
-### A helix cut through its own cylinder opens past two turns
+### A helix cut through its own cylinder opened past two turns *(fixed before it was diagnosed)*
 
 A groove swept along a helix and cut from a cylinder on the same axis, at the
-helix's radius — which is what a modelled thread is — builds and closes at one
-and two turns and does not at three:
+helix's radius, was recorded in the helix commit (`32feba99`) as building and
+closing at one and two turns and not at three:
 
-| `cylinder(3, 10).cut(pipe({ helix: { radius: 3, pitch: 2, turns } }, 1))` | result |
+| `cylinder(3, 10).cut(pipe({ helix: { radius: 3, pitch: 2, turns } }, 1))` | at `32feba99` | on main since `a5f1ccda` |
+|---|---|---|
+| 1 or 2 turns | watertight | watertight, 275.82 / 268.90 mm³ |
+| 3, 4 or 12 turns | 8 mesh edges border one face; refused | watertight; 3 turns 261.98 mm³ = closed form |
+| a V groove, 8 turns | 261 open edges (117 in the original script); refused | watertight |
+| a V ridge unioned onto a core, 8 turns | 1361 open edges (1043 in the original); refused | watertight |
+
+**The boolean was never wrong, and neither was the mesher.** The defect was
+parcad's own `Shape_drop_unused_seam_pcurves`, the pre-pass `clean()` runs
+before `UnifySameDomain`. A helical groove splits the cylinder's side into
+strips — one more per turn — that all lie on one `Geom_CylindricalSurface`,
+and each strip's wire uses its piece of the seam line once. The pass read "used
+once" as a stale seam and dropped one of the edge's two pcurves; but pcurves
+are stored per surface, not per face, and the neighbouring strip was using the
+one it dropped. Measured stage by stage in a C++ probe mirroring the pipeline
+at 3 turns:
+
+| stage | B-rep volume | BRepCheck | open mesh edges |
+|---|---|---|---|
+| `BRepAlgoAPI_Cut` | 261.9828 mm³ (closed form 261.982900) | valid | 0 |
+| seam pass, unguarded | 205.7516 | `UnorientableShape` ×2 | 8 |
+| seam pass, guarded | 261.9828, 0 pcurves dropped | valid | 0 |
+
+Serial or parallel, one `Build()` or two, the same. The fix is the guard
+`a5f1ccda` added for a different part — a cylinder unioned with its own rotated
+copy, GOTCHAS "A correct solid can mesh as a closed fragment of itself" — which
+keeps a seam another face on the same surface borders. The helix branch was cut
+from main before that commit and measured there; nobody re-measured after the
+merge. Confirmed in the real pipeline: the helix commit's own worker opens by
+exactly the recorded counts, and the same tree with only that 15-line guard
+applied closes every row with main's numbers. `eval/cases/helical-groove.json`
+holds the 3-turn cut to its closed form.
+
+At one and two turns the unguarded pass dropped pcurves too; in the pipeline
+the result still meshed and exported right (STEP 268.903 mm³ at two turns),
+which is why the table's first row passed.
+
+### Threads: which construction measures right
+
+`threadedRod` and `threadedHole` build an ISO 68-1 basic-profile thread as
+`Op::Thread`. What was measured before choosing, on an M8 × 1.25 and then on
+every coarse size M2 to M20 at 1 to 20 turns, both hands, against the slab
+closed form `V = π r1² L + 2π L / P · ∫ r w(r) dr`:
+
+| construction | from | result |
+|---|---|---|
+| tooth in the axial plane swept (MakePipeShell, Frenet) along a **one-edge** helix; core ∪ tooth; ends cut by two boxes | parcad's `sweep` | valid and closed; 206 of 220 within 1e-5, the rest 1–3e-5 — the fitted spine |
+| the same along a helix of **one edge per turn** | FreeCAD `makeLongHelix` + PartDesign Hole | 220 of 220 within 1e-5 (the rods about 1e-6, the tooth alone 8e-7 of Pappus); bolt and nut pairs 36 of 36 |
+| the same, end faces sewn on (FreeCAD's exact route) rather than `MakeSolid` | FreeCAD | the rods the same; the tooth alone 4e-9, below anything the boolean after it keeps, so parcad keeps `MakeSolid` |
+| four ruled faces between helices, two planar caps, sewn | cq_warehouse `Thread` | rods right, but the tooth alone read +25% / −12% of Pappus while `BRepCheck` passed it: rejected |
+| `ThruSections` (ruled) between two closed wires on coaxial cylinders | OCCT MakeBottle tutorial | invalid solids of wrong, some negative, volume at 3, 8 and 20 turns; the tutorial's two-turn ellipse is not a 60° thread, and it never fuses its thread either |
+| one 11-section loft per turn, fused | bd_warehouse `Thread` | valid, closed, and short everywhere — the tooth 1.1e-4, the rod 8e-5: a loft approximates the helicoid |
+
+And two ways to finish the chosen construction that return **valid, closed,
+wrong** solids with no warning beyond `BOPAlgo_AlertFaceBuilderUnusedEdges`:
+
+| finish | result |
 |---|---|
-| 1 or 2 turns (also inside a 20 mm cylinder) | watertight, one body |
-| 3 or 4 turns (also inside a 20 mm cylinder) | 8 mesh edges border one face; refused |
-| a V groove, 8 turns | 117 open edges; refused |
-| a V ridge unioned onto a core, 8 turns | 1043 open edges; refused |
+| core **shorter** than the swept tooth, so the tooth overhangs the core's ends | 94 of 132 rods 16–100% short, some empty |
+| ends squared by a **common with a cylinder** rather than by cutting boxes | fails the same way on the overhanging form; on the chosen form with a one-edge spine, 5 of 132 fail once the cylinders' seams are turned 37°. A box has no seam |
 
-Every row reported done. The watertight backstop is what refuses them, so no
-wrong part escapes, but nothing names a fix. The sweep alone is right — the
-same helices measure to the tube formula at 1e-6 — and booleans that do not
-wrap a coaxial surface close: a spring on a plate, a tapered conical spiral on
-a cone. Whether the defect is in the boolean or only in the mesh is not yet
-known; the unicorn's sphere union above is the precedent for it being the
-mesh. `docs/DSL_GAPS.md` keeps threads on the missing list for this.
+So `build_thread` in `backend.rs` sweeps along one edge per turn, gives the core
+exactly the swept height, and cuts two boxes; and because the wrong answers
+above were all valid and closed, it measures every thread it builds against the
+closed form and refuses one more than 2e-5 off. Two things follow for authors:
+the tooth crosses +X at z = 0 of the thread's own frame, so a rod and a hole
+mate only a whole number of pitches apart (or turned by 360° × offset / pitch)
+— `between_bodies` reads a pair out of phase as interfering — and a clearance
+`c` on each part is `c` across the flanks, shortened by the lead angle to
+`c (2/√3) / √(4/3 + (P / 2πr)²)`.
 
 ### `offset_surface` lies
 

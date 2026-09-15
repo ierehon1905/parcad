@@ -1416,6 +1416,7 @@ fn treatments(doc: &Doc) -> Vec<Treatment> {
                 | Op::Extrude { .. }
                 | Op::Loft { .. }
                 | Op::Sweep { .. }
+                | Op::Thread { .. }
                 | Op::Bodies { .. }
                 | Op::Union { .. }
                 | Op::Difference { .. }

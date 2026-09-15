@@ -16,12 +16,12 @@ use opencascade::{
     adhoc::AdHocShape,
     angle::Angle,
     primitives::{BooleanShape, Edge, Face, Shape, Solid, Wire},
-    sweep::{Helix as SweptHelix, SweepFrame},
+    sweep::{Helix as SweptHelix, HelixByTurn, SweepFrame},
 };
 use parcad_core::{
     graph::{
         ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, Hand, NodeId, Op,
-        SpinePiece, SweepSection, SweepSpine, V3,
+        SpinePiece, SweepSection, SweepSpine, ThreadForm, V3,
     },
     selectors::{
         parse_edge_selector, parse_vertex_selector, Axis, AxisDirection, CurveKind,
@@ -129,6 +129,7 @@ fn op_name(op: &Op) -> &'static str {
         Op::Extrude { .. } => "extrude",
         Op::Loft { .. } => "loft",
         Op::Sweep { .. } => "sweep",
+        Op::Thread { .. } => "thread",
         Op::Mirror { .. } => "mirror",
         Op::Cylinder { .. } => "cylinder",
         Op::Union { .. } => "union",
@@ -873,6 +874,90 @@ impl EdgeLineage {
 ///
 /// Called *after* `blend_seam`, never before. A blend fillets the edge
 /// handles the boolean reported as new, and unifying first invalidates them.
+/// How far a built thread's volume may read from its closed form, relative.
+/// Every ISO coarse size M2 to M20, 1 to 20 turns, both hands, read within
+/// 3e-6; a boolean that dropped a piece reads 16% or more.
+const THREAD_VOLUME_TOLERANCE: f64 = 2e-5;
+
+/// An ISO basic-profile thread from `from` to `to`, centred on the Z axis.
+///
+/// The construction and why it is this one are in docs/GOTCHAS.md, "Threads":
+/// the tooth is swept along a helix of one edge per turn, the core cylinder
+/// spans exactly the swept height, and the ends are squared by cutting two
+/// boxes. A core shorter than the sweep, or a common with a cylinder in place
+/// of the boxes, returns valid closed solids of the wrong volume.
+fn build_thread(form: &ThreadForm, from: f64, to: f64) -> Result<Shape> {
+    let (z0, turns) = form.sweep_span(from, to);
+    let height = f64::from(turns) * form.pitch;
+    let helix = HelixByTurn {
+        radius: form.minor_radius(),
+        pitch: form.pitch,
+        turns,
+        left_handed: form.hand == Hand::Left,
+        z0,
+    };
+    let spine = helix.spine().map_err(|e| anyhow::anyhow!(e))?;
+    let deviation = helix.deviation(&spine, 200);
+    breadcrumb(&format!(
+        "thread spine of {turns} turns strays at most {deviation:.2e} mm from the exact helix"
+    ));
+    if !(deviation <= HELIX_TOLERANCE_MM) {
+        bail!(
+            "the thread's helix strays {deviation:.2e} mm from the exact helix, over the {HELIX_TOLERANCE_MM:e} mm this backend accepts. A larger diameter or a coarser pitch fits better; please report the size"
+        );
+    }
+
+    let (r_in, r_out) = (form.tooth_root_radius(), form.major_radius());
+    let (w_in, w_out) = (form.tooth_root_half_width(), form.crest_half_width());
+    let tooth: Vec<DVec3> = vec![
+        DVec3::new(r_in, 0.0, z0 - w_in),
+        DVec3::new(r_out, 0.0, z0 - w_out),
+        DVec3::new(r_out, 0.0, z0 + w_out),
+        DVec3::new(r_in, 0.0, z0 + w_in),
+    ];
+    let edges: Vec<Edge> = (0..tooth.len())
+        .map(|i| Edge::segment(tooth[i], tooth[(i + 1) % tooth.len()]))
+        .collect();
+    let section = Wire::from_edges(&edges);
+    let swept = Shape::sweep_shell(&section, &spine, SweepFrame::Frenet, 1.0)
+        .map_err(|e| anyhow::anyhow!(e))?;
+    let mut swept = swept.single_solid().unwrap_or(swept);
+    if swept.signed_volume() < 0.0 {
+        swept = swept.oriented_outward();
+    }
+
+    let core = AdHocShape::make_cylinder(DVec3::new(0.0, 0.0, z0), form.minor_radius(), height).0;
+    let rod = unified(core.union(&swept).shape);
+    let reach = r_out + 1.0;
+    let above = AdHocShape::make_box_point_point(
+        DVec3::new(-reach, -reach, to),
+        DVec3::new(reach, reach, z0 + height + form.pitch),
+    )
+    .0;
+    let below = AdHocShape::make_box_point_point(
+        DVec3::new(-reach, -reach, z0 - form.pitch),
+        DVec3::new(reach, reach, from),
+    )
+    .0;
+    let rod = unified(rod.subtract(&above).shape);
+    let rod = unified(rod.subtract(&below).shape);
+    let rod = rod.single_solid().unwrap_or(rod);
+
+    let expected = form.volume(to - from);
+    let volume = rod.signed_volume();
+    let slip = (volume - expected).abs() / expected;
+    breadcrumb(&format!(
+        "thread volume {volume:.6} mm³ against {expected:.6} in closed form ({slip:.1e})"
+    ));
+    if !(slip <= THREAD_VOLUME_TOLERANCE) {
+        bail!(
+            "the thread built as {volume:.4} mm³ where its profile gives {expected:.4} mm³ in closed form, {:.2}% off, so a boolean inside it returned the wrong solid. A length a little different often builds; please report the size, pitch and range",
+            slip * 100.0
+        );
+    }
+    Ok(rod)
+}
+
 fn unified(mut shape: Shape) -> Shape {
     shape.clean();
     shape
@@ -3026,6 +3111,35 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 swept
             } else {
                 swept.translated(offset)
+            };
+            BuiltShape::primitive(placed, node.tag.as_deref())
+        }
+
+        Op::Thread {
+            diameter,
+            pitch,
+            from,
+            to,
+            hand,
+            shift,
+        } => {
+            let form = ThreadForm {
+                diameter: *diameter,
+                pitch: *pitch,
+                shift: *shift,
+                hand: *hand,
+            };
+            form.validate(*from, *to)
+                .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+            breadcrumb(&format!(
+                "thread node {id} ({label}): diameter {diameter}, pitch {pitch}, z {from}..{to}, shift {shift}"
+            ));
+            let shape = build_thread(&form, *from, *to)
+                .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+            let placed = if offset == DVec3::ZERO {
+                shape
+            } else {
+                shape.translated(offset)
             };
             BuiltShape::primitive(placed, node.tag.as_deref())
         }

@@ -1,0 +1,23 @@
+{
+  "name": "helical-groove",
+  "script": "eval/scripts/helical-groove.js",
+  "why": "The recorded reproducer of the helical cut that 'opened past two turns' (8 open mesh edges at 3 turns in the helix commit). The defect was parcad's seam-pcurve pre-pass dropping a pcurve of the cylinder's seam that the other groove-split strips of the same surface still used (BRepCheck_UnorientableShape, B-rep 205.75 mm3 at 3 turns), fixed by the shared-surface guard in a5f1ccda; the boolean itself was right all along. Closed form, derived in the script: the tube inside the cylinder is the screw sweep of the part of its section disk inside r < 3, V = theta * integral ((3 + u) 3 + p^2) / sqrt(9 + p^2) dA = 20.760439 mm3, so the part is 282.743339 - 20.760439 = 261.982900 mm3; the exact B-rep reads 261.9828 through BRepGProp. The recorded volume is the mesh's.",
+  "brep": {
+    "size": [
+      6.0,
+      5.998,
+      10.0
+    ],
+    "volume_mm3": 261.771,
+    "area_mm2": 268.322,
+    "triangles": 8454,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 28.213,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 9,
+    "edges": 42,
+    "curves": 19
+  }
+}

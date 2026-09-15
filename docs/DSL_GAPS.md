@@ -53,14 +53,26 @@ impossible, check the layer that would implement it, not the layer above.
   helix, measured: `spiral-horn` reads 811.62 mm³, where length would give
   614.81.
 
-  **Threads are still not here, and this is why.** A groove swept along a
-  helix and cut from a cylinder on the same axis builds at one and two turns
-  and comes back with an open surface at three or more (8 unclosed mesh edges
-  for a round groove, 117 for a V at eight turns), which the watertight
-  backstop refuses; a V ridge unioned onto a core at eight turns fails the same
-  way, with 1043. Unions that do not wrap a coaxial surface —
-  a spring on a plate, a tapered spiral on a cone — build and close. The cause
-  is undiagnosed; the tap drill stays the honest drawing of a threaded hole.
+  A helical groove cut through the cylinder it wraps was recorded here as
+  opening past two turns. That was parcad's seam-pcurve pass damaging the
+  cylinder's side, not the boolean, and a guard added on main for another part
+  had already fixed it when the helix landed (docs/GOTCHAS.md, "A helix cut
+  through its own cylinder"); `helical-groove` holds it to a closed form.
+- **a screw thread** — `threadedRod(size, length, { clearance, hand, pitch })`
+  and `threadedHole(size, depth, { through, clearance, hand, pitch })`, lowered
+  to `Op::Thread`: the ISO 68-1 basic 60° profile, a size from
+  `METRIC_FASTENERS` (which now carries the ISO 261 coarse pitch) or
+  `{ diameter, pitch }` for anything else of that profile — a 1/4"-20 tripod
+  screw, an M40 × 3 jar neck. The tooth is swept in the axial plane along a
+  helix of one edge per turn, unioned with a core of exactly the swept height
+  and squared off by cutting two boxes; every build is measured against the
+  slab closed form and refused past 2e-5. Five cases hold it — M8 at 3, 8 and
+  20 turns in both hands, a bolt and nut pair at a 0.2 mm clearance read back
+  as 0.200 between them, and the seeded `examples/screw-top-jar.js`. Not
+  here: rounded roots (ISO's d3), tolerance classes (6g/6H are a clearance
+  here), end chamfers or a thread run-out, tapered pipe threads, and any
+  profile but 60°. `holeFor(size, depth, { tapped: true })` stays the drawing
+  of a hole a machinist will tap.
 - **several bodies that stay several** — `return { base, lid }`, an object of
   named shapes in place of one, lowered to a root-only `Op::Bodies`. The cheap
   end of the multi-body row, and deliberately only that: the bodies are built,
@@ -85,7 +97,7 @@ is in [OP_ROADMAP.md](OP_ROADMAP.md).
 | wanted | needed for | what it takes |
 |---|---|---|
 | **arcs in a section** | an O-ring groove, a bearing seat — a radius in section rather than a chamfer | `Edge::arc` is bound; the profile is a `Vec<[f64; 2]>` of straight segments, so an arc has nowhere to live |
-| **a thread that closes** | real threads — every "threaded" hole in the corpus is drawn as its tap drill | the helix exists (above); a helical groove cut through its coaxial cylinder over three or more turns returns an open surface, refused. Needs the boolean diagnosed, not a new op |
+| **thread forms past the basic 60° profile** | a trapezoidal lead screw, a buttress or bottle-cap thread, a tapered pipe thread, a rounded root | `Op::Thread` sweeps one trapezoid; another profile is another tooth and its own closed form, a taper a conical core and helix |
 | **involute and other authored curves** | a spur gear, a cam, a real GT2 flank (`timing-pulley.js` approximates it and says so) | curve construction in the graph, on top of the section type |
 | **re-entrant (non-convex) sections** | a stepped hub in one operation | refused deliberately: on one the kernel's vertex pairing is a silent guess. A union of convex revolves is exact, and is how the part is turned anyway |
 | **variable-radius and unequal-distance treatments** | a casting fillet that tapers, an asymmetric chamfer for a weld prep | `Fillet`/`Chamfer` take one scalar |

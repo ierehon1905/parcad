@@ -247,6 +247,31 @@ mod tests {
         Op::validate_sweep(&[], 1.0, &[], 0.0, Some(&single), 1.0).unwrap();
     }
 
+    #[test]
+    fn a_thread_form_agrees_with_its_independent_closed_form() {
+        // eval/scripts/thread-m8-8-turns.js derives these by quadrature.
+        let m8 = ThreadForm { diameter: 8.0, pitch: 1.25, shift: 0.0, hand: Hand::Right };
+        assert!((m8.minor_radius() - 3.323418).abs() < 1e-6);
+        assert!((m8.volume(10.0) - 413.596572).abs() < 1e-5);
+        let bolt = ThreadForm { shift: -0.2, ..m8 };
+        assert!((bolt.volume(20.0) - 738.740412).abs() < 1e-5);
+        // The sweep starts a whole pitch below, and ends one above, whole pitches.
+        assert_eq!(m8.sweep_span(-5.0, 5.0), (-6.25, 10));
+        assert_eq!(m8.sweep_span(-8.5, 0.5), (-10.0, 10));
+    }
+
+    #[test]
+    fn a_thread_refuses_what_would_not_hold_and_names_the_limit() {
+        let m8 = ThreadForm { diameter: 8.0, pitch: 1.25, shift: -0.4, hand: Hand::Right };
+        let err = m8.validate(-5.0, 5.0).unwrap_err().to_string();
+        assert!(err.contains("Keep the clearance under 0.338"), "{err}");
+        let coarse = ThreadForm { diameter: 2.0, pitch: 2.5, shift: 0.0, hand: Hand::Right };
+        let err = coarse.validate(-1.0, 1.0).unwrap_err().to_string();
+        assert!(err.contains("through its own axis"), "{err}");
+        let err = ThreadForm { shift: 0.0, ..m8 }.validate(1.0, 1.0).unwrap_err().to_string();
+        assert!(err.contains("no length"), "{err}");
+    }
+
     fn two_bodies(root: NodeId) -> Doc {
         serde_json::from_value(serde_json::json!({
             "root": root,
@@ -508,6 +533,33 @@ pub enum Op {
         taper: f64,
     },
 
+    /// A 60° screw thread about +Z with the ISO 68-1 basic profile: a core at
+    /// the basic minor diameter and a helical tooth out to the major, flat
+    /// across P/8 at the crest and P/4 at the root, squared off at `from` and
+    /// `to`.
+    ///
+    /// The tooth's centre crosses +X at z = 0 whatever the range, so two
+    /// threads of one pitch and hand mate where the translation between them
+    /// along Z is a whole number of pitches. An internal thread is this solid
+    /// cut from the part, with `shift` > 0; see [`ThreadForm`].
+    Thread {
+        /// Basic major diameter: 8 for M8.
+        diameter: f64,
+        /// Axial advance per turn.
+        pitch: f64,
+        /// Bottom of the threaded length along Z.
+        from: f64,
+        /// Top of the threaded length along Z.
+        to: f64,
+        #[serde(default, skip_serializing_if = "Hand::is_right")]
+        hand: Hand,
+        /// Radial move of the whole profile, every diameter by twice this:
+        /// negative for an external thread's clearance, positive for the
+        /// cutter of an internal one.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        shift: f64,
+    },
+
     /// Union. `blend` > 0 rounds the join by that radius.
     Union {
         children: Vec<NodeId>,
@@ -685,6 +737,114 @@ pub enum Hand {
 impl Hand {
     fn is_right(&self) -> bool {
         *self == Hand::Right
+    }
+}
+
+/// The ISO 68-1 basic profile of an [`Op::Thread`], as the kernel sweeps it.
+///
+/// `H = √3/2 · P` is the fundamental triangle's height. The basic minor
+/// radius is `d/2 − 5H/8`; the tooth is `3P/4` wide there and `P/8` wide at
+/// `d/2`. `shift` moves all of it radially. The swept tooth runs its flanks a
+/// further `P/8` into the core so the union with it never meets the core's
+/// surface along a tooth edge.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ThreadForm {
+    pub diameter: f64,
+    pub pitch: f64,
+    pub shift: f64,
+    pub hand: Hand,
+}
+
+/// The most turns one [`Op::Thread`] builds: 20 turns take about 0.4 s.
+pub const THREAD_MAX_TURNS: f64 = 400.0;
+
+impl ThreadForm {
+    pub fn fundamental_height(&self) -> f64 {
+        3f64.sqrt() / 2.0 * self.pitch
+    }
+
+    /// Radial depth of the basic profile, `5H/8`.
+    pub fn depth(&self) -> f64 {
+        5.0 * self.fundamental_height() / 8.0
+    }
+
+    pub fn minor_radius(&self) -> f64 {
+        self.diameter / 2.0 - self.depth() + self.shift
+    }
+
+    pub fn major_radius(&self) -> f64 {
+        self.diameter / 2.0 + self.shift
+    }
+
+    /// Radius of the swept tooth's inner face, inside the core.
+    pub fn tooth_root_radius(&self) -> f64 {
+        self.minor_radius() - self.pitch / 8.0
+    }
+
+    /// Half the swept tooth's axial width at [`Self::tooth_root_radius`].
+    pub fn tooth_root_half_width(&self) -> f64 {
+        3.0 * self.pitch / 8.0 + self.pitch / 8.0 / 3f64.sqrt()
+    }
+
+    /// Half the crest flat, `P/16`.
+    pub fn crest_half_width(&self) -> f64 {
+        self.pitch / 16.0
+    }
+
+    /// The first whole-pitch height at or below `from` less one pitch, and
+    /// the whole number of turns from there to one pitch past `to`: the
+    /// tooth the kernel sweeps before squaring it off.
+    pub fn sweep_span(&self, from: f64, to: f64) -> (f64, i32) {
+        let first = (from / self.pitch).floor() - 1.0;
+        let last = (to / self.pitch).ceil() + 1.0;
+        (first * self.pitch, (last - first) as i32)
+    }
+
+    /// The solid's volume over `length`, in closed form. A horizontal slice of
+    /// a screw-symmetric solid is the same area at every height, so the volume
+    /// is that area times the length; one pitch of it is the tooth section
+    /// revolved once, `2π ∫ r w(r) dr` with `w` the tooth's width at `r`.
+    pub fn volume(&self, length: f64) -> f64 {
+        let (a, h) = (self.minor_radius(), self.depth());
+        let (b1, b2) = (0.75 * self.pitch, self.pitch / 8.0);
+        let k = (b2 - b1) / h;
+        let moment = a * b1 * h + a * k * h * h / 2.0 + b1 * h * h / 2.0 + k * h * h * h / 3.0;
+        std::f64::consts::PI * a * a * length + 2.0 * std::f64::consts::PI * moment * length / self.pitch
+    }
+
+    /// Check an [`Op::Thread`]'s fields together.
+    pub fn validate(&self, from: f64, to: f64) -> anyhow::Result<()> {
+        let ThreadForm { diameter, pitch, shift, .. } = *self;
+        if ![diameter, pitch, shift, from, to].iter().all(|v| v.is_finite()) {
+            anyhow::bail!("a thread needs finite numbers; got diameter {diameter}, pitch {pitch}, shift {shift}, from {from}, to {to}");
+        }
+        if diameter <= 0.0 || pitch <= 0.0 {
+            anyhow::bail!("a thread needs a positive diameter and pitch; got diameter {diameter}, pitch {pitch}");
+        }
+        if to <= from {
+            anyhow::bail!("a thread runs from z = {from} to z = {to}, which is no length. Give `to` above `from`");
+        }
+        if shift.abs() >= self.depth() / 2.0 {
+            anyhow::bail!(
+                "a clearance of {:.3} mm on a thread of pitch {pitch} is half its {:.3} mm tooth depth or more, and a bolt and nut that far apart would not hold. Keep the clearance under {:.3} mm; 0.1 to 0.2 mm is the usual range for a printed thread",
+                shift.abs(),
+                self.depth(),
+                self.depth() / 2.0
+            );
+        }
+        if self.tooth_root_radius() <= 0.0 {
+            anyhow::bail!(
+                "a thread of diameter {diameter} and pitch {pitch} has its root at radius {:.3} mm, through its own axis. Use a finer pitch or a larger diameter",
+                self.tooth_root_radius()
+            );
+        }
+        let turns = (to - from) / pitch;
+        if turns > THREAD_MAX_TURNS {
+            anyhow::bail!(
+                "a thread of {turns:.0} turns is past the {THREAD_MAX_TURNS:.0} this kernel builds in one piece. Thread only the length that engages, and draw the rest as a plain cylinder"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -1500,7 +1660,8 @@ impl Doc {
             | Op::Torus { .. }
             | Op::Extrude { .. }
             | Op::Loft { .. }
-            | Op::Sweep { .. } => vec![],
+            | Op::Sweep { .. }
+            | Op::Thread { .. } => vec![],
             Op::Bodies { bodies } => bodies.iter().map(|b| b.child).collect(),
             Op::Union { children, .. } | Op::Intersection { children, .. } => children.clone(),
             Op::Difference { base, tools, .. } => {

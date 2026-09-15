@@ -1,6 +1,6 @@
 # Examples
 
-Twenty-three parts, each a `.js` script that returns a shape — or, for one of
+Twenty-four parts, each a `.js` script that returns a shape — or, for two of
 them, two named shapes. Most are measured in
 `eval/cases/`, so an example that stops building fails a case rather than
 surprising someone.
@@ -46,6 +46,7 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 | `pillow-block.js` | 20 mm bore pillow block | a bore-carrying boss on a base; slots whose ends are arcs, not holes |
 | `pipe-tee.js` | socket-weld tee for 1" pipe | a saddle intersection curve, blended, inside and out |
 | `plate-stand.js` | vertical dinner-plate stand, 8 plates | a redesign of a printed part whose pegs broke: eighteen cone bosses blended into a base in one union, and one commit's worth of them placed on the wrong face and standing proud of the underside, which only the low end of the bounding box showed |
+| `screw-top-jar.js` | jar and cap, M40 × 3 printed thread | a modelled thread, `threadedRod` on the neck and `threadedHole` in the cap, 0.25 mm clearance each; the cap's cutter turned into phase with the neck, and `between_bodies` reading the flank gap its closed form predicts |
 | `shaft-coupler.js` | 8-to-10 mm rigid coupler | two blind bores meeting at a web; radial grub screws breaking into them |
 | `timing-pulley.js` | 20-tooth GT2 pulley | **approximate** — and says so; see docs/DSL_GAPS.md §5 |
 | `v-block.js` | 50 mm toolroom V-block | a 90° vee cut by a rotated cube, so the angle cannot drift |
