@@ -227,6 +227,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | you want to change | file |
 |---|---|
 | the graph schema / a new op | `crates/parcad-core/src/graph.rs` |
+| sections: corners, arcs, rounds, splines, and how they resolve to exact curves | `crates/parcad-core/src/section.rs`, built by `section_wire` in `backend.rs`; `SectionEntry` in `app/src/dsl.ts` is what a model reads |
 | how an op becomes a B-rep | `crates/parcad-occt/src/backend.rs` |
 | crash handling, timeouts, breadcrumbs, the worker pool | `crates/parcad-occt/src/host.rs` |
 | what a worker keeps between requests | `backend::BuildCache` and the serve loop in `crates/parcad-occt/src/bin/worker.rs` |
