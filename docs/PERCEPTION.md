@@ -196,6 +196,36 @@ alternate in and out, and a hit within 0.1 µm of a face boundary is what the
 intersector classifies as on it. And a part in several bodies is asked body by
 body, each crossing and point naming its `body`; `solid_mm` sums over them.
 
+**A thin reading says what kind of thin it is, because the list was unreadable
+without it.** Two parts shipped as STLs on 2026-09-16 with defects this sweep
+finds at once — 0.013 mm between a cable channel and a slot floor that met at
+15°, and a Ø2.8 grille hole 0.319 mm into a screw boss. Nothing had run the
+sweep; when it was run afterwards the first part listed five 0.319 mm readings
+of a *75° lip*, which is a sharp edge doing what sharp edges do, and the second
+flagged **1072** samples of which nearly all were intended 1 mm pocket floors,
+with the real defect one unnamed line among them. So every sample is now
+classified by the angle the two faces enclose — 180° less the turn between
+their outward normals, the faces sharing an edge or being the same face wrapping
+onto itself:
+
+- **`feather`**, under 60°: material tapering to nothing, thinner than a
+  threshold `t` over a band `t / tan(angle)` wide — 4.5 mm at 15°. What a cut
+  that grazed another feature leaves, and never intended.
+- **`wall`**, under 5° or between faces that never meet: a floor, a web, a rod
+  measured across itself. Thin because a dimension made it so.
+- **`edge`**, 60° and over: the reading every sharp edge gives beside itself,
+  0.32 mm at 75°. Counted as `below_threshold_at_edges`, listed after
+  everything else, and never the part's `thinnest`.
+
+Samples are then grouped into places — neighbours within 2.5 sample spacings,
+and a feather or an edge along one seam however far apart it was sampled — so a
+place carries `samples` and `extent_mm`: one thin corner and a pocket floor thin
+over 16 × 16 mm are different entries. Each face is named by geometry where no
+tag names it (`cylinder r 1.40 along +z near (-34.0, 18.0, 14.8)`), which is what
+identified the boss the grille had cut into. On the two shipped parts the new
+report reads: feather 0.013 `cable`→`slot` first, then feather 0.319 between the
+two cylinders, and `below_threshold` 3 and 12 where it had been 25 and 1072.
+
 **Measured, not assumed, and pinned in `eval/cases/` now that there is one
 kernel to pin against.** `probe-bored-block` holds the 40 mm plate with a Ø12
 bore to its closed forms — crossings at x = −20, −6, 6, 20, so 14 mm of wall

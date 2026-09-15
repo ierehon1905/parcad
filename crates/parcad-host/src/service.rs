@@ -605,7 +605,14 @@ fn ray_probe(r: &parcad_occt::RayResult) -> RayProbe {
 /// One place the part is thin, with both faces named.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct ThinSpot {
+    /// `feather`: two faces meeting at a shallow angle, material tapering to
+    /// nothing — what a cut that grazed another feature leaves, and never
+    /// intended. `wall`: two faces that do not meet — a floor, a wall, a web.
+    /// `edge`: two faces meeting steeply; every sharp edge reads thin right
+    /// beside itself, and this is that, listed last.
+    pub kind: ThinKind,
     /// Material between the two faces below, measured along the inward normal.
+    /// For a place, its thinnest sample.
     pub thickness_mm: f64,
     /// The point on the surface this was measured from.
     pub at: [f64; 3],
@@ -620,16 +627,50 @@ pub struct ThinSpot {
     /// thin one is a hole that is nearly through the side.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opposite_surface_of: Option<String>,
+    /// What each face is — `plane facing +z near (…)`, `cylinder r 1.40 along
+    /// +z near (…)` — which names a face no tag does.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opposite_surface: Option<String>,
+    /// The angle the two faces enclose where they meet, for a feather or an edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wedge_deg: Option<f64>,
+    /// How many thin samples this place groups, and the size of the box they
+    /// span: a pocket floor thin all over and one thin corner differ here.
+    pub samples: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extent_mm: Option<[f64; 3]>,
     /// For a part in several bodies: which body this wall is in.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+}
+
+/// The kinds of thin reading, as a tool reply spells them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinKind {
+    Feather,
+    Wall,
+    Edge,
+}
+
+impl From<parcad_occt::ThinKind> for ThinKind {
+    fn from(kind: parcad_occt::ThinKind) -> Self {
+        match kind {
+            parcad_occt::ThinKind::Feather => Self::Feather,
+            parcad_occt::ThinKind::Wall => Self::Wall,
+            parcad_occt::ThinKind::Edge => Self::Edge,
+        }
+    }
 }
 
 /// Where the part is thinnest, and how much of it is thin.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct ThicknessReport {
     pub units: String,
-    /// The thinnest place found. Absent only when nothing was measurable,
+    /// The thinnest place found that is not an edge reading — an edge only when
+    /// the part has nothing else. Absent only when nothing was measurable,
     /// which for a real part means something is wrong with the sweep rather
     /// than with the part.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -641,10 +682,14 @@ pub struct ThicknessReport {
     /// Echoed back, because "0 below threshold" is meaningless without it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold_mm: Option<f64>,
-    /// How many samples were at or below `threshold_mm` — the number that
-    /// separates one bad spot from a wall that is thin everywhere.
+    /// How many samples were at or below `threshold_mm`, edges not counted — the
+    /// number that separates one bad spot from a wall that is thin everywhere.
     pub below_threshold: usize,
-    /// Distinct thin places, worst first, spread out rather than clustered.
+    /// Samples at or below `threshold_mm` that only read thin beside a sharp edge.
+    pub below_threshold_at_edges: usize,
+    /// With a threshold: every thin sample grouped into the place it belongs to,
+    /// feathers and walls thinnest first, then up to three edges. Without one:
+    /// the thinnest samples, spread across the part.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub thin_spots: Vec<ThinSpot>,
     /// How the minimum can be wrong, and which way. A ray thickness is not
@@ -699,11 +744,17 @@ pub fn wall_thickness(
     };
 
     let spot = |s: &parcad_occt::ThicknessSample| ThinSpot {
+        kind: s.kind.into(),
         thickness_mm: round_mm(s.thickness_mm),
         at: round_point(s.at),
         opposite: round_point(s.opposite),
         surface_of: s.tags.first().cloned(),
         opposite_surface_of: s.opposite_tags.first().cloned(),
+        surface: s.surface.clone(),
+        opposite_surface: s.opposite_surface.clone(),
+        wedge_deg: s.wedge_deg.map(|d| (d * 10.0).round() / 10.0),
+        samples: s.samples,
+        extent_mm: s.extent_mm.map(round_point),
         body: s.body.clone(),
     };
 
@@ -714,6 +765,7 @@ pub fn wall_thickness(
         discarded: report.discarded,
         threshold_mm,
         below_threshold: report.below_threshold,
+        below_threshold_at_edges: report.below_threshold_at_edges,
         thin_spots: report.thin_spots.iter().map(spot).collect(),
         note: "a ray thickness, measured on the exact solid with every fillet and chamfer \
                in it; at or above the inscribed-sphere thickness in a concave corner, and \

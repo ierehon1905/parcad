@@ -152,9 +152,33 @@ pub struct ThicknessResult {
     pub discarded: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<ThicknessSample>,
+    /// Samples at or below the threshold that are not [`ThinKind::Edge`].
     pub below_threshold: usize,
-    /// The worst places, spatially separated, worst first.
+    /// Samples at or below the threshold that only read thin because they sit
+    /// beside a sharp edge.
+    #[serde(default)]
+    pub below_threshold_at_edges: usize,
+    /// Places, worst first: every sample below the threshold grouped with its
+    /// neighbours of the same kind, feathers and walls before edges. Without a
+    /// threshold, the worst samples spread across the part.
     pub thin_spots: Vec<ThicknessSample>,
+}
+
+/// What a thin reading is, from the two faces it lies between. Ordered by how
+/// much it matters to a part that has to be made.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ThinKind {
+    /// Two faces that meet at a shallow angle: material tapering to nothing
+    /// over a band as wide as the threshold divided by the angle's tangent.
+    /// The shape of a cut that grazed another feature.
+    Feather,
+    /// Two faces that do not meet: a wall, a floor, a web between holes.
+    #[default]
+    Wall,
+    /// Two faces that meet at a steep angle. Every sharp edge reads thin right
+    /// beside itself; the band is narrower than half the thickness it reads.
+    Edge,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -172,6 +196,30 @@ pub struct ThicknessSample {
     pub opposite_tags: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    #[serde(default)]
+    pub kind: ThinKind,
+    /// The angle the two faces enclose, in degrees, where they meet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wedge_deg: Option<f64>,
+    /// What each face is where it has no tag to name it, e.g. `cylinder r 1.5
+    /// along z near (-46, 26, 14)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opposite_surface: Option<String>,
+    /// The two faces' traversal indices in their body; worker-side only.
+    #[serde(skip)]
+    pub faces: (usize, usize),
+    /// For a place: how many samples it groups, and the size of the box they
+    /// span. 1 and absent for a single sample.
+    #[serde(default = "one")]
+    pub samples: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extent_mm: Option<[f64; 3]>,
+}
+
+fn one() -> usize {
+    1
 }
 
 /// Where one tag's surface is on the finished part: the exact bounds of the

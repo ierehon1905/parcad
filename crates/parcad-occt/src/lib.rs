@@ -36,6 +36,6 @@ pub use host::{
 pub use protocol::{
     BodyFit, BodySpan, CurveProbe, EdgeCurve, FaceProbe, FitReport, Perceive, Perceived,
     PointResult, RayHitResult, RayLine, RayResult, SolidProbe, StepProbe, Success, SurfaceProbe,
-    TagBounds, TargetPreview, TargetVertex, ThicknessResult, ThicknessSample, ThicknessSpec,
+    TagBounds, TargetPreview, TargetVertex, ThicknessResult, ThicknessSample, ThicknessSpec, ThinKind,
     Timings, Topology, WireProbe,
 };
