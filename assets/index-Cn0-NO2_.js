@@ -1,5 +1,5 @@
-var m={script:"kernel/11b4224aa04c/parcad-wasm.js",wasm:"kernel/11b4224aa04c/parcad_wasm.wasm",bytes:19668166};const L=6e4,A=new Set;let f={phase:"downloading",received:0,total:m.bytes};function g(e){f=e;for(const t of A)t(f)}function I(e){return A.add(e),e(f),()=>A.delete(e)}let D;function P(){return D??=(async()=>{const e=new URL(m.wasm,document.baseURI).href,t=await fetch(e);if(!t.ok||!t.body)throw new Error(`the geometry kernel did not download (${t.status} from ${e}); reload the page to try again`);const o=m.bytes,a=t.body.getReader(),s=[];let r=0;for(;;){const{done:h,value:R}=await a.read();if(h)break;s.push(R),r+=R.length,g({phase:"downloading",received:r,total:o})}g({phase:"compiling",received:r,total:o});const i=new Uint8Array(r);let l=0;for(const h of s)i.set(h,l),l+=h.length;const n=await WebAssembly.compile(i);return g({phase:"ready",received:r,total:o}),n})().catch(e=>{D=void 0;const t=e instanceof Error?e.message:String(e);throw g({...f,phase:"failed",error:t}),new Error(`${t}
-This browser could not start the WebAssembly kernel. It needs WebAssembly exception handling: Chrome 95, Firefox 100 or Safari 15.2, or newer.`)}),D}function j(){P().catch(()=>{})}let w,M=0,z=Promise.resolve();async function W(){const e=await P(),t=new Worker(new URL("/parcad/assets/kernel-worker-CrRtYMWW.js",import.meta.url),{type:"module"}),o={worker:t,stage:"starting up",ready:Promise.resolve()};o.ready=new Promise((s,r)=>{t.onmessage=i=>{i.data.kind==="ready"&&s(),i.data.kind==="died"&&r(new Error(y("starting up",i.data.detail)))},t.onerror=i=>r(new Error(y("starting up",i.message)))});const a=new URL(m.script,document.baseURI).href;return t.postMessage({kind:"start",module:e,script:a}),await o.ready,o}function b(){w?.worker.terminate(),w=void 0}const y=(e,t)=>`the geometry kernel crashed while ${e} (${t}). This is usually a dimension the operation cannot satisfy — a fillet larger than the material, a blend across a junction where several members meet or touch face-on, or a boolean between shapes that do not overlap. The next build starts a fresh kernel.`,X=e=>`the geometry kernel was still ${e} after ${L/1e3}s and was stopped. The WebAssembly kernel runs two to three times slower than the installed app, which gives a part 20 s by default and lets you raise it; a part this heavy is one to build there.`;function Y(e){const t=z.then(()=>q(e));return z=t.catch(()=>{}),t}async function q(e){w??=await W().catch(a=>{throw b(),a});const t=w,o=M++;return t.stage="reading the request",new Promise((a,s)=>{const r=window.setTimeout(()=>{b(),s(new Error(X(t.stage)))},L),i=()=>window.clearTimeout(r);t.worker.onmessage=l=>{const n=l.data;n.kind==="stage"?t.stage=n.stage:n.kind==="died"?(i(),b(),s(new Error(y(t.stage,n.detail)))):n.kind==="reply"&&n.id===o&&(i(),n.ok?a(n.bytes?{bytes:n.bytes}:{json:n.json}):s(new Error(n.message)))},t.worker.onerror=l=>{i(),b(),s(new Error(y(t.stage,l.message||"the worker failed")))},t.worker.postMessage({kind:"call",id:o,request:e})})}const Pe=Object.freeze(Object.defineProperty({__proto__:null,call:Y,preload:j,watchLoad:I},Symbol.toStringTag,{value:"Module"})),Z=`// parcad — everything is millimetres, Z is up.
+var m={script:"kernel/11b4224aa04c/parcad-wasm.js",wasm:"kernel/11b4224aa04c/parcad_wasm.wasm",bytes:19668166};const L=6e4,A=new Set;let f={phase:"downloading",received:0,total:m.bytes};function b(e){f=e;for(const t of A)t(f)}function I(e){return A.add(e),e(f),()=>A.delete(e)}let D;function P(){return D??=(async()=>{const e=new URL(m.wasm,document.baseURI).href,t=await fetch(e);if(!t.ok||!t.body)throw new Error(`the geometry kernel did not download (${t.status} from ${e}); reload the page to try again`);const o=m.bytes,a=t.body.getReader(),s=[];let r=0;for(;;){const{done:h,value:R}=await a.read();if(h)break;s.push(R),r+=R.length,b({phase:"downloading",received:r,total:o})}b({phase:"compiling",received:r,total:o});const i=new Uint8Array(r);let c=0;for(const h of s)i.set(h,c),c+=h.length;const n=await WebAssembly.compile(i);return b({phase:"ready",received:r,total:o}),n})().catch(e=>{D=void 0;const t=e instanceof Error?e.message:String(e);throw b({...f,phase:"failed",error:t}),new Error(`${t}
+This browser could not start the WebAssembly kernel. It needs WebAssembly exception handling: Chrome 95, Firefox 100 or Safari 15.2, or newer.`)}),D}function j(){P().catch(()=>{})}let w,M=0,z=Promise.resolve();async function X(){const e=await P(),t=new Worker(new URL("/parcad/assets/kernel-worker-CrRtYMWW.js",import.meta.url),{type:"module"}),o={worker:t,stage:"starting up",ready:Promise.resolve()};o.ready=new Promise((s,r)=>{t.onmessage=i=>{i.data.kind==="ready"&&s(),i.data.kind==="died"&&r(new Error(y("starting up",i.data.detail)))},t.onerror=i=>r(new Error(y("starting up",i.message)))});const a=new URL(m.script,document.baseURI).href;return t.postMessage({kind:"start",module:e,script:a}),await o.ready,o}function g(){w?.worker.terminate(),w=void 0}const y=(e,t)=>`the geometry kernel crashed while ${e} (${t}). This is usually a dimension the operation cannot satisfy — a fillet larger than the material, a blend across a junction where several members meet or touch face-on, or a boolean between shapes that do not overlap. The next build starts a fresh kernel.`,Y=e=>`the geometry kernel was still ${e} after ${L/1e3}s and was stopped. The WebAssembly kernel runs two to three times slower than the installed app, which gives a part 20 s by default and lets you raise it; a part this heavy is one to build there.`;function W(e){const t=z.then(()=>q(e));return z=t.catch(()=>{}),t}async function q(e){w??=await X().catch(a=>{throw g(),a});const t=w,o=M++;return t.stage="reading the request",new Promise((a,s)=>{const r=window.setTimeout(()=>{g(),s(new Error(Y(t.stage)))},L),i=()=>window.clearTimeout(r);t.worker.onmessage=c=>{const n=c.data;n.kind==="stage"?t.stage=n.stage:n.kind==="died"?(i(),g(),s(new Error(y(t.stage,n.detail)))):n.kind==="reply"&&n.id===o&&(i(),n.ok?a(n.bytes?{bytes:n.bytes}:{json:n.json}):s(new Error(n.message)))},t.worker.onerror=c=>{i(),g(),s(new Error(y(t.stage,c.message||"the worker failed")))},t.worker.postMessage({kind:"call",id:o,request:e})})}const Pe=Object.freeze(Object.defineProperty({__proto__:null,call:W,preload:j,watchLoad:I},Symbol.toStringTag,{value:"Module"})),Z=`// parcad — everything is millimetres, Z is up.
 // Primitives are centred on the origin; place them with .at(x, y, z).
 // The script must return a shape.
 
@@ -1108,7 +1108,7 @@ return bored
   .expect({ count: 2 })
   .chamfer(0.5)
   .tag("bore_lead_in");
-`,le=`// Lidded box: an open base and a lid with a locating lip, printed as two parts.
+`,ce=`// Lidded box: an open base and a lid with a locating lip, printed as two parts.
 //
 // The one thing this part shows is a script returning two bodies that stay
 // two — \`return { base, lid }\` — so the report measures each one and says how
@@ -1139,7 +1139,7 @@ const lip = box(L - 2 * wall - 2 * fit, W - 2 * wall - 2 * fit, lipH)
 const lid = plate.union(lip).tag("lid");
 
 return { base, lid };
-`,ce=`// A hydraulic manifold block: a solid with cross-drilled galleries that meet
+`,le=`// A hydraulic manifold block: a solid with cross-drilled galleries that meet
 // inside it, plus the plugged drilling access every real manifold has.
 //
 // The interesting property of a manifold is that its function lives in the
@@ -1411,7 +1411,7 @@ return bored
   .expect({ count: 1 })
   .chamfer(1.5)
   .tag("branch_socket_lead_in");
-`,ge=`// A vertical dinner-plate stand for a cupboard shelf, drawn so the pegs stop
+`,be=`// A vertical dinner-plate stand for a cupboard shelf, drawn so the pegs stop
 // breaking off.
 //
 // The stand this replaces (makerworld.com/models/1199653, after printables
@@ -1527,7 +1527,7 @@ return slotted
   .expect({ count: plates * 4 })
   .chamfer(0.8)
   .tag("slot_rims");
-`,be=`// Screw-top jar: a jar with a threaded neck and its cap, printed as two parts.
+`,ge=`// Screw-top jar: a jar with a threaded neck and its cap, printed as two parts.
 //
 // The thread is modelled, not drawn as a tap drill: M40 × 3 (ISO 261 fine)
 // with the ISO 68-1 basic profile, \`threadedRod\` on the neck and
@@ -1717,7 +1717,8 @@ return machined
 //
 // The planter is a six-point star lofted through nine sections, each wider
 // and turned further than the last, so its walls come out as twisted facets.
-// The saucer is a revolved dish with spiral arms for the planter to stand on.
+// The saucer is a dish of smooth bumps in rings of 1, 6, 12 and 18, which the
+// planter stands on.
 
 const points = 6;
 const height = 90;
@@ -1750,54 +1751,58 @@ const drain = cylinder(2.5, 3 * floor);
 const planter = outside
   .cut(
     cavity, // 1 mm past the rim, so the top opens cleanly
-    drain,
-    ...polar(6, 14).map(([x, y]) => drain.at(x, y)),
+    ...polar(6, 14, { straddle: true }).map(([x, y]) => drain.at(x, y)), // between the saucer's first ring of bumps
   )
   .tag("planter");
 
 // Wide enough that the 34 mm star base sits inside with room for runoff.
 const saucerRadius = 42;
 const saucerFloor = 2;
+const bumpRadius = 5.4;
+const bumpHeight = 2.4;
+const ringSpacing = 11;
+const ringCount = 3;
 
-// The planter stands on two rounded rings, 3.5 mm proud of the floor: past the
-// ~2.7 mm gap water bridges by surface tension, so its base drains instead of
-// wicking. Notches in the rings, staggered, let the water out.
-const ringHeight = 3.5;
-const ringWidth = 3;
-const rings = [21, 31]; // the inner one clear of the drains at 14 mm
+// Smootherstep: no slope and no curvature where a bump leaves the floor or at its top.
+const ease = (x) => x * x * x * (x * (6 * x - 15) + 10);
 
-// A ring in section: straight sides with a semicircular top.
-const ring = (r) => [
-  [r + ringWidth / 2, saucerFloor],
-  [r + ringWidth / 2, saucerFloor + ringHeight - ringWidth / 2],
-  { through: [r, saucerFloor + ringHeight] },
-  [r - ringWidth / 2, saucerFloor + ringHeight - ringWidth / 2],
-  [r - ringWidth / 2, saucerFloor],
-];
+function bump() {
+  const z = (r) => saucerFloor + bumpHeight * (1 - ease(r / bumpRadius));
+  const profile = [0.92, 0.82, 0.7, 0.58, 0.46, 0.34, 0.2].map((t) => [t * bumpRadius, z(t * bumpRadius)]);
+  return revolve([
+    [0, 0],
+    [bumpRadius, 0],
+    [bumpRadius, saucerFloor],
+    { spline: profile, start: [-1, 0], end: [-1, 0] },
+    [0, saucerFloor + bumpHeight],
+  ]);
+}
 
-// A radial slot through a ring down to the floor, at the point it is aimed at.
-const notch = (x, y) =>
-  box(3 * ringWidth, 4, 2 * ringHeight)
-    .rotate("z", (Math.atan2(y, x) * 180) / Math.PI)
-    .at(x, y, saucerFloor + ringHeight);
-
-const saucer = revolve([
+const dish = revolve([
   [0, 0],
   { at: [saucerRadius + 2, 0], round: 3 },
-  [saucerRadius + 2, 12],
-  [saucerRadius, 12],
+  [saucerRadius + 2, 11],
+  { through: [saucerRadius + 1, 12] },
+  [saucerRadius, 11],
   { at: [saucerRadius, saucerFloor], round: 2 },
-  ...rings.slice().reverse().flatMap(ring),
   [0, saucerFloor],
-])
-  .cut(
-    ...polar(6, rings[0]).map(([x, y]) => notch(x, y)), // in line with the drains
-    ...polar(6, rings[1], { straddle: true }).map(([x, y]) => notch(x, y)),
-  )
-  .tag("saucer");
+]);
+
+// One bump in the middle, then rings of 6, 12, 18: each ring's circumference grows
+// by 2π·spacing, so six more keeps every bump the same distance from its neighbours.
+// Even rings sit half a step round from the odd ones.
+const one = bump();
+const bumps = [one];
+for (let ring = 1; ring <= ringCount; ring++) {
+  const count = 6 * ring;
+  const start = ring % 2 === 0 ? 180 / count : 0;
+  for (const [x, y] of polar(count, ring * ringSpacing, { start })) bumps.push(one.at(x, y));
+}
+
+const saucer = dish.union(...bumps);
 
 return {
-  planter: planter.at(0, 0, saucerFloor + ringHeight),
+  planter: planter.at(0, 0, saucerFloor + bumpHeight),
   saucer,
 };
 `,ye=`// A toolroom V-block: a 90° vee that holds round stock on its axis, whichever
@@ -1887,5 +1892,5 @@ const spout = pipe({ spline: [[20, 0, 96], [40, 0, 112], [62, 0, 116], [80, 0, 1
 const bore = pipe({ spline: [[20, 0, 96], [40, 0, 112], [62, 0, 116], [80, 0, 108]] }, 2.6);
 
 return union(outer, spout).cut(cavity, bore);
-`,Te="parcad-playground",c="parts",p="folders",S="meta",N="this browser's storage — parts here stay on this device. The installed app keeps them as files and serves MCP.";let H;function T(){return H??=new Promise((e,t)=>{const o=indexedDB.open(Te,1);o.onupgradeneeded=()=>{const a=o.result;a.createObjectStore(c,{keyPath:"path"}),a.createObjectStore(p),a.createObjectStore(S)},o.onsuccess=()=>e(o.result),o.onerror=()=>t(new Error(`this browser refused the playground its storage (${o.error?.message}); a private window may not allow it`))}).then(async e=>(await _e(e),e)),H}function x(e){return new Promise((t,o)=>{e.onsuccess=()=>t(e.result),e.onerror=()=>o(e.error)})}async function F(e){const t=await T();return x(t.transaction(e).objectStore(e).getAll())}async function E(){const e=await T();return await x(e.transaction(p).objectStore(p).getAllKeys())}async function d(e,t){const a=(await T()).transaction(e,"readwrite");t(a.objectStore(e)),await new Promise((s,r)=>{a.oncomplete=()=>s(),a.onerror=()=>r(a.error)})}async function _(e){const t=await T();return x(t.transaction(c).objectStore(c).get(e))}const v=()=>Math.floor(Date.now()/1e3),xe=Object.assign({"../../../examples/bracket.js":Z,"../../../examples/cast-foot.js":G,"../../../examples/clevis.js":U,"../../../examples/cover-plate.js":$,"../../../examples/diamond-v19.js":K,"../../../examples/display-bezel.js":J,"../../../examples/edge-fillets.js":Q,"../../../examples/enclosure.js":V,"../../../examples/extrusion-2020.js":ee,"../../../examples/flange.js":te,"../../../examples/fusion360/retainer-v1.js":ne,"../../../examples/fusion360/untitled2-v1.js":oe,"../../../examples/fusion360/untriangle-v3.js":ae,"../../../examples/heat-sink.js":se,"../../../examples/hex-standoff.js":re,"../../../examples/hydraulic-line.js":ie,"../../../examples/knurled-knob.js":he,"../../../examples/lidded-box.js":le,"../../../examples/manifold-block.js":ce,"../../../examples/motor-mount.js":de,"../../../examples/pillow-block.js":ue,"../../../examples/pipe-tee.js":pe,"../../../examples/plate-stand.js":ge,"../../../examples/screw-top-jar.js":be,"../../../examples/shaft-coupler.js":me,"../../../examples/timing-pulley.js":fe,"../../../examples/twisted-planter.js":we,"../../../examples/v-block.js":ye,"../../../examples/wash-bottle.js":ve});async function _e(e){const t=e.transaction([c,S],"readwrite"),o=t.objectStore(S),a=t.objectStore(c),s=new Set(await x(o.get("seeded"))??[]);for(const[r,i]of Object.entries(xe).sort(([l],[n])=>l.localeCompare(n))){const l=r.replace(/^.*\/examples\//,"").replace(/\.js$/,"");s.has(l)||(a.put({path:l,script:i,tags:[],modified:v()}),s.add(l))}o.put([...s],"seeded"),await new Promise((r,i)=>{t.oncomplete=()=>r(),t.onerror=()=>i(t.error)})}const B=e=>e.split("/").pop()??e,ke=e=>e.replace(/[-_]/g," "),O=(e,t)=>e.name.toLowerCase()<t.name.toLowerCase()?-1:e.name.toLowerCase()>t.name.toLowerCase()?1:0;function C(e,t,o=""){const a=n=>o?n.startsWith(`${o}/`):!0,s=n=>o?n.slice(o.length+1):n,r=new Set;for(const n of[...t,...e.map(h=>h.path)]){if(!a(n))continue;const h=s(n).split("/");(h.length>1||t.includes(n))&&r.add(h[0])}const i=[...r].map(n=>{const h=o?`${o}/${n}`:n;return{kind:"folder",name:n,path:h,children:C(e,t,h)}}).sort(O),l=e.filter(n=>a(n.path)&&!s(n.path).includes("/")).map(n=>({kind:"part",name:B(n.path),path:n.path,title:n.title??ke(B(n.path)),bundle:!0,thumbnail:n.preview!==void 0,tags:n.tags,modified:n.modified})).sort(O);return[...i,...l]}function u(e){const t=e.split("/");for(const o of t)if(!o||o.startsWith(".")||/\.(js|parcad)$/.test(o)||/[\\:]/.test(o)||[...o].some(a=>a<" "))throw new Error(`${JSON.stringify(e)} is not a project name: each part of it must be a plain name, with no leading dot, extension, backslash or colon.`);return e}async function De(){const[e,t]=await Promise.all([F(c),E()]);return{projects:e.map(o=>o.path).sort(),tree:C(e,t),directory:N,preferred:"twisted-planter"}}async function k(e){const t=await _(u(e));if(!t)throw new Error(`no project called ${JSON.stringify(e)} in this browser.`);return t}async function Ae(e){return{script:(await k(e)).script}}async function Se(e,t,o){const a=await _(u(e))??{path:e,script:t,tags:[],modified:v()};return await d(c,s=>s.put({...a,script:t,modified:v(),preview:o??a.preview})),{path:e}}async function Ee(e,t){if(await _(u(e)))throw new Error(`${JSON.stringify(e)} already exists.`);return await d(c,o=>o.put({path:e,script:t,tags:[],modified:v()})),{path:e}}async function Re(e){if((await E()).includes(u(e)))throw new Error(`${JSON.stringify(e)} already exists.`);return await d(p,o=>o.put(!0,e)),{path:e}}async function ze(e,t){u(e),u(t);const o=await F(c),a=await E();if(o.some(n=>n.path===t)||a.includes(t))throw new Error(`${JSON.stringify(t)} already exists.`);const s=n=>n===e||n.startsWith(`${e}/`),r=n=>t+n.slice(e.length),i=o.filter(n=>s(n.path)),l=a.filter(s);if(!i.length&&!l.length)throw new Error(`nothing at ${JSON.stringify(e)} to rename.`);return await d(c,n=>{for(const h of i)n.delete(h.path),n.put({...h,path:r(h.path)})}),await d(p,n=>{for(const h of l)n.delete(h),n.put(!0,r(h))}),{path:t}}async function He(e,t){const o=await k(e);await d(c,a=>a.put({...o,title:t.trim()||void 0}))}async function Be(e){const t=await k(e);return await d(c,o=>o.delete(t.path)),{trashed:"removed from this browser's storage"}}async function Oe(e,t){const o=await k(e);await d(c,a=>a.put({...o,preview:t}))}async function Le(e){return(await _(e))?.preview??null}const Ne=Object.freeze(Object.defineProperty({__proto__:null,DIRECTORY:N,create:Ee,createFolder:Re,list:De,preview:Le,read:Ae,remove:Be,rename:ze,save:Se,setPreview:Oe,setTitle:He},Symbol.toStringTag,{value:"Module"}));export{Pe as kernel,Ne as store};
-//# sourceMappingURL=index-CC6c4V_t.js.map
+`,xe="parcad-playground",l="parts",p="folders",S="meta",N="this browser's storage — parts here stay on this device. The installed app keeps them as files and serves MCP.";let H;function x(){return H??=new Promise((e,t)=>{const o=indexedDB.open(xe,1);o.onupgradeneeded=()=>{const a=o.result;a.createObjectStore(l,{keyPath:"path"}),a.createObjectStore(p),a.createObjectStore(S)},o.onsuccess=()=>e(o.result),o.onerror=()=>t(new Error(`this browser refused the playground its storage (${o.error?.message}); a private window may not allow it`))}).then(async e=>(await _e(e),e)),H}function T(e){return new Promise((t,o)=>{e.onsuccess=()=>t(e.result),e.onerror=()=>o(e.error)})}async function C(e){const t=await x();return T(t.transaction(e).objectStore(e).getAll())}async function E(){const e=await x();return await T(e.transaction(p).objectStore(p).getAllKeys())}async function d(e,t){const a=(await x()).transaction(e,"readwrite");t(a.objectStore(e)),await new Promise((s,r)=>{a.oncomplete=()=>s(),a.onerror=()=>r(a.error)})}async function _(e){const t=await x();return T(t.transaction(l).objectStore(l).get(e))}const v=()=>Math.floor(Date.now()/1e3),Te=Object.assign({"../../../examples/bracket.js":Z,"../../../examples/cast-foot.js":G,"../../../examples/clevis.js":U,"../../../examples/cover-plate.js":$,"../../../examples/diamond-v19.js":K,"../../../examples/display-bezel.js":J,"../../../examples/edge-fillets.js":Q,"../../../examples/enclosure.js":V,"../../../examples/extrusion-2020.js":ee,"../../../examples/flange.js":te,"../../../examples/fusion360/retainer-v1.js":ne,"../../../examples/fusion360/untitled2-v1.js":oe,"../../../examples/fusion360/untriangle-v3.js":ae,"../../../examples/heat-sink.js":se,"../../../examples/hex-standoff.js":re,"../../../examples/hydraulic-line.js":ie,"../../../examples/knurled-knob.js":he,"../../../examples/lidded-box.js":ce,"../../../examples/manifold-block.js":le,"../../../examples/motor-mount.js":de,"../../../examples/pillow-block.js":ue,"../../../examples/pipe-tee.js":pe,"../../../examples/plate-stand.js":be,"../../../examples/screw-top-jar.js":ge,"../../../examples/shaft-coupler.js":me,"../../../examples/timing-pulley.js":fe,"../../../examples/twisted-planter.js":we,"../../../examples/v-block.js":ye,"../../../examples/wash-bottle.js":ve});async function _e(e){const t=e.transaction([l,S],"readwrite"),o=t.objectStore(S),a=t.objectStore(l),s=new Set(await T(o.get("seeded"))??[]);for(const[r,i]of Object.entries(Te).sort(([c],[n])=>c.localeCompare(n))){const c=r.replace(/^.*\/examples\//,"").replace(/\.js$/,"");s.has(c)||(a.put({path:c,script:i,tags:[],modified:v()}),s.add(c))}o.put([...s],"seeded"),await new Promise((r,i)=>{t.oncomplete=()=>r(),t.onerror=()=>i(t.error)})}const B=e=>e.split("/").pop()??e,ke=e=>e.replace(/[-_]/g," "),O=(e,t)=>e.name.toLowerCase()<t.name.toLowerCase()?-1:e.name.toLowerCase()>t.name.toLowerCase()?1:0;function F(e,t,o=""){const a=n=>o?n.startsWith(`${o}/`):!0,s=n=>o?n.slice(o.length+1):n,r=new Set;for(const n of[...t,...e.map(h=>h.path)]){if(!a(n))continue;const h=s(n).split("/");(h.length>1||t.includes(n))&&r.add(h[0])}const i=[...r].map(n=>{const h=o?`${o}/${n}`:n;return{kind:"folder",name:n,path:h,children:F(e,t,h)}}).sort(O),c=e.filter(n=>a(n.path)&&!s(n.path).includes("/")).map(n=>({kind:"part",name:B(n.path),path:n.path,title:n.title??ke(B(n.path)),bundle:!0,thumbnail:n.preview!==void 0,tags:n.tags,modified:n.modified})).sort(O);return[...i,...c]}function u(e){const t=e.split("/");for(const o of t)if(!o||o.startsWith(".")||/\.(js|parcad)$/.test(o)||/[\\:]/.test(o)||[...o].some(a=>a<" "))throw new Error(`${JSON.stringify(e)} is not a project name: each part of it must be a plain name, with no leading dot, extension, backslash or colon.`);return e}async function De(){const[e,t]=await Promise.all([C(l),E()]);return{projects:e.map(o=>o.path).sort(),tree:F(e,t),directory:N,preferred:"twisted-planter"}}async function k(e){const t=await _(u(e));if(!t)throw new Error(`no project called ${JSON.stringify(e)} in this browser.`);return t}async function Ae(e){return{script:(await k(e)).script}}async function Se(e,t,o){const a=await _(u(e))??{path:e,script:t,tags:[],modified:v()};return await d(l,s=>s.put({...a,script:t,modified:v(),preview:o??a.preview})),{path:e}}async function Ee(e,t){if(await _(u(e)))throw new Error(`${JSON.stringify(e)} already exists.`);return await d(l,o=>o.put({path:e,script:t,tags:[],modified:v()})),{path:e}}async function Re(e){if((await E()).includes(u(e)))throw new Error(`${JSON.stringify(e)} already exists.`);return await d(p,o=>o.put(!0,e)),{path:e}}async function ze(e,t){u(e),u(t);const o=await C(l),a=await E();if(o.some(n=>n.path===t)||a.includes(t))throw new Error(`${JSON.stringify(t)} already exists.`);const s=n=>n===e||n.startsWith(`${e}/`),r=n=>t+n.slice(e.length),i=o.filter(n=>s(n.path)),c=a.filter(s);if(!i.length&&!c.length)throw new Error(`nothing at ${JSON.stringify(e)} to rename.`);return await d(l,n=>{for(const h of i)n.delete(h.path),n.put({...h,path:r(h.path)})}),await d(p,n=>{for(const h of c)n.delete(h),n.put(!0,r(h))}),{path:t}}async function He(e,t){const o=await k(e);await d(l,a=>a.put({...o,title:t.trim()||void 0}))}async function Be(e){const t=await k(e);return await d(l,o=>o.delete(t.path)),{trashed:"removed from this browser's storage"}}async function Oe(e,t){const o=await k(e);await d(l,a=>a.put({...o,preview:t}))}async function Le(e){return(await _(e))?.preview??null}const Ne=Object.freeze(Object.defineProperty({__proto__:null,DIRECTORY:N,create:Ee,createFolder:Re,list:De,preview:Le,read:Ae,remove:Be,rename:ze,save:Se,setPreview:Oe,setTitle:He},Symbol.toStringTag,{value:"Module"}));export{Pe as kernel,Ne as store};
+//# sourceMappingURL=index-Cn0-NO2_.js.map
