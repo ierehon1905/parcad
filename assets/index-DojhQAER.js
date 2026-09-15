@@ -1,5 +1,97 @@
-var m={script:"kernel/11b4224aa04c/parcad-wasm.js",wasm:"kernel/11b4224aa04c/parcad_wasm.wasm",bytes:19668166};const L=6e4,A=new Set;let f={phase:"downloading",received:0,total:m.bytes};function b(e){f=e;for(const t of A)t(f)}function I(e){return A.add(e),e(f),()=>A.delete(e)}let D;function P(){return D??=(async()=>{const e=new URL(m.wasm,document.baseURI).href,t=await fetch(e);if(!t.ok||!t.body)throw new Error(`the geometry kernel did not download (${t.status} from ${e}); reload the page to try again`);const o=m.bytes,a=t.body.getReader(),s=[];let r=0;for(;;){const{done:h,value:R}=await a.read();if(h)break;s.push(R),r+=R.length,b({phase:"downloading",received:r,total:o})}b({phase:"compiling",received:r,total:o});const i=new Uint8Array(r);let c=0;for(const h of s)i.set(h,c),c+=h.length;const n=await WebAssembly.compile(i);return b({phase:"ready",received:r,total:o}),n})().catch(e=>{D=void 0;const t=e instanceof Error?e.message:String(e);throw b({...f,phase:"failed",error:t}),new Error(`${t}
-This browser could not start the WebAssembly kernel. It needs WebAssembly exception handling: Chrome 95, Firefox 100 or Safari 15.2, or newer.`)}),D}function j(){P().catch(()=>{})}let w,M=0,z=Promise.resolve();async function X(){const e=await P(),t=new Worker(new URL("/parcad/assets/kernel-worker-CrRtYMWW.js",import.meta.url),{type:"module"}),o={worker:t,stage:"starting up",ready:Promise.resolve()};o.ready=new Promise((s,r)=>{t.onmessage=i=>{i.data.kind==="ready"&&s(),i.data.kind==="died"&&r(new Error(y("starting up",i.data.detail)))},t.onerror=i=>r(new Error(y("starting up",i.message)))});const a=new URL(m.script,document.baseURI).href;return t.postMessage({kind:"start",module:e,script:a}),await o.ready,o}function g(){w?.worker.terminate(),w=void 0}const y=(e,t)=>`the geometry kernel crashed while ${e} (${t}). This is usually a dimension the operation cannot satisfy — a fillet larger than the material, a blend across a junction where several members meet or touch face-on, or a boolean between shapes that do not overlap. The next build starts a fresh kernel.`,Y=e=>`the geometry kernel was still ${e} after ${L/1e3}s and was stopped. The WebAssembly kernel runs two to three times slower than the installed app, which gives a part 20 s by default and lets you raise it; a part this heavy is one to build there.`;function W(e){const t=z.then(()=>q(e));return z=t.catch(()=>{}),t}async function q(e){w??=await X().catch(a=>{throw g(),a});const t=w,o=M++;return t.stage="reading the request",new Promise((a,s)=>{const r=window.setTimeout(()=>{g(),s(new Error(Y(t.stage)))},L),i=()=>window.clearTimeout(r);t.worker.onmessage=c=>{const n=c.data;n.kind==="stage"?t.stage=n.stage:n.kind==="died"?(i(),g(),s(new Error(y(t.stage,n.detail)))):n.kind==="reply"&&n.id===o&&(i(),n.ok?a(n.bytes?{bytes:n.bytes}:{json:n.json}):s(new Error(n.message)))},t.worker.onerror=c=>{i(),g(),s(new Error(y(t.stage,c.message||"the worker failed")))},t.worker.postMessage({kind:"call",id:o,request:e})})}const Pe=Object.freeze(Object.defineProperty({__proto__:null,call:W,preload:j,watchLoad:I},Symbol.toStringTag,{value:"Module"})),Z=`// parcad — everything is millimetres, Z is up.
+var f={script:"kernel/31198d443da2/parcad-wasm.js",wasm:"kernel/31198d443da2/parcad_wasm.wasm",bytes:19669228};const C=6e4,S=new Set;let w={phase:"downloading",received:0,total:f.bytes};function g(e){w=e;for(const t of S)t(w)}function q(e){return S.add(e),e(w),()=>S.delete(e)}let A;function j(){return A??=(async()=>{const e=new URL(f.wasm,document.baseURI).href,t=await fetch(e);if(!t.ok||!t.body)throw new Error(`the geometry kernel did not download (${t.status} from ${e}); reload the page to try again`);const n=f.bytes,a=t.body.getReader(),s=[];let r=0;for(;;){const{done:h,value:H}=await a.read();if(h)break;s.push(H),r+=H.length,g({phase:"downloading",received:r,total:n})}g({phase:"compiling",received:r,total:n});const i=new Uint8Array(r);let c=0;for(const h of s)i.set(h,c),c+=h.length;const o=await WebAssembly.compile(i);return g({phase:"ready",received:r,total:n}),o})().catch(e=>{A=void 0;const t=e instanceof Error?e.message:String(e);throw g({...w,phase:"failed",error:t}),new Error(`${t}
+This browser could not start the WebAssembly kernel. It needs WebAssembly exception handling: Chrome 95, Firefox 100 or Safari 15.2, or newer.`)}),A}function Z(){j().catch(()=>{})}let y,G=0,B=Promise.resolve();async function U(){const e=await j(),t=new Worker(new URL("/parcad/assets/kernel-worker-CrRtYMWW.js",import.meta.url),{type:"module"}),n={worker:t,stage:"starting up",ready:Promise.resolve()};n.ready=new Promise((s,r)=>{t.onmessage=i=>{i.data.kind==="ready"&&s(),i.data.kind==="died"&&r(new Error(v("starting up",i.data.detail)))},t.onerror=i=>r(new Error(v("starting up",i.message)))});const a=new URL(f.script,document.baseURI).href;return t.postMessage({kind:"start",module:e,script:a}),await n.ready,n}function m(){y?.worker.terminate(),y=void 0}const v=(e,t)=>`the geometry kernel crashed while ${e} (${t}). This is usually a dimension the operation cannot satisfy — a fillet larger than the material, a blend across a junction where several members meet or touch face-on, or a boolean between shapes that do not overlap. The next build starts a fresh kernel.`,$=e=>`the geometry kernel was still ${e} after ${C/1e3}s and was stopped. The WebAssembly kernel runs two to three times slower than the installed app, which gives a part 20 s by default and lets you raise it; a part this heavy is one to build there.`;function I(e){const t=B.then(()=>K(e));return B=t.catch(()=>{}),t}async function K(e){y??=await U().catch(a=>{throw m(),a});const t=y,n=G++;return t.stage="reading the request",new Promise((a,s)=>{const r=window.setTimeout(()=>{m(),s(new Error($(t.stage)))},C),i=()=>window.clearTimeout(r);t.worker.onmessage=c=>{const o=c.data;o.kind==="stage"?t.stage=o.stage:o.kind==="died"?(i(),m(),s(new Error(v(t.stage,o.detail)))):o.kind==="reply"&&o.id===n&&(i(),o.ok?a(o.bytes?{bytes:o.bytes}:{json:o.json}):s(new Error(o.message)))},t.worker.onerror=c=>{i(),m(),s(new Error(v(t.stage,c.message||"the worker failed")))},t.worker.postMessage({kind:"call",id:n,request:e})})}const Ye=Object.freeze(Object.defineProperty({__proto__:null,call:I,preload:Z,watchLoad:q},Symbol.toStringTag,{value:"Module"}));var O={url:"kernel/31198d443da2/first-part.json",part:"twisted-planter",script:`// Twisted planter and its drip saucer, printed as two parts.
+//
+// The planter is a six-point star lofted through nine sections, each wider
+// and turned further than the last, so its walls come out as twisted facets.
+// The saucer is a dish of smooth bumps in rings of 1, 6, 12 and 18, which the
+// planter stands on.
+
+const points = 6;
+const height = 90;
+const twist = 60; // degrees, base to rim
+const layers = 8;
+const wall = 3; // inset across the star; the facets' own wall measures 2.0 mm
+const floor = 3;
+
+// At height z: the star's tip radius, flaring fastest near the base, and its turn.
+const radiusAt = (z) => 34 + 18 * Math.sin((z / height) * (Math.PI / 2));
+const turnAt = (z) => (z / height) * twist;
+
+function star(z, inset) {
+  const outline = Array.from({ length: 2 * points }, (_, i) => {
+    const r = (i % 2 === 0 ? 1 : 0.78) * radiusAt(z) - inset;
+    const angle = ((i * 180) / points + turnAt(z)) * (Math.PI / 180);
+    return [r * Math.cos(angle), r * Math.sin(angle)];
+  });
+  return { z, outline };
+}
+
+// Section heights shared by the outside and the cavity, so their facets stay parallel.
+const levels = Array.from({ length: layers + 1 }, (_, i) => (i * height) / layers);
+
+const outside = loft(levels.map((z) => star(z, 0)));
+const cavity = loft([floor, ...levels.filter((z) => z > floor), height + 1].map((z) => star(z, wall)));
+
+const drain = cylinder(2.5, 3 * floor);
+
+const planter = outside
+  .cut(
+    cavity, // 1 mm past the rim, so the top opens cleanly
+    ...polar(6, 14, { straddle: true }).map(([x, y]) => drain.at(x, y)), // between the saucer's first ring of bumps
+  )
+  .tag("planter");
+
+// Wide enough that the 34 mm star base sits inside with room for runoff.
+const saucerRadius = 42;
+const saucerFloor = 2;
+const bumpRadius = 5.4;
+const bumpHeight = 2.4;
+const ringSpacing = 11;
+const ringCount = 3;
+
+// Smootherstep: no slope and no curvature where a bump leaves the floor or at its top.
+const ease = (x) => x * x * x * (x * (6 * x - 15) + 10);
+
+function bump() {
+  const z = (r) => saucerFloor + bumpHeight * (1 - ease(r / bumpRadius));
+  const profile = [0.92, 0.82, 0.7, 0.58, 0.46, 0.34, 0.2].map((t) => [t * bumpRadius, z(t * bumpRadius)]);
+  return revolve([
+    [0, 0],
+    [bumpRadius, 0],
+    [bumpRadius, saucerFloor],
+    { spline: profile, start: [-1, 0], end: [-1, 0] },
+    [0, saucerFloor + bumpHeight],
+  ]);
+}
+
+const dish = revolve([
+  [0, 0],
+  { at: [saucerRadius + 2, 0], round: 3 },
+  [saucerRadius + 2, 11],
+  { through: [saucerRadius + 1, 12] },
+  [saucerRadius, 11],
+  { at: [saucerRadius, saucerFloor], round: 2 },
+  [0, saucerFloor],
+]);
+
+// One bump in the middle, then rings of 6, 12, 18: each ring's circumference grows
+// by 2π·spacing, so six more keeps every bump the same distance from its neighbours.
+// Even rings sit half a step round from the odd ones.
+const one = bump();
+const bumps = [one];
+for (let ring = 1; ring <= ringCount; ring++) {
+  const count = 6 * ring;
+  const start = ring % 2 === 0 ? 180 / count : 0;
+  for (const [x, y] of polar(count, ring * ringSpacing, { start })) bumps.push(one.at(x, y));
+}
+
+const saucer = dish.union(...bumps);
+
+return {
+  planter: planter.at(0, 0, saucerFloor + bumpHeight),
+  saucer,
+};
+`};const p=typeof O>"u"?void 0:O;let L=!1,R;const M=(e,t)=>!!p&&e===p.part&&t===p.script;async function J(e,t){if(!p||L||!M(e,t))return;L=!0;const n=await fetch(new URL(p.url,document.baseURI)).catch(()=>{});if(!n?.ok)return;const a=await n.json().catch(()=>{});return a&&{...a,shipped:!0}}function Q(e){return R=I({op:"evaluate",graph:e}).then(t=>{if(!("json"in t))throw new Error("the kernel answered the rebuild with bytes, not an evaluation");return t.json}),R}function V(e,t){return M(e,t)?R:void 0}const We=Object.freeze(Object.defineProperty({__proto__:null,inFlight:V,rebuild:Q,take:J},Symbol.toStringTag,{value:"Module"})),ee=`// parcad — everything is millimetres, Z is up.
 // Primitives are centred on the origin; place them with .at(x, y, z).
 // The script must return a shape.
 
@@ -53,7 +145,7 @@ return chamferedBase
   .expect({ count: 1 })
   .fillet(2)
   .tag("outer_corner_round");
-`,G=`// A cast machine foot: a drafted pedestal on a drafted base, bolted down
+`,te=`// A cast machine foot: a drafted pedestal on a drafted base, bolted down
 // through four holes and tapped on top for the equipment it carries.
 //
 // This is the first part here that could actually be cast. Every wall leans by
@@ -117,7 +209,7 @@ return machined
   .expect({ count: 4 })
   .chamfer(0.8)
   .tag("seat_deburr");
-`,U=`// A threaded rod-end clevis: a shank with spanner flats, and a two-armed fork
+`,ne=`// A threaded rod-end clevis: a shank with spanner flats, and a two-armed fork
 // for a 10 mm pin.
 //
 // This is the part that shows what \`mirror\` is for. The fork is symmetric, so
@@ -187,7 +279,7 @@ return machined
   .expect({ count: 4 })
   .chamfer(0.5)
   .tag("pin_lead_in");
-`,$=`// A bolted cover plate with a turned spigot and countersunk screws.
+`,oe=`// A bolted cover plate with a turned spigot and countersunk screws.
 //
 // This is the part that could not be modelled at all until \`revolve\` existed:
 // both the spigot's taper and the screw countersinks are cones, and a cone is a
@@ -252,7 +344,7 @@ return machined
   .expect({ count: 5 })
   .chamfer(0.4)
   .tag("top_face_deburr");
-`,K=`// diamond v19 — recreated from a Fusion 360 export.
+`,ae=`// diamond v19 — recreated from a Fusion 360 export.
 //
 // A round brilliant cut, and every one of its 57 faces is a plane: a table,
 // 8 star facets, 8 crown mains, 16 upper girdle facets, 16 lower girdle
@@ -321,7 +413,7 @@ for (const { nz, d, count, az0 } of RINGS) {
 }
 
 return intersect(...facets).tag("stone");
-`,J=`// An instrument fascia: a display module drops into a milled seat in the front
+`,se=`// An instrument fascia: a display module drops into a milled seat in the front
 // face, and looks out through an aperture cut all the way to the back.
 //
 // Every other part here cuts *through* something, so only one end of a cutter
@@ -401,7 +493,7 @@ return machined
   .expect({ count: 8 })
   .chamfer(0.4)
   .tag("seat_lead_in");
-`,Q=`// Selected edge treatments. The queries are geometric, not \`edge[7]\`:
+`,re=`// Selected edge treatments. The queries are geometric, not \`edge[7]\`:
 // >Z = topmost, >Y = positive-Y-most, |X = a straight edge running along X.
 // If a later edit makes that query empty, the B-rep evaluator refuses instead
 // of treating a different edge by accident.
@@ -418,7 +510,7 @@ return rounded
   .expect({ count: 1 })
   .chamfer(1)
   .tag("edge_treatments");
-`,V=`// A printable enclosure — shows shell() and offset().
+`,ie=`// A printable enclosure — shows shell() and offset().
 
 const w = 70, d = 45, h = 28;
 const wall = 2.0;
@@ -438,7 +530,7 @@ const lid = box(w + 2, d + 2, h).at(0, 0, h - wall).tag("open_top");
 const port = cylinder(5, 40).rotate("x", 90).at(0, -d / 2, 0).tag("port");
 
 return body.cut(lid).cut(port);
-`,ee=`// A 200 mm length of 20x20 T-slot aluminium extrusion.
+`,he=`// A 200 mm length of 20x20 T-slot aluminium extrusion.
 //
 // The profile is the standard one every 3D printer frame is built from: a
 // 20 mm square with a 6 mm slot opening on each face, widening to an 11 mm
@@ -511,7 +603,7 @@ return corners
     profile,
   )
   .tag("corner_radii");
-`,te=`// A slip-on pipe flange, dimensioned after ASME B16.5 class 150, NPS 2.
+`,ce=`// A slip-on pipe flange, dimensioned after ASME B16.5 class 150, NPS 2.
 //
 // Nominal dimensions, all millimetres: OD 152.4, flange thickness 19.1,
 // hub OD 92.1, length through hub 25.4 measured from the back face, bore 60.3,
@@ -574,7 +666,7 @@ return drilled
   .expect({ count: 5 })
   .chamfer(1.5)
   .tag("back_face_breaks");
-`,ne=`// Retainer v1 — recreated from a Fusion 360 export.
+`,le=`// Retainer v1 — recreated from a Fusion 360 export.
 //
 // The one Fusion part in here that is a faithful recreation rather than a
 // target: it builds, it is watertight, and it agrees with the original.
@@ -720,7 +812,7 @@ const chamfered = drilled
   .tag("bore_rim");
 
 return chamfered.cut(threadHole).tag("thread");
-`,oe=`// Untitled2 v1 — recreated from the Fusion 360 export.
+`,de=`// Untitled2 v1 — recreated from the Fusion 360 export.
 //
 // Two turned bodies: a wavy teardrop (Body1) standing clear inside a cup
 // (Body2), each a revolved spline section. Fusion built them with Sketch,
@@ -785,7 +877,7 @@ const cup = revolve([
   .fillet(5);
 
 return { body1: drop, body2: cup };
-`,ae=`// UnTriangle v3 — recreated from the Fusion 360 export.
+`,ue=`// UnTriangle v3 — recreated from the Fusion 360 export.
 //
 // An impossible-triangle sculpture: three straight bars of 10 mm square
 // section whose axes draw an equilateral triangle, each bar twisting a
@@ -886,7 +978,7 @@ const corner = union(prism(incoming), prism(outgoing)).at(0, -SIDE / 2, -R_IN);
 // Union order follows the chain of contacts, as always.
 const unit = union(corner, bar);
 return union(unit, unit.rotate("x", 120), unit.rotate("x", 240));
-`,se=`// An extruded-profile heat sink, 60 x 60, with a plain fin array.
+`,pe=`// An extruded-profile heat sink, 60 x 60, with a plain fin array.
 //
 // Fin pitch and thickness are the whole design: closer fins add surface area
 // but choke natural convection, and 2 mm walls at a 6 mm pitch is the usual
@@ -932,7 +1024,7 @@ return drilled
   .expect({ count: 2 })
   .chamfer(0.4)
   .tag("seat_face_deburr");
-`,re=`// An M3 hex standoff, 5.5 mm across the flats, 20 mm long, bored 2.5 mm for
+`,be=`// An M3 hex standoff, 5.5 mm across the flats, 20 mm long, bored 2.5 mm for
 // a tapped thread.
 //
 // There is no prism primitive, so the hexagon is the intersection of three
@@ -961,7 +1053,7 @@ return drilled
   .expect({ count: 2 })
   .chamfer(0.4)
   .tag("thread_lead_in");
-`,ie=`// A bent hydraulic line with a flare fitting boss at each end, and the O-ring
+`,ge=`// A bent hydraulic line with a flare fitting boss at each end, and the O-ring
 // groove that seals one of them.
 //
 // \`pipe\` routes 12 mm tube through 20 mm bends — straight runs and partial
@@ -1050,7 +1142,7 @@ return machined
   .expect({ count: 2 })
   .chamfer(0.5)
   .tag("seat_chamfer");
-`,he=`// A knurled control knob for a 6 mm shaft with a flat — the D-bore that stops
+`,me=`// A knurled control knob for a 6 mm shaft with a flat — the D-bore that stops
 // the knob from spinning on the shaft.
 //
 // The knurl is 24 axial flutes cut with a small cylinder each. That is what a
@@ -1108,7 +1200,7 @@ return bored
   .expect({ count: 2 })
   .chamfer(0.5)
   .tag("bore_lead_in");
-`,ce=`// Lidded box: an open base and a lid with a locating lip, printed as two parts.
+`,fe=`// Lidded box: an open base and a lid with a locating lip, printed as two parts.
 //
 // The one thing this part shows is a script returning two bodies that stay
 // two — \`return { base, lid }\` — so the report measures each one and says how
@@ -1139,7 +1231,7 @@ const lip = box(L - 2 * wall - 2 * fit, W - 2 * wall - 2 * fit, lipH)
 const lid = plate.union(lip).tag("lid");
 
 return { base, lid };
-`,le=`// A hydraulic manifold block: a solid with cross-drilled galleries that meet
+`,we=`// A hydraulic manifold block: a solid with cross-drilled galleries that meet
 // inside it, plus the plugged drilling access every real manifold has.
 //
 // The interesting property of a manifold is that its function lives in the
@@ -1203,7 +1295,7 @@ return drilled
   .expect({ count: 6 })
   .chamfer(1)
   .tag("top_face_lead_ins");
-`,de=`// A NEMA 17 stepper motor mount: an L-bracket whose face plate carries the
+`,ye=`// A NEMA 17 stepper motor mount: an L-bracket whose face plate carries the
 // standard motor pattern.
 //
 // The NEMA 17 interface is fixed by the standard and is the whole reason the
@@ -1289,7 +1381,7 @@ return drilled
   .expect({ count: 5 })
   .chamfer(0.5)
   .tag("motor_face_deburr");
-`,ue=`// A pillow block for a 20 mm bore ball bearing (a UCP-204 style housing,
+`,ve=`// A pillow block for a 20 mm bore ball bearing (a UCP-204 style housing,
 // simplified to the shapes a machinist would actually cut from bar stock).
 //
 // The bore axis runs along Y, so the boss is a cylinder rotated 90° about X.
@@ -1351,7 +1443,7 @@ return machined
   .expect({ count: 2 })
   .chamfer(0.8)
   .tag("press_fit_lead_in");
-`,pe=`// A socket-weld pipe tee for 1" schedule 40 pipe.
+`,xe=`// A socket-weld pipe tee for 1" schedule 40 pipe.
 //
 // The pipe it joins is 33.4 OD, 3.38 wall, so the bore is 26.64. The fitting
 // body is deliberately fatter than the pipe: its sockets have to swallow the
@@ -1411,7 +1503,7 @@ return bored
   .expect({ count: 1 })
   .chamfer(1.5)
   .tag("branch_socket_lead_in");
-`,be=`// A vertical dinner-plate stand for a cupboard shelf, drawn so the pegs stop
+`,Te=`// A vertical dinner-plate stand for a cupboard shelf, drawn so the pegs stop
 // breaking off.
 //
 // The stand this replaces (makerworld.com/models/1199653, after printables
@@ -1527,7 +1619,7 @@ return slotted
   .expect({ count: plates * 4 })
   .chamfer(0.8)
   .tag("slot_rims");
-`,ge=`// Screw-top jar: a jar with a threaded neck and its cap, printed as two parts.
+`,_e=`// Screw-top jar: a jar with a threaded neck and its cap, printed as two parts.
 //
 // The thread is modelled, not drawn as a tap drill: M40 × 3 (ISO 261 fine)
 // with the ISO 68-1 basic profile, \`threadedRod\` on the neck and
@@ -1578,7 +1670,7 @@ const cap = cylinder(capR, capHeight)
   .tag("cap");
 
 return { jar, cap };
-`,me=`// A rigid set-screw shaft coupler: 8 mm motor shaft to 10 mm leadscrew.
+`,ke=`// A rigid set-screw shaft coupler: 8 mm motor shaft to 10 mm leadscrew.
 //
 // The two bores are different sizes and meet in the middle, which is the point
 // of the part — and it is also the thing that makes it easy to get wrong. The
@@ -1635,7 +1727,7 @@ return machined
   .expect({ count: 1 })
   .chamfer(0.8)
   .tag("screw_side_lead_in");
-`,fe=`// A 20-tooth GT2 timing pulley for 6 mm belt, on a 5 mm motor shaft.
+`,De=`// A 20-tooth GT2 timing pulley for 6 mm belt, on a 5 mm motor shaft.
 //
 // APPROXIMATE, and deliberately so. A real GT2 tooth is a curvilinear profile
 // defined by the belt standard; here each groove is a cylinder on the pitch
@@ -1713,7 +1805,7 @@ return machined
   .expect({ count: 1 })
   .chamfer(0.4)
   .tag("bore_lead_in");
-`,we=`// Twisted planter and its drip saucer, printed as two parts.
+`,Ae=`// Twisted planter and its drip saucer, printed as two parts.
 //
 // The planter is a six-point star lofted through nine sections, each wider
 // and turned further than the last, so its walls come out as twisted facets.
@@ -1805,7 +1897,7 @@ return {
   planter: planter.at(0, 0, saucerFloor + bumpHeight),
   saucer,
 };
-`,ye=`// A toolroom V-block: a 90° vee that holds round stock on its axis, whichever
+`,Se=`// A toolroom V-block: a 90° vee that holds round stock on its axis, whichever
 // diameter it is.
 //
 // The vee is a square block rotated 45° and subtracted from the top face. That
@@ -1847,7 +1939,7 @@ return machined
   .expect({ count: 4 })
   .chamfer(1)
   .tag("vee_lip_break");
-`,ve=`// A wash bottle: a turned body whose outline is one section — straight
+`,Re=`// A wash bottle: a turned body whose outline is one section — straight
 // walls, a spline shoulder, a neck with a rolled bead and a radiused base —
 // hollowed by a second section, with a smooth spout tube curving out of the
 // shoulder.
@@ -1892,5 +1984,5 @@ const spout = pipe({ spline: [[20, 0, 96], [40, 0, 112], [62, 0, 116], [80, 0, 1
 const bore = pipe({ spline: [[20, 0, 96], [40, 0, 112], [62, 0, 116], [80, 0, 108]] }, 2.6);
 
 return union(outer, spout).cut(cavity, bore);
-`,xe="parcad-playground",l="parts",p="folders",S="meta",N="this browser's storage — parts here stay on this device. The installed app keeps them as files and serves MCP.";let H;function x(){return H??=new Promise((e,t)=>{const o=indexedDB.open(xe,1);o.onupgradeneeded=()=>{const a=o.result;a.createObjectStore(l,{keyPath:"path"}),a.createObjectStore(p),a.createObjectStore(S)},o.onsuccess=()=>e(o.result),o.onerror=()=>t(new Error(`this browser refused the playground its storage (${o.error?.message}); a private window may not allow it`))}).then(async e=>(await _e(e),e)),H}function T(e){return new Promise((t,o)=>{e.onsuccess=()=>t(e.result),e.onerror=()=>o(e.error)})}async function C(e){const t=await x();return T(t.transaction(e).objectStore(e).getAll())}async function E(){const e=await x();return await T(e.transaction(p).objectStore(p).getAllKeys())}async function d(e,t){const a=(await x()).transaction(e,"readwrite");t(a.objectStore(e)),await new Promise((s,r)=>{a.oncomplete=()=>s(),a.onerror=()=>r(a.error)})}async function _(e){const t=await x();return T(t.transaction(l).objectStore(l).get(e))}const v=()=>Math.floor(Date.now()/1e3),Te=Object.assign({"../../../examples/bracket.js":Z,"../../../examples/cast-foot.js":G,"../../../examples/clevis.js":U,"../../../examples/cover-plate.js":$,"../../../examples/diamond-v19.js":K,"../../../examples/display-bezel.js":J,"../../../examples/edge-fillets.js":Q,"../../../examples/enclosure.js":V,"../../../examples/extrusion-2020.js":ee,"../../../examples/flange.js":te,"../../../examples/fusion360/retainer-v1.js":ne,"../../../examples/fusion360/untitled2-v1.js":oe,"../../../examples/fusion360/untriangle-v3.js":ae,"../../../examples/heat-sink.js":se,"../../../examples/hex-standoff.js":re,"../../../examples/hydraulic-line.js":ie,"../../../examples/knurled-knob.js":he,"../../../examples/lidded-box.js":ce,"../../../examples/manifold-block.js":le,"../../../examples/motor-mount.js":de,"../../../examples/pillow-block.js":ue,"../../../examples/pipe-tee.js":pe,"../../../examples/plate-stand.js":be,"../../../examples/screw-top-jar.js":ge,"../../../examples/shaft-coupler.js":me,"../../../examples/timing-pulley.js":fe,"../../../examples/twisted-planter.js":we,"../../../examples/v-block.js":ye,"../../../examples/wash-bottle.js":ve});async function _e(e){const t=e.transaction([l,S],"readwrite"),o=t.objectStore(S),a=t.objectStore(l),s=new Set(await T(o.get("seeded"))??[]);for(const[r,i]of Object.entries(Te).sort(([c],[n])=>c.localeCompare(n))){const c=r.replace(/^.*\/examples\//,"").replace(/\.js$/,"");s.has(c)||(a.put({path:c,script:i,tags:[],modified:v()}),s.add(c))}o.put([...s],"seeded"),await new Promise((r,i)=>{t.oncomplete=()=>r(),t.onerror=()=>i(t.error)})}const B=e=>e.split("/").pop()??e,ke=e=>e.replace(/[-_]/g," "),O=(e,t)=>e.name.toLowerCase()<t.name.toLowerCase()?-1:e.name.toLowerCase()>t.name.toLowerCase()?1:0;function F(e,t,o=""){const a=n=>o?n.startsWith(`${o}/`):!0,s=n=>o?n.slice(o.length+1):n,r=new Set;for(const n of[...t,...e.map(h=>h.path)]){if(!a(n))continue;const h=s(n).split("/");(h.length>1||t.includes(n))&&r.add(h[0])}const i=[...r].map(n=>{const h=o?`${o}/${n}`:n;return{kind:"folder",name:n,path:h,children:F(e,t,h)}}).sort(O),c=e.filter(n=>a(n.path)&&!s(n.path).includes("/")).map(n=>({kind:"part",name:B(n.path),path:n.path,title:n.title??ke(B(n.path)),bundle:!0,thumbnail:n.preview!==void 0,tags:n.tags,modified:n.modified})).sort(O);return[...i,...c]}function u(e){const t=e.split("/");for(const o of t)if(!o||o.startsWith(".")||/\.(js|parcad)$/.test(o)||/[\\:]/.test(o)||[...o].some(a=>a<" "))throw new Error(`${JSON.stringify(e)} is not a project name: each part of it must be a plain name, with no leading dot, extension, backslash or colon.`);return e}async function De(){const[e,t]=await Promise.all([C(l),E()]);return{projects:e.map(o=>o.path).sort(),tree:F(e,t),directory:N,preferred:"twisted-planter"}}async function k(e){const t=await _(u(e));if(!t)throw new Error(`no project called ${JSON.stringify(e)} in this browser.`);return t}async function Ae(e){return{script:(await k(e)).script}}async function Se(e,t,o){const a=await _(u(e))??{path:e,script:t,tags:[],modified:v()};return await d(l,s=>s.put({...a,script:t,modified:v(),preview:o??a.preview})),{path:e}}async function Ee(e,t){if(await _(u(e)))throw new Error(`${JSON.stringify(e)} already exists.`);return await d(l,o=>o.put({path:e,script:t,tags:[],modified:v()})),{path:e}}async function Re(e){if((await E()).includes(u(e)))throw new Error(`${JSON.stringify(e)} already exists.`);return await d(p,o=>o.put(!0,e)),{path:e}}async function ze(e,t){u(e),u(t);const o=await C(l),a=await E();if(o.some(n=>n.path===t)||a.includes(t))throw new Error(`${JSON.stringify(t)} already exists.`);const s=n=>n===e||n.startsWith(`${e}/`),r=n=>t+n.slice(e.length),i=o.filter(n=>s(n.path)),c=a.filter(s);if(!i.length&&!c.length)throw new Error(`nothing at ${JSON.stringify(e)} to rename.`);return await d(l,n=>{for(const h of i)n.delete(h.path),n.put({...h,path:r(h.path)})}),await d(p,n=>{for(const h of c)n.delete(h),n.put(!0,r(h))}),{path:t}}async function He(e,t){const o=await k(e);await d(l,a=>a.put({...o,title:t.trim()||void 0}))}async function Be(e){const t=await k(e);return await d(l,o=>o.delete(t.path)),{trashed:"removed from this browser's storage"}}async function Oe(e,t){const o=await k(e);await d(l,a=>a.put({...o,preview:t}))}async function Le(e){return(await _(e))?.preview??null}const Ne=Object.freeze(Object.defineProperty({__proto__:null,DIRECTORY:N,create:Ee,createFolder:Re,list:De,preview:Le,read:Ae,remove:Be,rename:ze,save:Se,setPreview:Oe,setTitle:He},Symbol.toStringTag,{value:"Module"}));export{Pe as kernel,Ne as store};
-//# sourceMappingURL=index-Cn0-NO2_.js.map
+`,ze="parcad-playground",l="parts",b="folders",z="meta",X="this browser's storage — parts here stay on this device. The installed app keeps them as files and serves MCP.";let P;function T(){return P??=new Promise((e,t)=>{const n=indexedDB.open(ze,1);n.onupgradeneeded=()=>{const a=n.result;a.createObjectStore(l,{keyPath:"path"}),a.createObjectStore(b),a.createObjectStore(z)},n.onsuccess=()=>e(n.result),n.onerror=()=>t(new Error(`this browser refused the playground its storage (${n.error?.message}); a private window may not allow it`))}).then(async e=>(await He(e),e)),P}function _(e){return new Promise((t,n)=>{e.onsuccess=()=>t(e.result),e.onerror=()=>n(e.error)})}async function Y(e){const t=await T();return _(t.transaction(e).objectStore(e).getAll())}async function E(){const e=await T();return await _(e.transaction(b).objectStore(b).getAllKeys())}async function d(e,t){const a=(await T()).transaction(e,"readwrite");t(a.objectStore(e)),await new Promise((s,r)=>{a.oncomplete=()=>s(),a.onerror=()=>r(a.error)})}async function k(e){const t=await T();return _(t.transaction(l).objectStore(l).get(e))}const x=()=>Math.floor(Date.now()/1e3),Ee=Object.assign({"../../../examples/bracket.js":ee,"../../../examples/cast-foot.js":te,"../../../examples/clevis.js":ne,"../../../examples/cover-plate.js":oe,"../../../examples/diamond-v19.js":ae,"../../../examples/display-bezel.js":se,"../../../examples/edge-fillets.js":re,"../../../examples/enclosure.js":ie,"../../../examples/extrusion-2020.js":he,"../../../examples/flange.js":ce,"../../../examples/fusion360/retainer-v1.js":le,"../../../examples/fusion360/untitled2-v1.js":de,"../../../examples/fusion360/untriangle-v3.js":ue,"../../../examples/heat-sink.js":pe,"../../../examples/hex-standoff.js":be,"../../../examples/hydraulic-line.js":ge,"../../../examples/knurled-knob.js":me,"../../../examples/lidded-box.js":fe,"../../../examples/manifold-block.js":we,"../../../examples/motor-mount.js":ye,"../../../examples/pillow-block.js":ve,"../../../examples/pipe-tee.js":xe,"../../../examples/plate-stand.js":Te,"../../../examples/screw-top-jar.js":_e,"../../../examples/shaft-coupler.js":ke,"../../../examples/timing-pulley.js":De,"../../../examples/twisted-planter.js":Ae,"../../../examples/v-block.js":Se,"../../../examples/wash-bottle.js":Re});async function He(e){const t=e.transaction([l,z],"readwrite"),n=t.objectStore(z),a=t.objectStore(l),s=new Set(await _(n.get("seeded"))??[]);for(const[r,i]of Object.entries(Ee).sort(([c],[o])=>c.localeCompare(o))){const c=r.replace(/^.*\/examples\//,"").replace(/\.js$/,"");s.has(c)||(a.put({path:c,script:i,tags:[],modified:x()}),s.add(c))}n.put([...s],"seeded"),await new Promise((r,i)=>{t.oncomplete=()=>r(),t.onerror=()=>i(t.error)})}const F=e=>e.split("/").pop()??e,Be=e=>e.replace(/[-_]/g," "),N=(e,t)=>e.name.toLowerCase()<t.name.toLowerCase()?-1:e.name.toLowerCase()>t.name.toLowerCase()?1:0;function W(e,t,n=""){const a=o=>n?o.startsWith(`${n}/`):!0,s=o=>n?o.slice(n.length+1):o,r=new Set;for(const o of[...t,...e.map(h=>h.path)]){if(!a(o))continue;const h=s(o).split("/");(h.length>1||t.includes(o))&&r.add(h[0])}const i=[...r].map(o=>{const h=n?`${n}/${o}`:o;return{kind:"folder",name:o,path:h,children:W(e,t,h)}}).sort(N),c=e.filter(o=>a(o.path)&&!s(o.path).includes("/")).map(o=>({kind:"part",name:F(o.path),path:o.path,title:o.title??Be(F(o.path)),bundle:!0,thumbnail:o.preview!==void 0,tags:o.tags,modified:o.modified})).sort(N);return[...i,...c]}function u(e){const t=e.split("/");for(const n of t)if(!n||n.startsWith(".")||/\.(js|parcad)$/.test(n)||/[\\:]/.test(n)||[...n].some(a=>a<" "))throw new Error(`${JSON.stringify(e)} is not a project name: each part of it must be a plain name, with no leading dot, extension, backslash or colon.`);return e}async function Oe(){const[e,t]=await Promise.all([Y(l),E()]);return{projects:e.map(n=>n.path).sort(),tree:W(e,t),directory:X,preferred:"twisted-planter"}}async function D(e){const t=await k(u(e));if(!t)throw new Error(`no project called ${JSON.stringify(e)} in this browser.`);return t}async function Le(e){return{script:(await D(e)).script}}async function Pe(e,t,n){const a=await k(u(e))??{path:e,script:t,tags:[],modified:x()};return await d(l,s=>s.put({...a,script:t,modified:x(),preview:n??a.preview})),{path:e}}async function Fe(e,t){if(await k(u(e)))throw new Error(`${JSON.stringify(e)} already exists.`);return await d(l,n=>n.put({path:e,script:t,tags:[],modified:x()})),{path:e}}async function Ne(e){if((await E()).includes(u(e)))throw new Error(`${JSON.stringify(e)} already exists.`);return await d(b,n=>n.put(!0,e)),{path:e}}async function Ce(e,t){u(e),u(t);const n=await Y(l),a=await E();if(n.some(o=>o.path===t)||a.includes(t))throw new Error(`${JSON.stringify(t)} already exists.`);const s=o=>o===e||o.startsWith(`${e}/`),r=o=>t+o.slice(e.length),i=n.filter(o=>s(o.path)),c=a.filter(s);if(!i.length&&!c.length)throw new Error(`nothing at ${JSON.stringify(e)} to rename.`);return await d(l,o=>{for(const h of i)o.delete(h.path),o.put({...h,path:r(h.path)})}),await d(b,o=>{for(const h of c)o.delete(h),o.put(!0,r(h))}),{path:t}}async function je(e,t){const n=await D(e);await d(l,a=>a.put({...n,title:t.trim()||void 0}))}async function Ie(e){const t=await D(e);return await d(l,n=>n.delete(t.path)),{trashed:"removed from this browser's storage"}}async function Me(e,t){const n=await D(e);await d(l,a=>a.put({...n,preview:t}))}async function Xe(e){return(await k(e))?.preview??null}const qe=Object.freeze(Object.defineProperty({__proto__:null,DIRECTORY:X,create:Fe,createFolder:Ne,list:Oe,preview:Xe,read:Le,remove:Ie,rename:Ce,save:Pe,setPreview:Me,setTitle:je},Symbol.toStringTag,{value:"Module"}));export{Ye as kernel,We as prebuilt,qe as store};
+//# sourceMappingURL=index-DojhQAER.js.map
