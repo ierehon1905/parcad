@@ -563,7 +563,13 @@ inline std::unique_ptr<TopoDS_Shape> ShapeFix_repair(const TopoDS_Shape &shape, 
 // exact rather than sampled. Returns a negative number when the search fails.
 inline double BRepExtrema_least_distance(const TopoDS_Shape &a, const TopoDS_Shape &b, gp_Pnt &on_a,
                                          gp_Pnt &on_b) {
-  BRepExtrema_DistShapeShape search(a, b);
+  // Default-constructed: the (a, b) constructor already runs Perform, so loading
+  // through it and calling Perform again measured every clearance twice.
+  BRepExtrema_DistShapeShape search;
+  search.SetFlag(Extrema_ExtFlag_MIN);
+  search.SetMultiThread(true);
+  search.LoadS1(a);
+  search.LoadS2(b);
   search.Perform();
   if (!search.IsDone() || search.NbSolution() < 1) {
     return -1.0;

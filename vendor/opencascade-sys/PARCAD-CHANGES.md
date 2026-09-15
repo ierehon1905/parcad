@@ -175,6 +175,13 @@ two points it is measured between, or a negative number when the search does
 not converge. parcad's fit check reports it as the clearance between a part
 and the object it is meant to hold.
 
+The search is default-constructed and loaded: the `(S1, S2)` constructor
+already runs `Perform`, and the first version called `Perform` again after it,
+measuring every clearance twice. It asks for the minimum only
+(`Extrema_ExtFlag_MIN`, the one value read back) and runs multi-threaded.
+Measured on `thread-m8-20-turns`, two 20-turn M8 rods: 16.9 s to 2.6 s for
+the case, with the same recorded clearance.
+
 ## Added: `Shape_scaled_axes`
 
 `BRepBuilderAPI_GTransform` with a diagonal `gp_GTrsf`: a different scale on
