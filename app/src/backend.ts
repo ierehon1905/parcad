@@ -294,6 +294,9 @@ export interface McpStatus {
   url: string;
 }
 
+/** Whether an agent can reach this kernel over MCP at all; the playground has no endpoint. */
+export const mcpServedHere = !inPage;
+
 export function mcpStatus(): Promise<McpStatus> {
   // No host, so no endpoint: refused like an unreachable one, which hides the chip.
   if (inPage) return Promise.reject(new Error("the playground has no MCP endpoint"));

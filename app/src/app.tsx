@@ -12,6 +12,7 @@ import { useEffect } from "preact/hooks";
 import * as engine from "./engine";
 import * as S from "./state";
 import { Editor } from "./ui/editor";
+import { InstallBar } from "./ui/install-bar";
 import { OpPalette } from "./ui/op-palette";
 import { ProjectBrowser } from "./ui/project-browser";
 import { Splitter } from "./ui/splitter";
@@ -27,6 +28,7 @@ export function App() {
   return (
     <div class="flex flex-col h-full">
       <Titlebar />
+      <InstallBar />
       <main class="flex flex-1 min-h-0">
         <section
           id="editor-pane"
