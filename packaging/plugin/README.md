@@ -12,6 +12,11 @@ installed parcad, the Homebrew formula or the app, which both carry the same
 | `codex.mcp.json` | Codex only. Not `.mcp.json`: Claude Code loads that name on its own and would start the server twice. `env_vars` is required: Codex starts a server with PATH and little else, so without it `PARCAD_PROJECTS_DIR` is dropped and the agent reads the default folder. It runs `parcad` from PATH rather than the launcher: Codex 0.147 expands no plugin-root variable in an MCP command and resolves no relative path, so an app-only install is not found there |
 | `scripts/parcad-mcp` | the one launcher, shared with the MCP bundle: `PARCAD_BIN`, PATH, Homebrew, then `ParCAD.app`, and a copy beside itself last — which only the bundle has. Names both installs when it finds none |
 | `skills/parcad/SKILL.md` | both; tells the model to use these tools and what to do when they are absent |
+| `skills/field-instrument/SKILL.md` | both; an optional style. A pointer only: the rules are `docs/styles/field-instrument.md`, served by `read_docs` so clients without skills get the same text |
+
+The field-instrument style draws on the publicly documented design principles
+of teenage engineering. ParCAD is not affiliated with or endorsed by them; the
+style is described in its own terms and copies no product.
 
 The marketplaces that list it are at the repository root:
 `.claude-plugin/marketplace.json` for Claude Code, and

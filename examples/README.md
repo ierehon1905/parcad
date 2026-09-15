@@ -68,6 +68,15 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 - **Comments explain why a dimension is what it is.** Where a number comes from
   a standard, the standard is named.
 
+## `field-instrument/` — one visual manner, for comparing how models follow a style
+
+| file | part | why it is here |
+|---|---|---|
+| `field-instrument/control-box.js` | moulded enclosure, 112 x 80 x 16, base plate and caps as three bodies | the style's moulded half: an 8 mm module every centre sits on, near-sharp r 0.5 plan corners, a Ø3-on-4 square grille, 16 mm pockets holding 15 mm caps, one knob |
+| `field-instrument/desk-stand.js` | phone rest milled from one 120 x 85 x 12 slab | the machined half: √2 plan, plan corners at 5 % of the short side, 0.4 top break and a larger bottom chamfer, one dish as the single gesture, a cable path under the slab |
+
+Not yet held by `eval/cases/`.
+
 ## What is not here, and why
 
 `fusion360/` holds recreations of real Fusion 360 documents, each held to the

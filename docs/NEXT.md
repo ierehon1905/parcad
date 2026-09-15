@@ -159,6 +159,30 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    shipped. Needs from the owner: an origin-trial token for
    `ierehon1905.github.io`. Check on the live site that the document is
    origin-isolated, which WebMCP requires.
+5b. **Checks that run without being asked** — agreed 2026-09-16, next. Two
+   parts shipped as STLs from one session with defects `measure_wall_thickness`
+   finds at once: a 0.013 mm sliver between a cable channel and a slot, and a
+   grille cutting 0.319 mm into a screw boss. The model (Opus, with a memory
+   note saying to check) never called it, and every number `export_part`
+   returned passed. A check a model must remember is a check weaker models
+   skip, so it moves onto the route every model already takes:
+   - **Make the report trustworthy first.** The old part flagged 1072 samples
+     at 1.2 mm, nearly all intended (1 mm pocket floors), with the real defect
+     one unnamed line among them. Cluster samples into places ranked by
+     thickness; tell a sharp edge (a 75° slot lip read 0.319) from material
+     between two features; name untagged features by the node and script line
+     that made them.
+   - **Collisions**: for each cut, the named features it removed material from
+     besides its target — "grille cuts boss" needs no threshold.
+   - **On the route**: `export_part` and `save_project` carry a `print_check`
+     (thinnest wall, its two features, collisions) from the cached build, its
+     verdict the first line of the reply. Below a floor nothing prints (≈0.3
+     mm) export refuses, naming the spot and the fix, unless given
+     `allow_thin: "reason"`; between that and the process minimum it flags.
+   - **Measured**: an `eval/field/` case whose part hides a sliver and a
+     collision; SOUND only when the reply tells the user both, both arms.
+   - Server instructions and the skills say a part is done when `print_check` is
+     clean or each flag has a reason — the weakest layer, and one line.
 6. **A measured parts library** — fasteners, bearings, boards, devices, each
    held by eval cases, and a way for one part to import another.
 
@@ -446,6 +470,43 @@ Measured, then fixed the same day. What each became:
 Already true and misreported: `preview_ready` / `exact_ready` do not apply,
 because the window runs one exact kernel per evaluation and the snapshot names
 it in `backend`.
+
+## Text on a part — asked for, not started
+
+Wanted for labels, legends and model codes on instrument-like parts: small,
+lowercase, engraved or raised a fraction of a millimetre. Nothing in the
+language makes a glyph today. Since item 4 (curves in sections) most of one
+does: a TrueType outline is quadratic Bézier contours, which an `extrude`
+section already builds exactly and re-entrant, and a counter (the hole in `o`)
+is a second extrude cut from the first. What is missing is the font.
+
+**Prior art.** Fusion splits it in two: Sketch › Text makes a profile, and
+Solid › Emboss projects it onto a face as *emboss*, *deboss* or *scribe*, with a
+depth, on developable faces only. CadQuery's `text()` and build123d's `Text` go
+through OCCT's `Font_BRepTextBuilder`; OpenSCAD has `text()` plus
+`linear_extrude`. The OCCT route needs FreeType and system fonts, and
+`vendor/occt-sys/build.rs` builds with `USE_FREETYPE` off — a C dependency and a
+part that measures differently on another machine.
+
+**The likely shape: no kernel change.** One OFL font, so every machine — and
+the WebAssembly playground — builds the same outline. A build step reads it
+(`ttf-parser`, MIT/Apache, or a script) into a generated glyph table of contours
+and advance widths, the way `docs.rs` is generated from `dsl.ts` and never
+written beside it; the DSL function lays out a string from that table into
+`extrude` sections with `{ bezier }` entries, unions the outer contours and cuts
+the counters. Nothing reads a font at run time, so the QuickJS sandbox needs no
+file access. A flat solid on a plane first; wrapping onto a cylinder is
+Fusion's harder half and waits. Eval cases hold it to closed forms: a glyph
+with a counter against its contour areas (shoelace plus the Bézier segment
+areas) times depth, and a word's bounding width against the table's advances.
+
+**Open decisions.**
+- *The name.* Every export is reserved in a script, and `text` is a likely local.
+  Fusion's word for the solid-making half is `emboss`.
+- *The font.* One typeface for every part; a comparison sheet is the input.
+- *Minimum stroke.* A light weight at 2 mm cap height is under a 0.4 mm nozzle;
+  the op should refuse or report the thinnest stroke, measured, like
+  `measure_wall_thickness`.
 
 ## Integrations before launch — researched 2026-09-16
 

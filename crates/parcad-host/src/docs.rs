@@ -66,6 +66,12 @@ const TOPICS: &[Topic] = &[
         answers: "which operations exist, which are deliberately absent, and why",
         text: Some(include_str!("../../../docs/OP_ROADMAP.md")),
     },
+    Topic {
+        name: "style-field-instrument",
+        source: "docs/styles/field-instrument.md",
+        answers: "an optional visual style — a precise instrument that is also a toy — as proportions, edges and layout numbers, and the checks it needs",
+        text: Some(include_str!("../../../docs/styles/field-instrument.md")),
+    },
 ];
 
 /// A topic, named so a caller can reach the next one without guessing.
