@@ -10,35 +10,39 @@
 # B-rep worker, the seed parts and the licence texts. Nothing here is built from
 # source — a cold OpenCASCADE compile is not something to ask of an install.
 class Parcad < Formula
-  desc "Parametric CAD you write as code, with an MCP server for the model that writes it"
+  desc "Parametric CAD you write as code, with an MCP server for agents"
   homepage "https://github.com/ierehon1905/parcad"
-  version "{{version}}"
   # The Rust crates are MIT or Apache-2.0; the statically linked OpenCASCADE
   # inside the worker is LGPL-2.1 with its exception. The texts are installed
   # beside the binaries, and NOTICE.md says how to relink your own OCCT.
   license any_of: ["MIT", "Apache-2.0"]
 
   # One build per platform: Apple silicon, and x86_64 Linux on Homebrew on Linux.
+  # `url` may not sit directly in an on_* block, so each sits behind its CPU.
   on_macos do
     depends_on arch: :arm64
-    url "https://github.com/ierehon1905/parcad/releases/download/v#{version}/parcad-cli-aarch64-apple-darwin.tar.gz"
-    sha256 "{{sha256:parcad-cli-aarch64-apple-darwin.tar.gz}}"
+    if Hardware::CPU.arm?
+      url "https://github.com/ierehon1905/parcad/releases/download/v{{version}}/parcad-cli-aarch64-apple-darwin.tar.gz"
+      sha256 "{{sha256:parcad-cli-aarch64-apple-darwin.tar.gz}}"
+    end
   end
   on_linux do
     depends_on arch: :x86_64
-    url "https://github.com/ierehon1905/parcad/releases/download/v#{version}/parcad-cli-x86_64-unknown-linux-gnu.tar.gz"
-    sha256 "{{sha256:parcad-cli-x86_64-unknown-linux-gnu.tar.gz}}"
+    if Hardware::CPU.intel?
+      url "https://github.com/ierehon1905/parcad/releases/download/v{{version}}/parcad-cli-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "{{sha256:parcad-cli-x86_64-unknown-linux-gnu.tar.gz}}"
+    end
   end
 
   def install
     # Both binaries in libexec: the host finds its worker beside itself, and
     # the env script below names it explicitly as well.
     libexec.install "parcad", "parcad-occt-worker"
-    (share/"parcad").install "examples"
+    pkgshare.install "examples"
     doc.install Dir["licenses/*"]
     (bin/"parcad").write_env_script libexec/"parcad",
       PARCAD_OCCT_WORKER: libexec/"parcad-occt-worker",
-      PARCAD_SEED_DIR:    share/"parcad/examples"
+      PARCAD_SEED_DIR:    pkgshare/"examples"
   end
 
   # `brew services start parcad`: the UI on http://127.0.0.1:4242 and MCP on
