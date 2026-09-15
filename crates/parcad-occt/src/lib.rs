@@ -20,6 +20,7 @@
 #[cfg(feature = "kernel")]
 pub mod backend;
 pub mod bodies;
+pub mod drawing;
 pub mod host;
 #[cfg(feature = "kernel")]
 pub mod perceive;

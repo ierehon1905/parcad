@@ -141,6 +141,13 @@ pub struct Expect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perception: Option<PerceptionExpect>,
 
+    /// Pictures drawn the way `evaluate_part` draws them, held to numbers
+    /// derived by hand: a tag's share of a view, a cut face's area, a region
+    /// of a section that must be capped. Never written by `--update`, like
+    /// `perception`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub renders: Vec<RenderExpect>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tolerance: Option<Tolerance>,
 
@@ -187,7 +194,7 @@ pub struct RayExpect {
     /// All the material along it, mm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub solid_mm: Option<f64>,
-    /// The innermost tag of each face crossed, in order.
+    /// The nearest tag of each face crossed, in order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub surfaces: Option<Vec<String>>,
 }
@@ -218,7 +225,7 @@ pub struct ThicknessExpect {
     pub at_most_mm: Option<f64>,
     #[serde(default = "default_thickness_tolerance")]
     pub tolerance_mm: f64,
-    /// The innermost tags of the two faces the thinnest wall lies between,
+    /// The nearest tags of the two faces the thinnest wall lies between,
     /// in either order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub between: Option<[String; 2]>,
@@ -226,6 +233,41 @@ pub struct ThicknessExpect {
 
 fn default_thickness_tolerance() -> f64 {
     0.01
+}
+
+/// One view of the part, as a region map or a section, and what it must show.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RenderExpect {
+    /// `iso`, `front`, `right`, `top`, `back`, `left` or `bottom`.
+    pub view: String,
+    /// Pixels per side, before the renderer's own supersampling.
+    pub size: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<SectionExpect>,
+    /// Each tag's share of the drawn surface, as `[at least, at most]`: the
+    /// `fraction` a region map's legend reports.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tag_fraction: BTreeMap<String, [f64; 2]>,
+    /// The cut face's area in mm², from its pixels and the plane's angle to
+    /// the view, within `cut_area_pct`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut_area_mm2: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cut_area_pct: Option<f64>,
+    /// Model boxes, `[min_x, min_y, min_z, max_x, max_y, max_z]`: every pixel
+    /// whose line of sight meets the section plane inside one is cut face.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cut_within: Vec<[f64; 6]>,
+}
+
+/// A section plane as `evaluate_part` takes one.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SectionExpect {
+    pub axis: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep: Option<String>,
 }
 
 /// Judge a perception reply against its expectation.
@@ -417,7 +459,7 @@ fn abs_check(out: &mut Vec<Mismatch>, field: &str, want: f64, got: f64, tol: f64
     }
 }
 
-fn pct_check(out: &mut Vec<Mismatch>, field: &str, want: f64, got: f64, pct: f64) {
+pub(crate) fn pct_check(out: &mut Vec<Mismatch>, field: &str, want: f64, got: f64, pct: f64) {
     // A recorded zero has no meaningful percentage; fall back to exact.
     let allowed = if want == 0.0 { 0.0 } else { want.abs() * pct / 100.0 };
     let delta = (got - want).abs();

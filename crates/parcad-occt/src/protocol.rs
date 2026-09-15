@@ -135,7 +135,7 @@ pub struct RayHitResult {
     pub point: [f64; 3],
     /// The ray passes into material here; otherwise out of it.
     pub entering: bool,
-    /// Tags of the face crossed, innermost first. Empty where no tagged node
+    /// Tags of the face crossed, nearest first. Empty where no tagged node
     /// owns it.
     #[serde(default)]
     pub tags: Vec<String>,
@@ -443,8 +443,9 @@ pub struct FaceSummary {
     /// several. Set by the worker after the parse; absent for a one-solid part.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
-    /// The tags this face carries, innermost first: the node that made it,
-    /// then every enclosing tagged node. Set by the worker from the lineage
+    /// The tags this face carries, nearest first: the node that made it,
+    /// then every enclosing tagged node — a tagged transform being the node
+    /// that made its copy's faces (`perceive::face_tags`). Set by the worker from the lineage
     /// after the parse; empty for a face no tagged node owns.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,

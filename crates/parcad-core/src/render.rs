@@ -327,6 +327,25 @@ impl GeometryBuffer {
         Some([p.x, p.y, p.z])
     }
 
+    /// Where this pixel's line of sight meets the section plane, in model
+    /// millimetres, whether or not there is material there. `None` without a
+    /// section, or where the plane is edge-on or leaves the frame's depth.
+    pub fn plane_point(&self, x: u32, y: u32) -> Option<[f32; 3]> {
+        let cut = self.cut_plane?;
+        let row = self.screen_to_model.row(cut.axis.index());
+        if row[2].abs() < 1e-12 {
+            return None;
+        }
+        let d = (cut.at_mm as f32 - row[0] * x as f32 - row[1] * y as f32 - row[3]) / row[2];
+        if !(1.0..=self.depth_samples as f32).contains(&d.round()) {
+            return None;
+        }
+        let p = self
+            .screen_to_model
+            .transform_point(&nalgebra::Point3::new(x as f32, y as f32, d));
+        Some([p.x, p.y, p.z])
+    }
+
     /// Whether this pixel is cut face.
     pub fn is_cut(&self, x: u32, y: u32) -> bool {
         self.cut
@@ -383,6 +402,9 @@ pub struct Surface<'a> {
     /// pixel can say which face it shows. Empty when there are no faces to
     /// name — the buffer's `face` is then empty too.
     pub faces: &'a [u32],
+    /// Which body each triangle belongs to, in triangle order, numbered from
+    /// zero. Empty for one body. A section decides "inside" per body.
+    pub bodies: &'a [u32],
 }
 
 impl Surface<'_> {
@@ -462,16 +484,20 @@ pub fn raster(
             s * (screen_to_model[(row, 3)] - cut.at_mm as f32),
         )
     });
-    // Surface crossings per pixel, counted over what the cut removed. An odd
-    // count means the ray was still in material when it reached the plane, so
-    // that pixel is cut face; the mesh is closed, so parity is the whole test.
+    // Surface crossings per pixel, counted over what the cut removed, as one
+    // parity bit per body. An odd count means the ray was still inside that
+    // body when it reached the plane; the pixel is cut face when it is inside
+    // any of them. One parity over every body is even — so "empty" — wherever
+    // two closed shells overlap, which is how two interfering bodies lost
+    // their shared material from a section.
     //
     // Not a signed winding number, which is the textbook answer and was wrong
     // here when the mesh came off a dual contourer with no reliable normal at
-    // a sharp feature. Parity needs no normals at all. Its one weakness — a
-    // pixel sample landing exactly on a shared triangle edge gets counted
-    // twice — takes an exact float coincidence.
-    let mut crossings = vec![0u32; if clip.is_some() { (size * size) as usize } else { 0 }];
+    // a sharp feature. Parity needs no normals at all, and it needs every
+    // crossing counted exactly once, which is what the fill rule below is for.
+    let body_count = surface.bodies.iter().copied().max().map_or(1, |b| b as usize + 1);
+    let words = body_count.div_ceil(64);
+    let mut crossings = vec![0u64; if clip.is_some() { (size * size) as usize * words } else { 0 }];
 
     let mut image = DepthImage::new(size, depth_samples);
     let mut face = vec![NO_FACE; if surface.faces.is_empty() { 0 } else { (size * size) as usize }];
@@ -483,7 +509,7 @@ pub fn raster(
     for (t, tri) in surface.triangles().into_iter().enumerate() {
         let corners = tri.map(|i| surface.vertex(i));
         let screen = corners.map(|(p, _)| project(p));
-        let normals = corners.map(|(_, n)| {
+        let mut normals = corners.map(|(_, n)| {
             let v = r * nalgebra::Vector3::new(n[0], n[1], n[2]);
             let len = v.norm();
             if len > 1e-9 {
@@ -493,72 +519,91 @@ pub fn raster(
             }
         });
 
-        // Half-open pixel bounds, clipped to the image.
-        let min_x = screen.iter().map(|p| p[0]).fold(f32::MAX, f32::min);
-        let max_x = screen.iter().map(|p| p[0]).fold(f32::MIN, f32::max);
-        let min_y = screen.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
-        let max_y = screen.iter().map(|p| p[1]).fold(f32::MIN, f32::max);
-        if !(min_x.is_finite() && max_x.is_finite() && min_y.is_finite() && max_y.is_finite()) {
+        // Corners snapped to a 1/256-pixel grid, so edge functions are exact
+        // integers: a shared edge evaluates to exactly opposite values in its
+        // two triangles, and the top-left rule then gives a sample on it to
+        // exactly one. In f32 a sample on an edge the view sees along the
+        // pixel grid could fall to neither, losing a crossing — docs/GOTCHAS.md,
+        // "A section cap with a line through it".
+        let fixed = |v: f32| (v as f64 * SUBPIXEL as f64).round();
+        // Past 2^30 an edge function's product would overflow i64.
+        let reach = (1i64 << 30) as f64;
+        if screen.iter().any(|p| !(p[0].is_finite() && p[1].is_finite() && p[2].is_finite()))
+            || screen.iter().any(|p| fixed(p[0]).abs() > reach || fixed(p[1]).abs() > reach)
+        {
             continue;
         }
-        let x0 = min_x.floor().max(0.0) as u32;
-        let x1 = (max_x.ceil() as i64).clamp(0, size as i64) as u32;
-        let y0 = min_y.floor().max(0.0) as u32;
-        let y1 = (max_y.ceil() as i64).clamp(0, size as i64) as u32;
-
-        let [a, b, c] = screen;
-        let area = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
-        if area.abs() < 1e-12 {
+        let mut v = screen.map(|p| [fixed(p[0]) as i64, fixed(p[1]) as i64]);
+        let mut depths = screen.map(|p| p[2]);
+        let mut area = edge(v[0], v[1], v[2]);
+        if area == 0 {
             continue; // edge-on, contributes no pixels
         }
+        if area < 0 {
+            v.swap(1, 2);
+            depths.swap(1, 2);
+            normals.swap(1, 2);
+            area = -area;
+        }
 
-        for y in y0..y1 {
-            for x in x0..x1 {
+        // Every integer sample inside the snapped corners' box, clipped to the image.
+        let lo = |a: i64, b: i64, c: i64| -(-a.min(b).min(c)).div_euclid(SUBPIXEL);
+        let hi = |a: i64, b: i64, c: i64| a.max(b).max(c).div_euclid(SUBPIXEL);
+        let x0 = lo(v[0][0], v[1][0], v[2][0]).max(0);
+        let x1 = hi(v[0][0], v[1][0], v[2][0]).min(size as i64 - 1);
+        let y0 = lo(v[0][1], v[1][1], v[2][1]).max(0);
+        let y1 = hi(v[0][1], v[1][1], v[2][1]).min(size as i64 - 1);
+        let bias = [
+            top_left_bias(v[1], v[2]),
+            top_left_bias(v[2], v[0]),
+            top_left_bias(v[0], v[1]),
+        ];
+
+        for y in y0..=y1 {
+            for x in x0..=x1 {
                 // Sample *on* the integer pixel coordinate, not at the pixel
                 // centre. That is where `model_point` reads a pixel back, and
                 // where the camera samples; a half-pixel offset here costs
                 // about 4% of coverage on a 128-pixel view, which looks like
                 // nothing and is a systematically shifted picture.
-                let (px, py) = (x as f32, y as f32);
-                let w0 = ((b[0] - px) * (c[1] - py) - (c[0] - px) * (b[1] - py)) / area;
-                let w1 = ((c[0] - px) * (a[1] - py) - (a[0] - px) * (c[1] - py)) / area;
-                let w2 = 1.0 - w0 - w1;
-                if w0 < 0.0 || w1 < 0.0 || w2 < 0.0 {
+                let p = [x * SUBPIXEL, y * SUBPIXEL];
+                let e = [edge(v[1], v[2], p), edge(v[2], v[0], p), edge(v[0], v[1], p)];
+                if e[0] + bias[0] < 0 || e[1] + bias[1] < 0 || e[2] + bias[2] < 0 {
                     continue;
                 }
+                let (x, y) = (x as u32, y as u32);
+                let w = e.map(|e| (e as f64 / area as f64) as f32);
 
-                let depth = w0 * a[2] + w1 * b[2] + w2 * c[2];
-                if !depth.is_finite() {
+                let exact = w[0] * depths[0] + w[1] * depths[1] + w[2] * depths[2];
+                if !exact.is_finite() {
                     continue;
                 }
-                // Depth 0 means "no surface here", so a hit is never allowed to
-                // round down into it.
-                let depth = (depth.round() as i64).clamp(1, depth_samples as i64) as u32;
-
-                let n = [
-                    w0 * normals[0][0] + w1 * normals[1][0] + w2 * normals[2][0],
-                    w0 * normals[0][1] + w1 * normals[1][1] + w2 * normals[2][1],
-                    w0 * normals[0][2] + w1 * normals[1][2] + w2 * normals[2][2],
-                ];
 
                 if let Some(clip) = clip {
-                    let removed =
-                        clip.0 * px + clip.1 * py + clip.2 * depth as f32 + clip.3;
+                    // Against the unrounded depth: a fragment within half a
+                    // voxel of the plane is otherwise counted on the side its
+                    // rounding lands, and one lost crossing uncaps a pixel.
+                    let removed = clip.0 * x as f32 + clip.1 * y as f32 + clip.2 * exact + clip.3;
                     if removed > 0.0 {
                         // Between the viewer and the plane: not drawn, but
                         // counted, because whether this pixel is cut face is
                         // decided by what the cut took away and not by what it
                         // left.
-                        crossings[(y * size + x) as usize] += 1;
+                        let body = surface.bodies.get(t).copied().unwrap_or(0) as usize;
+                        crossings[(y * size + x) as usize * words + body / 64] ^= 1 << (body % 64);
                         continue;
                     }
                 }
 
+                // Depth 0 means "no surface here", so a hit is never allowed to
+                // round down into it.
+                let depth = (exact.round() as i64).clamp(1, depth_samples as i64) as u32;
                 let pixel = &mut image[(y as usize, x as usize)];
                 // Larger depth is nearer the viewer.
                 if depth <= pixel.depth {
                     continue;
                 }
+                let n = [0, 1, 2].map(|k| w[0] * normals[0][k] + w[1] * normals[1][k] + w[2] * normals[2][k]);
                 *pixel = GeometryPixel { normal: n, depth };
                 if let Some(slot) = face.get_mut((y * size + x) as usize) {
                     *slot = surface.faces.get(t).copied().unwrap_or(NO_FACE);
@@ -584,7 +629,7 @@ pub fn raster(
             for y in 0..size {
                 for x in 0..size {
                     let i = (y * size + x) as usize;
-                    if crossings[i] % 2 == 0 {
+                    if crossings[i * words..(i + 1) * words].iter().all(|w| *w == 0) {
                         continue;
                     }
                     // Depth at which this pixel's ray meets the plane.
@@ -628,6 +673,26 @@ pub fn raster(
         cut,
         face,
     })
+}
+
+/// Sub-pixel steps per pixel in the rasteriser's fixed-point corners.
+const SUBPIXEL: i64 = 256;
+
+/// Twice the signed area of `a b p`, exact on the fixed-point grid.
+fn edge(a: [i64; 2], b: [i64; 2], p: [i64; 2]) -> i64 {
+    (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0])
+}
+
+/// 0 when a sample exactly on edge `a → b` of a positively wound triangle
+/// belongs to it, -1 when it belongs to the neighbour across the edge. The
+/// reversed edge always answers the other way, which is the whole rule.
+fn top_left_bias(a: [i64; 2], b: [i64; 2]) -> i64 {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    if dy < 0 || (dy == 0 && dx > 0) {
+        0
+    } else {
+        -1
+    }
 }
 
 /// Turn a geometry buffer into a legible image.
@@ -1038,6 +1103,7 @@ mod tests {
                 normals: &self.normals,
                 indices: &[],
                 faces: &[],
+                bodies: &[],
             }
         }
     }
@@ -1144,6 +1210,91 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// Samples in a section of the frame that should be cut face and are not,
+    /// bounded on both sides by cut face: a hole in a cap.
+    fn uncapped_between_cut(buf: &GeometryBuffer) -> Vec<(u32, u32)> {
+        let mut holes = Vec::new();
+        for y in 1..buf.size - 1 {
+            for x in 1..buf.size - 1 {
+                if !buf.is_cut(x, y) && buf.is_cut(x - 1, y) && buf.is_cut(x + 1, y) {
+                    holes.push((x, y));
+                }
+            }
+        }
+        holes
+    }
+
+    /// Two closed bodies drawn through each other are material wherever
+    /// either is, so the section caps their overlap.
+    ///
+    /// A 40 x 40 x 10 plate and a 10 x 10 x 20 post whose lower 5 mm is inside
+    /// it, cut on Y through both and seen from the front. The cut face is the
+    /// union of the two sections, 400 + 200 - 50 = 550 mm²; one parity over
+    /// both shells counts the shared 50 mm² as empty and reads 500.
+    #[test]
+    fn a_section_through_two_overlapping_bodies_caps_what_they_share() {
+        let mut mesh = Mesh::default();
+        mesh.cuboid([0.0; 3], [40.0, 40.0, 10.0]);
+        let plate = mesh.positions.len() / 9;
+        mesh.cuboid([0.0, 0.0, 10.0], [10.0, 10.0, 20.0]);
+        let post = mesh.positions.len() / 9 - plate;
+        let bodies: Vec<u32> = std::iter::repeat_n(0, plate).chain(std::iter::repeat_n(1, post)).collect();
+        let bounds = Aabb { min: V3::new(-20.0, -20.0, -5.0), max: V3::new(20.0, 20.0, 20.0) };
+        let opts = RenderOptions {
+            size: 256,
+            depth_samples: 256,
+            ssao: false,
+            supersample: 1,
+            section: Some(Section { axis: Axis::Y, at_mm: Some(0.0), keep: Some(Keep::Above) }),
+        };
+        let cut_area = |bodies: &[u32]| {
+            let surface = Surface { bodies, ..mesh.surface() };
+            let buf = raster(&surface, bounds, View::Front, &opts).expect("raster");
+            let mm_per_px = buf.screen_to_model.column(0).norm() as f64;
+            let cut = buf.cut.iter().filter(|c| **c).count();
+            let overlap = buf.model_point(buf.size / 2, buf.size / 2 - 1);
+            (cut as f64 * mm_per_px * mm_per_px, buf, overlap)
+        };
+
+        let (area, buf, _) = cut_area(&bodies);
+        assert!((area - 550.0).abs() < 550.0 * 0.03, "two bodies cut to {area:.1} mm², not 550");
+        // A sample inside the shared region: x = 0, z = 2.5.
+        let (x, y) = (buf.size / 2, (0..buf.size).find(|y| buf.model_point(buf.size / 2, *y).is_some_and(|p| (p[2] - 2.5).abs() < 0.2)).expect("a row at z = 2.5"));
+        assert!(buf.is_cut(x, y), "the plate and the post share material at z = 2.5, so it is cut face");
+
+        let (as_one, _, _) = cut_area(&[]);
+        assert!((as_one - 500.0).abs() < 500.0 * 0.03, "read as one shell, the overlap is uncapped: {as_one:.1} mm²");
+    }
+
+    /// A crossing on an edge the view sees along the sample grid is counted
+    /// exactly once.
+    ///
+    /// The iso view's centre column is the model's x = -y line, and a rod
+    /// about Z tessellated in 64 steps has a vertical edge at 315° lying
+    /// exactly on it: every sample there sits on the edge two side quads
+    /// share. With barycentric tests in f32 both triangles could reject it,
+    /// the ray lost its crossing into the rod, and the cap carried a one-pixel
+    /// line down its axis — the line an M10 bolt showed. Each combination below
+    /// drew that line before the fill rule was exact.
+    #[test]
+    fn a_section_cap_has_no_line_where_an_edge_lies_on_the_sample_grid() {
+        for (r, z, size) in [(2.5, 5.0, 1024), (4.25, 5.0, 768), (5.0, -3.0, 768), (5.0, 5.0, 1536)] {
+            let mut mesh = Mesh::default();
+            mesh.cylinder([0.0, 0.0, z], r, 30.0, false);
+            let bounds = Aabb { min: V3::new(-2.0 * r as f64, -2.0 * r as f64, -15.0), max: V3::new(2.0 * r as f64, 2.0 * r as f64, 15.0) };
+            let opts = RenderOptions {
+                size,
+                depth_samples: size,
+                ssao: false,
+                supersample: 1,
+                section: Some(Section { axis: Axis::Y, at_mm: None, keep: None }),
+            };
+            let buf = raster(&mesh.surface(), bounds, View::Iso, &opts).expect("raster");
+            let holes: Vec<_> = uncapped_between_cut(&buf).into_iter().filter(|(x, _)| *x == buf.size / 2).collect();
+            assert!(holes.is_empty(), "r {r} at z {z}, {size} px: {} uncapped samples on the axis, e.g. {:?}", holes.len(), &holes[..holes.len().min(5)]);
         }
     }
 

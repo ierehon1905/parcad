@@ -64,24 +64,39 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    the docs showed a mating pair, lost a trial to moving an out-of-phase nut
    off the thread; a second lost one to reading "interfering" as phase when
    the hole stopped short, which is why `threadedRod` now names both.
-3a. **Two render faults several bodies exposed** — found in the 2026-09-15
-   renders, next:
-   - A mirrored or moved copy is coloured by its original's tag:
-     `split-halves` paints the right half `left` (`right` 0 pixels), because a
-     face takes the innermost tag its lineage carries. Decided: the tag nearest
-     the node that produced the face wins, so a copy shows its own name while a
-     feature tag inside the original still wins there.
-   - A section through two overlapping bodies leaves the overlap uncapped:
-     the cut fill counts surface crossings by parity, which is right for one
-     closed solid and even — so "empty" — where two cross.
-     `interfering-bodies` shows the boss's buried 5 mm as a hole in the plate.
-     Test material per body instead.
-   - A threaded rod's cut face carries a thin dark line near its axis in a
-     `y` section (an M10 rod with a nut, 2026-09-15), while the rod measures
-     one intact piece: likely the same crossing count meeting the core and the
-     tooth where they share a face. Check it with the per-body fix.
-   Each needs a case that pins the pixel counts (`right` > 0; the overlap
-   filled).
+3a. **Three render faults several bodies exposed** — done 2026-09-15.
+   - *A tagged copy painted as its original.* `split-halves` drew all
+     952395 iso pixels `left`, `right` 0: every face of
+     `left.mirror("x").tag("right")` carries both names, and a pixel took the
+     first in node order. A tag on a move, turn, scale or mirror now outranks
+     the tags inside its input, on the copy only (`perceive::face_tags`,
+     `NamedFaces::outranked_by`); an untagged `.at()` names nothing, so a
+     feature tag before a placement still wins. After: 399447 `left` and
+     552948 `right` (0.419 / 0.581, against 0.407 derived from projected
+     areas); front and top views read 0.5000 each, pixel-exact reflections.
+     Of 97 corpus and seed scripts only `split-halves` writes a tag over a
+     tagged input, so no recorded surface or thickness moved.
+   - *An overlap of two bodies drawn as a hole.* One crossing parity over two
+     closed shells is even where they overlap. The raster keeps one parity bit
+     per body from the worker's body spans, cut face where any body is odd.
+     `interfering-bodies` cut on Y: 501 mm² of cut face before, 551.8 front
+     and 549.6 iso after, against 400 + 200 − 50 = 550; iso cut fraction
+     0.3571 → 0.3926.
+   - *A dark line down an M10 bolt's cut face.* Not per-body, not the
+     tessellation: 138 uncapped samples all on the iso buffer's centre column,
+     where the nut's corner edge projects exactly and a sample on a shared
+     edge failed both triangles' f32 test, losing a crossing; 16 more on
+     thread flanks from the clip reading the rounded depth. Fixed-point corners
+     with the top-left fill rule, and the unrounded depth (GOTCHAS, "A section
+     cap with a line through it").
+   Cases: `renders` blocks in `split-halves` and `interfering-bodies`, the new
+   `section-m10-bolt-and-nut`, each failing on the old rasteriser or worker
+   (right 0 px; 501.3 / 499.7 mm² and 2201 / 1249 overlap pixels open; 138
+   rod pixels open); unit tests for the per-body cap and for the fill rule on
+   a rod at four sizes that drew the line. Field, against the new host:
+   what-is-hidden 8/8 SOUND; what-is-inside 7/8 SOUND, 1 WRONG — a trial that
+   read its x = −22 section as two separate circles, on a picture measured
+   pixel-identical before and after the change.
 4. **Curves in sections and paths** — arcs and splines in the profile type; four
    of `eval/targets/fusion360/` wait on it.
 5. **A playground in the browser** — the exact kernel built for WebAssembly on

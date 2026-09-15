@@ -37,9 +37,10 @@ const MAX_THIN_SPOTS: usize = 8;
 pub struct Body<'a> {
     pub name: Option<&'a str>,
     pub shape: &'a Shape,
-    /// Per face, in the shape's own traversal order: its tags, innermost
-    /// first. The innermost tag is the one authored nearest the primitive —
-    /// `bore` rather than the `part` that was unioned around it.
+    /// Per face, in the shape's own traversal order: its tags, nearest first.
+    /// The nearest is the one authored nearest the node that produced the
+    /// face — `bore` rather than the `part` that was unioned around it, and
+    /// `right` rather than `left` on `left.mirror("x").tag("right")`.
     pub face_tags: Vec<Vec<String>>,
     /// The body's faces alone, for distances. `BRepExtrema` reads a solid as
     /// a volume, so a point inside one is 0 from it; the distance a probe
@@ -80,7 +81,9 @@ pub fn describe_faces(shape: &Shape) -> Vec<FaceSummary> {
     serde_json::from_str(&shape.faces_json()).unwrap_or_default()
 }
 
-/// Which tags each face of `shape` carries, innermost first.
+/// Which tags each face of `shape` carries, nearest first: node order, which
+/// is innermost first, except that a tag outranked on that face (see
+/// [`NamedFaces::outranked_by`]) follows the tags that outrank it.
 ///
 /// The lineage's faces are the result's own sub-shapes, so the map lookup
 /// answers for nearly all of them; a face the map does not know — one a
@@ -110,6 +113,16 @@ pub fn face_tags(shape: &Shape, names: &NamedFaces) -> Vec<Vec<String>> {
                 }
             }
         }
+    }
+    for carried in &mut tags {
+        let outranks = |tag: &String| {
+            names
+                .outranked_by
+                .get(tag)
+                .map_or(0, |by| carried.iter().filter(|t| by.contains(*t)).count())
+        };
+        let ranks: HashMap<String, usize> = carried.iter().map(|t| (t.clone(), outranks(t))).collect();
+        carried.sort_by_key(|t| ranks[t]);
     }
     tags
 }
@@ -741,6 +754,39 @@ mod tests {
         let b = extents.iter().find(|e| e.tag == "b").unwrap();
         assert_eq!((b.min[0], b.max[0]), (15.0, 25.0));
         assert_eq!(b.faces, 6);
+    }
+
+    /// A mirrored copy is named for itself, and a feature inside the
+    /// original is still named for the feature on the original.
+    #[test]
+    fn a_tagged_copy_outranks_the_tags_of_what_it_copied() {
+        let part = built(
+            r#"{"units":"mm","root":5,"nodes":[
+            {"op":"cuboid","size":{"x":10,"y":10,"z":10}},
+            {"op":"cylinder","r":2,"h":20,"tag":"bore"},
+            {"op":"difference","base":0,"tools":[1],"blend":0,"tag":"left"},
+            {"op":"translate","child":2,"by":{"x":-10,"y":0,"z":0}},
+            {"op":"mirror","child":3,"normal":{"x":1,"y":0,"z":0},"tag":"right"},
+            {"op":"bodies","bodies":[{"name":"left","child":3},{"name":"right","child":4}]}]}"#,
+        );
+        let bodies = bodies_of(&part);
+        let owners = |body: &Body| -> Vec<(String, String)> {
+            describe_faces(body.shape)
+                .iter()
+                .zip(&body.face_tags)
+                .map(|(f, tags)| (f.surface.kind.clone(), tags.first().cloned().unwrap_or_default()))
+                .collect()
+        };
+        let left = owners(&bodies[0]);
+        let right = owners(&bodies[1]);
+        assert_eq!(left.len(), 7, "{left:?}");
+        assert_eq!(right.len(), 7, "{right:?}");
+        for (kind, owner) in &left {
+            assert_eq!(owner, if kind == "cylinder" { "bore" } else { "left" }, "{left:?}");
+        }
+        assert!(right.iter().all(|(_, owner)| owner == "right"), "{right:?}");
+        // Every name is still carried; only the order moved.
+        assert!(bodies[1].face_tags.iter().all(|t| t.contains(&"left".to_string())));
     }
 
     /// The extents are exact: the bore's wall spans x 4..16 to the micron,

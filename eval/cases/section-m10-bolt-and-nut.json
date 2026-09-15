@@ -1,0 +1,93 @@
+{
+  "name": "section-m10-bolt-and-nut",
+  "script": "eval/scripts/section-m10-bolt-and-nut.js",
+  "why": "An M10 bolt and a printed nut at 0.25 mm clearance, in phase, cut on Y through the axis: the section that drew a thin dark line down the bolt's axis while the bolt measured one intact piece. Not the tessellation and not the two bodies: the iso view's centre column is the model's x = -y line, edges of the rod and of the nut's corner lie exactly on it, and a sample on an edge shared by two triangles was rejected by both in f32, losing one surface crossing and flipping the parity that decides cut face (138 samples at 768 px, all on column 768). Sixteen more sat on thread flanks within half a voxel of the plane, where the clip test read the rounded depth. The boxes are where the plane is certainly material: the rod's core inside radius 3.938 (basic minor 8.376 / 2 less the clearance), and the nut from the hole's 5.25 to its 8.5 flats over z 1 to 9, each shrunk by 0.3 mm or more. Every pixel of the plane in them must be cut face. The measurements are the part's own, recorded.",
+  "brep": {
+    "size": [
+      17.0,
+      17.0,
+      30.0
+    ],
+    "volume_mm3": 3476.71,
+    "area_mm2": 2808.055,
+    "triangles": 21872,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 58.121,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 119,
+    "edges": 488,
+    "curves": 244,
+    "named_bodies": {
+      "bolt": {
+        "size": [
+          9.5,
+          9.5,
+          30.0
+        ],
+        "volume_mm3": 1743.838,
+        "faces": 87,
+        "edges": 350,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "nut": {
+        "size": [
+          17.0,
+          17.0,
+          8.0
+        ],
+        "volume_mm3": 1732.872,
+        "faces": 32,
+        "edges": 138,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "bolt/nut": {
+        "verdict": "clear",
+        "clearance_mm": 0.25,
+        "interference_mm3": 0.0
+      }
+    },
+    "renders": [
+      {
+        "view": "iso",
+        "size": 768,
+        "section": {
+          "axis": "y"
+        },
+        "cut_within": [
+          [
+            -3.5,
+            -0.5,
+            -14.5,
+            3.5,
+            0.5,
+            14.5
+          ],
+          [
+            5.5,
+            -0.5,
+            1.5,
+            8.2,
+            0.5,
+            8.5
+          ],
+          [
+            -8.2,
+            -0.5,
+            1.5,
+            -5.5,
+            0.5,
+            8.5
+          ]
+        ]
+      }
+    ]
+  }
+}

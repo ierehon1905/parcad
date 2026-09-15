@@ -439,19 +439,13 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
     tess.write_stl(&mut f)?;
 
     // Views from the mesh, by the same rasteriser the agent's renders use.
-    let mut triangle_faces = vec![render::NO_FACE; s.indices.len() / 3];
-    for run in &s.face_runs {
-        for t in run.start..run.start + run.count {
-            if let Some(slot) = triangle_faces.get_mut(t as usize) {
-                *slot = run.face;
-            }
-        }
-    }
+    let owners = parcad_occt::drawing::TriangleOwners::of(&s);
     let surface = render::Surface {
         positions: &s.positions,
         normals: &s.normals,
         indices: &s.indices,
-        faces: &triangle_faces,
+        faces: &owners.faces,
+        bodies: &owners.bodies,
     };
     let opts = render::RenderOptions {
         size: args.size,
@@ -480,19 +474,8 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
     let mut region_path = None;
     if args.regions {
         let v = args.view.unwrap_or(parcad_core::view::View::Iso);
-        let names: Vec<String> = {
-            let mut seen = std::collections::HashSet::new();
-            doc.tags()
-                .into_iter()
-                .filter(|(_, t)| seen.insert(t.to_string()))
-                .map(|(_, t)| t.to_string())
-                .collect()
-        };
-        let owner_of_face: Vec<Option<usize>> = s
-            .faces
-            .iter()
-            .map(|f| f.tags.first().and_then(|t| names.iter().position(|n| n == t)))
-            .collect();
+        let names = parcad_occt::drawing::tag_names(doc);
+        let owner_of_face = parcad_occt::drawing::owner_of_face(&s.faces, &names);
         let buffer = render::raster(&surface, bounds, v, &opts)?;
         let map = parcad_core::tags::regions_by_face(&buffer, &owner_of_face, &names, &opts)?;
         let path = args.out.join(format!("regions-{}.png", v.name()));

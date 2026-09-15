@@ -6,9 +6,10 @@
 //!
 //! Which tag owns a point is the kernel's answer: every face of the finished
 //! part carries the tags its lineage gives it, followed through each boolean,
-//! blend and treatment, and a pixel takes the innermost of its face's. The wall
-//! of a hole is owned by the cylinder that cut it, which is exactly what you
-//! would want to say in a script.
+//! blend and treatment, and a pixel takes the one nearest the node that made
+//! the face. The wall of a hole is owned by the cylinder that cut it, and a
+//! mirrored copy tagged `right` by `right` rather than by the original it
+//! copied, which is exactly what you would want to say in a script.
 
 use crate::render::{self, GeometryBuffer, RenderOptions, Rgb};
 use anyhow::Result;
@@ -121,7 +122,7 @@ fn assign_colors(tags: &[String]) -> Vec<[u8; 3]> {
 /// pixel, which is the exact kernel's answer to "whose surface is this".
 ///
 /// `owner_of_face[f]` is the tag (an index into `names`) that face `f` of the
-/// part belongs to — the innermost of the tags its lineage gives it, since a
+/// part belongs to — the nearest of the tags its lineage gives it, since a
 /// pixel takes one colour — or `None` for a face no tagged node owns. The
 /// buffer's own face numbers come from [`crate::render::raster`], so the
 /// picture and its legend cannot disagree about where a face is. A fillet's

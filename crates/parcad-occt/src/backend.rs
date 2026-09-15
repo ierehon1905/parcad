@@ -2100,6 +2100,11 @@ pub struct BuiltPart {
 /// present with an empty list, so "unlocated" is a fact the reader can state.
 pub struct NamedFaces {
     pub tags: Vec<(String, Vec<Face>)>,
+    /// For each tag, the tags that outrank it on a face both carry: the
+    /// names written on a move, turn, scale or mirror whose input it is
+    /// inside. Such a transform produced a copy, and the copy's own name is
+    /// the one nearest the node that produced its faces.
+    pub outranked_by: HashMap<String, HashSet<String>>,
 }
 
 impl NamedFaces {
@@ -2120,8 +2125,44 @@ impl NamedFaces {
                 )
             })
             .collect();
-        Self { tags }
+        Self {
+            tags,
+            outranked_by: copy_names(doc),
+        }
     }
+}
+
+/// Which tags a tagged transform outranks: every tag inside its input. Only
+/// a tag on the transform itself counts, so `cylinder(..).tag("bore").at(..)`
+/// inside a tagged body stays `bore` — the placement names nothing.
+fn copy_names(doc: &Doc) -> HashMap<String, HashSet<String>> {
+    let mut outranked_by: HashMap<String, HashSet<String>> = HashMap::new();
+    for (id, node) in doc.nodes.iter().enumerate() {
+        let Some(copy) = node.tag.as_deref() else {
+            continue;
+        };
+        let (Op::Translate { child, .. }
+        | Op::Rotate { child, .. }
+        | Op::Scale { child, .. }
+        | Op::Mirror { child, .. }) = &node.op
+        else {
+            continue;
+        };
+        let mut stack = vec![*child];
+        let mut seen = HashSet::new();
+        while let Some(inner) = stack.pop() {
+            if inner == id || !seen.insert(inner) {
+                continue;
+            }
+            if let Some(name) = doc.nodes.get(inner).and_then(|n| n.tag.as_deref()) {
+                if name != copy {
+                    outranked_by.entry(name.to_owned()).or_default().insert(copy.to_owned());
+                }
+            }
+            stack.extend(doc.children_of(inner).unwrap_or_default());
+        }
+    }
+    outranked_by
 }
 
 /// Build the finished part, keeping each named body apart from the compound

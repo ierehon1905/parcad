@@ -55,6 +55,10 @@ pub struct Evaluated {
     /// measurement.
     #[serde(skip)]
     bounds: parcad_core::measure::Aabb,
+    /// Which named body each triangle belongs to; empty for one solid. A
+    /// section decides what is material body by body.
+    #[serde(skip)]
+    triangle_bodies: Vec<u32>,
 }
 
 /// Read access for callers that list entities rather than serialise geometry.
@@ -735,9 +739,10 @@ pub struct Region {
     /// Whether any pixel here is coloured for this tag. A tag that is genuinely
     /// in the model but hidden from this angle is the case worth stating:
     /// without it, a caller concludes its edit did nothing. A pixel takes its
-    /// face's innermost tag, so a union's or a cut's own tag — whose faces all
+    /// face's nearest tag, so a union's or a cut's own tag — whose faces all
     /// carry a name authored nearer the primitive — colours no pixel and
     /// reads false while its box in `tag_extents` covers everything it names.
+    /// A tag on a moved or mirrored copy is nearer than the tags it copied.
     pub visible: bool,
 }
 
@@ -795,6 +800,7 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
         normals: &evaluated.normals,
         indices: &evaluated.indices,
         faces: if evaluated.face_runs.is_empty() { &[] } else { &triangle_faces },
+        bodies: &evaluated.triangle_bodies,
     };
     let bounds = evaluated.bounds;
 
@@ -805,22 +811,10 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
         ..Default::default()
     };
 
-    // Every tag the script wrote, in the order it wrote them, whether or not
-    // any face still carries it; and each face's innermost tag, which is the
+    // Every tag the script wrote, and each face's nearest tag, which is the
     // one a pixel is coloured for.
-    let names: Vec<String> = {
-        let mut seen = std::collections::HashSet::new();
-        doc.tags()
-            .into_iter()
-            .filter(|(_, t)| seen.insert(t.to_string()))
-            .map(|(_, t)| t.to_string())
-            .collect()
-    };
-    let owner_of_face: Vec<Option<usize>> = evaluated
-        .faces
-        .iter()
-        .map(|f| f.tags.first().and_then(|t| names.iter().position(|n| n == t)))
-        .collect();
+    let names = parcad_occt::drawing::tag_names(doc);
+    let owner_of_face = parcad_occt::drawing::owner_of_face(&evaluated.faces, &names);
 
     views
         .iter()
@@ -987,7 +981,7 @@ pub struct Crossing {
     /// What the ray passed *into* here. Read down the list and it spells out
     /// the line: material, void, material.
     pub into: Medium,
-    /// The tag of the node this face belongs to — the innermost of the names
+    /// The tag of the node this face belongs to — the nearest of the names
     /// the kernel's lineage gives the face, the same answer a region map
     /// gives for a pixel. This is what makes a crossing readable rather than
     /// deducible: two voids that meet are one void along the ray, and only
@@ -1001,7 +995,7 @@ pub struct Crossing {
     /// Absent where no tagged node owns the face.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_of: Option<String>,
-    /// Every tag the face carries, innermost first, when there is more than
+    /// Every tag the face carries, nearest first, when there is more than
     /// the one `surface_of` names: a blend along the seam of `arm` and `hub`
     /// is part of both.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -1529,6 +1523,7 @@ pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evalua
         face_runs: s.face_runs.clone(),
         faces: s.faces.clone(),
         edges: s.edges.clone(),
+        triangle_bodies: parcad_occt::drawing::TriangleOwners::of(s).bodies,
     })
 }
 
@@ -2219,7 +2214,7 @@ mod tests {
         }));
         let evaluated = brep(&doc);
         // Every face carries `body`; the rounded ones also carry `top_rim`,
-        // and `body` is the innermost, so it is what the map colours by.
+        // and `body` is the nearest, so it is what the map colours by.
         assert!(evaluated.faces.iter().all(|f| f.tags.first().map(String::as_str) == Some("body")));
         assert!(evaluated.faces.iter().any(|f| f.tags.iter().any(|t| t == "top_rim")));
 

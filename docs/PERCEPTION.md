@@ -283,10 +283,19 @@ mesh once reported it as a flat ring and then as 11.95. A tag no face carries
 has no extent and says so in `unlocated_tags`. What the move settled:
 
 - **An extent is inclusive where a colour is exclusive.** A face carries every
-  tag its lineage gives it, innermost first; a pixel takes one colour and gets
-  the innermost, so a union's or a cut's own tag shows no pixels of its own in
+  tag its lineage gives it, nearest first; a pixel takes one colour and gets
+  the nearest, so a union's or a cut's own tag shows no pixels of its own in
   a region map while its box covers everything it names. Nested tags report
   nested boxes, which is what the script says.
+- **A tagged copy is nearer than what it copied.** "Nearest" is the tag
+  closest to the node that produced the face, and a move, turn, scale or
+  mirror produces its copy's faces: `left.mirror("x").tag("right")` carries
+  both names on every face, and until 2026-09-15 painted the whole of
+  `split-halves` `left`, `right` 0 pixels. A tag on the transform now outranks
+  every tag inside its input, on the copy only; an untagged placement names
+  nothing, so `cylinder(..).tag("bore").at(..)` inside a tagged body is still
+  `bore`. Only `split-halves` among the 97 corpus and seed scripts writes a
+  tag over a tagged input, so no other recorded surface moved.
 - **A coplanar merge carries a face across two features.** The bracket's
   `plate` reaches z = 40 because its −X face merged with the wall's at the
   union and the merged face carries both names — the same face `on: "plate"`
@@ -555,6 +564,18 @@ contouring does not have at a sharp feature: on a plain cube it reports the top
 face's normal along a vertical edge, and a third of the part comes back falsely
 capped. Parity needs no normals. Both renderers now agree pixel for pixel, which
 is the test that caught it.
+
+**Parity is per body, and every crossing is counted once.** Two named bodies
+drawn through each other are two closed shells, and one parity over both reads
+the material they share as empty: `interfering-bodies` drew the boss's buried
+5 mm as a hole in the plate (2026-09-15). The raster keeps one parity bit per
+body, from the triangle runs the worker already records per body, and a pixel
+is cut face if it is inside any body — the per-object capping three.js's
+stencil examples do by clearing the stencil between objects, and what the
+window's signed stencil count already gave it (two overlapping shells count
+±2, not 0). And a parity is only as good as its count: a sample on a shared
+edge used to fall to neither triangle in f32, which drew a line down an M10
+bolt's cut face; GOTCHAS, "A section cap with a line through it".
 
 **What is reported, because the failure is silent.** A plane clear of the
 material, or one this view looks *along*, produces a perfectly ordinary picture

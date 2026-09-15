@@ -1,7 +1,7 @@
 {
   "name": "split-halves",
   "script": "eval/scripts/split-halves.js",
-  "why": "A part printed in two halves — the shape DSL_GAPS §9 said needed a flag and two evaluations. Each half is 23800 minus a 735.419 mm³ circular segment of the bore, 23064.581 mm³ by the closed form in the script, the two sum to the one-piece block less the kerf, and the clearance between them is the 0.5 mm kerf exactly. Eight faces each: five of the box, the bore's arc, and the cut plane in two strips because the bore's chord parts it. The right half is the left mirrored, so a mirror that stopped reflecting would put the two on top of each other and read as interfering.",
+  "why": "A part printed in two halves — the shape DSL_GAPS §9 said needed a flag and two evaluations. Each half is 23800 minus a 735.419 mm³ circular segment of the bore, 23064.581 mm³ by the closed form in the script, the two sum to the one-piece block less the kerf, and the clearance between them is the 0.5 mm kerf exactly. Eight faces each: five of the box, the bore's arc, and the cut plane in two strips because the bore's chord parts it. The right half is the left mirrored, so a mirror that stopped reflecting would put the two on top of each other and read as interfering. The renders hold the region map to the rule that a tagged copy is named for itself: `right` is `left.mirror(\"x\").tag(\"right\")`, and every face of it carried both names with `left` first, so the whole part painted `left` and `right` owned 0 pixels. The front and top views look along and down the mirror plane, so the halves are pixel-for-pixel reflections and each owns half the tagged surface exactly (24768 and 48189 pixels each, measured). The iso view is derived from projected areas, each face's area times its cosine to the view (1/√3 for every face seen): left shows its top, 1190 less the bore's 36.771 mm² segment, and its 595 mm² -Y side; right shows the same two and its 800 mm² +X end, while left's kerf face is hidden behind right. 1748 against 2548 is 0.407 for left; the band allows the slivers of kerf and bore wall that show past the edges (measured 0.419).",
   "brep": {
     "size": [
       60.0,
@@ -53,6 +53,50 @@
         "clearance_mm": 0.5,
         "interference_mm3": 0.0
       }
-    }
+    },
+    "renders": [
+      {
+        "view": "front",
+        "size": 256,
+        "tag_fraction": {
+          "left": [
+            0.495,
+            0.505
+          ],
+          "right": [
+            0.495,
+            0.505
+          ]
+        }
+      },
+      {
+        "view": "top",
+        "size": 256,
+        "tag_fraction": {
+          "left": [
+            0.495,
+            0.505
+          ],
+          "right": [
+            0.495,
+            0.505
+          ]
+        }
+      },
+      {
+        "view": "iso",
+        "size": 256,
+        "tag_fraction": {
+          "left": [
+            0.39,
+            0.45
+          ],
+          "right": [
+            0.55,
+            0.61
+          ]
+        }
+      }
+    ]
   }
 }

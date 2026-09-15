@@ -1,7 +1,7 @@
 {
   "name": "interfering-bodies",
   "script": "eval/scripts/interfering-bodies.js",
-  "why": "Two bodies drawn through each other are reported, not refused: the boss's lower 5 mm lies inside the plate, so the pair is `interfering` by π·25·5 = 392.699 mm³ with no clearance to report, while each body alone is intact. The interference is exact (BRepGProp on the common solid) and holds at the corpus tolerance; the boss's own 1570.796 mm³ is read off its 0.01 mm mesh, which polygonises a Ø10 cylinder 0.13% short, hence the wider volume tolerance. The part-level bodies and voids are the count of two closed mesh shells that cross each other, recorded as measured and not to be read as the part's piece count — between_bodies is.",
+  "why": "Two bodies drawn through each other are reported, not refused: the boss's lower 5 mm lies inside the plate, so the pair is `interfering` by π·25·5 = 392.699 mm³ with no clearance to report, while each body alone is intact. The interference is exact (BRepGProp on the common solid) and holds at the corpus tolerance; the boss's own 1570.796 mm³ is read off its 0.01 mm mesh, which polygonises a Ø10 cylinder 0.13% short, hence the wider volume tolerance. The part-level bodies and voids are the count of two closed mesh shells that cross each other, recorded as measured and not to be read as the part's piece count — between_bodies is. The renders hold a section through the overlap: cut on Y at 0, the cut face is the union of the plate's 40 x 10 and the boss's 10 x 20, 400 + 200 - 50 = 550 mm², measured from the cut pixels and the plane's angle to the view (551.8 front, 549.6 iso). One crossing parity over both shells counts the shared 10 x 5 as empty and read 500, the boss's buried 5 mm drawn as a hole; every pixel of the plane inside that shared rectangle must now be cut face.",
   "brep": {
     "size": [
       40.0,
@@ -53,6 +53,47 @@
         "interference_mm3": 392.699
       }
     },
+    "renders": [
+      {
+        "view": "front",
+        "size": 256,
+        "section": {
+          "axis": "y",
+          "at_mm": 0.0,
+          "keep": "above"
+        },
+        "cut_area_mm2": 550.0,
+        "cut_within": [
+          [
+            -4.5,
+            -0.5,
+            0.5,
+            4.5,
+            0.5,
+            4.5
+          ]
+        ]
+      },
+      {
+        "view": "iso",
+        "size": 256,
+        "section": {
+          "axis": "y",
+          "at_mm": 0.0
+        },
+        "cut_area_mm2": 550.0,
+        "cut_within": [
+          [
+            -4.5,
+            -0.5,
+            0.5,
+            4.5,
+            0.5,
+            4.5
+          ]
+        ]
+      }
+    ],
     "tolerance": {
       "size_mm": 0.01,
       "volume_pct": 0.2,

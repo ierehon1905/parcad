@@ -123,9 +123,12 @@ pub struct EvaluateRequest {
     /// The reply then names every tag's colour and its share of the visible
     /// surface — every tag in the model, with the ones hidden from this angle
     /// marked `visible: false`, which is what tells you whether an edit is
-    /// invisible or absent. A face carries every tag its history gives it,
-    /// innermost first, and is coloured for the innermost; a fillet's faces
-    /// take the names of the faces its edge lay between.
+    /// invisible or absent. A face carries every tag its history gives it and
+    /// is coloured for the one nearest the node that made it: a tag inside a
+    /// union or cut wins over the union's own, and a tag on a moved, rotated,
+    /// scaled or mirrored copy wins over the tags inside what it copied, so
+    /// `a.mirror("x").tag("b")` shows as `b`. A fillet's faces take the names
+    /// of the faces its edge lay between.
     #[serde(default)]
     pub regions: Option<bool>,
     /// Cut the part open on a plane before drawing it, so the views show the

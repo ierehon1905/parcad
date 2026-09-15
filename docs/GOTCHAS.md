@@ -221,6 +221,29 @@ and the exports were never involved, and `Op::Mirror` is a different thing — b
 an agent reading a side view of a handed part got it backwards, which is a defect
 no amount of looking harder at the render would have caught.
 
+### A section cap with a line through it
+
+An M10 bolt and nut cut on Y and drawn iso showed a one-pixel dark line down
+the bolt's axis while the bolt measured one intact piece. Not the tessellation
+and not the second body: 138 uncapped samples, every one on column 768 of the
+1536-sample buffer, which is the model's x = −y line — and in iso that line is
+where the nut's vertical corner edge at (8.5, −8.5) projects *exactly*, as
+does any rod whose tessellation puts a vertex at 315°. A sample on an edge two triangles share passed neither triangle's
+f32 barycentric test (−5e-8 on both sides), so its ray lost one crossing, and
+the parity that decides cut face flipped all the way down. Sixteen more sat on
+thread flanks within half a voxel of the plane, where the clip compared the
+*rounded* depth and counted a crossing on the wrong side.
+
+The rasteriser now snaps corners to 1/256 px and evaluates edge functions in
+integers with the top-left rule, the rule Direct3D and OpenGL rasterisers use
+so that a sample on a shared edge belongs to exactly one triangle; the clip
+reads the unrounded depth. Parity is only as good as the crossing count, and a
+symmetric view puts real edges on the sample grid far more often than "an
+exact float coincidence" suggested. `eval/cases/section-m10-bolt-and-nut.json`
+holds the rod's core and the nut's section fully capped, and
+`a_section_cap_has_no_line_where_an_edge_lies_on_the_sample_grid` holds the rod
+alone at four sizes that drew the line before.
+
 ### A part can be five bodies and pass every check
 
 `examples/extrusion-2020.js` was in the corpus for months as one watertight part

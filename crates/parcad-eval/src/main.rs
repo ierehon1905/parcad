@@ -19,6 +19,7 @@
 //! an intended change is cheap to accept and an unintended one is still seen.
 
 mod case;
+mod render;
 mod run;
 
 use anyhow::{Context, Result};
@@ -187,6 +188,9 @@ fn judge(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (V
                         detail: message,
                     }),
                 }
+            }
+            if !expect.renders.is_empty() {
+                bad.extend(render::check(doc, &expect.renders));
             }
             let summary = format!(
                 "{:.2} x {:.2} x {:.2} mm, {:.2} mm³, {} tris{}",
