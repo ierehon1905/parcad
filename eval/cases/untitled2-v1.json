@@ -1,0 +1,58 @@
+{
+  "name": "untitled2-v1",
+  "script": "examples/fusion360/untitled2-v1.js",
+  "why": "A Fusion 360 recreation of both bodies, held to Fusion's own measurements: each is a revolve of the export's clamped uniform degree-5 B-spline pole rows, and the cup's two rim edges are filleted at 5 mm. Exact B-rep (this script's STEP, probed): Body1 36359.856 mm3 / 7027.379 mm2 against Fusion's 36356.903 / 7025.506 (+0.008% / +0.027%); Body2 126698.727 mm3 / 26405.298 mm2 against 126698.252 / 26405.273 (+0.0004% / +0.0001%); both bounding boxes the same. The export's own B-rep reads 36420.013 and 126430.918, off Fusion's figures by more than this recreation is. The recorded numbers are the runner's mesh-measured ones. The drop stands clear inside the cup, 19.296 mm at the closest.",
+  "brep": {
+    "size": [
+      97.085,
+      97.086,
+      111.131
+    ],
+    "volume_mm3": 163004.174,
+    "area_mm2": 33431.161,
+    "triangles": 284564,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 3100.323,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 7,
+    "edges": 23,
+    "curves": 5,
+    "named_bodies": {
+      "body1": {
+        "size": [
+          36.849,
+          36.851,
+          81.007
+        ],
+        "volume_mm3": 36340.608,
+        "faces": 1,
+        "edges": 4,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "body2": {
+        "size": [
+          97.085,
+          97.086,
+          41.928
+        ],
+        "volume_mm3": 126663.566,
+        "faces": 6,
+        "edges": 19,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "body1/body2": {
+        "verdict": "clear",
+        "clearance_mm": 19.296,
+        "interference_mm3": 0.0
+      }
+    }
+  }
+}

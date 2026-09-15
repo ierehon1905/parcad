@@ -1,23 +1,23 @@
 {
   "name": "hydraulic-line",
   "script": "examples/hydraulic-line.js",
-  "why": "Routed tube in a real part: three 90 degree bends of one radius, bored along the same route, with a boss at each end and an O-ring groove turned into the inlet boss. The two-rim selector is what says the bore still runs the whole route — a bend radius that stopped fitting would break the chain and leave a different number. The groove took 178.78 mm3 out of the 19340.75 the part measured without it, against 179.90 by Pappus: 0.6% under, which is tessellation under-reading a 1 mm concave radius and is the direction that error must have. It is also the shape that used to segfault UnifySameDomain in a cylinder wall, so a part carrying it is a second, in-context guard on the OCCT 8.0.1 fix that torus-gland holds directly.",
+  "why": "Routed tube in a real part: three 90 degree bends of one radius, bored along the same route, with a boss at each end and an O-ring gland turned into the inlet boss. The two-rim selector is what says the bore still runs the whole route — a bend radius that stopped fitting would break the chain and leave a different number. The gland is a catalogue section now, a 2.7 x 1.5 mm rectangle with 0.3 mm floor radii drawn as a revolve section, where it used to be a round-bottomed torus cut. By Pappus it removes 2 pi (w d (r + d/2) - 2 s (r + ds)) with r = 10.5, s = 0.09 - 0.0225 pi the spandrel area and ds = 0.3 (5/6 - pi/4)/(1 - pi/4) its centroid's inset: 283.712922 mm3. The exact B-rep (STEP probe) of the part with and without the cut differs by 19351.642732 - 19067.929810 = 283.712922. Coaxial seams like these in a cylinder wall once segfaulted UnifySameDomain, so the part is a second, in-context guard on the OCCT 8.0.1 fix that torus-gland holds directly.",
   "brep": {
     "size": [
       130.0,
       78.998,
       63.995
     ],
-    "volume_mm3": 19161.974,
-    "area_mm2": 15795.562,
-    "triangles": 41272,
+    "volume_mm3": 19057.366,
+    "area_mm2": 15804.29,
+    "triangles": 39086,
     "bodies": 1,
     "voids": 0,
     "stands_on_mm2": 0.0,
     "stands_on_patches": 0,
     "watertight": true,
-    "faces": 23,
-    "edges": 100,
-    "curves": 31
+    "faces": 26,
+    "edges": 108,
+    "curves": 34
   }
 }

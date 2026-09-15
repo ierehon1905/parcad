@@ -69,6 +69,7 @@ the document's *second* body, while the header recorded the first (see below).
 |---|---|---|
 | `retainer-v1.js` | plate with a bored, drafted disc | volume +0.0028%, bbox exact, all 23 faces the same surface types |
 | `../diamond-v19.js` | round brilliant, 57 planar facets | volume, area and bbox agree to every published digit; the same 57 planes — promoted up into `examples/`, measured by `eval/cases/diamond-v19.json` |
+| `untitled2-v1.js` | a wavy teardrop standing in a cup, both turned from splines (both bodies) | Body1 volume +0.008%, area +0.027%; Body2 volume +0.0004%, area +0.0001%, against Fusion's own measurements; both bboxes the same; the same faces as surfaces (Fusion writes each surface of revolution as a NURBS). Sections are the export's clamped uniform degree-5 pole rows, the cup's rim filleted at 5 mm — measured by `eval/cases/untitled2-v1.json` |
 | `untriangle-v3.js` | impossible-triangle ring of quarter-twisted bars (the export's body, Body12) | volume +0.00024%, area +0.00005%, bbox exact, the same 30 faces (18 plane, 12 nurbs); every twisted wall is the *identical* bilinear surface, corners matched to 1.2e-4 mm — measured by `eval/cases/untriangle-v3.json` |
 
 The diamond needed no new op at all. Fusion built it with BoundaryFill, but the
@@ -85,7 +86,7 @@ while reporting success.
 
 ## Targets that do not build yet
 
-Six more exports are measured but not buildable, and they live in
+Five more exports are measured but not recreated, and they live in
 `eval/targets/fusion360/`, which is not seeded: a part that only throws is a
 TODO, not an example. That README lists what each is blocked on.
 
@@ -111,12 +112,27 @@ UnTriangle's export properly. What that recreation taught, in order of worth:
   twisted loft as a straight prism. Vertex pairing is now literal, so a
   rotated outline authors a twist; docs/GOTCHAS.md has the story.
 
-Every remaining target above fails on the *section or path*, not on the op:
-four of the six carry spline sketch geometry the section type cannot hold, one
-rotates its sections up a helix, and one needs Patch, which stays out by
-decision. The next enabling change is a richer section type — arcs first,
-splines after — not another sweep or loft variant. See `docs/DSL_GAPS.md` and
-`docs/OP_ROADMAP.md`.
+This README used to end on "every remaining target fails on the *section or
+path*". The richer section type landed — arcs, rounds, splines, Béziers,
+B-splines, point sections in a loft, spline sweep paths — and moved exactly one
+of the four targets that were said to wait on it, `untitled2-v1`. Probing the
+other three before and after is what the change taught:
+
+- **A pole row copies into a section when the curve is uniform.** Untitled2's
+  walls are surfaces of revolution of clamped uniform degree-5 B-splines, so
+  `{ bspline, degree: 5 }` takes the export's poles verbatim and both bodies
+  land on Fusion's own volumes to 8e-5 and 4e-6 — closer than the export's
+  B-rep does.
+- **"Spline sections" can be a misreading of a fitted wall.** `v2`'s eight
+  NURBS walls, evaluated at their double knots, give back a square, a circle,
+  a turned square and a point: no spline in any sketch. Those sections build
+  now; the smooth surface OCCT fits between them is not the one Fusion fits,
+  and a smooth loft is exactly where two kernels owe each other nothing.
+- **An export can be a fit of a fillet, not a sketch.** `v4`'s outline is one
+  closed ~390-pole curve with the rim fillets merged into the wall, and its
+  header disagrees with its file by 7%.
+
+See `eval/targets/fusion360/README.md` for each.
 
 ## Exports not carried here
 

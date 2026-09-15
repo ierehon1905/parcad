@@ -18,6 +18,14 @@
 // and 32 NURBS faces where the sweep and its fillets leave the analytic
 // world entirely). See docs/DSL_GAPS.md and docs/OP_ROADMAP.md.
 //
+// Probed again when sections and paths gained curves (2026-09-15): it is not
+// waiting on a spline path. The 28 sphere faces are one r = 50 ball; the 8
+// tori are 0.3 mm tubes on great circles (major radius 49.976), circular
+// paths parcad already sweeps; the 224 cones and 168 planes are facets of a
+// patterned ornament cut around tilted axes, and the 32 NURBS faces are where
+// fillets meet them. Recreating it is reverse-engineering that pattern from
+// 460 faces, a different job from curves, and it was not attempted.
+//
 // This file throws rather than approximating. A stub that returned a rough
 // solid would measure as a part and read as progress, which is worse than
 // nothing — see "refuse rather than approximate" in CLAUDE.md. When it does

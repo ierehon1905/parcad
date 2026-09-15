@@ -3,10 +3,13 @@
 // APPROXIMATE, and deliberately so. A real GT2 tooth is a curvilinear profile
 // defined by the belt standard; here each groove is a cylinder on the pitch
 // circle, which is the right depth and pitch but not the right flank shape.
-// Printed, it runs; as a mould tool, it does not. The DSL has no way to sweep
-// an authored 2D profile around an axis (docs/DSL_GAPS.md), and inventing a
-// "close enough" tooth in the kernel would be exactly the approximation this
-// project refuses to make silently — so it is called out here instead.
+// Printed, it runs; as a mould tool, it does not. A section can hold arcs now,
+// so an arc-and-line groove extruded along the pulley axis is authorable
+// (docs/DSL_GAPS.md, "arcs in a section"); what is missing is the numbers.
+// The GT2 flank is published as a proprietary drawing, not as radii this file
+// can cite, and inventing a "close enough" tooth would be exactly the
+// approximation this project refuses to make silently — so it is called out
+// here instead.
 
 const teeth = 20;
 const pitch = 2;                          // GT2: 2 mm belt pitch
