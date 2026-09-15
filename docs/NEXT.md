@@ -42,8 +42,23 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    SOUND before the deletion: does-the-port-meet 8/8, does-the-laptop-fit 8/8,
    which-backend-measured 8/8, how-thin-is-it 8/8, what-is-hidden 8/8,
    where-is-the-feature 8/8, what-is-inside 6/8 SOUND and 2/8 LUCKY.
-3. **Threads that close** — diagnose the helical cut that opens at three turns
-   (OP_ROADMAP §5).
+3. **Threads that close** — running. Diagnose the helical cut that opens at
+   three turns (OP_ROADMAP §5), starting from the constructions that already
+   close on OpenCASCADE: its MakeBottle tutorial, cq/bd_warehouse, FreeCAD.
+3a. **Two render faults several bodies exposed** — found in the 2026-09-15
+   renders, fixed after threads:
+   - A mirrored or moved copy is coloured by its original's tag:
+     `split-halves` paints the right half `left` (`right` 0 pixels), because a
+     face takes the innermost tag its lineage carries. Decided: the tag nearest
+     the node that produced the face wins, so a copy shows its own name while a
+     feature tag inside the original still wins there.
+   - A section through two overlapping bodies leaves the overlap uncapped:
+     the cut fill counts surface crossings by parity, which is right for one
+     closed solid and even — so "empty" — where two cross.
+     `interfering-bodies` shows the boss's buried 5 mm as a hole in the plate.
+     Test material per body instead.
+   Each needs a case that pins the pixel counts (`right` > 0; the overlap
+   filled).
 4. **Curves in sections and paths** — arcs and splines in the profile type; four
    of `eval/targets/fusion360/` wait on it.
 5. **A playground in the browser** — the exact kernel built for WebAssembly on
