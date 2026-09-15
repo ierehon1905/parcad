@@ -49,6 +49,7 @@ build_occt() {
     -DCMAKE_BUILD_TYPE=Debug \
     -DBUILD_LIBRARY_TYPE=Static \
     -DBUILD_MODULE_Draw=FALSE \
+    -DBUILD_INCLUDE_SYMLINK=ON \
     -DUSE_D3D=FALSE -DUSE_DRACO=FALSE -DUSE_EIGEN=FALSE -DUSE_FFMPEG=FALSE \
     -DUSE_FREEIMAGE=FALSE -DUSE_FREETYPE=FALSE -DUSE_GLES2=FALSE -DUSE_OPENGL=FALSE \
     -DUSE_OPENVR=FALSE -DUSE_RAPIDJSON=FALSE -DUSE_TBB=FALSE -DUSE_TCL=FALSE \
@@ -67,6 +68,12 @@ build_occt() {
   find "$build" -name 'libTK*.a' -exec cp {} "$install/lib/" \;
   # Flat, as INSTALL_DIR_INCLUDE=include lays out the native install.
   cp -RL "$build/include/opencascade" "$install/include"
+  # Without symlinks OCCT writes one-line headers that #include the staged source
+  # by absolute path, an install that breaks once cached without occt-src.
+  if grep -rlq '^#include "/' "$install/include"; then
+    echo "opencascade: $install/include forwards into $staged; the install is not self-contained" >&2
+    exit 1
+  fi
   if grep -q -- '-O2' "$build/build.ninja" 2>/dev/null || grep -rq -- '-O2' "$build/CMakeFiles/rules.ninja" 2>/dev/null; then
     echo "opencascade: optimised (-O2)"
   else
