@@ -1,0 +1,23 @@
+{
+  "name": "domed-revolve",
+  "script": "eval/scripts/domed-revolve.js",
+  "why": "An arc in a revolve section: a domed cap. Closed form 8000 pi / 3 = 8377.580 mm3; exact B-rep 8377.580410 (STEP probe), faces cylinder + plane + sphere.",
+  "brep": {
+    "size": [
+      20.0,
+      20.0,
+      30.0
+    ],
+    "volume_mm3": 8370.517,
+    "area_mm2": 2198.224,
+    "triangles": 5470,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 313.953,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 3,
+    "edges": 9,
+    "curves": 2
+  }
+}

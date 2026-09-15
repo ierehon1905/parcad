@@ -1,0 +1,23 @@
+{
+  "name": "circle-section-ring",
+  "script": "eval/scripts/circle-section-ring.js",
+  "why": "A circle section in a revolve, against the torus closed form 2 pi^2 R r^2 = 4934.802 mm3; exact B-rep 4934.802201 (STEP probe), two torus faces (one per arc).",
+  "brep": {
+    "size": [
+      30.0,
+      29.99,
+      10.0
+    ],
+    "volume_mm3": 4926.516,
+    "area_mm2": 1972.792,
+    "triangles": 21066,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 0.0,
+    "stands_on_patches": 0,
+    "watertight": true,
+    "faces": 2,
+    "edges": 8,
+    "curves": 2
+  }
+}

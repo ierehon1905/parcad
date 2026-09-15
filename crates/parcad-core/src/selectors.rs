@@ -179,6 +179,10 @@ pub enum Dihedral {
 pub enum CurveKind {
     Line,
     Circle,
+    /// Neither straight nor a circular arc: a spline or Bézier from a section
+    /// or path, and also whatever else a boolean leaves — an ellipse, an
+    /// intersection curve, a helix.
+    Spline,
 }
 
 /// The material relationship of an edge.

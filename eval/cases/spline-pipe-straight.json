@@ -1,0 +1,23 @@
+{
+  "name": "spline-pipe-straight",
+  "script": "eval/scripts/spline-pipe-straight.js",
+  "why": "A spline path held to a closed form: collinear through-points make the chord-length cubic a straight line, so the pipe is a cylinder, 9 pi 30 = 848.230016 mm3. The exact B-rep reads 848.229790 (STEP probe), 2.7e-7 under: the swept wall is a B-spline surface MakePipeShell fits, not an analytic cylinder.",
+  "brep": {
+    "size": [
+      30.0,
+      5.995,
+      6.0
+    ],
+    "volume_mm3": 846.441,
+    "area_mm2": 621.618,
+    "triangles": 220,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 0.0,
+    "stands_on_patches": 0,
+    "watertight": true,
+    "faces": 3,
+    "edges": 6,
+    "curves": 2
+  }
+}

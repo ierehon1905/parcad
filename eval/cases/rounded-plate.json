@@ -1,0 +1,23 @@
+{
+  "name": "rounded-plate",
+  "script": "eval/scripts/rounded-plate.js",
+  "why": "Rounded corners authored in section. Closed form 5(800 - 9(4 - pi)) = 3961.372 mm3; exact B-rep 3961.371669 (STEP probe), 4 cylinders + 6 planes, 10 faces. A quarter-cylinder corner here is the same surface an .edges('|Z').fillet(3) would make, built without a rolling ball.",
+  "brep": {
+    "size": [
+      40.0,
+      20.0,
+      5.0
+    ],
+    "volume_mm3": 3961.075,
+    "area_mm2": 2158.628,
+    "triangles": 236,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 792.215,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 10,
+    "edges": 48,
+    "curves": 24
+  }
+}

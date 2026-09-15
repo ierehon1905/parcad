@@ -15,6 +15,7 @@ pub mod measure;
 pub mod mesh;
 mod occlusion;
 pub mod render;
+pub mod section;
 pub mod selectors;
 pub mod tags;
 pub mod view;

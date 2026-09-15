@@ -1,0 +1,23 @@
+{
+  "name": "stadium-extrude",
+  "script": "eval/scripts/stadium-extrude.js",
+  "why": "Arcs in an extruded section, both spellings: a through point and a radius. Closed form 4000 + 500 pi = 5570.796 mm3, area (40 + 10 pi)*20 + 2(200 + 25 pi) = 1985.398 mm2; the exact B-rep reads 5570.796327 and 1985.398163 (STEP probe), faces 2 cylinder + 4 plane. The mesh reads 0.04% under the volume, chord error on the two half cylinders.",
+  "brep": {
+    "size": [
+      30.0,
+      10.0,
+      20.0
+    ],
+    "volume_mm3": 5568.803,
+    "area_mm2": 1985.0,
+    "triangles": 292,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 278.44,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 6,
+    "edges": 24,
+    "curves": 12
+  }
+}

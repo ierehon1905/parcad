@@ -1,0 +1,23 @@
+{
+  "name": "stepped-shaft",
+  "script": "eval/scripts/stepped-shaft.js",
+  "why": "A re-entrant revolve section, one op for a stepped shaft. Closed form pi(100*10 + 36*20) = 5403.539 mm3; exact B-rep 5403.539364 (STEP probe), 2 cylinders and 3 planes. The mesh reads under it by the usual chord error on the cylinders.",
+  "brep": {
+    "size": [
+      20.0,
+      20.0,
+      30.0
+    ],
+    "volume_mm3": 5398.963,
+    "area_mm2": 2009.893,
+    "triangles": 704,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 313.953,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 5,
+    "edges": 12,
+    "curves": 4
+  }
+}

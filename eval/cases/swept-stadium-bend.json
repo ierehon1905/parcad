@@ -1,0 +1,23 @@
+{
+  "name": "swept-stadium-bend",
+  "script": "eval/scripts/swept-stadium-bend.js",
+  "why": "An arc section swept around a planar bend, against Pappus: A(40 + 10 pi) with A = 24 + 4 pi, 2611.421 mm3; exact B-rep 2611.421237 (STEP probe), faces 4 cylinder + 8 plane + 2 torus.",
+  "brep": {
+    "size": [
+      44.995,
+      44.995,
+      4.0
+    ],
+    "volume_mm3": 2608.319,
+    "area_mm2": 1826.629,
+    "triangles": 3662,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 428.463,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 14,
+    "edges": 56,
+    "curves": 28
+  }
+}

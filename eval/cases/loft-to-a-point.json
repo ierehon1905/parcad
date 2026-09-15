@@ -1,0 +1,23 @@
+{
+  "name": "loft-to-a-point",
+  "script": "eval/scripts/loft-to-a-point.js",
+  "why": "Arc sections in a loft, and a section that is a point. Closed form 1000 pi = 3141.593 mm3; exact B-rep 3141.592654 (STEP probe), the two ruled walls exact cones.",
+  "brep": {
+    "size": [
+      20.0,
+      20.0,
+      30.0
+    ],
+    "volume_mm3": 3137.945,
+    "area_mm2": 1307.074,
+    "triangles": 1738,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 313.953,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 3,
+    "edges": 10,
+    "curves": 5
+  }
+}

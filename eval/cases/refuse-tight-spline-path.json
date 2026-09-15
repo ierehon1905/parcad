@@ -1,0 +1,14 @@
+{
+  "name": "refuse-tight-spline-path",
+  "script": "eval/scripts/refuse-tight-spline-path.js",
+  "why": "A spline sweep path bending tighter than its section reaches is refused, naming the tightest radius and where it occurs.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "inside the section's own 12.00 mm reach",
+        "Spread the path's points"
+      ]
+    }
+  }
+}

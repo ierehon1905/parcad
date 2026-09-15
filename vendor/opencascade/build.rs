@@ -1,5 +1,5 @@
 fn main() {
-    cxx_build::bridges(["src/history.rs", "src/sweep.rs"])
+    cxx_build::bridges(["src/history.rs", "src/sweep.rs", "src/curve.rs"])
         .cpp(true)
         // OCCT 8.0 requires C++17; see vendor/opencascade-sys/build.rs.
         .std("c++17")
@@ -11,4 +11,6 @@ fn main() {
     println!("cargo:rerun-if-changed=include/history.hxx");
     println!("cargo:rerun-if-changed=src/sweep.rs");
     println!("cargo:rerun-if-changed=include/sweep.hxx");
+    println!("cargo:rerun-if-changed=src/curve.rs");
+    println!("cargo:rerun-if-changed=include/curve.hxx");
 }

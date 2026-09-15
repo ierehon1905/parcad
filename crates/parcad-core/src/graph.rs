@@ -5,6 +5,7 @@
 //! That separation is what let the exact B-rep kernel land, and later become
 //! the only one, without invalidating a single script.
 
+use crate::section::{self, BSpline, Section, SectionEntry};
 use crate::selectors::{EdgeExpectation, EdgeSelector, VertexSelector};
 use serde::{Deserialize, Serialize};
 
@@ -148,19 +149,67 @@ mod tests {
         assert!(matches!(target, EdgeTarget::Edges { .. }));
     }
 
-    const SQUARE: [[f64; 2]; 4] = [
-        [-20.0, -20.0],
-        [20.0, -20.0],
-        [20.0, 20.0],
-        [-20.0, 20.0],
-    ];
+    fn square() -> Vec<SectionEntry> {
+        [[-20.0, -20.0], [20.0, -20.0], [20.0, 20.0], [-20.0, 20.0]]
+            .map(SectionEntry::Point)
+            .to_vec()
+    }
+
+    #[test]
+    fn a_re_entrant_outline_builds_and_a_crossed_one_names_its_edges() {
+        let l: Vec<SectionEntry> = [[0.0, 0.0], [30.0, 0.0], [30.0, 10.0], [10.0, 10.0], [10.0, 25.0], [0.0, 25.0]]
+            .map(SectionEntry::Point)
+            .to_vec();
+        assert_eq!(Op::validate_outline(&l).unwrap().area, 450.0);
+        let bow: Vec<SectionEntry> = [[0.0, 0.0], [10.0, 10.0], [10.0, 0.0], [0.0, 10.0]].map(SectionEntry::Point).to_vec();
+        let err = Op::validate_outline(&bow).unwrap_err().to_string();
+        assert!(err.contains("crosses itself") && err.contains("point 0") && err.contains("point 2"), "{err}");
+        let err = Op::draft_inset(&l, 10.0, 3.0).unwrap_err().to_string();
+        assert!(err.contains("needs a convex outline of straight edges"), "{err}");
+    }
+
+    #[test]
+    fn an_arc_that_bulges_past_the_axis_is_refused() {
+        let dome: Vec<SectionEntry> =
+            serde_json::from_str("[[0,0],[10,0],{\"through\":[7.07,7.07]},[0,10]]").unwrap();
+        Op::validate_profile(&dome).unwrap();
+        let past: Vec<SectionEntry> = serde_json::from_str("[[0,-10],[5,0],[0,10],{\"through\":[-3,0]}]").unwrap();
+        let err = Op::validate_profile(&past).unwrap_err().to_string();
+        assert!(err.contains("left of the axis"), "{err}");
+    }
+
+    #[test]
+    fn loft_sections_pair_edges_and_may_end_on_a_point() {
+        let circle: Vec<SectionEntry> =
+            serde_json::from_str("[[10,0],{\"through\":[0,10]},[-10,0],{\"through\":[0,-10]}]").unwrap();
+        let apex = LoftSection { outline: vec![], z: 10.0, point: Some([0.0, 0.0]) };
+        let base = LoftSection { outline: circle.clone(), z: 0.0, point: None };
+        Op::validate_loft(&[base.clone(), apex.clone()]).unwrap();
+        let err = Op::validate_loft(&[base.clone(), LoftSection { z: 10.0, ..LoftSection { outline: square(), z: 0.0, point: None } }])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("same number of edges") && err.contains("has 4, section 0 has 2"), "{err}");
+        let err = Op::validate_loft(&[base, apex.clone(), LoftSection { outline: circle, z: 20.0, point: None }])
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("only the first or last"), "{err}");
+    }
+
+    #[test]
+    fn a_spline_path_tighter_than_its_section_is_refused() {
+        let path = [V3::new(0.0, 0.0, 0.0), V3::new(10.0, 3.0, 0.0), V3::new(20.0, 0.0, 0.0)];
+        Op::validate_sweep(&[], 1.0, &[], 0.0, None, &path, 1.0).unwrap();
+        let err = Op::validate_sweep(&[], 12.0, &[], 0.0, None, &path, 1.0).unwrap_err().to_string();
+        assert!(err.contains("inside the section's own 12.00 mm reach"), "{err}");
+    }
 
     #[test]
     fn a_positive_draft_pulls_the_top_in() {
         // The direction is the whole point: a mould releases upward, and a
         // frustum has the same volume either way up, so nothing downstream
         // would catch this being backwards.
-        let (inset, top) = Op::draft_inset(&SQUARE, 20.0, 5.0).unwrap();
+        let (_, inset, top) = Op::draft_inset(&square(), 20.0, 5.0).unwrap();
+        let top = top.unwrap();
         assert!((inset - 20.0 * 5f64.to_radians().tan()).abs() < 1e-12);
         assert_eq!(top.len(), 4);
         for [x, y] in top {
@@ -171,7 +220,8 @@ mod tests {
 
     #[test]
     fn a_negative_draft_pushes_it_out() {
-        let (inset, top) = Op::draft_inset(&SQUARE, 20.0, -5.0).unwrap();
+        let (_, inset, top) = Op::draft_inset(&square(), 20.0, -5.0).unwrap();
+        let top = top.unwrap();
         assert!(inset < 0.0);
         assert!(top.iter().all(|[x, _]| x.abs() > 20.0));
     }
@@ -179,7 +229,8 @@ mod tests {
     #[test]
     fn too_much_draft_reports_the_angle_that_would_work() {
         // A 10 mm wide rib cannot carry 30° over 40 mm: the walls meet at 20.
-        let err = Op::draft_inset(&[[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]], 40.0, 30.0)
+        let rib: Vec<SectionEntry> = [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0]].map(SectionEntry::Point).to_vec();
+        let err = Op::draft_inset(&rib, 40.0, 30.0)
             .unwrap_err()
             .to_string();
         assert!(err.contains("closes this outline"), "{err}");
@@ -223,7 +274,7 @@ mod tests {
 
     fn horn(end: f64, taper: f64) -> anyhow::Result<()> {
         let helix = Helix { radius: 12.0, end_radius: Some(end), pitch: 10.0, turns: 3.0, hand: Hand::Right };
-        Op::validate_sweep(&[], 2.0, &[], 0.0, Some(&helix), taper).map(|_| ())
+        Op::validate_sweep(&[], 2.0, &[], 0.0, Some(&helix), &[], taper).map(|_| ())
     }
 
     #[test]
@@ -238,13 +289,13 @@ mod tests {
     #[test]
     fn a_coil_through_its_own_turns_names_the_pitch_that_clears() {
         let helix = Helix { radius: 10.0, end_radius: None, pitch: 2.0, turns: 3.0, hand: Hand::Left };
-        let err = Op::validate_sweep(&[], 1.0, &[], 0.0, Some(&helix), 1.0).unwrap_err().to_string();
+        let err = Op::validate_sweep(&[], 1.0, &[], 0.0, Some(&helix), &[], 1.0).unwrap_err().to_string();
         assert!(err.contains("Use a pitch above 2.00 mm"), "{err}");
         let loose = Helix { pitch: 2.1, ..helix };
-        Op::validate_sweep(&[], 1.0, &[], 0.0, Some(&loose), 1.0).unwrap();
+        Op::validate_sweep(&[], 1.0, &[], 0.0, Some(&loose), &[], 1.0).unwrap();
         // A single turn has no neighbour to run into.
         let single = Helix { turns: 1.0, ..helix };
-        Op::validate_sweep(&[], 1.0, &[], 0.0, Some(&single), 1.0).unwrap();
+        Op::validate_sweep(&[], 1.0, &[], 0.0, Some(&single), &[], 1.0).unwrap();
     }
 
     #[test]
@@ -395,25 +446,25 @@ pub enum Op {
         h: f64,
     },
 
-    /// A closed convex polygon in the (radius, z) half-plane, revolved a full
-    /// turn about +Z.
+    /// A closed section in the (radius, z) half-plane, revolved a full turn
+    /// about +Z.
     ///
-    /// This is the primitive that a cone, a countersink cutter, a tapered hub or
-    /// a V-groove ring is made of — shapes that the three fixed primitives
-    /// cannot produce at all. The profile is authored in *section*, which is how
-    /// a turned part is drawn and dimensioned.
+    /// This is the primitive that a cone, a countersink cutter, a tapered hub,
+    /// a V-groove ring or a domed cap is made of — shapes that the three fixed
+    /// primitives cannot produce at all. The profile is authored in *section*,
+    /// which is how a turned part is drawn and dimensioned, with straight
+    /// edges, arcs and splines ([`crate::section`]).
     ///
-    /// Two constraints, both checked in [`Op::validate_profile`]:
-    ///
-    /// - **radius >= 0.** A profile crossing the axis sweeps through itself, and
-    ///   what comes back is neither the shape asked for nor an error.
-    /// - **convex.** A re-entrant section is refused rather than built: a
-    ///   stepped profile is authored as a union of convex revolves, which is
-    ///   also how it is turned, and keeps every section one the checks can
-    ///   reason about.
+    /// Checked in [`Op::validate_profile`]: **radius >= 0** everywhere along
+    /// the boundary, because a profile crossing the axis sweeps through
+    /// itself and what comes back is neither the shape asked for nor an
+    /// error; and a boundary that does not cross itself. A re-entrant
+    /// (stepped) section is allowed: a revolution pairs nothing, so the
+    /// reason convexity was once required went with the implicit kernel.
     Revolve {
-        /// `[radius, z]` pairs, anticlockwise, first point not repeated.
-        profile: Vec<[f64; 2]>,
+        /// `[radius, z]` corners and curve entries, anticlockwise, first
+        /// corner not repeated.
+        profile: Vec<SectionEntry>,
     },
 
     /// A circle of radius `minor` swept round the +Z axis at radius `major`.
@@ -437,20 +488,20 @@ pub enum Op {
         sweep: f64,
     },
 
-    /// A closed convex polygon in the XY plane, given a thickness along Z.
+    /// A closed outline in the XY plane, given a thickness along Z.
     ///
     /// The counterpart of [`Op::Revolve`] for a part that is *drawn* rather than
-    /// turned: a plate outline, a cam blank, a hexagon. It is centred on the
-    /// origin in Z like every other primitive, so the section runs from
-    /// `-height / 2` to `+height / 2`; the profile carries its own placement in
-    /// X and Y, exactly as a revolve section does in radius and z.
+    /// turned: a plate outline, a cam blank, a hexagon, an L-bracket. It is
+    /// centred on the origin in Z like every other primitive, so the section
+    /// runs from `-height / 2` to `+height / 2`; the profile carries its own
+    /// placement in X and Y, exactly as a revolve section does in radius and z.
     ///
-    /// Convexity is required for the same reason as on a revolve, and has the
-    /// same escape: an L-bracket outline is a union of two convex prisms, which
-    /// is also how it would be fabricated.
+    /// Any outline that does not cross itself; a draft still needs a convex
+    /// polygon, because the inset is a half-plane intersection.
     Extrude {
-        /// `[x, y]` pairs, anticlockwise, first point not repeated.
-        profile: Vec<[f64; 2]>,
+        /// `[x, y]` corners and curve entries, anticlockwise, first corner not
+        /// repeated.
+        profile: Vec<SectionEntry>,
         /// Full thickness along Z.
         height: f64,
         /// Draft angle in degrees: the walls lean in by this much going up, so
@@ -466,24 +517,22 @@ pub enum Op {
         draft: f64,
     },
 
-    /// Skin a solid through two or more convex outlines stacked along +Z.
+    /// Skin a solid through two or more outlines stacked along +Z.
     ///
     /// This is the op that was held while a second, implicit kernel had no
     /// honest answer for it — a loft between two arbitrary outlines has no
     /// closed-form distance, and that kernel refused it by name rather than
     /// approximate. The exact kernel builds it, and is the only one now.
     ///
-    /// Sections are convex for the same reason extrude and revolve sections
-    /// are, plus one of loft's own: OCCT matches section vertices to build the
-    /// wall, and a re-entrant section makes that correspondence — and with it
-    /// the whole surface — an unstated guess. A stepped or hollow loft is a
-    /// boolean of convex ones.
+    /// The wall pairs section edges by index, taken literally, so every
+    /// section resolves to the same number of edges; the first or last
+    /// section may instead be a single point, which the wall closes onto.
     Loft {
         /// Sections bottom to top, each at its own strictly increasing height.
         sections: Vec<LoftSection>,
         /// `false` (the default) makes each wall segment ruled — straight
         /// lines between consecutive sections, so the surface is exactly the
-        /// convex-hull skin of its sections. `true` fits one smooth B-spline
+        /// skin of its sections. `true` fits one smooth B-spline
         /// surface through all of them, which is Fusion's default look; the
         /// backend then *measures* that the fitted surface stayed inside the
         /// sections' own bounding box and refuses if it bulged past it, so
@@ -492,25 +541,23 @@ pub enum Op {
         smooth: bool,
     },
 
-    /// Sweep a convex outline along a path of straight runs joined by
-    /// circular bends — the same path a `pipe` takes, with an authored
-    /// section in place of the circle.
+    /// Sweep an outline along a path of straight runs joined by circular
+    /// bends — the same path a `pipe` takes, with an authored section in place
+    /// of the circle — or along a helix, or a spline.
     ///
-    /// The path model is deliberately the one a bender or a router can
-    /// follow — runs and tangent arcs — rather than a spline, whose reach the
-    /// kernel's checks could not bound in closed form.
-    ///
-    /// The spine is either that path or a [`Helix`] — a spring, a coil, a
-    /// spiral horn — and the section is either an authored outline or a circle
-    /// of radius `circle`, which is what a tapered or helical `pipe()` lowers
-    /// to. `taper` scales the section along the spine.
+    /// The spine is that path, a [`Helix`] — a spring, a coil, a spiral horn —
+    /// or a smooth cubic through `spline` points; the section is either an
+    /// authored outline or a circle of radius `circle`, which is what a
+    /// tapered, helical or spline `pipe()` lowers to. `taper` scales the
+    /// section along the spine.
     Sweep {
-        /// `[x, y]` pairs, anticlockwise, first point not repeated. Drawn in
-        /// the plane perpendicular to the spine's start, with the outline's +Y
-        /// kept as close to global +Z as that tangent allows; on a helix, +X
-        /// points away from the axis. Empty when `circle` is given.
+        /// `[x, y]` corners and curve entries, anticlockwise, first corner not
+        /// repeated. Drawn in the plane perpendicular to the spine's start,
+        /// with the outline's +Y kept as close to global +Z as that tangent
+        /// allows; on a helix, +X points away from the axis. Empty when
+        /// `circle` is given.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        profile: Vec<[f64; 2]>,
+        profile: Vec<SectionEntry>,
         /// Radius of a round section centred on the spine, in place of
         /// `profile`.
         #[serde(default, skip_serializing_if = "is_zero")]
@@ -527,6 +574,10 @@ pub enum Op {
         /// A helical spine in place of `path`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         helix: Option<Helix>,
+        /// Points a smooth spine passes through, in place of `path`: the
+        /// chord-length cubic of [`section::interpolate`], natural at both ends.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        spline: Vec<V3>,
         /// Scale of the section at the spine's end, from 1 at its start,
         /// linear along the spine's length and about the spine itself.
         #[serde(default = "unit_scale", skip_serializing_if = "is_unit_scale")]
@@ -682,13 +733,35 @@ pub struct NamedBody {
     pub child: NodeId,
 }
 
-/// One [`Op::Loft`] section: a convex outline lying in the plane at `z`.
+/// One [`Op::Loft`] section: an outline lying in the plane at `z`, or, for
+/// the first or last section only, a single point the wall closes onto.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LoftSection {
-    /// `[x, y]` pairs, anticlockwise, first point not repeated.
-    pub outline: Vec<[f64; 2]>,
+    /// `[x, y]` corners and curve entries, anticlockwise, first corner not
+    /// repeated. Empty when `point` is given.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outline: Vec<SectionEntry>,
     /// Height of the plane this section lies in.
     pub z: f64,
+    /// An apex in place of an outline.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub point: Option<[f64; 2]>,
+}
+
+/// The XY box over a loft's sections, as `(min, max)`: every outline's own
+/// bounds and every apex point. `resolved` is [`Op::validate_loft`]'s answer.
+pub fn loft_extent(sections: &[LoftSection], resolved: &[Option<Section>]) -> ([f64; 2], [f64; 2]) {
+    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+    for (section, outline) in sections.iter().zip(resolved) {
+        let (a, b) = match (outline, section.point) {
+            (Some(outline), _) => outline.bounds(),
+            (None, Some(p)) => (p, p),
+            (None, None) => continue,
+        };
+        lo = [lo[0].min(a[0]), lo[1].min(a[1])];
+        hi = [hi[0].max(b[0]), hi[1].max(b[1])];
+    }
+    (lo, hi)
 }
 
 fn is_false(value: &bool) -> bool {
@@ -860,17 +933,17 @@ impl Helix {
 }
 
 /// An [`Op::Sweep`]'s section, whichever way it was given.
-#[derive(Debug, Clone, Copy)]
-pub enum SweepSection<'a> {
-    Outline(&'a [[f64; 2]]),
+#[derive(Debug, Clone)]
+pub enum SweepSection {
+    Outline(Section),
     Circle(f64),
 }
 
-impl SweepSection<'_> {
+impl SweepSection {
     /// The farthest the section reaches from the spine, at scale 1.
     pub fn reach(&self) -> f64 {
         match self {
-            Self::Outline(points) => points.iter().fold(0.0f64, |acc, [x, y]| acc.max(x.hypot(*y))),
+            Self::Outline(section) => section.reach(),
             Self::Circle(r) => *r,
         }
     }
@@ -878,9 +951,7 @@ impl SweepSection<'_> {
     /// The farthest the section reaches along the in-plane direction `(dx, dy)`.
     fn reach_along(&self, dx: f64, dy: f64) -> f64 {
         match self {
-            Self::Outline(points) => points
-                .iter()
-                .fold(0.0f64, |acc, [x, y]| acc.max(x * dx + y * dy)),
+            Self::Outline(section) => section.extent_along([dx, dy]).max(0.0),
             Self::Circle(r) => r * dx.hypot(dy),
         }
     }
@@ -888,9 +959,10 @@ impl SweepSection<'_> {
     /// The section's extent along its own +Y: `(lowest, highest)`.
     fn y_extent(&self) -> (f64, f64) {
         match self {
-            Self::Outline(points) => points
-                .iter()
-                .fold((f64::MAX, f64::MIN), |(lo, hi), [_, y]| (lo.min(*y), hi.max(*y))),
+            Self::Outline(section) => {
+                let (lo, hi) = section.bounds();
+                (lo[1], hi[1])
+            }
             Self::Circle(r) => (-r, *r),
         }
     }
@@ -901,6 +973,45 @@ impl SweepSection<'_> {
 pub enum SweepSpine {
     Path(Vec<SpinePiece>),
     Helix(Helix),
+    Spline(BSpline<3>),
+}
+
+/// How far a sweep's spine turns tighter than `reach` anywhere along it, as
+/// the smallest radius of curvature and the parameter it occurs at: sampled
+/// per knot span and refined by golden section around the tightest sample.
+pub fn tightest_bend(curve: &BSpline<3>) -> (f64, f64) {
+    let radius_at = |t: f64| {
+        let d = curve.derivatives(t, 2);
+        let (v, a) = (nalgebra::Vector3::from(d[1]), nalgebra::Vector3::from(d[2]));
+        let speed = v.norm();
+        let bend = v.cross(&a).norm();
+        if bend <= 1e-300 { f64::INFINITY } else { speed * speed * speed / bend }
+    };
+    let mut best = (f64::INFINITY, 0.0);
+    for (lo, hi) in curve.spans() {
+        const SAMPLES: usize = 64;
+        let step = (hi - lo) / SAMPLES as f64;
+        let (mut worst_t, mut worst) = (lo, f64::INFINITY);
+        for i in 0..=SAMPLES {
+            let t = lo + step * i as f64;
+            let r = radius_at(t);
+            if r < worst {
+                (worst, worst_t) = (r, t);
+            }
+        }
+        let (mut a, mut b) = ((worst_t - step).max(lo), (worst_t + step).min(hi));
+        let g = (5f64.sqrt() - 1.0) / 2.0;
+        for _ in 0..60 {
+            let (c, d) = (b - g * (b - a), a + g * (b - a));
+            if radius_at(c) < radius_at(d) { b = d } else { a = c }
+        }
+        let t = (a + b) / 2.0;
+        let r = radius_at(t).min(worst);
+        if r < best.0 {
+            best = (r, t);
+        }
+    }
+    best
 }
 
 fn unit_scale() -> f64 {
@@ -1039,39 +1150,42 @@ impl SectionKind {
         }
     }
 
-    /// What to build instead, when the section is re-entrant.
-    fn workaround(self) -> &'static str {
-        match self {
-            Self::Revolve => "build a stepped profile as a union of convex revolves",
-            Self::Extrude => "build the outline as a union of convex prisms",
-        }
-    }
 }
 
 impl Op {
-    /// Check a [`Op::Revolve`] profile, and report the signed area.
+    /// Check a [`Op::Revolve`] profile and resolve it; `area` is signed,
+    /// positive anticlockwise in the (radius, z) plane.
     ///
-    /// The sign is the winding: positive is anticlockwise in the (radius, z)
-    /// plane. Called before anything is built, because every rejected case
-    /// here is one that produces a *plausible* solid rather than an error — a
-    /// profile crossing the axis sweeps through itself, and a re-entrant one
-    /// builds a solid whose vertex pairing is a silent guess.
-    pub fn validate_profile(profile: &[[f64; 2]]) -> anyhow::Result<f64> {
-        for (i, [r, _]) in profile.iter().enumerate() {
-            if *r < 0.0 {
-                anyhow::bail!(
-                    "revolve profile point {i} has radius {r}, which is left of the axis. A profile that crosses the axis sweeps through itself; mirror it so every radius is >= 0"
-                );
+    /// Called before anything is built, because every rejected case here is
+    /// one that produces a *plausible* solid rather than an error — a profile
+    /// crossing the axis sweeps through itself. For a curve the check reads
+    /// its control points, which contain it, so a curve that only a control
+    /// point takes past the axis is refused too.
+    pub fn validate_profile(profile: &[SectionEntry]) -> anyhow::Result<Section> {
+        for (i, entry) in profile.iter().enumerate() {
+            if let SectionEntry::Point([r, _]) = entry {
+                if *r < 0.0 {
+                    anyhow::bail!(
+                        "revolve profile point {i} has radius {r}, which is left of the axis. A profile that crosses the axis sweeps through itself; mirror it so every radius is >= 0"
+                    );
+                }
             }
         }
-        Self::validate_section(profile, SectionKind::Revolve)
+        let section = Self::validate_section(profile, SectionKind::Revolve)?;
+        let leftmost = section.leftmost();
+        if leftmost < -1e-9 {
+            anyhow::bail!(
+                "revolve profile reaches radius {leftmost:.4}, left of the axis: an arc bulges past it or a curve's control point lies there. A profile that crosses the axis sweeps through itself; keep every arc and control point at radius >= 0"
+            );
+        }
+        Ok(section)
     }
 
-    /// Check an [`Op::Extrude`] profile, and report the signed area.
+    /// Check an [`Op::Extrude`] profile and resolve it.
     ///
     /// Same rules as a revolve section minus the axis: an extruded outline may
     /// sit anywhere in XY, including across the origin.
-    pub fn validate_outline(profile: &[[f64; 2]]) -> anyhow::Result<f64> {
+    pub fn validate_outline(profile: &[SectionEntry]) -> anyhow::Result<Section> {
         Self::validate_section(profile, SectionKind::Extrude)
     }
 
@@ -1097,23 +1211,22 @@ impl Op {
         Ok(())
     }
 
-    /// Check an [`Op::Loft`]'s sections.
+    /// Check an [`Op::Loft`]'s sections and resolve each: `None` for an apex.
     ///
     /// Validated before the kernel sees it, so an authoring mistake reads as
     /// the mistake it is rather than as a kernel refusal.
-    pub fn validate_loft(sections: &[LoftSection]) -> anyhow::Result<()> {
+    pub fn validate_loft(sections: &[LoftSection]) -> anyhow::Result<Vec<Option<Section>>> {
         if sections.len() < 2 {
             anyhow::bail!(
-                "a loft needs at least 2 sections; got {}. Each section is a convex outline at its own height",
+                "a loft needs at least 2 sections; got {}. Each section is an outline at its own height",
                 sections.len()
             );
         }
+        let mut resolved = Vec::with_capacity(sections.len());
         for (i, section) in sections.iter().enumerate() {
             if !section.z.is_finite() {
                 anyhow::bail!("loft section {i} is at height {}, which is not a height", section.z);
             }
-            Self::validate_outline(&section.outline)
-                .map_err(|e| anyhow::anyhow!("loft section {i}: {e}"))?;
             if i > 0 && section.z <= sections[i - 1].z {
                 anyhow::bail!(
                     "loft sections must rise strictly: section {i} is at z = {}, below or level with section {} at z = {}. Reorder them bottom to top, and give coincident sections one outline",
@@ -1122,19 +1235,63 @@ impl Op {
                     sections[i - 1].z
                 );
             }
-            // The pairing is by index, taken literally — that is what lets a
-            // rotated outline author a twisted wall — so every section must
-            // offer the same number of vertices to pair. The kernel is not
-            // allowed to invent a correspondence.
-            if section.outline.len() != sections[0].outline.len() {
-                anyhow::bail!(
-                    "loft sections must all have the same number of outline points, because walls pair vertices by index: section {i} has {}, section 0 has {}. Repeat a vertex (a collinear point is allowed) to make the counts match",
-                    section.outline.len(),
-                    sections[0].outline.len()
-                );
+            match (&section.point, section.outline.is_empty()) {
+                (Some(point), true) => {
+                    if i != 0 && i != sections.len() - 1 {
+                        anyhow::bail!(
+                            "loft section {i} is a point, but only the first or last section may be one: a wall cannot pass through a point and open out again. Split it into two lofts that meet there"
+                        );
+                    }
+                    if !point[0].is_finite() || !point[1].is_finite() {
+                        anyhow::bail!("loft section {i}'s point is not a finite [x, y] pair");
+                    }
+                    resolved.push(None);
+                }
+                (None, false) => {
+                    let outline = Self::validate_outline(&section.outline)
+                        .map_err(|e| anyhow::anyhow!("loft section {i}: {e}"))?;
+                    resolved.push(Some(outline));
+                }
+                (Some(_), false) => anyhow::bail!(
+                    "loft section {i} has both an outline and a point; give one: {{ z, outline }} or {{ z, point: [x, y] }}"
+                ),
+                (None, true) => anyhow::bail!(
+                    "loft section {i} has neither an outline nor a point; give {{ z, outline: [[x, y], ...] }}"
+                ),
             }
         }
-        Ok(())
+        if resolved.iter().all(Option::is_none) {
+            anyhow::bail!("a loft between points alone has no volume; give at least one section an outline");
+        }
+        // The pairing is by index, taken literally — that is what lets a
+        // rotated outline author a twisted wall — so every section must
+        // offer the same number of edges to pair. The kernel is not allowed
+        // to invent a correspondence.
+        let outlines: Vec<(usize, &Section)> =
+            resolved.iter().enumerate().filter_map(|(i, s)| s.as_ref().map(|s| (i, s))).collect();
+        let (first, reference) = outlines[0];
+        if outlines.iter().all(|(_, s)| s.is_polygon()) {
+            for &(i, _) in &outlines {
+                if sections[i].outline.len() != sections[first].outline.len() {
+                    anyhow::bail!(
+                        "loft sections must all have the same number of outline points, because walls pair vertices by index: section {i} has {}, section {first} has {}. Repeat a vertex (a collinear point is allowed) to make the counts match",
+                        sections[i].outline.len(),
+                        sections[first].outline.len()
+                    );
+                }
+            }
+        } else {
+            for &(i, s) in &outlines {
+                if s.segments.len() != reference.segments.len() {
+                    anyhow::bail!(
+                        "loft sections must all have the same number of edges, because walls pair them by index, a straight edge, an arc or a curve each counting one (a rounded corner adds an arc): section {i} has {}, section {first} has {}. Split an edge with an extra corner — a circle is two or more arcs between corners — to make the counts match",
+                        s.segments.len(),
+                        reference.segments.len()
+                    );
+                }
+            }
+        }
+        Ok(resolved)
     }
 
     /// Resolve an [`Op::Sweep`] path into runs and bend arcs, refusing what
@@ -1145,33 +1302,32 @@ impl Op {
     /// and it lives here so the graph refuses exactly what the backend cannot
     /// build, with the same numbers in the message.
     pub fn sweep_spine(
-        profile: &[[f64; 2]],
+        profile: &[SectionEntry],
         path: &[V3],
         bend: f64,
     ) -> anyhow::Result<Vec<SpinePiece>> {
-        Self::validate_outline(profile)?;
-        Self::path_spine(SweepSection::Outline(profile), path, bend, 1.0)
+        let section = Self::validate_outline(profile)?;
+        Self::path_spine(&SweepSection::Outline(section), path, bend, 1.0)
     }
 
     /// Check every field of an [`Op::Sweep`] together and resolve its section
     /// and spine — the one entry point the kernel and the bounds call, so
     /// they refuse the same sweeps with the same words.
-    pub fn validate_sweep<'a>(
-        profile: &'a [[f64; 2]],
+    #[allow(clippy::too_many_arguments)]
+    pub fn validate_sweep(
+        profile: &[SectionEntry],
         circle: f64,
         path: &[V3],
         bend: f64,
         helix: Option<&Helix>,
+        spline: &[V3],
         taper: f64,
-    ) -> anyhow::Result<(SweepSection<'a>, SweepSpine)> {
+    ) -> anyhow::Result<(SweepSection, SweepSpine)> {
         let section = match (profile.is_empty(), circle) {
-            (false, c) if c == 0.0 => {
-                Self::validate_outline(profile)?;
-                SweepSection::Outline(profile)
-            }
+            (false, c) if c == 0.0 => SweepSection::Outline(Self::validate_outline(profile)?),
             (true, c) if c.is_finite() && c > 0.0 => SweepSection::Circle(c),
             (true, c) if c == 0.0 => anyhow::bail!(
-                "a sweep needs a section: a convex `profile` outline, or a `circle` radius for a round one"
+                "a sweep needs a section: a `profile` outline, or a `circle` radius for a round one"
             ),
             (true, c) => anyhow::bail!("a sweep's round section has radius {c}, which is not a radius"),
             (false, _) => anyhow::bail!(
@@ -1185,19 +1341,57 @@ impl Op {
         }
         // A tapered section is never larger than its bigger end.
         let grow = taper.max(1.0);
+        let spines = [!path.is_empty(), helix.is_some(), !spline.is_empty()];
+        if spines.iter().filter(|given| **given).count() > 1 {
+            anyhow::bail!(
+                "a sweep follows one spine — a `path` of points, a `helix` or a `spline` — not several; drop all but one"
+            );
+        }
         let spine = match helix {
             Some(helix) => {
-                if !path.is_empty() || bend != 0.0 {
+                if bend != 0.0 {
                     anyhow::bail!(
-                        "a sweep follows a `path` of points or a `helix`, not both; drop the path (and its bend) to sweep along the helix"
+                        "a helical sweep has no corners to bend; drop the bend to sweep along the helix"
                     );
                 }
                 Self::validate_helix(helix, &section, taper)?;
                 SweepSpine::Helix(*helix)
             }
-            None => SweepSpine::Path(Self::path_spine(section, path, bend, grow)?),
+            None if !spline.is_empty() => {
+                if bend != 0.0 {
+                    anyhow::bail!("a spline sweep has no corners to bend; drop the bend option");
+                }
+                SweepSpine::Spline(Self::spline_spine(spline, section.reach() * grow)?)
+            }
+            None => SweepSpine::Path(Self::path_spine(&section, path, bend, grow)?),
         };
         Ok((section, spine))
+    }
+
+    /// The smooth spine through `points`, refused where it bends tighter
+    /// than the section reaches, which would sweep the inside of the bend
+    /// through itself.
+    fn spline_spine(points: &[V3], reach: f64) -> anyhow::Result<BSpline<3>> {
+        if points.len() < 3 {
+            anyhow::bail!(
+                "a spline sweep path needs at least 3 points to curve through; got {}. A straight run is a path of 2 points",
+                points.len()
+            );
+        }
+        if let Some(i) = points.iter().position(|p| !p.x.is_finite() || !p.y.is_finite() || !p.z.is_finite()) {
+            anyhow::bail!("spline sweep path point {i} is not a finite [x, y, z] triple");
+        }
+        let raw: Vec<[f64; 3]> = points.iter().map(|p| [p.x, p.y, p.z]).collect();
+        let curve = section::interpolate(&raw, None, None).map_err(|e| anyhow::anyhow!("sweep path: {e}"))?;
+        let (tightest, t) = tightest_bend(&curve);
+        if tightest <= reach + 1e-9 {
+            let at = curve.point(t);
+            anyhow::bail!(
+                "the spline path bends to a radius of {tightest:.2} mm near ({:.2}, {:.2}, {:.2}), inside the section's own {reach:.2} mm reach, so the inside of that bend would sweep through itself. Spread the path's points further apart there, or use a smaller section",
+                at[0], at[1], at[2]
+            );
+        }
+        Ok(curve)
     }
 
     /// Refuse a helix that is not one, or that sweeps its section through the
@@ -1266,7 +1460,7 @@ impl Op {
     }
 
     fn path_spine(
-        section: SweepSection,
+        section: &SweepSection,
         path: &[V3],
         bend: f64,
         grow: f64,
@@ -1408,7 +1602,8 @@ impl Op {
             .then_some(normal)
     }
 
-    /// The top outline of a drafted extrusion, and how far it moved.
+    /// The resolved outline of an extrusion, how far a draft moves its top,
+    /// and the top outline when there is a draft.
     ///
     /// Computed here rather than in the kernel, so the refusal for a draft that
     /// collapses the outline is decided once, from the graph.
@@ -1416,12 +1611,13 @@ impl Op {
     /// The inset is a half-plane intersection rather than a per-vertex offset,
     /// because on a convex outline that is the definition — and it degrades the
     /// right way, by losing an edge, where corner arithmetic produces a bow tie.
+    /// That is also why a draft still needs a convex polygon.
     pub fn draft_inset(
-        profile: &[[f64; 2]],
+        profile: &[SectionEntry],
         height: f64,
         draft_degrees: f64,
-    ) -> anyhow::Result<(f64, Vec<[f64; 2]>)> {
-        let area = Self::validate_outline(profile)?;
+    ) -> anyhow::Result<(Section, f64, Option<Vec<[f64; 2]>>)> {
+        let section = Self::validate_outline(profile)?;
         if draft_degrees.abs() >= 90.0 {
             anyhow::bail!(
                 "draft of {draft_degrees}° is not a wall angle; it must be between -90 and 90"
@@ -1429,13 +1625,19 @@ impl Op {
         }
         let inset = height * draft_degrees.to_radians().tan();
         if inset == 0.0 {
-            return Ok((0.0, profile.to_vec()));
+            return Ok((section, 0.0, None));
         }
+        let polygon = match &section.polygon {
+            Some(points) if section::polygon_is_convex(points) => points.clone(),
+            _ => anyhow::bail!(
+                "a draft of {draft_degrees}° needs a convex outline of straight edges, because the drafted top is the outline's edges moved inward, and a re-entrant corner, an arc or a curve has no such inset here. Extrude this outline without draft, or draft a convex polygon and round its vertical edges with .fillet() afterwards"
+            ),
+        };
 
-        let points: Vec<[f64; 2]> = if area < 0.0 {
-            profile.iter().rev().copied().collect()
+        let points: Vec<[f64; 2]> = if section.area < 0.0 {
+            polygon.iter().rev().copied().collect()
         } else {
-            profile.to_vec()
+            polygon
         };
         let Some(top) = clip_inward(&points, inset) else {
             // Report the angle that would just work, measured rather than
@@ -1456,64 +1658,43 @@ impl Op {
                 "a draft of {draft_degrees}° closes this outline before the top of a {height} mm extrusion. The most it takes is about {most:.2}°; deepen the outline, shorten the extrusion, or build it as two"
             );
         };
-        Ok((inset, top))
+        Ok((section, inset, Some(top)))
     }
 
-    fn validate_section(profile: &[[f64; 2]], kind: SectionKind) -> anyhow::Result<f64> {
-        if profile.len() < 3 {
+    fn validate_section(profile: &[SectionEntry], kind: SectionKind) -> anyhow::Result<Section> {
+        let corners = profile.iter().filter(|e| matches!(e, SectionEntry::Point(_))).count();
+        if corners == profile.len() && profile.len() < 3 {
             anyhow::bail!(
-                "a {} profile needs at least 3 points; got {}. Author it as {} pairs, e.g. {}",
+                "a {} profile needs at least 3 points; got {}. Author it as {} pairs, e.g. {}, with {{ through: [x, y] }} between two points for an arc",
                 kind.op(),
                 profile.len(),
                 kind.pair(),
                 kind.example()
             );
         }
-        for (i, [u, v]) in profile.iter().enumerate() {
-            if !u.is_finite() || !v.is_finite() {
+        let what = format!("{} profile", kind.op());
+        let section = section::resolve(profile, &what).map_err(|e| anyhow::anyhow!(e))?;
+
+        if let Some(points) = &section.polygon {
+            // Convex polygons skip the pairwise test: they cannot cross
+            // themselves, and every section built before re-entrant ones
+            // were allowed takes exactly the path it always did.
+            if !section::polygon_is_convex(points) {
+                if let Some((i, j)) = section::polygon_self_intersection(points) {
+                    anyhow::bail!(
+                        "{} profile crosses itself: the edge from point {i} and the edge from point {j} meet. List the points in order around the outline, anticlockwise, so no two edges touch except at the corner they share",
+                        kind.op()
+                    );
+                }
+            }
+            if section.area.abs() < 1e-12 {
                 anyhow::bail!(
-                    "{} profile point {i} is not a finite {} pair",
-                    kind.op(),
-                    kind.pair()
+                    "{} profile encloses no area; its points are collinear or repeated",
+                    kind.op()
                 );
             }
         }
-
-        // Shoelace area, and the cross product at each corner. A convex polygon
-        // turns the same way at every corner; the area's sign says which way.
-        let n = profile.len();
-        let mut area = 0.0;
-        let mut turn: Option<f64> = None;
-        for i in 0..n {
-            let a = profile[i];
-            let b = profile[(i + 1) % n];
-            let c = profile[(i + 2) % n];
-            area += a[0] * b[1] - b[0] * a[1];
-
-            let cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0]);
-            // Collinear corners are allowed: they are a redundant point, not a
-            // dent, and refusing them would reject a profile a generator wrote.
-            if cross.abs() > 1e-12 {
-                match turn {
-                    Some(previous) if previous * cross < 0.0 => anyhow::bail!(
-                        "{} profile is not convex at point {}. A re-entrant section is refused rather than approximated; {}",
-                        kind.op(),
-                        (i + 1) % n,
-                        kind.workaround()
-                    ),
-                    _ => turn = Some(cross),
-                }
-            }
-        }
-        let area = area / 2.0;
-
-        if area.abs() < 1e-12 {
-            anyhow::bail!(
-                "{} profile encloses no area; its points are collinear or repeated",
-                kind.op()
-            );
-        }
-        Ok(area)
+        Ok(section)
     }
 }
 

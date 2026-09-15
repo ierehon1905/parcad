@@ -299,3 +299,20 @@ The law's parameter is worth knowing: `BRepFill_Sweep` maps it across spine
 edges by curvilinear length at the edge boundaries but linearly in each edge's
 own curve parameter inside one, which is length on a line or an arc and turn
 angle on the helix edge above.
+
+## `curve`: `Edge::bspline`, `Shape::loft_through`, `LoftProfile`
+
+A third bridge, `src/curve.rs` over `include/curve.hxx`, added for sections
+made of arcs and splines.
+
+- `Edge::bspline(poles, knots, mults, degree)` — a non-rational, non-periodic
+  `Geom_BSplineCurve` from explicit poles, distinct knots and multiplicities,
+  made into an edge. The upstream `Edge::spline` is an empty stub; this takes
+  poles rather than through-points on purpose, because parcad resolves every
+  spline, Bézier and B-spline section entry to its poles before the kernel
+  runs (see `crates/parcad-core/src/section.rs`).
+- `Shape::loft_through(sections, ruled)` — `BRepOffsetAPI_ThruSections` into a
+  solid with `CheckCompatibility(false)`, like `Solid::loft_sections`, where a
+  section is `LoftProfile::Wire` or `LoftProfile::Point` (`AddVertex`, first
+  or last only). Returns a `Shape` and an `Err` string on a builder failure or
+  a caught `Standard_Failure` instead of casting an unbuilt result.

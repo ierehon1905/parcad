@@ -1,0 +1,14 @@
+{
+  "name": "refuse-arc-radius-too-small",
+  "script": "eval/scripts/refuse-arc-radius-too-small.js",
+  "why": "An arc radius shorter than half its chord is refused with the smallest radius that fits (a half circle), rather than silently enlarged.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "less than half",
+        "The smallest is 10.000 mm"
+      ]
+    }
+  }
+}

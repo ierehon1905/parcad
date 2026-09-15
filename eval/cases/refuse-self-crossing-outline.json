@@ -1,0 +1,15 @@
+{
+  "name": "refuse-self-crossing-outline",
+  "script": "eval/scripts/refuse-self-crossing-outline.js",
+  "why": "A self-crossing polygon is refused in the graph layer, naming the two edges, now that convexity no longer screens it out.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "crosses itself",
+        "point 0",
+        "point 2"
+      ]
+    }
+  }
+}

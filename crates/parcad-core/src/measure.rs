@@ -3,7 +3,7 @@
 //! An agent should not have to squint at a render to learn a dimension. Anything
 //! that can be answered as a number is answered as a number.
 
-use crate::graph::{Doc, NodeId, Op, SweepSpine, ThreadForm, V3};
+use crate::graph::{loft_extent, Doc, NodeId, Op, SweepSpine, ThreadForm, V3};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -219,15 +219,14 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
         }
         // A full revolution reaches its widest radius in every direction, so the
         // box is the profile's radius extent squared off, and its z extent kept.
+        // A curve is bounded by its control points, which contain it.
         Op::Revolve { profile } => {
-            Op::validate_profile(profile)?;
-            let r = profile.iter().fold(0.0f64, |acc, [r, _]| acc.max(*r));
-            let (z_min, z_max) = profile.iter().fold((f64::MAX, f64::MIN), |(lo, hi), [_, z]| {
-                (lo.min(*z), hi.max(*z))
-            });
+            let section = Op::validate_profile(profile)?;
+            let (lo, hi) = section.bounds();
+            let r = hi[0].max(0.0);
             Aabb {
-                min: V3::new(-r, -r, z_min),
-                max: V3::new(r, r, z_max),
+                min: V3::new(-r, -r, lo[1]),
+                max: V3::new(r, r, hi[1]),
             }
         }
 
@@ -240,53 +239,48 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
             height,
             draft,
         } => {
-            let (inset, _) = Op::draft_inset(profile, *height, *draft)?;
+            let (section, inset, _) = Op::draft_inset(profile, *height, *draft)?;
             let grow = (-inset).max(0.0);
-            let (mut lo, mut hi) = (V3::new(f64::MAX, f64::MAX, 0.0), V3::new(f64::MIN, f64::MIN, 0.0));
-            for [x, y] in profile {
-                lo = V3::new(lo.x.min(*x), lo.y.min(*y), -height.abs() / 2.0);
-                hi = V3::new(hi.x.max(*x), hi.y.max(*y), height.abs() / 2.0);
-            }
+            let (lo, hi) = section.bounds();
+            let half = height.abs() / 2.0;
             Aabb {
-                min: V3::new(lo.x - grow, lo.y - grow, lo.z),
-                max: V3::new(hi.x + grow, hi.y + grow, hi.z),
+                min: V3::new(lo[0] - grow, lo[1] - grow, -half),
+                max: V3::new(hi[0] + grow, hi[1] + grow, half),
             }
         }
 
         // A ruled loft lies inside the convex hull of its sections, so the box
-        // over every section point bounds it exactly at the sections and
+        // over every section bounds it exactly at the sections and
         // conservatively between them. A smooth loft's fitted surface can in
         // principle bulge past that hull; the B-rep backend *measures* the
         // built solid against this same box and refuses one that escaped, so
         // the claim made here stays conservative rather than assumed.
         Op::Loft { sections, .. } => {
-            Op::validate_loft(sections)?;
-            let mut lo = V3::new(f64::MAX, f64::MAX, sections[0].z);
-            let mut hi = V3::new(f64::MIN, f64::MIN, sections[sections.len() - 1].z);
-            for section in sections {
-                for [x, y] in &section.outline {
-                    lo = V3::new(lo.x.min(*x), lo.y.min(*y), lo.z);
-                    hi = V3::new(hi.x.max(*x), hi.y.max(*y), hi.z);
-                }
+            let resolved = Op::validate_loft(sections)?;
+            let (lo, hi) = loft_extent(sections, &resolved);
+            Aabb {
+                min: V3::new(lo[0], lo[1], sections[0].z),
+                max: V3::new(hi[0], hi[1], sections[sections.len() - 1].z),
             }
-            Aabb { min: lo, max: hi }
         }
 
         // Every swept point lies within the section's reach — at the larger
         // end of a taper — of the spine. A path's spine (runs trimmed to their
         // tangent points, arcs inside each corner's own triangle) lies inside
         // the box over its points; a helix's inside the cylinder of its larger
-        // radius, over its height about z = 0.
+        // radius, over its height about z = 0; a spline's inside its control
+        // points.
         Op::Sweep {
             profile,
             circle,
             path,
             bend,
             helix,
+            spline,
             taper,
         } => {
             let (section, spine) =
-                Op::validate_sweep(profile, *circle, path, *bend, helix.as_ref(), *taper)?;
+                Op::validate_sweep(profile, *circle, path, *bend, helix.as_ref(), spline, *taper)?;
             let reach = section.reach() * taper.max(1.0);
             let (lo, hi) = match spine {
                 SweepSpine::Helix(helix) => {
@@ -299,6 +293,14 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
                     for p in path {
                         lo = V3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
                         hi = V3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
+                    }
+                    (lo, hi)
+                }
+                SweepSpine::Spline(curve) => {
+                    let (mut lo, mut hi) = (V3::splat(f64::MAX), V3::splat(f64::MIN));
+                    for [x, y, z] in &curve.poles {
+                        lo = V3::new(lo.x.min(*x), lo.y.min(*y), lo.z.min(*z));
+                        hi = V3::new(hi.x.max(*x), hi.y.max(*y), hi.z.max(*z));
                     }
                     (lo, hi)
                 }

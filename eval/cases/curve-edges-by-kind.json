@@ -1,0 +1,58 @@
+{
+  "name": "curve-edges-by-kind",
+  "script": "eval/scripts/curve-edges-by-kind.js",
+  "why": "Selectors on edges made from section curves: the four arc rims of a slot answer curve: \"circle\" and the two rims of a Bezier wall answer curve: \"spline\", each held by expect({ count }) and treated (a chamfer on the arcs, a fillet on the B-spline edges) so a classification that drifts refuses by name.",
+  "brep": {
+    "size": [
+      30.0,
+      15.0,
+      15.0
+    ],
+    "volume_mm3": 2177.948,
+    "area_mm2": 1386.435,
+    "triangles": 6676,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 243.527,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 20,
+    "edges": 80,
+    "curves": 40,
+    "named_bodies": {
+      "arch": {
+        "size": [
+          20.0,
+          10.0,
+          4.0
+        ],
+        "volume_mm3": 524.92,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "slot": {
+        "size": [
+          30.0,
+          10.0,
+          6.0
+        ],
+        "volume_mm3": 1653.028,
+        "faces": 14,
+        "edges": 56,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "slot/arch": {
+        "verdict": "clear",
+        "clearance_mm": 5.0,
+        "interference_mm3": 0.0
+      }
+    }
+  }
+}

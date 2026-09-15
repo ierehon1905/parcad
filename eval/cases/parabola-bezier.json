@@ -1,0 +1,23 @@
+{
+  "name": "parabola-bezier",
+  "script": "eval/scripts/parabola-bezier.js",
+  "why": "A Bezier section against Archimedes' quadrature of the parabola: 2/3 * 20 * 10 * 3 = 400 mm3. Exact B-rep 400.000000 (STEP probe); the curved wall is one B-spline surface, not a polygon.",
+  "brep": {
+    "size": [
+      20.0,
+      10.0,
+      3.0
+    ],
+    "volume_mm3": 399.696,
+    "area_mm2": 415.218,
+    "triangles": 450,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 133.246,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 4,
+    "edges": 12,
+    "curves": 6
+  }
+}

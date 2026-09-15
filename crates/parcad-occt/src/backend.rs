@@ -16,13 +16,15 @@ use opencascade::{
     adhoc::AdHocShape,
     angle::Angle,
     primitives::{BooleanShape, Edge, Face, Shape, Solid, Wire},
+    curve::LoftProfile,
     sweep::{Helix as SweptHelix, HelixByTurn, SweepFrame},
 };
 use parcad_core::{
     graph::{
-        ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, Hand, NodeId, Op,
+        loft_extent, ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, Hand, NodeId, Op,
         SpinePiece, SweepSection, SweepSpine, ThreadForm, V3,
     },
+    section::{Section, Segment},
     selectors::{
         parse_edge_selector, parse_vertex_selector, Axis, AxisDirection, CurveKind,
         EdgeExpectation, EdgeExtrema, EdgeQuery, EdgeRole, EdgeSelector, EdgeSelectorTerm,
@@ -35,6 +37,60 @@ use std::collections::{BTreeMap, HashSet};
 
 fn v(p: V3) -> DVec3 {
     DVec3::new(p.x, p.y, p.z)
+}
+
+/// The wire of a resolved section, every corner, arc point and control point
+/// placed by `place`, which must be affine for the curves to stay exact.
+fn section_wire(section: &Section, place: impl Fn([f64; 2]) -> DVec3) -> Result<Wire> {
+    if let Some(points) = &section.polygon {
+        // A polygon is built exactly as it was before sections had curves, so
+        // every straight-edged part keeps its geometry to the bit.
+        let points: Vec<DVec3> = points.iter().map(|p| place(*p)).collect();
+        let edges: Vec<Edge> = points
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| {
+                let b = points[(i + 1) % points.len()];
+                // Skip a repeated point: OCCT refuses a zero-length edge, and
+                // the polygon is unchanged without it.
+                (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
+            })
+            .collect();
+        return Ok(Wire::from_edges(&edges));
+    }
+    let edges = section
+        .segments
+        .iter()
+        .map(|segment| match segment {
+            Segment::Line { a, b } => Ok(Edge::segment(place(*a), place(*b))),
+            Segment::Arc { a, mid, b, .. } => Ok(Edge::arc(place(*a), place(*mid), place(*b))),
+            Segment::Curve(curve) => {
+                let poles: Vec<DVec3> = curve.poles.iter().map(|p| place(*p)).collect();
+                let (knots, mults) = curve.distinct_knots();
+                Edge::bspline(&poles, &knots, &mults, curve.degree).map_err(|e| anyhow::anyhow!(e))
+            }
+        })
+        .collect::<Result<Vec<Edge>>>()?;
+    Ok(Wire::from_edges(&edges))
+}
+
+/// The planar face a section wire bounds, checked by `BRepCheck` unless the
+/// section is a convex polygon, which cannot touch itself.
+///
+/// The graph refuses a polygon that crosses itself by name; an arc or spline
+/// that runs into another edge is caught here instead, on the exact curves.
+fn checked_face(section: &Section, wire: &Wire, what: &str) -> Result<Face> {
+    let face = Face::from_wire(wire);
+    if section.polygon.as_deref().is_some_and(parcad_core::section::polygon_is_convex) {
+        return Ok(face);
+    }
+    if let Err(report) = Shape::from(face.clone()).check_validity(true) {
+        bail!(
+            "the {what} touches or crosses itself — an arc or curve runs into another edge — so it bounds no single region. Move the through point, radius or control points so the outline passes each place once. The kernel's check said: {}",
+            report.lines().take(3).collect::<Vec<_>>().join("; ")
+        );
+    }
+    Ok(face)
 }
 
 /// Bounding box of a shape, from its tessellation.
@@ -1629,6 +1685,7 @@ fn select_query(
                 None => true,
                 Some(CurveKind::Line) => edge.curve == EdgeCurveKind::Line,
                 Some(CurveKind::Circle) => edge.curve == EdgeCurveKind::Circle,
+                Some(CurveKind::Spline) => edge.curve == EdgeCurveKind::Other,
             };
             let role_matches = match query.role {
                 None => true,
@@ -2784,33 +2841,20 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
 
         Op::Revolve { profile } => {
             breadcrumb(&format!(
-                "revolve node {id} ({label}) of a {}-point section",
+                "revolve node {id} ({label}) of a {}-entry section",
                 profile.len()
             ));
             // The graph owns the rules; the kernel only reports where they
             // were broken.
-            Op::validate_profile(profile)
+            let section = Op::validate_profile(profile)
                 .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
 
             // The section is drawn in the XZ plane at y = 0: x is the radius,
             // which is the plane the revolution sweeps out of.
-            let points: Vec<DVec3> = profile
-                .iter()
-                .map(|[r, z]| DVec3::new(*r, 0.0, *z))
-                .collect();
-
-            let edges: Vec<Edge> = points
-                .iter()
-                .enumerate()
-                .filter_map(|(i, a)| {
-                    let b = points[(i + 1) % points.len()];
-                    // Skip a repeated point: OCCT refuses a zero-length edge,
-                    // and the polygon is unchanged without it.
-                    (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
-                })
-                .collect();
-
-            let face = Face::from_wire(&Wire::from_edges(&edges));
+            let wire = section_wire(&section, |[r, z]| DVec3::new(r, 0.0, z))
+                .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+            let face = checked_face(&section, &wire, "revolve profile")
+                .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
             let solid = face.revolve(DVec3::ZERO, DVec3::Z, None);
 
             let placed = Shape::from(solid);
@@ -2859,7 +2903,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             draft,
         } => {
             breadcrumb(&format!(
-                "extrude node {id} ({label}) of a {}-point outline, {height} mm thick, {draft}° draft",
+                "extrude node {id} ({label}) of a {}-entry outline, {height} mm thick, {draft}° draft",
                 profile.len()
             ));
             if !height.is_finite() || *height <= 0.0 {
@@ -2867,38 +2911,46 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             }
             // The graph owns the rules, including how much draft this outline
             // can carry, so the refusal is decided before the kernel builds.
-            let (_, top) = Op::draft_inset(profile, *height, *draft)
+            let (section, _, top) = Op::draft_inset(profile, *height, *draft)
                 .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
 
             // The outline is drawn at z = -height/2 and swept up, which centres
             // the solid on the origin like every other primitive.
             let base = -height / 2.0;
-            let ring = |points: &[[f64; 2]], z: f64| {
-                let points: Vec<DVec3> = points
-                    .iter()
-                    .map(|[x, y]| DVec3::new(*x, *y, z))
-                    .collect();
-                let edges: Vec<Edge> = points
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, a)| {
-                        let b = points[(i + 1) % points.len()];
-                        // Skip a repeated point: OCCT refuses a zero-length
-                        // edge, and the polygon is unchanged without it.
-                        (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
-                    })
-                    .collect();
-                Wire::from_edges(&edges)
-            };
-
-            let solid = if *draft == 0.0 {
-                Face::from_wire(&ring(profile, base)).extrude(DVec3::Z * *height)
-            } else {
+            let solid = match top {
+                None => {
+                    let wire = section_wire(&section, |[x, y]| DVec3::new(x, y, base))
+                        .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+                    checked_face(&section, &wire, "extrude profile")
+                        .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?
+                        .extrude(DVec3::Z * *height)
+                }
                 // A drafted prism is a loft between the outline and its inset
                 // copy. `BRepOffsetAPI_DraftAngle` is not bound, and it would be
                 // the wrong tool anyway: it modifies faces of a finished solid,
-                // while this builds the tapered walls directly.
-                Solid::loft([&ring(profile, base), &ring(&top, base + height)])
+                // while this builds the tapered walls directly. The graph only
+                // lets a convex polygon carry a draft.
+                Some(top) => {
+                    let ring = |points: &[[f64; 2]], z: f64| {
+                        let points: Vec<DVec3> = points
+                            .iter()
+                            .map(|[x, y]| DVec3::new(*x, *y, z))
+                            .collect();
+                        let edges: Vec<Edge> = points
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(i, a)| {
+                                let b = points[(i + 1) % points.len()];
+                                // Skip a repeated point: OCCT refuses a zero-length
+                                // edge, and the polygon is unchanged without it.
+                                (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
+                            })
+                            .collect();
+                        Wire::from_edges(&edges)
+                    };
+                    let outline = section.polygon.as_deref().unwrap_or_default();
+                    Solid::loft([&ring(outline, base), &ring(&top, base + height)])
+                }
             };
 
             let placed = Shape::from(solid);
@@ -2916,27 +2968,45 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 "loft node {id} ({label}) through {} sections",
                 sections.len()
             ));
-            Op::validate_loft(sections).map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+            let resolved = Op::validate_loft(sections)
+                .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
 
-            let ring = |points: &[[f64; 2]], z: f64| {
-                let points: Vec<DVec3> =
-                    points.iter().map(|[x, y]| DVec3::new(*x, *y, z)).collect();
-                let edges: Vec<Edge> = points
+            let mut wires: Vec<Option<Wire>> = Vec::with_capacity(sections.len());
+            for (i, (section, outline)) in sections.iter().zip(&resolved).enumerate() {
+                wires.push(match outline {
+                    Some(outline) => {
+                        let z = section.z;
+                        let wire = section_wire(outline, |[x, y]| DVec3::new(x, y, z))
+                            .map_err(|e| anyhow::anyhow!("node {id} ({label}) section {i}: {e}"))?;
+                        checked_face(outline, &wire, "loft section")
+                            .map_err(|e| anyhow::anyhow!("node {id} ({label}) section {i}: {e}"))?;
+                        Some(wire)
+                    }
+                    None => None,
+                });
+            }
+            let plain = resolved.iter().all(|s| s.as_ref().is_some_and(Section::is_polygon));
+            let shape = if plain {
+                let wires: Vec<Wire> = wires.into_iter().flatten().collect();
+                Shape::from(Solid::loft_sections(&wires, !*smooth))
+            } else {
+                let profiles: Vec<LoftProfile> = sections
                     .iter()
-                    .enumerate()
-                    .filter_map(|(i, a)| {
-                        let b = points[(i + 1) % points.len()];
-                        (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
+                    .zip(&wires)
+                    .map(|(section, wire)| match (wire, section.point) {
+                        (Some(wire), _) => LoftProfile::Wire(wire),
+                        (None, Some([x, y])) => LoftProfile::Point(DVec3::new(x, y, section.z)),
+                        (None, None) => unreachable!("validate_loft gives every section an outline or a point"),
                     })
                     .collect();
-                Wire::from_edges(&edges)
+                let lofted = Shape::loft_through(&profiles, !*smooth)
+                    .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+                let mut lofted = lofted.single_solid().unwrap_or(lofted);
+                if lofted.signed_volume() < 0.0 {
+                    lofted = lofted.oriented_outward();
+                }
+                lofted
             };
-            let wires: Vec<Wire> = sections
-                .iter()
-                .map(|s| ring(&s.outline, s.z))
-                .collect();
-            let solid = Solid::loft_sections(&wires, !*smooth);
-            let shape = Shape::from(solid);
 
             // The graph promised the mesher and the renderer that the loft
             // stays inside its sections' bounding box. Ruled walls cannot
@@ -2944,16 +3014,9 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             // principle, bulge past it — so the promise is measured on the
             // shape in hand rather than assumed, the same bargain as offset's
             // slip check.
-            let (mut lo, mut hi) = (
-                DVec3::new(f64::MAX, f64::MAX, sections[0].z),
-                DVec3::new(f64::MIN, f64::MIN, sections[sections.len() - 1].z),
-            );
-            for section in sections {
-                for [x, y] in &section.outline {
-                    lo = DVec3::new(lo.x.min(*x), lo.y.min(*y), lo.z);
-                    hi = DVec3::new(hi.x.max(*x), hi.y.max(*y), hi.z);
-                }
-            }
+            let (xy_lo, xy_hi) = loft_extent(sections, &resolved);
+            let lo = DVec3::new(xy_lo[0], xy_lo[1], sections[0].z);
+            let hi = DVec3::new(xy_hi[0], xy_hi[1], sections[sections.len() - 1].z);
             let after = bbox(&shape);
             let bulge = (lo - after.0).max(after.1 - hi).max_element().max(0.0);
             if bulge > SLIP_TOLERANCE_MM {
@@ -2980,6 +3043,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             path,
             bend,
             helix,
+            spline,
             taper,
         } => {
             breadcrumb(&format!(
@@ -2987,7 +3051,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 if profile.is_empty() {
                     format!("round section of radius {circle}")
                 } else {
-                    format!("{}-point profile", profile.len())
+                    format!("{}-entry profile", profile.len())
                 },
                 match helix {
                     Some(h) => format!(
@@ -2997,13 +3061,14 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                         h.pitch,
                         h.turns
                     ),
+                    None if !spline.is_empty() => format!("a spline through {} points", spline.len()),
                     None => format!("{} path points", path.len()),
                 }
             ));
             // One resolver, shared with the bounds: what it refuses here, the
             // graph refuses with the same words.
             let (section, spine) =
-                Op::validate_sweep(profile, *circle, path, *bend, helix.as_ref(), *taper)
+                Op::validate_sweep(profile, *circle, path, *bend, helix.as_ref(), spline, *taper)
                     .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
 
             let p3 = |p: &parcad_core::graph::V3| DVec3::new(p.x, p.y, p.z);
@@ -3034,6 +3099,24 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                         hi = hi.max(p3(p));
                     }
                     (Wire::from_edges(&spine_edges), start, tangent, (lo, hi))
+                }
+                SweepSpine::Spline(curve) => {
+                    let poles: Vec<DVec3> = curve.poles.iter().map(|&[x, y, z]| DVec3::new(x, y, z)).collect();
+                    let (knots, mults) = curve.distinct_knots();
+                    let edge = Edge::bspline(&poles, &knots, &mults, curve.degree)
+                        .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+                    let d = curve.derivatives(curve.domain().0, 1);
+                    let (mut lo, mut hi) = (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN));
+                    for p in &poles {
+                        lo = lo.min(*p);
+                        hi = hi.max(*p);
+                    }
+                    (
+                        Wire::from_edges([&edge]),
+                        DVec3::from(d[0]),
+                        DVec3::from(d[1]).normalize(),
+                        (lo, hi),
+                    )
                 }
                 SweepSpine::Helix(h) => {
                     let exact = SweptHelix {
@@ -3089,30 +3172,22 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             if matches!(spine, SweepSpine::Helix(_)) && u_axis.x < 0.0 {
                 u_axis = -u_axis;
             }
-            let section_wire = match section {
-                SweepSection::Outline(points) => {
-                    let placed: Vec<DVec3> = points
-                        .iter()
-                        .map(|[x, y]| start + u_axis * *x + v_axis * *y)
-                        .collect();
-                    let edges: Vec<Edge> = placed
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, a)| {
-                            let b = placed[(i + 1) % placed.len()];
-                            (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
-                        })
-                        .collect();
-                    Wire::from_edges(&edges)
+            let section_wire = match &section {
+                SweepSection::Outline(outline) => {
+                    let wire = section_wire(outline, |[x, y]| start + u_axis * x + v_axis * y)
+                        .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+                    checked_face(outline, &wire, "sweep profile")
+                        .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+                    wire
                 }
-                SweepSection::Circle(r) => Wire::from_edges([&Edge::circle(start, tangent, r)]),
+                SweepSection::Circle(r) => Wire::from_edges([&Edge::circle(start, tangent, *r)]),
             };
 
             let frame = match &spine {
-                SweepSpine::Path(_) => SweepFrame::CorrectedFrenet,
+                SweepSpine::Path(_) | SweepSpine::Spline(_) => SweepFrame::CorrectedFrenet,
                 SweepSpine::Helix(_) => SweepFrame::Frenet,
             };
-            let swept = match (&spine, *taper == 1.0, section) {
+            let swept = match (&spine, *taper == 1.0, &section) {
                 // The original sweep, untouched: MakePipe's corrected Frenet
                 // frame along runs and arcs.
                 (SweepSpine::Path(_), true, SweepSection::Outline(_)) => {

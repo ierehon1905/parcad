@@ -55,8 +55,13 @@ export type AxisDirection = "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
 export interface EdgeQuery {
   /** Match edges created by this named Boolean operation. */
   generatedBy?: string;
-  /** Match a curve category identified from the B-rep edge. */
-  curve?: "line" | "circle";
+  /**
+   * Match a curve category identified from the B-rep edge: `"line"`, `"circle"`
+   * (any circular arc, including one drawn in a section), or `"spline"` — every
+   * edge that is neither, which is a section's spline, Bézier or B-spline and
+   * also an ellipse or intersection curve a boolean leaves.
+   */
+  curve?: "line" | "circle" | "spline";
   /** Match a circular hole rim, excluding the rim of an outside boss. */
   role?: "hole";
   /** Match an edge touching a face with this outward normal. */
@@ -750,29 +755,151 @@ export function torus(
 export type SectionPoint = [number, number];
 
 /**
- * A closed convex section in the (radius, z) half-plane, revolved a full turn
- * about Z.
+ * One entry of a section — the closed outline `extrude`, `revolve`, `loft` and
+ * `sweep` take. A section is a list, anticlockwise, that closes back to its
+ * first entry by itself (never repeat the first corner at the end):
  *
- * This is how a turned part is drawn: you author the *section*, the shape that
- * a lathe tool would leave, and the axis does the rest. It is the only
- * primitive here that is not a fixed shape with parameters, and it is what a
- * cone, a countersink, a tapered hub or a V-groove ring is made of.
+ * - `[x, y]` — a corner (`[radius, z]` in a revolve). Consecutive corners are
+ *   joined by a straight edge.
+ * - `{ at: [x, y], round: r }` — a corner rounded by a tangent arc of radius
+ *   `r`, which trims both straight edges that meet there. A rounded rectangle
+ *   is four of these; `round` only joins two straight edges.
  *
- * Two rules, enforced by the core rather than by this file, because a graph can
- * arrive from anywhere:
+ * Between two corners, one entry says how that stretch is drawn instead of a
+ * straight edge (after the last corner, it draws the closing stretch back to
+ * the first):
  *
- * - **radius >= 0** — a section that crosses the axis sweeps through itself.
- * - **convex** — a re-entrant section is refused rather than built, since on
- *   one the kernel's vertex pairing is a silent guess. Build a stepped profile
- *   as a union of convex revolves; that is how it is turned.
+ * - `{ through: [x, y] }` — a circular arc from the corner before to the
+ *   corner after, passing through this point. The unambiguous way to draw an
+ *   arc: a half circle between `[10, -5]` and `[10, 5]` bulging to +X is
+ *   `{ through: [15, 0] }`. A full circle is two arcs between two corners.
+ * - `{ radius: r }` — the shorter circular arc of radius `r` between the two
+ *   corners. Positive bulges *out* of an anticlockwise section (the arc turns
+ *   left as you travel), negative bends *in*. `r` must be at least half the
+ *   distance between the corners; exactly half is a half circle.
+ * - `{ spline: [[x, y], ...], start?: [dx, dy], end?: [dx, dy] }` — a smooth
+ *   curve from the corner before, *through* these points, to the corner
+ *   after: a cubic parameterised by chord length. `start` and `end` are the
+ *   directions it leaves and arrives in; without them it has no curvature at
+ *   its ends. A section that is nothing but `[{ spline: points }]` is one
+ *   closed smooth curve through the points, with no corner anywhere.
+ * - `{ bezier: [[x, y], ...] }` — a Bézier curve whose end points are the two
+ *   corners and whose *control* points are these: one is a quadratic, two a
+ *   cubic (the SVG `C` command). The curve does not pass through its control
+ *   points.
+ * - `{ bspline: [[x, y], ...], degree?: 3 }` — a clamped uniform B-spline
+ *   with the two corners as its first and last control points and these
+ *   between — the form a STEP export's poles copy into.
+ *
+ * Nothing is polygonised: arcs are exact circles and every curve is an exact
+ * B-spline, so faces from arcs are cylinders, cones, tori and spheres, and an
+ * edge from an arc answers `curve: "circle"` while one from a curve answers
+ * `curve: "spline"`. The outline may be re-entrant (an L, a stepped shaft) but
+ * must not touch or cross itself; that, an arc radius too small for its
+ * corners, and a round too big for its edges are refused with the numbers
+ * that would fit.
  */
-export function revolve(profile: SectionPoint[]): Shape {
-  if (profile.length < 3) {
+export type SectionEntry =
+  | [number, number]
+  | { at: [number, number]; round: number }
+  | { through: [number, number] }
+  | { radius: number }
+  | { spline: [number, number][]; start?: [number, number]; end?: [number, number] }
+  | { bezier: [number, number][] }
+  | { bspline: [number, number][]; degree?: number };
+
+const SECTION_KEYS = ["at", "round", "through", "radius", "spline", "start", "end", "bezier", "bspline", "degree"];
+
+function isPair(value: unknown): value is [number, number] {
+  return Array.isArray(value) && value.length === 2 && value.every((n) => typeof n === "number" && Number.isFinite(n));
+}
+
+/**
+ * Check a section's shape — the kinds of entry and their numbers — so a typo
+ * reads as one here. The geometry (arcs that fit, curves that do not cross)
+ * is the core's to judge, because a graph can arrive from anywhere.
+ */
+function checkSection(profile: SectionEntry[], what: string, example: string): SectionEntry[] {
+  if (!Array.isArray(profile)) {
+    throw new Error(`${what} must be a list of section entries, e.g. ${example}`);
+  }
+  let corners = 0;
+  for (const [i, entry] of profile.entries()) {
+    if (Array.isArray(entry)) {
+      if (!isPair(entry)) {
+        throw new Error(`${what} entry ${i} must be a corner [x, y] of two finite numbers; got ${JSON.stringify(entry)}`);
+      }
+      corners++;
+      continue;
+    }
+    if (!entry || typeof entry !== "object") {
+      throw new Error(`${what} entry ${i} is ${JSON.stringify(entry)}; an entry is a corner [x, y] or an object such as { through: [x, y] }`);
+    }
+    const unknown = Object.keys(entry).find((k) => !SECTION_KEYS.includes(k));
+    if (unknown !== undefined) {
+      throw new Error(
+        `${what} entry ${i} has an unknown key "${unknown}"; a section entry is [x, y], { at, round }, { through }, { radius }, { spline }, { bezier } or { bspline }`,
+      );
+    }
+    const e = entry as Record<string, unknown>;
+    if ("at" in e || "round" in e) {
+      if (!isPair(e.at) || !(typeof e.round === "number" && e.round > 0)) {
+        throw new Error(`${what} entry ${i}: a rounded corner is { at: [x, y], round: r } with r > 0`);
+      }
+      corners++;
+    } else if ("through" in e) {
+      if (!isPair(e.through)) throw new Error(`${what} entry ${i}: an arc is { through: [x, y] }, the point it passes through`);
+    } else if ("radius" in e) {
+      if (!(typeof e.radius === "number" && Number.isFinite(e.radius) && e.radius !== 0)) {
+        throw new Error(`${what} entry ${i}: an arc is { radius: r } with r non-zero — positive bulges out, negative bends in`);
+      }
+    } else {
+      const key = ["spline", "bezier", "bspline"].find((k) => k in e);
+      if (!key) throw new Error(`${what} entry ${i} names no kind of entry; give through, radius, spline, bezier or bspline`);
+      const points = e[key];
+      if (!Array.isArray(points) || !points.every(isPair)) {
+        throw new Error(`${what} entry ${i}: ${key} takes a list of [x, y] points`);
+      }
+      for (const tangent of ["start", "end"]) {
+        if (tangent in e && (key !== "spline" || !isPair(e[tangent]))) {
+          throw new Error(`${what} entry ${i}: ${tangent} is a direction [dx, dy] and belongs to a spline only`);
+        }
+      }
+      if ("degree" in e && (key !== "bspline" || !Number.isInteger(e.degree) || (e.degree as number) < 1)) {
+        throw new Error(`${what} entry ${i}: degree is a whole number of at least 1 and belongs to a bspline only`);
+      }
+    }
+  }
+  const lone = profile.length === 1 && !Array.isArray(profile[0]) && "spline" in (profile[0] as object);
+  if (corners === profile.length ? corners < 3 : corners === 0 && !lone) {
     throw new Error(
-      "a revolve section needs at least 3 [radius, z] points, e.g. revolve([[0, -5], [4, -5], [0, 5]])",
+      corners === profile.length
+        ? `${what} needs at least 3 corners, or corners with an arc or curve between them, e.g. ${example}`
+        : `${what} has no corners; put arcs and curves between [x, y] corners, or give one { spline: points } alone for a closed smooth curve`,
     );
   }
-  if (profile.some(([r]) => r < 0)) {
+  return profile;
+}
+
+/**
+ * A closed section in the (radius, z) half-plane, revolved a full turn about Z.
+ *
+ * This is how a turned part is drawn: you author the *section*, the shape that
+ * a lathe tool would leave, and the axis does the rest. It is what a cone, a
+ * countersink, a stepped shaft, a domed cap, an O-ring gland or a V-groove
+ * ring is made of. The section is a list of `SectionEntry`: corners, arcs and
+ * curves — a radiused shoulder is `{ at: [r, z], round: 1 }`, a dome is an arc
+ * `{ through: [...] }` from the axis round to the rim.
+ *
+ * The rules are enforced by the core rather than by this file, because a graph
+ * can arrive from anywhere: **radius >= 0** along the whole boundary — every
+ * corner, arc and curve control point, since a section that crosses the axis
+ * sweeps through itself — and an outline that does not cross itself. A
+ * re-entrant (stepped) section is fine.
+ */
+export function revolve(profile: SectionEntry[]): Shape {
+  checkSection(profile, "a revolve section", "revolve([[0, -5], [4, -5], [0, 5]])");
+  if (profile.some((entry) => Array.isArray(entry) && entry[0] < 0)) {
     throw new Error("revolve section radii must be >= 0; mirror the section onto +radius");
   }
   return new Shape(() => ({ op: "revolve", profile }), []);
@@ -1286,27 +1413,30 @@ export function hull(points: [number, number][]): [number, number][] {
 export type OutlinePoint = [number, number];
 
 /**
- * A closed convex outline in XY, given a thickness along Z.
+ * A closed outline in XY, given a thickness along Z.
  *
  * The counterpart of {@link revolve} for a part that is drawn rather than
- * turned: a plate outline, a cam blank, a hexagon. Like every other primitive
- * it is centred on the origin in Z, so the solid runs from `-height / 2` to
- * `+height / 2`; the outline carries its own placement in X and Y.
+ * turned: a plate outline, a cam blank, a hexagon, an L-bracket, a slot. Like
+ * every other primitive it is centred on the origin in Z, so the solid runs
+ * from `-height / 2` to `+height / 2`; the outline carries its own placement
+ * in X and Y.
  *
- * Convex only, for the same reason a revolve section is, and with the same
- * escape: an L outline is `union` of two convex prisms, which is also how the
- * part would be cut.
+ * The outline is a list of `SectionEntry`: corners, rounded corners, arcs and
+ * splines. A 20 × 10 slot with round ends is
+ * `extrude([[-5, -5], [5, -5], { through: [10, 0] }, [5, 5], [-5, 5], { through: [-10, 0] }], 3)`,
+ * and a plate with 2 mm corner radii is four `{ at: [x, y], round: 2 }`
+ * corners. It may be re-entrant but must not cross itself.
+ *
+ * `draft` leans the walls in by that many degrees going up, and needs a convex
+ * outline of straight edges: draft the polygon and `.fillet()` its vertical
+ * edges for a rounded, drafted boss.
  */
 export function extrude(
-  profile: OutlinePoint[],
+  profile: SectionEntry[],
   height: number,
   options: { draft?: number } = {},
 ): Shape {
-  if (profile.length < 3) {
-    throw new Error(
-      "an extrude outline needs at least 3 [x, y] points, e.g. extrude([[-5, -5], [5, -5], [5, 5], [-5, 5]], 2)",
-    );
-  }
+  checkSection(profile, "an extrude outline", "extrude([[-5, -5], [5, -5], [5, 5], [-5, 5]], 2)");
   if (!(height > 0)) throw new Error("extrude height must be positive");
   const draft = options.draft ?? 0;
   if (Math.abs(draft) >= 90) throw new Error("draft must be between -90 and 90 degrees");
@@ -1377,6 +1507,32 @@ export interface HelixPath {
     endRadius?: number;
     hand?: "right" | "left";
   };
+}
+
+/**
+ * A smooth path for `pipe` and `sweep`, in place of a list of points: a hose,
+ * a cable, a handle, a vase's rim — anything that curves without corners.
+ *
+ * `{ spline: [[x, y, z], ...] }` passes through every point, in order, as one
+ * cubic parameterised by chord length with no curvature at its two ends (at
+ * least three points; the same rule as `{ spline }` in a section). It is an
+ * exact B-spline, not a chain of arcs. The section is drawn perpendicular to
+ * the path at its first point, and the sweep is refused where the path bends
+ * tighter than the section reaches, naming the radius and where — spread the
+ * points further apart there.
+ */
+export interface SplinePath {
+  spline: PathPoint[];
+}
+
+function splineSpine(path: SplinePath, fn: string): { x: number; y: number; z: number }[] {
+  if (!Array.isArray(path.spline) || path.spline.length < 3) {
+    throw new Error(`a ${fn} spline path needs at least 3 [x, y, z] points to curve through`);
+  }
+  if (!path.spline.every((p) => Array.isArray(p) && p.length === 3 && p.every(Number.isFinite))) {
+    throw new Error(`every point of a ${fn} spline path is [x, y, z]`);
+  }
+  return path.spline.map(([x, y, z]) => ({ x, y, z }));
 }
 
 /** Options shared by `pipe` and `sweep`. */
@@ -1477,10 +1633,9 @@ function alignedX(axis: PathPoint): PathPoint {
  * A round tube of `diameter` following a path: hydraulic line, hose, wire.
  *
  * This is the honest half of what Fusion calls Sweep, and it is a bigger half
- * than it first looks. A sweep along a *spline* has no path type in the graph
- * yet, but the two path elements a tube is actually made of do: a straight
- * run is a cylinder, and a bend is a partial torus. Both are exact, so a
- * routed tube is exact.
+ * than it first looks: the two path elements a routed tube is actually made
+ * of are a straight run, which is a cylinder, and a bend, which is a partial
+ * torus. Both are exact, so a routed tube is exact.
  *
  * `bend` is the centreline bend radius, which is how tube is specified and how
  * a bender is set. Without it the corners are square and filled with a ball of
@@ -1488,17 +1643,17 @@ function alignedX(axis: PathPoint): PathPoint {
  * not a shape anybody can make. With it, the runs are trimmed back to their
  * tangent points and an arc joins them, which is the real part.
  *
- * Two options take the tube off those two surfaces: `taper`, which shrinks
- * or grows the tube along its length — a strand of hair, a tail, a horn — and
- * a `{ helix }` path in place of the points — a spring or a coil. A tapered
- * pipe along a path of points needs a `bend` at every corner, because the
- * ball that fills a square corner cannot taper.
+ * Three options take the tube off those two surfaces: `taper`, which shrinks
+ * or grows the tube along its length — a strand of hair, a tail, a horn — a
+ * `{ helix }` path in place of the points — a spring or a coil — and a
+ * `{ spline: [[x, y, z], ...] }` path, a smooth curve through the points — a
+ * hose or a cable. A tapered pipe along a path of points needs a `bend` at
+ * every corner, because the ball that fills a square corner cannot taper.
  *
- * What is still not offered: a spline path, and a profile that is not a circle
- * (that is `sweep`).
+ * A profile that is not a circle is `sweep`.
  */
 export function pipe(
-  points: PathPoint[] | HelixPath,
+  points: PathPoint[] | HelixPath | SplinePath,
   diameter: number,
   options: SweepOptions = {},
 ): Shape {
@@ -1508,9 +1663,15 @@ export function pipe(
   if (bend < 0) throw new Error("pipe bend radius must be positive");
   const taper = checkTaper(options.taper ?? 1, "pipe");
   if (!Array.isArray(points)) {
+    const tapered = taper !== 1 ? { taper } : {};
+    if ("spline" in points) {
+      if (bend > 0) throw new Error("a spline pipe has no corners to bend; drop the bend option");
+      const spline = splineSpine(points, "pipe");
+      return new Shape(() => ({ op: "sweep", circle: r, spline, ...tapered }), []);
+    }
     if (bend > 0) throw new Error("a helical pipe has no corners to bend; drop the bend option");
     const helix = helixSpine(points, "pipe");
-    return new Shape(() => ({ op: "sweep", circle: r, helix, ...(taper !== 1 ? { taper } : {}) }), []);
+    return new Shape(() => ({ op: "sweep", circle: r, helix, ...tapered }), []);
   }
   if (points.length < 2) throw new Error("a pipe needs at least 2 path points");
   if (taper !== 1) {
@@ -1598,16 +1759,23 @@ export function pipe(
   return union(...parts);
 }
 
-/** One loft section: a convex outline lying flat at height `z`. */
+/**
+ * One loft section, lying flat at height `z`: an `outline` (a list of
+ * `SectionEntry` — corners, arcs, curves), or, for the first or last section
+ * only, a single `point: [x, y]` the wall closes onto — the tip of a vase or
+ * a spire.
+ */
 export interface LoftSection {
   /** Height of the plane this section lies in. */
   z: number;
-  /** `[x, y]` pairs, anticlockwise, first point not repeated. */
-  outline: OutlinePoint[];
+  /** Corners and curve entries, anticlockwise, first corner not repeated. */
+  outline?: SectionEntry[];
+  /** An apex in place of an outline, first or last section only. */
+  point?: [number, number];
 }
 
 /**
- * Skin a solid through two or more convex outlines stacked along +Z.
+ * Skin a solid through two or more outlines stacked along +Z.
  *
  * By default the walls are ruled: straight lines between consecutive
  * sections, so the surface is exactly the skin of its sections and a
@@ -1617,18 +1785,18 @@ export interface LoftSection {
  * that the fit stayed inside the sections' own bounding box, refusing one
  * that bulged past it.
  *
- * Sections must be convex, for the same reason extrude and revolve sections
- * are, plus one of loft's own: the kernel pairs section vertices to build
- * the wall, and a re-entrant outline makes that pairing a silent guess. A
- * stepped or hollow loft is a boolean of convex ones.
- *
- * The pairing is by outline index, taken literally, which makes it part of
- * the intent: every section must have the same number of points, and listing
- * a section's outline rotated pairs each vertex with a different one above —
- * a *twisted* wall, authored on purpose. A square lofted to the same square
- * a quarter turn on is a bar twisting 90° over its length (see
+ * The wall pairs section *edges* by index, taken literally, which makes the
+ * pairing part of the intent. Every outline must resolve to the same number
+ * of edges — a straight edge, an arc or a curve each count one, and a rounded
+ * corner adds an arc — so a circle lofted to a square is the circle drawn as
+ * four arcs between four corners, one arc to each side. Listing a section's
+ * outline rotated pairs each edge with a different one above — a *twisted*
+ * wall, authored on purpose. A square lofted to the same square a quarter
+ * turn on is a bar twisting 90° over its length (see
  * examples/fusion360/untriangle-v3.js); the kernel is never allowed to
  * re-origin the sections to untwist what the outlines spell out.
+ *
+ * Outlines may be re-entrant, but must not cross themselves.
  */
 export function loft(
   sections: LoftSection[],
@@ -1637,34 +1805,51 @@ export function loft(
   if (!Array.isArray(sections) || sections.length < 2) {
     throw new Error("a loft needs at least 2 sections, each { z, outline }");
   }
+  const allCorners = sections.every(
+    (s) => Array.isArray(s?.outline) && s.outline.every((entry) => Array.isArray(entry)),
+  );
   for (const [i, section] of sections.entries()) {
-    if (!section || !Number.isFinite(section.z) || !Array.isArray(section.outline)) {
-      throw new Error(`loft section ${i} must be { z: number, outline: [[x, y], ...] }`);
+    if (!section || !Number.isFinite(section.z)) {
+      throw new Error(`loft section ${i} must be { z: number, outline: [[x, y], ...] } or { z: number, point: [x, y] }`);
+    }
+    if ((section.outline === undefined) === (section.point === undefined)) {
+      throw new Error(`loft section ${i} takes an outline or a point, exactly one: { z, outline: [[x, y], ...] } or { z, point: [x, y] }`);
+    }
+    if (section.point !== undefined) {
+      if (!isPair(section.point)) throw new Error(`loft section ${i}'s point is [x, y]`);
+      if (i !== 0 && i !== sections.length - 1) {
+        throw new Error(`loft section ${i} is a point, but only the first or last section may be one`);
+      }
+    } else {
+      checkSection(section.outline as SectionEntry[], `loft section ${i}'s outline`, "[[-5, -5], [5, -5], [5, 5], [-5, 5]]");
     }
     if (i > 0 && section.z <= sections[i - 1].z) {
       throw new Error(
         `loft sections must rise strictly: section ${i} is at z = ${section.z}, below or level with section ${i - 1} at z = ${sections[i - 1].z}`,
       );
     }
-    if (section.outline.length !== sections[0].outline.length) {
+    if (allCorners && section.outline!.length !== sections[0].outline!.length) {
       throw new Error(
-        `loft sections must all have the same number of outline points, because walls pair vertices by index: section ${i} has ${section.outline.length}, section 0 has ${sections[0].outline.length}. Repeat a vertex (a collinear point is allowed) to make the counts match`,
+        `loft sections must all have the same number of outline points, because walls pair vertices by index: section ${i} has ${section.outline!.length}, section 0 has ${sections[0].outline!.length}. Repeat a vertex (a collinear point is allowed) to make the counts match`,
       );
     }
   }
   const smooth = options.smooth ?? false;
   return new Shape(() => ({
     op: "loft",
-    sections: sections.map(({ outline, z }) => ({ outline, z })),
+    sections: sections.map(({ outline, z, point }) => (point !== undefined ? { z, point } : { outline, z })),
     ...(smooth ? { smooth } : {}),
   }), []);
 }
 
 /**
- * Sweep a convex outline along a path of straight runs joined by circular
- * bends — `pipe()` with an authored section in place of the circle.
+ * Sweep an outline along a path — `pipe()` with an authored section in place
+ * of the circle.
  *
- * The path model is the one a bender or a router can follow: runs, and
+ * The profile is a list of `SectionEntry`: corners, arcs and curves, so a
+ * stadium, a rounded rectangle or a D-shape sweeps as exactly as a square.
+ *
+ * A path of points is the one a bender or a router can follow: runs, and
  * tangent arcs of radius `bend` at every corner. `bend` is required as soon
  * as the path turns (an authored section has no ball to fill a square corner
  * with), must fit the legs either side, and must clear the profile's own
@@ -1676,27 +1861,36 @@ export function loft(
  * `HelixPath`): the profile is then drawn perpendicular to the helix at its
  * start, +X pointing away from the axis and +Y as near +Z as the helix's
  * slope allows, and it keeps that attitude to the axis all the way up — a
- * square wire wound into a coil, a thread-like ridge. `taper` scales the
- * profile about the path from 1 at the start to `taper` at the end.
+ * square wire wound into a coil, a thread-like ridge. Or it may be
+ * `{ spline: [[x, y, z], ...] }` (see `SplinePath`), a smooth curve through
+ * the points, the profile drawn perpendicular to it at the first point the
+ * same way as for a run. `taper` scales the profile about the path from 1 at
+ * the start to `taper` at the end.
  *
  * A *round* section should stay a `pipe()`.
  */
 export function sweep(
-  profile: OutlinePoint[],
-  path: PathPoint[] | HelixPath,
+  profile: SectionEntry[],
+  path: PathPoint[] | HelixPath | SplinePath,
   options: SweepOptions = {},
 ): Shape {
+  checkSection(profile, "a sweep profile", "[[-2, -1], [2, -1], [2, 1], [-2, 1]]");
   const bend = options.bend ?? 0;
   if (bend < 0) throw new Error("sweep bend radius must be positive");
   const taper = checkTaper(options.taper ?? 1, "sweep");
   const tapered = taper !== 1 ? { taper } : {};
   if (!Array.isArray(path)) {
+    if ("spline" in path) {
+      if (bend > 0) throw new Error("a spline sweep has no corners to bend; drop the bend option");
+      const spline = splineSpine(path, "sweep");
+      return new Shape(() => ({ op: "sweep", profile, spline, ...tapered }), []);
+    }
     if (bend > 0) throw new Error("a helical sweep has no corners to bend; drop the bend option");
     const helix = helixSpine(path, "sweep");
     return new Shape(() => ({ op: "sweep", profile, helix, ...tapered }), []);
   }
   if (path.length < 2) {
-    throw new Error("a sweep path needs at least 2 points, or { helix: { radius, pitch, turns } }");
+    throw new Error("a sweep path needs at least 2 points, or { helix: { radius, pitch, turns } }, or { spline: [[x, y, z], ...] }");
   }
   return new Shape(() => ({
     op: "sweep",

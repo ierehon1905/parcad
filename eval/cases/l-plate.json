@@ -1,0 +1,23 @@
+{
+  "name": "l-plate",
+  "script": "eval/scripts/l-plate.js",
+  "why": "A re-entrant extrude outline, allowed since the one-engine change removed the reason it was refused (no exact distance field). Closed form 450 mm2 * 6 = 2700 mm3; the exact B-rep (STEP probe) reads 2700.000000, and the mesh reads the same because every face is planar.",
+  "brep": {
+    "size": [
+      30.0,
+      25.0,
+      6.0
+    ],
+    "volume_mm3": 2700.0,
+    "area_mm2": 1560.0,
+    "triangles": 20,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 450.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 8,
+    "edges": 36,
+    "curves": 18
+  }
+}

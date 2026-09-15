@@ -1,0 +1,23 @@
+{
+  "name": "revolved-fillet-shoulder",
+  "script": "eval/scripts/revolved-fillet-shoulder.js",
+  "why": "A radiused shoulder in a revolve section, held to Pappus: 2000 pi - 2 pi (10 - d) s with s = 9 - 9pi/4 and d = 3(5/6 - pi/4)/(1 - pi/4), 6169.963 mm3 (derivation in the script). The rounded corner revolves into an exact torus face; the exact B-rep reads 6169.962838 (STEP probe), equal to the closed form at every printed digit.",
+  "brep": {
+    "size": [
+      20.0,
+      20.0,
+      20.0
+    ],
+    "volume_mm3": 6165.191,
+    "area_mm2": 1799.306,
+    "triangles": 4170,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 313.953,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 4,
+    "edges": 10,
+    "curves": 3
+  }
+}
