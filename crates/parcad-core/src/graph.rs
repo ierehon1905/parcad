@@ -135,6 +135,74 @@ impl ChamferRecipe {
 mod tests {
     use super::*;
 
+    fn colors(json: &str) -> Vec<Option<String>> {
+        let doc: Doc = serde_json::from_str(json).unwrap();
+        doc.body_materials().into_iter().map(|m| m.map(|m| m.color.clone())).collect()
+    }
+
+    /// Each refusal names the setting and the range it runs over.
+    #[test]
+    fn a_material_out_of_range_is_refused_by_name() {
+        let refusal = |look: &str| {
+            let doc: Doc = serde_json::from_str(&format!(
+                r#"{{"units":"mm","root":0,"nodes":[{{"op":"sphere","r":1,"material":{look}}}]}}"#
+            ))
+            .unwrap();
+            doc.topo_order().map(|_| String::new()).unwrap_or_else(|e| e.to_string())
+        };
+        assert_eq!(refusal(r##"{"color":"#aabbcc","opacity":0.4,"emissive":"#30ff60","clearcoat":1}"##), "");
+        assert!(refusal(r##"{"color":"#aabbcc","opacity":0}"##).contains("opacity 0"));
+        assert!(refusal(r##"{"color":"#aabbcc","clearcoat":1.5}"##).contains("clearcoat 1.5"));
+        assert!(refusal(r##"{"color":"#aabbcc","emissive":"green"}"##).contains("emissive \"green\""));
+    }
+
+    /// The demo that looked wrong: a blue wall unioned into a steel plate
+    /// is one solid, and one solid wears one material — the plate's, first,
+    /// even under a red boss unioned on one level nearer the root.
+    #[test]
+    fn a_body_wears_one_material_and_never_a_cutters() {
+        let plate_and_wall = r##"{"units":"mm","root":5,"nodes":[
+            {"op":"cuboid","size":{"x":80,"y":60,"z":8},"material":{"color":"#8a9099"}},
+            {"op":"cuboid","size":{"x":8,"y":60,"z":40}},
+            {"op":"translate","child":1,"by":{"x":-36,"y":0,"z":20},"material":{"color":"#3a6ea5"}},
+            {"op":"union","children":[0,2],"blend":0},
+            {"op":"cylinder","r":4,"h":60,"material":{"color":"#ff00ff"}},
+            {"op":"difference","base":3,"tools":[4],"blend":0}]}"##;
+        assert_eq!(colors(plate_and_wall), [Some("#8a9099".to_owned())]);
+
+        let painted_on_top = plate_and_wall
+            .replace(r#""root":5"#, r#""root":6"#)
+            .replace(
+                r#""blend":0}]}"#,
+                r##""blend":0},
+            {"op":"translate","child":5,"by":{"x":0,"y":0,"z":0},"material":{"color":"#c83c32"}}]}"##,
+            );
+        assert_eq!(colors(&painted_on_top), [Some("#c83c32".to_owned())]);
+
+        let only_the_cutter = r##"{"units":"mm","root":2,"nodes":[
+            {"op":"cuboid","size":{"x":10,"y":10,"z":10}},
+            {"op":"cylinder","r":2,"h":20,"material":{"color":"#ff00ff"}},
+            {"op":"difference","base":0,"tools":[1],"blend":0}]}"##;
+        assert_eq!(colors(only_the_cutter), [None]);
+
+        let two_bodies = r##"{"units":"mm","root":2,"nodes":[
+            {"op":"cuboid","size":{"x":10,"y":10,"z":10},"material":{"color":"#8a9099"}},
+            {"op":"cylinder","r":2,"h":20},
+            {"op":"bodies","bodies":[{"name":"base","child":0},{"name":"pin","child":1}]}]}"##;
+        assert_eq!(colors(two_bodies), [Some("#8a9099".to_owned()), None]);
+
+        let bracket_with_red_boss = r##"{"units":"mm","root":7,"nodes":[
+            {"op":"cuboid","size":{"x":80,"y":60,"z":8},"material":{"color":"#8a9099"}},
+            {"op":"cuboid","size":{"x":8,"y":60,"z":40}},
+            {"op":"union","children":[0,1],"blend":0},
+            {"op":"cylinder","r":10,"h":12},
+            {"op":"translate","child":3,"by":{"x":12,"y":0,"z":10},"material":{"color":"#c83c32"}},
+            {"op":"union","children":[2,4],"blend":0},
+            {"op":"cylinder","r":4,"h":60},
+            {"op":"difference","base":5,"tools":[6],"blend":0}]}"##;
+        assert_eq!(colors(bracket_with_red_boss), [Some("#8a9099".to_owned())]);
+    }
+
     #[test]
     fn old_fillet_json_defaults_to_the_supported_recipe() {
         let op: Op = serde_json::from_str(
@@ -1712,6 +1780,86 @@ pub struct Node {
     /// tags, never to indices, so the reference survives any parameter change.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+
+    /// How the body this node ends up in looks. Presentational only: no
+    /// measurement, selector or tag reads it, and an agent's render ignores it
+    /// unless asked. See [`Doc::body_materials`] for which one a body wears.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<Material>,
+}
+
+/// A surface appearance: glTF's metallic-roughness core, plus alpha, emissive
+/// and its clearcoat extension. Nothing heavier — see docs/PERCEPTION.md.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Material {
+    /// `#rrggbb`, sRGB.
+    pub color: String,
+    /// 0 is mirror-smooth, 1 fully diffuse.
+    #[serde(default = "Material::default_roughness")]
+    pub roughness: f64,
+    /// 0 is a dielectric (plastic, paint), 1 bare metal.
+    #[serde(default)]
+    pub metalness: f64,
+    /// 1 is solid, towards 0 see-through. Never 0: an invisible body is a
+    /// body nobody can check.
+    #[serde(default = "Material::default_opacity")]
+    pub opacity: f64,
+    /// `#rrggbb` light the surface gives off whatever lights it, for an LED or
+    /// an indicator. Absent is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emissive: Option<String>,
+    /// A clear lacquer layer over the surface, 0 to 1: paint, anodising.
+    #[serde(default)]
+    pub clearcoat: f64,
+}
+
+impl Material {
+    fn default_roughness() -> f64 {
+        0.5
+    }
+
+    fn default_opacity() -> f64 {
+        1.0
+    }
+
+    /// The colour as three bytes. `None` for anything but `#rrggbb`.
+    pub fn rgb(&self) -> Option<[u8; 3]> {
+        hex_rgb(&self.color)
+    }
+
+    fn validate(&self, id: NodeId) -> anyhow::Result<()> {
+        for (name, color) in [("colour", Some(&self.color)), ("emissive", self.emissive.as_ref())] {
+            if let Some(color) = color.filter(|c| hex_rgb(c).is_none()) {
+                anyhow::bail!(
+                    "node {id} has material {name} {color:?}; write it as six hex digits, \
+                     e.g. \"#c83c32\""
+                );
+            }
+        }
+        for (name, value) in [
+            ("roughness", self.roughness),
+            ("metalness", self.metalness),
+            ("clearcoat", self.clearcoat),
+        ] {
+            if !(0.0..=1.0).contains(&value) {
+                anyhow::bail!("node {id} has material {name} {value}; it runs from 0 to 1");
+            }
+        }
+        if !(self.opacity > 0.0 && self.opacity <= 1.0) {
+            anyhow::bail!(
+                "node {id} has material opacity {}; it runs above 0 up to 1, and a body \
+                 nobody should see belongs out of the returned object instead",
+                self.opacity
+            );
+        }
+        Ok(())
+    }
+}
+
+fn hex_rgb(color: &str) -> Option<[u8; 3]> {
+    let hex = color.strip_prefix('#').filter(|h| h.len() == 6)?;
+    let byte = |i: usize| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok();
+    Some([byte(0)?, byte(2)?, byte(4)?])
 }
 
 /// A document: an arena of nodes plus the one that is the finished part.
@@ -1778,7 +1926,50 @@ impl Doc {
         }
 
         self.validate_bodies(&order)?;
+        for &id in &order {
+            if let Some(material) = &self.nodes[id].material {
+                material.validate(id)?;
+            }
+        }
         Ok(order)
+    }
+
+    /// What each body wears, in body order, one entry for a one-solid part.
+    ///
+    /// A material colours a whole solid, never a feature of one: a face merged
+    /// from two operands belongs to both, so per-feature colour has no right
+    /// answer there. The body takes the first `.material()` met walking down
+    /// from its root through each first operand before the next, so the shape
+    /// returned wins, then the base of what it was built from; the tools of a
+    /// cut are never read, so `a.cut(b)` wears `a`'s.
+    pub fn body_materials(&self) -> Vec<Option<&Material>> {
+        let roots: Vec<NodeId> = match self.bodies() {
+            Some(bodies) => bodies.iter().map(|b| b.child).collect(),
+            None => vec![self.root],
+        };
+        roots
+            .into_iter()
+            .map(|root| {
+                let mut stack = vec![root];
+                let mut seen = std::collections::HashSet::new();
+                while let Some(id) = stack.pop() {
+                    if !seen.insert(id) {
+                        continue;
+                    }
+                    let Some(node) = self.nodes.get(id) else { continue };
+                    if let Some(material) = &node.material {
+                        return Some(material);
+                    }
+                    // A cutter leaves no solid of its own, so it cannot colour one.
+                    let operands = match &node.op {
+                        Op::Difference { base, .. } => vec![*base],
+                        _ => self.children_of(id).unwrap_or_default(),
+                    };
+                    stack.extend(operands.into_iter().rev());
+                }
+                None
+            })
+            .collect()
     }
 
     /// The named bodies of a part that returns several, or `None` for the

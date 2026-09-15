@@ -289,11 +289,17 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
     let t1 = Instant::now();
     breadcrumb("naming the faces");
     let bodies = perceive::bodies_of(&part);
+    let materials = doc.body_materials();
     let mut whole = Assembled::default();
-    for body in &bodies {
+    for (body, material) in bodies.iter().zip(materials) {
         let who = body.name.map(|name| format!("body `{name}`: ")).unwrap_or_default();
         match measure(body, &part.treatment_owners, &who) {
-            Ok(measured) => whole.append(body.name, measured),
+            Ok(mut measured) => {
+                for face in &mut measured.faces {
+                    face.material = material.cloned();
+                }
+                whole.append(body.name, measured)
+            }
             Err(refusal) => return refusal,
         }
     }

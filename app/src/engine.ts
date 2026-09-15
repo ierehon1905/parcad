@@ -252,6 +252,7 @@ function show(result: Evaluated) {
       indices: new Uint32Array(result.indices),
       edges,
       faceRuns: result.face_runs,
+      faceMaterials: result.faces?.map((face) => face.material),
     },
     bounds,
   );

@@ -120,6 +120,30 @@ export interface EdgeExpectation {
 }
 
 /** How a constant-radius edge fillet meets its neighbouring faces. */
+/**
+ * A surface appearance for {@link Shape.material}, in glTF's terms. Glossy is
+ * low `roughness`; there is no separate gloss setting.
+ *
+ * @example { color: "#c9ccd1", metalness: 1, roughness: 0.35 }  // aluminium
+ * @example { color: "#e8702a", roughness: 0.3, clearcoat: 1 }    // lacquered paint
+ * @example { color: "#9fd4ff", opacity: 0.35, roughness: 0.1 }   // clear cover
+ * @example { color: "#202020", emissive: "#30ff60" }             // a lit LED
+ */
+export interface Material {
+  /** `#rrggbb` or `#rgb`. */
+  color: string;
+  /** 0 mirror-smooth to 1 fully diffuse. Defaults to 0.5. */
+  roughness?: number;
+  /** 0 plastic or paint to 1 bare metal. Defaults to 0. */
+  metalness?: number;
+  /** 1 solid, towards 0 see-through; above 0. Defaults to 1. Window only. */
+  opacity?: number;
+  /** A colour the surface glows with, `#rrggbb` or `#rgb`. Defaults to none. Window only. */
+  emissive?: string;
+  /** A clear glossy layer over the surface, 0 to 1. Defaults to 0. Window only. */
+  clearcoat?: number;
+}
+
 export interface FilletOptions {
   /** Tangent (G1) is available now; curvature (G2) is reserved for the exact backend. */
   continuity?: "tangent" | "curvature";
@@ -412,6 +436,14 @@ export class VertexSelection {
  * one exception is {@link tag}, which names this shape in place: a name
  * belongs to the node, and a named copy would be a second node built twice.
  */
+function fullHex(name: string, color: string | undefined): string {
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color ?? "")?.[1];
+  if (!hex) {
+    throw new Error(`material ${name} ${JSON.stringify(color)} is not a hex colour; write it as "#c83c32" or "#c33"`);
+  }
+  return `#${(hex.length === 3 ? [...hex].map((c) => c + c).join("") : hex).toLowerCase()}`;
+}
+
 export class Shape {
   /** @internal Where the script made this shape: the call stack, as the engine prints it. */
   readonly createdAt = new Error().stack;
@@ -442,6 +474,46 @@ export class Shape {
   tag(name: string): Shape {
     this.name = name;
     return this;
+  }
+
+  /**
+   * How the body this shape becomes looks in the window: a colour, and
+   * optionally how rough and how metallic its surface is. Purely visual — no
+   * measurement, tag or selector reads it, and an agent's render stays grey
+   * unless it passes `materials: true`.
+   *
+   * A material colours a whole solid, never part of one. A body wears the
+   * outermost material in it: put it on the shape you return, or on each
+   * named body, `return { base: base.material(steel), lid }`. Shapes unioned
+   * together are one solid and wear one material, the first operand's when
+   * only the operands have one; a cutter's material is never used. For two
+   * colours, return two bodies.
+   *
+   * Like {@link tag}, this changes the shape itself and returns it.
+   *
+   * @example plate.material({ color: "#8a9099", metalness: 0.9, roughness: 0.35 })
+   */
+  material(material: Material): Shape {
+    const { roughness = 0.5, metalness = 0, opacity = 1, clearcoat = 0 } = material;
+    for (const [name, value] of [["roughness", roughness], ["metalness", metalness], ["clearcoat", clearcoat]] as const) {
+      if (!(value >= 0 && value <= 1)) {
+        throw new Error(`material ${name} ${value} is outside 0 to 1`);
+      }
+    }
+    if (!(opacity > 0 && opacity <= 1)) {
+      throw new Error(`material opacity ${opacity} must be above 0 and at most 1`);
+    }
+    const color = fullHex("colour", material.color);
+    const emissive = material.emissive === undefined ? undefined : fullHex("emissive", material.emissive);
+    this.look = { color, roughness, metalness, opacity, clearcoat, ...(emissive && { emissive }) };
+    return this;
+  }
+
+  private look?: Material;
+
+  /** @internal */
+  get materialSpec(): Material | undefined {
+    return this.look;
   }
 
   /** @internal */
@@ -2089,6 +2161,7 @@ export function build(
     const kids = s.children.map(visit);
     const node = s.toNode(kids);
     if (s.tagName) node.tag = s.tagName;
+    if (s.materialSpec) node.material = s.materialSpec;
 
     const id = nodes.length;
     nodes.push(node);

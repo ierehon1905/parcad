@@ -28,7 +28,7 @@ import type * as dsl from "./dsl";
 import type { KernelLoad, McpStatus } from "./backend";
 import type { VertexPoint } from "./entities";
 import type { Projects } from "./projects";
-import type { Viewport } from "./viewport";
+import type { FaceMaterial, Viewport } from "./viewport";
 
 /**
  * One evaluation, as the host measured it.
@@ -151,6 +151,8 @@ export interface FaceSummary {
     direction?: [number, number, number];
     radius?: number;
   };
+  /** The innermost `.material()` on this face, if any. */
+  material?: FaceMaterial;
 }
 
 export interface Evaluated {

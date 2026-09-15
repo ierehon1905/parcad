@@ -373,12 +373,20 @@ entries were replaced; minimum pairwise separation is now **34.5**, pinned by
 `no_two_palette_entries_look_alike`.
 
 Authored colour — `.tag(name, { color })`, and a per-render `colors:` override —
-was asked for alongside it and is **not** built. `tag` is semantic: it names
-what a thing *is*, and that name does real work in `probe_part` and
-`measure_wall_thickness` output, where colour would be the first purely
-presentational thing in the language. The diagnostic case — *put this one
-feature in screaming magenta and everything else grey* — is the half worth
-revisiting first if it comes back.
+was asked for alongside it and is **not** built on `tag`. `tag` is semantic: it
+names what a thing *is*, and that name does real work in `probe_part` and
+`measure_wall_thickness` output. Appearance came later as its own method,
+`.material({ color, roughness, metalness })`, and is kept apart from every
+answer: it is read off the graph per body (`Doc::body_materials`), never
+followed through the kernel, so it cannot reach `tags`, a selector or the
+build cache. Per body, not per feature, because a first per-feature version
+drew a wall unioned into a plate half blue and half grey: the faces the union
+merged belonged to both, and no rule for such a face looks like one solid.
+The window wears it. An agent's render stays neutral grey unless it passes
+`materials: true`, because grey is what every reading rule above was measured
+on; the snapshot's `materials` count is how it knows there is anything to ask
+for. The rasteriser draws the colour only. The diagnostic case — *this one
+feature in magenta, the rest grey* — is still `regions`.
 
 **The cheaper half is done: a `Crossing` names what it is on.** `tags::owners_at`
 asks of three coordinates what `regions_in` asks of a pixel, so every crossing

@@ -287,6 +287,11 @@ pub struct EvaluationSnapshot {
     /// usually not what was meant.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unlocated_tags: Vec<String>,
+    /// How many distinct materials the part's bodies wear, from `.material()`.
+    /// Views are drawn in neutral grey regardless; pass `materials: true` to
+    /// see them.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub materials: usize,
     /// Edge treatments the finished part actually depends on.
     pub treatments: Vec<Treatment>,
     /// Nodes the root does not reach: shapes the script built and never used.
@@ -662,6 +667,7 @@ pub fn describe(
         tags: report.tags.clone(),
         tag_extents: extents,
         unlocated_tags: unlocated,
+        materials: authored_materials(doc),
         treatments: treatments(doc),
         unused_nodes: report.total_nodes.saturating_sub(report.live_nodes),
         backend: "brep".to_string(),
@@ -671,6 +677,16 @@ pub fn describe(
         // measurements above, and most calls only want the numbers.
         views: Vec::new(),
     }
+}
+
+fn authored_materials(doc: &Doc) -> usize {
+    let mut seen: Vec<&parcad_core::graph::Material> = Vec::new();
+    for material in doc.body_materials().into_iter().flatten() {
+        if !seen.contains(&material) {
+            seen.push(material);
+        }
+    }
+    seen.len()
 }
 
 /// Every tag's extent as the kernel measured it, restated with its size and

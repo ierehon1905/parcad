@@ -236,6 +236,8 @@ pub struct RenderSpec<'a> {
     pub size: u32,
     /// Colour by owning tag instead of shading.
     pub regions: bool,
+    /// Shade each face in its authored material rather than neutral grey.
+    pub materials: bool,
     /// Cut the part open on a plane first.
     pub section: Option<parcad_core::view::Section>,
 }
@@ -260,6 +262,7 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
         views,
         size,
         regions,
+        materials,
         section,
     } = *spec;
 
@@ -292,6 +295,15 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
     // one a pixel is coloured for.
     let names = parcad_occt::drawing::tag_names(doc);
     let owner_of_face = parcad_occt::drawing::owner_of_face(&evaluated.faces, &names);
+    let face_colors: Vec<Option<[u8; 3]>> = if materials {
+        evaluated
+            .faces
+            .iter()
+            .map(|face| face.material.as_ref().and_then(|m| m.rgb()))
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     views
         .iter()
@@ -326,7 +338,8 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                     Some(round_fraction(map.unclaimed_pixels as f64 / total as f64)),
                 )
             } else {
-                let shaded = parcad_core::render::shade(&buffer, &opts);
+                let mut shaded = parcad_core::render::shade(&buffer, &opts);
+                parcad_core::render::paint_faces(&mut shaded, &buffer, &face_colors);
                 (shaded.downsample(opts.supersample.clamp(1, 4)), None, None)
             };
 
@@ -1298,6 +1311,7 @@ mod tests {
                 views: &[parcad_core::view::View::Iso, parcad_core::view::View::Top],
                 size: 128,
                 regions: false,
+                materials: false,
                 section: None,
             },
         )
@@ -1338,6 +1352,7 @@ mod tests {
             views: &[parcad_core::view::View::Front],
             size: 128,
             regions: false,
+            materials: false,
             section,
         };
 
@@ -1410,6 +1425,7 @@ mod tests {
                 views: &[parcad_core::view::View::Iso, parcad_core::view::View::Top],
                 size: 128,
                 regions: true,
+                materials: false,
                 section: None,
             },
         )
@@ -1475,6 +1491,7 @@ mod tests {
                 views: &[parcad_core::view::View::Iso],
                 size: 128,
                 regions: true,
+                materials: false,
                 section: None,
             },
         )
@@ -1498,6 +1515,7 @@ mod tests {
                 views: &parcad_core::view::View::ALL,
                 size: 64,
                 regions: false,
+                materials: false,
                 section: None,
             },
         )

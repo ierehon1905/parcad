@@ -459,10 +459,11 @@ mod tests {
     const NOT_IN_THE_LANGUAGE: [&str; 1] = ["__parcadTreatmentSource"];
 
     /// Members the classes carry for the editor rather than for a script.
-    const NOT_CALLABLE: [&str; 7] = [
+    const NOT_CALLABLE: [&str; 8] = [
         "constructor",
         "treatmentCall",
         "tagName",
+        "materialSpec",
         "children",
         "toNode",
         "filletVertices",

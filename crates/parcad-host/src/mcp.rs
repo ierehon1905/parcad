@@ -131,6 +131,12 @@ pub struct EvaluateRequest {
     /// of the faces its edge lay between.
     #[serde(default)]
     pub regions: Option<bool>,
+    /// Draw each face in the material the script gave it with `.material()`
+    /// instead of neutral grey. Off by default: grey keeps shape and shading
+    /// easiest to read, and the snapshot's `materials` says whether there are
+    /// any to show. Colour only — roughness and metalness are for the window.
+    #[serde(default)]
+    pub materials: Option<bool>,
     /// Cut the part open on a plane before drawing it, so the views show the
     /// inside. Nothing about the part changes — this is how it is drawn, not an
     /// operation on it.
@@ -463,6 +469,19 @@ impl Parcad {
         let views =
             service::parse_views(request.views.as_deref().unwrap_or(&[])).map_err(invalid)?;
         let regions = request.regions.unwrap_or(false);
+        let materials = request.materials.unwrap_or(false);
+        if materials && regions {
+            return Err(invalid(
+                "regions and materials both colour a view; ask for one per call, \
+                 regions for which tag owns a surface, materials for how it looks",
+            ));
+        }
+        if materials && views.is_empty() {
+            return Err(invalid(
+                "materials asks how a view is coloured, so it needs at least one \
+                 view; pass views: [\"iso\"]",
+            ));
+        }
         if regions && views.is_empty() {
             return Err(invalid(
                 "regions asks how a view is coloured, so it needs at least one \
@@ -498,11 +517,12 @@ impl Parcad {
                     views: &views,
                     size,
                     regions,
+                    materials,
                     section,
                 },
             )
             .map_err(|e| built.locate(e))?;
-            let stem = render_stem(&request.script, size, regions, section.is_some());
+            let stem = render_stem(&request.script, size, regions, materials, section.is_some());
             let (summaries, pngs) = renders
                 .views
                 .into_iter()
@@ -1232,14 +1252,15 @@ fn render_dir() -> PathBuf {
 
 /// A name for one script's renders that is stable across calls, so asking
 /// again replaces the file rather than filling the folder.
-fn render_stem(script: &str, size: u32, regions: bool, section: bool) -> String {
+fn render_stem(script: &str, size: u32, regions: bool, materials: bool, section: bool) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     script.hash(&mut hasher);
     format!(
-        "{:016x}-{size}{}{}",
+        "{:016x}-{size}{}{}{}",
         hasher.finish(),
         if regions { "-regions" } else { "" },
+        if materials { "-materials" } else { "" },
         if section { "-section" } else { "" }
     )
 }
@@ -1277,6 +1298,7 @@ fn preview_of(script: &str) -> Result<Vec<u8>, String> {
             views: &views,
             size: 512,
             regions: false,
+            materials: false,
             section: None,
         },
     )?;

@@ -449,6 +449,9 @@ pub struct FaceSummary {
     /// after the parse; empty for a face no tagged node owns.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// What the face's body wears (`Doc::body_materials`). Set by the worker.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<parcad_core::graph::Material>,
 }
 
 /// What kind of surface a face is, and how it is placed.
