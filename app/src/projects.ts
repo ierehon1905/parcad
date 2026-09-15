@@ -27,7 +27,7 @@ import type {
 
 export type { ProjectEntry, ProjectFolder, ProjectPart };
 
-/** Opened on first load when it exists — the part the docs walk through. */
+/** Opened on first load when it exists and the host names none — the part the docs walk through. */
 const PREFERRED = "bracket";
 
 export interface Projects {
@@ -42,13 +42,13 @@ export interface Projects {
 }
 
 /** What the picker makes of the host's answer. */
-export function describeProjects({ tree, directory }: ProjectList): Projects {
+export function describeProjects({ tree, directory, preferred = PREFERRED }: ProjectList): Projects {
   const parts = flatten(tree);
   return {
     tree,
     parts,
     directory,
-    initial: parts.find((part) => part.path === PREFERRED)?.path ?? parts[0]?.path,
+    initial: parts.find((part) => part.path === preferred)?.path ?? parts[0]?.path,
   };
 }
 

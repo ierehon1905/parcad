@@ -1,0 +1,58 @@
+{
+  "name": "twisted-planter",
+  "script": "examples/twisted-planter.js",
+  "why": "The part the web playground opens first, so it has to build, and read right, on a stranger's first visit. Two bodies: a ruled star loft twisted 60° through nine sections, cut hollow by the same star inset 3 mm at the same section heights; seven drain holes; three Ø8 feet standing on 3·π·4² = 150.8 mm²; and a revolved saucer the feet touch and nothing else does. measure_wall_thickness reads the wall at 2.0 mm with the rim edge rounded; on the sharp rim it reports hundredths of a millimetre at the edge itself, where the flared facet meets the flat top at an acute angle, which is a ray leaving through the top face and not a thin wall. A 0.6 mm rim fillet built but cost a third of the build and 30k triangles in the browser, and a chamfer would not build on the twisted facets, so the rim is left sharp.",
+  "brep": {
+    "size": [
+      104.0,
+      97.809,
+      94.0
+    ],
+    "volume_mm3": 86744.75,
+    "area_mm2": 72918.503,
+    "triangles": 62130,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 5280.166,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 215,
+    "edges": 896,
+    "curves": 434,
+    "named_bodies": {
+      "planter": {
+        "size": [
+          104.0,
+          97.809,
+          92.0
+        ],
+        "volume_mm3": 69482.209,
+        "faces": 208,
+        "edges": 876,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "saucer": {
+        "size": [
+          87.995,
+          87.998,
+          12.0
+        ],
+        "volume_mm3": 17262.541,
+        "faces": 7,
+        "edges": 20,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "planter/saucer": {
+        "verdict": "touching",
+        "clearance_mm": 0.0,
+        "interference_mm3": 0.0
+      }
+    }
+  }
+}

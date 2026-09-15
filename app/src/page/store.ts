@@ -168,6 +168,7 @@ export async function list(): Promise<ProjectList> {
     projects: parts.map((p) => p.path).sort(),
     tree: tree(parts, folders),
     directory: DIRECTORY,
+    preferred: "twisted-planter",
   };
 }
 

@@ -134,6 +134,8 @@ export interface ProjectList {
   tree: ProjectEntry[];
   /** The folder on disk, so the UI can tell the user where their parts are. */
   directory: string;
+  /** The part to open on a first visit, when this transport has an opinion. */
+  preferred?: string;
 }
 
 export function listProjects(): Promise<ProjectList> {
