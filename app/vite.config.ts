@@ -66,6 +66,13 @@ function kernel(): Plugin {
       `the playground needs the WebAssembly kernel at ${dir}, and it is not there.\n` +
         "Build it with:  EMSDK=/path/to/emsdk playground/build-kernel.sh   (see playground/README.md)",
     );
+  // The part recorded by playground/prebuild.sh, if it has been run: shipped
+  // beside the kernel so a visitor has geometry before the kernel arrives.
+  const first = resolve(process.env.PARCAD_FIRST_PART_DIR || resolve(__dirname, "../target/playground"));
+  const firstPart = resolve(first, "first-part.json");
+  const firstScript = resolve(first, "first-part-script.js");
+  const firstName = resolve(first, "first-part-name.txt");
+  const hasFirst = () => existsSync(firstPart) && existsSync(firstScript) && existsSync(firstName);
   let hash = "";
   let bytes = 0;
   return {
@@ -82,13 +89,29 @@ function kernel(): Plugin {
             wasm: `kernel/${hash}/parcad_wasm.wasm`,
             bytes,
           }),
+          // Matched on the part and its text rather than on the graph: the
+          // editor instruments treatment calls, so the graph it builds is not
+          // the one a headless run of the same script produces.
+          __PARCAD_FIRST_PART__: hasFirst()
+            ? JSON.stringify({
+                url: `kernel/${hash}/first-part.json`,
+                part: readFileSync(firstName, "utf8").trim(),
+                script: readFileSync(firstScript, "utf8"),
+              })
+            : "undefined",
         },
       };
     },
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
-        const match = request.url?.match(/\/kernel\/[0-9a-f]+\/(parcad-wasm\.js|parcad_wasm\.wasm)$/);
+        const match = request.url?.match(/\/kernel\/[0-9a-f]+\/(parcad-wasm\.js|parcad_wasm\.wasm|first-part\.json)$/);
         if (!match) return next();
+        if (match[1] === "first-part.json") {
+          if (!hasFirst()) return next();
+          response.setHeader("content-type", "application/json");
+          response.end(readFileSync(firstPart));
+          return;
+        }
         const file = match[1] === "parcad-wasm.js" ? script : wasm;
         response.setHeader("content-type", file === wasm ? "application/wasm" : "text/javascript");
         response.end(readFileSync(file));
@@ -97,6 +120,9 @@ function kernel(): Plugin {
     generateBundle() {
       this.emitFile({ type: "asset", fileName: `kernel/${hash}/parcad-wasm.js`, source: readFileSync(script) });
       this.emitFile({ type: "asset", fileName: `kernel/${hash}/parcad_wasm.wasm`, source: readFileSync(wasm) });
+      if (hasFirst()) {
+        this.emitFile({ type: "asset", fileName: `kernel/${hash}/first-part.json`, source: readFileSync(firstPart) });
+      }
       // The wasm links OpenCASCADE statically, so its licences travel with it (NOTICE.md).
       const repo = resolve(__dirname, "..");
       for (const [name, from] of [

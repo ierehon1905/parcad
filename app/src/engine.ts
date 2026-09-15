@@ -89,7 +89,9 @@ export async function run() {
   running = true;
   dirty = false;
 
-  S.setStatus("evaluating", "busy");
+  // While a build that travelled with the page is what the viewport shows, the
+  // status keeps saying so rather than plain "evaluating".
+  S.setStatus(showingShipped ? "built before this page was served, rebuilding it here" : "evaluating", "busy");
 
   // Tell the host what this window is showing, on the same debounce. Without
   // this an agent's get_session would report the last thing it wrote itself
@@ -110,7 +112,7 @@ export async function run() {
 
   try {
     const built = buildGraph(source);
-    const result = await backend.evaluate<Evaluated>(built.graph);
+    const result = await backend.evaluate<Evaluated>(built.graph, { part: name ?? undefined, source });
 
     S.lastGraph.value = built.graph;
     S.lastSource.value = built.source;
@@ -121,7 +123,7 @@ export async function run() {
     show(result);
     previewTreatmentAtCursor();
     clearError();
-    S.setStatus(`${result.snapshot.triangles.toLocaleString()} tris · ${result.snapshot.kernel_ms} ms`);
+    S.setStatus(reportOf(result), result.shipped ? "busy" : "");
     if (revision !== undefined) {
       void backend
         .reportShown({
@@ -236,7 +238,17 @@ function locateNodes(message: string): string {
   });
 }
 
+/** The status line for a build: what it measured, and where it was measured. */
+/** Whether the viewport is drawing a build that travelled with the page. */
+let showingShipped = false;
+
+const reportOf = (result: Evaluated) =>
+  result.shipped
+    ? `${result.snapshot.triangles.toLocaleString()} tris · built before this page was served, rebuilding it here`
+    : `${result.snapshot.triangles.toLocaleString()} tris · ${result.snapshot.kernel_ms} ms`;
+
 function show(result: Evaluated) {
+  showingShipped = result.shipped === true;
   const snapshot = result.snapshot;
   shownPath = S.openPath.value;
   S.snapshot.value = snapshot;
@@ -527,9 +539,21 @@ export function watchMcp(): () => void {
 
 /** Follow a kernel that arrives over the network; a no-op when there is a host. */
 export function watchKernel(): () => void {
-  return backend.watchKernelLoad((load) => {
+  const stopLoad = backend.watchKernelLoad((load) => {
     S.kernelLoad.value = load.phase === "ready" ? undefined : load;
   });
+  // A build that travelled with the page is replaced by this tab's own, unless
+  // the reader has moved on to something else in the meantime.
+  const stopRebuild = backend.watchFirstRebuild((evaluated) => {
+    const result = evaluated as Evaluated;
+    if (!showingShipped) return;
+    show(result);
+    S.setStatus(reportOf(result));
+  });
+  return () => {
+    stopLoad();
+    stopRebuild();
+  };
 }
 
 // --------------------------------------------------------------- the part

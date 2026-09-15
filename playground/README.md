@@ -45,11 +45,27 @@ whatever tree `OCCT_SOURCE` names.
 ## The site
 
 ```bash
+playground/prebuild.sh                 # record the first part (optional, and worth it)
 cd app && bun install --frozen-lockfile
 bun x vite build --mode playground     # app/dist-playground, for https://<owner>.github.io/parcad/
 bun x vite preview --mode playground   # or any static server, with the files under /parcad/
 bun x vite --mode playground           # the same, live, while editing the frontend
 ```
+
+`prebuild.sh` evaluates the part the playground opens first and writes the
+result to `target/playground/`, which the build ships beside the kernel. A
+visitor then has the part on screen about 3 s after navigating, instead of
+waiting out the kernel's download *and* a build — the twisted planter is 5 s of
+geometry in a tab. It costs 10 MB, near 3 MB gzipped, against the kernel's own
+6.3 MB.
+
+Nothing about it is a claim: the page draws the shipped build, says
+"built before this page was served, rebuilding it here" while it does, and
+replaces it with what the kernel in the tab measures for the same script. It is
+offered only for that part, only unedited, and only once. Skip the script and
+the site still builds; the first visit is simply slower. Re-run it whenever the
+part changes — a recording for a script that has moved on is ignored, not
+shown.
 
 `PARCAD_PLAYGROUND_BASE` changes the base path; `PARCAD_KERNEL_DIR` points at a
 kernel built somewhere other than `target/wasm/web`. The build copies the kernel
