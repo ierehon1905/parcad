@@ -95,7 +95,7 @@ function Flyout({ group, onChoose }: { group: OpGroup; onChoose: (op: Op) => voi
       variant="menu"
       data-flyout
       layout="fixed z-40 w-[min(430px,86vw)] max-h-[62vh] overflow-auto p-1.5"
-      ref={(element) => {
+      ref={(element: HTMLDivElement | null) => {
         if (!element) return;
         // The parent is the group's own wrapper, which is exactly the button's
         // box — so no ref has to be threaded through the map above.

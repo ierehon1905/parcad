@@ -71,7 +71,7 @@ export function TooltipLayer() {
       variant="tip"
       layout="fixed z-50 max-w-[34ch] px-2.5 py-2 pointer-events-none
               text-ink-dim text-tiny leading-[1.5]"
-      ref={(element) => {
+      ref={(element: HTMLDivElement | null) => {
         if (element) place(element, tip);
       }}
     >

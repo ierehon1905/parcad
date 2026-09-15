@@ -6,6 +6,7 @@
  */
 
 import type { ComponentChildren } from "preact";
+import { forwardRef } from "preact/compat";
 
 type Variant = "hud" | "target" | "menu" | "tip";
 
@@ -31,13 +32,13 @@ export interface GlassProps {
   children?: ComponentChildren;
   id?: string;
   "data-flyout"?: boolean;
-  ref?: (element: HTMLDivElement | null) => void;
 }
 
-export function Glass({ variant, layout, children, ...rest }: GlassProps) {
-  return (
-    <div class={`${SURFACE[variant]} ${layout ?? ""}`} {...rest}>
-      {children}
-    </div>
-  );
-}
+// Preact never hands `ref` to a function component as a prop: without
+// forwardRef it binds to the component instance, not the div.
+export const Glass = forwardRef<HTMLDivElement, GlassProps>(({ variant, layout, children, ...rest }, ref) => (
+  <div ref={ref} class={`${SURFACE[variant]} ${layout ?? ""}`} {...rest}>
+    {children}
+  </div>
+));
+Glass.displayName = "Glass";
