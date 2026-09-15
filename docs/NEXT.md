@@ -55,7 +55,15 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    valid closed solids 16–100% short (GOTCHAS, "Threads"). Cases:
    `thread-m8-{3,8,20}-turns` (both hands), `thread-bolt-and-nut` (0.2 mm
    clearance read back as 0.200), `helical-groove`, `refuse-thread-clearance`,
-   and the seeded `screw-top-jar`.
+   and the seeded `screw-top-jar`. The field case `does-the-bolt-turn` (a
+   printed M6 bolt and nut from nothing but `read_docs`) read 3/4 SOUND and
+   1 LUCKY at thinking 8000 and 2 SOUND, 1 LUCKY, 1 WRONG at thinking 0; every
+   LUCKY is the scorer matching "the script" in a reply that quoted
+   `between_bodies`, and the WRONG trial centred nothing where the docs say a
+   rod is centred and unioned a shank through the nut. A first round, before
+   the docs showed a mating pair, lost a trial to moving an out-of-phase nut
+   off the thread; a second lost one to reading "interfering" as phase when
+   the hole stopped short, which is why `threadedRod` now names both.
 3a. **Two render faults several bodies exposed** — found in the 2026-09-15
    renders, next:
    - A mirrored or moved copy is coloured by its original's tag:

@@ -755,8 +755,9 @@ pub struct ThreadForm {
     pub hand: Hand,
 }
 
-/// The most turns one [`Op::Thread`] builds: 20 turns take about 0.4 s.
-pub const THREAD_MAX_TURNS: f64 = 400.0;
+/// The most turns one [`Op::Thread`] builds: 200 turns of M3 take 8 s of the
+/// worker's 20 s deadline, 400 turns 13 s.
+pub const THREAD_MAX_TURNS: f64 = 200.0;
 
 impl ThreadForm {
     pub fn fundamental_height(&self) -> f64 {

@@ -991,10 +991,23 @@ function threadForm(size: ThreadSize, options: ThreadOptions, fn: string) {
  * it; it is an ordinary solid from here on.
  *
  * The tooth crosses +X at z = 0 of the rod's own frame, whatever its length,
- * so a rod and a `threadedHole` of the same size and hand mate where they sit
- * a whole number of pitches apart along Z (or rotated by 360° × offset /
- * pitch). The kernel measures every thread against its closed-form volume
- * and refuses one that reads more than 2e-5 off.
+ * so a rod and a `threadedHole` of the same size and hand mate only where
+ * their frames sit a whole number of pitches apart along Z, or the hole is
+ * turned about Z by 360° × offset / pitch. A bolt with a nut screwed on:
+ *
+ *     const bolt = threadedRod("M6", 20, { clearance: 0.2 });   // frame at z = 0
+ *     const nut = box(10, 10, 5).at(0, 0, 2.5)                  // z 0 to 5
+ *       .cut(threadedHole("M6", 5, { through: true, clearance: 0.2 }).at(0, 0, 5));
+ *     return { bolt, nut };                                      // 5 = 5 pitches: in phase
+ *
+ * `between_bodies` then reads them clear by the clearance across the flanks.
+ * A nut that reads **interfering** on its bolt is one of two mistakes: its
+ * hole does not run all the way through where the bolt passes (the cutter
+ * spans from its frame's z = +0.5 down to −depth, −depth − 0.5 with
+ * `through`, so place the frame on the face it enters), or the two are out of
+ * phase, which moving the nut by a whole pitch fixes. Moving it off the thread
+ * fixes neither. The kernel measures every thread against its closed-form
+ * volume and refuses one that reads more than 2e-5 off.
  */
 export function threadedRod(size: ThreadSize, length: number, options: ThreadOptions = {}): Shape {
   if (!(length > 0)) throw new Error("threadedRod length must be positive");
