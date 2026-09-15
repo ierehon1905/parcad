@@ -76,6 +76,10 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      closed solid and even — so "empty" — where two cross.
      `interfering-bodies` shows the boss's buried 5 mm as a hole in the plate.
      Test material per body instead.
+   - A threaded rod's cut face carries a thin dark line near its axis in a
+     `y` section (an M10 rod with a nut, 2026-09-15), while the rod measures
+     one intact piece: likely the same crossing count meeting the core and the
+     tooth where they share a face. Check it with the per-body fix.
    Each needs a case that pins the pixel counts (`right` > 0; the overlap
    filled).
 4. **Curves in sections and paths** — arcs and splines in the profile type; four
