@@ -142,6 +142,23 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    headless Firefox build the bracket from a plain static server, Safari is
    untested, and on a phone it has not been opened. playground/README.md has the
    recipe, the table and what a visitor can and cannot do.
+5a. **WebMCP on the playground** — agreed 2026-09-15, after the first Pages
+   deploy is live; time-boxed, page-only. The playground's one missing surface
+   is MCP; [WebMCP](https://developer.chrome.com/docs/ai/webmcp) lets the page
+   register tools for an agent in the visitor's browser (Chrome 149+, behind
+   `chrome://flags/#enable-webmcp-testing` or an origin trial; consumed by
+   Chrome's Gemini agent and the Model Context Tool Inspector extension, not by
+   Claude or Cursor). The tools are the ones `mcp.rs` already serves — same names,
+   descriptions generated from it at build time, never a second copy — each
+   calling the same `backend.ts` function the editor calls, so an agent's part
+   appears in the visitor's editor. Out of reach in a tab: the shared live
+   session, parts as files, builds over 60 s. `field/` cannot grade it (it speaks
+   MCP, and this is not an MCP server), so the evidence is inspector-extension
+   trials and a written record of whether an agent finds the tools, reads the
+   replies, and builds a part the editor shows; a weak result is recorded and not
+   shipped. Needs from the owner: an origin-trial token for
+   `ierehon1905.github.io`. Check on the live site that the document is
+   origin-isolated, which WebMCP requires.
 6. **A measured parts library** — fasteners, bearings, boards, devices, each
    held by eval cases, and a way for one part to import another.
 
