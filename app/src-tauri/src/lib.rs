@@ -31,6 +31,14 @@ fn export_stl(graph: serde_json::Value, project: String) -> Result<String, Strin
     write_and_reveal(&export, &project, "stl")
 }
 
+/// Write the current part out as 3MF, one object per body, beside the part.
+#[tauri::command]
+fn export_3mf(graph: serde_json::Value, project: String) -> Result<String, String> {
+    let name = project.rsplit('/').next().unwrap_or(&project);
+    let export = service::export_3mf(&service::parse_graph(graph)?, None, name)?;
+    write_and_reveal(&export, &project, "3mf")
+}
+
 /// Write the current part out as STEP.
 #[tauri::command]
 fn export_step(graph: serde_json::Value, project: String) -> Result<String, String> {
@@ -331,6 +339,7 @@ pub fn run() {
             evaluate,
             inspect_edge_target,
             export_stl,
+            export_3mf,
             export_step,
             list_projects,
             read_project,

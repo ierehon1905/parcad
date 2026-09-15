@@ -98,7 +98,7 @@ function Save() {
 }
 
 /**
- * The two files this app can produce, and the difference between them.
+ * The files this app can produce, and the difference between them.
  *
  * They were reachable only as ⌘E and ⇧⌘E, which is to say reachable only by
  * someone who had read the source. The modifier key also had to carry the whole
@@ -107,15 +107,22 @@ function Save() {
  * preview" and "the STEP file will be exact anyway" are both true at once and
  * look like a contradiction.
  */
-const EXPORTS: { format: "stl" | "step"; icon: IconName; label: string; key: string; detail: string }[] =
+const EXPORTS: { format: "3mf" | "stl" | "step"; icon: IconName; label: string; key?: string; detail: string }[] =
   [
+    {
+      format: "3mf",
+      icon: "plate",
+      label: "3MF for a slicer",
+      detail:
+        "The same triangles as STL, in millimetres, with every body its own named object — a lid and its box arrive as two parts to place, not one. Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open it.",
+    },
     {
       format: "stl",
       icon: "mesh",
       label: "STL mesh",
       key: "⌘E",
       detail:
-        "The triangles the viewport shows, welded. For printing, and for a quick look somewhere else.",
+        "The triangles the viewport shows, welded, with every body merged into one mesh. For any tool that reads a mesh, and for a quick look somewhere else.",
     },
     {
       format: "step",

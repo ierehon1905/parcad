@@ -11,3 +11,6 @@ serde.workspace = true
 serde_json.workspace = true
 nalgebra = "0.35"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# The 3MF package is a deflated ZIP; both are already in the lockfile, via png.
+flate2 = "1.1"
+crc32fast = "1.5"

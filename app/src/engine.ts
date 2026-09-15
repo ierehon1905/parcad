@@ -697,17 +697,16 @@ export const fmt = (v: number) =>
 
 // -------------------------------------------------------------- exporting
 
-/** Write one of the two files, and report where it went. */
-export async function runExport(format: "stl" | "step") {
+const EXPORTERS = { "3mf": backend.export3mf, stl: backend.exportStl, step: backend.exportStep };
+
+/** Write one of the files, and report where it went. */
+export async function runExport(format: keyof typeof EXPORTERS) {
   const graph = S.lastGraph.value;
   if (!graph) return;
-  S.setStatus(format === "step" ? "exporting STEP" : "exporting STL", "busy");
+  S.setStatus(`exporting ${format.toUpperCase()}`, "busy");
   try {
     const project = S.openPath.value;
-    const name =
-      format === "step"
-        ? await backend.exportStep(graph, project)
-        : await backend.exportStl(graph, project);
+    const name = await EXPORTERS[format](graph, project);
     // The whole path, not the file name. On the desktop it is where the file
     // actually is, and the file manager has just been opened on it; saying only
     // "exported part.stl" is what made the old export impossible to find.

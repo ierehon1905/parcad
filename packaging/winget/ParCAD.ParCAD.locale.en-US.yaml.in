@@ -16,6 +16,7 @@ Tags:
 - mcp
 - step
 - stl
+- 3mf
 ReleaseNotesUrl: https://github.com/ierehon1905/parcad/releases/tag/v{{version}}
 ManifestType: defaultLocale
 ManifestVersion: 1.10.0

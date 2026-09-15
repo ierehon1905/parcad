@@ -892,6 +892,19 @@ pub fn export_stl(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Expo
     })
 }
 
+/// Produce the current part as 3MF: the same triangles as [`export_stl`], each
+/// named body its own object. `name` names the object of a one-solid part.
+pub fn export_3mf(doc: &Doc, budget: Option<std::time::Duration>, name: &str) -> Result<Export, String> {
+    let built = build_exact(doc, budget, false)?;
+    let (bytes, measured) = parcad_evaluation::three_mf(doc, &built.success, built.reused, name)?;
+    Ok(Export {
+        bytes,
+        filename: "part.3mf",
+        content_type: "model/3mf",
+        measured,
+    })
+}
+
 /// Produce the current part as STEP, the exact surfaces.
 pub fn export_step(doc: &Doc) -> Result<Export, String> {
     export_step_within(doc, None)
@@ -1000,6 +1013,52 @@ pub fn reveal(path: &str) -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|e| format!("could not open a file manager for {path}: {e}"))
+}
+
+/// Hand a written file to the application the system opens its extension with
+/// — for a 3MF, whichever slicer the user installed last claimed it.
+///
+/// What comes back is only that the system accepted the hand-off. Whether the
+/// application then loaded the file is its own business, and a slicer already
+/// running is known to drop files handed to it (OrcaSlicer on Windows).
+/// Windows' `start` reports nothing either way, and asks the user for an
+/// application when none is registered.
+pub fn open_in_default_app(path: &str) -> Result<(), String> {
+    let file = Path::new(path);
+    if !file.exists() {
+        return Err(format!("nothing at {path} to open"));
+    }
+    let extension = file.extension().map_or(String::new(), |e| e.to_string_lossy().to_string());
+
+    #[cfg(target_os = "windows")]
+    {
+        // `start` is a cmd builtin; the empty string is the window title it
+        // would otherwise take the quoted path for.
+        return std::process::Command::new("cmd")
+            .args(["/C", "start", ""])
+            .arg(file)
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| format!("could not ask Windows to open {path}: {e}"));
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let program = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
+        let output = std::process::Command::new(program)
+            .arg(file)
+            .output()
+            .map_err(|e| format!("could not run {program} to open {path}: {e}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        Err(format!(
+            "{program} could not open {path} ({}): no application on this machine is set to open .{extension} files. \
+             Install a slicer that reads them — Bambu Studio, OrcaSlicer, PrusaSlicer or UltiMaker Cura — \
+             or tell the user the path to open by hand",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ))
+    }
 }
 
 /// Measure a foreign STEP export: the reverse of [`export_step`].

@@ -43,9 +43,23 @@ pub fn measure_bodies(s: &Success) -> Vec<MeasuredBody> {
         .collect()
 }
 
-fn measure_body(whole: &Tessellation, span: &BodySpan) -> Option<MeasuredBody> {
+/// Every named body's own mesh, welded, in the script's order. Empty for a
+/// one-solid part.
+pub fn body_meshes(s: &Success) -> Vec<(String, Tessellation)> {
+    if s.bodies.is_empty() {
+        return Vec::new();
+    }
+    let whole = unwelded(s);
+    s.bodies.iter().map(|span| (span.name.clone(), body_mesh(&whole, span))).collect()
+}
+
+fn body_mesh(whole: &Tessellation, span: &BodySpan) -> Tessellation {
     let end = (span.triangle_start + span.triangle_count).min(whole.triangles.len());
-    let tess = whole.restricted_to(span.triangle_start..end).weld(1e-3);
+    whole.restricted_to(span.triangle_start..end).weld(1e-3)
+}
+
+fn measure_body(whole: &Tessellation, span: &BodySpan) -> Option<MeasuredBody> {
+    let tess = body_mesh(whole, span);
     let bounds = Aabb::from_points(&tess.vertices)?;
     Some(MeasuredBody {
         name: span.name.clone(),
@@ -143,5 +157,9 @@ mod tests {
         assert!((bed.z_mm - 2.0).abs() < 1e-6 && (bed.footprint_fraction - 1.0).abs() < 1e-6);
         assert!(far.stats.watertight);
         assert_eq!(far.stats.bodies, 1);
+
+        let meshes = body_meshes(&s);
+        let shapes: Vec<_> = meshes.iter().map(|(name, m)| (name.as_str(), m.vertices.len(), m.triangles.len())).collect();
+        assert_eq!(shapes, [("near", 8, 12), ("far", 8, 12)]);
     }
 }

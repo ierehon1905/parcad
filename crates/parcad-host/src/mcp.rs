@@ -234,18 +234,24 @@ pub struct SelectorRequest {
 pub struct ExportRequest {
     /// A parcad DSL script ending in a returned shape.
     pub script: String,
-    /// `step` for exact surfaces, or `stl` for a mesh.
+    /// `3mf` for a slicer, `stl` for a bare mesh, or `step` for exact surfaces.
     pub format: String,
     /// File name to write, without any directory part. Defaults to
-    /// `part.step` / `part.stl`.
+    /// `part.3mf` / `part.stl` / `part.step`.
     #[serde(default)]
     pub filename: Option<String>,
     /// For a part that returns several bodies (`return { base, lid }`): the
     /// name of the one body to write on its own, e.g. `lid`. Omit to write
-    /// every body into one file — a solid per body in STEP, all of their
-    /// triangles in one STL. Refused by name when the part has no such body.
+    /// every body into one file — an object per body in 3MF, a solid per body
+    /// in STEP, all of their triangles in one STL. Refused by name when the
+    /// part has no such body.
     #[serde(default)]
     pub body: Option<String>,
+    /// Open the written file in the application this machine opens its
+    /// extension with — a 3MF lands in the user's slicer. Only when the user
+    /// asked to see or print the part now.
+    #[serde(default)]
+    pub open: bool,
     /// Seconds the kernel may take, 1 to 600. Defaults to 20, or
     /// PARCAD_OCCT_TIMEOUT. Reuses the build of an earlier evaluate_part on
     /// the same script when there is one.
@@ -370,6 +376,14 @@ pub struct Exported {
     /// `deflection_mm`. A file with watertight false, or with more bodies
     /// than the part names, is not ready to print whatever the slicer says.
     measured: service::ExportMeasured,
+    /// Present when `open` was asked: true when the system accepted the file
+    /// for the application it opens this extension with. The file is written
+    /// either way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    opened: Option<bool>,
+    /// Why the file could not be handed to an application, and what to do.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    open_error: Option<String>,
 }
 
 #[derive(Serialize, schemars::JsonSchema)]
@@ -664,16 +678,16 @@ impl Parcad {
     #[tool(
         name = "export_part",
         annotations(title = "Export a part to a file", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Export a part as STEP (exact surfaces, for CAD) or STL (a mesh, for printing) and return the absolute path written. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one solid per body in STEP, every body's triangles in one STL — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone, which is what a slicer wants when the halves print separately."
+        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way."
     )]
     async fn export_part(
         &self,
         Parameters(request): Parameters<ExportRequest>,
     ) -> Result<rmcp::handler::server::wrapper::Json<Exported>, ErrorData> {
         let format = request.format.to_ascii_lowercase();
-        if format != "step" && format != "stl" {
+        if !["3mf", "stl", "step"].contains(&format.as_str()) {
             return Err(invalid(format!(
-                "unknown export format {:?}; expected \"step\" or \"stl\"",
+                "unknown export format {:?}; expected \"3mf\", \"stl\" or \"step\"",
                 request.format
             )));
         }
@@ -700,11 +714,15 @@ impl Parcad {
             if let Some(body) = &request.body {
                 doc = service::body_doc(&doc, body)?;
             }
-            let export = if format == "step" {
-                service::export_step_within(&doc, budget).map_err(|e| built.locate(e))?
-            } else {
-                service::export_stl(&doc, budget).map_err(|e| built.locate(e))?
-            };
+            let export = match format.as_str() {
+                "step" => service::export_step_within(&doc, budget),
+                "3mf" => {
+                    let stem = filename.rsplit_once('.').map_or(filename.as_str(), |(stem, _)| stem);
+                    service::export_3mf(&doc, budget, request.body.as_deref().unwrap_or(stem))
+                }
+                _ => service::export_stl(&doc, budget),
+            }
+            .map_err(|e| built.locate(e))?;
 
             let dir = export_dir();
             std::fs::create_dir_all(&dir)
@@ -713,11 +731,15 @@ impl Parcad {
             std::fs::write(&path, &export.bytes)
                 .map_err(|e| format!("writing {}: {e}", path.display()))?;
 
+            let path = path.to_string_lossy().to_string();
+            let open_error = request.open.then(|| service::open_in_default_app(&path).err()).flatten();
             Ok(Exported {
-                path: path.to_string_lossy().to_string(),
                 bytes: export.bytes.len(),
                 format,
                 measured: export.measured,
+                opened: request.open.then_some(open_error.is_none()),
+                open_error,
+                path,
             })
         })
         .await?;

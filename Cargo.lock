@@ -2737,6 +2737,8 @@ name = "parcad-core"
 version = "0.0.6"
 dependencies = [
  "anyhow",
+ "crc32fast",
+ "flate2",
  "image",
  "nalgebra",
  "serde",

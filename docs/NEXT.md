@@ -447,6 +447,81 @@ Already true and misreported: `preview_ready` / `exact_ready` do not apply,
 because the window runs one exact kernel per evaluation and the snapshot names
 it in `backend`.
 
+## Integrations before launch — researched 2026-09-16
+
+Two web research passes, one on the 3D-printing side and one on CAD and the
+web, ranked what to connect ParCAD to before launch. What was built, and the
+two that wait for their own session:
+
+- **3MF export — built 2026-09-16.** One named object per body, millimetres,
+  core spec only (`parcad_core::threemf`, a hand-written deflated ZIP). On
+  `export_part` as `format: "3mf"`, in the export menu, on `/api/export/3mf`
+  and in the playground. lib3mf 2.5.0 (the 3MF Consortium's reference reader)
+  opened `lidded-box`, `screw-top-jar` and `knurled-knob` in strict mode with
+  no warnings, every object manifold and oriented, each object's volume equal
+  to `named_bodies`. Not yet opened in a real slicer. Colour per body
+  (`basematerials`) waits for the `materials` worktree; Bambu Studio's project
+  settings are undocumented and stay out. Field case `one-file-for-the-slicer`,
+  not yet run.
+- **`export_part`'s `open: true` — built 2026-09-16.** It hands the written
+  file to the application the system opens its extension with (`open`,
+  `xdg-open`, `start`), so an agent with no shell (Claude Desktop, ChatGPT)
+  can put a 3MF in the user's slicer. The error path is measured: with no
+  slicer installed, `opened: false` and `open_error` names what to install.
+  The success path is not, because this machine has no slicer. Deep links
+  (`bambustudio://`, `prusaslicer://`) were rejected: they download from an
+  https URL on the slicer vendor's own sites (MakerWorld, Printables) and never
+  open a local file.
+
+### STEP with body names and colours — next, its own session
+
+`vendor/opencascade`'s `write_step` uses a plain `STEPControl_Writer`, so a
+part's bodies arrive in other CAD programs unnamed and grey. The XCAF toolkits
+that carry names, colours and assemblies (`TKXCAF`, `TKDESTEP` via
+`STEPCAFControl_Writer`) are already linked in `vendor/opencascade-sys/build.rs`
+— it is a binding change, recorded in `PARCAD-CHANGES.md`, with no new
+dependency.
+
+- **Names:** each `Op::Bodies` entry's name on its solid; for a one-solid part,
+  the project name.
+- **Colours:** from `.material()` once the `materials` worktree lands.
+- **Units:** write millimetres explicitly. The classic STEP failure is a
+  25.4× or 1000× scale from a misread header unit, so a corpus case re-reads
+  each export with `probe_step` and holds its volume and bounds to the build.
+- **What importers show (unverified here):** FreeCAD reads colours through
+  OCCT, Fusion keeps simple RGB, Onshape reportedly stopped importing STEP
+  colours in 2024, and whether Fusion keeps body names is unconfirmed. So the
+  docs say "where the importer supports it". Estimate 2–3 days.
+
+### A 3D viewer inside the chat — after launch, the second announcement
+
+MCP Apps (the first official MCP extension, 2026-01-26) lets a tool point at a
+`ui://` HTML resource that the client renders in a sandboxed iframe. That
+iframe can call the server's tools back. Claude web and Desktop, VS Code
+Copilot, Goose and others render it. The official examples include a three.js
+server, Autodesk ships its APS viewer into chats this way, and an Onshape MCP
+server feeds a three.js view from glTF.
+
+- **The case for it:** today an agent's view is a PNG line in the reply. This
+  would put the orbitable part in the conversation, which is the demo
+  `docs/GROWTH.md` wants for "a second thing to announce within two weeks".
+- **Shape:**
+  - GLB export: OCCT's `RWGltf_CafWriter` (`TKRWMesh`/`TKDEGLTF`, not linked
+    yet), or written in Rust from the body meshes 3MF already uses.
+  - A self-contained viewer page reusing `app/src/viewport.ts`'s look, served
+    as the resource `evaluate_part` points at. The CSP is declared in
+    `_meta.ui.csp`, or everything is inlined.
+  - The same GLB serves `<model-viewer>` embeds and iOS AR Quick Look.
+- **Risks:**
+  - Client support varies (Claude Code in a terminal shows nothing).
+  - A large mesh inside an iframe is a practical limit.
+  - Whether a model *uses* it is a field case, not an assumption.
+- **Estimate:** 3–6 days.
+- **Sources:**
+  - <https://blog.modelcontextprotocol.io/posts/2026-01-26-mcp-apps/>
+  - <https://github.com/modelcontextprotocol/ext-apps/tree/main/examples/threejs-server>
+  - <https://aps.autodesk.com/blog/embedding-aps-viewer-ai-chats-mcp-apps>
+
 ## The small win, whenever there is room for one
 
 **Arcs in a section.** `Edge::arc` is already bound; it unlocks sealing grooves,

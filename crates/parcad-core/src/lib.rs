@@ -18,6 +18,7 @@ pub mod render;
 pub mod section;
 pub mod selectors;
 pub mod tags;
+pub mod threemf;
 pub mod view;
 
 use serde::{Deserialize, Serialize};
