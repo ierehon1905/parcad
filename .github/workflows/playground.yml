@@ -93,6 +93,10 @@ jobs:
         run: cd app && bun install --frozen-lockfile
 
       - name: The corpus, against the WebAssembly build
+        # The page's own limit (TIMEOUT_MS in app/src/page/kernel.ts), not the
+        # native 20 s: 20-turn thread clearance measured 20 s+ on a 4-vCPU runner.
+        env:
+          PARCAD_OCCT_TIMEOUT: 60
         run: PARCAD_OCCT_WORKER=$PWD/playground/node-worker.sh cargo run --locked -q --release -p parcad-eval
 
       - name: Build the site
