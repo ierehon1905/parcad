@@ -2755,6 +2755,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "parcad-evaluation"
+version = "0.0.6"
+dependencies = [
+ "parcad-core",
+ "parcad-occt",
+ "schemars 1.2.2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "parcad-host"
 version = "0.0.6"
 dependencies = [
@@ -2763,6 +2774,7 @@ dependencies = [
  "base64 0.22.1",
  "dirs",
  "parcad-core",
+ "parcad-evaluation",
  "parcad-occt",
  "rmcp",
  "rquickjs",
@@ -2781,6 +2793,17 @@ dependencies = [
  "glam 0.23.0",
  "opencascade",
  "parcad-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "parcad-wasm"
+version = "0.0.6"
+dependencies = [
+ "parcad-core",
+ "parcad-evaluation",
+ "parcad-occt",
  "serde",
  "serde_json",
 ]

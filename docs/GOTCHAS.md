@@ -205,7 +205,50 @@ the second (already-deleted) glob *before running anything*. Use:
 find target -maxdepth 3 -name "occt-sys-*" -type d -exec rm -rf {} +
 ```
 
+### The WebAssembly kernel: four ways a build links something else
+
+All met building `playground/build-kernel.sh`; each produced a binary, not an
+error.
+
+- **A rebuilt OpenCASCADE is not relinked.** `opencascade-sys` asks for
+  `static=TK…`, and rustc copies every one of those `.a` files into the crate's
+  own rlib when it compiles it. Replace the libraries and cargo sees nothing
+  changed: an instrumented `libTKMesh.a` that `strings` showed printing never
+  printed, because the worker still linked the copy inside the rlib. The script
+  `cargo clean -p opencascade-sys` after every OCCT build. The same holds for a
+  native `PARCAD_OCCT_PREBUILT` whose contents change under an unchanged path.
+- **ninja keeps objects when a source goes back in time.** Staging with
+  `rsync -a` restores upstream mtimes, so a file rewritten to *older* contents
+  looks older than its object and is not recompiled. Staging is by checksum with
+  fresh mtimes for that reason.
+- **setjmp inside a Wasm-EH `try` is invalid wasm.** OCCT defines
+  `OCC_CONVERT_SIGNALS` on every non-MSVC build, which puts a `setjmp` in each
+  `OCC_CATCH_SIGNALS` block; clang then emitted a function V8 rejects at
+  instantiation ("br_table: label arity inconsistent",
+  `ShapeUpgrade_ShapeDivide::Perform`) and binaryen could not parse. The define
+  only matters once `OSD::SetSignal` installs a handler, which nothing in parcad
+  calls, and wasm has no signals; `playground/occt-emscripten.cmake` undefines it.
+- **`--bin` filters every `-p`.** `cargo build -p a --bin x -p b` builds no
+  binary of `b`; name each.
+
 ## Geometry
+
+### A planar wall meshes two ways
+
+`re-entrant-loft`'s five side walls are planar B-spline patches. BRepMesh's
+deflection control measures the midpoint of each wall's diagonal against the
+segment (0.8–2.6 mm in-plane, over the 0.01 mm deflection) and asks to insert
+it — a point exactly on the link it would split. Native arm64 clang's Delaunay
+insertion takes it and produces no new triangle, so the next pass inserts
+nothing and every wall stays two triangles (634 in all). The WebAssembly build
+splits the link and refines each wall to 266–450 (2240). Measured with the same
+prints in both builds: pass 1 leaves 2 elements natively and 4 in wasm, the
+first diverging number. Volume (5250.000), area, size, faces and edges agree
+exactly, which is why the case holds the triangle count to 260% rather than
+either build's number. Across the whole corpus the WebAssembly build moves only
+tessellation-derived numbers — at most 1.7e-4 relative in volume or area, 0.002
+mm in size, 0.54% in bed contact and 9.8% in triangles elsewhere — and no face
+or edge count; playground/README.md has the table.
 
 ### The `left` and `right` views were mirrored
 

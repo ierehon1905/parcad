@@ -1,0 +1,17 @@
+[package]
+name = "parcad-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The exact kernel as a WebAssembly module, for the browser playground"
+publish = false
+
+# Everything is behind the Emscripten target: on any other target this crate is
+# an empty binary, so `cargo test --workspace` neither links OpenCASCADE nor
+# turns on parcad-occt's `kernel` feature for the crates that must not have it.
+[target.'cfg(target_os = "emscripten")'.dependencies]
+parcad-core = { path = "../parcad-core" }
+parcad-occt = { path = "../parcad-occt", features = ["kernel"] }
+parcad-evaluation = { path = "../parcad-evaluation" }
+serde.workspace = true
+serde_json.workspace = true

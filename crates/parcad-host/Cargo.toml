@@ -13,6 +13,7 @@ parcad-core = { path = "../parcad-core" }
 # Default features only: this pulls in the host half, which spawns a worker and
 # reads its reply. No OpenCASCADE is linked into a host binary.
 parcad-occt = { path = "../parcad-occt" }
+parcad-evaluation = { path = "../parcad-evaluation" }
 # The UI and API are hosted on a loopback port so a browser is the same
 # application rather than a reduced one. Whoever embeds this crate owns the
 # tokio reactor — Tauri runs one, the CLI starts one — and only the listener is

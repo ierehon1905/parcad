@@ -1,7 +1,7 @@
 {
   "name": "re-entrant-loft",
   "script": "eval/scripts/re-entrant-loft.js",
-  "why": "A re-entrant loft section, allowed since sections no longer need to be convex: a ruled loft between an L and the L at half size is the frustum h/3 (A1 + A2 + sqrt(A1 A2)) = 5250 mm3 exactly, every wall planar. A pairing that slipped one vertex would twist the walls into saddles and read short: the twisted-loft tripwire applied to a non-convex outline.",
+  "why": "A re-entrant loft section, allowed since sections no longer need to be convex: a ruled loft between an L and the L at half size is the frustum h/3 (A1 + A2 + sqrt(A1 A2)) = 5250 mm3 exactly, every wall planar. A pairing that slipped one vertex would twist the walls into saddles and read short: the twisted-loft tripwire applied to a non-convex outline. The mesher's triangle count is held to 260%: BRepMesh's deflection control asks to insert the midpoint of each planar wall's diagonal, a point exactly on the link it would split, and whether the Delaunay insertion takes it is a rounding tie. Native arm64 drops it and leaves five walls two triangles each (634); the WebAssembly build takes it and refines them to a few hundred (2240). Volume, area, size and topology agree to every recorded digit, which is what this case holds; see docs/GOTCHAS.md, \"A planar wall meshes two ways\".",
   "brep": {
     "size": [
       30.0,
@@ -18,6 +18,11 @@
     "watertight": true,
     "faces": 8,
     "edges": 36,
-    "curves": 18
+    "curves": 18,
+    "tolerance": {
+      "size_mm": 0.01,
+      "volume_pct": 0.05,
+      "triangles_pct": 260.0
+    }
   }
 }
