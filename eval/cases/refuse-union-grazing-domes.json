@@ -1,0 +1,16 @@
+{
+  "name": "refuse-union-grazing-domes",
+  "script": "eval/scripts/refuse-union-grazing-domes.js",
+  "why": "Two domes whose flat feet overlap by 0.36 mm, unioned onto a plate: the fuse returned a watertight solid with one dome missing (1643.64 mm³, 7 faces, where both give about 1687 and 8) and raised no alert. A planter saucer lost 19 of 48 such bumps, and a denser layout lost the dish. Every point of an input's faces must be inside or on the union; the refusal names the lost input and the fix.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "the result is missing node",
+        "lie outside it",
+        "grazing angle",
+        "Move those inputs apart"
+      ]
+    }
+  }
+}

@@ -35,6 +35,7 @@ pub(crate) mod ffi {
             original: &TopoDS_Shape,
         ) -> UniquePtr<CxxVector<TopoDS_Shape>>;
         fn is_deleted(self: &ParcadBoolean, original: &TopoDS_Shape) -> bool;
+        fn alerts(self: &ParcadBoolean) -> String;
 
         fn parcad_fillet_with_history(base: &TopoDS_Shape) -> UniquePtr<ParcadEdgeTreatment>;
         fn parcad_chamfer_with_history(base: &TopoDS_Shape) -> UniquePtr<ParcadEdgeTreatment>;

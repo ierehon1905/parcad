@@ -19,6 +19,7 @@
 #include "rust/cxx.h"
 
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <BRepTools_History.hxx>
@@ -70,6 +71,15 @@ class ParcadBoolean {
   }
 
   bool is_deleted(const TopoDS_Shape& original) const { return algorithm().IsDeleted(original); }
+
+  // The kernel's own errors and warnings, one alert name per line; empty when
+  // it raised none. A result is returned either way.
+  rust::String alerts() const {
+    std::ostringstream out;
+    algorithm().DumpErrors(out);
+    algorithm().DumpWarnings(out);
+    return out.str();
+  }
 
  private:
   BRepAlgoAPI_BooleanOperation& algorithm() const {

@@ -219,6 +219,9 @@ distance field the B-rep does not have.
   than a geometric comparison per hit.
 - `BRepClass3d_classify(shape, x, y, z, tol)`: `BRepClass3d_SolidClassifier`,
   as a small integer for inside, outside, on the boundary, or undecidable.
+- `BRepClass3d_classify_points(shape, points, tol)`: the same for many points,
+  the solid loaded into one classifier and `Perform`ed per point, so checking
+  a union against every input's faces does not rebuild it each time.
 - `Shape_bounds_optimal(shape, …)`: `BRepBndLib::AddOptimal` off the exact
   geometry, no triangulation and no tolerance gap, so a tag's extent is the
   surface's own reach and not the mesh's.

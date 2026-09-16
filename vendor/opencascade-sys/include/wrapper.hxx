@@ -439,6 +439,31 @@ inline int BRepClass3d_classify(const TopoDS_Shape &shape, double x, double y, d
   }
 }
 
+// Point-in-solid for many points against one loaded shape — added for parcad,
+// see PARCAD-CHANGES.md. `points` is x, y, z triples; one state per point,
+// coded as BRepClass3d_classify's.
+inline rust::Vec<int32_t> BRepClass3d_classify_points(const TopoDS_Shape &shape, rust::Slice<const double> points, double tolerance) {
+  rust::Vec<int32_t> out;
+  BRepClass3d_SolidClassifier classifier(shape);
+  for (size_t i = 0; i + 2 < points.size(); i += 3) {
+    classifier.Perform(gp_Pnt(points[i], points[i + 1], points[i + 2]), tolerance);
+    switch (classifier.State()) {
+      case TopAbs_IN:
+        out.push_back(0);
+        break;
+      case TopAbs_OUT:
+        out.push_back(1);
+        break;
+      case TopAbs_ON:
+        out.push_back(2);
+        break;
+      default:
+        out.push_back(3);
+    }
+  }
+  return out;
+}
+
 // Tight bounds of a shape from its exact geometry — added for parcad, see
 // PARCAD-CHANGES.md. `BRepBndLib::AddOptimal` without triangulation and
 // without tolerance enlargement. False for a shape with no extent.

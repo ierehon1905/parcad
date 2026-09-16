@@ -939,6 +939,7 @@ pub mod ffi {
 
         // BRepClass3d_SolidClassifier — added for parcad, see PARCAD-CHANGES.md.
         pub fn BRepClass3d_classify(shape: &TopoDS_Shape, x: f64, y: f64, z: f64, tolerance: f64) -> i32;
+        pub fn BRepClass3d_classify_points(shape: &TopoDS_Shape, points: &[f64], tolerance: f64) -> Vec<i32>;
 
         // BRepBndLib::AddOptimal — added for parcad, see PARCAD-CHANGES.md.
         pub fn Shape_bounds_optimal(

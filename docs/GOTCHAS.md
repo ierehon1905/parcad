@@ -1246,6 +1246,34 @@ fuse" below, did not reproduce on OCCT 8 in either form (three quarter-torus
 arcs listed before four runs build in 27–29 ms either way), but a layer can
 still hold disjoint pieces.
 
+### A union that drops solids
+
+Two domes 9 mm across (a revolved smootherstep, flat where it meets the floor)
+unioned onto a plate 8.64 mm apart, so their feet overlap by 0.36 mm: the fuse
+returned a watertight, valid plate with **one** dome, 1643.64 mm³ and 7 faces,
+and raised no alert. 8.4 mm apart it builds both (1687.19 mm³, 8 faces), and
+so does 8.0, 7 and 6; spheres at the same places always build. What matters is
+two surfaces meeting at a grazing angle over a sliver of overlap, not the count:
+a planter saucer with 48 such bumps, in rings whose neighbours sat 8.64 apart,
+lost 19 of them, and a hex grid 8 apart lost the dish and came back as 15
+separate bumps.
+
+Nothing in the kernel's own reporting is enough to catch it. On the saucer the
+boolean's history said no bump was deleted and `DumpWarnings` was empty; on the
+hex grid one layer reported `BOPAlgo_AlertFaceBuilderUnusedEdges` and the rest
+of the loss was silent. Unioning the bumps together first, one at a time, or
+with a 0.3 mm vertical step at the foot lost them too.
+
+So a union is checked on its result (`require_inputs_kept` in `backend.rs`):
+every point of an input's faces is inside or on the union of it with
+anything, and a 3 × 3 grid per input face is classified against the result at
+1e-3 mm. A point outside refuses the union, naming the inputs lost and any
+alert the kernel raised. With a blend the check reads the boolean before the
+blend, which may take material off a convex seam. It costs 150 ms of 2.1 s on
+the twisted planter's 38-input saucer and 20 ms on 48 spheres, paid once per
+build. `eval/cases/refuse-union-grazing-domes.json` holds it. Which OCCT step
+loses the input is not found yet.
+
 ### `role: "hole"` does not match a conical opening
 
 A countersink rim is an inner boundary of the top face by any reading, and

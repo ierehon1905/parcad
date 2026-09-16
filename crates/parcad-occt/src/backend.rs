@@ -15,7 +15,7 @@ use glam::{DMat3, DVec3};
 use opencascade::{
     adhoc::AdHocShape,
     angle::Angle,
-    primitives::{BooleanShape, Edge, Face, Shape, Solid, Wire},
+    primitives::{BooleanShape, Edge, Face, PointState, Shape, Solid, Wire},
     curve::LoftProfile,
     sweep::{Helix as SweptHelix, HelixByTurn, SweepFrame},
 };
@@ -3410,6 +3410,8 @@ struct Combined {
     /// Every edge the booleans created that is still on the result.
     seam: Vec<Edge>,
     tools: Vec<CombinedTool>,
+    /// Every distinct error and warning the kernel raised along the way.
+    alerts: Vec<String>,
 }
 
 struct CombinedTool {
@@ -3454,6 +3456,7 @@ fn boolean_in_layers(base: BuiltShape, tools: Vec<BuiltShape>, cut: bool, tag: O
     let mut lineage = base.lineage;
     let mut features = base.features;
     let mut seam: Vec<Edge> = Vec::new();
+    let mut alerts: Vec<String> = Vec::new();
     let mut tools: Vec<Option<BuiltShape>> = tools.into_iter().map(Some).collect();
     for (k, layer) in layers.into_iter().enumerate() {
         // Merging split faces before the next boolean is what one boolean
@@ -3484,6 +3487,11 @@ fn boolean_in_layers(base: BuiltShape, tools: Vec<BuiltShape>, cut: bool, tag: O
         for (&i, member) in layer.iter().zip(&members) {
             tools_out[i].vanished = member.shape.faces().all(|f| result.is_deleted_face(&f));
         }
+        for alert in result.alerts().lines().map(str::trim).filter(|a| !a.is_empty()) {
+            if !alerts.iter().any(|a| a == alert) {
+                alerts.push(alert.to_owned());
+            }
+        }
         seam = evolve_edges(seam, &result);
         seam.extend(result.new_edges().cloned());
         let mut lineages = Vec::with_capacity(members.len());
@@ -3500,7 +3508,73 @@ fn boolean_in_layers(base: BuiltShape, tools: Vec<BuiltShape>, cut: bool, tag: O
         features,
         seam,
         tools: tools_out,
+        alerts,
     }
+}
+
+/// Points a side each input face is sampled at to check a union kept it.
+const KEPT_GRID: usize = 2;
+
+/// How far outside a union's result a point of an input may read before the
+/// input counts as lost: well above the kernel's tolerances, far below a solid.
+const KEPT_TOLERANCE_MM: f64 = 1e-3;
+
+/// Refuse a union whose result leaves out an input; see docs/GOTCHAS.md, "A union that drops solids".
+fn require_inputs_kept(
+    doc: &Doc,
+    id: NodeId,
+    label: &str,
+    children: &[NodeId],
+    inputs: &[Shape],
+    result: &Shape,
+    alerts: &[String],
+) -> Result<()> {
+    let mut lost: Vec<NodeId> = Vec::new();
+    let mut first: Option<DVec3> = None;
+    let mut outside = 0;
+    let mut sampled = 0;
+    for (&child, input) in children.iter().zip(inputs) {
+        let points = input.face_grid(KEPT_GRID);
+        let states = result.classify_points(&points, KEPT_TOLERANCE_MM);
+        let out: Vec<DVec3> = points
+            .iter()
+            .zip(&states)
+            .filter(|(_, state)| **state == PointState::Outside)
+            .map(|(p, _)| *p)
+            .collect();
+        sampled += points.len();
+        if let Some(p) = out.first() {
+            lost.push(child);
+            first.get_or_insert(*p);
+            outside += out.len();
+        }
+    }
+    let Some(at) = first else {
+        return Ok(());
+    };
+    const NAMED: usize = 4;
+    let named = if lost.len() > NAMED {
+        format!("{} and {} more", nodes_phrase(doc, &lost[..NAMED]), lost.len() - NAMED)
+    } else {
+        nodes_phrase(doc, &lost)
+    };
+    let said = if alerts.is_empty() {
+        "raised no error".to_owned()
+    } else {
+        format!("reported {}", alerts.join(", "))
+    };
+    bail!(
+        "node {id} ({label}) unions {} inputs, and the result is missing {named}: {outside} of \
+         {sampled} points on the inputs' faces lie outside it, the first at \
+         [{:.3}, {:.3}, {:.3}], and OpenCASCADE {said}. It drops an input this way \
+         where two overlap by a sliver and their surfaces meet at a grazing angle, \
+         such as two domes whose flat feet barely overlap. Move those inputs apart \
+         until they clear each other, or closer until their surfaces cross steeply",
+        children.len(),
+        at.x,
+        at.y,
+        at.z
+    );
 }
 
 /// "node 3 (bore)", "node 3 (bore) and node 4 (untagged)": each in the form
@@ -3591,8 +3665,11 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 surfaces::require_solid(doc, id, label, "unions", c, built)?;
             }
             breadcrumb(&format!("union node {id} ({label}) of nodes {children:?}"));
+            let inputs: Vec<Shape> = std::iter::once(&base).chain(&others).map(|b| b.shape.clone()).collect();
             let joined = boolean_in_layers(base, others, false, node.tag.as_deref());
             let (shape, lineage) = if *blend > 0.0 {
+                // Checked before the blend, which may take material off a convex seam.
+                require_inputs_kept(doc, id, label, children, &inputs, &joined.shape, &joined.alerts)?;
                 breadcrumb(&format!(
                     "fillet {blend} mm on edges created by union at node {id} ({label})"
                 ));
@@ -3609,7 +3686,9 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 )?;
                 unified_tracked(shape, lineage)
             } else {
-                unified_tracked(joined.shape, joined.lineage)
+                let (shape, lineage) = unified_tracked(joined.shape, joined.lineage);
+                require_inputs_kept(doc, id, label, children, &inputs, &shape, &joined.alerts)?;
+                (shape, lineage)
             };
             BuiltShape {
                 shape,

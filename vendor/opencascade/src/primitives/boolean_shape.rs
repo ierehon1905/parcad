@@ -107,6 +107,13 @@ impl BooleanShape {
             .is_deleted(sys::cast_face_to_shape(&face.inner))
     }
 
+    /// Every error and warning the kernel raised while building this result,
+    /// by alert name; empty when it raised none. Added for parcad; see
+    /// PARCAD-CHANGES.md.
+    pub fn alerts(&self) -> String {
+        self.history.alerts()
+    }
+
     pub fn fillet_new_edges(&mut self, radius: f64) {
         self.shape.fillet_edges(radius, &self.new_edges);
     }

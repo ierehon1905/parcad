@@ -249,18 +249,14 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
 
 ### Found designing the playground's planter saucer (2026-09-16)
 
-- **A union silently drops solids — a kernel defect.** 48 identical smooth bumps
-  (a revolved smootherstep profile whose foot meets the floor level) unioned onto
-  a dish came back watertight with 34 of them: 42 faces for 7 + 48, and
-  18994.88 mm³ where the dish (17143.24) plus 48 × 54.48 is 19758. Each bump
-  unioned alone is present; the loss needs neighbours whose feet overlap (38
-  pairs closer than their 9 mm footprint), and happens the same n-ary or one
-  union at a time. Spheres at the same 48 points all survive, so it is the
-  near-level overlap at the floor, not the count. A union that returns less
-  than its largest input, or loses a face set it was given, has to refuse by
-  name — "Refuse rather than approximate" — and then the OCCT step that loses
-  the solid wants finding. Repro: `examples/twisted-planter.js` history, or
-  two such bumps 8 mm apart on a plate.
+- **A union silently drops solids — refused since 2026-09-17, cause not found.**
+  Two domes whose flat feet overlap by a sliver (9 mm across, 8.64 apart) fused
+  onto a plate come back as a valid plate with one dome and no alert; 48 in
+  rings lost 19, a denser grid lost the dish. `require_inputs_kept` now refuses
+  any union whose result leaves a point of an input's faces outside it
+  (GOTCHAS, "A union that drops solids";
+  `eval/cases/refuse-union-grazing-domes.json`). Still open: which OCCT step
+  loses the input, and whether a fuzzy value or a different grouping builds it.
 - **Delabella meshes faster and does not close.** Measured and reverted; the
   repro, the numbers and what it does not break are in GOTCHAS, "Delabella,
   OCCT's other triangulator". Worth a minimal C++ report upstream one day.

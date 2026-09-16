@@ -840,6 +840,21 @@ impl Shape {
         }
     }
 
+    /// [`Shape::classify_point`] for every one of `points`, loading the solid
+    /// once. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn classify_points(&self, points: &[DVec3], tolerance: f64) -> Vec<PointState> {
+        let flat: Vec<f64> = points.iter().flat_map(|p| p.to_array()).collect();
+        ffi::BRepClass3d_classify_points(&self.inner, &flat, tolerance)
+            .into_iter()
+            .map(|state| match state {
+                0 => PointState::Inside,
+                1 => PointState::Outside,
+                2 => PointState::OnBoundary,
+                _ => PointState::Unknown,
+            })
+            .collect()
+    }
+
     /// The least distance from a point to this shape's boundary, and the
     /// point on the boundary it is measured to. Unsigned: pair it with
     /// [`Shape::classify_point`] for a sign. Added for parcad.

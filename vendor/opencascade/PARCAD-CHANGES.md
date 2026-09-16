@@ -240,6 +240,15 @@ many times), and a tag's exact extent (`BRepBndLib::AddOptimal`). These are
 what parcad's probes, wall-thickness sweep and tag extents run on now that the
 exact kernel is the only one; they used to read a distance field.
 
+`Shape::classify_points` classifies many points against one loaded solid.
+
+## `BooleanShape::alerts`
+
+`ParcadBoolean::alerts()` (include/history.hxx) returns `DumpErrors` and
+`DumpWarnings` of the boolean just built. `Build()` returns a shape whether
+or not the kernel raised them, and a fuse that leaves edges unused while
+building faces has dropped material without saying so anywhere else.
+
 ## `Shape::bounds_bracket`
 
 The sys crate's `Shape_bounds_bracket`: a box that encloses the shape and the
