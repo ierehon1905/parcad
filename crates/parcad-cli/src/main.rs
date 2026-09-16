@@ -568,6 +568,9 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
     if let Some(deviation) = s.deviation_mm {
         println!("fit      fitted curves within {deviation:.4} mm of their points at worst");
     }
+    if let Some(wall) = s.loft_wall_mm {
+        println!("wall     the walled loft measures {:.4} to {:.4} mm between its skins", wall.min, wall.max);
+    }
     for body in parcad_occt::measure_bodies(&s) {
         let size = body.bounds.size();
         println!(

@@ -88,6 +88,16 @@ impossible, check the layer that would implement it, not the layer above.
   the fit between two is measured, not solved. Nothing selects across bodies:
   a tag lives in the
   body that made it, and a treatment cannot take the group as its child.
+- **a thin wall lofted through fitted sections** — `loft(sections, { wall: t })`
+  for sections that are each one `{ fit }`: the kernel makes the inside itself,
+  stepped by `t / cos φ` so the wall is `t` square to a leaning surface, on the
+  outside's parameters, and reports the wall it measured between the two skins
+  as `loft_wall_mm`; `bottom`/`top: "closed"` give an end a floor. A lampshade
+  used to be a loft minus a loft of hand-stepped points, which pinched to
+  0.001 mm between smooth sections and was 1.21 mm thick for 1.6 asked
+  between ruled ones. `walled-cone` and `walled-sleeve` hold it to closed
+  forms. Not here: a wall on corner or arc sections (cut `loft` of `inset`s
+  instead), or a wall that leans within 14° of flat.
 
 What a mainstream tool has that this still does not, with the cost of each here,
 is in [OP_ROADMAP.md](OP_ROADMAP.md).

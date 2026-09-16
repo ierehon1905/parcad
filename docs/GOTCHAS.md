@@ -469,6 +469,41 @@ dense samples of the wires instead. A sweep along a straight path still can. Fit
 a looser tolerance, or smooth the points, and the integral settles. `eps`
 stays 1e-7.
 
+### A sideways inset of a leaning wall is thinner than the inset
+
+Stepping a section inward by `t` in its own plane makes a wall `t · cos φ`
+thick, square to a surface leaning `φ` from vertical. The fitted lamp shade
+built as outer sections minus sections stepped in by 1.6 mm measured 1.211 mm
+at its thinnest in `measure_wall_thickness` (kind `wall`, not a rim artifact),
+and a horizontal inset of one sloped section measured 1.387 mm. `loft(...,
+{ wall })` steps by `t / cos φ` from the built outside, so its `loft_wall_mm`
+is the wall square to the surface.
+
+### `Edge::fit`'s closed seam is only G1, and can loop
+
+`AppParCurves_TangencyPoint` fixes the *direction* of the tangent at each end
+of the fit, not its size: `AppParCurves_LeastSquare` solves the two end
+magnitudes (`lambda1`, `lambda2`) freely along with the poles. So the closed
+`{ fit }` a section resolves to meets itself with one tangent direction and
+two speeds, and where the least squares wants the curve slow — the inside of a
+lamp at a star tip, where the offset turns with a radius of 0.4 mm — one
+magnitude goes to nearly zero and the curve cusps and loops by 0.01 mm at its
+start, at every span count up to the interpolation limit. The walled loft
+found it and does not use `Edge::fit`: its sections are fitted periodic
+(`parcad_core::skin::PeriodicFit`), with no seam at all. A plain `{ fit }`
+section in an extrude or a revolve still goes through `Edge::fit`; its loop
+check catches a loop, but the seam's speed jump is not reported.
+
+### One large B-spline face meshes far slower than the same surface in bands
+
+The fitted lamp as one smooth outer face and one inner (4 faces) spent 102 s
+in the loft's bounding-box tessellation at 0.01 mm; the same two surfaces cut
+into a face per stretch between its 15 sections (30 faces) took 18.7 s, and
+the mesh after it 1 s. `ThruSections`' single smooth face in the older lamp
+took 166 s. Splitting further, in `u` as well, did not help measurably (16 to
+19 s under load). So a skinned loft is always banded at its sections, and the
+edges between bands are `dihedral: "smooth"`.
+
 ### `offset_surface` lies
 
 It returns valid-looking wrong answers rather than failing:

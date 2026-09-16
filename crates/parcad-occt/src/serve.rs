@@ -8,7 +8,7 @@ use crate::backend::{self, BuildCache};
 use crate::perceive;
 use crate::protocol::{
     breadcrumb, edge_curve, BodyFit, BodySpan, EdgeCurve, FaceRun, FaceSummary, Request,
-    Response, Success, TargetPreview, Timings, Topology,
+    Response, Success, TargetPreview, Timings, Topology, WallRange,
 };
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -263,7 +263,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
 
     breadcrumb("lowering the graph");
     let t0 = Instant::now();
-    let (part, deviation_mm) =
+    let (part, measured) =
         backend::measuring_fits(|| backend::with_reuse(cache, &doc, || backend::build_part(&doc)));
     let part = match part {
         Ok(part) => part,
@@ -390,7 +390,8 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         faces,
         edges,
         deflection_mm: BINDING_DEFLECTION_MM,
-        deviation_mm,
+        deviation_mm: measured.deviation_mm,
+        loft_wall_mm: measured.loft_wall_mm.map(|[min, max]| WallRange { min, max }),
         topology,
         bodies,
         between,

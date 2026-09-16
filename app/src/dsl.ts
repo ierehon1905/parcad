@@ -1947,10 +1947,47 @@ export interface LoftSection {
  * re-origin the sections to untwist what the outlines spell out.
  *
  * Outlines may be re-entrant, but must not cross themselves.
+ *
+ * Sections that are each one closed `{ fit: points, tolerance }` over the
+ * same number of points are skinned by the kernel itself: every section is
+ * fitted on one shared knot vector, with point `i` at the same curve
+ * parameter in every section, so the loft is one low-pole surface (smooth)
+ * or one face per stretch between sections (ruled). List every section's
+ * points the same way round, starting at the same place on the outline.
+ *
+ * `wall: t` makes the loft a shell `t` mm thick instead of a solid, and is
+ * the way to draw a lampshade, a vase or a sleeve through fitted sections —
+ * not a loft of insets cut from a loft. The sections are the *outside*; the
+ * kernel steps each point inward itself, widened where the wall leans so the
+ * wall measured square to the surface is `t` (a sideways inset of a sloped
+ * wall is only `t · cos(slope)` thick), and skins the inside on the same
+ * knots and parameters as the outside, so the two stay `t` apart between
+ * sections too. The built part reports `loft_wall_mm: { min, max }`, the wall
+ * measured between the two skins, and a wall more than 5 % off `t` anywhere
+ * is refused, naming where. Both ends are open by default — the wall ends in
+ * a flat ring. `wall: { thickness: t, bottom: "closed" }` gives the bottom a
+ * floor `t` thick instead (a vase), and `top: "closed"` the top a lid.
+ * A walled loft takes only fitted sections, no point, and refuses where the
+ * outline turns tighter than the wall or the wall leans within about 14° of
+ * horizontal.
+ *
+ * ```js
+ * const ring = (r) => Array.from({ length: 120 }, (_, i) => {
+ *   const a = (2 * Math.PI * i) / 120;
+ *   return [r * Math.cos(a), r * Math.sin(a)];
+ * });
+ * return loft(
+ *   [0, 40, 80].map((z) => ({ z, outline: [{ fit: ring(30 + z / 4), tolerance: 0.01 }] })),
+ *   { smooth: true, wall: { thickness: 1.6, bottom: "closed" } },
+ * );
+ * ```
  */
 export function loft(
   sections: LoftSection[],
-  options: { smooth?: boolean } = {},
+  options: {
+    smooth?: boolean;
+    wall?: number | { thickness: number; bottom?: "open" | "closed"; top?: "open" | "closed" };
+  } = {},
 ): Shape {
   if (!Array.isArray(sections) || sections.length < 2) {
     throw new Error("a loft needs at least 2 sections, each { z, outline }");
@@ -1985,11 +2022,37 @@ export function loft(
     }
   }
   const smooth = options.smooth ?? false;
+  const wall = loftWall(options.wall);
   return new Shape(() => ({
     op: "loft",
     sections: sections.map(({ outline, z, point }) => (point !== undefined ? { z, point } : { outline, z })),
     ...(smooth ? { smooth } : {}),
+    ...(wall ? { wall } : {}),
   }), []);
+}
+
+function loftWall(
+  wall: number | { thickness: number; bottom?: "open" | "closed"; top?: "open" | "closed" } | undefined,
+): { thickness: number; bottom?: "closed"; top?: "closed" } | undefined {
+  if (wall === undefined) return undefined;
+  const spec = typeof wall === "number" ? { thickness: wall } : wall;
+  if (!spec || typeof spec !== "object" || !(Number.isFinite(spec.thickness) && spec.thickness > 0)) {
+    throw new Error(`a loft's wall is a thickness in mm, or { thickness, bottom: "open" | "closed", top: "open" | "closed" }; got ${JSON.stringify(wall)}`);
+  }
+  const extra = Object.keys(spec).filter((key) => !["thickness", "bottom", "top"].includes(key));
+  if (extra.length > 0) {
+    throw new Error(`a loft's wall takes thickness, bottom and top; ${extra.join(", ")} is not one of them`);
+  }
+  const out: { thickness: number; bottom?: "closed"; top?: "closed" } = { thickness: spec.thickness };
+  for (const end of ["bottom", "top"] as const) {
+    const value = spec[end];
+    if (value === undefined || value === "open") continue;
+    if (value !== "closed") {
+      throw new Error(`a loft wall's ${end} is "open" (the default, a flat ring) or "closed" (a floor as thick as the wall); got ${JSON.stringify(value)}`);
+    }
+    out[end] = "closed";
+  }
+  return out;
 }
 
 /**

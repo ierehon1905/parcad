@@ -1,0 +1,11 @@
+{
+  "name": "refuse-wall-on-corners",
+  "script": "eval/scripts/refuse-wall-on-corners.js",
+  "why": "A walled loft steps sampled points inward and fits both skins on one set of knots, so it takes only sections that are one closed { fit }. Asked of two squares it must refuse at the graph, and say how to get the fitted section and what to do for corners instead.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": ["not one closed { fit: points, tolerance }", "Sample the outline into points", "inset"]
+    }
+  }
+}

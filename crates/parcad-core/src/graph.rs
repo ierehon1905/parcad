@@ -264,6 +264,41 @@ mod tests {
     }
 
     #[test]
+    fn a_wall_takes_fitted_sections_of_one_count_with_room_for_its_floors() {
+        let fitted = |n: usize, z: f64| {
+            let points: Vec<[f64; 2]> = (0..n)
+                .map(|i| {
+                    let a = std::f64::consts::TAU * i as f64 / n as f64;
+                    [10.0 * a.cos(), 10.0 * a.sin()]
+                })
+                .collect();
+            LoftSection { outline: vec![SectionEntry::Fit { points, tolerance: 0.01 }], z, point: None }
+        };
+        let check = |sections: &[LoftSection], wall: LoftWall| {
+            let resolved = Op::validate_loft(sections).unwrap();
+            Op::validate_loft_wall(sections, &resolved, &wall).map_err(|e| e.to_string())
+        };
+        let open = LoftWall { thickness: 2.0, bottom: WallEnd::Open, top: WallEnd::Open };
+        check(&[fitted(40, 0.0), fitted(40, 10.0)], open).unwrap();
+        let err = check(&[fitted(40, 0.0), fitted(30, 10.0)], open).unwrap_err();
+        assert!(err.contains("resample every section to the same count"), "{err}");
+        let squares = [
+            LoftSection { outline: square(), z: 0.0, point: None },
+            LoftSection { outline: square(), z: 10.0, point: None },
+        ];
+        let err = check(&squares, open).unwrap_err();
+        assert!(err.contains("{ fit: points, tolerance }"), "{err}");
+        let closed = LoftWall { thickness: 6.0, bottom: WallEnd::Closed, top: WallEnd::Closed };
+        let err = check(&[fitted(40, 0.0), fitted(40, 10.0)], closed).unwrap_err();
+        assert!(err.contains("no room inside"), "{err}");
+        let err = check(&[fitted(40, 0.0), fitted(40, 10.0)], LoftWall { thickness: 0.0, ..open }).unwrap_err();
+        assert!(err.contains("positive thickness"), "{err}");
+        let wall: LoftWall = serde_json::from_str(r#"{"thickness":1.6,"bottom":"closed"}"#).unwrap();
+        assert_eq!(wall, LoftWall { thickness: 1.6, bottom: WallEnd::Closed, top: WallEnd::Open });
+        assert_eq!(serde_json::to_string(&wall).unwrap(), r#"{"thickness":1.6,"bottom":"closed"}"#);
+    }
+
+    #[test]
     fn a_spline_path_tighter_than_its_section_is_refused() {
         let path = [V3::new(0.0, 0.0, 0.0), V3::new(10.0, 3.0, 0.0), V3::new(20.0, 0.0, 0.0)];
         Op::validate_sweep(&[], 1.0, &[], 0.0, None, &path, 1.0).unwrap();
@@ -607,6 +642,12 @@ pub enum Op {
         /// the graph's cheap bounds stay conservative rather than assumed.
         #[serde(default, skip_serializing_if = "is_false")]
         smooth: bool,
+        /// A thin-walled loft instead of a solid one: the sections are the
+        /// outside, and the backend steps each inward itself, widened by the
+        /// wall's slope there so the wall measured square to the surface is
+        /// `thickness`. See [`LoftWall`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        wall: Option<LoftWall>,
     },
 
     /// Sweep an outline along a path of straight runs joined by circular
@@ -814,6 +855,40 @@ pub struct LoftSection {
     /// An apex in place of an outline.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub point: Option<[f64; 2]>,
+}
+
+/// The wall of an [`Op::Loft`] that is a shell rather than a solid.
+///
+/// Only sections that are each one closed `{ fit }` take a wall: the backend
+/// fits both skins on one shared knot vector and one shared parameter per
+/// authored point, so the inner skin corresponds to the outer parameter for
+/// parameter, and it measures the wall between them at matched parameters
+/// before returning the part.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct LoftWall {
+    /// The wall, in mm, measured along the surface normal.
+    pub thickness: f64,
+    /// Whether the bottom section is left open — the wall ends in a flat
+    /// ring, the way a lampshade or a sleeve does — or closed by a floor
+    /// `thickness` deep.
+    #[serde(default, skip_serializing_if = "WallEnd::is_open")]
+    pub bottom: WallEnd,
+    #[serde(default, skip_serializing_if = "WallEnd::is_open")]
+    pub top: WallEnd,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WallEnd {
+    #[default]
+    Open,
+    Closed,
+}
+
+impl WallEnd {
+    pub fn is_open(&self) -> bool {
+        *self == WallEnd::Open
+    }
 }
 
 /// The XY box over a loft's sections, as `(min, max)`: every outline's own
@@ -1360,6 +1435,55 @@ impl Op {
             }
         }
         Ok(resolved)
+    }
+
+    /// Check a loft's `wall` against its resolved sections: a wall needs
+    /// every section to be one closed `{ fit }` over the same number of
+    /// points, and room for its floors.
+    pub fn validate_loft_wall(
+        sections: &[LoftSection],
+        resolved: &[Option<Section>],
+        wall: &LoftWall,
+    ) -> anyhow::Result<()> {
+        if !(wall.thickness.is_finite() && wall.thickness > 0.0) {
+            anyhow::bail!("a loft's wall is {} mm; give a positive thickness in mm", wall.thickness);
+        }
+        let mut count = None;
+        for (i, section) in resolved.iter().enumerate() {
+            let Some(section) = section else {
+                anyhow::bail!(
+                    "loft section {i} is a point, and a walled loft has an inside that a point would close: end the loft on an outline and close that end with `top: \"closed\"` or `bottom: \"closed\"`"
+                );
+            };
+            let points = match (section.inset, section.segments.as_slice()) {
+                (None, [crate::section::Segment::Fit { points, closed: true, .. }]) => points.len(),
+                _ => anyhow::bail!(
+                    "loft section {i} is not one closed {{ fit: points, tolerance }}, and a walled loft takes only those: the kernel steps the sampled points inward to make the inside, and fits both skins on one set of knots so they stay a wall apart. Sample the outline into points and give it as [{{ fit: points, tolerance }}]; for corners and arcs, cut a loft of each section's inset from the solid loft instead"
+                ),
+            };
+            if points < 8 {
+                anyhow::bail!(
+                    "loft section {i} is fitted through {points} points, and a walled loft fits each section on at least four spans, which takes 8 points or more; sample the outline more densely"
+                );
+            }
+            match count {
+                None => count = Some(points),
+                Some(first) if first != points => anyhow::bail!(
+                    "loft section {i} is fitted through {points} points and section 0 through {first}; a walled loft pairs the points by index across sections, so resample every section to the same count"
+                ),
+                Some(_) => {}
+            }
+        }
+        let height = sections[sections.len() - 1].z - sections[0].z;
+        let floors = [wall.bottom, wall.top].iter().filter(|end| !end.is_open()).count() as f64;
+        if floors * wall.thickness >= height {
+            anyhow::bail!(
+                "a loft {height} mm tall has no room inside for {floors} closed end{} {} mm thick; thin the wall or open an end",
+                if floors > 1.0 { "s" } else { "" },
+                wall.thickness
+            );
+        }
+        Ok(())
     }
 
     /// Resolve an [`Op::Sweep`] path into runs and bend arcs, refusing what

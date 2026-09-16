@@ -384,6 +384,13 @@ fn is_straight(points: &[[f32; 3]], start: [f32; 3], delta: [f32; 3], magnitude:
     })
 }
 
+/// A measured range, in mm.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WallRange {
+    pub min: f64,
+    pub max: f64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Success {
     pub positions: Vec<f32>,
@@ -409,6 +416,11 @@ pub struct Success {
     /// asked for; absent when nothing was fitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deviation_mm: Option<f64>,
+    /// The thinnest and thickest wall of any `loft(..., { wall })`, measured
+    /// between its two skins square to the outside, in mm; absent when the
+    /// part has no walled loft.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loft_wall_mm: Option<WallRange>,
     /// Logical edges, each a polyline sampled along the true curve.
     ///
     /// A mesh alone cannot produce this at any resolution: there a sharp edge
