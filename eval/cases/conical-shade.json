@@ -1,0 +1,33 @@
+{
+  "name": "conical-shade",
+  "script": "eval/scripts/conical-shade.js",
+  "why": "A lampshade in closed form: a frustum shell open at both ends, outer radius 30 at z = 0 to 20 at z = 40, the inner surface the outer moved 1.6 in along the radius. Volume pi * integral of (3.2 R - 2.56) dz = 3097.6 pi = 9731.468 mm3, recorded 0.028% under, on the tessellation. The wall between two surfaces sloping 10 in 40 is 1.6 * 40 / sqrt(1700) = 1.5522 mm. At the two open rims every sample reads thinner — a ball there is wedged against the end face at 76 or 104 degrees — and those are edge readings, not the thinnest wall; the shade from which this case was drawn read 0.81 mm at its rims under a ray sweep.",
+  "brep": {
+    "size": [
+      59.995,
+      59.998,
+      40.0
+    ],
+    "volume_mm3": 9728.754,
+    "area_mm2": 13023.737,
+    "triangles": 6052,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 293.52,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 4,
+    "edges": 12,
+    "curves": 4,
+    "perception": {
+      "thickness": {
+        "min_mm": 1.5522,
+        "tolerance_mm": 0.001,
+        "between": [
+          "shade",
+          "shade"
+        ]
+      }
+    }
+  }
+}

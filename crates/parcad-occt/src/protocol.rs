@@ -70,9 +70,9 @@ pub struct RayLine {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThicknessSpec {
-    /// Cap on the surface points a ray is fired from. The candidates — every
-    /// node of the exact tessellation, plus the middle of every triangle and
-    /// edge on a planar face — are decimated evenly down to this.
+    /// Cap on the surface points measured from. The candidates — every node of
+    /// the exact tessellation off the faces' boundaries, plus a grid inside
+    /// every triangle — are decimated evenly down to this.
     pub max_samples: usize,
     /// Samples at or below this are counted and listed individually.
     #[serde(default)]
@@ -147,8 +147,8 @@ pub struct RayHitResult {
 pub struct ThicknessResult {
     /// Surface points that produced a measurement.
     pub samples: usize,
-    /// Surface points that did not: a line that left material at once (a
-    /// tangency, or a normal the mesher could not give) or never left it.
+    /// Surface points that did not: one the exact surface could not be
+    /// projected back onto, or where no ball could be sized.
     pub discarded: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub min: Option<ThicknessSample>,
@@ -173,21 +173,25 @@ pub enum ThinKind {
     /// over a band as wide as the threshold divided by the angle's tangent.
     /// The shape of a cut that grazed another feature.
     Feather,
-    /// Two faces that do not meet: a wall, a floor, a web between holes.
+    /// Two faces nearly parallel where the ball touches them, or two that do
+    /// not meet: a wall, a floor, a web between holes.
     #[default]
     Wall,
-    /// Two faces that meet at a steep angle. Every sharp edge reads thin right
-    /// beside itself; the band is narrower than half the thickness it reads.
+    /// A ball wedged into a corner of 60° or more. Every sharp edge reads thin
+    /// right beside itself, and a round reads its own diameter.
     Edge,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThicknessSample {
-    /// Material along the inward normal from `at` to `opposite`, mm.
+    /// The diameter of the largest ball inside the material that touches the
+    /// surface at `at`, mm.
     pub thickness_mm: f64,
     pub at: [f64; 3],
+    /// Where that ball touches the boundary again.
     pub opposite: [f64; 3],
-    /// Unit vector into the material at `at`.
+    /// Unit vector into the material at `at`, the surface's own normal; the
+    /// ball's centre is half the thickness along it.
     pub inward: [f64; 3],
     /// Tags of the face `at` is on, then of the face `opposite` is on.
     #[serde(default)]
@@ -198,7 +202,8 @@ pub struct ThicknessSample {
     pub body: Option<String>,
     #[serde(default)]
     pub kind: ThinKind,
-    /// The angle the two faces enclose, in degrees, where they meet.
+    /// The angle the two surfaces enclose where the ball touches them, in
+    /// degrees: 180 less the angle between the two contacts seen from its centre.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wedge_deg: Option<f64>,
     /// What each face is where it has no tag to name it, e.g. `cylinder r 1.5

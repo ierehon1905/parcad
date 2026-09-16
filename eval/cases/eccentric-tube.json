@@ -1,0 +1,50 @@
+{
+  "name": "eccentric-tube",
+  "script": "eval/scripts/eccentric-tube.js",
+  "why": "A Ø20 tube 30 long with its Ø16 bore 1 mm off axis toward +X: pi * (100 - 64) * 30 = 3392.920 mm3, recorded 0.035% under as every volume here is, measured on the tessellation.. Along X through the axis the line crosses the tube at -10, the bore at -7 and 9, the tube at 10: a first wall of 3 and 4 mm in all. The wall is thinnest where the two circles are nearest, 10 - (8 + 1) = 1.000 between tube and bore, and grows as 2 - cos of the angle away from there, so the sampled minimum sits within a few microns of it.",
+  "brep": {
+    "size": [
+      20.0,
+      20.0,
+      30.0
+    ],
+    "volume_mm3": 3391.729,
+    "area_mm2": 3618.412,
+    "triangles": 756,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 113.058,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 4,
+    "edges": 12,
+    "curves": 4,
+    "perception": {
+      "rays": [
+        {
+          "origin": [
+            -50.0,
+            0.0,
+            0.0
+          ],
+          "direction": [
+            1.0,
+            0.0,
+            0.0
+          ],
+          "crossings": 4,
+          "first_solid_mm": 3.0,
+          "solid_mm": 4.0
+        }
+      ],
+      "thickness": {
+        "min_mm": 1.0,
+        "tolerance_mm": 0.005,
+        "between": [
+          "tube",
+          "bore"
+        ]
+      }
+    }
+  }
+}

@@ -1,7 +1,7 @@
 {
   "name": "thickness-under-a-fillet",
   "script": "eval/scripts/thickness-under-a-fillet.js",
-  "why": "A fillet is in what the thickness sweep measures. The plate is 8 thick with its top edges rounded at r = 2, so a ray straight down through the middle runs 8 mm; a ray up from the underside at x = 14 leaves through the fillet at z = 2 + sqrt(2^2 - 1^2) = 3.732, so the wall there is 4 + 3.732 = 7.732 mm; and under the round the wall thins toward 6 at the wall, a limit no sample lands on exactly. The sweep's minimum is therefore held between the two closed forms: at least 6, the limit, and at most 7.5, which the default sample spacing (a hundredth of the diagonal, 0.45 mm here) guarantees since the underside sample nearest the wall reads 2 + sqrt(4 * 0.45 - 0.45^2) + 4 = 7.26. The old field dropped the fillet and reported 8 as an upper bound; this reports the number.",
+  "why": "A fillet is in what the thickness sweep measures, and a round does not thin a wall. The plate is 8 thick with its top edges rounded at r = 2, so a ray straight down through the middle runs 8 mm and a ray up from the underside at x = 14 leaves through the fillet at z = 2 + sqrt(2^2 - 1^2) = 3.732, 7.732 mm of material. A ray sweep read slanting lines like that as walls down to 7.08. The wall thickness is the largest ball that fits: 8 between top and bottom, and under the round a ball is stopped by the corner before the wall, so the sweep's minimum is 8.000 exactly. The round itself reads 2r = 4 and is an edge reading, wedged, never the thinnest wall.",
   "brep": {
     "size": [
       30.0,
@@ -51,8 +51,7 @@
         }
       ],
       "thickness": {
-        "at_least_mm": 6.0,
-        "at_most_mm": 7.5,
+        "min_mm": 8.0,
         "tolerance_mm": 0.001,
         "between": [
           "body",

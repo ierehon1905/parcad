@@ -1,10 +1,10 @@
 ---
 tool: measure_wall_thickness
 reach: measure_wall_thickness
-verdict: 4\.8
-trap: 19\.1|6\.3
-quote: 4\.8
-why: The thinnest wall names no variable in the script, and `thickness = 19.1` is sitting one line away from being the wrong answer. The flange's four bolt holes are countersunk on the back face by a 1.5 mm chamfer, so the ligament between a hole and the outside diameter thins from 6.3 mm — (152.4 − 120.7) / 2 − 19.1 / 2 — to 76.2 − (60.35 + 9.55 + 1.5) = 4.80 at the back face, approached where the countersink's rim meets it; the sweep on the exact solid reports 4.81 there. The field-sampled sweep dropped the chamfer and reported the 6.3 with a caveat that the true minimum was at or below it; that value is the second trap now.
+verdict: 6\.3
+trap: 19\.1|4\.8
+quote: 6\.3
+why: The thinnest wall names no variable in the script, and `thickness = 19.1` is sitting one line away from being the wrong answer. The wall is the ligament between a bolt hole and the outside diameter, (152.4 − 120.7) / 2 − 19.1 / 2 = 6.30, between `plate` (the OD) and `drilled` (the hole). The holes are countersunk on the back face by a 1.5 mm chamfer, which brings the hole's rim to 76.2 − (60.35 + 9.55 + 1.5) = 4.80 from the OD on that face. The ray sweep this tool used to run reported 4.81 there, from lines leaving through the chamfer; the inscribed ball it measures now cannot sit in that corner any wider than it can beside any sharp edge, so 4.8 is a trap. The source can produce 6.3 by arithmetic too, which is why `quote` asks for the measured value and the rules forbid the derivation.
 ---
 Use the parcad MCP tools. The part is flange.js in the parcad project folder.
 

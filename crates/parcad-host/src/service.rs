@@ -607,16 +607,21 @@ fn ray_probe(r: &parcad_occt::RayResult) -> RayProbe {
 pub struct ThinSpot {
     /// `feather`: two faces meeting at a shallow angle, material tapering to
     /// nothing — what a cut that grazed another feature leaves, and never
-    /// intended. `wall`: two faces that do not meet — a floor, a wall, a web.
-    /// `edge`: two faces meeting steeply; every sharp edge reads thin right
-    /// beside itself, and this is that, listed last.
+    /// intended. `wall`: the ball touches two faces nearly opposite each other,
+    /// or two that do not meet — a floor, a wall, a web. `edge`: the ball is
+    /// wedged into a corner of 60° or more; every sharp edge and every round
+    /// reads thin right beside itself, and this is that, listed last.
     pub kind: ThinKind,
-    /// Material between the two faces below, measured along the inward normal.
-    /// For a place, its thinnest sample.
+    /// The diameter of the largest ball that fits inside the material while
+    /// touching the surface at `at` — the wall thickness a mould or casting
+    /// check means, and not the material along a line, which `probe_part`
+    /// measures and which is longer through a slanted wall. For a place, its
+    /// thinnest sample.
     pub thickness_mm: f64,
     /// The point on the surface this was measured from.
     pub at: [f64; 3],
-    /// Where the material ran out — the far face of this wall.
+    /// Where that ball touches the surface again: straight across a wall, off
+    /// to one side where it is wedged into a corner.
     pub opposite: [f64; 3],
     /// The tag of the node whose surface `at` lies on, where one owns it. Same
     /// question, and the same answer, as a ray crossing's `surface_of`.
@@ -633,7 +638,8 @@ pub struct ThinSpot {
     pub surface: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub opposite_surface: Option<String>,
-    /// The angle the two faces enclose where they meet, for a feather or an edge.
+    /// The angle between the two surfaces where the ball touches them: 0 for a
+    /// wall with parallel faces, a few degrees of draft, 90 in a box's corner.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub wedge_deg: Option<f64>,
     /// How many thin samples this place groups, and the size of the box they
@@ -692,12 +698,9 @@ pub struct ThicknessReport {
     /// the thinnest samples, spread across the part.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub thin_spots: Vec<ThinSpot>,
-    /// How the minimum can be wrong, and which way. A ray thickness is not
-    /// an inscribed sphere: in a concave corner the ray crosses to whatever
-    /// is straight across, further than the sphere that fits, so the number
-    /// is at or above the inscribed one. And it is a sampled minimum: exact
-    /// for every point it fired from, and the true thinnest point may lie
-    /// between two samples. More samples narrow that; nothing widens it.
+    /// What the number is, and which way it can be wrong: an inscribed-ball
+    /// diameter, exact at every sampled point, so the true thinnest point may
+    /// lie between two samples. More samples narrow that; nothing widens it.
     pub note: &'static str,
 }
 
@@ -708,12 +711,12 @@ const DEFAULT_THICKNESS_SAMPLES: usize = 6000;
 
 /// Find the thinnest material in the part, and where it is.
 ///
-/// A ray from every sampled surface point, back along its own inward normal —
+/// The largest ball that fits in the material at every sampled surface point —
 /// `parcad_occt::perceive` is the loop — and this names the two faces each
-/// measurement lies between so the answer reads as "2.1 mm between `body` and
-/// `main_bore`" rather than as a pair of coordinates. Measured on the exact
-/// solid, treatments included: a rounded edge is in the number, not a caveat
-/// beside it.
+/// ball touches so the answer reads as "2.1 mm between `body` and `main_bore`"
+/// rather than as a pair of coordinates. Measured on the exact solid,
+/// treatments included: a rounded edge is in the number, not a caveat beside
+/// it.
 pub fn wall_thickness(
     doc: &Doc,
     threshold_mm: Option<f64>,
@@ -730,7 +733,7 @@ pub fn wall_thickness(
 
     let spec = parcad_occt::Perceive {
         thickness: Some(parcad_occt::ThicknessSpec {
-            // Clamped rather than rejected: the cost is a ray per sample, and
+            // Clamped rather than rejected: the cost is a ball per sample, and
             // the useful range is narrow enough that a caller asking for a
             // million wants detail rather than an hour.
             max_samples: max_samples.unwrap_or(DEFAULT_THICKNESS_SAMPLES).clamp(200, 100_000),
@@ -767,10 +770,13 @@ pub fn wall_thickness(
         below_threshold: report.below_threshold,
         below_threshold_at_edges: report.below_threshold_at_edges,
         thin_spots: report.thin_spots.iter().map(spot).collect(),
-        note: "a ray thickness, measured on the exact solid with every fillet and chamfer \
-               in it; at or above the inscribed-sphere thickness in a concave corner, and \
-               exact at each sampled point — the true thinnest point may lie between two \
-               samples, so raise max_samples to narrow it",
+        note: "each thickness is the diameter of the largest ball that fits inside the \
+               material touching the surface at `at`, measured on the exact solid with every \
+               fillet and chamfer in it — across a slanted wall, not along a line through it, \
+               so probe_part's first_solid_mm reads more there. Every sharp edge and every \
+               round reads thin beside itself, as kind `edge`. Exact at each sampled point; \
+               the true thinnest point may lie between two samples, so raise max_samples to \
+               narrow it",
     })
 }
 
@@ -1778,15 +1784,13 @@ mod tests {
         assert!(report.note.contains("exact solid"));
     }
 
-    /// The case the old field got wrong by construction, and the reason this
-    /// runs on the kernel: a fillet is in what gets measured. A 30 × 30 × 8
-    /// plate with its top edges rounded at r = 2 is 8 mm thick from the top
-    /// face and thinner from the underside beneath the round, down to 6 at
-    /// the walls. The sweep's minimum is below 8; the old sweep read 8 and
-    /// called it an upper bound.
+    /// A 30 × 30 × 8 plate with its top edges rounded at r = 2 is an 8 mm
+    /// plate. A ray sweep read it as 7.08 from lines leaving the underside
+    /// through the round at a slant; the ball that fits is 8 wherever a wall
+    /// is, and the round reads as an edge.
     #[test]
     #[ignore = "needs the kernel worker"]
-    fn a_fillet_is_in_what_the_sweep_measures() {
+    fn a_rounded_plate_is_as_thick_as_the_plate() {
         let treated = doc(serde_json::json!({
             "root": 1,
             "nodes": [
@@ -1795,10 +1799,12 @@ mod tests {
             ],
         }));
 
-        let report = wall_thickness(&treated, None, None, None).expect("it should measure");
+        let report = wall_thickness(&treated, Some(7.9), None, None).expect("it should measure");
         let thinnest = report.thinnest.expect("a thinnest place");
-        assert!(thinnest.thickness_mm < 7.5 && thinnest.thickness_mm >= 6.0, "{thinnest:?}");
-        assert_eq!(thinnest.at[2], -4.0, "measured from the underside: {thinnest:?}");
+        assert!((thinnest.thickness_mm - 8.0).abs() < 1e-3, "{thinnest:?}");
+        assert_eq!(thinnest.kind, ThinKind::Wall, "{thinnest:?}");
+        assert_eq!(report.below_threshold, 0, "{:?}", report.thin_spots);
+        assert!(report.thin_spots.iter().all(|s| s.kind == ThinKind::Edge));
     }
 
     /// Nothing a transport serialises carries an f32's rounding error widened
