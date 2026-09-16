@@ -768,6 +768,14 @@ impl Shape {
         }
     }
 
+    /// Load this shape for repeated nearest-boundary-point questions. Added
+    /// for parcad; see PARCAD-CHANGES.md.
+    pub fn nearest_boundary(&self) -> NearestBoundary {
+        NearestBoundary {
+            inner: ffi::NearestBoundary_new(&self.inner),
+        }
+    }
+
     /// Every face of this shape, numbered in traversal order — the numbering
     /// `Mesh::faces` and `faces_json` use. Added for parcad.
     pub fn face_map(&self) -> FaceMap {
@@ -889,6 +897,63 @@ impl RayCaster {
         }
         hits.sort_by(|a, b| a.distance.total_cmp(&b.distance));
         hits
+    }
+}
+
+/// A shape held ready for many nearest-point questions, every face's and
+/// edge's projector built once. Added for parcad; see PARCAD-CHANGES.md.
+pub struct NearestBoundary {
+    inner: UniquePtr<ffi::NearestBoundary>,
+}
+
+/// A boundary point, and the traversal number of a face it lies on.
+#[derive(Debug, Clone, Copy)]
+pub struct BoundaryPoint {
+    pub distance: f64,
+    pub point: DVec3,
+    pub face: usize,
+}
+
+impl NearestBoundary {
+    /// The boundary point nearest `point`, if one is nearer than `within`. A
+    /// point on an edge names one of the faces that share it.
+    pub fn nearest_within(&mut self, point: DVec3, within: f64) -> Option<BoundaryPoint> {
+        let mut at = make_point(DVec3::ZERO);
+        let mut face = -1;
+        let distance = ffi::NearestBoundary_nearest(
+            self.inner.pin_mut(),
+            point.x,
+            point.y,
+            point.z,
+            within,
+            at.pin_mut(),
+            &mut face,
+        );
+        (distance >= 0.0 && face >= 0).then(|| BoundaryPoint {
+            distance,
+            point: dvec3(at.X(), at.Y(), at.Z()),
+            face: face as usize,
+        })
+    }
+
+    /// The point of face `face`'s surface nearest `point`, and the face's
+    /// outward unit normal there. `None` where the surface has no normal, or
+    /// where that point is outside the face.
+    pub fn project(&mut self, face: usize, point: DVec3) -> Option<(DVec3, DVec3)> {
+        let mut at = make_point(DVec3::ZERO);
+        let mut normal = ffi::new_vec(0.0, 0.0, 0.0);
+        let ok = ffi::NearestBoundary_project(
+            self.inner.pin_mut(),
+            face as i32,
+            point.x,
+            point.y,
+            point.z,
+            at.pin_mut(),
+            normal.pin_mut(),
+        );
+        let n = dvec3(normal.X(), normal.Y(), normal.Z());
+        let len = n.length();
+        (ok && len.is_finite() && len > 1e-12).then(|| (dvec3(at.X(), at.Y(), at.Z()), n / len))
     }
 }
 

@@ -1,0 +1,49 @@
+{
+  "name": "slanted-slab",
+  "script": "eval/scripts/slanted-slab.js",
+  "why": "A 40 x 30 x 2 slab turned 30 degrees about Y: 2400 mm3 whatever its angle. A line straight down through its middle crosses 2 / cos 30 = 2.3094 mm of material, and that is what probe_part reports; the wall thickness is the ball that fits between the two faces, 2.000, and that is what measure_wall_thickness reports. The two numbers differ by exactly the cosine, which is the difference between the two definitions.",
+  "brep": {
+    "size": [
+      35.641,
+      30.0,
+      21.732
+    ],
+    "volume_mm3": 2399.999,
+    "area_mm2": 2680.0,
+    "triangles": 12,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 0.0,
+    "stands_on_patches": 0,
+    "watertight": true,
+    "faces": 6,
+    "edges": 24,
+    "curves": 12,
+    "perception": {
+      "rays": [
+        {
+          "origin": [
+            0.0,
+            0.0,
+            50.0
+          ],
+          "direction": [
+            0.0,
+            0.0,
+            -1.0
+          ],
+          "crossings": 2,
+          "first_solid_mm": 2.3094011
+        }
+      ],
+      "thickness": {
+        "min_mm": 2.0,
+        "tolerance_mm": 0.001,
+        "between": [
+          "slab",
+          "slab"
+        ]
+      }
+    }
+  }
+}

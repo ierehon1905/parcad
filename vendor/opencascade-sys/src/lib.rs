@@ -937,6 +937,29 @@ pub mod ffi {
             z1: &mut f64,
         ) -> bool;
 
+        // Nearest boundary point, projectors built once — added for parcad,
+        // see PARCAD-CHANGES.md.
+        type NearestBoundary;
+        pub fn NearestBoundary_new(shape: &TopoDS_Shape) -> UniquePtr<NearestBoundary>;
+        pub fn NearestBoundary_nearest(
+            nearest: Pin<&mut NearestBoundary>,
+            x: f64,
+            y: f64,
+            z: f64,
+            within: f64,
+            at: Pin<&mut gp_Pnt>,
+            face: &mut i32,
+        ) -> f64;
+        pub fn NearestBoundary_project(
+            nearest: Pin<&mut NearestBoundary>,
+            face: i32,
+            x: f64,
+            y: f64,
+            z: f64,
+            at: Pin<&mut gp_Pnt>,
+            normal: Pin<&mut gp_Vec>,
+        ) -> bool;
+
         // BRepFeat
         type BRepFeat_MakeCylindricalHole;
         pub fn BRepFeat_MakeCylindricalHole_ctor() -> UniquePtr<BRepFeat_MakeCylindricalHole>;

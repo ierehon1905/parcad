@@ -238,6 +238,15 @@ many times), and a tag's exact extent (`BRepBndLib::AddOptimal`). These are
 what parcad's probes, wall-thickness sweep and tag extents run on now that the
 exact kernel is the only one; they used to read a distance field.
 
+## `Shape::nearest_boundary`
+
+A `NearestBoundary` over the sys crate's class of the same name:
+`nearest_within(point, within)` for the boundary point nearest a point, if one
+is nearer than `within`, and the face it is on; `project(face, point)` for the
+exact point and outward unit normal of one face near a point on it. What
+parcad's inscribed-ball wall thickness runs on: each face's and edge's
+projector is built once rather than once per question.
+
 ## `Shape::least_distance_to`
 
 `BRepExtrema_DistShapeShape` through the sys crate's new binding: the least

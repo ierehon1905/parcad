@@ -2,13 +2,14 @@
 //! does this line cross, where is the part thinnest, where is each tag.
 //!
 //! Every answer here is measured on the B-rep the kernel built — a point
-//! against `BRepClass3d`, a line against the surfaces themselves, a tag
-//! against the faces its lineage says it owns. Nothing is read off a mesh or
-//! a field, so a fillet is in what gets measured and a distance is the
-//! distance, at a corner as on a face. The one place the tessellation is used
-//! is to choose *where* to fire the thickness sweep's rays from: its nodes lie
-//! on the surface, and a planar face's triangles give the middle of a face the
-//! mesher never puts a node in.
+//! against `BRepClass3d`, a line against the surfaces themselves, a wall as
+//! the largest ball whose nearest boundary point is no nearer than its
+//! radius, a tag against the faces its lineage says it owns. Nothing is read
+//! off a mesh or a field, so a fillet is in what gets measured and a distance
+//! is the distance, at a corner as on a face. The one place the tessellation
+//! is used is to choose *where* the thickness sweep measures from: its nodes
+//! lie near the surface and are projected onto it, and its triangles give the
+//! middle of a face the mesher never puts a node in.
 
 use crate::backend::{face_key, BuiltPart, FaceKey, NamedFaces};
 use crate::protocol::{
@@ -17,7 +18,7 @@ use crate::protocol::{
 };
 use anyhow::{bail, Result};
 use glam::DVec3;
-use opencascade::primitives::{Compound, Crossing, Face, PointState, RayCaster, Shape};
+use opencascade::primitives::{Compound, Crossing, NearestBoundary, PointState, RayCaster, Shape};
 use std::collections::{HashMap, HashSet};
 
 /// How near a point must be to a face to count as on it, and the face-boundary
@@ -25,9 +26,6 @@ use std::collections::{HashMap, HashSet};
 /// of an edge is reported by both faces that share it, which the walk below
 /// expects; smaller and a ray through an edge can be reported by neither.
 const SURFACE_TOLERANCE_MM: f64 = 1e-4;
-
-/// A hit nearer the ray's origin than this is the face the ray started on.
-const OWN_FACE_MM: f64 = 1e-7;
 
 /// How many distinct thin spots to report, and how many edge readings after them.
 const MAX_THIN_SPOTS: usize = 8;
@@ -226,7 +224,7 @@ pub fn perceive(bodies: &[Body], spec: &Perceive) -> Result<Perceived> {
     let thickness = spec
         .thickness
         .as_ref()
-        .map(|t| thickness(bodies, &mut casters, t, (hi - lo).length()));
+        .map(|t| thickness(bodies, t, (hi - lo).length()));
 
     Ok(Perceived {
         points,
@@ -390,65 +388,29 @@ fn cast(bodies: &[Body], casters: &mut [RayCaster], line: &RayLine, max: f64) ->
 /// chord, within this of the surface on the material's side or the void's.
 const DEFLECTION_MM: f64 = 0.01;
 
-/// A ray from every sampled surface point, back along its own outward normal.
+/// The inscribed-ball thickness at every sampled surface point: the diameter of
+/// the largest ball inside the material that touches the surface there, which
+/// is the thickness a mould or casting check means by the word.
 ///
-/// The samples are the exact tessellation's nodes — they lie on the surface,
-/// and the mesher's normal at each is the surface's — and a grid over every
-/// triangle at a spacing tied to the part's size, normals interpolated. The
-/// grid is what finds a wall in the middle of a face: a plane is meshed as
-/// two triangles with no node inside its boundary, and a bore's wall as two
-/// rings, so the nodes alone never fire a ray from the middle of either. A
-/// grid point on a curved face is on the chord, within the deflection of the
-/// surface; a ray that starts that far into the void enters material at once
-/// and is measured from there.
-fn thickness(
-    bodies: &[Body],
-    casters: &mut [RayCaster],
-    spec: &ThicknessSpec,
-    diagonal: f64,
-) -> ThicknessResult {
+/// The samples are the exact tessellation's nodes and a grid over every
+/// triangle at a spacing tied to the part's size. The grid is what finds a
+/// wall in the middle of a face: a plane is meshed as two triangles with no
+/// node inside its boundary. Every sample is projected onto its own face for
+/// the exact point and normal, since the ball has to be tangent to the surface
+/// itself, not to a chord of it. A node on a convex edge is moved a step into
+/// its face, since the neighbouring face cuts every ball tangent on the edge;
+/// a node on a concave edge is measured where it is. Either is often the only
+/// sample a narrow face has, and the material beside an edge is where a cut
+/// that grazed another feature leaves its sliver.
+fn thickness(bodies: &[Body], spec: &ThicknessSpec, diagonal: f64) -> ThicknessResult {
     let mut samples: Vec<ThicknessSample> = Vec::new();
     let mut discarded = 0usize;
-    let reach = diagonal * 1.05 + 1.0;
-    // About a hundred samples across the part's diagonal, before decimation:
-    // the density the old render-driven sweep had at its default 96 px.
+    // No ball in the part is wider than the part.
+    let limit = diagonal * 0.5 + 1.0;
+    // About a hundred samples across the part's diagonal, before decimation.
     let spacing = (diagonal / 96.0).max(1e-3);
 
-    let mut starts: Vec<(usize, DVec3, DVec3, usize)> = Vec::new();
-    for (b, body) in bodies.iter().enumerate() {
-        let mesh = body.shape.mesh();
-        for run in &mesh.faces {
-            let mut seen: HashSet<usize> = HashSet::new();
-            for tri in mesh.indices[run.start * 3..(run.start + run.count) * 3].chunks_exact(3) {
-                for &i in tri {
-                    if seen.insert(i) {
-                        starts.push((b, mesh.vertices[i], mesh.normals[i], run.face));
-                    }
-                }
-                let (p, q, r) = (mesh.vertices[tri[0]], mesh.vertices[tri[1]], mesh.vertices[tri[2]]);
-                let (np, nq, nr) = (mesh.normals[tri[0]], mesh.normals[tri[1]], mesh.normals[tri[2]]);
-                let longest = (q - p).length().max((r - q).length()).max((p - r).length());
-                let n = (longest / spacing).ceil() as usize;
-                if n < 2 {
-                    continue;
-                }
-                // Barycentric grid strictly inside the triangle; its corners
-                // and edges are the nodes and their neighbours' grids.
-                for i in 1..n {
-                    for j in 1..n - i {
-                        let (u, v) = (i as f64 / n as f64, j as f64 / n as f64);
-                        let w = 1.0 - u - v;
-                        starts.push((
-                            b,
-                            p * w + q * u + r * v,
-                            np * w + nq * u + nr * v,
-                            run.face,
-                        ));
-                    }
-                }
-            }
-        }
-    }
+    let mut starts = surface_samples(bodies, spacing);
     // Decimate evenly rather than truncating, so every face keeps a share.
     let max = spec.max_samples.max(1);
     if starts.len() > max {
@@ -457,53 +419,60 @@ fn thickness(
     }
 
     let faces: Vec<FacesOf> = bodies.iter().map(FacesOf::new).collect();
-    for (b, at, normal, face) in starts {
-        let len = normal.length();
-        if !len.is_finite() || len < 0.5 {
+    let mut nearest: Vec<NearestBoundary> = bodies.iter().map(|b| b.shape.nearest_boundary()).collect();
+    // Neighbouring samples on one face read alike, so the last reading there
+    // is the first radius tried.
+    let mut last_radius: HashMap<(usize, usize), f64> = HashMap::new();
+    // How far into its face a sample on a convex edge is moved. Beside a
+    // right-angled edge a ball there reads 1.1 times the threshold, so the
+    // edge itself is not counted, and any wall thinner than the threshold
+    // still is.
+    let step = spec.threshold_mm.map_or(0.5 * spacing, |t| 0.55 * t);
+    for Start { body: b, at, normal, face, into } in starts {
+        let body = &bodies[b];
+        let Some((p, outward)) = nearest[b].project(face, at) else {
+            discarded += 1;
+            continue;
+        };
+        // A projection that lands off the sample or turns the normal round has
+        // found another sheet of the same surface, not the point sampled.
+        if (p - at).length() > 20.0 * DEFLECTION_MM || outward.dot(normal.normalize_or_zero()) < 0.5 {
             discarded += 1;
             continue;
         }
-        let inward = -normal / len;
-        let body = &bodies[b];
-        let hits: Vec<_> = casters[b]
-            .cast(at, inward)
-            .into_iter()
-            .filter(|h| h.distance.abs() > OWN_FACE_MM && h.crossing != Crossing::Tangent)
-            .collect();
-        // A grid point on a curved triangle is on the chord, within the
-        // deflection of the surface on one side or the other. The wall is
-        // measured from where the line actually enters the material: just
-        // ahead when the start is in the void, just behind when it is
-        // already inside. A node starts on the surface and needs neither.
-        let from = hits
-            .iter()
-            .filter(|h| h.crossing == Crossing::Entering && h.distance.abs() <= 2.0 * DEFLECTION_MM)
-            .map(|h| h.distance)
-            .min_by(|a, b| a.abs().total_cmp(&b.abs()))
-            .unwrap_or(0.0);
-        let first = hits.into_iter().find(|h| h.distance > from + OWN_FACE_MM);
-        match first {
-            Some(hit) if hit.crossing == Crossing::Leaving && hit.distance <= reach => {
-                let (kind, wedge_deg) = faces[b].classify(face, hit.face, -inward, hit.point);
-                samples.push(ThicknessSample {
-                    thickness_mm: hit.distance - from,
-                    at: (at + inward * from).to_array(),
-                    opposite: hit.point.to_array(),
-                    inward: inward.to_array(),
-                    tags: body.tags_of(face),
-                    opposite_tags: body.tags_of(hit.face),
-                    body: body.name.map(str::to_owned),
-                    kind,
-                    wedge_deg,
-                    surface: None,
-                    opposite_surface: None,
-                    faces: (face, hit.face),
-                    samples: 1,
-                    extent_mm: None,
-                });
+        let (p, inward) = match into {
+            Some(into) if on_convex_edge(&mut nearest[b], p, -outward) => {
+                let along = (into - outward * into.dot(outward)).normalize_or_zero();
+                match nearest[b].project(face, p + along * step) {
+                    Some((q, outward)) if along != DVec3::ZERO => (q, -outward),
+                    _ => continue,
+                }
             }
-            _ => discarded += 1,
-        }
+            _ => (p, -outward),
+        };
+        let guess = last_radius.get(&(b, face)).copied().unwrap_or(spacing);
+        let Some(ball) = inscribed(&mut nearest[b], p, inward, guess, limit) else {
+            discarded += 1;
+            continue;
+        };
+        last_radius.insert((b, face), ball.radius.max(1e-3));
+        let (kind, wedge_deg) = faces[b].classify(face, ball.face, p, ball.centre, ball.contact);
+        samples.push(ThicknessSample {
+            thickness_mm: 2.0 * ball.radius,
+            at: p.to_array(),
+            opposite: ball.contact.to_array(),
+            inward: inward.to_array(),
+            tags: body.tags_of(face),
+            opposite_tags: body.tags_of(ball.face),
+            body: body.name.map(str::to_owned),
+            kind,
+            wedge_deg,
+            surface: None,
+            opposite_surface: None,
+            faces: (face, ball.face),
+            samples: 1,
+            extent_mm: None,
+        });
     }
 
     samples.sort_by(|a, b| a.thickness_mm.total_cmp(&b.thickness_mm));
@@ -544,51 +513,210 @@ fn thickness(
     }
 }
 
-/// One body's faces by traversal index, for the angle between two of them and a
+/// A surface point to measure from, with the mesher's normal there.
+struct Start {
+    body: usize,
+    at: DVec3,
+    normal: DVec3,
+    face: usize,
+    /// For a node on the face's boundary, a direction into the face.
+    into: Option<DVec3>,
+}
+
+/// Radius of the ball that tells a convex edge from a concave one, mm.
+const EDGE_PROBE_MM: f64 = 1e-4;
+
+/// How far, as a share of a ball's radius, boundary may reach into it and the
+/// ball still fit. It is what makes a crease between two faces under about a
+/// quarter of a degree smooth, as a ruled loft's seams between sections are,
+/// rather than an edge a ball cannot sit on.
+const BALL_SLACK: f64 = 1e-5;
+
+/// Whether a ball this small, tangent at `p`, already has boundary inside it:
+/// a neighbouring face turning towards the material.
+fn on_convex_edge(nearest: &mut NearestBoundary, p: DVec3, inward: DVec3) -> bool {
+    nearest
+        .nearest_within(p + inward * EDGE_PROBE_MM, EDGE_PROBE_MM * (1.0 - BALL_SLACK))
+        .is_some_and(|hit| (hit.point - p).dot(inward) > 0.0)
+}
+
+/// Every tessellation node, a barycentric grid inside every triangle, and a
+/// face's triangle middles where it has nothing inside its boundary.
+fn surface_samples(bodies: &[Body], spacing: f64) -> Vec<Start> {
+    let mut starts: Vec<Start> = Vec::new();
+    for (b, body) in bodies.iter().enumerate() {
+        let mesh = body.shape.mesh();
+        for run in &mesh.faces {
+            let triangles = &mesh.indices[run.start * 3..(run.start + run.count) * 3];
+            // A triangle side used once is on the face's boundary.
+            let mut sides: HashMap<(usize, usize), usize> = HashMap::new();
+            for tri in triangles.chunks_exact(3) {
+                for (i, j) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+                    *sides.entry((i.min(j), i.max(j))).or_default() += 1;
+                }
+            }
+            let mut rim: HashSet<usize> = HashSet::new();
+            for (&(i, j), &uses) in &sides {
+                if uses == 1 {
+                    rim.insert(i);
+                    rim.insert(j);
+                }
+            }
+            let first = starts.len();
+            // Into the face from a boundary node: towards the middles of the
+            // triangles it is a corner of.
+            let mut inwards: HashMap<usize, DVec3> = HashMap::new();
+            for tri in triangles.chunks_exact(3) {
+                let middle = (mesh.vertices[tri[0]] + mesh.vertices[tri[1]] + mesh.vertices[tri[2]]) / 3.0;
+                for &i in tri {
+                    if rim.contains(&i) {
+                        *inwards.entry(i).or_default() += (middle - mesh.vertices[i]).normalize_or_zero();
+                    }
+                }
+            }
+            let mut seen: HashSet<usize> = HashSet::new();
+            let mut push = |at: DVec3, normal: DVec3, into: Option<DVec3>| {
+                starts.push(Start { body: b, at, normal, face: run.face, into })
+            };
+            for tri in triangles.chunks_exact(3) {
+                for &i in tri {
+                    if seen.insert(i) {
+                        push(mesh.vertices[i], mesh.normals[i], inwards.get(&i).copied());
+                    }
+                }
+                let (p, q, r) = (mesh.vertices[tri[0]], mesh.vertices[tri[1]], mesh.vertices[tri[2]]);
+                let (np, nq, nr) = (mesh.normals[tri[0]], mesh.normals[tri[1]], mesh.normals[tri[2]]);
+                let longest = (q - p).length().max((r - q).length()).max((p - r).length());
+                let n = (longest / spacing).ceil() as usize;
+                // Barycentric grid strictly inside the triangle; its corners
+                // and edges are the nodes and their neighbours' grids.
+                for i in 1..n {
+                    for j in 1..n - i {
+                        let (u, v) = (i as f64 / n as f64, j as f64 / n as f64);
+                        let w = 1.0 - u - v;
+                        push(p * w + q * u + r * v, np * w + nq * u + nr * v, None);
+                    }
+                }
+            }
+            if starts[first..].iter().all(|s| s.into.is_some()) {
+                for tri in triangles.chunks_exact(3) {
+                    let [p, q, r] = [tri[0], tri[1], tri[2]];
+                    starts.push(Start {
+                        body: b,
+                        at: (mesh.vertices[p] + mesh.vertices[q] + mesh.vertices[r]) / 3.0,
+                        normal: mesh.normals[p] + mesh.normals[q] + mesh.normals[r],
+                        face: run.face,
+                        into: None,
+                    });
+                }
+            }
+        }
+    }
+    starts
+}
+
+/// The largest ball inside the material that touches the surface at a point.
+struct Ball {
+    radius: f64,
+    centre: DVec3,
+    /// Where else the ball touches the boundary, and a face that point is on.
+    contact: DVec3,
+    face: usize,
+}
+
+/// Radii tried per ball before settling for the largest that fitted. Measured:
+/// a median of 3 to 7 and a maximum of 16 over the corpus and a 180 mm lamp.
+const MAX_BALL_TESTS: usize = 80;
+
+/// The largest ball tangent at `p` on the material's side that has no boundary
+/// point inside it.
+///
+/// Balls tangent at one point on one side are nested, so the radii that fit
+/// are an interval `[0, r*]`. A ball that does not fit has a boundary point
+/// `q` strictly inside it, and the ball through `q` tangent at `p` is smaller
+/// yet never smaller than `r*` — the shrinking-ball step (Ma, Bae, Choi & Rhee,
+/// 2012). A radius reached that way which fits is therefore `r*` itself. The
+/// guess may lie either side: one that fits is doubled until one does not.
+fn inscribed(nearest: &mut NearestBoundary, p: DVec3, inward: DVec3, guess: f64, limit: f64) -> Option<Ball> {
+    let slack = |r: f64| (r * BALL_SLACK).max(1e-7);
+    // `lo` fits; `hi` is a shrink result, never below r*, not yet tested.
+    let mut lo = 0.0f64;
+    let mut hi = f64::INFINITY;
+    let mut contact: Option<(DVec3, usize)> = None;
+    let mut r = guess.clamp(1e-4, limit);
+    for _ in 0..MAX_BALL_TESTS {
+        // A boundary point on or behind the tangent plane is `p` itself to
+        // rounding: no ball tangent there can contain it.
+        let hit = nearest
+            .nearest_within(p + inward * r, r - slack(r))
+            .filter(|hit| (hit.point - p).dot(inward) > 0.0);
+        match hit {
+            None => {
+                lo = r;
+                if contact.is_none() {
+                    if r >= limit {
+                        return None;
+                    }
+                    r = (r * 2.0).min(limit);
+                    continue;
+                }
+            }
+            Some(hit) => {
+                let d = hit.point - p;
+                hi = (d.length_squared() / (2.0 * d.dot(inward))).min(r);
+                contact = Some((hit.point, hit.face));
+                // Converging slowly — a ball rolling into a round it
+                // osculates — so halve the bracket as well.
+                if hi > 0.9 * r && hi - lo > slack(hi) {
+                    r = 0.5 * (lo + hi);
+                    continue;
+                }
+            }
+        }
+        let (q, face) = contact?;
+        if hi - lo <= slack(hi) {
+            let radius = if lo > 0.0 { lo } else { hi };
+            return Some(Ball { radius, centre: p + inward * radius, contact: q, face });
+        }
+        r = hi;
+    }
+    let (q, face) = contact?;
+    (lo > 0.0).then(|| Ball { radius: lo, centre: p + inward * lo, contact: q, face })
+}
+
+/// One body's faces by traversal index, for whether two of them meet and a
 /// name for one that no tag names.
 struct FacesOf {
-    faces: Vec<Option<Face>>,
     summaries: Vec<FaceSummary>,
 }
 
 impl FacesOf {
     fn new(body: &Body) -> Self {
-        let map = body.shape.face_map();
-        let mut faces: Vec<Option<Face>> = (0..map.len()).map(|_| None).collect();
-        for face in body.shape.faces() {
-            if let Some(i) = map.index_of(&face) {
-                faces[i] = Some(face);
-            }
-        }
         Self {
-            faces,
             summaries: describe_faces(body.shape),
         }
     }
 
-    /// Feather, wall or edge, from whether the two faces share an edge and the
-    /// angle they enclose: 180° less the turn between their outward normals, so
-    /// parallel walls enclose 0° and a box corner 90°.
-    fn classify(&self, face: usize, opposite: usize, normal: DVec3, at: DVec3) -> (ThinKind, Option<f64>) {
-        // A face meets itself where it wraps round — a cone closing on its own
-        // apex is material running out as surely as two faces converging.
+    /// Feather, wall or edge, from where the ball touches: 180° less the angle
+    /// between its two contacts seen from its centre, which is the angle the
+    /// two surfaces enclose there — parallel walls 0°, a box corner 90°. A ball
+    /// wedged into a corner is an edge reading whether or not the corner's
+    /// faces share an edge, since a round between them is still a corner; a
+    /// feather is faces that meet, or one face wrapping onto itself.
+    fn classify(&self, face: usize, opposite: usize, p: DVec3, centre: DVec3, q: DVec3) -> (ThinKind, Option<f64>) {
+        let (a, b) = (p - centre, q - centre);
+        if a.length_squared() < 1e-24 || b.length_squared() < 1e-24 {
+            return (ThinKind::Wall, None);
+        }
+        let wedge = 180.0 - a.normalize().dot(b.normalize()).clamp(-1.0, 1.0).acos().to_degrees();
         let meet = face == opposite
             || self
                 .summaries
                 .get(face)
-                .is_some_and(|s| s.adjacent.iter().any(|&a| a as usize == opposite));
-        let far = match self.faces.get(opposite) {
-            Some(Some(f)) => f.normal_at(at),
-            _ => return (ThinKind::Wall, None),
-        };
-        if !meet || far.length_squared() < 1e-16 {
-            return (ThinKind::Wall, None);
-        }
-        let turn = normal.normalize().dot(far.normalize()).clamp(-1.0, 1.0).acos().to_degrees();
-        let wedge = 180.0 - turn;
+                .is_some_and(|s| s.adjacent.iter().any(|&f| f as usize == opposite));
         let kind = if wedge >= EDGE_MIN_WEDGE_DEG {
             ThinKind::Edge
-        } else if wedge > WALL_MAX_WEDGE_DEG {
+        } else if meet && wedge > WALL_MAX_WEDGE_DEG {
             ThinKind::Feather
         } else {
             ThinKind::Wall
@@ -827,12 +955,6 @@ mod tests {
         );
     }
 
-    /// The whole reason for the move: a fillet is in what gets measured.
-    ///
-    /// A 30 × 30 × 8 plate with its top edges rounded at r = 2 is 8 mm thick
-    /// from its top face, and less from its bottom face under the round: a
-    /// ray up from the underside at x = 14 leaves through the fillet at
-    /// z = 2 + √(4 − 1²), so the wall there is 4 + 2 + √3 = 7.732 mm, and
     fn thickness_of(part: &BuiltPart, threshold_mm: Option<f64>) -> ThicknessResult {
         ask(
             part,
@@ -924,11 +1046,15 @@ mod tests {
         );
     }
 
-    /// it thins to 6 at the side wall. The old field measured the sharp
-    /// corner — 8 everywhere — and called that an upper bound; this measures
-    /// the number.
+    /// A 30 × 30 × 8 plate with its top edges rounded at r = 2. A ray up from
+    /// the underside at x = 14 leaves through the round at z = 2 + √3, so the
+    /// material straight up there is 4 + 2 + √3 = 7.732 mm — and a ray sweep
+    /// reported walls down to 7.08 from such slanting exits. The plate is 8
+    /// thick: the largest ball that fits touches top and bottom, and under the
+    /// round it is the corner, not the wall, that stops a ball growing. On the
+    /// round itself a ball reads 2r = 4 and is wedged, so it is an edge.
     #[test]
-    fn the_thinnest_wall_under_a_fillet_is_measured_through_the_fillet() {
+    fn a_plate_with_rounded_edges_is_as_thick_as_the_plate() {
         let part = built(
             r#"{"units":"mm","root":1,"nodes":[
             {"op":"cuboid","size":{"x":30,"y":30,"z":8},"tag":"body"},
@@ -941,7 +1067,7 @@ mod tests {
                     RayLine { origin: [0.0, 0.0, 100.0], direction: [0.0, 0.0, -1.0], max_distance: None },
                     RayLine { origin: [14.0, 0.0, -100.0], direction: [0.0, 0.0, 1.0], max_distance: None },
                 ],
-                thickness: Some(ThicknessSpec { max_samples: 6000, threshold_mm: None }),
+                thickness: Some(ThicknessSpec { max_samples: 6000, threshold_mm: Some(7.9) }),
                 ..Default::default()
             },
         );
@@ -950,15 +1076,87 @@ mod tests {
         let expected = 6.0 + 3.0f64.sqrt();
         assert!((under - expected).abs() < 1e-6, "under the fillet: {under}, expected {expected}");
 
-        // The sweep's minimum is below 8 — the fillet is in what it measured
-        // — and no ray can measure less than the 6 mm at the side wall.
         let thickness = answer.thickness.unwrap();
-        let min = thickness.min.unwrap();
-        assert!(min.thickness_mm < 7.5, "{min:?}");
-        assert!(min.thickness_mm > 6.0 - 1e-6, "{min:?}");
-        // It is the underside that found it, at the wall.
-        assert!((min.at[2] + 4.0).abs() < 1e-6 && min.at[0].abs().max(min.at[1].abs()) > 13.0, "{min:?}");
+        let min = thickness.min.clone().unwrap();
+        assert_eq!(min.kind, ThinKind::Wall, "{min:?}");
+        assert!((min.thickness_mm - 8.0).abs() < 1e-6, "{min:?}");
+        assert_eq!(thickness.below_threshold, 0, "{:?}", thickness.thin_spots);
+        assert!(thickness.below_threshold_at_edges > 0, "{thickness:?}");
         assert!(thickness.samples > 500, "{}", thickness.samples);
+
+        // Halfway round the +Y edge's round, whose axis is at y = 13, z = 2.
+        let bodies = bodies_of(&part);
+        let mut nearest = bodies[0].shape.nearest_boundary();
+        let out = DVec3::new(0.0, 1.0, 1.0).normalize();
+        let p = DVec3::new(0.0, 13.0, 2.0) + out * 2.0;
+        let ball = inscribed(&mut nearest, p, -out, 3.0, 100.0).expect("a ball fits on the round");
+        assert!((ball.radius - 2.0).abs() < 1e-4, "radius {}", ball.radius);
+        let faces = FacesOf::new(&bodies[0]);
+        let (kind, _) = faces.classify(ball.face, ball.face, p, ball.centre, ball.contact);
+        assert_eq!(kind, ThinKind::Edge);
+    }
+
+    /// A slab 2 thick between its faces, turned 30° about Y: straight down it
+    /// is 2 / cos 30° of material, and the wall is 2.
+    #[test]
+    fn a_slanted_wall_is_measured_across_its_faces_not_along_a_line() {
+        let part = built(
+            r#"{"units":"mm","root":1,"nodes":[
+            {"op":"cuboid","size":{"x":40,"y":30,"z":2},"tag":"slab"},
+            {"op":"rotate","child":0,"axis":{"x":0,"y":1,"z":0},"degrees":30}]}"#,
+        );
+        let mut spec = ray([0.0, 0.0, 50.0], [0.0, 0.0, -1.0]);
+        spec.thickness = Some(ThicknessSpec { max_samples: 6000, threshold_mm: None });
+        let answer = ask(&part, spec);
+        let down = answer.rays[0].first_solid_mm.unwrap();
+        assert!((down - 2.0 / 30f64.to_radians().cos()).abs() < 1e-6, "{down}");
+        let min = answer.thickness.unwrap().min.unwrap();
+        assert!((min.thickness_mm - 2.0).abs() < 1e-6, "{min:?}");
+        assert!(min.wedge_deg.unwrap() < 1e-3, "{min:?}");
+        // The two contacts face each other across the wall.
+        let across = DVec3::from_array(min.opposite) - DVec3::from_array(min.at);
+        assert!(across.normalize().dot(DVec3::from_array(min.inward)) > 1.0 - 1e-9, "{min:?}");
+    }
+
+    /// A Ø20 tube with its Ø16 bore 1 mm off axis: the wall is 1 mm where the
+    /// circles are nearest, between the tube and the bore.
+    #[test]
+    fn an_eccentric_bore_leaves_the_wall_thinnest_where_the_circles_are_nearest() {
+        let part = built(
+            r#"{"units":"mm","root":3,"nodes":[
+            {"op":"cylinder","r":10,"h":30,"tag":"tube"},
+            {"op":"cylinder","r":8,"h":40},
+            {"op":"translate","child":1,"by":{"x":1,"y":0,"z":0},"tag":"bore"},
+            {"op":"difference","base":0,"tools":[2],"blend":0}]}"#,
+        );
+        let report = thickness_of(&part, Some(1.2));
+        let min = report.min.expect("a tube has a wall");
+        assert_eq!(min.kind, ThinKind::Wall, "{min:?}");
+        // Sampled: exact at its own point, which is within a sample spacing of
+        // the nearest pair, where the wall grows as 1 + 1 - cos θ.
+        assert!(min.thickness_mm >= 1.0 - 1e-6 && min.thickness_mm < 1.001, "{min:?}");
+        assert!(min.at[0] > 8.9 && min.at[1].abs() < 0.5, "{min:?}");
+        let mut between = [min.tags[0].as_str(), min.opposite_tags[0].as_str()];
+        between.sort();
+        assert_eq!(between, ["bore", "tube"]);
+        for spot in report.thin_spots.iter().filter(|s| s.kind == ThinKind::Wall) {
+            assert!(spot.at[0] > 8.0, "only the +X side is under 1.2: {spot:?}");
+        }
+    }
+
+    /// A ball fits nowhere on an edge, so no sample may sit on one: a box's
+    /// sweep reads its half-thickness walls and edges beside them, never zero.
+    #[test]
+    fn no_sample_sits_on_an_edge() {
+        let part = built(PLATE);
+        let report = thickness_of(&part, Some(1.0));
+        assert!(report.samples > 1000, "{report:?}");
+        let min = report.min.clone().unwrap();
+        assert!((min.thickness_mm - 6.0).abs() < 1e-6, "{min:?}");
+        assert_eq!(report.discarded, 0, "{report:?}");
+        for spot in &report.thin_spots {
+            assert!(spot.thickness_mm > 1e-3, "{spot:?}");
+        }
     }
 
     /// The manifold of docs/PERCEPTION.md §3: a blind port down Z meeting a
@@ -998,11 +1196,13 @@ mod tests {
         );
         let t = answer.thickness.unwrap();
         let min = t.min.unwrap();
-        // Exact for its own sample point, which lies a fraction of a degree
-        // off the port's -X generator, where the normal tilts and the wall
-        // along it is a few microns longer than the 5.000 at the generator
-        // itself — a sampled minimum, not a rounded one.
-        assert!((min.thickness_mm - 5.0).abs() < 1e-3, "{min:?}");
+        // Exact for its own sample point, y off the port's -X generator: a ball
+        // tangent to the plane there and to the Ø10 port 10 away satisfies
+        // (10 − r)² + y² = (5 + r)², so it is 5 + y²/15 across — a sampled
+        // minimum, a micron or so over the 5.000 at the generator.
+        let y = min.at[1];
+        assert!((min.thickness_mm - (5.0 + y * y / 15.0)).abs() < 1e-4, "{min:?}");
+        assert!((min.thickness_mm - 5.0).abs() < 3e-3, "{min:?}");
         let mut between = [min.tags[0].as_str(), min.opposite_tags[0].as_str()];
         between.sort();
         assert_eq!(between, ["block", "port"]);
@@ -1098,4 +1298,5 @@ mod tests {
         assert_eq!((body.min[0], body.max[0]), (-20.0, 20.0));
     }
 }
+
 

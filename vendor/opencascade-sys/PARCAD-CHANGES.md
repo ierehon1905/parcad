@@ -226,6 +226,35 @@ Two new includes for them: `BRepClass3d_SolidClassifier.hxx` and
 `GeomAdaptor_Curve.hxx`. Both classes are in `TKTopAlgo` / `TKG3d`, which
 `build.rs` already links.
 
+## Added: nearest boundary point, projectors kept
+
+`NearestBoundary`, a C++ class in `wrapper.hxx`, with `NearestBoundary_new`,
+`_nearest` and `_project`. The inscribed-ball wall thickness asks "is any
+boundary point closer than r to here" a few times for each of thousands of
+surface points, and `BRepExtrema_DistShapeShape` answers each question by
+rebuilding every face's `Extrema_ExtPS` sample grid, every edge's
+`Extrema_ExtPC` and every bounding box. This builds them once per shape, the
+way `BRepExtrema_ExtPF::Initialize` and `BRepExtrema_ExtPC::Initialize` do,
+and keeps them:
+
+- `_nearest(x, y, z, within)` visits the faces whose optimal box is nearer than
+  the best found so far, nearest box first; for each it takes every local
+  extremum on the surface (`Extrema_ExtFlag_MINMAX`, since the least over the
+  untrimmed patch can lie outside the face while a nearer one inside does
+  not) that `BRepClass_FaceClassifier` puts in or on the face, then the face's
+  edges and their end points, each edge once per query. It returns the
+  distance, the point and a face it lies on, or a negative distance when
+  nothing is within `within`.
+- `_project(face, x, y, z)` is the nearest point of one face's surface to a
+  point near it, and the outward normal there from the surface's first
+  derivatives, reversed for a reversed face — or false when the classifier
+  puts that point outside the face.
+
+Faces are numbered as `TopExp::MapShapes` numbers them, the order
+`IndexedMapOfShape_find_index` already reports. New includes:
+`BRepClass_FaceClassifier.hxx`, `Extrema_ExtPC.hxx`, `Extrema_ExtPS.hxx`,
+`Precision.hxx`, all in toolkits `build.rs` already links.
+
 ## Not changed
 
 Everything else is upstream 0.2.0 verbatim. The OCCT it builds against is **not**

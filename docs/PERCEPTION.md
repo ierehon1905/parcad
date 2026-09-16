@@ -67,7 +67,7 @@ is the failure a render hides.
 | Selector syntax check | ✅ `check_selector` | no geometry touched |
 | Depth + normal per pixel | ~ `render::GeometryBuffer` | exists, and `model_point` ties a pixel to a millimetre — not exposed |
 | Point and ray probe | ✅ `perceive.rs`, `probe_part` | §3 — exact distance at a point, every crossing along a ray with the face it went through, the wall thickness between them, on the B-rep with every treatment in it |
-| Wall thickness / minimum feature | ✅ `perceive.rs`, `measure_wall_thickness` | §5 — a ray from every sampled surface point against the exact surfaces, both faces named |
+| Wall thickness / minimum feature | ✅ `perceive.rs`, `measure_wall_thickness` | §5 — the largest ball that fits in the material at every sampled surface point, on the exact surfaces, both faces it touches named |
 | **Overhang and printability** | ❌ | §6 |
 | Section view | ✅ `render.rs`, `evaluate_part`'s `section` | §7 — a clipping plane in both renderers, the cut face capped and drawn flat, and `cut_fraction` to say whether it opened anything |
 | **Numbered marks on the render** | ❌ | §4 |
@@ -438,35 +438,112 @@ in `examples/` silently assumes and none verify. **Done**, as `thickness.rs` and
 `measure_wall_thickness`: minimum, the point, the two surfaces it lies between —
 named by the faces' own tags — and a count of samples below a caller-supplied
 threshold, so "one bad spot" and "the whole wall is thin" are distinguishable.
-Since 2026-09-14 it runs on the exact solid: the samples are the kernel's
-tessellation nodes, which lie on the surface with the surface's normal, plus
-a grid over every triangle at a hundredth of the part's diagonal, and each
-ray is intersected with the exact faces (`perceive.rs`, one loaded
-`BRepIntCurveSurface_Inter` per body).
+Since 2026-09-14 it runs on the exact solid, and since 2026-09-16 the number
+is the one a mould or casting check means: at each sampled surface point, the
+diameter of the largest ball that fits inside the material touching the
+surface there (`inscribed` in `perceive.rs`). Before that it was the material
+along a ray fired inward from the point.
 
-- **The fillet is in the number.** The old sweep ran on a field with every
-  treatment dropped and carried a `caveat` saying its minimum was an upper
-  bound; `eval/cases/thickness-under-a-fillet` is the case that sentence was
-  about, and now measures it: a plate 8 thick with its top edges rounded at
-  r = 2 reads 7.732 straight up at x = 14 (4 + 2 + √3) and its sweep minimum
-  sits between the 6 the wall thins to and 7.5. `omitted_treatments` and
-  `caveat` are gone from the reply because they are no longer true, and
-  `eval/field/how-thin-is-it.md` no longer asks a model to reproduce them.
-- **A grid point on a curved triangle is on the chord**, within the mesher's
-  0.01 mm of the surface on one side or the other, so the sweep measures from
-  where its line actually enters the material — just ahead of the sample, or
-  just behind it — and a node needs neither correction.
+- **How the ball is found.** Balls tangent at one point on one side are
+  nested, so the radii that fit are an interval. A ball that does not fit has
+  a boundary point inside it, and the ball through that point tangent at the
+  sample is smaller and still no smaller than the answer — the shrinking-ball
+  step (Ma, Bae, Choi & Rhee, 2012) — so a radius reached that way that fits
+  *is* the answer. "Is anything closer than r" is `NearestBoundary` in the
+  vendored wrapper: every face's `Extrema_ExtPS` and every edge's
+  `Extrema_ExtPC` built once and visited nearest box first, where
+  `BRepExtrema_DistShapeShape` rebuilt them per question. Measured: a median of
+  3 to 7 radii per sample, 16 at most, over the corpus and a 180 mm lamp.
+- **Where it measures from.** The tessellation's nodes and a grid over every
+  triangle at a hundredth of the part's diagonal, each projected onto its own
+  face for the exact point and normal — the ball must be tangent to the
+  surface, not to a chord. A node on a convex edge fits no ball at all (the
+  neighbouring face cuts every one), so it is moved 0.55 × the threshold into
+  its face: beside a right-angled edge a ball there reads 1.1 × the threshold
+  and is not counted, and a wall thinner than the threshold still is. That
+  step is what finds a sliver a millimetre wide beside an edge, which the ray
+  used to find from the edge node itself.
+- **A seam under a quarter of a degree is smooth.** The lamp's ruled strips
+  meet at creases of 0.08°, convex, and a node on one fits no ball in exact
+  arithmetic; with a tolerance of 1e-7 of the radius the sweep reported 25
+  samples of "edge" at 0.1–0.18 mm down the middle of a 1.2 mm wall. Boundary may reach
+  1e-5 of a ball's radius into it and the ball still fits (`BALL_SLACK`), and
+  the edge probe uses the same share, so the two agree on what a crease is.
+- **The kind comes from the ball.** `wedge_deg` is 180° less the angle between
+  the ball's two contacts seen from its centre — 0 across a wall, 90 in a box's
+  corner — so it no longer needs the faces to share an edge. A ball wedged at
+  60° or more is an `edge` reading whether or not a round sits between the two
+  faces: every round reads its own diameter, 2r, and is an edge.
+- **Cost, and its complexity.** Per sample, one projection and k ≈ 3–16
+  nearest-point tests; each test scans every face's box (O(F), a few µs at
+  F = 5000) and projects onto only the faces and edges whose boxes lie within
+  the current radius, which for a thin wall is a handful. So
+  O(S · k · (F + m)) for S samples and m faces near the ball, plus O(F + E)
+  projector set-up per body.
+
+| part | faces | ray sweep: thinnest, below 1.2 / at edges, time | ball: thinnest, below 1.2 / at edges, time |
+|---|---|---|---|
+| lamp shade, 1.6 step on sloped walls, open ends | 82 | wall 1.211, 0 / 4, 123 s | wall 1.211, 0 / 68, 52 s |
+| `thickness-under-a-fillet`, 8 plate, r 2 rounds | 10 | wall **7.079**, 0.5 s | wall **8.000**, 0.5 s |
+| `shelled-box` | 12 | wall 2.000, 0.3 s | wall 2.000, 0.1 s |
+| `fitted-ring` (B-spline) | 4 | wall 2.000, 10.6 s | wall 2.000, 6.8 s |
+| `probe-port-meets-gallery` | 10 | wall 5.000, 0.5 s | wall 5.000, 0.5 s |
+| `twisted-planter` | 245 | wall 2.000, 0 / 61, 5.3 s | wall 2.000, 0 / 383, 7.0 s |
+| `flange` | — | wall **4.814** | wall **6.300** |
+| `knurled-knob` | — | wall 0.916, 941 / 81 | wall 0.983, 529 / 1751 |
+| `timing-pulley` | — | feather 0.006 | feather 0.005 |
+
+Times are whole calls, part build included (the lamp builds in 4 s), on a
+machine shared with five other builds. What the rows say:
+
+- **The lamp's rims were already classified** — `f32be230` made them `edge`
+  readings before this — so the ball changes no verdict there. It agrees with
+  the ray within 1 % on 98.8 % of wall samples and never reads above it (0 of
+  4895; a missed nearest point would show as exactly that), and it is cheaper
+  on long B-spline strips: 16 s of balls against 91 s of rays in the same
+  sweep. Its thinnest wall is 1.211 and not 1.6 because the script steps its
+  sections 1.6 mm in the *plane*, so on a sloped wall the wall is
+  1.6 · cos(slope). Both methods say so.
+- **Where the two disagree, the ray was wrong.** A rounded 8 mm plate read
+  7.08 from lines leaving the underside through the round at a slant; the
+  shell read walls of 64 mm from a line 0.04 mm below the cavity's floor, the
+  lamp one of 78 mm. The ball has no line to leave by.
+- **The flange changes answer, and that is the definition.** Its back-face
+  countersinks bring a bolt hole's rim to 4.80 from the OD on that face; the
+  ray read 4.81 there from lines leaving through the chamfer. No ball wider
+  than the corner fits there, just as beside any sharp edge, so the thinnest
+  wall is the 6.3 ligament. `eval/field/how-thin-is-it.md` now asks for 6.3.
+- **Edge readings are many more.** A ball reads thin beside *every* sharp edge
+  and round, on both faces; a ray only where it happened to leave through the
+  neighbour. `below_threshold_at_edges` is a count of that, not of defects.
+- **Finding a small defect is still sampling.** Over ten sample budgets from
+  4000 to 24000, on the two field-instrument parts as saved in the user's
+  folder: the 0.013 mm cable-to-slot sliver, ray 10/10 and ball 9/10; a
+  0.457 mm sliver between a screw hole and a foot recess, ray 7/10 and ball
+  10/10; a grille hole cut 0.319 mm into a screw boss, ray 3/10 and ball 2/10
+  (the ball read it at 0.155, nearer the zero it tapers to). Before the edge
+  step the ball found the first 7/10 and the last 0/10.
+
+Closed forms in `eval/cases/`: `slanted-slab` (2 between the faces, 2.3094
+straight down through them — the two definitions a cosine apart),
+`eccentric-tube` (1.000 where the circles are nearest), `conical-shade` (the
+lamp in closed form, 1.5522 with the rims as edges), and
+`thickness-under-a-fillet` now holds 8.000.
+
 - **The minimum is a sampled minimum, exact at its own point.** The manifold's
-  outboard wall reads 5.000012 from a sample a fraction of a degree off the
-  port's generator, where the normal tilts; the 5.000 at the generator is a
-  limit. `max_samples` (default 6000, replacing the old render `resolution`)
-  narrows it and never widens it, and the reply's `note` says so.
-- **A ray thickness is not an inscribed sphere**, and the difference is signed:
-  they agree on a wall with parallel faces, and in a concave corner the ray
-  crosses to whatever is straight across, further than the sphere that fits.
-  Stated in the reply's `note` rather than discovered later.
+  outboard wall reads 5 + y²/15 from a sample y off the port's generator,
+  where a ball tangent to the plane meets the Ø10 port; the 5.000 at the
+  generator is a limit. `max_samples` (default 6000) narrows it and never
+  widens it, and the reply's `note` says so.
 
-**Measured on a model**, `eval/field/how-thin-is-it.md`, four trials of Haiku
+**Measured on a model, after the ball**, 2026-09-16: Haiku 4.5, four trials
+per arm. `how-thick-is-the-shade` (new): 8/8 SOUND, every trial 1.552 mm, and
+the transcripts name the rim readings as edges "not actual wall thickness" —
+the `kind` was read. `how-thin-is-it`, its answer moved from 4.8 to 6.3 by the
+new definition: 8/8 SOUND. Two thinking-off trials trip the `19.1` trap only by
+quoting the hole's diameter while naming the surface.
+
+**Measured on a model**, before the ball: `eval/field/how-thin-is-it.md`, four trials of Haiku
 4.5 with thinking on, against the flange: *what is the thinnest material in this
 part, and between which two surfaces?* The ligament between a bolt hole and the
 OD is 6.3 mm, and `thickness = 19.1` sits in the script one line away from being
