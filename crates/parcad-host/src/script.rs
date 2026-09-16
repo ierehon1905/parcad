@@ -643,6 +643,16 @@ mod tests {
             ("inset-sections", format!("return extrude(inset({triangle}, 1), 2);")),
             ("sweep-spline", "return pipe({ spline: [[0, 0, 0], [30, 20, 0], [60, 0, 0]] }, 4);".to_owned()),
             ("loft-point", format!("return loft([{{ z: 0, outline: {triangle} }}, {{ z: 10, point: [3, 3] }}]);")),
+            (
+                "bspline-knots",
+                "return extrude([[0, 0], { bspline: [[3, 5], [7, 5]], degree: 3, knots: [0, 0, 0, 0, 1, 1, 1, 1] }, [10, 0], [5, -5]], 2);"
+                    .to_owned(),
+            ),
+            (
+                "held-curves",
+                "return extrude([{ curve: (t) => [5 * Math.cos(t), 5 * Math.sin(t)], from: 0, to: Math.PI, tolerance: 0.01 }], 2);"
+                    .to_owned(),
+            ),
         ];
         let stamped: Vec<&str> = cases.iter().map(|(id, _)| *id).collect();
         assert_eq!(stamped, parcad_core::envelope::FEATURES, "the host's feature list and this table differ");

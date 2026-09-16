@@ -1808,13 +1808,6 @@ export function line2d(from: [number, number], toOrAngle: [number, number] | num
 }
 
 /**
- * The convex outline through a set of points, anticlockwise, ready for
- * `extrude`. What a fan, a flare or a gusset is: "the shape that joins these
- * corners", with the convexity `extrude` demands guaranteed by construction
- * rather than checked after. Points inside the hull are dropped; three
- * distinct points that are not collinear are the least it accepts.
- */
-/**
  * A section outline stepped inward by `by` mm, as a section: the wall of a
  * hollow part. `extrude(inset(outline, 1.6), h)` is the inside of a 1.6 mm
  * wall around `extrude(outline, h)`, and a shade is the loft of outer
@@ -1959,6 +1952,13 @@ export function spurGearOutline(options: {
   return outline;
 }
 
+/**
+ * The convex outline through a set of points, anticlockwise, ready for
+ * `extrude`. What a fan, a flare or a gusset is: "the shape that joins these
+ * corners", with the convexity `extrude` demands guaranteed by construction
+ * rather than checked after. Points inside the hull are dropped; three
+ * distinct points that are not collinear are the least it accepts.
+ */
 export function hull(points: [number, number][]): [number, number][] {
   const unique = points
     .map(([x, y]): [number, number] => [x, y])
