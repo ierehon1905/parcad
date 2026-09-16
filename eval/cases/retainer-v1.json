@@ -1,0 +1,17 @@
+{
+  "name": "retainer-v1",
+  "script": "examples/fusion360/retainer-v1.js",
+  "why": "The Fusion 360 retainer recreation, which killed the worker once treatments were built on a copy of their input: the chamfer's history was asked about a face its input no longer had (one the cut's face merge had replaced), BRepTools_Modifier::ModifiedShape raised Standard_NoSuchObject, and nothing caught it. Such a shape is now neither modified nor kept. The part must build with its 23 faces (14 plane, 6 cylinder, 2 cone, 1 torus) and the exact volume its header gives, 143829.66 mm3 against Fusion's 143825.63.",
+  "brep": {
+    "size": [
+      59.49,
+      148.126,
+      36.664
+    ],
+    "volume_mm3": 143829.658,
+    "bodies": 1,
+    "voids": 0,
+    "watertight": true,
+    "faces": 23
+  }
+}

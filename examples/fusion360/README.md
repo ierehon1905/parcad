@@ -67,7 +67,7 @@ the document's *second* body, while the header recorded the first (see below).
 
 | file | part | agreement with the original |
 |---|---|---|
-| `retainer-v1.js` | plate with a bored, drafted disc | volume +0.0028%, bbox exact, all 23 faces the same surface types |
+| `retainer-v1.js` | plate with a bored, drafted disc | volume +0.0028%, bbox exact, all 23 faces the same surface types — measured by `eval/cases/retainer-v1.json` |
 | `../diamond-v19.js` | round brilliant, 57 planar facets | volume, area and bbox agree to every published digit; the same 57 planes — promoted up into `examples/`, measured by `eval/cases/diamond-v19.json` |
 | `untitled2-v1.js` | a wavy teardrop standing in a cup, both turned from splines (both bodies) | Body1 volume +0.008%, area +0.027%; Body2 volume +0.0004%, area +0.0001%, against Fusion's own measurements; both bboxes the same; the same faces as surfaces (Fusion writes each surface of revolution as a NURBS). Sections are the export's clamped uniform degree-5 pole rows, the cup's rim filleted at 5 mm — measured by `eval/cases/untitled2-v1.json` |
 | `untriangle-v3.js` | impossible-triangle ring of quarter-twisted bars (the export's body, Body12) | volume +0.00024%, area +0.00005%, bbox exact, the same 30 faces (18 plane, 12 nurbs); every twisted wall is the *identical* bilinear surface, corners matched to 1.2e-4 mm — measured by `eval/cases/untriangle-v3.json` |

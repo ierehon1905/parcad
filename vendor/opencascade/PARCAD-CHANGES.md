@@ -529,3 +529,8 @@ on an attempt that builds and is then refused — one probe below a failed
 later probe and by anything sharing that vertex.
 `a_treatment_attempt_leaves_the_shape_it_was_given_as_it_was` in
 `parcad-occt` fails without the copy.
+A shape that is not a sub-shape of the input — a lineage can still name a face
+an earlier step replaced — has no copy, and `BRepTools_Modifier::ModifiedShape`
+raises `Standard_NoSuchObject` for it, which killed the worker on
+`examples/fusion360/retainer-v1.js`. The history answers for such a shape that
+it made nothing and is deleted.

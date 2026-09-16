@@ -1,5 +1,6 @@
 #pragma once
 
+#include <Standard_NoSuchObject.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_BooleanOperation.hxx>
@@ -161,7 +162,10 @@ class ParcadEdgeTreatment {
   const TopoDS_Shape& input() const { return input_; }
 
   std::unique_ptr<std::vector<TopoDS_Shape>> generated(const TopoDS_Edge& original) {
-    const TopoDS_Shape& copied = copy_.ModifiedShape(original);
+    TopoDS_Shape copied;
+    if (!copy_of(original, copied)) {
+      return shapes(NCollection_List<TopoDS_Shape>());
+    }
     return fillet_ ? shapes(fillet_->Generated(copied)) : shapes(chamfer_->Generated(copied));
   }
 
@@ -170,7 +174,10 @@ class ParcadEdgeTreatment {
   // fillet that trims it. A shape the treatment left alone became its copy,
   // which is what the result holds.
   std::unique_ptr<std::vector<TopoDS_Shape>> modified(const TopoDS_Shape& original) {
-    const TopoDS_Shape& copied = copy_.ModifiedShape(original);
+    TopoDS_Shape copied;
+    if (!copy_of(original, copied)) {
+      return shapes(NCollection_List<TopoDS_Shape>());
+    }
     auto out = fillet_ ? shapes(fillet_->Modified(copied)) : shapes(chamfer_->Modified(copied));
     if (out->empty() && !is_deleted(original)) {
       out->push_back(copied);
@@ -178,12 +185,28 @@ class ParcadEdgeTreatment {
     return out;
   }
 
+  // A shape that is not part of the treated input is not part of the result.
   bool is_deleted(const TopoDS_Shape& original) {
-    const TopoDS_Shape& copied = copy_.ModifiedShape(original);
+    TopoDS_Shape copied;
+    if (!copy_of(original, copied)) {
+      return true;
+    }
     return fillet_ ? fillet_->IsDeleted(copied) : chamfer_->IsDeleted(copied);
   }
 
  private:
+  // The copy of `original`, or false when it is not a sub-shape of the input:
+  // `BRepTools_Modifier::ModifiedShape` raises for one, and a caller's lineage
+  // can still name a face an earlier step replaced.
+  bool copy_of(const TopoDS_Shape& original, TopoDS_Shape& copied) const {
+    try {
+      copied = copy_.ModifiedShape(original);
+      return true;
+    } catch (const Standard_NoSuchObject&) {
+      return false;
+    }
+  }
+
   static std::unique_ptr<std::vector<TopoDS_Shape>> shapes(const NCollection_List<TopoDS_Shape>& shapes) {
     return std::unique_ptr<std::vector<TopoDS_Shape>>(
         new std::vector<TopoDS_Shape>(shapes.begin(), shapes.end()));
