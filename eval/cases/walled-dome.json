@@ -1,0 +1,28 @@
+{
+  "name": "walled-dome",
+  "script": "eval/scripts/walled-dome.js",
+  "why": "The upper half of a sphere of radius 40, from its equator at z = 0 to a closed cap at z = 39.5 (9 degrees off horizontal), lofted through 40 fitted circles as a 2 mm wall. The mirror image of walled-bowl: the outer cap 0..39.5 less the radius-38 cap 0..37.5, 19116.068 mm3 in closed form. loft_wall_mm must read 2.000.",
+  "brep": {
+    "size": [
+      80.002,
+      79.997,
+      39.5
+    ],
+    "volume_mm3": 19109.658,
+    "area_mm2": 19611.54,
+    "triangles": 55508,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 490.059,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 76,
+    "edges": 296,
+    "curves": 75,
+    "deviation_mm": 0.0008,
+    "loft_wall_mm": [
+      1.9999,
+      2.0001
+    ]
+  }
+}

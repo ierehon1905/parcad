@@ -1,0 +1,25 @@
+{
+  "name": "ruled-facet-sag",
+  "script": "eval/scripts/ruled-facet-sag.js",
+  "why": "A ruled loft through fitted circles r = 10, 20, 10 at z = 0, 10, 20. facet_sag_mm is how far the ruled walls lie from the smooth loft through the same sections, measured both ways: the smooth loft is the revolution of the parabola through the three radii, so the sag is the furthest the parabola and its two chords are from each other in the profile plane, 1.7678 mm (the parabola's point at z = 5 is 2.5 mm from a chord of slope 1).",
+  "brep": {
+    "size": [
+      40.0,
+      39.999,
+      20.0
+    ],
+    "volume_mm3": 14656.763,
+    "area_mm2": 3293.315,
+    "triangles": 12112,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 313.97,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 4,
+    "edges": 10,
+    "curves": 3,
+    "deviation_mm": 0.0009,
+    "facet_sag_mm": 1.7678
+  }
+}

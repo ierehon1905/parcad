@@ -1,0 +1,28 @@
+{
+  "name": "walled-twisted-pleats",
+  "script": "eval/scripts/walled-twisted-pleats.js",
+  "why": "A pleated pendant shade (288 points, 21 sections, a 35 degree eased twist with an S sway) lofted smooth as a 1.2 mm wall. Built with the base fitter it came out inside out: BRepLib::OrientClosedSolid classified the point at infinity by one ray through dozens of pleated walls, missed a crossing, and reversed a solid that was right, and every report read the volume unsigned. The skinner now states which way is out and checks it on the built face, and the mesh backstop refuses negative volume, so an inside-out wall goes red here as a refusal.",
+  "brep": {
+    "size": [
+      132.613,
+      124.63,
+      180.0
+    ],
+    "volume_mm3": 117737.728,
+    "area_mm2": 197432.523,
+    "triangles": 2885294,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 680.485,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 42,
+    "edges": 164,
+    "curves": 42,
+    "deviation_mm": 0.0975,
+    "loft_wall_mm": [
+      1.1673,
+      1.241
+    ]
+  }
+}

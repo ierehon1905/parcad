@@ -416,39 +416,74 @@ Tiller's *compatible skinning* (§10.3), with the arithmetic in
   section's chord-length parameters, averaged — so point `i` is at the same
   `u` in every section and the author's pairing is the surface's.
 - **One knot vector for every section.** Each is fitted by least squares on a
-  uniform *periodic* cubic (`PeriodicFit`): a closed outline has no seam to
+  *periodic* cubic (`PeriodicFit`): a closed outline has no seam to
   constrain, and with parameters and knots shared, one factorisation fits all
-  of them. The span count doubles from 4 until every section holds its
-  tolerance, measured point to curve, and nothing is unified or inserted
-  afterwards. The periodic curve is handed to OCCT as the clamped cubic equal
-  to it.
+  of them. The knots follow the parameters (Piegl & Tiller eq. 9.69, closed),
+  so every span holds the same number of points: uniform knots over points
+  whose spacing varied 4:1 left spans empty long before the points ran out,
+  and a pleated section that fits to 0.0007 mm was refused at 0.163. The span
+  count is the fewest that holds every section's tolerance, measured point
+  to curve, without a loop: doubling from 4, then halving the gap to the last
+  count that fell short, up to the most the points allow. Nothing is unified
+  or inserted afterwards. The periodic curve is handed to OCCT as the clamped
+  cubic equal to it.
 - **The surface interpolates each column of poles across the sections**, at
   `v` = the section's height scaled to [0, 1]. Interpolation reproduces a
   linear function, so height is exactly linear in `v`: every horizontal plane
   cuts the skin along one `v` iso-curve, and a floor or a rim is one.
 - **The faces are made and sewn here** (`opencascade::skin::Skinner`): a band
-  per stretch between sections — split even when smooth, because the mesher
-  took 102 s on one lamp skin as a single face and 18.7 s in bands — and flat
-  ends bounded by the skin's own iso-curves.
+  per stretch between sections, each on its own segment of the surface —
+  split even when smooth, because the mesher took 102 s on one lamp skin as a
+  single face and 18.7 s in bands, and segmented because a boolean's
+  `UnifySameDomain` welds faces that share a surface back into one (docs/GOTCHAS.md)
+  — and flat ends bounded by the skin's own iso-curves.
 
 `loft(sections, { wall })` adds the inside, and the pairing is what it is for.
 Two skins lofted independently through a section and its inset each bulge
 their own way between sections: a 15-section lamp built as two smooth lofts
 and a cut measured **0.001 mm** of wall in eight places. Here the inside is
-fitted on the same parameters and knots as the outside (twice as many spans —
-an offset turns tighter than its curve, at a convex tip by the whole wall),
-through targets the backend computes from the *built outside*: at four
-parameters between each pair of points and at a row between each pair of
-sections, the outside's point stepped horizontally by `t / cos φ`, where `φ`
-is the outside's lean there. A horizontal step of `t` is only `t · cos φ`
-thick square to a leaning wall (the same lamp: 1.211 mm for 1.6). The step is
+fitted on the same parameters as the outside, on a refinement of its knots
+(twice as many spans, and four or eight times when the wall measured below
+misses — an offset turns tighter than its curve, at a convex tip by the whole
+wall), through targets the backend computes from the *built outside*: at
+several parameters between each pair of points and at rows between each pair
+of sections, the point `t` along the outside's inward surface normal. Each
+target is the offset of the outside at `(u, v')`, with `v'` solved so the
+target lies at its row's height, so both skins keep height linear in `v` and
+a floor or a rim is still one iso-curve of each; `u` is shared exactly, and
+`v'` differs from the row's `v` by at most `t` of height. There is no limit
+on lean: a bowl's floor 9° off flat walls like a vase's side. What the
+geometry forbids is refused by name: where the profile bends tighter than
+`t`, the inside's height stops rising with the outside's and would fold. Below
+a closed end no rows are made — the inside starts at its floor — and at an
+open end the outside is continued by its end span to be stepped from.
+(A horizontal step of `t` is only `t · cos φ` thick square to a wall leaning
+`φ`: the fitted lamp built that way measured 1.211 mm for 1.6.) The step is
 then corrected twice by the wall it made, measured square to the outside at
-each target, and the result answers to one measurement:
-`Skinner::measure_wall`, from a grid of points of the inside to the nearest
-point of the outside, searched only within a knot span of the *same*
-parameters — the matching stretch of wall, never a ray that crosses the
-cavity. At an open end the foot is held to the edge and the distance is taken
-along its normal, which is the wall continued.
+each target's foot, and the result answers to one measurement:
+`Skinner::measure_wall_reaching`, from a grid of points of the inside to the
+nearest point of the outside, searched only within a knot span (or the `t`
+of height the step can shift) of the *same* parameters — the matching
+stretch of wall, never a ray that crosses the cavity. At an open end the foot
+is held to the edge and the distance is taken along its normal, which is the
+wall continued.
+
+A ruled loft reports `facet_sag_mm`, how flat its facets are: the furthest
+its walls lie from the smooth loft through the same sections, measured both
+ways — on a skinned loft between the ruled and the smooth surface through
+the same pole rows (`skin::facet_sag`, a Gauss-Newton foot from the same
+parameters), otherwise between the `ThruSections` solid and the smooth one
+OCCT builds through the same wires, from a grid on every face to the other's
+boundary. Two sections have none: the smooth loft through them is the ruled
+one. It is the number for what a person judged by eye: the owner saw faint
+horizontal lines on a 768 px render of the 41-section ruled lamp, whose
+shade measures 0.139 mm (its cavity 0.176 mm, which the part reports as the
+larger), and none on the smooth lamp. `ruled-facet-sag` holds it to a closed
+form.
+
+A closed `{ fit }` section anywhere else — an extrusion, a revolve — is
+fitted the same way, as a loft of one section (`skinned::fit_closed`), and
+built as a B-spline edge with its deviation measured again on the edge.
 
 The measured range is reported as `loft_wall_mm`. Thinner than 95 % of `t`
 anywhere is refused, naming where; thicker than `t` by more than 5 % or the
@@ -458,7 +493,18 @@ that much slack. Ends are open by default — the wall ends in a flat ring, a
 lampshade or a sleeve — and `bottom: "closed"` / `top: "closed"` put a floor
 `t` thick there, cut from the inside at `v = t / height`. A wall takes only
 fitted sections: corners and arcs have no points to step, and their inset is
-already `inset()`.
+already `inset()`. An open end on a wall that nearly lies flat is a knife
+edge, since the ring is level: `walled-shallow-shade` (11° off flat) measures
+a 0.098 mm feather at its rim.
+
+Which way the solid faces is stated, not classified: the skinner is told the
+outward direction at one point of the outside (`set_outward`), turns the
+sewn solid to match and checks the face it presents there.
+`BRepLib::OrientClosedSolid` shoots one ray from a face and trusts its
+farthest crossing; through a pleated shell of dozens of walls 1.2 mm apart it
+missed one and reversed a solid that was right, and every report read the
+volume unsigned. The mesh backstop in `serve.rs` now refuses a solid whose
+mesh encloses negative volume, whatever built it.
 
 ## Meshing: weld before you measure
 

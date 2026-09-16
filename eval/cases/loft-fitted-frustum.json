@@ -4,21 +4,21 @@
   "why": "A smooth loft through five fitted circles of a frustum, skinned by the kernel on one shared knot vector rather than by ThruSections. Interpolating the pole columns across the sections reproduces the straight generator, so the solid is the frustum pi*40/3*(900+300+100) = 54454.273 mm3 to the fit and the mesh chord; the four bands and two caps are the face count. A skin that bulged, or a pairing that twisted, would move the volume.",
   "brep": {
     "size": [
-      59.996,
-      59.999,
+      59.998,
+      59.998,
       40.0
     ],
-    "volume_mm3": 54442.968,
-    "area_mm2": 8760.259,
-    "triangles": 14842,
+    "volume_mm3": 54442.19,
+    "area_mm2": 8760.276,
+    "triangles": 21302,
     "bodies": 1,
     "voids": 0,
-    "stands_on_mm2": 2826.864,
+    "stands_on_mm2": 2826.866,
     "stands_on_patches": 1,
     "watertight": true,
     "faces": 6,
     "edges": 18,
     "curves": 5,
-    "deviation_mm": 0.0001
+    "deviation_mm": 0.0008
   }
 }

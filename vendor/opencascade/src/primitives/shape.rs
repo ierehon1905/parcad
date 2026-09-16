@@ -414,7 +414,8 @@ impl Shape {
     /// this tolerance is written as it stands; a finer request re-meshes it.
     pub fn write_stl<P: AsRef<Path>>(&self, path: P, deflection: f64) -> Result<(), Error> {
         let mut stl_writer = ffi::StlAPI_Writer_ctor();
-        let triangulation = ffi::BRepMesh_IncrementalMesh_ctor(&self.inner, deflection);
+        let triangulation =
+            ffi::BRepMesh_IncrementalMesh_ctor_full(&self.inner, deflection, false, 0.5, true);
         let success = ffi::write_stl(
             stl_writer.pin_mut(),
             triangulation.Shape(),
@@ -766,6 +767,15 @@ impl Shape {
             inner,
             faces: self.face_map(),
         }
+    }
+
+    /// Points on every face: a `per_side` by `per_side` grid over each face's
+    /// parameters, those inside the face kept. Added for parcad.
+    pub fn face_grid(&self, per_side: usize) -> Vec<DVec3> {
+        ffi::Shape_face_grid(&self.inner, per_side as i32)
+            .chunks_exact(3)
+            .map(|c| dvec3(c[0], c[1], c[2]))
+            .collect()
     }
 
     /// Load this shape for repeated nearest-boundary-point questions. Added

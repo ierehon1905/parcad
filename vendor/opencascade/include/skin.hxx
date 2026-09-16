@@ -10,9 +10,12 @@
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepCheck_Analyzer.hxx>
-#include <BRepLib.hxx>
+#include <BRep_Tool.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_BSplineSurface.hxx>
+#include <Geom_Geometry.hxx>
+#include <Geom_Surface.hxx>
+#include <TopAbs_Orientation.hxx>
 #include <NCollection_Array1.hxx>
 #include <NCollection_Array2.hxx>
 #include <ShapeFix_Face.hxx>
@@ -77,20 +80,26 @@ class ParcadSkin {
     }
   }
 
-  // The skin between v0 and v1, all the way round.
+  // The skin between v0 and v1, all the way round, on a surface of its own:
+  // faces sharing one surface handle are "same domain" to
+  // ShapeUpgrade_UnifySameDomain, which welds a boolean's bands back into one
+  // face that meshes many times slower.
   void add_band(int skin, double v0, double v1) {
     try {
-      const Handle(Geom_BSplineSurface)& s = surface(skin);
+      const Handle(Geom_BSplineSurface)& whole = surface(skin);
       double u0 = 0.0;
       double u1 = 0.0;
       double vmin = 0.0;
       double vmax = 0.0;
-      s->Bounds(u0, u1, vmin, vmax);
+      whole->Bounds(u0, u1, vmin, vmax);
+      Handle(Geom_BSplineSurface) s = Handle(Geom_BSplineSurface)::DownCast(whole->Copy());
+      s->CheckAndSegment(u0, u1, v0, v1);
       BRepBuilderAPI_MakeFace make(s, u0, u1, v0, v1, 1e-7);
       if (!make.IsDone()) {
         throw std::runtime_error("a band of the lofted skin could not be made into a face");
       }
       faces_.push_back(make.Face());
+      bands_.push_back(Band{faces_.size() - 1, skin, v0, v1});
     } catch (const Standard_Failure& raised) {
       throw std::runtime_error("a band of the lofted skin raised: " + parcad_skin_raised(raised));
     }
@@ -133,8 +142,23 @@ class ParcadSkin {
     }
   }
 
+  // Which way is out: at (u, v) of `skin`, the outside of the part lies
+  // along (x, y, z). `build` turns the solid to match and checks it did.
+  void set_outward(int skin, double u, double v, double x, double y, double z) {
+    surface(skin);
+    outward_skin_ = skin;
+    outward_uv_[0] = u;
+    outward_uv_[1] = v;
+    outward_ = gp_Vec(x, y, z);
+    has_outward_ = outward_.Magnitude() > 0.0;
+  }
+
   std::unique_ptr<TopoDS_Shape> build(double tolerance) {
     try {
+      if (!has_outward_) {
+        throw std::runtime_error(
+            "the lofted skin was sewn without being told which way is out; call set_outward first");
+      }
       BRepBuilderAPI_Sewing sewing(tolerance);
       for (const TopoDS_Face& face : faces_) {
         sewing.Add(face);
@@ -159,7 +183,18 @@ class ParcadSkin {
         throw std::runtime_error("the lofted shell could not be made into a solid");
       }
       TopoDS_Solid solid = make.Solid();
-      BRepLib::OrientClosedSolid(solid);
+      // BRepLib::OrientClosedSolid classifies a point at infinity by one ray,
+      // and through a pleated shell that ray misses a crossing and reverses a
+      // solid that was right; the side is known here, so it is stated.
+      double facing = facing_out(solid, sewing);
+      if (facing < 0.0) {
+        solid.Reverse();
+        facing = facing_out(solid, sewing);
+      }
+      if (!(facing > 0.0)) {
+        throw std::runtime_error(
+            "the lofted solid's faces do not turn out where the skin says outside is");
+      }
       BRepCheck_Analyzer check(solid);
       if (!check.IsValid()) {
         throw std::runtime_error("the lofted solid does not pass the kernel's validity check");
@@ -175,8 +210,9 @@ class ParcadSkin {
   // to the nearest point of the outer skin, found by Newton's method from
   // the *same* (u, v) — both skins share their parameterisation, so that is
   // the matching point and the search stays on its own stretch of wall.
-  // Returns [min, max, x, y, z of the min, x, y, z of the max].
-  rust::Vec<double> measure_wall(double v0, double v1, int per_u, int per_v) const {
+  // The search reaches at least v_reach either side in v. Returns [min, max,
+  // x, y, z of the min, x, y, z of the max].
+  rust::Vec<double> measure_wall(double v0, double v1, int per_u, int per_v, double v_reach) const {
     try {
       const Handle(Geom_BSplineSurface)& outer = surface(0);
       const Handle(Geom_BSplineSurface)& inner = surface(1);
@@ -194,7 +230,7 @@ class ParcadSkin {
         for (int b = 0; b <= per_v; ++b) {
           const double v = v0 + (v1 - v0) * b / per_v;
           const gp_Pnt p = inner->Value(u, v);
-          const double d = nearest(outer, p, u, v, u0, u1, vmin, vmax);
+          const double d = nearest(outer, p, u, v, u0, u1, vmin, vmax, v_reach);
           if (d < lo) {
             lo = d;
             at_lo = p;
@@ -259,9 +295,9 @@ class ParcadSkin {
   // foot is inside the surface and, at an open end where the foot is held to
   // the edge, the distance to the surface continued.
   static double nearest(const Handle(Geom_BSplineSurface)& s, const gp_Pnt& p, double u, double v,
-                        double u0, double u1, double vmin, double vmax) {
+                        double u0, double u1, double vmin, double vmax, double v_reach) {
     const double du_reach = (u1 - u0) / (s->NbUKnots() - 1);
-    const double dv_reach = (vmax - vmin) / (s->NbVKnots() - 1);
+    const double dv_reach = std::max(v_reach, (vmax - vmin) / (s->NbVKnots() - 1));
     const double period = u1 - u0;
     auto wrap = [&](double t) {
       while (t < u0) t += period;
@@ -332,8 +368,52 @@ class ParcadSkin {
     return std::abs(gp_Vec(at, p).Dot(normal));
   }
 
+  // The cosine between the stated outward direction and the normal of the
+  // solid's face through that point, as the solid presents it; 0 when no
+  // band holds the point.
+  double facing_out(const TopoDS_Solid& solid, BRepBuilderAPI_Sewing& sewing) const {
+    for (const Band& band : bands_) {
+      if (band.skin != outward_skin_ || outward_uv_[1] < band.v0 || outward_uv_[1] > band.v1) {
+        continue;
+      }
+      TopoDS_Shape sewn = sewing.Modified(faces_[band.face]);
+      for (TopExp_Explorer faces(solid, TopAbs_FACE); faces.More(); faces.Next()) {
+        const TopoDS_Face face = TopoDS::Face(faces.Current());
+        if (!face.IsSame(sewn)) {
+          continue;
+        }
+        Handle(Geom_Surface) geometry = BRep_Tool::Surface(face);
+        gp_Pnt at;
+        gp_Vec su, sv;
+        geometry->D1(outward_uv_[0], outward_uv_[1], at, su, sv);
+        gp_Vec normal = su.Crossed(sv);
+        if (face.Orientation() == TopAbs_REVERSED) {
+          normal.Reverse();
+        }
+        if (normal.Magnitude() < 1e-12) {
+          return 0.0;
+        }
+        return normal.Normalized().Dot(outward_.Normalized());
+      }
+      return 0.0;
+    }
+    return 0.0;
+  }
+
+  struct Band {
+    size_t face;
+    int skin;
+    double v0;
+    double v1;
+  };
+
   Handle(Geom_BSplineSurface) surfaces_[2];
   std::vector<TopoDS_Face> faces_;
+  std::vector<Band> bands_;
+  bool has_outward_ = false;
+  int outward_skin_ = 0;
+  double outward_uv_[2] = {0.0, 0.0};
+  gp_Vec outward_;
 };
 
 inline std::unique_ptr<ParcadSkin> parcad_skin() { return std::unique_ptr<ParcadSkin>(new ParcadSkin()); }

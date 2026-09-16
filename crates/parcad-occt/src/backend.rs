@@ -79,6 +79,7 @@ fn section_wire(section: &Section, place: impl Fn([f64; 2]) -> DVec3, what: &str
                         None => Ok(edge),
                     }
                 }
+                Segment::Fit { points, tolerance, closed: true } => closed_fit_edge(points, *tolerance, &place, what),
                 Segment::Fit { points, tolerance, closed } => {
                     let placed: Vec<DVec3> = points.iter().map(|p| place(*p)).collect();
                     let (edge, fit) = match Edge::fit(&placed, *tolerance, *closed) {
@@ -157,6 +158,68 @@ fn section_wire(section: &Section, place: impl Fn([f64; 2]) -> DVec3, what: &str
         Some(distance) => inset_wire(&wire, distance, what),
         None => Ok(wire),
     }
+}
+
+/// A closed `{ fit }` — a whole section — as the periodic cubic a skinned
+/// loft fits its sections with (`skinned::fit_closed`): parameters that
+/// follow the curve, knots that follow the parameters, the fewest spans that
+/// hold, and no seam. Its deviation is measured again on the edge as built.
+fn closed_fit_edge(points: &[[f64; 2]], tolerance: f64, place: &impl Fn([f64; 2]) -> DVec3, what: &str) -> Result<Edge> {
+    let fitted = match crate::skinned::fit_closed(points, tolerance)? {
+        Ok(fitted) => fitted,
+        Err((spans, why)) => {
+            // Below the points' own scatter nothing holds. Measure the
+            // tolerance that does, doubling up, so the refusal is a number to
+            // write in.
+            let closest = crate::skinned::closest_closed_fit(points);
+            let holds = (1..=10)
+                .map(|k| tolerance * f64::powi(2.0, k))
+                .find(|t| closest.is_some_and(|off| off <= *t));
+            let (at, turn) = sharpest_turn(points, true);
+            bail!(
+                "the {what}'s curve through {} points could not be fitted within {tolerance} mm: {why}{}. {}Raise the tolerance{}, or thin the points where they scatter",
+                points.len(),
+                if spans > 0 { format!(" on {spans} spans, the most {} points allow", points.len()) } else { String::new() },
+                if turn > 60.0 {
+                    format!("The points turn {turn:.0}° at point {at}, a corner no smooth curve can follow within a small tolerance: drop or smooth the points that fold there, or list that point as a corner [x, y] with a fit on either side. ")
+                } else {
+                    "A tolerance below the points' own scatter leaves nothing smooth to fit. ".to_string()
+                },
+                match holds {
+                    Some(t) => format!(" — {t:.3} mm is measured to hold"),
+                    None => String::new(),
+                }
+            );
+        }
+    };
+    let curve = &fitted.curve;
+    let poles: Vec<DVec3> = curve.poles.iter().map(|p| place(*p)).collect();
+    let (knots, mults) = curve.distinct_knots();
+    let edge = Edge::bspline(&poles, &knots, &mults, curve.degree).map_err(|e| anyhow::anyhow!(e))?;
+    let placed: Vec<DVec3> = points.iter().map(|p| place(*p)).collect();
+    let deviation = edge.deviation_from(&placed).map_err(|e| anyhow::anyhow!(e))?.max(fitted.deviation_mm);
+    if deviation > tolerance {
+        bail!(
+            "the {what}'s curve fitted through {} points is {deviation:.4} mm from them at worst, past the {tolerance} mm asked. Raise the tolerance to {:.3} mm, or thin the points where they scatter",
+            points.len(),
+            (deviation * 1000.0).ceil() / 1000.0
+        );
+    }
+    let flat = &fitted.samples;
+    let sampled_area = flat
+        .iter()
+        .zip(flat.iter().cycle().skip(1))
+        .map(|(a, b)| a[0] * b[1] - b[0] * a[1])
+        .sum::<f64>()
+        / 2.0;
+    breadcrumb(&format!(
+        "fitted {} points to a closed periodic cubic of {} poles on {} spans, {deviation:.4} mm off at worst; the samples enclose {sampled_area:.3} mm²",
+        points.len(),
+        curve.poles.len(),
+        curve.poles.len() - 3,
+    ));
+    record_fit(deviation);
+    Ok(edge)
 }
 
 /// Measure a curve drawn from a function against points of that function it
@@ -352,6 +415,11 @@ fn locate_crossing(section: &Section) -> Option<String> {
     let mut owners: Vec<usize> = Vec::new();
     for (i, segment) in section.segments.iter().enumerate() {
         let points = match segment {
+            Segment::Fit { points, tolerance, closed: true } => {
+                let mut samples = crate::skinned::fit_closed(points, *tolerance).ok()?.ok()?.samples;
+                samples.push(samples[0]);
+                samples
+            }
             Segment::Fit { points, tolerance, closed } => {
                 let placed: Vec<DVec3> = points.iter().map(|p| DVec3::new(p[0], p[1], 0.0)).collect();
                 let (_, fit) = Edge::fit(&placed, *tolerance, *closed).ok()?;
@@ -393,12 +461,31 @@ fn locate_crossing(section: &Section) -> Option<String> {
     Some(format!("Sampled, {what} near [{:.4}, {:.4}]. ", near[0], near[1]))
 }
 
+/// How far apart two lofts through the same sections lie: the furthest a
+/// point of either's faces is from the other's boundary.
+fn facet_sag_between(ruled: &Shape, smooth: &Shape) -> f64 {
+    let mut worst: f64 = 0.0;
+    for (from, to) in [(ruled, smooth), (smooth, ruled)] {
+        let mut nearest = to.nearest_boundary();
+        for p in from.face_grid(FACET_GRID) {
+            if let Some(hit) = nearest.nearest_within(p, f64::INFINITY) {
+                worst = worst.max(hit.distance);
+            }
+        }
+    }
+    worst
+}
+
+/// Points a side each face of a loft is sampled at for its facet sag.
+const FACET_GRID: usize = 6;
+
 /// What building a subtree measured that the report carries: the worst fit
 /// deviation, and the thinnest and thickest wall of any walled loft.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Measured {
     pub deviation_mm: Option<f64>,
     pub loft_wall_mm: Option<[f64; 2]>,
+    pub facet_sag_mm: Option<f64>,
 }
 
 impl Measured {
@@ -408,6 +495,9 @@ impl Measured {
         }
         if let Some([lo, hi]) = other.loft_wall_mm {
             self.loft_wall_mm = Some(self.loft_wall_mm.map_or([lo, hi], |[a, b]| [a.min(lo), b.max(hi)]));
+        }
+        if let Some(sag) = other.facet_sag_mm {
+            self.facet_sag_mm = Some(self.facet_sag_mm.map_or(sag, |worst| worst.max(sag)));
         }
     }
 }
@@ -3550,6 +3640,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                     record(Measured {
                         deviation_mm: Some(skinned.deviation_mm),
                         loft_wall_mm: skinned.wall.map(|w| [w.min_mm, w.max_mm]),
+                        facet_sag_mm: skinned.facet_sag_mm,
                     });
                     skinned.shape
                 }
@@ -3570,19 +3661,18 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 });
             }
             let plain = resolved.iter().all(|s| s.as_ref().is_some_and(Section::is_polygon));
-            if plain {
-                let wires: Vec<Wire> = wires.into_iter().flatten().collect();
-                Shape::from(Solid::loft_sections(&wires, !*smooth))
+            let profiles: Vec<LoftProfile> = sections
+                .iter()
+                .zip(&wires)
+                .map(|(section, wire)| match (wire, section.point) {
+                    (Some(wire), _) => LoftProfile::Wire(wire),
+                    (None, Some([x, y])) => LoftProfile::Point(DVec3::new(x, y, section.z)),
+                    (None, None) => unreachable!("validate_loft gives every section an outline or a point"),
+                })
+                .collect();
+            let lofted = if plain {
+                Shape::from(Solid::loft_sections(wires.iter().flatten(), !*smooth))
             } else {
-                let profiles: Vec<LoftProfile> = sections
-                    .iter()
-                    .zip(&wires)
-                    .map(|(section, wire)| match (wire, section.point) {
-                        (Some(wire), _) => LoftProfile::Wire(wire),
-                        (None, Some([x, y])) => LoftProfile::Point(DVec3::new(x, y, section.z)),
-                        (None, None) => unreachable!("validate_loft gives every section an outline or a point"),
-                    })
-                    .collect();
                 let lofted = Shape::loft_through(&profiles, !*smooth)
                     .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
                 let mut lofted = lofted.single_solid().unwrap_or(lofted);
@@ -3590,7 +3680,24 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                     lofted = lofted.oriented_outward();
                 }
                 lofted
+            };
+            if !*smooth && sections.len() > 2 {
+                match Shape::loft_through(&profiles, false) {
+                    Ok(rounded) => {
+                        let sag = facet_sag_between(&lofted, &rounded);
+                        breadcrumb(&format!(
+                            "node {id} ({label}): the ruled loft lies up to {sag:.4} mm from the smooth one through its sections"
+                        ));
+                        record(Measured { facet_sag_mm: Some(sag), ..Measured::default() });
+                    }
+                    Err(e) => breadcrumb(&format!(
+                        "node {id} ({label}): no smooth loft through its sections to measure the facets against ({e})"
+                    )),
+                }
+            } else if !*smooth {
+                record(Measured { facet_sag_mm: Some(0.0), ..Measured::default() });
             }
+            lofted
                 }
             };
 

@@ -558,7 +558,46 @@ built as outer sections minus sections stepped in by 1.6 mm measured 1.211 mm
 at its thinnest in `measure_wall_thickness` (kind `wall`, not a rim artifact),
 and a horizontal inset of one sloped section measured 1.387 mm. `loft(...,
 { wall })` steps by `t / cos φ` from the built outside, so its `loft_wall_mm`
-is the wall square to the surface.
+is the wall square to the surface. It now steps along the outside's surface
+normal rather than sideways, with the height solved so floors and rims stay
+level: the sideways step needed `t / cos φ`, which refused anything within
+14° of flat, and a bowl or a dome was impossible to wall.
+
+### `BRepLib::OrientClosedSolid` can reverse a solid that was right
+
+It classifies the point at infinity by one line along a face's normal and
+trusts the transition at its farthest crossing. A walled pleated shade
+(`walled-twisted-pleats`: 288 points, 21 sections, a 35° twist) came out of
+the sewing facing the right way; the classifier answered IN, the solid was
+reversed, and the part was all of space except the shade — while
+`mass_properties` reported `volume.abs()` and every check passed. The same
+script with 25 sections and a 70° twist got OUT. Nothing about the geometry
+is wrong; the line through dozens of walls 1.2 mm apart on large B-spline
+bands misses a crossing. The skinner states which way is out and checks the
+face; `serve.rs` refuses a mesh of negative volume. `Shape::oriented_outward`
+still uses the classifier, for `ThruSections` and the extrude path, and is
+now caught by that backstop if it errs. Built by the fitter that came after,
+the same shade faces the right way even under the old classifier, and no
+lighter variant of it (48 tried) flips; the case is kept for the backstop,
+which turns any recurrence red.
+
+### Uniform knots over uneven points leave spans empty
+
+A least-squares fit on uniform knots needs every span to hold points
+(Schoenberg–Whitney). A pleated section sampled at equal steps along its
+base star, then pushed out and in, had chord steps from 0.76 to 3.31 mm: on
+256 uniform spans its fit plateaued at 0.15 mm, and on 511 — nearly one span
+per point — it was still 0.163 mm off, because the long chords had spans with
+no point in them and the matrix was only nominally invertible. Knots placed
+by the parameters (same points per span) fit the same section to 0.0007 mm
+on 508 spans. `PeriodicFit` refuses a factorisation whose pivots span more
+than twelve orders of magnitude.
+
+That section's 0.15 mm plateau is its own: at `z = 0` near (67, 27) its
+points zigzag, turning ±1.4 mm every 0.77 mm, a staircase the pleat growth
+left behind. Held to 0.05 mm the outside must follow it, and a 0.8 mm wall's
+inside loops there at every refinement — refused, naming the place. At
+0.25 mm the fit smooths it and the wall holds.
 
 ### `Edge::fit`'s closed seam is only G1, and can loop
 
@@ -571,9 +610,27 @@ lamp at a star tip, where the offset turns with a radius of 0.4 mm — one
 magnitude goes to nearly zero and the curve cusps and loops by 0.01 mm at its
 start, at every span count up to the interpolation limit. The walled loft
 found it and does not use `Edge::fit`: its sections are fitted periodic
-(`parcad_core::skin::PeriodicFit`), with no seam at all. A plain `{ fit }`
-section in an extrude or a revolve still goes through `Edge::fit`; its loop
-check catches a loop, but the seam's speed jump is not reported.
+(`parcad_core::skin::PeriodicFit`), with no seam at all.
+
+A closed `{ fit }` section in an extrude, a revolve or anywhere else no longer
+does either: `section_wire` fits it as a one-section skinned loft
+(`skinned::fit_closed`) — parameters corrected to follow the curve, knots
+following the parameters, the fewest spans that hold, C2 through where the
+points start — and measures the deviation again on the edge OCCT holds. The
+six-lobed outline of `fit-six-lobes` (180 points) measured:
+
+| tolerance | `Edge::fit` | periodic fit |
+|---|---|---|
+| 0.6 | 35 poles, 0.594 mm | 22 poles, 0.436 mm |
+| 0.1 | 131 poles, 0.042 mm | 27 poles, 0.067 mm |
+| 0.05 | 131 poles, 0.042 mm | 49 poles, 0.044 mm |
+| 0.02 | refused | 57 poles, 0.017 mm |
+
+`Edge::fit` still makes the open fits between two corners, whose ends are
+the corners and have no seam. Both keep a fit to four fewer free poles than
+points: at the limit the loft's fitter used to allow, one fewer, a circle
+with 0.3 mm of noise "held" 0.01 mm on 122 poles for 120 points, which is
+interpolation.
 
 ### One large B-spline face meshes far slower than the same surface in bands
 
@@ -584,6 +641,26 @@ the mesh after it 1 s. `ThruSections`' single smooth face in the older lamp
 took 166 s. Splitting further, in `u` as well, did not help measurably (16 to
 19 s under load). So a skinned loft is always banded at its sections, and the
 edges between bands are `dihedral: "smooth"`.
+
+Bands cut from one `Geom_BSplineSurface` do not stay bands, though:
+`ShapeUpgrade_UnifySameDomain` counts two faces on the same surface *handle*
+as one domain, so the cleanup after any boolean welded them back into one
+face per skin. A lamp of two ruled 41-section lofts and a cut came out with 4
+faces and took 78 s (35 s of it tessellating those faces) where
+`ThruSections` had taken 17.6 s with 82. Each band is now its own segment of
+the surface (`Geom_BSplineSurface::CheckAndSegment`, exact knot insertion),
+which unify leaves apart; a whole-surface copy per band would too, but
+segments are smaller and the same lamp built in 6.3 s against 10.6 s with
+copies. The segments change only where the mesher puts triangles — it splits
+a face at its own knots — so the fitted-frustum case meshes in 20422
+triangles instead of 14842, within the same 0.01 mm.
+
+The mesher also ran one face at a time: the binding built
+`BRepMesh_IncrementalMesh` with `isInParallel` off, and a sample of the worker
+showed OCCT's thread pool idle while it meshed eighty independent bands. It is
+on now (`Mesher::new`, `Shape::write_stl`); every corpus case other than the
+two skinned ones meshes to the identical triangle count, volume and area, and
+the corpus's summed mesh-and-build wall time fell from 47 s to 29 s.
 
 ### `offset_surface` lies
 

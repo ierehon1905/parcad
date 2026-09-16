@@ -406,17 +406,34 @@ made of arcs and splines.
   B-spline surfaces the caller computed: `set_surface` builds a non-rational,
   non-periodic `Geom_BSplineSurface` from a pole grid and knot vectors for
   the outer or the inner skin; `add_band` makes the face over the whole `u`
-  range between two `v` values (`BRepBuilderAPI_MakeFace` on the surface,
-  which shares the seam edge of a `u`-closed surface); `add_disc` the planar
+  range between two `v` values (`BRepBuilderAPI_MakeFace` on a copy of the
+  surface cut to that range by `Geom_BSplineSurface::CheckAndSegment`, so no
+  two bands share a surface handle and `ShapeUpgrade_UnifySameDomain` does
+  not weld them back into one face after a boolean; the face shares the seam
+  edge of a `u`-closed surface); `add_disc` the planar
   face a skin's `v` iso-curve bounds, and `add_ring` the planar face between
   the outer skin's iso-curve and the inner's at one height, its hole turned
   by `ShapeFix_Face::FixOrientation`. An iso-curve's last pole is set onto its
   first so the edge closes to the bit. `build` sews every face
   (`BRepBuilderAPI_Sewing`), refuses free edges or more than one shell, makes
-  the solid, orients it outward (`BRepLib::OrientClosedSolid`) and refuses
-  one `BRepCheck_Analyzer` does not pass. `measure_wall` is the wall between
+  the solid, turns it to face the way `set_outward` stated — the outward
+  direction at one `(u, v)` of a skin, compared with the normal of the sewn
+  band there as the solid presents it, and checked again after turning — and
+  refuses one `BRepCheck_Analyzer` does not pass. It refuses to build when no
+  outward direction was stated. (It used `BRepLib::OrientClosedSolid`, whose
+  one-ray classification reversed a correct pleated shell.) `measure_wall` is the wall between
   the two skins: from a grid of inner points, the nearest outer point found
   within one knot span of the same parameters (a coarse grid, then Newton on
   the squared distance held to that window) and the distance taken along
   the outer normal there, so an open end reads the wall continued; it
   returns the least and greatest and where each is.
+  `measure_wall_reaching` widens that window in `v` to at least a given
+  reach, for an inner skin whose point `(u, v)` is the offset of the outer
+  one at a nearby `v`; `measure_wall` is it with no extra reach.
+- `Mesher::new` and `Shape::write_stl` mesh in parallel
+  (`BRepMesh_IncrementalMesh_ctor_full`, the sys crate's full constructor, with
+  `isInParallel` set); the defaults for the other arguments are unchanged.
+  Faces are meshed independently after their edges, so the triangulation is
+  the serial one (docs/GOTCHAS.md, "One large B-spline face meshes far slower").
+- `Shape::face_grid(per_side)` — points on every face, over the sys crate's
+  `Shape_face_grid`: what a surface-to-surface distance is sampled at.

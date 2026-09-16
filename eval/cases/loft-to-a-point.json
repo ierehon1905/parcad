@@ -18,6 +18,7 @@
     "watertight": true,
     "faces": 3,
     "edges": 10,
-    "curves": 5
+    "curves": 5,
+    "facet_sag_mm": 0.0
   }
 }

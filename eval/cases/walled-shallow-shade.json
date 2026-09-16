@@ -1,0 +1,28 @@
+{
+  "name": "walled-shallow-shade",
+  "script": "eval/scripts/walled-shallow-shade.js",
+  "why": "A cone that lies nearly flat, radius 70 at z = 0 to 20 at z = 10 (slope 5, 11.3 degrees off horizontal), lofted through three fitted circles as a 1 mm wall open at both ends. The inside is the parallel cone 1 mm in, a sideways step of sqrt(26): frustum(70, 20, 10) - frustum(70 - sqrt 26, 20 - sqrt 26, 10) = 13600.324 mm3. The open ends are extrapolated from the outside's end spans, which for a cone is exact.",
+  "brep": {
+    "size": [
+      139.999,
+      139.999,
+      10.0
+    ],
+    "volume_mm3": 13600.112,
+    "area_mm2": 29918.644,
+    "triangles": 50790,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 2160.894,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 6,
+    "edges": 20,
+    "curves": 6,
+    "deviation_mm": 0.001,
+    "loft_wall_mm": [
+      1.0,
+      1.0
+    ]
+  }
+}

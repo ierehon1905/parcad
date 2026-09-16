@@ -894,8 +894,10 @@ export type SectionPoint = [number, number];
  *   and refuses when the tolerance cannot be held or the fitted curve crosses
  *   itself — naming the tolerance that would hold, or the points to thin.
  *   A section that is nothing but `[{ fit: points, tolerance }]` is one closed
- *   fitted loop with no corner. 0.01 to 0.1 mm is the usual tolerance; a
- *   tighter one costs poles, a looser one smooths the points' noise.
+ *   fitted loop with no corner and no seam — smooth (C2) where the list of
+ *   points starts as everywhere else — on the fewest poles that hold the
+ *   tolerance. 0.01 to 0.1 mm is the usual tolerance; a tighter one costs
+ *   poles, a looser one smooths the points' noise.
  * - `{ curve: (t) => [x, y], from, to, tolerance }` — a curve given by a
  *   *formula*: an involute, a cam law, a spiral. Unlike the entries above it
  *   carries its own ends, `curve(from)` and `curve(to)`, so it needs no
@@ -2358,6 +2360,13 @@ export interface LoftSection {
  * that the fit stayed inside the sections' own bounding box, refusing one
  * that bulged past it.
  *
+ * A ruled loft through three or more sections reports `facet_sag_mm`: how far
+ * its flat facets lie from the smooth loft through the same sections,
+ * measured both ways. It is what a render shows as banding between sections:
+ * a 180 mm lamp shade through 41 sections measured 0.14 mm and showed faint
+ * horizontal lines at 768 px. Add sections where it is large (the sag falls
+ * with the square of their spacing), or use `smooth: true`.
+ *
  * The wall pairs section *edges* by index, taken literally, which makes the
  * pairing part of the intent. Every outline must resolve to the same number
  * of edges — a straight edge, an arc or a curve each count one, and a rounded
@@ -2381,18 +2390,19 @@ export interface LoftSection {
  * `wall: t` makes the loft a shell `t` mm thick instead of a solid, and is
  * the way to draw a lampshade, a vase or a sleeve through fitted sections —
  * not a loft of insets cut from a loft. The sections are the *outside*; the
- * kernel steps each point inward itself, widened where the wall leans so the
- * wall measured square to the surface is `t` (a sideways inset of a sloped
- * wall is only `t · cos(slope)` thick), and skins the inside on the same
- * knots and parameters as the outside, so the two stay `t` apart between
- * sections too. The built part reports `loft_wall_mm: { min, max }`, the wall
+ * kernel steps the built outside `t` inward along its own surface normal
+ * (a sideways inset of a sloped wall is only `t · cos(slope)` thick), at any
+ * lean — a bowl's floor or a dome's crown as well as a vase's side — and
+ * skins the inside on the outside's parameters, so the two stay `t` apart
+ * between sections too. The built part reports `loft_wall_mm: { min, max }`, the wall
  * measured between the two skins, and a wall more than 5 % off `t` anywhere
  * is refused, naming where. Both ends are open by default — the wall ends in
  * a flat ring. `wall: { thickness: t, bottom: "closed" }` gives the bottom a
  * floor `t` thick instead (a vase), and `top: "closed"` the top a lid.
- * A walled loft takes only fitted sections, no point, and refuses where the
- * outline turns tighter than the wall or the wall leans within about 14° of
- * horizontal.
+ * An open end on a wall that nearly lies flat is a knife edge, because the
+ * ring is cut level; close that end, or end the loft where the wall is
+ * steeper. A walled loft takes only fitted sections, no point, and refuses
+ * where the outline turns tighter than the wall.
  *
  * ```js
  * const ring = (r) => Array.from({ length: 120 }, (_, i) => {

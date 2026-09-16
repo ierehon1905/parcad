@@ -1,0 +1,24 @@
+{
+  "name": "ruled-polygon-sag",
+  "script": "eval/scripts/ruled-polygon-sag.js",
+  "why": "Three squares growing linearly (half-widths 10, 15, 20 at z = 0, 10, 20), lofted ruled through ThruSections. Their corners lie on straight lines, so the smooth loft OCCT builds through them is the same frustum: facet_sag_mm is 0 in closed form, and the volume is 20/3 (400 + 1600 + 800) = 18666.667 mm3. It holds the ThruSections half of the facet sag measurement, which compares the two solids' faces rather than surfaces the kernel computed itself.",
+  "brep": {
+    "size": [
+      40.0,
+      40.0,
+      20.0
+    ],
+    "volume_mm3": 18666.667,
+    "area_mm2": 4683.282,
+    "triangles": 1196,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 400.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 10,
+    "edges": 40,
+    "curves": 20,
+    "facet_sag_mm": 0.0
+  }
+}

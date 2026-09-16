@@ -437,6 +437,33 @@ inline bool Shape_bounds_optimal(const TopoDS_Shape &shape, double &x0, double &
   return true;
 }
 
+// Points on every face of a shape, a `per_side` by `per_side` grid over each
+// face's parameter bounds kept where the face classifier puts them inside the
+// face — added for parcad, see PARCAD-CHANGES.md. Flat x, y, z.
+inline rust::Vec<double> Shape_face_grid(const TopoDS_Shape &shape, int per_side) {
+  rust::Vec<double> out;
+  for (TopExp_Explorer faces(shape, TopAbs_FACE); faces.More(); faces.Next()) {
+    const TopoDS_Face face = TopoDS::Face(faces.Current());
+    double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    BRepAdaptor_Surface surface(face);
+    for (int i = 0; i <= per_side; ++i) {
+      for (int j = 0; j <= per_side; ++j) {
+        const gp_Pnt2d uv(u0 + (u1 - u0) * i / per_side, v0 + (v1 - v0) * j / per_side);
+        BRepClass_FaceClassifier inside(face, uv, Precision::PConfusion());
+        if (inside.State() == TopAbs_OUT) {
+          continue;
+        }
+        const gp_Pnt p = surface.Value(uv.X(), uv.Y());
+        out.push_back(p.X());
+        out.push_back(p.Y());
+        out.push_back(p.Z());
+      }
+    }
+  }
+  return out;
+}
+
 // The nearest boundary point of a shape to many query points — added for
 // parcad, see PARCAD-CHANGES.md. `BRepExtrema_DistShapeShape` rebuilds every
 // face's projector and bounding box per call; this builds them once, as

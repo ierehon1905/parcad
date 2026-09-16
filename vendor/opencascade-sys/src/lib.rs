@@ -937,6 +937,10 @@ pub mod ffi {
             z1: &mut f64,
         ) -> bool;
 
+        // A grid of points on every face — added for parcad, see
+        // PARCAD-CHANGES.md.
+        pub fn Shape_face_grid(shape: &TopoDS_Shape, per_side: i32) -> Vec<f64>;
+
         // Nearest boundary point, projectors built once — added for parcad,
         // see PARCAD-CHANGES.md.
         type NearestBoundary;
@@ -1023,6 +1027,17 @@ pub mod ffi {
         pub fn BRepMesh_IncrementalMesh_ctor(
             shape: &TopoDS_Shape,
             deflection: f64,
+        ) -> UniquePtr<BRepMesh_IncrementalMesh>;
+
+        // The full constructor, for `in_parallel` — added for parcad, see
+        // PARCAD-CHANGES.md.
+        #[cxx_name = "construct_unique"]
+        pub fn BRepMesh_IncrementalMesh_ctor_full(
+            shape: &TopoDS_Shape,
+            deflection: f64,
+            relative: bool,
+            angular_deflection: f64,
+            in_parallel: bool,
         ) -> UniquePtr<BRepMesh_IncrementalMesh>;
 
         pub fn Shape(self: &BRepMesh_IncrementalMesh) -> &TopoDS_Shape;
