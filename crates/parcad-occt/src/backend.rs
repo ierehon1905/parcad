@@ -22,9 +22,10 @@ use opencascade::{
 use parcad_core::{
     graph::{
         loft_extent, ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, Hand, NodeId, Op,
-        SpinePiece, SweepSection, SweepSpine, ThreadForm, V3,
+        tightest_bend, SpinePiece, SweepSection, SweepSpine, ThreadForm, V3,
     },
     section::{Section, Segment},
+    spine_contact::{spine_approach, Approach},
     selectors::{
         parse_edge_selector, parse_vertex_selector, Axis, AxisDirection, CurveKind,
         EdgeExpectation, EdgeExtrema, EdgeQuery, EdgeRole, EdgeSelector, EdgeSelectorTerm,
@@ -532,6 +533,13 @@ fn op_name(op: &Op) -> &'static str {
         Op::Chamfer { .. } => "chamfer",
         Op::Bodies { .. } => "bodies",
     }
+}
+
+/// [`op_name`] with its article, for a sentence: "an extrude", "a union".
+fn op_phrase(op: &Op) -> String {
+    let name = op_name(op);
+    let article = if name.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
+    format!("{article} {name}")
 }
 
 /// A kernel edge plus the geometry the selector language can reason about.
@@ -1317,10 +1325,7 @@ fn build_thread(form: &ThreadForm, from: f64, to: f64) -> Result<Shape> {
     let section = Wire::from_edges(&edges);
     let swept = Shape::sweep_shell(&section, &spine, SweepFrame::Frenet, 1.0)
         .map_err(|e| anyhow::anyhow!(e))?;
-    let mut swept = swept.single_solid().unwrap_or(swept);
-    if swept.signed_volume() < 0.0 {
-        swept = swept.oriented_outward();
-    }
+    let swept = facing_outward(swept.single_solid().unwrap_or(swept), &|| "the thread's swept tooth".to_string())?;
 
     let core = AdHocShape::make_cylinder(DVec3::new(0.0, 0.0, z0), form.minor_radius(), height).0;
     let rod = unified(core.union(&swept).shape);
@@ -1412,6 +1417,99 @@ fn validity_probe(what: &str, shape: &Shape) {
     }
 }
 
+/// Where a built shape runs into itself, as a clause for a refusal, or `None`
+/// when no face, edge or corner of it meets another except through one they
+/// share. `BRepCheck_Analyzer` judges each face against its own boundary and
+/// passes a solid whose faces cross; `BOPAlgo_CheckerSI` intersects them as a
+/// boolean would (docs/VALIDITY_CHECKS.md). With `since`, only what changed
+/// from that shape is asked — the faces an operation made or trimmed, against
+/// the faces near them. A check that cannot finish is a refusal too: nothing
+/// else can vouch for the shape.
+fn self_crossing(shape: &Shape, since: Option<&Shape>) -> Option<String> {
+    let started = std::time::Instant::now();
+    let found = match since {
+        None => shape.self_interference(0.0, 1),
+        Some(before) => shape.self_interference_since(before, 0.0, 1),
+    };
+    breadcrumb(&format!(
+        "self-intersection check{} in {:.1} ms: {}",
+        if since.is_some() { " of changed faces" } else { "" },
+        started.elapsed().as_secs_f64() * 1000.0,
+        found.as_ref().map_or("clear".to_string(), |f| format!("{} pair(s)", f.pairs))
+    ));
+    let found = found?;
+    let place = found
+        .meetings
+        .first()
+        .and_then(|m| m.at)
+        .map(|p| format!(" near ({:.3}, {:.3}, {:.3})", p.x, p.y, p.z))
+        .unwrap_or_default();
+    Some(if found.pairs == 0 {
+        format!("the kernel's self-intersection check could not finish on it{place}, so nothing shows its surface is sound")
+    } else {
+        let kinds = found
+            .meetings
+            .first()
+            .map(|m| {
+                let article = |kind: &str| if kind.starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" };
+                if m.kinds.1 == "itself" {
+                    format!("{} {} crosses itself", article(&m.kinds.0), m.kinds.0)
+                } else {
+                    format!("{} {} meets {} {}", article(&m.kinds.0), m.kinds.0, article(&m.kinds.1), m.kinds.1)
+                }
+            })
+            .unwrap_or_else(|| "two of its faces meet".to_string());
+        format!(
+            "its surface runs into itself{place} ({kinds}{}), so it bounds no single solid — OpenCASCADE's validity check passes such a shape, and its volume, mesh and export are all wrong",
+            if found.pairs > 1 { format!("; {} such places", found.pairs) } else { String::new() }
+        )
+    })
+}
+
+/// `shape` with every solid in it facing outward, or a refusal naming `what`.
+///
+/// The sign of the volume alone is not a test of this: a walled smooth loft
+/// came back inside out and passed it with every other gate. A solid is held
+/// to a point outside it classifying outside, its outer shell enclosing a
+/// positive volume and its voids negative ones; one that fails is rebuilt with
+/// its shells turned, measured again, and refused if it still fails.
+fn facing_outward(shape: Shape, what: &dyn Fn() -> String) -> Result<Shape> {
+    let faults = shape.orientation_faults();
+    if faults.is_empty() {
+        return Ok(shape);
+    }
+    breadcrumb(&format!("{} came back inside out: {}; turning it", what(), faults.join("; ")));
+    let turned = shape.turned_outward();
+    let left = turned.orientation_faults();
+    if left.is_empty() {
+        return Ok(turned);
+    }
+    bail!(
+        "{} came back inside out, and could not be turned right side out: {}. A later boolean would \
+         read it as everything but the part, and every measurement of it is wrong. Please report the script",
+        what(),
+        left.join("; ")
+    );
+}
+
+/// Refuse a finished body that does not face outward, whatever made it; the
+/// operations known to turn solids are corrected where they run, by
+/// [`facing_outward`]. The worker's evaluation reads the same fact off the
+/// mesh it makes anyway (`serve::measure`); probes and fit checks, which make
+/// none, ask here.
+pub fn check_finished(shape: &Shape, who: &str) -> Result<()> {
+    let faults = shape.orientation_faults();
+    if faults.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "the finished {who} is inside out: {}. OpenCASCADE's validity check passes such a solid, but \
+         every measurement of it is of everything but the part, so it is refused. No operation is \
+         known to leave a solid this way unchecked; please report the script",
+        faults.join("; ")
+    );
+}
+
 /// Post-conditions on a blend, checked where the operation still has a name.
 ///
 /// `{ blend }` reaches the same builder as `.fillet()` and inherited none of its
@@ -1470,8 +1568,8 @@ fn check_blend(
 }
 
 /// One treatment attempt, held to the standard a suggestion must meet: it
-/// builds, it stays inside the solid it started from, and OpenCASCADE's own
-/// checker accepts the result. Non-mutating, so a caller can probe several
+/// builds, it stays inside the solid it started from, OpenCASCADE's own
+/// checker accepts the result, and no face it made runs into another. Non-mutating, so a caller can probe several
 /// sizes against one input; the `Err` is the kernel's own words.
 fn attempt_treatment(
     base: &Shape,
@@ -1480,10 +1578,11 @@ fn attempt_treatment(
     chamfer: bool,
     before: (DVec3, DVec3),
 ) -> Result<Shape, String> {
-    let candidate = if chamfer {
-        base.chamfered_edges(size, edges)?
+    let mut candidate = base.clone();
+    let treatment = if chamfer {
+        candidate.chamfer_edges_with_history(size, edges)?
     } else {
-        base.filleted_edges(size, edges)?
+        candidate.fillet_edges_with_history(size, edges)?
     };
     let slip = growth_slip(before, bbox(&candidate));
     if slip > SLIP_TOLERANCE_MM {
@@ -1494,6 +1593,9 @@ fn attempt_treatment(
     candidate
         .check_validity(false)
         .map_err(|report| format!("the checker rejects it: {} fault(s)", report.lines().count()))?;
+    if let Some(crossing) = self_crossing(&candidate, Some(&treatment.input())) {
+        return Err(crossing);
+    }
     Ok(candidate)
 }
 
@@ -1538,7 +1640,10 @@ fn probe_below(
         floor = floor.min(size);
         match attempt_treatment(base, edges, size, chamfer, before) {
             Ok(_) => lo = size,
-            Err(_) => hi = size,
+            Err(why) => {
+                breadcrumb(&format!("{stage}: {size} mm refused: {why}"));
+                hi = size;
+            }
         }
     }
     ProbedRepair {
@@ -1760,6 +1865,17 @@ fn blend_seam(
                 "write that as the blend",
             )
             .trim_start()
+        );
+    }
+    if let Some(crossing) = self_crossing(&built, Some(&treatment.input())) {
+        bail!(
+            "{what} blends by {radius} mm, and {crossing}. The round is wider than the room it has: a neighbouring face, wall or other round is closer to the seam than the radius. Reduce the radius, move the solids apart, or build the round as geometry.{}",
+            repair_sentence(
+                &probe_below(joined, seam, radius, false, before, stage),
+                "this seam",
+                "radius",
+                "write that as the blend",
+            )
         );
     }
     let lineage = lineage.through_treatment(&mut treatment, &built, None);
@@ -2415,6 +2531,7 @@ pub fn build(doc: &Doc) -> Result<Shape> {
     doc.topo_order()?;
     let shape = build_node(doc, doc.root, DVec3::ZERO)?.shape;
     validity_probe("final shape", &shape);
+    check_finished(&shape, "part")?;
     Ok(shape)
 }
 
@@ -2425,8 +2542,10 @@ pub fn check_fit(doc: &Doc, reference: &Doc) -> Result<crate::protocol::FitRepor
     reference.topo_order()?;
     breadcrumb("building the part");
     let part = build_node(doc, doc.root, DVec3::ZERO)?.shape;
+    check_finished(&part, "part")?;
     breadcrumb("building the reference");
     let other = build_node(reference, reference.root, DVec3::ZERO)?.shape;
+    check_finished(&other, "reference")?;
     fit_between(&part, &other)
 }
 
@@ -3381,7 +3500,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
             let solid = face.revolve(DVec3::ZERO, DVec3::Z, None);
 
-            let placed = Shape::from(solid);
+            let placed = facing_outward(Shape::from(solid), &|| format!("node {id} ({label})'s revolution"))?;
             let placed = if offset == DVec3::ZERO {
                 placed
             } else {
@@ -3412,7 +3531,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             let arc = (*sweep < 360.0).then(|| Angle::Degrees(*sweep));
             let solid = face.revolve(DVec3::ZERO, DVec3::Z, arc);
 
-            let placed = Shape::from(solid);
+            let placed = facing_outward(Shape::from(solid), &|| format!("node {id} ({label})'s torus"))?;
             let placed = if offset == DVec3::ZERO {
                 placed
             } else {
@@ -3466,10 +3585,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
                     let swept = Shape::loft_through(&[LoftProfile::Wire(&bottom), LoftProfile::Wire(&top)], true)
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
-                    let mut swept = swept.single_solid().unwrap_or(swept);
-                    if swept.signed_volume() < 0.0 {
-                        swept = swept.oriented_outward();
-                    }
+                    let swept = facing_outward(swept.single_solid().unwrap_or(swept), &|| format!("node {id} ({label})'s extrusion"))?;
                     let placed = if offset == DVec3::ZERO { swept } else { swept.translated(offset) };
                     return Ok(BuiltShape::primitive(placed, node.tag.as_deref()));
                 }
@@ -3501,7 +3617,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 }
             };
 
-            let placed = Shape::from(solid);
+            let placed = facing_outward(Shape::from(solid), &|| format!("node {id} ({label})'s extrusion"))?;
             let placed = if offset == DVec3::ZERO {
                 placed
             } else {
@@ -3516,7 +3632,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 "loft node {id} ({label}) through {} sections",
                 sections.len()
             ));
-            let resolved = Op::validate_loft(sections)
+            let resolved = Op::validate_loft(sections, *smooth)
                 .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
 
             let mut wires: Vec<Option<Wire>> = Vec::with_capacity(sections.len());
@@ -3549,12 +3665,9 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                     .collect();
                 let lofted = Shape::loft_through(&profiles, !*smooth)
                     .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
-                let mut lofted = lofted.single_solid().unwrap_or(lofted);
-                if lofted.signed_volume() < 0.0 {
-                    lofted = lofted.oriented_outward();
-                }
-                lofted
+                lofted.single_solid().unwrap_or(lofted)
             };
+            let shape = facing_outward(shape, &|| format!("node {id} ({label})'s loft"))?;
 
             // The graph promised the mesher and the renderer that the loft
             // stays inside its sections' bounding box. Ruled walls cannot
@@ -3580,6 +3693,18 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                         "Add an intermediate section where it bulges, or drop `smooth` for ruled walls, which cannot leave the sections' hull"
                     }
                 );
+            }
+
+            // Ruled walls between polygons were proven apart by the graph;
+            // anything curved or smooth is measured on the solid.
+            if Op::loft_walls_unproven(sections, &resolved, *smooth) {
+                if let Some(crossing) = self_crossing(&shape, None) {
+                    bail!(
+                        "node {id} ({label}) lofts through {} sections, and {crossing}. Walls join each section's edges to the next section's in order, so two sections turned or shaped too differently make the walls between them pass through each other. Start each outline at the edge that sits above the previous section's first edge, or add sections between them that change less at a time{}",
+                        sections.len(),
+                        if *smooth { "; a smooth surface can also swing through itself between sections, which ruled walls cannot" } else { "" }
+                    );
+                }
             }
 
             let placed = if offset == DVec3::ZERO {
@@ -3750,10 +3875,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 _ => Shape::sweep_shell(&section_wire, &spine_wire, frame, *taper)
                     .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?,
             };
-            let mut swept = swept.single_solid().unwrap_or(swept);
-            if swept.signed_volume() < 0.0 {
-                swept = swept.oriented_outward();
-            }
+            let swept = facing_outward(swept.single_solid().unwrap_or(swept), &|| format!("node {id} ({label})'s sweep"))?;
 
             // Same bargain as the loft above: the graph told the pipeline the
             // sweep stays within the section's reach of the spine, so measure
@@ -3774,6 +3896,36 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                      and report this shape — it should not happen on a tangent \
                      path"
                 );
+            }
+
+            // A spine that comes back near itself can carry the section into
+            // itself; see `spine_contact`. A helix was cleared by the graph.
+            let tightest = match &spine {
+                SweepSpine::Path(pieces) if pieces.iter().any(|p| matches!(p, SpinePiece::Bend { .. })) => *bend,
+                SweepSpine::Path(_) => f64::INFINITY,
+                SweepSpine::Spline(curve) => tightest_bend(curve).0,
+                SweepSpine::Helix(_) => f64::INFINITY,
+            };
+            let approach = match &spine {
+                SweepSpine::Helix(_) => Approach::Clear,
+                _ => spine_approach(&spine, reach, tightest),
+            };
+            if approach != Approach::Clear {
+                breadcrumb(&format!("sweep node {id} spine: {approach:?} at reach {reach:.3}"));
+                if let Some(crossing) = self_crossing(&swept, None) {
+                    let why = match approach {
+                        Approach::Near { at: [a, b], along, gap } => format!(
+                            "The path passes ({:.2}, {:.2}, {:.2}) and, {along:.1} mm further along, ({:.2}, {:.2}, {:.2}), only {gap:.2} mm away, while the section reaches {reach:.2} mm from the path, so the two stretches overlap. Keep those stretches at least {:.2} mm apart, or use a smaller section",
+                            a[0] + offset.x, a[1] + offset.y, a[2] + offset.z,
+                            b[0] + offset.x, b[1] + offset.y, b[2] + offset.z,
+                            2.0 * reach
+                        ),
+                        _ => format!(
+                            "The path bends to {tightest:.2} mm somewhere, inside the section's full {reach:.2} mm reach, so the section can fold into itself there or where the path comes back near itself. Enlarge the bends, spread the path apart, or use a smaller section"
+                        ),
+                    };
+                    bail!("node {id} ({label}) sweeps a section along its path, and {crossing}. {why}");
+                }
             }
 
             let placed = if offset == DVec3::ZERO {
@@ -4059,43 +4211,49 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             // A treated body arrives as a compound around its one solid, and
             // the thick-solid builder wants the solid itself.
             let input = solid.shape.single_solid().unwrap_or_else(|| solid.shape.clone());
-            let mut grown = input.offset_surface(*distance);
+            let grown = input.offset_surface(*distance);
 
             // The thick-solid offset of anything with a fillet on it comes
             // back with its faces oriented inward: right size, right shape,
             // and every later boolean treats it as the whole of space minus
             // the part, so a cut with it removes everything and a union with
-            // it keeps nothing. The bounding box cannot see that; the sign
-            // of the volume can, and `BRepLib::OrientClosedSolid` is the
-            // kernel's own way to turn it right side out (shape healing does
-            // not). Measured on `box(50,30,20).edges("|Z").fillet(5)
-            // .offset(1)`, which cut nothing out of a box until this was here.
-            grown = grown.single_solid().unwrap_or(grown);
-            if grown.signed_volume() < 0.0 {
-                breadcrumb(&format!("offset node {id} ({label}) came back inside out; reorienting"));
-                grown = grown.oriented_outward();
-                if grown.signed_volume() < 0.0 {
-                    bail!(
-                        "node {id} ({label}) offsets a {} by {distance} mm, and the kernel \
-                         returned a solid whose faces point inward, which could not be \
-                         turned right side out. A later boolean would treat it as \
-                         everything but the part. Offset the primitives before combining \
-                         or treating them, or draw the grown shape directly",
-                        op_name(&doc.node(*child)?.op)
-                    );
-                }
-            }
+            // it keeps nothing. The bounding box cannot see that;
+            // `facing_outward` can, and turns it (shape healing does not).
+            // Measured on `box(50,30,20).edges("|Z").fillet(5).offset(1)`,
+            // which cut nothing out of a box until this was here.
+            let Some(closed) = grown.closed_solid() else {
+                bail!(
+                    "node {id} ({label}) offsets {} by {distance} mm, and the kernel's offset \
+                     of it did not close into one solid. That happens where two faces of the part \
+                     are closer than twice the offset, a slot or notch the grown faces would \
+                     close, and on combined or treated shapes. Offset by less, offset the \
+                     primitives before combining them, or draw the grown shape directly",
+                    op_phrase(&doc.node(*child)?.op)
+                );
+            };
+            let grown = facing_outward(closed, &|| {
+                format!("node {id} ({label})'s offset by {distance} mm")
+            })?;
 
             let slip = offset_slip(before, bbox(&grown), *distance);
             if slip > SLIP_TOLERANCE_MM {
                 bail!(
-                    "node {id} ({label}) offsets a {} by {distance} mm, and the \
+                    "node {id} ({label}) offsets {} by {distance} mm, and the \
                      kernel returned a shape {slip:.2} mm from where it must be. \
                      OCCT's thick-solid offset is exact on a single primitive but \
                      silently discards parts of a boolean result, so this is \
                      refused rather than shown. Offset the primitives before \
                      combining them",
-                    op_name(&doc.node(*child)?.op)
+                    op_phrase(&doc.node(*child)?.op)
+                );
+            }
+            if let Some(crossing) = self_crossing(&grown, None) {
+                bail!(
+                    "node {id} ({label}) offsets {} by {distance} mm, and {crossing}. Where two \
+                     faces of the part are closer than twice the offset — a slot or a notch \
+                     narrower than that — the grown faces run through each other. Offset by \
+                     less, or draw the grown shape directly",
+                    op_phrase(&doc.node(*child)?.op)
                 );
             }
             BuiltShape {
@@ -4124,7 +4282,19 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             breadcrumb(&format!(
                 "shrink node {id} ({label}) by {thickness} mm to form the cavity"
             ));
-            let cavity = solid.shape.clone().offset_surface(-thickness);
+            let what = op_phrase(&doc.node(*child)?.op);
+            // The kernel hands back the inward offset of a boolean result as a
+            // bare shell, which a boolean reads as nothing.
+            let Some(cavity) = solid.shape.clone().offset_surface(-thickness).closed_solid() else {
+                bail!(
+                    "node {id} ({label}) shells {what} by {thickness} mm, and the kernel's \
+                     inward offset of it did not close into a cavity. That happens where the \
+                     part is thinner than twice the wall or a round on it is tighter than the \
+                     wall, so the wall has nowhere to go. Thin the wall, or shell the pieces \
+                     before combining them"
+                );
+            };
+            let cavity = facing_outward(cavity, &|| format!("node {id} ({label})'s cavity"))?;
 
             // The inward offset has the same silent-failure mode as the outward
             // one, and here it would be invisible: a lost body leaves the outer
@@ -4133,17 +4303,37 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             let slip = offset_slip(before, bbox(&cavity), -thickness);
             if slip > SLIP_TOLERANCE_MM {
                 bail!(
-                    "node {id} ({label}) shells a {} by {thickness} mm, and the \
+                    "node {id} ({label}) shells {what} by {thickness} mm, and the \
                      cavity came back {slip:.2} mm from where it must be — OCCT \
                      drops parts of a boolean when offsetting it. Shell the solid \
-                     before combining it with others",
-                    op_name(&doc.node(*child)?.op)
+                     before combining it with others"
+                );
+            }
+            if let Some(crossing) = self_crossing(&cavity, None) {
+                bail!(
+                    "node {id} ({label}) shells {what} by {thickness} mm, and the cavity \
+                     the kernel made for it is wrong: {crossing}. Where the part is thinner than \
+                     twice the wall, the walls from either side run through each other. Thin the \
+                     wall, or thicken the part there"
                 );
             }
 
             breadcrumb(&format!("hollow node {id} ({label})"));
+            let hollow = solid.shape.subtract(&cavity).shape;
+            // The cavity lies inside the part, so the hollow part holds exactly
+            // the difference of the two volumes.
+            let (outer, inner, left) = (solid.shape.signed_volume(), cavity.signed_volume(), hollow.signed_volume());
+            if !(inner > 0.0) || (left - (outer - inner)).abs() > 1e-6 * outer.abs() + 1e-6 {
+                bail!(
+                    "node {id} ({label}) shells {what} by {thickness} mm, and the result holds \
+                     {left:.3} mm³ where the part's {outer:.3} mm³ less its {inner:.3} mm³ cavity \
+                     is {:.3} mm³: the cavity is not inside the part it was offset from. Thin the \
+                     wall, or shell the pieces before combining them",
+                    outer - inner
+                );
+            }
             BuiltShape {
-                shape: solid.shape.subtract(&cavity).shape,
+                shape: hollow,
                 lineage: EdgeLineage::default(),
                 features: solid.features,
             }
@@ -4213,6 +4403,20 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                      fill a concave one, so this result is wrong rather than merely \
                      surprising. The radius is too large for the material along those \
                      edges — reduce it, or select fewer edges.{measured}",
+                    measured = repair_sentence(
+                        &probe_below(&input, &selected.edges, *radius, false, before, &stage),
+                        "these edges",
+                        "radius",
+                        "reduce the fillet to that",
+                    ),
+                );
+            }
+            if let Some(crossing) = self_crossing(&solid.shape, Some(&treatment.input())) {
+                bail!(
+                    "node {id} ({label}) fillets {count} edge(s) by {radius} mm, and {crossing}. \
+                     A fillet this size reaches past the material behind the edge — a wall or \
+                     floor thinner than the radius — or into a neighbouring face or fillet. \
+                     Reduce it, or select fewer edges.{measured}",
                     measured = repair_sentence(
                         &probe_below(&input, &selected.edges, *radius, false, before, &stage),
                         "these edges",
@@ -4299,6 +4503,20 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                      started from. A chamfer only cuts material away, so this result is \
                      wrong rather than merely surprising. The distance is too large for \
                      the material along those edges — reduce it, or select fewer edges.{measured}",
+                    measured = repair_sentence(
+                        &probe_below(&input, &selected.edges, *distance, true, before, &stage),
+                        "these edges",
+                        "distance",
+                        "reduce the chamfer to that",
+                    ),
+                );
+            }
+            if let Some(crossing) = self_crossing(&solid.shape, Some(&treatment.input())) {
+                bail!(
+                    "node {id} ({label}) chamfers {count} edge(s) by {distance} mm, and {crossing}. \
+                     A chamfer this size cuts past the material behind the edge — through a wall \
+                     or floor thinner than the distance — or into a neighbouring face. Reduce it, \
+                     or select fewer edges.{measured}",
                     measured = repair_sentence(
                         &probe_below(&input, &selected.edges, *distance, true, before, &stage),
                         "these edges",
@@ -5191,5 +5409,127 @@ mod tests {
             cases.len(),
             wrong.join("\n")
         );
+    }
+
+    fn refusal_of(graph: &str) -> String {
+        let doc: Doc = serde_json::from_str(graph).unwrap();
+        match build_part(&doc) {
+            Ok(_) => panic!("built a part the kernel's own checks should refuse: {graph}"),
+            Err(e) => format!("{e:#}"),
+        }
+    }
+
+    // Each of these built before, passed BRepCheck_Analyzer and closed its
+    // mesh; docs/VALIDITY_CHECKS.md has the measurements.
+
+    #[test]
+    fn a_sweep_whose_path_crosses_itself_is_refused_where_it_does() {
+        let err = refusal_of(
+            r#"{"root": 0, "nodes": [{"op": "sweep", "profile": [[-3, -3], [3, -3], [3, 3], [-3, 3]],
+                "path": [{"x": 0, "y": 0, "z": 0}, {"x": 40, "y": 0, "z": 0}, {"x": 40, "y": 30, "z": 0},
+                         {"x": 20, "y": 30, "z": 0}, {"x": 20, "y": -20, "z": 0}], "bend": 5}]}"#,
+        );
+        assert!(err.contains("runs into itself near ("), "{err}");
+        assert!(err.contains("The path passes (20.") && err.contains("further along"), "{err}");
+    }
+
+    #[test]
+    fn a_curved_loft_whose_walls_cross_is_refused() {
+        let err = refusal_of(
+            r#"{"root": 0, "nodes": [{"op": "loft", "sections": [
+                {"z": 0, "outline": [[-10, -10], [10, -10], {"through": [14, 0]}, [10, 10], [-10, 10]]},
+                {"z": 20, "outline": [[10, 10], [-10, 10], {"through": [-14, 0]}, [-10, -10], [10, -10]]}]}]}"#,
+        );
+        assert!(err.contains("lofts through 2 sections") && err.contains("runs into itself"), "{err}");
+    }
+
+    #[test]
+    fn a_chamfer_through_the_wall_behind_it_is_refused_with_a_size_that_builds() {
+        let err = refusal_of(
+            r#"{"root": 4, "nodes": [{"op": "cuboid", "size": {"x": 40, "y": 40, "z": 20}},
+                {"op": "cuboid", "size": {"x": 32.45, "y": 34.35, "z": 20}},
+                {"op": "translate", "child": 1, "by": {"x": 0, "y": 0, "z": 1.63}},
+                {"op": "difference", "base": 0, "tools": [2], "blend": 0},
+                {"op": "chamfer", "child": 3, "distance": 5.41, "selector": "<Z"}]}"#,
+        );
+        assert!(err.contains("chamfers 4 edge(s) by 5.41 mm") && err.contains("runs into itself"), "{err}");
+        assert!(err.contains("Largest distance measured to build on these edges"), "{err}");
+    }
+
+    #[test]
+    fn a_blend_corner_that_folds_over_is_refused_by_its_own_face() {
+        let err = refusal_of(
+            r#"{"root": 5, "nodes": [{"op": "cuboid", "size": {"x": 40, "y": 30, "z": 20}},
+                {"op": "cuboid", "size": {"x": 3.26, "y": 40, "z": 11.21}},
+                {"op": "translate", "child": 1, "by": {"x": 3.82, "y": 0, "z": 10}},
+                {"op": "cylinder", "r": 3.67, "h": 30},
+                {"op": "translate", "child": 3, "by": {"x": 1.11, "y": -0.36, "z": 0}},
+                {"op": "difference", "base": 0, "tools": [2, 4], "blend": 0.4}]}"#,
+        );
+        assert!(err.contains("a face crosses itself"), "{err}");
+    }
+
+    #[test]
+    fn a_treatment_attempt_leaves_the_shape_it_was_given_as_it_was() {
+        // Two cylinders crossing: blends of their seam that build and fail
+        // BRepCheck used to leave a vertex of the input at 42 mm tolerance
+        // for every later attempt to inherit.
+        let run = Shape::from(AdHocShape::make_cylinder(DVec3::new(-50.0, 0.0, 0.0), 21.0, 100.0).0)
+            .rotated(DVec3::new(-50.0, 0.0, 0.0), DVec3::Y, std::f64::consts::FRAC_PI_2);
+        let branch = AdHocShape::make_cylinder(DVec3::new(0.0, 0.0, -10.0), 21.0, 60.0).0;
+        let joined = BooleanShape::fuse_all(&run, [&branch]);
+        let seam: Vec<Edge> = joined.new_edges().cloned().collect();
+        let before = joined.shape.topology_report();
+        let bounds = bbox(&joined.shape);
+        // The sequence a refused 2 mm blend probes.
+        for size in [2.0, 1.0, 1.5, 1.25] {
+            let _ = attempt_treatment(&joined.shape, &seam, size, false, bounds);
+            assert!(joined.shape.topology_report() == before, "the {size} mm attempt changed its input");
+        }
+    }
+
+    #[test]
+    fn a_shell_of_a_treated_solid_is_hollow_by_exactly_its_cavity() {
+        let doc: Doc = serde_json::from_str(
+            r#"{"root": 2, "nodes": [{"op": "cuboid", "size": {"x": 40, "y": 30, "z": 20}},
+                {"op": "fillet", "child": 0, "radius": 5, "selector": "|Z"},
+                {"op": "shell", "child": 1, "thickness": 2}]}"#,
+        )
+        .unwrap();
+        let part = build_part(&doc).unwrap_or_else(|e| panic!("{e:#}"));
+        let pi = std::f64::consts::PI;
+        let expected = (1200.0 - (4.0 - pi) * 25.0) * 20.0 - (936.0 - (4.0 - pi) * 9.0) * 16.0;
+        let measured = part.shape.signed_volume();
+        assert!((measured - expected).abs() < 1e-5 * expected, "{measured} against {expected}");
+    }
+
+    #[test]
+    fn an_inside_out_solid_is_measured_and_turned_shell_by_shell() {
+        // A box with a sealed cavity, reversed whole: the outside reads as
+        // material, the outer shell encloses a negative volume and the void a
+        // positive one. Each shell is turned on its own.
+        let block = Shape::from(AdHocShape::make_box_point_point(DVec3::splat(-10.0), DVec3::splat(10.0)).0);
+        let cavity = Shape::from(AdHocShape::make_box_point_point(DVec3::splat(-4.0), DVec3::splat(4.0)).0);
+        let hollow = block.subtract(&cavity).shape;
+        assert!(hollow.orientation_faults().is_empty(), "{:?}", hollow.orientation_faults());
+        let inside_out = hollow.reversed();
+        let faults = inside_out.orientation_faults();
+        assert!(faults.len() == 1 && faults[0].contains("is inside its outer surface") && faults[0].contains("1 of its 1 inner shell"), "{faults:?}");
+        let turned = facing_outward(inside_out, &|| "the test block".to_string()).unwrap_or_else(|e| panic!("{e:#}"));
+        assert!((turned.signed_volume() - (8000.0 - 512.0)).abs() < 1e-6, "{}", turned.signed_volume());
+        assert!(check_finished(&hollow.reversed(), "part").is_err());
+    }
+
+    #[test]
+    fn an_offset_of_a_filleted_body_comes_back_facing_outward() {
+        let doc: Doc = serde_json::from_str(
+            r#"{"root": 2, "nodes": [{"op": "cuboid", "size": {"x": 50, "y": 30, "z": 20}},
+                {"op": "fillet", "child": 0, "radius": 5, "selector": "|Z"},
+                {"op": "offset", "child": 1, "distance": 1}]}"#,
+        )
+        .unwrap();
+        let part = build_part(&doc).unwrap_or_else(|e| panic!("{e:#}"));
+        assert!(part.shape.orientation_faults().is_empty());
+        assert!(part.shape.signed_volume() > 0.0);
     }
 }

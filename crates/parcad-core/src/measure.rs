@@ -255,8 +255,8 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
         // principle bulge past that hull; the B-rep backend *measures* the
         // built solid against this same box and refuses one that escaped, so
         // the claim made here stays conservative rather than assumed.
-        Op::Loft { sections, .. } => {
-            let resolved = Op::validate_loft(sections)?;
+        Op::Loft { sections, smooth } => {
+            let resolved = Op::validate_loft(sections, *smooth)?;
             let (lo, hi) = loft_extent(sections, &resolved);
             Aabb {
                 min: V3::new(lo[0], lo[1], sections[0].z),

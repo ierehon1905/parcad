@@ -1,0 +1,14 @@
+{
+  "name": "refuse-tapered-pipe-through-itself",
+  "script": "eval/scripts/refuse-tapered-pipe-through-itself.js",
+  "why": "A tapered pipe is a shell sweep, not a union of tubes, so a path that crosses itself used to build one self-intersecting solid.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "sweeps a section along its path",
+        "runs into itself"
+      ]
+    }
+  }
+}

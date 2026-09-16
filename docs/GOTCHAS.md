@@ -360,6 +360,46 @@ number. `bodies` in `MeshStats` (connected components of the mesh, joined by
 vertex position) is the number that does, and `stands_on` found it first by way
 of the end face being five patches. Both are recorded for every case now.
 
+### A solid can cross itself, or face inward, and pass every check
+
+`BRepCheck_Analyzer` judges each face against its own boundary; it does not ask
+whether two faces of a solid run through each other, or which way the solid
+faces. The mesh backstops do not either: a self-crossing surface still closes,
+and an inside-out mesh encloses the same negative volume as its inside-out
+solid, so the two volumes agree. Measured on shapes that built and passed all
+of it: a sweep whose last leg crossed its first (the overlap counted twice in
+its volume); a star lofted to itself three corners on (volume −3382 mm³); a
+tray's bottom edges chamfered deeper than its walls, the chamfer faces running
+through the pocket; rounds on either side of a 1 mm gap crossing each other;
+a 0.4 mm blend whose corner patch folds over; and, at integration, a walled
+smooth loft that probed a point 300 mm outside it as material.
+
+`BOPAlgo_CheckerSI` finds the crossings and a point classified against each
+shell finds the orientation; docs/VALIDITY_CHECKS.md has where each runs, what
+each costs, and the fuzz sets. The first thing to suspect about a new
+construction that turns surfaces into a solid is both of these, not closure.
+
+### A fillet that fails can still change the shape it was given
+
+`BRepFilletAPI_MakeFillet` widens tolerances on the vertices and edges it is
+handed, in place, and a `TopoDS_Shape` is a handle: the input, every clone of
+it, every earlier probe and any cached subtree sharing those vertices see the
+change. Measured on two crossing cylinders: after a 1.5 mm blend that built and
+was refused, a vertex of the untouched union sat at 42 mm tolerance, and the
+self-intersection check then read 130 vertex contacts on a sound 1.13 mm blend.
+Treatments now build on a topology copy (vendor/opencascade PARCAD-CHANGES.md).
+Booleans alter their arguments too, but by at most 4.7e-7 mm over the corpus.
+
+### A shell of anything treated or combined was refused, blaming the author
+
+`BRepOffsetAPI_MakeThickSolid` hands back the inward offset of a filleted,
+chamfered or combined solid as a bare closed shell, not a solid; subtracting a
+shell removes nothing, and the part was refused as "the operations cancelled
+all the material away". 37 of 80 fuzzed shells hit it — every one a plain,
+buildable part. The cavity is now closed into a solid and turned outward, and
+the result is held to part volume minus cavity volume;
+`shell-filleted-box` and `shell-of-a-union` hold it to closed forms.
+
 ### A correct solid can mesh as a closed fragment of itself
 
 A model building a unicorn over MCP (2026-09-14) reported that "unions lost the

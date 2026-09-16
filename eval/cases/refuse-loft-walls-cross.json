@@ -1,0 +1,15 @@
+{
+  "name": "refuse-loft-walls-cross",
+  "script": "eval/scripts/refuse-loft-walls-cross.js",
+  "why": "A star lofted to itself turned three corners on built with a negative volume and passed every check. The graph now refuses it at the first height where a corner lands on an edge.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "ruled walls between loft sections 0 and 1 pass through each other",
+        "lands on the edge between corners",
+        "Start section 1's outline"
+      ]
+    }
+  }
+}

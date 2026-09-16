@@ -1,0 +1,14 @@
+{
+  "name": "refuse-folded-blend-corner",
+  "script": "eval/scripts/refuse-folded-blend-corner.js",
+  "why": "A corner patch that folds over near its degenerate corner, found only by intersecting each new face with itself; the fold was confirmed from the patch's own poles (the normal turns over on 224 of 40401 samples). If this passes, the self-check of new faces has been lost.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "blends by 0.4 mm",
+        "a face crosses itself"
+      ]
+    }
+  }
+}

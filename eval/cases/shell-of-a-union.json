@@ -1,0 +1,23 @@
+{
+  "name": "shell-of-a-union",
+  "script": "eval/scripts/shell-of-a-union.js",
+  "why": "Shell of a combined solid, refused before for the same reason. Held to its closed form, 4435.982 mm3, which includes the 1 mm rounds shrinking puts inside the two concave fin roots: a cavity with sharp roots would read 12.018 mm3 more material missing.",
+  "brep": {
+    "size": [
+      40.0,
+      30.0,
+      25.0
+    ],
+    "volume_mm3": 4435.7,
+    "area_mm2": 8880.702,
+    "triangles": 120,
+    "bodies": 1,
+    "voids": 1,
+    "stands_on_mm2": 1200.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 22,
+    "edges": 108,
+    "curves": 54
+  }
+}

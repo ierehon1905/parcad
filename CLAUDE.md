@@ -278,6 +278,10 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | which server that harness is pointed at | `field/field.toml` — the only file under `field/` that names parcad |
 | whether the DSL, the core and the kernel agree about a section | `eval/sections.json`, read by `agrees_with_the_shared_section_corpus` (Rust, both crates) and `section-corpus.test.ts`; `tools/section-fuzz.sh` finds new cases; docs/SECTION_CHECKS.md |
 | where a section's arcs and curves cross | `crates/parcad-core/src/section_crossing.rs` |
+| what `BRepCheck` passes and what catches it instead | `docs/VALIDITY_CHECKS.md`; `self_crossing`, `facing_outward` and `check_finished` in `backend.rs`, the orientation backstop in `serve::measure` |
+| whether a ruled loft's walls pass through each other | `crates/parcad-core/src/loft_walls.rs`, called by `Op::validate_loft` |
+| whether a sweep's path comes back near itself | `crates/parcad-core/src/spine_contact.rs` — a filter; the kernel's self-intersection check decides |
+| what every check says about a graph, and what each costs | `crates/parcad-occt/examples/validity_audit.rs` |
 | what "SOUND" is still allowed to mean | `field/fixtures/expected.toml`, gated by `field/selftest.py` |
 
 A new op touches `graph.rs` (variant + `children_of`), `measure.rs` (its

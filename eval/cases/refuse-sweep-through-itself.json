@@ -1,0 +1,16 @@
+{
+  "name": "refuse-sweep-through-itself",
+  "script": "eval/scripts/refuse-sweep-through-itself.js",
+  "why": "A sweep whose last leg runs back across its first built as one 'valid' solid with the overlap counted twice: nothing in the graph looks beyond one bend, and BRepCheck_Analyzer does not look for faces crossing. spine_contact flags the path coming back within twice the section's reach, and BOPAlgo_CheckerSI on the swept solid confirms and locates it.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "sweeps a section along its path",
+        "runs into itself",
+        "only 0.",
+        "apart, or use a smaller section"
+      ]
+    }
+  }
+}

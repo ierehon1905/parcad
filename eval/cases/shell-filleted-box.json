@@ -1,0 +1,23 @@
+{
+  "name": "shell-filleted-box",
+  "script": "eval/scripts/shell-filleted-box.js",
+  "why": "Shell of a treated solid, refused before because the kernel's inward offset came back as a bare shell. Held to its closed form, 8718.407 mm3 (part minus a cavity with 3 mm corners).",
+  "brep": {
+    "size": [
+      40.0,
+      30.0,
+      20.0
+    ],
+    "volume_mm3": 8717.363,
+    "area_mm2": 8742.864,
+    "triangles": 536,
+    "bodies": 1,
+    "voids": 1,
+    "stands_on_mm2": 1178.44,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 20,
+    "edges": 96,
+    "curves": 48
+  }
+}

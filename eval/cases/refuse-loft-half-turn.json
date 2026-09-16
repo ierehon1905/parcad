@@ -1,0 +1,16 @@
+{
+  "name": "refuse-loft-half-turn",
+  "script": "eval/scripts/refuse-loft-half-turn.js",
+  "why": "Four ruled walls meeting at a point at mid-height: OpenCASCADE builds and validates it. The graph finds the collapse exactly, at z = 10, before the kernel sees it.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "ruled walls between loft sections 0 and 1 pass through each other",
+        "z = 10.000",
+        "land on each other",
+        "turn less at a time"
+      ]
+    }
+  }
+}

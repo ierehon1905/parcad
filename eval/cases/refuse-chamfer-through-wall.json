@@ -1,0 +1,16 @@
+{
+  "name": "refuse-chamfer-through-wall",
+  "script": "eval/scripts/refuse-chamfer-through-wall.js",
+  "why": "The one treatment defect every earlier check passed: a chamfer deeper than the wall behind it, which OpenCASCADE returns as a closed solid with faces running through the pocket. Confirmed independently by 26 crossing triangle pairs in its 0.01 mm mesh. The refusal names the cause and a size measured to build.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "chamfers 4 edge(s) by 5.41 mm",
+        "runs into itself",
+        "through a wall",
+        "Largest distance measured to build"
+      ]
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "name": "refuse-spline-pipe-through-itself",
+  "script": "eval/scripts/refuse-spline-pipe-through-itself.js",
+  "why": "A round pipe along a spline that loops back across itself built before this check, watertight and accepted by the validity check. The refusal must name both places on the path and where the surface crosses.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "sweeps a section along its path",
+        "runs into itself",
+        "a face crosses itself",
+        "further along"
+      ]
+    }
+  }
+}

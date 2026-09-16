@@ -1,0 +1,15 @@
+{
+  "name": "refuse-curved-loft-crossing",
+  "script": "eval/scripts/refuse-curved-loft-crossing.js",
+  "why": "A loft with arcs is not proven by the graph; the kernel's self-intersection check on the built loft must find the walls meeting at the axis.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "lofts through 2 sections",
+        "runs into itself",
+        "turned or shaped too differently"
+      ]
+    }
+  }
+}

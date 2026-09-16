@@ -278,6 +278,20 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
     let build_ms = t0.elapsed().as_millis() as u64;
 
     if let Some(spec) = &request.perceive {
+        breadcrumb("checking which way the solid faces");
+        let finished: Vec<(String, &opencascade::primitives::Shape)> = if part.bodies.is_empty() {
+            vec![("part".to_string(), shape)]
+        } else {
+            part.bodies.iter().map(|(name, body)| (format!("body `{name}`"), body)).collect()
+        };
+        for (who, body) in finished {
+            if let Err(e) = backend::check_finished(body, &who) {
+                return Response::Error {
+                    stage: "measuring the solid".into(),
+                    message: format!("{e:#}"),
+                };
+            }
+        }
         breadcrumb("measuring the solid");
         return match perceive::perceive(&perceive::bodies_of(&part), spec) {
             Ok(answer) => Response::Perceived(Box::new(answer)),
@@ -448,7 +462,7 @@ fn measure(
     // matters, because that list is only as complete as the bugs already met.
     //
     // Weld first, for the reason `Tessellation::weld` documents.
-    let stats = parcad_core::mesh::Tessellation {
+    let (stats, inward) = parcad_core::mesh::Tessellation {
         vertices: mesh
             .vertices
             .iter()
@@ -462,7 +476,7 @@ fn measure(
         resolution_mm: BINDING_DEFLECTION_MM,
     }
     .weld(1e-3)
-    .stats();
+    .stats_and_inward_shells();
     if !stats.watertight {
         return Err(Response::Error {
             stage: "tessellating".into(),
@@ -480,6 +494,28 @@ fn measure(
                  produced this; please report the script: see docs/GOTCHAS.md",
                 stats.non_manifold_edges,
                 stats.triangles * 3,
+            ),
+        });
+    }
+
+    // The third backstop: a closed surface facing the wrong way, whatever
+    // operation turned it. OpenCASCADE's validity check passes such a solid,
+    // and every later reading of it is of everything but the part.
+    if let Some(shell) = inward.first() {
+        return Err(Response::Error {
+            stage: "tessellating".into(),
+            message: format!(
+                "{who}the kernel built a solid that is inside out: {} of its {} closed surface(s) \
+                 face the wrong way, the first enclosing {:.1} mm³ where a {} encloses a {} volume. \
+                 OpenCASCADE's validity check passes such a solid, but a point outside it reads as \
+                 material and its volume, preview and export describe everything but the part, so it \
+                 is refused. No operation is known to leave a solid this way unchecked; please report \
+                 the script",
+                inward.len(),
+                stats.bodies + stats.voids,
+                shell.volume_mm3,
+                if shell.depth % 2 == 0 { "body" } else { "cavity" },
+                if shell.depth % 2 == 0 { "positive" } else { "negative" },
             ),
         });
     }
@@ -724,5 +760,24 @@ mod tests {
         // boundary curves. The inspector must preserve all eight links, not
         // merely a single sample.
         assert_eq!(treatment_edge_count(&doc, 7), 8);
+    }
+
+    #[test]
+    fn a_part_that_is_inside_out_is_refused_when_meshed_and_when_probed() {
+        let doc: Doc = serde_json::from_str(
+            r#"{"root": 0, "nodes": [{"op": "cuboid", "size": {"x": 10, "y": 10, "z": 10}}]}"#,
+        )
+        .unwrap();
+        let part = backend::build_part(&doc).unwrap();
+        let inside_out = part.shape.reversed();
+        let body = perceive::Body::new(None, &inside_out, &part.names[0]);
+        match measure(&body, &BTreeMap::new(), "") {
+            Err(Response::Error { message, .. }) => {
+                assert!(message.contains("inside out") && message.contains("-1000.0 mm³"), "{message}")
+            }
+            _ => panic!("an inside-out cube was measured"),
+        }
+        let err = backend::check_finished(&inside_out, "part").unwrap_err().to_string();
+        assert!(err.contains("the finished part is inside out"), "{err}");
     }
 }

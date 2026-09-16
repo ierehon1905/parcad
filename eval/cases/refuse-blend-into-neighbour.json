@@ -1,0 +1,15 @@
+{
+  "name": "refuse-blend-into-neighbour",
+  "script": "eval/scripts/refuse-blend-into-neighbour.js",
+  "why": "Rounds on both sides of a 1 mm gap cross each other; the blend's BRepCheck gate passed it and the mesh closed. Confirmed independently by 25 crossing triangle pairs near the reported point.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "blends by 4.76 mm",
+        "runs into itself",
+        "wider than the room it has"
+      ]
+    }
+  }
+}

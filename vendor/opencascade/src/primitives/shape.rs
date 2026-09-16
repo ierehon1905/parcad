@@ -17,6 +17,47 @@ pub struct Shape {
     pub(crate) inner: UniquePtr<ffi::TopoDS_Shape>,
 }
 
+/// What [`Shape::self_interference`] found.
+#[derive(Debug, Clone)]
+pub struct SelfInterference {
+    /// How many pairs of sub-shapes meet.
+    pub pairs: usize,
+    /// The checker stopped with an error, so the pairs may be incomplete.
+    pub aborted: bool,
+    /// The first few pairs, each with a point where they meet.
+    pub meetings: Vec<SelfMeeting>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SelfMeeting {
+    /// `"face"`, `"edge"` or `"vertex"`, for each of the two.
+    pub kinds: (String, String),
+    pub at: Option<DVec3>,
+}
+
+impl SelfInterference {
+    fn parse(report: &str) -> Option<Self> {
+        let mut lines = report.lines();
+        let mut head = lines.next()?.split_whitespace();
+        let pairs = head.next().and_then(|n| n.parse().ok()).unwrap_or(0);
+        let aborted = head.next() == Some("1");
+        let meetings = lines
+            .map(|line| {
+                let mut words = line.split_whitespace();
+                let a = words.next().unwrap_or("shape").to_string();
+                let b = words.next().unwrap_or("shape").to_string();
+                let at: Vec<f64> = words.filter_map(|w| w.parse().ok()).collect();
+                SelfMeeting { kinds: (a, b), at: (at.len() == 3).then(|| DVec3::new(at[0], at[1], at[2])) }
+            })
+            .collect();
+        Some(Self { pairs, aborted, meetings })
+    }
+}
+
+fn clamp_count(n: usize) -> i32 {
+    n.min(i32::MAX as usize) as i32
+}
+
 /// Cheap: `TopoDS_Shape` is a handle onto a reference-counted `TShape`, so this
 /// shares the underlying geometry rather than copying it. Needed because several
 /// operations here take `self` by value while the caller still wants the
@@ -150,6 +191,26 @@ impl Shape {
         } else {
             Err(report)
         }
+    }
+
+    /// Where this shape runs into itself: every pair of its faces, edges and
+    /// vertices that meet other than through a sub-shape they share, as
+    /// `BOPAlgo_CheckerSI` finds them. `None` when nothing does.
+    ///
+    /// Added for parcad; see PARCAD-CHANGES.md. `check_validity` judges each
+    /// face against its own boundary and passes a solid whose faces cross.
+    /// `fuzzy` widens every tolerance by that much; `located` bounds how many
+    /// pairs are given a point, which is the costly part of the report.
+    pub fn self_interference(&self, fuzzy: f64, located: usize) -> Option<SelfInterference> {
+        SelfInterference::parse(&ffi::Shape_self_interference_report(&self.inner, fuzzy, clamp_count(located)))
+    }
+
+    /// [`Self::self_interference`] asked of what changed since `before`:
+    /// this shape's faces that are not faces of `before`, against every face
+    /// near them. Faces an operation left alone met nothing before it, and
+    /// intersecting them again is most of what the whole check costs.
+    pub fn self_interference_since(&self, before: &Shape, fuzzy: f64, located: usize) -> Option<SelfInterference> {
+        SelfInterference::parse(&ffi::Shape_self_interference_since(&self.inner, &before.inner, fuzzy, clamp_count(located)))
     }
 
     /// Full topology dump: faces, wires, edges, vertices with geometry types
@@ -726,6 +787,37 @@ impl Shape {
         }
     }
 
+    /// The one solid this shape is or bounds: a single solid as it is, or a
+    /// single closed shell made into a solid facing outward; `None` for
+    /// anything else. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn closed_solid(&self) -> Option<Self> {
+        let solid = ffi::Shape_closed_solid(&self.inner);
+        let solid = Self { inner: ffi::TopoDS_Shape_to_owned(&solid) };
+        (solid.faces().next().is_some()).then_some(solid)
+    }
+
+    /// Every solid of this shape that does not face outward, one line each,
+    /// measured three ways: a point outside its box classifies outside, its
+    /// outer shell encloses a positive volume, its void shells negative ones.
+    /// Empty when all do. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn orientation_faults(&self) -> Vec<String> {
+        ffi::Shape_orientation_report(&self.inner).lines().map(str::to_string).collect()
+    }
+
+    /// This shape with each solid's shells turned so it faces outward, for a
+    /// caller to measure again with [`Self::orientation_faults`]. Added for
+    /// parcad; see PARCAD-CHANGES.md.
+    pub fn turned_outward(&self) -> Self {
+        let turned = ffi::Shape_turned_outward(&self.inner);
+        Self { inner: ffi::TopoDS_Shape_to_owned(&turned) }
+    }
+
+    /// This shape facing the other way. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn reversed(&self) -> Self {
+        let reversed = ffi::Shape_reversed(&self.inner);
+        Self { inner: ffi::TopoDS_Shape_to_owned(&reversed) }
+    }
+
     /// The enclosed volume with its sign: negative when the shape's faces are
     /// oriented inward, which is what an inside-out solid looks like to every
     /// later boolean. Added for parcad; see PARCAD-CHANGES.md.
@@ -967,6 +1059,13 @@ pub struct Treatment {
 }
 
 impl Treatment {
+    /// The copy of the input the builder treated, which the result shares its
+    /// untouched faces with. The builder is given a copy because it widens
+    /// tolerances on what it is given, even when the result is then refused.
+    pub fn input(&self) -> Shape {
+        Shape { inner: ffi::TopoDS_Shape_to_owned(self.history.input()) }
+    }
+
     pub fn modified_edge(&mut self, edge: &Edge) -> Vec<Edge> {
         super::boolean_shape::edges(
             self.history

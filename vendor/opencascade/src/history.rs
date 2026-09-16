@@ -42,6 +42,7 @@ pub(crate) mod ffi {
         fn build(self: Pin<&mut ParcadEdgeTreatment>) -> bool;
         fn failure(self: &ParcadEdgeTreatment) -> String;
         fn result(self: Pin<&mut ParcadEdgeTreatment>) -> &TopoDS_Shape;
+        fn input(self: &ParcadEdgeTreatment) -> &TopoDS_Shape;
         fn generated(
             self: Pin<&mut ParcadEdgeTreatment>,
             original: &TopoDS_Edge,

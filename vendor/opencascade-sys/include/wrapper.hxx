@@ -32,6 +32,15 @@
 #include <BRepCheck.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepCheck_Result.hxx>
+#include <BOPAlgo_CheckerSI.hxx>
+#include <BOPDS_DS.hxx>
+#include <BOPDS_IteratorSI.hxx>
+#include <IntTools_Context.hxx>
+#include <IntTools_FaceFace.hxx>
+#include <BOPAlgo_Alerts.hxx>
+#include <OSD_Parallel.hxx>
+#include <Standard_ErrorHandler.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <ShapeFix_Shape.hxx>
 #include <BRepFeat_MakeCylindricalHole.hxx>
 #include <BRepFeat_MakeDPrism.hxx>
@@ -42,6 +51,7 @@
 #include <BRepGProp_Face.hxx>
 #include <BRepIntCurveSurface_Inter.hxx>
 #include <BRepClass3d_SolidClassifier.hxx> // PARCAD: point-in-solid
+#include <BRepTools_ReShape.hxx>
 #include <GeomAdaptor_Curve.hxx>           // PARCAD: ray casting against a loaded shape
 #include <BRepLib.hxx>
 #include <BRepLib_ToolTriangulatedShape.hxx>
@@ -844,6 +854,156 @@ inline std::unique_ptr<TopoDS_Shape> BRepLib_orient_closed_solid(const TopoDS_Sh
   return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(solid));
 }
 
+// Which way each solid of a shape faces, asked of each of its shells on its
+// own: a point outside the solid must classify as outside the outer shell and
+// inside every other shell, each a sealed void facing inward. The outer shell
+// is the one with the largest box, which does not depend on which way any of
+// them faces. Classification casts a ray and reads the face it meets, so it
+// needs no volume integral. Added for parcad: a walled smooth loft came back
+// inside out and nothing downstream asked.
+struct ParcadSolidFacing {
+  TopAbs_State far = TopAbs_UNKNOWN;           // the outer shell's verdict on the far point
+  std::vector<std::pair<TopoDS_Shell, TopAbs_State>> shells;
+  TopoDS_Shell outer_shell;
+};
+
+inline TopAbs_State parcad_shell_classifies(const TopoDS_Shell &shell, const gp_Pnt &far) {
+  BRep_Builder builder;
+  TopoDS_Solid alone;
+  builder.MakeSolid(alone);
+  builder.Add(alone, shell);
+  BRepClass3d_SolidClassifier where(alone, far, Precision::Confusion());
+  return where.State();
+}
+
+inline ParcadSolidFacing parcad_facing(const TopoDS_Solid &solid) {
+  ParcadSolidFacing out;
+  Bnd_Box box;
+  BRepBndLib::Add(solid, box);
+  if (box.IsVoid()) {
+    return out;
+  }
+  double x0, y0, z0, x1, y1, z1;
+  box.Get(x0, y0, z0, x1, y1, z1);
+  const double margin = 1.0 + 0.1 * std::sqrt(box.SquareExtent());
+  const gp_Pnt far(x1 + margin, y1 + 0.37 * margin, z1 + 0.61 * margin);
+  double largest = -1.0;
+  for (TopExp_Explorer it(solid, TopAbs_SHELL); it.More(); it.Next()) {
+    const TopoDS_Shell shell = TopoDS::Shell(it.Current());
+    Bnd_Box shell_box;
+    BRepBndLib::Add(shell, shell_box);
+    const double size = shell_box.IsVoid() ? 0.0 : shell_box.SquareExtent();
+    if (size > largest) {
+      largest = size;
+      out.outer_shell = shell;
+    }
+    out.shells.emplace_back(shell, parcad_shell_classifies(shell, far));
+  }
+  for (const auto &shell : out.shells) {
+    if (shell.first.IsSame(out.outer_shell)) {
+      out.far = shell.second;
+    }
+  }
+  return out;
+}
+
+inline bool parcad_faces_out(const ParcadSolidFacing &f) {
+  if (f.far != TopAbs_OUT) {
+    return false;
+  }
+  for (const auto &shell : f.shells) {
+    if (!shell.first.IsSame(f.outer_shell) && shell.second != TopAbs_IN) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// "" when every solid faces outward; otherwise one line per solid that does not.
+inline rust::String Shape_orientation_report(const TopoDS_Shape &shape) {
+  const char *states[] = {"inside", "outside", "on its surface", "unknown"};
+  std::ostringstream out;
+  int index = 0;
+  for (TopExp_Explorer it(shape, TopAbs_SOLID); it.More(); it.Next(), ++index) {
+    const ParcadSolidFacing f = parcad_facing(TopoDS::Solid(it.Current()));
+    if (parcad_faces_out(f)) {
+      continue;
+    }
+    out << "solid " << index << ": a point outside it is " << states[f.far] << " its outer surface";
+    int bad = 0;
+    for (const auto &shell : f.shells) {
+      if (!shell.first.IsSame(f.outer_shell) && shell.second != TopAbs_IN) {
+        ++bad;
+      }
+    }
+    if (bad > 0) {
+      out << ", and " << bad << " of its " << f.shells.size() - 1
+          << " inner shell(s) face outward, enclosing material instead of a cavity";
+    }
+    out << "\n";
+  }
+  return rust::String(out.str());
+}
+
+// The same shape with each solid rebuilt to face outward: the outer shell
+// turned to leave the outside outside, every void shell to hold it in.
+inline std::unique_ptr<TopoDS_Shape> Shape_turned_outward(const TopoDS_Shape &shape) {
+  BRepTools_ReShape reshape;
+  bool changed = false;
+  for (TopExp_Explorer it(shape, TopAbs_SOLID); it.More(); it.Next()) {
+    const ParcadSolidFacing f = parcad_facing(TopoDS::Solid(it.Current()));
+    if (parcad_faces_out(f)) {
+      continue;
+    }
+    BRep_Builder builder;
+    TopoDS_Solid turned;
+    builder.MakeSolid(turned);
+    for (const auto &shell : f.shells) {
+      const bool outer = shell.first.IsSame(f.outer_shell);
+      const bool flip = outer ? shell.second == TopAbs_IN : shell.second == TopAbs_OUT;
+      builder.Add(turned, flip ? TopoDS::Shell(shell.first.Reversed()) : shell.first);
+    }
+    reshape.Replace(it.Current(), turned);
+    changed = true;
+  }
+  return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(changed ? reshape.Apply(shape) : shape));
+}
+
+// The shape with its orientation reversed: every face of it pointing the
+// other way. Added for parcad, to make an inside-out solid on purpose.
+inline std::unique_ptr<TopoDS_Shape> Shape_reversed(const TopoDS_Shape &shape) {
+  return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(shape.Reversed()));
+}
+
+// The one solid a shape is, or bounds: a solid as it is, or a single closed
+// shell made into a solid and turned right side out. An empty shape
+// otherwise. Added for parcad: `BRepOffsetAPI_MakeThickSolid` hands back the
+// inward offset of a boolean result as a bare shell, which every later
+// boolean reads as nothing.
+inline std::unique_ptr<TopoDS_Shape> Shape_closed_solid(const TopoDS_Shape &shape) {
+  TopExp_Explorer solids(shape, TopAbs_SOLID);
+  if (solids.More()) {
+    const TopoDS_Shape solid = solids.Current();
+    solids.Next();
+    return std::unique_ptr<TopoDS_Shape>(solids.More() ? new TopoDS_Shape() : new TopoDS_Shape(solid));
+  }
+  TopExp_Explorer shells(shape, TopAbs_SHELL);
+  if (!shells.More()) {
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape());
+  }
+  const TopoDS_Shell shell = TopoDS::Shell(shells.Current());
+  shells.Next();
+  if (shells.More() || !BRep_Tool::IsClosed(shell)) {
+    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape());
+  }
+  BRep_Builder builder;
+  TopoDS_Solid solid;
+  builder.MakeSolid(solid);
+  builder.Add(solid, shell);
+  BRepLib::OrientClosedSolid(solid);
+  return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(solid));
+}
+
 // Topology report: every face -> wire -> edge -> vertex, with geometry types,
 // bounds and tolerances. Added for parcad as a diagnostic; the BRepCheck report
 // below says *what* is wrong, this says what the kernel actually built, which
@@ -1469,4 +1629,276 @@ inline rust::String BRepCheck_report(const TopoDS_Shape &shape, bool exact) {
     }
   }
   return rust::String(out.str());
+}
+
+// BOPAlgo_CheckerSI: does any part of this shape run into another part of it?
+// Added for parcad. BRepCheck_Analyzer judges each face against its own
+// boundary and passes a solid whose faces cross each other; the checker
+// intersects every sub-shape with every other, as a boolean would, and
+// reports each pair that meets anywhere but through a sub-shape they share.
+
+// The checker's candidate pairs, kept only where one side is, or lies on, a
+// face in `fresh`: faces an operation left alone met nothing before it, and
+// intersecting them again is most of what the check would cost.
+class ParcadFreshPairsSI : public BOPDS_IteratorSI {
+public:
+  ParcadFreshPairsSI(const Handle(NCollection_BaseAllocator) &allocator,
+                     const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> *fresh)
+      : BOPDS_IteratorSI(allocator), fresh_(fresh) {}
+
+protected:
+  void Intersect(const occ::handle<IntTools_Context> &context, const bool obb, const double fuzzy) override {
+    BOPDS_IteratorSI::Intersect(context, obb, fuzzy);
+    if (fresh_ == nullptr) {
+      return;
+    }
+    const int count = myDS->NbSourceShapes();
+    std::vector<char> touched(count, 0);
+    for (int i = 0; i < count; ++i) {
+      const BOPDS_ShapeInfo &info = myDS->ShapeInfo(i);
+      if (info.ShapeType() != TopAbs_FACE || !fresh_->Contains(info.Shape())) {
+        continue;
+      }
+      std::vector<int> stack{i};
+      while (!stack.empty()) {
+        const int at = stack.back();
+        stack.pop_back();
+        if (touched[at]) {
+          continue;
+        }
+        touched[at] = 1;
+        for (NCollection_List<int>::Iterator sub(myDS->ShapeInfo(at).SubShapes()); sub.More(); sub.Next()) {
+          stack.push_back(sub.Value());
+        }
+      }
+    }
+    for (int list = 0; list < myLists.Length(); ++list) {
+      NCollection_DynamicArray<BOPDS_Pair> kept;
+      for (NCollection_DynamicArray<BOPDS_Pair>::Iterator it(myLists(list)); it.More(); it.Next()) {
+        int a, b;
+        it.Value().Indices(a, b);
+        if (touched[a] || touched[b]) {
+          kept.Append(it.Value());
+        }
+      }
+      myLists(list) = kept;
+    }
+  }
+
+private:
+  const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> *fresh_;
+};
+
+class ParcadCheckerSI : public BOPAlgo_CheckerSI {
+public:
+  explicit ParcadCheckerSI(const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> *fresh) : fresh_(fresh) {}
+
+  // BOPAlgo_CheckerSI::Perform, with each surface intersected with itself
+  // only where its face is fresh: that pass is most of the cost on a fillet.
+  void Perform(const Message_ProgressRange &range = Message_ProgressRange()) override {
+    if (fresh_ == nullptr) {
+      BOPAlgo_CheckerSI::Perform(range);
+      return;
+    }
+    try {
+      OCC_CATCH_SIGNALS
+      BOPAlgo_PaveFiller::Perform(range);
+      ((NCollection_Map<BOPDS_Pair> &)myDS->Interferences()).Clear();
+      CheckFreshFacesOnThemselves();
+      if (!HasErrors()) PerformVZ(Message_ProgressRange());
+      if (!HasErrors()) PerformEZ(Message_ProgressRange());
+      if (!HasErrors()) PerformFZ(Message_ProgressRange());
+      if (!HasErrors()) PerformZZ(Message_ProgressRange());
+      if (HasErrors()) {
+        return;
+      }
+      PostTreat();
+    } catch (Standard_Failure const &) {
+      AddError(new BOPAlgo_AlertIntersectionFailed);
+    }
+  }
+
+private:
+  struct SelfIntersection {
+    std::vector<TopoDS_Face> *faces;
+    std::vector<char> *crossed;
+    void operator()(int i) const {
+      IntTools_FaceFace intersection;
+      intersection.Perform((*faces)[i], (*faces)[i], false);
+      (*crossed)[i] = intersection.IsDone() && (intersection.Lines().Length() > 0 || intersection.Points().Length() > 0);
+    }
+  };
+
+  void CheckFreshFacesOnThemselves() {
+    std::vector<TopoDS_Face> faces;
+    std::vector<int> indices;
+    for (int i = 0; i < myDS->NbSourceShapes(); ++i) {
+      const BOPDS_ShapeInfo &info = myDS->ShapeInfo(i);
+      if (info.ShapeType() != TopAbs_FACE || !fresh_->Contains(info.Shape())) {
+        continue;
+      }
+      const TopoDS_Face &face = TopoDS::Face(info.Shape());
+      BRepAdaptor_Surface surface(face, false);
+      const GeomAbs_SurfaceType type = surface.GetType();
+      // The kinds BOPAlgo_CheckerSI itself trusts not to meet themselves.
+      if (type == GeomAbs_Plane || type == GeomAbs_Cylinder || type == GeomAbs_Cone || type == GeomAbs_Sphere) {
+        continue;
+      }
+      if (type == GeomAbs_Torus && surface.Torus().MajorRadius() > surface.Torus().MinorRadius() + Precision::Confusion()) {
+        continue;
+      }
+      faces.push_back(face);
+      indices.push_back(i);
+    }
+    std::vector<char> crossed(faces.size(), 0);
+    OSD_Parallel::For(0, static_cast<int>(faces.size()), SelfIntersection{&faces, &crossed}, !myRunParallel);
+    NCollection_Map<BOPDS_Pair> &pairs = (NCollection_Map<BOPDS_Pair> &)myDS->Interferences();
+    for (size_t k = 0; k < faces.size(); ++k) {
+      if (crossed[k]) {
+        pairs.Add(BOPDS_Pair(indices[k], indices[k]));
+      }
+    }
+  }
+
+public:
+
+protected:
+  void Init(const Message_ProgressRange &) override {
+    Clear();
+    myDS = new BOPDS_DS(myAllocator);
+    myDS->SetArguments(myArguments);
+    myDS->Init(myFuzzyValue);
+    myContext = new IntTools_Context;
+    ParcadFreshPairsSI *iterator = new ParcadFreshPairsSI(myAllocator, fresh_);
+    iterator->SetDS(myDS);
+    iterator->Prepare(myContext, myUseOBB, myFuzzyValue);
+    iterator->UpdateByLevelOfCheck(myLevelOfCheck);
+    myIterator = iterator;
+  }
+
+private:
+  const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> *fresh_;
+};
+
+// Returns "" when nothing meets. Otherwise the first line is
+// "<pairs> <aborted>", then one "<kind> <kind> <x> <y> <z>" line for each of
+// the first `located` pairs, the point being where the two come closest.
+inline rust::String parcad_self_interference(const TopoDS_Shape &shape, double fuzzy, int located,
+                                             const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> *fresh) {
+  NCollection_List<TopoDS_Shape> arguments;
+  arguments.Append(shape);
+  ParcadCheckerSI checker(fresh);
+  checker.SetArguments(arguments);
+  checker.SetNonDestructive(true);
+  // Face pairs are intersected independently; in parallel the check costs a
+  // quarter to a sixth of its serial time on the fuzzed treatments.
+  checker.SetRunParallel(true);
+  checker.SetFuzzyValue(fuzzy);
+  checker.Perform();
+  const bool aborted = checker.HasErrors();
+  if (checker.PDS() == nullptr) {
+    return rust::String(aborted ? "0 1\n" : "");
+  }
+  const BOPDS_DS &ds = *checker.PDS();
+  std::ostringstream lines;
+  lines.precision(10);
+  int pairs = 0;
+  for (NCollection_Map<BOPDS_Pair>::Iterator it(ds.Interferences()); it.More(); it.Next()) {
+    int n1, n2;
+    it.Value().Indices(n1, n2);
+    if (ds.IsNewShape(n1) || ds.IsNewShape(n2)) {
+      continue;
+    }
+    if (pairs < located) {
+      const TopoDS_Shape &a = ds.Shape(n1);
+      const TopoDS_Shape &b = ds.Shape(n2);
+      auto kind = [](const TopoDS_Shape &s) {
+        switch (s.ShapeType()) {
+        case TopAbs_VERTEX: return "vertex";
+        case TopAbs_EDGE: return "edge";
+        case TopAbs_FACE: return "face";
+        default: return "shape";
+        }
+      };
+      if (n1 == n2 && a.ShapeType() == TopAbs_FACE) {
+        // A face that meets itself: where, from its own intersection.
+        IntTools_FaceFace itself;
+        itself.Perform(TopoDS::Face(a), TopoDS::Face(a), false);
+        lines << kind(a) << " itself";
+        if (itself.IsDone() && itself.Lines().Length() > 0) {
+          const Handle(Geom_Curve) &curve = itself.Lines().First().Curve();
+          if (!curve.IsNull()) {
+            const gp_Pnt p = curve->Value(0.5 * (curve->FirstParameter() + curve->LastParameter()));
+            lines << " " << p.X() << " " << p.Y() << " " << p.Z();
+          }
+        } else if (itself.IsDone() && itself.Points().Length() > 0) {
+          const gp_Pnt p = itself.Points().First().P1().Pnt();
+          lines << " " << p.X() << " " << p.Y() << " " << p.Z();
+        }
+      } else {
+        BRepExtrema_DistShapeShape search;
+        search.SetFlag(Extrema_ExtFlag_MIN);
+        search.LoadS1(a);
+        search.LoadS2(b);
+        search.Perform();
+        lines << kind(a) << " " << kind(b);
+        if (search.IsDone() && search.NbSolution() > 0) {
+          const gp_Pnt p = search.PointOnShape1(1);
+          lines << " " << p.X() << " " << p.Y() << " " << p.Z();
+        }
+      }
+      lines << "\n";
+    }
+    ++pairs;
+  }
+  if (pairs == 0 && !aborted) {
+    return rust::String("");
+  }
+  std::ostringstream out;
+  out << pairs << " " << (aborted ? 1 : 0) << "\n" << lines.str();
+  return rust::String(out.str());
+}
+
+inline rust::String Shape_self_interference_report(const TopoDS_Shape &shape, double fuzzy, int located) {
+  return parcad_self_interference(shape, fuzzy, located, nullptr);
+}
+
+// The same question asked of what an operation changed: the faces of `after`
+// that are not faces of `before`, against every face whose box meets one of
+// theirs. Only pairs with a changed face on one side are intersected, since
+// the faces an operation left alone met nothing before it. Added for parcad.
+inline rust::String Shape_self_interference_since(const TopoDS_Shape &after, const TopoDS_Shape &before,
+                                                  double fuzzy, int located) {
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> kept;
+  for (TopExp_Explorer it(before, TopAbs_FACE); it.More(); it.Next()) {
+    kept.Add(it.Current());
+  }
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> fresh;
+  std::vector<Bnd_Box> regions;
+  for (TopExp_Explorer it(after, TopAbs_FACE); it.More(); it.Next()) {
+    if (kept.Contains(it.Current())) {
+      continue;
+    }
+    fresh.Add(it.Current());
+    Bnd_Box box;
+    BRepBndLib::Add(it.Current(), box);
+    regions.push_back(box);
+  }
+  if (fresh.IsEmpty()) {
+    return rust::String("");
+  }
+  BRep_Builder builder;
+  TopoDS_Compound near;
+  builder.MakeCompound(near);
+  for (TopExp_Explorer it(after, TopAbs_FACE); it.More(); it.Next()) {
+    Bnd_Box box;
+    BRepBndLib::Add(it.Current(), box);
+    for (const Bnd_Box &region : regions) {
+      if (!box.IsOut(region)) {
+        builder.Add(near, it.Current());
+        break;
+      }
+    }
+  }
+  return parcad_self_interference(near, fuzzy, located, &fresh);
 }
