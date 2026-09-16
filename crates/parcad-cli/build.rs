@@ -12,6 +12,12 @@ use std::path::{Path, PathBuf};
 fn main() {
     let manifest = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
     let dist = manifest.join("../../app/dist");
+    // A watched path that does not exist is stale on every build, which
+    // recompiled this crate with full LTO each time; an empty dist is watched
+    // like a full one and still changes when the frontend is built into it.
+    if !dist.exists() {
+        std::fs::create_dir_all(&dist).expect("creating app/dist for cargo to watch");
+    }
     println!("cargo:rerun-if-changed={}", dist.display());
 
     let mut files = Vec::new();
