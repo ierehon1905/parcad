@@ -1733,7 +1733,8 @@ impl Op {
         let corners = profile.iter().filter(|e| matches!(e, SectionEntry::Point(_))).count();
         if corners == profile.len() && profile.len() < 3 {
             anyhow::bail!(
-                "a {} profile needs at least 3 points; got {}. Author it as {} pairs, e.g. {}, with {{ through: [x, y] }} between two points for an arc",
+                "{} {} profile needs at least 3 points; got {}. Author it as {} pairs, e.g. {}, with {{ through: [x, y] }} between two points for an arc",
+                if kind.op().starts_with(['a', 'e', 'i', 'o', 'u']) { "an" } else { "a" },
                 kind.op(),
                 profile.len(),
                 kind.pair(),

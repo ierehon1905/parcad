@@ -1,13 +1,14 @@
 {
   "name": "refuse-curve-through-its-outline",
   "script": "eval/scripts/refuse-curve-through-its-outline.js",
-  "why": "A curved section that crosses itself is refused on the exact curves (BRepCheck_SelfIntersectingWire on the section face) rather than built into an unorientable solid.",
+  "why": "A curved section that crosses itself is refused on the exact curves, by the core before the kernel, naming the two pieces and where they meet, rather than built into an unorientable solid. The kernel's BRepCheck on the face is the backstop, and it misses crossings near a corner (docs/SECTION_CHECKS.md).",
   "brep": {
     "refuses": {
       "kind": "rejected",
       "message_contains": [
         "touches or crosses itself",
-        "control points"
+        "the straight edge between corners 0 and 1 meets the spline between corners 2 and 3",
+        "near ["
       ]
     }
   }

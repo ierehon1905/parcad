@@ -21,6 +21,10 @@ required-features = ["kernel"]
 name = "try"
 required-features = ["kernel"]
 
+[[example]]
+name = "section_fuzz"
+required-features = ["kernel"]
+
 [dependencies]
 parcad-core = { path = "../parcad-core" }
 anyhow.workspace = true
