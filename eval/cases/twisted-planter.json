@@ -8,9 +8,9 @@
       97.809,
       94.4
     ],
-    "volume_mm3": 88705.963,
-    "area_mm2": 72955.925,
-    "triangles": 199346,
+    "volume_mm3": 88708.244,
+    "area_mm2": 72954.295,
+    "triangles": 148296,
     "bodies": 2,
     "voids": 0,
     "stands_on_mm2": 5280.166,
@@ -19,6 +19,9 @@
     "faces": 245,
     "edges": 1059,
     "curves": 463,
+    "requires": [
+      "section-curves"
+    ],
     "named_bodies": {
       "planter": {
         "size": [
@@ -26,7 +29,7 @@
           97.809,
           90.0
         ],
-        "volume_mm3": 69240.483,
+        "volume_mm3": 69240.041,
         "faces": 201,
         "edges": 852,
         "watertight": true,
@@ -39,7 +42,7 @@
           87.998,
           12.0
         ],
-        "volume_mm3": 19465.479,
+        "volume_mm3": 19468.203,
         "faces": 44,
         "edges": 207,
         "watertight": true,

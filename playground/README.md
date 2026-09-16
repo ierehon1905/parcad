@@ -195,6 +195,10 @@ inside the tolerances their cases already carried for GCC on x86_64, and 0.001 m
 of size on `helical-groove` and `left-hand-hook`. The 77 other cases record
 identical numbers.
 
+These numbers predate vendor patch 0003, which changed where the mesher
+samples a B-spline face and so every triangle count above that it touches;
+the WebAssembly corpus has not been recorded since.
+
 One case needed a tolerance: `re-entrant-loft`'s triangle count, whose planar
 walls mesh to two triangles natively and a few hundred here, with volume, area
 and topology exact in both. Its `why` says why, and docs/GOTCHAS.md, "A planar

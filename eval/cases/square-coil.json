@@ -1,16 +1,16 @@
 {
   "name": "square-coil",
   "script": "eval/scripts/square-coil.js",
-  "why": "An authored section wound on a helix, left-handed, against the tube formula: a 2 mm square on a radius-10, pitch-5 helix for 2.75 turns is 4 * 2.75 * sqrt((20 pi)^2 + 25) = 693.335 mm3; the exact B-rep reads 693.3357 through BRepGProp. The Frenet frame of a helix is its screw motion, so the square keeps its attitude to the axis: four B-spline walls, two flat ends, and a size no wider than the square's corner reaches (11.0003 mm). The mesher's triangle count on the B-spline walls is held to 15%: GCC on x86_64 lays 9.8% more.",
+  "why": "An authored section wound on a helix, left-handed, against the tube formula: a 2 mm square on a radius-10, pitch-5 helix for 2.75 turns is 4 * 2.75 * sqrt((20 pi)^2 + 25) = 693.335 mm3; the exact B-rep reads 693.3357 through BRepGProp. The Frenet frame of a helix is its screw motion, so the square keeps its attitude to the axis: four B-spline walls, two flat ends, and a size no wider than the square's corner reaches (11.0003 mm). The mesher's triangle count on the B-spline walls is held to 15%: GCC on x86_64 laid 9.8% more, measured before vendor patch 0003 changed where the mesher samples.",
   "brep": {
     "size": [
       22.0,
       22.0,
       15.744
     ],
-    "volume_mm3": 693.075,
-    "area_mm2": 1394.357,
-    "triangles": 6348,
+    "volume_mm3": 693.076,
+    "area_mm2": 1394.371,
+    "triangles": 2192,
     "bodies": 1,
     "voids": 0,
     "stands_on_mm2": 0.0,

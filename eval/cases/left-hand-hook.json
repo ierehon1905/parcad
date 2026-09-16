@@ -4,13 +4,13 @@
   "why": "Handedness, pinned where volume cannot see it: half a left-handed turn from +X spends itself at y <= 0 (y = -11 to +0.08, the end discs leaning), and a marker ball at y = +20 turns that position into a size, 32 mm deep in Y where the right-handed helix measures 21.08 with the identical volume. Closed form pi * 0.5 * sqrt((20 pi)^2 + 25) + 4/3 pi = 103.197 mm3; the exact B-rep reads 99.0080 + 4.1888 through BRepGProp. Two bodies on purpose.",
   "brep": {
     "size": [
-      21.997,
+      21.999,
       32.0,
       4.493
     ],
-    "volume_mm3": 102.612,
-    "area_mm2": 216.478,
-    "triangles": 13456,
+    "volume_mm3": 102.647,
+    "area_mm2": 216.496,
+    "triangles": 15072,
     "bodies": 2,
     "voids": 0,
     "stands_on_mm2": 0.0,

@@ -8,9 +8,9 @@
       63.998,
       8.0
     ],
-    "volume_mm3": 31377.857,
-    "area_mm2": 13401.091,
-    "triangles": 36428,
+    "volume_mm3": 31375.868,
+    "area_mm2": 13400.887,
+    "triangles": 5452,
     "bodies": 2,
     "voids": 0,
     "stands_on_mm2": 3921.984,
@@ -20,6 +20,11 @@
     "edges": 1812,
     "curves": 904,
     "deviation_mm": 0.0,
+    "requires": [
+      "section-curves",
+      "bspline-knots",
+      "held-curves"
+    ],
     "curve_bound_mm": 7.093665147216587e-6,
     "curve_bound": "certified",
     "named_bodies": {
@@ -29,7 +34,7 @@
           43.998,
           8.0
         ],
-        "volume_mm3": 9577.687,
+        "volume_mm3": 9576.975,
         "faces": 123,
         "edges": 726,
         "watertight": true,
@@ -42,7 +47,7 @@
           63.998,
           8.0
         ],
-        "volume_mm3": 21800.171,
+        "volume_mm3": 21798.894,
         "faces": 183,
         "edges": 1086,
         "watertight": true,

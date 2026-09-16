@@ -295,7 +295,7 @@ error.
 
 ## Geometry
 
-### A planar wall meshes two ways
+### A planar wall meshed two ways
 
 `re-entrant-loft`'s five side walls are planar B-spline patches. BRepMesh's
 deflection control measures the midpoint of each wall's diagonal against the
@@ -311,6 +311,16 @@ either build's number. Across the whole corpus the WebAssembly build moves only
 tessellation-derived numbers — at most 1.7e-4 relative in volume or area, 0.002
 mm in size, 0.54% in bed contact and 9.8% in triangles elsewhere — and no face
 or edge count; playground/README.md has the table.
+
+The request itself was the defect: a planar wall's parametric diagonal
+midpoint is off the diagonal in its own plane, which the deflection check read
+as deflection. Vendor patch 0003 (see "A curve that starts slowly meshed in
+ten times the triangles") samples the foot of the diagonal's own midpoint,
+which on a plane is the midpoint, so nothing is asked for: natively the walls
+are two triangles each and the part 20. The WebAssembly build should now
+agree, since there is no insertion left to round, but it has not been rebuilt
+to check: if it still refines, `re-entrant-loft` goes red there, which is the
+measurement still owed.
 
 ### The `left` and `right` views were mirrored
 
@@ -531,24 +541,43 @@ dense samples of the wires instead. A sweep along a straight path still can. Fit
 a looser tolerance, or smooth the points, and the integral settles. `eps`
 stays 1e-7.
 
-### A curve that starts slowly meshes in ten times the triangles
+### A curve that starts slowly meshed in ten times the triangles *(fixed)*
 
-The mesher judges a face in its parameters, so how fast a curve runs through
-its own parameter shows up in the triangle count even when the shape is the
-same. Measured on one arc of radius 20 over 2.5 rad, extruded 10: drawn with
-`{ curve }` in its angle, 240 triangles; the same arc with angle `t²/2.5`, so
-it starts at rest and ends at 40 mm per unit, 1018. The involute is the case
-that matters: its speed in the roll angle is `rb·t`, zero on the base circle
-— intrinsic, because its curvature is infinite there and a polynomial can
-only follow that by stopping — so a certified 20-tooth gear's flank walls
-mesh in some 480 triangles each, against 24 for a `fit` through the same
-flank on chord-length knots, and the whole gear in 20300 against 1916. The
-extra triangles are interior rows on the ruled wall, not a finer edge: the
-cap boundary has 11 points on each flank either way. Neither the knot scale,
-double knots (a C1 circle meshes like the fit, 592) nor the extrusion (a
-straight `sweep` gives 17446) is the cause. The geometry is right — the
-exported STEP puts the flank 2.9e-6 mm from the involute — so nothing is
-refused; the cost is a mesh of 180 ms instead of 120 and a larger STL.
+The mesher judged a face in its parameters, so how fast a curve ran through
+its own parameter showed up in the triangle count even when the shape was the
+same. One arc of radius 20 over 2.5 rad, extruded 10: drawn with `{ curve }`
+in its angle, 240 triangles; with angle `t²/2.5`, so it starts at rest, 1030.
+The involute is the case that matters: its speed in the roll angle is `rb·t`,
+zero on the base circle — intrinsic, because its curvature is infinite there
+and a polynomial can only follow that by stopping — so a certified 20-tooth
+gear meshed in 20300 triangles against 1916 for a `fit` through the same
+flanks, and its mesh took 182 ms against 117.
+
+Two assumptions in BRepMesh, both about B-spline faces, and
+`vendor/occt-sys/patches/0003-mesh-deflection-at-the-foot.patch` changes both:
+
+- **The deflection check sampled a link at its parametric middle.** On the
+  ruled flank wall a link running up the wall has its parametric middle
+  `rb·dt²/8` along the wall from its own middle — 0.014 mm on one knot span of
+  a module 2 gear, over the 0.01 mm deflection — so every diagonal "failed",
+  was split, and the new diagonals failed the same way: eight passes and 450
+  triangles a flank. The sample is now the foot of the perpendicular from the
+  link's (or triangle's) own middle. Measured over the whole corpus that is
+  also the more *correct* check: the parametric middle had let parts mesh
+  outside 0.01 mm (the helical groove to 0.011, a helical spring to 0.017),
+  and the parts that gained triangles are those, now all nearer their
+  surfaces and seven of them inside the deflection.
+- **A knot where the normal cannot be computed added a row of nodes.** The
+  flank's zero-speed edge is such a place, and it sits on the face's
+  boundary, where no node is ever inserted; the row it added at v = 0.5
+  doubled every flank. Only knots strictly inside a face count now.
+
+After: that arc 252 triangles, the certified gear 1996 in 120 ms (the fit,
+1916 in 116), the seeded gear pair 36428 → 5452 and 415 → 302 ms. The whole
+corpus, read back from STEP and meshed both ways, lost 12.6 % of its
+triangles and 11 % of its mesh time, and no part's worst sampled distance
+from its surface grew. `involute-gear` holds the count. Neither the knot
+scale, double knots, nor the extrusion was the cause, as was once checked.
 
 ### `offset_surface` lies
 

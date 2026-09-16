@@ -1,0 +1,255 @@
+Judge a B-spline face's mesh by where it is, not by where its parameters are.
+
+What it fixes
+  Two places in BRepMesh assume a surface's parameterization is uniform,
+  and a face swept from a curve that starts at rest — an involute on its
+  base circle, whose speed in the roll angle is zero there, drawn exactly
+  as a cubic B-spline and extruded as a ruled wall — breaks both.
+
+  1. BRepMesh_DelaunayDeflectionControlMeshAlgo checks a triangle at the
+     surface point of its parametric centroid and a link at the surface
+     point of its parametric middle, against the triangle's plane and the
+     link's line. On such a wall the parametric middle of a link running up
+     it lies along the wall from the link's own middle by rb·dt²/8 (0.014 mm
+     on a module 2 gear's knot span), which reads as deflection the link
+     does not have. Every pass splits those links, the new diagonals fail
+     the same way, and a flank that meshes in two rows of triangles took
+     450. The parametric middle can also miss where an element does stray,
+     and a face is left outside the deflection.
+
+     The sample is now moved to the foot of the perpendicular from the
+     element's own middle (link midpoint, triangle centroid), by
+     Gauss-Newton from the parametric middle, kept only if it converges
+     inside the element's parametric box; otherwise the old point is used.
+     A sample within the deflection of the element's middle passes either
+     way — its foot is nearer still — so the iteration runs only for points
+     that would fail. A node inserted for a failing element goes to that
+     foot.
+
+  2. BRepMesh_NURBSRangeSplitter adds a row of surface nodes between every
+     pair of knots when the normal cannot be computed directly at a knot.
+     It asked that of the knots on the face's range boundary too, where no
+     surface node is ever inserted (only nodes classified inside the face
+     are); the zero-speed edge of such a wall is exactly that, and the added
+     row at v = 0.5 doubled every flank's triangles. Only knots strictly
+     inside the range are asked now.
+
+How it was measured
+  parcad's eval corpus and seed parts, 111 solids read back from STEP,
+  meshed at 0.01 mm linear deflection, every triangle sampled at 15
+  barycentric points projected onto its face's surface (a local
+  projection, so an upper bound on the distance). Before -> after:
+  - no part's worst sample moved further from its surface; 20 moved
+    closer, 7 of them from outside 0.01 mm to inside it (the helical
+    groove 0.0110 -> 0.0088, a twisted loft 0.0153 -> 0.0099);
+  - 29 parts changed; triangles over all 111 parts 1561573 -> 1364975;
+  - a module 2, 20-tooth involute gear: 19434 -> 1996 triangles, 76 ->
+    21 ms, worst sample 0.0098 -> 0.0048 mm, against 1916 triangles for
+    the same gear with its flanks fitted through samples; a smooth loft
+    7090 -> 236, a tapered strand 29596 -> 6302;
+  - where parts gained triangles they were outside the deflection before
+    (helical spring 61720 -> 72754, worst 0.0170 -> 0.0120), and mesh
+    time grew with them (626 -> 754 ms); over the corpus it fell 11 %,
+    10866 -> 9682 ms, the least of five interleaved runs.
+  The eval corpus holds the volumes, areas and sizes it recorded, within
+  its 0.05 % and 0.01 mm, except one ellipsoid's mesh volume, which fewer
+  triangles at the same deflection moved 0.06 %.
+  Change 2 alone moves nothing measurable without change 1: the rows it
+  removes were hidden among the nodes the false deflection inserted.
+
+Upstream status
+  Not yet offered upstream (github.com/Open-Cascade-SAS/OCCT).
+--- a/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_DelaunayDeflectionControlMeshAlgo.hxx	2026-09-16 17:19:47
++++ b/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_DelaunayDeflectionControlMeshAlgo.hxx	2026-09-16 17:19:47
+@@ -219,10 +219,15 @@
+       {
+         myIsAllDegenerated = false;
+ 
+-        const gp_XY aCenter2d =
++        gp_XY aCenter2d =
+           (aNodesInfo[0].Point2d + aNodesInfo[1].Point2d + aNodesInfo[2].Point2d) / 3.;
++        const gp_XYZ aCenter3d =
++          (aNodesInfo[0].Point + aNodesInfo[1].Point + aNodesInfo[2].Point) / 3.;
+ 
+-        usePoint(aCenter2d, NormalDeviation(aNodesInfo[0].Point, aNormal));
++        usePoint(aCenter2d,
++                 aCenter3d,
++                 boxOf(aNodesInfo, 3),
++                 NormalDeviation(aNodesInfo[0].Point, aNormal));
+         splitLinks(aNodesInfo, aNodexIndices);
+       }
+     }
+@@ -319,9 +324,14 @@
+ 
+       if (myCouplesMap->Add(BRepMesh_OrientedEdge(aFirstVertex, aLastVertex)))
+       {
+-        const gp_XY aMidPnt2d = (theNodesInfo[i].Point2d + theNodesInfo[j].Point2d) / 2.;
++        gp_XY        aMidPnt2d = (theNodesInfo[i].Point2d + theNodesInfo[j].Point2d) / 2.;
++        const gp_XYZ aMidPnt3d = (theNodesInfo[i].Point + theNodesInfo[j].Point) / 2.;
++        const TriangleNodeInfo aLinkNodes[2] = {theNodesInfo[i], theNodesInfo[j]};
+ 
+-        if (!usePoint(aMidPnt2d, LineDeviation(theNodesInfo[i].Point, theNodesInfo[j].Point)))
++        if (!usePoint(aMidPnt2d,
++                      aMidPnt3d,
++                      boxOf(aLinkNodes, 2),
++                      LineDeviation(theNodesInfo[i].Point, theNodesInfo[j].Point)))
+         {
+           if (!rejectSplitLinksForMinSize(theNodesInfo[i], theNodesInfo[j], aMidPnt2d))
+           {
+@@ -376,13 +386,88 @@
+     return aPnt;
+   }
+ 
+-  //! Computes deflection of the given point and caches it for
+-  //! insertion in case if it overflows deflection.
++  //! Parametric bounding box of the given nodes, widened by the UV tolerance.
++  std::pair<gp_XY, gp_XY> boxOf(const TriangleNodeInfo* theNodesInfo, const int theNbNodes) const
++  {
++    gp_XY aMin = theNodesInfo[0].Point2d;
++    gp_XY aMax = aMin;
++    for (int i = 1; i < theNbNodes; ++i)
++    {
++      const gp_XY& aPnt = theNodesInfo[i].Point2d;
++      aMin.SetCoord(std::min(aMin.X(), aPnt.X()), std::min(aMin.Y(), aPnt.Y()));
++      aMax.SetCoord(std::max(aMax.X(), aPnt.X()), std::max(aMax.Y(), aPnt.Y()));
++    }
++    const std::pair<double, double>& aTol = this->getRangeSplitter().GetToleranceUV();
++    const gp_XY                      aPad(aTol.first, aTol.second);
++    return {aMin - aPad, aMax + aPad};
++  }
++
++  //! Moves thePnt2d to the foot of the perpendicular dropped from thePnt3d to
++  //! the surface, by Gauss-Newton iterations started at thePnt2d.
++  //! @return False, leaving thePnt2d as it was, if the foot is not found
++  //! inside theBox.
++  bool moveToFoot(const gp_XYZ& thePnt3d, const std::pair<gp_XY, gp_XY>& theBox, gp_XY& thePnt2d)
++  {
++    const Adaptor3d_Surface& aSurface = *this->getDFace()->GetSurface();
++    const gp_XY              aTol(this->getRangeSplitter().GetToleranceUV().first,
++                     this->getRangeSplitter().GetToleranceUV().second);
++    gp_XY                    aUV = thePnt2d;
++    for (int anIter = 0; anIter < 8; ++anIter)
++    {
++      gp_Pnt aPnt;
++      gp_Vec aDU, aDV;
++      aSurface.D1(aUV.X(), aUV.Y(), aPnt, aDU, aDV);
++      const double aUU  = aDU.SquareMagnitude();
++      const double aUV_ = aDU.Dot(aDV);
++      const double aVV  = aDV.SquareMagnitude();
++      const double aDet = aUU * aVV - aUV_ * aUV_;
++      if (!(aDet > 1.e-12 * aUU * aVV) || aUU < gp::Resolution() || aVV < gp::Resolution())
++      {
++        return false;
++      }
++      const gp_XYZ aResidual = thePnt3d - aPnt.XYZ();
++      const double aRU       = aResidual.Dot(aDU.XYZ());
++      const double aRV       = aResidual.Dot(aDV.XYZ());
++      const gp_XY  aStep((aVV * aRU - aUV_ * aRV) / aDet, (aUU * aRV - aUV_ * aRU) / aDet);
++      aUV += aStep;
++      if (aUV.X() < theBox.first.X() || aUV.Y() < theBox.first.Y() || aUV.X() > theBox.second.X()
++          || aUV.Y() > theBox.second.Y())
++      {
++        return false;
++      }
++      if (std::abs(aStep.X()) <= aTol.X() && std::abs(aStep.Y()) <= aTol.Y())
++      {
++        thePnt2d = aUV;
++        return true;
++      }
++    }
++    return false;
++  }
++
++  //! Computes deflection of the surface from the element at the given point and
++  //! caches the point for insertion in case if it overflows deflection.
++  //! thePnt3d is the element's own point that thePnt2d stands for (a link's
++  //! middle or a triangle's centroid). Where the surface parameterization is
++  //! not uniform, e.g. a curve swept from rest, the surface point at the
++  //! parametric middle lies far from it along the surface and reads as
++  //! deflection the element does not have; the point is then moved to the
++  //! foot of the perpendicular from thePnt3d, which is also where a node
++  //! splitting the element belongs.
+   //! @return True if point has been cached for insertion.
+   template <class DeflectionFunctor>
+-  bool usePoint(const gp_XY& thePnt2d, const DeflectionFunctor& theDeflectionFunctor)
++  bool usePoint(gp_XY&                           thePnt2d,
++                const gp_XYZ&                    thePnt3d,
++                const std::pair<gp_XY, gp_XY>&   theBox,
++                const DeflectionFunctor&         theDeflectionFunctor)
+   {
+-    const gp_Pnt aPnt = getPoint3d(thePnt2d);
++    gp_Pnt       aPnt          = getPoint3d(thePnt2d);
++    const double aSqDeflection = this->getDFace()->GetDeflection() * this->getDFace()->GetDeflection();
++    // Within the deflection of thePnt3d, the point passes, and its foot, which
++    // is nearer still, would pass too: only a farther point needs the foot.
++    if ((aPnt.XYZ() - thePnt3d).SquareModulus() > aSqDeflection && moveToFoot(thePnt3d, theBox, thePnt2d))
++    {
++      aPnt = getPoint3d(thePnt2d);
++    }
+     if (!checkDeflectionOfPointAndUpdateCache(thePnt2d,
+                                               aPnt,
+                                               theDeflectionFunctor.SquareDeviation(aPnt)))
+--- a/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_NURBSRangeSplitter.cxx	2026-09-16 17:19:47
++++ b/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_NURBSRangeSplitter.cxx	2026-09-16 17:19:47
+@@ -253,19 +253,35 @@
+   }
+ 
+   return isAdded;
++}
++
++//! Checks whether the given parameter lies strictly inside the given range.
++bool isInsideRange(const double                     theParam,
++                   const std::pair<double, double>& theRange,
++                   const double                     theTolerance)
++{
++  return theParam > theRange.first + theTolerance && theParam < theRange.second - theTolerance;
+ }
+ 
+ //! Checks whether intervals should be split.
+ //! Returns true in case if it is impossible to compute normal
+-//! directly on intervals, false is returned elsewhere.
++//! directly on intervals inside the face's range, false is returned elsewhere.
++//! A surface node on the range's boundary is never inserted (only nodes
++//! classified inside the face are), so a singular point there, such as the
++//! edge of a surface swept from a curve that starts at rest, is no reason to
++//! add interior nodes.
+ bool toSplitIntervals(const occ::handle<Geom_Surface>& theSurf,
+-                      const NCollection_Array1<double> (&theIntervals)[2])
++                      const NCollection_Array1<double> (&theIntervals)[2],
++                      const std::pair<double, double>& theRangeU,
++                      const std::pair<double, double>& theRangeV,
++                      const std::pair<double, double>& theToleranceUV)
+ {
+   int aIntervalU = theIntervals[0].Lower();
+   for (; aIntervalU <= theIntervals[0].Upper(); ++aIntervalU)
+   {
+     const double aParamU = theIntervals[0].Value(aIntervalU);
+-    if (Precision::IsInfinite(aParamU))
++    if (Precision::IsInfinite(aParamU)
++        || !isInsideRange(aParamU, theRangeU, theToleranceUV.first))
+     {
+       continue;
+     }
+@@ -275,7 +291,8 @@
+     {
+       gp_Dir       aNorm;
+       const double aParamV = theIntervals[1].Value(aIntervalV);
+-      if (Precision::IsInfinite(aParamV))
++      if (Precision::IsInfinite(aParamV)
++          || !isInsideRange(aParamV, theRangeV, theToleranceUV.second))
+       {
+         continue;
+       }
+@@ -460,7 +477,11 @@
+   getUndefinedInterval(aSurface, true, aContinuity, GetRangeU(), aIntervals[0]);
+   getUndefinedInterval(aSurface, false, aContinuity, GetRangeV(), aIntervals[1]);
+ 
+-  const bool isSplitIntervals = toSplitIntervals(aSurface->GeomSurfaceOriginal(), aIntervals);
++  const bool isSplitIntervals = toSplitIntervals(aSurface->GeomSurfaceOriginal(),
++                                                 aIntervals,
++                                                 GetRangeU(),
++                                                 GetRangeV(),
++                                                 GetToleranceUV());
+ 
+   if (!initParamsFromIntervals(aIntervals[0],
+                                GetRangeU(),
