@@ -1840,85 +1840,307 @@ export function inset(outline: SectionEntry[], by: number): SectionEntry[] {
  * The outline of an involute spur gear, for `extrude`: centred on the origin,
  * a tooth centred on +X, anticlockwise.
  *
- * `module` is the pitch diameter over the tooth count, in mm; `teeth` the
- * count; `pressureAngle` in degrees, 20 unless given. The pitch circle is
- * `module * teeth / 2`, the tip `addendum` outside it (default `module`) and
- * the root `dedendum` inside it (default `1.25 * module`). `backlash` thins
- * every tooth by that many mm at the pitch circle, the play a mesh needs.
+ * `module` is the reference diameter over the tooth count, in mm; `teeth` the
+ * count; `pressureAngle` in degrees, 20 unless given. The reference (pitch)
+ * circle is `module * teeth / 2`, the tip `addendum` outside it (default
+ * `module`) and the root `dedendum` inside it (default `1.25 * module`).
+ * `backlash` thins every tooth by that many mm at the reference circle, the
+ * play a mesh needs: two gears each thinned by it and centred at their centre
+ * distance are `backlash · cos(pressureAngle)` apart between flanks.
+ *
+ * `profileShift` is the profile shift coefficient x (default 0): the gear is
+ * cut with the hob moved `x · module` away from the centre, so the tip and the
+ * root both move out by that much and the tooth is `2 · x · module ·
+ * tan(pressureAngle)` thicker at the reference circle. A positive shift is how
+ * a gear with few teeth avoids undercut; mate shifted gears with
+ * `spurGearPair`, which works out their centre distance.
  *
  * Every flank is a `{ curve }` entry drawn from the involute of the base
- * circle (`pitch radius · cos pressureAngle`) and **certified** to lie within
- * `tolerance` mm of it (default 0.0001) — the part reports the bound as
+ * circle (`reference radius · cos pressureAngle`) and **certified** to lie
+ * within `tolerance` mm of it (default 0.0001) — the part reports the bound as
  * `curve_bound_mm`. Between the flanks the tip and root are exact circular
  * arcs. Below the base circle, where the involute has nothing to follow, the
- * flank runs straight in along the radius to the root; a hobbed gear has a
- * trochoid there instead, and nothing meshes against it.
+ * flank runs straight in along the radius to the root. A hob leaves a
+ * trochoid fillet there instead, which is thicker than that line, so the
+ * outline has no material a hobbed gear lacks and meshes wherever a hobbed one
+ * does; nothing meshes against the fillet.
  *
- * Refused, with the numbers: a tooth count that a hob would undercut (fewer
- * than `2 / sin²(pressureAngle)`: 18 at 20°, 12 at 25°), because the cut would
- * remove working flank this outline keeps; teeth that come to a point before
- * the tip circle; and teeth so thick the root has no room.
+ * Refused, with the numbers: a gear a hob would undercut — a shift below
+ * `dedendum / module − 0.25 − (teeth / 2) · sin²(pressureAngle)`, which is
+ * `1 − (teeth / 2) · sin²(pressureAngle)` for full-depth teeth, so an
+ * unshifted gear of fewer than 17.1 teeth at 20° or 11.2 at 25° — because the
+ * cut removes working flank, and this outline does not draw the trochoid an
+ * undercut root has; teeth that come to a point before the tip circle; and
+ * teeth so thick the root has no room.
  *
  * A 20-tooth, module 2 gear 10 mm thick with a 6 mm bore:
  * `extrude(spurGearOutline({ module: 2, teeth: 20 }), 10).cut(cylinder(3, 12))`.
- * Two gears mesh at centre distance `module * (teeth1 + teeth2) / 2`; turn
- * one by half a tooth (`180 / teeth` degrees) so a tooth meets a space.
+ * A 12-tooth pinion, which needs a shift of at least 0.298:
+ * `spurGearOutline({ module: 2, teeth: 12, profileShift: 0.3 })`. Two
+ * unshifted gears mesh at centre distance `module * (teeth1 + teeth2) / 2`,
+ * the second turned by `180 / teeth2` degrees when its tooth count is even so
+ * that a space faces the first gear's tooth; `spurGearPair` gives both
+ * numbers for any pair.
  */
 export function spurGearOutline(options: {
   module: number;
   teeth: number;
   pressureAngle?: number;
+  profileShift?: number;
   addendum?: number;
   dedendum?: number;
   backlash?: number;
   tolerance?: number;
 }): SectionEntry[] {
   const { module: m, teeth: z } = options ?? ({} as typeof options);
-  const degrees = options?.pressureAngle ?? 20;
-  const addendum = options?.addendum ?? m;
-  const dedendum = options?.dedendum ?? 1.25 * m;
-  const backlash = options?.backlash ?? 0;
-  const tolerance = options?.tolerance ?? 1e-4;
-  if (!(typeof m === "number" && m > 0 && Number.isFinite(m))) {
-    throw new Error(`spurGearOutline takes { module, teeth }: module is the pitch diameter over the tooth count in mm, more than 0; got ${JSON.stringify(m)}`);
+  checkGearModule(m, z, "spurGearOutline");
+  return involuteGear({
+    module: m,
+    teeth: z,
+    degrees: options.pressureAngle ?? 20,
+    shift: options.profileShift ?? 0,
+    addendum: options.addendum ?? m,
+    dedendum: options.dedendum ?? 1.25 * m,
+    backlash: options.backlash ?? 0,
+    tolerance: options.tolerance ?? 1e-4,
+    what: "spurGearOutline",
+  });
+}
+
+/**
+ * Two full-depth involute spur gears that mesh: their outlines, the distance
+ * between their centres, and how far to turn the second one.
+ *
+ * `teeth` is `[first, second]` and `profileShift` their shift coefficients
+ * (default `[0, 0]`); `module`, `pressureAngle` and `tolerance` are as in
+ * `spurGearOutline`, shared by both. `backlash` is the pair's play in mm,
+ * measured along the line of action with one pair of flanks touching; each
+ * gear's teeth are thinned by half of it, and centred as returned the two
+ * gears are `backlash / 2` apart at every flank in contact — what
+ * `between_bodies` reads on the built pair.
+ *
+ * Returns `{ centres, pressureAngle, turn, outlines: [first, second] }`:
+ * - `centres` — mm between the gears' axes. Unshifted, or shifted by opposite
+ *   amounts, it is `module * (teeth1 + teeth2) / 2`; otherwise the working
+ *   pressure angle changes, from `inv αw = inv α + 2 tan α (x1 + x2) /
+ *   (z1 + z2)`, and `centres` is `module * (z1 + z2) / 2 · cos α / cos αw`.
+ * - `pressureAngle` — that working pressure angle αw, in degrees.
+ * - `turn` — degrees to rotate the second gear about its own axis before
+ *   placing it at `[centres, 0]`, so a space faces the first gear's tooth on
+ *   +X: `180 / teeth2` for an even count, 0 for an odd one.
+ * - `outlines` — for `extrude`. A shifted pair's tips are both lowered by
+ *   `(x1 + x2 − (centres − module (z1 + z2) / 2) / module) · module`, the
+ *   standard tip shortening, so each tip still clears the other gear's root
+ *   by `0.25 · module`.
+ *
+ * Refused, with the numbers: a shift that lets the hob undercut either gear
+ * (as in `spurGearOutline`); a pair whose tip of one reaches below where the
+ * other's involute starts along the line of action; and a pair whose contact
+ * ratio is under 1, which would lose contact between one pair of teeth and
+ * the next.
+ *
+ * A 12- and 30-tooth pair, module 2, the pinion shifted to avoid undercut:
+ * ```js
+ * const pair = spurGearPair({ module: 2, teeth: [12, 30], profileShift: [0.3, 0], backlash: 0.1 });
+ * const pinion = extrude(pair.outlines[0], 8);
+ * const wheel = extrude(pair.outlines[1], 8).rotate("z", pair.turn).at(pair.centres, 0, 0);
+ * ```
+ */
+export function spurGearPair(options: {
+  module: number;
+  teeth: [number, number];
+  profileShift?: [number, number];
+  pressureAngle?: number;
+  backlash?: number;
+  tolerance?: number;
+}): { centres: number; pressureAngle: number; turn: number; outlines: [SectionEntry[], SectionEntry[]] } {
+  const { module: m, teeth } = options ?? ({} as typeof options);
+  const shifts = options?.profileShift ?? [0, 0];
+  if (!(Array.isArray(teeth) && teeth.length === 2)) {
+    throw new Error(`spurGearPair's teeth is [first, second], the two tooth counts; got ${shown(teeth)}`);
   }
-  if (!(Number.isInteger(z) && z > 0)) {
-    throw new Error(`spurGearOutline's teeth is a whole number of teeth; got ${JSON.stringify(z)}`);
+  if (!(Array.isArray(shifts) && shifts.length === 2 && shifts.every((x) => typeof x === "number" && Number.isFinite(x)))) {
+    throw new Error(`spurGearPair's profileShift is [first, second], two shift coefficients (usually between -0.5 and 1); got ${shown(shifts)}`);
   }
-  if (!(degrees > 0 && degrees < 45)) {
-    throw new Error(`spurGearOutline's pressureAngle is in degrees, between 0 and 45 (usually 20); got ${JSON.stringify(degrees)}`);
+  for (const z of teeth) checkGearModule(m, z, "spurGearPair");
+  const degrees = options.pressureAngle ?? 20;
+  checkPressureAngle(degrees, "spurGearPair");
+  const backlash = options.backlash ?? 0;
+  if (!(typeof backlash === "number" && backlash >= 0 && Number.isFinite(backlash))) {
+    throw new Error(`spurGearPair's backlash is the pair's play in mm along the line of action, at least 0; got ${shown(backlash)}`);
   }
-  if (!(addendum > 0 && dedendum > 0 && backlash >= 0)) {
-    throw new Error(`spurGearOutline's addendum and dedendum are mm beyond and inside the pitch circle, more than 0, and backlash is at least 0; got ${addendum}, ${dedendum} and ${backlash}`);
+  const [z1, z2] = teeth;
+  const [x1, x2] = shifts;
+  for (const [z, x] of [
+    [z1, x1],
+    [z2, x2],
+  ]) {
+    checkUndercut(m, z, x, degrees, 1.25 * m, `spurGearPair's ${z}-tooth gear`);
   }
   const alpha = (degrees * Math.PI) / 180;
-  const fewest = 2 / Math.sin(alpha) ** 2;
-  if (z < fewest) {
+  const inv = (a: number) => Math.tan(a) - a;
+  const target = inv(alpha) + (2 * Math.tan(alpha) * (x1 + x2)) / (z1 + z2);
+  if (!(target > 0)) {
+    const least = (-(z1 + z2) * inv(alpha)) / (2 * Math.tan(alpha));
     throw new Error(
-      `a hob undercuts a gear of fewer than 2 / sin²(${degrees}°) = ${fewest.toFixed(2)} teeth, cutting away working flank this outline would keep. Use ${Math.ceil(fewest)} or more teeth, or a larger pressureAngle: 25° needs ${Math.ceil(2 / Math.sin((25 * Math.PI) / 180) ** 2)}`,
+      `spurGearPair: shifts ${x1} and ${x2} thin the teeth so far that they meet at no centre distance: x1 + x2 must be more than −(z1 + z2) · inv(${degrees}°) / (2 tan ${degrees}°) = ${least.toFixed(4)}. Shift one of the gears out`,
     );
   }
+  // inv is increasing and convex on (0, π/2); Newton from above converges.
+  let working = Math.max(alpha, Math.cbrt(3 * target)) + 0.1;
+  for (let k = 0; k < 60; k++) {
+    const step = (inv(working) - target) / Math.tan(working) ** 2;
+    working -= step;
+    if (Math.abs(step) < 1e-15) break;
+  }
+  if (!(working > 0 && working < Math.PI / 2 && Math.abs(inv(working) - target) < 1e-12)) {
+    throw new Error(`spurGearPair: shifts ${x1} and ${x2} are too large for ${z1} and ${z2} teeth to find a working pressure angle; shift the gears less far out`);
+  }
+  const standard = (m * (z1 + z2)) / 2;
+  const centres = (standard * Math.cos(alpha)) / Math.cos(working);
+  const shortening = x1 + x2 - (centres - standard) / m;
+  const tolerance = options.tolerance ?? 1e-4;
+  const thinning = backlash / (2 * Math.cos(alpha));
+  const gear = (z: number, x: number) =>
+    involuteGear({
+      module: m,
+      teeth: z,
+      degrees,
+      shift: x,
+      addendum: m * (1 - shortening),
+      dedendum: 1.25 * m,
+      backlash: thinning,
+      tolerance,
+      what: `spurGearPair's ${z}-tooth gear`,
+    });
+  const outlines: [SectionEntry[], SectionEntry[]] = [gear(z1, x1), gear(z2, x2)];
+
+  const base = [z1, z2].map((z) => ((m * z) / 2) * Math.cos(alpha));
+  const tips = [
+    [z1, x1],
+    [z2, x2],
+  ].map(([z, x]) => (m * z) / 2 + m * (1 + x - shortening));
+  const floors = [
+    [z1, x1],
+    [z2, x2],
+  ].map(([z, x], i) => Math.max(base[i], (m * z) / 2 - m * (1.25 - x)));
+  const line = centres * Math.sin(working);
+  const reach = [0, 1].map((i) => Math.sqrt(tips[i] ** 2 - base[i] ** 2));
+  for (const [i, j] of [
+    [0, 1],
+    [1, 0],
+  ]) {
+    // Where gear j's tip leaves gear i's flank, along the line of action.
+    const along = line - reach[j];
+    const radius = Math.sqrt(base[i] ** 2 + Math.max(0, along) ** 2);
+    if (!(along >= 0 && radius >= floors[i] - 1e-9)) {
+      throw new Error(
+        `spurGearPair: the ${teeth[j]}-tooth gear's tip reaches the ${teeth[i]}-tooth gear ${along < 0 ? "below its base circle" : `at radius ${radius.toFixed(3)} mm, below its ${floors[i].toFixed(3)} mm root`} along the line of action, where its flank is no involute, so the teeth would jam. Shift the ${teeth[i]}-tooth gear out further, or the ${teeth[j]}-tooth gear in`,
+      );
+    }
+  }
+  const contactRatio = (reach[0] + reach[1] - line) / (Math.PI * m * Math.cos(alpha));
+  if (!(contactRatio >= 1)) {
+    throw new Error(
+      `spurGearPair: the contact ratio of this pair is ${contactRatio.toFixed(3)}, under 1, so one pair of teeth lets go before the next takes up the load. Shift the gears less far apart (x1 + x2 is ${x1 + x2}), use more teeth, or a smaller pressureAngle`,
+    );
+  }
+  return {
+    centres,
+    pressureAngle: (working * 180) / Math.PI,
+    turn: z2 % 2 === 0 ? 180 / z2 : 0,
+    outlines,
+  };
+}
+
+function checkGearModule(m: unknown, z: unknown, what: string): void {
+  if (!(typeof m === "number" && m > 0 && Number.isFinite(m))) {
+    throw new Error(`${what} takes { module, teeth }: module is the reference diameter over the tooth count in mm, more than 0; got ${shown(m)}`);
+  }
+  if (!(typeof z === "number" && Number.isInteger(z) && z > 0)) {
+    throw new Error(`${what}'s teeth is a whole number of teeth; got ${shown(z)}`);
+  }
+}
+
+function checkPressureAngle(degrees: unknown, what: string): void {
+  if (!(typeof degrees === "number" && degrees > 0 && degrees < 45)) {
+    throw new Error(`${what}'s pressureAngle is in degrees, between 0 and 45 (usually 20); got ${shown(degrees)}`);
+  }
+}
+
+/**
+ * Refuse a gear whose hob would undercut it. The hob that cuts the root has a
+ * straight flank that ends 0.25 · module short of it, in the rounded tip the
+ * standard basic rack gives that clearance; past the point where the line of
+ * action touches the base circle, that end cuts into the involute.
+ */
+function checkUndercut(m: number, z: number, x: unknown, degrees: number, dedendum: number, what: string): void {
+  checkPressureAngle(degrees, what);
+  if (!(typeof x === "number" && Number.isFinite(x))) {
+    throw new Error(`${what}'s profileShift is the shift coefficient x, a number (usually between -0.5 and 1); got ${shown(x)}`);
+  }
+  const sin2 = Math.sin((degrees * Math.PI) / 180) ** 2;
+  const flankDepth = dedendum / m - 0.25;
+  const fewestShift = flankDepth - (z / 2) * sin2;
+  if (x < fewestShift - 1e-12) {
+    const depth = Math.abs(flankDepth - 1) < 1e-12 ? "1" : `${flankDepth} (dedendum / module − 0.25)`;
+    const fewestTeeth = Math.ceil((2 * (flankDepth - x)) / sin2 - 1e-9);
+    throw new Error(
+      `${what}: a hob undercuts ${z} teeth at ${degrees}° unless the profile is shifted out by at least ${depth} − (${z} / 2) · sin²(${degrees}°) = ${fewestShift.toFixed(4)}, and profileShift is ${x}. The cut would remove working flank near the root, and this outline does not draw the trochoid an undercut root has, so it refuses rather than keep a flank the cutter removes. Use profileShift: ${(Math.ceil(fewestShift * 1000) / 1000).toFixed(3)} or more, ${fewestTeeth} or more teeth, or a larger pressureAngle`,
+    );
+  }
+}
+
+/**
+ * One involute gear's outline. `addendum` and `dedendum` are the unshifted
+ * tip and root depths.
+ */
+function involuteGear(g: {
+  module: number;
+  teeth: number;
+  degrees: number;
+  shift: number;
+  addendum: number;
+  dedendum: number;
+  backlash: number;
+  tolerance: number;
+  what: string;
+}): SectionEntry[] {
+  const { module: m, teeth: z, degrees, shift: x, addendum, dedendum, backlash, tolerance, what } = g;
+  if (!(addendum > 0 && dedendum > 0 && backlash >= 0)) {
+    throw new Error(`${what}'s addendum and dedendum are mm beyond and inside the reference circle, more than 0, and backlash is at least 0; got ${addendum}, ${dedendum} and ${backlash}`);
+  }
+  checkUndercut(m, z, x, degrees, dedendum, what);
+  const alpha = (degrees * Math.PI) / 180;
   const pitch = (m * z) / 2;
   const base = pitch * Math.cos(alpha);
-  const tip = pitch + addendum;
-  const root = pitch - dedendum;
+  const tip = pitch + addendum + x * m;
+  const root = pitch - dedendum + x * m;
   if (!(root > 0)) {
-    throw new Error(`spurGearOutline's dedendum ${dedendum} reaches past the centre of a ${pitch} mm pitch radius; make it smaller`);
+    throw new Error(`${what}'s root circle, ${dedendum} mm inside the ${pitch} mm reference radius and shifted ${x * m} mm out, reaches past the centre; make the dedendum smaller`);
   }
   const involute = (a: number) => Math.tan(a) - a;
   // Half the tooth's angular width at the base circle, and at radius r.
-  const halfAtBase = (Math.PI * m / 2 - backlash) / (2 * pitch) + involute(alpha);
+  const thickness = m * (Math.PI / 2 + 2 * x * Math.tan(alpha)) - backlash;
+  const halfAtBase = thickness / (2 * pitch) + involute(alpha);
   const halfAt = (r: number) => (r <= base ? halfAtBase : halfAtBase - involute(Math.acos(base / r)));
   const rollAt = (r: number) => (r <= base ? 0 : Math.sqrt((r / base) ** 2 - 1));
   if (!(halfAt(tip) > 0)) {
-    const pointed = [...Array(200).keys()].map((k) => pitch + (addendum * k) / 200).find((r) => halfAt(r) <= 0) ?? pitch;
+    // The involute's half-width falls monotonically above the base circle.
+    let low = Math.max(base, root);
+    let high = tip;
+    for (let k = 0; k < 60; k++) {
+      const mid = (low + high) / 2;
+      if (halfAt(mid) > 0) low = mid;
+      else high = mid;
+    }
     throw new Error(
-      `the teeth of this gear come to a point ${(pointed - pitch).toFixed(3)} mm outside the pitch circle, inside the ${addendum} mm addendum; lower the addendum below that, or use more teeth`,
+      `${what}: the teeth come to a point at radius ${low.toFixed(3)} mm, inside the ${tip.toFixed(3)} mm tip circle (${(low - pitch).toFixed(3)} mm outside the reference circle); lower the addendum or the profileShift, or use more teeth`,
     );
   }
   const floor = Math.max(root, base);
   if (!(halfAt(floor) < Math.PI / z)) {
-    throw new Error(`the tooth spaces of this gear close up at the ${floor.toFixed(3)} mm circle, so the teeth merge there: use a smaller dedendum`);
+    throw new Error(`${what}: the tooth spaces close up at the ${floor.toFixed(3)} mm circle, so the teeth merge there: use a smaller dedendum or profileShift`);
   }
   const t0 = rollAt(root);
   const t1 = rollAt(tip);

@@ -129,7 +129,9 @@ given by a formula, drawn by the script — where the function lives — as C1
 cubic Hermite pieces with a bound it states and, given the function's
 derivative and a fourth-derivative bound, certifies; the kernel measures the
 built curve against the function between the pieces. `spurGearOutline` draws
-involute teeth on it. docs/DSL_GAPS.md has the measurements.
+involute teeth on it, profile-shifted when asked, and `spurGearPair` meshes two
+at the centre distance their shifts need. docs/DSL_GAPS.md has the
+measurements.
 
 **Still out:** a section with holes (cut a second solid), a periodic or rational B-spline entry, tangent
 continuity asked for across a corner, and draft on a curved outline.

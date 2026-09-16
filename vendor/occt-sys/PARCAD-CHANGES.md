@@ -100,7 +100,21 @@ of `lib`, `libd`, `libi` holds `TKernel`, for a fresh build and for
 
 ## Changes to OCCT itself
 
-Two patches.
+Three patches.
+
+`patches/0003-mesh-deflection-at-the-foot.patch`: BRepMesh judges a B-spline
+face's mesh by where its elements are rather than where their parameters are.
+The deflection control samples each link and triangle at the foot of the
+perpendicular from its own middle instead of at its parametric middle, and
+the NURBS range splitter no longer adds a row of nodes for a knot where the
+normal is singular when that knot is on the face's boundary. Found on
+certified involute gears, whose flanks start at rest on the base circle: 20300
+triangles for a gear a fitted flank meshes in 1916, now 1996. Over the eval
+corpus triangles fell 12.6 % and mesh time 11 %, no part's measured
+deviation from its surface grew, and seven parts the old check had left
+outside the 0.01 mm deflection are now inside it. The header carries the
+measurements; docs/GOTCHAS.md, "A curve that starts slowly meshed in ten
+times the triangles", the mechanism. Not yet offered upstream.
 
 `patches/0002-unify-merge-must-not-abort.patch`: edge unification in
 `ShapeUpgrade_UnifySameDomain` no longer aborts wholesale when a single

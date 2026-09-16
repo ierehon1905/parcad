@@ -45,3 +45,9 @@ dropping it.
   reachable through an edge that is closed on one of its faces (a seam
   generator) chained with a collinear neighbour. The failed chain is now
   left unmerged instead. Header inside the patch; not yet offered upstream.
+- `0003-mesh-deflection-at-the-foot.patch` — BRepMesh's deflection control
+  samples an element at the foot of its own middle rather than at its
+  parametric middle, and the NURBS range splitter ignores singular normals on
+  the face's boundary. A curve drawn from rest (an involute on its base
+  circle) meshed in ten times the triangles; header inside the patch; not
+  yet offered upstream.

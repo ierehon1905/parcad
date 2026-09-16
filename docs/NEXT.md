@@ -134,7 +134,7 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    topology and every refusal are identical and only tessellation moves: at most
    1.7e-4 in volume or area. `re-entrant-loft` holds its triangle count to 260%,
    traced to one Delaunay insertion of a point on the link it splits (GOTCHAS,
-   "A planar wall meshes two ways"). The kernel is 19.7 MB, 6.4 MB gzipped, 4.3
+   "A planar wall meshed two ways"). The kernel is 19.7 MB, 6.4 MB gzipped, 4.3
    MB brotli; the bracket's snapshot in headless Chrome equals the native host's
    field for field, first part on screen 650 ms after navigation locally. Pages is
    enabled (source: GitHub Actions) and `.github/workflows/playground.yml` is

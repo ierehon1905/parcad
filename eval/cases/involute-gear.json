@@ -1,16 +1,16 @@
 {
   "name": "involute-gear",
   "script": "eval/scripts/involute-gear.js",
-  "why": "A module 2, 20-tooth, 20 degree spur gear 10 thick, every flank a certified { curve } on the base circle rb = 20 cos 20 = 18.794. Closed-form section: z * (rf^2 * gap / 2 + ra^2 * psiA + rb^2 * tA^3 / 3) with rf = 17.5, ra = 22, tA = sqrt((ra/rb)^2 - 1) = 0.6085, half-tooth angles psiB = pi/40 + inv 20 = 0.09344 at the base and psiA = 0.03159 at the tip, gap = 2pi/20 - 2 psiB: 1226.106 mm2, so 12261.057 mm3; the mesh reads 0.03 % under it at 0.01 mm, as every curved wall here does. The points are the analytic involute itself: tooth 0's rising flank at roll t = 0.15, 0.35, 0.55, each on the boundary and 0.01 mm either side of it along the involute's normal (sin b, -cos b), b = t - psiB, and tooth 7's falling flank at t = 0.3 and 0.01 mm outside it - so the built flank is held to the equation, not to any points the script drew it through. curve_bound_mm is the bound the script proved from |r''''| = rb sqrt(9 + t^2): eight pieces of tA/8 per flank, sqrt2 * rb * sqrt(9 + tA^2) * h^4 / 384; deviation_mm is the kernel's own reading against points of the involute between the pieces' ends.",
+  "why": "A module 2, 20-tooth, 20 degree spur gear 10 thick, every flank a certified { curve } on the base circle rb = 20 cos 20 = 18.794. Closed-form section: z * (rf^2 * gap / 2 + ra^2 * psiA + rb^2 * tA^3 / 3) with rf = 17.5, ra = 22, tA = sqrt((ra/rb)^2 - 1) = 0.6085, half-tooth angles psiB = pi/40 + inv 20 = 0.09344 at the base and psiA = 0.03159 at the tip, gap = 2pi/20 - 2 psiB: 1226.106 mm2, so 12261.057 mm3; the mesh reads 0.04 % under it at 0.01 mm, as every curved wall here does. It meshes in 1996 triangles: before vendor patch 0003 the mesher read the involute's slow start on the base circle as deflection and took 20300 (docs/GOTCHAS.md, \"A curve that starts slowly meshed in ten times the triangles\"). The points are the analytic involute itself: tooth 0's rising flank at roll t = 0.15, 0.35, 0.55, each on the boundary and 0.01 mm either side of it along the involute's normal (sin b, -cos b), b = t - psiB, and tooth 7's falling flank at t = 0.3 and 0.01 mm outside it - so the built flank is held to the equation, not to any points the script drew it through. curve_bound_mm is the bound the script proved from |r''''| = rb sqrt(9 + t^2): eight pieces of tA/8 per flank, sqrt2 * rb * sqrt(9 + tA^2) * h^4 / 384; deviation_mm is the kernel's own reading against points of the involute between the pieces' ends.",
   "brep": {
     "size": [
       43.998,
       43.998,
       10.0
     ],
-    "volume_mm3": 12257.093,
-    "area_mm2": 5083.806,
-    "triangles": 20300,
+    "volume_mm3": 12256.021,
+    "area_mm2": 5083.68,
+    "triangles": 1996,
     "bodies": 1,
     "voids": 0,
     "stands_on_mm2": 1225.602,
@@ -20,6 +20,11 @@
     "edges": 720,
     "curves": 360,
     "deviation_mm": 0.0,
+    "requires": [
+      "section-curves",
+      "bspline-knots",
+      "held-curves"
+    ],
     "curve_bound_mm": 7.093665147216587e-6,
     "curve_bound": "certified",
     "perception": {

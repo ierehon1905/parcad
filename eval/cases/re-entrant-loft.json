@@ -1,7 +1,7 @@
 {
   "name": "re-entrant-loft",
   "script": "eval/scripts/re-entrant-loft.js",
-  "why": "A re-entrant loft section, allowed since sections no longer need to be convex: a ruled loft between an L and the L at half size is the frustum h/3 (A1 + A2 + sqrt(A1 A2)) = 5250 mm3 exactly, every wall planar. A pairing that slipped one vertex would twist the walls into saddles and read short: the twisted-loft tripwire applied to a non-convex outline. The mesher's triangle count is held to 260%: BRepMesh's deflection control asks to insert the midpoint of each planar wall's diagonal, a point exactly on the link it would split, and whether the Delaunay insertion takes it is a rounding tie. Native arm64 drops it and leaves five walls two triangles each (634); the WebAssembly build takes it and refines them to a few hundred (2240). Volume, area, size and topology agree to every recorded digit, which is what this case holds; see docs/GOTCHAS.md, \"A planar wall meshes two ways\".",
+  "why": "A re-entrant loft section, allowed since sections no longer need to be convex: a ruled loft between an L and the L at half size is the frustum h/3 (A1 + A2 + sqrt(A1 A2)) = 5250 mm3 exactly, every wall planar. A pairing that slipped one vertex would twist the walls into saddles and read short: the twisted-loft tripwire applied to a non-convex outline. The mesher's triangle count is held to 260%. BRepMesh's deflection control used to ask to insert the parametric midpoint of each planar wall's diagonal, a point exactly on the link it would split, and whether the Delaunay insertion took it was a rounding tie: native arm64 dropped it (634 triangles), the WebAssembly build took it and refined the walls to a few hundred (2240). Vendor patch 0003 measures a link at the foot of its own midpoint, which on a plane is the midpoint itself, so nothing is asked for and natively every wall is two triangles (20); the WebAssembly build has not been measured since, and should now agree; if it still refines, this case goes red there. Volume, area, size and topology agree to every recorded digit, which is what this case holds; see docs/GOTCHAS.md, \"A planar wall meshed two ways\".",
   "brep": {
     "size": [
       30.0,
@@ -10,7 +10,7 @@
     ],
     "volume_mm3": 5250.0,
     "area_mm2": 2293.045,
-    "triangles": 634,
+    "triangles": 20,
     "bodies": 1,
     "voids": 0,
     "stands_on_mm2": 450.0,

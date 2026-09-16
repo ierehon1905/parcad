@@ -53,8 +53,8 @@ there is a defect rather than a value to re-record.
 }
 ```
 
-`kind` is one of `rejected`, `crashed`, `timedout`, `host`, or `error` (the
-graph layer, before the kernel sees the part). `crashed` is a legitimate expectation:
+`kind` is one of `rejected`, `crashed`, `timedout`, `host`, or `error` (before
+the kernel sees the part: the script threw, or the graph layer refused it). `crashed` is a legitimate expectation:
 OCCT segfaults on some impossible fillets, and what is asserted is that the
 outcome arrives as a typed error with a breadcrumb, not that OCCT survives.
 

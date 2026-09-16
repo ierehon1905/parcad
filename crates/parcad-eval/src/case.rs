@@ -50,7 +50,8 @@ pub enum RefusalKind {
     Crashed,
     TimedOut,
     Host,
-    /// The graph layer refused the document before the kernel saw it.
+    /// Refused before the kernel saw the part: the script threw, or the
+    /// graph layer refused the document.
     Error,
 }
 

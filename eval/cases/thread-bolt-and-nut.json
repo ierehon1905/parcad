@@ -8,9 +8,9 @@
       13.0,
       25.0
     ],
-    "volume_mm3": 1721.812,
-    "area_mm2": 1750.901,
-    "triangles": 17622,
+    "volume_mm3": 1721.78,
+    "area_mm2": 1750.889,
+    "triangles": 11260,
     "bodies": 2,
     "voids": 0,
     "stands_on_mm2": 36.872,
@@ -26,7 +26,7 @@
           7.598,
           20.0
         ],
-        "volume_mm3": 737.548,
+        "volume_mm3": 737.494,
         "faces": 71,
         "edges": 286,
         "watertight": true,
@@ -39,7 +39,7 @@
           13.0,
           8.0
         ],
-        "volume_mm3": 984.264,
+        "volume_mm3": 984.286,
         "faces": 37,
         "edges": 158,
         "watertight": true,
