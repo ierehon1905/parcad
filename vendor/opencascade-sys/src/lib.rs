@@ -959,6 +959,27 @@ pub mod ffi {
             at: Pin<&mut gp_Pnt>,
             normal: Pin<&mut gp_Vec>,
         ) -> bool;
+        pub fn NearestBoundary_evaluate(
+            nearest: Pin<&mut NearestBoundary>,
+            face: i32,
+            u: f64,
+            v: f64,
+            inside: bool,
+            at: Pin<&mut gp_Pnt>,
+            normal: Pin<&mut gp_Vec>,
+        ) -> bool;
+        pub fn NearestBoundary_edge_wedges(nearest: Pin<&mut NearestBoundary>, spacing: f64, out: &mut Vec<f64>);
+        pub fn NearestBoundary_settle_pair(
+            nearest: Pin<&mut NearestBoundary>,
+            a: i32,
+            b: i32,
+            ga: &gp_Pnt,
+            gb: &gp_Pnt,
+            pa: Pin<&mut gp_Pnt>,
+            pb: Pin<&mut gp_Pnt>,
+            inside: &mut bool,
+        ) -> f64;
+        pub fn NearestBoundary_close_pairs(nearest: Pin<&mut NearestBoundary>, reach: f64, out: &mut Vec<f64>);
 
         // BRepFeat
         type BRepFeat_MakeCylindricalHole;

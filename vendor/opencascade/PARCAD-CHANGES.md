@@ -397,3 +397,11 @@ made of arcs and splines.
   built through.
 - `Wire::to_shape()` — the same handle as a `Shape`, borrowed; `From<Wire>`
   consumes and a wire is not `Clone`.
+- `NearestBoundary::evaluate`, `edge_wedges`, `close_pairs` and
+  `settle_pair`, with `EdgeWedge` and `ClosePair`: surface points by
+  parameter, the angle between the faces along every edge, and pairs of faces
+  that come close without sharing an edge, for the wall-thickness search.
+  See `opencascade-sys/PARCAD-CHANGES.md`.
+- `Mesh::face_uvs` — each vertex's own surface parameters, as the
+  triangulation holds them; `uvs` is the same normalised per face for
+  texturing, which cannot be evaluated on the surface.

@@ -17,6 +17,10 @@ pub struct FaceRun {
 pub struct Mesh {
     pub vertices: Vec<DVec3>,
     pub uvs: Vec<DVec2>,
+    /// Each vertex's own surface parameters on its face, as the triangulation
+    /// holds them — `uvs` is these normalised per face for texturing. Added
+    /// for parcad; see PARCAD-CHANGES.md.
+    pub face_uvs: Vec<DVec2>,
     pub normals: Vec<DVec3>,
     pub indices: Vec<usize>,
     /// One run per *triangulated* face, in traversal order — so shorter than
@@ -43,6 +47,7 @@ impl Mesher {
     pub fn mesh(mut self) -> Mesh {
         let mut vertices = vec![];
         let mut uvs = vec![];
+        let mut face_uvs = vec![];
         let mut normals = vec![];
         let mut indices = vec![];
         let mut faces = vec![];
@@ -89,6 +94,7 @@ impl Mesher {
                 v_max = v_max.max(v);
 
                 uvs.push(dvec2(u, v));
+                face_uvs.push(dvec2(u, v));
             }
 
             // Normalize the newly added UV coordinates.
@@ -140,6 +146,6 @@ impl Mesher {
             });
         }
 
-        Mesh { vertices, uvs, normals, indices, faces }
+        Mesh { vertices, uvs, face_uvs, normals, indices, faces }
     }
 }
