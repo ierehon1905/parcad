@@ -522,9 +522,12 @@ in the page, with the Tauri bridge and the user's session in reach.
 `script.rs` therefore evaluates agent-authored scripts in an embedded QuickJS
 realm with no host functions at all. There is no `fetch`, `require`, filesystem,
 or console to remove — `quickjs-libc` is not linked and nothing adds them back.
-What QuickJS *can* still do is never return or allocate without bound, so a 5 s
-interrupt deadline and a 64 MB cap turn both into ordinary refusals. See
-ROADMAP.md for what this closed and what it did not.
+What QuickJS *can* still do is never return or allocate without bound, so a
+counted work budget and a 64 MB cap turn both into ordinary refusals. The
+budget counts interpreter steps, not seconds, so a part builds or is refused
+identically on any machine under any load; a script raises it for itself with
+`scriptBudget(n)`, so every route that builds the part agrees. GOTCHAS.md has
+the measurements. See ROADMAP.md for what this closed and what it did not.
 
 The DSL those scripts run against is `app/src/dsl.ts`, bundled into the binary by
 `build.rs` at compile time. Not a committed copy: a generated artifact that is

@@ -2180,6 +2180,48 @@ export function around(
 }
 
 // ---------------------------------------------------------------------------
+// Generative work. A part that runs a simulation to produce its sections does
+// real computation before the kernel sees anything. The sandbox that runs a
+// model's script counts that work rather than timing it, so a part passes or
+// fails identically on any machine; `globalThis.__parcadNative` is how the
+// sandbox is reached, and where it is absent (the editor, `tools/run.ts`) the
+// same answer is computed in JavaScript.
+// ---------------------------------------------------------------------------
+
+type ParcadNative = {
+  scriptBudget?: (multiple: number) => void;
+};
+
+const parcadNative = (): ParcadNative =>
+  ((globalThis as { __parcadNative?: ParcadNative }).__parcadNative ?? {});
+
+/** The most `scriptBudget` accepts; `MAX_WORK_MULTIPLE` in script.rs. */
+const MAX_SCRIPT_BUDGET = 10;
+
+/**
+ * Let this script do `multiple` times the default work: put it on the first
+ * line of a part that runs a simulation, a growth or a search to produce its
+ * sections. Work is counted in interpreter steps (function calls plus loop
+ * iterations), never timed, so a part that builds once builds on every machine
+ * however busy; the refusal says how much the script was allowed. The default
+ * is 600 million steps, several seconds of plain arithmetic, far more than
+ * any hand-drawn part uses. A whole number from 1 to 10; calling it again only
+ * ever raises the budget. Where no budget applies (the editor's own preview)
+ * it does nothing.
+ *
+ *     scriptBudget(8);
+ */
+export function scriptBudget(multiple: number): void {
+  if (!(Number.isInteger(multiple) && multiple >= 1 && multiple <= MAX_SCRIPT_BUDGET)) {
+    throw new Error(
+      `scriptBudget takes a whole multiple of the default work from 1 to ${MAX_SCRIPT_BUDGET}, ` +
+        `e.g. scriptBudget(4); got ${JSON.stringify(multiple)}`,
+    );
+  }
+  parcadNative().scriptBudget?.(multiple);
+}
+
+// ---------------------------------------------------------------------------
 // Flattening
 // ---------------------------------------------------------------------------
 

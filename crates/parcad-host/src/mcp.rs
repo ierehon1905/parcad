@@ -148,10 +148,9 @@ pub struct EvaluateRequest {
     /// Seconds the kernel may take, 1 to 600. Defaults to 20, or
     /// PARCAD_OCCT_TIMEOUT. A part that timed out can be asked again with
     /// more; a build that finishes is kept, so the next call on the same
-    /// script — a render, an export, the window — does not wait again. The
-    /// script itself gets the same allowance when it is more than the
-    /// sandbox's 5 s: a part that runs a simulation to draw its sections
-    /// asks for its time here.
+    /// script — a render, an export, the window — does not wait again. A
+    /// script's own work is counted rather than timed and is raised with
+    /// `scriptBudget(n)` in the script, not here.
     #[serde(default)]
     pub timeout_s: Option<f64>,
 }
@@ -1248,11 +1247,10 @@ fn budget(timeout_s: Option<f64>) -> Option<std::time::Duration> {
     timeout_s.map(|s| std::time::Duration::from_secs_f64(s.clamp(1.0, 600.0)))
 }
 
-/// The same `timeout_s` as the script sandbox's deadline: a caller who gives
-/// a heavy part longer gives its script longer too, never less than the
-/// sandbox's own floor.
+/// The same `timeout_s` as the script sandbox's clock backstop, never below
+/// its own. It raises no work budget: that is the script's `scriptBudget`.
 fn script_budget(timeout_s: Option<f64>) -> std::time::Duration {
-    budget(timeout_s).unwrap_or(script::DEADLINE).max(script::DEADLINE)
+    budget(timeout_s).unwrap_or(script::BACKSTOP).max(script::BACKSTOP)
 }
 
 /// Where renders are kept: beside exports, so one variable moves both.

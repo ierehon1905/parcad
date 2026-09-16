@@ -171,6 +171,34 @@ sandbox. Not a new requirement — the frontend already needed bun — but the
 failure now happens during `cargo build` rather than at `bun run tauri dev`. The
 panic names the fix.
 
+### A script's budget is counted, not timed
+
+The sandbox used to stop a script after 5 s of wall clock. That is a
+determinism bug: a script that took 4.0 s idle passed 9 of 10 runs with the
+machine at load 7 and 0 of 10 under twenty `yes` processes, and the lamp that
+motivated it (2.5 s idle) failed 2 of 3 under the same load. A debug build
+tripped it on scripts that finish in microseconds.
+
+`script.rs` now counts QuickJS's own interrupt polls. The interpreter decrements
+a per-context counter on every call and every loop back-jump (and every 10 000
+regex backtracking steps) and polls the handler when it reaches zero, so one
+poll is 10 000 steps and the same bytecode on the same input polls the same
+number of times. The same near-limit script then passed 10 of 10 idle and 10
+of 10 under the hog; one just over the budget failed 10 of 10 both ways.
+
+What the count does *not* see is arithmetic between calls, so steps per
+second varies by workload: about 110 M/s for a bare `Math.sqrt` loop, 26 M/s
+for the lamp's reaction-diffusion body, on an M-series machine. The default
+600 M steps is therefore 5 s of the one and 23 s of the other. The clock
+backstop (120 s per budget multiple, at most 600 s) exists for a script
+heavier per step than both; it is the one limit left that load can move.
+A native call that never polls cannot be stopped by either — the 64 MB cap is
+what bounds those.
+
+The budget belongs to the source, `scriptBudget(n)`, rather than to a call's
+`timeout_s`: a saved part is also built by the CLI, the picker's thumbnail and
+`check_fit`, none of which a caller passes a number to.
+
 ### `cargo build -p parcad-occt` does not build the worker
 
 Without `--features kernel` you get only the host half and the binary is skipped
