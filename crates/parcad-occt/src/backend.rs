@@ -3179,12 +3179,36 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             // the solid on the origin like every other primitive.
             let base = -height / 2.0;
             let solid = match top {
-                None => {
+                None if section.is_polygon() => {
                     let wire = section_wire(&section, |[x, y]| DVec3::new(x, y, base), "extrude profile")
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
                     checked_face(&section, &wire, "extrude profile")
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?
                         .extrude(DVec3::Z * *height)
+                }
+                // A curved outline is swept as a ruled loft between the
+                // section at its two heights rather than by MakePrism. The
+                // solid is the same; its side faces are B-spline surfaces
+                // instead of Geom_SurfaceOfLinearExtrusion, which the
+                // kernel's volume integral misreads by up to 3 % on a fitted
+                // curve (docs/GOTCHAS.md, "The volume integral misreads a wavy
+                // B-spline wall") — and that integral is what the mesh
+                // backstop checks every mesh against.
+                None => {
+                    let bottom = section_wire(&section, |[x, y]| DVec3::new(x, y, base), "extrude profile")
+                        .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+                    checked_face(&section, &bottom, "extrude profile")
+                        .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+                    let top = section_wire(&section, |[x, y]| DVec3::new(x, y, base + height), "extrude profile")
+                        .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+                    let swept = Shape::loft_through(&[LoftProfile::Wire(&bottom), LoftProfile::Wire(&top)], true)
+                        .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+                    let mut swept = swept.single_solid().unwrap_or(swept);
+                    if swept.signed_volume() < 0.0 {
+                        swept = swept.oriented_outward();
+                    }
+                    let placed = if offset == DVec3::ZERO { swept } else { swept.translated(offset) };
+                    return Ok(BuiltShape::primitive(placed, node.tag.as_deref()));
                 }
                 // A drafted prism is a loft between the outline and its inset
                 // copy. `BRepOffsetAPI_DraftAngle` is not bound, and it would be

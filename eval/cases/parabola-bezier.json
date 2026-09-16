@@ -5,12 +5,12 @@
   "brep": {
     "size": [
       20.0,
-      10.0,
+      9.999,
       3.0
     ],
-    "volume_mm3": 399.696,
+    "volume_mm3": 399.738,
     "area_mm2": 415.218,
-    "triangles": 450,
+    "triangles": 160,
     "bodies": 1,
     "voids": 0,
     "stands_on_mm2": 133.246,

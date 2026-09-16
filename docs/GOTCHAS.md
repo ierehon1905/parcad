@@ -445,6 +445,16 @@ dense samples enclose by Green's theorem:
 The mesh sits where a chord tessellation should, 0.04 % under; the integral
 is 0.8 % high on the fit and 2 % high on the interpolant, and *5 % low* on
 the same interpolant when asked for more precision — not converging, moving.
+Nor is waviness needed: a 36-point cam fitted to 19 poles at 0.05 mm and
+extruded 8 read 13045 mm³ against a mesh of 12662 and samples of 12666, and
+the field suite's first model spent eleven refused calls on it. The surface
+is the culprit, not the curve — `MakePrism` sweeps a B-spline edge into a
+`Geom_SurfaceOfLinearExtrusion`, and the same cam as a ruled loft between the
+section at its two heights (a `Geom_BSplineSurface` of the same shape) reads
+12663.5. So `Op::Extrude` now sweeps every curved outline as that ruled loft
+and keeps `MakePrism` for polygons; the three curved extrusions in the corpus
+kept their volumes to the recorded digits and mesh in a fifth of the
+triangles.
 `BRepGProp::SurfaceProperties` has the same trouble one dimension down: on
 the planar face a lamp section's fitted curve bounds (131 poles) it read
 8488 mm² where the curve's samples enclose 8835, and the inset guard built
@@ -453,8 +463,9 @@ fits of few poles integrate to the last digit, which is why the corpus never
 saw it; the backstop's refusal on such a part is a false alarm that reads as
 a missing surface, and its message now says so. Not fixed at the integral:
 the mesh is what every reported number is read from already, so the volume
-defect reaches only that guard, and the inset guard measures both its areas
-by Green's theorem over dense samples of the wires instead. Fit the curve at
+defect reaches only that guard, extrusions no longer make the surface it
+misreads, and the inset guard measures both its areas by Green's theorem over
+dense samples of the wires instead. A sweep along a straight path still can. Fit the curve at
 a looser tolerance, or smooth the points, and the integral settles. `eps`
 stays 1e-7.
 
