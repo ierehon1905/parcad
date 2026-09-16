@@ -311,6 +311,7 @@ fn main() -> Result<()> {
     let mut known = 0usize;
     let mut updated_files = 0usize;
     let mut slow = 0usize;
+    let mut timings: Vec<(String, std::time::Duration, std::time::Duration)> = Vec::new();
 
     for (path, mut case) in cases {
         println!("{}", case.name);
@@ -353,6 +354,7 @@ fn main() -> Result<()> {
             } else {
                 let (verdict, recorded, spent) = evaluate(expect, &doc, args.update);
                 let allowed = budget(expect);
+                timings.push((case.name.clone(), spent, allowed));
                 dirty |= recorded;
                 match verdict {
                     Verdict::Pass(s) => {
@@ -415,6 +417,11 @@ fn main() -> Result<()> {
     println!("{passed} passed, {failed} failed, {skipped} skipped, {known} known defect(s)");
     if slow > 0 {
         println!("{slow} case(s) used over half their kernel budget — see SLOW above");
+    }
+    timings.sort_by(|a, b| (b.1.as_secs_f64() / b.2.as_secs_f64()).total_cmp(&(a.1.as_secs_f64() / a.2.as_secs_f64())));
+    println!("nearest their kernel budget:");
+    for (name, spent, allowed) in timings.iter().take(10) {
+        println!("  {:>6.1} s of {:>4.0} s  {name}", spent.as_secs_f64(), allowed.as_secs_f64());
     }
     if updated_files > 0 {
         println!("{updated_files} case file(s) rewritten — review the diff before committing");

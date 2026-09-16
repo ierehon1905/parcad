@@ -4074,7 +4074,9 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             let (xy_lo, xy_hi) = built_extent.unwrap_or_else(|| loft_extent(sections, &resolved));
             let lo = DVec3::new(xy_lo[0], xy_lo[1], sections[0].z);
             let hi = DVec3::new(xy_hi[0], xy_hi[1], sections[sections.len() - 1].z);
-            let after = bbox(&shape);
+            // Exact bounds: a mesh at the report's deflection is millions of
+            // triangles on a fine smooth loft, and was most of its build.
+            let after = shape.bounds_optimal().unwrap_or_else(|| bbox(&shape));
             let bulge = (lo - after.0).max(after.1 - hi).max_element().max(0.0);
             if bulge > SLIP_TOLERANCE_MM {
                 bail!(
