@@ -11,7 +11,7 @@ shape.
 
 | where | relied on to catch | caught before | now | added cost |
 |---|---|---|---|---|
-| `checked_face`: section faces (`BRepCheck`, exact) | a fitted curve running into another edge | only where `BRepCheck` refused, then located by sampling | unchanged: a fuzz of 80 fits swinging across the edge beside a corner found no crossing `BRepCheck` missed | — |
+| `checked_face`: section faces (`BRepCheck`, exact) | a fitted curve running into another edge | only where `BRepCheck` refused, then located by sampling; a fuzz of 80 fits swinging across the edge beside a corner found no crossing it missed | the kernel's fitted B-spline searched exactly by `section_crossing::fitted_crossing` before `BRepCheck`, which stays as backstop; the 14 crossings of that fuzz now name the fitted span | none measurable |
 | `check_blend`: a blended union or cut (`BRepCheck`) | a blend whose surface crosses itself or a neighbour | 2 of 400 fuzzed blends accepted wrong; 6 caught only by the mesh backstop, whose message names other causes | refused by name, with the largest radius measured to build | the changed-face check below |
 | fillet and chamfer nodes (growth check only; no `BRepCheck`) | a treatment cutting through the wall behind it, or rounds running into each other | 3 chamfers accepted wrong; 2 fillets caught only by the mesh backstop | refused by name, with a size measured to build | the changed-face check below |
 | `attempt_treatment`: the probe below a failed size (`BRepCheck` + growth) | that a suggested size is sound | sizes measured on an input earlier probes had altered (a vertex left at 42 mm tolerance); a self-crossing size could be suggested | each attempt on its own copy of the input, held to the changed-face check too | refusal path only |

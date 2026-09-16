@@ -7,7 +7,7 @@ times before it becomes a face:
 |---|---|---|
 | DSL | `checkSection` in `app/src/dsl.ts` | the shape of each entry: its keys, its numbers, its point count |
 | core | `SectionEntry` parsing and `resolve` in `crates/parcad-core/src/section.rs`, `Op::validate_outline` in `graph.rs`, `section_crossing.rs` | how entries combine, and the geometry of every line, arc and non-fitted curve |
-| kernel | `section_wire` and `checked_face` in `crates/parcad-occt/src/backend.rs` | what only a built curve shows: fits, insets, and `BRepCheck` as the backstop |
+| kernel | `section_wire` and `checked_face` in `crates/parcad-occt/src/backend.rs` | what only a built curve shows: fits (their crossings searched exactly on the fitted curve), insets, and `BRepCheck` as the backstop |
 
 When two layers disagree, an author hears from the wrong one about the wrong
 thing. This page is what a seeded fuzz of all three found, what was changed,
@@ -151,8 +151,11 @@ lamp are simple and build.
 - Only extrusions are fuzzed. Revolve, loft and sweep sections go through the
   same `resolve`, so they get the same checks, but their own rules (the axis,
   section pairing) are not in the corpus.
-- A fitted curve against another edge is found by sampling, after the kernel
-  refused; a crossing between sample points is still reported by `BRepCheck`
-  alone, and a crossing `BRepCheck` misses is not looked for.
+- ~~A fitted curve against another edge is found by sampling, after the kernel
+  refused.~~ Done since: `checked_face` searches the kernel's fitted B-spline
+  exactly with `section_crossing::fitted_crossing` before `BRepCheck`, which
+  stays as the backstop (docs/VALIDITY_CHECKS.md). A fuzz of 80 fits swinging
+  across the edge beside a corner found no crossing `BRepCheck` had missed;
+  the 14 it refused now name the fitted span that crosses.
 - The search gives up after 200 000 splits and accepts, leaving the question
   to the kernel. No fuzzed outline came near it.

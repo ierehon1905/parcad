@@ -412,6 +412,10 @@ faces cross and solids that are inside out.
   `Shape::closed_solid()`, `Shape::reversed()` — over the sys shims of the
   same names.
 - `Treatment::input()` — the shape the builder actually treated; see below.
+- `FitReport::curve_poles` and `curve_knots` (`curve.rs`,
+  `ParcadFit::curve_poles` / `curve_knots` in `include/curve.hxx`): the fitted
+  curve itself, poles and full knot vector, empty for a periodic curve, so the
+  caller can search it for crossings exactly instead of sampling it.
 
 **Changed:** `ParcadEdgeTreatment` (`include/history.hxx`) builds on a
 `BRepBuilderAPI_Copy` of its input's topology (geometry and triangulations

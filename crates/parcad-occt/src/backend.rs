@@ -48,6 +48,16 @@ fn v(p: V3) -> DVec3 {
 /// report, and a fit that cannot hold its tolerance is refused. An inset
 /// section is its outline's wire stepped inward by [`inset_wire`].
 fn section_wire(section: &Section, place: impl Fn([f64; 2]) -> DVec3, what: &str) -> Result<Wire> {
+    Ok(section_wire_fitted(section, place, what)?.0)
+}
+
+/// Every fitted segment of a section, by index, as the exact curve the kernel
+/// built for it, back in the section's own plane.
+type FittedCurves = Vec<(usize, parcad_core::section::BSpline<2>)>;
+
+/// [`section_wire`], and the curves its fits became, for [`checked_face`].
+fn section_wire_fitted(section: &Section, place: impl Fn([f64; 2]) -> DVec3, what: &str) -> Result<(Wire, FittedCurves)> {
+    let mut fitted: FittedCurves = Vec::new();
     let wire = if let Some(points) = &section.polygon {
         // A polygon is built exactly as it was before sections had curves, so
         // every straight-edged part keeps its geometry to the bit.
@@ -148,6 +158,13 @@ fn section_wire(section: &Section, place: impl Fn([f64; 2]) -> DVec3, what: &str
                         sampled_area
                     ));
                     record_fit(fit.deviation_mm);
+                    if let Ok(curve) = parcad_core::section::BSpline::with_knots(
+                        in_section_plane(&fit.curve_poles, &place),
+                        fit.degree,
+                        fit.curve_knots.clone(),
+                    ) {
+                        fitted.push((index, curve));
+                    }
                     Ok(edge)
                 }
             })
@@ -155,8 +172,8 @@ fn section_wire(section: &Section, place: impl Fn([f64; 2]) -> DVec3, what: &str
         Wire::from_edges(&edges)
     };
     match section.inset {
-        Some(distance) => inset_wire(&wire, distance, what),
-        None => Ok(wire),
+        Some(distance) => Ok((inset_wire(&wire, distance, what)?, fitted)),
+        None => Ok((wire, fitted)),
     }
 }
 
@@ -306,9 +323,11 @@ fn inset_wire(outline: &Wire, distance: f64, what: &str) -> Result<Wire> {
 /// The planar face a section wire bounds, checked by `BRepCheck` unless the
 /// section is a convex polygon, which cannot touch itself.
 ///
-/// The graph refuses a polygon that crosses itself by name; an arc or spline
-/// that runs into another edge is caught here instead, on the exact curves.
-fn checked_face(section: &Section, wire: &Wire, what: &str) -> Result<Face> {
+/// The graph refuses a line, arc or curve that runs into another by name. A
+/// fitted curve is the kernel's, so it is searched here, exactly, as the
+/// curve `fitted` holds; `BRepCheck` passes some crossings
+/// (docs/SECTION_CHECKS.md) and stays behind as the backstop.
+fn checked_face(section: &Section, wire: &Wire, fitted: &FittedCurves, what: &str) -> Result<Face> {
     let face = Face::from_wire(wire);
     // The face builder hands back a null shape for a wire that does not
     // close, and the validity check below aborts the worker on one.
@@ -320,9 +339,17 @@ fn checked_face(section: &Section, wire: &Wire, what: &str) -> Result<Face> {
     if section.polygon.as_deref().is_some_and(parcad_core::section::polygon_is_convex) {
         return Ok(face);
     }
+    const FIT_FIX: &str = "A fitted curve can cross itself where its points are simple: dense points round a tight fold overshoot. Raise the tolerance so the curve follows them less closely, or thin the points at the fold";
+    if section.inset.is_none() && !fitted.is_empty() {
+        if let Some(crossing) = parcad_core::section_crossing::fitted_crossing(&section.segments, fitted) {
+            bail!(
+                "the {what} touches or crosses itself — an arc or curve runs into another edge — so it bounds no single region. Exactly, {crossing}. {FIT_FIX}"
+            );
+        }
+    }
     if let Err(report) = Shape::from(face.clone()).check_validity(true) {
         let fix = if section.has_fit() {
-            "A fitted curve can cross itself where its points are simple: dense points round a tight fold overshoot. Raise the tolerance so the curve follows them less closely, or thin the points at the fold"
+            FIT_FIX
         } else {
             "Move the through point, radius or control points so the outline passes each place once"
         };
@@ -339,8 +366,8 @@ fn checked_face(section: &Section, wire: &Wire, what: &str) -> Result<Face> {
 /// in the XY plane — with none of the graph's checks in front of it. How the
 /// section corpus asks whether the kernel would take what the core refused.
 pub fn section_face_verdict(section: &Section) -> Result<()> {
-    let wire = section_wire(section, |[x, y]| DVec3::new(x, y, 0.0), "extrude profile")?;
-    checked_face(section, &wire, "extrude profile")?;
+    let (wire, fitted) = section_wire_fitted(section, |[x, y]| DVec3::new(x, y, 0.0), "extrude profile")?;
+    checked_face(section, &wire, &fitted, "extrude profile")?;
     Ok(())
 }
 
@@ -3482,7 +3509,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
 
             // The section is drawn in the XZ plane at y = 0: x is the radius,
             // which is the plane the revolution sweeps out of.
-            let wire = section_wire(&section, |[r, z]| DVec3::new(r, 0.0, z), "revolve profile")
+            let (wire, fitted) = section_wire_fitted(&section, |[r, z]| DVec3::new(r, 0.0, z), "revolve profile")
                 .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
             // The graph checked a fit's points against the axis; the curve
             // between them is the kernel's, so it is measured here.
@@ -3496,7 +3523,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                     }
                 }
             }
-            let face = checked_face(&section, &wire, "revolve profile")
+            let face = checked_face(&section, &wire, &fitted, "revolve profile")
                 .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
             let solid = face.revolve(DVec3::ZERO, DVec3::Z, None);
 
@@ -3562,9 +3589,9 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             let base = -height / 2.0;
             let solid = match top {
                 None if section.is_polygon() => {
-                    let wire = section_wire(&section, |[x, y]| DVec3::new(x, y, base), "extrude profile")
+                    let (wire, fitted) = section_wire_fitted(&section, |[x, y]| DVec3::new(x, y, base), "extrude profile")
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
-                    checked_face(&section, &wire, "extrude profile")
+                    checked_face(&section, &wire, &fitted, "extrude profile")
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?
                         .extrude(DVec3::Z * *height)
                 }
@@ -3577,9 +3604,9 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 // B-spline wall") — and that integral is what the mesh
                 // backstop checks every mesh against.
                 None => {
-                    let bottom = section_wire(&section, |[x, y]| DVec3::new(x, y, base), "extrude profile")
+                    let (bottom, fitted) = section_wire_fitted(&section, |[x, y]| DVec3::new(x, y, base), "extrude profile")
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
-                    checked_face(&section, &bottom, "extrude profile")
+                    checked_face(&section, &bottom, &fitted, "extrude profile")
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
                     let top = section_wire(&section, |[x, y]| DVec3::new(x, y, base + height), "extrude profile")
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
@@ -3640,9 +3667,9 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 wires.push(match outline {
                     Some(outline) => {
                         let z = section.z;
-                        let wire = section_wire(outline, |[x, y]| DVec3::new(x, y, z), "loft section")
+                        let (wire, fitted) = section_wire_fitted(outline, |[x, y]| DVec3::new(x, y, z), "loft section")
                             .map_err(|e| anyhow::anyhow!("node {id} ({label}) section {i}: {e}"))?;
-                        checked_face(outline, &wire, "loft section")
+                        checked_face(outline, &wire, &fitted, "loft section")
                             .map_err(|e| anyhow::anyhow!("node {id} ({label}) section {i}: {e}"))?;
                         Some(wire)
                     }
@@ -3852,9 +3879,9 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             }
             let section_wire = match &section {
                 SweepSection::Outline(outline) => {
-                    let wire = section_wire(outline, |[x, y]| start + u_axis * x + v_axis * y, "sweep profile")
+                    let (wire, fitted) = section_wire_fitted(outline, |[x, y]| start + u_axis * x + v_axis * y, "sweep profile")
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
-                    checked_face(outline, &wire, "sweep profile")
+                    checked_face(outline, &wire, &fitted, "sweep profile")
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
                     wire
                 }
