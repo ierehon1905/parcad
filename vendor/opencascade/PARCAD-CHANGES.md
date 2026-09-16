@@ -435,3 +435,5 @@ made of arcs and splines.
   `isInParallel` set); the defaults for the other arguments are unchanged.
   Faces are meshed independently after their edges, so the triangulation is
   the serial one (docs/GOTCHAS.md, "One large B-spline face meshes far slower").
+- `Shape::face_grid(per_side)` — points on every face, over the sys crate's
+  `Shape_face_grid`: what a surface-to-surface distance is sampled at.

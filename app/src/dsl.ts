@@ -2360,6 +2360,13 @@ export interface LoftSection {
  * that the fit stayed inside the sections' own bounding box, refusing one
  * that bulged past it.
  *
+ * A ruled loft through three or more sections reports `facet_sag_mm`: how far
+ * its flat facets lie from the smooth loft through the same sections,
+ * measured both ways. It is what a render shows as banding between sections:
+ * a 180 mm lamp shade through 41 sections measured 0.14 mm and showed faint
+ * horizontal lines at 768 px. Add sections where it is large (the sag falls
+ * with the square of their spacing), or use `smooth: true`.
+ *
  * The wall pairs section *edges* by index, taken literally, which makes the
  * pairing part of the intent. Every outline must resolve to the same number
  * of edges — a straight edge, an arc or a curve each count one, and a rounded

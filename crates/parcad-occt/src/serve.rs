@@ -392,6 +392,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         deflection_mm: BINDING_DEFLECTION_MM,
         deviation_mm: measured.deviation_mm,
         loft_wall_mm: measured.loft_wall_mm.map(|[min, max]| WallRange { min, max }),
+        facet_sag_mm: measured.facet_sag_mm,
         topology,
         bodies,
         between,

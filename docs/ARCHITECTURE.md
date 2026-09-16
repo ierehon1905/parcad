@@ -468,6 +468,19 @@ stretch of wall, never a ray that crosses the cavity. At an open end the foot
 is held to the edge and the distance is taken along its normal, which is the
 wall continued.
 
+A ruled loft reports `facet_sag_mm`, how flat its facets are: the furthest
+its walls lie from the smooth loft through the same sections, measured both
+ways — on a skinned loft between the ruled and the smooth surface through
+the same pole rows (`skin::facet_sag`, a Gauss-Newton foot from the same
+parameters), otherwise between the `ThruSections` solid and the smooth one
+OCCT builds through the same wires, from a grid on every face to the other's
+boundary. Two sections have none: the smooth loft through them is the ruled
+one. It is the number for what a person judged by eye: the owner saw faint
+horizontal lines on a 768 px render of the 41-section ruled lamp, whose
+shade measures 0.139 mm (its cavity 0.176 mm, which the part reports as the
+larger), and none on the smooth lamp. `ruled-facet-sag` holds it to a closed
+form.
+
 A closed `{ fit }` section anywhere else — an extrusion, a revolve — is
 fitted the same way, as a loft of one section (`skinned::fit_closed`), and
 built as a B-spline edge with its deviation measured again on the edge.

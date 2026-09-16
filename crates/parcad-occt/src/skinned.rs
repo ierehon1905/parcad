@@ -16,7 +16,7 @@ use parcad_core::{
     graph::{LoftSection, LoftWall},
     par,
     section::{polyline_self_intersection, BSpline, Section, Segment, P2},
-    skin::{height_parameters, shared_parameters, PeriodicFit, Surface, CORRECTION_ROUNDS},
+    skin::{facet_sag, height_parameters, shared_parameters, PeriodicFit, Surface, CORRECTION_ROUNDS},
 };
 
 use crate::protocol::breadcrumb;
@@ -75,6 +75,9 @@ pub struct Skinned {
     /// through its section.
     pub deviation_mm: f64,
     pub wall: Option<WallReading>,
+    /// For a ruled loft, how far its outside lies from the smooth one through
+    /// the same sections, measured both ways.
+    pub facet_sag_mm: Option<f64>,
 }
 
 /// The loft's sections as fits this module can skin, or `None` when any is
@@ -253,6 +256,16 @@ pub fn build(sections: &[FitSection], smooth: bool, wall: Option<&LoftWall>, lab
         fit.spans(),
         fit.spans() + 3
     ));
+    let facet_sag_mm = (!smooth).then(|| -> Result<f64> {
+        let rounded = surface(&outer_fit.rows, &fit, &vparams, true)?;
+        let (sag, at) = facet_sag(&outer, &rounded, &vparams, SAG_PER_SPAN * fit.spans(), SAG_PER_STRETCH);
+        breadcrumb(&format!(
+            "{label}: the ruled outside lies up to {sag:.4} mm from the smooth one through its sections, near ({:.1}, {:.1}, {:.1})",
+            at[0], at[1], at[2]
+        ));
+        Ok(sag)
+    });
+    let facet_sag_mm = facet_sag_mm.transpose()?;
     let Some(wall) = wall else {
         let mut skinner = Skinner::new();
         set_surface(&mut skinner, Skin::Outer, &outer).map_err(err)?;
@@ -261,13 +274,13 @@ pub fn build(sections: &[FitSection], smooth: bool, wall: Option<&LoftWall>, lab
         skinner.add_disc(Skin::Outer, 1.0).map_err(err)?;
         state_outward(&mut skinner, &outer, &vparams, sense).map_err(err)?;
         let shape = skinner.build(SEW_TOLERANCE).map_err(err)?;
-        return Ok(Skinned { shape, deviation_mm, wall: None });
+        return Ok(Skinned { shape, deviation_mm, wall: None, facet_sag_mm });
     };
     let mut why = String::new();
     let mut refine = INSIDE_REFINE;
     while refine <= MAX_INSIDE_REFINE {
         match walled(sections, &fit, &outer, sense, smooth, wall, refine, label)? {
-            Ok(reading) => return Ok(Skinned { shape: reading.0, deviation_mm, wall: Some(reading.1) }),
+            Ok(reading) => return Ok(Skinned { shape: reading.0, deviation_mm, wall: Some(reading.1), facet_sag_mm }),
             Err(short) => why = short,
         }
         refine *= 2;
@@ -398,6 +411,11 @@ fn fit_fewest(
         Err(why) => fewest(|spans| probe(spans, LOOP_SAMPLES), params, Some((fit.spans(), why)), label),
     }
 }
+
+/// Points a ruled loft's facet sag is measured at, per span round and per
+/// stretch between sections.
+const SAG_PER_SPAN: usize = 2;
+const SAG_PER_STRETCH: usize = 8;
 
 /// Samples per span a fitted section is checked for loops at.
 const LOOP_SAMPLES: usize = 8;

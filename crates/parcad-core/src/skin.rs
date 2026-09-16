@@ -164,6 +164,61 @@ impl Surface {
         out
     }
 
+    /// The parameter range, `(u0, u1, v0, v1)`.
+    pub fn bounds(&self) -> (f64, f64, f64, f64) {
+        (
+            self.uknots[self.udegree],
+            self.uknots[self.nu],
+            self.vknots[self.vdegree],
+            self.vknots[self.nv],
+        )
+    }
+
+    /// The distance from `p` to the surface near `(u, v)`: a coarse grid over
+    /// `reach` either way (u wrapping round a closed surface's period, v held
+    /// to the surface), then Gauss-Newton on the squared distance held to
+    /// that window.
+    pub fn distance_near(&self, p: P3, u: f64, v: f64, reach: (f64, f64), closed_u: bool) -> f64 {
+        let (u0, u1, v0, v1) = self.bounds();
+        let period = u1 - u0;
+        let wrap = |t: f64| if closed_u { u0 + (t - u0).rem_euclid(period) } else { t.clamp(u0, u1) };
+        let (ulo, uhi) = (u - reach.0, u + reach.0);
+        let (vlo, vhi) = ((v - reach.1).max(v0), (v + reach.1).min(v1));
+        let dist2 = |q: P3| (0..3).map(|d| (q[d] - p[d]).powi(2)).sum::<f64>();
+        let grid = 6;
+        let (mut best, mut bu, mut bv) = (f64::INFINITY, u, v);
+        for a in 0..=grid {
+            for b in 0..=grid {
+                let tu = ulo + (uhi - ulo) * a as f64 / grid as f64;
+                let tv = vlo + (vhi - vlo) * b as f64 / grid as f64;
+                let d = dist2(self.derivatives(wrap(tu), tv)[0]);
+                if d < best {
+                    (best, bu, bv) = (d, tu, tv);
+                }
+            }
+        }
+        let (mut tu, mut tv) = (bu, bv);
+        for _ in 0..20 {
+            let [q, su, sv] = self.derivatives(wrap(tu), tv);
+            let r: [f64; 3] = std::array::from_fn(|d| q[d] - p[d]);
+            let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+            let (a, b, c) = (dot(su, su), dot(su, sv), dot(sv, sv));
+            let det = a * c - b * b;
+            if !(det > 0.0) {
+                break;
+            }
+            let (gu, gv) = (dot(r, su), dot(r, sv));
+            let nu = (tu - (c * gu - b * gv) / det).clamp(ulo, uhi);
+            let nv = (tv - (a * gv - b * gu) / det).clamp(vlo, vhi);
+            let still = (nu - tu).abs() < 1e-13 && (nv - tv).abs() < 1e-13;
+            (tu, tv) = (nu, nv);
+            if still {
+                break;
+            }
+        }
+        best.min(dist2(self.derivatives(wrap(tu), tv)[0])).sqrt()
+    }
+
     /// The distinct values and multiplicities of a knot vector.
     pub fn distinct(knots: &[f64]) -> (Vec<f64>, Vec<i32>) {
         let (mut values, mut mults): (Vec<f64>, Vec<i32>) = (Vec::new(), Vec::new());
@@ -178,6 +233,35 @@ impl Surface {
         }
         (values, mults)
     }
+}
+
+/// How far a ruled surface lies from the smooth one through the same pole
+/// rows — both on one `u` knot vector and the same row parameters, closed in
+/// `u` — measured both ways from `per_u` by `per_v` points of each between
+/// every pair of rows: the largest distance, and the point of `ruled` or
+/// `smooth` it was measured from.
+pub fn facet_sag(ruled: &Surface, smooth: &Surface, rows: &[f64], per_u: usize, per_v: usize) -> (f64, P3) {
+    let (u0, u1, _, _) = ruled.bounds();
+    let reach_u = 1.5 * (u1 - u0) / (ruled.nu - ruled.udegree) as f64;
+    let stretches: Vec<(f64, f64)> = rows.windows(2).map(|w| (w[0], w[1])).collect();
+    let worst = crate::par::map(&stretches, |&(a, b)| {
+        let mut worst = (0.0, [0.0; 3]);
+        for j in 1..per_v {
+            let v = a + (b - a) * j as f64 / per_v as f64;
+            for i in 0..per_u {
+                let u = u0 + (u1 - u0) * i as f64 / per_u as f64;
+                for (from, to) in [(ruled, smooth), (smooth, ruled)] {
+                    let p = from.derivatives(u, v)[0];
+                    let d = to.distance_near(p, u, v, (reach_u, b - a), true);
+                    if d > worst.0 {
+                        worst = (d, p);
+                    }
+                }
+            }
+        }
+        worst
+    });
+    worst.into_iter().fold((0.0, [0.0; 3]), |a, b| if b.0 > a.0 { b } else { a })
 }
 
 /// How far past the averaged foot each correction steps: the plain step
@@ -597,6 +681,40 @@ mod tests {
             let (a, b) = (fit.eval(&poles, u), curve.point(u));
             assert!((a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9, "{u}: {a:?} vs {b:?}");
         }
+    }
+
+    #[test]
+    fn facet_sag_is_the_distance_from_the_chords_to_the_profile_through_the_sections() {
+        // Circles r = 10, 20, 10 at z = 0, 10, 20: the smooth skin is the
+        // revolution of r(z) = 10 + 2z - z²/10, the ruled one of its two
+        // chords. The sag is the furthest a chord point is from the parabola
+        // (or the parabola from the chords), found here in the profile plane.
+        let n = 240;
+        let rings: Vec<Vec<P2>> = [10.0, 20.0, 10.0].iter().map(|r| circle(*r, n)).collect();
+        let sections: Vec<&[P2]> = rings.iter().map(|r| r.as_slice()).collect();
+        let params = shared_parameters(&sections)[..n].to_vec();
+        let fit = PeriodicFit::new(&params, 64).unwrap();
+        let heights = [0.0, 10.0, 20.0];
+        let rows: Vec<Vec<P3>> = sections
+            .iter()
+            .zip(heights)
+            .map(|(s, z)| fit.fit(s).unwrap().poles.iter().map(|p| [p[0], p[1], z]).collect())
+            .collect();
+        let v = height_parameters(&heights);
+        let ruled = Surface::skin(&rows, &fit.knots(), 3, &v, 1).unwrap();
+        let smooth = Surface::skin(&rows, &fit.knots(), 3, &v, 2).unwrap();
+        let (sag, _) = facet_sag(&ruled, &smooth, &v, 64, 16);
+        let parabola = |z: f64| 10.0 + 2.0 * z - z * z / 10.0;
+        let chord = |z: f64| if z <= 10.0 { 10.0 + z } else { 30.0 - z };
+        let profile_distance = |r: f64, z: f64, curve: &dyn Fn(f64) -> f64| {
+            (0..=40000).map(|k| 20.0 * k as f64 / 40000.0).map(|t| (curve(t) - r).hypot(t - z)).fold(f64::INFINITY, f64::min)
+        };
+        let mut expected: f64 = 0.0;
+        for k in 0..=2000 {
+            let z = 20.0 * k as f64 / 2000.0;
+            expected = expected.max(profile_distance(chord(z), z, &parabola)).max(profile_distance(parabola(z), z, &chord));
+        }
+        assert!((sag - expected).abs() < 2e-3, "measured {sag}, closed form {expected}");
     }
 
     #[test]

@@ -461,12 +461,31 @@ fn locate_crossing(section: &Section) -> Option<String> {
     Some(format!("Sampled, {what} near [{:.4}, {:.4}]. ", near[0], near[1]))
 }
 
+/// How far apart two lofts through the same sections lie: the furthest a
+/// point of either's faces is from the other's boundary.
+fn facet_sag_between(ruled: &Shape, smooth: &Shape) -> f64 {
+    let mut worst: f64 = 0.0;
+    for (from, to) in [(ruled, smooth), (smooth, ruled)] {
+        let mut nearest = to.nearest_boundary();
+        for p in from.face_grid(FACET_GRID) {
+            if let Some(hit) = nearest.nearest_within(p, f64::INFINITY) {
+                worst = worst.max(hit.distance);
+            }
+        }
+    }
+    worst
+}
+
+/// Points a side each face of a loft is sampled at for its facet sag.
+const FACET_GRID: usize = 6;
+
 /// What building a subtree measured that the report carries: the worst fit
 /// deviation, and the thinnest and thickest wall of any walled loft.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Measured {
     pub deviation_mm: Option<f64>,
     pub loft_wall_mm: Option<[f64; 2]>,
+    pub facet_sag_mm: Option<f64>,
 }
 
 impl Measured {
@@ -476,6 +495,9 @@ impl Measured {
         }
         if let Some([lo, hi]) = other.loft_wall_mm {
             self.loft_wall_mm = Some(self.loft_wall_mm.map_or([lo, hi], |[a, b]| [a.min(lo), b.max(hi)]));
+        }
+        if let Some(sag) = other.facet_sag_mm {
+            self.facet_sag_mm = Some(self.facet_sag_mm.map_or(sag, |worst| worst.max(sag)));
         }
     }
 }
@@ -3618,6 +3640,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                     record(Measured {
                         deviation_mm: Some(skinned.deviation_mm),
                         loft_wall_mm: skinned.wall.map(|w| [w.min_mm, w.max_mm]),
+                        facet_sag_mm: skinned.facet_sag_mm,
                     });
                     skinned.shape
                 }
@@ -3638,19 +3661,18 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 });
             }
             let plain = resolved.iter().all(|s| s.as_ref().is_some_and(Section::is_polygon));
-            if plain {
-                let wires: Vec<Wire> = wires.into_iter().flatten().collect();
-                Shape::from(Solid::loft_sections(&wires, !*smooth))
+            let profiles: Vec<LoftProfile> = sections
+                .iter()
+                .zip(&wires)
+                .map(|(section, wire)| match (wire, section.point) {
+                    (Some(wire), _) => LoftProfile::Wire(wire),
+                    (None, Some([x, y])) => LoftProfile::Point(DVec3::new(x, y, section.z)),
+                    (None, None) => unreachable!("validate_loft gives every section an outline or a point"),
+                })
+                .collect();
+            let lofted = if plain {
+                Shape::from(Solid::loft_sections(wires.iter().flatten(), !*smooth))
             } else {
-                let profiles: Vec<LoftProfile> = sections
-                    .iter()
-                    .zip(&wires)
-                    .map(|(section, wire)| match (wire, section.point) {
-                        (Some(wire), _) => LoftProfile::Wire(wire),
-                        (None, Some([x, y])) => LoftProfile::Point(DVec3::new(x, y, section.z)),
-                        (None, None) => unreachable!("validate_loft gives every section an outline or a point"),
-                    })
-                    .collect();
                 let lofted = Shape::loft_through(&profiles, !*smooth)
                     .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
                 let mut lofted = lofted.single_solid().unwrap_or(lofted);
@@ -3658,7 +3680,24 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                     lofted = lofted.oriented_outward();
                 }
                 lofted
+            };
+            if !*smooth && sections.len() > 2 {
+                match Shape::loft_through(&profiles, false) {
+                    Ok(rounded) => {
+                        let sag = facet_sag_between(&lofted, &rounded);
+                        breadcrumb(&format!(
+                            "node {id} ({label}): the ruled loft lies up to {sag:.4} mm from the smooth one through its sections"
+                        ));
+                        record(Measured { facet_sag_mm: Some(sag), ..Measured::default() });
+                    }
+                    Err(e) => breadcrumb(&format!(
+                        "node {id} ({label}): no smooth loft through its sections to measure the facets against ({e})"
+                    )),
+                }
+            } else if !*smooth {
+                record(Measured { facet_sag_mm: Some(0.0), ..Measured::default() });
             }
+            lofted
                 }
             };
 

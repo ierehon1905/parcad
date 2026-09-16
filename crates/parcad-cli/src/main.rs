@@ -580,6 +580,9 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
     if let Some(wall) = s.loft_wall_mm {
         println!("wall     the walled loft measures {:.4} to {:.4} mm between its skins", wall.min, wall.max);
     }
+    if let Some(sag) = s.facet_sag_mm {
+        println!("facets   ruled loft walls lie up to {sag:.4} mm from the smooth loft through their sections");
+    }
     for body in parcad_occt::measure_bodies(&s) {
         let size = body.bounds.size();
         println!(

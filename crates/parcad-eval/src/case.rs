@@ -130,6 +130,10 @@ pub struct Expect {
     /// derived by hand where the part has a closed form.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loft_wall_mm: Option<[f64; 2]>,
+    /// For a part with a ruled loft: how far its walls lie from the smooth
+    /// loft through the same sections, as the kernel measured it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facet_sag_mm: Option<f64>,
 
     /// Where each named feature sits, as `[min_x, min_y, min_z, max_x, max_y,
     /// max_z]` per tag: the exact bounds of the faces the kernel's lineage
@@ -461,6 +465,7 @@ pub struct Observed {
     /// What the part's curves drawn from a function state about themselves.
     pub curve_bound: Option<parcad_core::section::StatedBound>,
     pub loft_wall_mm: Option<[f64; 2]>,
+    pub facet_sag_mm: Option<f64>,
     /// Every tag's own box, and the ones no surface point could be found for.
     pub tags: BTreeMap<String, [f64; 6]>,
     pub unlocated_tags: Vec<String>,
@@ -600,6 +605,15 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
             None => out.push(Mismatch {
                 field: "loft_wall_mm".into(),
                 detail: format!("expected [{lo:.3}, {hi:.3}], but the part has no walled loft"),
+            }),
+        }
+    }
+    if let Some(want) = expect.facet_sag_mm {
+        match observed.facet_sag_mm {
+            Some(got) => abs_check(&mut out, "facet_sag_mm", want, got, 1e-3),
+            None => out.push(Mismatch {
+                field: "facet_sag_mm".into(),
+                detail: format!("expected {want:.3}, but the part has no ruled loft"),
             }),
         }
     }
@@ -786,6 +800,7 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
     expect.curve_bound_mm = observed.curve_bound.map(|b| b.mm);
     expect.curve_bound = observed.curve_bound.map(|b| if b.certified { "certified" } else { "estimated" }.to_string());
     expect.loft_wall_mm = observed.loft_wall_mm.map(|w| w.map(|d| (d * 1e4).round() / 1e4));
+    expect.facet_sag_mm = observed.facet_sag_mm.map(|d| (d * 1e4).round() / 1e4);
     // Bodies are recorded whenever the part has them: a case about a part in
     // several bodies is about those bodies.
     expect.named_bodies = (!observed.named_bodies.is_empty()).then(|| {

@@ -19,6 +19,7 @@
     "faces": 8,
     "edges": 36,
     "curves": 18,
+    "facet_sag_mm": 0.0,
     "tolerance": {
       "size_mm": 0.01,
       "volume_pct": 0.05,

@@ -427,6 +427,11 @@ pub struct Success {
     /// part has no walled loft.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loft_wall_mm: Option<WallRange>,
+    /// The furthest any ruled loft's walls lie from the smooth loft through
+    /// the same sections, measured both ways, in mm: how flat its facets are
+    /// between sections. Absent when the part has no ruled loft.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facet_sag_mm: Option<f64>,
     /// Logical edges, each a polyline sampled along the true curve.
     ///
     /// A mesh alone cannot produce this at any resolution: there a sharp edge

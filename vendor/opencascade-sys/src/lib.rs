@@ -937,6 +937,10 @@ pub mod ffi {
             z1: &mut f64,
         ) -> bool;
 
+        // A grid of points on every face — added for parcad, see
+        // PARCAD-CHANGES.md.
+        pub fn Shape_face_grid(shape: &TopoDS_Shape, per_side: i32) -> Vec<f64>;
+
         // Nearest boundary point, projectors built once — added for parcad,
         // see PARCAD-CHANGES.md.
         type NearestBoundary;

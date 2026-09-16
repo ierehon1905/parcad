@@ -769,6 +769,15 @@ impl Shape {
         }
     }
 
+    /// Points on every face: a `per_side` by `per_side` grid over each face's
+    /// parameters, those inside the face kept. Added for parcad.
+    pub fn face_grid(&self, per_side: usize) -> Vec<DVec3> {
+        ffi::Shape_face_grid(&self.inner, per_side as i32)
+            .chunks_exact(3)
+            .map(|c| dvec3(c[0], c[1], c[2]))
+            .collect()
+    }
+
     /// Load this shape for repeated nearest-boundary-point questions. Added
     /// for parcad; see PARCAD-CHANGES.md.
     pub fn nearest_boundary(&self) -> NearestBoundary {

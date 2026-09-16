@@ -39,6 +39,7 @@ pub fn evaluated(
         snapshot.curve_bound = Some(if bound.certified { "certified" } else { "estimated" });
     }
     snapshot.loft_wall_mm = s.loft_wall_mm.map(|w| WallRange { min: round_mm(w.min), max: round_mm(w.max) });
+    snapshot.facet_sag_mm = s.facet_sag_mm.map(round_mm);
     Ok(Evaluated {
         bounds: report.bounds,
         snapshot,
@@ -272,6 +273,13 @@ pub struct EvaluationSnapshot {
     /// mm. Measured, never the thickness asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub loft_wall_mm: Option<WallRange>,
+    /// For a part with a ruled loft: the furthest its walls lie from the
+    /// smooth loft through the same sections, in mm — how flat the facets
+    /// between sections are, which a render shows as banding (0.14 mm was
+    /// faintly visible at 768 px on a 180 mm shade). Measured both ways
+    /// between the two surfaces; absent when nothing is ruled.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub facet_sag_mm: Option<f64>,
     pub watertight: bool,
     pub non_manifold_edges: usize,
     /// Connected pieces of surface, measured over the whole part: one for a
@@ -695,6 +703,7 @@ pub fn describe(
         curve_bound_mm: None,
         curve_bound: None,
         loft_wall_mm: None,
+        facet_sag_mm: None,
         watertight: report.mesh.watertight,
         non_manifold_edges: report.mesh.non_manifold_edges,
         bodies: report.mesh.bodies,
