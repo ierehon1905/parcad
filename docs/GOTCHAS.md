@@ -199,6 +199,27 @@ The budget belongs to the source, `scriptBudget(n)`, rather than to a call's
 `timeout_s`: a saved part is also built by the CLI, the picker's thumbnail and
 `check_fit`, none of which a caller passes a number to.
 
+**Native helpers must match their JavaScript to the bit.** The reaction-diffusion
+lamp spent 75% of its 2.5 s in its field loop and 18% in segment-crossing tests,
+behind a spatial grid it had to write itself. `simulateReactionDiffusion`,
+`outlineCrossings` and `outlineGaps` now run in Rust in the sandbox
+(`generative.rs`) and as JavaScript everywhere else (`dsl.ts`), and the editor
+and MCP must build the same part from one script. So both sides do the same
+float operations in the same order, use `sqrt` where a script would reach for
+`hypot`, and `native_helpers_give_the_same_bits_as_their_javascript` compares
+them. The lamp rewritten on them builds the same graph under `bun tools/run.ts`
+as in the sandbox. Native work is charged to the budget before it runs, one step
+per cell update or pair test, because a native call cannot be interrupted, and a
+charge past the budget is refused even if the script catches the throw.
+
+**A graph's numbers can land one ulp off on the way into Rust.** `serde_json`
+without its `float_roundtrip` feature parses some shortest-form doubles to a
+neighbour. Both routes (webview IPC and sandbox) parse the same strings, so they
+agree with each other, but not always with the script: comparing a sandbox
+graph with the JSON `bun tools/run.ts` printed shows last-digit differences
+until both are parsed by serde. QuickJS and V8 agree on `Math.sin`, `cos`,
+`atan2`, `hypot`, `sqrt`, `pow`, `exp` and `log` to the bit on macOS.
+
 ### `cargo build -p parcad-occt` does not build the worker
 
 Without `--features kernel` you get only the host half and the binary is skipped

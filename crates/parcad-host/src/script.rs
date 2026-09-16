@@ -27,6 +27,7 @@
 //! Both are enforced by the runtime rather than checked for in the source,
 //! because a scanner for hostile source is a guess and a limit is a fact.
 
+use crate::generative;
 use rquickjs::{Context, Ctx, Function, Object, Runtime};
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
@@ -194,6 +195,8 @@ const PAST_BACKSTOP: u8 = 2;
 /// the handler is owned by the runtime and the hook by the realm.
 struct Meter {
     polls: AtomicU64,
+    /// Steps charged by native helpers, which the interpreter never polls in.
+    charged: AtomicU64,
     budget_steps: AtomicU64,
     started: Instant,
     backstop_ms: AtomicU64,
@@ -205,6 +208,7 @@ impl Meter {
     fn new(floor: Duration) -> Self {
         let meter = Meter {
             polls: AtomicU64::new(0),
+            charged: AtomicU64::new(0),
             budget_steps: AtomicU64::new(0),
             started: Instant::now(),
             backstop_ms: AtomicU64::new(0),
@@ -232,6 +236,17 @@ impl Meter {
         self.steps() > self.budget_steps.load(Ordering::Relaxed)
     }
 
+    /// Charge a native helper's work before it runs, and refuse it — as the
+    /// interpreter would at its next poll — when that is past the budget.
+    fn charge(&self, steps: u64) -> Result<(), String> {
+        self.charged.fetch_add(steps, Ordering::Relaxed);
+        if self.over_budget() {
+            self.stopped.store(OVER_BUDGET, Ordering::Relaxed);
+            return Err(self.refusal().unwrap_or_default());
+        }
+        Ok(())
+    }
+
     fn poll(&self) -> bool {
         self.polls.fetch_add(1, Ordering::Relaxed);
         let reason = if self.over_budget() {
@@ -246,7 +261,7 @@ impl Meter {
     }
 
     fn steps(&self) -> u64 {
-        self.polls.load(Ordering::Relaxed) * STEPS_PER_POLL
+        self.polls.load(Ordering::Relaxed) * STEPS_PER_POLL + self.charged.load(Ordering::Relaxed)
     }
 
     /// The refusal for a script the handler stopped, naming the fix.
@@ -270,7 +285,7 @@ impl Meter {
                 Some(format!(
                     "the script used its whole work budget of {} steps ({}x the default) and was stopped. \
                      Work is counted, not timed, so this fails the same way on every machine and every run. \
-                     {ask}.",
+                     {ask}. {HOT_LOOPS}",
                     self.budget_steps.load(Ordering::Relaxed),
                     multiple,
                 ))
@@ -285,6 +300,11 @@ impl Meter {
         }
     }
 }
+
+/// Where the refusal points a script that ran out of work.
+const HOT_LOOPS: &str = "The loops generative parts spend their work in — a reaction-diffusion field, \
+     an outline's self-crossings, the gaps between its parts — have native helpers that cost a \
+     fraction of it: simulateReactionDiffusion, outlineCrossings, outlineGaps";
 
 /// [`build`] with the clock backstop raised to at least `backstop` — a
 /// caller's `timeout_s`, so it covers the whole call. The work budget is not
@@ -310,6 +330,7 @@ pub fn build_within(source: &str, backstop: Duration) -> Result<Script, String> 
             .map_err(|e| format!("the bundled DSL did not load: {}", describe(&ctx, e)))?;
         // Loading the DSL is the host's work, not the script's.
         meter.polls.store(0, Ordering::Relaxed);
+        meter.charged.store(0, Ordering::Relaxed);
 
         // The script travels as a JS string literal rather than being spliced
         // into the runner's source: a script containing a quote or a newline is
@@ -329,6 +350,9 @@ pub fn build_within(source: &str, backstop: Duration) -> Result<Script, String> 
     // only "interrupted". Which limit tripped is a fact we hold, and it is the
     // one the caller needs: name the limit rather than the symptom.
     let json = json.map_err(|e| meter.refusal().unwrap_or(e))?;
+    if let Some(refusal) = meter.refusal() {
+        return Err(refusal);
+    }
 
     let outcome: Outcome = serde_json::from_str(&json)
         .map_err(|e| format!("the sandbox returned something unreadable: {e}"))?;
@@ -346,14 +370,91 @@ pub fn build_within(source: &str, backstop: Duration) -> Result<Script, String> 
 
 /// The host functions the DSL reaches through `globalThis.__parcadNative`.
 /// Each is arithmetic on the arguments it is handed; none reads anything else.
-fn install_native(ctx: &Ctx<'_>, meter: Arc<Meter>) -> rquickjs::Result<()> {
+/// The DSL validates arguments before calling, so these only refuse what
+/// would be unsafe to run; its JavaScript twins are what a script's mistakes
+/// are worded by.
+fn install_native<'js>(ctx: &Ctx<'js>, meter: Arc<Meter>) -> rquickjs::Result<()> {
     let native = Object::new(ctx.clone())?;
+    let m = meter.clone();
     native.set(
         "scriptBudget",
-        Function::new(ctx.clone(), move |multiple: u32| meter.allow(multiple))?,
+        Function::new(ctx.clone(), move |multiple: u32| m.allow(multiple))?,
     )?;
 
+    // `numbers` is [width, height, dt, steps, Da, Db, then the model's own].
+    let m = meter.clone();
+    native.set(
+        "reactionDiffusion",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, model: String, mut a: Vec<f64>, mut b: Vec<f64>, numbers: Vec<f64>|
+                  -> rquickjs::Result<Vec<Vec<f64>>> {
+                let kinetics = match (model.as_str(), numbers.get(6..).unwrap_or(&[])) {
+                    ("gierer-meinhardt", &[rho, kappa, da, db, sa, sb]) => {
+                        generative::Kinetics::GiererMeinhardt { rho, kappa, decay: [da, db], source: [sa, sb] }
+                    }
+                    ("gray-scott", &[feed, kill]) => generative::Kinetics::GrayScott { feed, kill },
+                    _ => return Err(throw(&ctx, format!("reactionDiffusion: bad arguments for {model:?}"))),
+                };
+                let (width, height) = (numbers[0] as usize, numbers[1] as usize);
+                let (dt, steps) = (numbers[2], numbers[3]);
+                let cells = width * height;
+                if cells == 0 || a.len() != cells || b.len() != cells || !(steps >= 0.0) {
+                    return Err(throw(&ctx, "reactionDiffusion: fields must match their size".into()));
+                }
+                let steps = steps as u64;
+                m.charge(steps.saturating_mul(cells as u64)).map_err(|e| throw(&ctx, e))?;
+                generative::reaction_diffusion(
+                    kinetics, width, height, &mut a, &mut b, [numbers[4], numbers[5]], dt, steps,
+                );
+                Ok(vec![a, b])
+            },
+        )?,
+    )?;
+
+    let m = meter.clone();
+    native.set(
+        "outlineCrossings",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, points: Vec<Vec<f64>>| -> rquickjs::Result<Vec<Vec<u32>>> {
+                let points = plane_points(&ctx, &points)?;
+                let (pairs, work) = generative::outline_crossings(&points);
+                m.charge(work).map_err(|e| throw(&ctx, e))?;
+                Ok(pairs.into_iter().map(Vec::from).collect())
+            },
+        )?,
+    )?;
+
+    let m = meter;
+    native.set(
+        "outlineGaps",
+        Function::new(
+            ctx.clone(),
+            move |ctx: Ctx<'js>, points: Vec<Vec<f64>>, ignore_within: f64, up_to: f64|
+                  -> rquickjs::Result<Vec<f64>> {
+                let points = plane_points(&ctx, &points)?;
+                let (gaps, work) = generative::outline_gaps(&points, ignore_within, up_to);
+                m.charge(work).map_err(|e| throw(&ctx, e))?;
+                Ok(gaps)
+            },
+        )?,
+    )?;
     ctx.globals().set("__parcadNative", native)
+}
+
+fn plane_points(ctx: &Ctx<'_>, points: &[Vec<f64>]) -> rquickjs::Result<Vec<[f64; 2]>> {
+    points
+        .iter()
+        .map(|p| match p.as_slice() {
+            &[x, y] => Ok([x, y]),
+            _ => Err(throw(ctx, "an outline point is [x, y]".into())),
+        })
+        .collect()
+}
+
+fn throw(ctx: &Ctx<'_>, message: String) -> rquickjs::Error {
+    rquickjs::Exception::throw_message(ctx, &message)
 }
 
 /// Every name the bundled DSL hands a script, and the methods of the classes
@@ -496,6 +597,58 @@ mod tests {
         let meter = Meter::new(BACKSTOP);
         meter.allow(1000);
         assert_eq!(meter.multiple(), u64::from(MAX_WORK_MULTIPLE));
+    }
+
+    /// The editor runs the helpers' JavaScript twins; the sandbox runs Rust.
+    /// A part must be the same part in both, so the answers must match to the bit.
+    #[test]
+    fn native_helpers_give_the_same_bits_as_their_javascript() {
+        let script = r#"
+let s = 7;
+const rand = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
+const n = 100;
+const noise = Array.from({ length: n }, () => 1 + 0.1 * (rand() - 0.5));
+const ring = Array.from({ length: 180 }, (_, i) => {
+  const t = (2 * Math.PI * i) / 180;
+  return [30 * Math.sin(t) + rand(), 15 * Math.sin(2 * t) + rand()];
+});
+const run = () => [
+  simulateReactionDiffusion({ model: "gierer-meinhardt", size: n, a: noise, b: noise.map((v) => 2 - v),
+    diffusion: [0.3, 60], dt: 0.2 / 60, steps: 3000, kappa: 0.05, decay: [1, 1.2], source: [0.01, 0] }),
+  simulateReactionDiffusion({ model: "gray-scott", size: [10, 10], a: noise, b: noise.map((v) => (v - 0.9) * 2),
+    diffusion: [0.2, 0.1], dt: 1, steps: 200, feed: 0.037, kill: 0.06 }),
+  outlineCrossings(ring),
+  outlineGaps(ring, { ignoreWithin: 5 }),
+  outlineGaps(ring, { ignoreWithin: 0, upTo: 4 }),
+];
+const native = run();
+const saved = globalThis.__parcadNative;
+globalThis.__parcadNative = undefined;
+const script = run();
+globalThis.__parcadNative = saved;
+const flat = (v) => JSON.stringify(v, (_, x) => (typeof x === "number" ? [x].map(String)[0] + ":" + Object.is(x, -0) : x));
+if (flat(native) !== flat(script)) throw new Error("native and script disagree");
+if (native[2].length === 0) throw new Error("the test outline should cross itself");
+return box(1, 1, 1);
+"#;
+        build(script).expect("both routes agree");
+    }
+
+    #[test]
+    fn native_work_is_charged_and_cannot_be_caught() {
+        let cheap = "simulateReactionDiffusion({ model: 'gray-scott', size: 100, a: Array(100).fill(1), \
+                     b: Array(100).fill(0), diffusion: [0.2, 0.1], dt: 1, steps: 1000, feed: 0.03, kill: 0.06 });\n\
+                     return box(1, 1, 1);";
+        let used = build(cheap).expect("builds").work_steps;
+        assert!((100_000..200_000).contains(&used), "{used}");
+
+        let spent = "try {\n  simulateReactionDiffusion({ model: 'gray-scott', size: 100, a: Array(100).fill(1), \
+                     b: Array(100).fill(0), diffusion: [0.2, 0.1], dt: 1, steps: 7000000, feed: 0.03, kill: 0.06 });\n\
+                     } catch (e) {}\nreturn box(1, 1, 1);";
+        let started = Instant::now();
+        let error = build_graph(spent).expect_err("past the budget, charged before it runs");
+        assert!(started.elapsed() < Duration::from_secs(2), "the work ran: {:?}", started.elapsed());
+        assert!(error.contains("whole work budget") && error.contains("scriptBudget(4)"), "{error}");
     }
 
     #[test]
