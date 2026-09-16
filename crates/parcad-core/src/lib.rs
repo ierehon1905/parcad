@@ -17,6 +17,7 @@ pub mod measure;
 pub mod mesh;
 mod occlusion;
 pub mod par;
+pub mod open_fit;
 pub mod render;
 pub mod section;
 pub mod section_crossing;

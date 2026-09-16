@@ -579,8 +579,6 @@ pub mod ffi {
         // PARCAD-CHANGES.md.
         pub fn Shape_scaled_axes(shape: &TopoDS_Shape, x: f64, y: f64, z: f64) -> UniquePtr<TopoDS_Shape>;
 
-        // BRepLib::OrientClosedSolid — added for parcad, see PARCAD-CHANGES.md.
-        pub fn BRepLib_orient_closed_solid(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
         // A closed shell made a solid — added for parcad, see PARCAD-CHANGES.md.
         pub fn Shape_closed_solid(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
         // Which way each solid faces, and every solid turned to face out —

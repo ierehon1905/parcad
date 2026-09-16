@@ -1,0 +1,26 @@
+{
+  "name": "surface-sweep-bend",
+  "script": "eval/scripts/surface-sweep-bend.js",
+  "why": "An arc of chord 10 through a point 3 up (radius 17/3, length 12.2495) swept along 35 + 25 mm of run and a quarter bend of radius 15, its centroid on the spine: 12.2495 (60 + 7.5 pi) = 1023.59 mm2.",
+  "brep": {
+    "size": [
+      55.0,
+      45.0,
+      3.0
+    ],
+    "area_mm2": 1023.246,
+    "triangles": 2465,
+    "bodies": 1,
+    "voids": 0,
+    "faces": 3,
+    "edges": 12,
+    "curves": 10,
+    "requires": [
+      "section-curves",
+      "surfaces"
+    ],
+    "kind": "surface",
+    "free_edges": 8,
+    "free_edge_length_mm": 191.623
+  }
+}

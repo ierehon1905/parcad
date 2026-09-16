@@ -1,0 +1,14 @@
+{
+  "name": "refuse-wall-of-a-surface",
+  "script": "eval/scripts/refuse-wall-of-a-surface.js",
+  "why": "A fillet rounds a solid's edge; a surface's has no material either side.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "a surface has no inside",
+        ".thicken(t)"
+      ]
+    }
+  }
+}

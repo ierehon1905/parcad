@@ -133,5 +133,8 @@ out of the real config; auth does not follow it there, which is fine, because
 | [does-the-lid-clear](does-the-lid-clear.md) | `evaluate_part` `named_bodies` + `between_bodies` | A part in two bodies. Whether a model reads the per-body volume and the pairwise clearance the reply now carries, rather than the "2 separate bodies" that used to read as a defect, or the 0.5 mm standoff in the script where the built lip clears by 0.3. **Not yet run** — written with the feature; the first round will say whether the field names land. |
 | [one-file-for-the-slicer](one-file-for-the-slicer.md) | `export_part` `format: "3mf"` | A part in two bodies going to a slicer, with the format left unnamed. Whether the description's "every body its own named object" beats the habit of exporting STL, which merges the halves. The quote is the reply's `bytes`. **Not yet run** — written with the 3MF export. |
 
+| [is-the-sheet-closed](is-the-sheet-closed.md) | `evaluate_part` `kind` + `surface` | A surface part: whether a model reads `open` and `free_edge_length_mm` instead of calling a stitched tube closed, and reports no volume, which the reply does not have. The script is inline because the subject is the report. **Not yet run** — written with the surface mode. |
+| [make-the-sheet-printable](make-the-sheet-printable.md) | `export_part` refusal → `.thicken` | An STL of an open sheet is refused, naming `.thicken(t)`; `input` shows whether the model thickened it, and the export's measured volume is the quote. **Not yet run** — written with the surface mode. |
+
 Record what a round found in docs/PERCEPTION.md rather than here — the case is
 reusable, the result belongs with the design decision it changed.

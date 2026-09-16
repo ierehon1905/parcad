@@ -711,7 +711,7 @@ in the loft's bounding-box tessellation at 0.01 mm; the same two surfaces cut
 into a face per stretch between its 15 sections (30 faces) took 18.7 s, and
 the mesh after it 1 s. `ThruSections`' single smooth face in the older lamp
 took 166 s. Splitting further, in `u` as well, did not help measurably (16 to
-19 s under load). So a skinned loft is always banded at its sections, and the
+19 s under load) on that surface's few spans; on 512 it does (below). So a skinned loft is always banded at its sections, and the
 edges between bands are `dihedral: "smooth"`.
 
 Bands cut from one `Geom_BSplineSurface` do not stay bands, though:
@@ -733,6 +733,119 @@ showed OCCT's thread pool idle while it meshed eighty independent bands. It is
 on now (`Mesher::new`, `Shape::write_stl`); every corpus case other than the
 two skinned ones meshes to the identical triangle count, volume and area, and
 the corpus's summed mesh-and-build wall time fell from 47 s to 29 s.
+### A fitted curve is wider than its points
+
+A `{ fit }` section's box was taken as its points' box plus its tolerance, and
+a loft was refused when the solid reached past it. But a smooth curve peaks
+between its samples: the star r = 30 + 12 cos 5a sampled at 60 points reaches
+y = ±39.944 at the points and ±40.201 on the curve, and every loft of it was
+refused as "bulging 0.20–0.27 mm outside its sections' own extent" — shifted
+pairings and the unshifted one alike — while the fit was right. The check now
+compares the solid with the curves as fitted (`BSpline::extent`, closed form
+on each span of a cubic; a knot is a station, since a turn exactly on one
+solves to the span's end). The graph's `framing_bounds` still use points plus
+tolerance, since no curve exists before the kernel runs; the reported bounds
+are measured.
+
+The same lofts logged a ruled facet sag of 2.3–2.7 mm where two sections make
+the ruled loft the smooth one. `Surface::distance_near` descended only from
+the nearest point of a coarse grid, and on a wall twisted seven points round
+another sheet passes nearer a grid point than the sheet the point is on; it
+now also descends from the point it is given (`fitted-loft-shifted-star`).
+
+### The volume integral misreads a thickened pleat
+
+A pleated shade thickened to 1.4 mm read 160 731 mm³ through
+`Shape::signed_volume` (adaptive, `eps` 1e-7), 153 800 through the fixed-order
+default, and its mesh 165 584; Gauss–Kronrod over every knot span
+(`BRepGProp::VolumePropertiesGK`, spans on) converged on 165 729.6 — the
+mesh's number less its chord — but took 25 s at `eps` 1e-3, still 1.8 % off,
+and 538 s at 1e-7. A deeper pleat read 15 % low.
+
+A closed form settles which number is wrong. A surface lofted through one
+pleated curve at three heights is a cylinder over the curve, with no Gaussian
+curvature, so a wall centred on it and closed along its normals holds exactly
+t × L × h, L the curve's length (half the surface's free edge length). For 24
+pleats 4 mm deep round 60 mm, 200 mm tall, 1.4 mm thick
+(`a_thickened_pleat_reports_the_volume_its_closed_form_gives` in
+`surfaces.rs`, the `thickened-pleat-cylinder` case):
+
+| reading | mm³ | off |
+|---|---|---|
+| t × L × h | 155 888.9 | — |
+| Gauss–Kronrod span by span, `eps` 1e-4 | 155 896.8 | +0.005 % |
+| the mesh at 0.01 mm (what the part reports) | 155 981.4 | +0.06 %, inside its chord bound |
+| `signed_volume`, adaptive whole-face | 556 182.5 | +257 % |
+| `BRepGProp::VolumeProperties`, fixed order | −170 703 | wrong sign |
+
+So the whole-face integral cannot arbitrate a mesh on these walls, and the
+mesh backstop, which compares the two, refused good shades. It now asks,
+before refusing, the question the volume stands in for: does every face's
+triangulation cover the face? In each face's parameter plane the triangles'
+area must equal the area the face's own mesh boundary — the polygon every
+edge was discretised into — encloses, to rounding (`Shape::uncovered_faces`);
+a mesh of part of a face falls short. The nodes of a triangulation lie on
+their surface, so a mesh that covers every face bounds the solid to within
+its chord, and the part's reported volume is always the mesh's, never the
+integral's. Only when some face fails does the old verdict stand. Anything
+else that needs a B-spline solid's volume integrates span by span
+(`Shape::volume_by_spans`); `stitchSurfaces` does.
+
+### A skinned surface in whole bands meshes in minutes and unifies in seconds per face
+
+A shade skinned on 512 knot spans, cut only at its sections, took 470 s to
+mesh at 0.01 mm; in pieces of 32 spans along u, 91 s under load, and 23 s with
+the mesher's faces on every core (`BRepMesh_IncrementalMesh`'s parallel flag,
+which meshes the same triangles). The pieces must be *segments* of the
+surface, not faces trimmed from one: `ShapeUpgrade_UnifySameDomain` asks
+`GeomLib_IsPlanarSurface` of every neighbouring pair, which samples the face's
+whole underlying surface — `8 + 3 × intervals` points each way — and an offset
+of a 512-span surface is that for every one of 672 faces: 43 s of a boolean
+that changed nothing, 0.5 s once each face had its own segment. The same
+unify welds faces that *share* one surface back into one face.
+
+### A thickened fold meshed open
+
+A deeply pleated shade skinned on 1024 spans, its fold tips rounded to 1.5 mm
+and thickened 1.4 mm, built, measured 1.4 mm everywhere and passed the
+kernel's checker, and its mesh had 2094 open edges among 18.6 million. The
+tips were rounded on the script's *points*; the curve fitted through them
+turns tighter between points than the points do. On a closed form — 24
+pleats round 60 mm, the fitted curve's tightest turn found by dense sampling
+— 6 mm pleats turn at 0.740 mm (0.857 mm on the function sampled), so half of
+a 1.4 mm wall leaves the inside skin turning at 0.04 mm. Its surface moves at
+5 % of the speed of the surface it was offset from, and `BRepMesh` left holes
+inside five of its faces, 0.4 to 5 % of each face's parameter area (19 %
+with a finer angular deflection). Measured by pleat depth:
+
+| pleats | tightest turn | offset × curvature | mesh |
+|---|---|---|---|
+| 5 mm | 0.912 mm | 0.77 | closed |
+| 5.5 mm | 0.821 mm | 0.85 | closed |
+| 5.8 mm | 0.770 mm | 0.91 | open in two faces |
+| 6 mm | 0.740 mm | 0.95 | open in five faces |
+
+Two faults let it through. `thicken`'s fold check sampled a 6 × 6 grid over
+each face, and a face of 32 knot spans hides every pleat tip between those
+points; and it refused only past 0.98. It now searches each face from four
+points in every continuous stretch of its surface each way, climbs the
+extremes to 1e-9 of the face's parameters (`Shape::bend_extremes`), and
+refuses past 0.88, naming the radius, where it is, and the rounding that
+would pass.
+
+### A thickened surface's rim leans
+
+`thicken` closes the wall at a free edge with a face along the surface's
+normals there, so the rim of a shade whose wall leans is not flat: a flared
+shade stood 0.155 mm below its lowest section on a line, and `stands_on` read
+0 mm². A print bed needs the flat ring, which is a cut: a slab off each end,
+`shade.thicken(t).cut(slab.at(0, 0, rim - 10), ...)`.
+
+### `clearance` is a word a lamp script reaches for
+
+It is the fastener table's function, so `const clearance = wall + 0.8` does
+not parse (`Cannot declare a const variable twice`). Every export is a
+reserved word; name a local for what it is, `closest`.
 
 ### `offset_surface` lies
 

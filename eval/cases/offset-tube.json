@@ -1,0 +1,30 @@
+{
+  "name": "offset-tube",
+  "script": "eval/scripts/offset-tube.js",
+  "why": "The tube offset 2 mm along its normal is a tube of radius 12: 2 pi 12 30 = 2261.947 mm2, measured 2 mm from the original at every sample.",
+  "brep": {
+    "size": [
+      24.0,
+      23.99,
+      30.0
+    ],
+    "area_mm2": 2261.639,
+    "triangles": 220,
+    "bodies": 1,
+    "voids": 0,
+    "faces": 2,
+    "edges": 8,
+    "curves": 4,
+    "requires": [
+      "section-curves",
+      "surfaces"
+    ],
+    "kind": "surface",
+    "free_edges": 4,
+    "free_edge_length_mm": 150.796,
+    "offset_mm": [
+      2.0,
+      2.0
+    ]
+  }
+}

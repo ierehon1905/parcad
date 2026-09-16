@@ -160,13 +160,14 @@ later release of it exists, so there is no version to bump to.
   both now sit on XCAF — so `TKDE`, `TKXCAF`, `TKVCAF`, `TKCAF`, `TKLCAF`,
   `TKCDF`, `TKV3d` and `TKService` are linked too.
 
-## Added: `BRepLib_orient_closed_solid`
+## Removed: `BRepLib_orient_closed_solid`
 
-`BRepLib::OrientClosedSolid` on a `TopoDS_Solid`, returned as a shape; any
-other shape type passes through untouched. `BRepOffsetAPI_MakeThickSolid`
-hands back the offset of a filleted body with every face pointing inward —
-a negative volume under `BRepGProp::VolumeProperties` — and `ShapeFix_Shape`
-leaves it that way. parcad's offset lowering measures the sign and calls this.
+It bound `BRepLib::OrientClosedSolid` on a `TopoDS_Solid`, for the inside-out
+offset `BRepOffsetAPI_MakeThickSolid` returns of a filleted body. Its one-ray
+classification reversed a correct pleated shell, and every caller now uses
+`Shape_orientation_report` / `Shape_turned_outward` (below). `Shape_closed_solid`
+still calls `OrientClosedSolid` itself, and its result is measured by the
+orientation report before anything uses it.
 
 ## Added: `BRepExtrema_least_distance`
 

@@ -28,6 +28,23 @@
  * solid per body, and STL writes them all into one file. Nothing joins or
  * constrains one body to another: each sits exactly where its script placed
  * it. Selectors, tags and treatments work inside a body, never across two.
+ *
+ * A shape may also be a *surface*: faces with no inside, free edges where it
+ * ends — Fusion's surface workspace. `surfaceLoft`, `surfaceExtrude`,
+ * `surfaceRevolve` and `surfaceSweep` make one from open or closed curves;
+ * `.trim(tool)`, `.split(tool)`, `.offsetSurface(d)`,
+ * `.edges({ role: "boundary" }).patch()` and `stitchSurfaces(...)` edit and
+ * join them; `.thicken(t)` makes one a solid again, its thickness measured.
+ * A surface reports its area, free edges and open or closed instead of a
+ * volume; booleans, fillets, wall thickness and STL refuse it, naming
+ * `.thicken(t)`, and STEP carries it exactly. A part returned as named bodies
+ * may mix solids and surfaces.
+ *
+ *     const sheet = surfaceLoft([
+ *       { z: 0, curve: [[-20, 0], { through: [0, 8] }, [20, 0]] },
+ *       { z: 40, curve: [[-15, 0], { through: [0, 12] }, [15, 0]] },
+ *     ]);
+ *     return sheet.thicken(1.4);
  */
 
 import { parseEdgeSelector, parseVertexSelector } from "./selectors";
@@ -62,8 +79,12 @@ export interface EdgeQuery {
    * also an ellipse or intersection curve a boolean leaves.
    */
   curve?: "line" | "circle" | "spline";
-  /** Match a circular hole rim, excluding the rim of an outside boss. */
-  role?: "hole";
+  /**
+   * `"hole"`: a circular hole rim, excluding the rim of an outside boss.
+   * `"boundary"`: a free edge — the edge of a surface, bordered by one face
+   * only, which is what `patch()` fills. A closed solid has none.
+   */
+  role?: "hole" | "boundary";
   /** Match an edge touching a face with this outward normal. */
   adjacentTo?: { faceNormal: AxisDirection };
   /** Match edge centres at the requested document extrema. */
@@ -240,6 +261,9 @@ function assertEdgeSelector(selector: EdgeSelector) {
   if (selector.generatedBy !== undefined && !selector.generatedBy.trim()) {
     throw new Error("generatedBy must name a tagged operation");
   }
+  if (selector.role !== undefined && !["hole", "boundary"].includes(selector.role)) {
+    throw new Error(`role must be "hole" or "boundary", not ${JSON.stringify(selector.role)}`);
+  }
   if (selector.dihedral !== undefined && !["convex", "concave", "smooth"].includes(selector.dihedral)) {
     throw new Error(`dihedral must be "convex", "concave" or "smooth", not ${JSON.stringify(selector.dihedral)}`);
   }
@@ -364,6 +388,37 @@ export class EdgeSelection {
       this.expectation,
       { ...options, continuity: "curvature" },
       treatmentSource("squircle"),
+    );
+  }
+
+  /**
+   * A surface filling every closed loop the selected free edges make — Fusion's
+   * Patch. A flat loop is filled with the exact plane; any other loop with a
+   * filling surface through its edges, whose distance from them is measured
+   * and refused past 0.01 mm. `tangent: true` also makes the fill meet the
+   * faces it borders smoothly (refused past 1°). Select the loop with
+   * `{ role: "boundary" }`, narrowed with `at` or `on`; every selected edge
+   * must be a free edge, and together they must close.
+   *
+   * The result is the patch alone, a new surface: stitch it to what it
+   * patches to close that.
+   *
+   * ```js
+   * const tube = surfaceExtrude([[20, 0], { through: [-20, 0] }, [20, 0]], 30, { closed: true });
+   * const lid = tube.edges({ role: "boundary", at: { z: "max" } }).patch();
+   * const floor = tube.edges({ role: "boundary", at: { z: "min" } }).patch();
+   * return stitchSurfaces(tube, lid, floor); // a closed shell: a solid cylinder
+   * ```
+   */
+  patch(options: { tangent?: boolean } = {}): Shape {
+    const extra = Object.keys(options ?? {}).filter((k) => k !== "tangent");
+    if (extra.length) throw new Error(`patch takes { tangent }; ${extra.join(", ")} is not an option`);
+    const tangent = options.tangent ?? false;
+    const selector = this.selector;
+    const expect = this.expectation;
+    return new Shape(
+      ([child]) => ({ op: "patch", child, selector, ...(expect ? { expect } : {}), ...(tangent ? { tangent } : {}) }),
+      [this.owner],
     );
   }
 }
@@ -627,6 +682,86 @@ export class Shape {
   /** Hollow this out, leaving a wall of `thickness` inside the current surface. */
   shell(thickness: number): Shape {
     return new Shape(([child]) => ({ op: "shell", child, thickness }), [this]);
+  }
+
+  /**
+   * Make this surface a solid `thickness` mm thick, measured square to the
+   * surface — Fusion's Thicken. `side: "both"` (the default) centres the
+   * material on the surface; `"out"` puts it all on the surface's normal side
+   * and `"in"` on the other. A surface's normal points to the right of its
+   * curve's direction of travel, seen from +Z for a loft or an extrusion —
+   * the outside of an anticlockwise outline.
+   *
+   * The kernel offsets the surface exactly, and the result is measured along
+   * the normal at a grid of points on every face: the evaluation reports the
+   * range as `thickened_mm`, and a solid more than 1 % off anywhere is
+   * refused, naming where. Refused before building where the surface bends
+   * tighter than the thickness on the side it grows toward (its radius of
+   * curvature is in the message), and where it has a crease — two faces
+   * meeting at an angle — which has no single offset.
+   *
+   * ```js
+   * surfaceLoft(sections, { closed: true, smooth: true }).thicken(1.4)
+   * ```
+   */
+  thicken(thickness: number, options: { side?: "both" | "out" | "in" } = {}): Shape {
+    if (!(typeof thickness === "number" && Number.isFinite(thickness) && thickness > 0)) {
+      throw new Error(`thicken takes a positive thickness in mm; got ${JSON.stringify(thickness)}`);
+    }
+    const side = options.side ?? "both";
+    if (!["both", "out", "in"].includes(side)) {
+      throw new Error(`thicken's side is "both", "out" or "in"; got ${JSON.stringify(side)}`);
+    }
+    return new Shape(
+      ([child]) => ({ op: "thicken", child, thickness, ...(side !== "both" ? { side } : {}) }),
+      [this],
+    );
+  }
+
+  /**
+   * Cut this surface with a tool and keep the pieces on one side — Fusion's
+   * Trim. The tool is a solid (`keep: "inside"` or `"outside"`), another
+   * surface (`"front"`, its normal side, or `"back"`), or a plane
+   * `{ plane: { point: [x, y, z], normal: [x, y, z] } }` (`"above"`, where
+   * the normal points, or `"below"`). A cutting surface must reach right
+   * across the surface it trims.
+   *
+   * To trim by a curve, extrude the curve into a surface or a solid and trim
+   * with that: `surfaceExtrude(curve, 100)` cuts along the curve seen from +Z.
+   * A tool that does not cross the surface, or keeps all or none of it, is
+   * refused.
+   */
+  trim(tool: Shape | { plane: { point: PathPoint; normal: PathPoint } }, options: { keep: TrimKeep }): Shape {
+    const keep = options?.keep;
+    if (!["inside", "outside", "above", "below", "front", "back"].includes(keep)) {
+      throw new Error(
+        `trim needs { keep }: "inside" or "outside" a solid tool, "front" or "back" of a surface tool, "above" or "below" a plane; got ${JSON.stringify(keep)}. To cut without removing anything, use .split(tool)`,
+      );
+    }
+    return trimBy(this, tool, keep);
+  }
+
+  /**
+   * Cut this surface along a tool — a solid, a surface or a plane, as
+   * {@link trim} takes — and keep every piece: Fusion's Split Face. The
+   * pieces stay joined along the cut, as separate faces a selector or a
+   * later trim can tell apart.
+   */
+  split(tool: Shape | { plane: { point: PathPoint; normal: PathPoint } }): Shape {
+    return trimBy(this, tool, "both");
+  }
+
+  /**
+   * This surface moved `distance` mm along its normal (negative: against it),
+   * as a new surface — Fusion's Offset surface. Measured along the normal at
+   * a grid of points on every face and reported as `offset_mm`; refused where
+   * the surface bends tighter than the distance on the side it moves toward.
+   */
+  offsetSurface(distance: number): Shape {
+    if (!(typeof distance === "number" && Number.isFinite(distance) && distance !== 0)) {
+      throw new Error(`offsetSurface takes a non-zero distance in mm; got ${JSON.stringify(distance)}`);
+    }
+    return new Shape(([child]) => ({ op: "offset_surface", child, distance }), [this]);
   }
 
   /**
@@ -1170,7 +1305,7 @@ function drawCurve(entry: CurveEntry, label: string): { start: P2; end: P2; draw
  * with a corner beside it that is the same point, and the curve the
  * `bspline` between them.
  */
-function drawCurves(profile: SectionEntry[], what: string): SectionEntry[] {
+function drawCurves(profile: SectionEntry[], what: string, open = false): SectionEntry[] {
   if (!profile.some(isCurveEntry)) return profile;
   const same = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]) <= 1e-9 * Math.max(1, Math.hypot(a[0], a[1]));
   const out: SectionEntry[] = [];
@@ -1192,7 +1327,7 @@ function drawCurves(profile: SectionEntry[], what: string): SectionEntry[] {
   }
   const first = out[0];
   const closing = out[out.length - 1];
-  if (out.length > 1 && Array.isArray(first) && Array.isArray(closing) && same(first, closing)) out.pop();
+  if (!open && out.length > 1 && Array.isArray(first) && Array.isArray(closing) && same(first, closing)) out.pop();
   return out;
 }
 
@@ -1201,12 +1336,13 @@ function drawCurves(profile: SectionEntry[], what: string): SectionEntry[] {
  * reads as one here. The geometry (arcs that fit, curves that do not cross)
  * is the core's to judge, because a graph can arrive from anywhere.
  */
-function checkSection(profile: SectionEntry[], what: string, example: string): SectionEntry[] {
+function checkSection(profile: SectionEntry[], what: string, example: string, open = false): SectionEntry[] {
   if (!Array.isArray(profile)) {
     throw new Error(`${what} must be a list of section entries, e.g. ${example}`);
   }
   const insetAt = profile.findIndex((entry) => entry && typeof entry === "object" && !Array.isArray(entry) && "inset" in entry);
   if (insetAt >= 0) {
+    if (open) throw new Error(`${what} is open, and an inset is a closed outline; give the curve's own entries`);
     if (profile.length !== 1) {
       throw new Error(`${what} entry ${insetAt} is an inset, which is a whole section: write inset(outline, d) alone, with the corners and curves inside it`);
     }
@@ -1300,6 +1436,12 @@ function checkSection(profile: SectionEntry[], what: string, example: string): S
         throw new Error(`${what} entry ${i}: tolerance belongs to a fit only`);
       }
     }
+  }
+  if (open) {
+    if (curves === 0 && corners < 2 && !lone(profile)) {
+      throw new Error(`${what} needs at least 2 corners, from one end of the curve to the other, e.g. ${example}`);
+    }
+    return drawCurves(profile, what, true);
   }
   if (curves === 0 && (corners === profile.length ? corners < 3 : corners === 0 && !lone(profile))) {
     throw new Error(
@@ -2770,6 +2912,225 @@ export function sweep(
   }), []);
 }
 
+/** Which pieces a {@link Shape.trim} keeps. */
+export type TrimKeep = "inside" | "outside" | "above" | "below" | "front" | "back";
+
+function trimBy(
+  shape: Shape,
+  tool: Shape | { plane: { point: PathPoint; normal: PathPoint } },
+  keep: TrimKeep | "both",
+): Shape {
+  if (tool instanceof Shape) {
+    return new Shape(([child, cutter]) => ({ op: "trim", child, tool: cutter, keep }), [shape, tool]);
+  }
+  const plane = (tool as { plane?: { point?: unknown; normal?: unknown } })?.plane;
+  const triple = (v: unknown) => Array.isArray(v) && v.length === 3 && v.every((c) => typeof c === "number" && Number.isFinite(c));
+  if (!plane || !triple(plane.point) || !triple(plane.normal) || (plane.normal as number[]).every((c) => c === 0)) {
+    throw new Error("a trim tool is a shape, or { plane: { point: [x, y, z], normal: [x, y, z] } } with a non-zero normal");
+  }
+  if (keep === "inside" || keep === "outside" || keep === "front" || keep === "back") {
+    throw new Error(`a plane has two sides: keep "above" (where its normal points) or "below", not ${JSON.stringify(keep)}`);
+  }
+  const [px, py, pz] = plane.point as number[];
+  const [nx, ny, nz] = plane.normal as number[];
+  return new Shape(
+    ([child]) => ({ op: "trim", child, plane: { point: { x: px, y: py, z: pz }, normal: { x: nx, y: ny, z: nz } }, keep }),
+    [shape],
+  );
+}
+
+/** Options every surface-making function takes. */
+export interface CurveOptions {
+  /**
+   * `false` (the default): the curve is open, running from its first entry
+   * to its last, both corners `[x, y]` — or it is one `{ spline }` or
+   * `{ fit }` alone. `true`: it closes back to its start like a section, and
+   * the surface is a tube.
+   */
+  closed?: boolean;
+}
+
+function checkCurve(curve: SectionEntry[], closed: boolean, what: string): SectionEntry[] {
+  if (typeof closed !== "boolean") throw new Error(`${what}: closed is true or false; got ${JSON.stringify(closed)}`);
+  return closed
+    ? checkSection(curve, what, "[[-5, -5], [5, -5], [5, 5], [-5, 5]]")
+    : checkSection(curve, what, "[[0, 0], { through: [10, 5] }, [20, 0]]", true);
+}
+
+function curveOptions(options: object, allowed: string[], fn: string) {
+  const extra = Object.keys(options ?? {}).filter((k) => !allowed.includes(k));
+  if (extra.length) throw new Error(`${fn} takes ${allowed.join(", ")}; ${extra.join(", ")} is not an option`);
+}
+
+/**
+ * A curve in the XY plane swept `height` mm along +Z into a surface, centred
+ * on z = 0 — Fusion's surface Extrude. The curve is a list of `SectionEntry`
+ * (corners, arcs, splines, fits) that does not close unless `closed: true`;
+ * a closed curve makes a tube with both ends open. The surface's normal lies
+ * to the right of the curve's direction of travel seen from +Z.
+ *
+ * ```js
+ * surfaceExtrude([[0, 0], { spline: [[10, 6], [20, -6]] }, [30, 0]], 40)
+ * ```
+ */
+export function surfaceExtrude(curve: SectionEntry[], height: number, options: CurveOptions = {}): Shape {
+  curveOptions(options, ["closed"], "surfaceExtrude");
+  const closed = options.closed ?? false;
+  const drawn = checkCurve(curve, closed, "surfaceExtrude curve");
+  if (!(typeof height === "number" && Number.isFinite(height) && height > 0)) {
+    throw new Error(`surfaceExtrude height is a positive length in mm; got ${JSON.stringify(height)}`);
+  }
+  return new Shape(() => ({ op: "surface_extrude", curve: drawn, ...(closed ? { closed } : {}), height }), []);
+}
+
+/**
+ * A curve in the (radius, z) half-plane revolved about +Z into a surface —
+ * Fusion's surface Revolve: a dome from a quarter arc, a lamp shade from a
+ * profile line. Radii must be >= 0; `degrees` (default 360) sweeps part of a
+ * turn, anticlockwise from +X. The normal lies to the right of the curve's
+ * travel in that plane: a curve drawn upward at positive radius faces out.
+ *
+ * ```js
+ * surfaceRevolve([[40, 0], { through: [30, 30] }, [0, 40]]) // a dome, open at its rim
+ * ```
+ */
+export function surfaceRevolve(curve: SectionEntry[], options: CurveOptions & { degrees?: number } = {}): Shape {
+  curveOptions(options, ["closed", "degrees"], "surfaceRevolve");
+  const closed = options.closed ?? false;
+  const degrees = options.degrees ?? 360;
+  if (!(typeof degrees === "number" && degrees > 0 && degrees <= 360)) {
+    throw new Error(`surfaceRevolve degrees is more than 0 and at most 360; got ${JSON.stringify(degrees)}`);
+  }
+  const drawn = checkCurve(curve, closed, "surfaceRevolve curve");
+  if (drawn.some((entry) => Array.isArray(entry) && entry[0] < 0)) {
+    throw new Error("surfaceRevolve curve radii must be >= 0; a curve that crosses the axis sweeps through itself");
+  }
+  return new Shape(
+    () => ({ op: "surface_revolve", curve: drawn, ...(closed ? { closed } : {}), ...(degrees !== 360 ? { degrees } : {}) }),
+    [],
+  );
+}
+
+/** One curve of a {@link surfaceLoft}, lying flat at height `z`. */
+export interface LoftCurve {
+  z: number;
+  curve: SectionEntry[];
+}
+
+/**
+ * A surface through two or more curves stacked along +Z — Fusion's Loft in
+ * the surface workspace, and the way to draw a shade, a blade or a hull
+ * that must stay open. Curves pair their pieces by index, as `loft` pairs
+ * outlines, so every curve resolves to the same number of pieces. Ruled
+ * stretches by default; `smooth: true` fits one surface through all of them,
+ * held to the curves' own bounding box. `closed: true` lofts closed curves
+ * into a tube open at both ends.
+ *
+ * Curves that are each one `{ fit: points, tolerance }` over the same
+ * number of points — open or closed — are skinned on one shared knot vector
+ * with one parameter per point, so point `i` of every curve lies on one
+ * line of the surface: list every curve's points from the same end (or, when
+ * closed, the same place and the same way round). The fit's worst distance
+ * from its points is reported as `deviation_mm`. This is the path for
+ * generated sections — a reaction-diffusion profile tweened and flared —
+ * and it keeps the surface light enough to thicken.
+ *
+ * ```js
+ * const blade = (z, w) => ({ z, curve: [{ fit: arcPoints(60, w, z), tolerance: 0.02 }] });
+ * surfaceLoft([blade(0, 30), blade(60, 40), blade(120, 25)], { smooth: true }).thicken(1.4)
+ * ```
+ */
+export function surfaceLoft(sections: LoftCurve[], options: CurveOptions & { smooth?: boolean } = {}): Shape {
+  curveOptions(options, ["closed", "smooth"], "surfaceLoft");
+  if (!Array.isArray(sections) || sections.length < 2) {
+    throw new Error("a surface loft needs at least 2 curves, each { z, curve }");
+  }
+  const closed = options.closed ?? false;
+  const smooth = options.smooth ?? false;
+  const drawn = sections.map((section, i) => {
+    if (!section || !Number.isFinite(section.z) || !Array.isArray(section.curve)) {
+      throw new Error(`surfaceLoft curve ${i} must be { z: number, curve: [...] }`);
+    }
+    const extra = Object.keys(section).filter((k) => k !== "z" && k !== "curve");
+    if (extra.length) throw new Error(`surfaceLoft curve ${i} is { z, curve }; ${extra.join(", ")} is not part of it`);
+    if (i > 0 && section.z <= sections[i - 1].z) {
+      throw new Error(`surfaceLoft curves must rise strictly: curve ${i} is at z = ${section.z}, below or level with curve ${i - 1} at z = ${sections[i - 1].z}`);
+    }
+    return { curve: checkCurve(section.curve, closed, `surfaceLoft curve ${i}`), z: section.z };
+  });
+  return new Shape(
+    () => ({ op: "surface_loft", sections: drawn, ...(closed ? { closed } : {}), ...(smooth ? { smooth } : {}) }),
+    [],
+  );
+}
+
+/**
+ * A curve swept along a path into a surface — Fusion's surface Sweep. The
+ * path is what `sweep` takes: points with `{ bend }` at every corner,
+ * `{ helix: { radius, pitch, turns } }` or `{ spline: [[x, y, z], ...] }`,
+ * and the curve is drawn in the plane square to the path's start exactly as
+ * `sweep` draws its profile. The normal lies to the right of the curve's
+ * travel in that plane.
+ */
+export function surfaceSweep(
+  curve: SectionEntry[],
+  path: PathPoint[] | HelixPath | SplinePath,
+  options: CurveOptions & { bend?: number } = {},
+): Shape {
+  curveOptions(options, ["closed", "bend"], "surfaceSweep");
+  const closed = options.closed ?? false;
+  const drawn = checkCurve(curve, closed, "surfaceSweep curve");
+  const bend = options.bend ?? 0;
+  if (!(bend >= 0)) throw new Error("surfaceSweep bend radius must be positive");
+  const head = { op: "surface_sweep", curve: drawn, ...(closed ? { closed } : {}) };
+  if (!Array.isArray(path)) {
+    if (bend > 0) throw new Error("a helical or spline sweep has no corners to bend; drop the bend option");
+    if ("spline" in path) {
+      const spline = splineSpine(path, "surfaceSweep");
+      return new Shape(() => ({ ...head, spline }), []);
+    }
+    const helix = helixSpine(path, "surfaceSweep");
+    return new Shape(() => ({ ...head, helix }), []);
+  }
+  if (path.length < 2) {
+    throw new Error("a surfaceSweep path needs at least 2 points, or { helix: { radius, pitch, turns } }, or { spline: [[x, y, z], ...] }");
+  }
+  return new Shape(
+    () => ({ ...head, path: path.map(([x, y, z]) => ({ x, y, z })), ...(bend > 0 ? { bend } : {}) }),
+    [],
+  );
+}
+
+/**
+ * Sew surfaces into one along the edges they share — Fusion's Stitch — and,
+ * when the result has no free edge left, into a solid: measured, not
+ * assumed, so the report says `solid` only when the shell closed. Edges
+ * closer than `tolerance` (default 0.01 mm, at most 0.5) are joined; a wider
+ * gap stays a free edge. `solid: true` refuses a result that does not close,
+ * listing its free edges — the way to insist on a watertight part.
+ *
+ * ```js
+ * stitchSurfaces(tube, top, bottom, { solid: true })
+ * ```
+ */
+export function stitchSurfaces(...args: (Shape | { tolerance?: number; solid?: boolean })[]): Shape {
+  const shapes: Shape[] = [];
+  let options: { tolerance?: number; solid?: boolean } = {};
+  for (const a of args) {
+    if (a instanceof Shape) shapes.push(a);
+    else if (a && typeof a === "object") options = { ...options, ...a };
+    else throw new Error(`stitchSurfaces takes surfaces and one { tolerance, solid }; got ${JSON.stringify(a)}`);
+  }
+  curveOptions(options, ["tolerance", "solid"], "stitchSurfaces");
+  if (shapes.length === 0) throw new Error("stitchSurfaces needs at least one surface");
+  const tolerance = options.tolerance ?? 0.01;
+  if (!(typeof tolerance === "number" && tolerance > 0 && tolerance <= 0.5)) {
+    throw new Error(`stitchSurfaces tolerance is the widest gap sewn shut, more than 0 and at most 0.5 mm; got ${JSON.stringify(tolerance)}`);
+  }
+  const solid = options.solid ?? false;
+  return new Shape((children) => ({ op: "stitch", children, tolerance, ...(solid ? { solid } : {}) }), shapes);
+}
+
 /**
  * Fuse every shape given into one solid.
  *
@@ -3271,9 +3632,9 @@ export interface Requirement {
 type GraphNode = Record<string, unknown>;
 
 function sectionEntriesOf(node: GraphNode): unknown[] {
-  const lists: unknown[] = [node.profile];
+  const lists: unknown[] = [node.profile, node.curve];
   if (Array.isArray(node.sections)) {
-    for (const section of node.sections) lists.push((section as GraphNode)?.outline);
+    for (const section of node.sections) lists.push((section as GraphNode)?.outline, (section as GraphNode)?.curve);
   }
   const entries: unknown[] = [];
   const walk = (list: unknown) => {
@@ -3333,6 +3694,26 @@ const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean })[] =
     uses: (n) => entryHas(n, "within"),
   },
   { feature: "loft-wall", after: "0.0.6", what: "lofts with a wall (loft(sections, { wall }))", uses: (n) => n.op === "loft" && n.wall != null },
+  {
+    feature: "surfaces",
+    after: "0.0.6",
+    what: "surface modelling (surfaceLoft, stitchSurfaces, trim, thicken and the rest)",
+    uses: (n) =>
+      SURFACE_OPS.includes(n.op as string) ||
+      (!!n.selector && typeof n.selector === "object" && (n.selector as GraphNode).role === "boundary"),
+  },
+];
+
+const SURFACE_OPS = [
+  "surface_extrude",
+  "surface_revolve",
+  "surface_loft",
+  "surface_sweep",
+  "patch",
+  "stitch",
+  "trim",
+  "thicken",
+  "offset_surface",
 ];
 
 function stamped(doc: Doc): Doc {

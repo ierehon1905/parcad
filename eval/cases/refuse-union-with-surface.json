@@ -1,0 +1,14 @@
+{
+  "name": "refuse-union-with-surface",
+  "script": "eval/scripts/refuse-union-with-surface.js",
+  "why": "A boolean needs an inside on both operands; a surface has none, and the refusal names thicken.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "a surface has no inside",
+        ".thicken(t)"
+      ]
+    }
+  }
+}

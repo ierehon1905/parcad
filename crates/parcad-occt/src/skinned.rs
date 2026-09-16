@@ -82,6 +82,8 @@ pub struct Skinned {
     /// Whether the skins' own check left their crossings for the kernel's
     /// (`skin_crossing`); when not, they are proven apart.
     pub unsettled: bool,
+    /// The XY box of the outside's section curves, as fitted.
+    pub sections_extent: (P2, P2),
 }
 
 /// Refuse skins that cross, and say whether the kernel still has to look:
@@ -148,6 +150,15 @@ fn signed_area(points: &[P2]) -> f64 {
 struct Fitted {
     rows: Vec<Vec<[f64; 3]>>,
     deviation: Vec<f64>,
+    /// Each fitted curve's box, as built.
+    extents: Vec<(P2, P2)>,
+}
+
+/// The box around every one of `boxes`.
+pub fn union(boxes: &[(P2, P2)]) -> (P2, P2) {
+    boxes.iter().fold(([f64::INFINITY; 2], [f64::NEG_INFINITY; 2]), |(lo, hi), (a, b)| {
+        ([lo[0].min(a[0]), lo[1].min(a[1])], [hi[0].max(b[0]), hi[1].max(b[1])])
+    })
 }
 
 /// Why a span count was not enough, in words for the refusal if no span
@@ -163,7 +174,7 @@ fn fit_all(
     name: &(dyn Fn(f64) -> String + Sync),
     per_span: usize,
 ) -> Result<std::result::Result<Fitted, Short>> {
-    type One = std::result::Result<std::result::Result<(Vec<[f64; 3]>, f64), Short>, String>;
+    type One = std::result::Result<std::result::Result<(Vec<[f64; 3]>, f64, (P2, P2)), Short>, String>;
     let each: Vec<One> = par::map(sections, |(points, tolerance, z)| {
         let what = match name(*z) {
             named if named.is_empty() => String::new(),
@@ -183,20 +194,22 @@ fn fit_all(
                 )));
             }
         }
-        Ok(Ok((curve.poles.iter().map(|p| [p[0], p[1], *z]).collect(), off)))
+        Ok(Ok((curve.poles.iter().map(|p| [p[0], p[1], *z]).collect(), off, curve.extent())))
     });
     let mut rows = Vec::with_capacity(sections.len());
     let mut deviation = Vec::with_capacity(sections.len());
+    let mut extents = Vec::with_capacity(sections.len());
     for one in each {
         match one.map_err(|e| anyhow::anyhow!(e))? {
-            Ok((row, off)) => {
+            Ok((row, off, extent)) => {
                 rows.push(row);
                 deviation.push(off);
+                extents.push(extent);
             }
             Err(why) => return Ok(Err(why)),
         }
     }
-    Ok(Ok(Fitted { rows, deviation }))
+    Ok(Ok(Fitted { rows, deviation, extents }))
 }
 
 fn surface(rows: &[Vec<[f64; 3]>], fit: &PeriodicFit, vparams: &[f64], smooth: bool) -> Result<Surface> {
@@ -264,13 +277,55 @@ fn offset_at_height(outer: &Surface, u: f64, z: f64, step: f64, sense: f64, base
     Ok((height_of(v).0, v))
 }
 
+/// A loft's outside: its sections fitted on one shared knot vector, the
+/// surface interpolated through them, and the worst distance of a point from
+/// its curve.
+pub struct Outside {
+    fit: PeriodicFit,
+    fitted: Fitted,
+    pub surface: Surface,
+    pub vparams: Vec<f64>,
+    pub deviation_mm: f64,
+}
+
+impl Outside {
+    pub fn spans(&self) -> usize {
+        self.fit.spans()
+    }
+
+    /// Each section curve's XY box, as fitted.
+    pub fn section_extents(&self) -> &[(P2, P2)] {
+        &self.fitted.extents
+    }
+}
+
+/// The outside [`build`] skins, for a caller that makes its own faces of it:
+/// sections that each run the same way round, fitted on the fewest spans that
+/// hold every tolerance without a loop.
+pub fn outside(sections: &[FitSection], smooth: bool, wall: Option<&LoftWall>, label: &str) -> Result<Outside> {
+    let points: Vec<&[P2]> = sections.iter().map(|s| s.points).collect();
+    let params = shared_parameters(&points);
+    let params = &params[..params.len() - 1];
+    let heights: Vec<f64> = sections.iter().map(|s| s.z).collect();
+    let vparams = height_parameters(&heights);
+    let (fit, fitted) = fit_outside(sections, &points, params, wall, label)?;
+    let surface = surface(&fitted.rows, &fit, &vparams, smooth)?;
+    let deviation_mm = fitted.deviation.iter().cloned().fold(0.0, f64::max);
+    breadcrumb(&format!(
+        "{label}: {} sections fitted on one knot vector of {} spans ({} poles each), {deviation_mm:.4} mm off at worst",
+        sections.len(),
+        fit.spans(),
+        fit.spans() + 3
+    ));
+    Ok(Outside { fit, fitted, surface, vparams, deviation_mm })
+}
+
 /// Build the loft. `wall` makes it a shell of that thickness.
 ///
 /// The outside is fitted on the fewest spans that hold every section's
 /// tolerance without a loop, and the inside on as many more as the wall needs.
 pub fn build(sections: &[FitSection], smooth: bool, wall: Option<&LoftWall>, label: &str) -> Result<Skinned> {
     let points: Vec<&[P2]> = sections.iter().map(|s| s.points).collect();
-    let params = shared_parameters(&points);
     let sense = signed_area(points[0]).signum();
     for (k, p) in points.iter().enumerate() {
         if signed_area(p).signum() != sense {
@@ -279,19 +334,9 @@ pub fn build(sections: &[FitSection], smooth: bool, wall: Option<&LoftWall>, lab
             );
         }
     }
-    let params = &params[..params.len() - 1];
-    let heights: Vec<f64> = sections.iter().map(|s| s.z).collect();
-    let vparams = height_parameters(&heights);
     let err = |e: String| anyhow::anyhow!("{label}: {e}");
-    let (fit, outer_fit) = fit_outside(sections, &points, params, wall, label)?;
-    let outer = surface(&outer_fit.rows, &fit, &vparams, smooth)?;
-    let deviation_mm = outer_fit.deviation.iter().cloned().fold(0.0, f64::max);
-    breadcrumb(&format!(
-        "{label}: {} sections fitted on one knot vector of {} spans ({} poles each), {deviation_mm:.4} mm off at worst",
-        sections.len(),
-        fit.spans(),
-        fit.spans() + 3
-    ));
+    let Outside { fit, fitted: outer_fit, surface: outer, vparams, deviation_mm } = outside(sections, smooth, wall, label)?;
+    let sections_extent = union(&outer_fit.extents);
     let facet_sag_mm = (!smooth).then(|| -> Result<f64> {
         let rounded = surface(&outer_fit.rows, &fit, &vparams, true)?;
         let (sag, at) = facet_sag(&outer, &rounded, &vparams, SAG_PER_SPAN * fit.spans(), SAG_PER_STRETCH);
@@ -311,13 +356,15 @@ pub fn build(sections: &[FitSection], smooth: bool, wall: Option<&LoftWall>, lab
         state_outward(&mut skinner, &outer, &vparams, sense).map_err(err)?;
         let unsettled = check_apart(&[SkinPart { surface: &outer, v: (0.0, 1.0) }], label, None)?;
         let shape = skinner.build(SEW_TOLERANCE).map_err(err)?;
-        return Ok(Skinned { shape, deviation_mm, wall: None, facet_sag_mm, unsettled });
+        return Ok(Skinned { shape, deviation_mm, wall: None, facet_sag_mm, unsettled, sections_extent });
     };
     let mut why = String::new();
     let mut refine = INSIDE_REFINE;
     while refine <= MAX_INSIDE_REFINE {
         match walled(sections, &fit, &outer, sense, smooth, wall, refine, label)? {
-            Ok((shape, reading, unsettled)) => return Ok(Skinned { shape, deviation_mm, wall: Some(reading), facet_sag_mm, unsettled }),
+            Ok((shape, reading, unsettled)) => {
+                return Ok(Skinned { shape, deviation_mm, wall: Some(reading), facet_sag_mm, unsettled, sections_extent })
+            }
             Err(short) => why = short,
         }
         refine *= 2;

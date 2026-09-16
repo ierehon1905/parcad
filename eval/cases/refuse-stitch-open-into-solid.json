@@ -1,0 +1,15 @@
+{
+  "name": "refuse-stitch-open-into-solid",
+  "script": "eval/scripts/refuse-stitch-open-into-solid.js",
+  "why": "A tube with one rim patched does not close; asked for a solid, the stitch lists the free edges left and names patch.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "asked to stitch into a solid",
+        "2 free edge(s)",
+        ".patch()"
+      ]
+    }
+  }
+}

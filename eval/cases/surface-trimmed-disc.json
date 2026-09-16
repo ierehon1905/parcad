@@ -1,0 +1,25 @@
+{
+  "name": "surface-trimmed-disc",
+  "script": "eval/scripts/surface-trimmed-disc.js",
+  "why": "A disc of radius 20 trimmed to the inside of a cylinder of radius 10 is a disc of radius 10: pi 100 = 314.159 mm2, one free edge 2 pi 10 = 62.832 mm long.",
+  "brep": {
+    "size": [
+      20.0,
+      20.0,
+      0.0
+    ],
+    "area_mm2": 313.953,
+    "triangles": 98,
+    "bodies": 1,
+    "voids": 0,
+    "faces": 1,
+    "edges": 1,
+    "curves": 1,
+    "requires": [
+      "surfaces"
+    ],
+    "kind": "surface",
+    "free_edges": 1,
+    "free_edge_length_mm": 62.832
+  }
+}

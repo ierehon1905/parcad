@@ -133,8 +133,12 @@ pub struct RayResult {
 pub struct RayHitResult {
     pub distance: f64,
     pub point: [f64; 3],
-    /// The ray passes into material here; otherwise out of it.
+    /// The ray passes into material here; otherwise out of it. False for a
+    /// surface, which has no material: see `surface`.
     pub entering: bool,
+    /// The ray crosses a surface body here, which has no inside to enter.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub surface: bool,
     /// Tags of the face crossed, nearest first. Empty where no tagged node
     /// owns it.
     #[serde(default)]
@@ -172,6 +176,9 @@ pub struct ThicknessResult {
     pub edges_checked: usize,
     #[serde(default)]
     pub face_pairs_checked: usize,
+    /// Surface bodies left out: a surface has no material to be thick.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub surfaces_skipped: Vec<String>,
 }
 
 /// What a thin reading is, from the two faces it lies between. Ordered by how
@@ -298,6 +305,9 @@ pub struct EdgeCurve {
     /// Absent for a one-solid part.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// Bordered by one face only: the edge of a surface.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub free: bool,
 }
 
 /// One exact pre-treatment corner selected by a vertex-targeted treatment.
@@ -384,6 +394,7 @@ pub fn edge_curve(points: Vec<[f32; 3]>) -> Option<EdgeCurve> {
         length_mm,
         treatment_node: None,
         body: None,
+        free: false,
     })
 }
 
@@ -402,6 +413,41 @@ fn is_straight(points: &[[f32; 3]], start: [f32; 3], delta: [f32; 3], magnitude:
         let distance = (cross[0].powi(2) + cross[1].powi(2) + cross[2].powi(2)).sqrt() / magnitude;
         distance <= 1e-4
     })
+}
+
+/// Whether a body encloses a volume or is a surface with none.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BodyKind {
+    #[default]
+    Solid,
+    Surface,
+}
+
+impl BodyKind {
+    pub fn is_solid(&self) -> bool {
+        *self == BodyKind::Solid
+    }
+}
+
+/// What is true of a surface body, measured on its B-rep: how it is made
+/// and where it is open.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceMeasure {
+    /// The named body this is, for a part in several; absent for one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    pub faces: usize,
+    /// Connected sheets of faces.
+    pub shells: usize,
+    /// Edges bordered by one face: the surface's own edges.
+    pub free_edges: usize,
+    /// Their total length along the exact curves, in mm.
+    pub free_edge_length_mm: f64,
+    /// Free edges joined into closed loops — a tube's two rims are two — and
+    /// into chains that do not close.
+    pub boundary_loops: usize,
+    pub open_chains: usize,
 }
 
 /// A measured range, in mm.
@@ -447,6 +493,25 @@ pub struct Success {
     /// between sections. Absent when the part has no ruled loft.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub facet_sag_mm: Option<f64>,
+    /// The thinnest and thickest any `thicken` measured through its solid,
+    /// square to the surface it thickened; absent when nothing was thickened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thickened_mm: Option<WallRange>,
+    /// The least and greatest distance any `offsetSurface` measured between
+    /// a surface and its offset.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_mm: Option<WallRange>,
+    /// The widest any filled patch's boundary strays from the edges it fills.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patch_gap_mm: Option<f64>,
+    /// What a one-body part is: a solid, or a surface. For a part in named
+    /// bodies each body says so in `bodies`.
+    #[serde(default)]
+    pub kind: BodyKind,
+    /// One entry per surface body, what is measured of it; empty when every
+    /// body is a solid.
+    #[serde(default)]
+    pub surfaces: Vec<SurfaceMeasure>,
     /// Logical edges, each a polyline sampled along the true curve.
     ///
     /// A mesh alone cannot produce this at any resolution: there a sharp edge
@@ -487,6 +552,8 @@ pub struct Success {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BodySpan {
     pub name: String,
+    #[serde(default)]
+    pub kind: BodyKind,
     pub faces: usize,
     pub edges: usize,
     /// First triangle of this body in `indices`, counted in triangles.
@@ -502,7 +569,8 @@ pub struct BodySpan {
 pub struct BodyFit {
     pub a: String,
     pub b: String,
-    /// `"clear"`, `"touching"`, or `"interfering"`.
+    /// `"clear"`, `"touching"`, or `"interfering"`; `"crossing"` when a
+    /// surface passes through the other body.
     pub verdict: String,
     pub interference_mm3: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]

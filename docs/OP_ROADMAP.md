@@ -41,8 +41,13 @@ are marked *hold* with a reason instead of a plan.
 | Coil | ✅ `pipe({ helix }, dia)`, `sweep(profile, { helix })` | §5 |
 | Thread | ✅ `threadedRod` `threadedHole` | ISO 68-1 basic 60° profile, named sizes or `{ diameter, pitch }`, a clearance for printing; measured against its closed form — §5 |
 | **Rib / Web** | ❌ | sugar over what exists — §6 |
-| **Split body / face** | ❌ | a different request from the section view; §8 |
-| Sheet metal, Surface/T-spline, Mesh, Simulation, CAM | ❌ | out of scope by design |
+| Split face | ✅ `.split(tool)` on a surface | pieces stay joined along the cut; §9 |
+| **Split body** | ❌ | two intersections returned as two bodies; §8 |
+| Surface: extrude, revolve, loft, sweep | ✅ `surfaceExtrude` `surfaceRevolve` `surfaceLoft` `surfaceSweep` | open or closed curves; fitted curves skinned on one knot vector; §9 |
+| Surface: patch, stitch, trim, split, offset | ✅ `.edges({ role: "boundary" }).patch()` `stitchSurfaces` `.trim()` `.split()` `.offsetSurface()` | measured: patch gap, closed-ness, offset distance; §9 |
+| Thicken | ✅ `.thicken(t, { side })` | wall measured at a grid on every face; §9 |
+| **Surface: extend, ruled, boundary fill of arbitrary curves** | ❌ | §9 |
+| Sheet metal, T-spline, Mesh, Simulation, CAM | ❌ | out of scope by design |
 | Sketch constraints, timeline, parameters | n/a | the DSL is the parametric model; JS is a better parameter table |
 | Several bodies in one part | ✅ `return { base, lid }` | never fused; each measured alone and every pair measured on the exact solids; STEP a solid per body; B-rep only |
 | Assemblies / joints | ❌ | a body is placed by its own coordinates, never by a mate — a solver, and the wide reading of NEXT.md §3 |
@@ -251,11 +256,32 @@ bodies — `return { left: part.intersect(box(...)), right: ... }` — measured
 per half and against each other; `eval/cases/split-halves.json` is that shape.
 There is no one-call split op, and a mirrored half is the usual second body.
 
+## 9. Surfaces — **DONE**, the core of Fusion's surface workspace
+
+Held out of scope until the owner reversed it: "Fusion has a full mode of
+surface work; we should not be this strict." The case that decided it is a
+shade of separate blades, whose free edges no closed skin can have.
+docs/ARCHITECTURE.md, "Surfaces", has the design. What shipped, each with its
+closed form in `eval/cases/`: a tube's area and free-edge length
+(`surface-cylinder`), a tube patched and stitched into a solid
+(`surface-capped-cylinder`), a cube stitched from walls and patches
+(`surface-stitched-box`), a disc trimmed by a cylinder (`surface-trimmed-disc`),
+a plane and a surface trim, a thickened sheet, tube (three sides) and dome, an
+offset tube, a swept arc by Pappus, open and closed fitted lofts, a partial
+revolve, a mixed part, a four-blade shade, and six refusals.
+
+**Still out:** *extend* (lengthening a surface past a free edge —
+`BRepLib::ExtendFace` extends one face by a chord length, and a skinned
+surface's faces would each extend on their own and no longer meet, so there
+is nothing honest to build yet); a patch whose boundary is authored curves
+rather than a surface's free edges; ruled surfaces between two arbitrary
+curves; and trimming a *solid* by a surface, which is `thicken` then `cut`.
+
 ---
 
 ## What is deliberately not on this list
 
-Sheet metal, surface and T-spline modelling, mesh repair, simulation and CAM are
+Sheet metal, T-spline modelling, mesh repair, simulation and CAM are
 whole product areas, not missing ops. Sketch constraints are not a gap either: a
 constraint solver exists to make a drawing consistent, and a script that says
 `gap / 2 + armT / 2` is consistent by construction — the trade this DSL makes on

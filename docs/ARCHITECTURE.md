@@ -514,6 +514,76 @@ other construction is (`facing_outward`), and the mesh backstop in `serve.rs`
 refuses any closed mesh shell wound against its nesting, whatever built it
 (docs/VALIDITY_CHECKS.md).
 
+## Surfaces
+
+A shape may be a *surface*: faces with no inside, and free edges — edges
+bordered by one face — where it ends. The owner reversed the old "surface
+modelling is out of scope" because some forms are only natural as surfaces: a
+shade of separate blades has free edges, and a closed skin never can. What a
+shape is, is measured rather than declared (`surfaces::kind_of`, from
+`Shape::census`): no solid is a surface, a solid with no loose face is a solid,
+and anything else is refused at the body as *mixed* — return the two as
+separate bodies. `crates/parcad-occt/src/surfaces.rs` builds every surface op;
+the OCCT half is `vendor/opencascade/include/surfacing.hxx`.
+
+**Making one.** `surface_extrude`, `surface_revolve`, `surface_loft` and
+`surface_sweep` take a *curve*: the same entries a section takes
+(`section::resolve_curve`), open by default — from the first corner to the last,
+nothing joining them — or closed. A surface's outward normal lies to the right
+of its curve's direction of travel (seen from +Z for a loft or an extrusion,
+in the profile plane for a sweep or a revolve), which is the outside of an
+anticlockwise outline; every builder probes the built shell near the curve's
+start and turns it over if it faces the other way, and refuses a shell the
+kernel's checker rejects. `thicken`'s `out` and `in` are read against that
+normal. A loft of curves that are each one `{ fit }` over the same number of
+points is skinned like a fitted solid loft — one shared knot vector, one
+parameter per point (`skin::PeriodicFit` closed, `open_fit::OpenFit` open) — and
+cut into faces of at most 32 knot spans along u as well as at every curve,
+each face its own segment of the surface: the mesher took 470 s on a pleated
+shade in whole bands and 5 s in segments, and `UnifySameDomain` samples a
+face's whole underlying surface for every neighbour it compares.
+
+A smooth surface loft reaches past its curves where the shape it describes
+turns or swells between them — its extreme lies between two curves, not on
+one — so `graph::surface_loft_extent` widens the curves' box by the furthest
+one curve's box moves from the next's, and the backend measures the built
+surface against that box and refuses past it, naming the side.
+
+**Editing one.** `patch` fills every closed loop the selected free edges make:
+the exact plane where the loop is flat, otherwise `BRepOffsetAPI_MakeFilling`,
+whose boundary's distance from the edges is measured and refused past the
+mesher's 0.01 mm (`patch_gap_mm`). `stitch` sews at a tolerance the script
+states and closes the result into a solid only when it has no free edge and is
+one sheet — measured, with `solid: true` to refuse otherwise, listing the free
+edges. `trim` splits with `BRepAlgoAPI_Splitter` and keeps the pieces on one
+side of the tool: a plane's normal side, a solid's inside, a surface's front,
+each piece classified at a point inside it; a tool that cuts nothing, keeps
+everything or keeps nothing is refused. `split` keeps every piece.
+`offset_surface` and `thicken` run `BRepOffset_MakeOffset` (skin mode, and
+thickening), shell by shell; `thicken` "both" offsets the surface back by half
+first. Before either builds, the surface is sampled on a grid in every face
+and refused where the offset would fold: where the distance times the
+curvature toward it reaches one, naming the radius. After, the wall is read
+at every sample as the largest ball centred midway through it
+(`NearestBoundary`): a wall built right reads its thickness; a fold of the
+surface running into the wall reads thinner; a skin the kernel dropped reads
+nothing. More than 1 % off anywhere is refused, and the range is
+`thickened_mm`. Names follow each face through all of these by the kernel's
+own history (`FaceHistory`, with the side walls a thickened edge makes
+inheriting its face's names); `generatedBy` does not.
+
+**What a surface reports.** No volume, watertightness, bed or print fit:
+`kind: "surface"` and `surface` — area, free edges and their length, loops,
+sheets. The worker's backstop for a surface is the one that fits it: the
+mesh's own open edges must run as long as the free edges do, chords of them,
+and no longer. Booleans, fillets, chamfers, offset and shell refuse a surface
+operand naming `.thicken(t)`; `measure_wall_thickness` refuses a surface and
+skips one in a mixed part; STL and 3MF refuse, STEP writes it. `probe_part`
+never calls a point on a surface `material` and lists every place a ray
+passes through one. Between a surface and another body `between_bodies`
+reports `clear`, `touching` or `crossing`, the last when splitting the surface
+by the other body cuts it.
+
 ## Meshing: weld before you measure
 
 OCCT triangulates **face by face**, so every shared edge arrives as two
@@ -525,11 +595,17 @@ computing mass properties or stats.
 ## Edges are the kernel's, not inferred
 
 The viewport draws OCCT's own edge curves rather than guessing creases in screen
-space. `worker.rs::edge_curves()` keys each edge by its rounded polyline and
-keeps only those bordering **two or more distinct faces** — that filter is what
-removes *seam edges*, where a closed surface's parameterisation wraps. Seams are
-topologically real but visually an artifact: without the filter every bore has a
-line down it. For the bracket this takes 77 curves down to 67.
+space. `serve.rs::edge_curves()` keys each edge by its rounded polyline and
+keeps those bordering **two or more distinct faces**, and a surface's free
+edges, which one face visits once — that filter is what removes *seam edges*,
+where a closed surface's parameterisation wraps and one face visits the edge
+twice. Seams are topologically real but visually an artifact: without the
+filter every bore has a line down it. For the bracket this takes 77 curves down
+to 67. An edge between two faces that meet with the same tangent plane and the
+same curvature along it (`Shape::split_edges`) is dropped for the same reason:
+it is a split inside one surface — a loft's bands, a torus in two halves, the
+flank strips of a thread — and a fillet's boundary, where the curvature jumps,
+stays.
 
 ## The app
 

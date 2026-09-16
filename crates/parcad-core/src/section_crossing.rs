@@ -295,6 +295,12 @@ pub fn sample_segment(segment: &Segment, per_span: usize) -> Vec<P2> {
 /// The first place a section's lines, arcs and curves meet other than end to
 /// end, or `None`. Fitted segments are skipped.
 pub fn outline_crossing(segments: &[Segment]) -> Option<Crossing> {
+    chain_crossing(segments, true)
+}
+
+/// [`outline_crossing`] for a chain that may be open: only a closed one's
+/// last piece meets its first at a shared corner.
+pub fn chain_crossing(segments: &[Segment], closed: bool) -> Option<Crossing> {
     let pieces = pieces(segments);
     let scale = pieces
         .iter()
@@ -320,7 +326,7 @@ pub fn outline_crossing(segments: &[Segment]) -> Option<Crossing> {
             // fitted segment, which is not here, came between.
             let joints = Joints {
                 ab: j == i + 1 && dist(ends[i].1, ends[j].0) <= eps,
-                ba: i == 0 && j == m - 1 && dist(ends[j].1, ends[i].0) <= eps,
+                ba: closed && i == 0 && j == m - 1 && dist(ends[j].1, ends[i].0) <= eps,
             };
             if let Some(near) = search.meet(&pieces[i].shape, &pieces[j].shape, joints, joints.any(), 0) {
                 return Some(Crossing { first: pieces[i].owner, second: pieces[j].owner, near });

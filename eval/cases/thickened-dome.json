@@ -1,0 +1,31 @@
+{
+  "name": "thickened-dome",
+  "script": "eval/scripts/thickened-dome.js",
+  "why": "A hemisphere of radius 30 thickened 2 mm inward: 2/3 pi (27000 - 21952) = 10572.742 mm3.",
+  "brep": {
+    "size": [
+      59.995,
+      59.998,
+      30.0
+    ],
+    "volume_mm3": 10569.385,
+    "area_mm2": 10942.378,
+    "triangles": 29506,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 364.384,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 3,
+    "edges": 10,
+    "curves": 2,
+    "requires": [
+      "section-curves",
+      "surfaces"
+    ],
+    "thickened_mm": [
+      2.0,
+      2.0
+    ]
+  }
+}

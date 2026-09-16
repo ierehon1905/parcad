@@ -1,0 +1,24 @@
+{
+  "name": "thickened-pleat-cylinder",
+  "script": "eval/scripts/thickened-pleat-cylinder.js",
+  "why": "A wall of deep B-spline pleats whose volume has a closed form, t × L × h = 155888.9 mm3 (no Gaussian curvature: every section is one curve). OCCT's whole-face volume integral reads it 257 % high and the fixed-order one with the wrong sign, so the mesh backstop must settle the disagreement by asking whether each face's mesh covers the face, and the reported volume is the mesh's. The tolerance is the mesh's: a 0.01 mm chord on 224000 mm2 of wall may move the volume 1.4 %; it reads 0.06 % over. If this goes red as a refusal, the backstop is trusting the integral again.",
+  "brep": {
+    "volume_mm3": 155888.9,
+    "bodies": 1,
+    "voids": 0,
+    "watertight": true,
+    "requires": [
+      "fitted-sections",
+      "surfaces"
+    ],
+    "thickened_mm": [
+      1.4,
+      1.4
+    ],
+    "tolerance": {
+      "size_mm": 0.01,
+      "volume_pct": 0.2,
+      "triangles_pct": 5.0
+    }
+  }
+}

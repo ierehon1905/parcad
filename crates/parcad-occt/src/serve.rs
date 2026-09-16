@@ -7,8 +7,8 @@
 use crate::backend::{self, BuildCache};
 use crate::perceive;
 use crate::protocol::{
-    breadcrumb, edge_curve, BodyFit, BodySpan, EdgeCurve, FaceRun, FaceSummary, Request,
-    Response, Success, TargetPreview, Timings, Topology, WallRange,
+    breadcrumb, edge_curve, BodyFit, BodyKind, BodySpan, EdgeCurve, FaceRun, FaceSummary, Request,
+    Response, Success, SurfaceMeasure, TargetPreview, Timings, Topology, WallRange,
 };
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -35,8 +35,10 @@ fn describe_faces(body: &perceive::Body) -> Vec<FaceSummary> {
 ///   material either side of it is the same smooth surface — and drawing it
 ///   puts a crack down every bore. Drop it.
 ///
+/// - **One face, visited once.** The free edge of a surface. Keep it.
+///
 /// Degenerate edges — the collapsed "edge" at the pole of a sphere, which is
-/// really a point — fall out of the same rule.
+/// really a point — have no length and are dropped.
 fn edge_curves(
     shape: &opencascade::primitives::Shape,
     treatment_owners: &std::collections::BTreeMap<Vec<[i64; 3]>, usize>,
@@ -47,7 +49,26 @@ fn edge_curves(
     // coordinates, and two different edges cannot, since they would have to be
     // the same curve. Quantised for the key only; emitted points stay exact.
     type Key = Vec<[i64; 3]>;
-    let mut faces_touching: HashMap<Key, (usize, Vec<[f32; 3]>)> = HashMap::new();
+    let mut faces_touching: HashMap<Key, (usize, usize, Vec<[f32; 3]>)> = HashMap::new();
+    let key_of = |points: &[[f32; 3]]| -> Key {
+        let forward: Key = points
+            .iter()
+            .map(|p| [(p[0] as f64 * 1000.0).round() as i64, (p[1] as f64 * 1000.0).round() as i64, (p[2] as f64 * 1000.0).round() as i64])
+            .collect();
+        let backward: Key = forward.iter().rev().copied().collect();
+        forward.min(backward)
+    };
+    // A split between two faces of one surface is no more an edge of the
+    // part than a seam is.
+    let splits: std::collections::HashSet<Key> = shape
+        .split_edges()
+        .map(|edges| {
+            edges
+                .edges()
+                .map(|edge| key_of(&edge.approximation_segments().map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect::<Vec<_>>()))
+                .collect()
+        })
+        .unwrap_or_default();
     let mut seen_here: std::collections::HashSet<Key> = std::collections::HashSet::new();
 
     for face in shape.faces() {
@@ -60,36 +81,36 @@ fn edge_curves(
             if points.len() < 2 {
                 continue;
             }
-            let forward: Key = points
-                .iter()
-                .map(|p| {
-                    [
-                        (p[0] as f64 * 1000.0).round() as i64,
-                        (p[1] as f64 * 1000.0).round() as i64,
-                        (p[2] as f64 * 1000.0).round() as i64,
-                    ]
-                })
-                .collect();
             // An edge is the same curve whichever direction its neighbouring
             // face happened to traverse it. Canonicalise that direction so its
             // hover ID and face count are deterministic.
-            let backward: Key = forward.iter().rev().copied().collect();
-            let key = forward.min(backward);
-
-            // Count each face at most once, so a seam's two visits from the
-            // same face still total one.
-            if !seen_here.insert(key.clone()) {
+            let key = key_of(&points);
+            if splits.contains(&key) {
                 continue;
             }
-            let slot = faces_touching.entry(key).or_insert((0, points));
+
+            // Count each face at most once, so a seam's two visits from the
+            // same face still total one; the visits tell a seam from the
+            // free edge of a surface, which its one face visits once.
+            let slot = faces_touching.entry(key.clone()).or_insert((0, 0, points));
+            slot.1 += 1;
+            if !seen_here.insert(key) {
+                continue;
+            }
             slot.0 += 1;
         }
     }
 
     let mut edges: Vec<EdgeCurve> = faces_touching
         .into_values()
-        .filter(|(faces, _)| *faces >= 2)
-        .filter_map(|(_, points)| edge_curve(points))
+        .filter(|(faces, visits, _)| *faces >= 2 || (*faces == 1 && *visits == 1))
+        .filter_map(|(faces, _, points)| {
+            let mut curve = edge_curve(points)?;
+            curve.free = faces == 1;
+            // A degenerate edge — a sphere's pole — is visited once too, and
+            // has no length to draw.
+            (curve.length_mm > 1e-6).then_some(curve)
+        })
         .collect();
     edges.sort_by_key(|edge| edge_key(&edge.points));
     for (index, edge) in edges.iter_mut().enumerate() {
@@ -207,6 +228,10 @@ fn probe_step(path: &std::path::Path) -> Response {
 /// `opencascade-sys`. Mirrored here so the number we report is the number that
 /// was used.
 pub const BINDING_DEFLECTION_MM: f64 = 0.01;
+
+/// How far a face's triangles may cover less or more of its parameter plane
+/// than its mesh boundary encloses, as a share of that: rounding only.
+const UV_COVER_TOLERANCE: f64 = 1e-6;
 
 /// Signed enclosed volume and surface area of a triangle mesh, in mm³ and mm².
 fn volume_and_area(mesh: &opencascade::mesh::Mesh) -> (f64, f64) {
@@ -363,6 +388,15 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
 
     let mut stl_path = None;
     if let Some(path) = &request.stl_path {
+        if !whole.kinds.iter().all(BodyKind::is_solid) {
+            return Response::Error {
+                stage: "writing STL".into(),
+                message: "the part has a surface body, and STL describes closed solids: a surface has no \
+                          inside for a slicer to fill. Thicken it first — .thicken(t) — or export STEP, \
+                          which carries surfaces exactly"
+                    .into(),
+            };
+        }
         breadcrumb("writing STL");
         // At the mesher's tolerance, so this writes the triangulation already on
         // the shape; the binding's old 0.001 mm re-meshed every face, and spent
@@ -389,6 +423,8 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         mut edges,
         topology,
         bodies,
+        kinds,
+        surfaces,
     } = whole;
     // One numbering across every body, in the same key order a one-solid
     // part's edges have always had.
@@ -407,6 +443,11 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         deviation_mm: measured.deviation_mm,
         loft_wall_mm: measured.loft_wall_mm.map(|[min, max]| WallRange { min, max }),
         facet_sag_mm: measured.facet_sag_mm,
+        thickened_mm: measured.thickened_mm.map(|[min, max]| WallRange { min, max }),
+        offset_mm: measured.offset_mm.map(|[min, max]| WallRange { min, max }),
+        patch_gap_mm: measured.patch_gap_mm,
+        kind: if kinds.iter().all(BodyKind::is_solid) { BodyKind::Solid } else { BodyKind::Surface },
+        surfaces,
         topology,
         bodies,
         between,
@@ -429,6 +470,27 @@ struct Measured {
     faces: Vec<FaceSummary>,
     edges: Vec<EdgeCurve>,
     topology: Topology,
+    kind: BodyKind,
+    surface: Option<SurfaceMeasure>,
+}
+
+/// The total length of the mesh's own open edges — those one triangle
+/// borders — after welding.
+fn mesh_boundary_length(stats_mesh: &parcad_core::mesh::Tessellation) -> f64 {
+    let mut uses: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
+    for t in &stats_mesh.triangles {
+        for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            *uses.entry((a.min(b), a.max(b))).or_default() += 1;
+        }
+    }
+    uses.into_iter()
+        .filter(|(_, n)| *n == 1)
+        .map(|((a, b), _)| {
+            let (p, q) = (stats_mesh.vertices[a], stats_mesh.vertices[b]);
+            let d = [(p[0] - q[0]) as f64, (p[1] - q[1]) as f64, (p[2] - q[2]) as f64];
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+        })
+        .sum()
 }
 
 /// Mesh a shape and refuse it if the mesh is not the solid. `who` names the
@@ -454,17 +516,34 @@ fn measure(
         });
     }
 
+    let kind = match backend::kind_of(shape) {
+        Ok(backend::Kind::Solid) => BodyKind::Solid,
+        Ok(backend::Kind::Surface) => BodyKind::Surface,
+        Ok(backend::Kind::Mixed) => {
+            return Err(Response::Error {
+                stage: "lowering the graph".into(),
+                message: format!(
+                    "{who}the result is a solid with loose surface faces beside it, and a body is one \
+                     or the other. Return the surface as its own body — return {{ solid, sheet }} — \
+                     or thicken it and union the two"
+                ),
+            })
+        }
+        Err(e) => {
+            return Err(Response::Error { stage: "counting topology".into(), message: format!("{who}{e:#}") })
+        }
+    };
+
     breadcrumb("tessellating");
     let mesh = shape.mesh();
     let edges = edge_curves(shape, treatment_owners);
-
     // The backstop, behind whatever the construction sites caught. A shape whose
     // triangles do not close is not a solid, whatever `IsDone()` said, and this
     // check does not depend on understanding why OCCT produced one — which
     // matters, because that list is only as complete as the bugs already met.
     //
     // Weld first, for the reason `Tessellation::weld` documents.
-    let (stats, inward) = parcad_core::mesh::Tessellation {
+    let stats = parcad_core::mesh::Tessellation {
         vertices: mesh
             .vertices
             .iter()
@@ -477,9 +556,43 @@ fn measure(
             .collect(),
         resolution_mm: BINDING_DEFLECTION_MM,
     }
-    .weld(1e-3)
-    .stats_and_inward_shells();
-    if !stats.watertight {
+    .weld(1e-3);
+    let welded = stats;
+    let (stats, inward) = welded.stats_and_inward_shells();
+    let surface = if kind == BodyKind::Surface {
+        let census = match shape.census() {
+            Ok(census) => census,
+            Err(e) => return Err(Response::Error { stage: "counting topology".into(), message: format!("{who}{e}") }),
+        };
+        // A surface's mesh is open exactly where the surface is: its open
+        // edges run along the free edges, as chords of them. More open
+        // length than that is a crack between faces the preview would show.
+        let open = mesh_boundary_length(&welded);
+        let exact = census.free_edge_length;
+        if (open - exact).abs() > 0.01 * exact + 0.05 {
+            return Err(Response::Error {
+                stage: "tessellating".into(),
+                message: format!(
+                    "{who}the kernel built a surface whose free edges run {exact:.3} mm, but its mesh \
+                     is open along {open:.3} mm, so the preview and every measurement would show \
+                     cracks the surface does not have. Refused rather than shown; please report \
+                     the script"
+                ),
+            });
+        }
+        Some(SurfaceMeasure {
+            body: body.name.map(str::to_owned),
+            faces: census.faces,
+            shells: census.shells,
+            free_edges: census.free_edges,
+            free_edge_length_mm: census.free_edge_length,
+            boundary_loops: census.closed_loops,
+            open_chains: census.open_chains,
+        })
+    } else {
+        None
+    };
+    if kind == BodyKind::Solid && !stats.watertight {
         return Err(Response::Error {
             stage: "tessellating".into(),
             message: format!(
@@ -503,7 +616,7 @@ fn measure(
     // The third backstop: a closed surface facing the wrong way, whatever
     // operation turned it. OpenCASCADE's validity check passes such a solid,
     // and every later reading of it is of everything but the part.
-    if let Some(shell) = inward.first() {
+    if let Some(shell) = inward.first().filter(|_| kind == BodyKind::Solid) {
         return Err(Response::Error {
             stage: "tessellating".into(),
             message: format!(
@@ -542,9 +655,28 @@ fn measure(
     // "A correct solid can mesh as a closed fragment of itself".
     breadcrumb("comparing the mesh's volume with the solid's");
     let (mesh_volume, mesh_area) = volume_and_area(&mesh);
-    let solid_volume = shape.signed_volume();
+    let solid_volume = if kind == BodyKind::Solid { shape.signed_volume() } else { mesh_volume };
     let allowed = 2.0 * mesh_area * BINDING_DEFLECTION_MM + 1e-6 * solid_volume.abs();
-    if (mesh_volume - solid_volume).abs() > allowed {
+    // The integral misreads B-spline walls, by +257 % on a closed form
+    // (docs/GOTCHAS.md, "The volume integral misreads a thickened pleat"), so
+    // before refusing, ask whether every face's mesh covers the face; the
+    // reported volume is the mesh's either way.
+    let disagrees = kind == BodyKind::Solid && (mesh_volume - solid_volume).abs() > allowed;
+    let disagrees = disagrees
+        && match shape.uncovered_faces(UV_COVER_TOLERANCE) {
+            Ok(uncovered) if uncovered.is_empty() => {
+                breadcrumb(&format!(
+                    "the volume integral reads {solid_volume:.1} mm³ against the mesh's {mesh_volume:.1}, and every face's mesh covers the face: the integral is the one that is off"
+                ));
+                false
+            }
+            Ok(uncovered) => {
+                breadcrumb(&format!("{} face(s) not covered by their mesh, first {:?}", uncovered.len(), uncovered[0]));
+                true
+            }
+            Err(_) => true,
+        };
+    if disagrees {
         return Err(Response::Error {
             stage: "tessellating".into(),
             message: format!(
@@ -571,6 +703,8 @@ fn measure(
         faces,
         edges,
         topology,
+        kind,
+        surface,
     })
 }
 
@@ -589,6 +723,8 @@ struct Assembled {
     edges: Vec<EdgeCurve>,
     topology: Topology,
     bodies: Vec<BodySpan>,
+    kinds: Vec<BodyKind>,
+    surfaces: Vec<SurfaceMeasure>,
 }
 
 impl Assembled {
@@ -598,7 +734,11 @@ impl Assembled {
             mut faces,
             mut edges,
             topology,
+            kind,
+            surface,
         } = measured;
+        self.kinds.push(kind);
+        self.surfaces.extend(surface);
         let vertex_offset = (self.positions.len() / 3) as u32;
         let face_offset = self.topology.faces as u32;
         let triangle_offset = (self.indices.len() / 3) as u32;
@@ -634,6 +774,7 @@ impl Assembled {
         if let Some(name) = body {
             self.bodies.push(BodySpan {
                 name: name.to_owned(),
+                kind,
                 faces: topology.faces,
                 edges: topology.edges,
                 triangle_start: triangle_offset as usize,

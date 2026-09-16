@@ -609,12 +609,21 @@ impl Shape {
             let mut shells =
                 ffi::TopExp_Explorer_ctor(solids.Current(), ffi::TopAbs_ShapeEnum::TopAbs_SHELL);
             let mut bounds = Vec::new();
+            let mut all = Vec::new();
             while shells.More() {
-                let shell = Shape { inner: ffi::TopoDS_Shape_to_owned(shells.Current()) };
+                all.push(Shape { inner: ffi::TopoDS_Shape_to_owned(shells.Current()) });
+                shells.pin_mut().Next();
+            }
+            // A solid of one shell has no cavity, and its box is not needed:
+            // bounding a pleated shade's 600 offset faces took seconds.
+            if all.len() < 2 {
+                solids.pin_mut().Next();
+                continue;
+            }
+            for shell in all {
                 if let Some(extent) = shell.bounds_optimal() {
                     bounds.push(extent);
                 }
-                shells.pin_mut().Next();
             }
             let size = |(lo, hi): &(DVec3, DVec3)| (*hi - *lo).length_squared();
             if let Some(outer) = (0..bounds.len()).max_by(|&a, &b| size(&bounds[a]).total_cmp(&size(&bounds[b]))) {
@@ -776,16 +785,6 @@ impl Shape {
     pub fn offset_surface(self, offset: f64) -> Self {
         let faces_to_remove: [Face; 0] = [];
         self.hollow(offset, faces_to_remove)
-    }
-
-    /// The same solid with its faces turned to point outward, when it is a
-    /// single closed solid; anything else comes back unchanged. Added for
-    /// parcad; see PARCAD-CHANGES.md.
-    pub fn oriented_outward(&self) -> Self {
-        let fixed = ffi::BRepLib_orient_closed_solid(&self.inner);
-        Self {
-            inner: ffi::TopoDS_Shape_to_owned(&fixed),
-        }
     }
 
     /// The one solid this shape is or bounds: a single solid as it is, or a

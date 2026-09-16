@@ -1,0 +1,27 @@
+{
+  "name": "surface-loft-open-fit",
+  "script": "eval/scripts/surface-loft-open-fit.js",
+  "why": "A fitted quarter circle of radius 20 lofted between two heights 30 apart: a quarter of a cylinder wall, 10 pi 30 = 942.478 mm2, skinned on one open knot vector.",
+  "brep": {
+    "size": [
+      20.0,
+      20.0,
+      30.0
+    ],
+    "area_mm2": 942.407,
+    "triangles": 74,
+    "bodies": 1,
+    "voids": 0,
+    "faces": 1,
+    "edges": 4,
+    "curves": 4,
+    "deviation_mm": 0.0005,
+    "requires": [
+      "fitted-sections",
+      "surfaces"
+    ],
+    "kind": "surface",
+    "free_edges": 4,
+    "free_edge_length_mm": 122.832
+  }
+}

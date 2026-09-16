@@ -96,8 +96,25 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
     let size = bounds.size();
     let (tags, unlocated_tags) = locate_tags(&s);
 
+    let kinds: Vec<bool> = if s.bodies.is_empty() {
+        vec![s.kind.is_solid()]
+    } else {
+        s.bodies.iter().map(|b| b.kind.is_solid()).collect()
+    };
+    let kind = if kinds.iter().all(|k| *k) {
+        "solid"
+    } else if kinds.iter().any(|k| *k) {
+        "mixed"
+    } else {
+        "surface"
+    };
     Outcome::Measured(Observed {
         size: [size.x, size.y, size.z],
+        kind: kind.to_owned(),
+        free_edges: s.surfaces.iter().map(|m| m.free_edges).sum(),
+        free_edge_length_mm: s.surfaces.iter().map(|m| m.free_edge_length_mm).sum(),
+        thickened_mm: s.thickened_mm.map(|w| [w.min, w.max]),
+        offset_mm: s.offset_mm.map(|w| [w.min, w.max]),
         volume_mm3: mass.volume_mm3,
         area_mm2: mass.area_mm2,
         triangles: stats.triangles,

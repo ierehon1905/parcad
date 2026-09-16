@@ -1,0 +1,26 @@
+{
+  "name": "surface-stitched-box",
+  "script": "eval/scripts/surface-stitched-box.js",
+  "why": "Four walls extruded from a closed square and two flat patches stitch into a 20 mm cube: 8000 mm3 and 2400 mm2 exactly, six faces.",
+  "brep": {
+    "size": [
+      20.0,
+      20.0,
+      20.0
+    ],
+    "volume_mm3": 8000.0,
+    "area_mm2": 2400.0,
+    "triangles": 12,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 400.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 6,
+    "edges": 24,
+    "curves": 12,
+    "requires": [
+      "surfaces"
+    ]
+  }
+}

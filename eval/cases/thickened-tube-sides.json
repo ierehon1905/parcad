@@ -1,0 +1,89 @@
+{
+  "name": "thickened-tube-sides",
+  "script": "eval/scripts/thickened-tube-sides.js",
+  "why": "The tube of radius 10 thickened 2 mm: centred, pi (121 - 81) 30 = 3769.911 mm3; outward, pi (144 - 100) 30 = 4146.902; inward, pi (100 - 64) 30 = 3392.920. Which side is out is the surface's normal, the right of the curve's travel: an anticlockwise circle faces out.",
+  "brep": {
+    "size": [
+      81.0,
+      23.99,
+      30.0
+    ],
+    "volume_mm3": 11306.025,
+    "area_mm2": 12061.629,
+    "triangles": 2408,
+    "bodies": 3,
+    "voids": 0,
+    "stands_on_mm2": 376.868,
+    "stands_on_patches": 3,
+    "watertight": true,
+    "faces": 24,
+    "edges": 96,
+    "curves": 24,
+    "requires": [
+      "section-curves",
+      "surfaces"
+    ],
+    "thickened_mm": [
+      2.0,
+      2.0
+    ],
+    "named_bodies": {
+      "both": {
+        "size": [
+          22.0,
+          21.99,
+          30.0
+        ],
+        "volume_mm3": 3768.683,
+        "faces": 8,
+        "edges": 32,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "in": {
+        "size": [
+          20.0,
+          20.0,
+          30.0
+        ],
+        "volume_mm3": 3391.619,
+        "faces": 8,
+        "edges": 32,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "out": {
+        "size": [
+          24.0,
+          23.99,
+          30.0
+        ],
+        "volume_mm3": 4145.723,
+        "faces": 8,
+        "edges": 32,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "both/in": {
+        "verdict": "clear",
+        "clearance_mm": 39.0,
+        "interference_mm3": 0.0
+      },
+      "both/out": {
+        "verdict": "clear",
+        "clearance_mm": 7.0,
+        "interference_mm3": 0.0
+      },
+      "out/in": {
+        "verdict": "clear",
+        "clearance_mm": 8.0,
+        "interference_mm3": 0.0
+      }
+    }
+  }
+}

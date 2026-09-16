@@ -18,7 +18,7 @@
     "watertight": true,
     "faces": 108,
     "edges": 444,
-    "curves": 222,
+    "curves": 130,
     "named_bodies": {
       "bolt": {
         "size": [

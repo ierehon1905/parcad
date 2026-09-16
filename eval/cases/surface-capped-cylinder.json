@@ -1,0 +1,27 @@
+{
+  "name": "surface-capped-cylinder",
+  "script": "eval/scripts/surface-capped-cylinder.js",
+  "why": "Patching the tube's two rims flat and stitching the three closes it: a solid of pi 100 30 = 9424.778 mm3 and 3 faces plus the tube's 2, measured closed rather than assumed.",
+  "brep": {
+    "size": [
+      20.0,
+      20.0,
+      30.0
+    ],
+    "volume_mm3": 9418.578,
+    "area_mm2": 2512.551,
+    "triangles": 396,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 313.953,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 4,
+    "edges": 12,
+    "curves": 4,
+    "requires": [
+      "section-curves",
+      "surfaces"
+    ]
+  }
+}

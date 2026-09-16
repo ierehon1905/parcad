@@ -1,0 +1,60 @@
+{
+  "name": "mixed-bodies",
+  "script": "eval/scripts/mixed-bodies.js",
+  "why": "A solid block beside a sheet: the part is mixed, its volume the block's 1000 mm3, and the pair measured clear by the 15 mm between them.",
+  "brep": {
+    "size": [
+      45.0,
+      10.0,
+      10.0
+    ],
+    "area_mm2": 800.0,
+    "triangles": 14,
+    "bodies": 2,
+    "voids": 0,
+    "faces": 7,
+    "edges": 28,
+    "curves": 16,
+    "requires": [
+      "surfaces"
+    ],
+    "kind": "mixed",
+    "free_edges": 4,
+    "free_edge_length_mm": 60.0,
+    "named_bodies": {
+      "block": {
+        "size": [
+          10.0,
+          10.0,
+          10.0
+        ],
+        "volume_mm3": 1000.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "sheet": {
+        "size": [
+          20.0,
+          0.0,
+          10.0
+        ],
+        "volume_mm3": 0.0,
+        "faces": 1,
+        "edges": 4,
+        "watertight": false,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "block/sheet": {
+        "verdict": "clear",
+        "clearance_mm": 15.0,
+        "interference_mm3": 0.0
+      }
+    }
+  }
+}

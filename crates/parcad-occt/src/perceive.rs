@@ -55,6 +55,8 @@ pub struct Body<'a> {
     /// a volume, so a point inside one is 0 from it; the distance a probe
     /// reports is to the boundary.
     boundary: Shape,
+    /// A surface body: faces with no inside.
+    pub surface: bool,
 }
 
 impl<'a> Body<'a> {
@@ -64,6 +66,7 @@ impl<'a> Body<'a> {
             shape,
             face_tags: face_tags(shape, names),
             boundary: Compound::from_shapes(shape.faces().map(Shape::from)).into(),
+            surface: crate::backend::kind_of(shape).is_ok_and(|k| k == crate::backend::Kind::Surface),
         }
     }
 
@@ -222,10 +225,20 @@ pub fn perceive(bodies: &[Body], spec: &Perceive) -> Result<Perceived> {
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let thickness = spec
-        .thickness
-        .as_ref()
-        .map(|t| thickness(bodies, t, (hi - lo).length()));
+    if spec.thickness.is_some() && bodies.iter().all(|b| b.surface) {
+        bail!(
+            "the part is a surface, which has no material to be thick. Thicken it into a solid first — .thicken(t) — and the thickened part's wall is what this measures; the thickness thicken built is already in the evaluation as thickened_mm"
+        );
+    }
+    let thickness = spec.thickness.as_ref().map(|t| {
+        let mut result = thickness(bodies, t, (hi - lo).length());
+        result.surfaces_skipped = bodies
+            .iter()
+            .filter(|b| b.surface)
+            .map(|b| b.name.unwrap_or("part").to_owned())
+            .collect();
+        result
+    });
 
     Ok(Perceived {
         points,
@@ -239,7 +252,7 @@ fn classify(bodies: &[Body], point: DVec3) -> PointResult {
     let mut nearest: Option<(f64, DVec3, Option<&str>)> = None;
     let mut inside: Option<&str> = None;
     let mut on_boundary = false;
-    for body in bodies {
+    for body in bodies.iter().filter(|b| !b.surface) {
         match body.shape.classify_point(point, SURFACE_TOLERANCE_MM) {
             PointState::Inside => inside = inside.or(body.name),
             PointState::OnBoundary => on_boundary = true,
@@ -251,9 +264,16 @@ fn classify(bodies: &[Body], point: DVec3) -> PointResult {
             }
         }
     }
+    for body in bodies.iter().filter(|b| b.surface) {
+        if let Some((distance, at)) = body.boundary.distance_to_point(point) {
+            if nearest.is_none_or(|(d, _, _)| distance < d) {
+                nearest = Some((distance, at, body.name));
+            }
+        }
+    }
     let (distance, at, near_body) = nearest.unwrap_or((0.0, point, None));
     let inside_any = bodies.iter().any(|b| {
-        b.shape.classify_point(point, SURFACE_TOLERANCE_MM) == PointState::Inside
+        !b.surface && b.shape.classify_point(point, SURFACE_TOLERANCE_MM) == PointState::Inside
     });
     let (where_, signed) = if inside_any {
         (PointWhere::Inside, -distance)
@@ -287,6 +307,9 @@ struct Walk {
 }
 
 fn walk(body: &Body, caster: &mut RayCaster, origin: DVec3, dir: DVec3, max: f64) -> Walk {
+    if body.surface {
+        return cross_surface(body, caster, origin, dir, max);
+    }
     let starts_inside = body.shape.classify_point(origin, SURFACE_TOLERANCE_MM) == PointState::Inside;
     let mut inside = starts_inside;
     let mut hits = Vec::new();
@@ -307,6 +330,7 @@ fn walk(body: &Body, caster: &mut RayCaster, origin: DVec3, dir: DVec3, max: f64
             distance: hit.distance.max(0.0),
             point: hit.point.to_array(),
             entering,
+            surface: false,
             tags: body.tags_of(hit.face),
             body: body.name.map(str::to_owned),
         });
@@ -341,6 +365,30 @@ fn walk(body: &Body, caster: &mut RayCaster, origin: DVec3, dir: DVec3, max: f64
         solid_mm,
         first_solid_mm,
     }
+}
+
+/// A surface body's crossings along a line: every place the line passes
+/// through it, once each, and no material.
+fn cross_surface(body: &Body, caster: &mut RayCaster, origin: DVec3, dir: DVec3, max: f64) -> Walk {
+    let mut hits: Vec<RayHitResult> = Vec::new();
+    for hit in caster.cast(origin, dir) {
+        if hit.distance < -SURFACE_TOLERANCE_MM || hit.distance > max || hit.crossing == Crossing::Tangent {
+            continue;
+        }
+        // An edge two faces share is reported by both.
+        if hits.last().is_some_and(|h| (h.distance - hit.distance).abs() <= SURFACE_TOLERANCE_MM) {
+            continue;
+        }
+        hits.push(RayHitResult {
+            distance: hit.distance.max(0.0),
+            point: hit.point.to_array(),
+            entering: false,
+            surface: true,
+            tags: body.tags_of(hit.face),
+            body: body.name.map(str::to_owned),
+        });
+    }
+    Walk { starts_inside: false, ends_inside: false, hits, solid_mm: 0.0, first_solid_mm: None }
 }
 
 fn cast(bodies: &[Body], casters: &mut [RayCaster], line: &RayLine, max: f64) -> Result<RayResult> {
@@ -417,7 +465,22 @@ fn thickness(bodies: &[Body], spec: &ThicknessSpec, diagonal: f64) -> ThicknessR
     let mut discarded = 0usize;
     // No ball in the part is wider than the part.
     let limit = diagonal * 0.5 + 1.0;
-    let meshes: Vec<Mesh> = bodies.iter().map(|b| b.shape.mesh()).collect();
+    // A surface body has no material to sample: it gets no triangles, so its
+    // index still names its body.
+    let meshes: Vec<Mesh> = bodies
+        .iter()
+        .map(|b| match b.surface {
+            true => Mesh {
+                vertices: Vec::new(),
+                uvs: Vec::new(),
+                face_uvs: Vec::new(),
+                normals: Vec::new(),
+                indices: Vec::new(),
+                faces: Vec::new(),
+            },
+            false => b.shape.mesh(),
+        })
+        .collect();
     let max = spec.max_samples.max(1);
     // About a hundred samples across the part's diagonal at the finest.
     let finest = (diagonal / 96.0).max(1e-3);
@@ -498,7 +561,7 @@ fn thickness(bodies: &[Body], spec: &ThicknessSpec, diagonal: f64) -> ThicknessR
     }
     let mut edges_checked = 0;
     let mut face_pairs_checked = 0;
-    for (b, body) in bodies.iter().enumerate() {
+    for (b, body) in bodies.iter().enumerate().filter(|(_, body)| !body.surface) {
         let edge_spacing = (diagonal / EDGE_SAMPLES_PER_DIAGONAL).max(1e-3);
         let (seams, edges) = feathers(body, &mut nearest[b], edge_spacing);
         edges_checked += edges;
@@ -577,6 +640,7 @@ fn thickness(bodies: &[Body], spec: &ThicknessSpec, diagonal: f64) -> ThicknessR
         spacing_mm: spacing,
         edges_checked,
         face_pairs_checked,
+        surfaces_skipped: Vec::new(),
     }
 }
 

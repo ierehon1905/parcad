@@ -704,6 +704,10 @@ pub struct ThicknessReport {
     /// the thinnest samples, spread across the part.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub thin_spots: Vec<ThinSpot>,
+    /// Named bodies left out because they are surfaces, which have no
+    /// material to be thick.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub surfaces_skipped: Vec<String>,
     /// What the number is, and what is certain about it: which thin places
     /// are always found, and which only as finely as `sample_spacing_mm`.
     pub note: &'static str,
@@ -776,6 +780,7 @@ pub fn wall_thickness(
         below_threshold: report.below_threshold,
         below_threshold_at_edges: report.below_threshold_at_edges,
         thin_spots: report.thin_spots.iter().map(spot).collect(),
+        surfaces_skipped: report.surfaces_skipped.clone(),
         note: "a `feather` is a sliver of real material that thins to 0 mm at a knife edge: \
                the worst thing a part can have, listed first, and never an edge artefact. Each \
                thickness is the diameter of the largest ball that fits inside the \
@@ -1005,7 +1010,7 @@ pub fn export_step_within(doc: &Doc, budget: Option<std::time::Duration>) -> Res
         bytes,
         filename: "part.step",
         content_type: "application/step",
-        measured: ExportMeasured::of(&report, body_reports(&built.success), None, built.reused),
+        measured: ExportMeasured::of(&report, &built.success, body_reports(&built.success), None, built.reused),
     })
 }
 

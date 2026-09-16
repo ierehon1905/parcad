@@ -1994,19 +1994,6 @@ inline std::unique_ptr<TopoDS_Shape> Shape_scaled_axes(const TopoDS_Shape &shape
   return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(builder.Shape()));
 }
 
-// BRepLib::OrientClosedSolid: turn a solid whose faces point inward right side
-// out. Added for parcad: `BRepOffsetAPI_MakeThickSolid` returns the offset of
-// a filleted body that way, and ShapeFix does not correct it. A shape that is
-// not a single closed solid is returned as it came.
-inline std::unique_ptr<TopoDS_Shape> BRepLib_orient_closed_solid(const TopoDS_Shape &shape) {
-  if (shape.ShapeType() != TopAbs_SOLID) {
-    return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(shape));
-  }
-  TopoDS_Solid solid = TopoDS::Solid(shape);
-  BRepLib::OrientClosedSolid(solid);
-  return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(solid));
-}
-
 // Which way each solid of a shape faces, asked of each of its shells on its
 // own: a point outside the solid must classify as outside the outer shell and
 // inside every other shell, each a sealed void facing inward. The outer shell

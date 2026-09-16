@@ -1,0 +1,13 @@
+{
+  "name": "refuse-trim-that-misses",
+  "script": "eval/scripts/refuse-trim-that-misses.js",
+  "why": "A trim whose tool never meets the surface cuts nothing, and says where both are.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "does not cross the surface"
+      ]
+    }
+  }
+}

@@ -18,7 +18,7 @@
     "watertight": true,
     "faces": 76,
     "edges": 296,
-    "curves": 75,
+    "curves": 4,
     "deviation_mm": 0.0008,
     "loft_wall_mm": [
       1.9999,
