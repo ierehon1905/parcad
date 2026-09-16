@@ -1,0 +1,16 @@
+{
+  "name": "refuse-multi-tool-miss",
+  "script": "eval/scripts/refuse-multi-tool-miss.js",
+  "why": "Judging a cut on its result must not blur which tool missed. Of three tools, one duplicates another and removes nothing new, and one lies 100 mm off the part; only the stray is a miss, because only it is clear of the material, and the refusal names that node with both extents.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "subtracts node 6",
+        "removed nothing",
+        "x 97.00..103.00",
+        "meet nowhere"
+      ]
+    }
+  }
+}

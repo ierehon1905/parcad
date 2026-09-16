@@ -1,0 +1,22 @@
+{
+  "name": "cut-opens-its-own-cavity",
+  "script": "eval/scripts/cut-opens-its-own-cavity.js",
+  "why": "A multi-tool cut is one boolean, judged on its result. The cavity is listed before the bore that opens it; checked after each tool, the cavity alone was a sealed void and the cut was refused, while cut(bore, cavity) built the same part — order-dependence measured on a lamp shade. Every number here is closed form: 40·40·30 − 30·30·24 − π·4²·3 = 26249.204 mm³; area 8000 + 4680 − 2·16π + 24π = 12654.87 mm²; the bore opens both faces it crosses, so one body and no void. See docs/GOTCHAS.md, \"A multi-tool cut is one cut\".",
+  "brep": {
+    "size": [
+      40.0,
+      40.0,
+      30.0
+    ],
+    "volume_mm3": 26249.204,
+    "area_mm2": 12654.867,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1600.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 13,
+    "edges": 54,
+    "curves": 26
+  }
+}
