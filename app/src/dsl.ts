@@ -919,6 +919,14 @@ function isPair(value: unknown): value is [number, number] {
   return Array.isArray(value) && value.length === 2 && value.every((n) => typeof n === "number" && Number.isFinite(n));
 }
 
+/** The highest curve degree the kernel builds: OCCT's `Geom_BSplineCurve::MaxDegree`. */
+const MAX_DEGREE = 25;
+
+/** A section that is one closed curve with no corner: `[{ spline }]` or `[{ fit, tolerance }]`. */
+function lone(profile: SectionEntry[]): boolean {
+  return profile.length === 1 && !Array.isArray(profile[0]) && ("spline" in (profile[0] as object) || "fit" in (profile[0] as object));
+}
+
 /**
  * Check a section's shape — the kinds of entry and their numbers — so a typo
  * reads as one here. The geometry (arcs that fit, curves that do not cross)
@@ -977,13 +985,28 @@ function checkSection(profile: SectionEntry[], what: string, example: string): S
       if (!Array.isArray(points) || !points.every(isPair)) {
         throw new Error(`${what} entry ${i}: ${key} takes a list of [x, y] points`);
       }
+      if (points.length === 0 && !lone(profile)) {
+        throw new Error(`${what} entry ${i}: a ${key} needs at least one point between the corners; with none it is a straight edge, so drop the entry`);
+      }
       for (const tangent of ["start", "end"]) {
         if (tangent in e && (key !== "spline" || !isPair(e[tangent]))) {
           throw new Error(`${what} entry ${i}: ${tangent} is a direction [dx, dy] and belongs to a spline only`);
         }
+        if (tangent in e && (e[tangent] as number[]).every((c) => c === 0)) {
+          throw new Error(`${what} entry ${i}: a spline's ${tangent} direction must be a non-zero vector`);
+        }
       }
-      if ("degree" in e && (key !== "bspline" || !Number.isInteger(e.degree) || (e.degree as number) < 1)) {
-        throw new Error(`${what} entry ${i}: degree is a whole number of at least 1 and belongs to a bspline only`);
+      if ("degree" in e && (key !== "bspline" || !Number.isInteger(e.degree) || (e.degree as number) < 1 || (e.degree as number) > MAX_DEGREE)) {
+        throw new Error(`${what} entry ${i}: degree is a whole number from 1 to ${MAX_DEGREE}, usually 3, and belongs to a bspline only`);
+      }
+      const degree = key === "bezier" ? points.length + 1 : key === "bspline" ? ((e.degree as number | undefined) ?? 3) : 0;
+      if (key === "bezier" && degree > MAX_DEGREE) {
+        throw new Error(`${what} entry ${i}: a bezier of ${points.length} control points is degree ${degree}, past the ${MAX_DEGREE} the kernel builds; split it at a corner`);
+      }
+      if (key === "bspline" && points.length + 2 < degree + 1) {
+        throw new Error(
+          `${what} entry ${i}: a degree ${degree} bspline needs at least ${degree + 1} control points counting the two corners; got ${points.length + 2}. Lower the degree or add control points`,
+        );
       }
       if (key === "fit" && !(typeof e.tolerance === "number" && Number.isFinite(e.tolerance) && e.tolerance > 0)) {
         throw new Error(`${what} entry ${i}: a fit is { fit: points, tolerance: t } with t the most the curve may be from any point, in mm, more than 0 — usually 0.01 to 0.1`);
@@ -993,8 +1016,7 @@ function checkSection(profile: SectionEntry[], what: string, example: string): S
       }
     }
   }
-  const lone = profile.length === 1 && !Array.isArray(profile[0]) && ("spline" in (profile[0] as object) || "fit" in (profile[0] as object));
-  if (corners === profile.length ? corners < 3 : corners === 0 && !lone) {
+  if (corners === profile.length ? corners < 3 : corners === 0 && !lone(profile)) {
     throw new Error(
       corners === profile.length
         ? `${what} needs at least 3 corners, or corners with an arc or curve between them, e.g. ${example}`
