@@ -599,9 +599,9 @@ pub fn measuring_fits<T>(build: impl FnOnce() -> T) -> (T, Measured) {
 
 /// Bounding box of a shape, from its tessellation.
 ///
-/// Meshing to measure is not free, but it is the only bound these bindings can
-/// give, and it is used where an operation needs checking rather than on every
-/// node. Tessellation only ever sits *inside* a curved surface, so the box can
+/// Meshing to measure is not free: on a fine smooth surface it is millions of
+/// triangles, where `Shape::bounds_optimal` reads the exact geometry instead
+/// (the loft's bulge check). Tessellation only ever sits *inside* a curved surface, so the box can
 /// be very slightly small — irrelevant at 0.01 mm deflection against the
 /// tolerances it is compared with.
 fn bbox(shape: &Shape) -> (DVec3, DVec3) {
