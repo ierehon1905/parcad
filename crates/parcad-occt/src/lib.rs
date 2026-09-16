@@ -27,6 +27,8 @@ pub mod perceive;
 pub mod protocol;
 #[cfg(feature = "kernel")]
 pub mod serve;
+#[cfg(feature = "kernel")]
+mod skinned;
 
 pub use bodies::{body_meshes, measure_bodies, MeasuredBody};
 pub use host::{

@@ -405,6 +405,61 @@ Two lowerings exist for the same reason:
   needs a face to open and produced a *shrunken solid* rather than a hollow one
   (measured: 64×39×22 became a solid 60×35×18 with six faces).
 
+## A walled loft, and lofts through fitted sections
+
+A loft whose sections are each one closed `{ fit }` over the same number of
+points is not handed to `ThruSections`. `skinned.rs` builds it as Piegl &
+Tiller's *compatible skinning* (§10.3), with the arithmetic in
+`parcad-core/src/skin.rs`:
+
+- **One parameter per authored point, shared by every section** — each
+  section's chord-length parameters, averaged — so point `i` is at the same
+  `u` in every section and the author's pairing is the surface's.
+- **One knot vector for every section.** Each is fitted by least squares on a
+  uniform *periodic* cubic (`PeriodicFit`): a closed outline has no seam to
+  constrain, and with parameters and knots shared, one factorisation fits all
+  of them. The span count doubles from 4 until every section holds its
+  tolerance, measured point to curve, and nothing is unified or inserted
+  afterwards. The periodic curve is handed to OCCT as the clamped cubic equal
+  to it.
+- **The surface interpolates each column of poles across the sections**, at
+  `v` = the section's height scaled to [0, 1]. Interpolation reproduces a
+  linear function, so height is exactly linear in `v`: every horizontal plane
+  cuts the skin along one `v` iso-curve, and a floor or a rim is one.
+- **The faces are made and sewn here** (`opencascade::skin::Skinner`): a band
+  per stretch between sections — split even when smooth, because the mesher
+  took 102 s on one lamp skin as a single face and 18.7 s in bands — and flat
+  ends bounded by the skin's own iso-curves.
+
+`loft(sections, { wall })` adds the inside, and the pairing is what it is for.
+Two skins lofted independently through a section and its inset each bulge
+their own way between sections: a 15-section lamp built as two smooth lofts
+and a cut measured **0.001 mm** of wall in eight places. Here the inside is
+fitted on the same parameters and knots as the outside (twice as many spans —
+an offset turns tighter than its curve, at a convex tip by the whole wall),
+through targets the backend computes from the *built outside*: at four
+parameters between each pair of points and at a row between each pair of
+sections, the outside's point stepped horizontally by `t / cos φ`, where `φ`
+is the outside's lean there. A horizontal step of `t` is only `t · cos φ`
+thick square to a leaning wall (the same lamp: 1.211 mm for 1.6). The step is
+then corrected twice by the wall it made, measured square to the outside at
+each target, and the result answers to one measurement:
+`Skinner::measure_wall`, from a grid of points of the inside to the nearest
+point of the outside, searched only within a knot span of the *same*
+parameters — the matching stretch of wall, never a ray that crosses the
+cavity. At an open end the foot is held to the edge and the distance is taken
+along its normal, which is the wall continued.
+
+The measured range is reported as `loft_wall_mm`. Thinner than 95 % of `t`
+anywhere is refused, naming where; thicker than `t` by more than 5 % or the
+sections' own fit tolerance, whichever is more, is refused too, because a
+smooth inside rounds a turn it cannot follow and the author allowed curves
+that much slack. Ends are open by default — the wall ends in a flat ring, a
+lampshade or a sleeve — and `bottom: "closed"` / `top: "closed"` put a floor
+`t` thick there, cut from the inside at `v = t / height`. A wall takes only
+fitted sections: corners and arcs have no points to step, and their inset is
+already `inset()`.
+
 ## Meshing: weld before you measure
 
 OCCT triangulates **face by face**, so every shared edge arrives as two

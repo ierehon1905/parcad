@@ -1,0 +1,11 @@
+{
+  "name": "refuse-wall-thicker-than-a-turn",
+  "script": "eval/scripts/refuse-wall-thicker-than-a-turn.js",
+  "why": "A six-lobed outline whose valleys turn tighter than the 5 mm wall asked: the inside folds there at every span count the 180 points allow. The kernel must refuse rather than return a wall that is not 5 mm, and name the wall as the thing to thin.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": ["the wall's inside", "loops through itself", "thin the wall"]
+    }
+  }
+}

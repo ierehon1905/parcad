@@ -393,36 +393,59 @@ fn locate_crossing(section: &Section) -> Option<String> {
     Some(format!("Sampled, {what} near [{:.4}, {:.4}]. ", near[0], near[1]))
 }
 
-thread_local! {
-    /// The worst fit deviation seen so far, one frame per subtree being
-    /// measured: the outermost is the request's, the rest are cache entries
-    /// in the making.
-    static FITS: std::cell::RefCell<Vec<Option<f64>>> = const { std::cell::RefCell::new(Vec::new()) };
+/// What building a subtree measured that the report carries: the worst fit
+/// deviation, and the thinnest and thickest wall of any walled loft.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Measured {
+    pub deviation_mm: Option<f64>,
+    pub loft_wall_mm: Option<[f64; 2]>,
 }
 
-fn record_fit(deviation_mm: f64) {
-    FITS.with(|frames| {
+impl Measured {
+    fn merge(&mut self, other: &Measured) {
+        if let Some(d) = other.deviation_mm {
+            self.deviation_mm = Some(self.deviation_mm.map_or(d, |worst| worst.max(d)));
+        }
+        if let Some([lo, hi]) = other.loft_wall_mm {
+            self.loft_wall_mm = Some(self.loft_wall_mm.map_or([lo, hi], |[a, b]| [a.min(lo), b.max(hi)]));
+        }
+    }
+}
+
+thread_local! {
+    /// What has been measured so far, one frame per subtree being measured:
+    /// the outermost is the request's, the rest are cache entries in the
+    /// making.
+    static MEASURED: std::cell::RefCell<Vec<Measured>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn record(measured: Measured) {
+    MEASURED.with(|frames| {
         for frame in frames.borrow_mut().iter_mut() {
-            *frame = Some(frame.map_or(deviation_mm, |worst| worst.max(deviation_mm)));
+            frame.merge(&measured);
         }
     });
 }
 
-fn push_fit_frame() {
-    FITS.with(|frames| frames.borrow_mut().push(None));
+fn record_fit(deviation_mm: f64) {
+    record(Measured { deviation_mm: Some(deviation_mm), ..Measured::default() });
 }
 
-fn pop_fit_frame() -> Option<f64> {
-    FITS.with(|frames| frames.borrow_mut().pop().flatten())
+fn push_measured_frame() {
+    MEASURED.with(|frames| frames.borrow_mut().push(Measured::default()));
 }
 
-/// Run `build` and return, beside its result, the worst deviation of any
-/// curve fitted while it ran — `None` when nothing was fitted. A subtree the
-/// cache reused reports the deviation measured when it was built.
-pub fn measuring_fits<T>(build: impl FnOnce() -> T) -> (T, Option<f64>) {
-    push_fit_frame();
+fn pop_measured_frame() -> Measured {
+    MEASURED.with(|frames| frames.borrow_mut().pop().unwrap_or_default())
+}
+
+/// Run `build` and return, beside its result, what it measured on the way —
+/// the worst deviation of any curve fitted and the range of any loft wall.
+/// A subtree the cache reused reports what was measured when it was built.
+pub fn measuring_fits<T>(build: impl FnOnce() -> T) -> (T, Measured) {
+    push_measured_frame();
     let out = build();
-    (out, pop_fit_frame())
+    (out, pop_measured_frame())
 }
 
 /// Bounding box of a shape, from its tessellation.
@@ -2758,9 +2781,9 @@ type CacheKey = (String, [i64; 3]);
 
 struct CacheEntry {
     built: BuiltShape,
-    /// The worst deviation of any curve fitted while building this subtree,
-    /// re-reported on a hit as if it had been built again.
-    fit_deviation: Option<f64>,
+    /// What building this subtree measured, re-reported on a hit as if it
+    /// had been built again.
+    measured: Measured,
     /// The generation that last built or reused this node.
     used: u64,
     /// The keys of the nodes built directly under it. A hit on a node is a
@@ -2897,9 +2920,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
         let reuse = slot.as_mut()?;
         let entry = reuse.cache.entries.get(&key)?;
         let built = entry.built.clone();
-        if let Some(deviation) = entry.fit_deviation {
-            record_fit(deviation);
-        }
+        record(entry.measured);
         touch(&mut reuse.cache, &key);
         if let Some(frame) = reuse.under.last_mut() {
             frame.push(key.clone());
@@ -2915,9 +2936,9 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             reuse.under.push(Vec::new());
         }
     });
-    push_fit_frame();
+    push_measured_frame();
     let built = build_node_afresh(doc, id, offset);
-    let fit_deviation = pop_fit_frame();
+    let measured = pop_measured_frame();
     REUSE.with(|slot| {
         if let Some(reuse) = slot.borrow_mut().as_mut() {
             let deps = reuse.under.pop().unwrap_or_default();
@@ -2927,7 +2948,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     key.clone(),
                     CacheEntry {
                         built: built.clone(),
-                        fit_deviation,
+                        measured,
                         used: generation,
                         deps,
                     },
@@ -3511,13 +3532,28 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             BuiltShape::primitive(placed, node.tag.as_deref())
         }
 
-        Op::Loft { sections, smooth } => {
+        Op::Loft { sections, smooth, wall } => {
             breadcrumb(&format!(
                 "loft node {id} ({label}) through {} sections",
                 sections.len()
             ));
             let resolved = Op::validate_loft(sections)
                 .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+            if let Some(wall) = wall {
+                Op::validate_loft_wall(sections, &resolved, wall)
+                    .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+            }
+            let fits = crate::skinned::fit_sections(sections, &resolved);
+            let shape = match fits {
+                Some(fits) => {
+                    let skinned = crate::skinned::build(&fits, *smooth, wall.as_ref(), &format!("node {id} ({label})"))?;
+                    record(Measured {
+                        deviation_mm: Some(skinned.deviation_mm),
+                        loft_wall_mm: skinned.wall.map(|w| [w.min_mm, w.max_mm]),
+                    });
+                    skinned.shape
+                }
+                None => {
 
             let mut wires: Vec<Option<Wire>> = Vec::with_capacity(sections.len());
             for (i, (section, outline)) in sections.iter().zip(&resolved).enumerate() {
@@ -3534,7 +3570,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 });
             }
             let plain = resolved.iter().all(|s| s.as_ref().is_some_and(Section::is_polygon));
-            let shape = if plain {
+            if plain {
                 let wires: Vec<Wire> = wires.into_iter().flatten().collect();
                 Shape::from(Solid::loft_sections(&wires, !*smooth))
             } else {
@@ -3554,6 +3590,8 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                     lofted = lofted.oriented_outward();
                 }
                 lofted
+            }
+                }
             };
 
             // The graph promised the mesher and the renderer that the loft
@@ -4349,7 +4387,7 @@ mod tests {
         let place = |p: [f64; 2]| DVec3::new(p[0], p[1], 0.0);
         let (built, deviation) = measuring_fits(|| section_wire(&section(0.2256), place, "quarter"));
         built.unwrap();
-        let deviation = deviation.unwrap();
+        let deviation = deviation.deviation_mm.unwrap();
         assert!((deviation - (10.0 - 6.963495408493621 * std::f64::consts::SQRT_2)).abs() < 1e-6, "{deviation}");
         let (refused, _) = measuring_fits(|| section_wire(&section(0.1), place, "quarter"));
         let err = refused.err().unwrap().to_string();

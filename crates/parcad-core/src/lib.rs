@@ -19,6 +19,7 @@ pub mod render;
 pub mod section;
 pub mod section_crossing;
 pub mod selectors;
+pub mod skin;
 pub mod tags;
 pub mod threemf;
 pub mod view;

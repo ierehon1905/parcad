@@ -397,3 +397,26 @@ made of arcs and splines.
   built through.
 - `Wire::to_shape()` — the same handle as a `Shape`, borrowed; `From<Wire>`
   consumes and a wire is not `Clone`.
+- Correction to `Edge::fit` above: the closed seam is G1, not C1.
+  `AppParCurves_TangencyPoint` imposes the tangent's direction and the least
+  squares solves each end's magnitude freely, so the two ends meet at
+  different speeds, and a magnitude near zero cusps (docs/GOTCHAS.md,
+  "`Edge::fit`'s closed seam is only G1, and can loop").
+- `skin::Skinner` (`include/skin.hxx`, its own bridge) — a solid sewn from
+  B-spline surfaces the caller computed: `set_surface` builds a non-rational,
+  non-periodic `Geom_BSplineSurface` from a pole grid and knot vectors for
+  the outer or the inner skin; `add_band` makes the face over the whole `u`
+  range between two `v` values (`BRepBuilderAPI_MakeFace` on the surface,
+  which shares the seam edge of a `u`-closed surface); `add_disc` the planar
+  face a skin's `v` iso-curve bounds, and `add_ring` the planar face between
+  the outer skin's iso-curve and the inner's at one height, its hole turned
+  by `ShapeFix_Face::FixOrientation`. An iso-curve's last pole is set onto its
+  first so the edge closes to the bit. `build` sews every face
+  (`BRepBuilderAPI_Sewing`), refuses free edges or more than one shell, makes
+  the solid, orients it outward (`BRepLib::OrientClosedSolid`) and refuses
+  one `BRepCheck_Analyzer` does not pass. `measure_wall` is the wall between
+  the two skins: from a grid of inner points, the nearest outer point found
+  within one knot span of the same parameters (a coarse grid, then Newton on
+  the squared distance held to that window) and the distance taken along
+  the outer normal there, so an open end reads the wall continued; it
+  returns the least and greatest and where each is.

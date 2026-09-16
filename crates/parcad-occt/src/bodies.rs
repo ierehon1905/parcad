@@ -132,6 +132,7 @@ mod tests {
             faces: Vec::new(),
             deflection_mm: 0.01,
             deviation_mm: None,
+            loft_wall_mm: None,
             edges: Vec::new(),
             topology: Topology { faces: 12, edges: 24 },
             bodies: vec![

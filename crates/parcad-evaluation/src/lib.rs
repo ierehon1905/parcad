@@ -38,6 +38,7 @@ pub fn evaluated(
         snapshot.curve_bound_mm = Some((bound.mm * 1e6).ceil() / 1e6);
         snapshot.curve_bound = Some(if bound.certified { "certified" } else { "estimated" });
     }
+    snapshot.loft_wall_mm = s.loft_wall_mm.map(|w| WallRange { min: round_mm(w.min), max: round_mm(w.max) });
     Ok(Evaluated {
         bounds: report.bounds,
         snapshot,
@@ -164,6 +165,13 @@ impl Evaluated {
 /// precision inside the kernel, where they are compared and accumulated; this
 /// is a decision about the *reply*, in the same module that chose `medium` over
 /// `inside` for the same kind of reason.
+/// A measured range, in mm.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, schemars::JsonSchema)]
+pub struct WallRange {
+    pub min: f64,
+    pub max: f64,
+}
+
 pub fn round_mm(v: f64) -> f64 {
     round_to(v, 1e3)
 }
@@ -259,6 +267,11 @@ pub struct EvaluationSnapshot {
     /// fourth-derivative bound, `estimated` when any was read off samples.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub curve_bound: Option<&'static str>,
+    /// For a part with a `loft(..., { wall })`: the thinnest and thickest
+    /// that wall measures between its two skins, square to the outside, in
+    /// mm. Measured, never the thickness asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub loft_wall_mm: Option<WallRange>,
     pub watertight: bool,
     pub non_manifold_edges: usize,
     /// Connected pieces of surface, measured over the whole part: one for a
@@ -681,6 +694,7 @@ pub fn describe(
         deviation_mm: None,
         curve_bound_mm: None,
         curve_bound: None,
+        loft_wall_mm: None,
         watertight: report.mesh.watertight,
         non_manifold_edges: report.mesh.non_manifold_edges,
         bodies: report.mesh.bodies,

@@ -577,6 +577,9 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
             if bound.certified { "certified by the script" } else { "estimated by the script from samples" }
         );
     }
+    if let Some(wall) = s.loft_wall_mm {
+        println!("wall     the walled loft measures {:.4} to {:.4} mm between its skins", wall.min, wall.max);
+    }
     for body in parcad_occt::measure_bodies(&s) {
         let size = body.bounds.size();
         println!(

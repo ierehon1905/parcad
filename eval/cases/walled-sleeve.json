@@ -1,0 +1,28 @@
+{
+  "name": "walled-sleeve",
+  "script": "eval/scripts/walled-sleeve.js",
+  "why": "A ruled 2 mm sleeve through three fitted circles of radius 20, open at both ends: pi*(400-324)*40 = 9550.442 mm3 in closed form, the mesh a chord short of it. loft_wall_mm must read 2.000 at both ends, and the part has no floor: 8 faces, two ruled bands per skin and two flat rings.",
+  "brep": {
+    "size": [
+      40.001,
+      40.001,
+      40.0
+    ],
+    "volume_mm3": 9548.918,
+    "area_mm2": 10027.132,
+    "triangles": 2304,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 238.723,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 8,
+    "edges": 28,
+    "curves": 8,
+    "deviation_mm": 0.0007,
+    "loft_wall_mm": [
+      2.0,
+      2.0
+    ]
+  }
+}

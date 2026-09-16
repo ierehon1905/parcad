@@ -653,6 +653,12 @@ mod tests {
                 "return extrude([{ curve: (t) => [5 * Math.cos(t), 5 * Math.sin(t)], from: 0, to: Math.PI, tolerance: 0.01 }], 2);"
                     .to_owned(),
             ),
+            (
+                "loft-wall",
+                "const ring = (r) => { const p = []; for (let i = 0; i < 24; i++) { const a = i * Math.PI / 12; p.push([r * Math.cos(a), r * Math.sin(a)]); } return [{ fit: p, tolerance: 0.01 }]; };\n\
+                 return loft([{ z: 0, outline: ring(20) }, { z: 30, outline: ring(15) }], { wall: 2 });"
+                    .to_owned(),
+            ),
         ];
         let stamped: Vec<&str> = cases.iter().map(|(id, _)| *id).collect();
         assert_eq!(stamped, parcad_core::envelope::FEATURES, "the host's feature list and this table differ");
