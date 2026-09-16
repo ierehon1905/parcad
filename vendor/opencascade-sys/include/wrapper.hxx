@@ -13,6 +13,12 @@
 #include <Extrema_ExtPC.hxx>
 #include <Extrema_ExtPS.hxx>
 #include <Precision.hxx>
+#include <BRepAdaptor_Curve2d.hxx>
+#include <GCPnts_AbscissaPoint.hxx>
+#include <Poly_Triangulation.hxx>
+#include <BRepTopAdaptor_FClass2d.hxx>
+#include <array>
+#include <map>
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -474,6 +480,676 @@ inline rust::Vec<double> Shape_face_grid(const TopoDS_Shape &shape, int per_side
   return out;
 }
 
+// Closest points on a face's own triangulation, and local projection onto its
+// surface from there — added for parcad, see PARCAD-CHANGES.md. The
+// triangulation lies within a measured slack of the surface, so a distance to
+// it bounds the distance to the face from both sides, and its nearest
+// triangles seed a Newton step that finds the surface's own nearest point
+// without the sample grid `Extrema_GenExtPS` rebuilds for every point.
+namespace parcad_proximity {
+
+struct Bounds {
+  double lo[3] = {1e300, 1e300, 1e300};
+  double hi[3] = {-1e300, -1e300, -1e300};
+  void add(const gp_XYZ &p) {
+    const double c[3] = {p.X(), p.Y(), p.Z()};
+    for (int i = 0; i < 3; ++i) {
+      lo[i] = std::min(lo[i], c[i]);
+      hi[i] = std::max(hi[i], c[i]);
+    }
+  }
+  void add(const Bounds &b) {
+    for (int i = 0; i < 3; ++i) {
+      lo[i] = std::min(lo[i], b.lo[i]);
+      hi[i] = std::max(hi[i], b.hi[i]);
+    }
+  }
+  double distance_sq(const gp_XYZ &p) const {
+    const double c[3] = {p.X(), p.Y(), p.Z()};
+    double sum = 0.0;
+    for (int i = 0; i < 3; ++i) {
+      const double d = c[i] < lo[i] ? lo[i] - c[i] : (c[i] > hi[i] ? c[i] - hi[i] : 0.0);
+      sum += d * d;
+    }
+    return sum;
+  }
+  double distance_sq(const Bounds &b) const {
+    double sum = 0.0;
+    for (int i = 0; i < 3; ++i) {
+      const double d = std::max({0.0, b.lo[i] - hi[i], lo[i] - b.hi[i]});
+      sum += d * d;
+    }
+    return sum;
+  }
+};
+
+// The point of triangle (a, b, c) nearest p, as a + v (b - a) + w (c - a)
+// (Ericson, Real-Time Collision Detection, 5.1.5).
+inline void closest_on_triangle(const gp_XYZ &p, const gp_XYZ &a, const gp_XYZ &b, const gp_XYZ &c, double &v,
+                                double &w) {
+  const gp_XYZ ab = b - a, ac = c - a, ap = p - a;
+  const double d1 = ab.Dot(ap), d2 = ac.Dot(ap);
+  if (d1 <= 0.0 && d2 <= 0.0) {
+    v = 0.0, w = 0.0;
+    return;
+  }
+  const gp_XYZ bp = p - b;
+  const double d3 = ab.Dot(bp), d4 = ac.Dot(bp);
+  if (d3 >= 0.0 && d4 <= d3) {
+    v = 1.0, w = 0.0;
+    return;
+  }
+  const double vc = d1 * d4 - d3 * d2;
+  if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0) {
+    v = d1 / (d1 - d3), w = 0.0;
+    return;
+  }
+  const gp_XYZ cp = p - c;
+  const double d5 = ab.Dot(cp), d6 = ac.Dot(cp);
+  if (d6 >= 0.0 && d5 <= d6) {
+    v = 0.0, w = 1.0;
+    return;
+  }
+  const double vb = d5 * d2 - d1 * d6;
+  if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0) {
+    v = 0.0, w = d2 / (d2 - d6);
+    return;
+  }
+  const double va = d3 * d6 - d5 * d4;
+  if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0) {
+    const double t = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+    v = 1.0 - t, w = t;
+    return;
+  }
+  const double denom = va + vb + vc;
+  if (std::abs(denom) < 1e-300) {
+    v = 0.0, w = 0.0;
+    return;
+  }
+  v = vb / denom, w = vc / denom;
+}
+
+// Parameters of the closest points of segments p1 q1 and p2 q2 (Ericson, 5.1.9).
+inline void closest_on_segments(const gp_XYZ &p1, const gp_XYZ &q1, const gp_XYZ &p2, const gp_XYZ &q2, double &s,
+                                double &t) {
+  const gp_XYZ d1 = q1 - p1, d2 = q2 - p2, r = p1 - p2;
+  const double a = d1.Dot(d1), e = d2.Dot(d2), f = d2.Dot(r);
+  if (a <= 1e-300 && e <= 1e-300) {
+    s = t = 0.0;
+    return;
+  }
+  if (a <= 1e-300) {
+    s = 0.0, t = std::clamp(f / e, 0.0, 1.0);
+    return;
+  }
+  const double c = d1.Dot(r);
+  if (e <= 1e-300) {
+    t = 0.0, s = std::clamp(-c / a, 0.0, 1.0);
+    return;
+  }
+  const double b = d1.Dot(d2), denom = a * e - b * b;
+  s = denom > 0.0 ? std::clamp((b * f - c * e) / denom, 0.0, 1.0) : 0.0;
+  t = (b * s + f) / e;
+  if (t < 0.0) {
+    t = 0.0, s = std::clamp(-c / a, 0.0, 1.0);
+  } else if (t > 1.0) {
+    t = 1.0, s = std::clamp((b - c) / a, 0.0, 1.0);
+  }
+}
+
+// Where segment p q passes through triangle (a, b, c): the parameter along the
+// segment and the weights on b and c (Möller & Trumbore).
+inline bool segment_through_triangle(const gp_XYZ &p, const gp_XYZ &q, const gp_XYZ &a, const gp_XYZ &b,
+                                     const gp_XYZ &c, double &s, double &v, double &w) {
+  const gp_XYZ d = q - p, e1 = b - a, e2 = c - a;
+  const gp_XYZ h = d.Crossed(e2);
+  const double det = e1.Dot(h);
+  if (std::abs(det) < 1e-300) {
+    return false;
+  }
+  const gp_XYZ o = p - a;
+  v = o.Dot(h) / det;
+  if (v < 0.0 || v > 1.0) {
+    return false;
+  }
+  const gp_XYZ k = o.Crossed(e1);
+  w = d.Dot(k) / det;
+  if (w < 0.0 || v + w > 1.0) {
+    return false;
+  }
+  s = e2.Dot(k) / det;
+  return s >= 0.0 && s <= 1.0;
+}
+
+struct TriangleMesh {
+  std::vector<gp_XYZ> nodes;
+  std::vector<gp_Pnt2d> uvs;
+  std::vector<std::array<int, 3>> triangles;
+  struct Node {
+    Bounds box;
+    int first = 0;
+    int count = 0; // a leaf when non-zero
+    int left = -1;
+    int right = -1;
+  };
+  std::vector<Node> tree;
+  std::vector<int> order;
+  // How far the surface may lie from the triangles, mm: twice the largest
+  // deviation measured at a triangle's middle, plus the face's tolerance.
+  double slack = 0.0;
+
+  bool empty() const { return tree.empty(); }
+
+  gp_XYZ corner(int t, int k) const { return nodes[triangles[t][k]]; }
+  gp_XYZ point_at(int t, double v, double w) const {
+    return corner(t, 0) * (1.0 - v - w) + corner(t, 1) * v + corner(t, 2) * w;
+  }
+  gp_Pnt2d uv_at(int t, double v, double w) const {
+    const gp_XY a = uvs[triangles[t][0]].XY(), b = uvs[triangles[t][1]].XY(), c = uvs[triangles[t][2]].XY();
+    return gp_Pnt2d(a * (1.0 - v - w) + b * v + c * w);
+  }
+  double longest_side(int t) const {
+    const gp_XYZ a = corner(t, 0), b = corner(t, 1), c = corner(t, 2);
+    return std::sqrt(std::max({(b - a).SquareModulus(), (c - b).SquareModulus(), (a - c).SquareModulus()}));
+  }
+  Bounds bounds_of(int t) const {
+    Bounds box;
+    for (int k = 0; k < 3; ++k) {
+      box.add(corner(t, k));
+    }
+    return box;
+  }
+
+  void build() {
+    if (triangles.empty()) {
+      return;
+    }
+    order.resize(triangles.size());
+    std::vector<gp_XYZ> centres(triangles.size());
+    for (int t = 0; t < (int)triangles.size(); ++t) {
+      order[t] = t;
+      centres[t] = (corner(t, 0) + corner(t, 1) + corner(t, 2)) / 3.0;
+    }
+    tree.reserve(triangles.size() / 2 + 2);
+    split(0, (int)triangles.size(), centres);
+  }
+
+  int split(int first, int count, const std::vector<gp_XYZ> &centres) {
+    const int index = (int)tree.size();
+    tree.emplace_back();
+    Bounds box, mids;
+    for (int k = first; k < first + count; ++k) {
+      box.add(bounds_of(order[k]));
+      mids.add(centres[order[k]]);
+    }
+    tree[index].box = box;
+    if (count <= 4) {
+      tree[index].first = first;
+      tree[index].count = count;
+      return index;
+    }
+    int axis = 0;
+    for (int i = 1; i < 3; ++i) {
+      if (mids.hi[i] - mids.lo[i] > mids.hi[axis] - mids.lo[axis]) {
+        axis = i;
+      }
+    }
+    const int half = count / 2;
+    std::nth_element(order.begin() + first, order.begin() + first + half, order.begin() + first + count,
+                     [&](int a, int b) { return centres[a].Coord(axis + 1) < centres[b].Coord(axis + 1); });
+    const int left = split(first, half, centres);
+    const int right = split(first + half, count - half, centres);
+    tree[index].left = left;
+    tree[index].right = right;
+    return index;
+  }
+
+  double triangle_distance_sq(int t, const gp_XYZ &p, double &v, double &w) const {
+    closest_on_triangle(p, corner(t, 0), corner(t, 1), corner(t, 2), v, w);
+    return (point_at(t, v, w) - p).SquareModulus();
+  }
+
+  // Nearer child last, so it is visited first.
+  void push_children(const Node &node, const gp_XYZ &p, std::vector<int> &stack) const {
+    if (tree[node.left].box.distance_sq(p) < tree[node.right].box.distance_sq(p)) {
+      stack.push_back(node.right);
+      stack.push_back(node.left);
+    } else {
+      stack.push_back(node.left);
+      stack.push_back(node.right);
+    }
+  }
+
+  // The least distance from p to the triangles, or `bound` when none is nearer.
+  double distance(const gp_XYZ &p, double bound) const {
+    if (empty()) {
+      return bound;
+    }
+    double best_sq = bound * bound;
+    std::vector<int> stack{0};
+    while (!stack.empty()) {
+      const Node &node = tree[stack.back()];
+      stack.pop_back();
+      if (node.box.distance_sq(p) >= best_sq) {
+        continue;
+      }
+      if (node.count > 0) {
+        for (int k = node.first; k < node.first + node.count; ++k) {
+          double v, w;
+          best_sq = std::min(best_sq, triangle_distance_sq(order[k], p, v, w));
+        }
+      } else {
+        push_children(node, p, stack);
+      }
+    }
+    return std::sqrt(best_sq);
+  }
+
+  // Every triangle within `radius` of p, with the weights of its nearest point.
+  struct Hit {
+    int t;
+    double v, w, d;
+  };
+  void within(const gp_XYZ &p, double radius, std::vector<Hit> &out) const {
+    if (empty()) {
+      return;
+    }
+    const double limit = radius * radius;
+    std::vector<int> stack{0};
+    while (!stack.empty()) {
+      const Node &node = tree[stack.back()];
+      stack.pop_back();
+      if (node.box.distance_sq(p) > limit) {
+        continue;
+      }
+      if (node.count > 0) {
+        for (int k = node.first; k < node.first + node.count; ++k) {
+          double v, w;
+          const double d = triangle_distance_sq(order[k], p, v, w);
+          if (d <= limit) {
+            out.push_back({order[k], v, w, std::sqrt(d)});
+          }
+        }
+      } else {
+        push_children(node, p, stack);
+      }
+    }
+  }
+};
+
+// The closest points of triangle `ta` of `A` and `tb` of `B`, as weights on
+// each, and their distance.
+struct TrianglePair {
+  double d = 1e300;
+  double va = 0, wa = 0, vb = 0, wb = 0;
+};
+
+inline TrianglePair closest_triangles(const TriangleMesh &A, int ta, const TriangleMesh &B, int tb) {
+  const gp_XYZ a[3] = {A.corner(ta, 0), A.corner(ta, 1), A.corner(ta, 2)};
+  const gp_XYZ b[3] = {B.corner(tb, 0), B.corner(tb, 1), B.corner(tb, 2)};
+  // Weights of each corner, and of a point along a side.
+  static const double corner_vw[3][2] = {{0, 0}, {1, 0}, {0, 1}};
+  auto along = [](int k, double s, double &v, double &w) {
+    const int n = (k + 1) % 3;
+    v = corner_vw[k][0] * (1 - s) + corner_vw[n][0] * s;
+    w = corner_vw[k][1] * (1 - s) + corner_vw[n][1] * s;
+  };
+  TrianglePair best;
+  auto consider = [&](double d, double va, double wa, double vb, double wb) {
+    if (d < best.d) {
+      best = {d, va, wa, vb, wb};
+    }
+  };
+  for (int k = 0; k < 3; ++k) {
+    double v, w, s;
+    if (segment_through_triangle(a[k], a[(k + 1) % 3], b[0], b[1], b[2], s, v, w)) {
+      double va, wa;
+      along(k, s, va, wa);
+      consider(0.0, va, wa, v, w);
+      return best;
+    }
+    if (segment_through_triangle(b[k], b[(k + 1) % 3], a[0], a[1], a[2], s, v, w)) {
+      double vb, wb;
+      along(k, s, vb, wb);
+      consider(0.0, v, w, vb, wb);
+      return best;
+    }
+  }
+  for (int k = 0; k < 3; ++k) {
+    double v, w;
+    closest_on_triangle(a[k], b[0], b[1], b[2], v, w);
+    consider((B.point_at(tb, v, w) - a[k]).Modulus(), corner_vw[k][0], corner_vw[k][1], v, w);
+    closest_on_triangle(b[k], a[0], a[1], a[2], v, w);
+    consider((A.point_at(ta, v, w) - b[k]).Modulus(), v, w, corner_vw[k][0], corner_vw[k][1]);
+  }
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j < 3; ++j) {
+      double s, t;
+      closest_on_segments(a[i], a[(i + 1) % 3], b[j], b[(j + 1) % 3], s, t);
+      const gp_XYZ p = a[i] + (a[(i + 1) % 3] - a[i]) * s;
+      const gp_XYZ q = b[j] + (b[(j + 1) % 3] - b[j]) * t;
+      double va, wa, vb, wb;
+      along(i, s, va, wa);
+      along(j, t, vb, wb);
+      consider((p - q).Modulus(), va, wa, vb, wb);
+    }
+  }
+  return best;
+}
+
+struct PairHit {
+  int ta, tb;
+  TrianglePair at;
+  double d;
+};
+
+// Triangle pairs of A and B no farther apart than `reach`: the nearest pair
+// in each cell of a grid `cell` across, among those within `band` of the
+// least distance found, which is left in `best`. Pairs whose point on A
+// `skip` rejects are not counted at all. One pair a cell keeps a wall of even
+// thickness, where every pair across it is within the band, from growing the
+// list with the wall's area.
+template <class Skip>
+void close_triangles(const TriangleMesh &A, const TriangleMesh &B, double reach, double band, double cell,
+                     std::vector<PairHit> &hits, double &best, Skip skip) {
+  best = reach;
+  if (A.empty() || B.empty()) {
+    return;
+  }
+  std::map<std::array<long long, 3>, PairHit> nearest;
+  std::vector<std::pair<int, int>> stack{{0, 0}};
+  auto limit = [&]() { return std::min(reach, best + band); };
+  const auto size = [](const Bounds &b) { return (b.hi[0] - b.lo[0]) + (b.hi[1] - b.lo[1]) + (b.hi[2] - b.lo[2]); };
+  while (!stack.empty()) {
+    const auto [na, nb] = stack.back();
+    stack.pop_back();
+    const auto &x = A.tree[na];
+    const auto &y = B.tree[nb];
+    const double l = limit();
+    if (x.box.distance_sq(y.box) > l * l) {
+      continue;
+    }
+    if (x.count > 0 && y.count > 0) {
+      for (int i = x.first; i < x.first + x.count; ++i) {
+        const int ta = A.order[i];
+        const gp_XYZ middle = A.point_at(ta, 1.0 / 3.0, 1.0 / 3.0);
+        const std::array<long long, 3> key = {(long long)std::floor(middle.X() / cell),
+                                              (long long)std::floor(middle.Y() / cell),
+                                              (long long)std::floor(middle.Z() / cell)};
+        auto found = nearest.find(key);
+        // A cell whose pair is already within the band needs no better one:
+        // its pair only seeds the exact search.
+        if (found != nearest.end() && found->second.d <= best + band) {
+          continue;
+        }
+        const Bounds bi = A.bounds_of(ta);
+        for (int j = y.first; j < y.first + y.count; ++j) {
+          const double lj = limit();
+          if (bi.distance_sq(B.bounds_of(B.order[j])) > lj * lj) {
+            continue;
+          }
+          const TrianglePair pair = closest_triangles(A, ta, B, B.order[j]);
+          if (pair.d > lj || skip(A.point_at(ta, pair.va, pair.wa))) {
+            continue;
+          }
+          best = std::min(best, pair.d);
+          if (found == nearest.end()) {
+            found = nearest.emplace(key, PairHit{ta, B.order[j], pair, pair.d}).first;
+          } else if (pair.d < found->second.d) {
+            found->second = {ta, B.order[j], pair, pair.d};
+          }
+          if (found->second.d <= best + band) {
+            break;
+          }
+        }
+      }
+      continue;
+    }
+    // Descend the larger box, or the only one that can be.
+    if (y.count > 0 || (x.count == 0 && size(x.box) >= size(y.box))) {
+      stack.push_back({x.left, nb});
+      stack.push_back({x.right, nb});
+    } else {
+      stack.push_back({na, y.left});
+      stack.push_back({na, y.right});
+    }
+  }
+  const double keep = best + band;
+  for (const auto &[key, hit] : nearest) {
+    if (hit.d <= keep) {
+      hits.push_back(hit);
+    }
+  }
+}
+
+// Solve the n x n system M x = b in place, n <= 4; false when singular.
+inline bool solve(int n, double M[4][4], double b[4]) {
+  for (int c = 0; c < n; ++c) {
+    int pivot = c;
+    for (int r = c + 1; r < n; ++r) {
+      if (std::abs(M[r][c]) > std::abs(M[pivot][c])) {
+        pivot = r;
+      }
+    }
+    if (std::abs(M[pivot][c]) < 1e-300) {
+      return false;
+    }
+    if (pivot != c) {
+      for (int k = 0; k < n; ++k) {
+        std::swap(M[c][k], M[pivot][k]);
+      }
+      std::swap(b[c], b[pivot]);
+    }
+    for (int r = c + 1; r < n; ++r) {
+      const double f = M[r][c] / M[c][c];
+      for (int k = c; k < n; ++k) {
+        M[r][k] -= f * M[c][k];
+      }
+      b[r] -= f * b[c];
+    }
+  }
+  for (int r = n - 1; r >= 0; --r) {
+    double sum = b[r];
+    for (int k = r + 1; k < n; ++k) {
+      sum -= M[r][k] * b[k];
+    }
+    b[r] = sum / M[r][r];
+  }
+  return true;
+}
+
+// A face's box in its surface's parameters, which a search is kept inside:
+// a line of equal distances runs on past a face along its untrimmed surface.
+// A direction the face covers for a whole period is left free.
+struct UVBox {
+  double lo[2] = {-1e300, -1e300};
+  double hi[2] = {1e300, 1e300};
+  bool bounded[2] = {false, false};
+
+  static UVBox of(const TopoDS_Face &face, const BRepAdaptor_Surface &S) {
+    UVBox box;
+    double u0, u1, v0, v1;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    box.lo[0] = u0, box.hi[0] = u1, box.lo[1] = v0, box.hi[1] = v1;
+    box.bounded[0] = !(S.IsUPeriodic() && u1 - u0 >= S.UPeriod() - 1e-9);
+    box.bounded[1] = !(S.IsVPeriodic() && v1 - v0 >= S.VPeriod() - 1e-9);
+    return box;
+  }
+
+  void clamp(double &u, double &v) const {
+    if (bounded[0]) {
+      u = std::clamp(u, lo[0], hi[0]);
+    }
+    if (bounded[1]) {
+      v = std::clamp(v, lo[1], hi[1]);
+    }
+  }
+};
+
+struct Jet {
+  gp_Pnt p;
+  gp_Vec du, dv, duu, dvv, duv;
+  void at(const BRepAdaptor_Surface &S, double u, double v) { S.D2(u, v, p, du, dv, duu, dvv, duv); }
+};
+
+// Damped Newton (Levenberg–Marquardt) on the squared distance, from a start
+// near the answer; n = 2 for a point and a surface, 4 for two surfaces. The
+// Hessian is the exact one, so a line or a patch of equal distances — two
+// coaxial cylinders — is a flat direction the damping holds still rather than
+// a singular matrix. Returns whether the step settled.
+struct Nearest {
+  static bool point(const BRepAdaptor_Surface &S, const UVBox &box, const gp_Pnt &target, double &u, double &v,
+                    gp_Pnt &at) {
+    Jet j;
+    j.at(S, u, v);
+    double f = 0.5 * j.p.SquareDistance(target);
+    double lambda = 1e-3;
+    for (int it = 0; it < 80; ++it) {
+      const gp_Vec D(target, j.p);
+      double M[4][4] = {{j.du.Dot(j.du) + D.Dot(j.duu), j.du.Dot(j.dv) + D.Dot(j.duv)},
+                        {j.du.Dot(j.dv) + D.Dot(j.duv), j.dv.Dot(j.dv) + D.Dot(j.dvv)}};
+      double g[4] = {-j.du.Dot(D), -j.dv.Dot(D)};
+      const double s0 = j.du.Dot(j.du), s1 = j.dv.Dot(j.dv);
+      M[0][0] += lambda * std::max(s0, 1e-12);
+      M[1][1] += lambda * std::max(s1, 1e-12);
+      if (!solve(2, M, g)) {
+        lambda *= 8;
+        continue;
+      }
+      double un = u + g[0], vn = v + g[1];
+      box.clamp(un, vn);
+      Jet k;
+      k.at(S, un, vn);
+      const double fn = 0.5 * k.p.SquareDistance(target);
+      if (fn <= f) {
+        const double moved = k.p.Distance(j.p);
+        u = un, v = vn, j = k, f = fn;
+        lambda = std::max(lambda * 0.25, 1e-12);
+        if (moved < 1e-10) {
+          at = j.p;
+          return true;
+        }
+      } else {
+        lambda *= 8;
+        if (lambda > 1e12) {
+          break;
+        }
+      }
+    }
+    at = j.p;
+    // Stalled: settled when nothing downhill is left.
+    const gp_Vec D(target, j.p);
+    return std::abs(j.du.Dot(D)) <= 1e-9 * (1.0 + j.du.Magnitude()) &&
+           std::abs(j.dv.Dot(D)) <= 1e-9 * (1.0 + j.dv.Magnitude());
+  }
+
+  static bool pair(const BRepAdaptor_Surface &A, const UVBox &boxA, const BRepAdaptor_Surface &B,
+                   const UVBox &boxB, double x[4], gp_Pnt &pa, gp_Pnt &pb) {
+    Jet a, b;
+    a.at(A, x[0], x[1]);
+    b.at(B, x[2], x[3]);
+    double f = 0.5 * a.p.SquareDistance(b.p);
+    double lambda = 1e-3;
+    for (int it = 0; it < 120; ++it) {
+      const gp_Vec D(b.p, a.p);
+      const gp_Vec J[4] = {a.du, a.dv, -b.du, -b.dv};
+      double M[4][4];
+      double g[4];
+      for (int r = 0; r < 4; ++r) {
+        g[r] = -J[r].Dot(D);
+        for (int c = 0; c < 4; ++c) {
+          M[r][c] = J[r].Dot(J[c]);
+        }
+      }
+      M[0][0] += D.Dot(a.duu);
+      M[0][1] += D.Dot(a.duv);
+      M[1][0] += D.Dot(a.duv);
+      M[1][1] += D.Dot(a.dvv);
+      M[2][2] -= D.Dot(b.duu);
+      M[2][3] -= D.Dot(b.duv);
+      M[3][2] -= D.Dot(b.duv);
+      M[3][3] -= D.Dot(b.dvv);
+      for (int r = 0; r < 4; ++r) {
+        M[r][r] += lambda * std::max(J[r].Dot(J[r]), 1e-12);
+      }
+      if (!solve(4, M, g)) {
+        lambda *= 8;
+        if (lambda > 1e12) {
+          break;
+        }
+        continue;
+      }
+      double y[4] = {x[0] + g[0], x[1] + g[1], x[2] + g[2], x[3] + g[3]};
+      boxA.clamp(y[0], y[1]);
+      boxB.clamp(y[2], y[3]);
+      Jet an, bn;
+      an.at(A, y[0], y[1]);
+      bn.at(B, y[2], y[3]);
+      const double fn = 0.5 * an.p.SquareDistance(bn.p);
+      if (fn <= f) {
+        const double moved = std::max(an.p.Distance(a.p), bn.p.Distance(b.p));
+        std::copy(y, y + 4, x);
+        a = an, b = bn, f = fn;
+        lambda = std::max(lambda * 0.25, 1e-12);
+        if (moved < 1e-10) {
+          break;
+        }
+      } else {
+        lambda *= 8;
+        if (lambda > 1e12) {
+          break;
+        }
+      }
+    }
+    pa = a.p, pb = b.p;
+    const gp_Vec D(b.p, a.p);
+    const double scale = 1e-7 * (1.0 + D.Magnitude());
+    // Settled where the distance is stationary along every direction the
+    // boxes leave free: a component pressing against a box side is held.
+    auto still = [&](const gp_Vec &d, double value, const UVBox &box, int k, double sign) {
+      const double g = sign * d.Dot(D);
+      if (std::abs(g) <= scale * (1.0 + d.Magnitude())) {
+        return true;
+      }
+      // Descending would move the parameter past the side it rests on.
+      return box.bounded[k] && ((value <= box.lo[k] && g > 0.0) || (value >= box.hi[k] && g < 0.0));
+    };
+    return still(a.du, x[0], boxA, 0, 1.0) && still(a.dv, x[1], boxA, 1, 1.0) && still(b.du, x[2], boxB, 0, -1.0) &&
+           still(b.dv, x[3], boxB, 1, -1.0);
+  }
+};
+
+// Seeds far enough apart to lie in different basins: the nearest hit first,
+// then any hit farther than a few triangles from every seed already taken.
+template <class Hit, class Where, class Size>
+std::vector<Hit> distinct_seeds(std::vector<Hit> hits, Where where, Size size, std::size_t cap) {
+  std::sort(hits.begin(), hits.end(), [](const Hit &a, const Hit &b) { return a.d < b.d; });
+  std::vector<Hit> seeds;
+  std::vector<std::pair<gp_XYZ, double>> taken;
+  for (const Hit &h : hits) {
+    const gp_XYZ p = where(h);
+    const double r = 3.0 * size(h);
+    bool near = false;
+    for (const auto &[q, s] : taken) {
+      if ((p - q).SquareModulus() < std::max(r, s) * std::max(r, s)) {
+        near = true;
+        break;
+      }
+    }
+    if (near) {
+      continue;
+    }
+    seeds.push_back(h);
+    taken.push_back({p, r});
+    if (seeds.size() >= cap) {
+      break;
+    }
+  }
+  return seeds;
+}
+
+} // namespace parcad_proximity
+
 // The nearest boundary point of a shape to many query points — added for
 // parcad, see PARCAD-CHANGES.md. `BRepExtrema_DistShapeShape` rebuilds every
 // face's projector and bounding box per call; this builds them once, as
@@ -511,8 +1187,17 @@ class NearestBoundary {
     Extrema_ExtPS extrema;
     double tolerance = 0.0;
     bool geometric = false;
+    // A plane, cylinder, cone, sphere or torus: `extrema` answers those in
+    // closed form, and every other surface from a sample grid it rebuilds
+    // per point, which the triangulation replaces.
+    bool analytic = false;
     Box box;
     std::vector<int> edges;
+    parcad_proximity::TriangleMesh mesh;
+    // Built on first use: the wires as polygons in the face's parameters,
+    // with the exact classifier behind them for a point within tolerance.
+    std::unique_ptr<BRepTopAdaptor_FClass2d> classifier;
+    parcad_proximity::UVBox uv_box;
   };
   struct EdgeEntry {
     BRepAdaptor_Curve curve; // Extrema_ExtPC keeps a pointer to this
@@ -525,11 +1210,147 @@ class NearestBoundary {
   std::vector<std::unique_ptr<FaceEntry>> faces;
   std::vector<std::unique_ptr<EdgeEntry>> edges;
   int query = 0;
+  TopoDS_Shape shape;
+  IndexedMapOfShape face_map;
+  IndexedMapOfShape edge_map;
+
+  // One face's side of an edge: the surface's outward normal there and the
+  // direction into the face, square to the edge.
+  struct Side {
+    TopoDS_Edge edge; // as the face's wire holds it
+    opencascade::handle<Geom2d_Curve> pcurve;
+    double sign = 1.0; // flips `into` when the classifier disagrees with the orientation rule
+  };
+
+  bool side_at(int face, const Side &side, double t, const gp_Vec &tangent, gp_Vec &normal, gp_Vec &into,
+               gp_Pnt2d &uv) {
+    FaceEntry &f = *faces[face];
+    uv = side.pcurve->Value(t);
+    gp_Pnt at;
+    gp_Vec du, dv;
+    f.surface.D1(uv.X(), uv.Y(), at, du, dv);
+    normal = du.Crossed(dv);
+    if (normal.SquareMagnitude() < 1e-24) {
+      return false;
+    }
+    normal.Normalize();
+    if (f.face.Orientation() == TopAbs_REVERSED) {
+      normal.Reverse();
+    }
+    // The face lies to the left of its oriented boundary, seen from outside.
+    gp_Vec along = side.edge.Orientation() == TopAbs_REVERSED ? tangent.Reversed() : tangent;
+    into = normal.Crossed(along) * side.sign;
+    if (into.SquareMagnitude() < 1e-24) {
+      return false;
+    }
+    into.Normalize();
+    return true;
+  }
+
+  // Whether a step along `into` from `uv` stays in the face; the one check
+  // that the orientation rule in `side_at` holds for this face and edge.
+  bool steps_inside(int face, const gp_Pnt2d &uv, const gp_Vec &into, double step) {
+    FaceEntry &f = *faces[face];
+    gp_Pnt at;
+    gp_Vec du, dv;
+    f.surface.D1(uv.X(), uv.Y(), at, du, dv);
+    const double a11 = du.Dot(du), a12 = du.Dot(dv), a22 = dv.Dot(dv);
+    const double det = a11 * a22 - a12 * a12;
+    if (std::abs(det) < 1e-30) {
+      return true;
+    }
+    const double b1 = du.Dot(into), b2 = dv.Dot(into);
+    const double a = (a22 * b1 - a12 * b2) / det;
+    const double b = (a11 * b2 - a12 * b1) / det;
+    return state(f, uv.X() + a * step, uv.Y() + b * step) != TopAbs_OUT;
+  }
+
+  // The face's own triangulation, if the shape has been meshed, and how far
+  // the surface strays from it: measured at every triangle's middle, where a
+  // chord is farthest from a gently curved surface, and doubled.
+  static void load_mesh(FaceEntry &f) {
+    TopLoc_Location location;
+    const opencascade::handle<Poly_Triangulation> &tri = BRep_Tool::Triangulation(f.face, location);
+    if (tri.IsNull() || !tri->HasUVNodes() || tri->NbTriangles() == 0) {
+      return;
+    }
+    auto &m = f.mesh;
+    const gp_Trsf &trsf = location.Transformation();
+    m.nodes.resize(tri->NbNodes());
+    m.uvs.resize(tri->NbNodes());
+    for (int i = 1; i <= tri->NbNodes(); ++i) {
+      m.nodes[i - 1] = tri->Node(i).Transformed(trsf).XYZ();
+      m.uvs[i - 1] = tri->UVNode(i);
+    }
+    m.triangles.resize(tri->NbTriangles());
+    double worst = 0.0;
+    for (int t = 1; t <= tri->NbTriangles(); ++t) {
+      int a, b, c;
+      tri->Triangle(t).Get(a, b, c);
+      m.triangles[t - 1] = {a - 1, b - 1, c - 1};
+      if (f.surface.GetType() != GeomAbs_Plane) {
+        const gp_Pnt2d uv = m.uv_at(t - 1, 1.0 / 3.0, 1.0 / 3.0);
+        worst = std::max(worst, f.surface.Value(uv.X(), uv.Y()).XYZ().Subtracted(m.point_at(t - 1, 1.0 / 3.0, 1.0 / 3.0)).Modulus());
+      }
+    }
+    double edge_tolerance = 0.0;
+    for (TopExp_Explorer it(f.face, TopAbs_EDGE); it.More(); it.Next()) {
+      edge_tolerance = std::max(edge_tolerance, BRep_Tool::Tolerance(TopoDS::Edge(it.Current())));
+    }
+    m.slack = 2.0 * std::max(worst, tri->Deflection()) + std::max(f.tolerance, edge_tolerance);
+    m.build();
+  }
+
+  static TopAbs_State state(FaceEntry &f, double u, double v) {
+    if (!f.classifier) {
+      f.classifier = std::make_unique<BRepTopAdaptor_FClass2d>(f.face, f.tolerance);
+    }
+    return f.classifier->Perform(gp_Pnt2d(u, v));
+  }
+
+  static bool inside(FaceEntry &f, double u, double v) {
+    const TopAbs_State s = state(f, u, v);
+    return s == TopAbs_IN || s == TopAbs_ON;
+  }
+
+  // Points of face `f`'s surface that may be its nearest to `p` and nearer
+  // than `bound`, whether inside the face or not: every extremum for a
+  // surface OCCT solves in closed form, otherwise a Newton step from each
+  // triangle that could hold the nearest point. `mesh_distance` is p's
+  // distance to the triangles, already known.
+  template <class Accept>
+  void surface_points(FaceEntry &f, const gp_Pnt &p, double bound, double mesh_distance, Accept accept) {
+    if (f.analytic || f.mesh.empty()) {
+      f.extrema.Perform(p);
+      if (f.extrema.IsDone()) {
+        for (int k = 1; k <= f.extrema.NbExt(); ++k) {
+          double u, v;
+          f.extrema.Point(k).Parameter(u, v);
+          accept(u, v, f.extrema.Point(k).Value(), f.extrema.SquareDistance(k));
+        }
+      }
+      return;
+    }
+    // Any surface point nearer than `bound` has a triangle within `slack` of
+    // it, and so within `mesh_distance + 2 slack` of p.
+    const double reach = std::min(bound + f.mesh.slack, mesh_distance + 2.0 * f.mesh.slack);
+    std::vector<parcad_proximity::TriangleMesh::Hit> hits;
+    f.mesh.within(p.XYZ(), reach, hits);
+    const auto seeds = parcad_proximity::distinct_seeds(
+        std::move(hits), [&](const auto &h) { return f.mesh.point_at(h.t, h.v, h.w); },
+        [&](const auto &h) { return f.mesh.longest_side(h.t); }, 8);
+    for (const auto &h : seeds) {
+      const gp_Pnt2d uv = f.mesh.uv_at(h.t, h.v, h.w);
+      double u = uv.X(), v = uv.Y();
+      gp_Pnt at;
+      if (parcad_proximity::Nearest::point(f.surface, f.uv_box, p, u, v, at)) {
+        accept(u, v, at, at.SquareDistance(p));
+      }
+    }
+  }
 
 public:
-  explicit NearestBoundary(const TopoDS_Shape &shape) {
-    IndexedMapOfShape face_map;
-    IndexedMapOfShape edge_map;
+  explicit NearestBoundary(const TopoDS_Shape &shape) : shape(shape) {
     TopExp::MapShapes(shape, TopAbs_FACE, face_map);
     TopExp::MapShapes(shape, TopAbs_EDGE, edge_map);
     for (int i = 1; i <= edge_map.Extent(); ++i) {
@@ -567,6 +1388,11 @@ public:
         entry->extrema.SetAlgo(Extrema_ExtAlgo_Grad);
         entry->extrema.Initialize(entry->surface, u0, u1, v0, v1, tol_u, tol_v);
         entry->geometric = true;
+        entry->uv_box = parcad_proximity::UVBox::of(entry->face, entry->surface);
+        const GeomAbs_SurfaceType type = entry->surface.GetType();
+        entry->analytic = type == GeomAbs_Plane || type == GeomAbs_Cylinder || type == GeomAbs_Cone ||
+                          type == GeomAbs_Sphere || type == GeomAbs_Torus;
+        load_mesh(*entry);
       }
       for (TopExp_Explorer it(entry->face, TopAbs_EDGE); it.More(); it.Next()) {
         const int index = edge_map.FindIndex(it.Current());
@@ -593,31 +1419,31 @@ public:
       }
     }
     std::sort(order.begin(), order.end());
-    BRepClass_FaceClassifier classifier;
-    for (const auto &[box_sq, i] : order) {
+    for (const auto &entry : order) {
+      const double box_sq = entry.first;
+      const int i = entry.second;
       if (box_sq >= best_sq) {
         break;
       }
       FaceEntry &f = *faces[i];
-      if (f.geometric) {
-        f.extrema.Perform(p);
-        if (f.extrema.IsDone()) {
-          for (int k = 1; k <= f.extrema.NbExt(); ++k) {
-            const double d = f.extrema.SquareDistance(k);
-            if (d >= best_sq) {
-              continue;
-            }
-            double u, v;
-            f.extrema.Point(k).Parameter(u, v);
-            classifier.Perform(f.face, gp_Pnt2d(u, v), f.tolerance);
-            if (classifier.State() == TopAbs_IN || classifier.State() == TopAbs_ON) {
-              best_sq = d;
-              at = f.extrema.Point(k).Value();
-              face_index = i;
-              found = true;
-            }
-          }
+      double mesh_distance = 0.0;
+      if (!f.mesh.empty()) {
+        // Nothing of the face, its boundary included, is nearer than this.
+        const double best = std::sqrt(best_sq);
+        mesh_distance = f.mesh.distance(p.XYZ(), best + f.mesh.slack);
+        if (mesh_distance - f.mesh.slack >= best) {
+          continue;
         }
+      }
+      if (f.geometric) {
+        surface_points(f, p, std::sqrt(best_sq), mesh_distance, [&](double u, double v, const gp_Pnt &q, double d) {
+          if (d < best_sq && inside(f, u, v)) {
+            best_sq = d;
+            at = q;
+            face_index = i;
+            found = true;
+          }
+        });
       }
       for (int e : f.edges) {
         EdgeEntry &edge = *edges[e];
@@ -659,20 +1485,17 @@ public:
       return false;
     }
     FaceEntry &f = *faces[index];
-    f.extrema.Perform(p);
-    if (!f.extrema.IsDone() || f.extrema.NbExt() < 1) {
+    const double mesh_distance = f.mesh.empty() ? 0.0 : f.mesh.distance(p.XYZ(), 1e300);
+    double best_sq = 1e300, u = 0.0, v = 0.0;
+    surface_points(f, p, 1e150, mesh_distance, [&](double pu, double pv, const gp_Pnt &, double d) {
+      if (d < best_sq) {
+        best_sq = d, u = pu, v = pv;
+      }
+    });
+    if (best_sq >= 1e300) {
       return false;
     }
-    int best = 1;
-    for (int k = 2; k <= f.extrema.NbExt(); ++k) {
-      if (f.extrema.SquareDistance(k) < f.extrema.SquareDistance(best)) {
-        best = k;
-      }
-    }
-    double u, v;
-    f.extrema.Point(best).Parameter(u, v);
-    BRepClass_FaceClassifier classifier(f.face, gp_Pnt2d(u, v), f.tolerance);
-    if (classifier.State() == TopAbs_OUT) {
+    if (state(f, u, v) == TopAbs_OUT) {
       return false;
     }
     gp_Vec du, dv;
@@ -682,6 +1505,291 @@ public:
       normal.Reverse();
     }
     return true;
+  }
+
+  // The point of face `index` at surface parameters (u, v) and its outward
+  // normal, unnormalised; with `inside`, false for a point outside the face.
+  bool evaluate(int index, double u, double v, bool inside, gp_Pnt &at, gp_Vec &normal) {
+    if (index < 0 || index >= (int)faces.size() || !faces[index]->geometric) {
+      return false;
+    }
+    FaceEntry &f = *faces[index];
+    if (inside && state(f, u, v) == TopAbs_OUT) {
+      return false;
+    }
+    gp_Vec du, dv;
+    f.surface.D1(u, v, at, du, dv);
+    normal = du.Crossed(dv);
+    if (f.face.Orientation() == TopAbs_REVERSED) {
+      normal.Reverse();
+    }
+    return true;
+  }
+
+  // Every edge between two different faces, sampled along its length: the
+  // angle the material encloses between the faces there, in degrees — 0 a
+  // knife, 90 a box's edge, 180 smooth, over 180 concave. Appends eleven
+  // numbers per sample: edge, the two faces, the point, the angle, the number
+  // of faces whose orientation the classifier corrected (for tests), and the
+  // direction into the material halfway between the faces.
+  void edge_wedges(double spacing, rust::Vec<double> &out) {
+    IndexedDataMapOfShapeListOfShape edge_faces;
+    TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces);
+    for (int e = 0; e < (int)edges.size(); ++e) {
+      if (!edges[e]->geometric) {
+        continue;
+      }
+      const TopoDS_Shape &edge_shape = edge_map(e + 1);
+      const int around = edge_faces.FindIndex(edge_shape);
+      if (around == 0) {
+        continue;
+      }
+      std::vector<int> owners;
+      for (const TopoDS_Shape &face : edge_faces(around)) {
+        const int index = face_map.FindIndex(face) - 1;
+        if (index >= 0 && std::find(owners.begin(), owners.end(), index) == owners.end()) {
+          owners.push_back(index);
+        }
+      }
+      if (owners.size() != 2) {
+        continue;
+      }
+      Side sides[2];
+      bool usable = true;
+      for (int k = 0; k < 2 && usable; ++k) {
+        int uses = 0;
+        for (TopExp_Explorer it(faces[owners[k]]->face, TopAbs_EDGE); it.More(); it.Next()) {
+          if (it.Current().IsSame(edge_shape)) {
+            sides[k].edge = TopoDS::Edge(it.Current());
+            ++uses;
+          }
+        }
+        double f0, l0;
+        if (uses == 1) {
+          sides[k].pcurve = BRep_Tool::CurveOnSurface(sides[k].edge, faces[owners[k]]->face, f0, l0);
+        }
+        usable = uses == 1 && !sides[k].pcurve.IsNull() && faces[owners[k]]->geometric;
+      }
+      // A pcurve is only a parametrisation of the edge's own curve when the
+      // two share parameters; booleans keep that, and an edge without it is
+      // left to the sampled sweep.
+      if (!usable || !BRep_Tool::SameParameter(TopoDS::Edge(edge_shape))) {
+        continue;
+      }
+      BRepAdaptor_Curve &curve = edges[e]->curve;
+      const double first = curve.FirstParameter(), last = curve.LastParameter();
+      double length = 0.0;
+      try {
+        length = GCPnts_AbscissaPoint::Length(curve, first, last, 1e-6);
+      } catch (...) {
+        length = edges[e]->ends[0].Distance(edges[e]->ends[1]);
+      }
+      const int n = std::clamp((int)std::ceil(length / spacing), 8, 512);
+      int corrected = 0;
+      {
+        const double t = 0.5 * (first + last);
+        gp_Pnt p;
+        gp_Vec tangent;
+        curve.D1(t, p, tangent);
+        if (tangent.SquareMagnitude() > 1e-24) {
+          tangent.Normalize();
+          for (int k = 0; k < 2; ++k) {
+            gp_Vec normal, into;
+            gp_Pnt2d uv;
+            if (side_at(owners[k], sides[k], t, tangent, normal, into, uv) &&
+                !steps_inside(owners[k], uv, into, std::max(1e-4, 1e-3 * length))) {
+              sides[k].sign = -1.0;
+              ++corrected;
+            }
+          }
+        }
+      }
+      for (int i = 0; i <= n; ++i) {
+        const double t = first + (last - first) * i / n;
+        gp_Pnt p;
+        gp_Vec tangent;
+        curve.D1(t, p, tangent);
+        if (tangent.SquareMagnitude() < 1e-24) {
+          continue;
+        }
+        tangent.Normalize();
+        gp_Vec normal[2], into[2];
+        gp_Pnt2d uv;
+        if (!side_at(owners[0], sides[0], t, tangent, normal[0], into[0], uv) ||
+            !side_at(owners[1], sides[1], t, tangent, normal[1], into[1], uv)) {
+          continue;
+        }
+        const double between = std::atan2(into[0].Crossed(into[1]).Magnitude(), into[0].Dot(into[1])) * 180.0 / M_PI;
+        const double facing = into[0].Dot(normal[1]);
+        const bool convex = facing < -1e-9 || (facing <= 1e-9 && between < 90.0);
+        const double angle = convex ? between : 360.0 - between;
+        gp_Vec bisector = into[0] + into[1];
+        if (bisector.SquareMagnitude() > 1e-24) {
+          bisector.Normalize();
+        }
+        const double row[11] = {(double)e, (double)owners[0], (double)owners[1], p.X(),        p.Y(),        p.Z(),
+                                angle,     (double)corrected, bisector.X(),       bisector.Y(), bisector.Z()};
+        for (double value : row) {
+          out.push_back(value);
+        }
+      }
+    }
+  }
+
+  // Surface parameters of the point of face `f` nearest `p`, inside the face
+  // or not.
+  bool nearest_uv(FaceEntry &f, const gp_Pnt &p, double &u, double &v) {
+    const double mesh_distance = f.mesh.empty() ? 0.0 : f.mesh.distance(p.XYZ(), 1e300);
+    double best_sq = 1e300;
+    surface_points(f, p, 1e150, mesh_distance, [&](double pu, double pv, const gp_Pnt &, double d) {
+      if (d < best_sq) {
+        best_sq = d, u = pu, v = pv;
+      }
+    });
+    return best_sq < 1e300;
+  }
+
+  // The least distance between faces `a` and `b` nearest the points given,
+  // settled by Newton from the surface points nearest them: the other end of
+  // a line or a patch of equal distances from where a first search stopped.
+  // Negative when it does not settle; `inside` when both ends are in their
+  // faces.
+  double settle_pair(int a, int b, const gp_Pnt &ga, const gp_Pnt &gb, gp_Pnt &pa, gp_Pnt &pb, bool &inside) {
+    if (a < 0 || b < 0 || a >= (int)faces.size() || b >= (int)faces.size() || !faces[a]->geometric ||
+        !faces[b]->geometric) {
+      return -1.0;
+    }
+    FaceEntry &A = *faces[a];
+    FaceEntry &B = *faces[b];
+    double x[4];
+    if (!nearest_uv(A, ga, x[0], x[1]) || !nearest_uv(B, gb, x[2], x[3]) ||
+        !parcad_proximity::Nearest::pair(A.surface, A.uv_box, B.surface, B.uv_box, x, pa, pb)) {
+      return -1.0;
+    }
+    inside = this->inside(A, x[0], x[1]) && this->inside(B, x[2], x[3]);
+    return pa.Distance(pb);
+  }
+
+  // Pairs of faces that share no edge and come nearer each other than
+  // `reach`, each with the points where its least distance is attained. Ten
+  // numbers a pair: the two faces, the distance, the point on each, and
+  // whether both points are inside their faces — a least distance inside
+  // both is a double normal, and one on a boundary is only near the wall.
+  // Faces without a triangulation are not considered.
+  void close_pairs(double reach, rust::Vec<double> &out) {
+    std::vector<std::vector<int>> faces_of_edge(edges.size());
+    for (int f = 0; f < (int)faces.size(); ++f) {
+      for (int e : faces[f]->edges) {
+        faces_of_edge[e].push_back(f);
+      }
+    }
+    std::set<std::pair<int, int>> adjacent;
+    for (const auto &around : faces_of_edge) {
+      for (int a : around) {
+        for (int b : around) {
+          adjacent.insert({a, b});
+        }
+      }
+    }
+    // Faces that meet only at a vertex are as near each other there as the
+    // vertex's own angle makes them, as beside an edge; that neighbourhood is
+    // the feather search's and the sweep's.
+    IndexedDataMapOfShapeListOfShape vertex_faces;
+    TopExp::MapShapesAndAncestors(shape, TopAbs_VERTEX, TopAbs_FACE, vertex_faces);
+    std::map<std::pair<int, int>, std::vector<gp_XYZ>> shared_vertices;
+    for (int k = 1; k <= vertex_faces.Extent(); ++k) {
+      std::vector<int> around;
+      for (const TopoDS_Shape &face : vertex_faces(k)) {
+        const int index = face_map.FindIndex(face) - 1;
+        if (index >= 0 && std::find(around.begin(), around.end(), index) == around.end()) {
+          around.push_back(index);
+        }
+      }
+      const gp_XYZ at = BRep_Tool::Pnt(TopoDS::Vertex(vertex_faces.FindKey(k))).XYZ();
+      for (int a : around) {
+        for (int b : around) {
+          if (a < b && !adjacent.count({a, b})) {
+            shared_vertices[{a, b}].push_back(at);
+          }
+        }
+      }
+    }
+    for (int i = 0; i < (int)faces.size(); ++i) {
+      FaceEntry &A = *faces[i];
+      if (A.mesh.empty() || !A.geometric) {
+        continue;
+      }
+      for (int j = i + 1; j < (int)faces.size(); ++j) {
+        FaceEntry &B = *faces[j];
+        if (B.mesh.empty() || !B.geometric || adjacent.count({i, j})) {
+          continue;
+        }
+        const double slack = A.mesh.slack + B.mesh.slack;
+        const double far = reach + slack;
+        const Box &x = A.box, &y = B.box;
+        double gap = 0.0;
+        for (int k = 0; k < 3; ++k) {
+          const double d = std::max({0.0, y.lo[k] - x.hi[k], x.lo[k] - y.hi[k]});
+          gap += d * d;
+        }
+        if (gap >= far * far) {
+          continue;
+        }
+        std::vector<parcad_proximity::PairHit> hits;
+        double least = far;
+        const auto shared = shared_vertices.find({i, j});
+        const double apart = 2.0 * far;
+        parcad_proximity::close_triangles(A.mesh, B.mesh, far, 2.0 * slack, far, hits, least, [&](const gp_XYZ &p) {
+          if (shared == shared_vertices.end()) {
+            return false;
+          }
+          for (const gp_XYZ &v : shared->second) {
+            if ((p - v).SquareModulus() < apart * apart) {
+              return true;
+            }
+          }
+          return false;
+        });
+        if (hits.empty() || least - slack >= reach) {
+          continue;
+        }
+        const auto seeds = parcad_proximity::distinct_seeds(
+            std::move(hits), [&](const auto &h) { return A.mesh.point_at(h.ta, h.at.va, h.at.wa); },
+            [&](const auto &h) { return std::max(A.mesh.longest_side(h.ta), B.mesh.longest_side(h.tb)); }, 8);
+        double best = 1e300;
+        gp_Pnt best_a, best_b;
+        bool interior = false;
+        for (const auto &h : seeds) {
+          const gp_Pnt2d ua = A.mesh.uv_at(h.ta, h.at.va, h.at.wa);
+          const gp_Pnt2d ub = B.mesh.uv_at(h.tb, h.at.vb, h.at.wb);
+          double x4[4] = {ua.X(), ua.Y(), ub.X(), ub.Y()};
+          gp_Pnt pa, pb;
+          if (!parcad_proximity::Nearest::pair(A.surface, A.uv_box, B.surface, B.uv_box, x4, pa, pb)) {
+            continue;
+          }
+          const double d = pa.Distance(pb);
+          if (d < best && inside(A, x4[0], x4[1]) && inside(B, x4[2], x4[3])) {
+            best = d, best_a = pa, best_b = pb, interior = true;
+          }
+        }
+        if (!interior) {
+          // The least distance is on a boundary: report the nearest
+          // triangles' points, on the surfaces, for the caller to search near.
+          const auto &h = seeds.front();
+          const gp_Pnt2d ua = A.mesh.uv_at(h.ta, h.at.va, h.at.wa);
+          const gp_Pnt2d ub = B.mesh.uv_at(h.tb, h.at.vb, h.at.wb);
+          best_a = A.surface.Value(ua.X(), ua.Y());
+          best_b = B.surface.Value(ub.X(), ub.Y());
+          best = h.d;
+        } else if (best >= reach) {
+          continue;
+        }
+        for (double value : {(double)i, (double)j, best, best_a.X(), best_a.Y(), best_a.Z(), best_b.X(),
+                             best_b.Y(), best_b.Z(), interior ? 1.0 : 0.0}) {
+          out.push_back(value);
+        }
+      }
+    }
   }
 };
 
@@ -700,6 +1808,24 @@ inline double NearestBoundary_nearest(NearestBoundary &nearest, double x, double
 inline bool NearestBoundary_project(NearestBoundary &nearest, int32_t face, double x, double y, double z,
                                     gp_Pnt &at, gp_Vec &normal) {
   return nearest.project(face, gp_Pnt(x, y, z), at, normal);
+}
+
+inline bool NearestBoundary_evaluate(NearestBoundary &nearest, int32_t face, double u, double v, bool inside,
+                                     gp_Pnt &at, gp_Vec &normal) {
+  return nearest.evaluate(face, u, v, inside, at, normal);
+}
+
+inline void NearestBoundary_edge_wedges(NearestBoundary &nearest, double spacing, rust::Vec<double> &out) {
+  nearest.edge_wedges(spacing, out);
+}
+
+inline double NearestBoundary_settle_pair(NearestBoundary &nearest, int32_t a, int32_t b, const gp_Pnt &ga,
+                                          const gp_Pnt &gb, gp_Pnt &pa, gp_Pnt &pb, bool &inside) {
+  return nearest.settle_pair(a, b, ga, gb, pa, pb, inside);
+}
+
+inline void NearestBoundary_close_pairs(NearestBoundary &nearest, double reach, rust::Vec<double> &out) {
+  nearest.close_pairs(reach, out);
 }
 
 // BRepFeat

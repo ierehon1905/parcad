@@ -179,7 +179,7 @@ pub fn perceive(doc: &Doc, expect: &crate::case::PerceptionExpect) -> std::resul
             .collect(),
         thickness: expect.thickness.as_ref().map(|t| parcad_occt::ThicknessSpec {
             max_samples: t.max_samples.unwrap_or(6000),
-            threshold_mm: None,
+            threshold_mm: t.threshold_mm,
         }),
     };
     parcad_occt::perceive(doc, &spec, &parcad_occt::Options::default()).map_err(|e| e.to_string())

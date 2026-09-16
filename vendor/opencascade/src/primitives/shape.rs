@@ -9,7 +9,7 @@ use crate::{
     Error,
 };
 use cxx::UniquePtr;
-use glam::{dvec3, DVec3};
+use glam::{dvec3, DVec2, DVec3};
 use opencascade_sys::ffi;
 use std::path::Path;
 
@@ -1057,6 +1057,120 @@ impl NearestBoundary {
         let len = n.length();
         (ok && len.is_finite() && len > 1e-12).then(|| (dvec3(at.X(), at.Y(), at.Z()), n / len))
     }
+
+    /// The point of face `face` at surface parameters `uv` — the raw ones
+    /// [`crate::mesh::Mesh::face_uvs`] holds — and the outward unit normal
+    /// there. `None` where the surface has no normal, or, with `inside`, where
+    /// the point is outside the face.
+    pub fn evaluate(&mut self, face: usize, uv: DVec2, inside: bool) -> Option<(DVec3, DVec3)> {
+        let mut at = make_point(DVec3::ZERO);
+        let mut normal = ffi::new_vec(0.0, 0.0, 0.0);
+        let ok = ffi::NearestBoundary_evaluate(
+            self.inner.pin_mut(),
+            face as i32,
+            uv.x,
+            uv.y,
+            inside,
+            at.pin_mut(),
+            normal.pin_mut(),
+        );
+        let n = dvec3(normal.X(), normal.Y(), normal.Z());
+        let len = n.length();
+        (ok && len.is_finite() && len > 1e-12).then(|| (dvec3(at.X(), at.Y(), at.Z()), n / len))
+    }
+
+    /// Every edge between two different faces, sampled at most `spacing`
+    /// apart and at least eight times: the angle the material encloses
+    /// between the two faces at each sample.
+    pub fn edge_wedges(&mut self, spacing: f64) -> Vec<EdgeWedge> {
+        let mut out = Vec::new();
+        ffi::NearestBoundary_edge_wedges(self.inner.pin_mut(), spacing, &mut out);
+        out.chunks_exact(11)
+            .map(|r| EdgeWedge {
+                edge: r[0] as usize,
+                faces: (r[1] as usize, r[2] as usize),
+                point: dvec3(r[3], r[4], r[5]),
+                angle_deg: r[6],
+                corrected: r[7] as usize,
+                into: dvec3(r[8], r[9], r[10]),
+            })
+            .collect()
+    }
+
+    /// The least distance between faces `a` and `b` nearest `near`, one point
+    /// on each, settled on the surfaces: where a line or a patch of equal
+    /// distances continues from a point [`Self::close_pairs`] gave. The two
+    /// points and whether both are inside their faces.
+    pub fn settle_pair(&mut self, a: usize, b: usize, near: (DVec3, DVec3)) -> Option<ClosePair> {
+        let mut pa = make_point(DVec3::ZERO);
+        let mut pb = make_point(DVec3::ZERO);
+        let mut inside = false;
+        let d = ffi::NearestBoundary_settle_pair(
+            self.inner.pin_mut(),
+            a as i32,
+            b as i32,
+            &make_point(near.0),
+            &make_point(near.1),
+            pa.pin_mut(),
+            pb.pin_mut(),
+            &mut inside,
+        );
+        (d >= 0.0).then(|| ClosePair {
+            faces: (a, b),
+            distance: d,
+            points: (dvec3(pa.X(), pa.Y(), pa.Z()), dvec3(pb.X(), pb.Y(), pb.Z())),
+            inside,
+        })
+    }
+
+    /// Pairs of faces sharing no edge that come nearer each other than
+    /// `reach`, found on the shape's triangulation and settled on the
+    /// surfaces. Needs the shape meshed first; faces without triangles are
+    /// left out.
+    pub fn close_pairs(&mut self, reach: f64) -> Vec<ClosePair> {
+        let mut out = Vec::new();
+        ffi::NearestBoundary_close_pairs(self.inner.pin_mut(), reach, &mut out);
+        out.chunks_exact(10)
+            .map(|r| ClosePair {
+                faces: (r[0] as usize, r[1] as usize),
+                distance: r[2],
+                points: (dvec3(r[3], r[4], r[5]), dvec3(r[6], r[7], r[8])),
+                inside: r[9] != 0.0,
+            })
+            .collect()
+    }
+}
+
+/// Two faces nearer each other than a reach, and where.
+#[derive(Debug, Clone, Copy)]
+pub struct ClosePair {
+    pub faces: (usize, usize),
+    /// The least distance between the two surfaces, mm; the triangles' when
+    /// `inside` is false.
+    pub distance: f64,
+    /// Where it is attained, on the first face and on the second.
+    pub points: (DVec3, DVec3),
+    /// Whether both points are inside their faces, so that the distance is
+    /// measured square to both surfaces.
+    pub inside: bool,
+}
+
+/// One sample along an edge between two faces.
+#[derive(Debug, Clone, Copy)]
+pub struct EdgeWedge {
+    /// The edge's traversal number.
+    pub edge: usize,
+    /// The two faces' traversal numbers.
+    pub faces: (usize, usize),
+    pub point: DVec3,
+    /// The angle the material encloses between the faces: 0 a knife edge,
+    /// 90 a box's, 180 smooth, above 180 concave.
+    pub angle_deg: f64,
+    /// Faces of this edge whose side the classifier had to correct; zero
+    /// unless the orientation rule failed.
+    pub corrected: usize,
+    /// Unit direction into the material, halving the angle between the faces.
+    pub into: DVec3,
 }
 
 /// A fillet or chamfer that built, with its history still alive. Added for

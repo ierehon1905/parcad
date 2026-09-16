@@ -264,6 +264,7 @@ Faces are numbered as `TopExp::MapShapes` numbers them, the order
   each face's `BRepTools::UVBounds`, evaluated by `BRepAdaptor_Surface` and
   kept where `BRepClass_FaceClassifier` does not put them outside the face.
   All of it already included.
+
 ## Self-intersection, orientation and closed shells
 
 Added for docs/VALIDITY_CHECKS.md, all in `include/wrapper.hxx`, declared in
@@ -294,6 +295,71 @@ Added for docs/VALIDITY_CHECKS.md, all in `include/wrapper.hxx`, declared in
   treated or combined solid as a bare shell.
 - `Shape_reversed(shape)` — `TopoDS_Shape::Reversed`, to make an inside-out
   solid in a test.
+
+## Changed: the nearest-boundary query reads the face's own triangulation
+
+`NearestBoundary` asks each face's `Extrema_ExtPS` for every point, and for a
+surface OCCT has no closed form for — a B-spline, a surface of revolution or
+extrusion, an offset — `Extrema_GenExtPS::Perform` rebuilds a grid of surface
+samples per point. The classifier behind it, `BRepClass_FaceClassifier`,
+intersects a line with every pcurve of the face per point. On a screw-top
+jar's thread those two were 3 ms a ball. So, when the shape has been meshed:
+
+- Each face keeps its `Poly_Triangulation` (nodes with the location applied,
+  raw UV nodes, triangles) in a bounding-volume tree, with a `slack`: twice
+  the largest distance between a triangle's middle, evaluated on the surface
+  at the triangle's own interpolated parameters, and the chord there, plus
+  the face's and its edges' tolerances. A face whose triangles are farther
+  than the best distance so far plus that slack is skipped whole, boundary
+  included.
+- For a non-analytic surface the extremum search is replaced by damped
+  Newton (Levenberg–Marquardt, exact Hessian, `D2`) from the nearest point of
+  every triangle within `mesh distance + 2 slack` — every triangle that can
+  hold the nearest surface point — keeping seeds three triangle sizes apart.
+  Planes, cylinders, cones, spheres and tori keep `Extrema_ExtPS`, which
+  solves them in closed form. The search is held inside the face's own
+  parameter box (`BRepTools::UVBounds`), except along a direction the face
+  covers for a whole period.
+- Inside/outside is `BRepTopAdaptor_FClass2d`, built once per face on first
+  use: the wires as polygons in the face's parameters, with the exact
+  classifier behind them for a point within tolerance — what OCCT's own
+  booleans use for repeated questions on one face.
+
+A shape that has not been meshed is answered as before. New include:
+`BRepTopAdaptor_FClass2d.hxx`, `Poly_Triangulation.hxx`, both in toolkits
+`build.rs` already links.
+
+## Added: surface points, edge angles and close face pairs
+
+On `NearestBoundary`, for the wall-thickness search:
+
+- `_evaluate(face, u, v, inside)` — the surface point and outward normal at
+  parameters, optionally refusing a point outside the face.
+- `_edge_wedges(spacing, out)` — every edge with exactly two distinct faces,
+  sampled at most `spacing` apart and at least eight times, via its pcurve on
+  each face (edges that do not share parameters with their pcurves are left
+  out): eleven numbers a sample — edge, faces, point, the angle the material
+  encloses between the faces (0 a knife, 90 a box edge, 180 smooth, over 180
+  concave), how many faces' inward direction the classifier corrected, and
+  the bisector into the material. The inward direction is the outward normal
+  crossed with the edge's tangent as oriented in the face, checked once per
+  edge and face by stepping along it and classifying.
+- `_close_pairs(reach, out)` — pairs of faces that share no edge and whose
+  surfaces may come nearer than `reach`: a dual traversal of the two faces'
+  triangle trees finds triangle pairs within `reach + slack`, keeping the
+  nearest pair in each reach-sized cell within twice the slacks of the least
+  distance found and skipping a cell once it has one (a wall of even
+  thickness is all in the band); pairs near a vertex the faces share are not
+  counted. From up to eight of those, damped Newton on both surfaces at once
+  settles a double normal; the least that is inside both faces is reported,
+  or, when none is, the nearest triangles' points on the surfaces with the
+  flag clear.
+- `_settle_pair(a, b, near_a, near_b, ...)` — the same Newton from given
+  points, for walking along a line of equal distances.
+
+`_face_distance` over `BRepExtrema_DistShapeShape`, which this replaced, spent
+40–60 ms a pair in `Extrema_ExtCC`'s global optimisation between B-spline
+edges.
 
 ## Not changed
 

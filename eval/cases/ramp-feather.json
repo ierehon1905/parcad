@@ -1,0 +1,37 @@
+{
+  "name": "ramp-feather",
+  "script": "eval/scripts/ramp-feather.js",
+  "why": "A floor falling 15 degrees meets a channel's ceiling at y = 1 / tan 15 = 3.732 across the channel: material tapering to nothing, the desk stand's cable-to-slot sliver. A sweep reads whatever it sampled beside the seam (0.142 at 200 samples and 0.096 at 6000 here, 0.007 to 0.304 on the desk stand); the edge search reports the seam itself, at 0, with the planes' own 15.000 degrees, from 200 samples.",
+  "brep": {
+    "size": [
+      40.0,
+      40.0,
+      10.0
+    ],
+    "volume_mm3": 7816.709,
+    "area_mm2": 4089.614,
+    "triangles": 36,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1200.0,
+    "stands_on_patches": 2,
+    "watertight": true,
+    "faces": 12,
+    "edges": 60,
+    "curves": 30,
+    "perception": {
+      "thickness": {
+        "max_samples": 200,
+        "min_mm": 0.0,
+        "tolerance_mm": 1e-09,
+        "between": [
+          "ramp",
+          "channel"
+        ],
+        "threshold_mm": 1.2,
+        "kind": "feather",
+        "wedge_deg": 15.0
+      }
+    }
+  }
+}

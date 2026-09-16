@@ -67,7 +67,7 @@ is the failure a render hides.
 | Selector syntax check | ✅ `check_selector` | no geometry touched |
 | Depth + normal per pixel | ~ `render::GeometryBuffer` | exists, and `model_point` ties a pixel to a millimetre — not exposed |
 | Point and ray probe | ✅ `perceive.rs`, `probe_part` | §3 — exact distance at a point, every crossing along a ray with the face it went through, the wall thickness between them, on the B-rep with every treatment in it |
-| Wall thickness / minimum feature | ✅ `perceive.rs`, `measure_wall_thickness` | §5 — the largest ball that fits in the material at every sampled surface point, on the exact surfaces, both faces it touches named |
+| Wall thickness / minimum feature | ✅ `perceive.rs`, `measure_wall_thickness` | §5 — the largest ball that fits in the material at every sampled surface point, on the exact surfaces, both faces it touches named; every feather and every wall between faces that do not meet found whatever the sample count |
 | **Overhang and printability** | ❌ | §6 |
 | Section view | ✅ `render.rs`, `evaluate_part`'s `section` | §7 — a clipping plane in both renderers, the cut face capped and drawn flat, and `cut_fraction` to say whether it opened anything |
 | **Numbered marks on the render** | ❌ | §4 |
@@ -454,15 +454,32 @@ along a ray fired inward from the point.
   `Extrema_ExtPC` built once and visited nearest box first, where
   `BRepExtrema_DistShapeShape` rebuilt them per question. Measured: a median of
   3 to 7 radii per sample, 16 at most, over the corpus and a 180 mm lamp.
-- **Where it measures from.** The tessellation's nodes and a grid over every
-  triangle at a hundredth of the part's diagonal, each projected onto its own
-  face for the exact point and normal — the ball must be tangent to the
-  surface, not to a chord. A node on a convex edge fits no ball at all (the
-  neighbouring face cuts every one), so it is moved 0.55 × the threshold into
-  its face: beside a right-angled edge a ball there reads 1.1 × the threshold
-  and is not counted, and a wall thinner than the threshold still is. That
-  step is what finds a sliver a millimetre wide beside an edge, which the ray
-  used to find from the edge node itself.
+  Since the thin-detect work it also reads each face's own triangulation: a
+  face whose triangles are farther than the best so far, plus a measured slack,
+  is skipped whole; a B-spline face is answered by Newton from its nearest
+  triangles instead of `Extrema_GenExtPS`, which rebuilt a sample grid per
+  point; and inside/outside is `BRepTopAdaptor_FClass2d`, built once per face,
+  instead of a classifier that intersects every pcurve per point. A ball on a
+  screw thread went from 3 ms to a fraction of one.
+- **Where it measures from.** Every triangle's middle, points over it no more
+  than the sample spacing apart (in rows along its longest side, so a sliver
+  gets one row), then the tessellation's nodes — the first of those in each
+  cell `spacing / √3` across, per face, so every point of every face is within
+  the spacing of a sample on it (`sample_spacing_mm` in the reply). The
+  spacing is the finest, down to a hundredth of the diagonal, whose samples
+  fit `max_samples`. Each is evaluated on its face at the triangle's own
+  interpolated parameters, for the exact point and normal — the ball must be
+  tangent to the surface, not to a chord. Until the thin-detect work the
+  candidates were decimated with a stride, which left a screw thread's faces 8
+  samples each against a body cylinder's 2948, and whether a small face was
+  measured at all depended on the budget. A point on a convex edge fits no
+  ball at all (the neighbouring face cuts every one), so it is moved 0.55 × the
+  threshold into its face: beside a right-angled edge a ball there reads 1.1 ×
+  the threshold and is not counted, and a wall thinner than the threshold
+  still is. The probe that tells convex from concave can be fooled where a
+  point lies on the line of another edge (`BRepClass` misjudges a point on an
+  edge's extension), so a boundary point whose ball comes out narrower than
+  four deflections moves too.
 - **A seam under a quarter of a degree is smooth.** The lamp's ruled strips
   meet at creases of 0.08°, convex, and a node on one fits no ball in exact
   arithmetic; with a tolerance of 1e-7 of the radius the sweep reported 25
@@ -516,13 +533,13 @@ machine shared with five other builds. What the rows say:
 - **Edge readings are many more.** A ball reads thin beside *every* sharp edge
   and round, on both faces; a ray only where it happened to leave through the
   neighbour. `below_threshold_at_edges` is a count of that, not of defects.
-- **Finding a small defect is still sampling.** Over ten sample budgets from
-  4000 to 24000, on the two field-instrument parts as saved in the user's
-  folder: the 0.013 mm cable-to-slot sliver, ray 10/10 and ball 9/10; a
-  0.457 mm sliver between a screw hole and a foot recess, ray 7/10 and ball
-  10/10; a grille hole cut 0.319 mm into a screw boss, ray 3/10 and ball 2/10
-  (the ball read it at 0.155, nearer the zero it tapers to). Before the edge
-  step the ball found the first 7/10 and the last 0/10.
+- **Finding a small defect was sampling**, until the searches below. Over ten
+  sample budgets from 4000 to 24000, on the two field-instrument parts as saved
+  in the user's folder: the 0.013 mm cable-to-slot sliver, ray 10/10 and ball
+  9/10; a 0.457 mm sliver between a screw hole and a foot recess, ray 7/10 and
+  ball 10/10; a grille hole cut 0.319 mm into a screw boss, ray 3/10 and ball
+  2/10 (the ball read it at 0.155, nearer the zero it tapers to). Before the
+  edge step the ball found the first 7/10 and the last 0/10.
 
 Closed forms in `eval/cases/`: `slanted-slab` (2 between the faces, 2.3094
 straight down through them — the two definitions a cosine apart),
@@ -530,11 +547,154 @@ straight down through them — the two definitions a cosine apart),
 lamp in closed form, 1.5522 with the rims as edges), and
 `thickness-under-a-fillet` now holds 8.000.
 
-- **The minimum is a sampled minimum, exact at its own point.** The manifold's
-  outboard wall reads 5 + y²/15 from a sample y off the port's generator,
-  where a ball tangent to the plane meets the Ø10 port; the 5.000 at the
-  generator is a limit. `max_samples` (default 6000) narrows it and never
-  widens it, and the reply's `note` says so.
+- **The minimum was a sampled minimum, exact at its own point.** The
+  manifold's outboard wall read 5 + y²/15 from a sample y off the port's
+  generator, where a ball tangent to the plane meets the Ø10 port. It now reads
+  5.000: the face-pair search below settles on the generator itself.
+
+### What is certain — the edge and face-pair searches
+
+A thickness tool that misses a real sliver is wrong, and raising the sample
+count only makes a miss less likely. So the sweep is now the third of three
+searches, and the first two do not depend on it (`thickness` in
+`perceive.rs`, with `edge_wedges` and `close_pairs` in the vendored wrapper):
+
+1. **Every edge is read along its length.** At most a four-hundredth of the
+   diagonal apart and at least eight times, the angle the material encloses
+   between the edge's two faces — from each face's normal and the direction
+   into it, which is the normal crossed with the edge as oriented in that face,
+   checked once per edge by stepping along it and classifying (the pocketed-box
+   test: 24 edges, 16 at 90°, 8 at 270°, no correction needed). An edge that
+   encloses less than 60° anywhere is a **feather**, and it is reported at
+   **0 mm**, on the edge, at its sharpest, with that angle and the stretch
+   that sharp as its extent. That is how thin a feather gets: the sampled
+   0.013 on the desk stand, and 0.007 to 0.304 over budgets, were only how
+   near the seam a sample happened to land.
+2. **Every pair of faces that share no edge and come within reach is solved on
+   the surfaces.** The reach is the threshold, or the thinnest wall the sweep
+   sampled if that is thicker (so an exact `thinnest` comes with no
+   threshold too). Candidate pairs come from the two faces' triangle trees:
+   the surfaces lie within a measured slack of their triangles, so a pair whose
+   surfaces come nearer than the reach has triangles within reach plus slack,
+   and no such pair is missed. From the nearest triangles, damped Newton on
+   both surfaces settles the double normal — the two points whose segment is
+   square to both faces — kept inside each face's parameter box. When it is
+   inside both faces and each face's material is towards the other, the ball
+   is taken there; a least distance along a line (a hole beside a flat side,
+   two parallel cylinders) may settle at an end of the line where no ball fits,
+   or where a third face cuts it, so it is settled again from where the sweep
+   found this wall and from points stepped along the face, and the first ball
+   that spans the whole distance is the reading. It is the closed form: 0.4569
+   for the control box's plate, 7.000 for the bracket's hole-to-edge ligament
+   the sweep read as 7.009, 5.000 for the manifold.
+3. **The sweep**, as above, then the four thinnest sampled walls followed
+   downhill on their faces by a compass search down to a micron.
+
+So the guarantee, which the reply's `note` states: **every feather is found,
+however short, and every wall thinner than the threshold between two faces
+that do not meet is found and read where it is thinnest.** What rests on the
+samples is a wall of another shape: across a single curved face (a thin pin,
+a tube drawn as one surface), between faces that meet elsewhere, or within
+twice the reach of a vertex two faces share; those are found where they are
+wider than `sample_spacing_mm`.
+
+Two readings are not minima, and say so in the docs rather than the number:
+
+- **A least distance on a face's boundary** — a countersink cone coming near a
+  side face at its rim — is near a wall, not across one. There the first wall
+  reading stepped in from it is followed back towards the boundary by halving
+  while it stays a wall, and the thinnest kept; that reading is real, and the
+  thinnest near there is within about a percent of it. It is searched for
+  below the threshold, and without one below the thinnest sampled wall, which
+  is why the pipe tee reads 3.913 with no threshold and 4.050 at 1.2.
+- **A ball smaller than twice the mesh deflection against a face its own face
+  meets** is an `edge` reading: the point is on the edge, and a feather there
+  is reported by the edge search. A ball that small against a face that does
+  not meet is a wall — `pierced-membrane` holds a 0.004 lid as one.
+
+**Measured, 2026-09-16.** The three defects that were found only some of the
+time, on copies of the field-instrument parts as saved in the user's folder,
+through `parcad call measure_wall_thickness` at threshold 1.2, over ten
+budgets from 4000 to 24000:
+
+| defect | ball sweep alone | with the searches |
+|---|---|---|
+| desk stand: cable channel's ceiling meets the 15° slot floor | 9/10, read 0.007 to 0.304 | **10/10**, feather 0 at 15.000°, on y = −13.768 (−17.5 + 1/tan 15°) |
+| control box: M2 hole beside a Ø8 foot recess, four corners | 8/10, all four 1/10, read 0.464 to 0.707 | **10/10**, all four, 0.4569 (5.6569 − 4 − 1.2) |
+| control box: grille hole through a screw boss | 4/10, read 0.144 to 0.41 | **10/10**, feather 0 at 51.75° |
+
+And ten more with each part turned about Z and moved by seeded random amounts
+up to 360° and 3 mm, at a random budget each — a different mesh, sample grid
+and face order every time: 10/10, 10/10 with all four corners, 10/10. The
+readings did not move. `eval/cases/` holds each shape in closed form at 200
+samples: `hairline-sliver` (0.2500 between two cylinders; the sweep alone read
+1.000 at 200 and 0.265 at 6000), `ramp-feather` (0 at 15.000°),
+`pinched-boss` (0 at 51.753°), `pierced-membrane` (a 0.004 lid).
+
+**Cost.** Interleaved medians of three, HEAD's sweep against this one, the
+same test-profile build, threshold 1.2 unless it says otherwise (the call adds
+the part's build, which neither changes):
+
+| part | before | after | thinnest before → after |
+|---|---|---|---|
+| lamp shade (82 B-spline faces), no threshold | 26 912 ms | 3 682 | wall 1.2108 → 1.2007 |
+| `fitted-ring` (B-spline) | 6 100 | 247 | 2.000 → 2.000 |
+| `spur-gears` | 9 337 | 2 256 | wall **0.0002** → 2.1132 |
+| `twisted-planter` (245 faces) | 4 536 | 1 510 | 2.000 → 2.000 |
+| `plate-stand` (86 k mesh nodes) | 5 156 | 1 456 | 6.000 → 6.000 |
+| `pipe-tee` | 1 956 | 277 | 4.050 → 4.050 (3.606 with no threshold) |
+| `cast-foot` | 1 241 | 102 | 4.7578 → 4.7292 |
+| `wash-bottle` (median of 7) | 1 426 | 1 156 | 1.200 → 1.200 |
+| `screw-top-jar` | 802 | 713 | feather 0 → 0 |
+| control box | 500 | 334 | wall 0.4686 → feather 0 |
+| desk stand | 200 | 73 | feather 0.0343 → 0 |
+| `hydraulic-line` | 188 | 179 | 1.500 → 1.500 |
+| `conical-shade` | 82 | 71 | 1.5522 → 1.5522 |
+| `bracket` | 243 | 96 | 7.0088 → **7.000** |
+| `cover-plate` | 195 | 86 | 7.2924 → 6.7882 |
+| `diamond-v19` | 198 | 65 | 35.5507 → 35.5842 |
+
+Every example and thickness case, in both arms, is at least as fast: from
+1.02× (the hydraulic line, within noise) to 25× (`fitted-ring`); the lamp
+without a threshold is 7×. The wash bottle's first round of three read 1.5 s
+against 1.9 without a threshold, and seven rounds read 1.43 against 1.17 —
+most of its time is the mesher's, which neither version changes. What moved,
+and why:
+
+- **Faster because a B-spline ball got cheap.** `Extrema_GenExtPS` rebuilt a
+  grid per point and `BRepClass_FaceClassifier` intersected every pcurve per
+  point; the triangulation and `BRepTopAdaptor_FClass2d` replace both, and
+  `BRepExtrema_DistShapeShape` — 40 to 60 ms a face pair between B-spline
+  edges — is not used at all. The old decimation also hid a cost: the jar's
+  thread faces had 8 samples each, and a fair share of samples on them is
+  what first made the new sweep ten times slower before the query was fixed.
+- **Exact where the sweep was not.** The bracket's ligament is 7.000 (a Ø6
+  hole 7 from the edge); the manifold's is 5.000; `pillow-block` 4.750.
+- **Thinner where the searches found what samples missed.** The spur gears'
+  0.0002 "wall" was a sample on an edge; they read 2.113 now. `cover-plate`
+  reads 6.788 where a countersink comes near the side face (the ligament
+  below it is 7.25), and the lamp 1.2007 across a sloped strip.
+- **Slightly thicker, once:** the diamond at threshold 1.2 reads 35.584
+  against the old sweep's 35.551 — a wall between facets that meet, which
+  rests on the samples; the fairer spread landed elsewhere, and the downhill
+  polish found that basin's minimum rather than the other's. Without a
+  threshold it reads 35.488.
+- **Feathers are 0.** The enclosure, the jar and the timing pulley already
+  had feathers; they read 0 now instead of a sample's distance from the seam.
+
+**Measured on a model**, 2026-09-16: `eval/field/where-is-the-sliver.md`, Haiku
+4.5, four trials per arm, a ten-line part with a 15° feather and a real
+0.725 mm wall beside it. The first round was **0/4 SOUND**: every trial called
+the tool, read the feather at 0, and answered with the wall — "a grazing
+intersection artifact rather than intentional wall material". The reply then
+described a feather as two faces meeting at a shallow angle, which reads as an
+edge, and the prompt asked for thin material "not merely beside a sharp edge".
+With the tool description, the `kind` schema and the `note` saying a feather
+is a sliver of real material that thins to a knife edge, never an artefact,
+the same prompt scored **2/4**; with the prompt asking plainly for the
+thinnest material, **8/8** over both arms. A 0 reads as nothing unless the
+reply says what it is.
+
 
 **Measured on a model, after the ball**, 2026-09-16: Haiku 4.5, four trials
 per arm. `how-thick-is-the-shade` (new): 8/8 SOUND, every trial 1.552 mm, and

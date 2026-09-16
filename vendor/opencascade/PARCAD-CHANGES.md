@@ -437,6 +437,14 @@ made of arcs and splines.
   the serial one (docs/GOTCHAS.md, "One large B-spline face meshes far slower").
 - `Shape::face_grid(per_side)` — points on every face, over the sys crate's
   `Shape_face_grid`: what a surface-to-surface distance is sampled at.
+- `NearestBoundary::evaluate`, `edge_wedges`, `close_pairs` and
+  `settle_pair`, with `EdgeWedge` and `ClosePair`: surface points by
+  parameter, the angle between the faces along every edge, and pairs of faces
+  that come close without sharing an edge, for the wall-thickness search.
+  See `opencascade-sys/PARCAD-CHANGES.md`.
+- `Mesh::face_uvs` — each vertex's own surface parameters, as the
+  triangulation holds them; `uvs` is the same normalised per face for
+  texturing, which cannot be evaluated on the surface.
 
 ## Self-intersection, orientation, and a treatment that leaves its input alone
 

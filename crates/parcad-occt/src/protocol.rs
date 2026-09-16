@@ -70,9 +70,9 @@ pub struct RayLine {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThicknessSpec {
-    /// Cap on the surface points measured from. The candidates — every node of
-    /// the exact tessellation off the faces' boundaries, plus a grid inside
-    /// every triangle — are decimated evenly down to this.
+    /// Cap on the surface points the sweep measures from: the tessellation's
+    /// nodes and a lattice over every triangle, at the finest spacing that
+    /// fits, one per cell of that spacing on each face.
     pub max_samples: usize,
     /// Samples at or below this are counted and listed individually.
     #[serde(default)]
@@ -162,6 +162,16 @@ pub struct ThicknessResult {
     /// neighbours of the same kind, feathers and walls before edges. Without a
     /// threshold, the worst samples spread across the part.
     pub thin_spots: Vec<ThicknessSample>,
+    /// The sweep's sample spacing, mm: every point of every face is within
+    /// this of a sample on the same face, to the mesher's deflection.
+    #[serde(default)]
+    pub spacing_mm: f64,
+    /// Edges whose angle was read along their whole length, and pairs of
+    /// faces not sharing an edge whose least distance was computed exactly.
+    #[serde(default)]
+    pub edges_checked: usize,
+    #[serde(default)]
+    pub face_pairs_checked: usize,
 }
 
 /// What a thin reading is, from the two faces it lies between. Ordered by how
@@ -171,7 +181,8 @@ pub struct ThicknessResult {
 pub enum ThinKind {
     /// Two faces that meet at a shallow angle: material tapering to nothing
     /// over a band as wide as the threshold divided by the angle's tangent.
-    /// The shape of a cut that grazed another feature.
+    /// The shape of a cut that grazed another feature. The edge itself is
+    /// reported at zero, from the angle read along it.
     Feather,
     /// Two faces nearly parallel where the ball touches them, or two that do
     /// not meet: a wall, a floor, a web between holes.
@@ -221,6 +232,10 @@ pub struct ThicknessSample {
     pub samples: usize,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extent_mm: Option<[f64; 3]>,
+    /// The box a reading already covers before grouping — a feather's run
+    /// along its edge; worker-side only.
+    #[serde(skip)]
+    pub span: Option<([f64; 3], [f64; 3])>,
 }
 
 fn one() -> usize {
