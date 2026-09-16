@@ -1,6 +1,6 @@
 # Examples
 
-Twenty-seven parts, each a `.js` script that returns a shape — or, for four
+Twenty-eight parts, each a `.js` script that returns a shape — or, for four
 of them, two named shapes. Most are measured in
 `eval/cases/`, so an example that stops building fails a case rather than
 surprising someone.
@@ -45,6 +45,7 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 | `motor-mount.js` | NEMA 17 mount with gussets | a standard interface, and gussets that must be unioned unblended |
 | `pillow-block.js` | 20 mm bore pillow block | a bore-carrying boss on a base; slots whose ends are arcs, not holes |
 | `pipe-tee.js` | socket-weld tee for 1" pipe | a saddle intersection curve, blended, inside and out |
+| `pleated-shade.js` | pendant lampshade, 24 twisted pleats, 1.4 mm wall | a surface, then a solid: pleated outlines generated in the script, a loft *surface* through fitted sections of them, `thicken` into a measured wall, and a flat cut at each rim for the print bed |
 | `plate-stand.js` | vertical dinner-plate stand, 8 plates | a redesign of a printed part whose pegs broke: eighteen cone bosses blended into a base in one union, and one commit's worth of them placed on the wrong face and standing proud of the underside, which only the low end of the bounding box showed |
 | `screw-top-jar.js` | jar and cap, M40 × 3 printed thread | a modelled thread, `threadedRod` on the neck and `threadedHole` in the cap, 0.25 mm clearance each; the cap's cutter turned into phase with the neck, and `between_bodies` reading the flank gap its closed form predicts |
 | `shaft-coupler.js` | 8-to-10 mm rigid coupler | two blind bores meeting at a web; radial grub screws breaking into them |

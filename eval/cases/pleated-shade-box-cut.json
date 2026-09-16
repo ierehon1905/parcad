@@ -1,0 +1,24 @@
+{
+  "name": "pleated-shade-box-cut",
+  "script": "eval/scripts/pleated-shade-box-cut.js",
+  "why": "A 60 mm box through the seeded pleated shade's wall, the check that was refused on the first pleated shade: the solid's volume integral read 5073 mm3 against a closed mesh of 6391, and the face-coverage check that should have settled it flagged a face whose parameters span a few 1e-6, where the kernel's own parametric confusion is a share of its area. It must build as one watertight body, the wall still 1.4 mm, the box's two full sides 60 mm.",
+  "brep": {
+    "size": [
+      32.961,
+      60.0,
+      60.0
+    ],
+    "bodies": 1,
+    "voids": 0,
+    "watertight": true,
+    "requires": [
+      "fitted-sections",
+      "surfaces"
+    ],
+    "thickened_mm": [
+      1.4,
+      1.4
+    ],
+    "timeout_s": 180.0
+  }
+}
