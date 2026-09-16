@@ -51,8 +51,8 @@ pub fn build_doc(root: &Path, script: &str) -> Result<Doc> {
 }
 
 /// Measure through OpenCASCADE, in the isolated worker.
-pub fn run_brep(doc: &Doc) -> Outcome {
-    let opts = parcad_occt::Options::default();
+pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
+    let opts = parcad_occt::Options { timeout, ..Default::default() };
     let s = match parcad_occt::evaluate(doc, &opts) {
         Ok(s) => s,
         Err(e) => {
@@ -169,7 +169,11 @@ fn locate_tags(s: &parcad_occt::Success) -> (BTreeMap<String, [f64; 6]>, Vec<Str
 }
 
 /// Ask the exact kernel the case's perception questions.
-pub fn perceive(doc: &Doc, expect: &crate::case::PerceptionExpect) -> std::result::Result<parcad_occt::Perceived, String> {
+pub fn perceive(
+    doc: &Doc,
+    expect: &crate::case::PerceptionExpect,
+    timeout: std::time::Duration,
+) -> std::result::Result<parcad_occt::Perceived, String> {
     let spec = parcad_occt::Perceive {
         points: expect.points.iter().map(|p| p.at).collect(),
         rays: expect
@@ -182,7 +186,8 @@ pub fn perceive(doc: &Doc, expect: &crate::case::PerceptionExpect) -> std::resul
             threshold_mm: t.threshold_mm,
         }),
     };
-    parcad_occt::perceive(doc, &spec, &parcad_occt::Options::default()).map_err(|e| e.to_string())
+    let opts = parcad_occt::Options { timeout, ..Default::default() };
+    parcad_occt::perceive(doc, &spec, &opts).map_err(|e| e.to_string())
 }
 
 /// Whether the exact backend can run at all here.

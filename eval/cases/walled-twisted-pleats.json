@@ -1,16 +1,16 @@
 {
   "name": "walled-twisted-pleats",
   "script": "eval/scripts/walled-twisted-pleats.js",
-  "why": "A pleated pendant shade (288 points, 21 sections, a 35 degree eased twist with an S sway) lofted smooth as a 1.2 mm wall. Built with the base fitter it came out inside out: BRepLib::OrientClosedSolid classified the point at infinity by one ray through dozens of pleated walls, missed a crossing, and reversed a solid that was right, and every report read the volume unsigned. The skinner now states which way is out and checks it on the built face, and the mesh backstop refuses negative volume, so an inside-out wall goes red here as a refusal.",
+  "why": "A pleated pendant shade (288 points, 21 sections, a 35 degree eased twist with an S sway) lofted smooth as a 1.2 mm wall. Built with the base fitter it came out inside out: BRepLib::OrientClosedSolid classified the point at infinity by one ray through dozens of pleated walls, missed a crossing, and reversed a solid that was right, and every report read the volume unsigned. The skinner now states which way is out and checks it on the built face, and the mesh backstop refuses any closed surface wound against its nesting, so an inside-out wall goes red here as a refusal. Its crossings are decided on the skins' poles (0.1 s) rather than by the kernel's self-intersection check (16 s). It meshes into 2.7 million triangles and takes about 9 s on an idle machine, so it states a 120 s kernel budget rather than sitting at half of the host's 20 s default, where a busy machine timed it out.",
   "brep": {
     "size": [
-      132.613,
+      132.614,
       124.63,
       180.0
     ],
-    "volume_mm3": 117737.728,
-    "area_mm2": 197432.523,
-    "triangles": 2885294,
+    "volume_mm3": 117741.754,
+    "area_mm2": 197432.247,
+    "triangles": 2724404,
     "bodies": 1,
     "voids": 0,
     "stands_on_mm2": 680.485,
@@ -23,6 +23,7 @@
     "loft_wall_mm": [
       1.1673,
       1.241
-    ]
+    ],
+    "timeout_s": 120.0
   }
 }

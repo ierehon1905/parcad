@@ -42,6 +42,20 @@ different part. A `perception` block holds closed forms derived by hand for
 rays, points and a thickness sweep; `--update` never writes it, so a drift
 there is a defect rather than a value to re-record.
 
+## A case that needs longer
+
+The kernel gets the host's budget, 20 s or `PARCAD_OCCT_TIMEOUT`, and a case
+that knows it needs more says so in its `brep` block:
+
+```json
+"brep": { "timeout_s": 120.0, "volume_mm3": 117741.754 }
+```
+
+A stated budget never shortens the host's. Every case that spends more than
+half its budget prints a `SLOW` line and is counted at the end, still passing:
+a case at 9 s of a 20 s budget is a failure on the first busy afternoon, and
+the line is there so it is budgeted, or made cheaper, before then.
+
 ## A refusal
 
 ```json

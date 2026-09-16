@@ -179,6 +179,13 @@ pub struct Expect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tolerance: Option<Tolerance>,
 
+    /// Seconds the kernel may take on this case, for a part known to need
+    /// more than the host's default (`PARCAD_OCCT_TIMEOUT`, or 20), which
+    /// still applies when it is longer. The harness warns when a case spends
+    /// over half its budget, so a slow case is seen before it flakes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_s: Option<f64>,
+
     /// Set when this expectation is known not to hold, with the reason.
     ///
     /// A corpus that is green because the wrong answers were written down as

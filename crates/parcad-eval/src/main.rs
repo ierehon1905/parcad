@@ -132,8 +132,20 @@ fn evaluate(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) ->
     (verdict, false)
 }
 
+/// The kernel's budget for a case: its own when it states one, never less
+/// than the host's default.
+fn budget(expect: &Expect) -> std::time::Duration {
+    let default = parcad_occt::default_timeout();
+    expect
+        .timeout_s
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .map(std::time::Duration::from_secs_f64)
+        .map_or(default, |stated| stated.max(default))
+}
+
 fn judge(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (Verdict, bool) {
-    let outcome = run::run_brep(doc);
+    let timeout = budget(expect);
+    let outcome = run::run_brep(doc, timeout);
 
     match (&expect.refuses, outcome) {
         // Required to refuse, and did.
@@ -177,7 +189,7 @@ fn judge(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (V
         (None, Outcome::Measured(o)) => {
             let mut bad = case::check(expect, &o, Tolerance::exact());
             if let Some(perception) = &expect.perception {
-                match run::perceive(doc, perception) {
+                match run::perceive(doc, perception, timeout) {
                     Ok(answer) => bad.extend(case::check_perception(
                         perception,
                         &answer,
@@ -249,6 +261,7 @@ fn main() -> Result<()> {
     let mut skipped = 0usize;
     let mut known = 0usize;
     let mut updated_files = 0usize;
+    let mut slow = 0usize;
 
     for (path, mut case) in cases {
         println!("{}", case.name);
@@ -289,7 +302,10 @@ fn main() -> Result<()> {
                 println!("  {KERNEL:<9} SKIP");
                 skipped += 1;
             } else {
+                let started = std::time::Instant::now();
                 let (verdict, recorded) = evaluate(expect, &doc, args.update);
+                let spent = started.elapsed();
+                let allowed = budget(expect);
                 dirty |= recorded;
                 match verdict {
                     Verdict::Pass(s) => {
@@ -327,6 +343,16 @@ fn main() -> Result<()> {
                         failed += 1;
                     }
                 }
+                // A case that uses most of its budget passes until the day the
+                // machine is busy; say so while it still passes.
+                if spent > allowed / 2 {
+                    println!(
+                        "  {KERNEL:<9} SLOW  {:.1} s of a {:.0} s budget: state a larger `timeout_s` in the case, or make the part cheaper",
+                        spent.as_secs_f64(),
+                        allowed.as_secs_f64()
+                    );
+                    slow += 1;
+                }
             }
         }
 
@@ -340,6 +366,9 @@ fn main() -> Result<()> {
     }
 
     println!("{passed} passed, {failed} failed, {skipped} skipped, {known} known defect(s)");
+    if slow > 0 {
+        println!("{slow} case(s) used over half their kernel budget — see SLOW above");
+    }
     if updated_files > 0 {
         println!("{updated_files} case file(s) rewritten — review the diff before committing");
     }
