@@ -2,7 +2,8 @@
 //!
 //!     cargo run --release -p parcad-host --example script_time -- [--runs N] [--timeout S] FILE.js...
 //!
-//! `GRAPH=out.json` also writes the last graph built; `SAME_AS=graph.json`
+//! Only the first run of a script runs it; the rest are the sandbox's cache, so
+//! time a script afresh by running this again. `GRAPH=out.json` also writes the last graph built; `SAME_AS=graph.json`
 //! compares each with one `bun tools/run.ts` built; `FULL=1` prints a refusal whole.
 
 use std::time::{Duration, Instant};

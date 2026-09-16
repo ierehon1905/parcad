@@ -29,8 +29,9 @@
 
 use crate::generative;
 use rquickjs::{Context, Ctx, Function, Object, Runtime};
-use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
+use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::time::{Duration, Instant};
 
 /// The DSL, bundled from `app/src/dsl.ts` at compile time by `build.rs`.
@@ -137,11 +138,14 @@ struct Outcome {
 }
 
 /// A script's graph, and the line of the script that made each node.
+#[derive(Clone)]
 pub struct Script {
     pub graph: serde_json::Value,
     lines: Vec<Option<u32>>,
     /// Interpreter steps the script took, measured to the nearest poll.
     pub work_steps: u64,
+    /// Whether this came from [`CACHE`] rather than from running the script.
+    pub reused: bool,
 }
 
 impl Script {
@@ -202,6 +206,12 @@ struct Meter {
     backstop_ms: AtomicU64,
     floor: Duration,
     stopped: AtomicU8,
+    /// The script read the clock or `Math.random`, so its result is not a
+    /// function of its source and must not be cached.
+    impure: AtomicBool,
+    /// The run reached an answer — a graph or the script's own error — rather
+    /// than failing to start.
+    finished: AtomicBool,
 }
 
 impl Meter {
@@ -214,6 +224,8 @@ impl Meter {
             backstop_ms: AtomicU64::new(0),
             floor,
             stopped: AtomicU8::new(RUNNING),
+            impure: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
         };
         meter.allow(1);
         meter
@@ -258,6 +270,14 @@ impl Meter {
         };
         self.stopped.store(reason, Ordering::Relaxed);
         true
+    }
+
+    /// Whether the run's result is a function of the source alone. A budget
+    /// refusal is — the count is — but the clock backstop is not.
+    fn cacheable(&self) -> bool {
+        let stopped = self.stopped.load(Ordering::Relaxed);
+        !self.impure.load(Ordering::Relaxed)
+            && (stopped == OVER_BUDGET || (stopped == RUNNING && self.finished.load(Ordering::Relaxed)))
     }
 
     fn steps(&self) -> u64 {
@@ -311,7 +331,23 @@ const HOT_LOOPS: &str = "The loops generative parts spend their work in — a re
 /// the caller's to raise: it belongs to the source (`scriptBudget`), so every
 /// route that builds the part — MCP, the CLI, a thumbnail — agrees on it.
 pub fn build_within(source: &str, backstop: Duration) -> Result<Script, String> {
+    if let Some(known) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(source) {
+        return known.map(|script| Script { reused: true, ..script });
+    }
     let meter = Arc::new(Meter::new(backstop.clamp(BACKSTOP, MAX_BACKSTOP)));
+    let outcome = run(source, &meter);
+    if meter.cacheable() {
+        let weight = source.len() + outcome.as_ref().map_or(0, |(_, json_len)| *json_len);
+        CACHE
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(source, outcome.clone().map(|(script, _)| script), weight);
+    }
+    outcome.map(|(script, _)| script)
+}
+
+/// Run a script once, returning its result and the size of the JSON it made.
+fn run(source: &str, meter: &Arc<Meter>) -> Result<(Script, usize), String> {
     let runtime = Runtime::new().map_err(|e| format!("could not start the script sandbox: {e}"))?;
     runtime.set_memory_limit(MEMORY_LIMIT_BYTES);
 
@@ -325,6 +361,7 @@ pub fn build_within(source: &str, backstop: Duration) -> Result<Script, String> 
 
     let json = context.with(|ctx| -> Result<String, String> {
         install_native(&ctx, meter.clone())
+            .and_then(|()| watch_for_impurity(&ctx, meter.clone()))
             .map_err(|e| format!("could not start the script sandbox: {}", describe(&ctx, e)))?;
         ctx.eval::<(), _>(DSL_BUNDLE)
             .map_err(|e| format!("the bundled DSL did not load: {}", describe(&ctx, e)))?;
@@ -353,19 +390,105 @@ pub fn build_within(source: &str, backstop: Duration) -> Result<Script, String> 
     if let Some(refusal) = meter.refusal() {
         return Err(refusal);
     }
+    let json_len = json.len();
 
     let outcome: Outcome = serde_json::from_str(&json)
         .map_err(|e| format!("the sandbox returned something unreadable: {e}"))?;
 
+    meter.finished.store(true, Ordering::Relaxed);
     match (outcome.graph, outcome.error) {
-        (Some(graph), _) => Ok(Script {
-            graph,
-            lines: outcome.lines,
-            work_steps: meter.steps(),
-        }),
+        (Some(graph), _) => Ok((
+            Script {
+                graph,
+                lines: outcome.lines,
+                work_steps: meter.steps(),
+                reused: false,
+            },
+            json_len,
+        )),
         (None, Some(error)) => Err(error),
         (None, None) => Err("the sandbox returned neither a graph nor an error".into()),
     }
+}
+
+/// Every result a script reached, by its exact source, so asking again — an
+/// export after an evaluation, a thumbnail after a save — skips the
+/// interpreter. Sound because a script sees nothing but its source and the
+/// DSL: the realm is empty, the budget is counted, and a run that read the
+/// clock or `Math.random` is never kept ([`watch_for_impurity`]).
+static CACHE: LazyLock<Mutex<Cache>> = LazyLock::new(|| Mutex::new(Cache::default()));
+
+/// At most this much graph JSON is kept; a parsed graph is a few times larger.
+const CACHE_BYTES: usize = 16 * 1024 * 1024;
+
+#[derive(Default)]
+struct Cache {
+    entries: HashMap<String, (Result<Script, String>, usize)>,
+    order: VecDeque<String>,
+    weight: usize,
+}
+
+impl Cache {
+    fn get(&mut self, source: &str) -> Option<Result<Script, String>> {
+        let (result, _) = self.entries.get(source)?;
+        let result = result.clone();
+        if let Some(at) = self.order.iter().position(|s| s == source) {
+            let key = self.order.remove(at).expect("position is in range");
+            self.order.push_back(key);
+        }
+        Some(result)
+    }
+
+    fn insert(&mut self, source: &str, result: Result<Script, String>, weight: usize) {
+        if weight > CACHE_BYTES || self.entries.contains_key(source) {
+            return;
+        }
+        while self.weight + weight > CACHE_BYTES {
+            let Some(oldest) = self.order.pop_front() else { break };
+            if let Some((_, w)) = self.entries.remove(&oldest) {
+                self.weight -= w;
+            }
+        }
+        self.entries.insert(source.to_string(), (result, weight));
+        self.order.push_back(source.to_string());
+        self.weight += weight;
+    }
+}
+
+/// The realm's only sources of a different answer on a different run —
+/// `Math.random` (QuickJS seeds it from the clock), `Date` and `performance`
+/// — still work, and mark the run as not worth keeping when they are read.
+const IMPURE: &str = r#"
+((mark) => {
+  const random = Math.random;
+  Math.random = () => { mark(); return random(); };
+  const RealDate = Date;
+  const now = RealDate.now;
+  RealDate.now = () => { mark(); return now(); };
+  globalThis.Date = new Proxy(RealDate, {
+    construct(target, args, newTarget) {
+      if (args.length === 0) mark();
+      return Reflect.construct(target, args, newTarget);
+    },
+    apply(target, self, args) {
+      mark();
+      return Reflect.apply(target, self, args);
+    },
+  });
+  if (typeof performance === "object") {
+    const clock = performance.now.bind(performance);
+    const origin = performance.timeOrigin;
+    globalThis.performance = {
+      now() { mark(); return clock(); },
+      get timeOrigin() { mark(); return origin; },
+    };
+  }
+})
+"#;
+
+fn watch_for_impurity<'js>(ctx: &Ctx<'js>, meter: Arc<Meter>) -> rquickjs::Result<()> {
+    let mark = Function::new(ctx.clone(), move || meter.impure.store(true, Ordering::Relaxed))?;
+    ctx.eval::<Function, _>(IMPURE)?.call::<_, ()>((mark,))
 }
 
 /// The host functions the DSL reaches through `globalThis.__parcadNative`.
@@ -572,10 +695,11 @@ mod tests {
     #[test]
     fn work_is_counted_the_same_on_every_run() {
         let script = "let s = 0;\nfor (let i = 0; i < 2000000; i++) s += Math.sqrt(i);\nreturn box(1, 1, 1);";
-        let first = build(script).expect("builds").work_steps;
+        let fresh = || run(script, &Arc::new(Meter::new(BACKSTOP))).expect("builds").0.work_steps;
+        let first = fresh();
         assert!(first >= 2_000_000, "{first}");
         for _ in 0..3 {
-            assert_eq!(build(script).expect("builds").work_steps, first);
+            assert_eq!(fresh(), first);
         }
         assert_eq!(build("return box(1, 1, 1);").expect("builds").work_steps, 0);
     }
@@ -649,6 +773,48 @@ return box(1, 1, 1);
         let error = build_graph(spent).expect_err("past the budget, charged before it runs");
         assert!(started.elapsed() < Duration::from_secs(2), "the work ran: {:?}", started.elapsed());
         assert!(error.contains("whole work budget") && error.contains("scriptBudget(4)"), "{error}");
+    }
+
+    #[test]
+    fn the_same_source_is_run_once() {
+        let script = "// the_same_source_is_run_once\nlet s = 0;\nfor (let i = 0; i < 3000000; i++) s += i;\nreturn box(1, 1, 1).at(s % 7, 0, 0);";
+        let first = build(script).expect("builds");
+        assert!(!first.reused);
+        let started = Instant::now();
+        let second = build(script).expect("builds");
+        assert!(second.reused && started.elapsed() < Duration::from_millis(5), "{:?}", started.elapsed());
+        assert_eq!(second.graph, first.graph);
+        assert_eq!(second.work_steps, first.work_steps);
+
+        let refused = "// kept too\nwhile (true) {}";
+        let error = build_graph(refused).expect_err("over budget");
+        let started = Instant::now();
+        assert_eq!(build_graph(refused).expect_err("still over budget"), error);
+        assert!(started.elapsed() < Duration::from_millis(5), "a budget refusal is a fact of the source");
+    }
+
+    /// A script that reads the clock or the random generator is not a function
+    /// of its source, so it is run again every time — and those still work.
+    #[test]
+    fn a_script_that_reads_the_clock_or_chance_is_never_reused() {
+        for read in [
+            "Math.random()",
+            "Date.now()",
+            "new Date().getTime()",
+            "Date().length",
+            "performance.now()",
+            "performance.timeOrigin",
+        ] {
+            let script = format!("const x = {read};\nif (!(x > 0)) throw new Error('no value');\nreturn box(1, 1, 1);");
+            build(&script).unwrap_or_else(|e| panic!("{read}: {e}"));
+            assert!(!build(&script).expect("builds").reused, "{read} was reused");
+        }
+        let fixed = "class Day extends Date {}\n\
+                     const d = new Day(2020, 0, 1);\n\
+                     if (!(d instanceof Date) || new Date(0).getTime() !== 0 || Date.UTC(2020, 0) <= 0) throw new Error('Date broke');\n\
+                     return box(1, 1, 1);";
+        build(fixed).expect("a fixed date is ordinary");
+        assert!(build(fixed).expect("builds").reused, "a fixed date is a function of the source");
     }
 
     #[test]

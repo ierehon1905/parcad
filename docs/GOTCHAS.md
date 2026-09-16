@@ -212,6 +212,19 @@ as in the sandbox. Native work is charged to the budget before it runs, one step
 per cell update or pair test, because a native call cannot be interrupted, and a
 charge past the budget is refused even if the script catches the throw.
 
+**A script's result is kept by its source, unless it read the clock.** Every
+MCP tool that takes a script runs it first, so an export after an evaluation,
+or a second evaluation asking for views, paid the lamp's 2.5 s again (a
+repeated `evaluate_part` took 2.95 s with the kernel build already reused; now
+0.34 s, and the export after it 4.6 s to 1.5 s). `script.rs` now keeps each
+result by its exact source. That is sound only because nothing but the source
+decides the answer: the realm is empty, the budget is counted, and the three
+things in it that differ between runs — `Math.random`, which QuickJS seeds
+from the clock, `Date` and `performance` — are wrapped to mark the run, and a
+marked run is never kept. A budget refusal is kept (the count is a fact of the
+source); a clock-backstop refusal is not. A part that wants randomness should
+seed its own generator, which is what every generative part here already does.
+
 **A graph's numbers can land one ulp off on the way into Rust.** `serde_json`
 without its `float_roundtrip` feature parses some shortest-form doubles to a
 neighbour. Both routes (webview IPC and sandbox) parse the same strings, so they
