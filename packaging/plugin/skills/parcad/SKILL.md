@@ -7,7 +7,9 @@ Model with the `parcad` MCP server's tools; do not write OpenSCAD, CadQuery or
 raw mesh code instead.
 
 1. Call `read_docs` first. Its `dsl` topic is the whole language; `gaps` and
-   `gotchas` are what the kernel refuses and what silently goes wrong.
+   `gotchas` are what the kernel refuses and what silently goes wrong. A long
+   topic answers with its contents: call again with `section` set to a section
+   or entry name it lists.
 2. Look at a nearby part with `list_projects` and `read_project` before writing
    a new one.
 3. Evaluate before you save or `set_script`, and quote the report's measured

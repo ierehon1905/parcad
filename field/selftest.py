@@ -24,10 +24,10 @@ import score
 HERE = pathlib.Path(__file__).resolve().parent
 FIXTURES = HERE / "fixtures"
 EXPECTED = FIXTURES / "expected.toml"
-PINNED = ("grade", "reached", "quoted", "trap", "derived", "stray")
+PINNED = ("grade", "reached", "quoted", "trap", "derived", "stray", "hidden")
 
 
-REFUSED = dict.fromkeys(PINNED, False) | {"grade": "REFUSED", "stray": []}
+REFUSED = dict.fromkeys(PINNED, False) | {"grade": "REFUSED", "stray": [], "hidden": []}
 
 
 def measure(cfg):
@@ -61,7 +61,8 @@ def write(graded):
         lines.append(f'grade = "{row["grade"]}"')
         for key in ("reached", "quoted", "trap", "derived"):
             lines.append(f"{key} = {str(bool(row[key])).lower()}")
-        lines.append("stray = [" + ", ".join(f'"{s}"' for s in row["stray"]) + "]")
+        for key in ("stray", "hidden"):
+            lines.append(f"{key} = [" + ", ".join(f'"{s}"' for s in row[key]) + "]")
         lines.append("")
     EXPECTED.write_text("\n".join(lines))
 
@@ -85,8 +86,8 @@ def main():
             moved += 1
         else:
             for key in PINNED:
-                if graded[name][key] != was[name][key]:
-                    print(f"{name}: {key} was {was[name][key]!r}, "
+                if graded[name][key] != was[name].get(key):
+                    print(f"{name}: {key} was {was[name].get(key, 'not recorded')!r}, "
                           f"is now {graded[name][key]!r}")
                     moved += 1
     if moved:

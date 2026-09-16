@@ -81,20 +81,47 @@ pub struct TopicSummary {
     pub answers: String,
 }
 
-/// One document, and the list of the others.
+/// One document, or one section of it, and the list of the others.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct Reference {
     pub topic: String,
     /// The file in the parcad repository this text comes from.
     pub source: String,
+    /// Which part of the topic `text` is: `contents` for the index of a topic
+    /// too long for one reply, a section or entry name when one was asked for,
+    /// absent when `text` is the whole document.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
     pub text: String,
-    /// Everything else that can be read, so one call is enough to find the rest.
+    /// Every section of this topic, in order, when it is too long for one
+    /// reply; reading each of them is reading the whole document. Empty when
+    /// the topic arrives whole. Always sent: the output schema requires it,
+    /// and a client refuses a reply that leaves it out.
+    pub sections: Vec<String>,
+    /// Everything else that can be read, so one call is enough to find the
+    /// rest. Only on a topic's first reply; a section leaves it empty.
     pub topics: Vec<TopicSummary>,
 }
 
-/// Read one topic. `None` is the language reference, which is what a caller who
-/// has not asked for anything in particular needs first.
-pub fn read(topic: Option<&str>) -> Result<Reference, String> {
+/// Claude Code saves a tool result longer than this many characters to a file
+/// and shows the model a 2 KB preview of it; see docs/GOTCHAS.md.
+pub const CLIENT_RESULT_LIMIT_CHARS: usize = 50_000;
+
+/// What one section's text may take once escaped into JSON: far under the
+/// client's limit, because every character of a reply is context the caller pays for.
+const SECTION_BUDGET_CHARS: usize = 12_000;
+
+/// The name under which a split topic's index is served.
+const CONTENTS: &str = "contents";
+
+/// Read one topic, or one section of it. No topic is the language reference,
+/// which is what a caller who has not asked for anything in particular needs
+/// first.
+///
+/// A topic that fits in one reply comes back whole. One that does not comes
+/// back as its contents, and each section it names comes back whole when asked
+/// for: nothing is dropped, it is only delivered in pieces a client will show.
+pub fn read(topic: Option<&str>, section: Option<&str>, detail: bool) -> Result<Reference, String> {
     let wanted = topic.unwrap_or("dsl").trim();
     let found = TOPICS.iter().find(|t| t.name == wanted).ok_or_else(|| {
         format!(
@@ -102,19 +129,283 @@ pub fn read(topic: Option<&str>) -> Result<Reference, String> {
             TOPICS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
         )
     })?;
+    let document = match found.text {
+        Some(text) => Document::from_markdown(text),
+        None => Document::from_dsl(DSL_SOURCE, detail),
+    };
+    let sections = document.sections();
+    let fits = escaped_len(&document.whole()) <= SECTION_BUDGET_CHARS;
+
+    let section = section.map(str::trim).filter(|s| !s.is_empty());
+    let asked_for_part = section.is_some_and(|s| !same_name(s, CONTENTS));
+    let (served, text) = match section {
+        None if fits => (None, document.whole()),
+        None => (Some(CONTENTS.to_string()), document.contents(found.name, &sections)),
+        Some(asked) if same_name(asked, CONTENTS) => {
+            (Some(CONTENTS.to_string()), document.contents(found.name, &sections))
+        }
+        Some(asked) => (Some(asked.to_string()), document.lookup(found.name, asked, &sections)?),
+    };
 
     Ok(Reference {
         topic: found.name.to_string(),
         source: found.source.to_string(),
-        text: found.text.map(str::to_string).unwrap_or_else(reference),
-        topics: TOPICS
-            .iter()
-            .map(|t| TopicSummary {
-                topic: t.name.to_string(),
-                answers: t.answers.to_string(),
-            })
-            .collect(),
+        section: served,
+        text,
+        sections: if fits {
+            Vec::new()
+        } else {
+            sections.iter().map(|s| s.name.clone()).collect()
+        },
+        topics: if asked_for_part {
+            Vec::new()
+        } else {
+            TOPICS
+                .iter()
+                .map(|t| TopicSummary {
+                    topic: t.name.to_string(),
+                    answers: t.answers.to_string(),
+                })
+                .collect()
+        },
     })
+}
+
+// ------------------------------------------------- a document, in sections
+
+/// A topic cut where its own headings cut it: a chapter is a `##` heading or a
+/// group of the reference, an entry is a `###` heading or one name.
+struct Document {
+    /// Everything before the first chapter.
+    preamble: String,
+    chapters: Vec<Chapter>,
+}
+
+struct Chapter {
+    heading: String,
+    /// The text between the heading and its first entry.
+    lead: String,
+    entries: Vec<Entry>,
+}
+
+struct Entry {
+    title: String,
+    /// The entry as it appears in the whole document, heading included.
+    text: String,
+}
+
+/// One reply's worth of a chapter: all of it, or a run of its entries.
+struct Section {
+    name: String,
+    chapter: usize,
+    entries: std::ops::Range<usize>,
+}
+
+impl Document {
+    /// `detail` adds each entry's `@remarks`: the reasons and history behind
+    /// the rules, which a caller writing a part rarely needs.
+    fn from_dsl(source: &str, detail: bool) -> Document {
+        let items = parse(source);
+        let mut preamble = String::from("# parcad DSL reference\n\n");
+        preamble.push_str(&shown(&module_doc(source), detail));
+        preamble.push_str(
+            "\nEvery name below is a reserved word in a script: a variable called `box` \
+             hides the primitive. What the language cannot do, and what to write instead, \
+             is the `gaps` topic.\n",
+        );
+
+        let chapters = [
+            ("Functions", "", Kind::Function),
+            ("Shape methods", "", Kind::Method("Shape")),
+            ("EdgeSelection methods", "What `.edges(...)` returns.\n", Kind::Method("EdgeSelection")),
+            ("VertexSelection methods", "What `.vertices(...)` returns.\n", Kind::Method("VertexSelection")),
+            ("Line2d methods", "What `line2d(...)` returns.\n", Kind::Method("Line2d")),
+            ("Values", "", Kind::Value),
+            ("Types", "", Kind::Type),
+        ]
+        .into_iter()
+        .map(|(heading, lead, kind)| Chapter {
+            heading: heading.to_string(),
+            lead: if lead.is_empty() { String::new() } else { format!("\n{lead}") },
+            entries: items
+                .iter()
+                .filter(|i| i.kind == kind)
+                .map(|item| {
+                    let signature = if item.signature.contains('\n') {
+                        format!("```ts\n{}\n```", without_remarks(&item.signature, detail))
+                    } else {
+                        format!("`{}`", item.signature)
+                    };
+                    let mut text = format!("\n### {}\n\n{signature}\n", item.name);
+                    let doc = shown(&item.doc, detail);
+                    if !doc.is_empty() {
+                        text.push_str(&format!("\n{doc}\n"));
+                    }
+                    Entry {
+                        title: item.name.clone(),
+                        text,
+                    }
+                })
+                .collect(),
+        })
+        .filter(|c| !c.entries.is_empty())
+        .collect();
+        Document { preamble, chapters }
+    }
+
+    fn from_markdown(source: &str) -> Document {
+        let mut preamble = String::new();
+        let mut chapters: Vec<Chapter> = Vec::new();
+        let mut fenced = false;
+        for line in source.split_inclusive('\n') {
+            if line.trim_start().starts_with("```") {
+                fenced = !fenced;
+            }
+            let heading = |marks: &str| {
+                (!fenced)
+                    .then(|| line.strip_prefix(marks))
+                    .flatten()
+                    .map(|h| h.trim().to_string())
+            };
+            if let Some(heading) = heading("## ") {
+                chapters.push(Chapter { heading, lead: String::new(), entries: Vec::new() });
+                continue;
+            }
+            let Some(chapter) = chapters.last_mut() else {
+                preamble.push_str(line);
+                continue;
+            };
+            if let Some(title) = heading("### ") {
+                chapter.entries.push(Entry { title, text: line.to_string() });
+                continue;
+            }
+            match chapter.entries.last_mut() {
+                Some(entry) => entry.text.push_str(line),
+                None => chapter.lead.push_str(line),
+            }
+        }
+        Document { preamble, chapters }
+    }
+
+    fn whole(&self) -> String {
+        let mut out = self.preamble.clone();
+        for index in 0..self.chapters.len() {
+            out.push_str(&self.render(&Section {
+                name: String::new(),
+                chapter: index,
+                entries: 0..self.chapters[index].entries.len(),
+            }));
+        }
+        out
+    }
+
+    /// A chapter heading with the entries in range, and its lead only where
+    /// the chapter starts, so the sections of a document add up to all of it.
+    fn render(&self, section: &Section) -> String {
+        let chapter = &self.chapters[section.chapter];
+        let mut out = format!("\n## {}\n", chapter.heading);
+        if section.entries.start == 0 {
+            out.push_str(&chapter.lead);
+        }
+        for entry in &chapter.entries[section.entries.clone()] {
+            out.push_str(&entry.text);
+        }
+        out
+    }
+
+    /// Each chapter whole where it fits, and otherwise its entries packed in
+    /// order into as few sections as the budget allows.
+    fn sections(&self) -> Vec<Section> {
+        let mut sections = Vec::new();
+        for (index, chapter) in self.chapters.iter().enumerate() {
+            let heading = escaped_len(&format!("\n## {}\n{}", chapter.heading, chapter.lead));
+            let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
+            let mut used = heading;
+            let mut start = 0;
+            for (at, entry) in chapter.entries.iter().enumerate() {
+                let size = escaped_len(&entry.text);
+                if at > start && used + size > SECTION_BUDGET_CHARS {
+                    runs.push(start..at);
+                    start = at;
+                    used = heading;
+                }
+                used += size;
+            }
+            runs.push(start..chapter.entries.len());
+            let count = runs.len();
+            for (part, entries) in runs.into_iter().enumerate() {
+                let name = if count == 1 {
+                    plain(&chapter.heading)
+                } else {
+                    format!("{} ({} of {count})", plain(&chapter.heading), part + 1)
+                };
+                sections.push(Section { name, chapter: index, entries });
+            }
+        }
+        sections
+    }
+
+    fn contents(&self, topic: &str, sections: &[Section]) -> String {
+        let entries: usize = self.chapters.iter().map(|c| c.entries.len()).sum();
+        let mut out = self.preamble.clone();
+        out.push_str(&format!(
+            "\n## Contents\n\nThis is the index of `{topic}`, not the document: {entries} \
+             entries in the {} sections below. Call read_docs with `topic: \"{topic}\"` and \
+             `section` set to a section name, or to one entry's name. Every section together \
+             is the whole document.\n",
+            sections.len()
+        ));
+        for section in sections {
+            let mut titles: Vec<&str> = self.chapters[section.chapter].entries
+                [section.entries.clone()]
+                .iter()
+                .map(|e| e.title.as_str())
+                .collect();
+            // An overload is one name to ask for.
+            titles.dedup();
+            out.push_str(&format!("\n### {}\n{}\n", section.name, titles.join(", ")));
+        }
+        out
+    }
+
+    /// A section by name, or an entry by its title; an unqualified method name
+    /// finds the method on every class that has one.
+    fn lookup(&self, topic: &str, asked: &str, sections: &[Section]) -> Result<String, String> {
+        if let Some(section) = sections.iter().find(|s| same_name(&s.name, asked)) {
+            return Ok(self.render(section));
+        }
+        let entries: Vec<&Entry> = self.chapters.iter().flat_map(|c| &c.entries).collect();
+        let mut found: Vec<&&Entry> = entries.iter().filter(|e| same_name(&e.title, asked)).collect();
+        if found.is_empty() {
+            found = entries
+                .iter()
+                .filter(|e| e.title.rsplit_once('.').is_some_and(|(_, member)| member == asked))
+                .collect();
+        }
+        if found.is_empty() {
+            return Err(format!(
+                "`{topic}` has no section or entry called {asked:?}. Its sections are: {}. \
+                 Call read_docs with `topic: \"{topic}\"` and no section for the contents, \
+                 which names every entry.",
+                sections.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join("; ")
+            ));
+        }
+        Ok(found.iter().map(|e| e.text.as_str()).collect())
+    }
+}
+
+/// Characters once written as a JSON string, which is what a client counts.
+fn escaped_len(text: &str) -> usize {
+    serde_json::to_string(text).map_or(0, |s| s.chars().count() - 2)
+}
+
+/// A heading as a caller would type it back: no code or emphasis marks.
+fn plain(heading: &str) -> String {
+    heading.replace(['`', '*'], "")
+}
+
+fn same_name(a: &str, b: &str) -> bool {
+    plain(a).trim().eq_ignore_ascii_case(plain(b).trim())
 }
 
 // ------------------------------------------------------- the DSL, read as text
@@ -143,44 +434,45 @@ const DOCUMENTED_CLASSES: [&str; 4] = ["Shape", "EdgeSelection", "VertexSelectio
 
 /// The language reference, built from `dsl.ts` every time it is asked for.
 pub fn reference() -> String {
-    let items = parse(DSL_SOURCE);
-    let mut out = String::from("# parcad DSL reference\n\n");
-    out.push_str(&module_doc(DSL_SOURCE));
-    out.push_str(
-        "\nEvery name below is handed to a script as a parameter, so it is also a \
-         reserved word inside one: a script whose own variable is called `box` loses \
-         the primitive. Ask for the `gaps` document before reaching for something that \
-         is not here — the kernel refuses rather than approximating, and what it \
-         refuses is written down there instead of being met one call at a time.\n",
-    );
+    Document::from_dsl(DSL_SOURCE, false).whole()
+}
 
-    for (heading, kind) in [
-        ("Functions", Kind::Function),
-        ("Shape methods", Kind::Method("Shape")),
-        ("EdgeSelection — what `.edges(...)` returns", Kind::Method("EdgeSelection")),
-        ("VertexSelection — what `.vertices(...)` returns", Kind::Method("VertexSelection")),
-        ("Line2d — what `line2d(...)` returns", Kind::Method("Line2d")),
-        ("Values", Kind::Value),
-        ("Types", Kind::Type),
-    ] {
-        let group: Vec<&Item> = items.iter().filter(|i| i.kind == kind).collect();
-        if group.is_empty() {
-            continue;
-        }
-        out.push_str(&format!("\n## {heading}\n"));
-        for item in group {
-            let shown = if item.signature.contains('\n') {
-                format!("```ts\n{}\n```", item.signature)
-            } else {
-                format!("`{}`", item.signature)
-            };
-            out.push_str(&format!("\n### {}\n\n{shown}\n", item.name));
-            if !item.doc.is_empty() {
-                out.push_str(&format!("\n{}\n", item.doc));
+/// Everything the source says, remarks included.
+pub fn reference_in_full() -> String {
+    Document::from_dsl(DSL_SOURCE, true).whole()
+}
+
+/// A doc comment's text for the reader: all of it, or what precedes `@remarks`.
+fn shown(doc: &str, detail: bool) -> String {
+    match doc.split_once("\n@remarks") {
+        Some((lead, remarks)) if detail => format!("{lead}\n{}", remarks.trim_start()),
+        Some((lead, _)) => lead.trim_end().to_string(),
+        None => doc.to_string(),
+    }
+}
+
+/// An interface as written, less the `@remarks` of each field unless asked.
+fn without_remarks(block: &str, detail: bool) -> String {
+    if detail {
+        return block.replace("* @remarks\n", "*\n");
+    }
+    let mut out: Vec<&str> = Vec::new();
+    let mut skipping = false;
+    for line in block.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("* @remarks") {
+            skipping = true;
+            while out.last().is_some_and(|l| l.trim() == "*") {
+                out.pop();
             }
+        } else if skipping && trimmed.starts_with("*/") {
+            skipping = false;
+        }
+        if !skipping {
+            out.push(line);
         }
     }
-    out
+    out.join("\n")
 }
 
 /// The file's own leading block comment, which is the language's preamble.
@@ -406,19 +698,36 @@ fn signature(lines: &[&str], start: usize) -> (String, usize) {
 }
 
 /// A declaration that ends at its semicolon rather than at a body.
+/// A `type` on one line, or verbatim when written across several: a union
+/// documents each of its variants in place, and those comments are its rules.
 fn statement(lines: &[&str], start: usize) -> (String, usize) {
-    let mut text = String::new();
-    let mut i = start;
-    while i < lines.len() {
-        text.push_str(lines[i].trim());
-        text.push(' ');
-        let done = lines[i].trim_end().ends_with(';');
-        i += 1;
-        if done {
-            break;
+    // An object type's fields end in `;` too: the statement ends where the
+    // brackets outside comments are balanced again.
+    let mut depth = 0i32;
+    let mut end = start;
+    while end < lines.len() {
+        let line = lines[end].trim();
+        if !(line.starts_with("/*") || line.starts_with('*')) {
+            for c in line.chars() {
+                match c {
+                    '{' | '(' | '[' => depth += 1,
+                    '}' | ')' | ']' => depth -= 1,
+                    _ => {}
+                }
+            }
+            if depth <= 0 && line.ends_with(';') {
+                break;
+            }
         }
+        end += 1;
     }
-    (tidy(&text), i)
+    let taken = &lines[start..(end + 1).min(lines.len())];
+    let text = if taken.len() > 1 {
+        taken.join("\n")
+    } else {
+        tidy(taken.join(" ").as_str())
+    };
+    (text, start + taken.len())
 }
 
 /// A block form, kept exactly as it is written.
@@ -602,15 +911,233 @@ mod tests {
 
     #[test]
     fn an_unknown_topic_is_refused_by_name_with_the_alternatives() {
-        let error = read(Some("readme")).expect_err("there is no such document");
+        let error = read(Some("readme"), None, false).expect_err("there is no such document");
         assert!(error.contains("gaps") && error.contains("gotchas"), "{error}");
     }
 
     #[test]
     fn the_prose_documents_arrive_whole() {
-        let gaps = read(Some("gaps")).expect("DSL_GAPS.md is compiled in");
-        assert!(gaps.text.len() > 2000, "truncated: {} bytes", gaps.text.len());
-        assert_eq!(gaps.source, "docs/DSL_GAPS.md");
-        assert_eq!(gaps.topics.len(), TOPICS.len());
+        let gaps = replies("gaps");
+        let served: usize = gaps.iter().skip(1).map(|r| r.text.len()).sum();
+        assert!(served > 20_000, "truncated: {served} bytes");
+        assert_eq!(gaps[0].source, "docs/DSL_GAPS.md");
+        assert_eq!(gaps[0].topics.len(), TOPICS.len());
+    }
+
+    fn replies(topic: &str) -> Vec<Reference> {
+        let mut all = Vec::new();
+        for detail in [false, true] {
+            let first = read(Some(topic), None, detail).expect("every listed topic can be read");
+            all.extend(
+                first
+                    .sections
+                    .iter()
+                    .map(|s| read(Some(topic), Some(s), detail).expect("every listed section can be read")),
+            );
+            all.insert(all.len() - first.sections.len(), first);
+        }
+        all
+    }
+
+    /// Claude Code shows a longer reply as a 2 KB preview of a file the model
+    /// may have no tool to open; the whole reference went that way for months.
+    #[test]
+    fn every_reply_fits_in_what_a_client_shows() {
+        for topic in TOPICS {
+            for reply in replies(topic.name) {
+                let sent = serde_json::to_value(&reply).unwrap().to_string().chars().count();
+                // The first reply also carries the topic list, about 1,500 characters.
+                let allowed = SECTION_BUDGET_CHARS + 2_000;
+                assert!(
+                    sent <= allowed && allowed <= CLIENT_RESULT_LIMIT_CHARS,
+                    "read_docs {} section {:?} is {sent} characters, over {allowed}. \
+                     Give the entry or contents that will not split a heading, or \
+                     shorten what it says.",
+                    topic.name,
+                    reply.section
+                );
+            }
+        }
+    }
+
+    /// The default reply is what a caller writing a part needs: a sentence,
+    /// the rules, an example. Why a rule exists goes under `@remarks`, which
+    /// `detail` serves; an entry longer than this is carrying that inline.
+    #[test]
+    fn every_entry_leads_with_what_a_caller_needs() {
+        // Code (signatures, an interface's fields, examples) is the entry; prose
+        // around it is what grows. `SectionEntry`, the curve vocabulary, is the largest.
+        const PROSE: usize = 700;
+        const WHOLE: usize = 3_000;
+        let long: Vec<String> = Document::from_dsl(DSL_SOURCE, false)
+            .chapters
+            .iter()
+            .flat_map(|c| &c.entries)
+            .filter_map(|e| {
+                let whole = e.text.chars().count();
+                let prose = prose_len(&e.text);
+                (prose > PROSE || whole > WHOLE).then(|| format!("{} ({prose} prose, {whole} in all)", e.title))
+            })
+            .collect();
+        assert!(
+            long.is_empty(),
+            "these entries run past {PROSE} characters of prose or {WHOLE} in all without \
+             `detail`: {}. Keep the sentence, the rules and one example; move the reasons \
+             and history under `@remarks` in app/src/dsl.ts.",
+            long.join(", ")
+        );
+    }
+
+    /// Characters outside code: fences, indented blocks and `@example` lines.
+    fn prose_len(text: &str) -> usize {
+        let mut fenced = false;
+        text.lines()
+            .filter(|line| {
+                if line.starts_with("```") {
+                    fenced = !fenced;
+                    return false;
+                }
+                !(fenced || line.starts_with("    ") || line.starts_with("@example") || line.starts_with('`'))
+            })
+            .map(|line| line.chars().count() + 1)
+            .sum()
+    }
+
+    /// An example is the part of an entry a model copies, so each one must run
+    /// as written: a script, or an expression that is one. It is checked in the
+    /// sandbox, which catches a wrong call; whether it builds is the corpus's job.
+    #[test]
+    fn every_example_runs() {
+        let mut ran = 0;
+        for item in parse(DSL_SOURCE) {
+            for example in examples(&item.doc) {
+                let script = if example.contains("return") {
+                    example.clone()
+                } else {
+                    format!("return {example}")
+                };
+                if let Err(error) = crate::script::build_graph(&script) {
+                    panic!(
+                        "the example on {} does not run: {error}\n{example}\n\
+                         Make it self-contained: every name it uses is defined in it.",
+                        item.name
+                    );
+                }
+                ran += 1;
+            }
+        }
+        assert!(ran >= 10, "only {ran} examples found; is the @example parser reading dsl.ts?");
+    }
+
+    /// The code of each `@example`: the rest of its line, or the block indented
+    /// under it.
+    fn examples(doc: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut lines = doc.lines().peekable();
+        while let Some(line) = lines.next() {
+            let Some(rest) = line.strip_prefix("@example") else {
+                continue;
+            };
+            if !rest.trim().is_empty() {
+                out.push(rest.trim().to_string());
+                continue;
+            }
+            let mut block = Vec::new();
+            while let Some(code) = lines.peek().and_then(|l| l.strip_prefix("    ")) {
+                block.push(code);
+                lines.next();
+            }
+            out.push(block.join("\n"));
+        }
+        out
+    }
+
+    #[test]
+    fn remarks_arrive_only_when_asked_for() {
+        let doc = "Rounds it.\n\n@remarks\nBecause of history.";
+        assert_eq!(shown(doc, false), "Rounds it.");
+        assert_eq!(shown(doc, true), "Rounds it.\n\nBecause of history.");
+        let block = "export interface A {\n  /**\n   * Short.\n   *\n   * @remarks\n   * Long.\n   */\n  a: number;\n}";
+        assert_eq!(
+            without_remarks(block, false),
+            "export interface A {\n  /**\n   * Short.\n   */\n  a: number;\n}"
+        );
+        assert!(without_remarks(block, true).contains("Long."));
+    }
+
+    /// Claude Code checks every reply against the tool's output schema and
+    /// shows the model an error instead of the text when a required field is
+    /// missing; `sections` was, on every topic that arrives whole.
+    #[test]
+    fn every_reply_carries_what_its_schema_requires() {
+        let schema = serde_json::to_value(schemars::schema_for!(Reference)).unwrap();
+        let required: Vec<&str> = schema["required"]
+            .as_array()
+            .expect("the reply schema lists required fields")
+            .iter()
+            .filter_map(|v| v.as_str())
+            .collect();
+        for topic in TOPICS {
+            for reply in replies(topic.name) {
+                let sent = serde_json::to_value(&reply).unwrap();
+                for field in &required {
+                    assert!(
+                        sent.get(field).is_some(),
+                        "read_docs {} section {:?} leaves out {field}, which its output \
+                         schema requires; the client will refuse the reply",
+                        topic.name,
+                        reply.section
+                    );
+                }
+            }
+        }
+    }
+
+    /// Serving a topic in pieces must not lose a line of it.
+    #[test]
+    fn the_sections_add_up_to_the_whole_document() {
+        for topic in TOPICS {
+            let document = match topic.text {
+                Some(text) => Document::from_markdown(text),
+                None => Document::from_dsl(DSL_SOURCE, true),
+            };
+            let sections = document.sections();
+            let pieces: String = sections.iter().map(|s| document.render(s)).collect();
+            let pieces = format!("{}{pieces}", document.preamble);
+            let original = topic.text.map_or_else(reference_in_full, str::to_string);
+            for line in original.lines().filter(|l| !l.trim().is_empty()) {
+                assert!(pieces.contains(line), "{}: lost {line:?}", topic.name);
+            }
+            assert!(!sections.is_empty(), "{} has no sections", topic.name);
+        }
+    }
+
+    #[test]
+    fn the_reference_answers_with_its_contents_and_then_each_name() {
+        let contents = read(Some("dsl"), None, false).unwrap();
+        assert_eq!(contents.section.as_deref(), Some("contents"));
+        assert!(contents.sections.len() > 1, "{:?}", contents.sections);
+        for name in ["box, ", "Shape.mirror, ", "SectionEntry"] {
+            assert!(contents.text.contains(name), "the contents never lists {name:?}");
+        }
+
+        let entry = read(Some("dsl"), Some("mirror"), false).unwrap();
+        assert!(entry.text.contains("\n### Shape.mirror\n"), "{}", entry.text);
+        assert!(entry.text.contains("union(half, half.mirror(\"x\"))"));
+
+        let section = read(Some("dsl"), Some(&contents.sections[0]), false).unwrap();
+        assert!(section.text.contains("\n### box\n"), "{}", section.text);
+
+        let error = read(Some("dsl"), Some("gearbox"), false).expect_err("no such entry");
+        assert!(error.contains(&contents.sections[0]), "{error}");
+    }
+
+    #[test]
+    fn a_topic_that_fits_still_arrives_whole() {
+        let style = read(Some("style-field-instrument"), None, false).unwrap();
+        assert!(style.section.is_none() && style.sections.is_empty());
+        let heading = read(Some("gotchas"), None, false).unwrap().sections[0].clone();
+        let part = read(Some("gotchas"), Some(&heading), false).unwrap();
+        assert!(part.text.starts_with("\n## "), "{}", part.text);
     }
 }

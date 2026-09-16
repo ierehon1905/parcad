@@ -40,8 +40,9 @@ number pools two different things:
             nothing in the reply suggests it read the answer off your source.
             This is the only outcome that is evidence.
 
-    LUCKY   right answer, wrong route. A required tool was never called, or the
-            reply cites the source rather than a measurement.
+    LUCKY   right answer, wrong route. A required tool was never called, or
+            every reply it gave was hidden from the model, or the reply cites
+            the source rather than a measurement.
 
     WRONG   the verdict is absent, or negated.
 
@@ -68,14 +69,37 @@ from somewhere else entirely. A trial that called the tool, quoted its number
 the argument from the file — softer, still not evidence, because the same reply
 on an input where source and reality had diverged would be confidently wrong.
 
+### A call is not a read
+
+A client may call your tool and never show the model what came back. Claude
+Code 2.1.273 does this to any tool result over **50,000 characters**: the model
+gets a `<persisted-output>` note naming a file the reply was saved to, plus a
+2 KB preview, and the runner denies the file tool it would need to open it. The
+call succeeded, the transcript shows it, and the model worked from something
+else. Past the client's token cap the note is an error instead,
+`Error: result (N characters) exceeds maximum allowed tokens`, with no preview
+at all, and a larger model then goes looking for a shell to open the file, which
+strays the trial. So the scorer counts a tool as reached only when at least one
+of its replies was *shown*; a call whose only result is either note does not
+reach it. `hid` is how many of a trial's replies went that way (per trial in `detail`,
+trials with any in `--suite`), and the suite names them under `HIDDEN`.
+
+It was found the expensive way. A documentation tool grew past the limit, and a
+round in which all eight trials got the note for every reference call still
+graded four of them SOUND: they had called the reference, then found what they
+needed by reading an existing artefact's source. `fixtures/the-only-read-was-hidden`
+is one of those four, and grades LUCKY now. A `hid` above zero is a finding
+about your server, not your model — make the reply smaller, or let the caller
+ask for part of it.
+
 ## What a result looks like
 
 One case, both thinking arms, four trials each — a tool that works:
 
 ```
-case                         tests                  arm     n   SLWVO  sound  reach  quote trap
-does-the-blend-reach-the-bol list_entities.faces    think0  4    SSSS 4/4    4/4    4/4       -
-does-the-blend-reach-the-bol list_entities.faces    think8  4    SSSS 4/4    4/4    4/4       -
+case                         tests                  arm     n   SLWVO  sound  reach  quote trap  hid
+does-the-blend-reach-the-bol list_entities.faces    think0  4    SSSS 4/4    4/4    4/4       -    -
+does-the-blend-reach-the-bol list_entities.faces    think8  4    SSSS 4/4    4/4    4/4       -    -
 
 8/8 SOUND — right answer by the route the case requires. 0 LUCKY, 0 WRONG, 0 VOID.
 
@@ -95,11 +119,11 @@ A run that is not a result at all, which is what VOID is for. Four trials, each
 asked where a named feature sits:
 
 ```
-trial      grade  think calls err reach quote trap src? stray    tail
-trial1     VOID      16    15   4    NO    no    - -    -        VERDICT: BODY starts at 7.62
-trial2     VOID      15    14   3    NO    no    - yes  -        VERDICT: HUB starts at 15.85
-trial3     VOID      12    11   3   yes    no    - -    -        VERDICT: HUB starts at 15.85
-trial4     VOID      18    17   4   yes    no    - -    -        VERDICT: HUB starts at 9.55
+trial      grade  think calls err reach quote trap src? hid stray    tail
+trial1     VOID      16    15   4    NO    no    - -      - -        VERDICT: BODY starts at 7.62
+trial2     VOID      15    14   3    NO    no    - yes    - -        VERDICT: HUB starts at 15.85
+trial3     VOID      12    11   3   yes    no    - -      - -        VERDICT: HUB starts at 15.85
+trial4     VOID      18    17   4   yes    no    - -      - -        VERDICT: HUB starts at 9.55
 
 0/4 SOUND, 0 LUCKY, 0 WRONG, 4 VOID — 2/4 reached evaluate_part,
 0/4 quoted a measured value.
@@ -140,6 +164,10 @@ with thinking off against 34/45 with it on**, the two worst cases both *worse*
 with reasoning (2/3 to 0/3, 3/3 to 1/3), the extra reasoning spent constructing
 a story for a wrong reading rather than checking it. The arms are two
 populations; the table keeps them apart and so should you.
+
+**Effort is a third axis, when the model has one.** `EFFORTS="low high xhigh"`
+passes each to `claude --effort` as its own arm; `ARMS=default` leaves the
+thinking budget to the effort instead of fixing it.
 
 ---
 

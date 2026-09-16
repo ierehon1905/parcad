@@ -123,6 +123,14 @@ when `dsl.ts` changes under it — it just quietly describes an older part. The 
 saved part that wrote `const hole = ...`. Adding one is a compatibility change:
 prefer a name a part would not choose for a local, and check `examples/` builds.
 
+**A DSL doc comment is written for a model writing a part.** `read_docs` serves
+it: one sentence, the rules as bullets, one self-contained `@example` that
+builds. Reasons and history go under `@remarks`, which only `detail: true`
+returns; a rule a caller can get wrong never does. Three tests in `docs.rs` hold
+reply size, entry length and that every example runs.
+docs/WRITING_FOR_MODELS.md is the research behind it, the rules for any tool
+reply, description or error, and how to measure a change.
+
 **The product is called ParCAD; everything a machine reads is `parcad`.** The
 capitalised name belongs in the titlebar, the window title, `productName`, the
 HTML `<title>` and prose. It must never reach an identifier: the bundle id
@@ -274,6 +282,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | cutting a part open to see inside it | `view.rs`'s `Section`, then `render.rs` for the agent and `app/src/viewport.ts` for the window |
 | what an agent can see, and what to tell it instead | `docs/PERCEPTION.md` |
 | what an agent can *read* about the language | `crates/parcad-host/src/docs.rs` — generated from `dsl.ts`, never written beside it |
+| how to write tools, replies, errors and docs a model reads, the evidence, and how to prove a change helped | `docs/WRITING_FOR_MODELS.md` |
 | whether a model can *read* a tool | `eval/field/*.md`, run by `field/run-suite.sh` |
 | which server that harness is pointed at | `field/field.toml` — the only file under `field/` that names parcad |
 | whether the DSL, the core and the kernel agree about a section | `eval/sections.json`, read by `agrees_with_the_shared_section_corpus` (Rust, both crates) and `section-corpus.test.ts`; `tools/section-fuzz.sh` finds new cases; docs/SECTION_CHECKS.md |
