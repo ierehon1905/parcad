@@ -183,6 +183,42 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      collision; SOUND only when the reply tells the user both, both arms.
    - Server instructions and the skills say a part is done when `print_check` is
      clean or each flag has a reason — the weakest layer, and one line.
+5c. **Two more steps a model has to remember, found the same day.** Both are
+   the shape of 5b: the mechanism exists, nothing makes it happen.
+   - **A render is colourless unless asked.** A part carrying materials draws
+     grey for an agent and coloured in the window — `materials: true` is
+     off by default, and nothing in a reply says the part has any. A model
+     therefore cannot see that an accent landed on the wrong body, that two
+     bodies came out the same colour, or that a part it dressed looks
+     undressed. The snapshot should say a part has materials wherever it is
+     measured, and the render note should name the flag; the session that
+     added the planter's two materials only passed it because it had just read
+     the commit that added them.
+   - **A tool's pictures do not reach the user.** Every view already carries
+     `markdown` for exactly this, and the server instructions say to paste it;
+     the same session drew three views, read all three, sent none, and the
+     user asked "SHOW IT". Measure whether a model pastes it
+     (`eval/field/`), and consider making the reply's first line say so when
+     views were asked for.
+
+5d. **Homebrew is published but never exercised.** `publish.yml` renders the
+   formula and pushes it to the tap, and `ruby -c` is the only thing that ever
+   reads it. Nothing installs it, so a formula that installs the wrong path, a
+   service that does not start, or an archive missing the worker would be found
+   by the first user rather than by us. In order of what it buys:
+   - **Before the tap sees it**: `brew style` and `brew audit --strict --formula`
+     on the rendered file, in the same `publish.yml` job that renders it.
+   - **After the push, install it for real**: a job on `macos-14` (arm64) and
+     `ubuntu-latest` that taps, `brew install parcad`, runs `parcad --version`,
+     starts `parcad serve`, and calls `parcad tools` against it — the end-to-end
+     check that the archive carries its worker and the host comes up. This is
+     the one that would have caught a bundle shipping no kernel.
+   - **`brew services`** cannot be started headless in CI in a way that proves
+     much; `parcad serve` in the background and one MCP call is the honest
+     substitute.
+   - Dry-run it locally first (`act`, or the same shell steps by hand against a
+     published tag): a blind CI round on a release path costs a release.
+
 6. **A measured parts library** — fasteners, bearings, boards, devices, each
    held by eval cases, and a way for one part to import another.
 
