@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Refuse a commit whose message credits an AI assistant as a co-author. The
+# repository's owner has attribution turned off, and a trailer an agent writes
+# into its own message bypasses that setting.
+if grep -qiE '^[[:space:]]*co-authored-by:.*(claude|anthropic|openai|copilot|gpt|gemini|cursor|codex)' "$1" \
+  || grep -qiE 'generated with .*(claude|copilot|chatgpt)' "$1"; then
+  echo "commit refused: the message credits an AI assistant (a Co-Authored-By or 'generated with' line)." >&2
+  echo "Remove that line and commit again." >&2
+  exit 1
+fi
