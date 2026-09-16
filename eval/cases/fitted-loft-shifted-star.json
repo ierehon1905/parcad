@@ -1,0 +1,24 @@
+{
+  "name": "fitted-loft-shifted-star",
+  "script": "eval/scripts/fitted-loft-shifted-star.js",
+  "why": "Two fitted stars paired seven points round, which do not cross. It was refused twice over: as a wall 'bulging 0.27 mm outside its sections' own extent', because that extent was the points' box plus the tolerance while the curve rightly peaks between points (the star's true y extent is 80.402 mm, its points' 79.889), and with a facet sag of 2.57 mm logged where two sections make the ruled loft the smooth one, because the sag search descended from a grid point on another sheet of the twisted wall. The size is the fitted curve's, which may stray from the true star by its tolerance between points; facet_sag_mm must be 0.",
+  "brep": {
+    "size": [
+      77.038,
+      80.402,
+      25.0
+    ],
+    "bodies": 1,
+    "voids": 0,
+    "watertight": true,
+    "requires": [
+      "fitted-sections"
+    ],
+    "facet_sag_mm": 0.0,
+    "tolerance": {
+      "size_mm": 0.15,
+      "volume_pct": 0.05,
+      "triangles_pct": 5.0
+    }
+  }
+}

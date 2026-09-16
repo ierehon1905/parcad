@@ -174,10 +174,13 @@ impl Surface {
         )
     }
 
-    /// The distance from `p` to the surface near `(u, v)`: a coarse grid over
-    /// `reach` either way (u wrapping round a closed surface's period, v held
-    /// to the surface), then Gauss-Newton on the squared distance held to
-    /// that window.
+    /// The distance from `p` to the surface near `(u, v)`: Gauss-Newton on the
+    /// squared distance, held to a window `reach` either way (u wrapping round
+    /// a closed surface's period, v held to the surface), from `(u, v)` itself
+    /// and from the nearest point of a coarse grid over the window; the nearer
+    /// of the two. A twisted surface can pass nearer a grid point than the
+    /// sheet `p` is on, and the descent from there settles on a sheet that is
+    /// not the nearest.
     pub fn distance_near(&self, p: P3, u: f64, v: f64, reach: (f64, f64), closed_u: bool) -> f64 {
         let (u0, u1, v0, v1) = self.bounds();
         let period = u1 - u0;
@@ -197,26 +200,30 @@ impl Surface {
                 }
             }
         }
-        let (mut tu, mut tv) = (bu, bv);
-        for _ in 0..20 {
-            let [q, su, sv] = self.derivatives(wrap(tu), tv);
-            let r: [f64; 3] = std::array::from_fn(|d| q[d] - p[d]);
-            let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-            let (a, b, c) = (dot(su, su), dot(su, sv), dot(sv, sv));
-            let det = a * c - b * b;
-            if !(det > 0.0) {
-                break;
+        let descend = |mut tu: f64, mut tv: f64| {
+            for _ in 0..20 {
+                let [q, su, sv] = self.derivatives(wrap(tu), tv);
+                let r: [f64; 3] = std::array::from_fn(|d| q[d] - p[d]);
+                let dot = |a: [f64; 3], b: [f64; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+                let (a, b, c) = (dot(su, su), dot(su, sv), dot(sv, sv));
+                let det = a * c - b * b;
+                if !(det > 0.0) {
+                    break;
+                }
+                let (gu, gv) = (dot(r, su), dot(r, sv));
+                let nu = (tu - (c * gu - b * gv) / det).clamp(ulo, uhi);
+                let nv = (tv - (a * gv - b * gu) / det).clamp(vlo, vhi);
+                let still = (nu - tu).abs() < 1e-13 && (nv - tv).abs() < 1e-13;
+                (tu, tv) = (nu, nv);
+                if still {
+                    break;
+                }
             }
-            let (gu, gv) = (dot(r, su), dot(r, sv));
-            let nu = (tu - (c * gu - b * gv) / det).clamp(ulo, uhi);
-            let nv = (tv - (a * gv - b * gu) / det).clamp(vlo, vhi);
-            let still = (nu - tu).abs() < 1e-13 && (nv - tv).abs() < 1e-13;
-            (tu, tv) = (nu, nv);
-            if still {
-                break;
-            }
-        }
-        best.min(dist2(self.derivatives(wrap(tu), tv)[0])).sqrt()
+            dist2(self.derivatives(wrap(tu), tv)[0])
+        };
+        let from_given = descend(u, v.clamp(vlo, vhi));
+        let from_grid = descend(bu, bv);
+        best.min(from_given).min(from_grid).sqrt()
     }
 
     /// The distinct values and multiplicities of a knot vector.
@@ -715,6 +722,41 @@ mod tests {
             expected = expected.max(profile_distance(chord(z), z, &parabola)).max(profile_distance(parabola(z), z, &chord));
         }
         assert!((sag - expected).abs() < 2e-3, "measured {sag}, closed form {expected}");
+    }
+
+    #[test]
+    fn two_sections_sag_nothing_however_far_round_they_are_paired() {
+        // With two sections the smooth skin is the ruled one, so every point
+        // of one lies on the other. A star paired a few points round twists
+        // its rulings until another sheet passes nearer a coarse grid point
+        // than the sheet the point is on; the search must still find 0.
+        let n = 60;
+        let star = |shift: usize| -> Vec<P2> {
+            (0..n)
+                .map(|i| {
+                    let a = std::f64::consts::TAU * ((i + shift) % n) as f64 / n as f64;
+                    let r = 30.0 + 12.0 * (5.0 * a).cos();
+                    [r * a.cos(), r * a.sin()]
+                })
+                .collect()
+        };
+        for shift in [7, 10, 11, 13] {
+            let rings = [star(0), star(shift)];
+            let sections: Vec<&[P2]> = rings.iter().map(|r| r.as_slice()).collect();
+            let params = shared_parameters(&sections)[..n].to_vec();
+            let fit = PeriodicFit::new(&params, 40).unwrap();
+            let heights = [0.0, 25.0];
+            let rows: Vec<Vec<P3>> = sections
+                .iter()
+                .zip(heights)
+                .map(|(s, z)| fit.fit(s).unwrap().poles.iter().map(|p| [p[0], p[1], z]).collect())
+                .collect();
+            let v = height_parameters(&heights);
+            let ruled = Surface::skin(&rows, &fit.knots(), 3, &v, 1).unwrap();
+            let smooth = Surface::skin(&rows, &fit.knots(), 3, &v, 1).unwrap();
+            let (sag, at) = facet_sag(&ruled, &smooth, &v, 2 * 40, 8);
+            assert!(sag < 1e-9, "shift {shift}: {sag} mm near {at:?}");
+        }
     }
 
     #[test]
