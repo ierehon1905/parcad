@@ -30,7 +30,11 @@ pub struct Mesher {
 
 impl Mesher {
     pub fn new(shape: &Shape) -> Self {
-        let inner = ffi::BRepMesh_IncrementalMesh_ctor(&shape.inner, 0.01);
+        // PARCAD: faces are meshed on every core. OCCT discretises the shared
+        // edges first and each face alone after, so the triangles are the
+        // ones the serial pass makes; a pleated shade of 900 faces took
+        // 470 s in one thread.
+        let inner = ffi::BRepMesh_IncrementalMesh_ctor_parallel(&shape.inner, 0.01, false, 0.5, true);
 
         if !inner.IsDone() {
             // TODO(bschwind) - Add proper Error type and return Result.

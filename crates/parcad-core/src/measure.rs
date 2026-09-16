@@ -269,11 +269,7 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
         }
 
         // Every swept point lies within the section's reach — at the larger
-        // end of a taper — of the spine. A path's spine (runs trimmed to their
-        // tangent points, arcs inside each corner's own triangle) lies inside
-        // the box over its points; a helix's inside the cylinder of its larger
-        // radius, over its height about z = 0; a spline's inside its control
-        // points.
+        // end of a taper — of the spine.
         Op::Sweep {
             profile,
             circle,
@@ -285,34 +281,7 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
         } => {
             let (section, spine) =
                 Op::validate_sweep(profile, *circle, path, *bend, helix.as_ref(), spline, *taper)?;
-            let reach = section.reach() * taper.max(1.0);
-            let (lo, hi) = match spine {
-                SweepSpine::Helix(helix) => {
-                    let r = helix.radius.max(helix.end_radius());
-                    let h = helix.height() / 2.0;
-                    (V3::new(-r, -r, -h), V3::new(r, r, h))
-                }
-                SweepSpine::Path(_) => {
-                    let (mut lo, mut hi) = (V3::splat(f64::MAX), V3::splat(f64::MIN));
-                    for p in path {
-                        lo = V3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
-                        hi = V3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
-                    }
-                    (lo, hi)
-                }
-                SweepSpine::Spline(curve) => {
-                    let (mut lo, mut hi) = (V3::splat(f64::MAX), V3::splat(f64::MIN));
-                    for [x, y, z] in &curve.poles {
-                        lo = V3::new(lo.x.min(*x), lo.y.min(*y), lo.z.min(*z));
-                        hi = V3::new(hi.x.max(*x), hi.y.max(*y), hi.z.max(*z));
-                    }
-                    (lo, hi)
-                }
-            };
-            Aabb {
-                min: V3::new(lo.x - reach, lo.y - reach, lo.z - reach),
-                max: V3::new(hi.x + reach, hi.y + reach, hi.z + reach),
-            }
+            spine_envelope(&spine, path).expand(section.reach() * taper.max(1.0))
         }
 
         // The swept circle reaches major + minor in every radial direction, and
@@ -326,6 +295,55 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
             form.validate(*from, *to)?;
             let r = form.major_radius();
             Aabb { min: V3::new(-r, -r, *from), max: V3::new(r, r, *to) }
+        }
+
+        // A surface lies where the solid of the same op would, less its caps.
+        Op::SurfaceExtrude { curve, closed, height } => {
+            let section = Op::validate_surface_extrude(curve, *closed, *height)?;
+            let (lo, hi) = section.bounds();
+            Aabb { min: V3::new(lo[0], lo[1], -height / 2.0), max: V3::new(hi[0], hi[1], height / 2.0) }
+        }
+        Op::SurfaceRevolve { curve, closed, degrees } => {
+            let section = Op::validate_surface_revolve(curve, *closed, *degrees)?;
+            let (lo, hi) = section.bounds();
+            let r = hi[0].max(0.0);
+            Aabb { min: V3::new(-r, -r, lo[1]), max: V3::new(r, r, hi[1]) }
+        }
+        // Ruled pieces stay inside the curves' hull; a smooth surface is
+        // given room between its curves and measured against it.
+        Op::SurfaceLoft { sections, closed, smooth } => {
+            let resolved = Op::validate_surface_loft(sections, *closed)?;
+            let (min, max) = crate::graph::surface_loft_extent(sections, &resolved, *smooth);
+            Aabb { min, max }
+        }
+        Op::SurfaceSweep { curve, closed, path, bend, helix, spline } => {
+            let (section, spine) = Op::validate_surface_sweep(curve, *closed, path, *bend, helix.as_ref(), spline)?;
+            spine_envelope(&spine, path).expand(section.reach())
+        }
+        // A patch lies inside its boundary's hull when flat; a filling is
+        // measured against the surface it patches by the backend.
+        Op::Patch { child, .. } => get(*child)?,
+        Op::Stitch { children, tolerance, .. } => {
+            Op::validate_stitch(children, *tolerance)?;
+            let mut acc = get(children[0])?;
+            for c in &children[1..] {
+                acc = acc.union(get(*c)?);
+            }
+            acc.expand(*tolerance)
+        }
+        // Trimming only removes.
+        Op::Trim { child, tool, plane, keep } => {
+            Op::validate_trim(*tool, plane.as_ref(), *keep)?;
+            get(*child)?
+        }
+        Op::Thicken { child, thickness, side } => {
+            Op::validate_thicken(*thickness)?;
+            let (out, inward) = side.reach(*thickness);
+            get(*child)?.expand(out.max(inward))
+        }
+        Op::OffsetSurface { child, distance } => {
+            Op::validate_offset_surface(*distance)?;
+            get(*child)?.expand(distance.abs())
         }
 
         Op::Torus { major, minor, sweep } => {
@@ -456,6 +474,30 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
     })
 }
 
+/// The box a sweep's spine lies in: a path's inside the box over its points
+/// (runs trimmed to their tangent points, arcs inside each corner's own
+/// triangle), a helix's inside the cylinder of its larger radius over its
+/// height about z = 0, a spline's inside its control points.
+fn spine_envelope(spine: &SweepSpine, path: &[V3]) -> Aabb {
+    let over = |points: &mut dyn Iterator<Item = V3>| {
+        let (mut lo, mut hi) = (V3::splat(f64::MAX), V3::splat(f64::MIN));
+        for p in points {
+            lo = V3::new(lo.x.min(p.x), lo.y.min(p.y), lo.z.min(p.z));
+            hi = V3::new(hi.x.max(p.x), hi.y.max(p.y), hi.z.max(p.z));
+        }
+        Aabb { min: lo, max: hi }
+    };
+    match spine {
+        SweepSpine::Helix(helix) => {
+            let r = helix.radius.max(helix.end_radius());
+            let h = helix.height() / 2.0;
+            Aabb { min: V3::new(-r, -r, -h), max: V3::new(r, r, h) }
+        }
+        SweepSpine::Path(_) => over(&mut path.iter().copied()),
+        SweepSpine::Spline(curve) => over(&mut curve.poles.iter().map(|[x, y, z]| V3::new(*x, *y, *z))),
+    }
+}
+
 fn ordered(a: f64, b: f64) -> (f64, f64) {
     if a <= b {
         (a, b)
@@ -524,6 +566,27 @@ pub fn mass_properties(vertices: &[[f32; 3]], triangles: &[[usize; 3]]) -> MassP
         volume_mm3: volume.abs(),
         area_mm2: area,
         centroid,
+    }
+}
+
+/// The centre of a mesh's area rather than its volume: where a surface,
+/// which encloses nothing, is.
+pub fn area_centroid(vertices: &[[f32; 3]], triangles: &[[usize; 3]]) -> V3 {
+    let (mut area, mut moment) = (0.0f64, [0.0f64; 3]);
+    for t in triangles {
+        let (a, b, c) = (vertex(vertices, t[0]), vertex(vertices, t[1]), vertex(vertices, t[2]));
+        let (ab, ac) = ([b[0] - a[0], b[1] - a[1], b[2] - a[2]], [c[0] - a[0], c[1] - a[1], c[2] - a[2]]);
+        let n = [ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0]];
+        let w = (n[0] * n[0] + n[1] * n[1] + n[2] * n[2]).sqrt() / 2.0;
+        area += w;
+        for i in 0..3 {
+            moment[i] += w * (a[i] + b[i] + c[i]) / 3.0;
+        }
+    }
+    if area > 0.0 {
+        V3::new(moment[0] / area, moment[1] / area, moment[2] / area)
+    } else {
+        V3::ZERO
     }
 }
 

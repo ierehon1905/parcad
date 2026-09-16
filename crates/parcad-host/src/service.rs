@@ -993,7 +993,7 @@ pub fn export_step_within(doc: &Doc, budget: Option<std::time::Duration>) -> Res
         bytes,
         filename: "part.step",
         content_type: "application/step",
-        measured: ExportMeasured::of(&report, body_reports(&built.success), None, built.reused),
+        measured: ExportMeasured::of(&report, &built.success, body_reports(&built.success), None, built.reused),
     })
 }
 

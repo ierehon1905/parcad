@@ -978,6 +978,9 @@ pub struct Section {
     /// The `Segment::Curve`s drawn from a function, by index into `segments`,
     /// with what the kernel must measure each against.
     pub held: Vec<(usize, Held)>,
+    /// False for an open curve, which a surface takes: its pieces run from
+    /// the first corner to the last and nothing joins the last to the first.
+    pub closed: bool,
 }
 
 impl Section {
@@ -1024,17 +1027,26 @@ impl Section {
 /// Resolve a section's entries into boundary pieces, refusing what is not a
 /// closed outline. `what` names the section in messages: "extrude profile".
 pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> {
-    resolve_checking(entries, what, true)
+    resolve_checking(entries, what, true, true)
+}
+
+/// Resolve a curve a surface is made from: a closed outline as [`resolve`]
+/// does, or, when `closed` is false, an open one — the same entries, running
+/// from the first corner to the last with nothing joining them, so it must
+/// start and end on a corner (or be one `{ spline }` or `{ fit }`), cannot
+/// round its two end corners, and encloses no area.
+pub fn resolve_curve(entries: &[SectionEntry], closed: bool, what: &str) -> Result<Section, String> {
+    resolve_checking(entries, what, true, closed)
 }
 
 /// [`resolve`] without refusing lines, arcs and curves that cross: how the
 /// section corpus asks the kernel alone about an outline the core refuses.
 /// Nothing that builds a part calls it.
 pub fn resolve_unchecked(entries: &[SectionEntry], what: &str) -> Result<Section, String> {
-    resolve_checking(entries, what, false)
+    resolve_checking(entries, what, false, true)
 }
 
-fn resolve_checking(entries: &[SectionEntry], what: &str, crossings: bool) -> Result<Section, String> {
+fn resolve_checking(entries: &[SectionEntry], what: &str, crossings: bool, closed: bool) -> Result<Section, String> {
     for entry in entries {
         let finite = |p: &P2| p[0].is_finite() && p[1].is_finite();
         let ok = match entry {
@@ -1060,7 +1072,13 @@ fn resolve_checking(entries: &[SectionEntry], what: &str, crossings: bool) -> Re
     }
 
     if let [SectionEntry::Inset { of, by }] = entries {
+        if !closed {
+            return Err(format!("{what} is an inset, which is a closed outline; an open curve cannot be one"));
+        }
         return resolve_inset(of, *by, what, crossings);
+    }
+    if !closed {
+        return resolve_open(entries, what, crossings);
     }
     if let Some(i) = entries.iter().position(|e| matches!(e, SectionEntry::Inset { .. })) {
         return Err(format!(
@@ -1093,7 +1111,7 @@ fn resolve_checking(entries: &[SectionEntry], what: &str, crossings: bool) -> Re
             })
             .sum::<f64>()
             / 2.0;
-        return Ok(Section { segments, area, polygon: Some(points), inset: None, held: Vec::new() });
+        return Ok(Section { segments, area, polygon: Some(points), inset: None, held: Vec::new(), closed: true });
     }
 
     let corners: Vec<usize> = (0..entries.len()).filter(|&i| entries[i].is_corner()).collect();
@@ -1121,6 +1139,14 @@ fn resolve_checking(entries: &[SectionEntry], what: &str, crossings: bool) -> Re
         };
     }
 
+    resolve_joined(entries, &corners, what, crossings, false)
+}
+
+/// The corners of `entries` and what joins each to the next, as segments,
+/// the last corner joined back to the first. `chain` is set for an open
+/// curve whose closing line is about to be dropped: its area and winding
+/// say nothing, so neither is checked or used.
+fn resolve_joined(entries: &[SectionEntry], corners: &[usize], what: &str, crossings: bool, chain: bool) -> Result<Section, String> {
     let n = corners.len();
     let at = |k: usize| -> P2 {
         match &entries[corners[k % n]] {
@@ -1254,7 +1280,7 @@ fn resolve_checking(entries: &[SectionEntry], what: &str, crossings: bool) -> Re
             a[0] * b[1] - b[0] * a[1]
         })
         .sum();
-    let winding = if corner_area < 0.0 { -1.0 } else { 1.0 };
+    let winding = if corner_area < 0.0 && !chain { -1.0 } else { 1.0 };
     let mut segments = Vec::new();
     let mut places = Vec::new();
     let mut held = Vec::new();
@@ -1390,7 +1416,136 @@ fn resolve_checking(entries: &[SectionEntry], what: &str, crossings: bool) -> Re
     if crossings {
         refuse_crossing(&segments, what, |i, span| places[i].clone().at_span(span))?;
     }
+    if chain {
+        return Ok(Section { segments, area: 0.0, polygon: None, inset: None, held, closed: false });
+    }
     Ok(Section { held, ..finish(segments, what)? })
+}
+
+/// An open curve: the corners and joins of a closed section with the stretch
+/// from the last corner back to the first left out.
+fn resolve_open(entries: &[SectionEntry], what: &str, crossings: bool) -> Result<Section, String> {
+    let open = |segments: Vec<Segment>, held: Vec<(usize, Held)>| -> Result<Section, String> {
+        if crossings {
+            if let Some(found) = crate::section_crossing::chain_crossing(&segments, false) {
+                return Err(format!(
+                    "{what} touches or crosses itself near [{:.4}, {:.4}] (pieces {} and {}), and a surface through it would pass through itself. Move the points so the curve passes each place once",
+                    found.near[0], found.near[1], found.first.0, found.second.0
+                ));
+            }
+        }
+        Ok(Section { segments, area: 0.0, polygon: None, inset: None, held, closed: false })
+    };
+    match entries {
+        [] | [_] if entries.iter().all(SectionEntry::is_corner) => {
+            return Err(format!(
+                "{what} needs at least 2 points to be a curve; got {}. List them as [x, y] pairs from one end to the other",
+                entries.len()
+            ))
+        }
+        [SectionEntry::Spline { points, start, end }] => {
+            if points.len() < 2 {
+                return Err(format!("{what}: a spline needs at least 2 points; got {}", points.len()));
+            }
+            let curve = if points.len() == 2 {
+                BSpline::clamped_uniform(points.clone(), 1)
+            } else {
+                interpolate(points, *start, *end).map_err(|e| format!("{what}: {e}"))?
+            };
+            return open(vec![Segment::Curve(curve)], Vec::new());
+        }
+        [SectionEntry::Fit { points, tolerance }] => {
+            check_fit(points, *tolerance, 3, what)?;
+            return open(vec![Segment::Fit { points: points.clone(), tolerance: *tolerance, closed: false }], Vec::new());
+        }
+        _ => {}
+    }
+    let first = entries.first().is_some_and(SectionEntry::is_corner);
+    let last = entries.last().is_some_and(SectionEntry::is_corner);
+    if !first || !last {
+        return Err(format!(
+            "{what} is an open curve, so it starts and ends on a corner [x, y]; put a corner {} the {}. A curve that is one {{ spline }} or {{ fit }} alone needs none",
+            if first { "after" } else { "before" },
+            if first { "last arc or curve" } else { "first arc or curve" }
+        ));
+    }
+    for (i, entry) in [(0, &entries[0]), (entries.len() - 1, &entries[entries.len() - 1])] {
+        if let SectionEntry::Corner { .. } = entry {
+            return Err(format!(
+                "{what} entry {i} rounds an end of an open curve, where there is only one edge to round; write it as [x, y]"
+            ));
+        }
+    }
+    // Resolve the chain as a closed section whose closing stretch is a
+    // straight line, then drop that line: every other stretch is resolved
+    // by the same code a closed section's is, and the closing line is the
+    // last segment by construction.
+    let corners = entries.iter().filter(|e| e.is_corner()).count();
+    if corners == 2 && entries.len() == 2 {
+        let (a, b) = match entries {
+            [SectionEntry::Point(a), SectionEntry::Point(b)] => (*a, *b),
+            _ => unreachable!("both entries are plain corners"),
+        };
+        refuse_speck(&a, &b, || format!("{what}'s two points"))?;
+        if dist(&a, &b) < 1e-9 {
+            return Err(format!("{what}'s two points are the same point, which is no curve"));
+        }
+        return open(vec![Segment::Line { a, b }], Vec::new());
+    }
+    let chain = resolve_closed_chain(entries, what)?;
+    open(chain.0, chain.1)
+}
+
+/// The segments of `entries` read as a closed section, less the straight
+/// line from the last corner back to the first; see [`resolve_open`].
+fn resolve_closed_chain(entries: &[SectionEntry], what: &str) -> Result<(Vec<Segment>, Vec<(usize, Held)>), String> {
+    let as_closed = resolve_checking_unclosed(entries, what)?;
+    let mut segments = as_closed.segments;
+    let first = match entries.first() {
+        Some(SectionEntry::Point(p)) => *p,
+        _ => unreachable!("an open curve starts on a plain corner"),
+    };
+    let last = match entries.last() {
+        Some(SectionEntry::Point(p)) => *p,
+        _ => unreachable!("an open curve ends on a plain corner"),
+    };
+    // The closing edge is absent when the curve already ends where it starts.
+    if dist(&first, &last) > 1e-9 {
+        match segments.pop() {
+            Some(Segment::Line { a, b }) if a == last && b == first => {}
+            other => unreachable!("the closing stretch of an open curve is a line, got {other:?}"),
+        }
+    }
+    Ok((segments, as_closed.held))
+}
+
+/// [`resolve_checking`] for a chain about to lose its closing line: the
+/// corner and join rules only, no crossing check and no area, both of which
+/// the closing line would falsify.
+fn resolve_checking_unclosed(entries: &[SectionEntry], what: &str) -> Result<Section, String> {
+    if entries.iter().all(|e| matches!(e, SectionEntry::Point(_))) {
+        let n = entries.len();
+        let points: Vec<P2> = entries
+            .iter()
+            .map(|e| match e {
+                SectionEntry::Point(p) => *p,
+                _ => unreachable!(),
+            })
+            .collect();
+        let mut segments = Vec::new();
+        for i in 0..n - 1 {
+            refuse_speck(&points[i], &points[i + 1], || format!("{what}'s points {i} and {}", i + 1))?;
+            if dist(&points[i], &points[i + 1]) > 1e-9 {
+                segments.push(Segment::Line { a: points[i], b: points[i + 1] });
+            }
+        }
+        if dist(&points[n - 1], &points[0]) > 1e-9 {
+            segments.push(Segment::Line { a: points[n - 1], b: points[0] });
+        }
+        return Ok(Section { segments, area: 0.0, polygon: None, inset: None, held: Vec::new(), closed: false });
+    }
+    let corners: Vec<usize> = (0..entries.len()).filter(|&i| entries[i].is_corner()).collect();
+    resolve_joined(entries, &corners, what, false, true)
 }
 
 /// Where on an authored section a resolved segment came from, for a refusal
@@ -1538,7 +1693,7 @@ fn resolve_inset(of: &[SectionEntry], by: f64, what: &str, crossings: bool) -> R
             "{what}: an inset steps the outline inward by a distance in mm, which must be more than 0; got {by}. To grow an outline, draw the larger one"
         ));
     }
-    let outline = resolve_checking(of, &format!("{what}'s inset outline"), crossings)?;
+    let outline = resolve_checking(of, &format!("{what}'s inset outline"), crossings, true)?;
     if outline.inset.is_some() {
         return Err(format!("{what} insets an inset; add the two distances and inset the outline once"));
     }
@@ -1551,7 +1706,7 @@ fn resolve_inset(of: &[SectionEntry], by: f64, what: &str, crossings: bool) -> R
             }
         }
     }
-    Ok(Section { segments: outline.segments, area: outline.area, polygon: None, inset: Some(by), held: outline.held })
+    Ok(Section { segments: outline.segments, area: outline.area, polygon: None, inset: Some(by), held: outline.held, closed: true })
 }
 
 fn describe(entry: &SectionEntry) -> String {
@@ -1571,7 +1726,7 @@ fn finish(segments: Vec<Segment>, what: &str) -> Result<Section, String> {
     if area.abs() < 1e-12 {
         return Err(format!("{what} encloses no area"));
     }
-    Ok(Section { segments, area, polygon: None, inset: None, held: Vec::new() })
+    Ok(Section { segments, area, polygon: None, inset: None, held: Vec::new(), closed: true })
 }
 
 /// Whether a polygon's straight edges cross or touch anywhere but at the

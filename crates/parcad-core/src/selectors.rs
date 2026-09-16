@@ -191,6 +191,9 @@ pub enum CurveKind {
 pub enum EdgeRole {
     /// A circular loop whose neighbouring wall faces toward its centre.
     Hole,
+    /// A free edge: the edge of a surface, bordered by one face only. A
+    /// closed solid has none.
+    Boundary,
 }
 
 /// A face relationship for an edge query.

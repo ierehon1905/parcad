@@ -816,6 +816,118 @@ pub enum Op {
         recipe: ChamferRecipe,
     },
 
+
+    /// An open or closed plane curve in XY, swept along +Z into a surface:
+    /// the surface counterpart of [`Op::Extrude`]. Centred in Z like every
+    /// primitive; no caps, so a closed curve makes a tube open at both ends.
+    ///
+    /// A surface face's outward normal lies to the right of the curve's
+    /// direction of travel seen from +Z — the outside of an anticlockwise
+    /// outline — and `thicken`'s `out` and `in` are read against it.
+    SurfaceExtrude {
+        /// `[x, y]` corners and curve entries from one end to the other, or
+        /// round a closed curve; see [`crate::section::resolve_curve`].
+        curve: Vec<SectionEntry>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        closed: bool,
+        /// Full length along Z.
+        height: f64,
+    },
+
+    /// A curve in the (radius, z) half-plane revolved about +Z into a
+    /// surface. Normal to the right of the curve's travel in that plane.
+    SurfaceRevolve {
+        curve: Vec<SectionEntry>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        closed: bool,
+        /// How far round, in degrees, from +X anticlockwise.
+        #[serde(default = "full_turn", skip_serializing_if = "is_full_turn")]
+        degrees: f64,
+    },
+
+    /// A surface through two or more curves stacked along +Z, pairing their
+    /// pieces by index as [`Op::Loft`] does. Curves that are each one
+    /// `{ fit }` over the same number of points are skinned on one shared
+    /// knot vector. No caps.
+    SurfaceLoft {
+        sections: Vec<CurveSection>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        closed: bool,
+        #[serde(default, skip_serializing_if = "is_false")]
+        smooth: bool,
+    },
+
+    /// A curve swept along a path, a helix or a spline into a surface, drawn
+    /// and carried as [`Op::Sweep`] draws its profile.
+    SurfaceSweep {
+        curve: Vec<SectionEntry>,
+        #[serde(default, skip_serializing_if = "is_false")]
+        closed: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        path: Vec<V3>,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        bend: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        helix: Option<Helix>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        spline: Vec<V3>,
+    },
+
+    /// Faces filling every closed loop the selected free edges of `child`
+    /// make: a plane where the loop is flat, otherwise a filling surface
+    /// through the edges, measured against them. The result is the patch
+    /// alone; stitch it to `child` to close it.
+    Patch {
+        child: NodeId,
+        selector: EdgeSelector,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expect: Option<EdgeExpectation>,
+        /// Tangent to the faces the loop borders, rather than only passing
+        /// through the edges. A flat loop is filled flat either way.
+        #[serde(default, skip_serializing_if = "is_false")]
+        tangent: bool,
+    },
+
+    /// Surfaces sewn along the edges they share within `tolerance`, into
+    /// one surface — and into a solid when the result closes, measured by
+    /// its free edges.
+    Stitch {
+        children: Vec<NodeId>,
+        /// The widest gap sewn shut, in mm.
+        tolerance: f64,
+        /// Refuse unless the result closes into a solid.
+        #[serde(default, skip_serializing_if = "is_false")]
+        solid: bool,
+    },
+
+    /// A surface cut by a tool — another shape, or a plane — keeping the
+    /// pieces on one side of it, or all of them split along it.
+    Trim {
+        child: NodeId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tool: Option<NodeId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        plane: Option<TrimPlane>,
+        keep: TrimKeep,
+    },
+
+    /// A surface made a solid of `thickness`, measured square to the
+    /// surface: on its normal side (`out`), the other (`in`), or centred
+    /// on it (`both`).
+    Thicken {
+        child: NodeId,
+        thickness: f64,
+        #[serde(default, skip_serializing_if = "ThickenSide::is_both")]
+        side: ThickenSide,
+    },
+
+    /// A surface moved `distance` along its normals: a new surface, the
+    /// same shape offset, measured.
+    OffsetSurface {
+        child: NodeId,
+        distance: f64,
+    },
+
     /// Several solids that stay several: a part finished as named bodies.
     ///
     /// Written only by a script that returns an object of shapes —
@@ -833,6 +945,82 @@ pub enum Op {
         bodies: Vec<NamedBody>,
     },
 }
+
+/// One [`Op::SurfaceLoft`] curve, lying flat at `z`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CurveSection {
+    pub curve: Vec<SectionEntry>,
+    pub z: f64,
+}
+
+/// A cutting plane: through `point`, facing `normal`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct TrimPlane {
+    pub point: V3,
+    pub normal: V3,
+}
+
+/// Which pieces of a trimmed surface stay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TrimKeep {
+    /// Inside a solid tool.
+    Inside,
+    /// Outside a solid tool.
+    Outside,
+    /// On a plane's normal side.
+    Above,
+    Below,
+    /// On a surface tool's normal side.
+    Front,
+    Back,
+    /// Every piece, split along the tool.
+    Both,
+}
+
+impl TrimKeep {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Inside => "inside",
+            Self::Outside => "outside",
+            Self::Above => "above",
+            Self::Below => "below",
+            Self::Front => "front",
+            Self::Back => "back",
+            Self::Both => "both",
+        }
+    }
+}
+
+/// Which side of a surface [`Op::Thicken`] adds material on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThickenSide {
+    #[default]
+    Both,
+    Out,
+    In,
+}
+
+impl ThickenSide {
+    pub fn is_both(&self) -> bool {
+        *self == ThickenSide::Both
+    }
+
+    /// How far the material reaches along the surface's normal, and how far
+    /// against it.
+    pub fn reach(self, thickness: f64) -> (f64, f64) {
+        match self {
+            Self::Both => (thickness / 2.0, thickness / 2.0),
+            Self::Out => (thickness, 0.0),
+            Self::In => (0.0, thickness),
+        }
+    }
+}
+
+/// The widest gap a stitch may sew shut, in mm: past this it would join
+/// edges that were drawn apart.
+pub const STITCH_MAX_TOLERANCE_MM: f64 = 0.5;
 
 /// One body of an [`Op::Bodies`] root: the name a script gave it, and the
 /// node that is that body's finished solid.
@@ -905,6 +1093,38 @@ pub fn loft_extent(sections: &[LoftSection], resolved: &[Option<Section>]) -> ([
         hi = [hi[0].max(b[0]), hi[1].max(b[1])];
     }
     (lo, hi)
+}
+
+/// The box an [`Op::SurfaceLoft`] promises to stay in, as `(min, max)`:
+/// its curves' own box, and for a smooth surface that box widened by the
+/// furthest one curve's box moves from the next's. A smooth surface through
+/// curves that turn or swell between them reaches past both — its extreme
+/// lies between the curves, not on one — by less than the step it takes;
+/// the backend measures the built surface against this and refuses past it.
+pub fn surface_loft_extent(sections: &[CurveSection], resolved: &[Section], smooth: bool) -> (V3, V3) {
+    let boxes: Vec<([f64; 2], [f64; 2])> = resolved.iter().map(Section::bounds).collect();
+    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+    for (a, b) in &boxes {
+        lo = [lo[0].min(a[0]), lo[1].min(a[1])];
+        hi = [hi[0].max(b[0]), hi[1].max(b[1])];
+    }
+    let step = if smooth {
+        boxes
+            .windows(2)
+            .map(|w| {
+                let (a, b) = (w[0], w[1]);
+                [a.0[0] - b.0[0], a.0[1] - b.0[1], a.1[0] - b.1[0], a.1[1] - b.1[1]]
+                    .iter()
+                    .fold(0.0f64, |m, d| m.max(d.abs()))
+            })
+            .fold(0.0, f64::max)
+    } else {
+        0.0
+    };
+    (
+        V3::new(lo[0] - step, lo[1] - step, sections[0].z),
+        V3::new(hi[0] + step, hi[1] + step, sections[sections.len() - 1].z),
+    )
 }
 
 fn is_false(value: &bool) -> bool {
@@ -1482,6 +1702,165 @@ impl Op {
                 if floors > 1.0 { "s" } else { "" },
                 wall.thickness
             );
+        }
+        Ok(())
+    }
+
+    /// Resolve the curve a surface is made from.
+    pub fn validate_curve(curve: &[SectionEntry], closed: bool, what: &str) -> anyhow::Result<Section> {
+        section::resolve_curve(curve, closed, what).map_err(|e| anyhow::anyhow!(e))
+    }
+
+    pub fn validate_surface_extrude(curve: &[SectionEntry], closed: bool, height: f64) -> anyhow::Result<Section> {
+        if !(height.is_finite() && height > 0.0) {
+            anyhow::bail!("a surface extrusion is {height} mm long; give a positive length in mm");
+        }
+        Self::validate_curve(curve, closed, "surfaceExtrude curve")
+    }
+
+    /// A revolved curve is checked against the axis as a revolve profile is:
+    /// a curve crossing it sweeps through itself.
+    pub fn validate_surface_revolve(curve: &[SectionEntry], closed: bool, degrees: f64) -> anyhow::Result<Section> {
+        if !(degrees.is_finite() && degrees > 0.0 && degrees <= 360.0) {
+            anyhow::bail!("a surface revolution of {degrees}° is not a turn; give more than 0 and at most 360");
+        }
+        for (i, entry) in curve.iter().enumerate() {
+            if let SectionEntry::Point([r, _]) = entry {
+                if *r < 0.0 {
+                    anyhow::bail!(
+                        "surfaceRevolve curve point {i} has radius {r}, left of the axis. A curve that crosses the axis sweeps through itself; keep every radius >= 0"
+                    );
+                }
+            }
+        }
+        let section = Self::validate_curve(curve, closed, "surfaceRevolve curve")?;
+        let leftmost = section.leftmost();
+        if leftmost < -1e-9 {
+            anyhow::bail!(
+                "surfaceRevolve curve reaches radius {leftmost:.4}, left of the axis: an arc bulges past it or a curve's control point lies there. Keep every arc and control point at radius >= 0"
+            );
+        }
+        Ok(section)
+    }
+
+    /// Curves pair by index, as a loft's outlines do, so every curve must
+    /// resolve to the same number of pieces.
+    pub fn validate_surface_loft(sections: &[CurveSection], closed: bool) -> anyhow::Result<Vec<Section>> {
+        if sections.len() < 2 {
+            anyhow::bail!("a surface loft needs at least 2 curves; got {}. Each is {{ z, curve }}", sections.len());
+        }
+        let mut resolved: Vec<Section> = Vec::with_capacity(sections.len());
+        for (i, section) in sections.iter().enumerate() {
+            if !section.z.is_finite() {
+                anyhow::bail!("surfaceLoft curve {i} is at height {}, which is not a height", section.z);
+            }
+            if i > 0 && section.z <= sections[i - 1].z {
+                anyhow::bail!(
+                    "surfaceLoft curves must rise strictly: curve {i} is at z = {}, below or level with curve {} at z = {}",
+                    section.z,
+                    i - 1,
+                    sections[i - 1].z
+                );
+            }
+            let curve = Self::validate_curve(&section.curve, closed, &format!("surfaceLoft curve {i}"))?;
+            if let Some(first) = resolved.first() {
+                if curve.segments.len() != first.segments.len() {
+                    anyhow::bail!(
+                        "surfaceLoft curves must all have the same number of pieces, because the surface pairs them by index — a straight edge, an arc or a curve each count one: curve {i} has {}, curve 0 has {}. Split a piece with an extra corner to make the counts match",
+                        curve.segments.len(),
+                        first.segments.len()
+                    );
+                }
+            }
+            resolved.push(curve);
+        }
+        Ok(resolved)
+    }
+
+    pub fn validate_surface_sweep(
+        curve: &[SectionEntry],
+        closed: bool,
+        path: &[V3],
+        bend: f64,
+        helix: Option<&Helix>,
+        spline: &[V3],
+    ) -> anyhow::Result<(SweepSection, SweepSpine)> {
+        let section = SweepSection::Outline(Self::validate_curve(curve, closed, "surfaceSweep curve")?);
+        let spines = [!path.is_empty(), helix.is_some(), !spline.is_empty()];
+        match spines.iter().filter(|given| **given).count() {
+            0 => anyhow::bail!("a surface sweep needs a spine: a `path` of points, a `helix` or a `spline`"),
+            1 => {}
+            _ => anyhow::bail!("a surface sweep follows one spine — a `path`, a `helix` or a `spline` — not several"),
+        }
+        let spine = match helix {
+            Some(helix) => {
+                if bend != 0.0 {
+                    anyhow::bail!("a helical sweep has no corners to bend; drop the bend");
+                }
+                Self::validate_helix(helix, &section, 1.0)?;
+                SweepSpine::Helix(*helix)
+            }
+            None if !spline.is_empty() => {
+                if bend != 0.0 {
+                    anyhow::bail!("a spline sweep has no corners to bend; drop the bend option");
+                }
+                SweepSpine::Spline(Self::spline_spine(spline, section.reach())?)
+            }
+            None => SweepSpine::Path(Self::path_spine(&section, path, bend, 1.0)?),
+        };
+        Ok((section, spine))
+    }
+
+    pub fn validate_stitch(children: &[NodeId], tolerance: f64) -> anyhow::Result<()> {
+        if children.is_empty() {
+            anyhow::bail!("stitchSurfaces needs at least one surface");
+        }
+        if !(tolerance.is_finite() && tolerance > 0.0 && tolerance <= STITCH_MAX_TOLERANCE_MM) {
+            anyhow::bail!(
+                "a stitch tolerance of {tolerance} mm is outside what sewing can honestly close: give more than 0 and at most {STITCH_MAX_TOLERANCE_MM} mm. A wider gap is a gap to model shut, with a patch or a longer surface"
+            );
+        }
+        Ok(())
+    }
+
+    pub fn validate_trim(tool: Option<NodeId>, plane: Option<&TrimPlane>, keep: TrimKeep) -> anyhow::Result<()> {
+        match (tool, plane) {
+            (Some(_), Some(_)) => anyhow::bail!("a trim cuts with one tool: a shape or a plane, not both"),
+            (None, None) => anyhow::bail!("a trim needs a tool: a shape, or {{ plane: {{ point, normal }} }}"),
+            (None, Some(plane)) => {
+                let n = plane.normal;
+                if !(n.length().is_finite() && n.length() > 1e-12) || ![plane.point.x, plane.point.y, plane.point.z].iter().all(|v| v.is_finite()) {
+                    anyhow::bail!("a trim plane needs a finite point and a non-zero normal");
+                }
+                if !matches!(keep, TrimKeep::Above | TrimKeep::Below | TrimKeep::Both) {
+                    anyhow::bail!(
+                        "a plane has two sides, above (where its normal points) and below: keep \"above\", \"below\" or \"both\", not \"{}\"",
+                        keep.name()
+                    );
+                }
+            }
+            (Some(_), None) => {
+                if matches!(keep, TrimKeep::Above | TrimKeep::Below) {
+                    anyhow::bail!(
+                        "\"{}\" is a side of a plane; a solid tool keeps \"inside\" or \"outside\", a surface tool \"front\" (its normal side) or \"back\", and either keeps \"both\"",
+                        keep.name()
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn validate_thicken(thickness: f64) -> anyhow::Result<()> {
+        if !(thickness.is_finite() && thickness > 0.0) {
+            anyhow::bail!("thicken takes a positive thickness in mm; got {thickness}");
+        }
+        Ok(())
+    }
+
+    pub fn validate_offset_surface(distance: f64) -> anyhow::Result<()> {
+        if !(distance.is_finite() && distance != 0.0) {
+            anyhow::bail!("offsetSurface moves a surface by a distance in mm, positive along its normal, negative against it; got {distance}");
         }
         Ok(())
     }
@@ -2163,8 +2542,15 @@ impl Doc {
             | Op::Extrude { .. }
             | Op::Loft { .. }
             | Op::Sweep { .. }
-            | Op::Thread { .. } => vec![],
+            | Op::Thread { .. }
+            | Op::SurfaceExtrude { .. }
+            | Op::SurfaceRevolve { .. }
+            | Op::SurfaceLoft { .. }
+            | Op::SurfaceSweep { .. } => vec![],
             Op::Bodies { bodies } => bodies.iter().map(|b| b.child).collect(),
+            Op::Stitch { children, .. } => children.clone(),
+            Op::Trim { child, tool, .. } => std::iter::once(*child).chain(*tool).collect(),
+            Op::Patch { child, .. } | Op::Thicken { child, .. } | Op::OffsetSurface { child, .. } => vec![*child],
             Op::Union { children, .. } | Op::Intersection { children, .. } => children.clone(),
             Op::Difference { base, tools, .. } => {
                 let mut v = vec![*base];
@@ -2191,6 +2577,10 @@ impl Doc {
             match &self.nodes[id].op {
                 Op::Extrude { profile, .. } | Op::Revolve { profile } | Op::Sweep { profile, .. } => profile.iter().collect(),
                 Op::Loft { sections, .. } => sections.iter().flat_map(|s| s.outline.iter()).collect(),
+                Op::SurfaceExtrude { curve, .. } | Op::SurfaceRevolve { curve, .. } | Op::SurfaceSweep { curve, .. } => {
+                    curve.iter().collect()
+                }
+                Op::SurfaceLoft { sections, .. } => sections.iter().flat_map(|s| s.curve.iter()).collect(),
                 _ => Vec::new(),
             }
         });

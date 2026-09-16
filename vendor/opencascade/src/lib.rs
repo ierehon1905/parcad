@@ -7,6 +7,7 @@ pub(crate) mod history;
 pub mod mesh;
 pub mod primitives;
 pub mod skin;
+pub mod surfacing;
 pub mod sweep;
 pub mod workplane;
 

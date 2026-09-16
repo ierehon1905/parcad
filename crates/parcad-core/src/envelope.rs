@@ -41,6 +41,7 @@ pub const FEATURES: &[&str] = &[
     "bspline-knots",
     "held-curves",
     "loft-wall",
+    "surfaces",
 ];
 
 /// The version of parcad reading the graph.

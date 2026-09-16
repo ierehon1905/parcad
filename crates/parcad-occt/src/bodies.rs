@@ -17,12 +17,16 @@ use parcad_core::{
 /// One named body, measured off its own slice of the part's mesh.
 pub struct MeasuredBody {
     pub name: String,
+    pub kind: crate::protocol::BodyKind,
     /// The kernel's own counts for this body alone.
     pub faces: usize,
     pub edges: usize,
     /// Tight bounds from the body's vertices.
     pub bounds: Aabb,
     pub mass: MassProperties,
+    /// The centre of the body's area: where a surface, which encloses
+    /// nothing, is.
+    pub area_centroid: parcad_core::graph::V3,
     /// `stats.bodies` here is the number of free-standing pieces *inside this
     /// named body* — one when it is intact, which is the only defect the
     /// part-level count cannot separate from an intended second body.
@@ -63,10 +67,12 @@ fn measure_body(whole: &Tessellation, span: &BodySpan) -> Option<MeasuredBody> {
     let bounds = Aabb::from_points(&tess.vertices)?;
     Some(MeasuredBody {
         name: span.name.clone(),
+        kind: span.kind,
         faces: span.faces,
         edges: span.edges,
         bounds,
         mass: measure::mass_properties(&tess.vertices, &tess.triangles),
+        area_centroid: measure::area_centroid(&tess.vertices, &tess.triangles),
         stats: tess.stats(),
         stands_on: tess.bed_contact(),
     })
@@ -133,11 +139,16 @@ mod tests {
             deflection_mm: 0.01,
             deviation_mm: None,
             loft_wall_mm: None,
+            thickened_mm: None,
+            offset_mm: None,
+            patch_gap_mm: None,
+            kind: Default::default(),
+            surfaces: Vec::new(),
             edges: Vec::new(),
             topology: Topology { faces: 12, edges: 24 },
             bodies: vec![
-                BodySpan { name: "near".into(), faces: 6, edges: 12, triangle_start: 0, triangle_count: 12 },
-                BodySpan { name: "far".into(), faces: 6, edges: 12, triangle_start: 12, triangle_count: 12 },
+                BodySpan { name: "near".into(), kind: Default::default(), faces: 6, edges: 12, triangle_start: 0, triangle_count: 12 },
+                BodySpan { name: "far".into(), kind: Default::default(), faces: 6, edges: 12, triangle_start: 12, triangle_count: 12 },
             ],
             between: Vec::new(),
             tag_extents: Vec::new(),

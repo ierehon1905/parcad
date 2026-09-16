@@ -29,8 +29,12 @@ pub fn evaluated(
     wall_ms: u64,
     reused: bool,
 ) -> Result<Evaluated, String> {
-    let (report, _) = measure_brep(doc, s)?;
-    let mut snapshot = describe(doc, &report, &s.topology, body_reports(s), tag_extents(s), wall_ms);
+    let (report, tess) = measure_brep(doc, s)?;
+    let mut snapshot = describe(doc, &report, s, body_reports(s), tag_extents(s), wall_ms);
+    if snapshot.kind != "solid" && s.bodies.is_empty() {
+        let c = parcad_core::measure::area_centroid(&tess.vertices, &tess.triangles);
+        snapshot.centroid = round_point([c.x, c.y, c.z]);
+    }
     snapshot.reused_build = reused;
     snapshot.deviation_mm = s.deviation_mm.map(round_mm);
     if let Some(bound) = doc.stated_curve_bound() {
@@ -39,6 +43,9 @@ pub fn evaluated(
         snapshot.curve_bound = Some(if bound.certified { "certified" } else { "estimated" });
     }
     snapshot.loft_wall_mm = s.loft_wall_mm.map(|w| WallRange { min: round_mm(w.min), max: round_mm(w.max) });
+    snapshot.thickened_mm = s.thickened_mm.map(|w| WallRange { min: round_mm(w.min), max: round_mm(w.max) });
+    snapshot.offset_mm = s.offset_mm.map(|w| WallRange { min: round_mm(w.min), max: round_mm(w.max) });
+    snapshot.patch_gap_mm = s.patch_gap_mm.map(|d| (d * 1e6).ceil() / 1e6);
     Ok(Evaluated {
         bounds: report.bounds,
         snapshot,
@@ -55,12 +62,30 @@ pub fn evaluated(
 /// A part as binary STL, and what the file holds: the welded triangles the
 /// viewport shows.
 pub fn stl(doc: &Doc, s: &parcad_occt::Success, reused: bool) -> Result<(Vec<u8>, ExportMeasured), String> {
+    refuse_surfaces(s, "STL")?;
     let (report, tess) = measure_brep(doc, s)?;
     let mut bytes = Vec::new();
     tess.write_stl(&mut bytes)
         .map_err(|e| format!("writing STL: {e:#}"))?;
-    let measured = ExportMeasured::of(&report, body_reports(s), Some(report.mesh.resolution_mm), reused);
+    let measured = ExportMeasured::of(&report, s, body_reports(s), Some(report.mesh.resolution_mm), reused);
     Ok((bytes, measured))
+}
+
+/// A mesh file describes closed solids, which a slicer fills; a surface has
+/// no inside to fill.
+fn refuse_surfaces(s: &parcad_occt::Success, format: &str) -> Result<(), String> {
+    let surfaces: Vec<String> = if s.bodies.is_empty() {
+        if s.kind.is_solid() { Vec::new() } else { vec!["the part".to_string()] }
+    } else {
+        s.bodies.iter().filter(|b| !b.kind.is_solid()).map(|b| format!("body `{}`", b.name)).collect()
+    };
+    if surfaces.is_empty() {
+        return Ok(());
+    }
+    Err(format!(
+        "{} is a surface, and {format} describes closed solids: a surface has no inside for a slicer to fill. Thicken it into a solid first — .thicken(t) — or export STEP, which carries surfaces exactly",
+        surfaces.join(" and ")
+    ))
 }
 
 /// A part as 3MF, and what the file holds: the same welded triangles as
@@ -72,6 +97,7 @@ pub fn three_mf(
     reused: bool,
     name: &str,
 ) -> Result<(Vec<u8>, ExportMeasured), String> {
+    refuse_surfaces(s, "3MF")?;
     let (report, tess) = measure_brep(doc, s)?;
     let bodies = parcad_occt::body_meshes(s);
     let objects: Vec<(&str, &Tessellation)> = if bodies.is_empty() {
@@ -80,7 +106,7 @@ pub fn three_mf(
         bodies.iter().map(|(name, mesh)| (name.as_str(), mesh)).collect()
     };
     let bytes = parcad_core::threemf::write_3mf(&objects).map_err(|e| format!("writing 3MF: {e:#}"))?;
-    let measured = ExportMeasured::of(&report, body_reports(s), Some(report.mesh.resolution_mm), reused);
+    let measured = ExportMeasured::of(&report, s, body_reports(s), Some(report.mesh.resolution_mm), reused);
     Ok((bytes, measured))
 }
 
@@ -172,6 +198,64 @@ pub struct WallRange {
     pub max: f64,
 }
 
+/// A surface, measured: `open` while it has free edges, which is what
+/// `.thicken(t)` or a stitch with patches changes.
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+pub struct SurfaceSummary {
+    /// The surface bodies' area, off the mesh.
+    pub area_mm2: f64,
+    pub open: bool,
+    pub faces: usize,
+    /// Connected sheets of faces.
+    pub shells: usize,
+    /// Edges bordered by one face: where the surface ends. Select them with
+    /// `{ role: "boundary" }`.
+    pub free_edges: usize,
+    pub free_edge_length_mm: f64,
+    /// Free edges joined into closed loops (a tube's two rims are two) and
+    /// into chains that do not close (a sheet's outline is one loop).
+    pub boundary_loops: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub open_chains: usize,
+    /// What a surface is not, and what to do about it.
+    pub note: &'static str,
+}
+
+const SURFACE_NOTE: &str = "a surface has no volume, wall or print bed: .thicken(t) makes it a solid, \
+     stitchSurfaces(...) closes it into one when its free edges meet; STEP export carries it as it is";
+
+impl SurfaceSummary {
+    fn of(measures: &[&parcad_occt::SurfaceMeasure], area_mm2: f64) -> Self {
+        let free_edges = measures.iter().map(|m| m.free_edges).sum();
+        Self {
+            area_mm2: round_mm(area_mm2),
+            open: free_edges > 0,
+            faces: measures.iter().map(|m| m.faces).sum(),
+            shells: measures.iter().map(|m| m.shells).sum(),
+            free_edges,
+            free_edge_length_mm: round_mm(measures.iter().map(|m| m.free_edge_length_mm).sum()),
+            boundary_loops: measures.iter().map(|m| m.boundary_loops).sum(),
+            open_chains: measures.iter().map(|m| m.open_chains).sum(),
+            note: SURFACE_NOTE,
+        }
+    }
+}
+
+/// Whether a reply's part is solid, surface or mixed.
+fn part_kind(s: &parcad_occt::Success) -> &'static str {
+    if s.bodies.is_empty() {
+        return if s.kind.is_solid() { "solid" } else { "surface" };
+    }
+    let solids = s.bodies.iter().filter(|b| b.kind.is_solid()).count();
+    if solids == s.bodies.len() {
+        "solid"
+    } else if solids == 0 {
+        "surface"
+    } else {
+        "mixed"
+    }
+}
+
 pub fn round_mm(v: f64) -> f64 {
     round_to(v, 1e3)
 }
@@ -232,13 +316,26 @@ pub fn round_fraction(v: f64) -> f64 {
 pub struct EvaluationSnapshot {
     /// Always "mm".
     pub units: String,
+    /// `solid` — every body encloses a volume; `surface` — faces with no
+    /// inside, as a surface loft or trim leaves them, which have no volume,
+    /// watertightness or print bed and report `surface` instead; `mixed` — a
+    /// part in named bodies, some of each.
+    pub kind: &'static str,
     /// Taken from the geometry, never from the requested framing.
     pub size: [f64; 3],
     pub bounds_min: [f64; 3],
     pub bounds_max: [f64; 3],
-    pub volume_mm3: f64,
+    /// The enclosed volume; for a mixed part, its solid bodies'. Absent for
+    /// a surface, which encloses none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_mm3: Option<f64>,
     pub area_mm2: f64,
+    /// The centre of the volume, or of a surface's area.
     pub centroid: [f64; 3],
+    /// What is true of a surface: its area, its free edges and whether it
+    /// closes. Present when any body is a surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface: Option<SurfaceSummary>,
     /// The kernel's own counts. Optional on the wire for the readers written
     /// when a field-sampled evaluation had none; every reply now carries them.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -272,8 +369,24 @@ pub struct EvaluationSnapshot {
     /// mm. Measured, never the thickness asked for.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub loft_wall_mm: Option<WallRange>,
-    pub watertight: bool,
-    pub non_manifold_edges: usize,
+    /// For a part with `.thicken(t)`: the thinnest and thickest the solid
+    /// measures through, square to the surface it was made from, at a grid of
+    /// points on every face. Measured, never the thickness asked for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thickened_mm: Option<WallRange>,
+    /// For a part with `.offsetSurface(d)`: how far the offset surface
+    /// measures from its surface, least and greatest.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset_mm: Option<WallRange>,
+    /// For a part with a filled (non-flat) `patch()`: the widest its boundary
+    /// strays from the edges it fills.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub patch_gap_mm: Option<f64>,
+    /// Whether the solid bodies' mesh closes; absent for a surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watertight: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub non_manifold_edges: Option<usize>,
     /// Connected pieces of surface, measured over the whole part: one for a
     /// part, more for pieces drawn together. Watertight and the right volume
     /// both hold for five bars. For a part that returns several named bodies
@@ -305,6 +418,8 @@ pub struct EvaluationSnapshot {
     /// Which printer beds take the part flat as it lies, and by how much the
     /// others miss: the size against the bed on the axis that fails. A part
     /// that fits no bed is one to split, and this says so before a slicer does.
+    /// Empty for a part with a surface body, which has nothing to print.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub prints_on: Vec<PrintsOn>,
     pub tags: Vec<String>,
     /// Where each of those tags actually is: the exact bounds of the faces the
@@ -366,17 +481,26 @@ fn one_body() -> usize {
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct BodyReport {
     pub name: String,
+    /// `solid` or `surface`.
+    pub kind: &'static str,
     pub size: [f64; 3],
     pub bounds_min: [f64; 3],
     pub bounds_max: [f64; 3],
-    pub volume_mm3: f64,
+    /// Absent for a surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_mm3: Option<f64>,
     pub area_mm2: f64,
+    /// The centre of the volume, or of a surface's area.
     pub centroid: [f64; 3],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub surface: Option<SurfaceSummary>,
     pub faces: usize,
     pub topological_edges: usize,
     pub triangles: usize,
-    pub watertight: bool,
-    pub non_manifold_edges: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watertight: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub non_manifold_edges: Option<usize>,
     /// Free-standing pieces inside this one named body: one when it is
     /// intact. Two is the accidental split — a body whose own booleans left
     /// it in parts — which the part-level `bodies` count cannot tell from a
@@ -387,25 +511,29 @@ pub struct BodyReport {
     pub stands_on: Option<StandsOn>,
 }
 
-impl From<&parcad_occt::MeasuredBody> for BodyReport {
-    fn from(b: &parcad_occt::MeasuredBody) -> Self {
+impl BodyReport {
+    fn of(b: &parcad_occt::MeasuredBody, surface: Option<&parcad_occt::SurfaceMeasure>) -> Self {
         let size = b.bounds.size();
+        let solid = b.kind.is_solid();
+        let centroid = if solid { b.mass.centroid } else { b.area_centroid };
         Self {
             name: b.name.clone(),
+            kind: if solid { "solid" } else { "surface" },
             size: round_point([size.x, size.y, size.z]),
             bounds_min: round_point([b.bounds.min.x, b.bounds.min.y, b.bounds.min.z]),
             bounds_max: round_point([b.bounds.max.x, b.bounds.max.y, b.bounds.max.z]),
-            volume_mm3: round_mm(b.mass.volume_mm3),
+            volume_mm3: solid.then(|| round_mm(b.mass.volume_mm3)),
             area_mm2: round_mm(b.mass.area_mm2),
-            centroid: round_point([b.mass.centroid.x, b.mass.centroid.y, b.mass.centroid.z]),
+            centroid: round_point([centroid.x, centroid.y, centroid.z]),
+            surface: surface.map(|m| SurfaceSummary::of(&[m], b.mass.area_mm2)),
             faces: b.faces,
             topological_edges: b.edges,
             triangles: b.stats.triangles,
-            watertight: b.stats.watertight,
-            non_manifold_edges: b.stats.non_manifold_edges,
+            watertight: solid.then_some(b.stats.watertight),
+            non_manifold_edges: solid.then_some(b.stats.non_manifold_edges),
             pieces: b.stats.bodies,
             voids: b.stats.voids,
-            stands_on: b.stands_on.as_ref().map(StandsOn::from),
+            stands_on: if solid { b.stands_on.as_ref().map(StandsOn::from) } else { None },
         }
     }
 }
@@ -445,7 +573,10 @@ impl From<&parcad_occt::BodyFit> for BodyFit {
 /// snapshot and for an export's `measured`.
 pub fn body_reports(s: &parcad_occt::Success) -> (Vec<BodyReport>, Vec<BodyFit>) {
     (
-        parcad_occt::measure_bodies(s).iter().map(BodyReport::from).collect(),
+        parcad_occt::measure_bodies(s)
+            .iter()
+            .map(|b| BodyReport::of(b, s.surfaces.iter().find(|m| m.body.as_deref() == Some(b.name.as_str()))))
+            .collect(),
         s.between.iter().map(BodyFit::from).collect(),
     )
 }
@@ -662,13 +793,59 @@ pub struct Region {
 pub fn describe(
     doc: &Doc,
     report: &parcad_core::PartReport,
-    topology: &parcad_occt::Topology,
+    s: &parcad_occt::Success,
     (named_bodies, between_bodies): (Vec<BodyReport>, Vec<BodyFit>),
     (extents, unlocated): (Vec<TagExtent>, Vec<String>),
     kernel_ms: u64,
 ) -> EvaluationSnapshot {
+    let kind = part_kind(s);
+    let solids: Vec<&BodyReport> = named_bodies.iter().filter(|b| b.kind == "solid").collect();
+    let (volume, watertight, non_manifold, centroid) = match kind {
+        "solid" => (
+            Some(round_mm(report.mass.volume_mm3)),
+            Some(report.mesh.watertight),
+            Some(report.mesh.non_manifold_edges),
+            round_point([report.mass.centroid.x, report.mass.centroid.y, report.mass.centroid.z]),
+        ),
+        "mixed" => {
+            let volume: f64 = solids.iter().filter_map(|b| b.volume_mm3).sum();
+            let mut moment = [0.0; 3];
+            for b in &solids {
+                for (m, c) in moment.iter_mut().zip(b.centroid) {
+                    *m += c * b.volume_mm3.unwrap_or(0.0);
+                }
+            }
+            (
+                Some(round_mm(volume)),
+                Some(solids.iter().all(|b| b.watertight == Some(true))),
+                Some(solids.iter().filter_map(|b| b.non_manifold_edges).sum()),
+                round_point(moment.map(|m| if volume > 0.0 { m / volume } else { 0.0 })),
+            )
+        }
+        // A one-body surface's centroid is set from its mesh by the caller.
+        _ => (None, None, None, [0.0; 3]),
+    };
+    let surface_measures: Vec<&parcad_occt::SurfaceMeasure> = s.surfaces.iter().collect();
+    let surface_area: f64 = if s.bodies.is_empty() {
+        report.mass.area_mm2
+    } else {
+        named_bodies.iter().filter(|b| b.kind == "surface").map(|b| b.area_mm2).sum()
+    };
+    let centroid = if kind == "surface" && !named_bodies.is_empty() {
+        let mut moment = [0.0; 3];
+        let area: f64 = named_bodies.iter().map(|b| b.area_mm2).sum();
+        for b in &named_bodies {
+            for (m, c) in moment.iter_mut().zip(b.centroid) {
+                *m += c * b.area_mm2;
+            }
+        }
+        round_point(moment.map(|m| if area > 0.0 { m / area } else { 0.0 }))
+    } else {
+        centroid
+    };
     EvaluationSnapshot {
         units: report.units.clone(),
+        kind,
         size: round_point([report.size.x, report.size.y, report.size.z]),
         bounds_min: round_point([
             report.bounds.min.x,
@@ -680,32 +857,36 @@ pub fn describe(
             report.bounds.max.y,
             report.bounds.max.z,
         ]),
-        volume_mm3: round_mm(report.mass.volume_mm3),
+        volume_mm3: volume,
         area_mm2: round_mm(report.mass.area_mm2),
-        centroid: round_point([
-            report.mass.centroid.x,
-            report.mass.centroid.y,
-            report.mass.centroid.z,
-        ]),
-        faces: Some(topology.faces),
-        topological_edges: Some(topology.edges),
+        centroid,
+        surface: (!surface_measures.is_empty()).then(|| SurfaceSummary::of(&surface_measures, surface_area)),
+        faces: Some(s.topology.faces),
+        topological_edges: Some(s.topology.edges),
         triangles: report.mesh.triangles,
         resolution_mm: round_mm(report.mesh.resolution_mm),
         deviation_mm: None,
         curve_bound_mm: None,
         curve_bound: None,
         loft_wall_mm: None,
-        watertight: report.mesh.watertight,
-        non_manifold_edges: report.mesh.non_manifold_edges,
+        thickened_mm: None,
+        offset_mm: None,
+        patch_gap_mm: None,
+        watertight,
+        non_manifold_edges: non_manifold,
         bodies: report.mesh.bodies,
         voids: report.mesh.voids,
         named_bodies,
         between_bodies,
-        stands_on: report.stands_on.as_ref().map(StandsOn::from),
-        prints_on: parcad_core::measure::fits_beds(report.size)
-            .into_iter()
-            .map(PrintsOn::from)
-            .collect(),
+        stands_on: if kind == "solid" { report.stands_on.as_ref().map(StandsOn::from) } else { None },
+        prints_on: if kind == "solid" {
+            parcad_core::measure::fits_beds(report.size)
+                .into_iter()
+                .map(PrintsOn::from)
+                .collect()
+        } else {
+            Vec::new()
+        },
         tags: report.tags.clone(),
         tag_extents: extents,
         unlocated_tags: unlocated,
@@ -815,7 +996,16 @@ pub fn treatments(doc: &Doc) -> Vec<Treatment> {
                 | Op::Scale { .. }
                 | Op::Mirror { .. }
                 | Op::Offset { .. }
-                | Op::Shell { .. } => return None,
+                | Op::Shell { .. }
+                | Op::SurfaceExtrude { .. }
+                | Op::SurfaceRevolve { .. }
+                | Op::SurfaceLoft { .. }
+                | Op::SurfaceSweep { .. }
+                | Op::Patch { .. }
+                | Op::Stitch { .. }
+                | Op::Trim { .. }
+                | Op::Thicken { .. }
+                | Op::OffsetSurface { .. } => return None,
             };
             Some(treatment)
         })
@@ -826,9 +1016,14 @@ pub fn treatments(doc: &Doc) -> Vec<Treatment> {
 /// know whether the file is fit to print.
 #[derive(Serialize, Clone, Debug, schemars::JsonSchema)]
 pub struct ExportMeasured {
+    /// `solid`, `surface` or `mixed`, as `evaluate_part` says.
+    pub kind: &'static str,
     pub size: [f64; 3],
-    pub volume_mm3: f64,
-    pub watertight: bool,
+    /// Absent when the file holds only surfaces.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_mm3: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watertight: Option<bool>,
     /// Free-standing pieces in the file; for a part in several named bodies,
     /// their number when every body is intact.
     pub bodies: usize,
@@ -852,14 +1047,26 @@ pub struct ExportMeasured {
 impl ExportMeasured {
     pub fn of(
         report: &parcad_core::PartReport,
+        s: &parcad_occt::Success,
         (named_bodies, between_bodies): (Vec<BodyReport>, Vec<BodyFit>),
         deflection_mm: Option<f64>,
         reused_build: bool,
     ) -> Self {
+        let kind = part_kind(s);
+        let solids = || named_bodies.iter().filter(|b| b.kind == "solid");
         Self {
+            kind,
             size: round_point([report.size.x, report.size.y, report.size.z]),
-            volume_mm3: round_mm(report.mass.volume_mm3),
-            watertight: report.mesh.watertight,
+            volume_mm3: match kind {
+                "solid" => Some(round_mm(report.mass.volume_mm3)),
+                "mixed" => Some(round_mm(solids().filter_map(|b| b.volume_mm3).sum())),
+                _ => None,
+            },
+            watertight: match kind {
+                "solid" => Some(report.mesh.watertight),
+                "mixed" => Some(solids().all(|b| b.watertight == Some(true))),
+                _ => None,
+            },
             bodies: report.mesh.bodies,
             voids: report.mesh.voids,
             named_bodies,

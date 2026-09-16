@@ -35,6 +35,10 @@ use parcad_core::{
 use crate::protocol::{breadcrumb, edge_curve, EdgeCurve, TargetVertex};
 use std::collections::{BTreeMap, HashSet};
 
+#[path = "surfaces.rs"]
+pub(crate) mod surfaces;
+pub use surfaces::{kind_of, Kind};
+
 fn v(p: V3) -> DVec3 {
     DVec3::new(p.x, p.y, p.z)
 }
@@ -399,10 +403,27 @@ fn locate_crossing(section: &Section) -> Option<String> {
 pub struct Measured {
     pub deviation_mm: Option<f64>,
     pub loft_wall_mm: Option<[f64; 2]>,
+    /// The thinnest and thickest any `thicken` measured, square to its surface.
+    pub thickened_mm: Option<[f64; 2]>,
+    /// The least and greatest distance any `offsetSurface` moved its surface.
+    pub offset_mm: Option<[f64; 2]>,
+    /// The widest any filled patch's boundary strays from the edges it fills.
+    pub patch_gap_mm: Option<f64>,
+}
+
+fn widen(range: &mut Option<[f64; 2]>, other: Option<[f64; 2]>) {
+    if let Some([lo, hi]) = other {
+        *range = Some(range.map_or([lo, hi], |[a, b]| [a.min(lo), b.max(hi)]));
+    }
 }
 
 impl Measured {
     fn merge(&mut self, other: &Measured) {
+        widen(&mut self.thickened_mm, other.thickened_mm);
+        widen(&mut self.offset_mm, other.offset_mm);
+        if let Some(d) = other.patch_gap_mm {
+            self.patch_gap_mm = Some(self.patch_gap_mm.map_or(d, |worst| worst.max(d)));
+        }
         if let Some(d) = other.deviation_mm {
             self.deviation_mm = Some(self.deviation_mm.map_or(d, |worst| worst.max(d)));
         }
@@ -554,6 +575,15 @@ fn op_name(op: &Op) -> &'static str {
         Op::Fillet { .. } => "fillet",
         Op::Chamfer { .. } => "chamfer",
         Op::Bodies { .. } => "bodies",
+        Op::SurfaceExtrude { .. } => "surface extrude",
+        Op::SurfaceRevolve { .. } => "surface revolve",
+        Op::SurfaceLoft { .. } => "surface loft",
+        Op::SurfaceSweep { .. } => "surface sweep",
+        Op::Patch { .. } => "patch",
+        Op::Stitch { .. } => "stitch",
+        Op::Trim { .. } => "trim",
+        Op::Thicken { .. } => "thicken",
+        Op::OffsetSurface { .. } => "surface offset",
     }
 }
 
@@ -582,6 +612,8 @@ struct SelectableEdge {
     /// A direction-independent key. OCCT's explorer can visit the same edge
     /// through both adjacent faces; a fillet builder must receive it once.
     key: Vec<[i64; 3]>,
+    /// Bordered by one face only: the edge of a surface.
+    free: bool,
 }
 
 /// A B-rep vertex represented by its exact incident edges.
@@ -690,6 +722,7 @@ fn list_edges(edges: &[SelectableEdge], limit: usize) -> String {
             Some(Dihedral::Convex) => format!("convex {:.0}°", edge.angle_deg),
             Some(Dihedral::Concave) => format!("concave {:.0}°", edge.angle_deg),
             Some(Dihedral::Smooth) => "smooth, tangent-continuous".to_owned(),
+            None if edge.free => "a free edge, bordered by one face".to_owned(),
             None => "corner not measured".to_owned(),
         };
         out.push_str(&format!(
@@ -778,6 +811,7 @@ fn describe_edge(edge: Edge) -> Option<SelectableEdge> {
             dihedral: None,
             angle_deg: 0.0,
             key,
+            free: false,
         });
     }
 
@@ -808,6 +842,7 @@ fn describe_edge(edge: Edge) -> Option<SelectableEdge> {
         dihedral: None,
         angle_deg: 0.0,
         key,
+        free: false,
     })
 }
 
@@ -907,6 +942,10 @@ fn selectable_edges(shape: &Shape) -> Vec<SelectableEdge> {
         }
     }
 
+    let free: HashSet<Vec<[i64; 3]>> = shape
+        .free_edges()
+        .map(|edges| edges.edges().filter_map(|e| describe_edge(e).map(|d| d.key)).collect())
+        .unwrap_or_default();
     let mut seen = std::collections::HashSet::new();
     shape
         .edges()
@@ -915,6 +954,7 @@ fn selectable_edges(shape: &Shape) -> Vec<SelectableEdge> {
             if !seen.insert(edge.key.clone()) {
                 return None;
             }
+            edge.free = free.contains(&edge.key);
             edge.adjacent_faces = adjacent_faces.remove(&edge.key).unwrap_or_default();
             edge.classify();
             Some(edge)
@@ -1923,6 +1963,7 @@ fn select_edges(
     }
 
     let (minima, maxima) = extrema(&edges);
+    let any_free = edges.iter().any(|e| e.free);
 
     let selected: Vec<SelectableEdge> = match selector {
         EdgeSelector::Directional(source) => {
@@ -1987,6 +2028,12 @@ fn select_edges(
     };
 
     if selected.is_empty() {
+        if matches!(selector, EdgeSelector::Query(q) if q.role == Some(EdgeRole::Boundary)) {
+            bail!(
+                "node {id} ({label}) selects free edges with {{ role: \"boundary\" }}, and none matched{}. A free edge is the edge of a surface, bordered by one face; a closed solid has none",
+                if any_free { " the rest of the query" } else { ": this shape has no free edge" }
+            );
+        }
         bail!(
             "node {id} ({label}) selector {selector:?} matched no edges. \
              Inspect the current B-rep edges and refine the selector, for example \
@@ -2054,6 +2101,7 @@ fn select_query(
             let role_matches = match query.role {
                 None => true,
                 Some(EdgeRole::Hole) => is_hole_rim(edge),
+                Some(EdgeRole::Boundary) => edge.free,
             };
             let adjacent_matches = query.adjacent_to.is_none_or(|adjacent| {
                 let wanted = axis_direction_vector(adjacent.face_normal);
@@ -2450,6 +2498,13 @@ pub fn check_fit(doc: &Doc, reference: &Doc) -> Result<crate::protocol::FitRepor
     let part = build_node(doc, doc.root, DVec3::ZERO)?.shape;
     breadcrumb("building the reference");
     let other = build_node(reference, reference.root, DVec3::ZERO)?.shape;
+    for (who, shape) in [("the part", &part), ("the reference", &other)] {
+        if kind_of(shape)? != Kind::Solid {
+            bail!(
+                "{who} is a surface, and a fit is measured between solids: there is no volume to interfere. Thicken it first — .thicken(t) — to check how the made part fits"
+            );
+        }
+    }
     fit_between(&part, &other)
 }
 
@@ -2458,6 +2513,33 @@ pub fn check_fit(doc: &Doc, reference: &Doc) -> Result<crate::protocol::FitRepor
 pub fn fit_between(part: &Shape, other: &Shape) -> Result<crate::protocol::FitReport> {
     let (p0, p1) = bbox(part);
     let (r0, r1) = bbox(other);
+    let surfaces = [kind_of(part)?, kind_of(other)?];
+    if surfaces.contains(&Kind::Surface) {
+        // A surface has no volume to share: it is clear of the other body,
+        // touches it, or passes through it, which splitting it shows.
+        breadcrumb("measuring a surface against a body");
+        let Some((distance, on_part, on_other)) = part.least_distance_to(other) else {
+            bail!("the kernel could not measure the distance between the two bodies");
+        };
+        let verdict = if distance > 1e-6 {
+            "clear"
+        } else {
+            let (surface, tool) = if surfaces[0] == Kind::Surface { (part, other) } else { (other, part) };
+            let before = surface.faces().count();
+            match surface.split_by(tool) {
+                Ok((split, _)) if split.faces().count() > before => "crossing",
+                _ => "touching",
+            }
+        };
+        return Ok(crate::protocol::FitReport {
+            verdict: verdict.to_owned(),
+            interference_mm3: 0.0,
+            clearance_mm: Some(distance),
+            closest_mm: Some([on_part.to_array(), on_other.to_array()]),
+            part_bounds: [p0.to_array(), p1.to_array()],
+            reference_bounds: [r0.to_array(), r1.to_array()],
+        });
+    }
 
     breadcrumb("intersecting the two");
     let mut common = AdHocShape(part.clone());
@@ -2902,6 +2984,115 @@ fn offset_key(offset: DVec3) -> [i64; 3] {
     ]
 }
 
+/// A sweep's spine as a wire, where it starts, its direction there, and the
+/// box its points lie in.
+fn sweep_spine_wire(spine: &SweepSpine, path: &[V3], id: NodeId, label: &str) -> Result<(Wire, DVec3, DVec3, (DVec3, DVec3))> {
+    let p3 = |p: &parcad_core::graph::V3| DVec3::new(p.x, p.y, p.z);
+    let spine_parts = match spine {
+        SweepSpine::Path(pieces) => {
+            let spine_edges: Vec<Edge> = pieces
+                .iter()
+                .map(|piece| match piece {
+                    SpinePiece::Run { from, to } => Edge::segment(p3(from), p3(to)),
+                    SpinePiece::Bend { from, mid, to } => {
+                        Edge::arc(p3(from), p3(mid), p3(to))
+                    }
+                })
+                .collect();
+            // The first piece is always a run: validation trims a
+            // corner strictly short of the leg before it.
+            let (start, tangent) = match pieces[0] {
+                SpinePiece::Run { from, to } => {
+                    (p3(&from), (p3(&to) - p3(&from)).normalize())
+                }
+                SpinePiece::Bend { .. } => bail!(
+                    "node {id} ({label}): sweep spine unexpectedly starts with a bend"
+                ),
+            };
+            let (mut lo, mut hi) = (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN));
+            for p in path {
+                lo = lo.min(p3(p));
+                hi = hi.max(p3(p));
+            }
+            (Wire::from_edges(&spine_edges), start, tangent, (lo, hi))
+        }
+        SweepSpine::Spline(curve) => {
+            let poles: Vec<DVec3> = curve.poles.iter().map(|&[x, y, z]| DVec3::new(x, y, z)).collect();
+            let (knots, mults) = curve.distinct_knots();
+            let edge = Edge::bspline(&poles, &knots, &mults, curve.degree)
+                .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+            let d = curve.derivatives(curve.domain().0, 1);
+            let (mut lo, mut hi) = (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN));
+            for p in &poles {
+                lo = lo.min(*p);
+                hi = hi.max(*p);
+            }
+            (
+                Wire::from_edges([&edge]),
+                DVec3::from(d[0]),
+                DVec3::from(d[1]).normalize(),
+                (lo, hi),
+            )
+        }
+        SweepSpine::Helix(h) => {
+            let exact = SweptHelix {
+                start_radius: h.radius,
+                end_radius: h.end_radius(),
+                pitch: h.pitch,
+                turns: h.turns,
+                left_handed: h.hand == Hand::Left,
+            };
+            let wire = exact
+                .spine()
+                .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+            // The kernel sweeps a B-spline fitted to the helix, not
+            // the helix; how far apart the two are is measured here.
+            let deviation = exact.deviation(&wire, HELIX_SAMPLES);
+            breadcrumb(&format!(
+                "helix spine of node {id} strays at most {deviation:.2e} mm from the exact helix"
+            ));
+            if !(deviation <= HELIX_TOLERANCE_MM) {
+                bail!(
+                    "node {id} ({label}): the helix's fitted curve strays {deviation:.2e} mm from the exact helix, over the {HELIX_TOLERANCE_MM:e} mm this backend accepts. Fewer turns per sweep, or a union of shorter helices, keeps the fit inside it"
+                );
+            }
+            let theta = 2.0 * std::f64::consts::PI * h.turns;
+            let hand = if exact.left_handed { -1.0 } else { 1.0 };
+            let tangent = DVec3::new(
+                (exact.end_radius - exact.start_radius) / theta,
+                hand * exact.start_radius,
+                h.height() / theta,
+            )
+            .normalize();
+            let r = exact.start_radius.max(exact.end_radius);
+            let half = h.height() / 2.0;
+            (
+                wire,
+                DVec3::new(exact.start_radius, 0.0, -half),
+                tangent,
+                (DVec3::new(-r, -r, -half), DVec3::new(r, r, half)),
+            )
+        }
+    };
+    Ok(spine_parts)
+}
+
+/// The in-plane axes a swept profile is drawn on at a spine's start: its +Y
+/// as close to global +Z as the tangent allows; on a helix +X points away
+/// from the axis.
+fn profile_axes(tangent: DVec3, helix: bool) -> (DVec3, DVec3) {
+    let v_axis = if tangent.z.abs() < 1.0 - 1e-9 {
+        (DVec3::Z - tangent * tangent.z).normalize()
+    } else {
+        DVec3::Y
+    };
+    let mut u_axis = v_axis.cross(tangent);
+    if helix && u_axis.x < 0.0 {
+        u_axis = -u_axis;
+    }
+    (u_axis, v_axis)
+}
+
 /// Build one node, or take it from the installed cache when the same subtree
 /// at the same offset was built before.
 fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
@@ -3150,6 +3341,9 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 .iter()
                 .map(|&c| build_node(doc, c, offset))
                 .collect::<Result<Vec<_>>>()?;
+            for (&c, built) in children.iter().zip(std::iter::once(&base).chain(&others)) {
+                surfaces::require_solid(doc, id, label, "unions", c, built)?;
+            }
             breadcrumb(&format!("union node {id} ({label}) of nodes {children:?}"));
             let joined = boolean_in_layers(base, others, false, node.tag.as_deref());
             let (shape, lineage) = if *blend > 0.0 {
@@ -3187,6 +3381,10 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 .iter()
                 .map(|&t| build_node(doc, t, offset))
                 .collect::<Result<Vec<_>>>()?;
+            surfaces::require_solid(doc, id, label, "cuts", *base, &acc)?;
+            for (&t, built) in tools.iter().zip(&cutters) {
+                surfaces::require_solid(doc, id, label, "cuts with", t, built)?;
+            }
             breadcrumb(&format!("subtract nodes {tools:?} from node {id} ({label})"));
             let material = acc.shape.clone();
             let voids_before = material.internal_void_count();
@@ -3233,6 +3431,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             // whatever its clearance measures, so exact coincidence and a
             // proud cutter stay silent. See docs/GOTCHAS.md, the entry end
             // of the cut rule.
+            breadcrumb(&format!("node {id} ({label}): the cut is made; checking it"));
             let voids = cut.shape.internal_void_bounds();
             let sealed = voids.len().saturating_sub(voids_before);
             if sealed > 0 {
@@ -3291,6 +3490,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 );
             }
 
+            breadcrumb(&format!("node {id} ({label}): merging the cut's faces"));
             let (shape, lineage) = if *blend > 0.0 {
                 breadcrumb(&format!(
                     "fillet {blend} mm on edges created by cut at node {id} ({label})"
@@ -3321,6 +3521,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 anyhow::anyhow!("intersection at node {id} ({label}) has no children")
             })?;
             let mut acc = build_node(doc, first, offset)?;
+            surfaces::require_solid(doc, id, label, "intersects", first, &acc)?;
 
             if *blend > 0.0 {
                 bail!(
@@ -3332,6 +3533,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             }
             for c in it {
                 let other = build_node(doc, c, offset)?;
+                surfaces::require_solid(doc, id, label, "intersects", c, &other)?;
                 breadcrumb(&format!("intersect node {id} ({label}) with node {c}"));
                 // Intersection mutates in place here and reports no new edges,
                 // so it goes through the ad-hoc wrapper rather than the boolean
@@ -3550,6 +3752,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                     record(Measured {
                         deviation_mm: Some(skinned.deviation_mm),
                         loft_wall_mm: skinned.wall.map(|w| [w.min_mm, w.max_mm]),
+                        ..Measured::default()
                     });
                     skinned.shape
                 }
@@ -3662,107 +3865,8 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 Op::validate_sweep(profile, *circle, path, *bend, helix.as_ref(), spline, *taper)
                     .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
 
-            let p3 = |p: &parcad_core::graph::V3| DVec3::new(p.x, p.y, p.z);
-            let (spine_wire, start, tangent, envelope) = match &spine {
-                SweepSpine::Path(pieces) => {
-                    let spine_edges: Vec<Edge> = pieces
-                        .iter()
-                        .map(|piece| match piece {
-                            SpinePiece::Run { from, to } => Edge::segment(p3(from), p3(to)),
-                            SpinePiece::Bend { from, mid, to } => {
-                                Edge::arc(p3(from), p3(mid), p3(to))
-                            }
-                        })
-                        .collect();
-                    // The first piece is always a run: validation trims a
-                    // corner strictly short of the leg before it.
-                    let (start, tangent) = match pieces[0] {
-                        SpinePiece::Run { from, to } => {
-                            (p3(&from), (p3(&to) - p3(&from)).normalize())
-                        }
-                        SpinePiece::Bend { .. } => bail!(
-                            "node {id} ({label}): sweep spine unexpectedly starts with a bend"
-                        ),
-                    };
-                    let (mut lo, mut hi) = (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN));
-                    for p in path {
-                        lo = lo.min(p3(p));
-                        hi = hi.max(p3(p));
-                    }
-                    (Wire::from_edges(&spine_edges), start, tangent, (lo, hi))
-                }
-                SweepSpine::Spline(curve) => {
-                    let poles: Vec<DVec3> = curve.poles.iter().map(|&[x, y, z]| DVec3::new(x, y, z)).collect();
-                    let (knots, mults) = curve.distinct_knots();
-                    let edge = Edge::bspline(&poles, &knots, &mults, curve.degree)
-                        .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
-                    let d = curve.derivatives(curve.domain().0, 1);
-                    let (mut lo, mut hi) = (DVec3::splat(f64::MAX), DVec3::splat(f64::MIN));
-                    for p in &poles {
-                        lo = lo.min(*p);
-                        hi = hi.max(*p);
-                    }
-                    (
-                        Wire::from_edges([&edge]),
-                        DVec3::from(d[0]),
-                        DVec3::from(d[1]).normalize(),
-                        (lo, hi),
-                    )
-                }
-                SweepSpine::Helix(h) => {
-                    let exact = SweptHelix {
-                        start_radius: h.radius,
-                        end_radius: h.end_radius(),
-                        pitch: h.pitch,
-                        turns: h.turns,
-                        left_handed: h.hand == Hand::Left,
-                    };
-                    let wire = exact
-                        .spine()
-                        .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
-                    // The kernel sweeps a B-spline fitted to the helix, not
-                    // the helix; how far apart the two are is measured here.
-                    let deviation = exact.deviation(&wire, HELIX_SAMPLES);
-                    breadcrumb(&format!(
-                        "helix spine of node {id} strays at most {deviation:.2e} mm from the exact helix"
-                    ));
-                    if !(deviation <= HELIX_TOLERANCE_MM) {
-                        bail!(
-                            "node {id} ({label}): the helix's fitted curve strays {deviation:.2e} mm from the exact helix, over the {HELIX_TOLERANCE_MM:e} mm this backend accepts. Fewer turns per sweep, or a union of shorter helices, keeps the fit inside it"
-                        );
-                    }
-                    let theta = 2.0 * std::f64::consts::PI * h.turns;
-                    let hand = if exact.left_handed { -1.0 } else { 1.0 };
-                    let tangent = DVec3::new(
-                        (exact.end_radius - exact.start_radius) / theta,
-                        hand * exact.start_radius,
-                        h.height() / theta,
-                    )
-                    .normalize();
-                    let r = exact.start_radius.max(exact.end_radius);
-                    let half = h.height() / 2.0;
-                    (
-                        wire,
-                        DVec3::new(exact.start_radius, 0.0, -half),
-                        tangent,
-                        (DVec3::new(-r, -r, -half), DVec3::new(r, r, half)),
-                    )
-                }
-            };
-
-            // The profile is authored in 2D; place it at the spine's start,
-            // perpendicular to it, with its +Y as close to global +Z as the
-            // tangent allows — the same convention a drawing's section view
-            // uses. On a helix +X is turned to point away from the axis.
-            let v_axis = if tangent.z.abs() < 1.0 - 1e-9 {
-                (DVec3::Z - tangent * tangent.z).normalize()
-            } else {
-                DVec3::Y
-            };
-            let mut u_axis = v_axis.cross(tangent);
-            if matches!(spine, SweepSpine::Helix(_)) && u_axis.x < 0.0 {
-                u_axis = -u_axis;
-            }
+            let (spine_wire, start, tangent, envelope) = sweep_spine_wire(&spine, path, id, label)?;
+            let (u_axis, v_axis) = profile_axes(tangent, matches!(spine, SweepSpine::Helix(_)));
             let section_wire = match &section {
                 SweepSection::Outline(outline) => {
                     let wire = section_wire(outline, |[x, y]| start + u_axis * x + v_axis * y, "sweep profile")
@@ -4091,6 +4195,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             }
 
             let solid = build_node(doc, *child, offset)?;
+            surfaces::require_solid(doc, id, label, "offsets", *child, &solid)?;
             let before = bbox(&solid.shape);
 
             breadcrumb(&format!("offset node {id} ({label}) by {distance} mm"));
@@ -4149,6 +4254,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 bail!("node {id} ({label}) shells to {thickness} mm, which is not a wall");
             }
             let solid = build_node(doc, *child, offset)?;
+            surfaces::require_solid(doc, id, label, "shells", *child, &solid)?;
             let before = bbox(&solid.shape);
 
             // Hollow by subtracting a shrunken copy of yourself.
@@ -4188,6 +4294,20 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             .named(node.tag.as_deref())
         }
 
+        Op::SurfaceExtrude { curve, closed, height } => surfaces::surface_extrude(node, id, offset, curve, *closed, *height)?,
+        Op::SurfaceRevolve { curve, closed, degrees } => surfaces::surface_revolve(node, id, offset, curve, *closed, *degrees)?,
+        Op::SurfaceLoft { sections, closed, smooth } => surfaces::surface_loft(node, id, offset, sections, *closed, *smooth)?,
+        Op::SurfaceSweep { curve, closed, path, bend, helix, spline } => {
+            surfaces::surface_sweep(node, id, offset, curve, *closed, path, *bend, helix.as_ref(), spline)?
+        }
+        Op::Patch { child, selector, expect, tangent } => {
+            surfaces::patch(doc, node, id, offset, *child, selector, expect.as_ref(), *tangent)?
+        }
+        Op::Stitch { children, tolerance, solid } => surfaces::stitch(doc, node, id, offset, children, *tolerance, *solid)?,
+        Op::Trim { child, tool, plane, keep } => surfaces::trim(doc, node, id, offset, *child, *tool, plane.as_ref(), *keep)?,
+        Op::Thicken { child, thickness, side } => surfaces::thicken(doc, node, id, offset, *child, *thickness, *side)?,
+        Op::OffsetSurface { child, distance } => surfaces::offset_surface(doc, node, id, offset, *child, *distance)?,
+
         Op::Fillet {
             child,
             radius,
@@ -4214,6 +4334,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 );
             }
             let mut solid = build_node(doc, *child, offset)?;
+            surfaces::require_solid(doc, id, label, "fillets", *child, &solid)?;
             let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
             let count = selected.edges.len();
             breadcrumb(&format!(
@@ -4299,6 +4420,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 );
             }
             let mut solid = build_node(doc, *child, offset)?;
+            surfaces::require_solid(doc, id, label, "chamfers", *child, &solid)?;
             let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
             let count = selected.edges.len();
             breadcrumb(&format!(

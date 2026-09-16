@@ -659,6 +659,10 @@ mod tests {
                  return loft([{ z: 0, outline: ring(20) }, { z: 30, outline: ring(15) }], { wall: 2 });"
                     .to_owned(),
             ),
+            (
+                "surfaces",
+                "return surfaceExtrude([[0, 0], { through: [5, 3] }, [10, 0]], 5).thicken(1);".to_owned(),
+            ),
         ];
         let stamped: Vec<&str> = cases.iter().map(|(id, _)| *id).collect();
         assert_eq!(stamped, parcad_core::envelope::FEATURES, "the host's feature list and this table differ");
