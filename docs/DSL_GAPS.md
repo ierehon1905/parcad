@@ -105,12 +105,33 @@ is in [OP_ROADMAP.md](OP_ROADMAP.md).
   closed form. `examples/hydraulic-line.js` draws its gland as the catalogue
   section now.
 
+- **curves given by a formula, and involute spur gears** —
+  `{ curve: (t) => [x, y], from, to, tolerance }` in any section, and
+  `spurGearOutline({ module, teeth })` built on it. The kernel cannot run a
+  script's function, so the script draws it: cubic Hermite pieces on the
+  function's own points and directions, halved until each is within the
+  tolerance, sent as a C1 B-spline with the bound beside it. Given the exact
+  `derivative` and a bound `fourth` on the fourth derivative the bound is
+  *certified* (the Hermite remainder, √2·m·h⁴/384 a piece); a bare function
+  gets an *estimated* one, read off the function between the pieces, and the
+  report says which as `curve_bound`. The kernel measures the built curve
+  against points of the function the pieces were not drawn through
+  (`deviation_mm`) and refuses a graph whose curve contradicts its bound.
+  Module 2, 20 teeth, 20°: every flank certified within 7.1e-6 mm in eight
+  pieces, read back from the exported STEP 2.9e-6 mm from the analytic
+  involute; the routes it replaces were a `spline` through ten samples
+  (1.8e-3 mm, built, nothing stated), a `fit` through twenty (4.5e-4 mm,
+  `deviation_mm` against the samples only), an arc per flank (0.037 mm) and
+  the pulley's cylindrical grooves (0.8 mm). `spur-gears` holds a meshed pair
+  to the 0.094 mm flank gap 0.1 mm of backlash predicts; `involute-gear`
+  holds a flank to points on the involute and 0.01 mm either side.
+
 ### Still missing
 
 | wanted | needed for | what it takes |
 |---|---|---|
 | **thread forms past the basic 60° profile** | a trapezoidal lead screw, a buttress or bottle-cap thread, a tapered pipe thread, a rounded root | `Op::Thread` sweeps one trapezoid; another profile is another tooth and its own closed form, a taper a conical core and helix |
-| **involute and other constructed curves, as exact curves** | a spur gear, a cam, a real GT2 flank (`timing-pulley.js` approximates it and says so) | the section type carries arcs and splines, and since the fitted-sections work a `{ fit: points, tolerance }` entry: an involute sampled from its equation and fitted is an approximation whose worst error is *measured* on the built curve and reported as `deviation_mm`, refused past the tolerance — which is the difference between this and the silent approximation the row used to name. What is still missing is the curve itself: a fit is held to its samples, not to the equation between them, and a tooth flank measured against the involute's closed form needs an entry that carries the base circle |
+| **gear forms past the plain spur** | a hobbed root, a profile-shifted pinion under 18 teeth, a helical, internal or bevel gear, a rack; a real GT2 flank (`timing-pulley.js` approximates it and says so) | the involute itself is drawn and certified (above). `spurGearOutline` runs the flank straight in below the base circle, where a hob leaves a trochoid, and refuses a tooth count a hob would undercut rather than draw a flank the cutter removes; a profile shift, a rack, an internal gear are other `{ curve }` entries with their own closed forms; a helical gear is a twisted loft or sweep of the outline; GT2 is missing its numbers, not a curve type |
 | **draft on a curved or re-entrant outline** | a moulded boss with rounded corners in one op | the drafted top is a half-plane inset, which only a convex polygon has; draft the polygon and fillet its vertical edges |
 | **variable-radius and unequal-distance treatments** | a casting fillet that tapers, an asymmetric chamfer for a weld prep | `Fillet`/`Chamfer` take one scalar |
 | **assembly: joints, mates, constraints** | a pillow block *and* its bearing, placed by a fit rather than by coordinates | the bodies exist (above) and the fit between them is measured; nothing yet *places* one against another — a solver, which is the wide reading of NEXT.md §3 |

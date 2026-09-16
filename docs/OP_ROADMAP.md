@@ -124,9 +124,14 @@ stepped inward by the kernel's offset and measured before it is used. What
 they close is geometry that arrives as points: a simulation, a scan, an
 involute sampled from its equation. docs/DSL_GAPS.md has the measurements.
 
-**Still out:** an involute or other *constructed* curve as an exact object (a
-fit is held to its samples, not to the equation between them), a section with
-holes (cut a second solid), a periodic or rational B-spline entry, tangent
+**And since:** `{ curve: (t) => [x, y], from, to, tolerance }`, a curve
+given by a formula, drawn by the script — where the function lives — as C1
+cubic Hermite pieces with a bound it states and, given the function's
+derivative and a fourth-derivative bound, certifies; the kernel measures the
+built curve against the function between the pieces. `spurGearOutline` draws
+involute teeth on it. docs/DSL_GAPS.md has the measurements.
+
+**Still out:** a section with holes (cut a second solid), a periodic or rational B-spline entry, tangent
 continuity asked for across a corner, and draft on a curved outline.
 
 ## 3. Sweep — **DONE**, in two honesty classes

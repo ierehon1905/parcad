@@ -1,0 +1,61 @@
+{
+  "name": "spur-gears",
+  "script": "examples/spur-gears.js",
+  "why": "The seeded gear pair: module 2, 20 and 30 teeth at 50 mm centres, each tooth thinned 0.1 mm at the pitch circle and the wheel turned half a tooth so a space faces the pinion's tooth. Involute flanks in mesh are parallel along the line of action, so the gap between them is the same at every tooth pair in contact: half the 0.2 mm circumferential play, times cos 20 - 0.0940 mm, which between_bodies reads on the exact solids. Tip to root is 0.25 * module = 0.5 mm, far wider, so the flanks set the clearance. Every flank is certified by the script to its involute.",
+  "brep": {
+    "size": [
+      103.888,
+      63.998,
+      8.0
+    ],
+    "volume_mm3": 31377.857,
+    "area_mm2": 13401.091,
+    "triangles": 36428,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 3921.984,
+    "stands_on_patches": 2,
+    "watertight": true,
+    "faces": 306,
+    "edges": 1812,
+    "curves": 904,
+    "deviation_mm": 0.0,
+    "curve_bound_mm": 7.093665147216587e-6,
+    "curve_bound": "certified",
+    "named_bodies": {
+      "pinion": {
+        "size": [
+          43.998,
+          43.998,
+          8.0
+        ],
+        "volume_mm3": 9577.687,
+        "faces": 123,
+        "edges": 726,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "wheel": {
+        "size": [
+          63.778,
+          63.998,
+          8.0
+        ],
+        "volume_mm3": 21800.171,
+        "faces": 183,
+        "edges": 1086,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "pinion/wheel": {
+        "verdict": "clear",
+        "clearance_mm": 0.094,
+        "interference_mm3": 0.0
+      }
+    }
+  }
+}

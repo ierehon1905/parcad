@@ -63,6 +63,13 @@ name = "deviation"
 capture = ['\\"deviation_mm\\":\s*(\d+\.\d+)']
 final = '\b{}\s*mm'
 
+# The bound a curve drawn from a formula states, to the nanometre it is
+# rounded up to.
+[[reads]]
+name = "curve bound"
+capture = ['\\"curve_bound_mm\\":\s*(\d+\.\d+)']
+final = '\b{}\d*\s*mm'
+
 [[reads]]
 name = "medium"
 final = '\bmaterial\b|\bvoid\b'
