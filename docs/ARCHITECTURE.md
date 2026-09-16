@@ -462,6 +462,15 @@ lampshade or a sleeve — and `bottom: "closed"` / `top: "closed"` put a floor
 fitted sections: corners and arcs have no points to step, and their inset is
 already `inset()`.
 
+Which way the solid faces is stated, not classified: the skinner is told the
+outward direction at one point of the outside (`set_outward`), turns the
+sewn solid to match and checks the face it presents there.
+`BRepLib::OrientClosedSolid` shoots one ray from a face and trusts its
+farthest crossing; through a pleated shell of dozens of walls 1.2 mm apart it
+missed one and reversed a solid that was right, and every report read the
+volume unsigned. The mesh backstop in `serve.rs` now refuses a solid whose
+mesh encloses negative volume, whatever built it.
+
 ## Meshing: weld before you measure
 
 OCCT triangulates **face by face**, so every shared edge arrives as two

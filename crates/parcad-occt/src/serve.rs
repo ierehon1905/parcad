@@ -507,6 +507,17 @@ fn measure(
     let (mesh_volume, mesh_area) = volume_and_area(&mesh);
     let solid_volume = shape.signed_volume();
     let allowed = 2.0 * mesh_area * BINDING_DEFLECTION_MM + 1e-6 * solid_volume.abs();
+    // Every report reads the volume unsigned, so an inside-out solid — all of
+    // space but the part — would otherwise pass as the part.
+    if mesh_volume < -allowed {
+        return Err(Response::Error {
+            stage: "tessellating".into(),
+            message: format!(
+                "{who}the kernel built an inside-out solid: its faces point into the part, so                  it encloses {:.1} mm³ of negative volume and every later boolean, probe and                  print would read it as all of space except the part. This is a kernel                  defect, not a script error; please report the script. Until it is fixed, a                  small change to the operation that made it (a section count, a tolerance)                  usually builds",
+                mesh_volume
+            ),
+        });
+    }
     if (mesh_volume - solid_volume).abs() > allowed {
         return Err(Response::Error {
             stage: "tessellating".into(),
@@ -619,6 +630,17 @@ mod tests {
             .iter()
             .filter(|edge| edge.treatment_node == Some(node))
             .count()
+    }
+
+    #[test]
+    fn an_inside_out_solid_is_refused_rather_than_measured_unsigned() {
+        let names = backend::NamedFaces { tags: Vec::new(), outranked_by: Default::default() };
+        let [right, wrong] = [-1.0, 1.0].map(crate::skinned::tests::cylinder_told);
+        assert!(measure(&perceive::Body::new(None, &right, &names), &BTreeMap::new(), "").is_ok());
+        let Err(Response::Error { message, .. }) = measure(&perceive::Body::new(None, &wrong, &names), &BTreeMap::new(), "") else {
+            panic!("an inside-out solid was measured");
+        };
+        assert!(message.contains("inside-out solid"), "{message}");
     }
 
     #[test]

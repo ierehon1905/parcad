@@ -87,7 +87,17 @@ impl Skinner {
         self.inner.pin_mut().add_ring(v_outer, v_inner).map_err(|e| e.what().to_string())
     }
 
-    /// Every face added, sewn at `tolerance`, as one valid solid facing out.
+    /// State which way is out: at `(u, v)` of `skin` the outside of the part
+    /// lies along `outward`. [`Self::build`] needs it.
+    pub fn set_outward(&mut self, skin: Skin, u: f64, v: f64, outward: DVec3) -> Result<(), String> {
+        self.inner
+            .pin_mut()
+            .set_outward(skin as i32, u, v, outward.x, outward.y, outward.z)
+            .map_err(|e| e.what().to_string())
+    }
+
+    /// Every face added, sewn at `tolerance`, as one valid solid facing the
+    /// way [`Self::set_outward`] said, checked on the solid's own face there.
     pub fn build(&mut self, tolerance: f64) -> Result<Shape, String> {
         let inner = self.inner.pin_mut().build(tolerance).map_err(|e| e.what().to_string())?;
         Ok(Shape { inner })
@@ -135,6 +145,7 @@ pub(crate) mod ffi {
         fn add_band(self: Pin<&mut ParcadSkin>, skin: i32, v0: f64, v1: f64) -> Result<()>;
         fn add_disc(self: Pin<&mut ParcadSkin>, skin: i32, v: f64) -> Result<()>;
         fn add_ring(self: Pin<&mut ParcadSkin>, v_outer: f64, v_inner: f64) -> Result<()>;
+        fn set_outward(self: Pin<&mut ParcadSkin>, skin: i32, u: f64, v: f64, x: f64, y: f64, z: f64) -> Result<()>;
         fn build(self: Pin<&mut ParcadSkin>, tolerance: f64) -> Result<UniquePtr<TopoDS_Shape>>;
         fn measure_wall(self: &ParcadSkin, v0: f64, v1: f64, per_u: i32, per_v: i32) -> Result<Vec<f64>>;
     }

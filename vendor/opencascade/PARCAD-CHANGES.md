@@ -416,8 +416,12 @@ made of arcs and splines.
   by `ShapeFix_Face::FixOrientation`. An iso-curve's last pole is set onto its
   first so the edge closes to the bit. `build` sews every face
   (`BRepBuilderAPI_Sewing`), refuses free edges or more than one shell, makes
-  the solid, orients it outward (`BRepLib::OrientClosedSolid`) and refuses
-  one `BRepCheck_Analyzer` does not pass. `measure_wall` is the wall between
+  the solid, turns it to face the way `set_outward` stated — the outward
+  direction at one `(u, v)` of a skin, compared with the normal of the sewn
+  band there as the solid presents it, and checked again after turning — and
+  refuses one `BRepCheck_Analyzer` does not pass. It refuses to build when no
+  outward direction was stated. (It used `BRepLib::OrientClosedSolid`, whose
+  one-ray classification reversed a correct pleated shell.) `measure_wall` is the wall between
   the two skins: from a grid of inner points, the nearest outer point found
   within one knot span of the same parameters (a coarse grid, then Newton on
   the squared distance held to that window) and the distance taken along

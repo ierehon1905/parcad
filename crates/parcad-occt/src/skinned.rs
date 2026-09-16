@@ -259,6 +259,7 @@ fn attempt(
         add_bands(&mut skinner, Skin::Outer, &vparams, 0.0, 1.0)?;
         skinner.add_disc(Skin::Outer, 0.0).map_err(err)?;
         skinner.add_disc(Skin::Outer, 1.0).map_err(err)?;
+        state_outward(&mut skinner, &outer, &vparams, sense).map_err(err)?;
         let shape = skinner.build(SEW_TOLERANCE).map_err(err)?;
         return Ok(Ok(Skinned { shape, deviation_mm, wall: None }));
     };
@@ -374,6 +375,7 @@ fn attempt(
         skinner.add_disc(Skin::Outer, 1.0).map_err(err)?;
         skinner.add_disc(Skin::Inner, v_hi).map_err(err)?;
     }
+    state_outward(&mut skinner, &outer, &vparams, sense).map_err(err)?;
     let shape = skinner.build(SEW_TOLERANCE).map_err(err)?;
     let reading = skinner
         .measure_wall(v_lo, v_hi, 4 * inside_spans, 4 * (sections.len() - 1).max(8))
@@ -400,6 +402,13 @@ fn attempt(
         );
     }
     Ok(Ok(Skinned { shape, deviation_mm, wall: Some(reading) }))
+}
+
+/// Tell the skinner which way is out, on the outside's first band.
+fn state_outward(skinner: &mut Skinner, outer: &Surface, vparams: &[f64], sense: f64) -> Result<(), String> {
+    let (u, v) = (0.37, 0.5 * (vparams[0] + vparams[1]));
+    let (_, normal, _) = inward(outer, u, v, sense);
+    skinner.set_outward(Skin::Outer, u, v, -normal)
 }
 
 /// Faces are sewn from shared iso-curves of one surface, so they meet to
@@ -439,4 +448,80 @@ fn add_bands(skinner: &mut Skinner, skin: Skin, breaks: &[f64], from: f64, to: f
         skinner.add_band(skin, w[0], w[1]).map_err(|e| anyhow::anyhow!(e))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use opencascade::primitives::PointState;
+    use parcad_core::graph::WallEnd;
+
+    pub(crate) fn ring(r: f64, n: usize, clockwise: bool) -> Vec<P2> {
+        (0..n)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / n as f64 * if clockwise { -1.0 } else { 1.0 };
+                [r * a.cos() + 0.3 * (5.0 * a).sin(), r * a.sin()]
+            })
+            .collect()
+    }
+
+    pub(crate) fn frustum(clockwise: bool, wall: Option<LoftWall>) -> Result<Skinned> {
+        let rings: Vec<Vec<P2>> = [20.0, 17.0, 15.0].iter().map(|r| ring(*r, 60, clockwise)).collect();
+        let sections: Vec<FitSection> = rings
+            .iter()
+            .zip([0.0, 10.0, 20.0])
+            .map(|(points, z)| FitSection { points, tolerance: 0.01, z })
+            .collect();
+        build(&sections, true, wall.as_ref(), "test")
+    }
+
+    #[test]
+    fn a_skinned_loft_faces_out_whichever_way_its_sections_run() {
+        for clockwise in [false, true] {
+            for wall in [None, Some(LoftWall { thickness: 1.5, bottom: WallEnd::Closed, top: WallEnd::Open })] {
+                let walled = wall.is_some();
+                let built = frustum(clockwise, wall).unwrap();
+                let volume = built.shape.signed_volume();
+                assert!(volume > 0.0, "clockwise {clockwise}, walled {walled}: {volume}");
+                assert_eq!(built.shape.classify_point(DVec3::new(100.0, 0.0, 10.0), 1e-6), PointState::Outside);
+                let centre = if walled { PointState::Outside } else { PointState::Inside };
+                assert_eq!(built.shape.classify_point(DVec3::new(0.0, 0.0, 10.0), 1e-6), centre);
+                assert_eq!(built.shape.classify_point(DVec3::new(16.3, 0.0, 10.0), 1e-6), PointState::Inside);
+            }
+        }
+    }
+
+    /// A skinned cylinder of radius 20 and height 10, sewn with the outside
+    /// stated as `sign` times the inward normal; `None` states nothing.
+    fn cylinder(sign: Option<f64>) -> std::result::Result<Shape, String> {
+        let points = ring(20.0, 60, false);
+        let params = shared_parameters(&[&points]);
+        let fit = PeriodicFit::new(&params[..params.len() - 1], 8).unwrap();
+        let curve = fit.fit(&points).unwrap();
+        let rows: Vec<Vec<[f64; 3]>> = [0.0, 10.0].iter().map(|z| curve.poles.iter().map(|p| [p[0], p[1], *z]).collect()).collect();
+        let vparams = [0.0, 1.0];
+        let outer = surface(&rows, 8, &vparams, false).unwrap();
+        let mut skinner = Skinner::new();
+        set_surface(&mut skinner, Skin::Outer, &outer).unwrap();
+        add_bands(&mut skinner, Skin::Outer, &vparams, 0.0, 1.0).unwrap();
+        skinner.add_disc(Skin::Outer, 0.0).unwrap();
+        skinner.add_disc(Skin::Outer, 1.0).unwrap();
+        if let Some(sign) = sign {
+            let (_, inward, _) = inward(&outer, 0.37, 0.5, 1.0);
+            skinner.set_outward(Skin::Outer, 0.37, 0.5, inward * sign).unwrap();
+        }
+        skinner.build(SEW_TOLERANCE)
+    }
+
+    pub(crate) fn cylinder_told(sign: f64) -> Shape {
+        cylinder(Some(sign)).unwrap()
+    }
+
+    #[test]
+    fn the_skinner_turns_the_solid_to_the_side_it_is_told_and_needs_telling() {
+        let Err(err) = cylinder(None) else { panic!("a skin with no outside stated was built") };
+        assert!(err.contains("set_outward"), "{err}");
+        assert!(cylinder_told(-1.0).signed_volume() > 0.0);
+        assert!(cylinder_told(1.0).signed_volume() < 0.0);
+    }
 }

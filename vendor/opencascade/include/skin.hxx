@@ -10,10 +10,12 @@
 #include <BRepBuilderAPI_MakeWire.hxx>
 #include <BRepBuilderAPI_Sewing.hxx>
 #include <BRepCheck_Analyzer.hxx>
-#include <BRepLib.hxx>
+#include <BRep_Tool.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_BSplineSurface.hxx>
 #include <Geom_Geometry.hxx>
+#include <Geom_Surface.hxx>
+#include <TopAbs_Orientation.hxx>
 #include <NCollection_Array1.hxx>
 #include <NCollection_Array2.hxx>
 #include <ShapeFix_Face.hxx>
@@ -97,6 +99,7 @@ class ParcadSkin {
         throw std::runtime_error("a band of the lofted skin could not be made into a face");
       }
       faces_.push_back(make.Face());
+      bands_.push_back(Band{faces_.size() - 1, skin, v0, v1});
     } catch (const Standard_Failure& raised) {
       throw std::runtime_error("a band of the lofted skin raised: " + parcad_skin_raised(raised));
     }
@@ -139,8 +142,23 @@ class ParcadSkin {
     }
   }
 
+  // Which way is out: at (u, v) of `skin`, the outside of the part lies
+  // along (x, y, z). `build` turns the solid to match and checks it did.
+  void set_outward(int skin, double u, double v, double x, double y, double z) {
+    surface(skin);
+    outward_skin_ = skin;
+    outward_uv_[0] = u;
+    outward_uv_[1] = v;
+    outward_ = gp_Vec(x, y, z);
+    has_outward_ = outward_.Magnitude() > 0.0;
+  }
+
   std::unique_ptr<TopoDS_Shape> build(double tolerance) {
     try {
+      if (!has_outward_) {
+        throw std::runtime_error(
+            "the lofted skin was sewn without being told which way is out; call set_outward first");
+      }
       BRepBuilderAPI_Sewing sewing(tolerance);
       for (const TopoDS_Face& face : faces_) {
         sewing.Add(face);
@@ -165,7 +183,18 @@ class ParcadSkin {
         throw std::runtime_error("the lofted shell could not be made into a solid");
       }
       TopoDS_Solid solid = make.Solid();
-      BRepLib::OrientClosedSolid(solid);
+      // BRepLib::OrientClosedSolid classifies a point at infinity by one ray,
+      // and through a pleated shell that ray misses a crossing and reverses a
+      // solid that was right; the side is known here, so it is stated.
+      double facing = facing_out(solid, sewing);
+      if (facing < 0.0) {
+        solid.Reverse();
+        facing = facing_out(solid, sewing);
+      }
+      if (!(facing > 0.0)) {
+        throw std::runtime_error(
+            "the lofted solid's faces do not turn out where the skin says outside is");
+      }
       BRepCheck_Analyzer check(solid);
       if (!check.IsValid()) {
         throw std::runtime_error("the lofted solid does not pass the kernel's validity check");
@@ -338,8 +367,52 @@ class ParcadSkin {
     return std::abs(gp_Vec(at, p).Dot(normal));
   }
 
+  // The cosine between the stated outward direction and the normal of the
+  // solid's face through that point, as the solid presents it; 0 when no
+  // band holds the point.
+  double facing_out(const TopoDS_Solid& solid, BRepBuilderAPI_Sewing& sewing) const {
+    for (const Band& band : bands_) {
+      if (band.skin != outward_skin_ || outward_uv_[1] < band.v0 || outward_uv_[1] > band.v1) {
+        continue;
+      }
+      TopoDS_Shape sewn = sewing.Modified(faces_[band.face]);
+      for (TopExp_Explorer faces(solid, TopAbs_FACE); faces.More(); faces.Next()) {
+        const TopoDS_Face face = TopoDS::Face(faces.Current());
+        if (!face.IsSame(sewn)) {
+          continue;
+        }
+        Handle(Geom_Surface) geometry = BRep_Tool::Surface(face);
+        gp_Pnt at;
+        gp_Vec su, sv;
+        geometry->D1(outward_uv_[0], outward_uv_[1], at, su, sv);
+        gp_Vec normal = su.Crossed(sv);
+        if (face.Orientation() == TopAbs_REVERSED) {
+          normal.Reverse();
+        }
+        if (normal.Magnitude() < 1e-12) {
+          return 0.0;
+        }
+        return normal.Normalized().Dot(outward_.Normalized());
+      }
+      return 0.0;
+    }
+    return 0.0;
+  }
+
+  struct Band {
+    size_t face;
+    int skin;
+    double v0;
+    double v1;
+  };
+
   Handle(Geom_BSplineSurface) surfaces_[2];
   std::vector<TopoDS_Face> faces_;
+  std::vector<Band> bands_;
+  bool has_outward_ = false;
+  int outward_skin_ = 0;
+  double outward_uv_[2] = {0.0, 0.0};
+  gp_Vec outward_;
 };
 
 inline std::unique_ptr<ParcadSkin> parcad_skin() { return std::unique_ptr<ParcadSkin>(new ParcadSkin()); }

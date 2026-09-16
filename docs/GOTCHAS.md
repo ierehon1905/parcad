@@ -560,6 +560,21 @@ and a horizontal inset of one sloped section measured 1.387 mm. `loft(...,
 { wall })` steps by `t / cos φ` from the built outside, so its `loft_wall_mm`
 is the wall square to the surface.
 
+### `BRepLib::OrientClosedSolid` can reverse a solid that was right
+
+It classifies the point at infinity by one line along a face's normal and
+trusts the transition at its farthest crossing. A walled pleated shade (288
+points, 21 sections, a 35° twist) came out of the sewing facing the right
+way; the classifier answered IN, the solid was
+reversed, and the part was all of space except the shade — while
+`mass_properties` reported `volume.abs()` and every check passed. The same
+script with 25 sections and a 70° twist got OUT. Nothing about the geometry
+is wrong; the line through dozens of walls 1.2 mm apart on large B-spline
+bands misses a crossing. The skinner states which way is out and checks the
+face; `serve.rs` refuses a mesh of negative volume. `Shape::oriented_outward`
+still uses the classifier, for `ThruSections` and the extrude path, and is
+now caught by that backstop if it errs.
+
 ### `Edge::fit`'s closed seam is only G1, and can loop
 
 `AppParCurves_TangencyPoint` fixes the *direction* of the tangent at each end
