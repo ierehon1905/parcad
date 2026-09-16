@@ -3,16 +3,17 @@ tool: export_part
 also: evaluate_part, read_docs
 reach: export_part
 input: \.thicken\(\s*1\.4\b
-verdict: VOLUME\s*[=:]\s*3\s?971\.8\d*\s*mm
+verdict: VOLUME\s*[=:]\s*3\s?971\.99\d*\s*mm
 trap: VOLUME\s*[=:]\s*0(\.0*)?\s*mm
-quote: \b3\s?971\.80?\d*\b
+quote: \b3\s?971\.99\d*\b
 why: |
   Whether a refusal that names its fix is acted on, in the surface mode. The
   script is an open lofted sheet, a surface: `export_part` with STL refuses
   it, saying STL describes closed solids and naming `.thicken(t)`. The route
   is to add `.thicken(1.4)` to the script — `input` is what shows it — and
-  export again, and the export's own `measured.volume_mm3`, 3971.802, is the
-  answer; nothing in the script states it, since the sheet's area is not
+  export again, and the export's own `measured.volume_mm3`, 3971.99, is the
+  answer (3971.80 before OCCT patch 0003 re-meshed it; every trial quoted the
+  new number); nothing in the script states it, since the sheet's area is not
   written anywhere. The trap is a volume of zero, read off a surface. A trial
   that builds the wall some other way (an extrude of an offset curve) has not
   used the surface mode and cannot land on the quote.
