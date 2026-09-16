@@ -5,4 +5,5 @@
  */
 
 export * as kernel from "./kernel";
+export * as prebuilt from "./prebuilt";
 export * as store from "./store";

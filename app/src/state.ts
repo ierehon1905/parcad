@@ -170,6 +170,12 @@ export interface Evaluated {
   /** What each face is. Indexed by the kernel's own face number. */
   faces?: FaceSummary[];
   snapshot: EvaluationSnapshot;
+  /**
+   * Measured before this page was deployed rather than here, and standing in
+   * only until the same graph has been built in front of the reader. Set by
+   * the transport that shipped it; see `page/prebuilt.ts`.
+   */
+  shipped?: boolean;
 }
 
 export interface TargetPreview {

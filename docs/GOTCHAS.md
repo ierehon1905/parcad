@@ -351,6 +351,39 @@ Two guards were tried first and taken out because the defect never reached
 them: a union volume floor (result ≥ larger operand) and a volume check across
 `UnifySameDomain`. Both read the exact B-rep, which was never wrong.
 
+### Delabella, OCCT's other triangulator, meshes an extruded spline open
+
+`IMeshTools_Parameters::MeshAlgo`, or the `CSF_MeshAlgo=delabella` environment
+variable the default factory reads, swaps OpenCASCADE's Watson triangulator for
+Delabella. It is faster — on the playground's planter, 199k triangles over 37
+revolved bumps, the mesher went 1.27 s to 0.94 s and the whole part 3.29 to
+2.86 (M4 Max, release); in WebAssembly it saved 6% of the mesh time — and it
+returns meshes that do not close. Two lines are enough:
+
+```js
+return extrude([[-10, 0], [10, 0], { bezier: [[0, 20]] }], 3);
+```
+
+82 of that shape's 240 mesh edges border one face instead of two, which the
+worker's first backstop refuses; a `{ spline: … }` section reads 98 of 288. The
+same shapes mesh watertight under the default. The failure follows the *surface*,
+not curves in general: a box, a cylinder, a sphere, an `extrude` whose curve is a
+circular arc, a `revolve` with a spline section, and a `loft` between those very
+Bézier outlines all pass. What fails is a straight extrusion of a B-spline, and
+the planar caps that curve bounds. Two corpus cases hold it down —
+`parabola-bezier` and `curve-edges-by-kind` — and two more drift past tolerance
+under it: `probe-port-meets-gallery` reads a 5 mm wall as 5.003, and
+`thread-m8-3-turns` gains 6.2% triangles.
+
+Delabella is not OCCT's default and its factory chooses a different algorithm per
+surface type, so this is a less-travelled path; measured on OCCT 8.0, 2026-09-16,
+and not reported upstream (their tracker's only Delabella item is an unrelated
+pointer-arithmetic fix from February 2026). The symptom is all that has been
+observed — free edges counted by our own check — not a dump of which face loses
+its triangles. `MinSize` was measured at the same time and is not worth having
+either: at 0.05 mm it removes 1% of the triangles and no time, because the count
+is set by real curvature, not by slivers.
+
 ### A helix cut through its own cylinder opened past two turns *(fixed before it was diagnosed)*
 
 A groove swept along a helix and cut from a cylinder on the same axis, at the

@@ -382,10 +382,37 @@ export function subscribeSession(viewer: string, onEvent: (session: Session) => 
   events.onmessage = (event) => onEvent(JSON.parse(event.data) as Session);
 }
 
-export async function evaluate<T>(graph: unknown): Promise<T> {
-  if (inPage) return json<T>(await (await page()).kernel.call({ op: "evaluate", graph }));
+/**
+ * What the shipped first build is replaced with, once this tab has built it.
+ *
+ * Only the playground ever calls back: every other transport builds the part it
+ * shows. See `page/prebuilt.ts` for why one evaluation travels with the site.
+ */
+let onRebuilt: ((evaluated: unknown) => void) | undefined;
+
+export function watchFirstRebuild(listener: (evaluated: unknown) => void): () => void {
+  onRebuilt = listener;
+  return () => (onRebuilt = undefined);
+}
+
+export async function evaluate<T>(graph: unknown, showing?: { part?: string; source: string }): Promise<T> {
+  if (inPage) {
+    const host = await page();
+    const shipped = showing && (await host.prebuilt.take(showing.part, showing.source));
+    if (shipped) {
+      void host.prebuilt
+        .rebuild(graph)
+        .then((evaluated) => onRebuilt?.(evaluated))
+        .catch(() => {});
+      return shipped as T;
+    }
+    const already = showing && host.prebuilt.inFlight(showing.part, showing.source);
+    if (already) return (await already) as T;
+    return json<T>(await host.kernel.call({ op: "evaluate", graph }));
+  }
   return inTauri ? invoke<T>("evaluate", { graph }) : post<T>("evaluate", { graph });
 }
+
 
 export async function inspectEdgeTarget<T>(graph: unknown, node: number): Promise<T> {
   if (inPage) return json<T>(await (await page()).kernel.call({ op: "inspect-edge-target", graph, node }));

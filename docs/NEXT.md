@@ -240,6 +240,37 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
 - **Signing**: SignPath Foundation (free) for Windows; Apple Developer ID ($99/yr)
   for the `.app`. Neither is started.
 
+### Found designing the playground's planter saucer (2026-09-16)
+
+- **A union silently drops solids — a kernel defect.** 48 identical smooth bumps
+  (a revolved smootherstep profile whose foot meets the floor level) unioned onto
+  a dish came back watertight with 34 of them: 42 faces for 7 + 48, and
+  18994.88 mm³ where the dish (17143.24) plus 48 × 54.48 is 19758. Each bump
+  unioned alone is present; the loss needs neighbours whose feet overlap (38
+  pairs closer than their 9 mm footprint), and happens the same n-ary or one
+  union at a time. Spheres at the same 48 points all survive, so it is the
+  near-level overlap at the floor, not the count. A union that returns less
+  than its largest input, or loses a face set it was given, has to refuse by
+  name — "Refuse rather than approximate" — and then the OCCT step that loses
+  the solid wants finding. Repro: `examples/twisted-planter.js` history, or
+  two such bumps 8 mm apart on a plate.
+- **Delabella meshes faster and does not close.** Measured and reverted; the
+  repro, the numbers and what it does not break are in GOTCHAS, "Delabella,
+  OCCT's other triangulator". Worth a minimal C++ report upstream one day.
+- **A tag on a union of many curved solids makes it crawl.** The same saucer
+  (a dish unioned with 37 revolved B-spline bumps, 39 nodes) builds in 1.3 s
+  untagged and runs past 120 s with `.tag("saucer")` on the union — the graphs
+  differ only by that tag, so it is the lineage bookkeeping, not the boolean.
+  The example drops the tag; the body is named by `return { saucer }` anyway.
+- **`.smooth()` / `.squircle()` are declared and refused.** The DSL has had the
+  curvature-continuous (G2) blend since the treatment recipes landed
+  (`app/src/dsl.ts`, ARCHITECTURE "edge treatments"); the kernel rejects it until
+  a true G2 surface builder exists. The saucer wanted exactly this — a bump
+  easing into the floor with no crease and no jump in curvature — and got it only
+  by hand-writing a smootherstep profile into a revolve. OCCT has no ready G2
+  fillet; check prior art (FreeCAD, OCCT's own `BRepBlend` / `GeomFill`,
+  licence fit) before building.
+
 ## Release state, as of 0.0.6 (2026-09-15)
 
 | channel | how it is fed | state |

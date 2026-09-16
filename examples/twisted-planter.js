@@ -2,7 +2,8 @@
 //
 // The planter is a six-point star lofted through nine sections, each wider
 // and turned further than the last, so its walls come out as twisted facets.
-// The saucer is a revolved dish with spiral arms for the planter to stand on.
+// The saucer is a dish of smooth bumps in rings of 1, 6, 12 and 18, which the
+// planter stands on.
 
 const points = 6;
 const height = 90;
@@ -35,53 +36,57 @@ const drain = cylinder(2.5, 3 * floor);
 const planter = outside
   .cut(
     cavity, // 1 mm past the rim, so the top opens cleanly
-    drain,
-    ...polar(6, 14).map(([x, y]) => drain.at(x, y)),
+    ...polar(6, 14, { straddle: true }).map(([x, y]) => drain.at(x, y)), // between the saucer's first ring of bumps
   )
   .tag("planter");
 
 // Wide enough that the 34 mm star base sits inside with room for runoff.
 const saucerRadius = 42;
 const saucerFloor = 2;
+const bumpRadius = 5.4;
+const bumpHeight = 2.4;
+const ringSpacing = 11;
+const ringCount = 3;
 
-// The planter stands on two rounded rings, 3.5 mm proud of the floor: past the
-// ~2.7 mm gap water bridges by surface tension, so its base drains instead of
-// wicking. Notches in the rings, staggered, let the water out.
-const ringHeight = 3.5;
-const ringWidth = 3;
-const rings = [21, 31]; // the inner one clear of the drains at 14 mm
+// Smootherstep: no slope and no curvature where a bump leaves the floor or at its top.
+const ease = (x) => x * x * x * (x * (6 * x - 15) + 10);
 
-// A ring in section: straight sides with a semicircular top.
-const ring = (r) => [
-  [r + ringWidth / 2, saucerFloor],
-  [r + ringWidth / 2, saucerFloor + ringHeight - ringWidth / 2],
-  { through: [r, saucerFloor + ringHeight] },
-  [r - ringWidth / 2, saucerFloor + ringHeight - ringWidth / 2],
-  [r - ringWidth / 2, saucerFloor],
-];
+function bump() {
+  const z = (r) => saucerFloor + bumpHeight * (1 - ease(r / bumpRadius));
+  const profile = [0.92, 0.82, 0.7, 0.58, 0.46, 0.34, 0.2].map((t) => [t * bumpRadius, z(t * bumpRadius)]);
+  return revolve([
+    [0, 0],
+    [bumpRadius, 0],
+    [bumpRadius, saucerFloor],
+    { spline: profile, start: [-1, 0], end: [-1, 0] },
+    [0, saucerFloor + bumpHeight],
+  ]);
+}
 
-// A radial slot through a ring down to the floor, at the point it is aimed at.
-const notch = (x, y) =>
-  box(3 * ringWidth, 4, 2 * ringHeight)
-    .rotate("z", (Math.atan2(y, x) * 180) / Math.PI)
-    .at(x, y, saucerFloor + ringHeight);
-
-const saucer = revolve([
+const dish = revolve([
   [0, 0],
   { at: [saucerRadius + 2, 0], round: 3 },
-  [saucerRadius + 2, 12],
-  [saucerRadius, 12],
+  [saucerRadius + 2, 11],
+  { through: [saucerRadius + 1, 12] },
+  [saucerRadius, 11],
   { at: [saucerRadius, saucerFloor], round: 2 },
-  ...rings.slice().reverse().flatMap(ring),
   [0, saucerFloor],
-])
-  .cut(
-    ...polar(6, rings[0]).map(([x, y]) => notch(x, y)), // in line with the drains
-    ...polar(6, rings[1], { straddle: true }).map(([x, y]) => notch(x, y)),
-  )
-  .tag("saucer");
+]);
+
+// One bump in the middle, then rings of 6, 12, 18: each ring's circumference grows
+// by 2π·spacing, so six more keeps every bump the same distance from its neighbours.
+// Even rings sit half a step round from the odd ones.
+const one = bump();
+const bumps = [one];
+for (let ring = 1; ring <= ringCount; ring++) {
+  const count = 6 * ring;
+  const start = ring % 2 === 0 ? 180 / count : 0;
+  for (const [x, y] of polar(count, ring * ringSpacing, { start })) bumps.push(one.at(x, y));
+}
+
+const saucer = dish.union(...bumps);
 
 return {
-  planter: planter.at(0, 0, saucerFloor + ringHeight),
+  planter: planter.at(0, 0, saucerFloor + bumpHeight),
   saucer,
 };
