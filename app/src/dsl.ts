@@ -1747,23 +1747,27 @@ export function line2d(from: [number, number], toOrAngle: [number, number] | num
 }
 
 /**
- * A section outline stepped inward by `by` mm, as a section: the wall of a
- * hollow part. `extrude(inset(outline, 1.6), h)` is the inside of a 1.6 mm
- * wall around `extrude(outline, h)`, and a shade is the loft of outer
- * sections minus the loft of each one inset by the wall.
+ * A section outline stepped inward by `by` mm, as a section: the inside of a
+ * wall. `outline` is any section: corners, arcs, curves, one closed `{ fit }`.
  *
- * The kernel offsets the *curve* — an arc stays an arc, a fitted curve stays
- * one curve — rather than a script offsetting points, which folds in every
- * valley narrower than the wall and hands the kernel an outline that crosses
- * itself. Where the outline's own turns are tighter than `by`, the loops the
- * offset would make are removed and the inset has a corner there; that is the
- * wall thickening into a valley, as a real one does. The result is measured
- * before it is used: an inset that does not lie exactly `by` inside the
- * outline, or that splits or vanishes, is refused naming the distance that
- * fits. An inset of an inset is refused; add the distances.
+ * - An arc stays an arc and a fitted curve one curve; never offset the
+ *   points yourself.
+ * - Where the outline turns tighter than `by`, the inset has a corner: the
+ *   wall thickens into the valley.
+ * - An inset that splits, vanishes or is not `by` inside is refused with the
+ *   distance that fits. Inset once by the sum, never an inset of an inset.
+ * - For a lofted wall use `loft`'s `wall`, not a loft of insets.
  *
- * `outline` is a section (`SectionEntry[]`): corners, arcs, curves, or one
- * closed `{ spline }` or `{ fit }`.
+ * @example
+ *     // a 60 × 40 tray, 1.6 mm walls and a 2 mm floor
+ *     const outline = [{ at: [-30, -20], round: 6 }, { at: [30, -20], round: 6 }, { at: [30, 20], round: 6 }, { at: [-30, 20], round: 6 }];
+ *     return extrude(outline, 20).cut(extrude(inset(outline, 1.6), 20).at(0, 0, 2));
+ *
+ * @remarks
+ * The kernel offsets the curve rather than a script offsetting points, which
+ * folds in every valley narrower than the wall and hands the kernel an
+ * outline that crosses itself. The loops the offset would make are removed.
+ * The result is measured before it is used.
  */
 export function inset(outline: SectionEntry[], by: number): SectionEntry[] {
   if (!(typeof by === "number" && Number.isFinite(by) && by > 0)) {
@@ -1774,50 +1778,44 @@ export function inset(outline: SectionEntry[], by: number): SectionEntry[] {
 }
 
 /**
- * The outline of an involute spur gear, for `extrude`: centred on the origin,
- * a tooth centred on +X, anticlockwise.
+ * The outline of an involute spur gear for `extrude`: centred on the origin,
+ * a tooth on +X, every flank certified to lie within `tolerance` mm of the
+ * true involute.
  *
- * `module` is the reference diameter over the tooth count, in mm; `teeth` the
- * count; `pressureAngle` in degrees, 20 unless given. The reference (pitch)
- * circle is `module * teeth / 2`, the tip `addendum` outside it (default
- * `module`) and the root `dedendum` inside it (default `1.25 * module`).
- * `backlash` thins every tooth by that many mm at the reference circle, the
- * play a mesh needs: two gears each thinned by it and centred at their centre
- * distance are `backlash · cos(pressureAngle)` apart between flanks.
+ * - `module` (mm) and `teeth` are required. Defaults: `pressureAngle` 20°,
+ *   `addendum` `module`, `dedendum` `1.25 * module`.
+ * - The part reports the flanks' proven bound as `curve_bound_mm`, with
+ *   `curve_bound: "certified"`; `tolerance` (default 0.0001) is only a cap.
+ * - `backlash` thins each tooth by that many mm at the pitch circle.
+ * - Under 17 teeth at 20° is refused as undercut unless `profileShift`
+ *   (x, in modules) is large enough; the refusal names the least.
  *
- * `profileShift` is the profile shift coefficient x (default 0): the gear is
- * cut with the hob moved `x · module` away from the centre, so the tip and the
- * root both move out by that much and the tooth is `2 · x · module ·
- * tan(pressureAngle)` thicker at the reference circle. A positive shift is how
- * a gear with few teeth avoids undercut; mate shifted gears with
- * `spurGearPair`, which works out their centre distance.
+ * @example
+ *     // module 2, 20 teeth, 10 mm thick, 6 mm bore
+ *     return extrude(spurGearOutline({ module: 2, teeth: 20 }), 10).cut(cylinder(3, 12).at(0, 0, 5));
+ * @example extrude(spurGearOutline({ module: 2, teeth: 12, profileShift: 0.3 }), 8)  // a 12-tooth pinion, shifted
  *
- * Every flank is a `{ curve }` entry drawn from the involute of the base
- * circle (`reference radius · cos pressureAngle`) and **certified** to lie
- * within `tolerance` mm of it (default 0.0001) — the part reports the bound as
- * `curve_bound_mm`. Between the flanks the tip and root are exact circular
- * arcs. Below the base circle, where the involute has nothing to follow, the
- * flank runs straight in along the radius to the root. A hob leaves a
- * trochoid fillet there instead, which is thicker than that line, so the
- * outline has no material a hobbed gear lacks and meshes wherever a hobbed one
- * does; nothing meshes against the fillet.
+ * @remarks
+ * The pitch radius is `module * teeth / 2`. Shifted gears mesh through
+ * `spurGearPair`. A shift moves the tip and root out by `x · module` and thickens the tooth
+ * by `2 · x · module · tan(pressureAngle)` at the pitch circle. Two gears
+ * each thinned by `backlash` and centred at their centre distance are
+ * `backlash · cos(pressureAngle)` apart between flanks.
  *
- * Refused, with the numbers: a gear a hob would undercut — a shift below
- * `dedendum / module − 0.25 − (teeth / 2) · sin²(pressureAngle)`, which is
- * `1 − (teeth / 2) · sin²(pressureAngle)` for full-depth teeth, so an
- * unshifted gear of fewer than 17.1 teeth at 20° or 11.2 at 25° — because the
- * cut removes working flank, and this outline does not draw the trochoid an
- * undercut root has; teeth that come to a point before the tip circle; and
- * teeth so thick the root has no room.
+ * Every flank is a `{ curve }` entry on the involute of the base circle
+ * (pitch radius · cos pressureAngle), certified by the Hermite remainder;
+ * the tip and root are exact arcs. Below the base circle the flank runs
+ * straight in along the radius. A hob leaves a thicker trochoid fillet there,
+ * so the outline has no material a hobbed gear lacks and meshes wherever a
+ * hobbed one does.
  *
- * A 20-tooth, module 2 gear 10 mm thick with a 6 mm bore:
- * `extrude(spurGearOutline({ module: 2, teeth: 20 }), 10).cut(cylinder(3, 12))`.
- * A 12-tooth pinion, which needs a shift of at least 0.298:
- * `spurGearOutline({ module: 2, teeth: 12, profileShift: 0.3 })`. Two
- * unshifted gears mesh at centre distance `module * (teeth1 + teeth2) / 2`,
- * the second turned by `180 / teeth2` degrees when its tooth count is even so
- * that a space faces the first gear's tooth; `spurGearPair` gives both
- * numbers for any pair.
+ * Refused, with the numbers: a shift below
+ * `dedendum / module − 0.25 − (teeth / 2) · sin²(pressureAngle)` (undercut:
+ * 17.1 teeth unshifted at 20°, 11.2 at 25°), because this outline does not
+ * draw an undercut root's trochoid; teeth pointed before the tip circle; and
+ * teeth so thick the root has no room. Two unshifted gears mesh at
+ * `module * (teeth1 + teeth2) / 2`, the second turned `180 / teeth2` when
+ * its count is even; `spurGearPair` gives both for any pair.
  */
 export function spurGearOutline(options: {
   module: number;
@@ -1845,43 +1843,41 @@ export function spurGearOutline(options: {
 }
 
 /**
- * Two full-depth involute spur gears that mesh: their outlines, the distance
- * between their centres, and how far to turn the second one.
+ * Two full-depth involute spur gears that mesh, and where to put them.
  *
- * `teeth` is `[first, second]` and `profileShift` their shift coefficients
- * (default `[0, 0]`); `module`, `pressureAngle` and `tolerance` are as in
- * `spurGearOutline`, shared by both. `backlash` is the pair's play in mm,
- * measured along the line of action with one pair of flanks touching; each
- * gear's teeth are thinned by half of it, and centred as returned the two
- * gears are `backlash / 2` apart at every flank in contact — what
- * `between_bodies` reads on the built pair.
+ * - `teeth` is `[first, second]`, `profileShift` their shifts (default
+ *   `[0, 0]`); `module`, `pressureAngle` and `tolerance` are as in
+ *   `spurGearOutline`.
+ * - `backlash` is the pair's play in mm: built as returned, the flanks are
+ *   `backlash / 2` apart in `between_bodies`.
+ * - Returns `{ centres, pressureAngle, turn, outlines }`: `centres` mm
+ *   between the axes, `pressureAngle` the working one in degrees, `turn` the
+ *   degrees to rotate the second gear before placing it at `[centres, 0]`.
+ * - Undercut, interference and a contact ratio under 1 are refused.
  *
- * Returns `{ centres, pressureAngle, turn, outlines: [first, second] }`:
- * - `centres` — mm between the gears' axes. Unshifted, or shifted by opposite
- *   amounts, it is `module * (teeth1 + teeth2) / 2`; otherwise the working
- *   pressure angle changes, from `inv αw = inv α + 2 tan α (x1 + x2) /
- *   (z1 + z2)`, and `centres` is `module * (z1 + z2) / 2 · cos α / cos αw`.
- * - `pressureAngle` — that working pressure angle αw, in degrees.
- * - `turn` — degrees to rotate the second gear about its own axis before
- *   placing it at `[centres, 0]`, so a space faces the first gear's tooth on
- *   +X: `180 / teeth2` for an even count, 0 for an odd one.
- * - `outlines` — for `extrude`. A shifted pair's tips are both lowered by
- *   `(x1 + x2 − (centres − module (z1 + z2) / 2) / module) · module`, the
- *   standard tip shortening, so each tip still clears the other gear's root
- *   by `0.25 · module`.
+ * @example
+ *     // 12 and 30 teeth, module 2, the pinion shifted to avoid undercut
+ *     const pair = spurGearPair({ module: 2, teeth: [12, 30], profileShift: [0.3, 0], backlash: 0.1 });
+ *     const pinion = extrude(pair.outlines[0], 8);
+ *     const wheel = extrude(pair.outlines[1], 8).rotate("z", pair.turn).at(pair.centres, 0, 0);
+ *     return { pinion, wheel };
  *
- * Refused, with the numbers: a shift that lets the hob undercut either gear
- * (as in `spurGearOutline`); a pair whose tip of one reaches below where the
- * other's involute starts along the line of action; and a pair whose contact
- * ratio is under 1, which would lose contact between one pair of teeth and
- * the next.
+ * @remarks
+ * Backlash is measured along the line of action with one pair of flanks
+ * touching; each gear's teeth are thinned by half of it. Refusals carry the
+ * numbers: a shift that lets the hob undercut either gear, a tip of one
+ * reaching below where the other's involute starts, and a contact ratio
+ * under 1, which would lose contact between one pair of teeth and the next.
  *
- * A 12- and 30-tooth pair, module 2, the pinion shifted to avoid undercut:
- * ```js
- * const pair = spurGearPair({ module: 2, teeth: [12, 30], profileShift: [0.3, 0], backlash: 0.1 });
- * const pinion = extrude(pair.outlines[0], 8);
- * const wheel = extrude(pair.outlines[1], 8).rotate("z", pair.turn).at(pair.centres, 0, 0);
- * ```
+ * Unshifted, or shifted by opposite amounts, `centres` is
+ * `module * (z1 + z2) / 2`. Otherwise the working pressure angle αw follows
+ * `inv αw = inv α + 2 tan α (x1 + x2) / (z1 + z2)` and `centres` is
+ * `module * (z1 + z2) / 2 · cos α / cos αw`. `turn` is `180 / teeth2` for an
+ * even count and 0 for an odd one, so a space faces the first gear's tooth
+ * on +X. A shifted pair's tips are both lowered by
+ * `(x1 + x2 − (centres − module (z1 + z2) / 2) / module) · module`, the
+ * standard tip shortening, so each tip clears the other's root by
+ * `0.25 · module`.
  */
 export function spurGearPair(options: {
   module: number;
@@ -2793,17 +2789,22 @@ const parcadNative = (): ParcadNative =>
 const MAX_SCRIPT_BUDGET = 10;
 
 /**
- * Let this script do `multiple` times the default work: put it on the first
- * line of a part that runs a simulation, a growth or a search to produce its
- * sections. Work is counted in interpreter steps (function calls plus loop
- * iterations), never timed, so a part that builds once builds on every machine
- * however busy; the refusal says how much the script was allowed. The default
- * is 600 million steps, several seconds of plain arithmetic, far more than
- * any hand-drawn part uses. A whole number from 1 to 10; calling it again only
- * ever raises the budget. Where no budget applies (the editor's own preview)
- * it does nothing.
+ * Let this script do `multiple` times the default work: the first line of a
+ * part that runs a simulation, a growth or a search.
  *
+ * - `multiple` is a whole number from 1 to 10; calling again only raises it.
+ * - Work is counted in interpreter steps, not timed: the default is 600
+ *   million, far more than a drawn part uses. A refusal says how much was
+ *   allowed. `evaluate_part`'s `timeout_s` does not raise it.
+ *
+ * @example
  *     scriptBudget(8);
+ *     return box(10, 10, 10);
+ *
+ * @remarks
+ * Steps are function calls plus loop iterations, so a part that builds once
+ * builds on every machine however busy. Where no budget applies (the
+ * editor's own preview) it does nothing.
  */
 export function scriptBudget(multiple: number): void {
   if (!(Number.isInteger(multiple) && multiple >= 1 && multiple <= MAX_SCRIPT_BUDGET)) {
@@ -2854,20 +2855,32 @@ export interface ReactionDiffusionOptions {
 }
 
 /**
- * Run a reaction-diffusion field to the pattern it settles into, and return
- * both fields — the Turing spots, stripes and lobes a generative part grows
- * its outline from. Explicit Euler steps on a ring of cells (`size: n`) or a
- * wrapping grid (`size: [w, h]`). In the sandbox it runs natively and costs
- * one step of the script's budget per cell per step, several times less than
- * the same loop written in the script; the answer is the same to the bit.
- * Refused when `dt` is too long for the diffusion to be stable, naming the
- * longest that is, and when the run diverges.
+ * Run a reaction-diffusion field to the pattern it settles into (Turing
+ * spots, stripes, lobes) and return both fields, `{ a, b }`, one value per
+ * cell: what a generative part grows its outline from.
  *
+ * - `size: n` is a ring of cells, `size: [w, h]` a grid that wraps both
+ *   ways; see `ReactionDiffusionOptions`.
+ * - A `dt` too long to stay stable is refused naming the longest that is; a
+ *   run that diverges is refused too.
+ * - Seed the starting noise deterministically, never with `Math.random`.
+ *
+ * @example
+ *     const cells = 100;
+ *     const noise = Array.from({ length: cells }, (_, i) => 1 + 0.01 * Math.sin(i * 7.3));
  *     const { a } = simulateReactionDiffusion({
- *       model: "gierer-meinhardt", size: 100, a: noise, b: ones,
+ *       model: "gierer-meinhardt", size: cells, a: noise, b: noise.map(() => 1),
  *       diffusion: [0.3, 60], dt: 0.2 / 60, steps: 12000,
  *       kappa: 0.05, decay: [1, 1.2], source: [0.01, 0],
  *     });
+ *     // a ring whose radius swells where the activator peaks
+ *     const ring = a.map((v, i) => [(20 + v) * Math.cos((2 * Math.PI * i) / cells), (20 + v) * Math.sin((2 * Math.PI * i) / cells)]);
+ *     return extrude([{ fit: ring, tolerance: 0.05 }], 5);
+ *
+ * @remarks
+ * Explicit Euler steps. In the sandbox it runs natively and costs one step
+ * of the script's budget per cell per step, several times less than the same
+ * loop written in the script; the answer is the same to the bit.
  */
 export function simulateReactionDiffusion(options: ReactionDiffusionOptions): { a: number[]; b: number[] } {
   const where = "simulateReactionDiffusion";
@@ -3025,15 +3038,23 @@ function segmentsMeet(p1: number[], p2: number[], p3: number[], p4: number[]): b
 }
 
 /**
- * Where a closed outline crosses or touches itself: every pair `[i, j]`,
- * `i < j`, of segments that meet without being neighbours, sorted; segment
- * `i` runs from point `i` to point `i + 1`, and the last back to the first.
- * Empty for an outline that is a clean loop. The check a growth or offset
- * loop makes after every move — in the sandbox it runs natively over a
- * spatial grid, so a script needs no grid of its own.
+ * Where a closed outline of points crosses or touches itself: every pair
+ * `[i, j]`, `i < j`, of segments that meet without being neighbours, sorted.
  *
- *     const bad = new Set(outlineCrossings(ring).flat());
- *     // segment i ends at point i + 1: roll back the points of the bad segments
+ * - Segment `i` runs from point `i` to point `i + 1`, the last back to the
+ *   first.
+ * - Empty for a clean loop: the check a growth or offset loop makes after
+ *   every move.
+ *
+ * @example
+ *     // a bow tie: its two diagonals, segments 1 and 3, cross at [5, 5]
+ *     const bow = [[0, 0], [10, 0], [0, 10], [10, 10]];
+ *     const pairs = outlineCrossings(bow); // [[1, 3]]
+ *     return box(10, 10, 2 * pairs.length);
+ *
+ * @remarks
+ * In the sandbox it runs natively over a spatial grid, so a script needs no
+ * grid of its own.
  */
 export function outlineCrossings(points: [number, number][]): [number, number][] {
   outlinePoints(points, "outlineCrossings");
@@ -3052,17 +3073,25 @@ export function outlineCrossings(points: [number, number][]): [number, number][]
 }
 
 /**
- * For each point of a closed outline, the width of the gap it faces: the
- * distance to the nearest part of the outline that is at least `ignoreWithin`
- * mm away from the point *along* the outline, so the point's own stretch of
- * curve does not count. A lobe growing toward its neighbour, or a slot a wall
- * must fit into, is a gap narrower than it should be. Gaps wider than `upTo`
- * (default: no limit) come back as `Infinity`, which is also the answer for a
- * point with nothing far enough along to measure. In the sandbox it runs
- * natively over a spatial grid, so a script needs no grid of its own.
+ * For each point of a closed outline of points, the width of the gap it
+ * faces: the distance to the nearest part of the outline that is at least
+ * `ignoreWithin` mm away along the outline.
  *
- *     const gaps = outlineGaps(ring, { ignoreWithin: 6, upTo: 6 });
- *     const tooNarrow = gaps.map((g) => g < 6);
+ * - `ignoreWithin` leaves out the point's own stretch of curve; set it to
+ *   about the narrowest gap you care about.
+ * - Gaps wider than `upTo` (default: no limit), and points with nothing far
+ *   enough along, come back as `Infinity`.
+ *
+ * @example
+ *     // a U: its two arms face each other across a 4 mm slot
+ *     const u = [[0, 0], [14, 0], [14, 20], [9, 20], [9, 5], [5, 5], [5, 20], [0, 20]];
+ *     const narrowest = Math.min(...outlineGaps(u, { ignoreWithin: 6, upTo: 10 })); // 4, at [9, 20] and [5, 20]
+ *     return extrude(u, narrowest);
+ *
+ * @remarks
+ * A lobe growing toward its neighbour, or a slot a wall must fit into, is a
+ * gap narrower than it should be. In the sandbox it runs natively over a
+ * spatial grid, so a script needs no grid of its own.
  */
 export function outlineGaps(
   points: [number, number][],
@@ -3133,7 +3162,7 @@ export interface Doc {
   requires?: Requirement[];
 }
 
-/** A feature a graph needs, in words a host that has never heard of it can print. */
+/** @internal A feature a graph needs, in words a host that has never heard of it can print. */
 export interface Requirement {
   feature: string;
   /** The last release that cannot read it. */
