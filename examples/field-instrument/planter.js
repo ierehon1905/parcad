@@ -97,11 +97,17 @@ const boss = cylinder(bossD / 2, dialDepth + bossProud)
   .at(dialX, -W / 2 + dialDepth - (dialDepth + bossProud) / 2, deck)
   .tag("boss");
 
+// One accent, on one body: the tray is RAL 2004, the orange this style uses
+// where something matters; the pot is the neutral moulded grey around it.
+const moulded = { color: "#d6d8d2", roughness: 0.75 };
+const accent = { color: "#e25303", roughness: 0.45, clearcoat: 0.3 };
+
 const pot = body
   .union(plinth)
   .cut(cavity, hollow, vents, drains, grille, dial)
   .union(boss)
   .chamfer(1, { on: "cavity", at: { z: "max" } }, { count: 4 })
+  .material(moulded)
   .tag("pot");
 
 // Tray: a plate with a pool the plinth stands clear of, so the pot never sits
@@ -121,6 +127,7 @@ const tray = box(TRAY_L, TRAY_W, trayFloor + pool)
   .chamfer(0.4, "<Z", { count: 8 })
   .union(repeat(pad, grid(2, 2, PLINTH_L - 2 * M, PLINTH_W - 2 * M)))
   .cut(repeat(cylinder(5, 1.6).at(0, 0, -trayFloor), grid(2, 2, TRAY_L - 4 * M, TRAY_W - 4 * M)))
+  .material(accent)
   .tag("tray");
 
 return { pot, tray };
