@@ -297,7 +297,7 @@ in a real project folder), read `blend` as a different shape, dropped fillets
 from every probe and wall-thickness answer and called the result an upper
 bound. Once probes, rays, thickness, tag extents and renders all ran on the
 exact solid and the field suite read them SOUND, `sdf.rs`, fidget and the
-`implicit` half of every eval case were deleted (docs/NEXT.md, item 2).
+`implicit` half of every eval case were deleted (`2c08506d`).
 
 What stayed in `parcad-core` from that side is the part that never depended on
 a field: the rasteriser and its section capping (`render.rs`), the region

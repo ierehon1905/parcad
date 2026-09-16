@@ -103,7 +103,7 @@ its own headings; `every_reply_fits_in_what_a_client_shows` and
 
 Two things were written into it rather than discovered later. MCP `resources` are
 the protocol-correct home for a document like this, but tool support is universal
-and resource support is not — [NEXT.md](NEXT.md) records a client that cannot
+and resource support is not — [ROADMAP.md](ROADMAP.md) records a client that cannot
 complete the handshake at all — so a tool is the reachable form. And adding the
 tool is not the same as a model reading it:
 `eval/field/say-the-symmetry-once.md` requires `reach: read_docs` so a model that

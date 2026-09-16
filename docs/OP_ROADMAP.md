@@ -50,7 +50,7 @@ are marked *hold* with a reason instead of a plan.
 | Sheet metal, T-spline, Mesh, Simulation, CAM | ❌ | out of scope by design |
 | Sketch constraints, timeline, parameters | n/a | the DSL is the parametric model; JS is a better parameter table |
 | Several bodies in one part | ✅ `return { base, lid }` | never fused; each measured alone and every pair measured on the exact solids; STEP a solid per body; B-rep only |
-| Assemblies / joints | ❌ | a body is placed by its own coordinates, never by a mate — a solver, and the wide reading of NEXT.md §3 |
+| Assemblies / joints | ❌ | a body is placed by its own coordinates, never by a mate — a solver, and the wide reading of NEXT.md §2 |
 
 ---
 

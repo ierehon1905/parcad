@@ -10,8 +10,8 @@
 //! One kernel sits behind the entry point: the exact B-rep one, which refuses
 //! operations it cannot do faithfully, and whose every answer has real faces,
 //! real edges and nominal dimensions. There used to be a second, implicit one
-//! beside it for the window and the perception tools; docs/NEXT.md records
-//! why it went.
+//! beside it for the window and the perception tools; docs/ARCHITECTURE.md
+//! records why it went.
 
 use parcad_core::graph::Doc;
 use serde::Serialize;
