@@ -914,8 +914,9 @@ likely a refusal or a warning than a sentence.
 trials must run against a **release** app: a debug binary was measured at
 about 70 s per 512 px view when renders were raymarched, against a fraction of
 a second in release, so any case that asks for `views` stalls, and under four
-concurrent trials the script sandbox's own 5 s deadline starts firing on
-scripts that build in microseconds. And a
+concurrent trials the script sandbox's old 5 s deadline started firing on
+scripts that build in microseconds (its budget is now counted work, which a
+slow binary or a busy machine does not change). And a
 `pkill -f parcad-app` from a sibling checkout kills the app this round is
 measuring; the trials then grade VOID with "unable to connect" in their errors,
 which reads exactly like a broken tool.

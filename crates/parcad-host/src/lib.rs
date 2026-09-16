@@ -9,6 +9,7 @@
 //! other lacks.
 
 pub mod docs;
+pub mod generative;
 pub mod http;
 pub mod mcp;
 pub mod projects;

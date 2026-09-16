@@ -2184,6 +2184,356 @@ export function around(
 }
 
 // ---------------------------------------------------------------------------
+// Generative work. A part that runs a simulation to produce its sections does
+// real computation before the kernel sees anything. The sandbox that runs a
+// model's script counts that work rather than timing it, so a part passes or
+// fails identically on any machine; `globalThis.__parcadNative` is how the
+// sandbox is reached, and where it is absent (the editor, `tools/run.ts`) the
+// same answer is computed in JavaScript.
+// ---------------------------------------------------------------------------
+
+type ParcadNative = {
+  scriptBudget?: (multiple: number) => void;
+  reactionDiffusion?: (model: string, a: number[], b: number[], numbers: number[]) => [number[], number[]];
+  outlineCrossings?: (points: [number, number][]) => [number, number][];
+  outlineGaps?: (points: [number, number][], ignoreWithin: number, upTo: number) => number[];
+};
+
+const parcadNative = (): ParcadNative =>
+  ((globalThis as { __parcadNative?: ParcadNative }).__parcadNative ?? {});
+
+/** The most `scriptBudget` accepts; `MAX_WORK_MULTIPLE` in script.rs. */
+const MAX_SCRIPT_BUDGET = 10;
+
+/**
+ * Let this script do `multiple` times the default work: put it on the first
+ * line of a part that runs a simulation, a growth or a search to produce its
+ * sections. Work is counted in interpreter steps (function calls plus loop
+ * iterations), never timed, so a part that builds once builds on every machine
+ * however busy; the refusal says how much the script was allowed. The default
+ * is 600 million steps, several seconds of plain arithmetic, far more than
+ * any hand-drawn part uses. A whole number from 1 to 10; calling it again only
+ * ever raises the budget. Where no budget applies (the editor's own preview)
+ * it does nothing.
+ *
+ *     scriptBudget(8);
+ */
+export function scriptBudget(multiple: number): void {
+  if (!(Number.isInteger(multiple) && multiple >= 1 && multiple <= MAX_SCRIPT_BUDGET)) {
+    throw new Error(
+      `scriptBudget takes a whole multiple of the default work from 1 to ${MAX_SCRIPT_BUDGET}, ` +
+        `e.g. scriptBudget(4); got ${JSON.stringify(multiple)}`,
+    );
+  }
+  parcadNative().scriptBudget?.(multiple);
+}
+
+// Each helper below runs natively in the sandbox and as the JavaScript beside
+// it everywhere else. The two do the same float operations in the same order
+// (`crates/parcad-host/src/generative.rs`), so both give the same bits.
+
+/** A two-species reaction-diffusion run: see {@link simulateReactionDiffusion}. */
+export interface ReactionDiffusionOptions {
+  /**
+   * `"gierer-meinhardt"`: `a` is the activator and `b` the inhibitor,
+   * `a' = Da∇²a + rho·a²/(b·(1 + kappa·a²)) − decay[0]·a + source[0]` and
+   * `b' = Db∇²b + rho·a² − decay[1]·b + source[1]`.
+   * `"gray-scott"`: `a` is the substrate and `b` the reactant,
+   * `a' = Da∇²a − a·b² + feed·(1 − a)` and `b' = Db∇²b + a·b² − (feed + kill)·b`.
+   */
+  model: "gierer-meinhardt" | "gray-scott";
+  /** `n` cells around a ring, or `[width, height]` cells on a grid that wraps both ways, stored row by row. */
+  size: number | [number, number];
+  /** Starting values, one per cell. Seed the noise with the script's own seeded generator. */
+  a: number[];
+  b: number[];
+  /** `[Da, Db]`, in cells² per unit time. */
+  diffusion: [number, number];
+  /** The explicit time step; refused when it is too long for the diffusion to stay stable. */
+  dt: number;
+  steps: number;
+  /** Gierer–Meinhardt only: production, default 1. */
+  rho?: number;
+  /** Gierer–Meinhardt only: activator saturation, default 0; larger widens the peaks. */
+  kappa?: number;
+  /** Gierer–Meinhardt only: `[decay of a, decay of b]`, default `[1, 1]`. */
+  decay?: [number, number];
+  /** Gierer–Meinhardt only: `[basal production of a, of b]`, default `[0, 0]`. */
+  source?: [number, number];
+  /** Gray–Scott only: the feed rate. */
+  feed?: number;
+  /** Gray–Scott only: the kill rate. */
+  kill?: number;
+}
+
+/**
+ * Run a reaction-diffusion field to the pattern it settles into, and return
+ * both fields — the Turing spots, stripes and lobes a generative part grows
+ * its outline from. Explicit Euler steps on a ring of cells (`size: n`) or a
+ * wrapping grid (`size: [w, h]`). In the sandbox it runs natively and costs
+ * one step of the script's budget per cell per step, several times less than
+ * the same loop written in the script; the answer is the same to the bit.
+ * Refused when `dt` is too long for the diffusion to be stable, naming the
+ * longest that is, and when the run diverges.
+ *
+ *     const { a } = simulateReactionDiffusion({
+ *       model: "gierer-meinhardt", size: 100, a: noise, b: ones,
+ *       diffusion: [0.3, 60], dt: 0.2 / 60, steps: 12000,
+ *       kappa: 0.05, decay: [1, 1.2], source: [0.01, 0],
+ *     });
+ */
+export function simulateReactionDiffusion(options: ReactionDiffusionOptions): { a: number[]; b: number[] } {
+  const where = "simulateReactionDiffusion";
+  const { model, size, a, b, diffusion, dt, steps } = options;
+  const own: Record<string, string[]> = {
+    "gierer-meinhardt": ["rho", "kappa", "decay", "source"],
+    "gray-scott": ["feed", "kill"],
+  };
+  if (!(model in own)) {
+    throw new Error(`${where}: model is "gierer-meinhardt" or "gray-scott", not ${JSON.stringify(model)}`);
+  }
+  const common = ["model", "size", "a", "b", "diffusion", "dt", "steps"];
+  for (const key of Object.keys(options)) {
+    if (!common.includes(key) && !own[model].includes(key)) {
+      throw new Error(`${where}: ${key} is not an option of ${model}, which takes ${own[model].join(", ")}`);
+    }
+  }
+  const [width, height] = typeof size === "number" ? [size, 1] : size;
+  if (!(Number.isInteger(width) && Number.isInteger(height) && width >= 1 && height >= 1)) {
+    throw new Error(`${where}: size is a cell count or [width, height] in whole cells; got ${JSON.stringify(size)}`);
+  }
+  const cells = width * height;
+  for (const [name, field] of [["a", a], ["b", b]] as const) {
+    if (!Array.isArray(field) || field.length !== cells || !field.every(Number.isFinite)) {
+      throw new Error(`${where}: ${name} must be ${cells} finite numbers, one per cell`);
+    }
+  }
+  const finite = (v: unknown, name: string, min = -Infinity): number => {
+    if (typeof v !== "number" || !Number.isFinite(v) || v < min) {
+      throw new Error(`${where}: ${name} must be a finite number${min > -Infinity ? ` of at least ${min}` : ""}; got ${JSON.stringify(v)}`);
+    }
+    return v;
+  };
+  const pair = (v: unknown, name: string, fallback?: [number, number]): [number, number] => {
+    if (v === undefined && fallback) return fallback;
+    if (!Array.isArray(v) || v.length !== 2) throw new Error(`${where}: ${name} is a pair [for a, for b]`);
+    return [finite(v[0], `${name}[0]`), finite(v[1], `${name}[1]`)];
+  };
+  const [da, db] = pair(diffusion, "diffusion");
+  finite(da, "diffusion[0]", 0);
+  finite(db, "diffusion[1]", 0);
+  if (!(finite(dt, "dt") > 0)) throw new Error(`${where}: dt must be more than 0`);
+  if (!(Number.isInteger(steps) && steps >= 0)) {
+    throw new Error(`${where}: steps is a whole number of steps; got ${JSON.stringify(steps)}`);
+  }
+  const neighbours = height === 1 ? 2 : 4;
+  const fastest = Math.max(da, db);
+  if (dt * fastest * neighbours > 1) {
+    throw new Error(
+      `${where}: dt ${dt} is too long for diffusion ${fastest} to stay stable; ` +
+        `explicit steps need dt at most ${1 / (fastest * neighbours)} here — take more, shorter steps`,
+    );
+  }
+  const kinetics =
+    model === "gierer-meinhardt"
+      ? [
+          finite(options.rho ?? 1, "rho"),
+          finite(options.kappa ?? 0, "kappa"),
+          ...pair(options.decay, "decay", [1, 1]),
+          ...pair(options.source, "source", [0, 0]),
+        ]
+      : [finite(options.feed, "feed"), finite(options.kill, "kill")];
+  const numbers = [width, height, dt, steps, da, db, ...kinetics];
+
+  const native = parcadNative().reactionDiffusion;
+  const [na, nb] = native
+    ? native(model, a, b, numbers)
+    : reactionDiffusionInScript(model, width, height, [...a], [...b], numbers);
+  if (!na.every(Number.isFinite) || !nb.every(Number.isFinite)) {
+    throw new Error(
+      `${where}: the run diverged — a value left the finite numbers. The reaction is too fast for dt ` +
+        `${dt}; halve dt and double steps, or check that b starts above zero`,
+    );
+  }
+  return { a: na, b: nb };
+}
+
+function reactionDiffusionInScript(
+  model: string,
+  width: number,
+  height: number,
+  a: number[],
+  b: number[],
+  numbers: number[],
+): [number[], number[]] {
+  const [, , dt, steps, da, db, p0, p1, p2, p3, p4, p5] = numbers;
+  const cells = width * height;
+  const na = new Array<number>(cells).fill(0);
+  const nb = new Array<number>(cells).fill(0);
+  for (let s = 0; s < steps; s++) {
+    for (let y = 0; y < height; y++) {
+      const up = (y === 0 ? height - 1 : y - 1) * width;
+      const down = (y + 1 === height ? 0 : y + 1) * width;
+      const row = y * width;
+      for (let x = 0; x < width; x++) {
+        const i = row + x;
+        const l = row + (x === 0 ? width - 1 : x - 1);
+        const r = row + (x + 1 === width ? 0 : x + 1);
+        const ai = a[i];
+        const bi = b[i];
+        const la = height === 1 ? a[l] + a[r] - 2.0 * ai : a[l] + a[r] + a[up + x] + a[down + x] - 4.0 * ai;
+        const lb = height === 1 ? b[l] + b[r] - 2.0 * bi : b[l] + b[r] + b[up + x] + b[down + x] - 4.0 * bi;
+        if (model === "gierer-meinhardt") {
+          const a2 = ai * ai;
+          na[i] = ai + dt * (da * la + (p0 * a2) / (bi * (1.0 + p1 * a2)) - p2 * ai + p4);
+          nb[i] = bi + dt * (db * lb + p0 * a2 - p3 * bi + p5);
+        } else {
+          const abb = ai * bi * bi;
+          na[i] = ai + dt * (da * la - abb + p0 * (1.0 - ai));
+          nb[i] = bi + dt * (db * lb + abb - (p0 + p1) * bi);
+        }
+      }
+    }
+    for (let i = 0; i < cells; i++) {
+      a[i] = na[i];
+      b[i] = nb[i];
+    }
+  }
+  return [a, b];
+}
+
+function outlinePoints(points: [number, number][], where: string): [number, number][] {
+  if (
+    !Array.isArray(points) ||
+    !points.every((p) => Array.isArray(p) && p.length === 2 && Number.isFinite(p[0]) && Number.isFinite(p[1]))
+  ) {
+    throw new Error(`${where}: an outline is a list of [x, y] points, closing itself`);
+  }
+  return points;
+}
+
+function outlineOrient(p: number[], q: number[], r: number[]): number {
+  return (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+}
+
+function outlineWithin(p: number[], q: number[], r: number[]): boolean {
+  return (
+    r[0] >= Math.min(p[0], q[0]) && r[0] <= Math.max(p[0], q[0]) &&
+    r[1] >= Math.min(p[1], q[1]) && r[1] <= Math.max(p[1], q[1])
+  );
+}
+
+function segmentsMeet(p1: number[], p2: number[], p3: number[], p4: number[]): boolean {
+  const d1 = outlineOrient(p3, p4, p1);
+  const d2 = outlineOrient(p3, p4, p2);
+  const d3 = outlineOrient(p1, p2, p3);
+  const d4 = outlineOrient(p1, p2, p4);
+  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
+  return (
+    (d1 === 0 && outlineWithin(p3, p4, p1)) ||
+    (d2 === 0 && outlineWithin(p3, p4, p2)) ||
+    (d3 === 0 && outlineWithin(p1, p2, p3)) ||
+    (d4 === 0 && outlineWithin(p1, p2, p4))
+  );
+}
+
+/**
+ * Where a closed outline crosses or touches itself: every pair `[i, j]`,
+ * `i < j`, of segments that meet without being neighbours, sorted; segment
+ * `i` runs from point `i` to point `i + 1`, and the last back to the first.
+ * Empty for an outline that is a clean loop. The check a growth or offset
+ * loop makes after every move — in the sandbox it runs natively over a
+ * spatial grid, so a script needs no grid of its own.
+ *
+ *     const bad = new Set(outlineCrossings(ring).flat());
+ *     // segment i ends at point i + 1: roll back the points of the bad segments
+ */
+export function outlineCrossings(points: [number, number][]): [number, number][] {
+  outlinePoints(points, "outlineCrossings");
+  const native = parcadNative().outlineCrossings;
+  if (native) return native(points);
+  const n = points.length;
+  const pairs: [number, number][] = [];
+  if (n < 4) return pairs;
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue;
+      if (segmentsMeet(points[i], points[(i + 1) % n], points[j], points[(j + 1) % n])) pairs.push([i, j]);
+    }
+  }
+  return pairs;
+}
+
+/**
+ * For each point of a closed outline, the width of the gap it faces: the
+ * distance to the nearest part of the outline that is at least `ignoreWithin`
+ * mm away from the point *along* the outline, so the point's own stretch of
+ * curve does not count. A lobe growing toward its neighbour, or a slot a wall
+ * must fit into, is a gap narrower than it should be. Gaps wider than `upTo`
+ * (default: no limit) come back as `Infinity`, which is also the answer for a
+ * point with nothing far enough along to measure. In the sandbox it runs
+ * natively over a spatial grid, so a script needs no grid of its own.
+ *
+ *     const gaps = outlineGaps(ring, { ignoreWithin: 6, upTo: 6 });
+ *     const tooNarrow = gaps.map((g) => g < 6);
+ */
+export function outlineGaps(
+  points: [number, number][],
+  options: { ignoreWithin: number; upTo?: number },
+): number[] {
+  outlinePoints(points, "outlineGaps");
+  const { ignoreWithin, upTo = Infinity } = options ?? ({} as { ignoreWithin: number });
+  if (!(typeof ignoreWithin === "number" && Number.isFinite(ignoreWithin) && ignoreWithin >= 0)) {
+    throw new Error(
+      `outlineGaps: ignoreWithin is the length of outline either side of a point to leave out, in mm, ` +
+        `0 or more — e.g. outlineGaps(ring, { ignoreWithin: 6 }); got ${JSON.stringify(ignoreWithin)}`,
+    );
+  }
+  if (!(typeof upTo === "number" && upTo >= 0)) {
+    throw new Error(`outlineGaps: upTo is a distance in mm, 0 or more; got ${JSON.stringify(upTo)}`);
+  }
+  const native = parcadNative().outlineGaps;
+  if (native) return native(points, ignoreWithin, upTo);
+  const n = points.length;
+  if (n < 3) return points.map(() => Infinity);
+  const run = [0];
+  for (let k = 0; k < n; k++) {
+    const p = points[k];
+    const q = points[(k + 1) % n];
+    const dx = q[0] - p[0];
+    const dy = q[1] - p[1];
+    run.push(run[k] + Math.sqrt(dx * dx + dy * dy));
+  }
+  const total = run[n];
+  return points.map((p, i) => {
+    let best = Infinity;
+    for (let j = 0; j < n; j++) {
+      let along = 0;
+      if (i !== j && i !== (j + 1) % n) {
+        let ahead = run[j] - run[i];
+        if (ahead < 0) ahead += total;
+        let behind = run[i] - run[j + 1];
+        if (behind < 0) behind += total;
+        along = Math.min(ahead, behind);
+      }
+      if (along < ignoreWithin) continue;
+      const a = points[j];
+      const b = points[(j + 1) % n];
+      const vx = b[0] - a[0];
+      const vy = b[1] - a[1];
+      const length2 = vx * vx + vy * vy;
+      let t = length2 > 0 ? ((p[0] - a[0]) * vx + (p[1] - a[1]) * vy) / length2 : 0;
+      t = Math.min(Math.max(t, 0), 1);
+      const dx = p[0] - (a[0] + t * vx);
+      const dy = p[1] - (a[1] + t * vy);
+      const d = Math.sqrt(dx * dx + dy * dy);
+      if (d < best) best = d;
+    }
+    return best > upTo ? Infinity : best;
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Flattening
 // ---------------------------------------------------------------------------
 
