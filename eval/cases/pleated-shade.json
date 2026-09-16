@@ -1,7 +1,7 @@
 {
   "name": "pleated-shade",
   "script": "examples/pleated-shade.js",
-  "why": "The seeded pleated shade: 24 deep pleats twisting up a flared surface loft of 21 fitted sections, thickened to a 1.4 mm wall and cut flat at both rims. There is no closed form, so the volume is held to a band that needs none: a wall of thickness t over a surface of area A holds t × A to within the curvature term, and the part's measured area is both skins plus the rims, so 1.4 × half the area, 250333 mm3, within 1 % (it reads 0.7 % under, the rims and the flat cuts). The wall must measure 1.4 mm everywhere, the part must be one watertight body with no void, and the mesh backstop refuses an inside-out wall, so this goes red if the orientation, the offset or the integral arbitration regresses. It costs about 25 s cold under load.",
+  "why": "The seeded pleated shade: 24 deep pleats twisting up a flared surface loft of 21 fitted sections, thickened to a 1.4 mm wall and cut flat at both rims. There is no closed form, so the volume is held to a band that needs none: a wall of thickness t over a surface of area A holds t × A to within the curvature term, and the part's measured area is both skins plus the rims, so 1.4 × half the area, 250333 mm3, within 1 % (it reads 0.7 % under, the rims and the flat cuts). The wall must measure 1.4 mm everywhere, the part must be one watertight body with no void, and the mesh backstop refuses an inside-out wall, so this goes red if the orientation, the offset or the integral arbitration regresses. It costs about 14 s cold natively and 55 s under WebAssembly, most of it the mesher on 546 offset faces (docs/GOTCHAS.md).",
   "brep": {
     "volume_mm3": 250333.06,
     "bodies": 1,
