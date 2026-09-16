@@ -207,9 +207,9 @@ impl Document {
     fn from_dsl(source: &str, detail: bool) -> Document {
         let items = parse(source);
         let mut preamble = String::from("# parcad DSL reference\n\n");
-        preamble.push_str(&shown(&module_doc(source), detail));
+        preamble.push_str(shown(&module_doc(source), detail).trim_end());
         preamble.push_str(
-            "\nEvery name below is a reserved word in a script: a variable called `box` \
+            "\n\nEvery name below is a reserved word in a script: a variable called `box` \
              hides the primitive. What the language cannot do, and what to write instead, \
              is the `gaps` topic.\n",
         );

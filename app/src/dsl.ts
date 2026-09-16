@@ -59,9 +59,10 @@ export interface EdgeQuery {
    */
   curve?: "line" | "circle" | "spline";
   /**
-   * `"hole"`: a circular hole rim, excluding the rim of an outside boss.
-   * `"boundary"`: a free edge — the edge of a surface, bordered by one face
-   * only, which is what `patch()` fills. A closed solid has none.
+   * `"hole"`: a circular hole rim, not the rim of an outside boss.
+   * `"boundary"`: a free edge, where a surface ends (one face on it); what
+   * `.patch()` fills and what a surface report measures as open. A closed
+   * solid has none.
    */
   role?: "hole" | "boundary";
   /** Match an edge touching a face with this outward normal. */
@@ -365,23 +366,25 @@ export class EdgeSelection {
   }
 
   /**
-   * A surface filling every closed loop the selected free edges make — Fusion's
-   * Patch. A flat loop is filled with the exact plane; any other loop with a
-   * filling surface through its edges, whose distance from them is measured
-   * and refused past 0.01 mm. `tangent: true` also makes the fill meet the
-   * faces it borders smoothly (refused past 1°). Select the loop with
-   * `{ role: "boundary" }`, narrowed with `at` or `on`; every selected edge
-   * must be a free edge, and together they must close.
+   * A new surface filling the closed loop of free edges selected: Fusion's
+   * Patch.
    *
-   * The result is the patch alone, a new surface: stitch it to what it
-   * patches to close that.
+   * - Select with `{ role: "boundary" }`, narrowed by `at` or `on`. Every
+   *   selected edge must be a free edge, and together they must close.
+   * - Returns the patch alone. `stitchSurfaces(surface, patch)` joins it.
+   * - `tangent: true` makes the fill meet its neighbours smoothly.
+   * - A fill more than 0.01 mm off its edges, or 1° off tangent, is refused.
    *
-   * ```js
-   * const tube = surfaceExtrude([[20, 0], { through: [-20, 0] }, [20, 0]], 30, { closed: true });
-   * const lid = tube.edges({ role: "boundary", at: { z: "max" } }).patch();
-   * const floor = tube.edges({ role: "boundary", at: { z: "min" } }).patch();
-   * return stitchSurfaces(tube, lid, floor); // a closed shell: a solid cylinder
-   * ```
+   * @example
+   *     // a radius-20 tube 30 tall, patched at both ends: a 37,699 mm³ cylinder
+   *     const tube = surfaceExtrude([[20, 0], { through: [0, 20] }, [-20, 0], { through: [0, -20] }], 30, { closed: true });
+   *     const lid = tube.edges({ role: "boundary", at: { z: "max" } }).patch();
+   *     const floor = tube.edges({ role: "boundary", at: { z: "min" } }).patch();
+   *     return stitchSurfaces(tube, lid, floor);
+   *
+   * @remarks
+   * A flat loop is filled with the exact plane, any other with a filling
+   * surface through its edges whose distance from them is measured.
    */
   patch(options: { tangent?: boolean } = {}): Shape {
     const extra = Object.keys(options ?? {}).filter((k) => k !== "tangent");
@@ -641,24 +644,26 @@ export class Shape {
   }
 
   /**
-   * Make this surface a solid `thickness` mm thick, measured square to the
-   * surface — Fusion's Thicken. `side: "both"` (the default) centres the
-   * material on the surface; `"out"` puts it all on the surface's normal side
-   * and `"in"` on the other. A surface's normal points to the right of its
-   * curve's direction of travel, seen from +Z for a loft or an extrusion —
-   * the outside of an anticlockwise outline.
+   * This surface made a solid `thickness` mm thick, measured square to the
+   * surface: Fusion's Thicken. The way to print, fillet or cut a surface.
    *
-   * The kernel offsets the surface exactly, and the result is measured along
-   * the normal at a grid of points on every face: the evaluation reports the
-   * range as `thickened_mm`, and a solid more than 1 % off anywhere is
-   * refused, naming where. Refused before building where the surface bends
-   * tighter than the thickness on the side it grows toward (its radius of
-   * curvature is in the message), and where it has a crease — two faces
-   * meeting at an angle — which has no single offset.
+   * - `side`: `"both"` (default) centres the wall on the surface, `"out"`
+   *   grows it on the normal side, `"in"` on the other.
+   * - The normal is to the right of the curve's direction of travel (seen
+   *   from +Z for an extrude or a loft): outward for an anticlockwise curve.
+   * - Reports the measured thickness as `thickened_mm: { min, max }`; more
+   *   than 1 % off anywhere is refused.
+   * - Refused where the surface bends tighter than `thickness` on the growing
+   *   side (the radius is in the message), and at a crease between faces.
    *
-   * ```js
-   * surfaceLoft(sections, { closed: true, smooth: true }).thicken(1.4)
-   * ```
+   * @example
+   *     // a radius-40 dome, 2 mm thick inward: 2/3 · π · (40³ − 38³) = 19,117 mm³
+   *     return surfaceRevolve([[40, 0], { through: [40 * Math.SQRT1_2, 40 * Math.SQRT1_2] }, [0, 40]]).thicken(2, { side: "in" });
+   *
+   * @remarks
+   * The kernel offsets the surface exactly; the solid is then measured along
+   * the normal at a grid of points on every face. A crease has no single
+   * offset, so it is refused rather than mitred.
    */
   thicken(thickness: number, options: { side?: "both" | "out" | "in" } = {}): Shape {
     if (!(typeof thickness === "number" && Number.isFinite(thickness) && thickness > 0)) {
@@ -675,17 +680,23 @@ export class Shape {
   }
 
   /**
-   * Cut this surface with a tool and keep the pieces on one side — Fusion's
-   * Trim. The tool is a solid (`keep: "inside"` or `"outside"`), another
-   * surface (`"front"`, its normal side, or `"back"`), or a plane
-   * `{ plane: { point: [x, y, z], normal: [x, y, z] } }` (`"above"`, where
-   * the normal points, or `"below"`). A cutting surface must reach right
-   * across the surface it trims.
+   * This surface cut by a tool, keeping the pieces on one side: Fusion's
+   * Trim. `keep` depends on the tool (see `TrimKeep`).
    *
-   * To trim by a curve, extrude the curve into a surface or a solid and trim
-   * with that: `surfaceExtrude(curve, 100)` cuts along the curve seen from +Z.
-   * A tool that does not cross the surface, or keeps all or none of it, is
-   * refused.
+   * - A solid tool: `keep: "inside"` or `"outside"`.
+   * - A surface tool: `"front"` (its normal side) or `"back"`. It must reach
+   *   right across this surface.
+   * - A plane, `{ plane: { point: [x, y, z], normal: [x, y, z] } }`:
+   *   `"above"` (where the normal points) or `"below"`.
+   * - To trim by a curve, trim by `surfaceExtrude(curve, h)` or an extruded
+   *   solid.
+   * - A tool that misses, or keeps all or none of the surface, is refused.
+   *   To keep every piece, use `.split(tool)`.
+   *
+   * @example
+   *     // a 40 × 40 sheet on y = 0, less the strip a radius-10 rod passes: 800 mm²
+   *     return surfaceExtrude([[-20, 0], [20, 0]], 40).trim(cylinder(10, 100), { keep: "outside" });
+   * @example surfaceExtrude([[-20, 0], [20, 0]], 40).trim({ plane: { point: [0, 0, 10], normal: [0, 0, 1] } }, { keep: "above" })  // 40 × 10
    */
   trim(tool: Shape | { plane: { point: PathPoint; normal: PathPoint } }, options: { keep: TrimKeep }): Shape {
     const keep = options?.keep;
@@ -698,20 +709,33 @@ export class Shape {
   }
 
   /**
-   * Cut this surface along a tool — a solid, a surface or a plane, as
-   * {@link trim} takes — and keep every piece: Fusion's Split Face. The
-   * pieces stay joined along the cut, as separate faces a selector or a
-   * later trim can tell apart.
+   * This surface cut along a tool, keeping every piece: Fusion's Split Face.
+   *
+   * - The tool is a solid, a surface or a plane, as `trim` takes.
+   * - The pieces stay joined along the cut, as separate faces that a
+   *   selector or a later trim can tell apart.
+   *
+   * @example
+   *     // one 40 × 40 sheet as two 800 mm² faces, split at x = 0
+   *     return surfaceExtrude([[-20, 0], [20, 0]], 40).split({ plane: { point: [0, 0, 0], normal: [1, 0, 0] } });
    */
   split(tool: Shape | { plane: { point: PathPoint; normal: PathPoint } }): Shape {
     return trimBy(this, tool, "both");
   }
 
   /**
-   * This surface moved `distance` mm along its normal (negative: against it),
-   * as a new surface — Fusion's Offset surface. Measured along the normal at
-   * a grid of points on every face and reported as `offset_mm`; refused where
-   * the surface bends tighter than the distance on the side it moves toward.
+   * A new surface `distance` mm from this one along its normal: Fusion's
+   * Offset Surface.
+   *
+   * - Negative `distance` moves against the normal (see `thicken` for which
+   *   way the normal points).
+   * - Reports the measured distance as `offset_mm: { min, max }`.
+   * - Refused where the surface bends tighter than `distance` on the side it
+   *   moves toward.
+   *
+   * @example
+   *     // a radius-40 dome moved 5 mm out: 2π · 45² = 12,723 mm²
+   *     return surfaceRevolve([[40, 0], { through: [40 * Math.SQRT1_2, 40 * Math.SQRT1_2] }, [0, 40]]).offsetSurface(5);
    */
   offsetSurface(distance: number): Shape {
     if (!(typeof distance === "number" && Number.isFinite(distance) && distance !== 0)) {
@@ -2784,8 +2808,20 @@ export function sweep(
   }), []);
 }
 
-/** Which pieces a {@link Shape.trim} keeps. */
-export type TrimKeep = "inside" | "outside" | "above" | "below" | "front" | "back";
+/** Which pieces a `trim` keeps; the tool decides which two words apply. */
+export type TrimKeep =
+  /** Inside a solid tool. */
+  | "inside"
+  /** Outside a solid tool. */
+  | "outside"
+  /** The side of a plane its normal points to. */
+  | "above"
+  /** The side of a plane its normal points away from. */
+  | "below"
+  /** A surface tool's normal side. */
+  | "front"
+  /** The other side of a surface tool. */
+  | "back";
 
 function trimBy(
   shape: Shape,
@@ -2811,14 +2847,20 @@ function trimBy(
   );
 }
 
-/** Options every surface-making function takes. */
+/**
+ * Options every surface-making function takes. The curve is a list of
+ * `SectionEntry`, open unless `closed: true`.
+ *
+ * - An open curve runs from its first entry to its last, and both are
+ *   corners `[x, y]`: `[[0, 0], { through: [10, 5] }, [20, 0]]`.
+ * - Or it is one `{ fit }` or `{ spline }` alone, which then runs open
+ *   through its points from the first to the last.
+ * - A closed curve is a section, as `extrude` takes, and makes a tube open at
+ *   both ends. A full circle is two arcs between two corners.
+ * - `inset` is refused in an open curve.
+ */
 export interface CurveOptions {
-  /**
-   * `false` (the default): the curve is open, running from its first entry
-   * to its last, both corners `[x, y]` — or it is one `{ spline }` or
-   * `{ fit }` alone. `true`: it closes back to its start like a section, and
-   * the surface is a tube.
-   */
+  /** `true`: the curve closes back to its start. Default `false`. */
   closed?: boolean;
 }
 
@@ -2835,15 +2877,18 @@ function curveOptions(options: object, allowed: string[], fn: string) {
 }
 
 /**
- * A curve in the XY plane swept `height` mm along +Z into a surface, centred
- * on z = 0 — Fusion's surface Extrude. The curve is a list of `SectionEntry`
- * (corners, arcs, splines, fits) that does not close unless `closed: true`;
- * a closed curve makes a tube with both ends open. The surface's normal lies
- * to the right of the curve's direction of travel seen from +Z.
+ * A surface: a curve in the XY plane extruded `height` mm along Z, centred
+ * on z = 0. Fusion's surface Extrude.
  *
- * ```js
- * surfaceExtrude([[0, 0], { spline: [[10, 6], [20, -6]] }, [30, 0]], 40)
- * ```
+ * - The curve is open unless `closed: true` (see `CurveOptions`).
+ * - The normal is to the right of the curve's travel, seen from +Z.
+ * - A surface has area and free edges, no volume; `.thicken(t)` makes it a
+ *   solid.
+ *
+ * @example
+ *     // an L-shaped sheet, 30 + 20 long and 40 tall: 2000 mm²
+ *     return surfaceExtrude([[0, 0], [30, 0], [30, 20]], 40);
+ * @example surfaceExtrude([[0, 0], { spline: [[10, 6], [20, -6]] }, [30, 0]], 40)  // a wavy sheet
  */
 export function surfaceExtrude(curve: SectionEntry[], height: number, options: CurveOptions = {}): Shape {
   curveOptions(options, ["closed"], "surfaceExtrude");
@@ -2856,15 +2901,18 @@ export function surfaceExtrude(curve: SectionEntry[], height: number, options: C
 }
 
 /**
- * A curve in the (radius, z) half-plane revolved about +Z into a surface —
- * Fusion's surface Revolve: a dome from a quarter arc, a lamp shade from a
- * profile line. Radii must be >= 0; `degrees` (default 360) sweeps part of a
- * turn, anticlockwise from +X. The normal lies to the right of the curve's
- * travel in that plane: a curve drawn upward at positive radius faces out.
+ * A surface: a curve in the (radius, z) plane revolved about Z. Fusion's
+ * surface Revolve: a dome from a quarter arc, a shade from a line.
  *
- * ```js
- * surfaceRevolve([[40, 0], { through: [30, 30] }, [0, 40]]) // a dome, open at its rim
- * ```
+ * - Points are `[radius, z]`, radius >= 0. The curve is open unless
+ *   `closed: true` (see `CurveOptions`).
+ * - `degrees` (default 360) revolves part of a turn, anticlockwise from +X.
+ * - The normal is to the right of the curve's travel: a curve drawn upward
+ *   faces outward.
+ *
+ * @example
+ *     // a radius-40 dome, open at its rim: 2π · 40² = 10,053 mm²
+ *     return surfaceRevolve([[40, 0], { through: [40 * Math.SQRT1_2, 40 * Math.SQRT1_2] }, [0, 40]]);
  */
 export function surfaceRevolve(curve: SectionEntry[], options: CurveOptions & { degrees?: number } = {}): Shape {
   curveOptions(options, ["closed", "degrees"], "surfaceRevolve");
@@ -2883,34 +2931,46 @@ export function surfaceRevolve(curve: SectionEntry[], options: CurveOptions & { 
   );
 }
 
-/** One curve of a {@link surfaceLoft}, lying flat at height `z`. */
+/** One curve of a `surfaceLoft`, lying flat at height `z`. */
 export interface LoftCurve {
+  /** Height of the plane the curve lies in. */
   z: number;
+  /** The curve, open unless the loft is `closed` (see `CurveOptions`). */
   curve: SectionEntry[];
 }
 
 /**
- * A surface through two or more curves stacked along +Z — Fusion's Loft in
- * the surface workspace, and the way to draw a shade, a blade or a hull
- * that must stay open. Curves pair their pieces by index, as `loft` pairs
- * outlines, so every curve resolves to the same number of pieces. Ruled
- * stretches by default; `smooth: true` fits one surface through all of them,
- * held to the curves' own bounding box. `closed: true` lofts closed curves
- * into a tube open at both ends.
+ * A surface through two or more `LoftCurve`s at rising `z`: Fusion's surface
+ * Loft, for a sheet, blade or shade that stays open. Ruled between curves
+ * unless `smooth: true`.
  *
- * Curves that are each one `{ fit: points, tolerance }` over the same
- * number of points — open or closed — are skinned on one shared knot vector
- * with one parameter per point, so point `i` of every curve lies on one
- * line of the surface: list every curve's points from the same end (or, when
- * closed, the same place and the same way round). The fit's worst distance
- * from its points is reported as `deviation_mm`. This is the path for
- * generated sections — a reaction-diffusion profile tweened and flared —
- * and it keeps the surface light enough to thicken.
+ * - Curves are open unless `closed: true`, which makes a tube open at both
+ *   ends (see `CurveOptions`).
+ * - Pieces pair by index, as in `loft`: every curve needs the same count.
+ * - For curves from points, give each curve one `{ fit }` over the same
+ *   number of points, listed from the same end (or, closed, the same start
+ *   and the same way round). Point `i` then lies on one line of the surface.
+ * - A surface has no volume; `.thicken(t)` makes it a printable solid.
  *
- * ```js
- * const blade = (z, w) => ({ z, curve: [{ fit: arcPoints(60, w, z), tolerance: 0.02 }] });
- * surfaceLoft([blade(0, 30), blade(60, 40), blade(120, 25)], { smooth: true }).thicken(1.4)
- * ```
+ * @example
+ *     // a 60° strip of a radius-40 cylinder, 40 tall: 40 · π/3 · 40 = 1676 mm²
+ *     const arc = (r) => Array.from({ length: 12 }, (_, i) => {
+ *       const a = (Math.PI / 3) * (i / 11) - Math.PI / 6;
+ *       return [r * Math.cos(a), r * Math.sin(a)];
+ *     });
+ *     return surfaceLoft([
+ *       { z: 0, curve: [{ fit: arc(40), tolerance: 0.01 }] },
+ *       { z: 40, curve: [{ fit: arc(40), tolerance: 0.01 }] },
+ *     ], { smooth: true });
+ * @example surfaceLoft([{ z: 0, curve: [[-20, 0], [20, 0]] }, { z: 30, curve: [[-20, 0], [20, 0]] }]).thicken(2)  // 2400 mm³
+ *
+ * @remarks
+ * Fitted curves over the same number of points are skinned on one shared
+ * knot vector with one parameter per point, which keeps the surface light
+ * enough to thicken; the fit's worst distance from its points is reported as
+ * `deviation_mm`. A smooth loft is held to the curves' bounding box. This is
+ * the path for generated sections, such as a reaction-diffusion profile
+ * tweened and flared.
  */
 export function surfaceLoft(sections: LoftCurve[], options: CurveOptions & { smooth?: boolean } = {}): Shape {
   curveOptions(options, ["closed", "smooth"], "surfaceLoft");
@@ -2937,12 +2997,17 @@ export function surfaceLoft(sections: LoftCurve[], options: CurveOptions & { smo
 }
 
 /**
- * A curve swept along a path into a surface — Fusion's surface Sweep. The
- * path is what `sweep` takes: points with `{ bend }` at every corner,
- * `{ helix: { radius, pitch, turns } }` or `{ spline: [[x, y, z], ...] }`,
- * and the curve is drawn in the plane square to the path's start exactly as
- * `sweep` draws its profile. The normal lies to the right of the curve's
- * travel in that plane.
+ * A surface: a curve swept along a path. Fusion's surface Sweep.
+ *
+ * - The path is what `sweep` takes: points (`bend` rounds every corner),
+ *   `{ helix: { radius, pitch, turns } }` or `{ spline: [[x, y, z], ...] }`.
+ * - The curve is drawn in the plane square to the path's start, as `sweep`
+ *   draws its profile, and is open unless `closed: true`.
+ * - The normal is to the right of the curve's travel in that plane.
+ *
+ * @example
+ *     // a ribbon 10 wide along a path 30 + π/2 · 10 + 20 long: 657 mm²
+ *     return surfaceSweep([[-5, 0], [5, 0]], [[0, 0, 0], [0, 0, 40], [30, 0, 40]], { bend: 10 });
  */
 export function surfaceSweep(
   curve: SectionEntry[],
@@ -2974,16 +3039,21 @@ export function surfaceSweep(
 }
 
 /**
- * Sew surfaces into one along the edges they share — Fusion's Stitch — and,
- * when the result has no free edge left, into a solid: measured, not
- * assumed, so the report says `solid` only when the shell closed. Edges
- * closer than `tolerance` (default 0.01 mm, at most 0.5) are joined; a wider
- * gap stays a free edge. `solid: true` refuses a result that does not close,
- * listing its free edges — the way to insist on a watertight part.
+ * Surfaces sewn into one along the edges they share: Fusion's Stitch. A
+ * result with no free edge left is a solid.
  *
- * ```js
- * stitchSurfaces(tube, top, bottom, { solid: true })
- * ```
+ * - The report's `kind` says `solid` only when the shell measured closed;
+ *   otherwise `kind: "surface"`, its opening in `surface.free_edge_length_mm`.
+ * - Edges closer than `tolerance` (default 0.01 mm, at most 0.5) are joined.
+ * - `solid: true` refuses a result that does not close, listing its free
+ *   edges: the way to insist on a watertight part.
+ *
+ * @example
+ *     // four sides and two patches: a closed 20 mm cube, 8000 mm³
+ *     const sides = surfaceExtrude([[-10, -10], [10, -10], [10, 10], [-10, 10]], 20, { closed: true });
+ *     const top = sides.edges({ role: "boundary", at: { z: "max" } }).patch();
+ *     const bottom = sides.edges({ role: "boundary", at: { z: "min" } }).patch();
+ *     return stitchSurfaces(sides, top, bottom, { solid: true });
  */
 export function stitchSurfaces(...args: (Shape | { tolerance?: number; solid?: boolean })[]): Shape {
   const shapes: Shape[] = [];
