@@ -951,6 +951,24 @@ pub mod ffi {
             z1: &mut f64,
         ) -> bool;
 
+        // A loose enclosing box and the triangulation's box — added for
+        // parcad, see PARCAD-CHANGES.md.
+        pub fn Shape_bounds_bracket(
+            shape: &TopoDS_Shape,
+            x0: &mut f64,
+            y0: &mut f64,
+            z0: &mut f64,
+            x1: &mut f64,
+            y1: &mut f64,
+            z1: &mut f64,
+            a0: &mut f64,
+            b0: &mut f64,
+            c0: &mut f64,
+            a1: &mut f64,
+            b1: &mut f64,
+            c1: &mut f64,
+        ) -> bool;
+
         // A grid of points on every face — added for parcad, see
         // PARCAD-CHANGES.md.
         pub fn Shape_face_grid(shape: &TopoDS_Shape, per_side: i32) -> Vec<f64>;

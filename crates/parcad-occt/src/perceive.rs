@@ -153,23 +153,57 @@ pub fn tag_extents(part: &BuiltPart, bodies: &[Body]) -> (Vec<TagBounds>, Vec<St
     let Some(first) = part.names.first() else {
         return (found, unlocated);
     };
-    let mut owned: HashMap<&str, (usize, DVec3, DVec3)> = HashMap::new();
+    // Every tagged face, with a box that encloses it and the box of its mesh,
+    // which lies on it. The tight box is the union of each face's optimal one,
+    // and a face whose enclosing box is strictly inside what the tag's meshes
+    // already reach cannot widen it, so only the others are optimised — on a
+    // pleated shade, a few dozen of 520 offset faces.
+    struct Tagged<'a> {
+        face: Shape,
+        tags: &'a [String],
+        outer: (DVec3, DVec3),
+        inner: Option<(DVec3, DVec3)>,
+        tight: Option<Option<(DVec3, DVec3)>>,
+    }
+    let mut tagged: Vec<Tagged> = Vec::new();
     for body in bodies {
         for (i, face) in body.shape.faces().enumerate() {
             let Some(tags) = body.face_tags.get(i).filter(|t| !t.is_empty()) else {
                 continue;
             };
-            let Some((lo, hi)) = Shape::from(face.clone()).bounds_optimal() else {
+            let face = Shape::from(face.clone());
+            let Some((outer, inner)) = face.bounds_bracket() else {
                 continue;
             };
-            for tag in tags {
-                let entry = owned
-                    .entry(tag.as_str())
-                    .or_insert((0, DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY)));
+            tagged.push(Tagged { face, tags, outer, inner, tight: None });
+        }
+    }
+    let empty = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
+    let mut reached: HashMap<&str, (DVec3, DVec3)> = HashMap::new();
+    for t in &tagged {
+        let Some((lo, hi)) = t.inner else { continue };
+        for tag in t.tags {
+            let entry = reached.entry(tag.as_str()).or_insert(empty);
+            *entry = (entry.0.min(lo), entry.1.max(hi));
+        }
+    }
+    let mut owned: HashMap<&str, (usize, DVec3, DVec3)> = HashMap::new();
+    for t in &mut tagged {
+        for tag in t.tags {
+            let entry = owned.entry(tag.as_str()).or_insert((0, empty.0, empty.1));
+            let (reach_lo, reach_hi) = reached.get(tag.as_str()).copied().unwrap_or(empty);
+            let (lo, hi) = t.outer;
+            let within = t.inner.is_some() && lo.cmpgt(reach_lo).all() && hi.cmplt(reach_hi).all();
+            if within {
                 entry.0 += 1;
-                entry.1 = entry.1.min(lo);
-                entry.2 = entry.2.max(hi);
+                continue;
             }
+            let Some((lo, hi)) = *t.tight.get_or_insert_with(|| t.face.bounds_optimal()) else {
+                continue;
+            };
+            entry.0 += 1;
+            entry.1 = entry.1.min(lo);
+            entry.2 = entry.2.max(hi);
         }
     }
     for (tag, _) in &first.tags {

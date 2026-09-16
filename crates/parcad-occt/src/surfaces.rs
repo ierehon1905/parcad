@@ -846,6 +846,10 @@ fn refuse_fold(id: NodeId, label: &str, doing: &str, amount: f64, side: &str, fo
 /// point is on a side wall — a sample nearer a rim than half the wall — which
 /// is not a reading of the wall.
 fn walls_at(solid: &Shape, lateral: &HashSet<usize>, samples: &[FaceSample], along: f64, against: f64) -> Vec<Option<(f64, DVec3)>> {
+    // The part's own tessellation, made now rather than at the end: the search
+    // seeds from triangles instead of an extrema grid per point, and every
+    // face a later operation leaves alone keeps it (docs/GOTCHAS.md).
+    drop(opencascade::mesh::Mesher::new(solid));
     let mut nearest = solid.nearest_boundary();
     let half = (along + against) / 2.0;
     let reach = half * (1.0 + OFFSET_TOLERANCE) + OFFSET_TOLERANCE_MM;

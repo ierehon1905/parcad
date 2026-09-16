@@ -1929,37 +1929,54 @@ pub fn polyline_self_intersection(points: &[P2], closed: bool) -> Option<(usize,
             && (p[0] - a[0]) * (b[0] - a[0]) + (p[1] - a[1]) * (b[1] - a[1]) >= -eps * len
             && (p[0] - b[0]) * (a[0] - b[0]) + (p[1] - b[1]) * (a[1] - b[1]) >= -eps * len
     };
-    for i in 0..m {
-        for j in i + 1..m {
-            let (ei, a, b) = edges[i];
-            let (ej, c, d) = edges[j];
-            let adjacent = j == i + 1 || (closed && i == 0 && j == m - 1);
-            if adjacent {
-                // Neighbours share one corner; they meet elsewhere only by
-                // folding back along each other.
-                let (shared, other_i, other_j) = if j == i + 1 { (b, a, d) } else { (a, b, c) };
-                let (u, v) = ([other_i[0] - shared[0], other_i[1] - shared[1]], [other_j[0] - shared[0], other_j[1] - shared[1]]);
-                let folds = cross([0.0, 0.0], u, v).abs() <= eps * u[0].hypot(u[1]).max(v[0].hypot(v[1]))
-                    && u[0] * v[0] + u[1] * v[1] > 0.0;
-                if folds {
-                    return Some((ei, ej));
-                }
+    let meets = |i: usize, j: usize| -> bool {
+        let (_, a, b) = edges[i];
+        let (_, c, d) = edges[j];
+        let adjacent = j == i + 1 || (closed && i == 0 && j == m - 1);
+        if adjacent {
+            // Neighbours share one corner; they meet elsewhere only by
+            // folding back along each other.
+            let (shared, other_i, other_j) = if j == i + 1 { (b, a, d) } else { (a, b, c) };
+            let (u, v) = ([other_i[0] - shared[0], other_i[1] - shared[1]], [other_j[0] - shared[0], other_j[1] - shared[1]]);
+            return cross([0.0, 0.0], u, v).abs() <= eps * u[0].hypot(u[1]).max(v[0].hypot(v[1]))
+                && u[0] * v[0] + u[1] * v[1] > 0.0;
+        }
+        let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
+        let proper = ((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps))
+            && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps));
+        proper || on_segment(a, c, d) || on_segment(b, c, d) || on_segment(c, a, b) || on_segment(d, a, b)
+    };
+    // Only edges whose boxes, widened past `on_segment`'s reach, overlap can
+    // meet: a sweep along x finds those pairs, and the first pair in index
+    // order is kept, which is the pair checking every one in order returns.
+    let margin = 2.0 * eps;
+    let boxes: Vec<(P2, P2)> = edges
+        .iter()
+        .map(|(_, a, b)| {
+            ([a[0].min(b[0]) - margin, a[1].min(b[1]) - margin], [a[0].max(b[0]) + margin, a[1].max(b[1]) + margin])
+        })
+        .collect();
+    let mut order: Vec<usize> = (0..m).collect();
+    order.sort_by(|&i, &j| boxes[i].0[0].total_cmp(&boxes[j].0[0]));
+    let mut first: Option<(usize, usize)> = None;
+    for (k, &i) in order.iter().enumerate() {
+        for &j in &order[k + 1..] {
+            if boxes[j].0[0] > boxes[i].1[0] {
+                break;
+            }
+            if boxes[j].0[1] > boxes[i].1[1] || boxes[i].0[1] > boxes[j].1[1] {
                 continue;
             }
-            let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
-            let proper = ((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps))
-                && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps));
-            if proper
-                || on_segment(a, c, d)
-                || on_segment(b, c, d)
-                || on_segment(c, a, b)
-                || on_segment(d, a, b)
-            {
-                return Some((ei, ej));
+            let pair = (i.min(j), i.max(j));
+            if first.is_some_and(|f| f <= pair) {
+                continue;
+            }
+            if meets(pair.0, pair.1) {
+                first = Some(pair);
             }
         }
     }
-    None
+    first.map(|(i, j)| (edges[i].0, edges[j].0))
 }
 
 /// Whether a polygon turns the same way at every corner (collinear corners
@@ -1983,6 +2000,75 @@ pub fn polygon_is_convex(points: &[P2]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The sweep returns the pair checking every pair in order would, on
+    /// chains that loop, touch, fold back and run along themselves.
+    #[test]
+    fn the_crossing_sweep_finds_the_first_pair_every_pair_would() {
+        let mut state = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % 10_000) as f64 / 10_000.0
+        };
+        for trial in 0..400 {
+            let n = 4 + trial % 40;
+            let grid = if trial % 3 == 0 { 4.0 } else { 0.0 };
+            let points: Vec<P2> = (0..n)
+                .map(|_| {
+                    let (x, y) = (next() * 10.0, next() * 10.0);
+                    if grid > 0.0 { [(x / grid * 2.0).round(), (y / grid * 2.0).round()] } else { [x, y] }
+                })
+                .collect();
+            for closed in [false, true] {
+                let brute = {
+                    let edge_count = if closed { n } else { n - 1 };
+                    let edges: Vec<usize> = (0..edge_count).filter(|&i| dist(&points[i], &points[(i + 1) % n]) > 1e-9).collect();
+                    let m = edges.len();
+                    let mut found = None;
+                    'all: for i in 0..m {
+                        for j in i + 1..m {
+                            if polyline_pair_meets(&points, closed, &edges, i, j) {
+                                found = Some((edges[i], edges[j]));
+                                break 'all;
+                            }
+                        }
+                    }
+                    found
+                };
+                assert_eq!(polyline_self_intersection(&points, closed), brute, "trial {trial}, closed {closed}");
+            }
+        }
+    }
+
+    /// One pair of [`polyline_self_intersection`]'s edges, tested alone: the
+    /// same chain with only those two edges' order and adjacency.
+    fn polyline_pair_meets(points: &[P2], closed: bool, edges: &[usize], i: usize, j: usize) -> bool {
+        let n = points.len();
+        let m = edges.len();
+        let (a, b) = (points[edges[i]], points[(edges[i] + 1) % n]);
+        let (c, d) = (points[edges[j]], points[(edges[j] + 1) % n]);
+        let scale = points.iter().fold(0.0f64, |acc, p| acc.max(p[0].abs()).max(p[1].abs())).max(1.0);
+        let eps = (1e-9 * scale).max(crate::section_crossing::RESOLUTION_MM);
+        let on_segment = |p: P2, a: P2, b: P2| -> bool {
+            let len = dist(&a, &b);
+            cross(a, b, p).abs() <= eps * len
+                && (p[0] - a[0]) * (b[0] - a[0]) + (p[1] - a[1]) * (b[1] - a[1]) >= -eps * len
+                && (p[0] - b[0]) * (a[0] - b[0]) + (p[1] - b[1]) * (a[1] - b[1]) >= -eps * len
+        };
+        if j == i + 1 || (closed && i == 0 && j == m - 1) {
+            let (shared, other_i, other_j) = if j == i + 1 { (b, a, d) } else { (a, b, c) };
+            let (u, v) = ([other_i[0] - shared[0], other_i[1] - shared[1]], [other_j[0] - shared[0], other_j[1] - shared[1]]);
+            return cross([0.0, 0.0], u, v).abs() <= eps * u[0].hypot(u[1]).max(v[0].hypot(v[1])) && u[0] * v[0] + u[1] * v[1] > 0.0;
+        }
+        let (d1, d2, d3, d4) = (cross(c, d, a), cross(c, d, b), cross(a, b, c), cross(a, b, d));
+        ((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps)) && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps))
+            || on_segment(a, c, d)
+            || on_segment(b, c, d)
+            || on_segment(c, a, b)
+            || on_segment(d, a, b)
+    }
 
     #[test]
     fn a_curve_extent_is_where_it_turns_not_where_its_poles_are() {

@@ -873,6 +873,26 @@ extremes to 1e-9 of the face's parameters (`Shape::bend_extremes`), and
 refuses past 0.88, naming the radius, where it is, and the rounding that
 would pass.
 
+### `thicken` measures its wall on the part's own mesh
+
+Reading the wall at 9360 points of a pleated shade by `Extrema_ExtPS` — a
+sample grid rebuilt per point on each nearby offset B-spline face — took
+12.5 s native and 18 s under WebAssembly, three quarters of the build. The
+thickened solid is now meshed first, with the same `Mesher` the part's report
+uses, so `NearestBoundary` seeds its Newton steps from triangles; and every
+face the later cut leaves alone keeps that triangulation, which the final
+`BRepMesh_IncrementalMesh` reuses rather than repeats. The readings are the
+same exact distances (1.40000 to 1.40000 mm). What is left is the mesher
+itself: 546 offset faces at 0.01 mm are about 28 s single-threaded in a tab
+(3 s on every native core), and no parameter that keeps the deflection
+bound makes that smaller.
+
+Bounding them was the other half: `AddOptimal` on an offset face runs a
+particle-swarm search per coordinate, 4.3 s for a shade's tag extent. Only the
+faces whose enclosing box reaches past what the tag's mesh nodes already
+reach are optimised now, which gives the identical box (checked bit for bit
+on the corpus's tagged parts) from a few dozen faces.
+
 ### A thickened surface's rim leans
 
 `thicken` closes the wall at a free edge with a face along the surface's

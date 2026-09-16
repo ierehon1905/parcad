@@ -240,6 +240,12 @@ many times), and a tag's exact extent (`BRepBndLib::AddOptimal`). These are
 what parcad's probes, wall-thickness sweep and tag extents run on now that the
 exact kernel is the only one; they used to read a distance field.
 
+## `Shape::bounds_bracket`
+
+The sys crate's `Shape_bounds_bracket`: a box that encloses the shape and the
+box of its triangulation's nodes (`None` unless every face is meshed), either
+side of `bounds_optimal` and far cheaper than it.
+
 ## `Shape::nearest_boundary`
 
 A `NearestBoundary` over the sys crate's class of the same name:

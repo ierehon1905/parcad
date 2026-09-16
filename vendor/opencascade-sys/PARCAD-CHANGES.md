@@ -362,6 +362,20 @@ On `NearestBoundary`, for the wall-thickness search:
 40–60 ms a pair in `Extrema_ExtCC`'s global optimisation between B-spline
 edges.
 
+## `Shape_bounds_bracket`, and `NearestBoundary`'s box for a meshed face
+
+`Shape_bounds_bracket` returns two cheap boxes around a shape's tight one: an
+enclosing box from `BRepBndLib::Add` without the triangulation (control
+points and tolerances), and the box of its triangulation's nodes, which lie on
+the shape. parcad's tag extents optimise only the faces that can widen what
+the nodes already reach.
+
+`NearestBoundary` now bounds a face it has a mesh for with that enclosing box
+rather than `AddOptimal`: the box only orders and prunes faces, a meshed face
+is pruned by its triangles anyway, and `AddOptimal` on 546 offset B-spline
+faces was most of the cost of building one. A face with no mesh keeps the
+tight box.
+
 ## Not changed
 
 Everything else is upstream 0.2.0 verbatim. The OCCT it builds against is **not**

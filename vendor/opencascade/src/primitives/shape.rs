@@ -889,6 +889,24 @@ impl Shape {
         FaceMap { inner }
     }
 
+    /// Two boxes either side of [`Self::bounds_optimal`], both cheap: one that
+    /// encloses the shape (control points and tolerances), and the box of its
+    /// triangulation's nodes, which lie on it — `None` unless every face is
+    /// triangulated. `None` for a shape with no extent. Added for parcad.
+    #[allow(clippy::type_complexity)]
+    pub fn bounds_bracket(&self) -> Option<((DVec3, DVec3), Option<(DVec3, DVec3)>)> {
+        let mut o = [0.0f64; 6];
+        let mut i = [f64::NAN; 6];
+        let [x0, y0, z0, x1, y1, z1] = &mut o;
+        let [a0, b0, c0, a1, b1, c1] = &mut i;
+        if !ffi::Shape_bounds_bracket(&self.inner, x0, y0, z0, x1, y1, z1, a0, b0, c0, a1, b1, c1) {
+            return None;
+        }
+        let outer = (dvec3(o[0], o[1], o[2]), dvec3(o[3], o[4], o[5]));
+        let inner = i.iter().all(|v| v.is_finite()).then(|| (dvec3(i[0], i[1], i[2]), dvec3(i[3], i[4], i[5])));
+        Some((outer, inner))
+    }
+
     /// Tight bounds from the exact geometry, `BRepBndLib::AddOptimal` with no
     /// triangulation and no tolerance gap. `None` for a shape with no extent.
     /// Added for parcad.

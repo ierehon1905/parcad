@@ -453,6 +453,40 @@ inline bool Shape_bounds_optimal(const TopoDS_Shape &shape, double &x0, double &
   return true;
 }
 
+// Two boxes that bracket a shape's tight one, both cheap — added for parcad,
+// see PARCAD-CHANGES.md. `outer` (x0..z1) encloses the shape, from control
+// points and tolerances; `inner` (a0..c1) is the box of its triangulation's
+// nodes, which lie on it, and is left untouched with `false` when a face has
+// no triangulation.
+inline bool Shape_bounds_bracket(const TopoDS_Shape &shape, double &x0, double &y0, double &z0, double &x1,
+                                 double &y1, double &z1, double &a0, double &b0, double &c0, double &a1, double &b1,
+                                 double &c1) {
+  Bnd_Box outer;
+  BRepBndLib::Add(shape, outer, /*useTriangulation*/ false);
+  if (outer.IsVoid()) {
+    return false;
+  }
+  outer.Get(x0, y0, z0, x1, y1, z1);
+  Bnd_Box inner;
+  for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+    TopLoc_Location location;
+    const opencascade::handle<Poly_Triangulation> &tri = BRep_Tool::Triangulation(TopoDS::Face(it.Current()), location);
+    if (tri.IsNull() || tri->NbNodes() == 0) {
+      return true;
+    }
+    const gp_Trsf &trsf = location.Transformation();
+    for (int i = 1; i <= tri->NbNodes(); ++i) {
+      inner.Add(tri->Node(i).Transformed(trsf));
+    }
+  }
+  if (inner.IsVoid()) {
+    return true;
+  }
+  inner.SetGap(0.0);
+  inner.Get(a0, b0, c0, a1, b1, c1);
+  return true;
+}
+
 // Points on every face of a shape, a `per_side` by `per_side` grid over each
 // face's parameter bounds kept where the face classifier puts them inside the
 // face — added for parcad, see PARCAD-CHANGES.md. Flat x, y, z.
@@ -1180,6 +1214,21 @@ class NearestBoundary {
       }
       return box;
     }
+    // Enclosing but not tight, from control points: a meshed face is pruned
+    // by its triangles anyway, and `AddOptimal` on an offset B-spline face is
+    // most of the cost of building this.
+    static Box loose(const TopoDS_Shape &shape) {
+      Bnd_Box bnd;
+      BRepBndLib::Add(shape, bnd, /*useTriangulation*/ false);
+      Box box;
+      if (bnd.IsVoid()) {
+        box.lo[0] = box.lo[1] = box.lo[2] = -1e300;
+        box.hi[0] = box.hi[1] = box.hi[2] = 1e300;
+      } else {
+        bnd.Get(box.lo[0], box.lo[1], box.lo[2], box.hi[0], box.hi[1], box.hi[2]);
+      }
+      return box;
+    }
   };
   struct FaceEntry {
     TopoDS_Face face;
@@ -1372,7 +1421,6 @@ public:
     for (int i = 1; i <= face_map.Extent(); ++i) {
       auto entry = std::make_unique<FaceEntry>();
       entry->face = TopoDS::Face(face_map(i));
-      entry->box = Box::of(entry->face);
       entry->surface.Initialize(entry->face, false);
       entry->tolerance = BRep_Tool::Tolerance(entry->face);
       if (entry->surface.GetType() != GeomAbs_OtherSurface) {
@@ -1394,6 +1442,7 @@ public:
                           type == GeomAbs_Sphere || type == GeomAbs_Torus;
         load_mesh(*entry);
       }
+      entry->box = entry->mesh.empty() ? Box::of(entry->face) : Box::loose(entry->face);
       for (TopExp_Explorer it(entry->face, TopAbs_EDGE); it.More(); it.Next()) {
         const int index = edge_map.FindIndex(it.Current());
         if (index > 0) {
