@@ -428,6 +428,36 @@ mate only a whole number of pitches apart (or turned by 360° × offset / pitch)
 `c` on each part is `c` across the flanks, shortened by the lead angle to
 `c (2/√3) / √(4/3 + (P / 2πr)²)`.
 
+### The volume integral misreads a wavy B-spline wall
+
+`Shape::signed_volume` — `BRepGProp::VolumeProperties` with the adaptive
+`Eps` — is the reference the mesh backstop compares every mesh with, and on a
+wall extruded from a wiggly B-spline it is the number that is wrong. Measured
+on a 120-point circle of radius 20 with ±0.15 mm of noise on every point,
+extruded 10 (the true disc is 12566 mm³), against the area the curve's own
+dense samples enclose by Green's theorem:
+
+| curve through the points | samples × 10 | mesh at 0.01 mm | B-rep, eps 1e-7 | B-rep, eps 1e-10 |
+|---|---|---|---|---|
+| `{ fit }` at 0.2 mm, 35 poles | 12568.9 | 12564.1 | 12666.6 | within the allowance |
+| `{ spline }` (interpolating), 123 poles | — | 12571.3 | 12828.3 | 11947.7 |
+
+The mesh sits where a chord tessellation should, 0.04 % under; the integral
+is 0.8 % high on the fit and 2 % high on the interpolant, and *5 % low* on
+the same interpolant when asked for more precision — not converging, moving.
+`BRepGProp::SurfaceProperties` has the same trouble one dimension down: on
+the planar face a lamp section's fitted curve bounds (131 poles) it read
+8488 mm² where the curve's samples enclose 8835, and the inset guard built
+on it refused a good inset for "growing". Faces from arcs, planes and smooth
+fits of few poles integrate to the last digit, which is why the corpus never
+saw it; the backstop's refusal on such a part is a false alarm that reads as
+a missing surface, and its message now says so. Not fixed at the integral:
+the mesh is what every reported number is read from already, so the volume
+defect reaches only that guard, and the inset guard measures both its areas
+by Green's theorem over dense samples of the wires instead. Fit the curve at
+a looser tolerance, or smooth the points, and the integral settles. `eps`
+stays 1e-7.
+
 ### `offset_surface` lies
 
 It returns valid-looking wrong answers rather than failing:

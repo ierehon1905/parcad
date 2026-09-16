@@ -355,6 +355,12 @@ pub struct Success {
     /// not the same number: the bindings hard-code theirs. Printing the
     /// requested value would be a quietly wrong quality claim.
     pub deflection_mm: f64,
+    /// The furthest any point a `{ fit }` section entry was fitted through
+    /// sits from the curve the part was built with, in mm, worst over every
+    /// fit in the part. Measured on the built curves, never the tolerance
+    /// asked for; absent when nothing was fitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deviation_mm: Option<f64>,
     /// Logical edges, each a polyline sampled along the true curve.
     ///
     /// A mesh alone cannot produce this at any resolution: there a sharp edge

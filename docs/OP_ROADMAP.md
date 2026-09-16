@@ -116,11 +116,18 @@ last printed digit.
 export's degree-5 pole rows (examples/fusion360/README.md). The other three it
 was supposed to unblock were not waiting on curves once probed.
 
-**Still out:** an involute or other *constructed* curve (a gear needs the
-curve itself, and a spline through sampled involute points is exactly the
-approximation this refuses), a section with holes (cut a second solid), a
-periodic or rational B-spline entry, tangent continuity asked for across a
-corner, and draft on a curved outline.
+**Since added:** `{ fit: points, tolerance }`, a curve the kernel fits through
+sampled points and *measures* — the worst distance from any point to the
+built curve is `deviation_mm` in every report, and a fit that cannot hold its
+tolerance or crosses itself is refused — and `inset(outline, d)`, the outline
+stepped inward by the kernel's offset and measured before it is used. What
+they close is geometry that arrives as points: a simulation, a scan, an
+involute sampled from its equation. docs/DSL_GAPS.md has the measurements.
+
+**Still out:** an involute or other *constructed* curve as an exact object (a
+fit is held to its samples, not to the equation between them), a section with
+holes (cut a second solid), a periodic or rational B-spline entry, tangent
+continuity asked for across a corner, and draft on a curved outline.
 
 ## 3. Sweep — **DONE**, in two honesty classes
 

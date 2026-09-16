@@ -316,3 +316,57 @@ made of arcs and splines.
   section is `LoftProfile::Wire` or `LoftProfile::Point` (`AddVertex`, first
   or last only). Returns a `Shape` and an `Err` string on a builder failure or
   a caught `Standard_Failure` instead of casting an unbuilt result.
+- `Edge::fit(points, tolerance, closed)` — a cubic C2 B-spline least-squares
+  fitted through the points on uniform knots, doubling the number of spans
+  from 4 until the curve *measures* within `tolerance` of every point (each
+  point's distance to the curve, not the fitter's parametric criterion), or
+  refusing when that would take a pole per point — interpolation, which is
+  the overshoot a fit exists to avoid. Driven through `AppDef_BSplineCompute`
+  the way `GeomAPI_PointsToBSpline` drives it (chord-length parameters
+  normalised to [0, 1], no parameter correction, plain least squares) but
+  with what that class hides: `SetKnots`, and `SetConstraints` — an open fit
+  passes through its first and last point exactly, so a wire closes on the
+  corners to the bit; a closed fit is the loop back to its first point with
+  one tangent imposed at both ends (`AppParCurves_TangencyPoint`, the chord
+  through the point's two neighbours at the parameterisation's own speed),
+  so the seam is C1 by construction. The `FitReport` beside the edge carries
+  the deviation measured on the curve returned, the pole count, and the
+  curve sampled eight times per span for the caller's own checks. Two
+  measurements chose the knots: `GeomAPI_PointsToBSpline`'s adaptive knots
+  fit a rough section in 111–147 poles each, and a fifteen-section smooth
+  loft through them ran past ten minutes, because `ThruSections` unifies
+  every section's knots and adaptive vectors unify into their union; uniform
+  vectors doubled from 4 unify into the finest of them, and the same loft
+  builds in 41 s. And the fitter's own tolerance is not read at all: driven
+  with parameters in millimetres it fitted nothing but the first sliver of
+  the range and fell back to interpolation while reporting done, and driven
+  correctly it still reports done on the interpolation fallback.
+- `Wire::inset(distance)` — a closed planar outline stepped inward with
+  `BRepOffsetAPI_MakeOffset` on the face the wire bounds, `GeomAbs_Intersection`
+  joins so a polygon keeps its edge count, `Perform(-distance)`. Measured, not
+  trusted: an `InsetReport` carries the largest distance any of 65 samples
+  per result edge is from lying exactly `distance` inside the outline (the
+  outline's curves projected, ends included), both areas, and the pole count;
+  the caller refuses on slip or on an area that did not shrink. Both areas
+  are Green's theorem over dense samples of the wires, not
+  `BRepGProp::SurfaceProperties`, which read a lamp section's face 4 % small
+  and had the guard refusing a good inset for growing (docs/GOTCHAS.md, "The
+  volume integral misreads a wavy B-spline wall"). `Err` when nothing is
+  left or the result is several loops. Three things the builder needed doing
+  for it: it returns nothing, at any distance, for an outline that is one
+  closed edge, so such an outline is split at its middle parameter before
+  the offset and the result joined back into one edge with
+  `GeomConvert_CompCurveToBSplineCurve` (exact for the B-spline and rational
+  arc pieces the offset makes), its last pole set onto its first so the edge
+  is closed to the bit; it starts its wire wherever it likes, so the result's
+  edges are rotated and oriented to begin at the corner nearest the
+  outline's start and run its way — a one-edge result re-origined at the
+  curve point nearest that start — because `ThruSections` with the
+  compatibility pass off pairs sections by first vertex and direction; and
+  `GeomAPI_ProjectPointOnCurve` on the joined curve (some 2500 poles: the
+  offset builder's own 3D approximations of its pieces) handed back an
+  extremum a quarter of the way round from the true nearest point, so every
+  nearest-point question here — deviation, slip, re-origin — brackets the
+  span by sampling first and projects only within it.
+- `Wire::to_shape()` — the same handle as a `Shape`, borrowed; `From<Wire>`
+  consumes and a wire is not `Clone`.

@@ -1,0 +1,14 @@
+{
+  "name": "refuse-inset-too-deep",
+  "script": "eval/scripts/refuse-inset-too-deep.js",
+  "why": "A 20 x 6 rectangle inset by 4 leaves nothing; the refusal bisects for the distance that builds and names it, 3 mm, so the author's next edit is a number.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "cannot be stepped inward by 4 mm",
+        "about 3.00 mm"
+      ]
+    }
+  }
+}

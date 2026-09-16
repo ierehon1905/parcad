@@ -107,6 +107,12 @@ pub struct Expect {
     pub edges: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub curves: Option<usize>,
+    /// For a part with a `{ fit }` section: the worst distance from a fitted
+    /// point to the built curve, as the kernel reported it. Recorded so a
+    /// case holds the fit to what it measured, and a fit that quietly
+    /// loosened goes red.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deviation_mm: Option<f64>,
 
     /// Where each named feature sits, as `[min_x, min_y, min_z, max_x, max_y,
     /// max_z]` per tag: the exact bounds of the faces the kernel's lineage
@@ -432,6 +438,8 @@ pub struct Observed {
     pub bodies: usize,
     pub voids: usize,
     pub stands_on: Option<parcad_core::mesh::BedContact>,
+    /// The kernel's worst fit deviation, when the part fitted anything.
+    pub deviation_mm: Option<f64>,
     /// Every tag's own box, and the ones no surface point could be found for.
     pub tags: BTreeMap<String, [f64; 6]>,
     pub unlocated_tags: Vec<String>,
@@ -518,6 +526,17 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
     }
     if let Some(want) = expect.area_mm2 {
         pct_check(&mut out, "area_mm2", want, observed.area_mm2, tol.volume_pct);
+    }
+    if let Some(want) = expect.deviation_mm {
+        match observed.deviation_mm {
+            // A micron: the fit is deterministic, and this is what a case
+            // is for — the number read back from the part, not recomputed.
+            Some(got) => abs_check(&mut out, "deviation_mm", want, got, 1e-3),
+            None => out.push(Mismatch {
+                field: "deviation_mm".into(),
+                detail: format!("expected {want:.3}, but the part fitted nothing"),
+            }),
+        }
     }
     if let Some(want) = expect.triangles {
         pct_check(
@@ -697,6 +716,7 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
     expect.faces = observed.faces;
     expect.edges = observed.edges;
     expect.curves = observed.curves;
+    expect.deviation_mm = observed.deviation_mm.map(|d| (d * 1e4).round() / 1e4);
     // Bodies are recorded whenever the part has them: a case about a part in
     // several bodies is about those bodies.
     expect.named_bodies = (!observed.named_bodies.is_empty()).then(|| {

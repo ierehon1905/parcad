@@ -263,7 +263,9 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
 
     breadcrumb("lowering the graph");
     let t0 = Instant::now();
-    let part = match backend::with_reuse(cache, &doc, || backend::build_part(&doc)) {
+    let (part, deviation_mm) =
+        backend::measuring_fits(|| backend::with_reuse(cache, &doc, || backend::build_part(&doc)));
+    let part = match part {
         Ok(part) => part,
         Err(e) => {
             return Response::Error {
@@ -382,6 +384,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         faces,
         edges,
         deflection_mm: BINDING_DEFLECTION_MM,
+        deviation_mm,
         topology,
         bodies,
         between,
@@ -509,7 +512,10 @@ fn measure(
                  share a curved surface — a sphere unioned with a rotated or mirrored copy \
                  of itself, pieces of one radius meeting along it. Overlap them instead of \
                  letting them coincide: move or grow one by 0.01 mm, or leave out the copy \
-                 that adds nothing"
+                 that adds nothing. Also seen on a wall extruded from a wavy spline of many \
+                 poles, where it is the solid's volume integral that is wrong, not the mesh \
+                 (docs/GOTCHAS.md, \"The volume integral misreads a wavy B-spline wall\"): \
+                 smooth the curve, or fit it at a looser tolerance"
             ),
         });
     }

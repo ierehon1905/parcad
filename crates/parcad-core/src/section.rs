@@ -4,21 +4,30 @@
 //! A section is authored as a list, anticlockwise, closed back to its start.
 //! `[x, y]` is a corner, and consecutive corners are joined by a straight line.
 //! An object between two corners says how that stretch is drawn instead —
-//! `{ through }` or `{ radius }` for an arc, `{ spline }`, `{ bezier }` or
-//! `{ bspline }` for a curve — and `{ at, round }` is a corner whose two
-//! straight neighbours meet in a tangent arc. The vocabulary is the one
-//! CadQuery's `threePointArc`/`radiusArc`/`spline` and build123d's
-//! `ThreePointArc`/`RadiusArc`/`Spline`/`Bezier`/`FilletPolyline` share, spelled
-//! as data so a graph can carry it verbatim.
+//! `{ through }` or `{ radius }` for an arc, `{ spline }`, `{ bezier }`,
+//! `{ bspline }` or `{ fit }` for a curve — and `{ at, round }` is a corner
+//! whose two straight neighbours meet in a tangent arc. The vocabulary is the
+//! one CadQuery's `threePointArc`/`radiusArc`/`spline` and build123d's
+//! `ThreePointArc`/`RadiusArc`/`Spline`/`Bezier`/`FilletPolyline` share,
+//! spelled as data so a graph can carry it verbatim. `{ inset: outline, by }`
+//! is a whole section: that outline stepped inward.
 //!
 //! Everything here is resolved in this crate, not in the kernel: arcs become
-//! three points and a centre, every curve becomes a clamped B-spline with
-//! explicit poles. The kernel builds exactly those poles, so the bounds, the
-//! area, the axis check and a sweep's reach are computed from the same curve
-//! the solid is made of rather than from the corners around it. That is why
-//! `spline` interpolates with its own documented rule (chord-length cubic,
+//! three points and a centre, every drawn curve becomes a clamped B-spline
+//! with explicit poles. The kernel builds exactly those poles, so the bounds,
+//! the area, the axis check and a sweep's reach are computed from the same
+//! curve the solid is made of rather than from the corners around it. That is
+//! why `spline` interpolates with its own documented rule (chord-length cubic,
 //! natural or given end tangents) instead of calling `GeomAPI_Interpolate`:
 //! the curve has to exist before the kernel does.
+//!
+//! Two entries are the exception, on purpose: a *fitted* curve and an
+//! *inset* outline are approximations the kernel makes and then measures —
+//! `GeomAPI_PointsToBSpline` through the points, `BRepOffsetAPI_MakeOffset`
+//! around the outline — and their measured error is what the report carries.
+//! Here they resolve to their inputs, and every bound taken from them is
+//! conservative: the points plus the tolerance, the outline the inset lies
+//! inside.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -56,6 +65,13 @@ pub enum SectionEntry {
     /// The stretch to the next corner is a clamped uniform B-spline with these
     /// control points between the two corners.
     BSpline { poles: Vec<P2>, degree: usize },
+    /// The stretch to the next corner is a smooth curve *fitted* through these
+    /// sampled points, measured to lie within `tolerance` of every one of
+    /// them. As the only entry of a section, a closed fitted loop.
+    Fit { points: Vec<P2>, tolerance: f64 },
+    /// A whole section: the outline `of` stepped inward by `by`. Allowed only
+    /// on its own.
+    Inset { of: Vec<SectionEntry>, by: f64 },
 }
 
 impl SectionEntry {
@@ -109,6 +125,18 @@ impl Serialize for SectionEntry {
                 map.serialize_entry("degree", degree)?;
                 map.end()
             }
+            Self::Fit { points, tolerance } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("fit", points)?;
+                map.serialize_entry("tolerance", tolerance)?;
+                map.end()
+            }
+            Self::Inset { of, by } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("inset", of)?;
+                map.serialize_entry("by", by)?;
+                map.end()
+            }
         }
     }
 }
@@ -120,7 +148,7 @@ impl<'de> Deserialize<'de> for SectionEntry {
     }
 }
 
-const VOCABULARY: &str = "a section entry is a corner [x, y], a rounded corner { at: [x, y], round: r }, or, between two corners, { through: [x, y] } or { radius: r } for an arc, { spline: [[x, y], ...] }, { bezier: [[x, y], ...] } or { bspline: [[x, y], ...], degree: 3 } for a curve";
+const VOCABULARY: &str = "a section entry is a corner [x, y], a rounded corner { at: [x, y], round: r }, or, between two corners, { through: [x, y] } or { radius: r } for an arc, { spline: [[x, y], ...] }, { bezier: [[x, y], ...] }, { bspline: [[x, y], ...], degree: 3 } or { fit: [[x, y], ...], tolerance: t } for a curve; a section that is only [{ inset: outline, by: d }] is that outline stepped inward by d";
 
 fn parse_pair(value: &serde_json::Value, what: &str) -> Result<P2, String> {
     let pair = value
@@ -211,6 +239,33 @@ fn parse_entry(value: &serde_json::Value) -> Result<SectionEntry, String> {
             poles: parse_pairs(&map["bspline"], "bspline")?,
             degree,
         });
+    }
+    if has("fit") {
+        allow(&["fit", "tolerance"])?;
+        if !has("tolerance") {
+            return Err(format!(
+                "a fit takes the tolerance it must hold, in mm, e.g. {{ fit: points, tolerance: 0.05 }}; got {value}"
+            ));
+        }
+        return Ok(SectionEntry::Fit {
+            points: parse_pairs(&map["fit"], "fit")?,
+            tolerance: number("tolerance")?,
+        });
+    }
+    if has("inset") {
+        allow(&["inset", "by"])?;
+        if !has("by") {
+            return Err(format!(
+                "an inset takes the distance it steps inward, in mm, e.g. {{ inset: outline, by: 1.6 }}; got {value}"
+            ));
+        }
+        let of = map["inset"]
+            .as_array()
+            .ok_or_else(|| format!("inset must be a list of section entries, the outline to step inward; got {}", map["inset"]))?
+            .iter()
+            .map(parse_entry)
+            .collect::<Result<Vec<_>, _>>()?;
+        return Ok(SectionEntry::Inset { of, by: number("by")? });
     }
     Err(format!("{VOCABULARY}; got {value}"))
 }
@@ -585,6 +640,11 @@ pub enum Segment {
     /// angle it turns through, positive anticlockwise.
     Arc { a: P2, mid: P2, b: P2, centre: P2, radius: f64, sweep: f64 },
     Curve(BSpline<2>),
+    /// A curve the kernel fits through `points` — the corners it joins first
+    /// and last, or, when `closed`, one loop back to `points[0]` — and
+    /// measures against `tolerance`. Every bound taken here is the points'
+    /// widened by the tolerance, which is the promise the fit is held to.
+    Fit { points: Vec<P2>, tolerance: f64, closed: bool },
 }
 
 fn cross(o: P2, a: P2, b: P2) -> f64 {
@@ -605,6 +665,7 @@ impl Segment {
         match self {
             Self::Line { a, .. } | Self::Arc { a, .. } => *a,
             Self::Curve(c) => c.poles[0],
+            Self::Fit { points, .. } => points[0],
         }
     }
 
@@ -612,6 +673,8 @@ impl Segment {
         match self {
             Self::Line { b, .. } | Self::Arc { b, .. } => *b,
             Self::Curve(c) => *c.poles.last().unwrap(),
+            Self::Fit { points, closed: true, .. } => points[0],
+            Self::Fit { points, closed: false, .. } => *points.last().unwrap(),
         }
     }
 
@@ -674,12 +737,25 @@ impl Segment {
                 }
                 total
             }
+            // The polyline through the points; the curve is within the
+            // tolerance of each of them, and the kernel measures the built
+            // solid rather than this.
+            Self::Fit { points, closed, .. } => {
+                let n = points.len();
+                let last = if *closed { n } else { n - 1 };
+                (0..last)
+                    .map(|i| {
+                        let (a, b) = (points[i], points[(i + 1) % n]);
+                        a[0] * b[1] - b[0] * a[1]
+                    })
+                    .sum()
+            }
         }
     }
 
     /// The farthest this piece reaches along `dir` (not necessarily unit):
     /// exact for lines and arcs, the control polygon's for a curve, which
-    /// contains it.
+    /// contains it, and the points' plus the tolerance for a fit.
     pub fn extent_along(&self, dir: P2) -> f64 {
         let along = |p: &P2| p[0] * dir[0] + p[1] * dir[1];
         match self {
@@ -694,6 +770,9 @@ impl Segment {
                 }
             }
             Self::Curve(c) => c.poles.iter().map(along).fold(f64::MIN, f64::max),
+            Self::Fit { points, tolerance, .. } => {
+                points.iter().map(along).fold(f64::MIN, f64::max) + tolerance * dir[0].hypot(dir[1])
+            }
         }
     }
 
@@ -715,11 +794,27 @@ impl Segment {
                 }
             }
             Self::Curve(c) => c.poles.iter().map(norm).fold(0.0, f64::max),
+            Self::Fit { points, tolerance, .. } => points.iter().map(norm).fold(0.0, f64::max) + tolerance,
+        }
+    }
+
+    /// The least x this piece reaches, in the terms a revolve's axis check
+    /// needs: exact for lines and arcs, a control point's for a curve, and
+    /// the points' own for a fit — the kernel measures the fitted curve
+    /// against the axis itself, so the tolerance is not charged here.
+    pub fn leftmost(&self) -> f64 {
+        match self {
+            Self::Fit { points, .. } => points.iter().map(|p| p[0]).fold(f64::MAX, f64::min),
+            _ => -self.extent_along([-1.0, 0.0]),
         }
     }
 
     pub fn is_straight(&self) -> bool {
         matches!(self, Self::Line { .. })
+    }
+
+    pub fn is_fit(&self) -> bool {
+        matches!(self, Self::Fit { .. })
     }
 }
 
@@ -757,15 +852,25 @@ fn gauss_legendre(n: usize) -> (Vec<f64>, Vec<f64>) {
 pub struct Section {
     pub segments: Vec<Segment>,
     /// Signed enclosed area: positive when the boundary runs anticlockwise.
+    /// For an inset section, the outline's — the inset lies inside it.
     pub area: f64,
     /// The corners, when the section is nothing but corners: the polygon a
     /// section always was before curves, built by exactly the old code.
     pub polygon: Option<Vec<P2>>,
+    /// When set, `segments` are the outline the kernel steps inward by this
+    /// much; the section is what that leaves. Every bound here is the
+    /// outline's, which contains it.
+    pub inset: Option<f64>,
 }
 
 impl Section {
     pub fn is_polygon(&self) -> bool {
         self.polygon.is_some()
+    }
+
+    /// Whether any piece is a curve the kernel fits and measures.
+    pub fn has_fit(&self) -> bool {
+        self.segments.iter().any(Segment::is_fit)
     }
 
     pub fn extent_along(&self, dir: P2) -> f64 {
@@ -792,9 +897,10 @@ impl Section {
 
     /// The first point a curve or corner of the section reaches left of
     /// `x = 0`, in the terms a revolve refusal needs: exact for lines and
-    /// arcs, any control point for a curve, which is conservative.
+    /// arcs, any control point for a curve, which is conservative, and a
+    /// fit's own points.
     pub fn leftmost(&self) -> f64 {
-        -self.extent_along([-1.0, 0.0])
+        self.segments.iter().map(Segment::leftmost).fold(f64::MAX, f64::min)
     }
 }
 
@@ -812,10 +918,22 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
             }
             SectionEntry::Bezier(points) => points.iter().all(finite),
             SectionEntry::BSpline { poles, .. } => poles.iter().all(finite),
+            SectionEntry::Fit { points, tolerance } => points.iter().all(finite) && tolerance.is_finite(),
+            // The outline inside is checked when it is resolved.
+            SectionEntry::Inset { by, .. } => by.is_finite(),
         };
         if !ok {
             return Err(format!("{what} has an entry with a number that is not finite: {entry:?}"));
         }
+    }
+
+    if let [SectionEntry::Inset { of, by }] = entries {
+        return resolve_inset(of, *by, what);
+    }
+    if let Some(i) = entries.iter().position(|e| matches!(e, SectionEntry::Inset { .. })) {
+        return Err(format!(
+            "{what} entry {i} is an inset, which is a whole section rather than a stretch of one: write the section as [{{ inset: outline, by: d }}] alone, with the corners and curves inside `inset`"
+        ));
     }
 
     if entries.iter().all(|e| matches!(e, SectionEntry::Point(_))) {
@@ -840,7 +958,7 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
             })
             .sum::<f64>()
             / 2.0;
-        return Ok(Section { segments, area, polygon: Some(points) });
+        return Ok(Section { segments, area, polygon: Some(points), inset: None });
     }
 
     let corners: Vec<usize> = (0..entries.len()).filter(|&i| entries[i].is_corner()).collect();
@@ -854,8 +972,13 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
             [SectionEntry::Spline { .. }] => Err(format!(
                 "{what} is one closed spline, which has no ends to give a start or end direction; drop them, or add a corner where the directions apply"
             )),
+            [SectionEntry::Fit { points, tolerance }] => {
+                check_fit(points, *tolerance, 3, what)?;
+                let segments = vec![Segment::Fit { points: points.clone(), tolerance: *tolerance, closed: true }];
+                finish(segments, what)
+            }
             _ => Err(format!(
-                "{what} has no corners. List the corners anticlockwise as [x, y] and put an arc or curve between two of them; a section that is only {{ spline: [...] }} is a closed smooth curve through its points"
+                "{what} has no corners. List the corners anticlockwise as [x, y] and put an arc or curve between two of them; a section that is only {{ spline: [...] }} or {{ fit: [...], tolerance }} is a closed smooth curve through its points"
             )),
         };
     }
@@ -1089,10 +1212,68 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
                 }
                 segments.push(Segment::Curve(BSpline::clamped_uniform(poles, degree)));
             }
+            Some(SectionEntry::Fit { points, tolerance }) => {
+                if points.is_empty() {
+                    return Err(format!("{}: a fit needs at least one point between the corners; with none it is a straight edge, so drop the entry", label()));
+                }
+                let mut through = vec![from];
+                through.extend_from_slice(points);
+                through.push(to);
+                check_fit(&through, *tolerance, 3, &label())?;
+                segments.push(Segment::Fit { points: through, tolerance: *tolerance, closed: false });
+            }
             Some(other) => unreachable!("corner entries are not joins: {other:?}"),
         }
     }
     finish(segments, what)
+}
+
+/// What a fit needs before the kernel sees it: a tolerance that is a
+/// distance, and enough points that are not the same point.
+fn check_fit(points: &[P2], tolerance: f64, at_least: usize, label: &str) -> Result<(), String> {
+    if !(tolerance > 0.0) {
+        return Err(format!(
+            "{label}: a fit's tolerance is the most the curve may be from any of its points, in mm, and must be more than 0; got {tolerance}. Sampled geometry usually holds 0.01 to 0.1"
+        ));
+    }
+    if points.len() < at_least {
+        return Err(format!(
+            "{label}: a fit needs at least {at_least} points, counting the corners it joins; got {}",
+            points.len()
+        ));
+    }
+    for i in 1..points.len() {
+        if dist(&points[i - 1], &points[i]) < 1e-9 {
+            return Err(format!("{label}: fit points {} and {i} are the same point; drop one of them", i - 1));
+        }
+    }
+    Ok(())
+}
+
+/// `[{ inset: of, by }]`: the outline resolved, then marked for the kernel to
+/// step inward. The polygon checks the outline would get on its own run here,
+/// so a crossed outline is refused by name rather than by the kernel's
+/// validity check on the inset.
+fn resolve_inset(of: &[SectionEntry], by: f64, what: &str) -> Result<Section, String> {
+    if !(by > 0.0) {
+        return Err(format!(
+            "{what}: an inset steps the outline inward by a distance in mm, which must be more than 0; got {by}. To grow an outline, draw the larger one"
+        ));
+    }
+    let outline = resolve(of, &format!("{what}'s inset outline"))?;
+    if outline.inset.is_some() {
+        return Err(format!("{what} insets an inset; add the two distances and inset the outline once"));
+    }
+    if let Some(points) = &outline.polygon {
+        if !polygon_is_convex(points) {
+            if let Some((i, j)) = polygon_self_intersection(points) {
+                return Err(format!(
+                    "{what}'s inset outline crosses itself: the edge from point {i} and the edge from point {j} meet. List the points in order around the outline so no two edges touch except at the corner they share"
+                ));
+            }
+        }
+    }
+    Ok(Section { segments: outline.segments, area: outline.area, polygon: None, inset: Some(by) })
 }
 
 fn describe(entry: &SectionEntry) -> String {
@@ -1102,6 +1283,7 @@ fn describe(entry: &SectionEntry) -> String {
         SectionEntry::Spline { .. } => "a spline".into(),
         SectionEntry::Bezier(_) => "a bezier".into(),
         SectionEntry::BSpline { .. } => "a bspline".into(),
+        SectionEntry::Fit { .. } => "a fit".into(),
         other => format!("{other:?}"),
     }
 }
@@ -1111,15 +1293,23 @@ fn finish(segments: Vec<Segment>, what: &str) -> Result<Section, String> {
     if area.abs() < 1e-12 {
         return Err(format!("{what} encloses no area"));
     }
-    Ok(Section { segments, area, polygon: None })
+    Ok(Section { segments, area, polygon: None, inset: None })
 }
 
 /// Whether a polygon's straight edges cross or touch anywhere but at the
 /// corner two neighbours share — the check a re-entrant polygon needs now that
 /// convexity is no longer required. Returns the two edge indices that meet.
 pub fn polygon_self_intersection(points: &[P2]) -> Option<(usize, usize)> {
+    polyline_self_intersection(points, true)
+}
+
+/// [`polygon_self_intersection`] for a chain that may be open: `closed` adds
+/// the edge from the last point back to the first. How a densely sampled
+/// curve is checked for the loops a fit can make between its points.
+pub fn polyline_self_intersection(points: &[P2], closed: bool) -> Option<(usize, usize)> {
     let n = points.len();
-    let edges: Vec<(usize, P2, P2)> = (0..n)
+    let edge_count = if closed { n } else { n.saturating_sub(1) };
+    let edges: Vec<(usize, P2, P2)> = (0..edge_count)
         .map(|i| (i, points[i], points[(i + 1) % n]))
         .filter(|(_, a, b)| dist(a, b) > 1e-9)
         .collect();
@@ -1136,7 +1326,7 @@ pub fn polygon_self_intersection(points: &[P2]) -> Option<(usize, usize)> {
         for j in i + 1..m {
             let (ei, a, b) = edges[i];
             let (ej, c, d) = edges[j];
-            let adjacent = j == i + 1 || (i == 0 && j == m - 1);
+            let adjacent = j == i + 1 || (closed && i == 0 && j == m - 1);
             if adjacent {
                 // Neighbours share one corner; they meet elsewhere only by
                 // folding back along each other.
@@ -1361,6 +1551,60 @@ mod tests {
         );
         // A spike folding back along its own edge.
         assert!(polygon_self_intersection(&[[0.0, 0.0], [10.0, 0.0], [5.0, 0.0], [5.0, 5.0]]).is_some());
+    }
+
+    #[test]
+    fn a_fit_and_an_inset_round_trip() {
+        let json = r#"[{"inset":[[0.0,0.0],[10.0,0.0],{"fit":[[10.0,5.0],[9.0,9.0]],"tolerance":0.05},[0.0,10.0]],"by":1.5}]"#;
+        let parsed = entries(json);
+        assert_eq!(serde_json::to_string(&parsed).unwrap(), json);
+        let section = resolve(&parsed, "extrude profile").unwrap();
+        assert_eq!(section.inset, Some(1.5));
+        assert!(section.has_fit() && !section.is_polygon());
+    }
+
+    #[test]
+    fn a_fit_needs_a_tolerance_and_an_inset_a_distance() {
+        let err = serde_json::from_str::<Vec<SectionEntry>>(r#"[{"fit":[[1,1],[2,2],[3,1]]}]"#).unwrap_err();
+        assert!(err.to_string().contains("tolerance: 0.05"), "{err}");
+        let err = resolve(&entries(r#"[{"fit":[[1,1],[2,2],[3,1]],"tolerance":0}]"#), "p").unwrap_err();
+        assert!(err.contains("more than 0"), "{err}");
+        let err = resolve(&entries(r#"[{"inset":[[0,0],[10,0],[0,10]],"by":-1}]"#), "p").unwrap_err();
+        assert!(err.contains("more than 0"), "{err}");
+    }
+
+    #[test]
+    fn a_closed_fit_is_bounded_by_its_points_and_their_tolerance() {
+        let n = 64;
+        let points: Vec<P2> = (0..n)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / n as f64;
+                [10.0 * a.cos(), 10.0 * a.sin()]
+            })
+            .collect();
+        let section = resolve(&[SectionEntry::Fit { points, tolerance: 0.05 }], "p").unwrap();
+        // The polyline through the points, which the kernel's fit refines.
+        let exact = std::f64::consts::PI * 100.0;
+        assert!((section.area - exact).abs() / exact < 2e-3, "{}", section.area);
+        let (lo, hi) = section.bounds();
+        assert!(close(hi[0], 10.05, 1e-9) && close(lo[0], -10.05, 1e-9), "{lo:?} {hi:?}");
+        assert!(close(section.reach(), 10.05, 1e-9));
+        // The axis check reads the points alone; the kernel measures the curve.
+        assert!(close(section.leftmost(), -10.0, 1e-9));
+    }
+
+    #[test]
+    fn an_inset_is_a_whole_section_and_keeps_its_outlines_bounds() {
+        let section = resolve(&entries(r#"[{"inset":[[0,0],[10,0],[10,10],[0,10]],"by":2}]"#), "p").unwrap();
+        assert_eq!(section.inset, Some(2.0));
+        assert_eq!(section.segments.len(), 4);
+        assert!(!section.is_polygon(), "an inset is not the polygon it steps in from");
+        let (lo, hi) = section.bounds();
+        assert!(close(lo[0], 0.0, 1e-12) && close(hi[1], 10.0, 1e-12));
+        let err = resolve(&entries(r#"[[0,0],{"inset":[[0,0],[10,0],[0,10]],"by":2},[10,0],[0,10]]"#), "p").unwrap_err();
+        assert!(err.contains("whole section"), "{err}");
+        let err = resolve(&entries(r#"[{"inset":[[0,0],[10,10],[10,0],[0,10]],"by":1}]"#), "p").unwrap_err();
+        assert!(err.contains("crosses itself"), "{err}");
     }
 
     #[test]

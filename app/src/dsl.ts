@@ -804,6 +804,23 @@ export type SectionPoint = [number, number];
  * - `{ bspline: [[x, y], ...], degree?: 3 }` — a clamped uniform B-spline
  *   with the two corners as its first and last control points and these
  *   between — the form a STEP export's poles copy into.
+ * - `{ fit: [[x, y], ...], tolerance: t }` — a smooth curve *fitted* through
+ *   sampled points, from the corner before to the corner after, held within
+ *   `tolerance` mm of every point. This is the entry for geometry that
+ *   arrives as points — a simulation, a scan, a contour, an involute sampled
+ *   from its equation — where `spline` overshoots between dense points and
+ *   `bspline` treats them as control points and misses them by a millimetre
+ *   without saying so. The kernel fits the curve, *measures* its worst
+ *   distance from the points, reports it as `deviation_mm` beside the part,
+ *   and refuses when the tolerance cannot be held or the fitted curve crosses
+ *   itself — naming the tolerance that would hold, or the points to thin.
+ *   A section that is nothing but `[{ fit: points, tolerance }]` is one closed
+ *   fitted loop with no corner. 0.01 to 0.1 mm is the usual tolerance; a
+ *   tighter one costs poles, a looser one smooths the points' noise.
+ *
+ * A section may also be a whole outline stepped inward: `inset(outline, d)`
+ * (below) builds the entry `[{ inset: outline, by: d }]` and is how a wall is
+ * drawn — a shade's inner surface is its outer outline inset by the wall.
  *
  * Nothing is polygonised: arcs are exact circles and every curve is an exact
  * B-spline, so faces from arcs are cylinders, cones, tori and spheres, and an
@@ -820,9 +837,11 @@ export type SectionEntry =
   | { radius: number }
   | { spline: [number, number][]; start?: [number, number]; end?: [number, number] }
   | { bezier: [number, number][] }
-  | { bspline: [number, number][]; degree?: number };
+  | { bspline: [number, number][]; degree?: number }
+  | { fit: [number, number][]; tolerance: number }
+  | { inset: SectionEntry[]; by: number };
 
-const SECTION_KEYS = ["at", "round", "through", "radius", "spline", "start", "end", "bezier", "bspline", "degree"];
+const SECTION_KEYS = ["at", "round", "through", "radius", "spline", "start", "end", "bezier", "bspline", "degree", "fit", "tolerance", "inset", "by"];
 
 function isPair(value: unknown): value is [number, number] {
   return Array.isArray(value) && value.length === 2 && value.every((n) => typeof n === "number" && Number.isFinite(n));
@@ -836,6 +855,18 @@ function isPair(value: unknown): value is [number, number] {
 function checkSection(profile: SectionEntry[], what: string, example: string): SectionEntry[] {
   if (!Array.isArray(profile)) {
     throw new Error(`${what} must be a list of section entries, e.g. ${example}`);
+  }
+  const insetAt = profile.findIndex((entry) => entry && typeof entry === "object" && !Array.isArray(entry) && "inset" in entry);
+  if (insetAt >= 0) {
+    if (profile.length !== 1) {
+      throw new Error(`${what} entry ${insetAt} is an inset, which is a whole section: write inset(outline, d) alone, with the corners and curves inside it`);
+    }
+    const e = profile[0] as { inset: SectionEntry[]; by: number };
+    if (!(typeof e.by === "number" && Number.isFinite(e.by) && e.by > 0)) {
+      throw new Error(`${what}: an inset steps inward by a distance in mm, more than 0; got ${JSON.stringify(e.by)}`);
+    }
+    checkSection(e.inset, `${what}'s inset outline`, example);
+    return profile;
   }
   let corners = 0;
   for (const [i, entry] of profile.entries()) {
@@ -852,7 +883,7 @@ function checkSection(profile: SectionEntry[], what: string, example: string): S
     const unknown = Object.keys(entry).find((k) => !SECTION_KEYS.includes(k));
     if (unknown !== undefined) {
       throw new Error(
-        `${what} entry ${i} has an unknown key "${unknown}"; a section entry is [x, y], { at, round }, { through }, { radius }, { spline }, { bezier } or { bspline }`,
+        `${what} entry ${i} has an unknown key "${unknown}"; a section entry is [x, y], { at, round }, { through }, { radius }, { spline }, { bezier }, { bspline } or { fit, tolerance }`,
       );
     }
     const e = entry as Record<string, unknown>;
@@ -868,8 +899,8 @@ function checkSection(profile: SectionEntry[], what: string, example: string): S
         throw new Error(`${what} entry ${i}: an arc is { radius: r } with r non-zero — positive bulges out, negative bends in`);
       }
     } else {
-      const key = ["spline", "bezier", "bspline"].find((k) => k in e);
-      if (!key) throw new Error(`${what} entry ${i} names no kind of entry; give through, radius, spline, bezier or bspline`);
+      const key = ["spline", "bezier", "bspline", "fit"].find((k) => k in e);
+      if (!key) throw new Error(`${what} entry ${i} names no kind of entry; give through, radius, spline, bezier, bspline or fit`);
       const points = e[key];
       if (!Array.isArray(points) || !points.every(isPair)) {
         throw new Error(`${what} entry ${i}: ${key} takes a list of [x, y] points`);
@@ -882,14 +913,20 @@ function checkSection(profile: SectionEntry[], what: string, example: string): S
       if ("degree" in e && (key !== "bspline" || !Number.isInteger(e.degree) || (e.degree as number) < 1)) {
         throw new Error(`${what} entry ${i}: degree is a whole number of at least 1 and belongs to a bspline only`);
       }
+      if (key === "fit" && !(typeof e.tolerance === "number" && Number.isFinite(e.tolerance) && e.tolerance > 0)) {
+        throw new Error(`${what} entry ${i}: a fit is { fit: points, tolerance: t } with t the most the curve may be from any point, in mm, more than 0 — usually 0.01 to 0.1`);
+      }
+      if ("tolerance" in e && key !== "fit") {
+        throw new Error(`${what} entry ${i}: tolerance belongs to a fit only`);
+      }
     }
   }
-  const lone = profile.length === 1 && !Array.isArray(profile[0]) && "spline" in (profile[0] as object);
+  const lone = profile.length === 1 && !Array.isArray(profile[0]) && ("spline" in (profile[0] as object) || "fit" in (profile[0] as object));
   if (corners === profile.length ? corners < 3 : corners === 0 && !lone) {
     throw new Error(
       corners === profile.length
         ? `${what} needs at least 3 corners, or corners with an arc or curve between them, e.g. ${example}`
-        : `${what} has no corners; put arcs and curves between [x, y] corners, or give one { spline: points } alone for a closed smooth curve`,
+        : `${what} has no corners; put arcs and curves between [x, y] corners, or give one { spline: points } or { fit: points, tolerance } alone for a closed smooth curve`,
     );
   }
   return profile;
@@ -1400,6 +1437,33 @@ export function line2d(from: [number, number], toOrAngle: [number, number] | num
  * rather than checked after. Points inside the hull are dropped; three
  * distinct points that are not collinear are the least it accepts.
  */
+/**
+ * A section outline stepped inward by `by` mm, as a section: the wall of a
+ * hollow part. `extrude(inset(outline, 1.6), h)` is the inside of a 1.6 mm
+ * wall around `extrude(outline, h)`, and a shade is the loft of outer
+ * sections minus the loft of each one inset by the wall.
+ *
+ * The kernel offsets the *curve* — an arc stays an arc, a fitted curve stays
+ * one curve — rather than a script offsetting points, which folds in every
+ * valley narrower than the wall and hands the kernel an outline that crosses
+ * itself. Where the outline's own turns are tighter than `by`, the loops the
+ * offset would make are removed and the inset has a corner there; that is the
+ * wall thickening into a valley, as a real one does. The result is measured
+ * before it is used: an inset that does not lie exactly `by` inside the
+ * outline, or that splits or vanishes, is refused naming the distance that
+ * fits. An inset of an inset is refused; add the distances.
+ *
+ * `outline` is a section (`SectionEntry[]`): corners, arcs, curves, or one
+ * closed `{ spline }` or `{ fit }`.
+ */
+export function inset(outline: SectionEntry[], by: number): SectionEntry[] {
+  if (!(typeof by === "number" && Number.isFinite(by) && by > 0)) {
+    throw new Error(`inset steps an outline inward by a distance in mm, more than 0; got ${JSON.stringify(by)}`);
+  }
+  checkSection(outline, "an inset outline", "inset([[-10, -10], [10, -10], [10, 10], [-10, 10]], 1.6)");
+  return [{ inset: outline, by }];
+}
+
 export function hull(points: [number, number][]): [number, number][] {
   const unique = points
     .map(([x, y]): [number, number] => [x, y])

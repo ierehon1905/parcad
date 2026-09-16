@@ -565,6 +565,9 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         },
         bodies_text(&stats)
     );
+    if let Some(deviation) = s.deviation_mm {
+        println!("fit      fitted curves within {deviation:.4} mm of their points at worst");
+    }
     for body in parcad_occt::measure_bodies(&s) {
         let size = body.bounds.size();
         println!(

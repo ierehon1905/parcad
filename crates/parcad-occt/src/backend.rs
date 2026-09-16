@@ -41,8 +41,13 @@ fn v(p: V3) -> DVec3 {
 
 /// The wire of a resolved section, every corner, arc point and control point
 /// placed by `place`, which must be affine for the curves to stay exact.
-fn section_wire(section: &Section, place: impl Fn([f64; 2]) -> DVec3) -> Result<Wire> {
-    if let Some(points) = &section.polygon {
+///
+/// A fitted curve is built here by the kernel and measured before it is
+/// used: its deviation from the points goes to [`record_fit`] for the
+/// report, and a fit that cannot hold its tolerance is refused. An inset
+/// section is its outline's wire stepped inward by [`inset_wire`].
+fn section_wire(section: &Section, place: impl Fn([f64; 2]) -> DVec3, what: &str) -> Result<Wire> {
+    let wire = if let Some(points) = &section.polygon {
         // A polygon is built exactly as it was before sections had curves, so
         // every straight-edged part keeps its geometry to the bit.
         let points: Vec<DVec3> = points.iter().map(|p| place(*p)).collect();
@@ -56,22 +61,212 @@ fn section_wire(section: &Section, place: impl Fn([f64; 2]) -> DVec3) -> Result<
                 (a.distance(b) > 1e-9).then(|| Edge::segment(*a, b))
             })
             .collect();
-        return Ok(Wire::from_edges(&edges));
+        Wire::from_edges(&edges)
+    } else {
+        let edges = section
+            .segments
+            .iter()
+            .map(|segment| match segment {
+                Segment::Line { a, b } => Ok(Edge::segment(place(*a), place(*b))),
+                Segment::Arc { a, mid, b, .. } => Ok(Edge::arc(place(*a), place(*mid), place(*b))),
+                Segment::Curve(curve) => {
+                    let poles: Vec<DVec3> = curve.poles.iter().map(|p| place(*p)).collect();
+                    let (knots, mults) = curve.distinct_knots();
+                    Edge::bspline(&poles, &knots, &mults, curve.degree).map_err(|e| anyhow::anyhow!(e))
+                }
+                Segment::Fit { points, tolerance, closed } => {
+                    let placed: Vec<DVec3> = points.iter().map(|p| place(*p)).collect();
+                    let (edge, fit) = match Edge::fit(&placed, *tolerance, *closed) {
+                        Ok(fitted) => fitted,
+                        Err(e) => {
+                            // The fitter gives up below the points' own scatter.
+                            // Measure the tolerance that does hold, doubling
+                            // up, so the refusal is a number to write in.
+                            let holds = (1..=10)
+                                .map(|k| tolerance * f64::powi(2.0, k))
+                                .find(|t| Edge::fit(&placed, *t, *closed).is_ok());
+                            let (at, turn) = sharpest_turn(points, *closed);
+                            bail!(
+                                "the {what}'s curve through {} points could not be fitted within {tolerance} mm: {e}. {}Raise the tolerance{}, or thin the points where they scatter",
+                                points.len(),
+                                if turn > 60.0 {
+                                    format!("The points turn {turn:.0}° at point {at}, a corner no smooth curve can follow within a small tolerance: drop or smooth the points that fold there, or list that point as a corner [x, y] with a fit on either side. ")
+                                } else {
+                                    "A tolerance below the points' own scatter leaves nothing smooth to fit. ".to_string()
+                                },
+                                match holds {
+                                    Some(t) => format!(" — {t:.3} mm is measured to hold"),
+                                    None => String::new(),
+                                }
+                            );
+                        }
+                    };
+                    if fit.deviation_mm > *tolerance {
+                        bail!(
+                            "the {what}'s curve fitted through {} points is {:.4} mm from them at worst, past the {tolerance} mm asked. Raise the tolerance to {:.3} mm, or thin the points where they scatter",
+                            points.len(),
+                            fit.deviation_mm,
+                            (fit.deviation_mm * 1000.0).ceil() / 1000.0
+                        );
+                    }
+                    // Between two of its points a fit is held to nothing, and
+                    // a tolerance below the points' own scatter makes it
+                    // interpolate and loop between them — loops far smaller
+                    // than the validity check on the face resolves. Checked
+                    // on the curve sampled eight times per span, back in the
+                    // section's own plane.
+                    let flat = in_section_plane(&fit.samples, &place);
+                    if let Some((i, j)) = parcad_core::section::polyline_self_intersection(&flat, *closed) {
+                        let per_span = 8;
+                        bail!(
+                            "the {what}'s curve fitted through {} points crosses itself between points {} and {}: holding {tolerance} mm needed {} poles for {} points, so the curve interpolates the points' scatter and loops between them. Raise the tolerance above the scatter, or thin the points there",
+                            points.len(),
+                            i / per_span,
+                            j / per_span + 1,
+                            fit.poles,
+                            points.len()
+                        );
+                    }
+                    let sampled_area = flat
+                        .iter()
+                        .zip(flat.iter().cycle().skip(1))
+                        .map(|(a, b)| a[0] * b[1] - b[0] * a[1])
+                        .sum::<f64>()
+                        / 2.0;
+                    breadcrumb(&format!(
+                        "fitted {} points to a degree {} curve of {} poles, {:.4} mm off at worst; the samples enclose {:.3} mm²",
+                        points.len(),
+                        fit.degree,
+                        fit.poles,
+                        fit.deviation_mm,
+                        sampled_area
+                    ));
+                    record_fit(fit.deviation_mm);
+                    Ok(edge)
+                }
+            })
+            .collect::<Result<Vec<Edge>>>()?;
+        Wire::from_edges(&edges)
+    };
+    match section.inset {
+        Some(distance) => inset_wire(&wire, distance, what),
+        None => Ok(wire),
     }
-    let edges = section
-        .segments
+}
+
+/// The sharpest turn a chain of points makes, in degrees, and the point it
+/// turns at: the corner that bounds how tightly a smooth curve can be held
+/// to the chain.
+fn sharpest_turn(points: &[[f64; 2]], closed: bool) -> (usize, f64) {
+    let n = points.len();
+    let range = if closed { 0..n } else { 1..n.saturating_sub(1) };
+    let mut worst = (0, 0.0f64);
+    for i in range {
+        let (p, q, r) = (points[(i + n - 1) % n], points[i], points[(i + 1) % n]);
+        let a = (q[1] - p[1]).atan2(q[0] - p[0]);
+        let b = (r[1] - q[1]).atan2(r[0] - q[0]);
+        let turn = ((b - a + std::f64::consts::PI).rem_euclid(std::f64::consts::TAU) - std::f64::consts::PI).abs().to_degrees();
+        if turn > worst.1 {
+            worst = (i, turn);
+        }
+    }
+    worst
+}
+
+/// Points of a section's plane back in the section's own coordinates, given
+/// the affine `place` that put them there: the two axis images are read off
+/// `place` and each point is resolved against them.
+fn in_section_plane(points: &[DVec3], place: &impl Fn([f64; 2]) -> DVec3) -> Vec<[f64; 2]> {
+    let origin = place([0.0, 0.0]);
+    let u = place([1.0, 0.0]) - origin;
+    let v = place([0.0, 1.0]) - origin;
+    let (uu, uv, vv) = (u.dot(u), u.dot(v), v.dot(v));
+    let det = uu * vv - uv * uv;
+    points
         .iter()
-        .map(|segment| match segment {
-            Segment::Line { a, b } => Ok(Edge::segment(place(*a), place(*b))),
-            Segment::Arc { a, mid, b, .. } => Ok(Edge::arc(place(*a), place(*mid), place(*b))),
-            Segment::Curve(curve) => {
-                let poles: Vec<DVec3> = curve.poles.iter().map(|p| place(*p)).collect();
-                let (knots, mults) = curve.distinct_knots();
-                Edge::bspline(&poles, &knots, &mults, curve.degree).map_err(|e| anyhow::anyhow!(e))
-            }
+        .map(|p| {
+            let d = *p - origin;
+            let (du, dv) = (d.dot(u), d.dot(v));
+            [(du * vv - dv * uv) / det, (dv * uu - du * uv) / det]
         })
-        .collect::<Result<Vec<Edge>>>()?;
-    Ok(Wire::from_edges(&edges))
+        .collect()
+}
+
+/// An outline stepped inward by `distance`, refused unless the kernel's
+/// answer measures as one loop lying exactly that far inside it.
+///
+/// `BRepOffsetAPI_MakeOffset` is trusted the way `offset_surface` is, which
+/// is not at all: `offset_slip` exists because that builder returns a valid
+/// shape with a body missing, and this one is assumed to have wires it fails
+/// on quietly. So every inset is measured — the distance from points along
+/// it back to the outline, and that its area shrank — and a fold, a dropped
+/// stretch or a loop that ran the wrong way is a refusal rather than a wall
+/// that is wrong. When nothing is left at the asked distance, the refusal
+/// names the largest distance measured to build.
+fn inset_wire(outline: &Wire, distance: f64, what: &str) -> Result<Wire> {
+    breadcrumb(&format!("stepping the {what} inward by {distance} mm"));
+    let attempt = |d: f64| -> Result<Wire, String> {
+        let (wire, report) = outline.inset(d)?;
+        breadcrumb(&format!(
+            "inset of {d} mm: {} poles, {:.4} mm of slip, {:.2} of {:.2} mm²",
+            report.poles, report.slip_mm, report.area_mm2, report.outline_area_mm2
+        ));
+        if report.slip_mm > SLIP_TOLERANCE_MM {
+            return Err(format!(
+                "the kernel's inset strays {:.3} mm from lying {d} mm inside the outline",
+                report.slip_mm
+            ));
+        }
+        if report.area_mm2 >= report.outline_area_mm2 {
+            return Err(format!(
+                "the kernel's inset grew the outline from {:.2} to {:.2} mm² instead of shrinking it",
+                report.outline_area_mm2, report.area_mm2
+            ));
+        }
+        Ok(wire)
+    };
+    match attempt(distance) {
+        Ok(wire) => {
+            let describe = |w: &Wire| -> String {
+                let edges: Vec<Edge> = w.to_shape().edges().collect();
+                match (edges.first(), edges.last()) {
+                    (Some(a), Some(b)) => format!(
+                        "{} edges, from {:.3} to {:.3}",
+                        edges.len(),
+                        a.start_point(),
+                        b.end_point()
+                    ),
+                    _ => "no edges".to_string(),
+                }
+            };
+            breadcrumb(&format!("outline {}; inset {}", describe(outline), describe(&wire)));
+            Ok(wire)
+        }
+        Err(reason) => {
+            breadcrumb(&format!("inset of {distance} mm refused: {reason}"));
+            // Bisect for the distance that does build, so the refusal is a
+            // number the author can use rather than a fact about the kernel.
+            let (mut lo, mut hi) = (0.0, distance);
+            for _ in 0..8 {
+                let mid = (lo + hi) / 2.0;
+                match attempt(mid) {
+                    Ok(_) => lo = mid,
+                    Err(why) => {
+                        breadcrumb(&format!("inset of {mid:.4} mm refused: {why}"));
+                        hi = mid;
+                    }
+                }
+            }
+            let most = if lo > 0.0 {
+                format!("the most this outline takes is about {:.2} mm", lo)
+            } else {
+                "no smaller inset built either".to_string()
+            };
+            bail!(
+                "the {what} cannot be stepped inward by {distance} mm: {reason}; {most}. A wall thicker than the narrowest lobe or valley of the outline is half that lobe's width, so widen the outline there or thin the wall"
+            )
+        }
+    }
 }
 
 /// The planar face a section wire bounds, checked by `BRepCheck` unless the
@@ -81,16 +276,60 @@ fn section_wire(section: &Section, place: impl Fn([f64; 2]) -> DVec3) -> Result<
 /// that runs into another edge is caught here instead, on the exact curves.
 fn checked_face(section: &Section, wire: &Wire, what: &str) -> Result<Face> {
     let face = Face::from_wire(wire);
+    // The face builder hands back a null shape for a wire that does not
+    // close, and the validity check below aborts the worker on one.
+    if Shape::from(face.clone()).faces().next().is_none() {
+        bail!(
+            "the {what} does not close into one face: its edges do not meet end to end. Every curve or arc must start where the last one ended, and the last must end on the first corner"
+        );
+    }
     if section.polygon.as_deref().is_some_and(parcad_core::section::polygon_is_convex) {
         return Ok(face);
     }
     if let Err(report) = Shape::from(face.clone()).check_validity(true) {
+        let fix = if section.has_fit() {
+            "A fitted curve can cross itself where its points are simple: dense points round a tight fold overshoot. Raise the tolerance so the curve follows them less closely, or thin the points at the fold"
+        } else {
+            "Move the through point, radius or control points so the outline passes each place once"
+        };
         bail!(
-            "the {what} touches or crosses itself — an arc or curve runs into another edge — so it bounds no single region. Move the through point, radius or control points so the outline passes each place once. The kernel's check said: {}",
+            "the {what} touches or crosses itself — an arc or curve runs into another edge — so it bounds no single region. {fix}. The kernel's check said: {}",
             report.lines().take(3).collect::<Vec<_>>().join("; ")
         );
     }
     Ok(face)
+}
+
+thread_local! {
+    /// The worst fit deviation seen so far, one frame per subtree being
+    /// measured: the outermost is the request's, the rest are cache entries
+    /// in the making.
+    static FITS: std::cell::RefCell<Vec<Option<f64>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn record_fit(deviation_mm: f64) {
+    FITS.with(|frames| {
+        for frame in frames.borrow_mut().iter_mut() {
+            *frame = Some(frame.map_or(deviation_mm, |worst| worst.max(deviation_mm)));
+        }
+    });
+}
+
+fn push_fit_frame() {
+    FITS.with(|frames| frames.borrow_mut().push(None));
+}
+
+fn pop_fit_frame() -> Option<f64> {
+    FITS.with(|frames| frames.borrow_mut().pop().flatten())
+}
+
+/// Run `build` and return, beside its result, the worst deviation of any
+/// curve fitted while it ran — `None` when nothing was fitted. A subtree the
+/// cache reused reports the deviation measured when it was built.
+pub fn measuring_fits<T>(build: impl FnOnce() -> T) -> (T, Option<f64>) {
+    push_fit_frame();
+    let out = build();
+    (out, pop_fit_frame())
 }
 
 /// Bounding box of a shape, from its tessellation.
@@ -2417,6 +2656,9 @@ type CacheKey = (String, [i64; 3]);
 
 struct CacheEntry {
     built: BuiltShape,
+    /// The worst deviation of any curve fitted while building this subtree,
+    /// re-reported on a hit as if it had been built again.
+    fit_deviation: Option<f64>,
     /// The generation that last built or reused this node.
     used: u64,
     /// The keys of the nodes built directly under it. A hit on a node is a
@@ -2551,7 +2793,11 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
     let hit = REUSE.with(|slot| {
         let mut slot = slot.borrow_mut();
         let reuse = slot.as_mut()?;
-        let built = reuse.cache.entries.get(&key)?.built.clone();
+        let entry = reuse.cache.entries.get(&key)?;
+        let built = entry.built.clone();
+        if let Some(deviation) = entry.fit_deviation {
+            record_fit(deviation);
+        }
         touch(&mut reuse.cache, &key);
         if let Some(frame) = reuse.under.last_mut() {
             frame.push(key.clone());
@@ -2567,7 +2813,9 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             reuse.under.push(Vec::new());
         }
     });
+    push_fit_frame();
     let built = build_node_afresh(doc, id, offset);
+    let fit_deviation = pop_fit_frame();
     REUSE.with(|slot| {
         if let Some(reuse) = slot.borrow_mut().as_mut() {
             let deps = reuse.under.pop().unwrap_or_default();
@@ -2577,6 +2825,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     key.clone(),
                     CacheEntry {
                         built: built.clone(),
+                        fit_deviation,
                         used: generation,
                         deps,
                     },
@@ -2851,8 +3100,20 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
 
             // The section is drawn in the XZ plane at y = 0: x is the radius,
             // which is the plane the revolution sweeps out of.
-            let wire = section_wire(&section, |[r, z]| DVec3::new(r, 0.0, z))
+            let wire = section_wire(&section, |[r, z]| DVec3::new(r, 0.0, z), "revolve profile")
                 .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
+            // The graph checked a fit's points against the axis; the curve
+            // between them is the kernel's, so it is measured here.
+            if section.has_fit() {
+                if let Some((lo, _)) = wire.to_shape().bounds_optimal() {
+                    if lo.x < -1e-6 {
+                        bail!(
+                            "node {id} ({label}): the revolve profile's fitted curve reaches radius {:.4}, left of the axis, between the points it was fitted through. A profile that crosses the axis sweeps through itself; keep the points at radius >= 0 and, where they touch the axis, tighten the tolerance",
+                            lo.x
+                        );
+                    }
+                }
+            }
             let face = checked_face(&section, &wire, "revolve profile")
                 .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
             let solid = face.revolve(DVec3::ZERO, DVec3::Z, None);
@@ -2919,7 +3180,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             let base = -height / 2.0;
             let solid = match top {
                 None => {
-                    let wire = section_wire(&section, |[x, y]| DVec3::new(x, y, base))
+                    let wire = section_wire(&section, |[x, y]| DVec3::new(x, y, base), "extrude profile")
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
                     checked_face(&section, &wire, "extrude profile")
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?
@@ -2976,7 +3237,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 wires.push(match outline {
                     Some(outline) => {
                         let z = section.z;
-                        let wire = section_wire(outline, |[x, y]| DVec3::new(x, y, z))
+                        let wire = section_wire(outline, |[x, y]| DVec3::new(x, y, z), "loft section")
                             .map_err(|e| anyhow::anyhow!("node {id} ({label}) section {i}: {e}"))?;
                         checked_face(outline, &wire, "loft section")
                             .map_err(|e| anyhow::anyhow!("node {id} ({label}) section {i}: {e}"))?;
@@ -3020,12 +3281,17 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             let after = bbox(&shape);
             let bulge = (lo - after.0).max(after.1 - hi).max_element().max(0.0);
             if bulge > SLIP_TOLERANCE_MM {
+                let fitted = resolved.iter().flatten().any(Section::has_fit);
                 bail!(
-                    "node {id} ({label}) lofts a smooth surface that bulges \
+                    "node {id} ({label}) lofts a {} that bulges \
                      {bulge:.2} mm outside its sections' own extent, which the \
-                     rest of the pipeline was told bounds it. Add an \
-                     intermediate section where it bulges, or drop `smooth` \
-                     for ruled walls, which cannot leave the sections' hull"
+                     rest of the pipeline was told bounds it. {}",
+                    if *smooth { "smooth surface" } else { "wall" },
+                    if fitted {
+                        "A fitted section's extent is its points' plus its tolerance, so a curve swinging wider than that between two points is the cause: add a point where it swings, or raise the tolerance"
+                    } else {
+                        "Add an intermediate section where it bulges, or drop `smooth` for ruled walls, which cannot leave the sections' hull"
+                    }
                 );
             }
 
@@ -3174,7 +3440,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             }
             let section_wire = match &section {
                 SweepSection::Outline(outline) => {
-                    let wire = section_wire(outline, |[x, y]| start + u_axis * x + v_axis * y)
+                    let wire = section_wire(outline, |[x, y]| start + u_axis * x + v_axis * y, "sweep profile")
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
                     checked_face(outline, &wire, "sweep profile")
                         .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;

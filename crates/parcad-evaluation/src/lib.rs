@@ -32,6 +32,7 @@ pub fn evaluated(
     let (report, _) = measure_brep(doc, s)?;
     let mut snapshot = describe(doc, &report, &s.topology, body_reports(s), tag_extents(s), wall_ms);
     snapshot.reused_build = reused;
+    snapshot.deviation_mm = s.deviation_mm.map(round_mm);
     Ok(Evaluated {
         bounds: report.bounds,
         snapshot,
@@ -213,6 +214,12 @@ pub struct EvaluationSnapshot {
     pub triangles: usize,
     /// What the mesher achieved, never what was asked for.
     pub resolution_mm: f64,
+    /// For a part with a `{ fit }` section entry: the furthest any point it
+    /// was fitted through sits from the curve the part was built with, in
+    /// mm, the worst over every fit. Measured on the built curve, never the
+    /// tolerance asked for. Absent when nothing was fitted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deviation_mm: Option<f64>,
     pub watertight: bool,
     pub non_manifold_edges: usize,
     /// Connected pieces of surface, measured over the whole part: one for a
@@ -627,6 +634,7 @@ pub fn describe(
         topological_edges: Some(topology.edges),
         triangles: report.mesh.triangles,
         resolution_mm: round_mm(report.mesh.resolution_mm),
+        deviation_mm: None,
         watertight: report.mesh.watertight,
         non_manifold_edges: report.mesh.non_manifold_edges,
         bodies: report.mesh.bodies,

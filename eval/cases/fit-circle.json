@@ -1,0 +1,24 @@
+{
+  "name": "fit-circle",
+  "script": "eval/scripts/fit-circle.js",
+  "why": "A circle of radius 20 sampled at 200 points and fitted closed at 0.01 mm, extruded 10: the analytic disc is pi*400*10 = 12566.371 mm3, and a curve held within 0.01 mm of a 125.66 mm perimeter can move it by at most 12.6 mm3. deviation_mm is the kernel's own measurement of the built curve against the samples, read back from the part, and must sit under the tolerance asked; the fit is 19 poles of degree 3 on uniform knots, where the same outline as bspline control points was 200.",
+  "brep": {
+    "size": [
+      40.001,
+      40.001,
+      10.0
+    ],
+    "volume_mm3": 12561.45,
+    "area_mm2": 3769.023,
+    "triangles": 2624,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1256.254,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 3,
+    "edges": 6,
+    "curves": 2,
+    "deviation_mm": 0.001
+  }
+}

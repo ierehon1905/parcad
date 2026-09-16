@@ -57,6 +57,12 @@ name = "mm"
 capture = ['\\"(?:first_solid|solid|distance|thickness)_mm\\":\s*(\d+)']
 final = '\b{}(?:\.\d+)?\s*mm'
 
+# A fitted section's measured deviation, to the micron the reply rounds it to.
+[[reads]]
+name = "deviation"
+capture = ['\\"deviation_mm\\":\s*(\d+\.\d+)']
+final = '\b{}\s*mm'
+
 [[reads]]
 name = "medium"
 final = '\bmaterial\b|\bvoid\b'

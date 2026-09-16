@@ -1,0 +1,15 @@
+{
+  "name": "refuse-fit-below-scatter",
+  "script": "eval/scripts/refuse-fit-below-scatter.js",
+  "why": "A circle with 0.3 mm of noise on every point fitted at 0.01 mm. Below the scatter there is nothing smooth to fit: the fitter adds knots until it has one per point and gives up. The refusal measures the tolerance that does hold, doubling up from the one asked, and names it - the author's next edit is a number, not a guess.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "could not be fitted within 0.01 mm",
+        "is measured to hold",
+        "Raise the tolerance"
+      ]
+    }
+  }
+}

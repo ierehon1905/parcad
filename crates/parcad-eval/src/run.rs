@@ -106,6 +106,7 @@ pub fn run_brep(doc: &Doc) -> Outcome {
         bodies: stats.bodies,
         voids: stats.voids,
         stands_on: tess.bed_contact(),
+        deviation_mm: s.deviation_mm,
         tags,
         unlocated_tags,
         // The same slice-and-measure the app's reply uses, for the same

@@ -1,0 +1,30 @@
+{
+  "name": "fitted-ring",
+  "script": "eval/scripts/fitted-ring.js",
+  "why": "A fitted circle of radius 20 minus the same outline inset by 2, 10 tall: pi*(400-324)*10 = 2387.610 mm3. The inset of a one-curve outline comes back as one curve, offset by the kernel rather than re-fitted, so the wall is 2 mm by construction; measure_wall_thickness reads it back as 2.",
+  "brep": {
+    "size": [
+      40.001,
+      40.001,
+      10.0
+    ],
+    "volume_mm3": 2386.743,
+    "area_mm2": 2864.808,
+    "triangles": 6502,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 238.716,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 4,
+    "edges": 12,
+    "curves": 4,
+    "deviation_mm": 0.001,
+    "perception": {
+      "thickness": {
+        "min_mm": 2.0,
+        "tolerance_mm": 0.02
+      }
+    }
+  }
+}
