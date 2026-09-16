@@ -531,6 +531,25 @@ dense samples of the wires instead. A sweep along a straight path still can. Fit
 a looser tolerance, or smooth the points, and the integral settles. `eps`
 stays 1e-7.
 
+### A curve that starts slowly meshes in ten times the triangles
+
+The mesher judges a face in its parameters, so how fast a curve runs through
+its own parameter shows up in the triangle count even when the shape is the
+same. Measured on one arc of radius 20 over 2.5 rad, extruded 10: drawn with
+`{ curve }` in its angle, 240 triangles; the same arc with angle `t²/2.5`, so
+it starts at rest and ends at 40 mm per unit, 1018. The involute is the case
+that matters: its speed in the roll angle is `rb·t`, zero on the base circle
+— intrinsic, because its curvature is infinite there and a polynomial can
+only follow that by stopping — so a certified 20-tooth gear's flank walls
+mesh in some 480 triangles each, against 24 for a `fit` through the same
+flank on chord-length knots, and the whole gear in 20300 against 1916. The
+extra triangles are interior rows on the ruled wall, not a finer edge: the
+cap boundary has 11 points on each flank either way. Neither the knot scale,
+double knots (a C1 circle meshes like the fit, 592) nor the extrusion (a
+straight `sweep` gives 17446) is the cause. The geometry is right — the
+exported STEP puts the flank 2.9e-6 mm from the involute — so nothing is
+refused; the cost is a mesh of 180 ms instead of 120 and a larger STL.
+
 ### `offset_surface` lies
 
 It returns valid-looking wrong answers rather than failing:

@@ -1,0 +1,134 @@
+{
+  "name": "involute-gear",
+  "script": "eval/scripts/involute-gear.js",
+  "why": "A module 2, 20-tooth, 20 degree spur gear 10 thick, every flank a certified { curve } on the base circle rb = 20 cos 20 = 18.794. Closed-form section: z * (rf^2 * gap / 2 + ra^2 * psiA + rb^2 * tA^3 / 3) with rf = 17.5, ra = 22, tA = sqrt((ra/rb)^2 - 1) = 0.6085, half-tooth angles psiB = pi/40 + inv 20 = 0.09344 at the base and psiA = 0.03159 at the tip, gap = 2pi/20 - 2 psiB: 1226.106 mm2, so 12261.057 mm3; the mesh reads 0.03 % under it at 0.01 mm, as every curved wall here does. The points are the analytic involute itself: tooth 0's rising flank at roll t = 0.15, 0.35, 0.55, each on the boundary and 0.01 mm either side of it along the involute's normal (sin b, -cos b), b = t - psiB, and tooth 7's falling flank at t = 0.3 and 0.01 mm outside it - so the built flank is held to the equation, not to any points the script drew it through. curve_bound_mm is the bound the script proved from |r''''| = rb sqrt(9 + t^2): eight pieces of tA/8 per flank, sqrt2 * rb * sqrt(9 + tA^2) * h^4 / 384; deviation_mm is the kernel's own reading against points of the involute between the pieces' ends.",
+  "brep": {
+    "size": [
+      43.998,
+      43.998,
+      10.0
+    ],
+    "volume_mm3": 12257.093,
+    "area_mm2": 5083.806,
+    "triangles": 20300,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1225.602,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 122,
+    "edges": 720,
+    "curves": 360,
+    "deviation_mm": 0.0,
+    "curve_bound_mm": 7.093665147216587e-6,
+    "curve_bound": "certified",
+    "perception": {
+      "points": [
+        {
+          "at": [
+            18.923154031,
+            -1.752235751,
+            0.0
+          ],
+          "state": "on_boundary",
+          "distance_mm": 0.0
+        },
+        {
+          "at": [
+            18.923719288,
+            -1.762219763,
+            0.0
+          ],
+          "state": "outside",
+          "distance_mm": 0.01
+        },
+        {
+          "at": [
+            18.922588775,
+            -1.74225174,
+            0.0
+          ],
+          "state": "inside",
+          "distance_mm": -0.01
+        },
+        {
+          "at": [
+            19.847856557,
+            -1.593602076,
+            0.0
+          ],
+          "state": "on_boundary",
+          "distance_mm": 0.0
+        },
+        {
+          "at": [
+            19.850394063,
+            -1.603274773,
+            0.0
+          ],
+          "state": "outside",
+          "distance_mm": 0.01
+        },
+        {
+          "at": [
+            19.845319051,
+            -1.583929379,
+            0.0
+          ],
+          "state": "inside",
+          "distance_mm": -0.01
+        },
+        {
+          "at": [
+            21.425909619,
+            -0.992458778,
+            0.0
+          ],
+          "state": "on_boundary",
+          "distance_mm": 0.0
+        },
+        {
+          "at": [
+            21.430318212,
+            -1.00143454,
+            0.0
+          ],
+          "state": "outside",
+          "distance_mm": 0.01
+        },
+        {
+          "at": [
+            21.421501026,
+            -0.983483016,
+            0.0
+          ],
+          "state": "inside",
+          "distance_mm": -0.01
+        },
+        {
+          "at": [
+            -12.837704217,
+            14.838835501,
+            0.0
+          ],
+          "state": "on_boundary",
+          "distance_mm": 0.0
+        },
+        {
+          "at": [
+            -12.846827905,
+            14.834741808,
+            0.0
+          ],
+          "state": "outside",
+          "distance_mm": 0.01
+        }
+      ]
+    },
+    "tolerance": {
+      "size_mm": 0.001,
+      "volume_pct": 0.05,
+      "triangles_pct": 5.0
+    }
+  }
+}

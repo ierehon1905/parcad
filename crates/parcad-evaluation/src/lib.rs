@@ -33,6 +33,11 @@ pub fn evaluated(
     let mut snapshot = describe(doc, &report, &s.topology, body_reports(s), tag_extents(s), wall_ms);
     snapshot.reused_build = reused;
     snapshot.deviation_mm = s.deviation_mm.map(round_mm);
+    if let Some(bound) = doc.stated_curve_bound() {
+        // A bound rounds up, never down: 0.00004 mm must not read as 0.
+        snapshot.curve_bound_mm = Some((bound.mm * 1e6).ceil() / 1e6);
+        snapshot.curve_bound = Some(if bound.certified { "certified" } else { "estimated" });
+    }
     Ok(Evaluated {
         bounds: report.bounds,
         snapshot,
@@ -237,10 +242,23 @@ pub struct EvaluationSnapshot {
     pub resolution_mm: f64,
     /// For a part with a `{ fit }` section entry: the furthest any point it
     /// was fitted through sits from the curve the part was built with, in
-    /// mm, the worst over every fit. Measured on the built curve, never the
-    /// tolerance asked for. Absent when nothing was fitted.
+    /// mm, the worst over every fit — and for a `{ curve }` entry, the
+    /// furthest any of its check points (points of the function between the
+    /// ones the curve was built through) sits from it. Measured on the built
+    /// curve, never the tolerance asked for. Absent when there are neither.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deviation_mm: Option<f64>,
+    /// For a part with a section curve drawn from a function
+    /// (`{ curve: t => [x, y] }`): the most any such curve may be from its
+    /// function, in mm, rounded up. Computed by the script where the function
+    /// lives — the kernel cannot run it — and checked by the kernel, whose
+    /// measurement against points of the function is `deviation_mm`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curve_bound_mm: Option<f64>,
+    /// `certified` when every such bound is proven from the function's own
+    /// fourth-derivative bound, `estimated` when any was read off samples.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curve_bound: Option<&'static str>,
     pub watertight: bool,
     pub non_manifold_edges: usize,
     /// Connected pieces of surface, measured over the whole part: one for a
@@ -661,6 +679,8 @@ pub fn describe(
         triangles: report.mesh.triangles,
         resolution_mm: round_mm(report.mesh.resolution_mm),
         deviation_mm: None,
+        curve_bound_mm: None,
+        curve_bound: None,
         watertight: report.mesh.watertight,
         non_manifold_edges: report.mesh.non_manifold_edges,
         bodies: report.mesh.bodies,

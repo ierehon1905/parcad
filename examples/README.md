@@ -1,7 +1,7 @@
 # Examples
 
-Twenty-six parts, each a `.js` script that returns a shape — or, for two of
-them, two named shapes. Most are measured in
+Twenty-seven parts, each a `.js` script that returns a shape — or, for four
+of them, two named shapes. Most are measured in
 `eval/cases/`, so an example that stops building fails a case rather than
 surprising someone.
 
@@ -48,6 +48,7 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 | `plate-stand.js` | vertical dinner-plate stand, 8 plates | a redesign of a printed part whose pegs broke: eighteen cone bosses blended into a base in one union, and one commit's worth of them placed on the wrong face and standing proud of the underside, which only the low end of the bounding box showed |
 | `screw-top-jar.js` | jar and cap, M40 × 3 printed thread | a modelled thread, `threadedRod` on the neck and `threadedHole` in the cap, 0.25 mm clearance each; the cap's cutter turned into phase with the neck, and `between_bodies` reading the flank gap its closed form predicts |
 | `shaft-coupler.js` | 8-to-10 mm rigid coupler | two blind bores meeting at a web; radial grub screws breaking into them |
+| `spur-gears.js` | module 2 gear pair, 20 and 30 teeth, meshed | curves drawn from a formula: every flank an involute the script certifies to a few millionths of a millimetre, and `between_bodies` reading the 0.094 mm flank gap that 0.1 mm of backlash predicts |
 | `timing-pulley.js` | 20-tooth GT2 pulley | **approximate** — and says so; see docs/DSL_GAPS.md §5 |
 | `twisted-planter.js` | twisted star planter and drip saucer, two prints | the part the web playground opens first: a ruled loft twisted through nine star sections and hollowed along the same twist to a measured 2 mm wall, and a saucer of smooth bumps in rings of 1, 6, 12 and 18, each a revolved smootherstep profile that leaves the floor with no crease |
 | `v-block.js` | 50 mm toolroom V-block | a 90° vee cut by a rotated cube, so the angle cannot drift |

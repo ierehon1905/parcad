@@ -568,7 +568,14 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         bodies_text(&stats)
     );
     if let Some(deviation) = s.deviation_mm {
-        println!("fit      fitted curves within {deviation:.4} mm of their points at worst");
+        println!("fit      fitted and function curves within {deviation:.4} mm of their points at worst");
+    }
+    if let Some(bound) = doc.stated_curve_bound() {
+        println!(
+            "curve    function curves within {:.2e} mm of their functions everywhere, {}",
+            bound.mm,
+            if bound.certified { "certified by the script" } else { "estimated by the script from samples" }
+        );
     }
     for body in parcad_occt::measure_bodies(&s) {
         let size = body.bounds.size();

@@ -66,13 +66,18 @@ fn section_wire(section: &Section, place: impl Fn([f64; 2]) -> DVec3, what: &str
         let edges = section
             .segments
             .iter()
-            .map(|segment| match segment {
+            .enumerate()
+            .map(|(index, segment)| match segment {
                 Segment::Line { a, b } => Ok(Edge::segment(place(*a), place(*b))),
                 Segment::Arc { a, mid, b, .. } => Ok(Edge::arc(place(*a), place(*mid), place(*b))),
                 Segment::Curve(curve) => {
                     let poles: Vec<DVec3> = curve.poles.iter().map(|p| place(*p)).collect();
                     let (knots, mults) = curve.distinct_knots();
-                    Edge::bspline(&poles, &knots, &mults, curve.degree).map_err(|e| anyhow::anyhow!(e))
+                    let edge = Edge::bspline(&poles, &knots, &mults, curve.degree).map_err(|e| anyhow::anyhow!(e))?;
+                    match section.held.iter().find(|(i, _)| *i == index) {
+                        Some((_, held)) => check_held(edge, held, &place, what),
+                        None => Ok(edge),
+                    }
                 }
                 Segment::Fit { points, tolerance, closed } => {
                     let placed: Vec<DVec3> = points.iter().map(|p| place(*p)).collect();
@@ -152,6 +157,34 @@ fn section_wire(section: &Section, place: impl Fn([f64; 2]) -> DVec3, what: &str
         Some(distance) => inset_wire(&wire, distance, what),
         None => Ok(wire),
     }
+}
+
+/// Measure a curve drawn from a function against points of that function it
+/// was not built through, and refuse when the built curve is further from
+/// them than the bound the script stated — a stated bound the kernel's own
+/// curve contradicts is not one to report.
+fn check_held(edge: Edge, held: &parcad_core::section::Held, place: &impl Fn([f64; 2]) -> DVec3, what: &str) -> Result<Edge> {
+    // Room for the projection and the rounding of poles computed in the
+    // script, far below any bound worth stating.
+    const SLACK_MM: f64 = 1e-6;
+    let check: Vec<DVec3> = held.check.iter().map(|p| place(*p)).collect();
+    let deviation = edge.deviation_from(&check).map_err(|e| anyhow::anyhow!(e))?;
+    if deviation > held.within + SLACK_MM {
+        bail!(
+            "the {what}'s curve drawn from a function is {deviation:.3e} mm from the function at one of its {} check points, past the {:.3e} mm the script stated ({}). The poles, knots or check points in the graph do not describe one curve: rebuild the graph from the script, or report the function that did this",
+            check.len(),
+            held.within,
+            if held.certified { "certified" } else { "estimated" }
+        );
+    }
+    breadcrumb(&format!(
+        "a curve drawn from a function measures {deviation:.2e} mm from {} of its points; the script states {:.2e} mm, {}",
+        check.len(),
+        held.within,
+        if held.certified { "certified" } else { "estimated" }
+    ));
+    record_fit(deviation);
+    Ok(edge)
 }
 
 /// The sharpest turn a chain of points makes, in degrees, and the point it
@@ -4299,6 +4332,29 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_curve_from_a_function_is_measured_against_it_and_refused_past_its_bound() {
+        // A quarter circle of radius 10 as one cubic Hermite piece: at its
+        // middle it bends 0.152 mm inside the circle, under the remainder's
+        // √2 · 10 · (π/2)⁴ / 384 = 0.2255 mm.
+        let k = std::f64::consts::FRAC_PI_6 * 10.0;
+        let section = |within: f64| {
+            let json = format!(
+                r#"[[0,0],[10,0],{{"bspline":[[10,{k}],[{k},10]],"knots":[0,0,0,0,1.5707963267948966,1.5707963267948966,1.5707963267948966,1.5707963267948966],"within":{within},"certified":true,"check":[[7.0710678118654755,7.0710678118654755]]}},[0,10]]"#
+            );
+            let entries: Vec<parcad_core::section::SectionEntry> = serde_json::from_str(&json).unwrap();
+            parcad_core::section::resolve(&entries, "quarter").unwrap()
+        };
+        let place = |p: [f64; 2]| DVec3::new(p[0], p[1], 0.0);
+        let (built, deviation) = measuring_fits(|| section_wire(&section(0.2256), place, "quarter"));
+        built.unwrap();
+        let deviation = deviation.unwrap();
+        assert!((deviation - (10.0 - 6.963495408493621 * std::f64::consts::SQRT_2)).abs() < 1e-6, "{deviation}");
+        let (refused, _) = measuring_fits(|| section_wire(&section(0.1), place, "quarter"));
+        let err = refused.err().unwrap().to_string();
+        assert!(err.contains("past the 1.000e-1 mm the script stated (certified)"), "{err}");
+    }
 
     #[test]
     fn composed_selector_finds_one_physical_box_edge() {

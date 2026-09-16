@@ -38,6 +38,8 @@ pub const FEATURES: &[&str] = &[
     "inset-sections",
     "sweep-spline",
     "loft-point",
+    "bspline-knots",
+    "held-curves",
 ];
 
 /// The version of parcad reading the graph.
