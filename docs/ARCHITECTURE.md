@@ -468,6 +468,10 @@ stretch of wall, never a ray that crosses the cavity. At an open end the foot
 is held to the edge and the distance is taken along its normal, which is the
 wall continued.
 
+A closed `{ fit }` section anywhere else — an extrusion, a revolve — is
+fitted the same way, as a loft of one section (`skinned::fit_closed`), and
+built as a B-spline edge with its deviation measured again on the edge.
+
 The measured range is reported as `loft_wall_mm`. Thinner than 95 % of `t`
 anywhere is refused, naming where; thicker than `t` by more than 5 % or the
 sections' own fit tolerance, whichever is more, is refused too, because a

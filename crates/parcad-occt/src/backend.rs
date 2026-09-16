@@ -79,6 +79,7 @@ fn section_wire(section: &Section, place: impl Fn([f64; 2]) -> DVec3, what: &str
                         None => Ok(edge),
                     }
                 }
+                Segment::Fit { points, tolerance, closed: true } => closed_fit_edge(points, *tolerance, &place, what),
                 Segment::Fit { points, tolerance, closed } => {
                     let placed: Vec<DVec3> = points.iter().map(|p| place(*p)).collect();
                     let (edge, fit) = match Edge::fit(&placed, *tolerance, *closed) {
@@ -157,6 +158,68 @@ fn section_wire(section: &Section, place: impl Fn([f64; 2]) -> DVec3, what: &str
         Some(distance) => inset_wire(&wire, distance, what),
         None => Ok(wire),
     }
+}
+
+/// A closed `{ fit }` — a whole section — as the periodic cubic a skinned
+/// loft fits its sections with (`skinned::fit_closed`): parameters that
+/// follow the curve, knots that follow the parameters, the fewest spans that
+/// hold, and no seam. Its deviation is measured again on the edge as built.
+fn closed_fit_edge(points: &[[f64; 2]], tolerance: f64, place: &impl Fn([f64; 2]) -> DVec3, what: &str) -> Result<Edge> {
+    let fitted = match crate::skinned::fit_closed(points, tolerance)? {
+        Ok(fitted) => fitted,
+        Err((spans, why)) => {
+            // Below the points' own scatter nothing holds. Measure the
+            // tolerance that does, doubling up, so the refusal is a number to
+            // write in.
+            let closest = crate::skinned::closest_closed_fit(points);
+            let holds = (1..=10)
+                .map(|k| tolerance * f64::powi(2.0, k))
+                .find(|t| closest.is_some_and(|off| off <= *t));
+            let (at, turn) = sharpest_turn(points, true);
+            bail!(
+                "the {what}'s curve through {} points could not be fitted within {tolerance} mm: {why}{}. {}Raise the tolerance{}, or thin the points where they scatter",
+                points.len(),
+                if spans > 0 { format!(" on {spans} spans, the most {} points allow", points.len()) } else { String::new() },
+                if turn > 60.0 {
+                    format!("The points turn {turn:.0}° at point {at}, a corner no smooth curve can follow within a small tolerance: drop or smooth the points that fold there, or list that point as a corner [x, y] with a fit on either side. ")
+                } else {
+                    "A tolerance below the points' own scatter leaves nothing smooth to fit. ".to_string()
+                },
+                match holds {
+                    Some(t) => format!(" — {t:.3} mm is measured to hold"),
+                    None => String::new(),
+                }
+            );
+        }
+    };
+    let curve = &fitted.curve;
+    let poles: Vec<DVec3> = curve.poles.iter().map(|p| place(*p)).collect();
+    let (knots, mults) = curve.distinct_knots();
+    let edge = Edge::bspline(&poles, &knots, &mults, curve.degree).map_err(|e| anyhow::anyhow!(e))?;
+    let placed: Vec<DVec3> = points.iter().map(|p| place(*p)).collect();
+    let deviation = edge.deviation_from(&placed).map_err(|e| anyhow::anyhow!(e))?.max(fitted.deviation_mm);
+    if deviation > tolerance {
+        bail!(
+            "the {what}'s curve fitted through {} points is {deviation:.4} mm from them at worst, past the {tolerance} mm asked. Raise the tolerance to {:.3} mm, or thin the points where they scatter",
+            points.len(),
+            (deviation * 1000.0).ceil() / 1000.0
+        );
+    }
+    let flat = &fitted.samples;
+    let sampled_area = flat
+        .iter()
+        .zip(flat.iter().cycle().skip(1))
+        .map(|(a, b)| a[0] * b[1] - b[0] * a[1])
+        .sum::<f64>()
+        / 2.0;
+    breadcrumb(&format!(
+        "fitted {} points to a closed periodic cubic of {} poles on {} spans, {deviation:.4} mm off at worst; the samples enclose {sampled_area:.3} mm²",
+        points.len(),
+        curve.poles.len(),
+        curve.poles.len() - 3,
+    ));
+    record_fit(deviation);
+    Ok(edge)
 }
 
 /// Measure a curve drawn from a function against points of that function it
@@ -352,6 +415,11 @@ fn locate_crossing(section: &Section) -> Option<String> {
     let mut owners: Vec<usize> = Vec::new();
     for (i, segment) in section.segments.iter().enumerate() {
         let points = match segment {
+            Segment::Fit { points, tolerance, closed: true } => {
+                let mut samples = crate::skinned::fit_closed(points, *tolerance).ok()?.ok()?.samples;
+                samples.push(samples[0]);
+                samples
+            }
             Segment::Fit { points, tolerance, closed } => {
                 let placed: Vec<DVec3> = points.iter().map(|p| DVec3::new(p[0], p[1], 0.0)).collect();
                 let (_, fit) = Edge::fit(&placed, *tolerance, *closed).ok()?;

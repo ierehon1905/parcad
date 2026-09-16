@@ -610,9 +610,27 @@ lamp at a star tip, where the offset turns with a radius of 0.4 mm — one
 magnitude goes to nearly zero and the curve cusps and loops by 0.01 mm at its
 start, at every span count up to the interpolation limit. The walled loft
 found it and does not use `Edge::fit`: its sections are fitted periodic
-(`parcad_core::skin::PeriodicFit`), with no seam at all. A plain `{ fit }`
-section in an extrude or a revolve still goes through `Edge::fit`; its loop
-check catches a loop, but the seam's speed jump is not reported.
+(`parcad_core::skin::PeriodicFit`), with no seam at all.
+
+A closed `{ fit }` section in an extrude, a revolve or anywhere else no longer
+does either: `section_wire` fits it as a one-section skinned loft
+(`skinned::fit_closed`) — parameters corrected to follow the curve, knots
+following the parameters, the fewest spans that hold, C2 through where the
+points start — and measures the deviation again on the edge OCCT holds. The
+six-lobed outline of `fit-six-lobes` (180 points) measured:
+
+| tolerance | `Edge::fit` | periodic fit |
+|---|---|---|
+| 0.6 | 35 poles, 0.594 mm | 22 poles, 0.436 mm |
+| 0.1 | 131 poles, 0.042 mm | 27 poles, 0.067 mm |
+| 0.05 | 131 poles, 0.042 mm | 49 poles, 0.044 mm |
+| 0.02 | refused | 57 poles, 0.017 mm |
+
+`Edge::fit` still makes the open fits between two corners, whose ends are
+the corners and have no seam. Both keep a fit to four fewer free poles than
+points: at the limit the loft's fitter used to allow, one fewer, a circle
+with 0.3 mm of noise "held" 0.01 mm on 122 poles for 120 points, which is
+interpolation.
 
 ### One large B-spline face meshes far slower than the same surface in bands
 

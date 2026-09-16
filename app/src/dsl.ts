@@ -894,8 +894,10 @@ export type SectionPoint = [number, number];
  *   and refuses when the tolerance cannot be held or the fitted curve crosses
  *   itself — naming the tolerance that would hold, or the points to thin.
  *   A section that is nothing but `[{ fit: points, tolerance }]` is one closed
- *   fitted loop with no corner. 0.01 to 0.1 mm is the usual tolerance; a
- *   tighter one costs poles, a looser one smooths the points' noise.
+ *   fitted loop with no corner and no seam — smooth (C2) where the list of
+ *   points starts as everywhere else — on the fewest poles that hold the
+ *   tolerance. 0.01 to 0.1 mm is the usual tolerance; a tighter one costs
+ *   poles, a looser one smooths the points' noise.
  * - `{ curve: (t) => [x, y], from, to, tolerance }` — a curve given by a
  *   *formula*: an involute, a cam law, a spiral. Unlike the entries above it
  *   carries its own ends, `curve(from)` and `curve(to)`, so it needs no

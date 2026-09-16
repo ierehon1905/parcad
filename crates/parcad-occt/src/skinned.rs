@@ -15,7 +15,7 @@ use opencascade::{
 use parcad_core::{
     graph::{LoftSection, LoftWall},
     par,
-    section::{polyline_self_intersection, Section, Segment, P2},
+    section::{polyline_self_intersection, BSpline, Section, Segment, P2},
     skin::{height_parameters, shared_parameters, PeriodicFit, Surface, CORRECTION_ROUNDS},
 };
 
@@ -121,21 +121,25 @@ type Short = String;
 fn fit_all(
     fit: &PeriodicFit,
     sections: &[(&[P2], f64, f64)],
-    what: &str,
+    name: &(dyn Fn(f64) -> String + Sync),
     per_span: usize,
 ) -> Result<std::result::Result<Fitted, Short>> {
     type One = std::result::Result<std::result::Result<(Vec<[f64; 3]>, f64), Short>, String>;
     let each: Vec<One> = par::map(sections, |(points, tolerance, z)| {
-        let curve = fit.fit(points).map_err(|e| format!("{what} at z = {z:.1}: {e}"))?;
+        let what = match name(*z) {
+            named if named.is_empty() => String::new(),
+            named => format!("{named}: "),
+        };
+        let curve = fit.fit(points).map_err(|e| format!("{what}{e}"))?;
         let off = fit.deviation(&curve, points);
         if off > *tolerance {
-            return Ok(Err(format!("{what} at z = {z:.1}: its curve is {off:.3} mm from its points, past its {tolerance} mm")));
+            return Ok(Err(format!("{what}its curve is {off:.3} mm from its points, past its {tolerance} mm")));
         }
         if per_span > 0 {
             let flat = fit.samples(&curve, per_span);
             if let Some((i, _)) = polyline_self_intersection(&flat, true) {
                 return Ok(Err(format!(
-                    "{what} at z = {z:.1}: its curve loops through itself near ({:.2}, {:.2})",
+                    "{what}its curve loops through itself near ({:.2}, {:.2})",
                     flat[i][0], flat[i][1]
                 )));
             }
@@ -271,10 +275,12 @@ pub fn build(sections: &[FitSection], smooth: bool, wall: Option<&LoftWall>, lab
     bail!("{label}: {why}")
 }
 
+fn section_name(z: f64) -> String {
+    format!("the section at z = {z:.1}")
+}
+
 /// The fewest spans on which every section holds its tolerance and does not
-/// loop, searched up to the most the points allow. Loops are rare and costly
-/// to look for, so they are looked for on the count the tolerance picks, and
-/// on every count only if that one loops.
+/// loop, searched up to the most the points allow.
 fn fit_outside(
     sections: &[FitSection],
     points: &[&[P2]],
@@ -283,19 +289,113 @@ fn fit_outside(
     label: &str,
 ) -> Result<(PeriodicFit, Fitted)> {
     let input: Vec<(&[P2], f64, f64)> = sections.iter().map(|s| (s.points, s.tolerance, s.z)).collect();
+    match fit_fewest(points, params, &input, &section_name, label)? {
+        Ok(fitted) => Ok(fitted),
+        Err((spans, why)) => bail!(
+            "{label}: {why}, on {spans} spans, the most {} points allow. {}",
+            params.len(),
+            match wall {
+                Some(_) => "Raise the tolerance above the points' scatter, or sample the outline more densely there",
+                None => "Raise the tolerance above the points' scatter, or thin the points there",
+            }
+        ),
+    }
+}
+
+/// A closed `{ fit }` section on its own, fitted as a skinned loft fits its
+/// sections: the curve, its deviation from the points and the curve sampled
+/// between them — or, when no span count holds, the most spans tried and why.
+#[derive(Clone)]
+pub struct ClosedFit {
+    pub curve: BSpline<2>,
+    pub deviation_mm: f64,
+    pub samples: Vec<P2>,
+}
+
+type ClosedAnswer = std::result::Result<ClosedFit, (usize, Short)>;
+
+/// Fits already made, newest last: an extrusion builds its outline at both
+/// ends, and a fit is a function of its points and tolerance alone.
+const RECENT_FITS: usize = 8;
+
+thread_local! {
+    static RECENT: std::cell::RefCell<Vec<(Vec<P2>, f64, ClosedAnswer)>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+pub fn fit_closed(points: &[P2], tolerance: f64) -> Result<ClosedAnswer> {
+    let known = RECENT.with(|recent| {
+        recent.borrow().iter().find(|(p, t, _)| *t == tolerance && p.as_slice() == points).map(|(_, _, answer)| answer.clone())
+    });
+    if let Some(answer) = known {
+        return Ok(answer);
+    }
+    let answer = fit_closed_afresh(points, tolerance)?;
+    RECENT.with(|recent| {
+        let mut recent = recent.borrow_mut();
+        if recent.len() == RECENT_FITS {
+            drop(recent.remove(0));
+        }
+        recent.push((points.to_vec(), tolerance, answer.clone()));
+    });
+    Ok(answer)
+}
+
+fn fit_closed_afresh(points: &[P2], tolerance: f64) -> Result<ClosedAnswer> {
+    if points.len() < 5 {
+        return Ok(Err((0, format!("{} points are too few to fit a closed curve on 4 spans", points.len()))));
+    }
+    let params = shared_parameters(&[points]);
+    let params = &params[..params.len() - 1];
+    let input = [(points, tolerance, 0.0)];
+    let name = |_: f64| String::new();
+    Ok(fit_fewest(&[points], params, &input, &name, "the curve")?.map(|(fit, fitted)| {
+        let curve = fit.fit(points).expect("the fit held once already");
+        ClosedFit { deviation_mm: fitted.deviation[0], samples: fit.samples(&curve, LOOP_SAMPLES), curve }
+    }))
+}
+
+/// The least deviation a closed fit of `points` reaches — on the most spans
+/// they allow, where parameters and knots do not depend on the tolerance —
+/// or `None` when that fit loops or cannot be made.
+pub fn closest_closed_fit(points: &[P2]) -> Option<f64> {
+    let params = shared_parameters(&[points]);
+    let params = &params[..params.len() - 1];
+    let spans = (4..=params.len().checked_sub(parcad_core::skin::SMOOTHING)?)
+        .rev()
+        .find(|s| PeriodicFit::new(params, *s).is_ok())?;
+    let fit = corrected_fit(&[points], params, spans).ok()?;
+    let input = [(points, f64::INFINITY, 0.0)];
+    let fitted = fit_all(&fit, &input, &|_| String::new(), LOOP_SAMPLES).ok()?.ok()?;
+    Some(fitted.deviation[0])
+}
+
+/// The fewest spans on which every one of `input` holds its tolerance and
+/// does not loop. Loops are rare and costly to look for, so they are looked
+/// for on the count the tolerance picks, and on every count only if that one
+/// loops.
+fn fit_fewest(
+    points: &[&[P2]],
+    params: &[f64],
+    input: &[(&[P2], f64, f64)],
+    name: &(dyn Fn(f64) -> String + Sync),
+    label: &str,
+) -> Result<std::result::Result<(PeriodicFit, Fitted), (usize, Short)>> {
     let probe = |spans: usize, per_span: usize| -> Result<Probe> {
         Ok(match corrected_fit(points, params, spans) {
             Err(e) => Probe::Unbuildable(e),
-            Ok(fit) => match fit_all(&fit, &input, "the section", per_span)? {
+            Ok(fit) => match fit_all(&fit, input, name, per_span)? {
                 Ok(fitted) => Probe::Holds(fit, fitted),
                 Err(why) => Probe::Short(why),
             },
         })
     };
-    let (fit, fitted) = fewest(|spans| probe(spans, 0), params, None, wall, label)?;
-    match fit_all(&fit, &input, "the section", LOOP_SAMPLES)? {
-        Ok(_) => Ok((fit, fitted)),
-        Err(why) => fewest(|spans| probe(spans, LOOP_SAMPLES), params, Some((fit.spans(), why)), wall, label),
+    let (fit, fitted) = match fewest(|spans| probe(spans, 0), params, None, label)? {
+        Ok(found) => found,
+        Err(short) => return Ok(Err(short)),
+    };
+    match fit_all(&fit, input, name, LOOP_SAMPLES)? {
+        Ok(_) => Ok(Ok((fit, fitted))),
+        Err(why) => fewest(|spans| probe(spans, LOOP_SAMPLES), params, Some((fit.spans(), why)), label),
     }
 }
 
@@ -304,34 +404,24 @@ const LOOP_SAMPLES: usize = 8;
 
 /// The fewest spans `probe` holds on — doubling from past `below` (or from
 /// 4), then halving the gap to the last count that fell short — searched up
-/// to the most `params` allow.
+/// to the most `params` allow; or the most spans tried and why they fell
+/// short.
 fn fewest(
     probe: impl Fn(usize) -> Result<Probe>,
     params: &[f64],
     below: Option<(usize, Short)>,
-    wall: Option<&LoftWall>,
     label: &str,
-) -> Result<(PeriodicFit, Fitted)> {
-    let refuse = |why: &str, spans: usize| {
-        anyhow::anyhow!(
-            "{label}: {why}, on {spans} spans, the most {} points allow. {}",
-            params.len(),
-            match wall {
-                Some(_) => "Raise the tolerance above the points' scatter, or sample the outline more densely there",
-                None => "Raise the tolerance above the points' scatter, or thin the points there",
-            }
-        )
-    };
+) -> Result<std::result::Result<(PeriodicFit, Fitted), (usize, Short)>> {
     let mut spans = below.as_ref().map_or(4, |(short, _)| 2 * short);
     let mut below = below;
-    let mut ceiling = params.len() - 1;
+    let mut ceiling = params.len() - parcad_core::skin::SMOOTHING;
     let found = loop {
         if spans > ceiling {
-            let Some((short, why)) = below.as_ref() else {
+            let Some((short, why)) = below else {
                 bail!("{label}: {} points are too few to fit on 4 spans; sample each section with more points", params.len());
             };
             // The most spans these parameters can be fitted on at all.
-            let (mut lo, mut hi) = (*short, ceiling + 1);
+            let (mut lo, mut hi) = (short, ceiling + 1);
             while hi - lo > 1 {
                 let mid = (lo + hi) / 2;
                 if PeriodicFit::new(params, mid).is_ok() {
@@ -340,12 +430,15 @@ fn fewest(
                     hi = mid;
                 }
             }
-            if lo <= *short {
-                return Err(refuse(why, *short));
+            if lo <= short {
+                return Ok(Err((short, why)));
             }
             match probe(lo)? {
-                Probe::Holds(fit, fitted) => break (lo, fit, fitted),
-                Probe::Short(why) => return Err(refuse(&why, lo)),
+                Probe::Holds(fit, fitted) => {
+                    below = Some((short, why));
+                    break (lo, fit, fitted);
+                }
+                Probe::Short(why) => return Ok(Err((lo, why))),
                 Probe::Unbuildable(e) => bail!("{label}: {e}; sample each section with more points"),
             }
         }
@@ -376,7 +469,7 @@ fn fewest(
             Probe::Short(_) | Probe::Unbuildable(_) => short = mid,
         }
     }
-    Ok((best, best_fitted))
+    Ok(Ok((best, best_fitted)))
 }
 
 enum Probe {
@@ -492,7 +585,7 @@ fn walled(
             .map(|(row, z)| (row.as_slice(), f64::INFINITY, *z))
             .collect();
         let last = corrections == CORRECTIONS;
-        let inner_fit = match fit_all(&inside_fit, &inner_input, "the wall's inside", if last { 2 } else { 0 })? {
+        let inner_fit = match fit_all(&inside_fit, &inner_input, &|z| format!("the wall's inside at z = {z:.1}"), if last { 2 } else { 0 })? {
             Ok(fit) => fit,
             Err(why) => {
                 return Ok(Err(format!(
@@ -659,6 +752,31 @@ pub(crate) mod tests {
             .map(|(points, z)| FitSection { points, tolerance: 0.01, z })
             .collect();
         build(&sections, true, wall.as_ref(), "test")
+    }
+
+    #[test]
+    fn a_closed_fit_is_smooth_through_its_seam_on_few_poles() {
+        let lobes: Vec<P2> = (0..180)
+            .map(|i| {
+                let a = std::f64::consts::TAU * i as f64 / 180.0;
+                let r = 20.0 * (1.0 + 0.3 * (6.0 * a).cos());
+                [r * a.cos(), r * a.sin()]
+            })
+            .collect();
+        let fit = fit_closed(&lobes, 0.05).unwrap().ok().unwrap();
+        assert!(fit.deviation_mm <= 0.05, "{}", fit.deviation_mm);
+        // Chord-length parameters took 131 poles for this.
+        assert!(fit.curve.poles.len() <= 52, "{} poles", fit.curve.poles.len());
+        let (start, end) = (fit.curve.derivatives2(0.0), fit.curve.derivatives2(1.0));
+        for order in 0..3 {
+            let scale = start[order][0].hypot(start[order][1]).max(1.0);
+            for d in 0..2 {
+                assert!((start[order][d] - end[order][d]).abs() < 1e-9 * scale, "order {order}: {start:?} {end:?}");
+            }
+        }
+        // Twelve fewer poles than points is still a fit; four fewer is the
+        // most allowed.
+        assert!(fit_closed(&lobes, 1e-6).unwrap().is_err());
     }
 
     #[test]

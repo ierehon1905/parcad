@@ -1,0 +1,24 @@
+{
+  "name": "fit-six-lobes",
+  "script": "eval/scripts/fit-six-lobes.js",
+  "why": "A six-lobed closed fit at 0.05 mm, extruded 10: 13131.858 mm3 in closed form, the mesh a chord short. Fitted on chord-length parameters it took 131 poles for a 0.042 mm deviation; the periodic fit with corrected parameters holds 0.05 on 49 poles (held by a kernel test in skinned.rs; the deviation is recorded here). The volume is within 0.05 mm times the 198.7 mm perimeter times 10 (99 mm3) of the closed form.",
+  "brep": {
+    "size": [
+      52.075,
+      45.887,
+      10.0
+    ],
+    "volume_mm3": 13128.234,
+    "area_mm2": 4611.202,
+    "triangles": 23474,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1312.772,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 3,
+    "edges": 6,
+    "curves": 2,
+    "deviation_mm": 0.0438
+  }
+}

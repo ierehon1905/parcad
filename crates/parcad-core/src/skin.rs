@@ -201,6 +201,10 @@ pub struct PeriodicFit {
     lu: nalgebra::LU<f64, nalgebra::Dyn, nalgebra::Dyn>,
 }
 
+/// How many fewer spans than points a fit keeps, so it still smooths: the
+/// margin `Edge::fit` kept (a pole per point less its two seam tangents).
+pub const SMOOTHING: usize = 4;
+
 /// A fit whose pivots span more than this many orders of magnitude has a
 /// span its points barely hold, and its poles are noise.
 const CONDITION_LIMIT: f64 = 1e12;
@@ -209,7 +213,7 @@ impl PeriodicFit {
     /// `params` has one value per point, rising from 0 and below 1.
     pub fn new(params: &[f64], spans: usize) -> Result<Self, String> {
         let n = params.len();
-        if spans < 4 || spans >= n {
+        if spans < 4 || spans + SMOOTHING > n {
             return Err(format!("{spans} spans for {n} points would be interpolation rather than a fit"));
         }
         if params[0] != 0.0 || params.windows(2).any(|w| !(w[0] < w[1])) || !(params[n - 1] < 1.0) {
@@ -576,7 +580,7 @@ mod tests {
             let a = std::f64::consts::TAU * u;
             [20.0 * a.cos() + 3.0 * (5.0 * a).sin(), 20.0 * a.sin()]
         }).collect();
-        let fit = PeriodicFit::new(&params, n - 1).unwrap();
+        let fit = PeriodicFit::new(&params, n - SMOOTHING).unwrap();
         let knots = fit.knots();
         for w in knots[3..knots.len() - 3].windows(2) {
             let inside = params.iter().filter(|&&u| u >= w[0] && u < w[1]).count();
@@ -586,7 +590,7 @@ mod tests {
         let off = fit.deviation(&curve, &points);
         assert!(off < 0.02, "{off}");
         // The clamped curve is the periodic one on these knots too.
-        let poles: Vec<P2> = (0..n - 1).map(|j| [(j * j % 11) as f64, (j % 7) as f64 - 3.0]).collect();
+        let poles: Vec<P2> = (0..n - SMOOTHING).map(|j| [(j * j % 11) as f64, (j % 7) as f64 - 3.0]).collect();
         let curve = fit.clamped(&poles);
         for k in 0..=200 {
             let u = k as f64 / 200.0;
