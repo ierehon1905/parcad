@@ -288,15 +288,15 @@ jobs:
             **Windows SmartScreen will warn the same way** — the installer is
             unsigned. Choose *More info*, then *Run anyway*.
 
-            On a Mac, Homebrew installs the host instead of the app —
-            the whole app is in your browser at http://127.0.0.1:4242, MCP at
-            /mcp:
+            On a Mac, Homebrew installs the host instead of the app. An agent
+            starts it through `parcad mcp`; run `parcad serve` for the whole
+            app in your browser at http://127.0.0.1:4242:
 
             ```
             brew tap ierehon1905/parcad
             brew trust ierehon1905/parcad
             brew install parcad
-            brew services start parcad
+            claude mcp add parcad -- parcad mcp
             ```
 
             ---

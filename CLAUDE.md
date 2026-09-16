@@ -77,8 +77,9 @@ loop faster, and see the profile comments in `Cargo.toml` before changing it.
 
 **The running app also serves MCP at <http://127.0.0.1:4242/mcp>** — the same
 `service.rs` the UI uses. **So does `parcad serve`**, which is the same host
-with no window: the Homebrew formula runs it as a service, and
-`brew services start parcad` is how a machine gets MCP at login. The CLI is
+with no window. Most clients reach it through `parcad mcp`, a stdio relay that
+hosts one itself when none is running; `brew services start parcad` is only for
+clients that connect by URL. The CLI is
 also a client of whichever is running — `parcad tools` lists what `/mcp`
 offers and `parcad call <tool>` calls it, same names, same arguments, same
 reply — so a shell can do everything a model can. Scripts from an agent run in `script.rs`'s QuickJS

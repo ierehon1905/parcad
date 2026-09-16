@@ -61,15 +61,17 @@ which is what makes the MCP surface real instead of a wrapper.
 ## Install it
 
 With Homebrew, on macOS or Linux (Linux from 0.0.6), which installs the host
-and no window — the whole app is in your browser at <http://127.0.0.1:4242>,
-and MCP for an agent is at `/mcp`:
+and no window:
 
 ```bash
 brew tap ierehon1905/parcad
 brew trust ierehon1905/parcad
 brew install parcad
-brew services start parcad      # up at login; or run `parcad serve` in a terminal
 ```
+
+Then [add it to your agent](#use-it-from-an-agent), which starts parcad when it
+needs it. To use the app yourself, run `parcad serve` and open
+<http://127.0.0.1:4242> — the whole app is there, in your browser.
 
 On Windows, from 0.0.6, the desktop app through winget:
 
@@ -181,7 +183,8 @@ codex mcp add parcad -- parcad mcp
 `parcad mcp` relays to the app or `parcad serve` when one is running, so the
 agent shares the live session with your window. When none is running it hosts
 one itself, for as long as the client stays connected. A client that connects
-by URL can use `http://127.0.0.1:4242/mcp` directly while a host is up.
+by URL can use `http://127.0.0.1:4242/mcp` directly, but only while a host is
+up; `brew services start parcad` keeps one up from login.
 
 The same tools are on the command line, with the same names and arguments —
 `parcad tools` lists them, `parcad call evaluate_part --set script=@part.js`

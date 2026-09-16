@@ -57,11 +57,11 @@ class Parcad < Formula
 
   def caveats
     <<~EOS
-      Run the host at login, then open http://127.0.0.1:4242 — the whole app
-      is there, and an agent's MCP endpoint is http://127.0.0.1:4242/mcp:
-        brew services start parcad
-      Or just once, in this terminal:
-        parcad serve
+      Give it to an agent, which starts parcad when it needs it:
+        claude mcp add parcad -- parcad mcp
+      Or use the app yourself: run `parcad serve`, then open http://127.0.0.1:4242.
+      A client that connects by URL (http://127.0.0.1:4242/mcp) needs a host
+      already up; `brew services start parcad` keeps one up from login.
       Parts are saved in ~/Documents/parcad. Set PARCAD_PROJECTS_DIR to move them.
     EOS
   end

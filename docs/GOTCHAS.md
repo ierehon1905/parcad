@@ -143,26 +143,33 @@ not answering" and keeps the last good geometry on screen. That is the app havin
 exited, not a failed evaluation — `tauri dev` restarting on a rebuild is the
 usual cause.
 
-### The MCP server only exists while a host is running
+### The MCP server is one host, however the client reaches it
 
-It is hosted by the desktop process or by `parcad serve`, never by a binary a
-client launches, so a client connects only while one of those is up —
-`brew services start parcad` is how it stays up. Point the client at the
-streamable-HTTP URL:
+There is one host per machine on port 4242. The desktop app, `parcad serve`
+or `parcad mcp` provides it. `parcad mcp` is the stdio server a client launches,
+and it is a relay, not a second host: it forwards to the host that is already
+running, and only when none is running does it host one itself, for as long as
+the client stays connected. That is the default route (the plugin, the MCP
+bundle, `claude mcp add parcad -- parcad mcp`) and needs nothing running
+beforehand.
+
+A client that connects by URL cannot start anything, so it only connects while
+some host is up — `brew services start parcad` keeps one up from login:
 
 ```bash
 claude mcp add --transport http parcad http://127.0.0.1:4242/mcp
 ```
+
+Whichever process got 4242 first owns the session. Open the desktop app while a
+relay or the service holds the port, and the window works but its HTTP host
+fails to bind — the agent is then editing the other process, not the window.
+Quit one of them.
 
 A `.mcp.json` in a workspace needs that workspace **explicitly** trusted, and a
 workspace under an already-trusted parent inherits trust without the dialog ever
 firing — so it can never *become* explicitly trusted, and the server stays
 `⏸ Pending approval` forever. Not parcad's bug, and it reads exactly like one;
 the fix is `hasTrustDialogAccepted: true` for that path in `~/.claude.json`.
-
-There is no stdio transport on purpose. A stdio server would be a second process
-with its own kernel and its own idea of what is on screen, which is the split
-`service.rs` exists to prevent.
 
 ### `cargo build` needs bun, because the sandbox embeds the DSL
 
