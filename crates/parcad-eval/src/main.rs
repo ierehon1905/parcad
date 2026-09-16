@@ -257,8 +257,26 @@ fn main() -> Result<()> {
         let doc = match run::build_doc(&root, &case.script) {
             Ok(d) => d,
             Err(e) => {
-                println!("  FAIL  {e:#}\n");
-                failed += 1;
+                let message = format!("{e:#}");
+                let required = case.brep.as_ref().and_then(|b| b.refuses.as_ref()).filter(|r| r.kind == RefusalKind::Error);
+                match required.map(|r| case::check_refusal(r, RefusalKind::Error, &message)) {
+                    Some(bad) if bad.is_empty() => {
+                        println!("  {KERNEL:<9} ok    refused before the kernel, as required\n");
+                        passed += 1;
+                    }
+                    Some(bad) => {
+                        println!("  {KERNEL:<9} FAIL");
+                        for m in bad {
+                            println!("            {:<14} {}", m.field, m.detail);
+                        }
+                        println!();
+                        failed += 1;
+                    }
+                    None => {
+                        println!("  FAIL  {message}\n");
+                        failed += 1;
+                    }
+                }
                 continue;
             }
         };
