@@ -363,7 +363,7 @@ impl<const D: usize> BSpline<D> {
     }
 
     /// Insert `t` once (Boehm), keeping the curve unchanged.
-    fn insert_knot(&mut self, t: f64) {
+    pub(crate) fn insert_knot(&mut self, t: f64) {
         let p = self.degree;
         let k = {
             // The span `t` falls in, counting a knot equal to `t` as the start.
@@ -402,7 +402,7 @@ impl<const D: usize> BSpline<D> {
 
 /// Piegl & Tiller A2.3: the non-zero basis functions at `t` and their
 /// derivatives up to `order`, `ders[k][j]` for basis `span - degree + j`.
-fn basis_derivatives(span: usize, t: f64, p: usize, knots: &[f64], order: usize) -> Vec<Vec<f64>> {
+pub(crate) fn basis_derivatives(span: usize, t: f64, p: usize, knots: &[f64], order: usize) -> Vec<Vec<f64>> {
     let mut ndu = vec![vec![0.0; p + 1]; p + 1];
     let mut left = vec![0.0; p + 1];
     let mut right = vec![0.0; p + 1];

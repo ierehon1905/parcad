@@ -17,6 +17,7 @@ mod occlusion;
 pub mod render;
 pub mod section;
 pub mod selectors;
+pub mod skin;
 pub mod tags;
 pub mod threemf;
 pub mod view;
