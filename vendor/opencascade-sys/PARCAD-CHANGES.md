@@ -264,6 +264,36 @@ Faces are numbered as `TopExp::MapShapes` numbers them, the order
   each face's `BRepTools::UVBounds`, evaluated by `BRepAdaptor_Surface` and
   kept where `BRepClass_FaceClassifier` does not put them outside the face.
   All of it already included.
+## Self-intersection, orientation and closed shells
+
+Added for docs/VALIDITY_CHECKS.md, all in `include/wrapper.hxx`, declared in
+`src/lib.rs`; `TKBO`, `TKTopAlgo` and `TKBRep` were already linked.
+
+- `Shape_self_interference_report(shape, fuzzy, located)` —
+  `BOPAlgo_CheckerSI` on the shape, as `BRepAlgoAPI_Check` runs it. `""` when
+  nothing meets; else `"<pairs> <aborted>"`, then `"<kind> <kind> x y z"` for
+  the first `located` pairs, the point from `BRepExtrema_DistShapeShape`, or
+  `"face itself x y z"` from the face's own `IntTools_FaceFace` when a face
+  meets itself.
+- `Shape_self_interference_since(after, before, fuzzy, located)` — the same
+  over the faces of `after` that are not faces of `before` and every face
+  whose box meets one of theirs. A `BOPAlgo_CheckerSI` subclass keeps only the
+  candidate pairs with a changed face, or a sub-shape of one, on a side (a
+  `BOPDS_IteratorSI` subclass filters its lists after `Intersect`), and
+  intersects only the changed faces with themselves. Runs parallel.
+- `Shape_orientation_report(shape)` / `Shape_turned_outward(shape)` — per
+  solid, per shell: a point outside the solid's box classified
+  (`BRepClass3d_SolidClassifier`) against each shell on its own must be
+  outside the outer shell (the one with the largest box) and inside every
+  other. `BRepClass3d::OuterShell` is not used: it classifies, and names a
+  cavity on a solid that is inside out. Turning rebuilds the solid with each
+  wrong shell reversed, through `BRepTools_ReShape`.
+- `Shape_closed_solid(shape)` — a single solid as it is, or a single closed
+  shell made a solid and turned by `BRepLib::OrientClosedSolid`; empty
+  otherwise. `BRepOffsetAPI_MakeThickSolid` returns the inward offset of a
+  treated or combined solid as a bare shell.
+- `Shape_reversed(shape)` — `TopoDS_Shape::Reversed`, to make an inside-out
+  solid in a test.
 
 ## Not changed
 

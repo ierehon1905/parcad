@@ -10,9 +10,11 @@
 //! reported is a contact within [`RESOLUTION_MM`], which the kernel cannot tell
 //! from one either. docs/SECTION_CHECKS.md records why this exists.
 //!
-//! Fitted curves are not here: the kernel fits them, and checks them itself.
+//! Fitted curves are the kernel's to build; once it has, [`fitted_crossing`]
+//! asks the same question of the outline with each fit replaced by the curve
+//! the kernel made.
 
-use crate::section::{Segment, P2};
+use crate::section::{BSpline, Segment, P2};
 
 /// Closer than this, two edges of an outline touch. OpenCASCADE's own
 /// confusion distance is 1e-7 mm, and a gap within a few of those aborts the
@@ -328,6 +330,78 @@ pub fn outline_crossing(segments: &[Segment]) -> Option<Crossing> {
     None
 }
 
+/// Where an outline meets itself once each fitted segment is the curve the
+/// kernel built for it — `fitted` pairs a segment's index with that curve —
+/// as a clause naming both places, or `None`. The kernel's validity check
+/// passes some crossings; this is the exact search the other curves get.
+pub fn fitted_crossing(segments: &[Segment], fitted: &[(usize, BSpline<2>)]) -> Option<String> {
+    let replaced: Vec<Segment> = segments
+        .iter()
+        .enumerate()
+        .map(|(i, segment)| match fitted.iter().find(|(k, _)| *k == i) {
+            Some((_, curve)) => Segment::Curve(curve.clone()),
+            None => segment.clone(),
+        })
+        .collect();
+    if replaced.iter().any(|s| matches!(s, Segment::Fit { .. })) {
+        return None;
+    }
+    let found = outline_crossing(&replaced)?;
+    let place = |(i, span): (usize, Option<usize>)| -> String {
+        let at = |p: P2| format!("[{}, {}]", p[0], p[1]);
+        match (&segments[i], &replaced[i]) {
+            (Segment::Fit { points, closed, .. }, Segment::Curve(curve)) => {
+                let between = span.map(|s| {
+                    let (knots, _) = curve.distinct_knots();
+                    let (lo, hi) = (knots[s], knots[(s + 1).min(knots.len() - 1)]);
+                    let (a, b) = fit_points_around(points, *closed, (lo - knots[0]) / (knots[knots.len() - 1] - knots[0]), (hi - knots[0]) / (knots[knots.len() - 1] - knots[0]));
+                    let name = |k: usize| {
+                        if *closed {
+                            format!("{}", k % points.len())
+                        } else if k == 0 {
+                            "its first corner".to_string()
+                        } else if k == points.len() - 1 {
+                            "its last corner".to_string()
+                        } else {
+                            format!("{}", k - 1)
+                        }
+                    };
+                    let (na, nb) = (name(a), name(b));
+                    let plural = |n: &str| if n.starts_with("its") { n.to_string() } else { format!("its point {n}") };
+                    format!(", between {} and {}", plural(&na), plural(&nb))
+                });
+                format!("the curve fitted through {} points from {}{}", points.len(), at(points[0]), between.unwrap_or_default())
+            }
+            (Segment::Line { a, b }, _) => format!("the straight edge from {} to {}", at(*a), at(*b)),
+            (Segment::Arc { a, b, .. }, _) => format!("the arc from {} to {}", at(*a), at(*b)),
+            (other, _) => format!("the curve from {} to {}", at(other.start()), at(other.end())),
+        }
+    };
+    let near = format!("[{:.4}, {:.4}]", found.near[0], found.near[1]);
+    Some(if found.first == found.second {
+        format!("{} crosses itself near {near}", place(found.first))
+    } else {
+        format!("{} meets {} near {near}", place(found.first), place(found.second))
+    })
+}
+
+/// The two of a fit's points that bracket the parameter range `lo..hi` of its
+/// curve, with the points placed by chord length as the kernel places them.
+fn fit_points_around(points: &[P2], closed: bool, lo: f64, hi: f64) -> (usize, usize) {
+    let mut chain: Vec<P2> = points.to_vec();
+    if closed {
+        chain.push(points[0]);
+    }
+    let mut at = vec![0.0];
+    for w in chain.windows(2) {
+        at.push(at.last().unwrap() + dist(w[0], w[1]));
+    }
+    let total = at.last().copied().unwrap_or(1.0).max(f64::MIN_POSITIVE);
+    let before = at.iter().rposition(|u| u / total <= lo + 1e-12).unwrap_or(0);
+    let after = at.iter().position(|u| u / total >= hi - 1e-12).unwrap_or(chain.len() - 1);
+    (before, after)
+}
+
 #[cfg(test)]
 mod tests {
     use crate::graph::Op;
@@ -398,6 +472,28 @@ mod tests {
     fn a_rounded_corner_of_zero_is_refused_as_the_dsl_refuses_it() {
         let message = refusal("[[0, 0], [10, 0], [10, 10], { \"at\": [0, 10], \"round\": 0 }]").unwrap();
         assert!(message.contains("write it as [x, y]"), "{message}");
+    }
+
+    #[test]
+    fn a_fitted_curve_is_searched_as_the_curve_the_kernel_built() {
+        use crate::section::{BSpline, Segment};
+        let points = vec![[20.0, 0.0], [21.0, 6.0], [21.0, 14.0], [20.0, 20.0]];
+        let segments = vec![
+            Segment::Line { a: [0.0, 0.0], b: [20.0, 0.0] },
+            Segment::Fit { points: points.clone(), tolerance: 0.01, closed: false },
+            Segment::Line { a: [20.0, 20.0], b: [0.0, 20.0] },
+            Segment::Line { a: [0.0, 20.0], b: [0.0, 0.0] },
+        ];
+        let knots = vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0];
+        let clear = BSpline::with_knots(vec![[20.0, 0.0], [22.0, 5.0], [22.0, 15.0], [20.0, 20.0]], 3, knots.clone()).unwrap();
+        assert_eq!(super::fitted_crossing(&segments, &[(1, clear)]), None);
+        // A fit that swings back across the far edge between its points.
+        let wild = BSpline::with_knots(vec![[20.0, 0.0], [-20.0, 5.0], [-20.0, 15.0], [20.0, 20.0]], 3, knots).unwrap();
+        let found = super::fitted_crossing(&segments, &[(1, wild)]).unwrap();
+        assert!(found.contains("the curve fitted through 4 points from [20, 0], between its first corner and its last corner"), "{found}");
+        assert!(found.contains("the straight edge from [0, 20] to [0, 0]"), "{found}");
+        // Unfitted, there is no curve to search.
+        assert_eq!(super::fitted_crossing(&segments, &[]), None);
     }
 
     /// The core's half of `eval/sections.json`; `app/src/section-corpus.test.ts`

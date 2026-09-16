@@ -40,6 +40,17 @@ fn one() -> usize {
     1
 }
 
+/// A closed shell of a mesh that faces the wrong way; see
+/// [`Tessellation::inward_shells`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct InwardShell {
+    /// The volume it encloses, signed by the way its triangles wind.
+    pub volume_mm3: f64,
+    /// How many other shells it lies inside: 0 for a body, 1 for its void.
+    pub depth: usize,
+    pub triangles: usize,
+}
+
 /// What the part stands on: the surface lying in its lowest plane.
 ///
 /// A printed part rests on this face, and no other number describes it. The
@@ -196,9 +207,19 @@ impl Tessellation {
     }
 
     pub fn stats(&self) -> MeshStats {
+        self.stats_and_inward_shells().0
+    }
+
+    /// [`Self::stats`] and [`Self::inward_shells`] from one pass over the
+    /// shells.
+    pub fn stats_and_inward_shells(&self) -> (MeshStats, Vec<InwardShell>) {
         let (watertight, non_manifold_edges) = self.edge_check();
-        let (bodies, voids) = self.bodies_and_voids();
-        MeshStats {
+        let shells = self.shells(self.triangles.iter());
+        let depths = self.depths(&shells);
+        let voids = depths.iter().filter(|&&d| d > 0).count();
+        let bodies = shells.len() - voids;
+        let inward = self.wrong_way(&shells, &depths);
+        let stats = MeshStats {
             vertices: self.vertices.len(),
             triangles: self.triangles.len(),
             resolution_mm: self.resolution_mm,
@@ -206,41 +227,66 @@ impl Tessellation {
             non_manifold_edges,
             bodies,
             voids,
-        }
+        };
+        (stats, inward)
     }
 
-    /// Sort the mesh's closed shells into free-standing bodies and the voids
-    /// inside them.
+    /// How many other shells each shell lies inside.
     ///
-    /// A shell is a void when a point of it lies inside some other shell,
-    /// decided by ray parity against that shell's triangles. The ray runs in
-    /// a direction off every axis, so a mesh of axis-aligned faces cannot
-    /// have it graze an edge; a shell nested two deep is still a void.
-    fn bodies_and_voids(&self) -> (usize, usize) {
-        let shells = self.shells(self.triangles.iter());
+    /// Decided by ray parity against each other shell's triangles from a
+    /// point of this one. The ray runs in a direction off every axis, so a
+    /// mesh of axis-aligned faces cannot have it graze an edge.
+    fn depths(&self, shells: &[Vec<[usize; 3]>]) -> Vec<usize> {
         if shells.len() <= 1 {
-            return (shells.len(), 0);
+            return vec![0; shells.len()];
         }
         let dir = [0.3163_f64, 0.5203, 0.7933];
-        let mut voids = 0;
-        for (i, shell) in shells.iter().enumerate() {
-            let p = self.vertices[shell[0][0]];
-            let origin = [p[0] as f64, p[1] as f64, p[2] as f64];
-            let inside_another = shells.iter().enumerate().any(|(j, other)| {
-                if i == j {
-                    return false;
-                }
-                let crossings = other
+        shells
+            .iter()
+            .enumerate()
+            .map(|(i, shell)| {
+                let p = self.vertices[shell[0][0]];
+                let origin = [p[0] as f64, p[1] as f64, p[2] as f64];
+                shells
                     .iter()
-                    .filter(|t| self.ray_hits(origin, dir, t))
-                    .count();
-                crossings % 2 == 1
-            });
-            if inside_another {
-                voids += 1;
-            }
-        }
-        (shells.len() - voids, voids)
+                    .enumerate()
+                    .filter(|(j, other)| *j != i && other.iter().filter(|t| self.ray_hits(origin, dir, t)).count() % 2 == 1)
+                    .count()
+            })
+            .collect()
+    }
+
+    /// The closed shells that face the wrong way, as the volume each encloses
+    /// with its sign and how deep it lies: a shell inside an even number of
+    /// others must enclose a positive volume, one inside an odd number (a
+    /// void) a negative one. Meaningful only on a watertight mesh, whose
+    /// triangles wind as the solid's faces do.
+    pub fn inward_shells(&self) -> Vec<InwardShell> {
+        let shells = self.shells(self.triangles.iter());
+        let depths = self.depths(&shells);
+        self.wrong_way(&shells, &depths)
+    }
+
+    fn wrong_way(&self, shells: &[Vec<[usize; 3]>], depths: &[usize]) -> Vec<InwardShell> {
+        shells
+            .iter()
+            .zip(depths.iter().copied())
+            .filter_map(|(shell, depth)| {
+                let volume: f64 = shell
+                    .iter()
+                    .map(|t| {
+                        let v = |i: usize| {
+                            let p = self.vertices[t[i]];
+                            [p[0] as f64, p[1] as f64, p[2] as f64]
+                        };
+                        let (a, b, c) = (v(0), v(1), v(2));
+                        (a[0] * (b[1] * c[2] - b[2] * c[1]) + a[1] * (b[2] * c[0] - b[0] * c[2]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6.0
+                    })
+                    .sum();
+                let wrong = if depth % 2 == 0 { volume <= 0.0 } else { volume >= 0.0 };
+                wrong.then_some(InwardShell { volume_mm3: volume, depth, triangles: shell.len() })
+            })
+            .collect()
     }
 
     /// Möller–Trumbore, forward half-line only.
@@ -368,5 +414,55 @@ impl Tessellation {
             w.write_all(&[0u8; 2])?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A cube from `lo` to `hi`, its triangles wound outward, or inward.
+    fn cube(lo: f32, hi: f32, outward: bool, into: &mut Tessellation) {
+        let base = into.vertices.len();
+        for i in 0..8 {
+            into.vertices.push([
+                if i & 1 == 0 { lo } else { hi },
+                if i & 2 == 0 { lo } else { hi },
+                if i & 4 == 0 { lo } else { hi },
+            ]);
+        }
+        let quads = [[0, 2, 3, 1], [4, 5, 7, 6], [0, 1, 5, 4], [2, 6, 7, 3], [0, 4, 6, 2], [1, 3, 7, 5]];
+        for [a, b, c, d] in quads {
+            for mut t in [[a, b, c], [a, c, d]] {
+                if !outward {
+                    t.swap(1, 2);
+                }
+                into.triangles.push(t.map(|k| base + k));
+            }
+        }
+    }
+
+    fn mesh(parts: &[(f32, f32, bool)]) -> Tessellation {
+        let mut t = Tessellation { vertices: Vec::new(), triangles: Vec::new(), resolution_mm: 0.01 };
+        for &(lo, hi, outward) in parts {
+            cube(lo, hi, outward, &mut t);
+        }
+        t
+    }
+
+    #[test]
+    fn a_shell_faces_out_unless_it_is_a_void_and_a_void_faces_in() {
+        assert!(mesh(&[(0.0, 10.0, true)]).inward_shells().is_empty());
+        assert!(mesh(&[(0.0, 10.0, true), (3.0, 6.0, false)]).inward_shells().is_empty());
+        // A body standing in another body's cavity faces out again.
+        assert!(mesh(&[(0.0, 10.0, true), (2.0, 8.0, false), (4.0, 6.0, true)]).inward_shells().is_empty());
+
+        let inside_out = mesh(&[(0.0, 10.0, false)]).inward_shells();
+        assert_eq!(inside_out.len(), 1);
+        assert!((inside_out[0].volume_mm3 + 1000.0).abs() < 1e-6 && inside_out[0].depth == 0, "{inside_out:?}");
+
+        let void_turned = mesh(&[(0.0, 10.0, true), (3.0, 6.0, true)]).inward_shells();
+        assert_eq!(void_turned.len(), 1);
+        assert!((void_turned[0].volume_mm3 - 27.0).abs() < 1e-6 && void_turned[0].depth == 1, "{void_turned:?}");
     }
 }

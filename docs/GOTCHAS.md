@@ -360,6 +360,46 @@ number. `bodies` in `MeshStats` (connected components of the mesh, joined by
 vertex position) is the number that does, and `stands_on` found it first by way
 of the end face being five patches. Both are recorded for every case now.
 
+### A solid can cross itself, or face inward, and pass every check
+
+`BRepCheck_Analyzer` judges each face against its own boundary; it does not ask
+whether two faces of a solid run through each other, or which way the solid
+faces. The mesh backstops do not either: a self-crossing surface still closes,
+and an inside-out mesh encloses the same negative volume as its inside-out
+solid, so the two volumes agree. Measured on shapes that built and passed all
+of it: a sweep whose last leg crossed its first (the overlap counted twice in
+its volume); a star lofted to itself three corners on (volume −3382 mm³); a
+tray's bottom edges chamfered deeper than its walls, the chamfer faces running
+through the pocket; rounds on either side of a 1 mm gap crossing each other;
+a 0.4 mm blend whose corner patch folds over; and, at integration, a walled
+smooth loft that probed a point 300 mm outside it as material.
+
+`BOPAlgo_CheckerSI` finds the crossings and a point classified against each
+shell finds the orientation; docs/VALIDITY_CHECKS.md has where each runs, what
+each costs, and the fuzz sets. The first thing to suspect about a new
+construction that turns surfaces into a solid is both of these, not closure.
+
+### A fillet that fails can still change the shape it was given
+
+`BRepFilletAPI_MakeFillet` widens tolerances on the vertices and edges it is
+handed, in place, and a `TopoDS_Shape` is a handle: the input, every clone of
+it, every earlier probe and any cached subtree sharing those vertices see the
+change. Measured on two crossing cylinders: after a 1.5 mm blend that built and
+was refused, a vertex of the untouched union sat at 42 mm tolerance, and the
+self-intersection check then read 130 vertex contacts on a sound 1.13 mm blend.
+Treatments now build on a topology copy (vendor/opencascade PARCAD-CHANGES.md).
+Booleans alter their arguments too, but by at most 4.7e-7 mm over the corpus.
+
+### A shell of anything treated or combined was refused, blaming the author
+
+`BRepOffsetAPI_MakeThickSolid` hands back the inward offset of a filleted,
+chamfered or combined solid as a bare closed shell, not a solid; subtracting a
+shell removes nothing, and the part was refused as "the operations cancelled
+all the material away". 37 of 80 fuzzed shells hit it — every one a plain,
+buildable part. The cavity is now closed into a solid and turned outward, and
+the result is held to part volume minus cavity volume;
+`shell-filleted-box` and `shell-of-a-union` hold it to closed forms.
+
 ### A correct solid can mesh as a closed fragment of itself
 
 A model building a unicorn over MCP (2026-09-14) reported that "unions lost the
@@ -574,9 +614,12 @@ reversed, and the part was all of space except the shade — while
 script with 25 sections and a 70° twist got OUT. Nothing about the geometry
 is wrong; the line through dozens of walls 1.2 mm apart on large B-spline
 bands misses a crossing. The skinner states which way is out and checks the
-face; `serve.rs` refuses a mesh of negative volume. `Shape::oriented_outward`
-still uses the classifier, for `ThruSections` and the extrude path, and is
-now caught by that backstop if it errs. Built by the fitter that came after,
+face, so a skinned loft is never classified. Everything else that turns
+surfaces into a solid is classified per shell (`facing_outward`, a point
+outside the box against each shell on its own — the same kind of ray, so it
+can misfire the same way), and behind all of it the mesh backstop in
+`serve.rs` checks every closed mesh shell's winding against its nesting,
+which a turned solid cannot pass. Built by the fitter that came after,
 the same shade faces the right way even under the old classifier, and no
 lighter variant of it (48 tried) flips; the case is kept for the backstop,
 which turns any recurrence red.
@@ -675,9 +718,8 @@ It returns valid-looking wrong answers rather than failing:
   union reads it as all of space minus the part — `box(50,30,20).edges("|Z")
   .fillet(5).offset(1)` cut *nothing* out of a block until this was caught.
   The bounding box cannot see it. `Shape::signed_volume` (`BRepGProp`) can:
-  it comes back negative, and `Shape::oriented_outward`
-  (`BRepLib::OrientClosedSolid`) turns it right side out; `ShapeFix` does
-  not. Both are parcad additions to the vendored crates. Feed the builder the
+  it comes back negative, and `facing_outward` in `backend.rs` finds and
+  turns it (docs/VALIDITY_CHECKS.md); `ShapeFix` does not. Feed the builder the
   solid, not the compound a treatment wraps it in — `single_solid()` first —
   or the offset of a compound is a compound and the reorientation passes it
   through untouched.

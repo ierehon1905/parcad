@@ -15,6 +15,10 @@ pub struct FitReport {
     /// The curve sampled densely — eight points per span between two of the
     /// given points — for a check on what it does between them.
     pub samples: Vec<DVec3>,
+    /// The fitted curve exactly: its poles, and its full knot vector with
+    /// every knot repeated by its multiplicity. Empty for a periodic curve.
+    pub curve_poles: Vec<DVec3>,
+    pub curve_knots: Vec<f64>,
 }
 
 /// What [`Wire::inset`] measured on the wire it built.
@@ -61,6 +65,8 @@ impl Edge {
             poles: fit.poles() as usize,
             degree: fit.degree() as usize,
             samples: fit.samples().chunks_exact(3).map(|c| DVec3::new(c[0], c[1], c[2])).collect(),
+            curve_poles: fit.curve_poles().chunks_exact(3).map(|c| DVec3::new(c[0], c[1], c[2])).collect(),
+            curve_knots: fit.curve_knots().into_iter().collect(),
         };
         Ok((Edge { inner: fit.edge() }, report))
     }
@@ -147,6 +153,8 @@ pub(crate) mod ffi {
         fn poles(self: &ParcadFit) -> i32;
         fn degree(self: &ParcadFit) -> i32;
         fn samples(self: &ParcadFit) -> Vec<f64>;
+        fn curve_poles(self: &ParcadFit) -> Vec<f64>;
+        fn curve_knots(self: &ParcadFit) -> Vec<f64>;
 
         fn parcad_inset(outline: &TopoDS_Wire, distance: f64) -> Result<UniquePtr<ParcadInset>>;
         fn wire(self: &ParcadInset) -> UniquePtr<TopoDS_Wire>;

@@ -4,6 +4,7 @@
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_BooleanOperation.hxx>
 #include <BRepAlgoAPI_BuilderAlgo.hxx>
+#include <BRepBuilderAPI_Copy.hxx>
 #include <BRepFilletAPI_MakeChamfer.hxx>
 #include <BRepFilletAPI_MakeFillet.hxx>
 #include <Message_ProgressRange.hxx>
@@ -106,15 +107,26 @@ inline std::unique_ptr<ParcadBoolean> parcad_fuse_with_history(const TopoDS_Shap
 // The local-operation API has the same history contract as booleans: it can
 // tell us which result shapes were generated from a selected input edge. Keep
 // the builder alive through that query; Shape() alone discards the history.
+//
+// The builder works on a copy of the input's topology. BRepFilletAPI widens
+// tolerances on the vertices and edges it is given, in place, and an attempt
+// that builds and is then refused does it too: one probe below a failed blend
+// left a vertex of the input at 42 mm tolerance, shared with every later
+// attempt and with any cached shape that vertex came from. Geometry and
+// triangulations are shared, not copied; the history below answers in terms
+// of the caller's own input shapes.
 class ParcadEdgeTreatment {
  public:
   ParcadEdgeTreatment(const TopoDS_Shape& base, bool chamfer)
-      : fillet_(chamfer ? nullptr : std::unique_ptr<BRepFilletAPI_MakeFillet>(new BRepFilletAPI_MakeFillet(base))),
-        chamfer_(chamfer ? std::unique_ptr<BRepFilletAPI_MakeChamfer>(new BRepFilletAPI_MakeChamfer(base)) : nullptr) {}
+      : copy_(base, false, true),
+        input_(copy_.Shape()),
+        fillet_(chamfer ? nullptr : std::unique_ptr<BRepFilletAPI_MakeFillet>(new BRepFilletAPI_MakeFillet(input_))),
+        chamfer_(chamfer ? std::unique_ptr<BRepFilletAPI_MakeChamfer>(new BRepFilletAPI_MakeChamfer(input_)) : nullptr) {}
 
   void add(double distance, const TopoDS_Edge& edge) {
-    if (fillet_) fillet_->Add(distance, edge);
-    else chamfer_->Add(distance, edge);
+    const TopoDS_Edge copied = TopoDS::Edge(copy_.ModifiedShape(edge));
+    if (fillet_) fillet_->Add(distance, copied);
+    else chamfer_->Add(distance, copied);
   }
 
   // OCCT signals an unbuildable treatment by raising Standard_Failure, which
@@ -145,19 +157,30 @@ class ParcadEdgeTreatment {
     return fillet_ ? fillet_->Shape() : chamfer_->Shape();
   }
 
+  // The copy the builder treated: the result's untouched faces are its faces.
+  const TopoDS_Shape& input() const { return input_; }
+
   std::unique_ptr<std::vector<TopoDS_Shape>> generated(const TopoDS_Edge& original) {
-    return fillet_ ? shapes(fillet_->Generated(original)) : shapes(chamfer_->Generated(original));
+    const TopoDS_Shape& copied = copy_.ModifiedShape(original);
+    return fillet_ ? shapes(fillet_->Generated(copied)) : shapes(chamfer_->Generated(copied));
   }
 
   // The boolean's contract, for a treatment: what a face or edge of the input
   // became, and whether it is gone. What lets a name on a face outlive the
-  // fillet that trims it.
+  // fillet that trims it. A shape the treatment left alone became its copy,
+  // which is what the result holds.
   std::unique_ptr<std::vector<TopoDS_Shape>> modified(const TopoDS_Shape& original) {
-    return fillet_ ? shapes(fillet_->Modified(original)) : shapes(chamfer_->Modified(original));
+    const TopoDS_Shape& copied = copy_.ModifiedShape(original);
+    auto out = fillet_ ? shapes(fillet_->Modified(copied)) : shapes(chamfer_->Modified(copied));
+    if (out->empty() && !is_deleted(original)) {
+      out->push_back(copied);
+    }
+    return out;
   }
 
   bool is_deleted(const TopoDS_Shape& original) {
-    return fillet_ ? fillet_->IsDeleted(original) : chamfer_->IsDeleted(original);
+    const TopoDS_Shape& copied = copy_.ModifiedShape(original);
+    return fillet_ ? fillet_->IsDeleted(copied) : chamfer_->IsDeleted(copied);
   }
 
  private:
@@ -166,6 +189,8 @@ class ParcadEdgeTreatment {
         new std::vector<TopoDS_Shape>(shapes.begin(), shapes.end()));
   }
 
+  BRepBuilderAPI_Copy copy_;
+  TopoDS_Shape input_;
   std::unique_ptr<BRepFilletAPI_MakeFillet> fillet_;
   std::unique_ptr<BRepFilletAPI_MakeChamfer> chamfer_;
   std::string failure_;

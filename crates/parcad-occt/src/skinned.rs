@@ -17,6 +17,7 @@ use parcad_core::{
     par,
     section::{polyline_self_intersection, BSpline, Section, Segment, P2},
     skin::{facet_sag, height_parameters, shared_parameters, PeriodicFit, Surface, CORRECTION_ROUNDS},
+    skin_crossing::{skins_apart, Apart, SkinPart},
 };
 
 use crate::protocol::breadcrumb;
@@ -78,6 +79,41 @@ pub struct Skinned {
     /// For a ruled loft, how far its outside lies from the smooth one through
     /// the same sections, measured both ways.
     pub facet_sag_mm: Option<f64>,
+    /// Whether the skins' own check left their crossings for the kernel's
+    /// (`skin_crossing`); when not, they are proven apart.
+    pub unsettled: bool,
+}
+
+/// Refuse skins that cross, and say whether the kernel still has to look:
+/// `parts[0]` is the outside, `parts[1]` the wall's inside.
+fn check_apart(parts: &[SkinPart], label: &str, thickness: Option<f64>) -> Result<bool> {
+    let started = std::time::Instant::now();
+    let found = skins_apart(parts);
+    breadcrumb(&format!(
+        "{label}: the skins' crossing check in {:.1} ms: {found:?}",
+        started.elapsed().as_secs_f64() * 1000.0
+    ));
+    let at = |p: [f64; 3]| format!("({:.2}, {:.2}, {:.2})", p[0], p[1], p[2]);
+    let wall = |t: f64| format!("a {t} mm wall");
+    match found {
+        Apart::Clear => Ok(false),
+        Apart::Unsettled { .. } => Ok(true),
+        Apart::Crossing { skins: (0, 0), at: p } => bail!(
+            "{label}: the loft's surface crosses itself near {}: at that height its outline loops or folds over, so it bounds no single solid. Walls join each section's points to the same-numbered points of the next, so sections paired too far round from each other, or shaped too differently, make the walls between them pass through each other. Start each section's points at the place above the previous section's first point, or add sections between them that change less at a time",
+            at(p)
+        ),
+        Apart::Crossing { skins: (1, 1), at: p } => bail!(
+            "{label}: the wall's inside crosses itself near {}: the outline turns tighter there than {} can follow. Thin the wall, or smooth the outline there",
+            at(p),
+            thickness.map_or_else(|| "the wall".to_string(), wall)
+        ),
+        Apart::Crossing { at: p, .. } => bail!(
+            "{label}: the wall's inside runs through its outside near {}, so the wall has no material there. The outline changes faster there than {} can follow: add sections around z = {:.1}, smooth the outline there, or thin the wall",
+            at(p),
+            thickness.map_or_else(|| "the wall".to_string(), wall),
+            p[2]
+        ),
+    }
 }
 
 /// The loft's sections as fits this module can skin, or `None` when any is
@@ -273,14 +309,15 @@ pub fn build(sections: &[FitSection], smooth: bool, wall: Option<&LoftWall>, lab
         skinner.add_disc(Skin::Outer, 0.0).map_err(err)?;
         skinner.add_disc(Skin::Outer, 1.0).map_err(err)?;
         state_outward(&mut skinner, &outer, &vparams, sense).map_err(err)?;
+        let unsettled = check_apart(&[SkinPart { surface: &outer, v: (0.0, 1.0) }], label, None)?;
         let shape = skinner.build(SEW_TOLERANCE).map_err(err)?;
-        return Ok(Skinned { shape, deviation_mm, wall: None, facet_sag_mm });
+        return Ok(Skinned { shape, deviation_mm, wall: None, facet_sag_mm, unsettled });
     };
     let mut why = String::new();
     let mut refine = INSIDE_REFINE;
     while refine <= MAX_INSIDE_REFINE {
         match walled(sections, &fit, &outer, sense, smooth, wall, refine, label)? {
-            Ok(reading) => return Ok(Skinned { shape: reading.0, deviation_mm, wall: Some(reading.1), facet_sag_mm }),
+            Ok((shape, reading, unsettled)) => return Ok(Skinned { shape, deviation_mm, wall: Some(reading), facet_sag_mm, unsettled }),
             Err(short) => why = short,
         }
         refine *= 2;
@@ -528,7 +565,7 @@ fn walled(
     wall: &LoftWall,
     refine: usize,
     label: &str,
-) -> Result<std::result::Result<(Shape, WallReading), Short>> {
+) -> Result<std::result::Result<(Shape, WallReading, bool), Short>> {
     let heights: Vec<f64> = sections.iter().map(|s| s.z).collect();
     let vparams = height_parameters(&heights);
     let err = |e: String| anyhow::anyhow!("{label}: {e}");
@@ -697,8 +734,10 @@ fn walled(
         skinner.add_disc(Skin::Inner, v_hi).map_err(err)?;
     }
     state_outward(&mut skinner, outer, &vparams, sense).map_err(err)?;
+    let parts = [SkinPart { surface: outer, v: (0.0, 1.0) }, SkinPart { surface: &inner, v: (v_lo, v_hi) }];
+    let unsettled = check_apart(&parts, label, Some(thickness))?;
     let shape = skinner.build(SEW_TOLERANCE).map_err(err)?;
-    Ok(Ok((shape, reading)))
+    Ok(Ok((shape, reading, unsettled)))
 }
 
 /// Tell the skinner which way is out, on the outside's first band.
@@ -748,7 +787,7 @@ fn add_bands(skinner: &mut Skinner, skin: Skin, breaks: &[f64], from: f64, to: f
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
     use opencascade::primitives::PointState;
     use parcad_core::graph::WallEnd;
@@ -835,7 +874,67 @@ pub(crate) mod tests {
         skinner.build(SEW_TOLERANCE)
     }
 
-    pub(crate) fn cylinder_told(sign: f64) -> Shape {
+    /// The skins' own crossing check against the kernel's, on the same
+    /// solids: a star lofted to itself some points further round, ruled and
+    /// smooth, which crosses itself for some shifts and not others.
+    #[test]
+    fn the_skins_crossing_check_agrees_with_the_kernels() {
+        let star = |shift: usize| -> Vec<P2> {
+            (0..60)
+                .map(|i| {
+                    let a = std::f64::consts::TAU * ((i + shift) % 60) as f64 / 60.0;
+                    let r = 30.0 + 12.0 * (5.0 * a).cos();
+                    [r * a.cos(), r * a.sin()]
+                })
+                .collect()
+        };
+        let (mut clear, mut crossing) = (0, 0);
+        for shift in [0, 3, 7, 8, 11] {
+            for smooth in [false, true] {
+                let (sections, heights) = if smooth {
+                    (vec![star(0), star(shift / 2), star(shift), star(shift)], vec![0.0, 12.0, 25.0, 30.0])
+                } else {
+                    (vec![star(0), star(shift)], vec![0.0, 25.0])
+                };
+                let points: Vec<&[P2]> = sections.iter().map(|s| s.as_slice()).collect();
+                let params = shared_parameters(&points);
+                let fit = PeriodicFit::new(&params[..params.len() - 1], 24).unwrap();
+                let rows: Vec<Vec<[f64; 3]>> = sections
+                    .iter()
+                    .zip(&heights)
+                    .map(|(s, z)| fit.fit(s).unwrap().poles.iter().map(|p| [p[0], p[1], *z]).collect())
+                    .collect();
+                let vparams = height_parameters(&heights);
+                let outer = surface(&rows, &fit, &vparams, smooth).unwrap();
+                let mut skinner = Skinner::new();
+                set_surface(&mut skinner, Skin::Outer, &outer).unwrap();
+                add_bands(&mut skinner, Skin::Outer, &vparams, 0.0, 1.0).unwrap();
+                skinner.add_disc(Skin::Outer, 0.0).unwrap();
+                skinner.add_disc(Skin::Outer, 1.0).unwrap();
+                state_outward(&mut skinner, &outer, &vparams, 1.0).unwrap();
+                let ours = skins_apart(&[SkinPart { surface: &outer, v: (0.0, 1.0) }]);
+                let Ok(shape) = skinner.build(SEW_TOLERANCE) else {
+                    assert!(matches!(ours, Apart::Crossing { .. }), "shift {shift}, smooth {smooth}: not sewn, but {ours:?}");
+                    continue;
+                };
+                let kernel = shape.self_interference(0.0, 1).is_some();
+                match ours {
+                    Apart::Clear => {
+                        assert!(!kernel, "shift {shift}, smooth {smooth}: clear, and the kernel finds a crossing");
+                        clear += 1;
+                    }
+                    Apart::Crossing { .. } => {
+                        assert!(kernel, "shift {shift}, smooth {smooth}: {ours:?}, and the kernel finds none");
+                        crossing += 1;
+                    }
+                    other => panic!("shift {shift}, smooth {smooth}: {other:?}"),
+                }
+            }
+        }
+        assert!(clear > 0 && crossing > 0, "{clear} clear, {crossing} crossing");
+    }
+
+    fn cylinder_told(sign: f64) -> Shape {
         cylinder(Some(sign)).unwrap()
     }
 

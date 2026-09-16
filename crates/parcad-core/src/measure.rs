@@ -256,8 +256,8 @@ fn bounds_of(doc: &Doc, id: NodeId, out: &[Option<Aabb>]) -> Result<Aabb> {
         // built solid against this same box and refuses one that escaped, so
         // the claim made here stays conservative rather than assumed.
         // A wall only takes material away from the loft it lines.
-        Op::Loft { sections, wall, .. } => {
-            let resolved = Op::validate_loft(sections)?;
+        Op::Loft { sections, smooth, wall } => {
+            let resolved = Op::validate_loft(sections, *smooth)?;
             if let Some(wall) = wall {
                 Op::validate_loft_wall(sections, &resolved, wall)?;
             }

@@ -1,0 +1,14 @@
+{
+  "name": "refuse-fitted-loft-crossing",
+  "script": "eval/scripts/refuse-fitted-loft-crossing.js",
+  "why": "A loft through fitted sections is skinned, and its crossings are decided on the skin's poles (skin_crossing) instead of by the kernel's slow self-intersection check; a star paired eight points round must still be refused, naming the place.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "the loft's surface crosses itself near",
+        "Start each section's points at the place above the previous section's first point"
+      ]
+    }
+  }
+}

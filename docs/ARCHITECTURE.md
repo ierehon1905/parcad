@@ -485,6 +485,12 @@ A closed `{ fit }` section anywhere else — an extrusion, a revolve — is
 fitted the same way, as a loft of one section (`skinned::fit_closed`), and
 built as a B-spline edge with its deviation measured again on the edge.
 
+Whether the skins cross themselves or each other is decided on their poles
+before they are sewn (`skin_crossing`, docs/VALIDITY_CHECKS.md): height being
+linear in `v` makes it a question about plane curves at each height, which
+halving Bézier patches settles exactly in milliseconds, where the kernel's
+self-intersection check spent 16 s on one pleated shade.
+
 The measured range is reported as `loft_wall_mm`. Thinner than 95 % of `t`
 anywhere is refused, naming where; thicker than `t` by more than 5 % or the
 sections' own fit tolerance, whichever is more, is refused too, because a
@@ -503,8 +509,10 @@ sewn solid to match and checks the face it presents there.
 `BRepLib::OrientClosedSolid` shoots one ray from a face and trusts its
 farthest crossing; through a pleated shell of dozens of walls 1.2 mm apart it
 missed one and reversed a solid that was right, and every report read the
-volume unsigned. The mesh backstop in `serve.rs` now refuses a solid whose
-mesh encloses negative volume, whatever built it.
+volume unsigned. A skinned loft is therefore not classified afterwards; every
+other construction is (`facing_outward`), and the mesh backstop in `serve.rs`
+refuses any closed mesh shell wound against its nesting, whatever built it
+(docs/VALIDITY_CHECKS.md).
 
 ## Meshing: weld before you measure
 

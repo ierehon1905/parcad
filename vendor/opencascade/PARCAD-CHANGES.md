@@ -437,3 +437,34 @@ made of arcs and splines.
   the serial one (docs/GOTCHAS.md, "One large B-spline face meshes far slower").
 - `Shape::face_grid(per_side)` — points on every face, over the sys crate's
   `Shape_face_grid`: what a surface-to-surface distance is sampled at.
+
+## Self-intersection, orientation, and a treatment that leaves its input alone
+
+Added for docs/VALIDITY_CHECKS.md: `BRepCheck_Analyzer` passes solids whose
+faces cross and solids that are inside out.
+
+- `Shape::self_interference(fuzzy, located)` and
+  `Shape::self_interference_since(before, fuzzy, located)`, returning
+  `SelfInterference { pairs, aborted, meetings }` — `BOPAlgo_CheckerSI` over
+  the whole shape, or over the faces not in `before` against the faces whose
+  boxes meet theirs. Thin wrappers over the sys shims of the same names.
+- `Shape::orientation_faults()`, `Shape::turned_outward()`,
+  `Shape::closed_solid()`, `Shape::reversed()` — over the sys shims of the
+  same names.
+- `Treatment::input()` — the shape the builder actually treated; see below.
+- `FitReport::curve_poles` and `curve_knots` (`curve.rs`,
+  `ParcadFit::curve_poles` / `curve_knots` in `include/curve.hxx`): the fitted
+  curve itself, poles and full knot vector, empty for a periodic curve, so the
+  caller can search it for crossings exactly instead of sampling it.
+
+**Changed:** `ParcadEdgeTreatment` (`include/history.hxx`) builds on a
+`BRepBuilderAPI_Copy` of its input's topology (geometry and triangulations
+shared), and maps every history question from the caller's shapes through the
+copy; a shape the treatment left alone is reported `modified` into its copy,
+which is what the result holds. Measured before: `BRepFilletAPI_MakeFillet`
+widens tolerances on the vertices and edges it is given, in place, including
+on an attempt that builds and is then refused — one probe below a failed
+2 mm blend left a vertex of the input at 42 mm tolerance, inherited by every
+later probe and by anything sharing that vertex.
+`a_treatment_attempt_leaves_the_shape_it_was_given_as_it_was` in
+`parcad-occt` fails without the copy.

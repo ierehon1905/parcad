@@ -581,10 +581,26 @@ pub mod ffi {
 
         // BRepLib::OrientClosedSolid — added for parcad, see PARCAD-CHANGES.md.
         pub fn BRepLib_orient_closed_solid(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+        // A closed shell made a solid — added for parcad, see PARCAD-CHANGES.md.
+        pub fn Shape_closed_solid(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+        // Which way each solid faces, and every solid turned to face out —
+        // added for parcad, see PARCAD-CHANGES.md.
+        pub fn Shape_orientation_report(shape: &TopoDS_Shape) -> String;
+        pub fn Shape_turned_outward(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
+        pub fn Shape_reversed(shape: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
 
         // BRepCheck — added for parcad, see PARCAD-CHANGES.md.
         // Empty string means valid; otherwise one line per fault.
         pub fn BRepCheck_report(shape: &TopoDS_Shape, exact: bool) -> String;
+        // BOPAlgo_CheckerSI — added for parcad, see PARCAD-CHANGES.md.
+        // Empty string means no part of the shape meets another.
+        pub fn Shape_self_interference_report(shape: &TopoDS_Shape, fuzzy: f64, located: i32) -> String;
+        pub fn Shape_self_interference_since(
+            after: &TopoDS_Shape,
+            before: &TopoDS_Shape,
+            fuzzy: f64,
+            located: i32,
+        ) -> String;
 
         // Diagnostics — added for parcad, see PARCAD-CHANGES.md.
         pub fn Shape_topology_report(shape: &TopoDS_Shape) -> String;

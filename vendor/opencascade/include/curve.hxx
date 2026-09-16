@@ -331,6 +331,7 @@ class ParcadFit {
         samples_.push_back(at.Y());
         samples_.push_back(at.Z());
       }
+      curve_ = curve;
       BRepBuilderAPI_MakeEdge make_edge(curve);
       if (!make_edge.IsDone()) {
         throw std::runtime_error("the fitted curve could not be made into an edge");
@@ -352,6 +353,33 @@ class ParcadFit {
   double deviation() const { return deviation_; }
   int poles() const { return poles_; }
   int degree() const { return degree_; }
+  // The fitted curve itself: its poles as x, y, z triples, and its full knot
+  // vector, each knot repeated by its multiplicity. Empty when periodic.
+  rust::Vec<double> curve_poles() const {
+    rust::Vec<double> out;
+    if (curve_.IsNull() || curve_->IsPeriodic()) {
+      return out;
+    }
+    for (int i = 1; i <= curve_->NbPoles(); ++i) {
+      const gp_Pnt& p = curve_->Pole(i);
+      out.push_back(p.X());
+      out.push_back(p.Y());
+      out.push_back(p.Z());
+    }
+    return out;
+  }
+  rust::Vec<double> curve_knots() const {
+    rust::Vec<double> out;
+    if (curve_.IsNull() || curve_->IsPeriodic()) {
+      return out;
+    }
+    for (int i = 1; i <= curve_->NbKnots(); ++i) {
+      for (int k = 0; k < curve_->Multiplicity(i); ++k) {
+        out.push_back(curve_->Knot(i));
+      }
+    }
+    return out;
+  }
   rust::Vec<double> samples() const {
     rust::Vec<double> out;
     out.reserve(samples_.size());
@@ -363,6 +391,7 @@ class ParcadFit {
 
  private:
   TopoDS_Edge edge_;
+  Handle(Geom_BSplineCurve) curve_;
   double deviation_ = 0.0;
   int poles_ = 0;
   int degree_ = 0;

@@ -12,6 +12,7 @@
 pub mod envelope;
 pub mod font;
 pub mod graph;
+pub mod loft_walls;
 pub mod measure;
 pub mod mesh;
 mod occlusion;
@@ -19,8 +20,10 @@ pub mod par;
 pub mod render;
 pub mod section;
 pub mod section_crossing;
+pub mod spine_contact;
 pub mod selectors;
 pub mod skin;
+pub mod skin_crossing;
 pub mod tags;
 pub mod threemf;
 pub mod view;

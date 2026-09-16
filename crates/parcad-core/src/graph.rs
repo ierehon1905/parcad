@@ -252,12 +252,12 @@ mod tests {
             serde_json::from_str("[[10,0],{\"through\":[0,10]},[-10,0],{\"through\":[0,-10]}]").unwrap();
         let apex = LoftSection { outline: vec![], z: 10.0, point: Some([0.0, 0.0]) };
         let base = LoftSection { outline: circle.clone(), z: 0.0, point: None };
-        Op::validate_loft(&[base.clone(), apex.clone()]).unwrap();
-        let err = Op::validate_loft(&[base.clone(), LoftSection { z: 10.0, ..LoftSection { outline: square(), z: 0.0, point: None } }])
+        Op::validate_loft(&[base.clone(), apex.clone()], false).unwrap();
+        let err = Op::validate_loft(&[base.clone(), LoftSection { z: 10.0, ..LoftSection { outline: square(), z: 0.0, point: None } }], false)
             .unwrap_err()
             .to_string();
         assert!(err.contains("same number of edges") && err.contains("has 4, section 0 has 2"), "{err}");
-        let err = Op::validate_loft(&[base, apex.clone(), LoftSection { outline: circle, z: 20.0, point: None }])
+        let err = Op::validate_loft(&[base, apex.clone(), LoftSection { outline: circle, z: 20.0, point: None }], false)
             .unwrap_err()
             .to_string();
         assert!(err.contains("only the first or last"), "{err}");
@@ -275,7 +275,7 @@ mod tests {
             LoftSection { outline: vec![SectionEntry::Fit { points, tolerance: 0.01 }], z, point: None }
         };
         let check = |sections: &[LoftSection], wall: LoftWall| {
-            let resolved = Op::validate_loft(sections).unwrap();
+            let resolved = Op::validate_loft(sections, false).unwrap();
             Op::validate_loft_wall(sections, &resolved, &wall).map_err(|e| e.to_string())
         };
         let open = LoftWall { thickness: 2.0, bottom: WallEnd::Open, top: WallEnd::Open };
@@ -1358,7 +1358,7 @@ impl Op {
     ///
     /// Validated before the kernel sees it, so an authoring mistake reads as
     /// the mistake it is rather than as a kernel refusal.
-    pub fn validate_loft(sections: &[LoftSection]) -> anyhow::Result<Vec<Option<Section>>> {
+    pub fn validate_loft(sections: &[LoftSection], smooth: bool) -> anyhow::Result<Vec<Option<Section>>> {
         if sections.len() < 2 {
             anyhow::bail!(
                 "a loft needs at least 2 sections; got {}. Each section is an outline at its own height",
@@ -1434,6 +1434,9 @@ impl Op {
                 }
             }
         }
+        if !smooth {
+            Self::refuse_folded_walls(sections, &resolved)?;
+        }
         Ok(resolved)
     }
 
@@ -1484,6 +1487,52 @@ impl Op {
             );
         }
         Ok(())
+    }
+
+    /// Refuse a ruled loft whose walls between two polygon sections pass
+    /// through each other, at the height and corner where they first meet;
+    /// see `loft_walls`.
+    fn refuse_folded_walls(sections: &[LoftSection], resolved: &[Option<Section>]) -> anyhow::Result<()> {
+        for i in 1..sections.len() {
+            let (Some(lower), Some(upper)) = (&resolved[i - 1], &resolved[i]) else {
+                continue;
+            };
+            let (Some(a), Some(b)) = (&lower.polygon, &upper.polygon) else {
+                continue;
+            };
+            let Ok(Some(fold)) = crate::loft_walls::ruled_fold(a, b) else {
+                continue;
+            };
+            let z = sections[i - 1].z + fold.t * (sections[i].z - sections[i - 1].z);
+            let meets = match fold.on {
+                crate::loft_walls::Landing::Edge(e) => format!("corner {} lands on the edge between corners {e} and {}", fold.corner, (e + 1) % a.len()),
+                crate::loft_walls::Landing::Corner(c) => format!("corners {} and {c} land on each other", fold.corner),
+            };
+            anyhow::bail!(
+                "the ruled walls between loft sections {} and {i} pass through each other: at z = {z:.3}, where the outline is part way from one to the other, {meets} near [{:.4}, {:.4}], so the loft bounds no single solid. Walls join corner k of one section to corner k of the next, and these pairs cross over. Start section {i}'s outline at the corner that sits above corner 0 of section {}, or add sections between them that turn less at a time",
+                i - 1,
+                fold.near[0],
+                fold.near[1],
+                i - 1
+            );
+        }
+        Ok(())
+    }
+
+    /// Whether a loft that passed [`Op::validate_loft`] can still have walls
+    /// that cross: the core proves ruled walls between polygons simple and
+    /// walls running to a point simple, and nothing else.
+    pub fn loft_walls_unproven(sections: &[LoftSection], resolved: &[Option<Section>], smooth: bool) -> bool {
+        if smooth {
+            return true;
+        }
+        (1..sections.len()).any(|i| match (&resolved[i - 1], &resolved[i]) {
+            (Some(lower), Some(upper)) => match (&lower.polygon, &upper.polygon) {
+                (Some(a), Some(b)) => crate::loft_walls::ruled_fold(a, b).is_err(),
+                _ => true,
+            },
+            _ => false,
+        })
     }
 
     /// Resolve an [`Op::Sweep`] path into runs and bend arcs, refusing what
