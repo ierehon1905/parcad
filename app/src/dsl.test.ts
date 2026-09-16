@@ -20,6 +20,7 @@ import {
   polar,
   pipe,
   sweep,
+  spurGearOutline,
   repeat,
   revolve,
   Shape,
@@ -519,5 +520,140 @@ describe("bodies", () => {
     expect(() => build({})).toThrow(/return \{ base, lid \}/);
     expect(() => build({ a: box(1, 1, 1), b: 5 as unknown as Shape })).toThrow(/body "b" is not a shape \(it is a number\)/);
     expect(() => build({ " ": box(1, 1, 1) })).toThrow(/empty name/);
+  });
+});
+
+/** A clamped B-spline evaluated by de Boor, independent of the code that drew it. */
+function deBoor(poles: number[][], knots: number[], degree: number, u: number): number[] {
+  const n = poles.length - 1;
+  let k = degree;
+  while (k < n && knots[k + 1] <= u) k++;
+  const d = Array.from({ length: degree + 1 }, (_, j) => [...poles[j + k - degree]]);
+  for (let r = 1; r <= degree; r++) {
+    for (let j = degree; j >= r; j--) {
+      const lo = knots[j + k - degree];
+      const a = (u - lo) / (knots[j + 1 + k - r] - lo);
+      d[j] = d[j].map((v, i) => (1 - a) * d[j - 1][i] + a * v);
+    }
+  }
+  return d[degree];
+}
+
+type Drawn = { bspline: number[][]; knots: number[]; within: number; certified: boolean; check: number[][] };
+
+/** The corners and drawn curves of an extruded outline's graph. */
+function drawnOutline(outline: Parameters<typeof extrude>[0]) {
+  const profile = build(extrude(outline, 1)).nodes[0].profile as (number[] | Drawn)[];
+  const curves: { poles: number[][]; drawn: Drawn }[] = [];
+  profile.forEach((entry, i) => {
+    if (Array.isArray(entry) || !("within" in entry)) return;
+    const before = profile[i - 1] as number[];
+    const after = profile[(i + 1) % profile.length] as number[];
+    curves.push({ poles: [before, ...entry.bspline, after], drawn: entry });
+  });
+  return { profile, curves };
+}
+
+/** The furthest a drawn curve strays from `truth`, sampled densely in its own parameter. */
+function worstStray(poles: number[][], knots: number[], truth: (s: number) => number[], samples = 4000) {
+  const end = knots[knots.length - 1];
+  let worst = 0;
+  for (let i = 0; i <= samples; i++) {
+    const s = (end * i) / samples;
+    const p = deBoor(poles, knots, 3, s);
+    const q = truth(s);
+    worst = Math.max(worst, Math.hypot(p[0] - q[0], p[1] - q[1]));
+  }
+  return worst;
+}
+
+describe("curve section entries", () => {
+  const circle = (t: number): [number, number] => [20 * Math.cos(t), 20 * Math.sin(t)];
+
+  test("a certified circle is within the bound it states everywhere, not only at its points", () => {
+    const { profile, curves } = drawnOutline([
+      { curve: circle, derivative: (t) => [-20 * Math.sin(t), 20 * Math.cos(t)], fourth: () => 20, from: 0, to: Math.PI * 2, tolerance: 0.001 },
+    ]);
+    // One closed curve: its start is the only corner.
+    expect(profile).toHaveLength(2);
+    const [{ poles, drawn }] = curves;
+    expect(drawn.certified).toBe(true);
+    expect(drawn.within).toBeLessThanOrEqual(0.001);
+    // Sixteen pieces would be 0.00175 mm off; 32 of 2π/32 are
+    // √2 · 20 · h⁴ / 384, plus the rounding allowance.
+    const h = (Math.PI * 2) / 32;
+    expect(drawn.within).toBeCloseTo((Math.SQRT2 * 20 * h ** 4) / 384 + 1e-9, 12);
+    expect(drawn.knots).toHaveLength(2 * 32 + 6);
+    const stray = worstStray(poles, drawn.knots, circle);
+    expect(stray).toBeLessThanOrEqual(drawn.within);
+    expect(stray).toBeGreaterThan(drawn.within / 4);
+    expect(drawn.check).toHaveLength(3 * 32);
+  });
+
+  test("a bare function is drawn with an estimated bound, and a backwards range runs backwards", () => {
+    const { profile, curves } = drawnOutline([[-10, 0], [10, 0], { curve: (t) => [10 * Math.cos(t), 10 * Math.sin(t)], from: 0, to: Math.PI, tolerance: 0.0001 }]);
+    // [10, 0] is the curve's start and is merged with it; [-10, 0] is its end.
+    expect(profile.filter(Array.isArray)).toHaveLength(2);
+    const [{ poles, drawn }] = curves;
+    expect(drawn.certified).toBe(false);
+    expect(worstStray(poles, drawn.knots, (s) => [10 * Math.cos(s), 10 * Math.sin(s)])).toBeLessThanOrEqual(2 * drawn.within);
+    const back = drawnOutline([[0, 0], { curve: circle, from: Math.PI / 2, to: 0, tolerance: 0.001 }]).curves[0];
+    expect(back.poles[0][0]).toBeCloseTo(0, 12);
+    expect(back.poles[back.poles.length - 1][0]).toBeCloseTo(20, 12);
+  });
+
+  test("a curve that cannot be certified as given is refused, naming which half is wrong", () => {
+    const derivative = (t: number): [number, number] => [-20 * Math.sin(t), 20 * Math.cos(t)];
+    const range = { from: 0, to: Math.PI, tolerance: 0.001 };
+    expect(() => extrude([[0, 0], { curve: circle, fourth: () => 20, ...range }], 1)).toThrow(/beside its exact derivative/);
+    expect(() => extrude([[0, 0], { curve: circle, derivative, fourth: () => 0.01, ...range }], 1)).toThrow(/fourth must be at least the length of the fourth derivative/);
+    expect(() => extrude([[0, 0], { curve: circle, derivative: (t) => [-10 * Math.sin(t), 20 * Math.cos(t)], fourth: () => 20, ...range }], 1)).toThrow(/must be the exact derivative/);
+    expect(() => extrude([[0, 0], { curve: (t) => [t, Math.sqrt(1 - t)], from: 0, to: 2, tolerance: 0.001 }], 1)).toThrow(/returned \[1\.0+\d*,"NaN"\]/);
+    expect(() => extrude([[0, 0], { curve: circle, from: 0, to: 0, tolerance: 0.001 }], 1)).toThrow(/two different finite numbers/);
+    expect(() => extrude([[0, 0], { curve: circle, from: 0, to: 1, tolerance: 0 }], 1)).toThrow(/at least 0.000001/);
+  });
+
+  test("a script cannot state a bound for a curve it did not draw from a function", () => {
+    const claimed = { bspline: [[10, 5]], within: 0, certified: true, check: [[10, 5]] } as unknown as Parameters<typeof extrude>[0][number];
+    expect(() => extrude([[0, 0], [10, 0], claimed, [0, 10]], 1)).toThrow(/a script cannot state it/);
+  });
+});
+
+describe("spurGearOutline", () => {
+  const m = 2;
+  const z = 20;
+  const alpha = (20 * Math.PI) / 180;
+  const base = ((m * z) / 2) * Math.cos(alpha);
+
+  test("every flank is certified and lies on the involute of the base circle", () => {
+    const { curves } = drawnOutline(spurGearOutline({ module: m, teeth: z, tolerance: 1e-4 }));
+    expect(curves).toHaveLength(2 * z);
+    const inv = (a: number) => Math.tan(a) - a;
+    const half = Math.PI / (2 * z) + inv(alpha);
+    const tip = Math.sqrt((22 / base) ** 2 - 1);
+    for (const [i, { poles, drawn }] of curves.entries()) {
+      expect(drawn.certified).toBe(true);
+      expect(drawn.within).toBeLessThanOrEqual(1e-4);
+      const centre = (2 * Math.PI * Math.floor(i / 2)) / z;
+      // Rising flanks start on the base circle; falling ones start at the tip.
+      const rising = i % 2 === 0;
+      const truth = (s: number) => {
+        const t = rising ? s : tip - s;
+        const a = rising ? centre - half + t : centre + half - t;
+        const sign = rising ? 1 : -1;
+        return [base * (Math.cos(a) + sign * t * Math.sin(a)), base * (Math.sin(a) - sign * t * Math.cos(a))];
+      };
+      expect(worstStray(poles, drawn.knots, truth, 800)).toBeLessThanOrEqual(drawn.within);
+      const radii = [poles[0], poles[poles.length - 1]].map((p) => Math.hypot(p[0], p[1]));
+      expect(radii[rising ? 0 : 1]).toBeCloseTo(base, 9);
+      expect(radii[rising ? 1 : 0]).toBeCloseTo(22, 9);
+    }
+  });
+
+  test("refuses a tooth count a hob would undercut, and teeth that come to a point", () => {
+    expect(() => spurGearOutline({ module: 1, teeth: 17 })).toThrow(/17\.10 teeth.*Use 18 or more/);
+    expect(() => spurGearOutline({ module: 1, teeth: 12, pressureAngle: 25 })).not.toThrow();
+    expect(() => spurGearOutline({ module: 1, teeth: 20, addendum: 1.8 })).toThrow(/come to a point 1\.\d+ mm outside the pitch circle/);
+    expect(() => spurGearOutline({ module: 0, teeth: 20 })).toThrow(/module is the pitch diameter/);
   });
 });

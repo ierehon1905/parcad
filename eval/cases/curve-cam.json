@@ -1,0 +1,73 @@
+{
+  "name": "curve-cam",
+  "script": "eval/scripts/curve-cam.js",
+  "why": "A closed cam r = 20 + 3 cos t + sin 2t drawn from the bare function at 0.00005 mm, 8 tall: (1/2) * integral of r^2 over a turn is 405 pi, so 3240 pi = 10178.760 mm3, which the mesh reads 0.03 % under at 0.01 mm. With no derivative and no fourth-derivative bound the script can only estimate, and says so: curve_bound is estimated, read off the function between the pieces' ends. The points are the function at t = 0 and pi/2, where pieces meet, and at t = 4, inside a piece, all on the boundary - which the probe calls within 0.0001 mm, so a tolerance of 0.001 would put t = 4 outside, as it did -, and at t = 0 1 mm inside and outside along the radius (r(0) = 23).",
+  "brep": {
+    "size": [
+      40.21,
+      40.597,
+      8.0
+    ],
+    "volume_mm3": 10175.897,
+    "area_mm2": 3557.379,
+    "triangles": 616,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1271.987,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 3,
+    "edges": 6,
+    "curves": 2,
+    "deviation_mm": 0.0,
+    "curve_bound_mm": 0.00004557172680124899,
+    "curve_bound": "estimated",
+    "perception": {
+      "points": [
+        {
+          "at": [
+            23.0,
+            0.0,
+            0.0
+          ],
+          "state": "on_boundary",
+          "distance_mm": 0.0
+        },
+        {
+          "at": [
+            0.0,
+            20.0,
+            0.0
+          ],
+          "state": "on_boundary",
+          "distance_mm": 0.0
+        },
+        {
+          "at": [
+            -12.437810175,
+            -14.400761326,
+            0.0
+          ],
+          "state": "on_boundary",
+          "distance_mm": 0.0
+        },
+        {
+          "at": [
+            22.0,
+            0.0,
+            0.0
+          ],
+          "state": "inside"
+        },
+        {
+          "at": [
+            24.0,
+            0.0,
+            0.0
+          ],
+          "state": "outside"
+        }
+      ]
+    }
+  }
+}

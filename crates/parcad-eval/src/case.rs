@@ -113,6 +113,14 @@ pub struct Expect {
     /// loosened goes red.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deviation_mm: Option<f64>,
+    /// For a part with a section curve drawn from a function: the loosest
+    /// bound the script stated for any such curve, and `certified` or
+    /// `estimated`. Recorded so a change to how the script bounds a curve —
+    /// or one that quietly downgrades a proof to an estimate — goes red.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve_bound_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curve_bound: Option<String>,
 
     /// Where each named feature sits, as `[min_x, min_y, min_z, max_x, max_y,
     /// max_z]` per tag: the exact bounds of the faces the kernel's lineage
@@ -440,6 +448,8 @@ pub struct Observed {
     pub stands_on: Option<parcad_core::mesh::BedContact>,
     /// The kernel's worst fit deviation, when the part fitted anything.
     pub deviation_mm: Option<f64>,
+    /// What the part's curves drawn from a function state about themselves.
+    pub curve_bound: Option<parcad_core::section::StatedBound>,
     /// Every tag's own box, and the ones no surface point could be found for.
     pub tags: BTreeMap<String, [f64; 6]>,
     pub unlocated_tags: Vec<String>,
@@ -526,6 +536,30 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
     }
     if let Some(want) = expect.area_mm2 {
         pct_check(&mut out, "area_mm2", want, observed.area_mm2, tol.volume_pct);
+    }
+    if expect.curve_bound_mm.is_some() || expect.curve_bound.is_some() {
+        match observed.curve_bound {
+            Some(got) => {
+                if let Some(want) = expect.curve_bound_mm {
+                    // The bound is arithmetic in the script, so it repeats to
+                    // far below this; a nanometre is room for bun versions.
+                    abs_check(&mut out, "curve_bound_mm", want, got.mm, 1e-6);
+                }
+                let kind = if got.certified { "certified" } else { "estimated" };
+                if let Some(want) = &expect.curve_bound {
+                    if want != kind {
+                        out.push(Mismatch {
+                            field: "curve_bound".into(),
+                            detail: format!("expected {want}, got {kind}"),
+                        });
+                    }
+                }
+            }
+            None => out.push(Mismatch {
+                field: "curve_bound_mm".into(),
+                detail: "expected a stated bound, but the part draws no curve from a function".into(),
+            }),
+        }
     }
     if let Some(want) = expect.deviation_mm {
         match observed.deviation_mm {
@@ -717,6 +751,8 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
     expect.edges = observed.edges;
     expect.curves = observed.curves;
     expect.deviation_mm = observed.deviation_mm.map(|d| (d * 1e4).round() / 1e4);
+    expect.curve_bound_mm = observed.curve_bound.map(|b| b.mm);
+    expect.curve_bound = observed.curve_bound.map(|b| if b.certified { "certified" } else { "estimated" }.to_string());
     // Bodies are recorded whenever the part has them: a case about a part in
     // several bodies is about those bodies.
     expect.named_bodies = (!observed.named_bodies.is_empty()).then(|| {

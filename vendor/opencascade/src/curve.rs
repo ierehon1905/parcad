@@ -39,6 +39,13 @@ impl Edge {
         Ok(Edge { inner })
     }
 
+    /// The furthest any of `points` lies from this edge's curve, found by
+    /// sampling for the nearest span and projecting within it.
+    pub fn deviation_from(&self, points: &[DVec3]) -> Result<f64, String> {
+        let flat: Vec<f64> = points.iter().flat_map(|p| [p.x, p.y, p.z]).collect();
+        ffi::parcad_edge_deviation(&self.inner, &flat).map_err(|e| e.what().to_string())
+    }
+
     /// A B-spline fitted through `points` in order (`AppDef_BSplineCompute`
     /// as `GeomAPI_PointsToBSpline` drives it: chord-length parameters,
     /// degree 3 to 8, C2), passing through the first and last point exactly
@@ -126,6 +133,8 @@ pub(crate) mod ffi {
             mults: &[i32],
             degree: i32,
         ) -> Result<UniquePtr<TopoDS_Edge>>;
+
+        fn parcad_edge_deviation(edge: &TopoDS_Edge, points: &[f64]) -> Result<f64>;
 
         fn parcad_loft(ruled: bool) -> UniquePtr<ParcadLoft>;
         fn add_wire(self: Pin<&mut ParcadLoft>, wire: &TopoDS_Wire);

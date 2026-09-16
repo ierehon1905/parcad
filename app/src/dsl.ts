@@ -873,9 +873,12 @@ export type SectionPoint = [number, number];
  *   corners and whose *control* points are these: one is a quadratic, two a
  *   cubic (the SVG `C` command). The curve does not pass through its control
  *   points.
- * - `{ bspline: [[x, y], ...], degree?: 3 }` — a clamped uniform B-spline
- *   with the two corners as its first and last control points and these
- *   between — the form a STEP export's poles copy into.
+ * - `{ bspline: [[x, y], ...], degree?: 3, knots?: [...] }` — a clamped
+ *   B-spline with the two corners as its first and last control points and
+ *   these between — the form a STEP export's poles copy into. On uniform
+ *   knots unless `knots` gives the full vector: `poles + degree + 1` values
+ *   counting the two corners, the first and last each repeated
+ *   `degree + 1` times.
  * - `{ fit: [[x, y], ...], tolerance: t }` — a smooth curve *fitted* through
  *   sampled points, from the corner before to the corner after, held within
  *   `tolerance` mm of every point. This is the entry for geometry that
@@ -889,6 +892,36 @@ export type SectionPoint = [number, number];
  *   A section that is nothing but `[{ fit: points, tolerance }]` is one closed
  *   fitted loop with no corner. 0.01 to 0.1 mm is the usual tolerance; a
  *   tighter one costs poles, a looser one smooths the points' noise.
+ * - `{ curve: (t) => [x, y], from, to, tolerance }` — a curve given by a
+ *   *formula*: an involute, a cam law, a spiral. Unlike the entries above it
+ *   carries its own ends, `curve(from)` and `curve(to)`, so it needs no
+ *   corners round it; a corner listed next to it is joined to that end by a
+ *   straight edge, and one equal to the end is merged with it. The script
+ *   evaluates the function — the kernel cannot run JavaScript — and draws it
+ *   as a cubic that matches the function's position and direction at points
+ *   placed where it bends, adding points until the curve is within
+ *   `tolerance` mm of the function *everywhere*, not only at the points. That
+ *   bound is reported as `curve_bound_mm` beside the part, with
+ *   `curve_bound` saying what kind of promise it is:
+ *   - `estimated` — for a bare function. Directions come from finite
+ *     differences and the error is read off the function between the points,
+ *     so a feature narrower than those samples can hide from it.
+ *   - `certified` — when you also give `derivative: (t) => [dx, dy]`, the
+ *     exact derivative, and `fourth: (a, b) => m`, a number no smaller than
+ *     the length of the fourth derivative anywhere in `[a, b]`. Then each
+ *     piece is within `√2 · m · h⁴ / 384` of the function (the cubic Hermite
+ *     remainder, h the piece's length in t), which is a proof, as good as the
+ *     `m` you give. The script checks `derivative` against the function and
+ *     the bound against the error it can see, and refuses either when they
+ *     disagree.
+ *   Either way the kernel also measures the built curve against points of the
+ *   function between the ones it was drawn through; the worst is
+ *   `deviation_mm`. `from` may be larger than `to` to draw the curve
+ *   backwards. The function must be smooth on the range: a cusp or a corner
+ *   inside it is two curve entries meeting at a corner. A section that is
+ *   nothing but one closed `{ curve }` is that closed curve. 0.001 mm is a
+ *   usual tolerance: a certified curve costs a handful of pieces to reach it.
+ *   `spurGearOutline` (below) draws involute teeth this way.
  *
  * A section may also be a whole outline stepped inward: `inset(outline, d)`
  * (below) builds the entry `[{ inset: outline, by: d }]` and is how a wall is
@@ -909,14 +942,244 @@ export type SectionEntry =
   | { radius: number }
   | { spline: [number, number][]; start?: [number, number]; end?: [number, number] }
   | { bezier: [number, number][] }
-  | { bspline: [number, number][]; degree?: number }
+  | { bspline: [number, number][]; degree?: number; knots?: number[] }
   | { fit: [number, number][]; tolerance: number }
+  | CurveEntry
   | { inset: SectionEntry[]; by: number };
 
-const SECTION_KEYS = ["at", "round", "through", "radius", "spline", "start", "end", "bezier", "bspline", "degree", "fit", "tolerance", "inset", "by"];
+/** A section curve given by a formula; see `SectionEntry`. */
+export type CurveEntry = {
+  curve: (t: number) => [number, number];
+  from: number;
+  to: number;
+  tolerance: number;
+  derivative?: (t: number) => [number, number];
+  fourth?: (a: number, b: number) => number;
+};
+
+const SECTION_KEYS = ["at", "round", "through", "radius", "spline", "start", "end", "bezier", "bspline", "degree", "knots", "fit", "tolerance", "inset", "by", "curve", "from", "to", "derivative", "fourth"];
 
 function isPair(value: unknown): value is [number, number] {
   return Array.isArray(value) && value.length === 2 && value.every((n) => typeof n === "number" && Number.isFinite(n));
+}
+
+function isCurveEntry(entry: unknown): entry is CurveEntry {
+  return !!entry && typeof entry === "object" && !Array.isArray(entry) && "curve" in entry;
+}
+
+/** A value as a message shows it, NaN and Infinity included. */
+function shown(value: unknown): string {
+  return JSON.stringify(value, (_, v) => (typeof v === "number" && !Number.isFinite(v) ? String(v) : v)) ?? String(value);
+}
+
+/** Most pieces one `{ curve }` may be drawn in before it is refused. */
+const MAX_CURVE_PIECES = 4096;
+
+type P2 = [number, number];
+
+/**
+ * A `{ curve }` entry drawn as a C1 cubic B-spline: cubic Hermite pieces on
+ * the function's own points and directions, halved until every piece is
+ * within the tolerance — by the Hermite remainder when the entry certifies
+ * itself, by the error seen between the points when it does not. What comes
+ * back is the curve's two ends and the `bspline` entry between them, carrying
+ * the bound and points of the function for the kernel to measure against.
+ */
+function drawCurve(entry: CurveEntry, label: string): { start: P2; end: P2; drawn: Record<string, unknown> } {
+  const { curve, from, to, tolerance, derivative, fourth } = entry;
+  if (typeof curve !== "function") {
+    throw new Error(`${label}: curve is a function of t returning [x, y], e.g. { curve: (t) => [10 * Math.cos(t), 10 * Math.sin(t)], from: 0, to: Math.PI, tolerance: 0.001 }`);
+  }
+  if (!(typeof from === "number" && Number.isFinite(from) && typeof to === "number" && Number.isFinite(to)) || from === to) {
+    throw new Error(`${label}: a curve runs over t from \`from\` to \`to\`, two different finite numbers; got from ${JSON.stringify(from)}, to ${JSON.stringify(to)}`);
+  }
+  if (!(typeof tolerance === "number" && tolerance >= 1e-6 && Number.isFinite(tolerance))) {
+    throw new Error(`${label}: a curve's tolerance is the most the drawn curve may be from the function anywhere, in mm, at least 0.000001 (the kernel's own precision); usually 0.001. Got ${JSON.stringify(tolerance)}`);
+  }
+  for (const [key, value] of [["derivative", derivative], ["fourth", fourth]] as const) {
+    if (value !== undefined && typeof value !== "function") {
+      throw new Error(`${label}: ${key} is a function — derivative: (t) => [dx, dy], fourth: (a, b) => bound — or left out`);
+    }
+  }
+  if (fourth && !derivative) {
+    throw new Error(`${label}: fourth certifies a curve only beside its exact derivative; give derivative: (t) => [dx, dy] too, or drop fourth for an estimated bound`);
+  }
+  const certified = fourth !== undefined;
+  const sign = to > from ? 1 : -1;
+  const length = Math.abs(to - from);
+  const tAt = (s: number) => (s >= length ? to : from + sign * s);
+  const point = (s: number): P2 => {
+    const t = tAt(s);
+    const p = curve(t);
+    if (!isPair(p)) {
+      throw new Error(`${label}: curve(${t}) returned ${shown(p)}; it must return [x, y], two finite numbers, for every t from ${from} to ${to}`);
+    }
+    return [p[0], p[1]];
+  };
+  // Second-order differences that never step outside [from, to], where the
+  // function may not be defined.
+  const delta = 1e-6 * length;
+  const differenced = (s: number): P2 => {
+    const start = s - delta < 0 ? s : s + delta > length ? s - 2 * delta : s - delta;
+    const weights = s - delta < 0 ? [-3, 4, -1] : s + delta > length ? [1, -4, 3] : [-1, 0, 1];
+    const samples = [0, 1, 2].map((k) => point(start + k * delta));
+    const along = (axis: 0 | 1) => weights.reduce((sum, w, k) => sum + w * samples[k][axis], 0) / (2 * delta);
+    return [along(0), along(1)];
+  };
+  const slope = (s: number): P2 => {
+    if (!derivative) return differenced(s);
+    const t = tAt(s);
+    const d = derivative(t);
+    if (!isPair(d)) {
+      throw new Error(`${label}: derivative(${t}) returned ${shown(d)}; it must return [dx, dy], two finite numbers`);
+    }
+    return [sign * d[0], sign * d[1]];
+  };
+  if (derivative) {
+    for (const f of [0.1, 0.37, 0.5, 0.71, 0.9]) {
+      const s = f * length;
+      const given = slope(s);
+      const seen = differenced(s);
+      const scale = Math.hypot(...point(s));
+      const allowed = 1e-6 * (1 + Math.hypot(...seen)) + (1e-14 * scale) / delta;
+      if (Math.hypot(given[0] - seen[0], given[1] - seen[1]) > allowed) {
+        throw new Error(
+          `${label}: derivative(${tAt(s)}) is [${given.map((v) => sign * v).join(", ")}], but the curve itself changes at [${seen.map((v) => sign * v).join(", ")}] there. derivative must be the exact derivative of curve with respect to t`,
+        );
+      }
+    }
+  }
+
+  const nodes = new Map<number, { p: P2; d: P2 }>();
+  const node = (s: number) => {
+    let n = nodes.get(s);
+    if (!n) {
+      n = { p: point(s), d: slope(s) };
+      nodes.set(s, n);
+    }
+    return n;
+  };
+  type Piece = { s0: number; s1: number; poles: [P2, P2, P2, P2]; bound: number; check: P2[] };
+  const pieces: Piece[] = [];
+  const initial = certified ? 1 : 8;
+  const stack: [number, number][] = [];
+  for (let i = initial - 1; i >= 0; i--) {
+    stack.push([(length * i) / initial, i + 1 === initial ? length : (length * (i + 1)) / initial]);
+  }
+  const hermite = (q: [P2, P2, P2, P2], u: number): P2 => {
+    const v = 1 - u;
+    const w = [v * v * v, 3 * v * v * u, 3 * v * u * u, u * u * u];
+    return [
+      w[0] * q[0][0] + w[1] * q[1][0] + w[2] * q[2][0] + w[3] * q[3][0],
+      w[0] * q[0][1] + w[1] * q[1][1] + w[2] * q[2][1] + w[3] * q[3][1],
+    ];
+  };
+  const probes = certified ? [0.25, 0.5, 0.75] : [0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 0.875];
+  while (stack.length > 0) {
+    const [s0, s1] = stack.pop()!;
+    const h = s1 - s0;
+    const a = node(s0);
+    const b = node(s1);
+    const poles: [P2, P2, P2, P2] = [
+      a.p,
+      [a.p[0] + (h / 3) * a.d[0], a.p[1] + (h / 3) * a.d[1]],
+      [b.p[0] - (h / 3) * b.d[0], b.p[1] - (h / 3) * b.d[1]],
+      b.p,
+    ];
+    let seen = 0;
+    let seenAt = s0;
+    const check: P2[] = [];
+    for (const u of probes) {
+      const truth = point(s0 + u * h);
+      const drawn = hermite(poles, u);
+      const error = Math.hypot(truth[0] - drawn[0], truth[1] - drawn[1]);
+      if (error > seen) {
+        seen = error;
+        seenAt = s0 + u * h;
+      }
+      if (u === 0.25 || u === 0.5 || u === 0.75) check.push(truth);
+    }
+    let bound = seen;
+    if (fourth) {
+      const [ta, tb] = [tAt(s0), tAt(s1)].sort((x, y) => x - y);
+      const m = fourth(ta, tb);
+      if (!(typeof m === "number" && Number.isFinite(m) && m >= 0)) {
+        throw new Error(`${label}: fourth(${ta}, ${tb}) returned ${JSON.stringify(m)}; it must return a finite number, at least 0`);
+      }
+      bound = (Math.SQRT2 * m * h ** 4) / 384;
+      if (seen > bound * (1 + 1e-6) + 1e-12) {
+        throw new Error(
+          `${label}: the drawn curve is ${seen.toExponential(3)} mm from the function at t = ${tAt(seenAt)}, more than the ${bound.toExponential(3)} mm that fourth(${ta}, ${tb}) = ${m} allows. fourth must be at least the length of the fourth derivative everywhere on [a, b], and derivative the exact derivative; one of them is not`,
+        );
+      }
+    }
+    if (bound <= tolerance) {
+      pieces.push({ s0, s1, poles, bound, check });
+      continue;
+    }
+    if (pieces.length + stack.length + 2 > MAX_CURVE_PIECES || h < 1e-12 * length) {
+      throw new Error(
+        `${label}: the curve cannot be held within ${tolerance} mm in ${MAX_CURVE_PIECES} pieces — the piece at t = ${tAt(s0)} to ${tAt(s1)} is still ${bound.toExponential(3)} mm off. Raise the tolerance, or split the range where the curve turns sharply: a cusp or corner inside it is two curve entries meeting at a corner [x, y]`,
+      );
+    }
+    const mid = s0 + h / 2;
+    stack.push([mid, s1], [s0, mid]);
+  }
+
+  const poles: P2[] = [pieces[0].poles[0], pieces[0].poles[1]];
+  const knots = [0, 0, 0, 0];
+  for (let k = 0; k + 1 < pieces.length; k++) {
+    poles.push(pieces[k].poles[2], pieces[k + 1].poles[1]);
+    knots.push(pieces[k].s1, pieces[k].s1);
+  }
+  const last = pieces[pieces.length - 1];
+  poles.push(last.poles[2], last.poles[3]);
+  knots.push(length, length, length, length);
+  // Room for rounding in the poles, which the remainder does not cover.
+  const within = Math.max(...pieces.map((p) => p.bound)) + (certified ? 1e-9 : 0);
+  return {
+    start: poles[0],
+    end: poles[poles.length - 1],
+    drawn: {
+      bspline: poles.slice(1, -1),
+      degree: 3,
+      knots,
+      within,
+      certified,
+      check: pieces.flatMap((p) => p.check),
+    },
+  };
+}
+
+/**
+ * A section with every `{ curve }` drawn: its two ends become corners, merged
+ * with a corner beside it that is the same point, and the curve the
+ * `bspline` between them.
+ */
+function drawCurves(profile: SectionEntry[], what: string): SectionEntry[] {
+  if (!profile.some(isCurveEntry)) return profile;
+  const same = (a: P2, b: P2) => Math.hypot(a[0] - b[0], a[1] - b[1]) <= 1e-9 * Math.max(1, Math.hypot(a[0], a[1]));
+  const out: SectionEntry[] = [];
+  const corner = (p: P2) => {
+    const previous = out[out.length - 1];
+    if (!(Array.isArray(previous) && same(previous, p))) out.push(p);
+  };
+  for (const [i, entry] of profile.entries()) {
+    if (isCurveEntry(entry)) {
+      const { start, end, drawn } = drawCurve(entry, `${what} entry ${i}`);
+      corner(start);
+      out.push(drawn as unknown as SectionEntry);
+      corner(end);
+    } else if (Array.isArray(entry)) {
+      corner(entry);
+    } else {
+      out.push(entry);
+    }
+  }
+  const first = out[0];
+  const closing = out[out.length - 1];
+  if (out.length > 1 && Array.isArray(first) && Array.isArray(closing) && same(first, closing)) out.pop();
+  return out;
 }
 
 /**
@@ -937,10 +1200,10 @@ function checkSection(profile: SectionEntry[], what: string, example: string): S
     if (!(typeof e.by === "number" && Number.isFinite(e.by) && e.by > 0)) {
       throw new Error(`${what}: an inset steps inward by a distance in mm, more than 0; got ${JSON.stringify(e.by)}`);
     }
-    checkSection(e.inset, `${what}'s inset outline`, example);
-    return profile;
+    return [{ inset: checkSection(e.inset, `${what}'s inset outline`, example), by: e.by }];
   }
   let corners = 0;
+  let curves = 0;
   for (const [i, entry] of profile.entries()) {
     if (Array.isArray(entry)) {
       if (!isPair(entry)) {
@@ -953,13 +1216,26 @@ function checkSection(profile: SectionEntry[], what: string, example: string): S
       throw new Error(`${what} entry ${i} is ${JSON.stringify(entry)}; an entry is a corner [x, y] or an object such as { through: [x, y] }`);
     }
     const unknown = Object.keys(entry).find((k) => !SECTION_KEYS.includes(k));
+    if (unknown === "within" || unknown === "certified" || unknown === "check") {
+      throw new Error(
+        `${what} entry ${i}: ${unknown} is what a { curve: (t) => [x, y], from, to, tolerance } entry writes about the curve it draws, from the function itself; a script cannot state it. Give the function as a curve entry instead`,
+      );
+    }
     if (unknown !== undefined) {
       throw new Error(
-        `${what} entry ${i} has an unknown key "${unknown}"; a section entry is [x, y], { at, round }, { through }, { radius }, { spline }, { bezier }, { bspline } or { fit, tolerance }`,
+        `${what} entry ${i} has an unknown key "${unknown}"; a section entry is [x, y], { at, round }, { through }, { radius }, { spline }, { bezier }, { bspline }, { fit, tolerance } or { curve, from, to, tolerance }`,
       );
     }
     const e = entry as Record<string, unknown>;
-    if ("at" in e || "round" in e) {
+    if ("curve" in e) {
+      const stray = Object.keys(e).find((k) => !["curve", "from", "to", "tolerance", "derivative", "fourth"].includes(k));
+      if (stray !== undefined) {
+        throw new Error(`${what} entry ${i}: ${stray} does not belong to a curve, which is { curve, from, to, tolerance, derivative?, fourth? }`);
+      }
+      curves++;
+    } else if ("from" in e || "to" in e || "derivative" in e || "fourth" in e) {
+      throw new Error(`${what} entry ${i}: from, to, derivative and fourth belong to a { curve: (t) => [x, y] } entry only`);
+    } else if ("at" in e || "round" in e) {
       if (!isPair(e.at) || !(typeof e.round === "number" && e.round > 0)) {
         throw new Error(`${what} entry ${i}: a rounded corner is { at: [x, y], round: r } with r > 0`);
       }
@@ -982,6 +1258,9 @@ function checkSection(profile: SectionEntry[], what: string, example: string): S
           throw new Error(`${what} entry ${i}: ${tangent} is a direction [dx, dy] and belongs to a spline only`);
         }
       }
+      if ("knots" in e && (key !== "bspline" || !Array.isArray(e.knots) || !e.knots.every((k) => typeof k === "number" && Number.isFinite(k)))) {
+        throw new Error(`${what} entry ${i}: knots is the full knot vector, a list of numbers, and belongs to a bspline only`);
+      }
       if ("degree" in e && (key !== "bspline" || !Number.isInteger(e.degree) || (e.degree as number) < 1)) {
         throw new Error(`${what} entry ${i}: degree is a whole number of at least 1 and belongs to a bspline only`);
       }
@@ -994,14 +1273,14 @@ function checkSection(profile: SectionEntry[], what: string, example: string): S
     }
   }
   const lone = profile.length === 1 && !Array.isArray(profile[0]) && ("spline" in (profile[0] as object) || "fit" in (profile[0] as object));
-  if (corners === profile.length ? corners < 3 : corners === 0 && !lone) {
+  if (curves === 0 && (corners === profile.length ? corners < 3 : corners === 0 && !lone)) {
     throw new Error(
       corners === profile.length
         ? `${what} needs at least 3 corners, or corners with an arc or curve between them, e.g. ${example}`
         : `${what} has no corners; put arcs and curves between [x, y] corners, or give one { spline: points } or { fit: points, tolerance } alone for a closed smooth curve`,
     );
   }
-  return profile;
+  return drawCurves(profile, what);
 }
 
 /**
@@ -1021,11 +1300,11 @@ function checkSection(profile: SectionEntry[], what: string, example: string): S
  * re-entrant (stepped) section is fine.
  */
 export function revolve(profile: SectionEntry[]): Shape {
-  checkSection(profile, "a revolve section", "revolve([[0, -5], [4, -5], [0, 5]])");
-  if (profile.some((entry) => Array.isArray(entry) && entry[0] < 0)) {
+  const drawn = checkSection(profile, "a revolve section", "revolve([[0, -5], [4, -5], [0, 5]])");
+  if (drawn.some((entry) => Array.isArray(entry) && entry[0] < 0)) {
     throw new Error("revolve section radii must be >= 0; mirror the section onto +radius");
   }
-  return new Shape(() => ({ op: "revolve", profile }), []);
+  return new Shape(() => ({ op: "revolve", profile: drawn }), []);
 }
 
 /**
@@ -1532,8 +1811,126 @@ export function inset(outline: SectionEntry[], by: number): SectionEntry[] {
   if (!(typeof by === "number" && Number.isFinite(by) && by > 0)) {
     throw new Error(`inset steps an outline inward by a distance in mm, more than 0; got ${JSON.stringify(by)}`);
   }
-  checkSection(outline, "an inset outline", "inset([[-10, -10], [10, -10], [10, 10], [-10, 10]], 1.6)");
-  return [{ inset: outline, by }];
+  const drawn = checkSection(outline, "an inset outline", "inset([[-10, -10], [10, -10], [10, 10], [-10, 10]], 1.6)");
+  return [{ inset: drawn, by }];
+}
+
+/**
+ * The outline of an involute spur gear, for `extrude`: centred on the origin,
+ * a tooth centred on +X, anticlockwise.
+ *
+ * `module` is the pitch diameter over the tooth count, in mm; `teeth` the
+ * count; `pressureAngle` in degrees, 20 unless given. The pitch circle is
+ * `module * teeth / 2`, the tip `addendum` outside it (default `module`) and
+ * the root `dedendum` inside it (default `1.25 * module`). `backlash` thins
+ * every tooth by that many mm at the pitch circle, the play a mesh needs.
+ *
+ * Every flank is a `{ curve }` entry drawn from the involute of the base
+ * circle (`pitch radius · cos pressureAngle`) and **certified** to lie within
+ * `tolerance` mm of it (default 0.0001) — the part reports the bound as
+ * `curve_bound_mm`. Between the flanks the tip and root are exact circular
+ * arcs. Below the base circle, where the involute has nothing to follow, the
+ * flank runs straight in along the radius to the root; a hobbed gear has a
+ * trochoid there instead, and nothing meshes against it.
+ *
+ * Refused, with the numbers: a tooth count that a hob would undercut (fewer
+ * than `2 / sin²(pressureAngle)`: 18 at 20°, 12 at 25°), because the cut would
+ * remove working flank this outline keeps; teeth that come to a point before
+ * the tip circle; and teeth so thick the root has no room.
+ *
+ * A 20-tooth, module 2 gear 10 mm thick with a 6 mm bore:
+ * `extrude(spurGearOutline({ module: 2, teeth: 20 }), 10).cut(cylinder(3, 12))`.
+ * Two gears mesh at centre distance `module * (teeth1 + teeth2) / 2`; turn
+ * one by half a tooth (`180 / teeth` degrees) so a tooth meets a space.
+ */
+export function spurGearOutline(options: {
+  module: number;
+  teeth: number;
+  pressureAngle?: number;
+  addendum?: number;
+  dedendum?: number;
+  backlash?: number;
+  tolerance?: number;
+}): SectionEntry[] {
+  const { module: m, teeth: z } = options ?? ({} as typeof options);
+  const degrees = options?.pressureAngle ?? 20;
+  const addendum = options?.addendum ?? m;
+  const dedendum = options?.dedendum ?? 1.25 * m;
+  const backlash = options?.backlash ?? 0;
+  const tolerance = options?.tolerance ?? 1e-4;
+  if (!(typeof m === "number" && m > 0 && Number.isFinite(m))) {
+    throw new Error(`spurGearOutline takes { module, teeth }: module is the pitch diameter over the tooth count in mm, more than 0; got ${JSON.stringify(m)}`);
+  }
+  if (!(Number.isInteger(z) && z > 0)) {
+    throw new Error(`spurGearOutline's teeth is a whole number of teeth; got ${JSON.stringify(z)}`);
+  }
+  if (!(degrees > 0 && degrees < 45)) {
+    throw new Error(`spurGearOutline's pressureAngle is in degrees, between 0 and 45 (usually 20); got ${JSON.stringify(degrees)}`);
+  }
+  if (!(addendum > 0 && dedendum > 0 && backlash >= 0)) {
+    throw new Error(`spurGearOutline's addendum and dedendum are mm beyond and inside the pitch circle, more than 0, and backlash is at least 0; got ${addendum}, ${dedendum} and ${backlash}`);
+  }
+  const alpha = (degrees * Math.PI) / 180;
+  const fewest = 2 / Math.sin(alpha) ** 2;
+  if (z < fewest) {
+    throw new Error(
+      `a hob undercuts a gear of fewer than 2 / sin²(${degrees}°) = ${fewest.toFixed(2)} teeth, cutting away working flank this outline would keep. Use ${Math.ceil(fewest)} or more teeth, or a larger pressureAngle: 25° needs ${Math.ceil(2 / Math.sin((25 * Math.PI) / 180) ** 2)}`,
+    );
+  }
+  const pitch = (m * z) / 2;
+  const base = pitch * Math.cos(alpha);
+  const tip = pitch + addendum;
+  const root = pitch - dedendum;
+  if (!(root > 0)) {
+    throw new Error(`spurGearOutline's dedendum ${dedendum} reaches past the centre of a ${pitch} mm pitch radius; make it smaller`);
+  }
+  const involute = (a: number) => Math.tan(a) - a;
+  // Half the tooth's angular width at the base circle, and at radius r.
+  const halfAtBase = (Math.PI * m / 2 - backlash) / (2 * pitch) + involute(alpha);
+  const halfAt = (r: number) => (r <= base ? halfAtBase : halfAtBase - involute(Math.acos(base / r)));
+  const rollAt = (r: number) => (r <= base ? 0 : Math.sqrt((r / base) ** 2 - 1));
+  if (!(halfAt(tip) > 0)) {
+    const pointed = [...Array(200).keys()].map((k) => pitch + (addendum * k) / 200).find((r) => halfAt(r) <= 0) ?? pitch;
+    throw new Error(
+      `the teeth of this gear come to a point ${(pointed - pitch).toFixed(3)} mm outside the pitch circle, inside the ${addendum} mm addendum; lower the addendum below that, or use more teeth`,
+    );
+  }
+  const floor = Math.max(root, base);
+  if (!(halfAt(floor) < Math.PI / z)) {
+    throw new Error(`the tooth spaces of this gear close up at the ${floor.toFixed(3)} mm circle, so the teeth merge there: use a smaller dedendum`);
+  }
+  const t0 = rollAt(root);
+  const t1 = rollAt(tip);
+  // |d⁴/dt⁴| of an involute of radius b is b·√(9 + t²), largest at the larger |t|.
+  const fourth = (a: number, b: number) => base * Math.sqrt(9 + Math.max(a * a, b * b));
+  const polar = (r: number, angle: number): [number, number] => [r * Math.cos(angle), r * Math.sin(angle)];
+  const outline: SectionEntry[] = [];
+  for (let k = 0; k < z; k++) {
+    const centre = (2 * Math.PI * k) / z;
+    const up = centre - halfAtBase;
+    const down = centre + halfAtBase;
+    if (root < base) outline.push(polar(root, up));
+    outline.push({
+      curve: (t) => [base * (Math.cos(up + t) + t * Math.sin(up + t)), base * (Math.sin(up + t) - t * Math.cos(up + t))],
+      derivative: (t) => [base * t * Math.cos(up + t), base * t * Math.sin(up + t)],
+      fourth,
+      from: t0,
+      to: t1,
+      tolerance,
+    });
+    outline.push({ through: polar(tip, centre) });
+    outline.push({
+      curve: (t) => [base * (Math.cos(down - t) - t * Math.sin(down - t)), base * (Math.sin(down - t) + t * Math.cos(down - t))],
+      derivative: (t) => [base * t * Math.cos(down - t), base * t * Math.sin(down - t)],
+      fourth,
+      from: t1,
+      to: t0,
+      tolerance,
+    });
+    if (root < base) outline.push(polar(root, down));
+    outline.push({ through: polar(root, centre + Math.PI / z) });
+  }
+  return outline;
 }
 
 export function hull(points: [number, number][]): [number, number][] {
@@ -1586,11 +1983,11 @@ export function extrude(
   height: number,
   options: { draft?: number } = {},
 ): Shape {
-  checkSection(profile, "an extrude outline", "extrude([[-5, -5], [5, -5], [5, 5], [-5, 5]], 2)");
+  const drawn = checkSection(profile, "an extrude outline", "extrude([[-5, -5], [5, -5], [5, 5], [-5, 5]], 2)");
   if (!(height > 0)) throw new Error("extrude height must be positive");
   const draft = options.draft ?? 0;
   if (Math.abs(draft) >= 90) throw new Error("draft must be between -90 and 90 degrees");
-  return new Shape(() => ({ op: "extrude", profile, height, draft }), []);
+  return new Shape(() => ({ op: "extrude", profile: drawn, height, draft }), []);
 }
 
 /**
@@ -1958,6 +2355,7 @@ export function loft(
   const allCorners = sections.every(
     (s) => Array.isArray(s?.outline) && s.outline.every((entry) => Array.isArray(entry)),
   );
+  const drawn: (SectionEntry[] | undefined)[] = [];
   for (const [i, section] of sections.entries()) {
     if (!section || !Number.isFinite(section.z)) {
       throw new Error(`loft section ${i} must be { z: number, outline: [[x, y], ...] } or { z: number, point: [x, y] }`);
@@ -1971,7 +2369,7 @@ export function loft(
         throw new Error(`loft section ${i} is a point, but only the first or last section may be one`);
       }
     } else {
-      checkSection(section.outline as SectionEntry[], `loft section ${i}'s outline`, "[[-5, -5], [5, -5], [5, 5], [-5, 5]]");
+      drawn[i] = checkSection(section.outline as SectionEntry[], `loft section ${i}'s outline`, "[[-5, -5], [5, -5], [5, 5], [-5, 5]]");
     }
     if (i > 0 && section.z <= sections[i - 1].z) {
       throw new Error(
@@ -1987,7 +2385,7 @@ export function loft(
   const smooth = options.smooth ?? false;
   return new Shape(() => ({
     op: "loft",
-    sections: sections.map(({ outline, z, point }) => (point !== undefined ? { z, point } : { outline, z })),
+    sections: sections.map(({ z, point }, i) => (point !== undefined ? { z, point } : { outline: drawn[i], z })),
     ...(smooth ? { smooth } : {}),
   }), []);
 }
@@ -2024,7 +2422,7 @@ export function sweep(
   path: PathPoint[] | HelixPath | SplinePath,
   options: SweepOptions = {},
 ): Shape {
-  checkSection(profile, "a sweep profile", "[[-2, -1], [2, -1], [2, 1], [-2, 1]]");
+  const drawnProfile = checkSection(profile, "a sweep profile", "[[-2, -1], [2, -1], [2, 1], [-2, 1]]");
   const bend = options.bend ?? 0;
   if (bend < 0) throw new Error("sweep bend radius must be positive");
   const taper = checkTaper(options.taper ?? 1, "sweep");
@@ -2033,18 +2431,18 @@ export function sweep(
     if ("spline" in path) {
       if (bend > 0) throw new Error("a spline sweep has no corners to bend; drop the bend option");
       const spline = splineSpine(path, "sweep");
-      return new Shape(() => ({ op: "sweep", profile, spline, ...tapered }), []);
+      return new Shape(() => ({ op: "sweep", profile: drawnProfile, spline, ...tapered }), []);
     }
     if (bend > 0) throw new Error("a helical sweep has no corners to bend; drop the bend option");
     const helix = helixSpine(path, "sweep");
-    return new Shape(() => ({ op: "sweep", profile, helix, ...tapered }), []);
+    return new Shape(() => ({ op: "sweep", profile: drawnProfile, helix, ...tapered }), []);
   }
   if (path.length < 2) {
     throw new Error("a sweep path needs at least 2 points, or { helix: { radius, pitch, turns } }, or { spline: [[x, y, z], ...] }");
   }
   return new Shape(() => ({
     op: "sweep",
-    profile,
+    profile: drawnProfile,
     path: path.map(([x, y, z]) => ({ x, y, z })),
     ...(bend > 0 ? { bend } : {}),
     ...tapered,

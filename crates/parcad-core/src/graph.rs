@@ -2053,6 +2053,21 @@ impl Doc {
         })
     }
 
+    /// What the curves drawn from a function in this part state about
+    /// themselves, over every section the root depends on; `None` when there
+    /// are none.
+    pub fn stated_curve_bound(&self) -> Option<section::StatedBound> {
+        let order = self.topo_order().ok()?;
+        let entries = order.iter().flat_map(|&id| -> Vec<&SectionEntry> {
+            match &self.nodes[id].op {
+                Op::Extrude { profile, .. } | Op::Revolve { profile } | Op::Sweep { profile, .. } => profile.iter().collect(),
+                Op::Loft { sections, .. } => sections.iter().flat_map(|s| s.outline.iter()).collect(),
+                _ => Vec::new(),
+            }
+        });
+        section::StatedBound::of(entries)
+    }
+
     /// Tagged nodes, in graph order. These are the selectable regions.
     pub fn tags(&self) -> Vec<(NodeId, &str)> {
         self.nodes

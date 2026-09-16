@@ -368,5 +368,10 @@ made of arcs and splines.
   extremum a quarter of the way round from the true nearest point, so every
   nearest-point question here — deviation, slip, re-origin — brackets the
   span by sampling first and projects only within it.
+- `Edge::deviation_from(points)` — the furthest any of the points lies from
+  the edge's 3D curve, with the same bracket-then-project nearest-point
+  search `Edge::fit` measures with. Added so a curve parcad builds from a
+  function's poles is measured against points of that function it was not
+  built through.
 - `Wire::to_shape()` — the same handle as a `Shape`, borrowed; `From<Wire>`
   consumes and a wire is not `Clone`.

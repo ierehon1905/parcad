@@ -62,9 +62,11 @@ pub enum SectionEntry {
     /// The stretch to the next corner is a Bézier curve with these control
     /// points between the two corners.
     Bezier(Vec<P2>),
-    /// The stretch to the next corner is a clamped uniform B-spline with these
-    /// control points between the two corners.
-    BSpline { poles: Vec<P2>, degree: usize },
+    /// The stretch to the next corner is a clamped B-spline with these
+    /// control points between the two corners: on uniform knots, or on
+    /// `knots` when given — the full vector, as a STEP export or a curve
+    /// drawn from a function carries it. `held` is set for the latter.
+    BSpline { poles: Vec<P2>, degree: usize, knots: Option<Vec<f64>>, held: Option<Held> },
     /// The stretch to the next corner is a smooth curve *fitted* through these
     /// sampled points, measured to lie within `tolerance` of every one of
     /// them. As the only entry of a section, a closed fitted loop.
@@ -72,6 +74,48 @@ pub enum SectionEntry {
     /// A whole section: the outline `of` stepped inward by `by`. Allowed only
     /// on its own.
     Inset { of: Vec<SectionEntry>, by: f64 },
+}
+
+/// What a B-spline drawn from a function carries beside its poles: the most
+/// the curve is from that function, whether that is proven or only estimated,
+/// and points *of the function* — not ones the curve was built through — for
+/// the kernel to measure the built curve against. The bound is computed where
+/// the function lives, in the script; the kernel can only check it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Held {
+    pub within: f64,
+    pub certified: bool,
+    pub check: Vec<P2>,
+}
+
+/// The loosest bound any curve drawn from a function states, over a set of
+/// sections, and whether every one of those bounds is certified rather than
+/// estimated. Read from the graph: the script computed it, the kernel only
+/// measured the built curves against `check`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StatedBound {
+    pub mm: f64,
+    pub certified: bool,
+}
+
+impl StatedBound {
+    pub fn of<'a>(entries: impl IntoIterator<Item = &'a SectionEntry>) -> Option<Self> {
+        let mut worst: Option<Self> = None;
+        for entry in entries {
+            let found = match entry {
+                SectionEntry::BSpline { held: Some(h), .. } => Some(Self { mm: h.within, certified: h.certified }),
+                SectionEntry::Inset { of, .. } => Self::of(of),
+                _ => None,
+            };
+            if let Some(f) = found {
+                worst = Some(match worst {
+                    None => f,
+                    Some(w) => Self { mm: w.mm.max(f.mm), certified: w.certified && f.certified },
+                });
+            }
+        }
+        worst
+    }
 }
 
 impl SectionEntry {
@@ -119,10 +163,19 @@ impl Serialize for SectionEntry {
                 map.serialize_entry("bezier", points)?;
                 map.end()
             }
-            Self::BSpline { poles, degree } => {
-                let mut map = serializer.serialize_map(Some(2))?;
+            Self::BSpline { poles, degree, knots, held } => {
+                let len = 2 + knots.is_some() as usize + 3 * held.is_some() as usize;
+                let mut map = serializer.serialize_map(Some(len))?;
                 map.serialize_entry("bspline", poles)?;
                 map.serialize_entry("degree", degree)?;
+                if let Some(knots) = knots {
+                    map.serialize_entry("knots", knots)?;
+                }
+                if let Some(held) = held {
+                    map.serialize_entry("within", &held.within)?;
+                    map.serialize_entry("certified", &held.certified)?;
+                    map.serialize_entry("check", &held.check)?;
+                }
                 map.end()
             }
             Self::Fit { points, tolerance } => {
@@ -148,7 +201,7 @@ impl<'de> Deserialize<'de> for SectionEntry {
     }
 }
 
-const VOCABULARY: &str = "a section entry is a corner [x, y], a rounded corner { at: [x, y], round: r }, or, between two corners, { through: [x, y] } or { radius: r } for an arc, { spline: [[x, y], ...] }, { bezier: [[x, y], ...] }, { bspline: [[x, y], ...], degree: 3 } or { fit: [[x, y], ...], tolerance: t } for a curve; a section that is only [{ inset: outline, by: d }] is that outline stepped inward by d";
+const VOCABULARY: &str = "a section entry is a corner [x, y], a rounded corner { at: [x, y], round: r }, or, between two corners, { through: [x, y] } or { radius: r } for an arc, { spline: [[x, y], ...] }, { bezier: [[x, y], ...] }, { bspline: [[x, y], ...], degree: 3, knots?: [...] } or { fit: [[x, y], ...], tolerance: t } for a curve; a section that is only [{ inset: outline, by: d }] is that outline stepped inward by d";
 
 fn parse_pair(value: &serde_json::Value, what: &str) -> Result<P2, String> {
     let pair = value
@@ -227,7 +280,7 @@ fn parse_entry(value: &serde_json::Value) -> Result<SectionEntry, String> {
         return parse_pairs(&map["bezier"], "bezier").map(SectionEntry::Bezier);
     }
     if has("bspline") {
-        allow(&["bspline", "degree"])?;
+        allow(&["bspline", "degree", "knots", "within", "certified", "check"])?;
         let degree = match map.get("degree") {
             None => 3,
             Some(d) => d
@@ -235,9 +288,40 @@ fn parse_entry(value: &serde_json::Value) -> Result<SectionEntry, String> {
                 .ok_or_else(|| format!("a bspline's degree must be a whole number; got {d}"))?
                 as usize,
         };
+        let knots = map
+            .get("knots")
+            .map(|k| {
+                k.as_array()
+                    .and_then(|a| a.iter().map(serde_json::Value::as_f64).collect::<Option<Vec<f64>>>())
+                    .ok_or_else(|| format!("a bspline's knots must be a list of numbers, the full knot vector; got {k}"))
+            })
+            .transpose()?;
+        let held = if has("within") {
+            if !has("check") {
+                return Err(format!(
+                    "a bspline that states how far it is `within` of a function also carries `check`, points of that function the kernel measures the built curve against; got {value}"
+                ));
+            }
+            let certified = match map.get("certified") {
+                None => false,
+                Some(c) => c.as_bool().ok_or_else(|| format!("certified must be true or false; got {c}"))?,
+            };
+            Some(Held { within: number("within")?, certified, check: parse_pairs(&map["check"], "check")? })
+        } else if has("certified") || has("check") {
+            return Err(format!(
+                "certified and check belong to a bspline that states the bound it is `within`; got {value}"
+            ));
+        } else {
+            None
+        };
+        if held.is_some() && knots.is_none() {
+            return Err(format!("a bspline held `within` a function gives its `knots`; got {value}"));
+        }
         return Ok(SectionEntry::BSpline {
             poles: parse_pairs(&map["bspline"], "bspline")?,
             degree,
+            knots,
+            held,
         });
     }
     if has("fit") {
@@ -288,6 +372,36 @@ impl<const D: usize> BSpline<D> {
         knots.extend((1..=interior).map(|i| i as f64 / (interior + 1) as f64));
         knots.extend(std::iter::repeat_n(1.0, degree + 1));
         Self { degree, poles, knots }
+    }
+
+    /// A clamped B-spline on an explicit knot vector, refused with the rule
+    /// it breaks: `poles + degree + 1` values, non-decreasing, the ends each
+    /// repeated `degree + 1` times and no interior value more than `degree`.
+    pub fn with_knots(poles: Vec<[f64; D]>, degree: usize, knots: Vec<f64>) -> Result<Self, String> {
+        let want = poles.len() + degree + 1;
+        if knots.len() != want {
+            return Err(format!(
+                "a degree {degree} curve of {} control points, counting the two corners, takes {want} knots; got {}",
+                poles.len(),
+                knots.len()
+            ));
+        }
+        if let Some(i) = knots.windows(2).position(|w| !(w[0] <= w[1])) {
+            return Err(format!("knots must never decrease; knot {} is {} after {}", i + 1, knots[i + 1], knots[i]));
+        }
+        let (first, last) = (knots[0], knots[want - 1]);
+        if !(first < last) || knots[..=degree].iter().any(|&k| k != first) || knots[want - degree - 1..].iter().any(|&k| k != last) {
+            return Err(format!(
+                "knots must be clamped: the first {0} equal, the last {0} equal and larger, so the curve starts and ends on the two corners",
+                degree + 1
+            ));
+        }
+        let curve = Self { degree, poles, knots };
+        let (_, mults) = curve.distinct_knots();
+        if mults[1..mults.len() - 1].iter().any(|&m| m as usize > degree) {
+            return Err(format!("no interior knot may repeat more than {degree} times, the curve's degree; a break in the curve is a corner [x, y]"));
+        }
+        Ok(curve)
     }
 
     pub fn domain(&self) -> (f64, f64) {
@@ -861,6 +975,9 @@ pub struct Section {
     /// much; the section is what that leaves. Every bound here is the
     /// outline's, which contains it.
     pub inset: Option<f64>,
+    /// The `Segment::Curve`s drawn from a function, by index into `segments`,
+    /// with what the kernel must measure each against.
+    pub held: Vec<(usize, Held)>,
 }
 
 impl Section {
@@ -917,7 +1034,11 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
                 points.iter().all(finite) && start.iter().all(finite) && end.iter().all(finite)
             }
             SectionEntry::Bezier(points) => points.iter().all(finite),
-            SectionEntry::BSpline { poles, .. } => poles.iter().all(finite),
+            SectionEntry::BSpline { poles, knots, held, .. } => {
+                poles.iter().all(finite)
+                    && knots.iter().flatten().all(|k| k.is_finite())
+                    && held.iter().all(|h| h.within.is_finite() && h.check.iter().all(finite))
+            }
             SectionEntry::Fit { points, tolerance } => points.iter().all(finite) && tolerance.is_finite(),
             // The outline inside is checked when it is resolved.
             SectionEntry::Inset { by, .. } => by.is_finite(),
@@ -958,7 +1079,7 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
             })
             .sum::<f64>()
             / 2.0;
-        return Ok(Section { segments, area, polygon: Some(points), inset: None });
+        return Ok(Section { segments, area, polygon: Some(points), inset: None, held: Vec::new() });
     }
 
     let corners: Vec<usize> = (0..entries.len()).filter(|&i| entries[i].is_corner()).collect();
@@ -1116,6 +1237,7 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
         .sum();
     let winding = if corner_area < 0.0 { -1.0 } else { 1.0 };
     let mut segments = Vec::new();
+    let mut held = Vec::new();
     for k in 0..n {
         let mut from = at(k);
         if let Some((start, mid, end)) = fillets[k] {
@@ -1194,7 +1316,7 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
                 let degree = poles.len() - 1;
                 segments.push(Segment::Curve(BSpline::clamped_uniform(poles, degree)));
             }
-            Some(SectionEntry::BSpline { poles: controls, degree }) => {
+            Some(SectionEntry::BSpline { poles: controls, degree, knots, held: stated }) => {
                 let degree = *degree;
                 if degree == 0 || degree > MAX_DEGREE {
                     return Err(format!("{}: a bspline degree of {degree} is not one the kernel builds; use 1 to {MAX_DEGREE}, usually 3", label()));
@@ -1210,7 +1332,22 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
                         poles.len()
                     ));
                 }
-                segments.push(Segment::Curve(BSpline::clamped_uniform(poles, degree)));
+                let curve = match knots {
+                    None => BSpline::clamped_uniform(poles, degree),
+                    Some(knots) => BSpline::with_knots(poles, degree, knots.clone()).map_err(|e| format!("{}: {e}", label()))?,
+                };
+                if let Some(stated) = stated {
+                    if !(stated.within >= 0.0) || stated.check.is_empty() {
+                        return Err(format!(
+                            "{}: a curve held within a function states a bound of 0 mm or more and at least one check point; got {} mm and {} points",
+                            label(),
+                            stated.within,
+                            stated.check.len()
+                        ));
+                    }
+                    held.push((segments.len(), stated.clone()));
+                }
+                segments.push(Segment::Curve(curve));
             }
             Some(SectionEntry::Fit { points, tolerance }) => {
                 if points.is_empty() {
@@ -1225,7 +1362,7 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
             Some(other) => unreachable!("corner entries are not joins: {other:?}"),
         }
     }
-    finish(segments, what)
+    Ok(Section { held, ..finish(segments, what)? })
 }
 
 /// What a fit needs before the kernel sees it: a tolerance that is a
@@ -1273,7 +1410,7 @@ fn resolve_inset(of: &[SectionEntry], by: f64, what: &str) -> Result<Section, St
             }
         }
     }
-    Ok(Section { segments: outline.segments, area: outline.area, polygon: None, inset: Some(by) })
+    Ok(Section { segments: outline.segments, area: outline.area, polygon: None, inset: Some(by), held: outline.held })
 }
 
 fn describe(entry: &SectionEntry) -> String {
@@ -1293,7 +1430,7 @@ fn finish(segments: Vec<Segment>, what: &str) -> Result<Section, String> {
     if area.abs() < 1e-12 {
         return Err(format!("{what} encloses no area"));
     }
-    Ok(Section { segments, area, polygon: None, inset: None })
+    Ok(Section { segments, area, polygon: None, inset: None, held: Vec::new() })
 }
 
 /// Whether a polygon's straight edges cross or touch anywhere but at the
@@ -1611,5 +1748,55 @@ mod tests {
     fn two_curves_between_the_same_corners_are_refused() {
         let err = resolve(&entries(r#"[[0,0],{"through":[5,-2]},{"radius":5},[10,0],[5,5]]"#), "p").unwrap_err();
         assert!(err.contains("put a corner between them"), "{err}");
+    }
+
+    #[test]
+    fn a_bspline_on_its_own_knots_is_that_curve_and_keeps_what_it_states() {
+        // A quarter circle's cubic Hermite in two pieces on double knots
+        // [0, 0.5, 1.2]: the curve passes through the middle node at s = 0.5.
+        let json = r#"[[0,0],[10,0],{"bspline":[[10,1],[9,3],[8,4],[6,6]],"degree":3,"knots":[0,0,0,0,0.5,0.5,1.2,1.2,1.2,1.2],"within":0.001,"certified":true,"check":[[9.5,2]]},[5,7]]"#;
+        let parsed = entries(json);
+        let again: Vec<SectionEntry> = serde_json::from_str(&serde_json::to_string(&parsed).unwrap()).unwrap();
+        assert_eq!(parsed, again);
+        let section = resolve(&parsed, "p").unwrap();
+        let Segment::Curve(curve) = &section.segments[1] else { panic!("{:?}", section.segments[1]) };
+        assert_eq!(curve.knots, vec![0.0, 0.0, 0.0, 0.0, 0.5, 0.5, 1.2, 1.2, 1.2, 1.2]);
+        // Double knot: the point there is the mean of its two poles, weighted
+        // by the spans either side.
+        let mid = curve.point(0.5);
+        assert!(close(mid[0], (0.7 * 9.0 + 0.5 * 8.0) / 1.2, 1e-12) && close(mid[1], (0.7 * 3.0 + 0.5 * 4.0) / 1.2, 1e-12), "{mid:?}");
+        assert_eq!(section.held.len(), 1);
+        assert_eq!(section.held[0].0, 1);
+        let bound = StatedBound::of(&parsed).unwrap();
+        assert_eq!(bound, StatedBound { mm: 0.001, certified: true });
+    }
+
+    #[test]
+    fn knots_that_do_not_describe_the_curve_are_refused_with_the_rule() {
+        let with = |knots: &str| resolve(&entries(&format!(r#"[[0,0],[10,0],{{"bspline":[[10,5],[5,8]],"knots":{knots}}},[0,10]]"#)), "p");
+        assert!(with("[0,0,0,0,1,1,1,1]").is_ok());
+        assert!(with("[0,0,0,0,1,1,1]").unwrap_err().contains("takes 8 knots; got 7"));
+        assert!(with("[0,0,0,0,1,1,1,0.5]").unwrap_err().contains("never decrease"));
+        assert!(with("[0,0,0,0.1,1,1,1,1]").unwrap_err().contains("clamped"));
+        let err = serde_json::from_str::<Vec<SectionEntry>>(r#"[{"bspline":[[1,1]],"within":0.1,"check":[[1,1]]}]"#).unwrap_err();
+        assert!(err.to_string().contains("gives its `knots`"), "{err}");
+        let err = serde_json::from_str::<Vec<SectionEntry>>(r#"[{"bspline":[[1,1]],"certified":true}]"#).unwrap_err();
+        assert!(err.to_string().contains("belong to a bspline that states"), "{err}");
+    }
+
+    #[test]
+    fn the_loosest_stated_bound_wins_and_one_estimate_makes_it_an_estimate() {
+        let held = |within: f64, certified: bool| SectionEntry::BSpline {
+            poles: vec![[1.0, 1.0]],
+            degree: 3,
+            knots: Some(vec![0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]),
+            held: Some(Held { within, certified, check: vec![[1.0, 1.0]] }),
+        };
+        let a = held(0.002, true);
+        let b = held(0.001, false);
+        let inset = SectionEntry::Inset { of: vec![b.clone()], by: 1.0 };
+        assert_eq!(StatedBound::of([&a, &inset]), Some(StatedBound { mm: 0.002, certified: false }));
+        assert_eq!(StatedBound::of([&a]), Some(StatedBound { mm: 0.002, certified: true }));
+        assert_eq!(StatedBound::of(&entries("[[0,0],[1,0],[0,1]]")), None);
     }
 }

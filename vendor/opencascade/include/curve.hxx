@@ -165,6 +165,26 @@ inline double parcad_distance_to_curve(const gp_Pnt& p, const Handle(Geom_Curve)
   return distance;
 }
 
+// The furthest any of `points` (x, y, z flattened) lies from `edge`'s curve.
+inline double parcad_edge_deviation(const TopoDS_Edge& edge, rust::Slice<const double> points) {
+  try {
+    double first = 0.0;
+    double last = 0.0;
+    Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
+    if (curve.IsNull()) {
+      throw std::runtime_error("the edge has no 3D curve to measure against");
+    }
+    double worst = 0.0;
+    for (size_t i = 0; i + 2 < points.size(); i += 3) {
+      const gp_Pnt p(points[i], points[i + 1], points[i + 2]);
+      worst = std::max(worst, parcad_distance_to_curve(p, curve, first, last));
+    }
+    return worst;
+  } catch (const Standard_Failure& raised) {
+    throw std::runtime_error(std::string("measuring an edge against points raised: ") + raised.what());
+  }
+}
+
 inline double parcad_distance_to_wire(const gp_Pnt& p, const TopoDS_Wire& wire) {
   double best = std::numeric_limits<double>::infinity();
   for (TopExp_Explorer it(wire, TopAbs_EDGE); it.More(); it.Next()) {
