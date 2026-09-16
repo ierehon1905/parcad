@@ -7,14 +7,17 @@ use std::collections::VecDeque;
 use std::rc::Rc;
 use std::time::Instant;
 
-/// What the page can ask. The same four the HTTP host routes: `/api/evaluate`,
-/// `/api/inspect-edge-target`, `/api/export/stl` and `/api/export/step`.
+/// What the page can ask. The same five the HTTP host routes: `/api/evaluate`,
+/// `/api/inspect-edge-target`, `/api/export/stl`, `/api/export/3mf` and
+/// `/api/export/step`.
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "kebab-case")]
 enum Call {
     Evaluate { graph: serde_json::Value },
     InspectEdgeTarget { graph: serde_json::Value, node: usize },
     ExportStl { graph: serde_json::Value },
+    #[serde(rename = "export-3mf")]
+    Export3mf { graph: serde_json::Value },
     ExportStep { graph: serde_json::Value },
 }
 
@@ -96,6 +99,12 @@ fn answer(input: &[u8]) -> Result<Reply, String> {
             let doc = parcad_evaluation::parse_graph(graph)?;
             let (build, reused) = build(&doc)?;
             let (bytes, _) = parcad_evaluation::stl(&doc, &build.0, reused)?;
+            Ok(Reply::Bytes(bytes))
+        }
+        Call::Export3mf { graph } => {
+            let doc = parcad_evaluation::parse_graph(graph)?;
+            let (build, reused) = build(&doc)?;
+            let (bytes, _) = parcad_evaluation::three_mf(&doc, &build.0, reused, "part")?;
             Ok(Reply::Bytes(bytes))
         }
         Call::ExportStep { graph } => {

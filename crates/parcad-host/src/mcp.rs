@@ -131,6 +131,12 @@ pub struct EvaluateRequest {
     /// of the faces its edge lay between.
     #[serde(default)]
     pub regions: Option<bool>,
+    /// Draw each face in the material the script gave it with `.material()`
+    /// instead of neutral grey. Off by default: grey keeps shape and shading
+    /// easiest to read, and the snapshot's `materials` says whether there are
+    /// any to show. Colour only — roughness and metalness are for the window.
+    #[serde(default)]
+    pub materials: Option<bool>,
     /// Cut the part open on a plane before drawing it, so the views show the
     /// inside. Nothing about the part changes — this is how it is drawn, not an
     /// operation on it.
@@ -237,18 +243,24 @@ pub struct SelectorRequest {
 pub struct ExportRequest {
     /// A parcad DSL script ending in a returned shape.
     pub script: String,
-    /// `step` for exact surfaces, or `stl` for a mesh.
+    /// `3mf` for a slicer, `stl` for a bare mesh, or `step` for exact surfaces.
     pub format: String,
     /// File name to write, without any directory part. Defaults to
-    /// `part.step` / `part.stl`.
+    /// `part.3mf` / `part.stl` / `part.step`.
     #[serde(default)]
     pub filename: Option<String>,
     /// For a part that returns several bodies (`return { base, lid }`): the
     /// name of the one body to write on its own, e.g. `lid`. Omit to write
-    /// every body into one file — a solid per body in STEP, all of their
-    /// triangles in one STL. Refused by name when the part has no such body.
+    /// every body into one file — an object per body in 3MF, a solid per body
+    /// in STEP, all of their triangles in one STL. Refused by name when the
+    /// part has no such body.
     #[serde(default)]
     pub body: Option<String>,
+    /// Open the written file in the application this machine opens its
+    /// extension with — a 3MF lands in the user's slicer. Only when the user
+    /// asked to see or print the part now.
+    #[serde(default)]
+    pub open: bool,
     /// Seconds the kernel may take, 1 to 600. Defaults to 20, or
     /// PARCAD_OCCT_TIMEOUT. Reuses the build of an earlier evaluate_part on
     /// the same script when there is one.
@@ -373,6 +385,14 @@ pub struct Exported {
     /// `deflection_mm`. A file with watertight false, or with more bodies
     /// than the part names, is not ready to print whatever the slicer says.
     measured: service::ExportMeasured,
+    /// Present when `open` was asked: true when the system accepted the file
+    /// for the application it opens this extension with. The file is written
+    /// either way.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    opened: Option<bool>,
+    /// Why the file could not be handed to an application, and what to do.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    open_error: Option<String>,
 }
 
 #[derive(Serialize, schemars::JsonSchema)]
@@ -452,6 +472,19 @@ impl Parcad {
         let views =
             service::parse_views(request.views.as_deref().unwrap_or(&[])).map_err(invalid)?;
         let regions = request.regions.unwrap_or(false);
+        let materials = request.materials.unwrap_or(false);
+        if materials && regions {
+            return Err(invalid(
+                "regions and materials both colour a view; ask for one per call, \
+                 regions for which tag owns a surface, materials for how it looks",
+            ));
+        }
+        if materials && views.is_empty() {
+            return Err(invalid(
+                "materials asks how a view is coloured, so it needs at least one \
+                 view; pass views: [\"iso\"]",
+            ));
+        }
         if regions && views.is_empty() {
             return Err(invalid(
                 "regions asks how a view is coloured, so it needs at least one \
@@ -487,11 +520,12 @@ impl Parcad {
                     views: &views,
                     size,
                     regions,
+                    materials,
                     section,
                 },
             )
             .map_err(|e| built.locate(e))?;
-            let stem = render_stem(&request.script, size, regions, section.is_some());
+            let stem = render_stem(&request.script, size, regions, materials, section.is_some());
             let (summaries, pngs) = renders
                 .views
                 .into_iter()
@@ -607,7 +641,7 @@ impl Parcad {
     #[tool(
         name = "measure_wall_thickness",
         annotations(title = "Find the thinnest wall", read_only_hint = true, open_world_hint = false),
-        description = "Find the thinnest material anywhere in the part, and where it is. Use this before saying a part is ready to print, cast or mill, and any time you cut a pocket, a bore or a shell into something — it is the check that catches a wall you thinned without meaning to. Unlike probe_part it needs no guess about where to look: it fires a ray inward from thousands of points over the whole surface and reports the worst.\n\nReports `thinnest` — the thickness in mm, the point, and `surface_of` and `opposite_surface_of`, the tags of the two faces the material lies between, which is what tells you *which* wall is thin. Pass `threshold_mm` (the process minimum, e.g. 1.2 for a print) and it also reports `below_threshold`, how many samples failed it, plus `thin_spots`, the distinct places they are: one bad corner and a wall that is thin all over are different problems and this is how you tell them apart.\n\nMeasured on the exact solid with every fillet and chamfer in it: a rounded edge is in the number, not a caveat beside it. Two things about the number are in the reply's `note`: it is a ray thickness, at or above the inscribed-sphere thickness in a concave corner, and it is exact at each of the thousands of points sampled, so the true thinnest point can sit between two samples — raise `max_samples` to narrow that. A minimum that tapers toward zero at a groove rim or a run-off blend is real material geometry, not a defect: docs/GOTCHAS.md, in `read_docs`, has the two shipped parts it happens on."
+        description = "Find the thinnest material anywhere in the part, and where it is. Use this before saying a part is ready to print, cast or mill, and any time you cut a pocket, a bore or a shell into something — it is the check that catches a wall you thinned without meaning to. Unlike probe_part it needs no guess about where to look: it fires a ray inward from thousands of points over the whole surface and reports the worst.\n\nReports `thinnest` — the thickness in mm, the point, and `surface_of` and `opposite_surface_of`, the tags of the two faces the material lies between, which is what tells you *which* wall is thin. Pass `threshold_mm` (the process minimum, e.g. 1.2 for a print) and it also reports `below_threshold`, how many samples failed it, plus `thin_spots`: every thin sample grouped into the place it belongs to, with its `kind`, `samples` and `extent_mm`, so a pocket floor thin all over and one thin corner are different entries.\n\nRead `kind` first. `feather` is two faces meeting at a shallow angle, material tapering to nothing: the sliver a cut leaves when it grazes another feature. It is almost never intended, so fix it or say why it stays. `wall` is two faces that do not meet — a floor, a wall, a web between holes — and is thin because a dimension made it so. `edge` is a sharp edge reading thin right beside itself; those come last and are not a wall. `surface` and `opposite_surface` say what each face is, which names the feature when no tag does.\n\nMeasured on the exact solid with every fillet and chamfer in it: a rounded edge is in the number, not a caveat beside it. Two things about the number are in the reply's `note`: it is a ray thickness, at or above the inscribed-sphere thickness in a concave corner, and it is exact at each of the thousands of points sampled, so the true thinnest point can sit between two samples — raise `max_samples` to narrow that. A minimum that tapers toward zero at a groove rim or a run-off blend is real material geometry, not a defect: docs/GOTCHAS.md, in `read_docs`, has the two shipped parts it happens on."
     )]
     async fn measure_wall_thickness(
         &self,
@@ -667,16 +701,16 @@ impl Parcad {
     #[tool(
         name = "export_part",
         annotations(title = "Export a part to a file", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Export a part as STEP (exact surfaces, for CAD) or STL (a mesh, for printing) and return the absolute path written. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one solid per body in STEP, every body's triangles in one STL — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone, which is what a slicer wants when the halves print separately."
+        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way."
     )]
     async fn export_part(
         &self,
         Parameters(request): Parameters<ExportRequest>,
     ) -> Result<rmcp::handler::server::wrapper::Json<Exported>, ErrorData> {
         let format = request.format.to_ascii_lowercase();
-        if format != "step" && format != "stl" {
+        if !["3mf", "stl", "step"].contains(&format.as_str()) {
             return Err(invalid(format!(
-                "unknown export format {:?}; expected \"step\" or \"stl\"",
+                "unknown export format {:?}; expected \"3mf\", \"stl\" or \"step\"",
                 request.format
             )));
         }
@@ -703,11 +737,15 @@ impl Parcad {
             if let Some(body) = &request.body {
                 doc = service::body_doc(&doc, body)?;
             }
-            let export = if format == "step" {
-                service::export_step_within(&doc, budget).map_err(|e| built.locate(e))?
-            } else {
-                service::export_stl(&doc, budget).map_err(|e| built.locate(e))?
-            };
+            let export = match format.as_str() {
+                "step" => service::export_step_within(&doc, budget),
+                "3mf" => {
+                    let stem = filename.rsplit_once('.').map_or(filename.as_str(), |(stem, _)| stem);
+                    service::export_3mf(&doc, budget, request.body.as_deref().unwrap_or(stem))
+                }
+                _ => service::export_stl(&doc, budget),
+            }
+            .map_err(|e| built.locate(e))?;
 
             let dir = export_dir();
             std::fs::create_dir_all(&dir)
@@ -716,11 +754,15 @@ impl Parcad {
             std::fs::write(&path, &export.bytes)
                 .map_err(|e| format!("writing {}: {e}", path.display()))?;
 
+            let path = path.to_string_lossy().to_string();
+            let open_error = request.open.then(|| service::open_in_default_app(&path).err()).flatten();
             Ok(Exported {
-                path: path.to_string_lossy().to_string(),
                 bytes: export.bytes.len(),
                 format,
                 measured: export.measured,
+                opened: request.open.then_some(open_error.is_none()),
+                open_error,
+                path,
             })
         })
         .await?;
@@ -1220,14 +1262,15 @@ fn render_dir() -> PathBuf {
 
 /// A name for one script's renders that is stable across calls, so asking
 /// again replaces the file rather than filling the folder.
-fn render_stem(script: &str, size: u32, regions: bool, section: bool) -> String {
+fn render_stem(script: &str, size: u32, regions: bool, materials: bool, section: bool) -> String {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     script.hash(&mut hasher);
     format!(
-        "{:016x}-{size}{}{}",
+        "{:016x}-{size}{}{}{}",
         hasher.finish(),
         if regions { "-regions" } else { "" },
+        if materials { "-materials" } else { "" },
         if section { "-section" } else { "" }
     )
 }
@@ -1265,6 +1308,7 @@ fn preview_of(script: &str) -> Result<Vec<u8>, String> {
             views: &views,
             size: 512,
             regions: false,
+            materials: false,
             section: None,
         },
     )?;

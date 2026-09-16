@@ -20,6 +20,18 @@ export interface Geometry {
   edges?: EdgeCurve[];
   /** Where each face's triangles sit in `indices`. Absent means faces are unpickable, not mispicked. */
   faceRuns?: FaceRun[];
+  /** Each face's authored material, by kernel face number; a gap wears the default. */
+  faceMaterials?: (FaceMaterial | undefined)[];
+}
+
+/** A face's appearance, as `.material()` wrote it. */
+export interface FaceMaterial {
+  color: string;
+  roughness: number;
+  metalness: number;
+  opacity: number;
+  emissive?: string;
+  clearcoat: number;
 }
 
 /** One face's triangles, as a span of the index buffer. See `state.ts`. */
@@ -668,17 +680,7 @@ export class Viewport {
               color: 0x9aa6b6,
               emissive: 0x0c1018,
             })
-          : new THREE.MeshStandardMaterial({
-              color: 0xaeb8c6,
-              roughness: 0.46,
-              metalness: 0.1,
-              envMapIntensity: 1.0,
-              flatShading: DEBUG === "flat",
-              // Pushed back a hair so the edge lines lying on it win the depth test.
-              polygonOffset: true,
-              polygonOffsetFactor: 1,
-              polygonOffsetUnits: 1,
-            }),
+          : dressFaces(g, geo, this.scene.environment),
     );
     mesh.castShadow = true;
     // Cast onto the ground, never onto itself: a hard shadow of a fin across
@@ -1154,6 +1156,79 @@ function meshWireframe(g: THREE.BufferGeometry): THREE.LineSegments {
   lines.castShadow = false;
   lines.receiveShadow = false;
   return lines;
+}
+
+const shared = {
+  flatShading: DEBUG === "flat",
+  // Pushed back a hair so the edge lines lying on it win the depth test.
+  polygonOffset: true,
+  polygonOffsetFactor: 1,
+  polygonOffsetUnits: 1,
+};
+
+function solidMaterial(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color: 0xaeb8c6, roughness: 0.46, metalness: 0.1, ...shared });
+}
+
+/**
+ * An authored look. It carries the environment itself because three ignores a
+ * material's `envMapIntensity` under `scene.environment`, and a metal lit at the
+ * scene's 0.62 has almost nothing to reflect: steel drew black.
+ */
+function authoredMaterial(look: FaceMaterial, environment: THREE.Texture | null): THREE.MeshPhysicalMaterial {
+  const seeThrough = look.opacity < 1;
+  return new THREE.MeshPhysicalMaterial({
+    color: look.color,
+    roughness: look.roughness,
+    metalness: look.metalness,
+    envMap: environment,
+    envMapIntensity: 0.62 + 0.9 * look.metalness,
+    clearcoat: look.clearcoat,
+    clearcoatRoughness: 0.08,
+    emissive: look.emissive ?? 0x000000,
+    opacity: look.opacity,
+    transparent: seeThrough,
+    // A see-through body must not hide what is behind it from the depth test.
+    depthWrite: !seeThrough,
+    ...shared,
+  });
+}
+
+/**
+ * One material for a plain part; for a part with authored materials, a group
+ * per face run, and triangles no run covers left on the default so a gap in
+ * the runs can never make surface disappear.
+ */
+function dressFaces(
+  g: THREE.BufferGeometry,
+  geo: Geometry,
+  environment: THREE.Texture | null,
+): THREE.Material | THREE.Material[] {
+  const looks = geo.faceMaterials ?? [];
+  const runs = [...(geo.faceRuns ?? [])].sort((a, b) => a.start - b.start);
+  if (!looks.some(Boolean) || runs.length === 0 || geo.indices.length === 0) return solidMaterial();
+
+  const materials: THREE.Material[] = [solidMaterial()];
+  const slotOf = new Map<string, number>();
+  const slot = (look?: FaceMaterial) => {
+    if (!look) return 0;
+    const key = JSON.stringify(look);
+    let index = slotOf.get(key);
+    if (index === undefined) {
+      index = materials.push(authoredMaterial(look, environment)) - 1;
+      slotOf.set(key, index);
+    }
+    return index;
+  };
+  const triangles = geo.indices.length / 3;
+  let covered = 0;
+  for (const run of runs) {
+    if (run.start > covered) g.addGroup(covered * 3, (run.start - covered) * 3, 0);
+    g.addGroup(run.start * 3, run.count * 3, slot(looks[run.face]));
+    covered = Math.max(covered, run.start + run.count);
+  }
+  if (covered < triangles) g.addGroup(covered * 3, (triangles - covered) * 3, 0);
+  return materials;
 }
 
 /** Free a material unless it is shared — the corner materials outlive any one part. */

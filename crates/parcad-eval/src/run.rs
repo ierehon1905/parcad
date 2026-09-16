@@ -192,6 +192,7 @@ pub fn brep_available() -> std::result::Result<(), String> {
                 size: parcad_core::graph::V3::new(1.0, 1.0, 1.0),
             },
             tag: None,
+            material: None,
         }],
         root: 0,
         units: "mm".to_string(),

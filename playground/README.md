@@ -92,7 +92,7 @@ for the bracket, the same 6822 triangles); not yet in Safari or on a phone.
 and op palette, see every change built by the exact kernel with the report,
 section view, edge and face inspection, and the gold treatment-target preview;
 read refusals that name the fix; save parts, make new ones and folders, rename
-and delete them, all in that browser's storage; and export STEP and STL as
+and delete them, all in that browser's storage; and export STEP, 3MF and STL as
 downloads.
 
 **A visitor cannot** reach MCP (there is no endpoint, so the chip never shows),

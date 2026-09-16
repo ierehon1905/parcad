@@ -159,6 +159,66 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    shipped. Needs from the owner: an origin-trial token for
    `ierehon1905.github.io`. Check on the live site that the document is
    origin-isolated, which WebMCP requires.
+5b. **Checks that run without being asked** — agreed 2026-09-16, next. Two
+   parts shipped as STLs from one session with defects `measure_wall_thickness`
+   finds at once: a 0.013 mm sliver between a cable channel and a slot, and a
+   grille cutting 0.319 mm into a screw boss. The model (Opus, with a memory
+   note saying to check) never called it, and every number `export_part`
+   returned passed. A check a model must remember is a check weaker models
+   skip, so it moves onto the route every model already takes:
+   - **Make the report trustworthy first.** The old part flagged 1072 samples
+     at 1.2 mm, nearly all intended (1 mm pocket floors), with the real defect
+     one unnamed line among them. Cluster samples into places ranked by
+     thickness; tell a sharp edge (a 75° slot lip read 0.319) from material
+     between two features; name untagged features by the node and script line
+     that made them.
+   - **Collisions**: for each cut, the named features it removed material from
+     besides its target — "grille cuts boss" needs no threshold.
+   - **On the route**: `export_part` and `save_project` carry a `print_check`
+     (thinnest wall, its two features, collisions) from the cached build, its
+     verdict the first line of the reply. Below a floor nothing prints (≈0.3
+     mm) export refuses, naming the spot and the fix, unless given
+     `allow_thin: "reason"`; between that and the process minimum it flags.
+   - **Measured**: an `eval/field/` case whose part hides a sliver and a
+     collision; SOUND only when the reply tells the user both, both arms.
+   - Server instructions and the skills say a part is done when `print_check` is
+     clean or each flag has a reason — the weakest layer, and one line.
+5c. **Two more steps a model has to remember, found the same day.** Both are
+   the shape of 5b: the mechanism exists, nothing makes it happen.
+   - **A render is colourless unless asked.** A part carrying materials draws
+     grey for an agent and coloured in the window — `materials: true` is
+     off by default, and nothing in a reply says the part has any. A model
+     therefore cannot see that an accent landed on the wrong body, that two
+     bodies came out the same colour, or that a part it dressed looks
+     undressed. The snapshot should say a part has materials wherever it is
+     measured, and the render note should name the flag; the session that
+     added the planter's two materials only passed it because it had just read
+     the commit that added them.
+   - **A tool's pictures do not reach the user.** Every view already carries
+     `markdown` for exactly this, and the server instructions say to paste it;
+     the same session drew three views, read all three, sent none, and the
+     user asked "SHOW IT". Measure whether a model pastes it
+     (`eval/field/`), and consider making the reply's first line say so when
+     views were asked for.
+
+5d. **Homebrew is published but never exercised.** `publish.yml` renders the
+   formula and pushes it to the tap, and `ruby -c` is the only thing that ever
+   reads it. Nothing installs it, so a formula that installs the wrong path, a
+   service that does not start, or an archive missing the worker would be found
+   by the first user rather than by us. In order of what it buys:
+   - **Before the tap sees it**: `brew style` and `brew audit --strict --formula`
+     on the rendered file, in the same `publish.yml` job that renders it.
+   - **After the push, install it for real**: a job on `macos-14` (arm64) and
+     `ubuntu-latest` that taps, `brew install parcad`, runs `parcad --version`,
+     starts `parcad serve`, and calls `parcad tools` against it — the end-to-end
+     check that the archive carries its worker and the host comes up. This is
+     the one that would have caught a bundle shipping no kernel.
+   - **`brew services`** cannot be started headless in CI in a way that proves
+     much; `parcad serve` in the background and one MCP call is the honest
+     substitute.
+   - Dry-run it locally first (`act`, or the same shell steps by hand against a
+     published tag): a blind CI round on a release path costs a release.
+
 6. **A measured parts library** — fasteners, bearings, boards, devices, each
    held by eval cases, and a way for one part to import another.
 
@@ -486,6 +546,118 @@ Measured, then fixed the same day. What each became:
 Already true and misreported: `preview_ready` / `exact_ready` do not apply,
 because the window runs one exact kernel per evaluation and the snapshot names
 it in `backend`.
+
+## Text on a part — asked for, not started
+
+Wanted for labels, legends and model codes on instrument-like parts: small,
+lowercase, engraved or raised a fraction of a millimetre. Nothing in the
+language makes a glyph today. Since item 4 (curves in sections) most of one
+does: a TrueType outline is quadratic Bézier contours, which an `extrude`
+section already builds exactly and re-entrant, and a counter (the hole in `o`)
+is a second extrude cut from the first. What is missing is the font.
+
+**Prior art.** Fusion splits it in two: Sketch › Text makes a profile, and
+Solid › Emboss projects it onto a face as *emboss*, *deboss* or *scribe*, with a
+depth, on developable faces only. CadQuery's `text()` and build123d's `Text` go
+through OCCT's `Font_BRepTextBuilder`; OpenSCAD has `text()` plus
+`linear_extrude`. The OCCT route needs FreeType and system fonts, and
+`vendor/occt-sys/build.rs` builds with `USE_FREETYPE` off — a C dependency and a
+part that measures differently on another machine.
+
+**The likely shape: no kernel change.** One OFL font, so every machine — and
+the WebAssembly playground — builds the same outline. A build step reads it
+(`ttf-parser`, MIT/Apache, or a script) into a generated glyph table of contours
+and advance widths, the way `docs.rs` is generated from `dsl.ts` and never
+written beside it; the DSL function lays out a string from that table into
+`extrude` sections with `{ bezier }` entries, unions the outer contours and cuts
+the counters. Nothing reads a font at run time, so the QuickJS sandbox needs no
+file access. A flat solid on a plane first; wrapping onto a cylinder is
+Fusion's harder half and waits. Eval cases hold it to closed forms: a glyph
+with a counter against its contour areas (shoelace plus the Bézier segment
+areas) times depth, and a word's bounding width against the table's advances.
+
+**Open decisions.**
+- *The name.* Every export is reserved in a script, and `text` is a likely local.
+  Fusion's word for the solid-making half is `emboss`.
+- *The font.* One typeface for every part; a comparison sheet is the input.
+- *Minimum stroke.* A light weight at 2 mm cap height is under a 0.4 mm nozzle;
+  the op should refuse or report the thinnest stroke, measured, like
+  `measure_wall_thickness`.
+
+## Integrations before launch — researched 2026-09-16
+
+Two web research passes, one on the 3D-printing side and one on CAD and the
+web, ranked what to connect ParCAD to before launch. What was built, and the
+two that wait for their own session:
+
+- **3MF export — built 2026-09-16.** One named object per body, millimetres,
+  core spec only (`parcad_core::threemf`, a hand-written deflated ZIP). On
+  `export_part` as `format: "3mf"`, in the export menu, on `/api/export/3mf`
+  and in the playground. lib3mf 2.5.0 (the 3MF Consortium's reference reader)
+  opened `lidded-box`, `screw-top-jar` and `knurled-knob` in strict mode with
+  no warnings, every object manifold and oriented, each object's volume equal
+  to `named_bodies`. Not yet opened in a real slicer. Colour per body
+  (`basematerials`) waits for the `materials` worktree; Bambu Studio's project
+  settings are undocumented and stay out. Field case `one-file-for-the-slicer`,
+  not yet run.
+- **`export_part`'s `open: true` — built 2026-09-16.** It hands the written
+  file to the application the system opens its extension with (`open`,
+  `xdg-open`, `start`), so an agent with no shell (Claude Desktop, ChatGPT)
+  can put a 3MF in the user's slicer. The error path is measured: with no
+  slicer installed, `opened: false` and `open_error` names what to install.
+  The success path is not, because this machine has no slicer. Deep links
+  (`bambustudio://`, `prusaslicer://`) were rejected: they download from an
+  https URL on the slicer vendor's own sites (MakerWorld, Printables) and never
+  open a local file.
+
+### STEP with body names and colours — next, its own session
+
+`vendor/opencascade`'s `write_step` uses a plain `STEPControl_Writer`, so a
+part's bodies arrive in other CAD programs unnamed and grey. The XCAF toolkits
+that carry names, colours and assemblies (`TKXCAF`, `TKDESTEP` via
+`STEPCAFControl_Writer`) are already linked in `vendor/opencascade-sys/build.rs`
+— it is a binding change, recorded in `PARCAD-CHANGES.md`, with no new
+dependency.
+
+- **Names:** each `Op::Bodies` entry's name on its solid; for a one-solid part,
+  the project name.
+- **Colours:** from `.material()` once the `materials` worktree lands.
+- **Units:** write millimetres explicitly. The classic STEP failure is a
+  25.4× or 1000× scale from a misread header unit, so a corpus case re-reads
+  each export with `probe_step` and holds its volume and bounds to the build.
+- **What importers show (unverified here):** FreeCAD reads colours through
+  OCCT, Fusion keeps simple RGB, Onshape reportedly stopped importing STEP
+  colours in 2024, and whether Fusion keeps body names is unconfirmed. So the
+  docs say "where the importer supports it". Estimate 2–3 days.
+
+### A 3D viewer inside the chat — after launch, the second announcement
+
+MCP Apps (the first official MCP extension, 2026-01-26) lets a tool point at a
+`ui://` HTML resource that the client renders in a sandboxed iframe. That
+iframe can call the server's tools back. Claude web and Desktop, VS Code
+Copilot, Goose and others render it. The official examples include a three.js
+server, Autodesk ships its APS viewer into chats this way, and an Onshape MCP
+server feeds a three.js view from glTF.
+
+- **The case for it:** today an agent's view is a PNG line in the reply. This
+  would put the orbitable part in the conversation, which is the demo
+  `docs/GROWTH.md` wants for "a second thing to announce within two weeks".
+- **Shape:**
+  - GLB export: OCCT's `RWGltf_CafWriter` (`TKRWMesh`/`TKDEGLTF`, not linked
+    yet), or written in Rust from the body meshes 3MF already uses.
+  - A self-contained viewer page reusing `app/src/viewport.ts`'s look, served
+    as the resource `evaluate_part` points at. The CSP is declared in
+    `_meta.ui.csp`, or everything is inlined.
+  - The same GLB serves `<model-viewer>` embeds and iOS AR Quick Look.
+- **Risks:**
+  - Client support varies (Claude Code in a terminal shows nothing).
+  - A large mesh inside an iframe is a practical limit.
+  - Whether a model *uses* it is a field case, not an assumption.
+- **Estimate:** 3–6 days.
+- **Sources:**
+  - <https://blog.modelcontextprotocol.io/posts/2026-01-26-mcp-apps/>
+  - <https://github.com/modelcontextprotocol/ext-apps/tree/main/examples/threejs-server>
+  - <https://aps.autodesk.com/blog/embedding-aps-viewer-ai-chats-mcp-apps>
 
 ## The small win, whenever there is room for one
 

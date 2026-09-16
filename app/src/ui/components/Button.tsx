@@ -4,6 +4,7 @@
  */
 
 import type { JSX } from "preact";
+import { forwardRef } from "preact/compat";
 
 type Variant = "default" | "primary" | "quiet" | "danger";
 
@@ -20,15 +21,14 @@ const COLOURS: Record<Variant, string> = {
   danger: "bg-panel-2 text-bad border-line",
 };
 
-export interface ButtonProps extends Omit<JSX.IntrinsicElements["button"], "class"> {
+export interface ButtonProps extends Omit<JSX.IntrinsicElements["button"], "class" | "ref"> {
   variant?: Variant;
   /** Layout only — where this one sits. A colour here would land in the hazard
    *  above, since which of two backgrounds wins is not decided here. */
   layout?: string;
 }
 
-export function Button({ variant = "default", layout, ...rest }: ButtonProps) {
-  return (
-    <button type="button" class={`${SHAPE} ${COLOURS[variant]} ${layout ?? ""}`} {...rest} />
-  );
-}
+export const Button = forwardRef<HTMLButtonElement, ButtonProps>(({ variant = "default", layout, ...rest }, ref) => (
+  <button ref={ref} type="button" class={`${SHAPE} ${COLOURS[variant]} ${layout ?? ""}`} {...rest} />
+));
+Button.displayName = "Button";

@@ -57,6 +57,27 @@ pub fn stl(doc: &Doc, s: &parcad_occt::Success, reused: bool) -> Result<(Vec<u8>
     Ok((bytes, measured))
 }
 
+/// A part as 3MF, and what the file holds: the same welded triangles as
+/// [`stl`], with each named body its own object so a slicer can place it
+/// apart. A one-solid part is one object called `name`.
+pub fn three_mf(
+    doc: &Doc,
+    s: &parcad_occt::Success,
+    reused: bool,
+    name: &str,
+) -> Result<(Vec<u8>, ExportMeasured), String> {
+    let (report, tess) = measure_brep(doc, s)?;
+    let bodies = parcad_occt::body_meshes(s);
+    let objects: Vec<(&str, &Tessellation)> = if bodies.is_empty() {
+        vec![(name, &tess)]
+    } else {
+        bodies.iter().map(|(name, mesh)| (name.as_str(), mesh)).collect()
+    };
+    let bytes = parcad_core::threemf::write_3mf(&objects).map_err(|e| format!("writing 3MF: {e:#}"))?;
+    let measured = ExportMeasured::of(&report, body_reports(s), Some(report.mesh.resolution_mm), reused);
+    Ok((bytes, measured))
+}
+
 /// Geometry in the layout three.js wants, plus the description of what it is.
 ///
 /// Everything measurable lives in `snapshot` and nowhere else. The mesh arrays
@@ -273,6 +294,11 @@ pub struct EvaluationSnapshot {
     /// usually not what was meant.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unlocated_tags: Vec<String>,
+    /// How many distinct materials the part's bodies wear, from `.material()`.
+    /// Views are drawn in neutral grey regardless; pass `materials: true` to
+    /// see them.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub materials: usize,
     /// Edge treatments the finished part actually depends on.
     pub treatments: Vec<Treatment>,
     /// Nodes the root does not reach: shapes the script built and never used.
@@ -649,6 +675,7 @@ pub fn describe(
         tags: report.tags.clone(),
         tag_extents: extents,
         unlocated_tags: unlocated,
+        materials: authored_materials(doc),
         treatments: treatments(doc),
         unused_nodes: report.total_nodes.saturating_sub(report.live_nodes),
         backend: "brep".to_string(),
@@ -658,6 +685,16 @@ pub fn describe(
         // measurements above, and most calls only want the numbers.
         views: Vec::new(),
     }
+}
+
+fn authored_materials(doc: &Doc) -> usize {
+    let mut seen: Vec<&parcad_core::graph::Material> = Vec::new();
+    for material in doc.body_materials().into_iter().flatten() {
+        if !seen.contains(&material) {
+            seen.push(material);
+        }
+    }
+    seen.len()
 }
 
 /// Every tag's extent as the kernel measured it, restated with its size and
@@ -762,15 +799,16 @@ pub struct ExportMeasured {
     /// their number when every body is intact.
     pub bodies: usize,
     pub voids: usize,
-    /// The named bodies the file holds — a solid each in STEP, all of their
-    /// triangles in one STL — each measured alone. Empty for a one-solid file.
+    /// The named bodies the file holds — a solid each in STEP, an object each
+    /// in 3MF, all of their triangles in one STL — each measured alone. Empty
+    /// for a one-solid file.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub named_bodies: Vec<BodyReport>,
     /// How those bodies sit against each other, as `evaluate_part` reports.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub between_bodies: Vec<BodyFit>,
-    /// For STL, the furthest any triangle in the file sits from the true
-    /// surface, in mm. Absent for STEP, whose surfaces are exact.
+    /// For STL and 3MF, the furthest any triangle in the file sits from the
+    /// true surface, in mm. Absent for STEP, whose surfaces are exact.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deflection_mm: Option<f64>,
     /// True when the file came from a build already made for this graph.

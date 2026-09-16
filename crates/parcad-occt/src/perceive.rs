@@ -13,11 +13,11 @@
 use crate::backend::{face_key, BuiltPart, FaceKey, NamedFaces};
 use crate::protocol::{
     FaceSummary, Perceive, Perceived, PointResult, PointWhere, RayHitResult, RayLine, RayResult,
-    TagBounds, ThicknessResult, ThicknessSample, ThicknessSpec,
+    TagBounds, ThicknessResult, ThicknessSample, ThicknessSpec, ThinKind,
 };
 use anyhow::{bail, Result};
 use glam::DVec3;
-use opencascade::primitives::{Compound, Crossing, PointState, RayCaster, Shape};
+use opencascade::primitives::{Compound, Crossing, Face, PointState, RayCaster, Shape};
 use std::collections::{HashMap, HashSet};
 
 /// How near a point must be to a face to count as on it, and the face-boundary
@@ -29,8 +29,18 @@ const SURFACE_TOLERANCE_MM: f64 = 1e-4;
 /// A hit nearer the ray's origin than this is the face the ray started on.
 const OWN_FACE_MM: f64 = 1e-7;
 
-/// How many distinct thin spots to report.
+/// How many distinct thin spots to report, and how many edge readings after them.
 const MAX_THIN_SPOTS: usize = 8;
+const MAX_EDGE_SPOTS: usize = 3;
+
+/// Faces that meet at this angle or steeper make an edge reading, not a feather:
+/// the band thinner than a reading of `t` is at most `t / tan(60°)` ≈ 0.58 t wide.
+const EDGE_MIN_WEDGE_DEG: f64 = 60.0;
+
+/// Below this the two faces are parallel enough to be a wall rather than
+/// material running out: a rod measured across itself, a floor under a pocket,
+/// a moulded wall with draft on it.
+const WALL_MAX_WEDGE_DEG: f64 = 5.0;
 
 /// One finished body with the lookup every question needs: which tags each
 /// face carries.
@@ -446,6 +456,7 @@ fn thickness(
         starts = starts.into_iter().step_by(stride).collect();
     }
 
+    let faces: Vec<FacesOf> = bodies.iter().map(FacesOf::new).collect();
     for (b, at, normal, face) in starts {
         let len = normal.length();
         if !len.is_finite() || len < 0.5 {
@@ -473,6 +484,7 @@ fn thickness(
         let first = hits.into_iter().find(|h| h.distance > from + OWN_FACE_MM);
         match first {
             Some(hit) if hit.crossing == Crossing::Leaving && hit.distance <= reach => {
+                let (kind, wedge_deg) = faces[b].classify(face, hit.face, -inward, hit.point);
                 samples.push(ThicknessSample {
                     thickness_mm: hit.distance - from,
                     at: (at + inward * from).to_array(),
@@ -481,6 +493,13 @@ fn thickness(
                     tags: body.tags_of(face),
                     opposite_tags: body.tags_of(hit.face),
                     body: body.name.map(str::to_owned),
+                    kind,
+                    wedge_deg,
+                    surface: None,
+                    opposite_surface: None,
+                    faces: (face, hit.face),
+                    samples: 1,
+                    extent_mm: None,
                 });
             }
             _ => discarded += 1,
@@ -488,36 +507,211 @@ fn thickness(
     }
 
     samples.sort_by(|a, b| a.thickness_mm.total_cmp(&b.thickness_mm));
-    let below_threshold = spec
-        .threshold_mm
-        .map(|t| samples.iter().filter(|s| s.thickness_mm <= t).count())
-        .unwrap_or(0);
+    let (edges, rest): (Vec<&ThicknessSample>, Vec<&ThicknessSample>) =
+        samples.iter().partition(|s| s.kind == ThinKind::Edge);
+    let below = |group: &[&ThicknessSample]| {
+        spec.threshold_mm
+            .map(|t| group.iter().filter(|s| s.thickness_mm <= t).count())
+            .unwrap_or(0)
+    };
+    let mut thin_spots = match spec.threshold_mm {
+        Some(t) => {
+            let link = spacing * 2.5;
+            let mut found = places(&rest, t, link);
+            found.truncate(MAX_THIN_SPOTS);
+            let mut at_edges = places(&edges, t, link);
+            at_edges.truncate(MAX_EDGE_SPOTS);
+            found.extend(at_edges);
+            found
+        }
+        None => distinct(&rest, diagonal),
+    };
+    // The thinnest reading that is not an edge beside itself; an edge only when
+    // that is all the part has.
+    let mut min = rest.first().or(edges.first()).map(|s| (*s).clone());
+    for spot in thin_spots.iter_mut().chain(min.iter_mut()) {
+        let b = bodies.iter().position(|body| body.name.map(str::to_owned) == spot.body).unwrap_or(0);
+        spot.surface = Some(faces[b].describe(spot.faces.0));
+        spot.opposite_surface = Some(faces[b].describe(spot.faces.1));
+    }
     ThicknessResult {
         samples: samples.len(),
         discarded,
-        min: samples.first().cloned(),
-        below_threshold,
-        thin_spots: distinct(&samples, spec.threshold_mm, diagonal),
+        min,
+        below_threshold: below(&rest),
+        below_threshold_at_edges: below(&edges),
+        thin_spots,
     }
+}
+
+/// One body's faces by traversal index, for the angle between two of them and a
+/// name for one that no tag names.
+struct FacesOf {
+    faces: Vec<Option<Face>>,
+    summaries: Vec<FaceSummary>,
+}
+
+impl FacesOf {
+    fn new(body: &Body) -> Self {
+        let map = body.shape.face_map();
+        let mut faces: Vec<Option<Face>> = (0..map.len()).map(|_| None).collect();
+        for face in body.shape.faces() {
+            if let Some(i) = map.index_of(&face) {
+                faces[i] = Some(face);
+            }
+        }
+        Self {
+            faces,
+            summaries: describe_faces(body.shape),
+        }
+    }
+
+    /// Feather, wall or edge, from whether the two faces share an edge and the
+    /// angle they enclose: 180° less the turn between their outward normals, so
+    /// parallel walls enclose 0° and a box corner 90°.
+    fn classify(&self, face: usize, opposite: usize, normal: DVec3, at: DVec3) -> (ThinKind, Option<f64>) {
+        // A face meets itself where it wraps round — a cone closing on its own
+        // apex is material running out as surely as two faces converging.
+        let meet = face == opposite
+            || self
+                .summaries
+                .get(face)
+                .is_some_and(|s| s.adjacent.iter().any(|&a| a as usize == opposite));
+        let far = match self.faces.get(opposite) {
+            Some(Some(f)) => f.normal_at(at),
+            _ => return (ThinKind::Wall, None),
+        };
+        if !meet || far.length_squared() < 1e-16 {
+            return (ThinKind::Wall, None);
+        }
+        let turn = normal.normalize().dot(far.normalize()).clamp(-1.0, 1.0).acos().to_degrees();
+        let wedge = 180.0 - turn;
+        let kind = if wedge >= EDGE_MIN_WEDGE_DEG {
+            ThinKind::Edge
+        } else if wedge > WALL_MAX_WEDGE_DEG {
+            ThinKind::Feather
+        } else {
+            ThinKind::Wall
+        };
+        (kind, Some(wedge))
+    }
+
+    fn describe(&self, face: usize) -> String {
+        let Some(s) = self.summaries.get(face) else {
+            return "a face".to_owned();
+        };
+        let [x, y, z] = s.centroid;
+        let near = format!("near ({x:.1}, {y:.1}, {z:.1})");
+        let along = s.surface.direction.map(axis_name);
+        match (s.surface.kind.as_str(), along, s.surface.radius) {
+            ("plane", Some(d), _) => format!("plane facing {d} {near}"),
+            (kind, Some(d), Some(r)) => format!("{kind} r {r:.2} along {d} {near}"),
+            (kind, _, Some(r)) => format!("{kind} r {r:.2} {near}"),
+            (kind, _, _) => format!("{kind} {near}"),
+        }
+    }
+}
+
+/// `+z` for a direction on an axis, the rounded vector otherwise.
+fn axis_name(d: [f64; 3]) -> String {
+    for (i, name) in ["x", "y", "z"].iter().enumerate() {
+        if (d[i].abs() - 1.0).abs() < 1e-6 {
+            return format!("{}{name}", if d[i] > 0.0 { "+" } else { "-" });
+        }
+    }
+    format!("({:.2}, {:.2}, {:.2})", d[0], d[1], d[2])
+}
+
+/// Every sample at or below `threshold`, grouped with its neighbours within
+/// `link` in the same body and of the same kind: one entry per group, its
+/// thinnest sample carrying the group's size and extent, thinnest group first.
+fn places(sorted: &[&ThicknessSample], threshold: f64, link: f64) -> Vec<ThicknessSample> {
+    let thin: Vec<&ThicknessSample> = sorted.iter().copied().take_while(|s| s.thickness_mm <= threshold).collect();
+    let cell = |p: [f64; 3]| -> [i64; 3] { p.map(|c| (c / link).floor() as i64) };
+    let mut grid: HashMap<[i64; 3], Vec<usize>> = HashMap::new();
+    for (i, s) in thin.iter().enumerate() {
+        grid.entry(cell(s.at)).or_default().push(i);
+    }
+
+    fn root(parent: &mut [usize], mut i: usize) -> usize {
+        while parent[i] != i {
+            parent[i] = parent[parent[i]];
+            i = parent[i];
+        }
+        i
+    }
+    let mut parent: Vec<usize> = (0..thin.len()).collect();
+    for (i, s) in thin.iter().enumerate() {
+        let [cx, cy, cz] = cell(s.at);
+        for near in (-1..=1).flat_map(|dx| (-1..=1).flat_map(move |dy| (-1..=1).map(move |dz| [cx + dx, cy + dy, cz + dz]))) {
+            let Some(indices) = grid.get(&near) else { continue };
+            for &j in indices {
+                let other = thin[j];
+                if j <= i || other.body != s.body || other.kind != s.kind {
+                    continue;
+                }
+                if (DVec3::from_array(other.at) - DVec3::from_array(s.at)).length() <= link {
+                    let (a, b) = (root(&mut parent, i), root(&mut parent, j));
+                    // Samples are sorted thinnest first, so the lower index stays the root.
+                    parent[a.max(b)] = a.min(b);
+                }
+            }
+        }
+    }
+
+    // A feather or an edge runs along the seam of two faces, and is one place
+    // however far apart the sweep happened to sample it.
+    let mut first_on_seam: HashMap<(Option<&str>, ThinKind, usize, usize), usize> = HashMap::new();
+    for (i, s) in thin.iter().enumerate() {
+        if s.kind == ThinKind::Wall {
+            continue;
+        }
+        let (a, b) = s.faces;
+        let seam = (s.body.as_deref(), s.kind, a.min(b), a.max(b));
+        let first = *first_on_seam.entry(seam).or_insert(i);
+        let (ra, rb) = (root(&mut parent, first), root(&mut parent, i));
+        parent[ra.max(rb)] = ra.min(rb);
+    }
+
+    let mut groups: Vec<(usize, usize, DVec3, DVec3)> = Vec::new();
+    let mut group_of_root: HashMap<usize, usize> = HashMap::new();
+    for (i, s) in thin.iter().enumerate() {
+        let r = root(&mut parent, i);
+        let p = DVec3::from_array(s.at);
+        let g = *group_of_root.entry(r).or_insert_with(|| {
+            groups.push((r, 0, p, p));
+            groups.len() - 1
+        });
+        let group = &mut groups[g];
+        group.1 += 1;
+        group.2 = group.2.min(p);
+        group.3 = group.3.max(p);
+    }
+    groups
+        .into_iter()
+        .map(|(r, count, lo, hi)| {
+            let mut place = thin[r].clone();
+            place.samples = count;
+            place.extent_mm = Some((hi - lo).to_array());
+            place
+        })
+        .collect()
 }
 
 /// The worst samples with near-duplicates suppressed, so the list names
 /// distinct features rather than a hundred neighbouring points of one.
-fn distinct(sorted: &[ThicknessSample], threshold: Option<f64>, diagonal: f64) -> Vec<ThicknessSample> {
+fn distinct(sorted: &[&ThicknessSample], diagonal: f64) -> Vec<ThicknessSample> {
     let apart = diagonal * 0.05;
     let mut kept: Vec<ThicknessSample> = Vec::new();
     for s in sorted {
         if kept.len() >= MAX_THIN_SPOTS {
             break;
         }
-        if threshold.is_some_and(|t| s.thickness_mm > t) {
-            break;
-        }
         let near = kept.iter().any(|k| {
             (DVec3::from_array(k.at) - DVec3::from_array(s.at)).length() < apart
         });
         if !near {
-            kept.push(s.clone());
+            kept.push((*s).clone());
         }
     }
     kept
@@ -639,6 +833,97 @@ mod tests {
     /// from its top face, and less from its bottom face under the round: a
     /// ray up from the underside at x = 14 leaves through the fillet at
     /// z = 2 + √(4 − 1²), so the wall there is 4 + 2 + √3 = 7.732 mm, and
+    fn thickness_of(part: &BuiltPart, threshold_mm: Option<f64>) -> ThicknessResult {
+        ask(
+            part,
+            Perceive {
+                thickness: Some(ThicknessSpec { max_samples: 20000, threshold_mm }),
+                ..Default::default()
+            },
+        )
+        .thickness
+        .expect("a thickness sweep was asked for")
+    }
+
+    /// A cut whose floor meets the plate's top face at 15° leaves material
+    /// tapering to nothing along that seam — the shape that shipped a 0.013 mm
+    /// sliver under a phone slot. It is a feather, it is what `thinnest` names,
+    /// and the angle is the one the two planes enclose.
+    #[test]
+    fn a_cut_that_grazes_a_face_reads_as_a_feather_at_the_angle_the_two_faces_enclose() {
+        // Two cuts converging on one line, as a cable channel converged on a
+        // leaning slot floor: everything above a plane through the origin
+        // turned 15° about X goes, and so does everything below z = 0. What is
+        // left runs out to nothing along y = 0.
+        let part = built(
+            r#"{"units":"mm","root":6,"nodes":[
+            {"op":"cuboid","size":{"x":40,"y":40,"z":10},"tag":"plate"},
+            {"op":"cuboid","size":{"x":80,"y":80,"z":20},"tag":"ramp"},
+            {"op":"rotate","child":1,"axis":{"x":1,"y":0,"z":0},"degrees":15},
+            {"op":"translate","child":2,"by":{"x":0,"y":-2.5882,"z":9.6593}},
+            {"op":"cuboid","size":{"x":80,"y":80,"z":20},"tag":"floor"},
+            {"op":"translate","child":4,"by":{"x":0,"y":0,"z":-10}},
+            {"op":"difference","base":0,"tools":[3,5],"blend":0}]}"#,
+        );
+        let report = thickness_of(&part, Some(1.2));
+        let min = report.min.clone().expect("the taper is measurable");
+        assert_eq!(min.kind, ThinKind::Feather, "{min:?}");
+        assert!(min.thickness_mm < 0.5, "{min:?}");
+        let wedge = min.wedge_deg.expect("a feather knows its angle");
+        assert!((wedge - 15.0).abs() < 1.0, "wedge {wedge}, expected about 15");
+        // The seam is one place, however far apart the sweep sampled it, and it
+        // is named by the tags of both faces.
+        let feathers: Vec<_> = report
+            .thin_spots
+            .iter()
+            .filter(|s| s.kind == ThinKind::Feather)
+            .collect();
+        assert_eq!(feathers.len(), 1, "{:?}", report.thin_spots);
+        assert!(feathers[0].samples > 1, "{:?}", feathers[0]);
+        let mut named = [
+            feathers[0].tags.first().map(String::as_str).unwrap_or(""),
+            feathers[0].opposite_tags.first().map(String::as_str).unwrap_or(""),
+        ];
+        named.sort();
+        assert_eq!(named, ["floor", "ramp"], "{:?}", feathers[0]);
+    }
+
+    /// A cone whose side meets its base at 75° is thin beside that rim and
+    /// nowhere else. Every sharp edge is, so those readings are counted apart
+    /// and never become the part's thinnest wall.
+    #[test]
+    fn a_sharp_rim_is_counted_as_an_edge_rather_than_as_thin_material() {
+        let part = built(
+            r#"{"units":"mm","root":0,"nodes":[
+            {"op":"revolve","profile":[[0,-14.93],[10,-14.93],[2,14.93],[0,14.93]],"tag":"cone"}]}"#,
+        );
+        let report = thickness_of(&part, Some(1.0));
+        assert_eq!(report.below_threshold, 0, "{:?}", report.thin_spots);
+        assert!(report.below_threshold_at_edges > 0, "{report:?}");
+        let edge = report
+            .thin_spots
+            .iter()
+            .find(|s| s.kind == ThinKind::Edge)
+            .expect("the rim is listed, after anything that is really thin");
+        let wedge = edge.wedge_deg.expect("an edge knows its angle");
+        assert!((wedge - 75.0).abs() < 2.0, "wedge {wedge}, expected about 75");
+        let min = report.min.expect("the cone has material to measure");
+        assert_ne!(min.kind, ThinKind::Edge, "{min:?}");
+    }
+
+    /// A face with no tag is still named, by what it is and where.
+    #[test]
+    fn an_untagged_face_is_named_by_its_own_geometry() {
+        let part = built(PLATE);
+        let report = thickness_of(&part, None);
+        let spot = report.thin_spots.first().expect("a plate has walls");
+        let surface = spot.surface.clone().unwrap_or_default();
+        assert!(
+            surface.starts_with("plane facing") || surface.starts_with("cylinder r"),
+            "{surface}"
+        );
+    }
+
     /// it thins to 6 at the side wall. The old field measured the sharp
     /// corner — 8 everywhere — and called that an upper bound; this measures
     /// the number.

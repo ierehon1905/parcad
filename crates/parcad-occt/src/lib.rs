@@ -28,7 +28,7 @@ pub mod protocol;
 #[cfg(feature = "kernel")]
 pub mod serve;
 
-pub use bodies::{measure_bodies, MeasuredBody};
+pub use bodies::{body_meshes, measure_bodies, MeasuredBody};
 pub use host::{
     check_fit, default_timeout, evaluate, inspect_edge_target, perceive, probe_step, OcctError,
     Options,
@@ -36,6 +36,6 @@ pub use host::{
 pub use protocol::{
     BodyFit, BodySpan, CurveProbe, EdgeCurve, FaceProbe, FitReport, Perceive, Perceived,
     PointResult, RayHitResult, RayLine, RayResult, SolidProbe, StepProbe, Success, SurfaceProbe,
-    TagBounds, TargetPreview, TargetVertex, ThicknessResult, ThicknessSample, ThicknessSpec,
+    TagBounds, TargetPreview, TargetVertex, ThicknessResult, ThicknessSample, ThicknessSpec, ThinKind,
     Timings, Topology, WireProbe,
 };

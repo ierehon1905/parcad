@@ -443,6 +443,14 @@ export async function exportStl(graph: unknown, project: string | undefined): Pr
   return "part.stl";
 }
 
+export async function export3mf(graph: unknown, project: string | undefined): Promise<string> {
+  if (inTauri && project) {
+    return invoke<string>("export_3mf", { graph, project });
+  }
+  save(inPage ? await pageExport("export-3mf", graph, "model/3mf") : await download("export/3mf", { graph }), "part.3mf");
+  return "part.3mf";
+}
+
 export async function exportStep(graph: unknown, project: string | undefined): Promise<string> {
   if (inTauri && project) {
     return invoke<string>("export_step", { graph, project });

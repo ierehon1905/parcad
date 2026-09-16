@@ -155,6 +155,7 @@ fn router(assets: Arc<dyn Assets>) -> Router {
         .route("/api/evaluate", post(evaluate))
         .route("/api/inspect-edge-target", post(inspect_edge_target))
         .route("/api/export/stl", post(export_stl))
+        .route("/api/export/3mf", post(export_3mf))
         .route("/api/export/step", post(export_step))
         // Projects are files on disk shared with the desktop window and with
         // MCP. The frontend reads them from here rather than from a build-time
@@ -295,6 +296,12 @@ async fn inspect_edge_target(Json(request): Json<InspectRequest>) -> Result<Resp
 async fn export_stl(Json(request): Json<EvaluateRequest>) -> Result<Response, Failed> {
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
     let export = blocking(move || service::export_stl(&doc, None)).await?;
+    Ok(download(export))
+}
+
+async fn export_3mf(Json(request): Json<EvaluateRequest>) -> Result<Response, Failed> {
+    let doc = service::parse_graph(request.graph).map_err(Failed)?;
+    let export = blocking(move || service::export_3mf(&doc, None, "part")).await?;
     Ok(download(export))
 }
 

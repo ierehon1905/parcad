@@ -54,9 +54,11 @@ the exact solids with `fit_between`, the measurement behind `check_fit`, and
 reported as `between_bodies`: `clear` by a clearance, `touching`, or
 `interfering` by a shared volume — a clip drawn through the body it clips onto
 is a design error the number states outright. STEP writes the compound, which
-OCCT's writer turns into one solid per body; STL writes every body's triangles
-into one file, and `export_part`'s `body` picks one body out by rebuilding the
-graph with that body as the root.
+OCCT's writer turns into one solid per body; 3MF writes each body's welded
+triangles as its own named object, so a slicer can place the halves apart
+(`parcad_occt::body_meshes`, `parcad_core::threemf`); STL writes every body's
+triangles into one file, and `export_part`'s `body` picks one body out by
+rebuilding the graph with that body as the root.
 
 The part-level `bodies` count keeps its meaning — free-standing closed pieces
 of the whole mesh, one for a part — and for a part in named bodies it should
@@ -446,8 +448,8 @@ The kernel is not a reimplementation. `crates/parcad-wasm` compiles
 `parcad_occt::serve::run` — the function the native worker's stdin loop calls —
 and `parcad_evaluation::evaluated`, the function `service::evaluate` calls, with
 the patched OpenCASCADE, to one WebAssembly module (`playground/build-kernel.sh`).
-Four exported calls mirror the four HTTP routes the editor uses: evaluate,
-inspect an edge target, export STL, export STEP. The same Node build of the
+Five exported calls mirror the five HTTP routes the editor uses: evaluate,
+inspect an edge target, export STL, 3MF and STEP. The same Node build of the
 worker is what the eval corpus measures, and it passes it (playground/README.md
 has every number that moved).
 

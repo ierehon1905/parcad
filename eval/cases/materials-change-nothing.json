@@ -1,0 +1,23 @@
+{
+  "name": "materials-change-nothing",
+  "script": "eval/scripts/materials-change-nothing.js",
+  "why": "bracket-with-boss with .material() on nested nodes. Appearance is read per body off the graph; if it leaked into geometry or a selector, a number here would move away from that case's or an expect({ count }) would fail. Every value is copied from bracket-with-boss, not recorded.",
+  "brep": {
+    "size": [
+      80.0,
+      60.0,
+      44.0
+    ],
+    "volume_mm3": 55545.337,
+    "area_mm2": 16971.615,
+    "triangles": 7106,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 4357.836,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 24,
+    "edges": 113,
+    "curves": 47
+  }
+}

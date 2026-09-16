@@ -1,6 +1,6 @@
 ---
 name: parcad
-description: Model a physical part — a bracket, enclosure, mount, holder, adapter or anything to 3D print or export as STEP/STL — with the parcad MCP tools. Use when the user wants a part designed, changed, measured, or checked against the object it holds.
+description: Model a physical part — a bracket, enclosure, mount, holder, adapter or anything to 3D print or export as 3MF/STEP/STL — with the parcad MCP tools. Use when the user wants a part designed, changed, measured, or checked against the object it holds.
 ---
 
 Model with the `parcad` MCP server's tools; do not write OpenSCAD, CadQuery or

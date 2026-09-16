@@ -766,6 +766,32 @@ pub fn shade(buf: &GeometryBuffer, opts: &RenderOptions) -> Rgb {
     out
 }
 
+/// Recolour a shaded image by the material of the face under each pixel,
+/// keeping its light. Colour only: the rasteriser has no reflections for
+/// roughness or metalness to change. Cut faces keep the cut colour.
+pub fn paint_faces(image: &mut Rgb, buf: &GeometryBuffer, face_colors: &[Option<[u8; 3]>]) {
+    if face_colors.iter().all(Option::is_none) {
+        return;
+    }
+    const BASE: [f32; 3] = [0.86, 0.87, 0.90];
+    for y in 0..buf.size {
+        for x in 0..buf.size {
+            if buf.is_cut(x, y) {
+                continue;
+            }
+            let Some(color) = buf
+                .face_at(x, y)
+                .and_then(|f| face_colors.get(f as usize).copied().flatten())
+            else {
+                continue;
+            };
+            let shaded = image.get(x, y);
+            let light = shaded[0] as f32 / 255.0 / BASE[0];
+            image.set(x, y, color.map(|c| (c as f32 * light).clamp(0.0, 255.0) as u8));
+        }
+    }
+}
+
 /// True where the surface genuinely breaks — a silhouette or a step.
 ///
 /// A fixed depth threshold is wrong: on a surface seen at a grazing angle, depth
@@ -820,6 +846,7 @@ fn is_depth_edge(buf: &GeometryBuffer, x: u32, y: u32) -> bool {
 /// Map a lighting value onto the part's material colour — a neutral grey that is
 /// light enough to show shading on both its lit and unlit sides.
 fn tint(light: f32) -> [u8; 3] {
+    // `paint_faces` divides this back out.
     const BASE: [f32; 3] = [0.86, 0.87, 0.90];
     [
         (BASE[0] * light * 255.0) as u8,
