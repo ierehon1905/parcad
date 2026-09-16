@@ -113,6 +113,10 @@ pub struct Expect {
     /// loosened goes red.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deviation_mm: Option<f64>,
+    /// The feature ids the DSL stamped on the graph, in its order: what a
+    /// host older than the feature refuses by name. Never tolerated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requires: Option<Vec<String>>,
 
     /// Where each named feature sits, as `[min_x, min_y, min_z, max_x, max_y,
     /// max_z]` per tag: the exact bounds of the faces the kernel's lineage
@@ -440,6 +444,7 @@ pub struct Observed {
     pub stands_on: Option<parcad_core::mesh::BedContact>,
     /// The kernel's worst fit deviation, when the part fitted anything.
     pub deviation_mm: Option<f64>,
+    pub requires: Vec<String>,
     /// Every tag's own box, and the ones no surface point could be found for.
     pub tags: BTreeMap<String, [f64; 6]>,
     pub unlocated_tags: Vec<String>,
@@ -526,6 +531,14 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
     }
     if let Some(want) = expect.area_mm2 {
         pct_check(&mut out, "area_mm2", want, observed.area_mm2, tol.volume_pct);
+    }
+    if let Some(want) = &expect.requires {
+        if *want != observed.requires {
+            out.push(Mismatch {
+                field: "requires".into(),
+                detail: format!("expected {want:?}, the graph requires {:?}", observed.requires),
+            });
+        }
     }
     if let Some(want) = expect.deviation_mm {
         match observed.deviation_mm {
@@ -717,6 +730,7 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
     expect.edges = observed.edges;
     expect.curves = observed.curves;
     expect.deviation_mm = observed.deviation_mm.map(|d| (d * 1e4).round() / 1e4);
+    expect.requires = (!observed.requires.is_empty()).then(|| observed.requires.clone());
     // Bodies are recorded whenever the part has them: a case about a part in
     // several bodies is about those bodies.
     expect.named_bodies = (!observed.named_bodies.is_empty()).then(|| {

@@ -734,7 +734,11 @@ export class Shape {
     return union(this, ...rest);
   }
 
-  /** Subtract each of `tools` from this shape. */
+  /**
+   * Subtract every one of `tools` from this shape, as one cut judged on its
+   * result: the order they are listed in does not matter, so a bore listed
+   * after the cavity it opens still opens it.
+   */
   cut(...rest: (Shape | BoolOptions)[]): Shape {
     const { shapes, opts } = split(rest);
     const kids = [this, ...shapes];
@@ -2187,6 +2191,84 @@ export interface Doc {
   units: "mm";
   root: number;
   nodes: Record<string, unknown>[];
+  /** Features the graph uses that an older host cannot read; see {@link GRAPH_FEATURES}. */
+  requires?: Requirement[];
+}
+
+/** A feature a graph needs, in words a host that has never heard of it can print. */
+export interface Requirement {
+  feature: string;
+  /** The last release that cannot read it. */
+  after: string;
+  what: string;
+}
+
+type GraphNode = Record<string, unknown>;
+
+function sectionEntriesOf(node: GraphNode): unknown[] {
+  const lists: unknown[] = [node.profile];
+  if (Array.isArray(node.sections)) {
+    for (const section of node.sections) lists.push((section as GraphNode)?.outline);
+  }
+  const entries: unknown[] = [];
+  const walk = (list: unknown) => {
+    if (!Array.isArray(list)) return;
+    for (const entry of list) {
+      entries.push(entry);
+      if (entry && typeof entry === "object" && !Array.isArray(entry) && "inset" in entry) {
+        walk((entry as GraphNode).inset);
+      }
+    }
+  };
+  lists.forEach(walk);
+  return entries;
+}
+
+function entryHas(node: GraphNode, key: string): boolean {
+  return sectionEntriesOf(node).some((e) => !!e && typeof e === "object" && !Array.isArray(e) && key in e);
+}
+
+/**
+ * Every graph feature a host released before it cannot read, and how to spot
+ * it in a node. A host refuses a graph that requires an id it does not know,
+ * by name, instead of failing on the field or silently dropping it. Adding a
+ * graph feature means a row here and an id in `FEATURES` in
+ * `crates/parcad-core/src/envelope.rs`; a host test holds the two together.
+ * Not exported: every export is a reserved word in a script.
+ */
+const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean })[] = [
+  {
+    feature: "section-curves",
+    after: "0.0.6",
+    what: "sections with rounded corners, arcs or splines",
+    uses: (n) =>
+      sectionEntriesOf(n).some(
+        (e) => !isPair(e) && !!e && typeof e === "object" && !("fit" in e) && !("inset" in e),
+      ),
+  },
+  { feature: "fitted-sections", after: "0.0.6", what: "fitted sections ({ fit })", uses: (n) => entryHas(n, "fit") },
+  { feature: "inset-sections", after: "0.0.6", what: "inset sections (inset(outline, d))", uses: (n) => entryHas(n, "inset") },
+  {
+    feature: "sweep-spline",
+    after: "0.0.6",
+    what: "sweeps and pipes along a spline",
+    uses: (n) => n.op === "sweep" && Array.isArray(n.spline) && n.spline.length > 0,
+  },
+  {
+    feature: "loft-point",
+    after: "0.0.6",
+    what: "lofts that close onto a point",
+    uses: (n) => n.op === "loft" && Array.isArray(n.sections) && n.sections.some((s) => (s as GraphNode)?.point != null),
+  },
+];
+
+function stamped(doc: Doc): Doc {
+  const requires = GRAPH_FEATURES.filter((f) => doc.nodes.some(f.uses)).map(({ feature, after, what }) => ({
+    feature,
+    after,
+    what,
+  }));
+  return requires.length ? { ...doc, requires } : doc;
 }
 
 /**
@@ -2237,7 +2319,7 @@ export function build(
 
   if (root instanceof Shape) {
     const rootId = visit(root);
-    return { units: "mm", root: rootId, nodes };
+    return stamped({ units: "mm", root: rootId, nodes });
   }
 
   if (Array.isArray(root)) {
@@ -2264,7 +2346,7 @@ export function build(
   });
   const rootId = nodes.length;
   nodes.push({ op: "bodies", bodies });
-  return { units: "mm", root: rootId, nodes };
+  return stamped({ units: "mm", root: rootId, nodes });
 }
 
 function describe(value: unknown): string {

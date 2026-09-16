@@ -16,7 +16,7 @@ use serde::Serialize;
 
 /// Read an intent graph, naming the fix if it will not parse.
 pub fn parse_graph(graph: serde_json::Value) -> Result<Doc, String> {
-    serde_json::from_value(graph).map_err(|e| format!("the graph is not valid: {e}"))
+    parcad_core::envelope::parse_doc(graph)
 }
 
 /// The evaluation of a built part: measured, described and ready to draw.

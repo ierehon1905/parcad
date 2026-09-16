@@ -14,7 +14,7 @@
 //! What a request does is `parcad_occt::serve`; this file is only the transport.
 
 use parcad_occt::backend::BuildCache;
-use parcad_occt::protocol::{Frame, Request, Response, REPLY};
+use parcad_occt::protocol::{Request, Response, REPLY};
 use parcad_occt::serve::run;
 use std::io::{BufRead, Read};
 
@@ -26,8 +26,10 @@ fn main() {
             .read_to_end(&mut input)
             .map_err(|e| format!("cannot read stdin: {e}"))
             .and_then(|_| {
-                serde_json::from_slice::<Request>(&input).map_err(|e| format!("the request is not valid: {e}"))
-            });
+                serde_json::from_slice::<serde_json::Value>(&input)
+                    .map_err(|e| format!("the request is not JSON: {e}"))
+            })
+            .and_then(read_request);
         let response = match request {
             Ok(request) => run(request, &mut cache),
             Err(message) => Response::Error {
@@ -48,17 +50,53 @@ fn main() {
         if line.trim().is_empty() {
             continue;
         }
-        let frame: Frame = match serde_json::from_str(&line) {
-            Ok(frame) => frame,
+        let value: serde_json::Value = match serde_json::from_str(&line) {
+            Ok(value) => value,
             Err(e) => {
                 eprintln!("a frame this worker could not read ({e}); dropping it");
                 continue;
             }
         };
-        let response = run(frame.request, &mut cache);
-        write_reply(&frame.reply, &response);
-        eprintln!("{REPLY}{}", frame.reply);
+        let Some(reply) = value.get("reply").and_then(|r| r.as_str()).map(str::to_owned) else {
+            eprintln!("a frame with no reply path; dropping it");
+            continue;
+        };
+        // Answered rather than dropped: a dropped frame reads to the host as
+        // a crash, and a request this build cannot read is a version mismatch.
+        let request = value
+            .get("request")
+            .cloned()
+            .ok_or_else(|| "the frame carries no request".to_owned())
+            .and_then(read_request);
+        let request = match request {
+            Ok(request) => request,
+            Err(message) => {
+                let response = Response::Error { stage: "reading the request".into(), message };
+                write_reply(&reply, &response);
+                eprintln!("{REPLY}{reply}");
+                continue;
+            }
+        };
+        let response = run(request, &mut cache);
+        write_reply(&reply, &response);
+        eprintln!("{REPLY}{reply}");
     }
+}
+
+/// A request, or why this worker cannot read it, naming the version mismatch
+/// that is almost always the cause.
+fn read_request(value: serde_json::Value) -> Result<Request, String> {
+    for doc in ["doc", "fit_against"].iter().filter_map(|key| value.get(*key)) {
+        parcad_core::envelope::check_requires(doc)?;
+    }
+    serde_json::from_value::<Request>(value).map_err(|e| {
+        format!(
+            "this worker (parcad {}) cannot read the request: {e}. The host and the worker are \
+             different builds; rebuild the worker with tools/build-worker.sh, or unset \
+             PARCAD_OCCT_WORKER so the host uses the one installed beside it",
+            parcad_core::envelope::HOST_VERSION
+        )
+    })
 }
 
 /// Not stdout: OCCT prints its own banners there and we cannot stop it, so
