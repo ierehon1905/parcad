@@ -1,0 +1,202 @@
+{
+  "name": "shifted-pinion",
+  "script": "eval/scripts/shifted-pinion.js",
+  "why": "A module 2, 12-tooth, 20 degree pinion 10 thick, profile shift x = 0.3, just above the least shift that avoids undercut, 1 - 6 sin^2 20 = 0.298. Closed forms: tip ra = 12 + 2(1 + x) = 14.6 (size 29.2 across two teeth, read 1 micron short at the mesh's tip vertices); root rf = 12 - 2(1.25 - x) = 10.1, inside the base circle rb = 12 cos 20 = 11.2763; reference thickness s = 2(pi/2 + 2x tan 20) = 3.57836, so the base half-angle is psiB = s/24 + inv 20 = 0.164003 and the tip half-angle psiA = psiB - inv(acos(rb/ra)) = 0.029845. Section area z(rf^2 (2pi/z - 2 psiB)/2 + ra^2 psiA + rb^2 tA^3/3), tA = sqrt((ra/rb)^2 - 1) = 0.822421: 478.985 mm2, so 4789.850 mm3; the mesh reads 0.066 % under it. The points hold the built solid to the formulas, not to the script's samples: the rising flank of tooth 0 at roll t = tan 20 - which is the reference circle, at polar angle -s/(2r) - and at t = 0.1 and 0.6, each on the boundary and 0.01 either side along the involute's normal (sin b, -cos b), b = t - psiB; the base circle at angle -psiB, where the flank leaves the radial line tangent to it, and 0.01 either side across the radius; the tip at (14.6, 0); and the root at the middle of a space, angle pi/12, radius 10.1. A simulated hob (a basic rack with a 0.38-module tip radius rolled through the blank in 0.25 degree steps) leaves every point of this flank on its surface to 0.1 micron and every point of the radial line below the base circle inside its material, up to 0.39 mm deep at the root: the outline has no material a hobbed pinion lacks.",
+  "brep": {
+    "size": [
+      29.199,
+      29.199,
+      10.0
+    ],
+    "volume_mm3": 4786.826,
+    "area_mm2": 2496.304,
+    "triangles": 1388,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 478.683,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 74,
+    "edges": 432,
+    "curves": 216,
+    "deviation_mm": 0.0,
+    "requires": [
+      "section-curves",
+      "bspline-knots",
+      "held-curves"
+    ],
+    "curve_bound_mm": 0.000014429606868202994,
+    "curve_bound": "certified",
+    "perception": {
+      "points": [
+        {
+          "at": [
+            11.86686526,
+            -1.782556843,
+            0.0
+          ],
+          "state": "on_boundary",
+          "distance_mm": 0.0
+        },
+        {
+          "at": [
+            11.868851636,
+            -1.792357574,
+            0.0
+          ],
+          "state": "outside",
+          "distance_mm": 0.01
+        },
+        {
+          "at": [
+            11.864878884,
+            -1.772756113,
+            0.0
+          ],
+          "state": "inside",
+          "distance_mm": -0.01
+        },
+        {
+          "at": [
+            11.181101527,
+            -1.846542862,
+            0.0
+          ],
+          "state": "on_boundary",
+          "distance_mm": 0.0
+        },
+        {
+          "at": [
+            11.180461938,
+            -1.856522387,
+            0.0
+          ],
+          "state": "outside",
+          "distance_mm": 0.01
+        },
+        {
+          "at": [
+            11.181741116,
+            -1.836563337,
+            0.0
+          ],
+          "state": "inside",
+          "distance_mm": -0.01
+        },
+        {
+          "at": [
+            13.078695648,
+            -1.370690346,
+            0.0
+          ],
+          "state": "on_boundary",
+          "distance_mm": 0.0
+        },
+        {
+          "at": [
+            13.082918795,
+            -1.379754839,
+            0.0
+          ],
+          "state": "outside",
+          "distance_mm": 0.01
+        },
+        {
+          "at": [
+            13.074472501,
+            -1.361625853,
+            0.0
+          ],
+          "state": "inside",
+          "distance_mm": -0.01
+        },
+        {
+          "at": [
+            11.125002426,
+            -1.841065164,
+            0.0
+          ],
+          "state": "on_boundary",
+          "distance_mm": 0.0
+        },
+        {
+          "at": [
+            11.123369742,
+            -1.850930981,
+            0.0
+          ],
+          "state": "outside",
+          "distance_mm": 0.01
+        },
+        {
+          "at": [
+            11.126635109,
+            -1.831199347,
+            0.0
+          ],
+          "state": "inside",
+          "distance_mm": -0.01
+        },
+        {
+          "at": [
+            14.6,
+            0.0,
+            0.0
+          ],
+          "state": "on_boundary",
+          "distance_mm": 0.0
+        },
+        {
+          "at": [
+            14.61,
+            0.0,
+            0.0
+          ],
+          "state": "outside",
+          "distance_mm": 0.01
+        },
+        {
+          "at": [
+            14.59,
+            0.0,
+            0.0
+          ],
+          "state": "inside",
+          "distance_mm": -0.01
+        },
+        {
+          "at": [
+            9.755850846,
+            2.614072356,
+            0.0
+          ],
+          "state": "on_boundary",
+          "distance_mm": 0.0
+        },
+        {
+          "at": [
+            9.765510104,
+            2.616660546,
+            0.0
+          ],
+          "state": "outside",
+          "distance_mm": 0.01
+        },
+        {
+          "at": [
+            9.746191587,
+            2.611484165,
+            0.0
+          ],
+          "state": "inside",
+          "distance_mm": -0.01
+        }
+      ]
+    },
+    "tolerance": {
+      "size_mm": 0.001,
+      "volume_pct": 0.05,
+      "triangles_pct": 5.0
+    }
+  }
+}

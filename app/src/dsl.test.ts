@@ -21,6 +21,7 @@ import {
   pipe,
   sweep,
   spurGearOutline,
+  spurGearPair,
   repeat,
   revolve,
   Shape,
@@ -650,10 +651,83 @@ describe("spurGearOutline", () => {
     }
   });
 
-  test("refuses a tooth count a hob would undercut, and teeth that come to a point", () => {
-    expect(() => spurGearOutline({ module: 1, teeth: 17 })).toThrow(/17\.10 teeth.*Use 18 or more/);
+  test("refuses a gear a hob would undercut, naming the least shift, and teeth that come to a point", () => {
+    expect(() => spurGearOutline({ module: 1, teeth: 17 })).toThrow(/1 − \(17 \/ 2\) · sin²\(20°\) = 0\.0057, and profileShift is 0.*does not draw the trochoid.*profileShift: 0\.006 or more, 18 or more teeth/);
+    expect(() => spurGearOutline({ module: 1, teeth: 17, profileShift: 0.006 })).not.toThrow();
+    expect(() => spurGearOutline({ module: 1, teeth: 12, profileShift: 0.29 })).toThrow(/= 0\.2981, and profileShift is 0\.29.*profileShift: 0\.299 or more, 13 or more teeth/);
     expect(() => spurGearOutline({ module: 1, teeth: 12, pressureAngle: 25 })).not.toThrow();
-    expect(() => spurGearOutline({ module: 1, teeth: 20, addendum: 1.8 })).toThrow(/come to a point 1\.\d+ mm outside the pitch circle/);
-    expect(() => spurGearOutline({ module: 0, teeth: 20 })).toThrow(/module is the pitch diameter/);
+    expect(() => spurGearOutline({ module: 1, teeth: 11, pressureAngle: 25 })).toThrow(/a hob undercuts 11 teeth at 25°/);
+    // A deeper root is cut by a deeper hob, which undercuts sooner.
+    expect(() => spurGearOutline({ module: 1, teeth: 18, dedendum: 1.4 })).toThrow(/1\.15 \(dedendum \/ module − 0\.25\)/);
+    expect(() => spurGearOutline({ module: 1, teeth: 20, addendum: 1.8 })).toThrow(/come to a point at radius 11\.5\d+ mm, inside the 11\.800 mm tip circle \(1\.5\d+ mm outside the reference circle\)/);
+    expect(() => spurGearOutline({ module: 1, teeth: 8, profileShift: 1.2 })).toThrow(/come to a point/);
+    expect(() => spurGearOutline({ module: 0, teeth: 20 })).toThrow(/module is the reference diameter/);
+    expect(() => spurGearOutline({ module: 1, teeth: 20, profileShift: Number.NaN })).toThrow(/profileShift is the shift coefficient x/);
+  });
+
+  test("a profile shift moves tip and root out and thickens the tooth by 2 x m tan α at the reference circle", () => {
+    const shift = 0.3;
+    const teeth = 12;
+    const pitch = (m * teeth) / 2;
+    const rb = pitch * Math.cos(alpha);
+    const { profile, curves } = drawnOutline(spurGearOutline({ module: m, teeth, profileShift: shift }));
+    const radii = profile.filter((e): e is number[] => Array.isArray(e)).map((p) => Math.hypot(p[0], p[1]));
+    expect(Math.min(...radii)).toBeCloseTo(pitch - m * (1.25 - shift), 9);
+    expect(Math.max(...radii)).toBeCloseTo(pitch + m * (1 + shift), 9);
+    // Tooth 0's rising flank crosses the reference circle at half the tooth's thickness below +X.
+    const thickness = m * (Math.PI / 2 + 2 * shift * Math.tan(alpha));
+    const inv = (a: number) => Math.tan(a) - a;
+    const half = thickness / (2 * pitch) + inv(alpha);
+    const { poles, drawn } = curves[0];
+    expect(drawn.certified).toBe(true);
+    const truth = (s: number) => [rb * (Math.cos(s - half) + s * Math.sin(s - half)), rb * (Math.sin(s - half) - s * Math.cos(s - half))];
+    expect(worstStray(poles, drawn.knots, truth, 800)).toBeLessThanOrEqual(drawn.within);
+    const atReference = truth(Math.tan(alpha));
+    expect(Math.hypot(atReference[0], atReference[1])).toBeCloseTo(pitch, 12);
+    expect(Math.atan2(atReference[1], atReference[0])).toBeCloseTo(-thickness / (2 * pitch), 12);
+  });
+});
+
+describe("spurGearPair", () => {
+  const inv = (a: number) => Math.tan(a) - a;
+  const alpha = (20 * Math.PI) / 180;
+
+  test("an unshifted pair sits at m (z1 + z2) / 2, and the second gear turns half a tooth only for an even count", () => {
+    const even = spurGearPair({ module: 2, teeth: [20, 30] });
+    expect(even.centres).toBeCloseTo(50, 12);
+    expect(even.pressureAngle).toBeCloseTo(20, 10);
+    expect(even.turn).toBeCloseTo(6, 12);
+    expect(even.outlines).toHaveLength(2);
+    expect(spurGearPair({ module: 2, teeth: [20, 31] }).turn).toBe(0);
+    // Equal and opposite shifts keep the standard centre distance.
+    expect(spurGearPair({ module: 2, teeth: [20, 30], profileShift: [0.4, -0.4] }).centres).toBeCloseTo(50, 10);
+  });
+
+  test("a shifted pair moves apart by the working pressure angle and keeps 0.25 m of tip clearance", () => {
+    const pair = spurGearPair({ module: 2, teeth: [12, 30], profileShift: [0.3, 0] });
+    const working = (pair.pressureAngle * Math.PI) / 180;
+    expect(inv(working)).toBeCloseTo(inv(alpha) + (2 * Math.tan(alpha) * 0.3) / 42, 14);
+    expect(pair.centres).toBeCloseTo((42 * Math.cos(alpha)) / Math.cos(working), 12);
+    expect(pair.centres).toBeCloseTo(42.5719, 4);
+    const radii = pair.outlines.map((outline) =>
+      outline.filter((e): e is [number, number] => Array.isArray(e)).map((p) => Math.hypot(p[0], p[1])),
+    );
+    const tips = pair.outlines.map((outline) =>
+      Math.max(...outline.map((e) => ("through" in (e as object) ? Math.hypot(...(e as { through: [number, number] }).through) : 0))),
+    );
+    const roots = radii.map((r) => Math.min(...r));
+    expect(pair.centres - tips[0] - roots[1]).toBeCloseTo(0.5, 12);
+    expect(pair.centres - tips[1] - roots[0]).toBeCloseTo(0.5, 12);
+  });
+
+  test("refuses a pair that would lose contact or jam, and passes an undercut refusal through", () => {
+    expect(() => spurGearPair({ module: 2, teeth: [10, 10], profileShift: [1, 1] })).toThrow(/contact ratio of this pair is 0\.775, under 1/);
+    expect(() => spurGearPair({ module: 2, teeth: [12, 30] })).toThrow(/spurGearPair's 12-tooth gear: a hob undercuts 12 teeth/);
+    expect(() => spurGearPair({ module: 1, teeth: [8, 40], profileShift: [0.3, -1], pressureAngle: 25 })).toThrow(
+      /the 40-tooth gear's tip reaches the 8-tooth gear below its base circle along the line of action.*Shift the 8-tooth gear out further/,
+    );
+    expect(() => spurGearPair({ module: 1, teeth: [200, 200], profileShift: [-5, -5] })).toThrow(/meet at no centre distance: x1 \+ x2 must be more than .* = -8\.1\d+/);
+    expect(() => spurGearPair({ module: 2, teeth: [12, 30], profileShift: [0.3] as unknown as [number, number] })).toThrow(/profileShift is \[first, second\]/);
+    expect(() => spurGearPair({ module: 2, teeth: 12 as unknown as [number, number] })).toThrow(/teeth is \[first, second\]/);
   });
 });

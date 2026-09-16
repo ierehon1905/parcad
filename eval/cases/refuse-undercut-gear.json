@@ -1,0 +1,17 @@
+{
+  "name": "refuse-undercut-gear",
+  "script": "eval/scripts/refuse-undercut-gear.js",
+  "why": "The textbook 17-tooth, 20 degree spur gear, unshifted: a hob's straight flank reaches 1 module below the pitch line, past where the line of action touches the base circle (r sin^2 20 = 0.994 module), so it cuts away involute near the root. Building the clean involute would keep flank the cutter removes, and the outline has no trochoid to draw instead, so the script refuses and names the least shift, 1 - 8.5 sin^2 20 = 0.0057, rounded up to one it can use.",
+  "brep": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": [
+        "a hob undercuts 17 teeth",
+        "= 0.0057",
+        "does not draw the trochoid",
+        "profileShift: 0.006 or more",
+        "18 or more teeth"
+      ]
+    }
+  }
+}

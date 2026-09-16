@@ -126,12 +126,33 @@ is in [OP_ROADMAP.md](OP_ROADMAP.md).
   to the 0.094 mm flank gap 0.1 mm of backlash predicts; `involute-gear`
   holds a flank to points on the involute and 0.01 mm either side.
 
+- **profile-shifted gears, and a pair that meshes** — `profileShift` on
+  `spurGearOutline` moves tip and root out by x·module and thickens the tooth
+  by 2x·module·tan α, which is how a pinion under 17 teeth avoids undercut;
+  the undercut refusal names the least shift, `1 − (z/2)·sin²α`.
+  `spurGearPair({ module, teeth: [z1, z2], profileShift, backlash })` returns
+  both outlines, the centre distance from the working pressure angle
+  (`inv αw = inv α + 2 tan α (x1 + x2)/(z1 + z2)`), the tip shortening that
+  keeps 0.25·module of root clearance, and the turn that faces a space to a
+  tooth — `180/z2` only for an even count, which the old advice got wrong for
+  odd ones. It refuses a pair that jams below a base circle or whose contact
+  ratio is under 1. `shifted-pinion` holds a 12-tooth, x = 0.3 pinion's tip,
+  root, base-circle tangency and reference-circle thickness to the formulas;
+  `shifted-gear-pair` and its turned twin read the 0.050 mm backlash/2 gap at
+  the 42.572 mm centres a shifted 12/30 pair needs. A simulated hob — a basic
+  rack with a 0.38·module tip radius rolled through a blank in 0.25° steps —
+  leaves that pinion's whole flank on its surface to 0.1 µm and the radial
+  line below the base circle up to 0.39 mm inside its material, so the
+  outline keeps nothing a hob removes; unshifted, the same hob cuts the
+  12-tooth flank away from the base circle up to r = 11.33 mm, which is what
+  the refusal is for.
+
 ### Still missing
 
 | wanted | needed for | what it takes |
 |---|---|---|
 | **thread forms past the basic 60° profile** | a trapezoidal lead screw, a buttress or bottle-cap thread, a tapered pipe thread, a rounded root | `Op::Thread` sweeps one trapezoid; another profile is another tooth and its own closed form, a taper a conical core and helix |
-| **gear forms past the plain spur** | a hobbed root, a profile-shifted pinion under 18 teeth, a helical, internal or bevel gear, a rack; a real GT2 flank (`timing-pulley.js` approximates it and says so) | the involute itself is drawn and certified (above). `spurGearOutline` runs the flank straight in below the base circle, where a hob leaves a trochoid, and refuses a tooth count a hob would undercut rather than draw a flank the cutter removes; a profile shift, a rack, an internal gear are other `{ curve }` entries with their own closed forms; a helical gear is a twisted loft or sweep of the outline; GT2 is missing its numbers, not a curve type |
+| **gear forms past the shifted spur** | an undercut or fillet-rooted hobbed gear, a helical, internal or bevel gear, a rack; a real GT2 flank (`timing-pulley.js` approximates it and says so) | the involute and the profile shift are drawn and certified (above). Below the base circle `spurGearOutline` runs the flank straight in, inside the trochoid fillet a hob leaves (measured), so a strength-critical root is thinner than the part a hob cuts; an undercut gear is refused, because its flank is the trochoid of the rack's tip radius — an offset of an extended involute, certifiable like the involute, meeting the involute at a point found by root-finding. A rack and an internal gear are other `{ curve }` entries with their own closed forms; a helical gear is a twisted loft or sweep of the outline; GT2 is missing its numbers, not a curve type |
 | **draft on a curved or re-entrant outline** | a moulded boss with rounded corners in one op | the drafted top is a half-plane inset, which only a convex polygon has; draft the polygon and fillet its vertical edges |
 | **variable-radius and unequal-distance treatments** | a casting fillet that tapers, an asymmetric chamfer for a weld prep | `Fillet`/`Chamfer` take one scalar |
 | **assembly: joints, mates, constraints** | a pillow block *and* its bearing, placed by a fit rather than by coordinates | the bodies exist (above) and the fit between them is measured; nothing yet *places* one against another — a solver, which is the wide reading of NEXT.md §3 |

@@ -1,0 +1,71 @@
+{
+  "name": "shifted-gear-pair-turned",
+  "script": "eval/scripts/shifted-gear-pair-turned.js",
+  "why": "A module 2 pair, 12 and 30 teeth, pinion shifted x1 = 0.3 and wheel x2 = 0, rolled on by 7 degrees of the pinion and 2.8 of the wheel, from spurGearPair with 0.1 mm of backlash. inv aw = inv 20 + 2 tan 20 (x1 + x2)/42 gives the working pressure angle aw = 22.0176 degrees and centres 42 cos 20 / cos aw = 42.5719, 0.5719 further apart than unshifted; the tips are shortened by k = x1 + x2 - 0.5719/2 = 0.01404 module so each still clears the other's root by exactly 0.25 module (0.5 mm): pinion tip 14.5719, wheel tip 31.9719. Every tooth is thinned by 0.1 / (2 cos 20) = 0.05321 at its reference circle, which is 0.05 along the line of action, and involute flanks in mesh keep one gap along it at every angle, so between_bodies reads backlash / 2 = 0.050 - a wrong centre distance would move it by its error times sin aw, and a wrong tooth thickness by the error times cos 20. Closed-form volumes 3805.988 (pinion) and 22246.937 (wheel) mm3; the mesh reads 0.067 % and 0.029 % under them. The pinion's size is 2 x 14.5719 across two tips, read 2 microns short at the mesh's tip vertices. Contact ratio 1.415.",
+  "brep": {
+    "size": [
+      89.035,
+      63.922,
+      8.0
+    ],
+    "volume_mm3": 26044.378,
+    "area_mm2": 10858.91,
+    "triangles": 4336,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 3255.547,
+    "stands_on_patches": 2,
+    "watertight": true,
+    "faces": 256,
+    "edges": 1512,
+    "curves": 756,
+    "deviation_mm": 0.0,
+    "requires": [
+      "section-curves",
+      "bspline-knots",
+      "held-curves"
+    ],
+    "curve_bound_mm": 0.0000997878710745998,
+    "curve_bound": "certified",
+    "named_bodies": {
+      "pinion": {
+        "size": [
+          29.018,
+          29.018,
+          8.0
+        ],
+        "volume_mm3": 3803.499,
+        "faces": 74,
+        "edges": 432,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "wheel": {
+        "size": [
+          63.909,
+          63.922,
+          8.0
+        ],
+        "volume_mm3": 22240.879,
+        "faces": 182,
+        "edges": 1080,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "pinion/wheel": {
+        "verdict": "clear",
+        "clearance_mm": 0.05,
+        "interference_mm3": 0.0
+      }
+    },
+    "tolerance": {
+      "size_mm": 0.001,
+      "volume_pct": 0.05,
+      "triangles_pct": 5.0
+    }
+  }
+}
