@@ -632,6 +632,9 @@ pub const SMALL_ORDER: usize = 8;
 /// arithmetic in the same order on fixed arrays, so the values are identical.
 pub(crate) fn basis_small(span: usize, t: f64, p: usize, knots: &[f64], order: usize) -> [[f64; SMALL_ORDER]; 3] {
     debug_assert!(p < SMALL_ORDER && order <= 2);
+    if order == 0 {
+        return [basis_values(span, t, p, knots), [0.0; SMALL_ORDER], [0.0; SMALL_ORDER]];
+    }
     let mut ndu = [[0.0; SMALL_ORDER]; SMALL_ORDER];
     let mut left = [0.0; SMALL_ORDER];
     let mut right = [0.0; SMALL_ORDER];
@@ -686,6 +689,28 @@ pub(crate) fn basis_small(span: usize, t: f64, p: usize, knots: &[f64], order: u
         factor *= (p - k) as f64;
     }
     ders
+}
+
+/// Piegl & Tiller A2.2: the non-zero basis functions alone, by the same
+/// arithmetic as the last column of A2.3's table, so to the bit what
+/// [`basis_small`] computed for them before it asked this.
+fn basis_values(span: usize, t: f64, p: usize, knots: &[f64]) -> [f64; SMALL_ORDER] {
+    let mut n = [0.0; SMALL_ORDER];
+    let mut left = [0.0; SMALL_ORDER];
+    let mut right = [0.0; SMALL_ORDER];
+    n[0] = 1.0;
+    for j in 1..=p {
+        left[j] = t - knots[span + 1 - j];
+        right[j] = knots[span + j] - t;
+        let mut saved = 0.0;
+        for r in 0..j {
+            let temp = n[r] / (right[r + 1] + left[j - r]);
+            n[r] = saved + right[r + 1] * temp;
+            saved = left[j - r] * temp;
+        }
+        n[j] = saved;
+    }
+    n
 }
 
 /// Piegl & Tiller A2.3: the non-zero basis functions at `t` and their
@@ -2000,6 +2025,19 @@ pub fn polygon_is_convex(points: &[P2]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_basis_values_alone_are_the_bits_the_derivative_table_gives() {
+        let knots = [0.0, 0.0, 0.0, 0.0, 0.1, 0.13, 0.4, 0.41, 0.77, 1.0, 1.0, 1.0, 1.0];
+        for degree in 1..=3 {
+            for i in 0..=1000 {
+                let t = i as f64 / 1000.0 * 0.999_999;
+                let span = (knots[..=8].partition_point(|&k| k <= t).max(1) - 1).max(degree);
+                let full = basis_small(span, t, degree, &knots, 1)[0];
+                assert_eq!(basis_values(span, t, degree, &knots).map(f64::to_bits), full.map(f64::to_bits), "degree {degree}, t {t}");
+            }
+        }
+    }
 
     /// The sweep returns the pair checking every pair in order would, on
     /// chains that loop, touch, fold back and run along themselves.

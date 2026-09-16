@@ -25,10 +25,13 @@ enum Call {
 const JSON: u32 = 0;
 const BYTES: u32 = 1;
 const REFUSED: u32 = 2;
+/// An evaluation whose mesh follows its JSON as little-endian arrays.
+const MESHED: u32 = 3;
 
 enum Reply {
     Json(Vec<u8>),
     Bytes(Vec<u8>),
+    Meshed(Vec<u8>),
 }
 
 /// One build of a graph, as `service::build_exact` keeps it: keyed by the whole
@@ -63,6 +66,7 @@ pub extern "C" fn parcad_call(ptr: *mut u8, len: usize) -> *mut u8 {
     let (kind, payload) = match outcome {
         Ok(Reply::Json(json)) => (JSON, json),
         Ok(Reply::Bytes(bytes)) => (BYTES, bytes),
+        Ok(Reply::Meshed(bytes)) => (MESHED, bytes),
         Err(message) => (REFUSED, message.into_bytes()),
     };
     let mut framed = Vec::with_capacity(8 + payload.len());
@@ -87,7 +91,7 @@ fn answer(input: &[u8]) -> Result<Reply, String> {
             let (build, reused) = build(&doc)?;
             breadcrumb("measuring the mesh for the page");
             let evaluated = parcad_evaluation::evaluated(&doc, &build.0, build.1, reused)?;
-            json(&evaluated)
+            meshed(evaluated)
         }
         Call::InspectEdgeTarget { graph, node } => {
             let doc = parcad_evaluation::parse_graph(graph)?;
@@ -183,6 +187,29 @@ fn refusal(response: Response, kind: &str) -> String {
         Response::Error { stage, message } => format!("{message} (while {stage})"),
         _ => format!("the kernel returned the wrong reply kind for a {kind} request"),
     }
+}
+
+/// An evaluation with its mesh as arrays rather than JSON numbers: a pleated
+/// shade's 3.5 million triangles are 190 MB of JSON text to write and parse.
+/// Four little-endian u32 lengths (JSON bytes, then positions, normals and
+/// indices in elements), the JSON with those three arrays empty, and the
+/// arrays, each starting on a multiple of four bytes.
+fn meshed(mut evaluated: parcad_evaluation::Evaluated) -> Result<Reply, String> {
+    let positions = std::mem::take(&mut evaluated.positions);
+    let normals = std::mem::take(&mut evaluated.normals);
+    let indices = std::mem::take(&mut evaluated.indices);
+    breadcrumb("encoding the reply");
+    let text = serde_json::to_vec(&evaluated).map_err(|e| format!("encoding the reply: {e}"))?;
+    let pad = (4 - text.len() % 4) % 4;
+    let mut out = Vec::with_capacity(16 + text.len() + pad + 4 * (positions.len() + normals.len() + indices.len()));
+    for len in [text.len(), positions.len(), normals.len(), indices.len()] {
+        out.extend_from_slice(&(len as u32).to_le_bytes());
+    }
+    out.extend_from_slice(&text);
+    out.resize(out.len() + pad, b' ');
+    positions.iter().chain(&normals).for_each(|v| out.extend_from_slice(&v.to_le_bytes()));
+    indices.iter().for_each(|v| out.extend_from_slice(&v.to_le_bytes()));
+    Ok(Reply::Meshed(out))
 }
 
 fn json(value: &impl serde::Serialize) -> Result<Reply, String> {

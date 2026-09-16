@@ -174,9 +174,10 @@ export interface FaceSummary {
 }
 
 export interface Evaluated {
-  positions: number[];
-  normals: number[];
-  indices: number[];
+  /** Arrays from the page's kernel, which sends the mesh as binary; numbers over HTTP and IPC. */
+  positions: ArrayLike<number>;
+  normals: ArrayLike<number>;
+  indices: ArrayLike<number>;
   /** Logical edge curves. */
   edges: EdgeCurve[];
   /**

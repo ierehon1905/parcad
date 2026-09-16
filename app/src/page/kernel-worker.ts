@@ -72,7 +72,17 @@ self.onmessage = async (event: MessageEvent<ToWorker>) => {
     const len = k.HEAPU32[(reply >>> 2) + 1];
     const payload = k.HEAPU8.slice(reply + 8, reply + 8 + len);
     k._parcad_free(reply);
-    if (kind === 0) {
+    if (kind === 3) {
+      // `meshed` in crates/parcad-wasm/src/kernel.rs: lengths, JSON, then the arrays.
+      const [textLen, positionsLen, normalsLen, indicesLen] = new Uint32Array(payload.buffer, 0, 4);
+      const json = JSON.parse(new TextDecoder().decode(payload.subarray(16, 16 + textLen)));
+      let at = 16 + Math.ceil(textLen / 4) * 4;
+      const take = (count: number) => payload.buffer.slice(at, (at += 4 * count));
+      json.positions = new Float32Array(take(positionsLen));
+      json.normals = new Float32Array(take(normalsLen));
+      json.indices = new Uint32Array(take(indicesLen));
+      post({ kind: "reply", id: message.id, ok: true, json }, [json.positions.buffer, json.normals.buffer, json.indices.buffer]);
+    } else if (kind === 0) {
       post({ kind: "reply", id: message.id, ok: true, json: JSON.parse(new TextDecoder().decode(payload)) });
     } else if (kind === 1) {
       post({ kind: "reply", id: message.id, ok: true, bytes: payload }, [payload.buffer]);
