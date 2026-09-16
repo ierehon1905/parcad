@@ -1,6 +1,6 @@
 use parcad_core::graph::Doc;
 use parcad_occt::backend::BuildCache;
-use parcad_occt::protocol::{Request, Response, Success};
+use parcad_occt::protocol::{breadcrumb, Request, Response, Success};
 use serde::Deserialize;
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -85,6 +85,7 @@ fn answer(input: &[u8]) -> Result<Reply, String> {
         Call::Evaluate { graph } => {
             let doc = parcad_evaluation::parse_graph(graph)?;
             let (build, reused) = build(&doc)?;
+            breadcrumb("measuring the mesh for the page");
             let evaluated = parcad_evaluation::evaluated(&doc, &build.0, build.1, reused)?;
             json(&evaluated)
         }
@@ -98,12 +99,14 @@ fn answer(input: &[u8]) -> Result<Reply, String> {
         Call::ExportStl { graph } => {
             let doc = parcad_evaluation::parse_graph(graph)?;
             let (build, reused) = build(&doc)?;
+            breadcrumb("writing STL");
             let (bytes, _) = parcad_evaluation::stl(&doc, &build.0, reused)?;
             Ok(Reply::Bytes(bytes))
         }
         Call::Export3mf { graph } => {
             let doc = parcad_evaluation::parse_graph(graph)?;
             let (build, reused) = build(&doc)?;
+            breadcrumb("writing 3MF");
             let (bytes, _) = parcad_evaluation::three_mf(&doc, &build.0, reused, "part")?;
             Ok(Reply::Bytes(bytes))
         }
@@ -183,6 +186,7 @@ fn refusal(response: Response, kind: &str) -> String {
 }
 
 fn json(value: &impl serde::Serialize) -> Result<Reply, String> {
+    breadcrumb("encoding the reply");
     serde_json::to_vec(value)
         .map(Reply::Json)
         .map_err(|e| format!("encoding the reply: {e}"))

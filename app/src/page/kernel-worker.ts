@@ -66,6 +66,8 @@ self.onmessage = async (event: MessageEvent<ToWorker>) => {
     k.HEAPU8.set(input, ptr);
     const reply = k._parcad_call(ptr, input.length);
     // Views are re-read after the call: memory may have grown during it.
+    // The kernel's last breadcrumb is "done"; a stop after it is in here.
+    post({ kind: "stage", stage: "handing the reply to the page" });
     const kind = k.HEAPU32[reply >>> 2];
     const len = k.HEAPU32[(reply >>> 2) + 1];
     const payload = k.HEAPU8.slice(reply + 8, reply + 8 + len);
