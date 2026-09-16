@@ -247,6 +247,19 @@ pub struct ThicknessExpect {
     /// in either order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub between: Option<[String; 2]>,
+    /// The process minimum to sweep with; without it the sweep only looks
+    /// for the thinnest place.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threshold_mm: Option<f64>,
+    /// What the thinnest place is: `wall`, `feather` or `edge`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// The angle the two faces enclose there, degrees, to a tenth of one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wedge_deg: Option<f64>,
+    /// How many places below `threshold_mm` are not edge readings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub places: Option<usize>,
 }
 
 fn default_thickness_tolerance() -> f64 {
@@ -369,6 +382,36 @@ pub fn check_perception(
                         out.push(Mismatch {
                             field: "perception.thickness.at_most_mm".into(),
                             detail: format!("expected at most {hi}, measured {:.4}", min.thickness_mm),
+                        });
+                    }
+                }
+                if let Some(kind) = &want.kind {
+                    let got = format!("{:?}", min.kind).to_lowercase();
+                    if &got != kind {
+                        out.push(Mismatch {
+                            field: "perception.thickness.kind".into(),
+                            detail: format!("expected {kind}, measured {got} at {:?}", min.at),
+                        });
+                    }
+                }
+                if let Some(w) = want.wedge_deg {
+                    match min.wedge_deg {
+                        Some(got) => abs_check(&mut out, "perception.thickness.wedge_deg", w, got, 0.1),
+                        None => out.push(Mismatch {
+                            field: "perception.thickness.wedge_deg".into(),
+                            detail: "no angle was measured".into(),
+                        }),
+                    }
+                }
+                if let Some(places) = want.places {
+                    let got = answer
+                        .thickness
+                        .as_ref()
+                        .map_or(0, |t| t.thin_spots.iter().filter(|s| s.kind != parcad_occt::ThinKind::Edge).count());
+                    if got != places {
+                        out.push(Mismatch {
+                            field: "perception.thickness.places".into(),
+                            detail: format!("expected {places} places that are not edges, measured {got}"),
                         });
                     }
                 }

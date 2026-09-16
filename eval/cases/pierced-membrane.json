@@ -1,0 +1,36 @@
+{
+  "name": "pierced-membrane",
+  "script": "eval/scripts/pierced-membrane.js",
+  "why": "A blind hole stopping 0.004 mm short of the top face leaves a membrane 0.004 thick between two parallel planes that share no edge. The disc is large on this plate, so a sweep lands on it too; the case pins that the face-pair search reads it to the micron at 200 samples, and that a ball this small stays a wall: it is taken for an edge only against a face its own face meets.",
+  "brep": {
+    "size": [
+      20.0,
+      20.0,
+      5.0
+    ],
+    "volume_mm3": 1937.422,
+    "area_mm2": 1262.731,
+    "triangles": 192,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 387.474,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 8,
+    "edges": 30,
+    "curves": 14,
+    "perception": {
+      "thickness": {
+        "max_samples": 200,
+        "min_mm": 0.004,
+        "tolerance_mm": 1e-05,
+        "between": [
+          "hole",
+          "plate"
+        ],
+        "threshold_mm": 1.2,
+        "kind": "wall"
+      }
+    }
+  }
+}

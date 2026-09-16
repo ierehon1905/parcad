@@ -605,9 +605,11 @@ fn ray_probe(r: &parcad_occt::RayResult) -> RayProbe {
 /// One place the part is thin, with both faces named.
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct ThinSpot {
-    /// `feather`: two faces meeting at a shallow angle, material tapering to
-    /// nothing — what a cut that grazed another feature leaves, and never
-    /// intended. `wall`: the ball touches two faces nearly opposite each other,
+    /// `feather`: a sliver — real material thinning to a knife edge where two
+    /// faces meet at a shallow angle, what a cut that grazed another feature
+    /// leaves, and never intended. Its thickness is 0 because the material
+    /// runs out to nothing on that edge: the thinnest material there is, not a
+    /// measuring artefact and not an `edge` reading. `wall`: the ball touches two faces nearly opposite each other,
     /// or two that do not meet — a floor, a wall, a web. `edge`: the ball is
     /// wedged into a corner of 60° or more; every sharp edge and every round
     /// reads thin right beside itself, and this is that, listed last.
@@ -685,6 +687,10 @@ pub struct ThicknessReport {
     /// discarded most of what it sampled is a weaker answer, and says so.
     pub samples: usize,
     pub discarded: usize,
+    /// Every point of every face is within this of a sample on the same face:
+    /// how wide a thin place the sweep alone can miss, where the searches in
+    /// `note` do not reach.
+    pub sample_spacing_mm: f64,
     /// Echoed back, because "0 below threshold" is meaningless without it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub threshold_mm: Option<f64>,
@@ -698,9 +704,8 @@ pub struct ThicknessReport {
     /// the thinnest samples, spread across the part.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub thin_spots: Vec<ThinSpot>,
-    /// What the number is, and which way it can be wrong: an inscribed-ball
-    /// diameter, exact at every sampled point, so the true thinnest point may
-    /// lie between two samples. More samples narrow that; nothing widens it.
+    /// What the number is, and what is certain about it: which thin places
+    /// are always found, and which only as finely as `sample_spacing_mm`.
     pub note: &'static str,
 }
 
@@ -766,17 +771,24 @@ pub fn wall_thickness(
         thinnest: report.min.as_ref().map(spot),
         samples: report.samples,
         discarded: report.discarded,
+        sample_spacing_mm: round_mm(report.spacing_mm),
         threshold_mm,
         below_threshold: report.below_threshold,
         below_threshold_at_edges: report.below_threshold_at_edges,
         thin_spots: report.thin_spots.iter().map(spot).collect(),
-        note: "each thickness is the diameter of the largest ball that fits inside the \
+        note: "a `feather` is a sliver of real material that thins to 0 mm at a knife edge: \
+               the worst thing a part can have, listed first, and never an edge artefact. Each \
+               thickness is the diameter of the largest ball that fits inside the \
                material touching the surface at `at`, measured on the exact solid with every \
                fillet and chamfer in it — across a slanted wall, not along a line through it, \
-               so probe_part's first_solid_mm reads more there. Every sharp edge and every \
-               round reads thin beside itself, as kind `edge`. Exact at each sampled point; \
-               the true thinnest point may lie between two samples, so raise max_samples to \
-               narrow it",
+               so probe_part's first_solid_mm reads more there. Certain, whatever the sample \
+               count: every edge whose two faces meet at under 60° with material between them \
+               is listed as a `feather` at 0 mm, however short; and every wall thinner than threshold_mm (without one, \
+               than the thinnest wall sampled) between two faces that do not meet is found, \
+               and measured exactly where it is thinnest. Anything else — a wall across one \
+               curved face, such as a thin pin — is found where it is wider than \
+               sample_spacing_mm; raise max_samples to narrow that. Every sharp edge and \
+               every round reads thin beside itself, as kind `edge`",
     })
 }
 

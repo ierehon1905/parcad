@@ -17,9 +17,10 @@ use crate::protocol::{
     TagBounds, ThicknessResult, ThicknessSample, ThicknessSpec, ThinKind,
 };
 use anyhow::{bail, Result};
-use glam::DVec3;
-use opencascade::primitives::{Compound, Crossing, NearestBoundary, PointState, RayCaster, Shape};
-use std::collections::{HashMap, HashSet};
+use glam::{DVec2, DVec3};
+use opencascade::mesh::Mesh;
+use opencascade::primitives::{ClosePair, Compound, Crossing, EdgeWedge, NearestBoundary, PointState, RayCaster, Shape};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// How near a point must be to a face to count as on it, and the face-boundary
 /// tolerance the ray intersector classifies hits with, in mm. A hit within this
@@ -383,40 +384,45 @@ fn cast(bodies: &[Body], casters: &mut [RayCaster], line: &RayLine, max: f64) ->
     })
 }
 
-/// How far a thickness sample may sit off the exact surface, in mm: the
-/// mesher's deflection. A grid point inside a curved triangle lies on the
-/// chord, within this of the surface on the material's side or the void's.
+/// How far the exact surface may lie from the mesh the sweep plans on, in mm:
+/// the mesher's linear deflection.
 const DEFLECTION_MM: f64 = 0.01;
+
+/// Edge samples per part diagonal for the feather search, at least eight per
+/// edge: the angle between two faces changes slowly along their edge.
+const EDGE_SAMPLES_PER_DIAGONAL: f64 = 400.0;
 
 /// The inscribed-ball thickness at every sampled surface point: the diameter of
 /// the largest ball inside the material that touches the surface there, which
-/// is the thickness a mould or casting check means by the word.
+/// is the thickness a mould or casting check means by the word — and then the
+/// two places thin material can hide between samples, found from the exact
+/// geometry rather than hoped for (docs/PERCEPTION.md §5, "What is certain").
 ///
-/// The samples are the exact tessellation's nodes and a grid over every
-/// triangle at a spacing tied to the part's size. The grid is what finds a
-/// wall in the middle of a face: a plane is meshed as two triangles with no
-/// node inside its boundary. Every sample is projected onto its own face for
-/// the exact point and normal, since the ball has to be tangent to the surface
-/// itself, not to a chord of it. A node on a convex edge is moved a step into
-/// its face, since the neighbouring face cuts every ball tangent on the edge;
-/// a node on a concave edge is measured where it is. Either is often the only
-/// sample a narrow face has, and the material beside an edge is where a cut
-/// that grazed another feature leaves its sliver.
+/// The sweep measures from points over every triangle and the tessellation's
+/// nodes, evaluated on the surface at the triangle's own parameters, at the
+/// finest spacing the budget allows: every point of every face is within that
+/// spacing of a sample on the same face. A point on a face's boundary beside a
+/// convex edge is moved a step into its face, since the neighbouring face cuts
+/// every ball tangent on the edge.
+///
+/// Then: every edge is read along its length, and one whose faces enclose
+/// less than [`EDGE_MIN_WEDGE_DEG`] of material is a feather, reported at
+/// zero on its seam. Every pair of faces that do not share an edge but come
+/// within reach of each other — reach being the threshold or the thinnest
+/// sampled wall, whichever is larger — has its least distance settled on the
+/// surfaces and the ball measured where it is attained. And the thinnest
+/// sampled walls are followed downhill on their faces.
 fn thickness(bodies: &[Body], spec: &ThicknessSpec, diagonal: f64) -> ThicknessResult {
     let mut samples: Vec<ThicknessSample> = Vec::new();
     let mut discarded = 0usize;
     // No ball in the part is wider than the part.
     let limit = diagonal * 0.5 + 1.0;
-    // About a hundred samples across the part's diagonal, before decimation.
-    let spacing = (diagonal / 96.0).max(1e-3);
-
-    let mut starts = surface_samples(bodies, spacing);
-    // Decimate evenly rather than truncating, so every face keeps a share.
+    let meshes: Vec<Mesh> = bodies.iter().map(|b| b.shape.mesh()).collect();
     let max = spec.max_samples.max(1);
-    if starts.len() > max {
-        let stride = starts.len().div_ceil(max);
-        starts = starts.into_iter().step_by(stride).collect();
-    }
+    // About a hundred samples across the part's diagonal at the finest.
+    let finest = (diagonal / 96.0).max(1e-3);
+    let spacing = plan_spacing(&meshes, max, finest);
+    let starts = surface_samples(&meshes, spacing);
 
     let faces: Vec<FacesOf> = bodies.iter().map(FacesOf::new).collect();
     let mut nearest: Vec<NearestBoundary> = bodies.iter().map(|b| b.shape.nearest_boundary()).collect();
@@ -428,51 +434,109 @@ fn thickness(bodies: &[Body], spec: &ThicknessSpec, diagonal: f64) -> ThicknessR
     // edge itself is not counted, and any wall thinner than the threshold
     // still is.
     let step = spec.threshold_mm.map_or(0.5 * spacing, |t| 0.55 * t);
-    for Start { body: b, at, normal, face, into } in starts {
-        let body = &bodies[b];
-        let Some((p, outward)) = nearest[b].project(face, at) else {
-            discarded += 1;
+    for Start { body: b, face, uv, into, may_be_outside, .. } in starts {
+        let Some((p, outward)) = nearest[b].evaluate(face, uv, may_be_outside) else {
+            // A lattice point in the sliver between a curved boundary and its
+            // chord is not on the face at all; anything else is a failure.
+            if !may_be_outside {
+                discarded += 1;
+            }
             continue;
         };
-        // A projection that lands off the sample or turns the normal round has
-        // found another sheet of the same surface, not the point sampled.
-        if (p - at).length() > 20.0 * DEFLECTION_MM || outward.dot(normal.normalize_or_zero()) < 0.5 {
-            discarded += 1;
+        // A first ball much wider than the wall asks every face near it.
+        let guess = last_radius.get(&(b, face)).copied().unwrap_or(finest);
+        // A point on the face's boundary is measured where it is only beside
+        // a concave edge; beside a convex one no ball fits. The probe that
+        // tells them apart can be fooled where a point lies on the line of
+        // another edge, and a point on a boundary's chord is up to the
+        // deflection inside the face, so a ball no wider than that moves too.
+        let mut reading = None;
+        if into.is_none() || !on_convex_edge(&mut nearest[b], p, -outward) {
+            reading = measure(&bodies[b], &faces[b], &mut nearest[b], p, -outward, face, guess, limit);
+        }
+        if let Some(into) = into.filter(|_| reading.as_ref().is_none_or(|s| s.thickness_mm < 4.0 * DEFLECTION_MM)) {
+            let along = (into - outward * into.dot(outward)).normalize_or_zero();
+            reading = match nearest[b].project(face, p + along * step) {
+                Some((q, outward)) if along != DVec3::ZERO => {
+                    measure(&bodies[b], &faces[b], &mut nearest[b], q, -outward, face, guess, limit)
+                }
+                _ => continue,
+            };
+        }
+        match reading {
+            Some(sample) => {
+                last_radius.insert((b, face), (0.5 * sample.thickness_mm).max(1e-3));
+                samples.push(sample);
+            }
+            None => discarded += 1,
+        }
+    }
+
+    // Readings beside a feather run down to nothing and the seam search
+    // reports those exactly, so the reach is the thinnest sampled wall.
+    let sampled_min = samples
+        .iter()
+        .filter(|s| s.kind == ThinKind::Wall)
+        .map(|s| s.thickness_mm)
+        .fold(None, |m: Option<f64>, t| Some(m.map_or(t, |m| m.min(t))));
+    let reach = spec.threshold_mm.unwrap_or(0.0).max(sampled_min.unwrap_or(0.0));
+    // The thinnest sampled wall between each pair of faces, where a least
+    // distance that runs along a line is known to be reachable by a ball.
+    let mut sampled_walls: HashMap<(usize, usize, usize), (f64, DVec3, DVec3)> = HashMap::new();
+    for s in samples.iter().filter(|s| s.kind == ThinKind::Wall) {
+        let b = bodies.iter().position(|body| body.name.map(str::to_owned) == s.body).unwrap_or(0);
+        let (f, g) = s.faces;
+        let (key, at) = if f < g {
+            ((b, f, g), (DVec3::from_array(s.at), DVec3::from_array(s.opposite)))
+        } else {
+            ((b, g, f), (DVec3::from_array(s.opposite), DVec3::from_array(s.at)))
+        };
+        let entry = sampled_walls.entry(key).or_insert((f64::INFINITY, at.0, at.1));
+        if s.thickness_mm < entry.0 {
+            *entry = (s.thickness_mm, at.0, at.1);
+        }
+    }
+    let mut edges_checked = 0;
+    let mut face_pairs_checked = 0;
+    for (b, body) in bodies.iter().enumerate() {
+        let edge_spacing = (diagonal / EDGE_SAMPLES_PER_DIAGONAL).max(1e-3);
+        let (seams, edges) = feathers(body, &mut nearest[b], edge_spacing);
+        edges_checked += edges;
+        samples.extend(seams);
+        if reach <= 0.0 {
             continue;
         }
-        let (p, inward) = match into {
-            Some(into) if on_convex_edge(&mut nearest[b], p, -outward) => {
-                let along = (into - outward * into.dot(outward)).normalize_or_zero();
-                match nearest[b].project(face, p + along * step) {
-                    Some((q, outward)) if along != DVec3::ZERO => (q, -outward),
-                    _ => continue,
-                }
-            }
-            _ => (p, -outward),
-        };
-        let guess = last_radius.get(&(b, face)).copied().unwrap_or(spacing);
-        let Some(ball) = inscribed(&mut nearest[b], p, inward, guess, limit) else {
-            discarded += 1;
-            continue;
-        };
-        last_radius.insert((b, face), ball.radius.max(1e-3));
-        let (kind, wedge_deg) = faces[b].classify(face, ball.face, p, ball.centre, ball.contact);
-        samples.push(ThicknessSample {
-            thickness_mm: 2.0 * ball.radius,
-            at: p.to_array(),
-            opposite: ball.contact.to_array(),
-            inward: inward.to_array(),
-            tags: body.tags_of(face),
-            opposite_tags: body.tags_of(ball.face),
-            body: body.name.map(str::to_owned),
-            kind,
-            wedge_deg,
-            surface: None,
-            opposite_surface: None,
-            faces: (face, ball.face),
-            samples: 1,
-            extent_mm: None,
-        });
+        let pairs = nearest[b].close_pairs(reach);
+        face_pairs_checked += pairs.len();
+        // A least distance on a boundary is only near a wall, and stepping back
+        // from it finds a reading rather than the minimum: worth it for what a
+        // threshold asks about, and for the thinnest when nothing is asked.
+        let boundaries_below = spec.threshold_mm.unwrap_or(reach);
+        for pair in pairs.into_iter().filter(|p| p.inside || p.distance < boundaries_below) {
+            let sampled = sampled_walls.get(&(b, pair.faces.0, pair.faces.1)).map(|w| (w.1, w.2));
+            samples.extend(wall_between(body, &faces[b], &mut nearest[b], &pair, sampled, limit));
+        }
+    }
+
+    // The thinnest walls sampled, each followed downhill on its own face: a
+    // sample lands somewhere on a wall, and the wall is thinnest nearby.
+    let mut walls: Vec<&ThicknessSample> = samples.iter().filter(|s| s.kind == ThinKind::Wall).collect();
+    walls.sort_by(|a, b| a.thickness_mm.total_cmp(&b.thickness_mm));
+    let mut seeds: Vec<ThicknessSample> = Vec::new();
+    for w in walls {
+        if seeds.len() == POLISHED_WALLS {
+            break;
+        }
+        let apart = |s: &ThicknessSample| (DVec3::from_array(s.at) - DVec3::from_array(w.at)).length() > 2.5 * spacing;
+        if seeds.iter().all(apart) {
+            seeds.push(w.clone());
+        }
+    }
+    for seed in seeds {
+        let b = bodies.iter().position(|body| body.name.map(str::to_owned) == seed.body).unwrap_or(0);
+        if let Some(better) = downhill(&bodies[b], &faces[b], &mut nearest[b], &seed, spacing, limit) {
+            samples.push(better);
+        }
     }
 
     samples.sort_by(|a, b| a.thickness_mm.total_cmp(&b.thickness_mm));
@@ -510,17 +574,327 @@ fn thickness(bodies: &[Body], spec: &ThicknessSpec, diagonal: f64) -> ThicknessR
         below_threshold: below(&rest),
         below_threshold_at_edges: below(&edges),
         thin_spots,
+        spacing_mm: spacing,
+        edges_checked,
+        face_pairs_checked,
     }
 }
 
-/// A surface point to measure from, with the mesher's normal there.
+/// How many of the thinnest sampled walls, a few sample spacings apart, are
+/// followed downhill.
+const POLISHED_WALLS: usize = 4;
+
+/// A compass search for a thinner wall on `seed`'s face, from a quarter of the
+/// sample spacing down to a micron: the thinnest reading it reaches, if it is
+/// thinner, or nothing.
+fn downhill(
+    body: &Body,
+    faces: &FacesOf,
+    nearest: &mut NearestBoundary,
+    seed: &ThicknessSample,
+    spacing: f64,
+    limit: f64,
+) -> Option<ThicknessSample> {
+    const MAX_MOVES: usize = 64;
+    let face = seed.faces.0;
+    let mut best = seed.clone();
+    let mut step = 0.25 * spacing;
+    let mut moved = false;
+    for _ in 0..MAX_MOVES {
+        if step < 1e-3 {
+            break;
+        }
+        let at = DVec3::from_array(best.at);
+        let inward = DVec3::from_array(best.inward);
+        let t1 = inward.any_orthonormal_vector();
+        let t2 = inward.cross(t1);
+        let mut improved = false;
+        for dir in [t1, -t1, t2, -t2] {
+            let Some((q, outward)) = nearest.project(face, at + dir * step) else {
+                continue;
+            };
+            if on_convex_edge(nearest, q, -outward) {
+                continue;
+            }
+            let guess = 0.5 * best.thickness_mm;
+            if let Some(s) = measure(body, faces, nearest, q, -outward, face, guess, limit) {
+                if s.kind == ThinKind::Wall && s.thickness_mm < best.thickness_mm - 1e-9 {
+                    best = s;
+                    improved = true;
+                    moved = true;
+                    break;
+                }
+            }
+        }
+        if !improved {
+            step *= 0.5;
+        }
+    }
+    moved.then_some(best)
+}
+
+/// The ball tangent at `p`, as a reading named for its faces.
+#[allow(clippy::too_many_arguments)]
+fn measure(
+    body: &Body,
+    faces: &FacesOf,
+    nearest: &mut NearestBoundary,
+    p: DVec3,
+    inward: DVec3,
+    face: usize,
+    guess: f64,
+    limit: f64,
+) -> Option<ThicknessSample> {
+    let ball = inscribed(nearest, p, inward, guess, limit)?;
+    // Smaller than the probe that finds edges, or than the mesh's deflection
+    // against a face this one meets: the point is on an edge, and a feather
+    // there is the seam search's to report.
+    let (mut kind, wedge_deg) = faces.classify(face, ball.face, p, ball.centre, ball.contact);
+    if ball.radius < 2.0 * EDGE_PROBE_MM || (ball.radius < 2.0 * DEFLECTION_MM && faces.meet(face, ball.face)) {
+        kind = ThinKind::Edge;
+    }
+    Some(ThicknessSample {
+        thickness_mm: 2.0 * ball.radius,
+        at: p.to_array(),
+        opposite: ball.contact.to_array(),
+        inward: inward.to_array(),
+        tags: body.tags_of(face),
+        opposite_tags: body.tags_of(ball.face),
+        body: body.name.map(str::to_owned),
+        kind,
+        wedge_deg,
+        surface: None,
+        opposite_surface: None,
+        faces: (face, ball.face),
+        samples: 1,
+        extent_mm: None,
+        span: None,
+    })
+}
+
+/// Every edge whose two faces enclose less than [`EDGE_MIN_WEDGE_DEG`] of
+/// material anywhere along it, as one zero-thickness reading on its seam at
+/// the sharpest point, spanning the stretch that is that sharp; and how many
+/// edges were read.
+fn feathers(body: &Body, nearest: &mut NearestBoundary, spacing: f64) -> (Vec<ThicknessSample>, usize) {
+    let wedges = nearest.edge_wedges(spacing);
+    let mut by_edge: BTreeMap<usize, Vec<&EdgeWedge>> = BTreeMap::new();
+    for w in &wedges {
+        by_edge.entry(w.edge).or_default().push(w);
+    }
+    let mut seams = Vec::new();
+    for along in by_edge.values() {
+        let sharp: Vec<&&EdgeWedge> = along.iter().filter(|w| w.angle_deg < EDGE_MIN_WEDGE_DEG).collect();
+        let Some(sharpest) = sharp.iter().min_by(|a, b| a.angle_deg.total_cmp(&b.angle_deg)) else {
+            continue;
+        };
+        let lo = sharp.iter().fold(DVec3::splat(f64::INFINITY), |m, w| m.min(w.point));
+        let hi = sharp.iter().fold(DVec3::splat(f64::NEG_INFINITY), |m, w| m.max(w.point));
+        let (a, b) = sharpest.faces;
+        seams.push(ThicknessSample {
+            thickness_mm: 0.0,
+            at: sharpest.point.to_array(),
+            opposite: sharpest.point.to_array(),
+            inward: sharpest.into.to_array(),
+            tags: body.tags_of(a),
+            opposite_tags: body.tags_of(b),
+            body: body.name.map(str::to_owned),
+            kind: ThinKind::Feather,
+            wedge_deg: Some(sharpest.angle_deg),
+            surface: None,
+            opposite_surface: None,
+            faces: (a, b),
+            samples: 1,
+            extent_mm: None,
+            span: Some((lo.to_array(), hi.to_array())),
+        });
+    }
+    (seams, by_edge.len())
+}
+
+/// The thinnest wall between two faces that do not share an edge, measured as
+/// a ball where their least distance `d` is attained. When that is square to
+/// both faces the ball there spans the whole distance and is the answer. A
+/// least distance along a line or over a patch — a hole beside a flat side —
+/// may have been settled at an end of it, on a face's boundary where no ball
+/// fits, or where a third face cuts the line; so the distance is settled again
+/// from where the sweep found this wall and from points stepped along the
+/// face, which moves along the line rather than off it, and the ball is taken
+/// there. A least distance only on a boundary is near a wall, not across one:
+/// see [`wall_near_boundary`]. Nothing when the faces face each other across a
+/// void or look the same way across a step.
+fn wall_between(
+    body: &Body,
+    faces: &FacesOf,
+    nearest: &mut NearestBoundary,
+    pair: &ClosePair,
+    sampled: Option<(DVec3, DVec3)>,
+    limit: f64,
+) -> Option<ThicknessSample> {
+    let d = pair.distance;
+    // Steps sized by the wall alone, so that what is found does not depend on
+    // the threshold asked about.
+    let scale = d.max(4.0 * DEFLECTION_MM);
+    let guess = (0.5 * d).max(1e-4);
+    let (a, c) = pair.faces;
+    let (pa, pc) = pair.points;
+    let ends = [(a, nearest.project(a, pa)), (c, nearest.project(c, pc))];
+    // A wall has each face's material towards the other: two faces that both
+    // look the same way across a step, or away from each other across a gap,
+    // are not one.
+    if d > 1e-6 {
+        for ((_, end), other) in ends.iter().zip([pc, pa]) {
+            if end.is_some_and(|(q, outward)| (other - q).dot(-outward) <= 0.0) {
+                return None;
+            }
+        }
+    }
+    if !pair.inside {
+        return ends.into_iter().find_map(|(face, end)| {
+            let (q, outward) = end?;
+            wall_near_boundary(body, faces, nearest, face, q, outward, scale, guess, limit)
+        });
+    }
+    let spans = |s: &ThicknessSample, across: f64| {
+        s.kind != ThinKind::Edge && s.thickness_mm >= across * (1.0 - 1e-4) - 1e-6
+    };
+    for (face, end) in ends {
+        let Some((q, outward)) = end else {
+            continue;
+        };
+        if !on_convex_edge(nearest, q, -outward) {
+            if let Some(s) = measure(body, faces, nearest, q, -outward, face, guess, limit) {
+                if spans(&s, d) {
+                    return Some(s);
+                }
+            }
+        }
+        let across = if face == a { pc - pa } else { pa - pc };
+        let towards = faces.centroid(face).map(|c| c - q);
+        let stepped = steps_into(nearest, face, q, outward, towards, scale)
+            .into_iter()
+            .map(|(at, _)| if face == a { (at, at + across) } else { (at + across, at) });
+        let seeds: Vec<(DVec3, DVec3)> = sampled.filter(|_| face == a).into_iter().chain(stepped).collect();
+        for near in seeds {
+            let Some(settled) = nearest
+                .settle_pair(a, c, near)
+                .filter(|s| s.inside && s.distance <= d * (1.0 + 1e-4) + 1e-6)
+            else {
+                continue;
+            };
+            let on_face = if face == a { settled.points.0 } else { settled.points.1 };
+            let Some((m, n)) = nearest.project(face, on_face) else {
+                continue;
+            };
+            if on_convex_edge(nearest, m, -n) {
+                continue;
+            }
+            if let Some(s) = measure(body, faces, nearest, m, -n, face, guess, limit) {
+                if spans(&s, settled.distance) {
+                    return Some(s);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Beside a least distance `q` that lies on face `face`'s boundary: the first
+/// reading stepped into the face that is not an edge, followed back towards
+/// `q` by halving for as long as it stays a wall, keeping the thinnest.
+#[allow(clippy::too_many_arguments)]
+fn wall_near_boundary(
+    body: &Body,
+    faces: &FacesOf,
+    nearest: &mut NearestBoundary,
+    face: usize,
+    q: DVec3,
+    outward: DVec3,
+    scale: f64,
+    guess: f64,
+    limit: f64,
+) -> Option<ThicknessSample> {
+    const HALVINGS: usize = 6;
+    let towards = faces.centroid(face).map(|c| c - q);
+    for (at, n) in steps_into(nearest, face, q, outward, towards, scale) {
+        if on_convex_edge(nearest, at, -n) {
+            continue;
+        }
+        let Some(first) = measure(body, faces, nearest, at, -n, face, guess, limit) else {
+            continue;
+        };
+        if first.kind == ThinKind::Edge {
+            continue;
+        }
+        let (mut wall, mut edge) = (at, q);
+        let mut best = first;
+        for _ in 0..HALVINGS {
+            let mid = 0.5 * (wall + edge);
+            let Some((m, n)) = nearest.project(face, mid) else {
+                edge = mid;
+                continue;
+            };
+            match measure(body, faces, nearest, m, -n, face, guess, limit) {
+                Some(t) if t.kind != ThinKind::Edge && !on_convex_edge(nearest, m, -n) => {
+                    wall = mid;
+                    if t.thickness_mm < best.thickness_mm {
+                        best = t;
+                    }
+                }
+                _ => edge = mid,
+            }
+        }
+        return Some(best);
+    }
+    None
+}
+
+/// Points of the face `step`, `2 step`, `4 step` away from `q` in each tangent direction
+/// that stays on the face — the one nearest `towards` first, which from a
+/// face's boundary is the way into it.
+fn steps_into(
+    nearest: &mut NearestBoundary,
+    face: usize,
+    q: DVec3,
+    outward: DVec3,
+    towards: Option<DVec3>,
+    scale: f64,
+) -> Vec<(DVec3, DVec3)> {
+    const DIRECTIONS: usize = 8;
+    let mut out = Vec::new();
+    let aim = towards.map(|t| t - outward * t.dot(outward)).filter(|t| t.length() > 1e-9);
+    let t1 = aim.map_or_else(|| outward.any_orthonormal_vector(), DVec3::normalize);
+    let t2 = outward.cross(t1);
+    let probe = (1e-3 * scale).max(1e-5);
+    // Straight ahead, then alternately either side of it.
+    for k in [0, 1, 7, 2, 6, 3, 5, 4] {
+        let angle = std::f64::consts::TAU * k as f64 / DIRECTIONS as f64;
+        let dir = t1 * angle.cos() + t2 * angle.sin();
+        if nearest.project(face, q + dir * probe).is_none() {
+            continue;
+        }
+        for step in [0.55, 1.1, 2.2] {
+            if let Some(hit) = nearest.project(face, q + dir * step * scale) {
+                out.push(hit);
+            }
+        }
+    }
+    out
+}
+
+/// A surface point to measure from.
 struct Start {
     body: usize,
-    at: DVec3,
-    normal: DVec3,
     face: usize,
-    /// For a node on the face's boundary, a direction into the face.
+    /// Where on the face's surface, in its own parameters.
+    uv: DVec2,
+    /// The same point on the mesh, for how far the mesh lies off the surface.
+    chord: DVec3,
+    /// For a point on the face's boundary, a direction into the face.
     into: Option<DVec3>,
+    /// Whether the point may lie outside the face: a lattice point in a
+    /// triangle on the boundary, which a curved boundary can leave outside.
+    may_be_outside: bool,
 }
 
 /// Radius of the ball that tells a convex edge from a concave one, mm.
@@ -540,74 +914,225 @@ fn on_convex_edge(nearest: &mut NearestBoundary, p: DVec3, inward: DVec3) -> boo
         .is_some_and(|hit| (hit.point - p).dot(inward) > 0.0)
 }
 
-/// Every tessellation node, a barycentric grid inside every triangle, and a
-/// face's triangle middles where it has nothing inside its boundary.
-fn surface_samples(bodies: &[Body], spacing: f64) -> Vec<Start> {
+fn point_segment_distance(x: DVec3, a: DVec3, b: DVec3) -> f64 {
+    let ab = b - a;
+    let t = if ab.length_squared() > 0.0 { ((x - a).dot(ab) / ab.length_squared()).clamp(0.0, 1.0) } else { 0.0 };
+    (x - (a + ab * t)).length()
+}
+
+/// Points over triangle `corners` no more than `spacing` apart, its corners
+/// left out: rows parallel to its longest side, so a sliver gets a row along
+/// its middle rather than a lattice as wide as it is long. Each point is its
+/// weights on the three corners and, for a point on a side, the corner that
+/// side is opposite.
+fn triangle_points(corners: [DVec3; 3], spacing: f64) -> Vec<([f64; 3], Option<usize>)> {
+    let side = |k: usize| (corners[(k + 2) % 3] - corners[(k + 1) % 3]).length();
+    let apex = (0..3).max_by(|&i, &j| side(i).total_cmp(&side(j))).unwrap_or(0);
+    let (a, b) = ((apex + 1) % 3, (apex + 2) % 3);
+    let base = side(apex);
+    let area = 0.5 * (corners[b] - corners[a]).cross(corners[apex] - corners[a]).length();
+    let height = if base > 0.0 { 2.0 * area / base } else { 0.0 };
+    let rows = ((height / spacing).ceil() as usize).max(1);
+    let mut out = Vec::new();
+    for j in 0..rows {
+        let t = j as f64 / rows as f64;
+        let across = ((base * (1.0 - t) / spacing).ceil() as usize).max(1);
+        for k in 0..=across {
+            if j == 0 && (k == 0 || k == across) {
+                continue;
+            }
+            let along = k as f64 / across as f64;
+            let mut w = [0.0; 3];
+            w[a] = (1.0 - t) * (1.0 - along);
+            w[b] = (1.0 - t) * along;
+            w[apex] = t;
+            let on = if j == 0 {
+                Some(apex)
+            } else if k == 0 {
+                Some(b)
+            } else if k == across {
+                Some(a)
+            } else {
+                None
+            };
+            out.push((w, on));
+        }
+    }
+    out
+}
+
+/// A grid cell, hashed for [`CellSet`].
+type Cell = (u32, [i64; 3]);
+
+/// Sets and maps over the mesh's own keys — cells, node indices, triangle
+/// sides — with a hash that costs a multiply rather than SipHash's rounds:
+/// the keys are ours, and there are hundreds of thousands.
+type FastHash = std::hash::BuildHasherDefault<CellHasher>;
+type CellSet = HashSet<Cell, FastHash>;
+
+#[derive(Default)]
+struct CellHasher(u64);
+
+impl std::hash::Hasher for CellHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(b as u64);
+        }
+    }
+    fn write_u64(&mut self, n: u64) {
+        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+    fn write_i64(&mut self, n: i64) {
+        self.write_u64(n as u64);
+    }
+    fn write_u32(&mut self, n: u32) {
+        self.write_u64(n as u64);
+    }
+    fn write_usize(&mut self, n: usize) {
+        self.write_u64(n as u64);
+    }
+}
+
+fn cell_of(face: usize, p: DVec3, cell: f64) -> Cell {
+    (face as u32, (p / cell).floor().to_array().map(|c| c as i64))
+}
+
+/// How many samples [`surface_samples`] takes at `spacing`, without taking them.
+fn sample_count(meshes: &[Mesh], spacing: f64) -> usize {
+    let cell = spacing / 3f64.sqrt();
+    let mut total = 0;
+    for mesh in meshes {
+        let mut taken = CellSet::default();
+        let mut node_seen = vec![false; mesh.vertices.len()];
+        for run in &mesh.faces {
+            let triangles = &mesh.indices[run.start * 3..(run.start + run.count) * 3];
+            for tri in triangles.chunks_exact(3) {
+                let [p, q, r] = [mesh.vertices[tri[0]], mesh.vertices[tri[1]], mesh.vertices[tri[2]]];
+                taken.insert(cell_of(run.face, (p + q + r) / 3.0, cell));
+                for (w, _) in triangle_points([p, q, r], spacing) {
+                    taken.insert(cell_of(run.face, p * w[0] + q * w[1] + r * w[2], cell));
+                }
+                for &k in tri {
+                    if !std::mem::replace(&mut node_seen[k], true) {
+                        taken.insert(cell_of(run.face, mesh.vertices[k], cell));
+                    }
+                }
+            }
+        }
+        total += taken.len();
+    }
+    total
+}
+
+/// A spacing no finer than `finest` whose samples fit in `max`, and within a
+/// few percent of the finest that does: samples go as the inverse square of
+/// the spacing, so a few corrected guesses land there.
+fn plan_spacing(meshes: &[Mesh], max: usize, finest: f64) -> f64 {
+    // Cells a spacing / √3 across cover a surface of area A about 3A / s²
+    // times, which is where to start counting.
+    let area: f64 = meshes
+        .iter()
+        .flat_map(|m| {
+            m.indices.chunks_exact(3).map(|t| {
+                let [p, q, r] = [m.vertices[t[0]], m.vertices[t[1]], m.vertices[t[2]]];
+                0.5 * (q - p).cross(r - p).length()
+            })
+        })
+        .sum();
+    let mut spacing = finest.max(0.95 * (3.0 * area / max as f64).sqrt());
+    for _ in 0..8 {
+        let count = sample_count(meshes, spacing);
+        if count <= max && (spacing <= finest || count * 10 >= max * 9) {
+            return spacing;
+        }
+        let next = spacing * (count as f64 / max as f64).sqrt() * if count > max { 1.02 } else { 0.99 };
+        spacing = next.max(finest);
+    }
+    // Still over after the corrections: coarsen until it fits.
+    while sample_count(meshes, spacing) > max && spacing < 1e6 {
+        spacing *= 1.25;
+    }
+    spacing
+}
+
+/// Points to measure from on every face, no two in one cell of a grid whose
+/// cells are `spacing / √3` across, so every candidate is within `spacing` of
+/// a sample on its own face. The candidates are every triangle's middle and
+/// points over it at `spacing`, then the tessellation's nodes. Each point carries its
+/// surface parameters, so it is evaluated on the face rather than projected.
+fn surface_samples(meshes: &[Mesh], spacing: f64) -> Vec<Start> {
+    let cell = spacing / 3f64.sqrt();
     let mut starts: Vec<Start> = Vec::new();
-    for (b, body) in bodies.iter().enumerate() {
-        let mesh = body.shape.mesh();
+    for (b, mesh) in meshes.iter().enumerate() {
+        let at = |i: usize| (mesh.vertices[i], mesh.face_uvs[i]);
         for run in &mesh.faces {
             let triangles = &mesh.indices[run.start * 3..(run.start + run.count) * 3];
             // A triangle side used once is on the face's boundary.
-            let mut sides: HashMap<(usize, usize), usize> = HashMap::new();
+            let mut sides: HashMap<(usize, usize), usize, FastHash> = HashMap::default();
             for tri in triangles.chunks_exact(3) {
                 for (i, j) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
                     *sides.entry((i.min(j), i.max(j))).or_default() += 1;
                 }
             }
-            let mut rim: HashSet<usize> = HashSet::new();
-            for (&(i, j), &uses) in &sides {
-                if uses == 1 {
-                    rim.insert(i);
-                    rim.insert(j);
+            let on_rim = |i: usize, j: usize| sides.get(&(i.min(j), i.max(j))) == Some(&1);
+            // Off the boundary first, then on it, then the nodes: the first
+            // candidate in a cell is the one measured.
+            let mut inner: Vec<Start> = Vec::new();
+            let mut boundary: Vec<Start> = Vec::new();
+            let start = |chord: DVec3, uv: DVec2, into: Option<DVec3>, may_be_outside: bool| Start {
+                body: b,
+                face: run.face,
+                uv,
+                chord,
+                into,
+                may_be_outside,
+            };
+            for tri in triangles.chunks_exact(3) {
+                let [(p, up), (q, uq), (r, ur)] = [at(tri[0]), at(tri[1]), at(tri[2])];
+                let middle = (p + q + r) / 3.0;
+                // Per side, opposite corners p, q, r in turn.
+                let rim = [on_rim(tri[1], tri[2]), on_rim(tri[0], tri[2]), on_rim(tri[0], tri[1])];
+                // Only a point this near a boundary side can be off the face:
+                // the boundary is within the deflection of its chord.
+                let off_face = |x: DVec3| {
+                    [(q, r), (p, r), (p, q)]
+                        .iter()
+                        .zip(rim)
+                        .any(|(&(a, c), on)| on && point_segment_distance(x, a, c) <= 2.0 * DEFLECTION_MM)
+                };
+                inner.push(start(middle, (up + uq + ur) / 3.0, None, off_face(middle)));
+                for (w, on) in triangle_points([p, q, r], spacing) {
+                    let chord = p * w[0] + q * w[1] + r * w[2];
+                    let uv = up * w[0] + uq * w[1] + ur * w[2];
+                    match on {
+                        None => inner.push(start(chord, uv, None, off_face(chord))),
+                        Some(side) => boundary.push(start(chord, uv, rim[side].then(|| middle - chord), off_face(chord))),
+                    }
                 }
             }
-            let first = starts.len();
             // Into the face from a boundary node: towards the middles of the
             // triangles it is a corner of.
-            let mut inwards: HashMap<usize, DVec3> = HashMap::new();
+            let mut inwards: HashMap<usize, DVec3, FastHash> = HashMap::default();
             for tri in triangles.chunks_exact(3) {
                 let middle = (mesh.vertices[tri[0]] + mesh.vertices[tri[1]] + mesh.vertices[tri[2]]) / 3.0;
-                for &i in tri {
-                    if rim.contains(&i) {
+                for (k, &i) in tri.iter().enumerate() {
+                    if on_rim(i, tri[(k + 1) % 3]) || on_rim(i, tri[(k + 2) % 3]) {
                         *inwards.entry(i).or_default() += (middle - mesh.vertices[i]).normalize_or_zero();
                     }
                 }
             }
-            let mut seen: HashSet<usize> = HashSet::new();
-            let mut push = |at: DVec3, normal: DVec3, into: Option<DVec3>| {
-                starts.push(Start { body: b, at, normal, face: run.face, into })
-            };
-            for tri in triangles.chunks_exact(3) {
-                for &i in tri {
-                    if seen.insert(i) {
-                        push(mesh.vertices[i], mesh.normals[i], inwards.get(&i).copied());
-                    }
-                }
-                let (p, q, r) = (mesh.vertices[tri[0]], mesh.vertices[tri[1]], mesh.vertices[tri[2]]);
-                let (np, nq, nr) = (mesh.normals[tri[0]], mesh.normals[tri[1]], mesh.normals[tri[2]]);
-                let longest = (q - p).length().max((r - q).length()).max((p - r).length());
-                let n = (longest / spacing).ceil() as usize;
-                // Barycentric grid strictly inside the triangle; its corners
-                // and edges are the nodes and their neighbours' grids.
-                for i in 1..n {
-                    for j in 1..n - i {
-                        let (u, v) = (i as f64 / n as f64, j as f64 / n as f64);
-                        let w = 1.0 - u - v;
-                        push(p * w + q * u + r * v, np * w + nq * u + nr * v, None);
-                    }
-                }
-            }
-            if starts[first..].iter().all(|s| s.into.is_some()) {
-                for tri in triangles.chunks_exact(3) {
-                    let [p, q, r] = [tri[0], tri[1], tri[2]];
-                    starts.push(Start {
-                        body: b,
-                        at: (mesh.vertices[p] + mesh.vertices[q] + mesh.vertices[r]) / 3.0,
-                        normal: mesh.normals[p] + mesh.normals[q] + mesh.normals[r],
-                        face: run.face,
-                        into: None,
-                    });
+            let mut seen: HashSet<usize, FastHash> = HashSet::default();
+            let nodes = triangles
+                .iter()
+                .filter(|&&i| seen.insert(i))
+                .map(|&i| start(at(i).0, at(i).1, inwards.get(&i).copied(), false));
+            let mut taken = CellSet::default();
+            for candidate in inner.into_iter().chain(boundary).chain(nodes.collect::<Vec<_>>()) {
+                if taken.insert(cell_of(run.face, candidate.chord, cell)) {
+                    starts.push(candidate);
                 }
             }
         }
@@ -695,6 +1220,14 @@ impl FacesOf {
         Self {
             summaries: describe_faces(body.shape),
         }
+    }
+
+    fn meet(&self, a: usize, b: usize) -> bool {
+        a == b || self.summaries.get(a).is_some_and(|s| s.adjacent.iter().any(|&f| f as usize == b))
+    }
+
+    fn centroid(&self, face: usize) -> Option<DVec3> {
+        self.summaries.get(face).map(|s| DVec3::from_array(s.centroid))
     }
 
     /// Feather, wall or edge, from where the ball touches: 180° less the angle
@@ -806,14 +1339,17 @@ fn places(sorted: &[&ThicknessSample], threshold: f64, link: f64) -> Vec<Thickne
     for (i, s) in thin.iter().enumerate() {
         let r = root(&mut parent, i);
         let p = DVec3::from_array(s.at);
+        let (lo, hi) = s
+            .span
+            .map_or((p, p), |(lo, hi)| (DVec3::from_array(lo).min(p), DVec3::from_array(hi).max(p)));
         let g = *group_of_root.entry(r).or_insert_with(|| {
-            groups.push((r, 0, p, p));
+            groups.push((r, 0, lo, hi));
             groups.len() - 1
         });
         let group = &mut groups[g];
         group.1 += 1;
-        group.2 = group.2.min(p);
-        group.3 = group.3.max(p);
+        group.2 = group.2.min(lo);
+        group.3 = group.3.max(hi);
     }
     groups
         .into_iter()
@@ -990,9 +1526,12 @@ mod tests {
         let report = thickness_of(&part, Some(1.2));
         let min = report.min.clone().expect("the taper is measurable");
         assert_eq!(min.kind, ThinKind::Feather, "{min:?}");
-        assert!(min.thickness_mm < 0.5, "{min:?}");
+        // Read off the edge itself: it runs to nothing, on the line y = 0 at
+        // z = 0 where the two cuts meet.
+        assert_eq!(min.thickness_mm, 0.0, "{min:?}");
+        assert!(min.at[1].abs() < 1e-3 && min.at[2].abs() < 1e-3, "{min:?}");
         let wedge = min.wedge_deg.expect("a feather knows its angle");
-        assert!((wedge - 15.0).abs() < 1.0, "wedge {wedge}, expected about 15");
+        assert!((wedge - 15.0).abs() < 0.01, "wedge {wedge}, expected 15");
         // The seam is one place, however far apart the sweep sampled it, and it
         // is named by the tags of both faces.
         let feathers: Vec<_> = report
@@ -1196,17 +1735,106 @@ mod tests {
         );
         let t = answer.thickness.unwrap();
         let min = t.min.unwrap();
-        // Exact for its own sample point, y off the port's -X generator: a ball
-        // tangent to the plane there and to the Ø10 port 10 away satisfies
-        // (10 − r)² + y² = (5 + r)², so it is 5 + y²/15 across — a sampled
-        // minimum, a micron or so over the 5.000 at the generator.
-        let y = min.at[1];
-        assert!((min.thickness_mm - (5.0 + y * y / 15.0)).abs() < 1e-4, "{min:?}");
-        assert!((min.thickness_mm - 5.0).abs() < 3e-3, "{min:?}");
+        // On the port's -X generator, which the face-pair search settles on: a
+        // sample y off it reads 5 + y²/15, where a ball tangent to the plane
+        // meets the Ø10 port, and the gallery cuts the generator below z = 4,
+        // so the ball is taken where it fits above.
+        assert!((min.thickness_mm - 5.0).abs() < 1e-6, "{min:?}");
+        assert!(min.at[1].abs() < 1e-6, "{min:?}");
         let mut between = [min.tags[0].as_str(), min.opposite_tags[0].as_str()];
         between.sort();
         assert_eq!(between, ["block", "port"]);
         assert!(t.below_threshold > 0);
+    }
+
+    /// The control box's plate defect in closed form: a Ø2 hole and a Ø6
+    /// recess 1 mm deep, 4.25 apart, leave 0.25 mm between them. Found and
+    /// measured exactly at any sample count, one included.
+    #[test]
+    fn a_thin_wall_between_two_features_is_found_whatever_the_sample_count() {
+        let part = built(
+            r#"{"units":"mm","root":6,"nodes":[
+            {"op":"cuboid","size":{"x":20,"y":20,"z":2}},
+            {"op":"translate","child":0,"by":{"x":0,"y":0,"z":1},"tag":"plate"},
+            {"op":"cylinder","r":1,"h":4},
+            {"op":"translate","child":2,"by":{"x":0,"y":0,"z":1},"tag":"hole"},
+            {"op":"cylinder","r":3,"h":2},
+            {"op":"translate","child":4,"by":{"x":4.25,"y":0,"z":0},"tag":"recess"},
+            {"op":"difference","base":1,"tools":[3,5],"blend":0}]}"#,
+        );
+        for max_samples in [1, 200, 20000] {
+            let report = ask(
+                &part,
+                Perceive {
+                    thickness: Some(ThicknessSpec { max_samples, threshold_mm: Some(1.2) }),
+                    ..Default::default()
+                },
+            )
+            .thickness
+            .unwrap();
+            let min = report.min.clone().expect("the plate has walls");
+            assert!((min.thickness_mm - 0.25).abs() < 1e-6, "{max_samples}: {min:?}");
+            assert_eq!(min.kind, ThinKind::Wall, "{min:?}");
+            let mut between = [min.tags[0].as_str(), min.opposite_tags[0].as_str()];
+            between.sort();
+            assert_eq!(between, ["hole", "recess"]);
+            assert!(report.below_threshold > 0);
+            assert!(report.face_pairs_checked > 0 && report.edges_checked > 0, "{report:?}");
+        }
+    }
+
+    /// The control box's grille through its screw boss, in closed form: where
+    /// circles of radius 3.5 and 1.5, 2√2 apart, cross, the material between
+    /// them closes at acos((3.5² + 1.5² − 8) / (2 · 3.5 · 1.5)).
+    #[test]
+    fn a_hole_through_a_boss_side_is_a_feather_at_the_angle_the_circles_cross() {
+        let part = built(
+            r#"{"units":"mm","root":3,"nodes":[
+            {"op":"cylinder","r":3.5,"h":10,"tag":"boss"},
+            {"op":"cylinder","r":1.5,"h":20},
+            {"op":"translate","child":1,"by":{"x":2,"y":2,"z":0},"tag":"hole"},
+            {"op":"difference","base":0,"tools":[2],"blend":0}]}"#,
+        );
+        let report = thickness_of(&part, Some(1.2));
+        let min = report.min.expect("the boss has material");
+        assert_eq!((min.kind, min.thickness_mm), (ThinKind::Feather, 0.0), "{min:?}");
+        let expected = ((3.5f64 * 3.5 + 1.5 * 1.5 - 8.0) / (2.0 * 3.5 * 1.5)).acos().to_degrees();
+        let wedge = min.wedge_deg.unwrap();
+        assert!((wedge - expected).abs() < 1e-3, "wedge {wedge}, expected {expected}");
+        // On a crossing line: 3.5 from the boss's axis and 1.5 from the hole's.
+        let at = DVec3::from_array(min.at);
+        assert!((at.truncate().length() - 3.5).abs() < 1e-6, "{min:?}");
+        assert!(((at.truncate() - glam::DVec2::new(2.0, 2.0)).length() - 1.5).abs() < 1e-6, "{min:?}");
+    }
+
+    /// A box with a pocket: its own edges and the pocket's rim are convex
+    /// right angles, the pocket's floor and inside corners concave ones, and
+    /// the rule for which side of an edge a face lies on never needed the
+    /// classifier's correction.
+    #[test]
+    fn every_edge_reads_the_angle_its_material_encloses() {
+        let part = built(
+            r#"{"units":"mm","root":3,"nodes":[
+            {"op":"cuboid","size":{"x":20,"y":20,"z":10}},
+            {"op":"cuboid","size":{"x":10,"y":10,"z":10}},
+            {"op":"translate","child":1,"by":{"x":0,"y":0,"z":5}},
+            {"op":"difference","base":0,"tools":[2],"blend":0}]}"#,
+        );
+        let bodies = bodies_of(&part);
+        let wedges = bodies[0].shape.nearest_boundary().edge_wedges(0.5);
+        let mut by_edge: BTreeMap<usize, (f64, f64)> = BTreeMap::new();
+        for w in &wedges {
+            assert_eq!(w.corrected, 0, "{w:?}");
+            let e = by_edge.entry(w.edge).or_insert((f64::INFINITY, f64::NEG_INFINITY));
+            e.0 = e.0.min(w.angle_deg);
+            e.1 = e.1.max(w.angle_deg);
+        }
+        assert_eq!(by_edge.len(), 24, "{by_edge:?}");
+        let convex = by_edge.values().filter(|(lo, hi)| (lo - 90.0).abs() < 1e-9 && (hi - 90.0).abs() < 1e-9).count();
+        let concave = by_edge.values().filter(|(lo, hi)| (lo - 270.0).abs() < 1e-9 && (hi - 270.0).abs() < 1e-9).count();
+        assert_eq!((convex, concave), (16, 8), "{by_edge:?}");
+        let report = thickness_of(&part, Some(1.0));
+        assert!(report.thin_spots.iter().all(|s| s.kind != ThinKind::Feather), "{:?}", report.thin_spots);
     }
 
     /// Two bodies, each answered on its own and the answers merged.

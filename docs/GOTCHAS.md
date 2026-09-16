@@ -787,14 +787,17 @@ reports watertight and 11 faces, and removes 4519.86 mm³ against the
 parallelogram's exact 4519.87 — the cutter's own volume and not a micron more, so
 the membrane is intact and nothing in the reply mentions it.
 
-**And the measurement that finds it can miss it.** `measure_wall_thickness`
-fires from sampled surface points, so it reports a membrane only when a sample
-lands on one: on the sloped case above, when it sampled seven rendered views at
+**The measurement that finds it used to miss it.** `measure_wall_thickness`
+fired from sampled surface points, so it reported a membrane only when a sample
+landed on one: on the sloped case above, when it sampled seven rendered views at
 96 px it reported a minimum of 10.82 mm and *nothing* under a 1 mm threshold,
-while 256 px reported 0.0104 mm — the formula's value there to six places. It
-now samples the exact tessellation's nodes and a grid over every triangle, and
-the same rule holds: raise `max_samples` before believing a clean answer;
-docs/PERCEPTION.md §5 has the other direction it is wrong in.
+while 256 px reported 0.0104 mm — the formula's value there to six places. A
+membrane is a wall between two faces that share no edge, and those are now
+searched for on the exact surfaces whatever the sample count, and read where
+they are thinnest; a sliver whose faces meet is a feather, found from the edge
+itself and reported at 0. `eval/cases/pierced-membrane.json` holds a 0.004 mm
+lid at 200 samples. docs/PERCEPTION.md §5, "What is certain", has what still
+rests on the samples.
 
 So the rule has two ends: **a cutter crosses every face it meets** — past the
 material where it exits, proud of the material where it enters. `holeFor` and
