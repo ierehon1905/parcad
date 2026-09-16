@@ -458,8 +458,8 @@ recorded here:
   the cut, and a union, returned "the result has no faces", which blamed the
   boolean. The offset alone measured right, so the bounding-box post-condition
   could not see it: the thick-solid builder returns the grown body inside out.
-  The lowering now measures the sign of the volume and reorients with the
-  kernel's own `OrientClosedSolid`; `eval/cases/offset-filleted-cutter` holds
+  The lowering now closes the grown body into a solid and turns it outward
+  (`facing_outward`, docs/VALIDITY_CHECKS.md); `eval/cases/offset-filleted-cutter` holds
   the pocket against its closed form. GOTCHAS, "`offset_surface` lies".
 - **A cut that removed nothing was silent — FIXED.** Four VESA 100 holes fell
   outside a Ø120 hub and vanished; the face count said so one evaluation later.
