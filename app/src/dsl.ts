@@ -2381,18 +2381,19 @@ export interface LoftSection {
  * `wall: t` makes the loft a shell `t` mm thick instead of a solid, and is
  * the way to draw a lampshade, a vase or a sleeve through fitted sections —
  * not a loft of insets cut from a loft. The sections are the *outside*; the
- * kernel steps each point inward itself, widened where the wall leans so the
- * wall measured square to the surface is `t` (a sideways inset of a sloped
- * wall is only `t · cos(slope)` thick), and skins the inside on the same
- * knots and parameters as the outside, so the two stay `t` apart between
- * sections too. The built part reports `loft_wall_mm: { min, max }`, the wall
+ * kernel steps the built outside `t` inward along its own surface normal
+ * (a sideways inset of a sloped wall is only `t · cos(slope)` thick), at any
+ * lean — a bowl's floor or a dome's crown as well as a vase's side — and
+ * skins the inside on the outside's parameters, so the two stay `t` apart
+ * between sections too. The built part reports `loft_wall_mm: { min, max }`, the wall
  * measured between the two skins, and a wall more than 5 % off `t` anywhere
  * is refused, naming where. Both ends are open by default — the wall ends in
  * a flat ring. `wall: { thickness: t, bottom: "closed" }` gives the bottom a
  * floor `t` thick instead (a vase), and `top: "closed"` the top a lid.
- * A walled loft takes only fitted sections, no point, and refuses where the
- * outline turns tighter than the wall or the wall leans within about 14° of
- * horizontal.
+ * An open end on a wall that nearly lies flat is a knife edge, because the
+ * ring is cut level; close that end, or end the loft where the wall is
+ * steeper. A walled loft takes only fitted sections, no point, and refuses
+ * where the outline turns tighter than the wall.
  *
  * ```js
  * const ring = (r) => Array.from({ length: 120 }, (_, i) => {

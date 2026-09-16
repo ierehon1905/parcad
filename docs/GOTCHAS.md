@@ -558,14 +558,17 @@ built as outer sections minus sections stepped in by 1.6 mm measured 1.211 mm
 at its thinnest in `measure_wall_thickness` (kind `wall`, not a rim artifact),
 and a horizontal inset of one sloped section measured 1.387 mm. `loft(...,
 { wall })` steps by `t / cos φ` from the built outside, so its `loft_wall_mm`
-is the wall square to the surface.
+is the wall square to the surface. It now steps along the outside's surface
+normal rather than sideways, with the height solved so floors and rims stay
+level: the sideways step needed `t / cos φ`, which refused anything within
+14° of flat, and a bowl or a dome was impossible to wall.
 
 ### `BRepLib::OrientClosedSolid` can reverse a solid that was right
 
 It classifies the point at infinity by one line along a face's normal and
-trusts the transition at its farthest crossing. A walled pleated shade (288
-points, 21 sections, a 35° twist) came out of the sewing facing the right
-way; the classifier answered IN, the solid was
+trusts the transition at its farthest crossing. A walled pleated shade
+(`walled-twisted-pleats`: 288 points, 21 sections, a 35° twist) came out of
+the sewing facing the right way; the classifier answered IN, the solid was
 reversed, and the part was all of space except the shade — while
 `mass_properties` reported `volume.abs()` and every check passed. The same
 script with 25 sections and a 70° twist got OUT. Nothing about the geometry
@@ -573,7 +576,28 @@ is wrong; the line through dozens of walls 1.2 mm apart on large B-spline
 bands misses a crossing. The skinner states which way is out and checks the
 face; `serve.rs` refuses a mesh of negative volume. `Shape::oriented_outward`
 still uses the classifier, for `ThruSections` and the extrude path, and is
-now caught by that backstop if it errs.
+now caught by that backstop if it errs. Built by the fitter that came after,
+the same shade faces the right way even under the old classifier, and no
+lighter variant of it (48 tried) flips; the case is kept for the backstop,
+which turns any recurrence red.
+
+### Uniform knots over uneven points leave spans empty
+
+A least-squares fit on uniform knots needs every span to hold points
+(Schoenberg–Whitney). A pleated section sampled at equal steps along its
+base star, then pushed out and in, had chord steps from 0.76 to 3.31 mm: on
+256 uniform spans its fit plateaued at 0.15 mm, and on 511 — nearly one span
+per point — it was still 0.163 mm off, because the long chords had spans with
+no point in them and the matrix was only nominally invertible. Knots placed
+by the parameters (same points per span) fit the same section to 0.0007 mm
+on 508 spans. `PeriodicFit` refuses a factorisation whose pivots span more
+than twelve orders of magnitude.
+
+That section's 0.15 mm plateau is its own: at `z = 0` near (67, 27) its
+points zigzag, turning ±1.4 mm every 0.77 mm, a staircase the pleat growth
+left behind. Held to 0.05 mm the outside must follow it, and a 0.8 mm wall's
+inside loops there at every refinement — refused, naming the place. At
+0.25 mm the fit smooths it and the wall holds.
 
 ### `Edge::fit`'s closed seam is only G1, and can loop
 

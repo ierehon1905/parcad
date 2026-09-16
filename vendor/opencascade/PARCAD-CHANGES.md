@@ -427,6 +427,9 @@ made of arcs and splines.
   the squared distance held to that window) and the distance taken along
   the outer normal there, so an open end reads the wall continued; it
   returns the least and greatest and where each is.
+  `measure_wall_reaching` widens that window in `v` to at least a given
+  reach, for an inner skin whose point `(u, v)` is the offset of the outer
+  one at a nearby `v`; `measure_wall` is it with no extra reach.
 - `Mesher::new` and `Shape::write_stl` mesh in parallel
   (`BRepMesh_IncrementalMesh_ctor_full`, the sys crate's full constructor, with
   `isInParallel` set); the defaults for the other arguments are unchanged.

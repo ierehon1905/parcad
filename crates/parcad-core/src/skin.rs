@@ -180,22 +180,6 @@ impl Surface {
     }
 }
 
-/// The four uniform periodic cubic weights at `u` in [0, 1] on `spans`
-/// spans, for poles `k - 3 ..= k` (mod `spans`), and `k`.
-fn periodic_basis(u: f64, spans: usize) -> (usize, [f64; 4]) {
-    let t = u.clamp(0.0, 1.0) * spans as f64;
-    let k = (t.floor() as usize).min(spans - 1);
-    let s = t - k as f64;
-    let (s2, s3) = (s * s, s * s * s);
-    let w = [
-        (1.0 - s).powi(3) / 6.0,
-        (3.0 * s3 - 6.0 * s2 + 4.0) / 6.0,
-        (-3.0 * s3 + 3.0 * s2 + 3.0 * s + 1.0) / 6.0,
-        s3 / 6.0,
-    ];
-    (k, w)
-}
-
 /// How far past the averaged foot each correction steps: the plain step
 /// converges slowly, twice it in a few rounds, three times not at all.
 const RELAX: f64 = 2.0;
@@ -204,37 +188,69 @@ const RELAX: f64 = 2.0;
 pub const CORRECTION_ROUNDS: usize = 6;
 
 /// A least-squares fit of closed outlines, one point per parameter, on a
-/// uniform periodic cubic with `spans` spans: C2 all the way round,
-/// including where the list of points starts.
+/// periodic cubic with `spans` spans: C2 all the way round, including where
+/// the list of points starts. The knots follow the parameters (Piegl &
+/// Tiller eq. 9.69, closed): the same number of points falls in every span,
+/// so a fit on nearly as many spans as points still has each span held.
 pub struct PeriodicFit {
     spans: usize,
     params: Vec<f64>,
+    /// The periodic knots unwrapped, `knots[m + 3]` for `m` in `-3..=spans + 3`,
+    /// with `knots[3] = 0` and `knots[spans + 3] = 1`.
+    knots: Vec<f64>,
     lu: nalgebra::LU<f64, nalgebra::Dyn, nalgebra::Dyn>,
 }
+
+/// A fit whose pivots span more than this many orders of magnitude has a
+/// span its points barely hold, and its poles are noise.
+const CONDITION_LIMIT: f64 = 1e12;
 
 impl PeriodicFit {
     /// `params` has one value per point, rising from 0 and below 1.
     pub fn new(params: &[f64], spans: usize) -> Result<Self, String> {
-        if spans < 4 || spans >= params.len() {
-            return Err(format!(
-                "{spans} spans for {} points would be interpolation rather than a fit",
-                params.len()
-            ));
+        let n = params.len();
+        if spans < 4 || spans >= n {
+            return Err(format!("{spans} spans for {n} points would be interpolation rather than a fit"));
         }
+        if params[0] != 0.0 || params.windows(2).any(|w| !(w[0] < w[1])) || !(params[n - 1] < 1.0) {
+            return Err("a periodic fit takes parameters rising from 0 and below 1".into());
+        }
+        let at = |pos: f64| -> f64 {
+            let i = (pos.floor() as usize).min(n - 1);
+            let (a, b) = (params[i], params.get(i + 1).copied().unwrap_or(1.0));
+            a + (pos - i as f64) * (b - a)
+        };
+        let per = n as f64 / spans as f64;
+        let mut period: Vec<f64> = (0..spans).map(|j| at(j as f64 * per)).collect();
+        period.push(1.0);
+        let knots: Vec<f64> = (-3..=spans as isize + 3)
+            .map(|m| {
+                let wraps = m.div_euclid(spans as isize);
+                period[m.rem_euclid(spans as isize) as usize] + wraps as f64
+            })
+            .collect();
+        Self::factor(spans, params, knots)
+    }
+
+    fn factor(spans: usize, params: &[f64], knots: Vec<f64>) -> Result<Self, String> {
+        let mut fit = Self { spans, params: params.to_vec(), knots, lu: nalgebra::DMatrix::<f64>::zeros(1, 1).lu() };
         let mut normal = nalgebra::DMatrix::<f64>::zeros(spans, spans);
         for &u in params {
-            let (k, w) = periodic_basis(u, spans);
+            let (first, w) = fit.basis(u, 0);
             for a in 0..4 {
                 for b in 0..4 {
-                    normal[((k + spans - 3 + a) % spans, (k + spans - 3 + b) % spans)] += w[a] * w[b];
+                    normal[((first + a) % spans, (first + b) % spans)] += w[0][a] * w[0][b];
                 }
             }
         }
         let lu = normal.lu();
-        if !lu.is_invertible() {
+        let pivots: Vec<f64> = lu.u().diagonal().iter().map(|d| d.abs()).collect();
+        let (lo, hi) = pivots.iter().fold((f64::INFINITY, 0.0f64), |(lo, hi), &d| (lo.min(d), hi.max(d)));
+        if !lu.is_invertible() || !(lo * CONDITION_LIMIT > hi) {
             return Err(format!("{spans} spans leave a span with no point in it to hold it"));
         }
-        Ok(Self { spans, params: params.to_vec(), lu })
+        fit.lu = lu;
+        Ok(fit)
     }
 
     pub fn spans(&self) -> usize {
@@ -245,15 +261,52 @@ impl PeriodicFit {
         &self.params
     }
 
-    /// The curve through `points`, as the clamped cubic on
-    /// [`uniform_cubic_knots`] the periodic one is equal to.
+    /// The clamped knot vector of the curves [`Self::fit`] returns: every
+    /// section fitted by this shares it.
+    pub fn knots(&self) -> Vec<f64> {
+        let s = self.spans;
+        let mut out = vec![0.0; 3];
+        out.extend_from_slice(&self.knots[3..=s + 3]);
+        out.extend([1.0; 3]);
+        out
+    }
+
+    /// The span `u` lies in, as an index into `knots` less 3.
+    fn span(&self, u: f64) -> usize {
+        let s = self.spans;
+        let inner = &self.knots[4..s + 3];
+        inner.partition_point(|&k| k <= u.clamp(0.0, 1.0))
+    }
+
+    /// The four non-zero periodic basis functions at `u` and their first
+    /// `order` derivatives, for poles `first ..= first + 3` (mod spans).
+    fn basis(&self, u: f64, order: usize) -> (usize, [[f64; 4]; 3]) {
+        let i = self.span(u);
+        let b = basis_small(i + 3, u.clamp(0.0, 1.0), 3, &self.knots, order);
+        let mut w = [[0.0; 4]; 3];
+        for k in 0..=order {
+            w[k].copy_from_slice(&b[k][..4]);
+        }
+        (i + self.spans - 3, w)
+    }
+
+    /// How far a point's foot is searched either side of its parameter: a
+    /// span and a half of the widest span around it.
+    fn reach(&self, u: f64) -> f64 {
+        let i = self.span(u) + 3;
+        let widest = (i - 1..=i + 1).map(|m| self.knots[m + 1] - self.knots[m]).fold(0.0, f64::max);
+        1.5 * widest
+    }
+
+    /// The curve through `points`, as the clamped cubic on [`Self::knots`]
+    /// the periodic one is equal to.
     pub fn fit(&self, points: &[P2]) -> Result<BSpline<2>, String> {
         let s = self.spans;
         let mut rhs = nalgebra::DMatrix::<f64>::zeros(s, 2);
         for (p, &u) in points.iter().zip(&self.params) {
-            let (k, w) = periodic_basis(u, s);
-            for (a, wa) in w.iter().enumerate() {
-                let j = (k + s - 3 + a) % s;
+            let (first, w) = self.basis(u, 0);
+            for (a, wa) in w[0].iter().enumerate() {
+                let j = (first + a) % s;
                 rhs[(j, 0)] += wa * p[0];
                 rhs[(j, 1)] += wa * p[1];
             }
@@ -263,7 +316,28 @@ impl PeriodicFit {
             return Err("the least squares gave a pole that is not a number".into());
         }
         let periodic: Vec<P2> = (0..s).map(|j| [q[(j, 0)], q[(j, 1)]]).collect();
-        Ok(clamped(&periodic))
+        Ok(self.clamped(&periodic))
+    }
+
+    /// A periodic cubic's poles as the clamped cubic on [0, 1] equal to it:
+    /// unwrapped to `spans + 3` poles on the knots either side, then knots 0
+    /// and 1 raised to full multiplicity (Boehm) and the rest cut away.
+    fn clamped(&self, periodic: &[P2]) -> BSpline<2> {
+        let s = periodic.len();
+        let poles: Vec<P2> = (0..s + 3).map(|m| periodic[(m + s - 3) % s]).collect();
+        let mut curve = BSpline { degree: 3, poles, knots: self.knots.clone() };
+        for _ in 0..3 {
+            curve.insert_knot(0.0);
+        }
+        for _ in 0..3 {
+            curve.insert_knot(1.0);
+        }
+        let start = curve.knots.iter().position(|&k| k == 0.0).expect("knot 0 was inserted");
+        let mut poles: Vec<P2> = curve.poles[start..start + s + 3].to_vec();
+        // Both ends are the same point of a closed curve; make them the same
+        // bits.
+        poles[s + 2] = poles[0];
+        BSpline { degree: 3, poles, knots: self.knots() }
     }
 
     /// The furthest any point is from `curve`, each point's nearest foot
@@ -272,7 +346,7 @@ impl PeriodicFit {
         points
             .iter()
             .zip(&self.params)
-            .map(|(p, &u)| nearest(curve, *p, u, 1.5 / self.spans as f64).1)
+            .map(|(p, &u)| nearest(curve, *p, u, self.reach(u)).1)
             .fold(0.0, f64::max)
     }
 
@@ -290,14 +364,23 @@ impl PeriodicFit {
     /// [`Self::corrected`], from one search for each point's foot.
     pub fn examine(&self, curves: &[BSpline<2>], sections: &[&[P2]]) -> (f64, Vec<f64>) {
         let n = self.params.len();
+        let pairs: Vec<(&BSpline<2>, &&[P2])> = curves.iter().zip(sections).collect();
+        let feet = crate::par::map(&pairs, |(curve, points)| {
+            points
+                .iter()
+                .zip(&self.params)
+                .map(|(p, &u)| {
+                    let (foot, off) = nearest(curve, *p, u, self.reach(u));
+                    ((foot - u + 0.5).rem_euclid(1.0) - 0.5, off)
+                })
+                .collect::<Vec<_>>()
+        });
         let mut shift = vec![0.0; n];
         let mut worst: f64 = 0.0;
-        for (curve, points) in curves.iter().zip(sections) {
-            for (i, p) in points.iter().enumerate() {
-                let u = self.params[i];
-                let (foot, off) = nearest(curve, *p, u, 1.5 / self.spans as f64);
-                worst = worst.max(off);
-                shift[i] += (foot - u + 0.5).rem_euclid(1.0) - 0.5;
+        for section in &feet {
+            for (i, (moved, off)) in section.iter().enumerate() {
+                worst = worst.max(*off);
+                shift[i] += moved;
             }
         }
         let count = curves.len() as f64;
@@ -333,37 +416,15 @@ impl PeriodicFit {
     #[cfg(test)]
     fn eval(&self, poles: &[P2], u: f64) -> P2 {
         let s = self.spans;
-        let (k, w) = periodic_basis(u, s);
+        let (first, w) = self.basis(u, 0);
         let mut out = [0.0; 2];
-        for (a, wa) in w.iter().enumerate() {
-            let q = poles[(k + s - 3 + a) % s];
+        for (a, wa) in w[0].iter().enumerate() {
+            let q = poles[(first + a) % s];
             out[0] += wa * q[0];
             out[1] += wa * q[1];
         }
         out
     }
-}
-
-/// A periodic uniform cubic's poles as the clamped cubic on [0, 1] equal to
-/// it: unwrapped to `spans + 3` poles on the uniform knots either side, then
-/// knots 0 and 1 raised to full multiplicity (Boehm) and the rest cut away.
-fn clamped(periodic: &[P2]) -> BSpline<2> {
-    let s = periodic.len();
-    let poles: Vec<P2> = (0..s + 3).map(|m| periodic[(m + s - 3) % s]).collect();
-    let knots: Vec<f64> = (0..s + 7).map(|m| (m as f64 - 3.0) / s as f64).collect();
-    let mut curve = BSpline { degree: 3, poles, knots };
-    for _ in 0..3 {
-        curve.insert_knot(0.0);
-    }
-    for _ in 0..3 {
-        curve.insert_knot(1.0);
-    }
-    let start = curve.knots.iter().position(|&k| k == 0.0).expect("knot 0 was inserted");
-    let mut poles: Vec<P2> = curve.poles[start..start + s + 3].to_vec();
-    // Both ends are the same point of a closed curve; make them the same
-    // bits.
-    poles[s + 2] = poles[0];
-    BSpline { degree: 3, poles, knots: uniform_cubic_knots(s) }
 }
 
 /// The parameter of the point of `curve` nearest `p` within `reach` of `u`,
@@ -454,7 +515,7 @@ mod tests {
         let params: Vec<f64> = (0..40).map(|i| i as f64 / 40.0).collect();
         let fit = PeriodicFit::new(&params, 8).unwrap();
         let poles: Vec<P2> = (0..8).map(|j| [(j * j) as f64 % 7.0, j as f64 * 1.5 - (j % 3) as f64]).collect();
-        let curve = clamped(&poles);
+        let curve = fit.clamped(&poles);
         for k in 0..=64 {
             let u = k as f64 / 64.0;
             let (a, b) = (fit.eval(&poles, u), curve.point(u));
@@ -501,6 +562,37 @@ mod tests {
         }
         let (after, _) = worst(&params);
         assert!(before > 0.4 && after < 0.1, "{before} -> {after}");
+    }
+
+    #[test]
+    fn knots_follow_uneven_parameters_so_every_span_is_held() {
+        // Points bunched four to one around the loop: uniform knots would
+        // leave spans empty well before as many spans as points.
+        let n = 120;
+        let raw: Vec<f64> = (0..n).map(|i| if i % 2 == 0 { 1.0 } else { 4.0 }).collect();
+        let total: f64 = raw.iter().sum();
+        let params: Vec<f64> = (0..n).map(|i| raw[..i].iter().sum::<f64>() / total).collect();
+        let points: Vec<P2> = params.iter().map(|u| {
+            let a = std::f64::consts::TAU * u;
+            [20.0 * a.cos() + 3.0 * (5.0 * a).sin(), 20.0 * a.sin()]
+        }).collect();
+        let fit = PeriodicFit::new(&params, n - 1).unwrap();
+        let knots = fit.knots();
+        for w in knots[3..knots.len() - 3].windows(2) {
+            let inside = params.iter().filter(|&&u| u >= w[0] && u < w[1]).count();
+            assert!(inside >= 1, "an empty span {w:?}");
+        }
+        let curve = fit.fit(&points).unwrap();
+        let off = fit.deviation(&curve, &points);
+        assert!(off < 0.02, "{off}");
+        // The clamped curve is the periodic one on these knots too.
+        let poles: Vec<P2> = (0..n - 1).map(|j| [(j * j % 11) as f64, (j % 7) as f64 - 3.0]).collect();
+        let curve = fit.clamped(&poles);
+        for k in 0..=200 {
+            let u = k as f64 / 200.0;
+            let (a, b) = (fit.eval(&poles, u), curve.point(u));
+            assert!((a[0] - b[0]).abs() < 1e-9 && (a[1] - b[1]).abs() < 1e-9, "{u}: {a:?} vs {b:?}");
+        }
     }
 
     #[test]

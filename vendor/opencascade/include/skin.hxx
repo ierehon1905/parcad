@@ -210,8 +210,9 @@ class ParcadSkin {
   // to the nearest point of the outer skin, found by Newton's method from
   // the *same* (u, v) — both skins share their parameterisation, so that is
   // the matching point and the search stays on its own stretch of wall.
-  // Returns [min, max, x, y, z of the min, x, y, z of the max].
-  rust::Vec<double> measure_wall(double v0, double v1, int per_u, int per_v) const {
+  // The search reaches at least v_reach either side in v. Returns [min, max,
+  // x, y, z of the min, x, y, z of the max].
+  rust::Vec<double> measure_wall(double v0, double v1, int per_u, int per_v, double v_reach) const {
     try {
       const Handle(Geom_BSplineSurface)& outer = surface(0);
       const Handle(Geom_BSplineSurface)& inner = surface(1);
@@ -229,7 +230,7 @@ class ParcadSkin {
         for (int b = 0; b <= per_v; ++b) {
           const double v = v0 + (v1 - v0) * b / per_v;
           const gp_Pnt p = inner->Value(u, v);
-          const double d = nearest(outer, p, u, v, u0, u1, vmin, vmax);
+          const double d = nearest(outer, p, u, v, u0, u1, vmin, vmax, v_reach);
           if (d < lo) {
             lo = d;
             at_lo = p;
@@ -294,9 +295,9 @@ class ParcadSkin {
   // foot is inside the surface and, at an open end where the foot is held to
   // the edge, the distance to the surface continued.
   static double nearest(const Handle(Geom_BSplineSurface)& s, const gp_Pnt& p, double u, double v,
-                        double u0, double u1, double vmin, double vmax) {
+                        double u0, double u1, double vmin, double vmax, double v_reach) {
     const double du_reach = (u1 - u0) / (s->NbUKnots() - 1);
-    const double dv_reach = (vmax - vmin) / (s->NbVKnots() - 1);
+    const double dv_reach = std::max(v_reach, (vmax - vmin) / (s->NbVKnots() - 1));
     const double period = u1 - u0;
     auto wrap = [&](double t) {
       while (t < u0) t += period;

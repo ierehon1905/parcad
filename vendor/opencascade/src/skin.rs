@@ -106,9 +106,17 @@ impl Skinner {
     /// The distance from `per_u` by `per_v + 1` points of the inner skin over
     /// `[v0, v1]` to the outer skin, each found from the same parameters.
     pub fn measure_wall(&self, v0: f64, v1: f64, per_u: usize, per_v: usize) -> Result<WallReading, String> {
+        self.measure_wall_reaching(v0, v1, per_u, per_v, 0.0)
+    }
+
+    /// [`Self::measure_wall`], with each foot searched at least `v_reach`
+    /// either side of the inner point's `v` as well as a knot span: for an
+    /// inner skin whose point `(u, v)` is the offset of the outer at another
+    /// `v`.
+    pub fn measure_wall_reaching(&self, v0: f64, v1: f64, per_u: usize, per_v: usize, v_reach: f64) -> Result<WallReading, String> {
         let r = self
             .inner
-            .measure_wall(v0, v1, per_u as i32, per_v as i32)
+            .measure_wall(v0, v1, per_u as i32, per_v as i32, v_reach)
             .map_err(|e| e.what().to_string())?;
         Ok(WallReading {
             min_mm: r[0],
@@ -147,6 +155,6 @@ pub(crate) mod ffi {
         fn add_ring(self: Pin<&mut ParcadSkin>, v_outer: f64, v_inner: f64) -> Result<()>;
         fn set_outward(self: Pin<&mut ParcadSkin>, skin: i32, u: f64, v: f64, x: f64, y: f64, z: f64) -> Result<()>;
         fn build(self: Pin<&mut ParcadSkin>, tolerance: f64) -> Result<UniquePtr<TopoDS_Shape>>;
-        fn measure_wall(self: &ParcadSkin, v0: f64, v1: f64, per_u: i32, per_v: i32) -> Result<Vec<f64>>;
+        fn measure_wall(self: &ParcadSkin, v0: f64, v1: f64, per_u: i32, per_v: i32, v_reach: f64) -> Result<Vec<f64>>;
     }
 }

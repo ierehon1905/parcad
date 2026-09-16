@@ -1,0 +1,28 @@
+{
+  "name": "walled-bowl",
+  "script": "eval/scripts/walled-bowl.js",
+  "why": "A spherical bowl, radius 40 about (0, 0, 40), lofted through 40 fitted circles from z = 0.5 to its equator as a 2 mm wall with a closed floor. At the floor the surface lies 9 degrees off horizontal, which the sideways step once refused; stepped along the surface normal, the inside is the sphere of radius 38 about the same centre. Closed form: pi * [rho^2 z - (z - 40)^3 / 3] between the planes, outer 0.5..40 less inner 2.5..40, 19116.068 mm3; the mesh reads a chord short. loft_wall_mm must read 2.000 everywhere.",
+  "brep": {
+    "size": [
+      80.002,
+      79.997,
+      39.5
+    ],
+    "volume_mm3": 19110.718,
+    "area_mm2": 19611.589,
+    "triangles": 53310,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 124.758,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 76,
+    "edges": 296,
+    "curves": 75,
+    "deviation_mm": 0.0008,
+    "loft_wall_mm": [
+      1.9999,
+      2.0001
+    ]
+  }
+}

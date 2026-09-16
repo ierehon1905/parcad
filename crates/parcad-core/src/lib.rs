@@ -15,6 +15,7 @@ pub mod graph;
 pub mod measure;
 pub mod mesh;
 mod occlusion;
+pub mod par;
 pub mod render;
 pub mod section;
 pub mod section_crossing;
