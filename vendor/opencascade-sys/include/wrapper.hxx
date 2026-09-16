@@ -9,6 +9,14 @@
 #include <BRepAdaptor_Curve.hxx>
 #include <BRepAlgoAPI_Common.hxx>
 #include <BRepExtrema_DistShapeShape.hxx>
+#include <BRepClass_FaceClassifier.hxx>
+#include <Extrema_ExtPC.hxx>
+#include <Extrema_ExtPS.hxx>
+#include <Precision.hxx>
+#include <algorithm>
+#include <cmath>
+#include <memory>
+#include <vector>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_Section.hxx>
@@ -427,6 +435,234 @@ inline bool Shape_bounds_optimal(const TopoDS_Shape &shape, double &x0, double &
   }
   box.Get(x0, y0, z0, x1, y1, z1);
   return true;
+}
+
+// The nearest boundary point of a shape to many query points — added for
+// parcad, see PARCAD-CHANGES.md. `BRepExtrema_DistShapeShape` rebuilds every
+// face's projector and bounding box per call; this builds them once, as
+// `BRepExtrema_ExtPF` and `BRepExtrema_ExtPC` do, and keeps them. Faces are
+// numbered in `TopExp::MapShapes` order, the order `IndexedMapOfShape` gives.
+class NearestBoundary {
+  struct Box {
+    double lo[3];
+    double hi[3];
+    double distance_sq(const gp_Pnt &p) const {
+      double sum = 0.0;
+      const double c[3] = {p.X(), p.Y(), p.Z()};
+      for (int i = 0; i < 3; ++i) {
+        const double d = c[i] < lo[i] ? lo[i] - c[i] : (c[i] > hi[i] ? c[i] - hi[i] : 0.0);
+        sum += d * d;
+      }
+      return sum;
+    }
+    static Box of(const TopoDS_Shape &shape) {
+      Bnd_Box bnd;
+      BRepBndLib::AddOptimal(shape, bnd, /*useTriangulation*/ false, /*useShapeTolerance*/ true);
+      Box box;
+      if (bnd.IsVoid()) {
+        box.lo[0] = box.lo[1] = box.lo[2] = -1e300;
+        box.hi[0] = box.hi[1] = box.hi[2] = 1e300;
+      } else {
+        bnd.Get(box.lo[0], box.lo[1], box.lo[2], box.hi[0], box.hi[1], box.hi[2]);
+      }
+      return box;
+    }
+  };
+  struct FaceEntry {
+    TopoDS_Face face;
+    BRepAdaptor_Surface surface; // Extrema_ExtPS keeps a pointer to this
+    Extrema_ExtPS extrema;
+    double tolerance = 0.0;
+    bool geometric = false;
+    Box box;
+    std::vector<int> edges;
+  };
+  struct EdgeEntry {
+    BRepAdaptor_Curve curve; // Extrema_ExtPC keeps a pointer to this
+    Extrema_ExtPC extrema;
+    gp_Pnt ends[2];
+    bool geometric = false;
+    Box box;
+    int stamp = 0;
+  };
+  std::vector<std::unique_ptr<FaceEntry>> faces;
+  std::vector<std::unique_ptr<EdgeEntry>> edges;
+  int query = 0;
+
+public:
+  explicit NearestBoundary(const TopoDS_Shape &shape) {
+    IndexedMapOfShape face_map;
+    IndexedMapOfShape edge_map;
+    TopExp::MapShapes(shape, TopAbs_FACE, face_map);
+    TopExp::MapShapes(shape, TopAbs_EDGE, edge_map);
+    for (int i = 1; i <= edge_map.Extent(); ++i) {
+      auto entry = std::make_unique<EdgeEntry>();
+      const TopoDS_Edge &edge = TopoDS::Edge(edge_map(i));
+      entry->box = Box::of(edge);
+      if (BRep_Tool::IsGeometric(edge) && !BRep_Tool::Degenerated(edge)) {
+        entry->curve.Initialize(edge);
+        double first, last;
+        BRep_Tool::Range(edge, first, last);
+        const double tol = std::max(entry->curve.Resolution(Precision::Confusion()), Precision::PConfusion());
+        entry->extrema.Initialize(entry->curve, first, last, tol);
+        entry->ends[0] = entry->curve.Value(first);
+        entry->ends[1] = entry->curve.Value(last);
+        entry->geometric = true;
+      }
+      edges.push_back(std::move(entry));
+    }
+    for (int i = 1; i <= face_map.Extent(); ++i) {
+      auto entry = std::make_unique<FaceEntry>();
+      entry->face = TopoDS::Face(face_map(i));
+      entry->box = Box::of(entry->face);
+      entry->surface.Initialize(entry->face, false);
+      entry->tolerance = BRep_Tool::Tolerance(entry->face);
+      if (entry->surface.GetType() != GeomAbs_OtherSurface) {
+        const double tol = std::min(entry->tolerance, Precision::Confusion());
+        const double tol_u = std::max(entry->surface.UResolution(tol), Precision::PConfusion());
+        const double tol_v = std::max(entry->surface.VResolution(tol), Precision::PConfusion());
+        double u0, u1, v0, v1;
+        BRepTools::UVBounds(entry->face, u0, u1, v0, v1);
+        // Every local extremum, not only the least: the least over the
+        // untrimmed patch can lie outside the face while a nearer one inside
+        // it does not.
+        entry->extrema.SetFlag(Extrema_ExtFlag_MINMAX);
+        entry->extrema.SetAlgo(Extrema_ExtAlgo_Grad);
+        entry->extrema.Initialize(entry->surface, u0, u1, v0, v1, tol_u, tol_v);
+        entry->geometric = true;
+      }
+      for (TopExp_Explorer it(entry->face, TopAbs_EDGE); it.More(); it.Next()) {
+        const int index = edge_map.FindIndex(it.Current());
+        if (index > 0) {
+          entry->edges.push_back(index - 1);
+        }
+      }
+      faces.push_back(std::move(entry));
+    }
+  }
+
+  // The nearest boundary point closer than `within`, and the 0-based face it
+  // lies on — for a point on an edge, the first face met that owns the edge.
+  // A negative distance when nothing is that close.
+  double nearest(const gp_Pnt &p, double within, gp_Pnt &at, int &face_index) {
+    ++query;
+    double best_sq = within * within;
+    bool found = false;
+    std::vector<std::pair<double, int>> order;
+    for (int i = 0; i < (int)faces.size(); ++i) {
+      const double d = faces[i]->box.distance_sq(p);
+      if (d < best_sq) {
+        order.emplace_back(d, i);
+      }
+    }
+    std::sort(order.begin(), order.end());
+    BRepClass_FaceClassifier classifier;
+    for (const auto &[box_sq, i] : order) {
+      if (box_sq >= best_sq) {
+        break;
+      }
+      FaceEntry &f = *faces[i];
+      if (f.geometric) {
+        f.extrema.Perform(p);
+        if (f.extrema.IsDone()) {
+          for (int k = 1; k <= f.extrema.NbExt(); ++k) {
+            const double d = f.extrema.SquareDistance(k);
+            if (d >= best_sq) {
+              continue;
+            }
+            double u, v;
+            f.extrema.Point(k).Parameter(u, v);
+            classifier.Perform(f.face, gp_Pnt2d(u, v), f.tolerance);
+            if (classifier.State() == TopAbs_IN || classifier.State() == TopAbs_ON) {
+              best_sq = d;
+              at = f.extrema.Point(k).Value();
+              face_index = i;
+              found = true;
+            }
+          }
+        }
+      }
+      for (int e : f.edges) {
+        EdgeEntry &edge = *edges[e];
+        if (edge.stamp == query || !edge.geometric || edge.box.distance_sq(p) >= best_sq) {
+          continue;
+        }
+        edge.stamp = query;
+        for (const gp_Pnt &end : edge.ends) {
+          const double d = end.SquareDistance(p);
+          if (d < best_sq) {
+            best_sq = d;
+            at = end;
+            face_index = i;
+            found = true;
+          }
+        }
+        edge.extrema.Perform(p);
+        if (edge.extrema.IsDone()) {
+          for (int k = 1; k <= edge.extrema.NbExt(); ++k) {
+            const double d = edge.extrema.SquareDistance(k);
+            if (d < best_sq) {
+              best_sq = d;
+              at = edge.extrema.Point(k).Value();
+              face_index = i;
+              found = true;
+            }
+          }
+        }
+      }
+    }
+    return found ? std::sqrt(best_sq) : -1.0;
+  }
+
+  // The point of face `index` nearest `p`, and the face's outward normal
+  // there, unnormalised. False where the surface cannot answer, or where that
+  // point of the surface lies outside the face's boundary.
+  bool project(int index, const gp_Pnt &p, gp_Pnt &at, gp_Vec &normal) {
+    if (index < 0 || index >= (int)faces.size() || !faces[index]->geometric) {
+      return false;
+    }
+    FaceEntry &f = *faces[index];
+    f.extrema.Perform(p);
+    if (!f.extrema.IsDone() || f.extrema.NbExt() < 1) {
+      return false;
+    }
+    int best = 1;
+    for (int k = 2; k <= f.extrema.NbExt(); ++k) {
+      if (f.extrema.SquareDistance(k) < f.extrema.SquareDistance(best)) {
+        best = k;
+      }
+    }
+    double u, v;
+    f.extrema.Point(best).Parameter(u, v);
+    BRepClass_FaceClassifier classifier(f.face, gp_Pnt2d(u, v), f.tolerance);
+    if (classifier.State() == TopAbs_OUT) {
+      return false;
+    }
+    gp_Vec du, dv;
+    f.surface.D1(u, v, at, du, dv);
+    normal = du.Crossed(dv);
+    if (f.face.Orientation() == TopAbs_REVERSED) {
+      normal.Reverse();
+    }
+    return true;
+  }
+};
+
+inline std::unique_ptr<NearestBoundary> NearestBoundary_new(const TopoDS_Shape &shape) {
+  return std::unique_ptr<NearestBoundary>(new NearestBoundary(shape));
+}
+
+inline double NearestBoundary_nearest(NearestBoundary &nearest, double x, double y, double z, double within,
+                                      gp_Pnt &at, int32_t &face) {
+  int index = -1;
+  const double d = nearest.nearest(gp_Pnt(x, y, z), within, at, index);
+  face = index;
+  return d;
+}
+
+inline bool NearestBoundary_project(NearestBoundary &nearest, int32_t face, double x, double y, double z,
+                                    gp_Pnt &at, gp_Vec &normal) {
+  return nearest.project(face, gp_Pnt(x, y, z), at, normal);
 }
 
 // BRepFeat
