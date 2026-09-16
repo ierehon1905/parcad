@@ -70,9 +70,14 @@ function kernel(): Plugin {
   // beside the kernel so a visitor has geometry before the kernel arrives.
   const first = resolve(process.env.PARCAD_FIRST_PART_DIR || resolve(__dirname, "../target/playground"));
   const firstPart = resolve(first, "first-part.json");
+  const firstMesh = resolve(first, "first-part.drc");
   const firstScript = resolve(first, "first-part-script.js");
   const firstName = resolve(first, "first-part-name.txt");
-  const hasFirst = () => existsSync(firstPart) && existsSync(firstScript) && existsSync(firstName);
+  const hasFirst = () =>
+    existsSync(firstPart) && existsSync(firstMesh) && existsSync(firstScript) && existsSync(firstName);
+  // Three's copy of Draco's decoder, which the page loads only to unpack that mesh.
+  const dracoDir = resolve(__dirname, "node_modules/three/examples/jsm/libs/draco");
+  const dracoFiles = ["draco_wasm_wrapper.js", "draco_decoder.wasm"];
   let hash = "";
   let bytes = 0;
   return {
@@ -95,6 +100,8 @@ function kernel(): Plugin {
           __PARCAD_FIRST_PART__: hasFirst()
             ? JSON.stringify({
                 url: `kernel/${hash}/first-part.json`,
+                mesh: `kernel/${hash}/first-part.drc`,
+                decoder: `kernel/${hash}/draco/`,
                 part: readFileSync(firstName, "utf8").trim(),
                 script: readFileSync(firstScript, "utf8"),
               })
@@ -104,12 +111,16 @@ function kernel(): Plugin {
     },
     configureServer(server) {
       server.middlewares.use((request, response, next) => {
-        const match = request.url?.match(/\/kernel\/[0-9a-f]+\/(parcad-wasm\.js|parcad_wasm\.wasm|first-part\.json)$/);
+        const match = request.url?.match(
+          /\/kernel\/[0-9a-f]+\/(parcad-wasm\.js|parcad_wasm\.wasm|first-part\.json|first-part\.drc|draco\/[\w.]+)$/,
+        );
         if (!match) return next();
-        if (match[1] === "first-part.json") {
+        if (match[1].startsWith("first-part") || match[1].startsWith("draco/")) {
           if (!hasFirst()) return next();
-          response.setHeader("content-type", "application/json");
-          response.end(readFileSync(firstPart));
+          const served = match[1] === "first-part.json" ? firstPart : match[1] === "first-part.drc" ? firstMesh : resolve(dracoDir, match[1].slice("draco/".length));
+          if (!existsSync(served)) return next();
+          response.setHeader("content-type", served.endsWith(".json") ? "application/json" : served.endsWith(".wasm") ? "application/wasm" : served.endsWith(".js") ? "text/javascript" : "application/octet-stream");
+          response.end(readFileSync(served));
           return;
         }
         const file = match[1] === "parcad-wasm.js" ? script : wasm;
@@ -122,6 +133,10 @@ function kernel(): Plugin {
       this.emitFile({ type: "asset", fileName: `kernel/${hash}/parcad_wasm.wasm`, source: readFileSync(wasm) });
       if (hasFirst()) {
         this.emitFile({ type: "asset", fileName: `kernel/${hash}/first-part.json`, source: readFileSync(firstPart) });
+        this.emitFile({ type: "asset", fileName: `kernel/${hash}/first-part.drc`, source: readFileSync(firstMesh) });
+        for (const name of dracoFiles) {
+          this.emitFile({ type: "asset", fileName: `kernel/${hash}/draco/${name}`, source: readFileSync(resolve(dracoDir, name)) });
+        }
       }
       // The wasm links OpenCASCADE statically, so its licences travel with it (NOTICE.md).
       const repo = resolve(__dirname, "..");

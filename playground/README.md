@@ -56,8 +56,12 @@ bun x vite --mode playground           # the same, live, while editing the front
 result to `target/playground/`, which the build ships beside the kernel. A
 visitor then has the part on screen about 3 s after navigating, instead of
 waiting out the kernel's download *and* a build — the twisted planter is 5 s of
-geometry in a tab. It costs 10 MB, near 3 MB gzipped, against the kernel's own
-6.3 MB.
+geometry in a tab. Its mesh travels as Draco (`playground/encode-draco.ts`, three's decoder beside
+it): 0.36 MB where the same triangles are 9.95 MB of JSON, so the whole
+recording is 0.6 MB against the kernel's own 6.3 MB. Draco quantises positions
+to 14 bits of the part's extent — 0.006 mm here, finer than the mesher's own
+0.01 mm — and carries nothing that is reported: every number on screen comes
+from the snapshot, which is JSON and exact.
 
 Nothing about it is a claim: the page draws the shipped build, says
 "built before this page was served, rebuilding it here" while it does, and

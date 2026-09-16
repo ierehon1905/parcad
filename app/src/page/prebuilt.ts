@@ -14,9 +14,13 @@
  * says so while the stored build is what is on screen.
  */
 
+import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
+
 import { call } from "./kernel";
 
-declare const __PARCAD_FIRST_PART__: { url: string; part: string; script: string } | undefined;
+declare const __PARCAD_FIRST_PART__:
+  | { url: string; mesh: string; decoder: string; part: string; script: string }
+  | undefined;
 
 const shipped = typeof __PARCAD_FIRST_PART__ === "undefined" ? undefined : __PARCAD_FIRST_PART__;
 let offered = false;
@@ -32,8 +36,35 @@ export async function take(part: string | undefined, source: string): Promise<un
   const response = await fetch(new URL(shipped.url, document.baseURI)).catch(() => undefined);
   if (!response?.ok) return undefined;
   const evaluated = (await response.json().catch(() => undefined)) as Record<string, unknown> | undefined;
+  if (!evaluated) return undefined;
+  const mesh = await triangles(shipped.mesh, shipped.decoder).catch(() => undefined);
+  if (!mesh) return undefined;
   // Marked, because what the viewport draws has to say where it was measured.
-  return evaluated && { ...evaluated, shipped: true };
+  return { ...evaluated, ...mesh, shipped: true };
+}
+
+/**
+ * The mesh, out of the Draco file beside the evaluation.
+ *
+ * Only the triangles travel that way, and only as far as the first rebuild:
+ * Draco quantises positions to 14 bits of the part's own extent, 0.006 mm here,
+ * where every number the page *reports* comes from the snapshot in the JSON.
+ * playground/encode-draco.ts writes it.
+ */
+async function triangles(url: string, decoderPath: string) {
+  const response = await fetch(new URL(url, document.baseURI));
+  if (!response.ok) throw new Error(`the shipped mesh is not there: ${response.status}`);
+  const encoded = await response.arrayBuffer();
+  const loader = new DRACOLoader().setDecoderPath(new URL(decoderPath, document.baseURI).href);
+  const geometry = await new Promise<import("three").BufferGeometry>((resolve, reject) =>
+    loader.parse(encoded, resolve, reject),
+  );
+  loader.dispose();
+  return {
+    positions: geometry.getAttribute("position").array as Float32Array,
+    normals: geometry.getAttribute("normal").array as Float32Array,
+    indices: geometry.getIndex()!.array as Uint32Array,
+  };
 }
 
 /** Build that same graph in this tab, to replace what was shipped with it. */

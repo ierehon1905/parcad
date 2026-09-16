@@ -7,8 +7,9 @@
 #     playground/prebuild.sh                 # examples/twisted-planter.js
 #     playground/prebuild.sh examples/bracket.js
 #
-# It writes target/playground/first-part.json — the evaluation, exactly as
-# `/api/evaluate` answers it — and the script beside it, which is what the page
+# It writes target/playground/first-part.json — the evaluation as
+# `/api/evaluate` answers it, with the mesh moved into first-part.drc by
+# playground/encode-draco.ts — and the script beside it, which is what the page
 # matches the open part against: the same text, unedited, or the kernel in the
 # tab builds it. Neither is checked in: both are derived, and a stale one would
 # describe a part the script no longer builds.
@@ -48,10 +49,12 @@ printf '{"graph": %s}' "$(cat "$out/first-part-graph.json")" |
   curl -sf -X POST "http://127.0.0.1:$port/api/evaluate" -H 'content-type: application/json' --data-binary @- \
     -o "$out/first-part.json"
 
+bun playground/encode-draco.ts "$out/first-part.json"
+
 python3 - "$out/first-part.json" <<'PY'
 import json, sys
 evaluated = json.load(open(sys.argv[1]))
 snapshot = evaluated["snapshot"]
 print(f"recorded {snapshot['triangles']} triangles, {snapshot['volume_mm3']} mm3, {snapshot['kernel_ms']} ms")
 PY
-ls -lh "$out/first-part.json" | awk '{print "  " $5 " on disk (the page fetches it gzipped)"}'
+ls -lh "$out/first-part.json" "$out/first-part.drc" | awk '{print "  " $5 "  " $9}'
