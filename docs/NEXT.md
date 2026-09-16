@@ -194,18 +194,9 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
   name — "Refuse rather than approximate" — and then the OCCT step that loses
   the solid wants finding. Repro: `examples/twisted-planter.js` history, or
   two such bumps 8 mm apart on a plate.
-- **Delabella meshes faster and does not close.** OCCT's other 2D triangulator
-  (`IMeshTools_Parameters::MeshAlgo`, or the `CSF_MeshAlgo` environment
-  variable) cut the mesher by 25% on the planter — 1.27 s to 0.94 s, the whole
-  part 3.29 to 2.86 — and 6% of the WebAssembly build's mesh time. It also
-  loses the watertightness the corpus holds: `parabola-bezier` and
-  `curve-edges-by-kind` come back with 82 mesh edges bordering one face, which
-  the worker's own backstop refuses, and `probe-port-meets-gallery` reads a
-  5 mm wall at 5.003 while `thread-m8-3-turns` gains 6.2% triangles. Reverted;
-  measured 2026-09-16 on OCCT 8.0. `MinSize` was measured with it and is not
-  worth having either: 0.05 mm removes 1% of the triangles and no time, because
-  the count is set by real curvature, not by slivers. What the browser actually
-  waits on is the booleans, not the mesher.
+- **Delabella meshes faster and does not close.** Measured and reverted; the
+  repro, the numbers and what it does not break are in GOTCHAS, "Delabella,
+  OCCT's other triangulator". Worth a minimal C++ report upstream one day.
 - **A tag on a union of many curved solids makes it crawl.** The same saucer
   (a dish unioned with 37 revolved B-spline bumps, 39 nodes) builds in 1.3 s
   untagged and runs past 120 s with `.tag("saucer")` on the union — the graphs
