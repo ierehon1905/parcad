@@ -836,6 +836,52 @@ rules are gated on the `MCP-Protocol-Version` header the client sends; the
 older versions keep their session and want neither. `call.rs` in the CLI
 speaks the new one only, and says so.
 
+## A tool reply over 50,000 characters reaches the model as a 2 KB preview
+
+Claude Code 2.1.273 counts a tool result's text in **characters, not bytes**,
+and at **50,000** it stops handing the text to the model: longer than that,
+the result is written to a file under
+`~/.claude/projects/…/tool-results/` and the model gets a
+`<persisted-output>` note saying `Output too large (NN.NKB)` with the first
+2 KB. The KB there is characters ÷ 1024. A model with no Read tool — every
+field trial, and any client that denies it — cannot open that file, so the
+rest of the reply does not exist for it. Nothing fails: the call succeeds,
+and the model works from whatever else it has.
+
+Measured on 2026-09-16 with a one-tool stdio server returning `n` copies of
+one character, asked once per `n` by haiku:
+
+| text returned | reached the model |
+|---|---|
+| 49,000 × `x` | whole |
+| 50,000 × `x` | whole |
+| 50,001 × `x` | persisted, 2,368-character preview |
+| 51,000 × `x` | persisted |
+| 50,000 × `—` (150,000 bytes) | whole |
+| 30,000 × `é` (60,000 bytes) | whole |
+
+A second form hides a reply completely: `Error: result (61,261 characters)
+exceeds maximum allowed tokens. Output has been saved to …`, with no preview.
+Sonnet got it for the gears branch's 61,261-character `dsl` topic, where haiku
+got the preview form, and sonnet got the preview form for a 53,601-character
+reply. The client's token cap, `MAX_MCP_OUTPUT_TOKENS` (25,000 by default), is
+the likely trigger; that is not measured. Handed the error, sonnet went looking
+for PowerShell, Grep or Read in 10 of 12 trials.
+
+For a tool that returns a struct through rmcp's `Json`, the counted text is
+the compact JSON (`Value::to_string()`, non-ASCII unescaped), so a newline in
+a document costs two characters and a quote costs two. `read_docs` was the
+tool it hid: the `dsl` topic ran 58–62 KB on the gears branch, and in
+`eval/field/how-close-to-the-involute.md` every trial got the preview, read a
+seeded part's source instead, and graded LUCKY. `gotchas` was 53,601 on main.
+`docs.rs` now serves any topic longer than `SECTION_BUDGET_CHARS` (12,000
+escaped — the client limit is a ceiling, not a target) as its contents and then one `section` per call;
+`every_reply_fits_in_what_a_client_shows` holds every reply under
+`CLIENT_RESULT_LIMIT_CHARS`. Any other tool that can grow — a long
+`list_entities`, a large probe — has the same ceiling. The field grader no longer counts such a call as
+reaching its tool, and shows how many replies were hidden: field/README.md,
+"A call is not a read".
+
 ## A union of pieces that do not touch each other kills the fuse that joins them
 
 `pipe()` builds a tube as runs and bend arcs and unions them. Assembled with

@@ -1197,8 +1197,12 @@ pub fn check_fit(part: &str, reference: &str) -> Result<parcad_occt::FitReport, 
 /// the kernel refuses is a fact about this application, and a caller who has to
 /// infer it by reading example parts infers a *subset* — measurably, and in the
 /// direction of a worse part.
-pub fn read_docs(topic: Option<&str>) -> Result<crate::docs::Reference, String> {
-    crate::docs::read(topic)
+pub fn read_docs(
+    topic: Option<&str>,
+    section: Option<&str>,
+    detail: bool,
+) -> Result<crate::docs::Reference, String> {
+    crate::docs::read(topic, section, detail)
 }
 
 #[cfg(test)]

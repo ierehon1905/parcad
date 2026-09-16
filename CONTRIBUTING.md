@@ -68,6 +68,9 @@ the fix.**
   and both languages test against it.
 - **Every DSL export becomes a reserved word in a saved part.** Adding one is a
   compatibility change.
+- **A DSL doc comment is what a model reads.** A sentence, the rules, one
+  example that runs; reasons and history under `@remarks`. See
+  docs/WRITING_FOR_MODELS.md.
 - **Units are millimetres**, and primitives are centred on the origin.
 - **`cargo build` produces a *dev* app whatever the profile** — Tauri's switch is
   the `custom-protocol` feature, not `--release`.

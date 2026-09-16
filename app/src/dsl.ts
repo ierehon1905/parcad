@@ -1,33 +1,23 @@
 /**
  * The parcad modelling language.
  *
- * A script here builds a description of *intent* and nothing else — no geometry
- * is computed in JavaScript. `build()` flattens it to the JSON graph that the
- * Rust core evaluates. That split is what lets the same script outlive a change
- * of geometry kernel.
+ * - Millimetres. Every primitive is centred on the origin; place it with
+ *   `.at(x, y, z)`.
+ * - Shapes are values: reusing one reuses the node.
+ * - A script returns one shape, or named bodies, `return { base, lid }`,
+ *   which are measured apart and against each other and never fused.
+ *   Selectors, tags and treatments work inside one body.
  *
- * Every length is in millimetres, every primitive is centred on the origin and
- * placed with `.at(x, y, z)`, and a script ends by returning one shape.
+ *     const hole = cylinder(3, 40);
+ *     return box(60, 30, 6).cut(hole.at(20, 0, 0), hole.at(-20, 0, 0));
  *
- * Shapes are values. Reusing one reuses the node, so
- *
- *     const hole = cylinder(3, 40)
- *     plate.cut(hole.at(20, 0, 0), hole.at(-20, 0, 0))
- *
- * produces one cylinder with two placements, not two cylinders.
- *
- * A part that is several solids — a box and its lid, a clamp in two halves,
- * a holder and the object it holds — returns an object of named shapes
- * instead of one:
- *
- *     return { base, lid }
- *
- * The bodies are built, measured and exported together and never fused. The
- * report then measures each body by name and every pair against each other
- * (`clear` by how much, or `interfering` by how many mm³), STEP writes one
- * solid per body, and STL writes them all into one file. Nothing joins or
- * constrains one body to another: each sits exactly where its script placed
- * it. Selectors, tags and treatments work inside a body, never across two.
+ * @remarks
+ * A script builds a description of intent; no geometry is computed in
+ * JavaScript. `build()` flattens it to the JSON graph the Rust core evaluates,
+ * which is what lets a script outlive a change of kernel. The report measures
+ * each body by name and every pair (`clear` by how much, `interfering` by how
+ * many mm³); STEP writes one solid per body and STL all of them into one file.
+ * Nothing joins one body to another: each sits where its script placed it.
  */
 
 import { parseEdgeSelector, parseVertexSelector } from "./selectors";
@@ -56,10 +46,8 @@ export interface EdgeQuery {
   /** Match edges created by this named Boolean operation. */
   generatedBy?: string;
   /**
-   * Match a curve category identified from the B-rep edge: `"line"`, `"circle"`
-   * (any circular arc, including one drawn in a section), or `"spline"` — every
-   * edge that is neither, which is a section's spline, Bézier or B-spline and
-   * also an ellipse or intersection curve a boolean leaves.
+   * `"line"`, `"circle"` (any circular arc) or `"spline"` (anything else:
+   * section curves, and the ellipses and intersection curves booleans leave).
    */
   curve?: "line" | "circle" | "spline";
   /** Match a circular hole rim, excluding the rim of an outside boss. */
@@ -69,11 +57,9 @@ export interface EdgeQuery {
   /** Match edge centres at the requested document extrema. */
   at?: Partial<Record<"x" | "y" | "z", "min" | "max">>;
   /**
-   * How the two faces meet along the edge: `convex` is an outside corner —
-   * what "break every edge" means — `concave` an inside one, and `smooth` no
-   * corner at all: the boundary an earlier fillet left, or a cylinder's
-   * seam. A fillet or chamfer leaves smooth edges out unless asked for them
-   * by name, because there is nothing there for a rolling ball to build on.
+   * `convex` (an outside corner), `concave` (inside) or `smooth` (no corner:
+   * a fillet's boundary, a cylinder's seam). Fillets and chamfers skip smooth
+   * edges unless asked for them.
    */
   dihedral?: "convex" | "concave" | "smooth";
   /** A straight edge parallel to this axis: the object form of `|Z`. */
@@ -81,12 +67,10 @@ export interface EdgeQuery {
   /** Only edges at least this long, in mm: what keeps a sliver out of a cosmetic pass. */
   longerThan?: number;
   /**
-   * Only edges of one or more named features. A tag names the faces of the
-   * node it is on, and those faces keep the name through every later
-   * boolean, fillet, chamfer and rigid motion — so `{ on: "lip", at: { z:
-   * "max" } }` is the lip's own top rim, its extremes measured among the
-   * lip's edges rather than the whole part's. Lost through offset, shell and
-   * intersection.
+   * Only edges of these tagged features. `{ on: "lip", at: { z: "max" } }` is
+   * the lip's own top rim: `at` is then measured among the lip's edges. Tags
+   * survive booleans, fillets, chamfers and moves, not offset, shell or
+   * intersect.
    */
   on?: string | string[];
   /** Only edges with one face from each of two features: the seam where one meets the other. */
@@ -94,13 +78,9 @@ export interface EdgeQuery {
 }
 
 /**
- * Either a compact directional query over a shape's logical edges, or the
- * topology-aware object form above.
- *
- * `>Z` means furthest in +Z, `<Y` furthest in -Y, and `|X` parallel to X.
- * Join terms with `and`: `>Z and >Y and |X` picks the top edge at positive Y
- * that runs along X. Either form is resolved anew after each evaluation, rather
- * than depending on an unstable B-rep edge number.
+ * A string query or an `EdgeQuery`, resolved anew on every build. `>Z` is
+ * furthest in +Z, `<Y` furthest in -Y, `|X` parallel to X, joined by `and`:
+ * `>Z and >Y and |X` is the top edge at +Y running along X.
  */
 export type EdgeSelector = string | EdgeQuery;
 
@@ -119,15 +99,16 @@ export interface EdgeExpectation {
   count: number;
 }
 
-/** How a constant-radius edge fillet meets its neighbouring faces. */
 /**
- * A surface appearance for {@link Shape.material}, in glTF's terms. Glossy is
- * low `roughness`; there is no separate gloss setting.
+ * A surface appearance for `Shape.material`, in glTF's terms. Glossy is low
+ * `roughness`.
  *
- * @example { color: "#c9ccd1", metalness: 1, roughness: 0.35 }  // aluminium
- * @example { color: "#e8702a", roughness: 0.3, clearcoat: 1 }    // lacquered paint
- * @example { color: "#9fd4ff", opacity: 0.35, roughness: 0.1 }   // clear cover
- * @example { color: "#202020", emissive: "#30ff60" }             // a lit LED
+ * @example box(20, 10, 2).material({ color: "#c9ccd1", metalness: 1, roughness: 0.35 })  // aluminium
+ *
+ * @remarks
+ * More looks: `{ color: "#e8702a", roughness: 0.3, clearcoat: 1 }` lacquered
+ * paint, `{ color: "#9fd4ff", opacity: 0.35, roughness: 0.1 }` a clear cover,
+ * `{ color: "#202020", emissive: "#30ff60" }` a lit LED.
  */
 export interface Material {
   /** `#rrggbb` or `#rgb`. */
@@ -144,6 +125,7 @@ export interface Material {
   clearcoat?: number;
 }
 
+/** How a constant-radius edge fillet meets its neighbouring faces. */
 export interface FilletOptions {
   /** Tangent (G1) is available now; curvature (G2) is reserved for the exact backend. */
   continuity?: "tangent" | "curvature";
@@ -157,7 +139,7 @@ export interface ChamferOptions {
   corner?: "chamfer" | "miter" | "blend";
 }
 
-/** The position of a treatment call in the editor source. */
+/** @internal The position of a treatment call in the editor source. */
 export interface SourceLocation {
   /** One-based line in the script, not in the generated Function wrapper. */
   line: number;
@@ -166,7 +148,7 @@ export interface SourceLocation {
   method: "fillet" | "chamfer" | "smooth" | "squircle";
 }
 
-/** A selected-edge treatment node and the source call that authored it. */
+/** @internal A selected-edge treatment node and the source call that authored it. */
 export interface TreatmentSource {
   node: number;
   kind: "fillet" | "chamfer";
@@ -428,14 +410,6 @@ export class VertexSelection {
   }
 }
 
-/**
- * A solid, or a step on the way to one.
- *
- * Every method returns a *new* shape rather than changing this one, so a shape
- * can be placed twice, cut from two things, or kept as a tool and reused. The
- * one exception is {@link tag}, which names this shape in place: a name
- * belongs to the node, and a named copy would be a second node built twice.
- */
 function fullHex(name: string, color: string | undefined): string {
   const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color ?? "")?.[1];
   if (!hex) {
@@ -444,6 +418,14 @@ function fullHex(name: string, color: string | undefined): string {
   return `#${(hex.length === 3 ? [...hex].map((c) => c + c).join("") : hex).toLowerCase()}`;
 }
 
+/**
+ * A solid, or a step on the way to one. Every method returns a new shape, so a
+ * shape can be placed twice or kept as a tool, except `tag` and `material`,
+ * which change this one.
+ *
+ * @remarks
+ * A name belongs to the node: a named copy would be a second node built twice.
+ */
 export class Shape {
   /** @internal Where the script made this shape: the call stack, as the engine prints it. */
   readonly createdAt = new Error().stack;
@@ -462,14 +444,14 @@ export class Shape {
   }
 
   /**
-   * Name this shape so selectors — and you, reading a render — can refer to it.
+   * Name this shape's faces, for selectors (`on`, `between`) and for
+   * `tag_extents` in the report. Changes this shape in place and returns it;
+   * a second tag replaces the first everywhere the shape is used.
    *
-   * Tags are the only stable way to point at part of a model. They survive any
-   * change to dimensions or ordering, because they name the step that made the
-   * surface rather than the surface's position in some list.
-   *
-   * Unlike every other method this renames the shape itself and returns it,
-   * so tagging a shape twice keeps the last name, everywhere it is used.
+   * @remarks
+   * Tags are the only stable way to point at part of a model: they name the
+   * step that made a surface, not its position in a list, so they survive any
+   * change of dimensions or ordering.
    */
   tag(name: string): Shape {
     this.name = name;
@@ -477,21 +459,14 @@ export class Shape {
   }
 
   /**
-   * How the body this shape becomes looks in the window: a colour, and
-   * optionally how rough and how metallic its surface is. Purely visual — no
-   * measurement, tag or selector reads it, and an agent's render stays grey
-   * unless it passes `materials: true`.
+   * How this body looks in the window. Visual only: nothing measured reads it,
+   * and an agent's render shows it only with `materials: true`. Changes this
+   * shape in place and returns it.
    *
-   * A material colours a whole solid, never part of one. A body wears the
-   * outermost material in it: put it on the shape you return, or on each
-   * named body, `return { base: base.material(steel), lid }`. Shapes unioned
-   * together are one solid and wear one material, the first operand's when
-   * only the operands have one; a cutter's material is never used. For two
-   * colours, return two bodies.
+   * - One material per solid: a body wears the outermost one in it, a union
+   *   the first operand's, a cutter's never. Two colours are two bodies.
    *
-   * Like {@link tag}, this changes the shape itself and returns it.
-   *
-   * @example plate.material({ color: "#8a9099", metalness: 0.9, roughness: 0.35 })
+   * @example return { base: box(40, 40, 10).material({ color: "#8a9099", metalness: 0.9 }), lid: box(40, 40, 2).at(0, 0, 7) }
    */
   material(material: Material): Shape {
     const { roughness = 0.5, metalness = 0, opacity = 1, clearcoat = 0 } = material;
@@ -545,13 +520,9 @@ export class Shape {
   }
 
   /**
-   * Rotate about an axis through the origin, in degrees.
-   *
-   * A positive angle is right-handed: seen from the axis's + end looking back
-   * at the origin, the shape turns anticlockwise. Measured, both of them —
-   * `.rotate("z", 90)` carries a feature on +X round to +Y, and
-   * `.rotate("x", 90)` carries one on +Z round to -Y, which is how a cylinder
-   * built along Z ends up lying along Y.
+   * Rotate about an axis through the origin, in degrees. Positive turns
+   * anticlockwise seen from the axis's + end: `.rotate("z", 90)` takes +X to
+   * +Y, and `.rotate("x", 90)` takes +Z to -Y, so a Z cylinder lies along Y.
    */
   rotate(axis: Vec3 | "x" | "y" | "z", degrees: number): Shape {
     const a: Vec3 =
@@ -569,21 +540,17 @@ export class Shape {
   }
 
   /**
-   * Reflect in a plane through the origin, named by its normal.
+   * Reflect in the plane through the origin whose normal is `axis`:
+   * `.mirror("x")` flips X, across the YZ plane.
    *
-   * `.mirror("x")` reflects across the YZ plane — the axis names the direction
-   * the shape is flipped in, not the plane it stays in. A symmetric part is
-   * `union(half, half.mirror("x"))`; the reflection on its own is the left-hand
-   * version of a right-hand part.
+   * - A symmetric part is `union(half, half.mirror("x"))`.
+   * - Mirror only a half. A body spanning the plane refills a hole cut on one
+   *   side from its own uncut reflection; mirror the features, or cut after
+   *   the union.
    *
-   * The half has to be a *half*. Mirroring a body that spans the plane puts its
-   * material back over the far side, so a hole cut at +x is refilled by the
-   * reflected copy of the same uncut body — measured, silently, and the part
-   * still builds. Mirror the features and union them onto the full body, or
-   * cut both holes after the union.
-   *
-   * Unlike `.scale(-1)` this is a reflection rather than a point inversion, and
-   * it costs nothing: reflections are isometries, so no surface changes type.
+   * @remarks
+   * The refilled hole was measured: the part still builds and nothing warns.
+   * A reflection is an isometry, so no surface changes type.
    */
   mirror(axis: Vec3 | "x" | "y" | "z"): Shape {
     const normal: Vec3 =
@@ -598,14 +565,12 @@ export class Shape {
   }
 
   /**
-   * Resize about the origin. One factor scales uniformly; three stretch each
-   * axis, so `sphere(10).scale(2, 1, 0.5)` is an ellipsoid of semi-axes 20, 10
-   * and 5 — a figurine's body or head.
+   * Resize about the origin: one factor uniformly, three per axis.
+   * `sphere(10).scale(2, 1, 0.5)` is an ellipsoid with semi-axes 20, 10, 5.
    *
-   * A stretched shape's surfaces become exact B-splines: its circles are
-   * ellipses, so a selector asking for `curve: "circle"` no longer finds them.
-   * Fillet after stretching, not before. Every factor must be positive; a
-   * reflection is `mirror`.
+   * - Factors must be positive; a reflection is `mirror`.
+   * - Stretching turns circles into ellipses, which `curve: "circle"` no
+   *   longer finds. Fillet after stretching.
    */
   scale(x: number, y = x, z = x): Shape {
     return new Shape(
@@ -734,7 +699,11 @@ export class Shape {
     return union(this, ...rest);
   }
 
-  /** Subtract each of `tools` from this shape. */
+  /**
+   * Subtract each of `tools` from this shape. A cutter must pass through, not
+   * end on, the faces it opens: make it at least 0.5 mm longer at each open
+   * end, or the part keeps a sliver or fails to close.
+   */
   cut(...rest: (Shape | BoolOptions)[]): Shape {
     const { shapes, opts } = split(rest);
     const kids = [this, ...shapes];
@@ -795,14 +764,10 @@ export function cylinder(r: number, h: number): Shape {
 }
 
 /**
- * A ring: a circle of radius `minor` swept round the Z axis at radius `major`.
- *
- * Both are radii, like {@link cylinder}'s — an O-ring is quoted by cord
- * diameter and inside diameter, so a 2 mm cord on a 20 mm ID is
- * `torus(20 / 2 + 2 / 2, 2 / 2)`, and it is worth writing the halves out.
- *
- * `minor >= major` is refused: that torus passes through its own axis and
- * encloses a lens-shaped double region, which is not the groove anybody meant.
+ * A ring: a circle of radius `minor` swept round Z at radius `major`, with
+ * `minor < major`. Both are radii: a 2 mm cord O-ring on a 20 mm ID is
+ * `torus(20 / 2 + 2 / 2, 2 / 2)`. `sweep` in degrees, from +X anticlockwise,
+ * makes part of a ring.
  */
 export function torus(
   major: number,
@@ -827,71 +792,55 @@ export function torus(
 export type SectionPoint = [number, number];
 
 /**
- * One entry of a section — the closed outline `extrude`, `revolve`, `loft` and
- * `sweep` take. A section is a list, anticlockwise, that closes back to its
- * first entry by itself (never repeat the first corner at the end):
+ * One entry of a section, the outline `extrude`, `revolve`, `loft` and `sweep`
+ * take: a list, anticlockwise, closing itself (never repeat the first corner).
  *
- * - `[x, y]` — a corner (`[radius, z]` in a revolve). Consecutive corners are
- *   joined by a straight edge.
- * - `{ at: [x, y], round: r }` — a corner rounded by a tangent arc of radius
- *   `r`. `at` is the *sharp* corner, where the two straight edges would meet,
- *   not where the arc starts: the round trims both edges back itself. A
- *   40 × 20 plate with 5 mm corner radii is exactly four entries,
- *   `{ at: [±20, ±10], round: 5 }`, anticlockwise. `round` only joins two
- *   straight edges.
+ * - One boundary that does not cross itself; a hole is a second shape cut out.
+ * - Two corners in a row are a straight edge; between two corners at most one
+ *   entry draws the stretch (after the last, the stretch back to the first).
+ * - Arcs are exact circles and curves exact B-splines: never approximate a
+ *   curve with short lines.
  *
- * Between two corners, one entry says how that stretch is drawn instead of a
- * straight edge (after the last corner, it draws the closing stretch back to
- * the first):
+ * @example
+ *     // 60 × 30 plate, 4 mm corners: four rounded corners and nothing else
+ *     const plate = [{ at: [-30, -15], round: 4 }, { at: [30, -15], round: 4 }, { at: [30, 15], round: 4 }, { at: [-30, 15], round: 4 }];
+ *     // slot 24 long, 8 wide: straight sides end at x = ±8, each half circle
+ *     // passes through its tip at x = ±12 (the chord's midpoint moved out by the radius)
+ *     const slot = [[-8, -4], [8, -4], { through: [12, 0] }, [8, 4], [-8, 4], { through: [-12, 0] }];
+ *     return extrude(plate, 3).cut(extrude(slot, 5));
  *
- * - `{ through: [x, y] }` — a circular arc from the corner before to the
- *   corner after, passing through this point, which must lie *on* the arc.
- *   The unambiguous way to draw an arc: a half circle between `[10, -5]` and
- *   `[10, 5]` bulging to +X is `{ through: [15, 0] }` — the chord's midpoint
- *   moved out by the radius. A full circle is two arcs between two corners.
- * - `{ radius: r }` — the shorter circular arc of radius `r` between the two
- *   corners. Positive bulges *out* of the section and negative bends *in*,
- *   whichever way round the corners are listed. `r` must be at least half the
- *   distance between the corners; exactly half is a half circle.
- *
- * A slot (stadium) `L` long overall and `w` wide, along X, has its four
- * corners where the straight sides end, at `x = ±(L − w) / 2`, `y = ±w / 2`,
- * and its half-circle ends reach `x = ±L / 2`:
- * `[[-a, -w/2], [a, -w/2], { through: [L/2, 0] }, [a, w/2], [-a, w/2], { through: [-L/2, 0] }]`
- * with `a = (L − w) / 2`.
- *
- * A section is **one** closed boundary, with no holes: a hole, slot or pocket
- * is a second shape cut out of the first (`plate.cut(extrude(slot, h))`),
- * never a second loop listed after the first.
- * - `{ spline: [[x, y], ...], start?: [dx, dy], end?: [dx, dy] }` — a smooth
- *   curve from the corner before, *through* these points, to the corner
- *   after: a cubic parameterised by chord length. `start` and `end` are the
- *   directions it leaves and arrives in; without them it has no curvature at
- *   its ends. A section that is nothing but `[{ spline: points }]` is one
- *   closed smooth curve through the points, with no corner anywhere.
- * - `{ bezier: [[x, y], ...] }` — a Bézier curve whose end points are the two
- *   corners and whose *control* points are these: one is a quadratic, two a
- *   cubic (the SVG `C` command). The curve does not pass through its control
- *   points.
- * - `{ bspline: [[x, y], ...], degree?: 3 }` — a clamped uniform B-spline
- *   with the two corners as its first and last control points and these
- *   between — the form a STEP export's poles copy into.
- *
- * Nothing is polygonised: arcs are exact circles and every curve is an exact
- * B-spline, so faces from arcs are cylinders, cones, tori and spheres, and an
- * edge from an arc answers `curve: "circle"` while one from a curve answers
- * `curve: "spline"`. The outline may be re-entrant (an L, a stepped shaft) but
- * must not touch or cross itself; that, an arc radius too small for its
- * corners, and a round too big for its edges are refused with the numbers
- * that would fit.
+ * @remarks
+ * Faces from arcs are cylinders, cones, tori and spheres. A
+ * self-touching outline, an arc radius too small for its corners and a round
+ * too big for its edges are refused with the numbers that would fit.
  */
 export type SectionEntry =
+  /** A corner, `[x, y]` (`[radius, z]` in a revolve). */
   | [number, number]
+  /**
+   * A corner rounded by a tangent arc of radius `round`, between two straight
+   * edges. `at` is the sharp corner where the edges would meet, not where the
+   * arc starts; the round trims both edges. A 40 × 20 plate with 5 mm corners
+   * is exactly four entries, `{ at: [±20, ±10], round: 5 }`, anticlockwise,
+   * with no plain corners.
+   */
   | { at: [number, number]; round: number }
+  /** A circular arc through this point, which lies on it. A full circle is two arcs between two corners. */
   | { through: [number, number] }
+  /** The shorter arc of this radius, at least half the chord. Positive bulges out of the section, negative bends in. */
   | { radius: number }
+  /**
+   * A smooth curve through the points; `start` and `end` are its end
+   * directions. `[{ spline: points }]` alone is one closed smooth curve.
+   *
+   * @remarks
+   * A cubic parameterised by chord length, with no curvature at its ends
+   * unless `start` and `end` are given.
+   */
   | { spline: [number, number][]; start?: [number, number]; end?: [number, number] }
+  /** Bézier control points: one is quadratic, two cubic. The curve does not pass through them. */
   | { bezier: [number, number][] }
+  /** A clamped uniform B-spline with the corners as its end poles: how a STEP export's poles copy in. */
   | { bspline: [number, number][]; degree?: number };
 
 const SECTION_KEYS = ["at", "round", "through", "radius", "spline", "start", "end", "bezier", "bspline", "degree"];
@@ -968,20 +917,19 @@ function checkSection(profile: SectionEntry[], what: string, example: string): S
 }
 
 /**
- * A closed section in the (radius, z) half-plane, revolved a full turn about Z.
+ * A closed section in the (radius, z) half-plane, revolved a full turn about Z:
+ * a turned part, drawn as the shape a lathe tool leaves. The section is a list
+ * of `SectionEntry`; a radiused shoulder is `{ at: [r, z], round: 1 }`.
  *
- * This is how a turned part is drawn: you author the *section*, the shape that
- * a lathe tool would leave, and the axis does the rest. It is what a cone, a
- * countersink, a stepped shaft, a domed cap, an O-ring gland or a V-groove
- * ring is made of. The section is a list of `SectionEntry`: corners, arcs and
- * curves — a radiused shoulder is `{ at: [r, z], round: 1 }`, a dome is an arc
- * `{ through: [...] }` from the axis round to the rim.
+ * - Radius >= 0 everywhere on the boundary, control points included.
+ * - A stepped (re-entrant) section is fine; a self-crossing one is not.
  *
- * The rules are enforced by the core rather than by this file, because a graph
- * can arrive from anywhere: **radius >= 0** along the whole boundary — every
- * corner, arc and curve control point, since a section that crosses the axis
- * sweeps through itself — and an outline that does not cross itself. A
- * re-entrant (stepped) section is fine.
+ * @example revolve([[0, 0], [10, 0], [10, 4], { at: [6, 4], round: 1 }, [6, 12], [0, 12]])
+ *
+ * @remarks
+ * What a cone, countersink, stepped shaft, domed cap, O-ring gland or V-groove
+ * ring is made of. The core enforces the rules, because a graph can arrive
+ * from anywhere; a section crossing the axis would sweep through itself.
  */
 export function revolve(profile: SectionEntry[]): Shape {
   checkSection(profile, "a revolve section", "revolve([[0, -5], [4, -5], [0, 5]])");
@@ -1054,17 +1002,10 @@ export function countersink(head: number | string, includedAngle = 90): Shape {
 export type Fit = "close" | "normal" | "free";
 
 /**
- * ISO metric coarse fasteners: everything a hole needs, by thread designation.
- *
- * `pitch` is the ISO 261 coarse pitch; `tap` is the drill for a coarse-pitch
- * tapped hole; `close`/`normal`/`free` are ISO 273's three clearance series;
- * `head` is the head diameter of a socket head cap screw (ISO 4762) and
- * `csink` that of a 90° countersunk socket screw (ISO 10642). Millimetres,
- * always.
- *
- * Exported so a caller can see the whole table rather than discover a missing
- * size one refusal at a time — and so a size that is not here is obviously
- * absent rather than silently approximated.
+ * ISO metric coarse fasteners by designation, M2 to M20 (`M2_5` is M2.5), in mm:
+ * `pitch` (ISO 261 coarse), `tap` drill, `close`/`normal`/`free` clearance
+ * (ISO 273), `head` of a socket head cap screw (ISO 4762), `csink` of a 90°
+ * countersunk screw (ISO 10642). A size not listed is refused, never guessed.
  */
 export const METRIC_FASTENERS: Record<
   string,
@@ -1119,17 +1060,18 @@ export function counterbore(thread: string): { diameter: number; depth: number }
 }
 
 /**
- * A hole cutter along Z for a named fastener, entering at z = 0 going down.
+ * A hole cutter along Z for a named fastener, entering at z = 0 going down:
+ * place it at the face it enters. `holeFor("M6", 12)` is a blind clearance hole
+ * 12 mm deep; `tapped` drills for a thread a machinist will tap; `through`
+ * also clears the far face. It already overshoots by 0.5 mm. A printed or
+ * modelled thread is `threadedHole`.
  *
- * `holeFor("M6", 12)` is a blind clearance hole 12 mm deep; `{ tapped: true }`
- * drills it for a coarse thread instead — the right drawing for a hole a
- * machinist will tap. A hole whose thread is printed or must be modelled is
- * `threadedHole`.
+ * @example box(60, 30, 6).cut(holeFor("M5", 6, { through: true }).at(20, 0, 3))  // entering the top face
  *
- * The cutter always overshoots the face it enters by 0.5 mm, and `through`
- * overshoots the far side too. That is not tidiness: a tool ending exactly on a
- * face leaves a zero-thickness sliver, and one *starting* on it can cost the rim
- * the selector was going to reach.
+ * @remarks
+ * The cutter overshoots the entry face by 0.5 mm, and the far face with
+ * `through`: a tool ending exactly on a face leaves a zero-thickness sliver,
+ * and one starting on it can cost the rim a selector was going to reach.
  */
 export function holeFor(
   thread: string,
@@ -1154,12 +1096,13 @@ export interface ThreadOptions {
   /** `"right"` (the default, and nearly every screw) or `"left"`. */
   hand?: "right" | "left";
   /**
-   * Radial allowance in mm, default 0 (the ISO basic profile exactly). A rod
-   * shrinks by it and a hole grows by it, every diameter by twice the value.
-   * A printed pair needs one on both parts: two parts given `c` each sit `c`
-   * apart across the flanks and `2c` at crest and root, which
-   * `between_bodies` reads back. 0.2 is a starting point for FDM with a
-   * 0.4 mm nozzle, not a measured fit; tune it on the printer.
+   * Radial allowance in mm, default 0 (the ISO basic profile). A rod shrinks
+   * and a hole grows by it. A printed pair gives it to both: `c` on each sits
+   * `c` apart across the flanks and `2c` at crest and root.
+   *
+   * @remarks
+   * 0.2 is a starting point for FDM with a 0.4 mm nozzle, not a measured fit;
+   * tune it on the printer. `between_bodies` reads the gap back.
    */
   clearance?: number;
   /** A fine pitch in place of the coarse one a named size carries: `{ pitch: 1 }` on "M8". */
@@ -1193,34 +1136,31 @@ function threadForm(size: ThreadSize, options: ThreadOptions, fn: string) {
 }
 
 /**
- * An external screw thread along Z, centred on the origin like `cylinder`:
- * a bolt's thread, a knob's stud, a jar's neck.
+ * An external ISO 68-1 thread along Z, centred on the origin like `cylinder`,
+ * squared off at both ends; union a head or shank onto it. `size` is `"M8"`
+ * (coarse pitch) or `{ diameter, pitch }`.
  *
- * `threadedRod("M8", 20)` is 20 mm of M8 × 1.25 with the ISO 68-1 basic
- * profile — 60° flanks, a core at the basic minor diameter (6.647 mm for M8),
- * flats of P/8 at the crest and P/4 at the root — squared off at both ends.
- * `threadedRod({ diameter: 6.35, pitch: 25.4 / 20 }, 9)` is a 1/4"-20 tripod
- * screw's thread (the same 60° basic profile). Union a head or a shank on to
- * it; it is an ordinary solid from here on.
+ * - The tooth crosses +X at z = 0 of the rod's own frame. A rod and a
+ *   `threadedHole` of the same size mate only when their frames are a whole
+ *   number of pitches apart along Z.
+ * - A nut reading **interfering** is out of phase (move it a whole pitch) or
+ *   its hole stops short (place the hole's frame on the face it enters).
  *
- * The tooth crosses +X at z = 0 of the rod's own frame, whatever its length,
- * so a rod and a `threadedHole` of the same size and hand mate only where
- * their frames sit a whole number of pitches apart along Z, or the hole is
- * turned about Z by 360° × offset / pitch. A bolt with a nut screwed on:
- *
+ * @example
  *     const bolt = threadedRod("M6", 20, { clearance: 0.2 });   // frame at z = 0
  *     const nut = box(10, 10, 5).at(0, 0, 2.5)                  // z 0 to 5
  *       .cut(threadedHole("M6", 5, { through: true, clearance: 0.2 }).at(0, 0, 5));
- *     return { bolt, nut };                                      // 5 = 5 pitches: in phase
+ *     return { bolt, nut };                                      // 5 mm = 5 pitches: in phase
  *
- * `between_bodies` then reads them clear by the clearance across the flanks.
- * A nut that reads **interfering** on its bolt is one of two mistakes: its
- * hole does not run all the way through where the bolt passes (the cutter
- * spans from its frame's z = +0.5 down to −depth, −depth − 0.5 with
- * `through`, so place the frame on the face it enters), or the two are out of
- * phase, which moving the nut by a whole pitch fixes. Moving it off the thread
- * fixes neither. The kernel measures every thread against its closed-form
- * volume and refuses one that reads more than 2e-5 off.
+ * @remarks
+ * The basic profile: 60° flanks, a core at the basic minor diameter (6.647 mm
+ * for M8), flats of P/8 at the crest and P/4 at the root. A 1/4"-20 tripod
+ * screw is `threadedRod({ diameter: 6.35, pitch: 25.4 / 20 }, 9)`. A hole out
+ * of phase can also be turned about Z by 360° × offset / pitch. The hole
+ * cutter spans z = +0.5 down to −depth (−depth − 0.5 with `through`); moving a
+ * nut off the thread fixes neither mistake. `between_bodies` reads a good pair
+ * clear by the clearance across the flanks. The kernel measures every thread
+ * against its closed-form volume and refuses one more than 2e-5 off.
  */
 export function threadedRod(size: ThreadSize, length: number, options: ThreadOptions = {}): Shape {
   if (!(length > 0)) throw new Error("threadedRod length must be positive");
@@ -1239,14 +1179,15 @@ export function threadedRod(size: ThreadSize, length: number, options: ThreadOpt
 /**
  * The cutter for an internal screw thread along Z, entering at z = 0 going
  * down like `holeFor`: a nut, a cap, a threaded boss. Cut it, do not union it.
+ * Its tooth crosses +X at the entry face, so a `threadedRod` mates a whole
+ * number of pitches away along Z. A hole a machinist will tap is
+ * `holeFor(size, depth, { tapped: true })`.
  *
- * `part.cut(threadedHole("M8", 10, { through: true }).at(x, y, top))` taps
- * the ISO basic profile into the part: a bore at the minor diameter and the
- * thread out to the major. It overshoots the entry face by 0.5 mm and, with
- * `through`, the far face too. The tooth crosses +X at z = 0 of the cutter's
- * frame — the entry face — so a `threadedRod` mates with it a whole number of
- * pitches away along Z. For a part a machinist will tap, draw
- * `holeFor(size, depth, { tapped: true })` instead.
+ * @example box(20, 20, 10).cut(threadedHole("M8", 10, { through: true }).at(0, 0, 5))  // a nut
+ *
+ * @remarks
+ * It cuts a bore at the minor diameter and the thread out to the major, and
+ * overshoots the entry face by 0.5 mm (and the far face with `through`).
  */
 export function threadedHole(
   size: ThreadSize,
@@ -1316,12 +1257,9 @@ export const DEVICES: Record<string, DeviceBody> = {
 };
 
 /**
- * A device's body as a solid, centred on the origin like every primitive, its
- * front edge toward -Y. `device("macbook-pro-16")` is the laptop;
- * `device("macbook-pro-16", { clearance: 1 })` is the cutter that leaves a
- * millimetre all round it — grown outward, its corner and edge radii grown
- * with it, which is what `.offset()` would do and what a holder cuts out of
- * itself to wrap the real thing.
+ * A device from `DEVICES` as a solid, centred on the origin, front edge toward
+ * -Y. With `clearance` it is grown outward, radii too: the cutter a holder
+ * takes out of itself. `device("macbook-pro-16", { clearance: 1 })`.
  */
 export function device(name: string, options: { clearance?: number } = {}): Shape {
   const body = DEVICES[name];
@@ -1499,23 +1437,18 @@ export function hull(points: [number, number][]): [number, number][] {
 export type OutlinePoint = [number, number];
 
 /**
- * A closed outline in XY, given a thickness along Z.
+ * A closed outline in XY (a list of `SectionEntry`), given a thickness along Z.
+ * Like every primitive it is centred on the origin in Z, from `-height / 2`
+ * to `+height / 2`; the outline places it in X and Y.
  *
- * The counterpart of {@link revolve} for a part that is drawn rather than
- * turned: a plate outline, a cam blank, a hexagon, an L-bracket, a slot. Like
- * every other primitive it is centred on the origin in Z, so the solid runs
- * from `-height / 2` to `+height / 2`; the outline carries its own placement
- * in X and Y.
+ * - `draft` leans the walls in by that many degrees going up, and needs a
+ *   convex outline of straight edges: fillet the vertical edges afterwards.
  *
- * The outline is a list of `SectionEntry`: corners, rounded corners, arcs and
- * splines. A 20 × 10 slot with round ends is
- * `extrude([[-5, -5], [5, -5], { through: [10, 0] }, [5, 5], [-5, 5], { through: [-10, 0] }], 3)`,
- * and a plate with 2 mm corner radii is four `{ at: [x, y], round: 2 }`
- * corners. It may be re-entrant but must not cross itself.
+ * @example extrude([[-5, -5], [5, -5], { through: [10, 0] }, [5, 5], [-5, 5], { through: [-10, 0] }], 3)  // 20 × 10 slot
  *
- * `draft` leans the walls in by that many degrees going up, and needs a convex
- * outline of straight edges: draft the polygon and `.fillet()` its vertical
- * edges for a rounded, drafted boss.
+ * @remarks
+ * The drawn counterpart of `revolve`: a plate outline, a cam blank, an
+ * L-bracket.
  */
 export function extrude(
   profile: SectionEntry[],
@@ -1530,13 +1463,9 @@ export function extrude(
 }
 
 /**
- * A regular polygon prism along Z: hex stock, a square drive, a triangular key.
- *
- * `size` is measured **across the corners** by default, which is the polygon's
- * circumscribed diameter. Hex bar and every spanner in the world are specified
- * across the *flats* instead, so that is `{ across: "flats" }` rather than a
- * conversion the caller has to remember — the same reason `polar()` has a
- * `straddle` flag instead of an unexplained half-step.
+ * A regular polygon prism along Z, first corner on +X: hex stock, a square
+ * drive. `size` is across the corners unless `{ across: "flats" }`, which is
+ * how hex bar and spanners are sized.
  */
 export function ngon(
   sides: number,
@@ -1566,23 +1495,22 @@ export function ngon(
 export type PathPoint = [number, number, number];
 
 /**
- * A helical path for `pipe` and `sweep`, in place of a list of points: a
- * spring, a coil, a thread's path, a spiral horn.
+ * A helical path for `pipe` and `sweep`: a spring, a coil, a spiral horn.
+ * Axis +Z, centred on the origin: it starts at `[radius, 0, -height / 2]`.
  *
- * The axis is +Z and the helix is centred on the origin like every primitive:
- * it starts at `[radius, 0, -height / 2]` and rises to `height / 2`. Give
- * `turns` or `height` (= `pitch * turns`). `endRadius` changes the radius
- * linearly with the turn angle — a conical helix, which a horn is — and
- * `hand: "left"` winds it the other way (right-handed, the default, turns
- * anticlockwise seen from above as it rises, like a standard thread).
+ * - Give `turns` or `height` (= `pitch * turns`), not both.
+ * - `endRadius` varies the radius linearly (a conical helix); `hand: "left"`
+ *   reverses the default right-handed winding.
+ * - A screw thread is `threadedRod` or `threadedHole`, not a sweep.
  *
- * The kernel sweeps a curve fitted to the exact helix and measures how far
- * the two differ, refusing past 0.0001 mm. It refuses a pitch so tight the
- * turns would sweep through each other, and a radius so small the section
- * would cross the axis, naming the limit either way. Place and turn the
- * result with `.at()` and `.rotate()`. Build time grows with turns — about
- * 0.2 s a turn for a round wire. A screw thread is not a sweep: use
- * `threadedRod` or `threadedHole`, which build the ISO profile and measure it.
+ * @example pipe({ helix: { radius: 10, pitch: 4, turns: 5 } }, 1.5)  // a spring
+ *
+ * @remarks
+ * Right-handed turns anticlockwise seen from above as it rises, like a
+ * standard thread. The kernel sweeps a curve fitted to the exact helix and
+ * refuses a fit more than 0.0001 mm off; it also refuses a pitch so tight the
+ * turns collide and a radius so small the section crosses the axis, naming the
+ * limit. Build time is about 0.2 s a turn for a round wire.
  */
 export interface HelixPath {
   helix: {
@@ -1596,16 +1524,14 @@ export interface HelixPath {
 }
 
 /**
- * A smooth path for `pipe` and `sweep`, in place of a list of points: a hose,
- * a cable, a handle, a vase's rim — anything that curves without corners.
+ * A smooth path for `pipe` and `sweep` through at least three points, in
+ * order: a hose, a cable, a handle. The section starts perpendicular to it at
+ * the first point. A bend tighter than the section is refused, naming where:
+ * spread the points there.
  *
- * `{ spline: [[x, y, z], ...] }` passes through every point, in order, as one
- * cubic parameterised by chord length with no curvature at its two ends (at
- * least three points; the same rule as `{ spline }` in a section). It is an
- * exact B-spline, not a chain of arcs. The section is drawn perpendicular to
- * the path at its first point, and the sweep is refused where the path bends
- * tighter than the section reaches, naming the radius and where — spread the
- * points further apart there.
+ * @remarks
+ * One exact cubic B-spline parameterised by chord length, with no curvature at
+ * its ends: the same rule as `{ spline }` in a section.
  */
 export interface SplinePath {
   spline: PathPoint[];
@@ -1626,12 +1552,12 @@ export interface SweepOptions {
   /** Centreline bend radius at every corner of a path of points. */
   bend?: number;
   /**
-   * The section's size at the end of the path relative to its start: `0.2`
-   * ends at a fifth of the size, `2` at double, scaled about the path itself.
-   * Linear in length along a path of points; on a helix, linear in turn
-   * angle, which is the same thing unless `endRadius` narrows it. Must be
-   * more than 0; end on a small scale such as `0.05` for a point. A tapered
-   * part is B-rep only.
+   * The section's size at the end relative to the start, above 0: `0.2` ends
+   * at a fifth. For a point, end on something small like `0.05`.
+   *
+   * @remarks
+   * Scaled about the path, linearly in length (in turn angle on a helix, the
+   * same thing unless `endRadius` narrows it). A tapered part is B-rep only.
    */
   taper?: number;
 }
@@ -1716,27 +1642,19 @@ function alignedX(axis: PathPoint): PathPoint {
 }
 
 /**
- * A round tube of `diameter` following a path: hydraulic line, hose, wire.
+ * A round tube of `diameter` along a path of points, a `HelixPath` or a
+ * `SplinePath`: hydraulic line, hose, wire, spring. Another profile is `sweep`.
  *
- * This is the honest half of what Fusion calls Sweep, and it is a bigger half
- * than it first looks: the two path elements a routed tube is actually made
- * of are a straight run, which is a cylinder, and a bend, which is a partial
- * torus. Both are exact, so a routed tube is exact.
+ * - `bend` is the centreline bend radius at every corner. Without it corners
+ *   are filled with a ball: fine for clearance, not a makeable tube.
+ * - `taper` along a path of points needs a `bend`.
  *
- * `bend` is the centreline bend radius, which is how tube is specified and how
- * a bender is set. Without it the corners are square and filled with a ball of
- * the tube diameter — inside the swept envelope, fine for clearance work, and
- * not a shape anybody can make. With it, the runs are trimmed back to their
- * tangent points and an arc joins them, which is the real part.
+ * @example pipe([[0, 0, 0], [40, 0, 0], [40, 30, 0]], 6, { bend: 10 })
  *
- * Three options take the tube off those two surfaces: `taper`, which shrinks
- * or grows the tube along its length — a strand of hair, a tail, a horn — a
- * `{ helix }` path in place of the points — a spring or a coil — and a
- * `{ spline: [[x, y, z], ...] }` path, a smooth curve through the points — a
- * hose or a cable. A tapered pipe along a path of points needs a `bend` at
- * every corner, because the ball that fills a square corner cannot taper.
- *
- * A profile that is not a circle is `sweep`.
+ * @remarks
+ * A routed tube is exact: runs are cylinders and bends partial tori, trimmed
+ * back to their tangent points. The ball in a square corner cannot taper,
+ * which is why a tapered path needs its bends.
  */
 export function pipe(
   points: PathPoint[] | HelixPath | SplinePath,
@@ -1861,28 +1779,21 @@ export interface LoftSection {
 }
 
 /**
- * Skin a solid through two or more outlines stacked along +Z.
+ * Skin a solid through two or more `LoftSection`s at rising `z`. Walls are
+ * ruled (straight between sections) unless `smooth: true`.
  *
- * By default the walls are ruled: straight lines between consecutive
- * sections, so the surface is exactly the skin of its sections and a
- * two-section loft of an outline and its inset is the same solid a drafted
- * extrude builds. `smooth: true` fits one continuous surface through all the
- * sections instead — Fusion's default look — and the backend then measures
- * that the fit stayed inside the sections' own bounding box, refusing one
- * that bulged past it.
+ * - Walls pair section edges by index, so every outline needs the same edge
+ *   count: a straight edge, arc or curve is one, a rounded corner adds one.
+ *   A circle lofted to a square is four arcs between four corners.
+ * - Listing an outline rotated twists the wall; the kernel never untwists it.
  *
- * The wall pairs section *edges* by index, taken literally, which makes the
- * pairing part of the intent. Every outline must resolve to the same number
- * of edges — a straight edge, an arc or a curve each count one, and a rounded
- * corner adds an arc — so a circle lofted to a square is the circle drawn as
- * four arcs between four corners, one arc to each side. Listing a section's
- * outline rotated pairs each edge with a different one above — a *twisted*
- * wall, authored on purpose. A square lofted to the same square a quarter
- * turn on is a bar twisting 90° over its length (see
- * examples/fusion360/untriangle-v3.js); the kernel is never allowed to
- * re-origin the sections to untwist what the outlines spell out.
+ * @example loft([{ z: 0, outline: [[-10, -10], [10, -10], [10, 10], [-10, 10]] }, { z: 30, point: [0, 0] }])  // a pyramid
  *
- * Outlines may be re-entrant, but must not cross themselves.
+ * @remarks
+ * A two-section ruled loft of an outline and its inset is the solid a drafted
+ * extrude builds. A smooth loft is measured against the sections' bounding
+ * box and refused if it bulges past. A square lofted to itself a quarter turn
+ * on is a bar twisting 90° (examples/fusion360/untriangle-v3.js).
  */
 export function loft(
   sections: LoftSection[],
@@ -1929,31 +1840,21 @@ export function loft(
 }
 
 /**
- * Sweep an outline along a path — `pipe()` with an authored section in place
- * of the circle.
+ * Sweep a `SectionEntry` profile along a path of points, a `HelixPath` or a
+ * `SplinePath`: `pipe` with any section. A round one stays a `pipe`.
  *
- * The profile is a list of `SectionEntry`: corners, arcs and curves, so a
- * stadium, a rounded rectangle or a D-shape sweeps as exactly as a square.
+ * - The profile starts perpendicular to the path, its +Y as near global +Z as
+ *   the path allows; on a helix its +X points away from the axis.
+ * - A path of points that turns needs `bend`, which must fit the legs and
+ *   clear the profile's own extent.
  *
- * A path of points is the one a bender or a router can follow: runs, and
- * tangent arcs of radius `bend` at every corner. `bend` is required as soon
- * as the path turns (an authored section has no ball to fill a square corner
- * with), must fit the legs either side, and must clear the profile's own
- * extent so the inner side of the bend does not sweep through itself. The
- * profile is drawn perpendicular to the first run, its +Y kept as close to
- * global +Z as that run allows.
+ * @example sweep([[-2, -1], [2, -1], [2, 1], [-2, 1]], [[0, 0, 0], [0, 0, 20], [30, 0, 20]], { bend: 8 })
  *
- * The path may instead be `{ helix: { radius, pitch, turns } }` (see
- * `HelixPath`): the profile is then drawn perpendicular to the helix at its
- * start, +X pointing away from the axis and +Y as near +Z as the helix's
- * slope allows, and it keeps that attitude to the axis all the way up — a
- * square wire wound into a coil, a thread-like ridge. Or it may be
- * `{ spline: [[x, y, z], ...] }` (see `SplinePath`), a smooth curve through
- * the points, the profile drawn perpendicular to it at the first point the
- * same way as for a run. `taper` scales the profile about the path from 1 at
- * the start to `taper` at the end.
- *
- * A *round* section should stay a `pipe()`.
+ * @remarks
+ * A path of points is what a bender or router follows: runs joined by tangent
+ * arcs. An authored section has no ball to fill a square corner, hence the
+ * required `bend`. On a helix the profile keeps its attitude to the axis all
+ * the way up: a square wire coil, a thread-like ridge.
  */
 export function sweep(
   profile: SectionEntry[],
@@ -2022,13 +1923,12 @@ export function repeat(shape: Shape, points: [number, number, number?][]): Shape
 }
 
 /**
- * A centred `cols` x `rows` grid of points, `dx` and `dy` apart.
+ * A centred `cols` x `rows` grid of points. `dx` and `dy` are the
+ * centre-to-centre pitch, not the span: `grid(3, 1, 20, 0)` is x = -20, 0, 20.
  *
- * `dx` is the centre-to-centre **pitch**, not the overall span: the pattern
- * runs `(cols - 1) * dx` wide, so `grid(3, 1, 20, 0)` puts points at -20, 0 and
- * +20. Every pattern in `examples/` is 2 x 2, where pitch and span happen to be
- * the same number — which is exactly why reading it as span builds a part that
- * is watertight, passes every count, and is the wrong size.
+ * @remarks
+ * In a 2 x 2 pattern pitch and span are the same number, which is how reading
+ * it as span builds a watertight part of the wrong size.
  */
 export function grid(
   cols: number,
@@ -2050,23 +1950,16 @@ export interface PolarOptions {
   /** Angle of the first point, in degrees anticlockwise from +X. Default 0. */
   start?: number;
   /**
-   * Rotate the whole circle by half a step, so no point lands on a centreline.
-   *
-   * This is the convention in ASME B16.5 and most flange standards, and it is
-   * worth a named option rather than an unexplained `+ 0.5` in a loop: a reader
-   * can check "straddle" against a drawing, and cannot check arithmetic.
+   * Turn the circle half a step so no point sits on a centreline, as flange
+   * standards (ASME B16.5) place bolt holes.
    */
   straddle?: boolean;
 }
 
 /**
- * `count` points spaced evenly around a circle of `radius`.
- *
- * The rotational counterpart to {@link grid}, and returns the same `[x, y]`
- * tuples, so it feeds {@link repeat} the same way. Every part with a bolt
- * circle used to write this loop out with `Math.cos`/`Math.sin`; the trouble
- * with that is not the length but that the standards knowledge — where the
- * holes sit relative to the centrelines — ended up encoded as arithmetic.
+ * `count` points spaced evenly around a circle of `radius`, as `[x, y]` for
+ * `repeat`: a bolt circle,
+ * `repeat(holeFor("M6", 8, { through: true }), polar(6, 40))`.
  */
 export function polar(
   count: number,
@@ -2088,14 +1981,9 @@ export function polar(
 }
 
 /**
- * `count` copies of `shape`, spun evenly about an axis through the origin and
- * unioned together.
- *
- * Where {@link polar} places points, this rotates a whole shape — which is what
- * a feature that is not rotationally symmetric needs: a T-slot on each face of
- * an extrusion, a flute around a knob. Placing the shape once at its radius and
- * spinning it keeps the radius in one place instead of inside a trig call, and
- * the copies share one node in the graph.
+ * `count` copies of `shape` spun evenly about an axis through the origin and
+ * unioned: for a feature that must turn with its position, like a flute round
+ * a knob. Place the shape once at its radius, then `around(flute, 12)`.
  */
 export function around(
   shape: Shape,
@@ -2119,6 +2007,7 @@ export function around(
 // Flattening
 // ---------------------------------------------------------------------------
 
+/** @internal The flattened graph `build` returns. */
 export interface Doc {
   units: "mm";
   root: number;
@@ -2138,12 +2027,12 @@ const RETURN_HINT =
   "End it with something like:  return body.cut(hole)   or   return { base, lid }";
 
 /**
- * Flatten a shape into the JSON graph.
+ * Flatten a shape, or an object of named bodies, into the JSON graph. A
+ * script does not need it: returning the part is enough.
  *
- * Nodes are memoised by identity, so a shape used in several places becomes one
- * node with several parents — the graph stays a DAG and the core evaluates the
- * shared work once. An object of shapes becomes one `bodies` root over each
- * body's own subgraph; a shape shared between two bodies is still one node.
+ * @remarks
+ * Nodes are memoised by identity, so a shape used in several places is one
+ * node with several parents, evaluated once, even across bodies.
  */
 export function build(
   root: Part,

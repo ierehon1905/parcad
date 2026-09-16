@@ -295,6 +295,17 @@ pub struct DocsRequest {
     /// absent. The reply lists them all, so one call finds the rest.
     #[serde(default)]
     pub topic: Option<String>,
+    /// One part of a topic too long for a single reply. Leave it out first: a
+    /// long topic then answers with its contents, which names every section
+    /// and every entry. Pass a section name from there to read that section
+    /// whole, or one entry's name — `spurGearOutline`, `Shape.mirror`,
+    /// `SectionEntry` — to read just that entry.
+    #[serde(default)]
+    pub section: Option<String>,
+    /// Add the reasons and history behind each rule. Leave it out: the
+    /// default is the rules themselves, and is what writing a part needs.
+    #[serde(default)]
+    pub detail: bool,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -440,14 +451,14 @@ impl Parcad {
     #[tool(
         name = "read_docs",
         annotations(title = "Read parcad's own documentation", read_only_hint = true, open_world_hint = false),
-        description = "Read parcad's own documentation. Call this before writing your first script: `dsl` is the complete language reference — every function, method and constant, with signatures and what each one means — generated from the DSL source, so nothing it has can be missing from it.\n\nThe alternative is learning the language from example parts, and that has been measured: a session that read two of them built its part out of boxes and cylinders, recorded `mirror` and lofts as impossible when both ship, and never found revolve, cone, ngon, polar, repeat, countersink, counterbore, tapDrill or clearance. The parts it wrote were a function of which files it happened to open.\n\nThe other topics are prose, and each is cited by name inside the seeded parts' own comments: `gaps` is what the language cannot express and what to write instead; `gotchas` is the list of shapes that make the kernel return a plausible wrong answer or die — a blended union of two solids that only touch on a face, an offset that silently drops a body, a fillet that grows the part; `operations` is which operations exist, which are deliberately absent, and why. Read `gaps` and `gotchas` before a part with blends, offsets or shells in it: most failed calls are in there already, described from the other side."
+        description = "Read parcad's own documentation. Call this before writing your first script: `dsl` is the complete language reference — every function, method and constant, with signatures and what each one means — generated from the DSL source, so nothing it has can be missing from it.\n\nThe alternative is learning the language from example parts, and that has been measured: a session that read two of them built its part out of boxes and cylinders, recorded `mirror` and lofts as impossible when both ship, and never found revolve, cone, ngon, polar, repeat, countersink, counterbore, tapDrill or clearance. The parts it wrote were a function of which files it happened to open.\n\nThe other topics are prose, and each is cited by name inside the seeded parts' own comments: `gaps` is what the language cannot express and what to write instead; `gotchas` is the list of shapes that make the kernel return a plausible wrong answer or die — a blended union of two solids that only touch on a face, an offset that silently drops a body, a fillet that grows the part; `operations` is which operations exist, which are deliberately absent, and why. Read `gaps` and `gotchas` before a part with blends, offsets or shells in it: most failed calls are in there already, described from the other side.\n\nA topic too long for one reply — `dsl` is one, and so is `gotchas` — answers first with its contents, not the document: every section by name, and the name of every entry in it. `section` in that reply says `contents`, and `sections` lists the section names. Call read_docs again with the same `topic` and `section` set to one of those names to read that section whole, or to one entry's name — `holeFor`, `Shape.mirror`, `SectionEntry`; a bare method name like `mirror` also works — to read just that entry. Reading every section in `sections` is reading the whole document; nothing is left out of them. A topic that fits in one reply comes back whole, with no `section`. Entries give the rules and an example; `detail: true` adds the reasons and history behind them, which writing a part rarely needs."
     )]
     async fn read_docs(
         &self,
         Parameters(request): Parameters<DocsRequest>,
     ) -> Result<rmcp::handler::server::wrapper::Json<crate::docs::Reference>, ErrorData> {
         Ok(rmcp::handler::server::wrapper::Json(
-            service::read_docs(request.topic.as_deref()).map_err(invalid)?,
+            service::read_docs(request.topic.as_deref(), request.section.as_deref(), request.detail).map_err(invalid)?,
         ))
     }
 

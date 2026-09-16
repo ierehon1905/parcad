@@ -95,7 +95,11 @@ every export and every method of `Shape`, `EdgeSelection` and `VertexSelection`,
 with real signatures, parameter names and JSDoc, grouped and prefaced by the
 file's own module comment. It is served as `read_docs`, whose `dsl` topic is that
 index and whose other topics `include_str!` the prose documents, so moving or
-deleting one breaks the build rather than the reader.
+deleting one breaks the build rather than the reader. A topic longer than one
+reply a client will show — docs/GOTCHAS.md, "A tool reply over 50,000
+characters" — is served as its contents and then one `section` at a time, cut at
+its own headings; `every_reply_fits_in_what_a_client_shows` and
+`the_sections_add_up_to_the_whole_document` hold both halves of that.
 
 Two things were written into it rather than discovered later. MCP `resources` are
 the protocol-correct home for a document like this, but tool support is universal
