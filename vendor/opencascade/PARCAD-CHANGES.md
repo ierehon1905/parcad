@@ -164,6 +164,19 @@ out. Everything below could otherwise have lived in our own crate.
   530-node sculpture of overlapping spheres, cones and pipes (M4 Max): build
   13.3 s → 3.2 s, with volume, area, topology and the exported STL
   byte-identical; the `parcad-eval` corpus is 110/110 unchanged.
+- `BooleanShape::cut_all(base, tools)` / `fuse_all(base, tools)` — one
+  boolean against several tools, through `parcad_boolean_with_history`,
+  `ParcadBoolean::add_tool` and `ParcadBoolean::build`; the two-shape
+  constructors are now that sequence with one tool. OCCT treats the tools as
+  a group (the cut removes their union; they may overlap), so the result and
+  its history no longer depend on the order the tools were applied in —
+  parcad judged a cut's sealed voids after each tool, and refused a cavity
+  that a later tool in the same cut opened. Not used for a common: a
+  multi-tool `BRepAlgoAPI_Common` intersects with the tools' union, which is
+  not an n-way intersection.
+- `Shape::internal_void_bounds()` — the tight box of each cavity shell, the
+  outer shell being the one with the largest box. `internal_void_count`'s
+  walk, with `bounds_optimal` per shell; lets a refusal say where a void is.
 
 ## Not added
 

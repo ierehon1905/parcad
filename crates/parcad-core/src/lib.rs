@@ -9,6 +9,7 @@
 //! [`graph`] is deliberately ignorant of how shapes are computed; the one
 //! kernel lives in the `parcad-occt` crate, behind a process boundary.
 
+pub mod envelope;
 pub mod font;
 pub mod graph;
 pub mod measure;

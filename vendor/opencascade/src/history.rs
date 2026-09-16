@@ -24,6 +24,9 @@ pub(crate) mod ffi {
             base: &TopoDS_Shape,
             tool: &TopoDS_Shape,
         ) -> UniquePtr<ParcadBoolean>;
+        fn parcad_boolean_with_history(base: &TopoDS_Shape, is_cut: bool) -> UniquePtr<ParcadBoolean>;
+        fn add_tool(self: Pin<&mut ParcadBoolean>, tool: &TopoDS_Shape);
+        fn build(self: Pin<&mut ParcadBoolean>);
 
         fn result(self: &ParcadBoolean) -> &TopoDS_Shape;
         fn section_edges(self: &ParcadBoolean) -> UniquePtr<CxxVector<TopoDS_Shape>>;

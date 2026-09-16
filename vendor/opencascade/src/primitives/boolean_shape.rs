@@ -45,6 +45,27 @@ impl BooleanShape {
         Self::from_history(ffi::parcad_fuse_with_history(base, tool))
     }
 
+    /// `base` minus every one of `tools`, as one boolean: the result does not
+    /// depend on the order the tools are listed in. Added for parcad; see
+    /// PARCAD-CHANGES.md.
+    pub fn cut_all<'a>(base: &Shape, tools: impl IntoIterator<Item = &'a Shape>) -> Self {
+        Self::many(base, tools, true)
+    }
+
+    /// `base` fused with every one of `tools`, as one boolean.
+    pub fn fuse_all<'a>(base: &Shape, tools: impl IntoIterator<Item = &'a Shape>) -> Self {
+        Self::many(base, tools, false)
+    }
+
+    fn many<'a>(base: &Shape, tools: impl IntoIterator<Item = &'a Shape>, is_cut: bool) -> Self {
+        let mut history = ffi::parcad_boolean_with_history(&base.inner, is_cut);
+        for tool in tools {
+            history.pin_mut().add_tool(&tool.inner);
+        }
+        history.pin_mut().build();
+        Self::from_history(history)
+    }
+
     fn from_history(history: UniquePtr<ffi::ParcadBoolean>) -> Self {
         let shape = Shape {
             inner: sys::TopoDS_Shape_to_owned(history.result()),

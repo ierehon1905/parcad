@@ -19,6 +19,9 @@
     "faces": 3,
     "edges": 6,
     "curves": 2,
-    "deviation_mm": 0.001
+    "deviation_mm": 0.001,
+    "requires": [
+      "fitted-sections"
+    ]
   }
 }

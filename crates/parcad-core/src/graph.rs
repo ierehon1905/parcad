@@ -1871,6 +1871,10 @@ pub struct Doc {
     /// can never be silently misread.
     #[serde(default = "default_units")]
     pub units: String,
+    /// Features this graph uses that an older host cannot read; checked by
+    /// [`crate::envelope::parse_doc`] and carried to the worker.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requires: Vec<crate::envelope::Requirement>,
 }
 
 fn default_units() -> String {

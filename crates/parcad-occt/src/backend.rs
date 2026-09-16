@@ -880,9 +880,17 @@ impl EdgeLineage {
         lineage
     }
 
+    #[cfg(test)]
     fn through_boolean(self, other: Self, result: &BooleanShape, tag: Option<&str>) -> Self {
+        self.through_boolean_all(vec![other], result, tag)
+    }
+
+    /// [`Self::through_boolean`] for a boolean with several tools.
+    fn through_boolean_all(self, others: Vec<Self>, result: &BooleanShape, tag: Option<&str>) -> Self {
+        let (other_edges, other_faces): (Vec<_>, Vec<_>) =
+            others.into_iter().map(|o| (o.by_source, o.faces_by_source)).unzip();
         let mut by_source = BTreeMap::new();
-        for (source, edges) in self.by_source.into_iter().chain(other.by_source) {
+        for (source, edges) in self.by_source.into_iter().chain(other_edges.into_iter().flatten()) {
             let evolved = evolve_edges(edges, result);
             if !evolved.is_empty() {
                 by_source
@@ -898,7 +906,7 @@ impl EdgeLineage {
                 .extend(result.new_edges().cloned());
         }
         let mut faces_by_source = BTreeMap::new();
-        for (source, faces) in self.faces_by_source.into_iter().chain(other.faces_by_source) {
+        for (source, faces) in self.faces_by_source.into_iter().chain(other_faces.into_iter().flatten()) {
             let evolved = evolve_faces(faces, result);
             if !evolved.is_empty() {
                 faces_by_source
@@ -1617,29 +1625,30 @@ fn through_observation(seam: &[Edge]) -> String {
 /// blended union dropped its lineage, so `plate` and `wall` had no faces
 /// left on the bracket and every tag extent on it read as unlocated.
 fn blend_seam(
-    joined: &BooleanShape,
+    joined: &Shape,
+    seam: &[Edge],
     lineage: EdgeLineage,
     radius: f64,
     what: &str,
     stage: &str,
     seam_of: SeamOf,
 ) -> Result<(Shape, EdgeLineage)> {
-    validity_probe(&format!("{stage} before blend"), &joined.shape);
-    let before = bbox(&joined.shape);
-    let mut built = joined.shape.clone();
-    let mut treatment = match built.fillet_edges_with_history(radius, &joined.new_edges) {
+    validity_probe(&format!("{stage} before blend"), joined);
+    let before = bbox(joined);
+    let mut built = joined.clone();
+    let mut treatment = match built.fillet_edges_with_history(radius, seam) {
         Ok(treatment) => treatment,
         Err(reason) => bail!(
             "{what} blends by {radius} mm, and OpenCASCADE could not build the \
              fillet ({reason}).{observed}{through}{measured}",
-            observed = seam_observation(&reason, &joined.new_edges),
+            observed = seam_observation(&reason, seam),
             through = if seam_of == SeamOf::Union {
-                through_observation(&joined.new_edges)
+                through_observation(seam)
             } else {
                 String::new()
             },
             measured = repair_sentence(
-                &probe_below(&joined.shape, &joined.new_edges, radius, false, before, stage),
+                &probe_below(joined, seam, radius, false, before, stage),
                 "this seam",
                 "radius",
                 "write that as the blend",
@@ -1652,7 +1661,7 @@ fn blend_seam(
         bail!(
             "{refusal}\n{}",
             repair_sentence(
-                &probe_below(&joined.shape, &joined.new_edges, radius, false, before, stage),
+                &probe_below(joined, seam, radius, false, before, stage),
                 "this seam",
                 "radius",
                 "write that as the blend",
@@ -2839,6 +2848,128 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
     built
 }
 
+/// How far clear of the material a cutter must lie to have missed it.
+const MISS_GAP_MM: f64 = 1e-6;
+
+/// A union or cut of `base` with every one of `tools`, before unification.
+struct Combined {
+    shape: Shape,
+    lineage: EdgeLineage,
+    features: TreatmentFeatures,
+    /// Every edge the booleans created that is still on the result.
+    seam: Vec<Edge>,
+    tools: Vec<CombinedTool>,
+}
+
+struct CombinedTool {
+    shape: Shape,
+    bounds: Option<(DVec3, DVec3)>,
+    /// No face of this tool is on the result of the boolean it went into.
+    vanished: bool,
+}
+
+/// Apply every tool, so that nothing about the result depends on the order
+/// they were listed in; see docs/GOTCHAS.md, "A multi-tool cut is one cut".
+///
+/// Tools whose boxes are clear of each other go into one OCCT boolean, which
+/// is many times faster than one boolean per tool. Tools that overlap go into
+/// successive booleans: OCCT intersects the tools of one boolean with each
+/// other too, and forty slots crossing at a centre took 70–140 s that way
+/// against 2 s one at a time.
+fn boolean_in_layers(base: BuiltShape, tools: Vec<BuiltShape>, cut: bool, tag: Option<&str>) -> Combined {
+    let mut tools_out: Vec<CombinedTool> = tools
+        .iter()
+        .map(|t| CombinedTool {
+            shape: t.shape.clone(),
+            bounds: t.shape.bounds_optimal(),
+            vanished: false,
+        })
+        .collect();
+    let mut layers: Vec<Vec<usize>> = Vec::new();
+    for (i, tool) in tools_out.iter().enumerate() {
+        let clear_of = |j: &usize| match (tool.bounds, tools_out[*j].bounds) {
+            (Some((a0, a1)), Some((b0, b1))) => {
+                a1.cmplt(b0 - MISS_GAP_MM).any() || b1.cmplt(a0 - MISS_GAP_MM).any()
+            }
+            _ => false,
+        };
+        match layers.iter_mut().find(|layer| layer.iter().all(clear_of)) {
+            Some(layer) => layer.push(i),
+            None => layers.push(vec![i]),
+        }
+    }
+
+    let mut shape = base.shape;
+    let mut lineage = base.lineage;
+    let mut features = base.features;
+    let mut seam: Vec<Edge> = Vec::new();
+    let mut tools: Vec<Option<BuiltShape>> = tools.into_iter().map(Some).collect();
+    for (k, layer) in layers.into_iter().enumerate() {
+        // Merging split faces before the next boolean is what one boolean
+        // per tool always did, and it keeps that boolean's face count down.
+        if k > 0 {
+            let unification = shape.into_unified();
+            seam = seam
+                .into_iter()
+                .flat_map(|edge| {
+                    let modified = unification.modified_edge(&edge);
+                    if modified.is_empty() && !unification.is_deleted_edge(&edge) {
+                        vec![edge]
+                    } else {
+                        modified
+                    }
+                })
+                .collect();
+            lineage = lineage.through_unify(&unification);
+            shape = unification.shape;
+        }
+        let members: Vec<BuiltShape> = layer.iter().filter_map(|&i| tools[i].take()).collect();
+        let shapes = members.iter().map(|m| &m.shape);
+        let result = if cut {
+            BooleanShape::cut_all(&shape, shapes)
+        } else {
+            BooleanShape::fuse_all(&shape, shapes)
+        };
+        for (&i, member) in layer.iter().zip(&members) {
+            tools_out[i].vanished = member.shape.faces().all(|f| result.is_deleted_face(&f));
+        }
+        seam = evolve_edges(seam, &result);
+        seam.extend(result.new_edges().cloned());
+        let mut lineages = Vec::with_capacity(members.len());
+        for member in members {
+            features.extend(member.features);
+            lineages.push(member.lineage);
+        }
+        lineage = lineage.through_boolean_all(lineages, &result, tag);
+        shape = result.shape;
+    }
+    Combined {
+        shape,
+        lineage,
+        features,
+        seam,
+        tools: tools_out,
+    }
+}
+
+/// "node 3 (bore)", "node 3 (bore) and node 4 (untagged)": each in the form
+/// the host's error locator adds a script line to.
+fn nodes_phrase(doc: &Doc, ids: &[NodeId]) -> String {
+    let one = |id: &NodeId| {
+        let label = doc.nodes.get(*id).and_then(|n| n.tag.as_deref()).unwrap_or("untagged");
+        format!("node {id} ({label})")
+    };
+    match ids {
+        [] => "no node".to_owned(),
+        [only] => one(only),
+        [init @ .., last] => format!(
+            "{} and {}",
+            init.iter().map(one).collect::<Vec<_>>().join(", "),
+            one(last)
+        ),
+    }
+}
+
 /// Build one node, with `offset` accumulated from enclosing translations.
 ///
 /// Translation is carried down and applied at the primitives rather than moving
@@ -2894,141 +3025,180 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
         }
 
         Op::Union { children, blend } => {
-            let mut it = children.iter().copied();
-            let first = it
-                .next()
-                .ok_or_else(|| anyhow::anyhow!("union at node {id} ({label}) has no children"))?;
-            let mut acc = build_node(doc, first, offset)?;
-
-            for c in it {
-                let other = build_node(doc, c, offset)?;
-                breadcrumb(&format!("union node {id} ({label}) with node {c}"));
-                let joined = acc.shape.union(&other.shape);
-                let lineage = acc
-                    .lineage
-                    .through_boolean(other.lineage, &joined, node.tag.as_deref());
-                let mut features = acc.features;
-                features.extend(other.features);
-
-                if *blend > 0.0 {
-                    breadcrumb(&format!(
-                        "fillet {blend} mm on edges created by union at node {id} ({label})"
-                    ));
-                    // The edges a boolean creates are exactly the seam, which is
-                    // what `blend` names in the graph.
-                    let (shape, lineage) = blend_seam(
-                        &joined,
-                        lineage,
-                        *blend,
-                        &format!("node {id} ({label}) unions node {c}"),
-                        &format!("union at node {id}"),
-                        SeamOf::Union,
-                    )?;
-                    let (shape, lineage) = unified_tracked(shape, lineage);
-                    acc = BuiltShape {
-                        shape,
-                        lineage,
-                        features,
-                    };
-                } else {
-                    let (shape, lineage) = unified_tracked(joined.shape, lineage);
-                    acc = BuiltShape {
-                        shape,
-                        lineage,
-                        features,
-                    };
-                }
+            let Some((&first, rest)) = children.split_first() else {
+                bail!("union at node {id} ({label}) has no children");
+            };
+            let base = build_node(doc, first, offset)?;
+            if rest.is_empty() {
+                return Ok(base);
             }
-            acc
+            let others = rest
+                .iter()
+                .map(|&c| build_node(doc, c, offset))
+                .collect::<Result<Vec<_>>>()?;
+            breadcrumb(&format!("union node {id} ({label}) of nodes {children:?}"));
+            let joined = boolean_in_layers(base, others, false, node.tag.as_deref());
+            let (shape, lineage) = if *blend > 0.0 {
+                breadcrumb(&format!(
+                    "fillet {blend} mm on edges created by union at node {id} ({label})"
+                ));
+                // The edges a boolean creates are exactly the seam, which is
+                // what `blend` names in the graph.
+                let (shape, lineage) = blend_seam(
+                    &joined.shape,
+                    &joined.seam,
+                    joined.lineage,
+                    *blend,
+                    &format!("node {id} ({label}) unions {}", nodes_phrase(doc, rest)),
+                    &format!("union at node {id}"),
+                    SeamOf::Union,
+                )?;
+                unified_tracked(shape, lineage)
+            } else {
+                unified_tracked(joined.shape, joined.lineage)
+            };
+            BuiltShape {
+                shape,
+                lineage,
+                features: joined.features,
+            }
         }
 
         Op::Difference { base, tools, blend } => {
-            let mut acc = build_node(doc, *base, offset)?;
-            for t in tools {
-                let tool = build_node(doc, *t, offset)?;
-                breadcrumb(&format!("subtract node {t} from node {id} ({label})"));
-                let voids_before = acc.shape.internal_void_count();
-                let faces_before = acc.shape.faces().count();
-                let cut = acc.shape.subtract(&tool.shape);
-
-                // A cut that touches nothing. The tool made no new edge and
-                // took no face, so it lies wholly outside the material — a
-                // hole pattern drawn past the edge of the part, a cutter for
-                // a feature that has since moved. It used to pass silently
-                // and show up, one evaluation later, as a missing hole.
-                if cut.new_edges().next().is_none()
-                    && cut.shape.faces().count() == faces_before
-                {
-                    let (a0, a1) = bbox(&acc.shape);
-                    let (t0, t1) = bbox(&tool.shape);
-                    bail!(
-                        "node {id} ({label}) subtracts node {t}, and the cut removed \
-                         nothing: the tool spans x {:.2}..{:.2}, y {:.2}..{:.2}, \
-                         z {:.2}..{:.2} and the material x {:.2}..{:.2}, y {:.2}..{:.2}, \
-                         z {:.2}..{:.2}, and they meet nowhere. A cutter that misses is \
-                         usually placed against the wrong feature or drawn for a part \
-                         that has since changed size; a cut that is meant to do nothing \
-                         is a tool to leave out",
-                        t0.x, t1.x, t0.y, t1.y, t0.z, t1.z, a0.x, a1.x, a0.y, a1.y, a0.z, a1.z
-                    );
-                }
-
-                // A cut that entombs its tool instead of opening the surface.
-                // Topology, not a threshold: an extra closed shell is a cavity
-                // whatever its clearance measures, so exact coincidence and a
-                // proud cutter stay silent. See docs/GOTCHAS.md, the entry end
-                // of the cut rule.
-                let sealed = cut.shape.internal_void_count().saturating_sub(voids_before);
-                if sealed > 0 {
-                    bail!(
-                        "node {id} ({label}) subtracts node {t}, and the cut sealed \
-                         {sealed} closed void(s) inside the part instead of opening its \
-                         surface. The tool broke through no face — it sits entirely \
-                         inside the material, usually a fraction of a millimetre short \
-                         of the face it was meant to enter — so the result is a solid \
-                         block with an unreachable cavity: watertight, plausible in \
-                         every render, and unmanufacturable. Run the cutter proud of \
-                         the material where it enters and past it where it exits, the \
-                         way holeFor(thread, depth, {{ through: true }}) overshoots both \
-                         faces; exactly on a face also cuts clean, but only the exact \
-                         value does. A sealed cavity that is wanted is what shell() \
-                         builds. See docs/GOTCHAS.md"
-                    );
-                }
-                let lineage = acc
-                    .lineage
-                    .through_boolean(tool.lineage, &cut, node.tag.as_deref());
-                let mut features = acc.features;
-                features.extend(tool.features);
-
-                if *blend > 0.0 {
-                    breadcrumb(&format!(
-                        "fillet {blend} mm on edges created by cut at node {id} ({label})"
-                    ));
-                    let (shape, lineage) = blend_seam(
-                        &cut,
-                        lineage,
-                        *blend,
-                        &format!("node {id} ({label}) subtracts node {t}"),
-                        &format!("cut at node {id}"),
-                        SeamOf::Cut,
-                    )?;
-                    let (shape, lineage) = unified_tracked(shape, lineage);
-                    acc = BuiltShape {
-                        shape,
-                        lineage,
-                        features,
-                    };
-                } else {
-                    let (shape, lineage) = unified_tracked(cut.shape, lineage);
-                    acc = BuiltShape {
-                        shape,
-                        lineage,
-                        features,
-                    };
-                }
+            let acc = build_node(doc, *base, offset)?;
+            if tools.is_empty() {
+                return Ok(acc);
             }
-            acc
+            let cutters = tools
+                .iter()
+                .map(|&t| build_node(doc, t, offset))
+                .collect::<Result<Vec<_>>>()?;
+            breadcrumb(&format!("subtract nodes {tools:?} from node {id} ({label})"));
+            let material = acc.shape.clone();
+            let voids_before = material.internal_void_count();
+            let faces_before = material.faces().count();
+            let cut = boolean_in_layers(acc, cutters, true, node.tag.as_deref());
+            let whom = nodes_phrase(doc, tools);
+
+            // A cut that touches nothing. The tool made no new edge and
+            // took no face, so it lies wholly outside the material — a
+            // hole pattern drawn past the edge of the part, a cutter for
+            // a feature that has since moved. It used to pass silently
+            // and show up, one evaluation later, as a missing hole.
+            // With several tools, one can miss while the rest cut: it left
+            // no face and lies clear of the material. A tool inside a region
+            // another tool removed leaves no face either, but meets the
+            // material, so it is not a miss.
+            let nothing_at_all = cut.seam.is_empty() && cut.shape.faces().count() == faces_before;
+            let missed = tools.iter().zip(&cut.tools).find(|(_, tool)| {
+                nothing_at_all
+                    || (tool.vanished
+                        && tool
+                            .shape
+                            .least_distance_to(&material)
+                            .is_some_and(|(gap, _, _)| gap > MISS_GAP_MM))
+            });
+            if let Some((t, tool)) = missed {
+                let (a0, a1) = bbox(&material);
+                let (t0, t1) = bbox(&tool.shape);
+                bail!(
+                    "node {id} ({label}) subtracts {}, and the cut removed \
+                     nothing: the tool spans x {:.2}..{:.2}, y {:.2}..{:.2}, \
+                     z {:.2}..{:.2} and the material x {:.2}..{:.2}, y {:.2}..{:.2}, \
+                     z {:.2}..{:.2}, and they meet nowhere. A cutter that misses is \
+                     usually placed against the wrong feature or drawn for a part \
+                     that has since changed size; a cut that is meant to do nothing \
+                     is a tool to leave out",
+                    nodes_phrase(doc, std::slice::from_ref(t)),
+                    t0.x, t1.x, t0.y, t1.y, t0.z, t1.z, a0.x, a1.x, a0.y, a1.y, a0.z, a1.z
+                );
+            }
+
+            // A cut that entombs its tool instead of opening the surface.
+            // Topology, not a threshold: an extra closed shell is a cavity
+            // whatever its clearance measures, so exact coincidence and a
+            // proud cutter stay silent. See docs/GOTCHAS.md, the entry end
+            // of the cut rule.
+            let voids = cut.shape.internal_void_bounds();
+            let sealed = voids.len().saturating_sub(voids_before);
+            if sealed > 0 {
+                let located = if tools.len() == 1 {
+                    "The tool broke through no face — it sits entirely inside the material, \
+                     usually a fraction of a millimetre short of the face it was meant to \
+                     enter —"
+                        .to_owned()
+                } else {
+                    let places: Vec<String> = voids
+                        .iter()
+                        .map(|&(lo, hi)| {
+                            let near = |pick: &dyn Fn(DVec3, DVec3) -> bool| -> Vec<NodeId> {
+                                tools
+                                    .iter()
+                                    .zip(&cut.tools)
+                                    .filter(|(_, tool)| tool.bounds.is_some_and(|(c0, c1)| pick(c0, c1)))
+                                    .map(|(t, _)| *t)
+                                    .collect()
+                            };
+                            let mut by = near(&|c0, c1| {
+                                c0.cmple(lo + MISS_GAP_MM).all() && hi.cmple(c1 + MISS_GAP_MM).all()
+                            });
+                            if by.is_empty() {
+                                by = near(&|c0, c1| {
+                                    c0.cmplt(hi - MISS_GAP_MM).all() && lo.cmplt(c1 - MISS_GAP_MM).all()
+                                });
+                            }
+                            format!(
+                                "x {:.2}..{:.2}, y {:.2}..{:.2}, z {:.2}..{:.2}, cut by {}",
+                                lo.x, hi.x, lo.y, hi.y, lo.z, hi.z,
+                                nodes_phrase(doc, &by)
+                            )
+                        })
+                        .collect();
+                    format!(
+                        "The tools are cut together and the result is what is judged, and no \
+                         tool of this cut breaks through to the cavity at {} — it sits \
+                         entirely inside the material, usually a fraction of a millimetre short \
+                         of the face it was meant to open onto —",
+                        places.join("; ")
+                    )
+                };
+                bail!(
+                    "node {id} ({label}) subtracts {whom}, and the cut sealed \
+                     {sealed} closed void(s) inside the part instead of opening its \
+                     surface. {located} so the result is a solid \
+                     block with an unreachable cavity: watertight, plausible in \
+                     every render, and unmanufacturable. Run the cutter proud of \
+                     the material where it enters and past it where it exits, the \
+                     way holeFor(thread, depth, {{ through: true }}) overshoots both \
+                     faces; exactly on a face also cuts clean, but only the exact \
+                     value does. A cavity is also opened by another tool of the same \
+                     cut that reaches it, such as a bore, in any order. A sealed \
+                     cavity that is wanted is what shell() builds. See docs/GOTCHAS.md"
+                );
+            }
+
+            let (shape, lineage) = if *blend > 0.0 {
+                breadcrumb(&format!(
+                    "fillet {blend} mm on edges created by cut at node {id} ({label})"
+                ));
+                let (shape, lineage) = blend_seam(
+                    &cut.shape,
+                    &cut.seam,
+                    cut.lineage,
+                    *blend,
+                    &format!("node {id} ({label}) subtracts {whom}"),
+                    &format!("cut at node {id}"),
+                    SeamOf::Cut,
+                )?;
+                unified_tracked(shape, lineage)
+            } else {
+                unified_tracked(cut.shape, cut.lineage)
+            };
+            BuiltShape {
+                shape,
+                lineage,
+                features: cut.features,
+            }
         }
 
         Op::Intersection { children, blend } => {

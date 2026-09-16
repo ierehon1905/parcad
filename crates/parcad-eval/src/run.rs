@@ -44,8 +44,10 @@ pub fn build_doc(root: &Path, script: &str) -> Result<Doc> {
         );
     }
 
-    serde_json::from_slice(&out.stdout)
-        .with_context(|| format!("parsing the graph {script} produced"))
+    let graph: serde_json::Value = serde_json::from_slice(&out.stdout)
+        .with_context(|| format!("parsing the graph {script} produced"))?;
+    parcad_core::envelope::parse_doc(graph)
+        .map_err(|e| anyhow::anyhow!("reading the graph {script} produced: {e}"))
 }
 
 /// Measure through OpenCASCADE, in the isolated worker.
@@ -107,6 +109,7 @@ pub fn run_brep(doc: &Doc) -> Outcome {
         voids: stats.voids,
         stands_on: tess.bed_contact(),
         deviation_mm: s.deviation_mm,
+        requires: doc.requires.iter().map(|r| r.feature.clone()).collect(),
         tags,
         unlocated_tags,
         // The same slice-and-measure the app's reply uses, for the same
@@ -196,6 +199,7 @@ pub fn brep_available() -> std::result::Result<(), String> {
         }],
         root: 0,
         units: "mm".to_string(),
+        requires: Vec::new(),
     };
 
     match parcad_occt::evaluate(&doc, &parcad_occt::Options::default()) {

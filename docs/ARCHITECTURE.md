@@ -30,6 +30,55 @@ Consequences worth internalising:
 - **A node's meaning can differ per backend and that is allowed** — but it must
   be documented. See "blend" below.
 
+### A graph says what it needs
+
+The graph and the host that builds it are often different builds: the editor
+bundle of a source tree posting to an installed app, `tools/run.ts` output
+handed to a released CLI, a worker from `PARCAD_OCCT_WORKER`. Parcad 0.0.6 read
+a part with a rounded section corner as `the graph is not valid: invalid type:
+map, expected an array of length 2`, which took half an hour to trace to the
+version. So:
+
+- **`requires` lists the features a graph uses that an older host cannot
+  read**, each as `{ feature, after, what }`, stamped by `build()` in
+  `app/src/dsl.ts` from `GRAPH_FEATURES`. Only features a graph actually uses
+  are listed, and only features newer than the version that started reading
+  `requires` exist at all.
+- **A host refuses an id it does not know, in the writer's words**:
+  `crates/parcad-core/src/envelope.rs`, `parse_doc`, used by every transport,
+  the CLI and the corpus, and by the worker for its own copy. "This part uses
+  sections with rounded corners, arcs or splines, which needs a parcad released
+  after 0.0.6. This host is parcad …: update it, or point the client at a newer
+  host."
+- **Everything else that fails to read names the node, the field and the
+  fix** — an unknown op, a missing field, a value of the wrong shape — and a
+  field no slot reads is refused rather than dropped: serde ignored
+  `"chamfer": 1` on a cylinder and built a plain one, which is how a newer
+  host's optional field would have arrived at an older one.
+
+**Features, not a schema number.** A version integer would say *that* a host
+is too old, never *what* it lacks; it would lock every new graph out of an old
+host, including the many that use nothing new; and it would have to be bumped
+by hand, where the source tree already carries a version (0.0.6) that does not
+describe what it can read. A feature id is exact, and its entry carries the
+words and the release a host that has never heard of it needs to print. The
+reverse direction is free while features are only added: a graph with no
+`requires` is an older writer's and reads as it always did. A feature whose
+meaning ever changes gets a new id, and the host can refuse the old one with
+its own words.
+
+**What already-shipped hosts do:** 0.0.6 and earlier ignore `requires`, so they
+still fail with serde's text on the first entry they cannot parse, and still
+silently drop a field they have no slot for. Nothing can change that
+retroactively; every host from this one on fails by name. `GRAPH_FEATURES`'s
+`after` is the last release that cannot read a feature — a fact at the time it
+is written, not a guess at the next version number.
+
+Adding a graph feature is a row in `GRAPH_FEATURES` and an id in
+`envelope::FEATURES`; `every_graph_feature_is_stamped_and_read` in
+`parcad-host` fails until both exist and a script that uses the feature stamps
+it. `eval/cases/graph-states-what-it-needs.json` pins what one part stamps.
+
 ### A part may be several bodies, and they stay several
 
 A script that returns an object of shapes — `return { base, lid }` — builds a

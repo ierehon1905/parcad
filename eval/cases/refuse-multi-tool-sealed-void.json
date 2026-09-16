@@ -1,0 +1,17 @@
+{
+  "name": "refuse-multi-tool-sealed-void",
+  "script": "eval/scripts/refuse-multi-tool-sealed-void.js",
+  "why": "The sealed-void refusal survives being judged on the whole cut. A cavity 3 mm inside every face, a bore that stops 1 mm short of it and a hole elsewhere: nothing opens the cavity, so the cut is refused, and with several tools the message says where the void is and which tool made it, since 'the tool' no longer identifies one.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "sealed 1 closed void(s)",
+        "x -15.00..15.00, y -15.00..15.00, z -12.00..12.00, cut by node 1 (cavity)",
+        "unmanufacturable",
+        "proud of the material where it enters and past it where it exits",
+        "opened by another tool of the same cut"
+      ]
+    }
+  }
+}

@@ -221,11 +221,13 @@ fn load_doc(path: &std::path::Path) -> Result<Doc> {
     if path.extension().is_some_and(|e| e == "js") {
         let graph = parcad_host::script::build_graph(&text)
             .map_err(|e| anyhow::anyhow!("building {}: {e}", path.display()))?;
-        return serde_json::from_value(graph)
-            .with_context(|| format!("the graph {} built is not an intent graph", path.display()));
+        return parcad_core::envelope::parse_doc(graph)
+            .map_err(|e| anyhow::anyhow!("the graph {} built: {e}", path.display()));
     }
-    serde_json::from_str(&text)
-        .with_context(|| format!("parsing {} as an intent graph", path.display()))
+    let graph = serde_json::from_str(&text)
+        .with_context(|| format!("parsing {} as JSON", path.display()))?;
+    parcad_core::envelope::parse_doc(graph)
+        .map_err(|e| anyhow::anyhow!("reading {} as an intent graph: {e}", path.display()))
 }
 
 /// The application without its window: seed the project folder, host the UI,

@@ -770,6 +770,42 @@ threshold nobody can defend. Where a defect can be restated that way it can be
 refused; where it cannot, the entry-side rule stays in the examples, in this
 file, and in `display-bezel.js`'s comments.
 
+### A multi-tool cut is one cut
+
+`outside.cut(cavity, bore)` — a cavity sealed 3 mm inside every face, and a bore
+through the top that opens it — was **refused** as a sealed void, while
+`outside.cut(bore, cavity)` built the identical part. The cut ran one boolean
+per tool and judged each intermediate, so the cavity was condemned before the
+bore reached it. The same fold refused `cut(box(4, 4, 4), box(10, 10, 20))` as a
+sealed void and the reverse order as a tool that "meets nowhere", and a blended
+`union(left, right, plate)` failed because the two bosses fused first share no
+seam to blend.
+
+Now a union or a cut applies all its tools before anything is judged
+(`boolean_in_layers` in `backend.rs`): the void count is taken on the result,
+a tool is a miss only when it left no face *and* is clear of the original
+material (a tool inside another tool's volume is not a miss), and a blend
+rounds the whole seam once. `eval/cases/cut-opens-its-own-cavity.json`,
+`cut-with-a-redundant-tool.json`, `blended-union-any-order.json` and the two
+`refuse-multi-tool-*` cases pin it.
+
+Tools whose boxes are clear of each other go into **one** OCCT boolean: 144
+holes in a plate built in 70–100 ms against 1.3–4 s one at a time, 64 bosses in
+25–45 ms against 0.3–0.9 s. Tools that overlap go into successive booleans,
+because OCCT also intersects the tools of one boolean with each other: forty
+slots crossing at a centre took **70–140 s** as one boolean and 1 s in turn.
+Intersection stays a fold: `BRepAlgoAPI_Common` with several tools intersects
+with their *union*, and an empty common at any step is empty at the end
+whatever the order, so its refusal was never order-dependent.
+
+Two things are still order-dependent, deliberately. A chain is several nodes:
+`outside.cut(cavity).cut(bore)` still refuses, because `outside.cut(cavity)` is a
+shape the script made and could return — list both tools in one `cut`. And the
+fold's old hazard, "A union of pieces that do not touch each other kills the
+fuse" below, did not reproduce on OCCT 8 in either form (three quarter-torus
+arcs listed before four runs build in 27–29 ms either way), but a layer can
+still hold disjoint pieces.
+
 ### `role: "hole"` does not match a conical opening
 
 A countersink rim is an inner boundary of the top face by any reading, and

@@ -1,0 +1,26 @@
+{
+  "name": "graph-states-what-it-needs",
+  "script": "eval/scripts/graph-states-what-it-needs.js",
+  "why": "The graph names the features it uses that an older host cannot read, so that host refuses by name ('this part uses sections with rounded corners, arcs or splines, which needs a parcad released after 0.0.6') instead of with serde's 'invalid type: map, expected an array of length 2', which is what 0.0.6 said and what cost a session half an hour. `requires` is exact and ordered as GRAPH_FEATURES lists it; the geometry is closed form: wall area 400 − 36(1 − π/4) − 256 + 4(1 − π/4) = 137.133 mm², volume 1371.327 mm³, surface 2·137.133 + 10·(56 + 6π) + 10·(56 + 2π) = 1645.59 mm².",
+  "brep": {
+    "requires": [
+      "section-curves",
+      "inset-sections"
+    ],
+    "size": [
+      20.0,
+      20.0,
+      10.0
+    ],
+    "volume_mm3": 1371.327,
+    "area_mm2": 1645.593,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 137.133,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 18,
+    "edges": 96,
+    "curves": 48
+  }
+}

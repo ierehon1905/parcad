@@ -37,14 +37,19 @@ class ParcadBoolean {
  public:
   // The (base, tool) constructors run the boolean themselves, so building
   // after them did the whole operation twice; start empty and build once.
-  ParcadBoolean(const TopoDS_Shape& base, const TopoDS_Shape& tool, bool is_cut)
+  ParcadBoolean(const TopoDS_Shape& base, bool is_cut)
       : cut_(is_cut ? std::unique_ptr<BRepAlgoAPI_Cut>(new BRepAlgoAPI_Cut()) : nullptr),
         fuse_(is_cut ? nullptr : std::unique_ptr<BRepAlgoAPI_Fuse>(new BRepAlgoAPI_Fuse())) {
-    NCollection_List<TopoDS_Shape> arguments, tools;
-    arguments.Append(base);
-    tools.Append(tool);
-    algorithm().SetArguments(arguments);
-    algorithm().SetTools(tools);
+    arguments_.Append(base);
+  }
+
+  // Several tools are one boolean against the group of them: base minus
+  // their union for a cut, all of them fused for a fuse. Tools may overlap.
+  void add_tool(const TopoDS_Shape& tool) { tools_.Append(tool); }
+
+  void build() {
+    algorithm().SetArguments(arguments_);
+    algorithm().SetTools(tools_);
     algorithm().SetToFillHistory(true);
     // OCCT's global default is serial; the face/face and edge/face loops are
     // written for OSD_Parallel, and matched serial on every part measured.
@@ -77,14 +82,25 @@ class ParcadBoolean {
 
   mutable std::unique_ptr<BRepAlgoAPI_Cut> cut_;
   mutable std::unique_ptr<BRepAlgoAPI_Fuse> fuse_;
+  NCollection_List<TopoDS_Shape> arguments_, tools_;
 };
 
+inline std::unique_ptr<ParcadBoolean> parcad_boolean_with_history(const TopoDS_Shape& base, bool is_cut) {
+  return std::unique_ptr<ParcadBoolean>(new ParcadBoolean(base, is_cut));
+}
+
 inline std::unique_ptr<ParcadBoolean> parcad_cut_with_history(const TopoDS_Shape& base, const TopoDS_Shape& tool) {
-  return std::unique_ptr<ParcadBoolean>(new ParcadBoolean(base, tool, true));
+  auto boolean = parcad_boolean_with_history(base, true);
+  boolean->add_tool(tool);
+  boolean->build();
+  return boolean;
 }
 
 inline std::unique_ptr<ParcadBoolean> parcad_fuse_with_history(const TopoDS_Shape& base, const TopoDS_Shape& tool) {
-  return std::unique_ptr<ParcadBoolean>(new ParcadBoolean(base, tool, false));
+  auto boolean = parcad_boolean_with_history(base, false);
+  boolean->add_tool(tool);
+  boolean->build();
+  return boolean;
 }
 
 // The local-operation API has the same history contract as booleans: it can

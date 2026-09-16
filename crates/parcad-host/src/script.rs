@@ -276,6 +276,41 @@ pub fn surface() -> Result<Surface, String> {
 mod tests {
     use super::*;
 
+    /// `GRAPH_FEATURES` in dsl.ts and `envelope::FEATURES` are one list kept
+    /// in two languages: every id the DSL can stamp is one this host reads,
+    /// and every id the host reads is one the DSL stamps when it is used.
+    #[test]
+    fn every_graph_feature_is_stamped_and_read() {
+        let triangle = "[[0, 0], [10, 0], [0, 10]]";
+        let cases = [
+            ("section-curves", "return extrude([[0, 0], [10, 0], { through: [7.07, 7.07] }, [0, 10]], 2);".to_owned()),
+            (
+                "fitted-sections",
+                "const p = []; for (let i = 0; i < 12; i++) { const a = i * Math.PI / 6; p.push([5 * Math.cos(a), 5 * Math.sin(a)]); }\n\
+                 return extrude([{ fit: p, tolerance: 0.01 }], 2);"
+                    .to_owned(),
+            ),
+            ("inset-sections", format!("return extrude(inset({triangle}, 1), 2);")),
+            ("sweep-spline", "return pipe({ spline: [[0, 0, 0], [30, 20, 0], [60, 0, 0]] }, 4);".to_owned()),
+            ("loft-point", format!("return loft([{{ z: 0, outline: {triangle} }}, {{ z: 10, point: [3, 3] }}]);")),
+        ];
+        let stamped: Vec<&str> = cases.iter().map(|(id, _)| *id).collect();
+        assert_eq!(stamped, parcad_core::envelope::FEATURES, "the host's feature list and this table differ");
+        for (id, source) in &cases {
+            let graph = build_graph(source).unwrap_or_else(|e| panic!("{id}: {e}"));
+            let requires: Vec<&str> = graph["requires"]
+                .as_array()
+                .unwrap_or_else(|| panic!("{id}: the graph requires nothing: {graph}"))
+                .iter()
+                .filter_map(|r| r["feature"].as_str())
+                .collect();
+            assert!(requires.contains(id), "{id} was not stamped: {requires:?}");
+            parcad_core::envelope::parse_doc(graph.clone()).unwrap_or_else(|e| panic!("{id}: {e}"));
+        }
+        let plain = build_graph(&format!("return extrude({triangle}, 2).cut(box(1, 1, 9));")).unwrap();
+        assert!(plain.get("requires").is_none(), "a graph using nothing new requires nothing: {plain}");
+    }
+
     /// The claim this module exists to make. Asserted rather than described,
     /// because "there is no filesystem in there" is exactly the kind of belief
     /// that survives being false.

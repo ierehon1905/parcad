@@ -536,6 +536,34 @@ impl Shape {
         voids
     }
 
+    /// The tight bounds of every sealed internal void, one entry per cavity
+    /// shell. A solid's outer shell encloses its cavities, so it is the shell
+    /// with the largest box, and every other shell is a void. Added for parcad.
+    pub fn internal_void_bounds(&self) -> Vec<(DVec3, DVec3)> {
+        let mut voids = Vec::new();
+        let mut solids =
+            ffi::TopExp_Explorer_ctor(&self.inner, ffi::TopAbs_ShapeEnum::TopAbs_SOLID);
+        while solids.More() {
+            let mut shells =
+                ffi::TopExp_Explorer_ctor(solids.Current(), ffi::TopAbs_ShapeEnum::TopAbs_SHELL);
+            let mut bounds = Vec::new();
+            while shells.More() {
+                let shell = Shape { inner: ffi::TopoDS_Shape_to_owned(shells.Current()) };
+                if let Some(extent) = shell.bounds_optimal() {
+                    bounds.push(extent);
+                }
+                shells.pin_mut().Next();
+            }
+            let size = |(lo, hi): &(DVec3, DVec3)| (*hi - *lo).length_squared();
+            if let Some(outer) = (0..bounds.len()).max_by(|&a, &b| size(&bounds[a]).total_cmp(&size(&bounds[b]))) {
+                bounds.swap_remove(outer);
+                voids.extend(bounds);
+            }
+            solids.pin_mut().Next();
+        }
+        voids
+    }
+
     /// Apply an arbitrary rigid transform, returning a new shape.
     ///
     /// The general escape hatch the rest of the transforms are built on. Unlike

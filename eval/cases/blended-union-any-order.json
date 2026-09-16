@@ -1,0 +1,21 @@
+{
+  "name": "blended-union-any-order",
+  "script": "eval/scripts/blended-union-any-order.js",
+  "why": "A blend rounds the seam of the whole union, made as one boolean. Joined one operand at a time, the two bosses listed first fused into a pair with no seam, blending that failed ('no suitable edges'), and the part was refused while union(plate, left, right) built. The volume matches that order's to tessellation (15714.56 mm³ measured there before this change); two 2 mm fillet rings on 5 mm bosses have no closed form worth trusting here.",
+  "brep": {
+    "size": [
+      60.0,
+      40.0,
+      14.0
+    ],
+    "volume_mm3": 15714.581,
+    "area_mm2": 6451.98,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 2400.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 12,
+    "edges": 44
+  }
+}
