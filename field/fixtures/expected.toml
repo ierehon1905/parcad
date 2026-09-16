@@ -37,6 +37,15 @@ derived = false
 stray = ["mcp__parcad_list_projects", "mcp__parcad_read_project"]
 hidden = []
 
+[measured-on-the-script]
+grade = "SOUND"
+reached = true
+quoted = true
+trap = false
+derived = false
+stray = []
+hidden = []
+
 [no-final-answer]
 grade = "OPEN"
 reached = true
