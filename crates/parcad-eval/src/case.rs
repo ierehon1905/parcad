@@ -65,6 +65,52 @@ pub struct Refusal {
     pub kind: RefusalKind,
     #[serde(default)]
     pub message_contains: Vec<String>,
+    /// A value the refusal says it built, which the harness builds again.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builds_with: Option<Suggestion>,
+}
+
+/// A refusal that names a value "measured to build" is held to that promise
+/// rather than to one compiler's number: the search finds 1.13 natively and
+/// 0.94 under WebAssembly, and each must build where it was found.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Suggestion {
+    /// The words before the value; it is the number after the next `": "`.
+    pub after: String,
+    /// The graph field to write it into, wherever that field holds `refused`.
+    pub field: String,
+    pub refused: f64,
+}
+
+impl Suggestion {
+    /// The suggested value, or why the message does not carry one.
+    pub fn value(&self, message: &str) -> Result<f64, String> {
+        let missing = || format!("the refusal names no value after {:?}", self.after);
+        let (_, rest) = message.split_once(self.after.as_str()).ok_or_else(missing)?;
+        let (_, rest) = rest.split_once(": ").ok_or_else(missing)?;
+        let number: String = rest.chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+        number.parse().map_err(|_| missing())
+    }
+
+    /// The graph with every `field` equal to `refused` set to `value`, and how
+    /// many were.
+    pub fn apply(&self, graph: &mut serde_json::Value, value: f64) -> usize {
+        match graph {
+            serde_json::Value::Object(map) => map
+                .iter_mut()
+                .map(|(key, v)| {
+                    if key == &self.field && v.as_f64() == Some(self.refused) {
+                        *v = serde_json::json!(value);
+                        1
+                    } else {
+                        self.apply(v, value)
+                    }
+                })
+                .sum(),
+            serde_json::Value::Array(items) => items.iter_mut().map(|v| self.apply(v, value)).sum(),
+            _ => 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -97,6 +143,11 @@ pub struct Expect {
     pub stands_on_mm2: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stands_on_patches: Option<usize>,
+    /// A ceiling in place of `stands_on_mm2`, for a part that touches the bed
+    /// at a point: its area is whichever triangles the mesher laid there, so
+    /// the case bounds it by hand and `record` leaves it unrecorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stands_on_under_mm2: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watertight: Option<bool>,
 
@@ -592,6 +643,15 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
         let got = observed.stands_on.as_ref().map_or(0.0, |c| c.area_mm2);
         pct_check(&mut out, "stands_on_mm2", want, got, tol.stands_on_pct.unwrap_or(tol.volume_pct));
     }
+    if let Some(ceiling) = expect.stands_on_under_mm2 {
+        let got = observed.stands_on.as_ref().map_or(0.0, |c| c.area_mm2);
+        if got > ceiling {
+            out.push(Mismatch {
+                field: "stands_on_under_mm2".into(),
+                detail: format!("stands on {got:.3} mm², over the {ceiling} mm² the case derives"),
+            });
+        }
+    }
     if let Some(want) = expect.stands_on_patches {
         let got = observed.stands_on.as_ref().map_or(0, |c| c.patches);
         if got != want {
@@ -841,7 +901,9 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
     expect.watertight = Some(observed.watertight);
     expect.bodies = Some(observed.bodies);
     expect.voids = Some(observed.voids);
-    expect.stands_on_mm2 = observed.stands_on.as_ref().map(|c| round3(c.area_mm2));
+    if expect.stands_on_under_mm2.is_none() {
+        expect.stands_on_mm2 = observed.stands_on.as_ref().map(|c| round3(c.area_mm2));
+    }
     expect.stands_on_patches = observed.stands_on.as_ref().map(|c| c.patches);
     expect.faces = observed.faces;
     expect.edges = observed.edges;
@@ -900,4 +962,29 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
 
 fn round3(v: f64) -> f64 {
     (v * 1000.0).round() / 1000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Suggestion;
+
+    #[test]
+    fn a_suggestion_is_read_from_the_refusal_and_written_where_the_refused_value_was() {
+        let suggestion = Suggestion {
+            after: "Largest radius measured to build on".into(),
+            field: "blend".into(),
+            refused: 2.0,
+        };
+        let message = "branches 4 ways at (0.0, 21.0, -0.0). Largest radius measured to build on this seam: 0.94 mm — rebuilt";
+        assert_eq!(suggestion.value(message), Ok(0.94));
+        assert!(suggestion.value("No radius built on this seam").is_err());
+
+        let mut graph = serde_json::json!({ "nodes": [
+            { "op": "union", "children": [0, 1], "blend": 2.0 },
+            { "op": "union", "children": [2, 3], "blend": 0.0 },
+        ]});
+        assert_eq!(suggestion.apply(&mut graph, 0.94), 1);
+        assert_eq!(graph["nodes"][0]["blend"], 0.94);
+        assert_eq!(graph["nodes"][1]["blend"], 0.0);
+    }
 }
