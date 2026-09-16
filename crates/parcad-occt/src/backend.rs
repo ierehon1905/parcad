@@ -293,11 +293,71 @@ fn checked_face(section: &Section, wire: &Wire, what: &str) -> Result<Face> {
             "Move the through point, radius or control points so the outline passes each place once"
         };
         bail!(
-            "the {what} touches or crosses itself — an arc or curve runs into another edge — so it bounds no single region. {fix}. The kernel's check said: {}",
+            "the {what} touches or crosses itself — an arc or curve runs into another edge — so it bounds no single region. {}{fix}. The kernel's check said: {}",
+            locate_crossing(section).unwrap_or_default(),
             report.lines().take(3).collect::<Vec<_>>().join("; ")
         );
     }
     Ok(face)
+}
+
+/// The kernel's own verdict on a resolved section — its wire and checked face
+/// in the XY plane — with none of the graph's checks in front of it. How the
+/// section corpus asks whether the kernel would take what the core refused.
+pub fn section_face_verdict(section: &Section) -> Result<()> {
+    let wire = section_wire(section, |[x, y]| DVec3::new(x, y, 0.0), "extrude profile")?;
+    checked_face(section, &wire, "extrude profile")?;
+    Ok(())
+}
+
+/// Where a section the validity check refused meets itself, found on the
+/// curves as built — a fitted curve refitted and sampled, the rest sampled
+/// from the core's — as a sentence for the refusal, or `None` when sampling
+/// finds nothing the check did.
+fn locate_crossing(section: &Section) -> Option<String> {
+    let mut chain: Vec<[f64; 2]> = Vec::new();
+    let mut owners: Vec<usize> = Vec::new();
+    for (i, segment) in section.segments.iter().enumerate() {
+        let points = match segment {
+            Segment::Fit { points, tolerance, closed } => {
+                let placed: Vec<DVec3> = points.iter().map(|p| DVec3::new(p[0], p[1], 0.0)).collect();
+                let (_, fit) = Edge::fit(&placed, *tolerance, *closed).ok()?;
+                fit.samples.iter().map(|p| [p.x, p.y]).collect()
+            }
+            other => parcad_core::section_crossing::sample_segment(other, 32),
+        };
+        // Each piece's last point is the next one's first.
+        let kept = points.len().saturating_sub(1);
+        chain.extend_from_slice(&points[..kept]);
+        owners.extend(std::iter::repeat_n(i, kept));
+    }
+    let (a, b) = parcad_core::section::polyline_self_intersection(&chain, true)?;
+    let describe = |i: usize| match &section.segments[owners[i]] {
+        Segment::Line { a, b } => format!("the straight edge from [{}, {}] to [{}, {}]", a[0], a[1], b[0], b[1]),
+        Segment::Arc { a, b, .. } => format!("the arc from [{}, {}] to [{}, {}]", a[0], a[1], b[0], b[1]),
+        Segment::Curve(c) => {
+            let (s, e) = (c.poles[0], c.poles[c.poles.len() - 1]);
+            format!("the curve from [{}, {}] to [{}, {}]", s[0], s[1], e[0], e[1])
+        }
+        Segment::Fit { points, .. } => format!("the curve fitted through {} points from [{}, {}]", points.len(), points[0][0], points[0][1]),
+    };
+    let n = chain.len();
+    let (p, r) = (chain[a], [chain[(a + 1) % n][0] - chain[a][0], chain[(a + 1) % n][1] - chain[a][1]]);
+    let (q, d) = (chain[b], [chain[(b + 1) % n][0] - chain[b][0], chain[(b + 1) % n][1] - chain[b][1]]);
+    let denom = r[0] * d[1] - r[1] * d[0];
+    // Where the two sampled pieces cross; where they only touch end on, the end.
+    let near = if denom.abs() > 1e-12 {
+        let t = (((q[0] - p[0]) * d[1] - (q[1] - p[1]) * d[0]) / denom).clamp(0.0, 1.0);
+        [p[0] + r[0] * t, p[1] + r[1] * t]
+    } else {
+        q
+    };
+    let what = if owners[a] == owners[b] {
+        format!("{} crosses itself", describe(a))
+    } else {
+        format!("{} runs into {}", describe(a), describe(b))
+    };
+    Some(format!("Sampled, {what} near [{:.4}, {:.4}]. ", near[0], near[1]))
 }
 
 thread_local! {
@@ -4861,5 +4921,49 @@ mod tests {
             assert_eq!(run.face, position, "runs are in the shape's own face order");
         }
     }
-}
 
+    /// The kernel's half of `eval/sections.json`: an extrusion of each outline
+    /// lowered, or, for `kernel_alone`, its face checked with nothing in front.
+    #[test]
+    fn agrees_with_the_shared_section_corpus() {
+        use parcad_core::section::{self, SectionEntry};
+        use serde_json::Value;
+        let corpus: Value = serde_json::from_str(include_str!("../../../eval/sections.json")).unwrap();
+        let mut wrong = Vec::new();
+        let cases = corpus["cases"].as_array().unwrap();
+        for case in cases {
+            let expected = &case["kernel"];
+            if expected.is_null() || expected.get("crashes").is_some() {
+                continue;
+            }
+            let outline = &case["outline"];
+            let got = if case["kernel_alone"] == true {
+                let entries: Vec<SectionEntry> = serde_json::from_value(outline.clone()).unwrap();
+                let resolved = section::resolve_unchecked(&entries, "extrude profile").unwrap();
+                section_face_verdict(&resolved).map_err(|e| format!("{e:#}"))
+            } else {
+                let doc: Doc = serde_json::from_value(serde_json::json!({
+                    "nodes": [{ "op": "extrude", "profile": outline, "height": 2.0 }],
+                    "root": 0,
+                }))
+                .unwrap();
+                build_part(&doc).map(|_| ()).map_err(|e| format!("{e:#}"))
+            };
+            let agrees = match (&got, expected.get("refuses").and_then(Value::as_str)) {
+                (Ok(()), None) => expected["ok"] == true,
+                (Err(message), Some(want)) => message.split(". ").next() == Some(want),
+                _ => false,
+            };
+            if !agrees {
+                wrong.push(format!("{} ({}):\n  expected {expected}\n  got      {got:?}", case["from"], case["why"]));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "{} of {} kernel verdicts in eval/sections.json changed. If that was meant, rerun tools/section-fuzz.sh --keep DIR and bun tools/section-promote.ts DIR/verdicts.jsonl > eval/sections.json, and read the diff:\n{}",
+            wrong.len(),
+            cases.len(),
+            wrong.join("\n")
+        );
+    }
+}

@@ -276,6 +276,8 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | what an agent can *read* about the language | `crates/parcad-host/src/docs.rs` — generated from `dsl.ts`, never written beside it |
 | whether a model can *read* a tool | `eval/field/*.md`, run by `field/run-suite.sh` |
 | which server that harness is pointed at | `field/field.toml` — the only file under `field/` that names parcad |
+| whether the DSL, the core and the kernel agree about a section | `eval/sections.json`, read by `agrees_with_the_shared_section_corpus` (Rust, both crates) and `section-corpus.test.ts`; `tools/section-fuzz.sh` finds new cases; docs/SECTION_CHECKS.md |
+| where a section's arcs and curves cross | `crates/parcad-core/src/section_crossing.rs` |
 | what "SOUND" is still allowed to mean | `field/fixtures/expected.toml`, gated by `field/selftest.py` |
 
 A new op touches `graph.rs` (variant + `children_of`), `measure.rs` (its

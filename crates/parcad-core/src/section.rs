@@ -363,7 +363,7 @@ impl<const D: usize> BSpline<D> {
     }
 
     /// Insert `t` once (Boehm), keeping the curve unchanged.
-    fn insert_knot(&mut self, t: f64) {
+    pub(crate) fn insert_knot(&mut self, t: f64) {
         let p = self.degree;
         let k = {
             // The span `t` falls in, counting a knot equal to `t` as the start.
@@ -907,6 +907,17 @@ impl Section {
 /// Resolve a section's entries into boundary pieces, refusing what is not a
 /// closed outline. `what` names the section in messages: "extrude profile".
 pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> {
+    resolve_checking(entries, what, true)
+}
+
+/// [`resolve`] without refusing lines, arcs and curves that cross: how the
+/// section corpus asks the kernel alone about an outline the core refuses.
+/// Nothing that builds a part calls it.
+pub fn resolve_unchecked(entries: &[SectionEntry], what: &str) -> Result<Section, String> {
+    resolve_checking(entries, what, false)
+}
+
+fn resolve_checking(entries: &[SectionEntry], what: &str, crossings: bool) -> Result<Section, String> {
     for entry in entries {
         let finite = |p: &P2| p[0].is_finite() && p[1].is_finite();
         let ok = match entry {
@@ -928,7 +939,7 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
     }
 
     if let [SectionEntry::Inset { of, by }] = entries {
-        return resolve_inset(of, *by, what);
+        return resolve_inset(of, *by, what, crossings);
     }
     if let Some(i) = entries.iter().position(|e| matches!(e, SectionEntry::Inset { .. })) {
         return Err(format!(
@@ -945,6 +956,9 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
             })
             .collect();
         let n = points.len();
+        for i in 0..n {
+            refuse_speck(&points[i], &points[(i + 1) % n], || format!("{what}'s corners {i} and {}", (i + 1) % n))?;
+        }
         let segments: Vec<Segment> = (0..n)
             .filter_map(|i| {
                 let (a, b) = (points[i], points[(i + 1) % n]);
@@ -967,6 +981,9 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
             [SectionEntry::Spline { points, start: None, end: None }] => {
                 let curve = interpolate_closed(points).map_err(|e| format!("{what}: {e}"))?;
                 let segments = vec![Segment::Curve(curve)];
+                if crossings {
+                    refuse_crossing(&segments, what, |_, span| Place::ClosedSpline { span, points: points.len() })?;
+                }
                 finish(segments, what)
             }
             [SectionEntry::Spline { .. }] => Err(format!(
@@ -1038,11 +1055,13 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
     let mut fillets: Vec<Option<(P2, P2, P2)>> = vec![None; n];
     for k in 0..n {
         let r = rounds[k];
+        if r <= 0.0 && matches!(entries[corners[k]], SectionEntry::Corner { .. }) {
+            return Err(format!(
+                "{what} corner {k} has round {r}; a corner radius must be more than 0. For a sharp corner, write it as [x, y]"
+            ));
+        }
         if r == 0.0 {
             continue;
-        }
-        if r < 0.0 {
-            return Err(format!("{what} corner {k} has round {r}; a corner radius must be more than 0"));
         }
         let prev = (k + n - 1) % n;
         if joins[prev].is_some() || joins[k].is_some() {
@@ -1058,7 +1077,7 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
         let u = [(c[0] - p[0]) / lu, (c[1] - p[1]) / lu];
         let v = [(q[0] - c[0]) / lv, (q[1] - c[1]) / lv];
         let turn = (u[0] * v[0] + u[1] * v[1]).clamp(-1.0, 1.0).acos();
-        if turn < 1e-9 {
+        if turn < 1e-9 || r * turn <= crate::section_crossing::RESOLUTION_MM {
             return Err(format!("{what} corner {k} is rounded but its edges run straight on, so there is no corner to round; drop round there"));
         }
         if std::f64::consts::PI - turn < 1e-9 {
@@ -1116,10 +1135,12 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
         .sum();
     let winding = if corner_area < 0.0 { -1.0 } else { 1.0 };
     let mut segments = Vec::new();
+    let mut places = Vec::new();
     for k in 0..n {
         let mut from = at(k);
         if let Some((start, mid, end)) = fillets[k] {
             segments.push(Segment::arc(start, mid, end).map_err(|e| format!("{what} corner {k}: {e}"))?);
+            places.push(Place::Round(k));
             from = end;
         }
         let corner_to = at(k + 1);
@@ -1130,11 +1151,13 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
         let label = || format!("{what} between corners {k} and {}", (k + 1) % n);
         match joins[k] {
             None => {
+                refuse_speck(&from, &to, || format!("{}: the straight edge's ends", label()))?;
                 if dist(&from, &to) > 1e-9 {
                     segments.push(Segment::Line { a: from, b: to });
                 }
             }
             Some(SectionEntry::Through(m)) => {
+                refuse_speck(&from, &to, || format!("{}: the arc's ends", label()))?;
                 if dist(&from, &to) < 1e-9 {
                     return Err(format!("{}: an arc needs two different corners; for a full circle, use two arcs between two corners", label()));
                 }
@@ -1144,6 +1167,7 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
                 segments.push(Segment::arc(from, *m, to).map_err(|e| format!("{}: {e}", label()))?);
             }
             Some(SectionEntry::Radius(r)) => {
+                refuse_speck(&from, &to, || format!("{}: the arc's ends", label()))?;
                 let chord = dist(&from, &to);
                 if chord < 1e-9 {
                     return Err(format!("{}: an arc needs two different corners", label()));
@@ -1224,8 +1248,125 @@ pub fn resolve(entries: &[SectionEntry], what: &str) -> Result<Section, String> 
             }
             Some(other) => unreachable!("corner entries are not joins: {other:?}"),
         }
+        places.resize(segments.len(), Place::Join { k, n, entry: joins[k] });
+    }
+    if crossings {
+        refuse_crossing(&segments, what, |i, span| places[i].clone().at_span(span))?;
     }
     finish(segments, what)
+}
+
+/// Where on an authored section a resolved segment came from, for a refusal
+/// to point at.
+#[derive(Debug, Clone)]
+enum Place<'a> {
+    Round(usize),
+    /// The stretch from corner `k` to the next of `n`, drawn by `entry`.
+    Join { k: usize, n: usize, entry: Option<&'a SectionEntry> },
+    JoinSpan { k: usize, n: usize, entry: &'a SectionEntry, span: usize },
+    ClosedSpline { span: Option<usize>, points: usize },
+}
+
+impl<'a> Place<'a> {
+    fn at_span(self, span: Option<usize>) -> Self {
+        match (self, span) {
+            (Place::Join { k, n, entry: Some(entry @ SectionEntry::Spline { .. }) }, Some(span)) => {
+                Place::JoinSpan { k, n, entry, span }
+            }
+            (place, _) => place,
+        }
+    }
+
+    fn describe(&self) -> String {
+        let corners = |k: usize, n: usize| format!("between corners {k} and {}", (k + 1) % n);
+        match self {
+            Place::Round(k) => format!("the round at corner {k}"),
+            Place::Join { k, n, entry } => {
+                let kind = match entry {
+                    None => "straight edge".to_string(),
+                    Some(SectionEntry::Through(p)) => format!("arc through [{}, {}]", p[0], p[1]),
+                    Some(SectionEntry::Radius(r)) => format!("arc of radius {r}"),
+                    Some(other) => describe(other).trim_start_matches("a ").to_string(),
+                };
+                format!("the {kind} {}", corners(*k, *n))
+            }
+            Place::JoinSpan { k, n, entry, span } => {
+                let count = match entry {
+                    SectionEntry::Spline { points, .. } => points.len(),
+                    _ => 0,
+                };
+                // The spline runs corner k, its points 0.., corner k + 1.
+                let name = |i: usize| match i {
+                    0 => format!("corner {k}"),
+                    i if i == count + 1 => format!("corner {}", (k + 1) % n),
+                    i => format!("its point {}", i - 1),
+                };
+                format!("the spline {}, between {} and {}", corners(*k, *n), name(*span), name(span + 1))
+            }
+            Place::ClosedSpline { span: Some(span), points } => {
+                format!("the closed spline between its points {span} and {}", (span + 1) % points)
+            }
+            Place::ClosedSpline { span: None, .. } => "the closed spline".to_string(),
+        }
+    }
+
+    fn fix(&self) -> &'static str {
+        match self {
+            Place::Round(_) => "make the round smaller",
+            Place::Join { entry: None, .. } => "list the corners in order around the outline",
+            Place::Join { entry: Some(SectionEntry::Through(_) | SectionEntry::Radius(_)), .. } => {
+                "move the through point or change the radius so the arc stays clear"
+            }
+            Place::Join { entry: Some(SectionEntry::Spline { .. }), .. } | Place::JoinSpan { .. } => {
+                "a spline passes through its points but can swing wide between them, so move or add points where it swings, or give it start and end directions"
+            }
+            Place::Join { .. } => "move the control points so the curve stays clear; it does not pass through them",
+            Place::ClosedSpline { .. } => {
+                "a spline passes through its points but can swing wide between them, so add or move points where it swings, or use { fit: points, tolerance }, which is held to the points"
+            }
+        }
+    }
+}
+
+/// Refuse an outline whose lines, arcs and curves cross or touch, naming the
+/// two places and where they meet.
+fn refuse_crossing<'a>(segments: &[Segment], what: &str, place: impl Fn(usize, Option<usize>) -> Place<'a>) -> Result<(), String> {
+    let Some(found) = crate::section_crossing::outline_crossing(segments) else {
+        return Ok(());
+    };
+    let reach = |dir: P2| segments.iter().map(|s| s.extent_along(dir)).fold(f64::MIN, f64::max);
+    let across = (reach([1.0, 0.0]) + reach([-1.0, 0.0])).max(reach([0.0, 1.0]) + reach([0.0, -1.0]));
+    let resolution = crate::section_crossing::RESOLUTION_MM;
+    if across < 1000.0 * resolution {
+        return Err(format!(
+            "{what} is only {across:.1e} mm across, and the kernel resolves {resolution:.0e} mm, so its edges cannot be told apart. Sections are in millimetres: scale the outline up"
+        ));
+    }
+    let (a, b) = (place(found.first.0, found.first.1), place(found.second.0, found.second.1));
+    let near = format!("[{:.4}, {:.4}]", found.near[0], found.near[1]);
+    let meets = if found.first == found.second {
+        format!("{} crosses itself near {near}", a.describe())
+    } else {
+        format!("{} meets {} near {near}", a.describe(), b.describe())
+    };
+    let fixes = if a.fix() == b.fix() { a.fix().to_string() } else { format!("{}; or {}", a.fix(), b.fix()) };
+    Err(format!(
+        "{what} touches or crosses itself: {meets}, closer than the kernel's {resolution:.0e} mm, so it bounds no single region. To fix it, {fixes}"
+    ))
+}
+
+/// Refuse two points closer than the kernel resolves yet not the same point:
+/// an edge that short aborts the kernel. An exact repeat is dropped as before.
+fn refuse_speck(a: &P2, b: &P2, which: impl Fn() -> String) -> Result<(), String> {
+    let gap = dist(a, b);
+    if gap > 1e-9 && gap <= crate::section_crossing::RESOLUTION_MM {
+        return Err(format!(
+            "{} are {gap:.1e} mm apart, closer than the {:.0e} mm the kernel can resolve. Make them the same point, or move them apart",
+            which(),
+            crate::section_crossing::RESOLUTION_MM
+        ));
+    }
+    Ok(())
 }
 
 /// What a fit needs before the kernel sees it: a tolerance that is a
@@ -1254,13 +1395,13 @@ fn check_fit(points: &[P2], tolerance: f64, at_least: usize, label: &str) -> Res
 /// step inward. The polygon checks the outline would get on its own run here,
 /// so a crossed outline is refused by name rather than by the kernel's
 /// validity check on the inset.
-fn resolve_inset(of: &[SectionEntry], by: f64, what: &str) -> Result<Section, String> {
+fn resolve_inset(of: &[SectionEntry], by: f64, what: &str, crossings: bool) -> Result<Section, String> {
     if !(by > 0.0) {
         return Err(format!(
             "{what}: an inset steps the outline inward by a distance in mm, which must be more than 0; got {by}. To grow an outline, draw the larger one"
         ));
     }
-    let outline = resolve(of, &format!("{what}'s inset outline"))?;
+    let outline = resolve_checking(of, &format!("{what}'s inset outline"), crossings)?;
     if outline.inset.is_some() {
         return Err(format!("{what} insets an inset; add the two distances and inset the outline once"));
     }
@@ -1315,7 +1456,7 @@ pub fn polyline_self_intersection(points: &[P2], closed: bool) -> Option<(usize,
         .collect();
     let m = edges.len();
     let scale = points.iter().fold(0.0f64, |acc, p| acc.max(p[0].abs()).max(p[1].abs())).max(1.0);
-    let eps = 1e-9 * scale;
+    let eps = (1e-9 * scale).max(crate::section_crossing::RESOLUTION_MM);
     let on_segment = |p: P2, a: P2, b: P2| -> bool {
         let len = dist(&a, &b);
         cross(a, b, p).abs() <= eps * len
