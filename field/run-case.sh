@@ -4,6 +4,7 @@
 #
 #     field/run-case.sh eval/field/does-the-port-meet.md 4
 #     THINK=0 field/run-case.sh eval/field/does-the-port-meet.md 4
+#     MODEL=claude-sonnet-5 EFFORT=xhigh THINK=default field/run-case.sh ...
 #
 # Trials run in parallel, which is only safe while the tools are stateless: run
 # a case that drives one shared screen or open document one trial at a time.
@@ -16,7 +17,8 @@ eval "$(python3 "$here/config.py" --shell)"
 PROMPT=${1:?usage: field/run-case.sh <prompt-file> [trials]}
 TRIALS=${2:-4}
 MODEL=${MODEL:-claude-haiku-4-5-20251001}
-THINK=${THINK:-8000}
+THINK=${THINK:-8000}     # a thinking budget, or "default" to leave it to EFFORT
+EFFORT=${EFFORT:-}       # low, medium, high, xhigh or max: the CLI's --effort
 
 # The rubric is for the scorer and must not reach the model: a prompt that names
 # its own expected answer measures nothing.
@@ -48,16 +50,21 @@ DENY="Bash,Read,Grep,Glob,Edit,Write,WebFetch,WebSearch,Task,Agent,Skill,Monitor
 NotebookEdit,CronCreate,RemoteTrigger,TaskCreate,TaskStop,SendMessage,Artifact,\
 EnterWorktree,ExitWorktree,ExitPlanMode,TodoWrite,KillShell,BashOutput,Workflow"
 
+budgeted() {
+  if [ "$THINK" = default ]; then "$@"; else MAX_THINKING_TOKENS="$THINK" "$@"; fi
+}
+
 run_one() {
-  MAX_THINKING_TOKENS="$THINK" claude -p "$(prompt_body "$PROMPT")" \
+  budgeted claude -p "$(prompt_body "$PROMPT")" \
     --model "$MODEL" \
+    ${EFFORT:+--effort "$EFFORT"} \
     --mcp-config "$RUN/mcp.json" \
     --allowed-tools "$FIELD_ALLOW" \
     --disallowed-tools "$DENY" \
     --output-format stream-json --verbose < /dev/null > "$RUN/trial$1.jsonl" 2>&1 || true
 }
 
-echo "$(basename "$PROMPT" .md): $TRIALS trials, model $MODEL, thinking $THINK, at $FIELD_URL"
+echo "$(basename "$PROMPT" .md): $TRIALS trials, model $MODEL, thinking $THINK${EFFORT:+, effort $EFFORT}, at $FIELD_URL"
 for i in $(seq 1 "$TRIALS"); do run_one "$i" & done
 wait
 
