@@ -1,0 +1,40 @@
+{
+  "name": "thickened-sheet",
+  "script": "eval/scripts/thickened-sheet.js",
+  "why": "A flat 40 x 20 sheet thickened 2 mm is a 40 x 2 x 20 slab, 1600 mm3 exactly, measured 2 mm through at every sample.",
+  "brep": {
+    "size": [
+      40.0,
+      2.0,
+      20.0
+    ],
+    "volume_mm3": 1600.0,
+    "area_mm2": 1840.0,
+    "triangles": 12,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 80.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 6,
+    "edges": 24,
+    "curves": 12,
+    "requires": [
+      "surfaces"
+    ],
+    "thickened_mm": [
+      2.0,
+      2.0
+    ],
+    "tags": {
+      "sheet": [
+        0.0,
+        -1.0,
+        -10.0,
+        40.0,
+        1.0,
+        10.0
+      ]
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name": "refuse-patch-open-chain",
+  "script": "eval/scripts/refuse-patch-open-chain.js",
+  "why": "One edge of a sheet is no loop to fill.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "do not close into a loop"
+      ]
+    }
+  }
+}

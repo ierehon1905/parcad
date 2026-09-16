@@ -1054,6 +1054,23 @@ the app is open, and the case grades that WRONG — read those transcripts
 before reading the score. Renders live in the temp directory, so a chat's
 images outlast the machine's temp cleaning only by days.
 
+## 18. Surfaces — what a part with no inside says
+
+A surface part (docs/ARCHITECTURE.md, "Surfaces") changes what every
+perception tool can truthfully answer, and each says so rather than
+pretending: `evaluate_part` carries `kind` and `surface` — area, `open`,
+free edges and their length, loops — and no volume, watertightness, bed or
+print fit; `measure_wall_thickness` refuses a surface naming `.thicken(t)`,
+and skips (and lists) surfaces in a mixed part; `probe_part` never calls a
+point `material` near a surface, measures its distance to it, and lists each
+place a ray passes through it as a crossing into `void`; a thickened part's
+wall is `thickened_mm`, measured at a grid on every face before the reply is
+built. Two field cases were written with the mode —
+`eval/field/is-the-sheet-closed.md` (reading `surface` instead of reaching
+for a volume) and `eval/field/make-the-sheet-printable.md` (whether a refusal
+naming `thicken` is acted on); section 18's rounds are recorded below them
+when run.
+
 ## Suggested order
 
 Done, and what each cost is in its own section: point and ray probes and

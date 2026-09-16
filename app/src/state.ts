@@ -44,19 +44,36 @@ import type { FaceMaterial, Viewport } from "./viewport";
  */
 export interface EvaluationSnapshot {
   units: string;
+  /** `solid`, `surface` (faces with no inside) or `mixed` (named bodies of both). */
+  kind: "solid" | "surface" | "mixed";
   size: [number, number, number];
   bounds_min: [number, number, number];
   bounds_max: [number, number, number];
-  volume_mm3: number;
+  /** The enclosed volume; absent for a surface, which encloses none. */
+  volume_mm3?: number;
   area_mm2: number;
   centroid: [number, number, number];
+  /** What is true of a surface: whether it is open, and where. */
+  surface?: {
+    area_mm2: number;
+    open: boolean;
+    faces: number;
+    shells: number;
+    free_edges: number;
+    free_edge_length_mm: number;
+    boundary_loops: number;
+    open_chains?: number;
+  };
+  /** The thinnest and thickest any `.thicken(t)` measured. */
+  thickened_mm?: { min: number; max: number };
   /** The kernel's own counts. */
   faces?: number;
   topological_edges?: number;
   triangles: number;
   resolution_mm: number;
-  watertight: boolean;
-  non_manifold_edges: number;
+  /** Whether the solid bodies' mesh closes; absent for a surface. */
+  watertight?: boolean;
+  non_manifold_edges?: number;
   /** Free-standing pieces of surface; one for a part, and for a part that
    *  returns several named bodies, their number when each is intact. */
   bodies: number;
@@ -66,9 +83,10 @@ export interface EvaluationSnapshot {
    *  Absent for a one-solid part. */
   named_bodies?: {
     name: string;
-    volume_mm3: number;
+    kind: "solid" | "surface";
+    volume_mm3?: number;
     faces: number;
-    watertight: boolean;
+    watertight?: boolean;
     /** Free-standing pieces inside this body: one when it is intact. */
     pieces: number;
   }[];
@@ -76,7 +94,7 @@ export interface EvaluationSnapshot {
   between_bodies?: {
     a: string;
     b: string;
-    verdict: "clear" | "touching" | "interfering";
+    verdict: "clear" | "touching" | "interfering" | "crossing";
     interference_mm3: number;
     clearance_mm?: number;
   }[];

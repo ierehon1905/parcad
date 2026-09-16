@@ -420,3 +420,54 @@ made of arcs and splines.
   the squared distance held to that window) and the distance taken along
   the outer normal there, so an open end reads the wall continued; it
   returns the least and greatest and where each is.
+- `surfacing` (`include/surfacing.hxx`, its own bridge) — surface modelling for
+  parcad's surface ops, each builder returning the kernel's own shape and,
+  where it has one, a `FaceHistory`: `(input face, output face)` pairs numbered
+  as `Shape::face_map` numbers faces, and the faces made from an input face's
+  free edges (a thickened wall's sides) apart as `lateral`.
+  `Shape::census` counts solids, sheets (faces joined through shared edges),
+  faces, free edges (one face, not a seam, not degenerate) and their length by
+  `GCPnts_AbscissaPoint`, edges met by more than two faces, faces in no solid,
+  and the free edges joined into closed loops and open chains
+  (`ShapeAnalysis_FreeBounds::ConnectEdgesToWires`, shared vertices only).
+  `Shape::free_edges` and `Shape::split_edges` return edges as compounds, the
+  latter every edge whose two faces have the same tangent plane and the same
+  mean and Gaussian curvature at three points along it (`BRepLProp_SLProps` at
+  the edge's parameter curve on each face). `prism_of`, `revolution_of`,
+  `loft_surface` (`BRepOffsetAPI_ThruSections` with `isSolid` off and the
+  compatibility pass off) and `pipe_surface` (`MakePipeShell`, no solid) build
+  open shells from wires. `bspline_bands` builds a B-spline surface from poles
+  and knots and makes a face of each stretch between `v_breaks` and each of
+  `u_pieces` equal stretches of u, each face on its own
+  `Geom_BSplineSurface::Segment` copy, sews them at 1e-6, and returns the
+  exact box of the whole surface (`BRepBndLib::AddOptimal` on one face over
+  its domain). `Shape::sewn` sews a compound's shapes (`BRepBuilderAPI_Sewing`,
+  history from `IsModified`/`Modified` and `ModifiedSubShape`) and reports free
+  and multiple edges; `closed_solid` makes the solid a single closed shell
+  bounds, orients it with `BRepLib::OrientClosedSolid` and refuses one
+  `BRepCheck_Analyzer` rejects. `plane_face` is a bounded planar face;
+  `split_by` is `BRepAlgoAPI_Splitter` with history from `Modified`.
+  `face_inside_points` finds a point inside each face (grids of 1, 3, 7, 15
+  and 31 cells, `BRepClass_FaceClassifier`) with the outward normal there;
+  `face_samples` is a grid of such points with the curvatures toward and away
+  from the normal, signed by the face's orientation; `nearest_on` is
+  `BRepExtrema_DistShapeShape` from a vertex, with the face normal when the
+  foot is inside a face. `fill_loops` joins selected free edges into wires and
+  fills each closed one with its plane (`BRepLib_FindSurface`, planes only) or
+  `BRepOffsetAPI_MakeFilling` (C0, or G1 against the edge's one face),
+  reporting the worst `G0Error` and `G1Error`. `offset_shells` runs
+  `BRepOffset_MakeOffset` in skin mode, arc joins, on every shell (or loose
+  face), `MakeOffsetShape` or, thickening, `MakeThickSolid`, fusing several
+  thickened pieces, with history from `Modified` and `Generated`.
+  `volume_by_spans` is `BRepGProp::VolumePropertiesGK` with spans on;
+  `uncovered_faces` compares each face's triangles' area in its parameter
+  plane with the area its mesh boundary (`BRep_Tool::PolygonOnTriangulation`
+  of each edge, in the face's own direction) encloses there. `reversed` is
+  `TopoDS_Shape::Reversed`.
+- `Mesher::new` meshes with `BRepMesh_IncrementalMesh`'s parallel face pass
+  on, through the sys crate's new five-argument constructor: the same
+  triangles (the eval corpus's counts held), a pleated shade in 23 s instead
+  of minutes.
+- `Shape::internal_void_bounds` skips a solid of one shell, which has no
+  cavity; bounding that one shell of a thickened shade's 600 offset faces
+  cost seconds on every cut.

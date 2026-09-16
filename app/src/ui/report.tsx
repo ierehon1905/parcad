@@ -53,7 +53,15 @@ export function Report() {
         mm · z <Strong>{fmt(zLow)}</Strong> to <Strong>{fmt(zHigh)}</Strong>
       </div>
       <div>
-        <Strong>{fmt(snapshot.volume_mm3)}</Strong> mm³
+        {snapshot.volume_mm3 !== undefined ? (
+          <>
+            <Strong>{fmt(snapshot.volume_mm3)}</Strong> mm³
+          </>
+        ) : (
+          <>
+            surface of <Strong>{fmt(snapshot.area_mm2)}</Strong> mm²
+          </>
+        )}
         {snapshot.faces !== undefined && (
           <>
             {" · "}
@@ -66,6 +74,32 @@ export function Report() {
         <Strong>{snapshot.triangles.toLocaleString()}</Strong> tris within{" "}
         <Strong>{snapshot.resolution_mm.toFixed(3)}</Strong> mm
       </div>
+      {snapshot.surface && (
+        <div>
+          {snapshot.surface.open ? (
+            <>
+              open along <Strong>{fmt(snapshot.surface.free_edge_length_mm)}</Strong> mm in{" "}
+              <Strong>{snapshot.surface.boundary_loops}</Strong>{" "}
+              {snapshot.surface.boundary_loops === 1 ? "loop" : "loops"}
+            </>
+          ) : (
+            "closed, with no inside yet"
+          )}
+          {" · "}thicken to print
+        </div>
+      )}
+      {snapshot.thickened_mm && (
+        <div>
+          thickened <Strong>{fmt(snapshot.thickened_mm.min)}</Strong>
+          {snapshot.thickened_mm.max !== snapshot.thickened_mm.min && (
+            <>
+              {" to "}
+              <Strong>{fmt(snapshot.thickened_mm.max)}</Strong>
+            </>
+          )}{" "}
+          mm, measured
+        </div>
+      )}
       {snapshot.stands_on && (
         <div class={snapshot.stands_on.footprint_fraction < 0.1 ? "text-bad" : undefined}>
           stands on <Strong>{fmt(snapshot.stands_on.area_mm2)}</Strong> mm² in{" "}
@@ -80,8 +114,15 @@ export function Report() {
         </div>
       )}
       {snapshot.named_bodies?.map((body) => (
-        <div key={body.name} class={body.pieces > 1 || !body.watertight ? "text-bad" : undefined}>
-          {body.name}: <Strong>{fmt(body.volume_mm3)}</Strong> mm³
+        <div key={body.name} class={body.pieces > 1 || body.watertight === false ? "text-bad" : undefined}>
+          {body.name}:{" "}
+          {body.volume_mm3 !== undefined ? (
+            <>
+              <Strong>{fmt(body.volume_mm3)}</Strong> mm³
+            </>
+          ) : (
+            "a surface"
+          )}
           {body.pieces > 1 && ` in ${body.pieces} pieces`}
         </div>
       ))}
@@ -102,7 +143,7 @@ export function Report() {
           )}
         </div>
       ))}
-      {!snapshot.watertight && (
+      {snapshot.watertight === false && (
         <div class="text-bad">
           NOT watertight — {snapshot.non_manifold_edges} bad edges
         </div>

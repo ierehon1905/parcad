@@ -60,6 +60,10 @@ const SPANS_PER_FACE: usize = 32;
 /// count is abandoned without correcting its parameters.
 const HOPELESS: f64 = 32.0;
 
+/// How far from the built surface a probe of its facing may land: a chord
+/// of the curve it was drawn from is within this of it.
+const PROBE_REACH_MM: f64 = 0.5;
+
 /// Samples per face side where a surface is checked and measured.
 const SAMPLES_PER_FACE: usize = 6;
 
@@ -74,10 +78,10 @@ pub(super) fn require_solid(doc: &Doc, id: NodeId, label: &str, doing: &str, ope
     match kind_of(&built.shape)? {
         Kind::Solid => Ok(()),
         Kind::Surface => bail!(
-            "node {id} ({label}) {doing} {named}, a {what} that is a surface: it has no inside, so there is nothing for this to add, remove or round. Make it a solid first with .thicken(t), or keep working in surfaces — .trim(tool) cuts one and stitchSurfaces(...) joins them"
+            "node {id} ({label}) {doing} {named}, a {what}, which is a surface: a surface has no inside, so there is nothing for this to add, remove or round. Make it a solid first with .thicken(t), or keep working in surfaces — .trim(tool) cuts one and stitchSurfaces(...) joins them"
         ),
         Kind::Mixed => bail!(
-            "node {id} ({label}) {doing} {named}, a {what} that is a solid with loose surface faces beside it. Return the surface as its own body, or thicken it and union the two"
+            "node {id} ({label}) {doing} {named}, a {what}, which is a solid with loose surface faces beside it. Return the surface as its own body, or thicken it and union the two"
         ),
     }
 }
@@ -131,7 +135,7 @@ fn oriented(shape: Shape, probes: &[(DVec3, DVec3)], id: NodeId, label: &str) ->
     breadcrumb(&format!("node {id}: finding which way the surface faces"));
     for (probe, want) in probes {
         let near = shape.nearest_on(*probe).map_err(kernel(id, label))?;
-        if !near.in_face || near.distance > 1.0 {
+        if !near.in_face || near.distance > PROBE_REACH_MM {
             continue;
         }
         return Ok(if near.normal.dot(*want) < 0.0 { shape.reversed() } else { shape });
@@ -470,14 +474,13 @@ pub(super) fn surface_loft(node: &Node, id: NodeId, offset: DVec3, sections: &[C
             Shape::loft_surface(&wires, !smooth).map_err(|e| anyhow::anyhow!("{who}: {e}"))?
         }
     };
-    let starts: Vec<Vec<(P2, P2)>> = resolved.iter().take(2).map(curve_start).collect();
+    // Just above the first curve, where the surface is still within a hair
+    // of it whatever it does between the curves.
     let (z0, z1) = (sections[0].z, sections[1].z);
-    let probes: Vec<(DVec3, DVec3)> = starts[0]
-        .iter()
-        .zip(&starts[1])
-        .map(|((a, t), (b, _))| {
-            (DVec3::new((a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0, (z0 + z1) / 2.0), DVec3::new(t[1], -t[0], 0.0))
-        })
+    let lift = ((z1 - z0) * 0.01).min(0.05);
+    let probes: Vec<(DVec3, DVec3)> = curve_start(&resolved[0])
+        .into_iter()
+        .map(|(a, t)| (DVec3::new(a[0], a[1], z0 + lift), DVec3::new(t[1], -t[0], 0.0)))
         .collect();
     let shape = oriented(shape, &probes, id, label)?;
 

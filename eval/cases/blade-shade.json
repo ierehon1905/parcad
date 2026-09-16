@@ -1,0 +1,50 @@
+{
+  "name": "blade-shade",
+  "script": "eval/scripts/blade-shade.js",
+  "why": "Four open fitted blades thickened to 1.4 mm and unioned into a ring: the thickness measured through every blade at every sample, and the tags carried through thicken and the union.",
+  "brep": {
+    "size": [
+      76.542,
+      76.542,
+      61.209
+    ],
+    "volume_mm3": 23134.783,
+    "area_mm2": 26990.197,
+    "triangles": 55216,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 0.0,
+    "stands_on_patches": 0,
+    "watertight": true,
+    "faces": 72,
+    "edges": 300,
+    "curves": 108,
+    "deviation_mm": 0.0004,
+    "requires": [
+      "fitted-sections",
+      "surfaces"
+    ],
+    "thickened_mm": [
+      1.4,
+      1.4
+    ],
+    "tags": {
+      "blade": [
+        -38.276,
+        -38.276,
+        -0.209,
+        38.276,
+        38.276,
+        57.0
+      ],
+      "ring": [
+        -38.0,
+        -38.0,
+        57.0,
+        38.0,
+        38.0,
+        61.0
+      ]
+    }
+  }
+}

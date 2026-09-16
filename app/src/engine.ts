@@ -678,20 +678,34 @@ function readmeFor(path: string, source: string): string {
     "## Measured",
     "",
     `- **${fmt(sx)} × ${fmt(sy)} × ${fmt(sz)} mm**`,
-    `- volume ${fmt(snapshot.volume_mm3)} mm³, area ${fmt(snapshot.area_mm2)} mm²`,
+    snapshot.volume_mm3 !== undefined
+      ? `- volume ${fmt(snapshot.volume_mm3)} mm³, area ${fmt(snapshot.area_mm2)} mm²`
+      : `- a surface of ${fmt(snapshot.area_mm2)} mm², no volume`,
+    ...(snapshot.surface
+      ? [
+          snapshot.surface.open
+            ? `- open along ${fmt(snapshot.surface.free_edge_length_mm)} mm of free edge in ${snapshot.surface.boundary_loops} loop(s)`
+            : "- a closed surface, not yet a solid",
+        ]
+      : []),
+    ...(snapshot.thickened_mm
+      ? [`- thickened ${fmt(snapshot.thickened_mm.min)} to ${fmt(snapshot.thickened_mm.max)} mm, measured square to the surface`]
+      : []),
     ...(snapshot.faces !== undefined
       ? [`- ${snapshot.faces} faces, ${snapshot.topological_edges} edges`]
       : []),
-    `- mesh ${snapshot.triangles.toLocaleString()} triangles, ` +
-      (snapshot.watertight
-        ? "watertight"
-        : `NOT watertight — ${snapshot.non_manifold_edges} bad edges`) +
+    `- mesh ${snapshot.triangles.toLocaleString()} triangles` +
+      (snapshot.watertight === undefined
+        ? ""
+        : snapshot.watertight
+          ? ", watertight"
+          : `, NOT watertight — ${snapshot.non_manifold_edges} bad edges`) +
       (snapshot.bodies > (snapshot.named_bodies?.length ?? 1)
         ? `, ${snapshot.bodies} SEPARATE BODIES`
         : ""),
     ...(snapshot.named_bodies ?? []).map(
       (body) =>
-        `- body ${body.name}: ${fmt(body.volume_mm3)} mm³, ${body.faces} faces` +
+        `- body ${body.name}: ${body.volume_mm3 !== undefined ? `${fmt(body.volume_mm3)} mm³` : "a surface"}, ${body.faces} faces` +
         (body.pieces > 1 ? `, in ${body.pieces} PIECES` : ""),
     ),
     ...(snapshot.between_bodies ?? []).map(

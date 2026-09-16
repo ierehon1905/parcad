@@ -582,8 +582,62 @@ in the loft's bounding-box tessellation at 0.01 mm; the same two surfaces cut
 into a face per stretch between its 15 sections (30 faces) took 18.7 s, and
 the mesh after it 1 s. `ThruSections`' single smooth face in the older lamp
 took 166 s. Splitting further, in `u` as well, did not help measurably (16 to
-19 s under load). So a skinned loft is always banded at its sections, and the
+19 s under load) on that surface's few spans; on 512 it does (below). So a skinned loft is always banded at its sections, and the
 edges between bands are `dihedral: "smooth"`.
+
+### The volume integral misreads a thickened pleat by 3 to 15 %
+
+A pleated shade thickened to 1.4 mm read 160 731 mm³ through
+`Shape::signed_volume` (adaptive, `eps` 1e-7), 153 800 through the fixed-order
+default, and its mesh 165 584; Gauss–Kronrod over every knot span
+(`BRepGProp::VolumePropertiesGK`, spans on) converged on 165 729.6 — the
+mesh's number less its chord — but took 25 s at `eps` 1e-3, still 1.8 % off,
+and 538 s at 1e-7. A deeper pleat read 15 % low against a mesh whose half-area
+times the wall agreed with it. The mesh backstop compares these two numbers,
+so it refused good shades. It now asks, before refusing, the question the
+volume stands in for: does every face's triangulation cover the face? In each
+face's parameter plane the triangles' area must equal the area the face's own
+mesh boundary — the polygon every edge was discretised into — encloses,
+to rounding (`Shape::uncovered_faces`); a mesh of part of a face falls short.
+Only when some face fails, or the integral agrees, does the old verdict stand.
+
+### A skinned surface in whole bands meshes in minutes and unifies in seconds per face
+
+A shade skinned on 512 knot spans, cut only at its sections, took 470 s to
+mesh at 0.01 mm; in pieces of 32 spans along u, 91 s under load, and 23 s with
+the mesher's faces on every core (`BRepMesh_IncrementalMesh`'s parallel flag,
+which meshes the same triangles). The pieces must be *segments* of the
+surface, not faces trimmed from one: `ShapeUpgrade_UnifySameDomain` asks
+`GeomLib_IsPlanarSurface` of every neighbouring pair, which samples the face's
+whole underlying surface — `8 + 3 × intervals` points each way — and an offset
+of a 512-span surface is that for every one of 672 faces: 43 s of a boolean
+that changed nothing, 0.5 s once each face had its own segment. The same
+unify welds faces that *share* one surface back into one face.
+
+### A thickened fold of 1.5 mm radius meshed open, and is refused
+
+A deeply pleated shade skinned on 1024 spans, its fold tips rounded to 1.5 mm
+and thickened 1.4 mm — so the inside of each tip turns at 0.8 mm — built,
+measured 1.4 mm everywhere and passed the kernel's checker, and its mesh had
+2094 open edges among 18.6 million, serial or parallel alike. The watertight
+backstop refused it, as it should; the same shade with 2.2 mm tips on 512
+spans meshes closed. Not diagnosed further: the refusal is the honest
+outcome, and a wall that turns inside a millimetre is past what a 0.4 mm
+nozzle draws anyway.
+
+### A thickened surface's rim leans
+
+`thicken` closes the wall at a free edge with a face along the surface's
+normals there, so the rim of a shade whose wall leans is not flat: a flared
+shade stood 0.155 mm below its lowest section on a line, and `stands_on` read
+0 mm². A print bed needs the flat ring, which is a cut: a slab off each end,
+`shade.thicken(t).cut(slab.at(0, 0, rim - 10), ...)`.
+
+### `clearance` is a word a lamp script reaches for
+
+It is the fastener table's function, so `const clearance = wall + 0.8` does
+not parse (`Cannot declare a const variable twice`). Every export is a
+reserved word; name a local for what it is, `closest`.
 
 ### `offset_surface` lies
 

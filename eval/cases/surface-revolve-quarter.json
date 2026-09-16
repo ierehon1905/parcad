@@ -1,0 +1,25 @@
+{
+  "name": "surface-revolve-quarter",
+  "script": "eval/scripts/surface-revolve-quarter.js",
+  "why": "A line at radius 10 revolved 90 degrees: a quarter of a cylinder wall, 2 pi 10 20 / 4 = 314.159 mm2, four free edges.",
+  "brep": {
+    "size": [
+      10.0,
+      10.0,
+      20.0
+    ],
+    "area_mm2": 314.108,
+    "triangles": 50,
+    "bodies": 1,
+    "voids": 0,
+    "faces": 1,
+    "edges": 4,
+    "curves": 4,
+    "requires": [
+      "surfaces"
+    ],
+    "kind": "surface",
+    "free_edges": 4,
+    "free_edge_length_mm": 71.416
+  }
+}

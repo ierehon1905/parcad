@@ -698,6 +698,10 @@ pub struct ThicknessReport {
     /// the thinnest samples, spread across the part.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub thin_spots: Vec<ThinSpot>,
+    /// Named bodies left out because they are surfaces, which have no
+    /// material to be thick.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub surfaces_skipped: Vec<String>,
     /// What the number is, and which way it can be wrong: an inscribed-ball
     /// diameter, exact at every sampled point, so the true thinnest point may
     /// lie between two samples. More samples narrow that; nothing widens it.
@@ -770,6 +774,7 @@ pub fn wall_thickness(
         below_threshold: report.below_threshold,
         below_threshold_at_edges: report.below_threshold_at_edges,
         thin_spots: report.thin_spots.iter().map(spot).collect(),
+        surfaces_skipped: report.surfaces_skipped.clone(),
         note: "each thickness is the diameter of the largest ball that fits inside the \
                material touching the surface at `at`, measured on the exact solid with every \
                fillet and chamfer in it — across a slanted wall, not along a line through it, \

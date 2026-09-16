@@ -131,6 +131,23 @@ pub struct Expect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loft_wall_mm: Option<[f64; 2]>,
 
+    /// `surface` or `mixed` for a part with a surface body; absent for a
+    /// solid, which is what every case written before surfaces is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// A surface's free edges, their count and total length along the exact
+    /// curves, summed over its surface bodies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub free_edges: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub free_edge_length_mm: Option<f64>,
+    /// `[min, max]` of every `thicken` measured through its solid, and of
+    /// every `offsetSurface` measured between the two surfaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thickened_mm: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset_mm: Option<[f64; 2]>,
+
     /// Where each named feature sits, as `[min_x, min_y, min_z, max_x, max_y,
     /// max_z]` per tag: the exact bounds of the faces the kernel's lineage
     /// gives that tag, the same numbers `tag_extents` carries on the wire.
@@ -445,6 +462,13 @@ pub struct Case {
 #[derive(Debug, Clone)]
 pub struct Observed {
     pub size: [f64; 3],
+    /// `solid`, `surface` or `mixed`.
+    pub kind: String,
+    pub free_edges: usize,
+    pub free_edge_length_mm: f64,
+    pub thickened_mm: Option<[f64; 2]>,
+    pub offset_mm: Option<[f64; 2]>,
+    /// The mesh's enclosed volume, which means something only for a solid.
     pub volume_mm3: f64,
     pub area_mm2: f64,
     pub triangles: usize,
@@ -513,8 +537,42 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
             abs_check(&mut out, &format!("size.{axis}"), want[i], observed.size[i], tol.size_mm);
         }
     }
+    let kind = expect.kind.as_deref().unwrap_or("solid");
+    if kind != observed.kind {
+        out.push(Mismatch {
+            field: "kind".into(),
+            detail: format!("expected a {kind}, measured a {}", observed.kind),
+        });
+    }
     if let Some(want) = expect.volume_mm3 {
         pct_check(&mut out, "volume_mm3", want, observed.volume_mm3, tol.volume_pct);
+    }
+    if let Some(want) = expect.free_edges {
+        if want != observed.free_edges {
+            out.push(Mismatch {
+                field: "free_edges".into(),
+                detail: format!("expected {want}, measured {}", observed.free_edges),
+            });
+        }
+    }
+    if let Some(want) = expect.free_edge_length_mm {
+        pct_check(&mut out, "free_edge_length_mm", want, observed.free_edge_length_mm, tol.volume_pct);
+    }
+    for (field, want, got) in [
+        ("thickened_mm", expect.thickened_mm, observed.thickened_mm),
+        ("offset_mm", expect.offset_mm, observed.offset_mm),
+    ] {
+        match (want, got) {
+            (Some([lo, hi]), Some([got_lo, got_hi])) => {
+                abs_check(&mut out, &format!("{field} min"), lo, got_lo, 1e-3);
+                abs_check(&mut out, &format!("{field} max"), hi, got_hi, 1e-3);
+            }
+            (Some(_), None) => out.push(Mismatch {
+                field: field.into(),
+                detail: "expected a measurement, but the part has nothing it measures".into(),
+            }),
+            _ => {}
+        }
     }
     if let Some(want) = expect.bodies {
         if observed.bodies != want {
@@ -769,15 +827,23 @@ pub fn check_refusal(refusal: &Refusal, kind: RefusalKind, message: &str) -> Vec
 /// Overwrite the measurements with what was observed, leaving `why` and any
 /// explicit tolerance alone.
 pub fn record(expect: &mut Expect, observed: &Observed) {
+    let solid = observed.kind == "solid";
+    expect.kind = (!solid).then(|| observed.kind.clone());
     expect.size = Some(observed.size.map(round3));
-    expect.volume_mm3 = Some(round3(observed.volume_mm3));
+    // A surface's mesh encloses nothing: its "volume" is a number of the
+    // origin's choosing, and its watertightness is false by definition.
+    expect.volume_mm3 = solid.then(|| round3(observed.volume_mm3));
     expect.area_mm2 = Some(round3(observed.area_mm2));
     expect.triangles = Some(observed.triangles);
-    expect.watertight = Some(observed.watertight);
+    expect.watertight = solid.then_some(observed.watertight);
+    expect.free_edges = (observed.kind != "solid").then_some(observed.free_edges);
+    expect.free_edge_length_mm = (observed.kind != "solid").then(|| round3(observed.free_edge_length_mm));
+    expect.thickened_mm = observed.thickened_mm.map(|w| w.map(|d| (d * 1e4).round() / 1e4));
+    expect.offset_mm = observed.offset_mm.map(|w| w.map(|d| (d * 1e4).round() / 1e4));
     expect.bodies = Some(observed.bodies);
     expect.voids = Some(observed.voids);
-    expect.stands_on_mm2 = observed.stands_on.as_ref().map(|c| round3(c.area_mm2));
-    expect.stands_on_patches = observed.stands_on.as_ref().map(|c| c.patches);
+    expect.stands_on_mm2 = observed.stands_on.as_ref().filter(|_| solid).map(|c| round3(c.area_mm2));
+    expect.stands_on_patches = observed.stands_on.as_ref().filter(|_| solid).map(|c| c.patches);
     expect.faces = observed.faces;
     expect.edges = observed.edges;
     expect.curves = observed.curves;

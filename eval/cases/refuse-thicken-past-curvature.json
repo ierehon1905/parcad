@@ -1,0 +1,14 @@
+{
+  "name": "refuse-thicken-past-curvature",
+  "script": "eval/scripts/refuse-thicken-past-curvature.js",
+  "why": "Thickening 12 mm toward the axis of a radius-5 half tube folds the offset through itself; refused before the kernel builds, naming the radius.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "radius of curvature there is 5.000 mm",
+        "folds through itself"
+      ]
+    }
+  }
+}
