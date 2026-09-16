@@ -115,11 +115,13 @@ enum Verdict {
     Fixed(String),
 }
 
-/// Returns the verdict and whether anything was written back into `expect`.
-fn evaluate(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (Verdict, bool) {
-    let (verdict, recorded) = judge(expect, doc, update);
+/// Returns the verdict, whether anything was written back into `expect`, and
+/// the longest single wait on the kernel, which is what the case's budget
+/// bounds.
+fn evaluate(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (Verdict, bool, std::time::Duration) {
+    let (verdict, recorded, waited) = judge(expect, doc, update);
     let Some(reason) = expect.known_defect.clone() else {
-        return (verdict, recorded);
+        return (verdict, recorded, waited);
     };
     let verdict = match verdict {
         Verdict::Fail(bad) => Verdict::KnownDefect(reason, bad),
@@ -129,7 +131,7 @@ fn evaluate(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) ->
     };
     // Never record over a known defect: that would write the wrong answer down
     // as the expected one, which is the exact failure this marker prevents.
-    (verdict, false)
+    (verdict, false, waited)
 }
 
 /// The kernel's budget for a case: its own when it states one, never less
@@ -143,11 +145,13 @@ fn budget(expect: &Expect) -> std::time::Duration {
         .map_or(default, |stated| stated.max(default))
 }
 
-fn judge(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (Verdict, bool) {
+fn judge(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (Verdict, bool, std::time::Duration) {
     let timeout = budget(expect);
+    let started = std::time::Instant::now();
     let outcome = run::run_brep(doc, timeout);
+    let mut waited = started.elapsed();
 
-    match (&expect.refuses, outcome) {
+    let (verdict, recorded) = match (&expect.refuses, outcome) {
         // Required to refuse, and did.
         (Some(refusal), Outcome::Refused { kind, message }) => {
             let bad = case::check_refusal(refusal, kind, &message);
@@ -189,7 +193,10 @@ fn judge(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (V
         (None, Outcome::Measured(o)) => {
             let mut bad = case::check(expect, &o, Tolerance::exact());
             if let Some(perception) = &expect.perception {
-                match run::perceive(doc, perception, timeout) {
+                let started = std::time::Instant::now();
+                let answer = run::perceive(doc, perception, timeout);
+                waited = waited.max(started.elapsed());
+                match answer {
                     Ok(answer) => bad.extend(case::check_perception(
                         perception,
                         &answer,
@@ -233,7 +240,8 @@ fn judge(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (V
                 (Verdict::Fail(bad), false)
             }
         }
-    }
+    };
+    (verdict, recorded, waited)
 }
 
 fn main() -> Result<()> {
@@ -302,9 +310,7 @@ fn main() -> Result<()> {
                 println!("  {KERNEL:<9} SKIP");
                 skipped += 1;
             } else {
-                let started = std::time::Instant::now();
-                let (verdict, recorded) = evaluate(expect, &doc, args.update);
-                let spent = started.elapsed();
+                let (verdict, recorded, spent) = evaluate(expect, &doc, args.update);
                 let allowed = budget(expect);
                 dirty |= recorded;
                 match verdict {
