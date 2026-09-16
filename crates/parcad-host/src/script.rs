@@ -38,8 +38,12 @@ const DSL_BUNDLE: &str = include_str!(concat!(env!("OUT_DIR"), "/dsl.bundle.js")
 const MEMORY_LIMIT_BYTES: usize = 64 * 1024 * 1024;
 
 /// A script only builds a graph — it does no geometry. Anything that takes this
-/// long is looping, not working.
-const DEADLINE: Duration = Duration::from_secs(5);
+/// long is looping, not working — for a hand-written part. A generative part
+/// is the exception: a simulation run inside the script to produce its
+/// sections is real work, and the caller who asked for it can say so with
+/// the same `timeout_s` it gives the kernel, through [`build_within`]. This
+/// is the floor every call gets without asking.
+pub const DEADLINE: Duration = Duration::from_secs(5);
 
 /// The runner, evaluated inside the sandbox.
 ///
@@ -154,15 +158,25 @@ pub fn build_graph(source: &str) -> Result<serde_json::Value, String> {
     build(source).map(|script| script.graph)
 }
 
-/// [`build_graph`], keeping which line made each node.
+/// [`build_graph`], keeping which line made each node, within [`DEADLINE`].
 pub fn build(source: &str) -> Result<Script, String> {
+    build_within(source, DEADLINE)
+}
+
+/// [`build`] with the sandbox's deadline raised to `budget` — never lowered
+/// below [`DEADLINE`], and never longer than the kernel's own ceiling, so a
+/// caller's `timeout_s` covers the whole call. The memory cap and the empty
+/// realm are untouched: time is the one limit a legitimate script can need
+/// more of.
+pub fn build_within(source: &str, budget: Duration) -> Result<Script, String> {
+    let budget = budget.clamp(DEADLINE, Duration::from_secs(600));
     let runtime = Runtime::new().map_err(|e| format!("could not start the script sandbox: {e}"))?;
     runtime.set_memory_limit(MEMORY_LIMIT_BYTES);
 
     // A script that never returns must not take the application with it. The
     // handler is polled by the interpreter, so this stops a bare `while (true)`
     // that no timeout on an outer future could reach.
-    let deadline = Instant::now() + DEADLINE;
+    let deadline = Instant::now() + budget;
     runtime.set_interrupt_handler(Some(Box::new(move || Instant::now() > deadline)));
 
     let context =
@@ -193,8 +207,10 @@ pub fn build(source: &str) -> Result<Script, String> {
         if Instant::now() > deadline {
             format!(
                 "the script ran longer than {} s and was stopped; \
-                 a script only builds a graph, so an unbounded loop is the usual cause",
-                DEADLINE.as_secs()
+                 a script only builds a graph, so an unbounded loop is the usual cause. \
+                 A part that genuinely computes for longer — a simulation run to produce \
+                 its sections — can ask for more with timeout_s, which covers the script too",
+                budget.as_secs()
             )
         } else {
             e
@@ -326,6 +342,20 @@ mod tests {
             error.contains("was stopped") && error.contains("unbounded loop"),
             "unhelpful refusal: {error}"
         );
+    }
+
+    /// The budget is a floor raised on request, never a way below the floor.
+    #[test]
+    fn a_caller_may_lengthen_the_deadline_but_not_shorten_it() {
+        let started = Instant::now();
+        let Err(error) = build_within("while (true) {}", Duration::from_millis(100)) else {
+            panic!("an endless loop should be stopped");
+        };
+        assert!(error.contains("ran longer than 5 s"), "{error}");
+        assert!(started.elapsed() >= Duration::from_secs(5), "{:?}", started.elapsed());
+        // Spin for six seconds: past the floor, within a raised budget.
+        let script = "const end = Date.now() + 6000; while (Date.now() < end) {} return box(1, 1, 1);";
+        build_within(script, Duration::from_secs(10)).expect("a raised budget covers it");
     }
 
     #[test]

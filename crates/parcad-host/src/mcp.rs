@@ -142,7 +142,10 @@ pub struct EvaluateRequest {
     /// Seconds the kernel may take, 1 to 600. Defaults to 20, or
     /// PARCAD_OCCT_TIMEOUT. A part that timed out can be asked again with
     /// more; a build that finishes is kept, so the next call on the same
-    /// script — a render, an export, the window — does not wait again.
+    /// script — a render, an export, the window — does not wait again. The
+    /// script itself gets the same allowance when it is more than the
+    /// sandbox's 5 s: a part that runs a simulation to draw its sections
+    /// asks for its time here.
     #[serde(default)]
     pub timeout_s: Option<f64>,
 }
@@ -471,7 +474,7 @@ impl Parcad {
         let budget = budget(request.timeout_s);
 
         let (snapshot, pngs) = blocking(move || {
-            let built = script::build(&request.script)?;
+            let built = script::build_within(&request.script, script_budget(request.timeout_s))?;
             let doc = service::parse_graph(built.graph.clone())?;
             let evaluated = service::evaluate(&doc, budget).map_err(|e| built.locate(e))?;
 
@@ -587,7 +590,7 @@ impl Parcad {
     ) -> Result<rmcp::handler::server::wrapper::Json<service::ProbeReport>, ErrorData> {
         let budget = budget(request.timeout_s);
         let report = blocking(move || {
-            let built = script::build(&request.script)?;
+            let built = script::build_within(&request.script, script_budget(request.timeout_s))?;
             let doc = service::parse_graph(built.graph.clone())?;
             service::probe(&doc, &request.points, &request.rays, budget).map_err(|e| built.locate(e))
         })
@@ -612,7 +615,7 @@ impl Parcad {
     ) -> Result<rmcp::handler::server::wrapper::Json<service::ThicknessReport>, ErrorData> {
         let budget = budget(request.timeout_s);
         let report = blocking(move || {
-            let built = script::build(&request.script)?;
+            let built = script::build_within(&request.script, script_budget(request.timeout_s))?;
             let doc = service::parse_graph(built.graph.clone())?;
             service::wall_thickness(&doc, request.threshold_mm, request.max_samples, budget)
                 .map_err(|e| built.locate(e))
@@ -695,7 +698,7 @@ impl Parcad {
 
         let budget = budget(request.timeout_s);
         let exported = blocking(move || {
-            let built = script::build(&request.script)?;
+            let built = script::build_within(&request.script, script_budget(request.timeout_s))?;
             let mut doc = service::parse_graph(built.graph.clone())?;
             if let Some(body) = &request.body {
                 doc = service::body_doc(&doc, body)?;
@@ -1201,6 +1204,13 @@ fn keep_screen(next: &str) {
 /// A caller's `timeout_s`, bounded; `None` keeps the host's default.
 fn budget(timeout_s: Option<f64>) -> Option<std::time::Duration> {
     timeout_s.map(|s| std::time::Duration::from_secs_f64(s.clamp(1.0, 600.0)))
+}
+
+/// The same `timeout_s` as the script sandbox's deadline: a caller who gives
+/// a heavy part longer gives its script longer too, never less than the
+/// sandbox's own floor.
+fn script_budget(timeout_s: Option<f64>) -> std::time::Duration {
+    budget(timeout_s).unwrap_or(script::DEADLINE).max(script::DEADLINE)
 }
 
 /// Where renders are kept: beside exports, so one variable moves both.
