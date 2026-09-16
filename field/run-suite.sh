@@ -8,6 +8,7 @@
 #     CASES="how-many-edges what-is-hidden" field/run-suite.sh 3
 #     ARMS="0" field/run-suite.sh 3         # the non-reasoning arm alone
 #     MODELS=haiku field/run-suite.sh 3     # the cheap floor alone
+#     MODELS=sonnet ARMS=default EFFORTS="low high xhigh" field/run-suite.sh 3
 #
 # cases x models x arms x trials, so ten cases at three trials is 120 sessions.
 # Narrow with CASES while iterating; run the whole thing when deciding. It costs
@@ -24,6 +25,8 @@ eval "$(python3 "$here/config.py" --shell)"
 TRIALS=${1:-3}
 ARMS=${ARMS:-8000 0}
 MODELS=${MODELS:-haiku sonnet}
+# Each effort is one more arm; "default" in ARMS leaves thinking to the effort.
+EFFORTS=${EFFORTS:-}
 RUN=${RUN:-$(mktemp -d "${TMPDIR:-/tmp}/$FIELD_SERVER-suite-XXXXXX")}
 mkdir -p "$RUN"
 
@@ -52,11 +55,18 @@ for model in $MODELS; do
   mkdir -p "$mrun"
   for prompt in $FILES; do
     case=$(basename "$prompt" .md)
-    for think in $ARMS; do
-      out="$mrun/$case/think$think"
-      mkdir -p "$out"
-      QUIET=1 RUN="$out" THINK="$think" MODEL="$id" \
-        "$here/run-case.sh" "$prompt" "$TRIALS"
+    for effort in ${EFFORTS:-none}; do
+      [ "$effort" = none ] && effort=""
+      for think in $ARMS; do
+        if [ -z "$effort" ]; then arm="think$think"
+        elif [ "$think" = default ]; then arm="$effort"
+        else arm="$effort-think$think"
+        fi
+        out="$mrun/$case/$arm"
+        mkdir -p "$out"
+        QUIET=1 RUN="$out" THINK="$think" EFFORT="$effort" MODEL="$id" \
+          "$here/run-case.sh" "$prompt" "$TRIALS"
+      done
     done
     cp "$prompt" "$mrun/$case/case.md"
   done

@@ -1,16 +1,21 @@
 {
   "name": "refuse-unblendable-junction",
   "script": "eval/scripts/refuse-unblendable-junction.js",
-  "why": "The failure that cost the field session three evaluations per radius: a blend across a junction where several members converge. The refusal must name the junction it measured on the seam — four seam edges at one vertex — and a radius measured to build, 1.13 mm, which does build when asked for.",
+  "why": "The failure that cost the field session three evaluations per radius: a blend across a junction where several members converge. The refusal must name the junction it measured on the seam — four seam edges at one vertex — and a radius it measured to build, which must build when asked for. That radius comes from a bisection on the kernel, so it is the compiler's: 1.13 mm natively, 0.94 under WebAssembly. The case holds the promise, not the number: `builds_with` writes the named radius into the union's blend and builds it.",
   "brep": {
     "refuses": {
       "kind": "rejected",
       "message_contains": [
         "blends by 2 mm",
         "branches 4 ways",
-        "Largest radius measured to build",
-        "1.13"
-      ]
+        "Largest radius measured to build on this seam: ",
+        "rebuilt and checked"
+      ],
+      "builds_with": {
+        "after": "Largest radius measured to build on",
+        "field": "blend",
+        "refused": 2.0
+      }
     }
   }
 }

@@ -1,6 +1,15 @@
 # Recorded by field/selftest.py --update. A grade that moves here
 # re-grades every round already reported, so read the diff.
 
+[a-hidden-reply-sends-the-model-for-a-file]
+grade = "VOID"
+reached = false
+quoted = false
+trap = false
+derived = true
+stray = ["PowerShell"]
+hidden = ["read_docs"]
+
 [a-rubric-that-is-not-a-regex]
 grade = "REFUSED"
 reached = false
@@ -8,6 +17,7 @@ quoted = false
 trap = false
 derived = false
 stray = []
+hidden = []
 
 [a-rubric-with-no-verdict]
 grade = "REFUSED"
@@ -16,6 +26,7 @@ quoted = false
 trap = false
 derived = false
 stray = []
+hidden = []
 
 [a-tool-name-that-does-not-exist]
 grade = "VOID"
@@ -24,6 +35,7 @@ quoted = false
 trap = false
 derived = false
 stray = ["mcp__parcad_list_projects", "mcp__parcad_read_project"]
+hidden = []
 
 [no-final-answer]
 grade = "OPEN"
@@ -32,6 +44,7 @@ quoted = false
 trap = false
 derived = false
 stray = []
+hidden = []
 
 [right-and-measured]
 grade = "SOUND"
@@ -40,6 +53,7 @@ quoted = true
 trap = false
 derived = false
 stray = []
+hidden = []
 
 [right-but-derived-from-source]
 grade = "LUCKY"
@@ -48,6 +62,7 @@ quoted = true
 trap = false
 derived = true
 stray = []
+hidden = []
 
 [right-but-tool-unreached]
 grade = "LUCKY"
@@ -56,6 +71,7 @@ quoted = true
 trap = false
 derived = false
 stray = []
+hidden = []
 
 [server-went-away]
 grade = "VOID"
@@ -64,6 +80,7 @@ quoted = true
 trap = false
 derived = false
 stray = []
+hidden = []
 
 [strayed-to-a-local-tool]
 grade = "VOID"
@@ -72,6 +89,7 @@ quoted = false
 trap = false
 derived = false
 stray = ["ListAgents"]
+hidden = []
 
 [the-argument-route-not-taken]
 grade = "LUCKY"
@@ -80,6 +98,7 @@ quoted = true
 trap = false
 derived = false
 stray = []
+hidden = []
 
 [the-named-wrong-answer]
 grade = "WRONG"
@@ -88,6 +107,16 @@ quoted = false
 trap = true
 derived = false
 stray = []
+hidden = []
+
+[the-only-read-was-hidden]
+grade = "LUCKY"
+reached = false
+quoted = false
+trap = false
+derived = false
+stray = []
+hidden = ["read_docs", "read_docs"]
 
 [the-part-was-never-cut-open]
 grade = "LUCKY"
@@ -96,6 +125,7 @@ quoted = true
 trap = false
 derived = false
 stray = []
+hidden = []
 
 [the-route-is-an-argument]
 grade = "SOUND"
@@ -104,6 +134,7 @@ quoted = true
 trap = false
 derived = false
 stray = []
+hidden = []
 
 [the-verdict-is-only-the-tail]
 grade = "WRONG"
@@ -112,6 +143,7 @@ quoted = true
 trap = true
 derived = false
 stray = []
+hidden = []
 
 [verdict-absent]
 grade = "WRONG"
@@ -120,3 +152,4 @@ quoted = false
 trap = false
 derived = false
 stray = []
+hidden = []

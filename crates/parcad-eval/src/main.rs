@@ -154,7 +154,12 @@ fn judge(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (V
     let (verdict, recorded) = match (&expect.refuses, outcome) {
         // Required to refuse, and did.
         (Some(refusal), Outcome::Refused { kind, message }) => {
-            let bad = case::check_refusal(refusal, kind, &message);
+            let mut bad = case::check_refusal(refusal, kind, &message);
+            if let Some(suggestion) = &refusal.builds_with {
+                let started = std::time::Instant::now();
+                bad.extend(rebuild_suggestion(suggestion, doc, &message, timeout));
+                waited = waited.max(started.elapsed());
+            }
             let v = if bad.is_empty() {
                 Verdict::Pass(format!("refused as required ({kind:?})"))
             } else {
@@ -242,6 +247,42 @@ fn judge(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (V
         }
     };
     (verdict, recorded, waited)
+}
+
+/// Build the part again with the value the refusal named, which it says it
+/// already built: anything but a closed part is a refusal that lied.
+fn rebuild_suggestion(
+    suggestion: &case::Suggestion,
+    doc: &parcad_core::graph::Doc,
+    message: &str,
+    timeout: std::time::Duration,
+) -> Vec<Mismatch> {
+    let fail = |detail: String| vec![Mismatch { field: "builds_with".into(), detail }];
+    let value = match suggestion.value(message) {
+        Ok(value) => value,
+        Err(why) => return fail(why),
+    };
+    let mut graph = match serde_json::to_value(doc) {
+        Ok(graph) => graph,
+        Err(e) => return fail(format!("the graph does not serialise: {e}")),
+    };
+    if suggestion.apply(&mut graph, value) == 0 {
+        return fail(format!(
+            "no `{}` in the graph is {}; the case names the wrong field or value",
+            suggestion.field, suggestion.refused
+        ));
+    }
+    let doc = match parcad_core::envelope::parse_doc(graph) {
+        Ok(doc) => doc,
+        Err(e) => return fail(format!("with {} = {value}: {e}", suggestion.field)),
+    };
+    match run::run_brep(&doc, timeout) {
+        Outcome::Measured(o) if o.watertight => Vec::new(),
+        Outcome::Measured(_) => fail(format!("{} = {value} builds, but not closed", suggestion.field)),
+        Outcome::Refused { kind, message } => {
+            fail(format!("the refusal says {} = {value} builds; it does not: {kind:?}: {message}", suggestion.field))
+        }
+    }
 }
 
 fn main() -> Result<()> {

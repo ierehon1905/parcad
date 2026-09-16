@@ -38,6 +38,21 @@ DISCLAIMS = re.compile(r"\b(not|never|rather than|instead of|without|nor)\b"
                        r"[^.]{0,60}$", re.I)
 
 
+# Claude Code swaps an oversized tool result for a note naming the file it
+# saved it to: a 2 KB preview past 50,000 characters, an error and no preview
+# past its token cap. A model with no file tool never reads the rest, so that
+# call did not reach the tool; README.md, "A call is not a read".
+PERSISTED = re.compile(r"^\W*(<persisted-output>|Error: result \([\d,]+ characters\) "
+                       r"exceeds maximum allowed tokens)")
+
+
+def result_text(content):
+    """A tool_result's text, whether the client sent a string or blocks."""
+    if isinstance(content, str):
+        return content
+    return "".join(b.get("text", "") for b in content or [] if isinstance(b, dict))
+
+
 def derived(final):
     """Did the reply reason from the source rather than from a measurement?"""
     return any(not DISCLAIMS.search(final[max(0, m.start() - 70):m.start()])
@@ -82,7 +97,7 @@ def listed(rub, key):
 
 def routed(row, rub):
     """Did the trial take the route the case requires — `reach`, `arg`, `input`?"""
-    if not all(t in row["calls"] for t in listed(rub, "reach")):
+    if not all(t in row["read"] for t in listed(rub, "reach")):
         return False
     if not all(row["args"].get(a) for a in listed(rub, "arg")):
         return False
@@ -116,11 +131,14 @@ def summarise(path, cfg):
     finished = False
     args = collections.Counter()
     inputs = []
+    named = {}      # tool_use id -> tool name
+    hidden = []     # calls whose result the client kept from the model
     for m in load(path):
         if m.get("type") == "assistant":
             for c in m["message"]["content"]:
                 if c["type"] == "tool_use":
                     calls.append(c["name"].replace(cfg["prefix"], ""))
+                    named[c.get("id")] = calls[-1]
                     inputs.append(json.dumps(c.get("input") or {}))
                     for k, v in (c.get("input") or {}).items():
                         if v not in (None, False, "", [], {}):
@@ -132,6 +150,8 @@ def summarise(path, cfg):
             for c in content if isinstance(content, list) else []:
                 if c.get("type") == "tool_result":
                     results.append(json.dumps(c.get("content")))
+                    if PERSISTED.search(result_text(c.get("content"))):
+                        hidden.append(named.get(c.get("tool_use_id"), "?"))
                     if c.get("is_error"):
                         errors.append(json.dumps(c.get("content"))[:200])
         elif m.get("type") == "result":
@@ -145,6 +165,9 @@ def summarise(path, cfg):
         "errors": errors,
         "finished": finished,
         "calls": calls,
+        # A tool counts as reached when at least one of its replies was shown.
+        "read": [c for c in calls if calls.count(c) > hidden.count(c)],
+        "hidden": hidden,
         "args": args,
         "inputs": " ".join(inputs),
         "n": len(calls),
@@ -226,11 +249,12 @@ GRADES = ("SOUND", "LUCKY", "WRONG", "VOID", "OPEN")
 
 def detail(rows):
     print(f'{"trial":10} {"grade":6} {"think":>5} {"calls":>5} {"err":>3} {"reach":>5} '
-          f'{"quote":>5} {"trap":>4} {"src?":4} {"stray":8} tail')
+          f'{"quote":>5} {"trap":>4} {"src?":4} {"hid":3} {"stray":8} tail')
     for r in rows:
         print(f'{r["name"][:10]:10} {r["grade"]:6} {r["think"]:>5} {r["n"]:>5} '
               f'{len(r["errors"]) or "-":>3} {"yes" if r["reached"] else "NO":>5} {"yes" if r["quoted"] else "no":>5} '
               f'{"HIT" if r["trap"] else "-":>4} {"yes" if r["derived"] else "-":4} '
+              f'{len(r["hidden"]) or "-":>3} '
               f'{(",".join(r["stray"])[:8] if r["stray"] else "-"):8} '
               f'{" ".join(r["final"].split())[-80:]}')
 
@@ -249,10 +273,10 @@ def suite(root, cfg):
     """RUNDIR/<case>/<arm>/trial*.jsonl, plus RUNDIR/<case>/case.md."""
     cases = sorted(p for p in pathlib.Path(root).iterdir() if p.is_dir())
     print(f'{"case":28} {"tests":22} {"arm":6} {"n":>2} {"SLWVO":>7} '
-          f'{"sound":>6} {"reach":>6} {"quote":>6} {"trap":>4}')
+          f'{"sound":>6} {"reach":>6} {"quote":>6} {"trap":>4} {"hid":>4}')
     per_tool = collections.defaultdict(lambda: [0, 0])   # tool -> [sound, trials]
     total = collections.Counter()
-    lucky, wrong, void = [], [], []
+    lucky, wrong, void, hid = [], [], [], []
     for case in cases:
         rub = rubric(case / "case.md") if (case / "case.md").exists() else {}
         facet = rub.get("tool", "?")
@@ -274,9 +298,13 @@ def suite(root, cfg):
             for r in rows:
                 {"LUCKY": lucky, "WRONG": wrong, "VOID": void}.get(
                     r["grade"], []).append(f'{case.name}/{arm.name}/{r["name"]}')
+                if r["hidden"]:
+                    hid.append(f'{case.name}/{arm.name}/{r["name"]} '
+                               f'({", ".join(sorted(set(r["hidden"])))})')
             print(f'{case.name[:28]:28} {facet[:22]:22} {arm.name[:6]:6} {n:>2} '
                   f'{bar(c, n):>7} {c["SOUND"]}/{n:<4} {reach}/{n:<4} '
-                  f'{quote}/{n:<4} {sum(r["trap"] for r in rows) or "-":>4}')
+                  f'{quote}/{n:<4} {sum(r["trap"] for r in rows) or "-":>4} '
+                  f'{sum(bool(r["hidden"]) for r in rows) or "-":>4}')
 
     n = sum(total.values())
     if total["OPEN"]:
@@ -294,6 +322,9 @@ def suite(root, cfg):
     for label, names in (("LUCKY", lucky), ("WRONG", wrong), ("VOID", void)):
         if names:
             print(f'\n{label}: {", ".join(names)}')
+    if hid:
+        print(f'\nHIDDEN — a reply the client saved to a file instead of showing, so '
+              f'that call does not count as reaching its tool: {", ".join(hid)}')
     if void:
         print("  A VOID trial measured nothing and must not be counted either way. "
               "If it strayed, widen --disallowed-tools in field/run-case.sh.")

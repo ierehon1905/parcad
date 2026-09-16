@@ -78,6 +78,23 @@ assertion is on the words a reader needs, not on the fact of an error. A case
 that must refuse and instead returns a part fails loudly, quoting the part it
 got — a believable wrong answer is what this corpus exists for.
 
+A refusal that names a value it built ("Largest radius measured to build on
+this seam: 1.13 mm") is held to that, not to the number: a search on the kernel
+finds a different one under another compiler. `builds_with` reads the number
+after `after`, writes it into every `field` of the graph that holds `refused`,
+and fails unless that part builds closed:
+
+```json
+"builds_with": { "after": "Largest radius measured to build on", "field": "blend", "refused": 2.0 }
+```
+
+## A value no mesh fixes
+
+A part that touches the bed at a point stands on whichever triangles the mesher
+laid there, which moves between compilers. `stands_on_under_mm2` replaces
+`stands_on_mm2` with a ceiling derived by hand, and `--update` leaves it alone;
+`ellipsoid.json` derives its own.
+
 ## Known defects
 
 ```json
