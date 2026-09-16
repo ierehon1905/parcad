@@ -427,9 +427,11 @@ Tiller's *compatible skinning* (§10.3), with the arithmetic in
   linear function, so height is exactly linear in `v`: every horizontal plane
   cuts the skin along one `v` iso-curve, and a floor or a rim is one.
 - **The faces are made and sewn here** (`opencascade::skin::Skinner`): a band
-  per stretch between sections — split even when smooth, because the mesher
-  took 102 s on one lamp skin as a single face and 18.7 s in bands — and flat
-  ends bounded by the skin's own iso-curves.
+  per stretch between sections, each on its own segment of the surface —
+  split even when smooth, because the mesher took 102 s on one lamp skin as a
+  single face and 18.7 s in bands, and segmented because a boolean's
+  `UnifySameDomain` welds faces that share a surface back into one (docs/GOTCHAS.md)
+  — and flat ends bounded by the skin's own iso-curves.
 
 `loft(sections, { wall })` adds the inside, and the pairing is what it is for.
 Two skins lofted independently through a section and its inset each bulge

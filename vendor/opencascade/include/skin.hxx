@@ -13,6 +13,7 @@
 #include <BRepLib.hxx>
 #include <Geom_BSplineCurve.hxx>
 #include <Geom_BSplineSurface.hxx>
+#include <Geom_Geometry.hxx>
 #include <NCollection_Array1.hxx>
 #include <NCollection_Array2.hxx>
 #include <ShapeFix_Face.hxx>
@@ -77,15 +78,20 @@ class ParcadSkin {
     }
   }
 
-  // The skin between v0 and v1, all the way round.
+  // The skin between v0 and v1, all the way round, on a surface of its own:
+  // faces sharing one surface handle are "same domain" to
+  // ShapeUpgrade_UnifySameDomain, which welds a boolean's bands back into one
+  // face that meshes many times slower.
   void add_band(int skin, double v0, double v1) {
     try {
-      const Handle(Geom_BSplineSurface)& s = surface(skin);
+      const Handle(Geom_BSplineSurface)& whole = surface(skin);
       double u0 = 0.0;
       double u1 = 0.0;
       double vmin = 0.0;
       double vmax = 0.0;
-      s->Bounds(u0, u1, vmin, vmax);
+      whole->Bounds(u0, u1, vmin, vmax);
+      Handle(Geom_BSplineSurface) s = Handle(Geom_BSplineSurface)::DownCast(whole->Copy());
+      s->CheckAndSegment(u0, u1, v0, v1);
       BRepBuilderAPI_MakeFace make(s, u0, u1, v0, v1, 1e-7);
       if (!make.IsDone()) {
         throw std::runtime_error("a band of the lofted skin could not be made into a face");

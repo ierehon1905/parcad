@@ -30,7 +30,7 @@ pub struct Mesher {
 
 impl Mesher {
     pub fn new(shape: &Shape) -> Self {
-        let inner = ffi::BRepMesh_IncrementalMesh_ctor(&shape.inner, 0.01);
+        let inner = ffi::BRepMesh_IncrementalMesh_ctor_full(&shape.inner, 0.01, false, 0.5, true);
 
         if !inner.IsDone() {
             // TODO(bschwind) - Add proper Error type and return Result.

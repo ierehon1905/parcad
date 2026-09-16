@@ -255,6 +255,11 @@ Faces are numbered as `TopExp::MapShapes` numbers them, the order
 `BRepClass_FaceClassifier.hxx`, `Extrema_ExtPC.hxx`, `Extrema_ExtPS.hxx`,
 `Precision.hxx`, all in toolkits `build.rs` already links.
 
+- `BRepMesh_IncrementalMesh_ctor_full(shape, deflection, relative,
+  angular_deflection, in_parallel)` — the same `construct_unique` as the
+  two-argument constructor, reaching `BRepMesh_IncrementalMesh`'s remaining
+  arguments so the mesher can run faces in parallel.
+
 ## Not changed
 
 Everything else is upstream 0.2.0 verbatim. The OCCT it builds against is **not**

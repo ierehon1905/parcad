@@ -214,8 +214,8 @@ fn corrected_fit(sections: &[&[P2]], params: &[f64], spans: usize) -> std::resul
     let mut best: Option<(f64, PeriodicFit)> = None;
     for round in 0..=CORRECTION_ROUNDS {
         let curves = sections.iter().map(|p| fit.fit(p)).collect::<std::result::Result<Vec<_>, _>>()?;
-        let off = sections.iter().zip(&curves).map(|(p, c)| fit.deviation(c, p)).fold(0.0, f64::max);
-        let next = (round < CORRECTION_ROUNDS).then(|| fit.corrected(&curves, sections));
+        let (off, corrected) = fit.examine(&curves, sections);
+        let next = (round < CORRECTION_ROUNDS).then_some(corrected);
         if best.as_ref().is_none_or(|(b, _)| off < *b) {
             best = Some((off, fit));
         }

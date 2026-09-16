@@ -585,6 +585,26 @@ took 166 s. Splitting further, in `u` as well, did not help measurably (16 to
 19 s under load). So a skinned loft is always banded at its sections, and the
 edges between bands are `dihedral: "smooth"`.
 
+Bands cut from one `Geom_BSplineSurface` do not stay bands, though:
+`ShapeUpgrade_UnifySameDomain` counts two faces on the same surface *handle*
+as one domain, so the cleanup after any boolean welded them back into one
+face per skin. A lamp of two ruled 41-section lofts and a cut came out with 4
+faces and took 78 s (35 s of it tessellating those faces) where
+`ThruSections` had taken 17.6 s with 82. Each band is now its own segment of
+the surface (`Geom_BSplineSurface::CheckAndSegment`, exact knot insertion),
+which unify leaves apart; a whole-surface copy per band would too, but
+segments are smaller and the same lamp built in 6.3 s against 10.6 s with
+copies. The segments change only where the mesher puts triangles — it splits
+a face at its own knots — so the fitted-frustum case meshes in 20422
+triangles instead of 14842, within the same 0.01 mm.
+
+The mesher also ran one face at a time: the binding built
+`BRepMesh_IncrementalMesh` with `isInParallel` off, and a sample of the worker
+showed OCCT's thread pool idle while it meshed eighty independent bands. It is
+on now (`Mesher::new`, `Shape::write_stl`); every corpus case other than the
+two skinned ones meshes to the identical triangle count, volume and area, and
+the corpus's summed mesh-and-build wall time fell from 47 s to 29 s.
+
 ### `offset_surface` lies
 
 It returns valid-looking wrong answers rather than failing:

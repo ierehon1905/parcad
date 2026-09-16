@@ -414,7 +414,8 @@ impl Shape {
     /// this tolerance is written as it stands; a finer request re-meshes it.
     pub fn write_stl<P: AsRef<Path>>(&self, path: P, deflection: f64) -> Result<(), Error> {
         let mut stl_writer = ffi::StlAPI_Writer_ctor();
-        let triangulation = ffi::BRepMesh_IncrementalMesh_ctor(&self.inner, deflection);
+        let triangulation =
+            ffi::BRepMesh_IncrementalMesh_ctor_full(&self.inner, deflection, false, 0.5, true);
         let success = ffi::write_stl(
             stl_writer.pin_mut(),
             triangulation.Shape(),

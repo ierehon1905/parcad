@@ -14,7 +14,7 @@
 //! every section, and the fit of a stepped outline is the fit of the outline
 //! stepped by the fit of the step.
 
-use crate::section::{basis_derivatives, BSpline, P2};
+use crate::section::{basis_derivatives, basis_small, BSpline, P2, SMALL_ORDER};
 
 type P3 = [f64; 3];
 
@@ -137,13 +137,23 @@ impl Surface {
     pub fn derivatives(&self, u: f64, v: f64) -> [P3; 3] {
         let su = find_span(&self.uknots, self.nu, self.udegree, u);
         let sv = find_span(&self.vknots, self.nv, self.vdegree, v);
-        let bu = basis_derivatives(su, u, self.udegree, &self.uknots, 1);
-        let bv = basis_derivatives(sv, v, self.vdegree, &self.vknots, 1);
+        if self.udegree < SMALL_ORDER && self.vdegree < SMALL_ORDER {
+            let bu = basis_small(su, u, self.udegree, &self.uknots, 1);
+            let bv = basis_small(sv, v, self.vdegree, &self.vknots, 1);
+            self.combine(su, sv, |k, a| bu[k][a], |k, b| bv[k][b])
+        } else {
+            let bu = basis_derivatives(su, u, self.udegree, &self.uknots, 1);
+            let bv = basis_derivatives(sv, v, self.vdegree, &self.vknots, 1);
+            self.combine(su, sv, |k, a| bu[k][a], |k, b| bv[k][b])
+        }
+    }
+
+    fn combine(&self, su: usize, sv: usize, bu: impl Fn(usize, usize) -> f64, bv: impl Fn(usize, usize) -> f64) -> [P3; 3] {
         let mut out = [[0.0; 3]; 3];
         for a in 0..=self.udegree {
             for b in 0..=self.vdegree {
                 let pole = self.poles[(su - self.udegree + a) * self.nv + (sv - self.vdegree + b)];
-                let weights = [bu[0][a] * bv[0][b], bu[1][a] * bv[0][b], bu[0][a] * bv[1][b]];
+                let weights = [bu(0, a) * bv(0, b), bu(1, a) * bv(0, b), bu(0, a) * bv(1, b)];
                 for (o, w) in out.iter_mut().zip(weights) {
                     for d in 0..3 {
                         o[d] += w * pole[d];
@@ -273,12 +283,20 @@ impl PeriodicFit {
     /// six-lobed outline on 32 spans measured 0.59 mm off with them and
     /// 0.03 mm with parameters that follow the curve.
     pub fn corrected(&self, curves: &[BSpline<2>], sections: &[&[P2]]) -> Vec<f64> {
+        self.examine(curves, sections).1
+    }
+
+    /// [`Self::deviation`] of every section, worst first, and
+    /// [`Self::corrected`], from one search for each point's foot.
+    pub fn examine(&self, curves: &[BSpline<2>], sections: &[&[P2]]) -> (f64, Vec<f64>) {
         let n = self.params.len();
         let mut shift = vec![0.0; n];
+        let mut worst: f64 = 0.0;
         for (curve, points) in curves.iter().zip(sections) {
             for (i, p) in points.iter().enumerate() {
                 let u = self.params[i];
-                let (foot, _) = nearest(curve, *p, u, 1.5 / self.spans as f64);
+                let (foot, off) = nearest(curve, *p, u, 1.5 / self.spans as f64);
+                worst = worst.max(off);
                 shift[i] += (foot - u + 0.5).rem_euclid(1.0) - 0.5;
             }
         }
@@ -293,9 +311,9 @@ impl PeriodicFit {
             out[i] = out[i].max(floor);
         }
         if out[n - 1] >= 1.0 {
-            return self.params.clone();
+            return (worst, self.params.clone());
         }
-        out
+        (worst, out)
     }
 
     /// `curve` sampled `per` times between each pair of neighbouring points'
@@ -370,7 +388,7 @@ fn nearest(curve: &BSpline<2>, p: P2, u: f64, reach: f64) -> (f64, f64) {
     let (lo, hi) = (best - step, best + step);
     let mut t = best;
     for _ in 0..8 {
-        let [c, d1, d2] = <[P2; 3]>::try_from(curve.derivatives(wrap(t), 2)).unwrap();
+        let [c, d1, d2] = curve.derivatives2(wrap(t));
         let r = [c[0] - p[0], c[1] - p[1]];
         let g = r[0] * d1[0] + r[1] * d1[1];
         let h = d1[0] * d1[0] + d1[1] * d1[1] + r[0] * d2[0] + r[1] * d2[1];

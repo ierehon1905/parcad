@@ -1025,6 +1025,17 @@ pub mod ffi {
             deflection: f64,
         ) -> UniquePtr<BRepMesh_IncrementalMesh>;
 
+        // The full constructor, for `in_parallel` — added for parcad, see
+        // PARCAD-CHANGES.md.
+        #[cxx_name = "construct_unique"]
+        pub fn BRepMesh_IncrementalMesh_ctor_full(
+            shape: &TopoDS_Shape,
+            deflection: f64,
+            relative: bool,
+            angular_deflection: f64,
+            in_parallel: bool,
+        ) -> UniquePtr<BRepMesh_IncrementalMesh>;
+
         pub fn Shape(self: &BRepMesh_IncrementalMesh) -> &TopoDS_Shape;
         pub fn IsDone(self: &BRepMesh_IncrementalMesh) -> bool;
 

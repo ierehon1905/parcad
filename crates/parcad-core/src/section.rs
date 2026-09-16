@@ -434,15 +434,16 @@ impl<const D: usize> BSpline<D> {
             }
             return k;
         }
-        let mut k = self.degree;
-        while !(self.knots[k] <= t && t < self.knots[k + 1]) {
-            k += 1;
-        }
-        k
+        // The last knot at or before `t`, which starts the one non-empty span
+        // holding it.
+        (self.knots[..=n].partition_point(|&k| k <= t).max(1) - 1).max(self.degree)
     }
 
     /// The point and its first `order` derivatives at `t`.
     pub fn derivatives(&self, t: f64, order: usize) -> Vec<[f64; D]> {
+        if self.degree < SMALL_ORDER && order <= 2 {
+            return self.derivatives2(t)[..=order].to_vec();
+        }
         let span = self.span(t);
         let basis = basis_derivatives(span, t, self.degree, &self.knots, order);
         (0..=order)
@@ -461,8 +462,44 @@ impl<const D: usize> BSpline<D> {
             .collect()
     }
 
+    /// The point and its first two derivatives at `t`, without allocating
+    /// for a curve of degree below [`SMALL_ORDER`]: fitting and its nearest
+    /// point searches evaluate a curve millions of times.
+    pub fn derivatives2(&self, t: f64) -> [[f64; D]; 3] {
+        if self.degree >= SMALL_ORDER {
+            let d = self.derivatives(t, 2);
+            return [d[0], d[1], d[2]];
+        }
+        let span = self.span(t);
+        let basis = basis_small(span, t, self.degree, &self.knots, 2);
+        let mut out = [[0.0; D]; 3];
+        for (k, o) in out.iter_mut().enumerate() {
+            if k <= self.degree {
+                for j in 0..=self.degree {
+                    let pole = &self.poles[span - self.degree + j];
+                    for (x, c) in o.iter_mut().zip(pole) {
+                        *x += basis[k][j] * c;
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub fn point(&self, t: f64) -> [f64; D] {
-        self.derivatives(t, 0)[0]
+        if self.degree >= SMALL_ORDER {
+            return self.derivatives(t, 0)[0];
+        }
+        let span = self.span(t);
+        let basis = basis_small(span, t, self.degree, &self.knots, 0);
+        let mut out = [0.0; D];
+        for j in 0..=self.degree {
+            let pole = &self.poles[span - self.degree + j];
+            for (x, c) in out.iter_mut().zip(pole) {
+                *x += basis[0][j] * c;
+            }
+        }
+        out
     }
 
     /// Every distinct non-empty knot span, as `(from, to)`.
@@ -512,6 +549,69 @@ impl<const D: usize> BSpline<D> {
         self.knots.insert(k + 1, t);
         self.poles = poles;
     }
+}
+
+/// Orders (degree + 1) up to which [`basis_small`] works on the stack.
+pub const SMALL_ORDER: usize = 8;
+
+/// [`basis_derivatives`] for `p < SMALL_ORDER` and `order <= 2`, the same
+/// arithmetic in the same order on fixed arrays, so the values are identical.
+pub(crate) fn basis_small(span: usize, t: f64, p: usize, knots: &[f64], order: usize) -> [[f64; SMALL_ORDER]; 3] {
+    debug_assert!(p < SMALL_ORDER && order <= 2);
+    let mut ndu = [[0.0; SMALL_ORDER]; SMALL_ORDER];
+    let mut left = [0.0; SMALL_ORDER];
+    let mut right = [0.0; SMALL_ORDER];
+    ndu[0][0] = 1.0;
+    for j in 1..=p {
+        left[j] = t - knots[span + 1 - j];
+        right[j] = knots[span + j] - t;
+        let mut saved = 0.0;
+        for r in 0..j {
+            ndu[j][r] = right[r + 1] + left[j - r];
+            let temp = ndu[r][j - 1] / ndu[j][r];
+            ndu[r][j] = saved + right[r + 1] * temp;
+            saved = left[j - r] * temp;
+        }
+        ndu[j][j] = saved;
+    }
+    let mut ders = [[0.0; SMALL_ORDER]; 3];
+    for j in 0..=p {
+        ders[0][j] = ndu[j][p];
+    }
+    let mut a = [[0.0; SMALL_ORDER]; 2];
+    for r in 0..=p {
+        let (mut s1, mut s2) = (0usize, 1usize);
+        a[0][0] = 1.0;
+        for k in 1..=order.min(p) {
+            let mut d = 0.0;
+            let rk = r as isize - k as isize;
+            let pk = p - k;
+            if r >= k {
+                a[s2][0] = a[s1][0] / ndu[pk + 1][r - k];
+                d = a[s2][0] * ndu[r - k][pk];
+            }
+            let j1 = if rk >= -1 { 1 } else { (-rk) as usize };
+            let j2 = if (r as isize - 1) <= pk as isize { k - 1 } else { p - r };
+            for j in j1..=j2 {
+                a[s2][j] = (a[s1][j] - a[s1][j - 1]) / ndu[pk + 1][(rk + j as isize) as usize];
+                d += a[s2][j] * ndu[(rk + j as isize) as usize][pk];
+            }
+            if r <= pk {
+                a[s2][k] = -a[s1][k - 1] / ndu[pk + 1][r];
+                d += a[s2][k] * ndu[r][pk];
+            }
+            ders[k][r] = d;
+            std::mem::swap(&mut s1, &mut s2);
+        }
+    }
+    let mut factor = p as f64;
+    for k in 1..=order.min(p) {
+        for j in 0..=p {
+            ders[k][j] *= factor;
+        }
+        factor *= (p - k) as f64;
+    }
+    ders
 }
 
 /// Piegl & Tiller A2.3: the non-zero basis functions at `t` and their
@@ -1661,6 +1761,42 @@ mod tests {
 
     fn close(a: f64, b: f64, tol: f64) -> bool {
         (a - b).abs() <= tol
+    }
+
+    #[test]
+    fn the_stack_evaluator_matches_the_general_one_to_the_bit() {
+        let mut seed = 7u64;
+        let mut next = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for degree in 1..SMALL_ORDER {
+            let count = degree + 6;
+            let poles: Vec<[f64; 2]> = (0..count).map(|_| [next() * 10.0, next() * 10.0]).collect();
+            let mut curve = BSpline::clamped_uniform(poles, degree);
+            // A repeated interior knot, to hold the span search to it too.
+            curve.insert_knot(curve.knots[degree + 2]);
+            let mut ts: Vec<f64> = curve.knots.clone();
+            ts.extend((0..40).map(|_| next()));
+            for t in ts {
+                let span = curve.span(t);
+                let wide = basis_derivatives(span, t, degree, &curve.knots, 2);
+                let small = basis_small(span, t, degree, &curve.knots, 2);
+                for k in 0..=2 {
+                    for j in 0..=degree {
+                        assert_eq!(wide[k][j].to_bits(), small[k][j].to_bits(), "degree {degree}, t {t}, k {k}, j {j}");
+                    }
+                }
+                let mut linear = degree;
+                while !(curve.knots[linear] <= t && t < curve.knots[linear + 1]) && linear < curve.poles.len() - 1 {
+                    linear += 1;
+                }
+                if t < 1.0 {
+                    assert_eq!(span, linear, "degree {degree}, t {t}");
+                }
+                assert_eq!(curve.point(t), curve.derivatives2(t)[0]);
+            }
+        }
     }
 
     #[test]
