@@ -6,7 +6,7 @@ which, because the difference matters if you redistribute a binary.
 ## Our own code — MIT OR Apache-2.0
 
 `crates/`, `app/` (both the Rust host and the TypeScript frontend), `tools/`,
-`field/`, `examples/`, `eval/`, `cmake/`, `playground/` and `docs/` — including the screenshots
+`field/`, `examples/`, `eval/`, `cmake/`, `web/` and `docs/` — including the screenshots
 in `docs/images/`, which are this application rendering its own examples — with
 one file excepted below, at your option under either:
 
@@ -107,13 +107,18 @@ contains OpenCASCADE code. So you only have to rebuild that one file.
 **1. Get the source.** All of it is public, including the copy of OpenCASCADE
 this project builds: <https://github.com/ierehon1905/parcad>
 
+Check out the tag of the version you have, e.g. `git checkout v0.0.6`. The app
+runs only a worker built from its own parcad sources, and says so if it is
+given another; OpenCASCADE and the LGPL wrapper crates in `vendor/` are not part
+of that check, so they are yours to change.
+
 **2. Change OpenCASCADE if you want to.** It is in `vendor/occt-sys/OCCT/`. You
 can edit it, or replace it with a different version.
 
 **3. Build a new worker.**
 
 ```bash
-tools/build-worker.sh
+tools/build-worker.sh --release
 ```
 
 This compiles OpenCASCADE the first time — about five minutes on a fast
@@ -122,7 +127,7 @@ If you already have an OpenCASCADE build, you can point at it instead and skip
 that:
 
 ```bash
-PARCAD_OCCT_PREBUILT=/path/to/occt-install tools/build-worker.sh
+PARCAD_OCCT_PREBUILT=/path/to/occt-install tools/build-worker.sh --release
 ```
 
 **4. Tell the app to use your worker.**
@@ -137,9 +142,9 @@ with. You do not have to modify the app, and you do not need our permission.
 If any of this does not work for you, that is a bug in this project. Please open
 an issue.
 
-## The browser playground's kernel
+## ParCAD web's kernel
 
-The playground (`playground/`, published as a static site) is distributed
+ParCAD web (`web/`, published as a static site) is distributed
 differently, and the difference matters. There is no separate worker process in
 a browser tab: `parcad_wasm.wasm` is **one WebAssembly file holding OpenCASCADE,
 the LGPL-2.1 wrapper crates above, our MIT/Apache Rust (`parcad-occt`,
@@ -152,11 +157,11 @@ licences, and OCCT's two licence texts under `licenses/`.
 Because OpenCASCADE is statically linked into that file, relinking means
 rebuilding the file, and everything needed to do that is public: the whole
 source of the program, the exact build recipe, and the pinned tool versions in
-[playground/README.md](playground/README.md). To use your own OpenCASCADE:
+[web/README.md](web/README.md). To use your own OpenCASCADE:
 
 ```bash
-OCCT_SOURCE=/path/to/your/occt EMSDK=/path/to/emsdk playground/build-kernel.sh
-cd app && bun x vite build --mode playground        # a site built on your kernel
+OCCT_SOURCE=/path/to/your/occt EMSDK=/path/to/emsdk web/build-kernel.sh
+cd app && bun x vite build --mode web        # a site built on your kernel
 ```
 
 `build-kernel.sh` applies `vendor/occt-sys/patches` to whatever tree
