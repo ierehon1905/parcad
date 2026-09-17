@@ -140,51 +140,37 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
 
 ### Left from the engine wave (2026-09-16)
 
-In order. The first two go one after the other, never together: each is
-measured by timings the other would disturb.
+In order.
 
-1. **Local builds fast, measured builds optimised.** Every local loop builds
-   the release profile (thin LTO, `codegen-units = 1`), so one line costs ~37 s
-   for the native worker and ~80 s for the WebAssembly kernel. Add an iterate
-   profile (no LTO, many codegen units, incremental) as the default for
-   `tools/build-worker.sh`, the CLI and `playground/build-kernel.sh worker`; keep
-   release for the full `tools/check.sh` (its corpus budgets assume it),
-   benchmarks, Pages and CI, with a switch in each script and no way for one
-   build's worker to be picked up by the other. Audit build parallelism (codegen
-   units, jobs, linker, `wasm-opt`, OCCT's ninja) and try a content-addressed
-   cache for worktrees — cargo keys artifacts on absolute paths, so identical
-   code recompiles in every new worktree. Table every change before/after:
-   no-op, one line in `parcad-core`, one line in `backend.rs`, fresh worktree.
-   (Already fixed: the CLI rebuilt on every build while `app/dist` was absent.)
-2. **Threads at run time.** The pleated shade builds in 46 s in a browser tab
+1. **Threads at run time.** The pleated shade builds in 46 s in a browser tab
    against the page's 60 s, 28 s of it OCCT's mesher on one thread (3 s across
    14 cores natively). WebAssembly threads need COOP/COEP headers, which Pages
    cannot send — a service-worker shim is the known route; measure it in a real
    tab. Also check OCCT's parallel mode for booleans and fillets.
-3. **The pleated shade meshes to 3.5 million triangles.** OCCT's mesher lays
+2. **The pleated shade meshes to 3.5 million triangles.** OCCT's mesher lays
    near-equilateral triangles, so the spacing a pleat tip needs is spent up the
    whole height too. An anisotropic layout needs an OCCT patch; it is what could
    bring the tab under 20 s.
-4. **The pleated shade floats.** It spans z = 0.40 to 199.60; a seeded example
+3. **The pleated shade floats.** It spans z = 0.40 to 199.60; a seeded example
    stands on z = 0. Fix the example and make its case assert the z range.
-5. **`thicken` refuses at 0.88 of the turn radius** (`FOLD_LIMIT`,
+4. **`thicken` refuses at 0.88 of the turn radius** (`FOLD_LIMIT`,
    `crates/parcad-occt/src/surfaces.rs`), set from four pleat depths on one
    shape, because OCCT's offset skin slows to under an eighth of the surface's
    speed there and meshes open. The geometry allows up to 1.0: fit the offset
    skin on its own parameters, as the walled loft does, and delete the limit.
-6. **Errors that still don't name their cause:** 2 of 400 fuzzed fillets and
+5. **Errors that still don't name their cause:** 2 of 400 fuzzed fillets and
    chamfers are refused only by the generic mesh backstop.
-7. **Skinned lofts the crossing check can't settle fall back to OCCT's
+6. **Skinned lofts the crossing check can't settle fall back to OCCT's
    self-intersection check**, which can time out on a loft as large as the
    pleated shade.
-8. **Wall thickness between faces that meet is still sampled** (the diamond
+7. **Wall thickness between faces that meet is still sampled** (the diamond
    reads 35.584 against 35.551 before), outside the tool's stated guarantee.
-9. **Surfaces left out:** `extend`, a patch from drawn curves, ruled surfaces,
+8. **Surfaces left out:** `extend`, a patch from drawn curves, ruled surfaces,
    trimming a solid by a surface.
-10. **Near a budget on a slower machine:** `walled-twisted-pleats` and
+9. **Near a budget on a slower machine:** `walled-twisted-pleats` and
    `pleated-shade-box-cut` use ~35 % of theirs under WebAssembly here; a GitHub
    runner may be 2× slower.
-11. **Small:** booleans nudge their inputs' tolerances (at most 4.7e-7 mm);
+10. **Small:** booleans nudge their inputs' tolerances (at most 4.7e-7 mm);
    haiku without thinking still quotes the 0.725 mm wall beside the feather in
    `where-is-the-sliver`.
 
