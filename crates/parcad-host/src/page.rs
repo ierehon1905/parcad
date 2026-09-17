@@ -38,11 +38,12 @@ use std::sync::Arc;
 use std::task::Poll;
 use std::time::Duration;
 
-/// What a model is told on top of `mcp::INSTRUCTIONS` when the host is a tab.
-pub const INSTRUCTIONS: &str = "This is ParCAD web: the part builds in the user's browser tab, \
-which must stay open, with the same kernel as the app. Projects are kept in that browser. \
-export_part hands the file to the browser as a download — it lands where that browser saves \
-downloads, and `path` is only its name inside the tab.";
+/// What a model is told about the screen when the host is a tab, in place of the app's.
+pub const INSTRUCTIONS: &str = "This is ParCAD web, a page in the user's browser that must stay \
+open; parts build and are kept there. That page is their screen: get_session reads it; to show \
+a part you built, save_project it under its own name and open_project it there, not as a \
+picture of your own; set_script edits the part already open. export_part downloads through \
+their browser, and `path` is only a name in the tab.";
 
 thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };

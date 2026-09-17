@@ -86,9 +86,23 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      link. OpenAI's review also wants a verified developer, a privacy policy
      page, tool annotations (done) and test cases; submitting is the owner's
      call, and says it was prepared with an AI assistant.
-   - **Try it in claude.ai and Claude Desktop** as a custom connector, and the
-     in-chat viewer there; only Claude Code (via the field harness) and curl
-     have connected so far, over a local relay.
+   - **Finish measuring "show it to me".** On claude.ai (the owner's test,
+     2026-09-17) the connector built a brick and put it on the page, but
+     "show me it in web" first sent the model off to draw its own viewer. The
+     session tools and instructions were reworded to say that showing a part
+     means save_project then open_project, and the instructions now fit
+     Claude Code's 2048 characters in both hosts — in the tab they did not,
+     and the ParCAD web paragraph, appended last, was the part cut off.
+     `eval/field/show-it-in-my-browser` measures it, run by
+     `bun web/field-tab.ts <label> eval/field/show-it-in-my-browser.md`
+     against `vite --mode web` (the host module must be rebuilt to change the
+     wording it serves). Before the rewording, over the deployed relay: haiku
+     3/4 SOUND without thinking (one trial saved the brick, then set_script
+     wrote it over the open planter and said it was showing) and 4/4 with;
+     sonnet not run. Left: sonnet before, the whole round after, then rebuild
+     and redeploy the site — the live site still serves the old wording.
+   - **The in-chat viewer in claude.ai**: the connector works there; whether
+     the 3D card showed under `evaluate_part` was not checked.
    - **Measure `show-me-the-part` for the web**: a tab gives no render path a
      client can open, so the view's `markdown` is absent and the case, as
      written, cannot pass there.

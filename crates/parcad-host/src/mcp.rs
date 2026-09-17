@@ -565,7 +565,7 @@ impl Parcad {
     #[tool(
         name = "evaluate_part",
         annotations(title = "Build and measure a part", read_only_hint = true, open_world_hint = false),
-        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality, `bodies` (free-standing pieces: one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in.\n\nA part that is meant to be several solids — a base and its lid, a clamp in two halves — returns an object of named shapes, `return { base, lid }`, and the reply then carries `named_bodies`: each body measured alone (size, bounds, volume, faces, `watertight`, `pieces` — 1 when that body is intact, more when its own booleans left it split, the defect the part-level `bodies` cannot tell from a second body that was meant) and `between_bodies`: every pair measured on the exact solids, `clear` with a `clearance_mm` and the two `closest_mm` points, `touching`, or `interfering` with the mm³ they share. Read `between_bodies` for whether a lid clears its base or a clip is drawn through what it clips onto; for such a part `bodies` should equal the number of named bodies. Bodies are never fused, and selectors, tags and treatments work inside one body only. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Each view in the reply also carries `path`, the same image as a PNG file on this machine, and `markdown`, that file as an image line for your reply: the user does not see the pictures a tool returns in every client, so paste `markdown` whenever they should see the part. A build is kept per script: asking again with other views, exporting, or putting the script on screen reuses it (`reused_build`), so render after measuring rather than instead of it. `timeout_s` gives a heavy part longer than the default 20 s. Use this to check that a script produces the part you intended.\n\nA part may be a *surface* — faces with no inside, from surfaceLoft, surfaceExtrude, surfaceRevolve, surfaceSweep, trim or patch. Its reply says `kind: \"surface\"` and carries `surface` instead of a volume: `area_mm2`, `open`, `free_edges` and `free_edge_length_mm` (the edges bordered by one face, where the surface ends; select them with { role: \"boundary\" }) and `boundary_loops`; there is no `volume_mm3`, `watertight`, `stands_on` or `prints_on`, because a surface has none. `.thicken(t)` makes it a solid and the reply's `thickened_mm` is the wall measured square to the surface at a grid on every face; `stitchSurfaces(...)` makes one a solid only when its free edges all meet. A part in named bodies may mix the two, `kind: \"mixed\"`.\n\nCurved outlines are drawn, not approximated: a section for extrude, revolve, loft or sweep is a list of corners [x, y], anticlockwise, closing itself; between two corners { through: [x, y] } is a circular arc through that point, { radius: r } the shorter arc of that radius (positive bulges out of the section), { spline: [[x, y], ...] } a smooth curve through the points, { bezier: [[x, y], ...] } one by control points, and { fit: [[x, y], ...], tolerance: 0.05 } a curve fitted through sampled points — a simulation's, a scan's — measured to lie within the tolerance of every one and reported back as `deviation_mm`; { at: [x, y], round: r } is a corner rounded by a tangent arc. A curve given by a formula — an involute, a cam law, a spiral — is { curve: (t) => [x, y], from, to, tolerance }, which brings its own two ends: the script draws it within the tolerance of the function everywhere and the reply's `curve_bound_mm` is that bound, `curve_bound` `certified` when the entry also gives its exact `derivative` and a `fourth`-derivative bound, `estimated` otherwise. spurGearOutline({ module, teeth, profileShift }) is a whole involute spur gear drawn that way, and spurGearPair({ module, teeth: [z1, z2], profileShift, backlash }) gives two that mesh with their centre distance. inset(outline, d) is that outline stepped inward by d, the way a wall is drawn. A pipe or sweep path may be { spline: [[x, y, z], ...] }, and a loft's first or last section { z, point: [x, y] }. Never fake a curve with many short straight edges. SectionEntry in read_docs `dsl` has the rules.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. Each box is the exact extent of the faces the kernel's own history says the tag still owns, and `faces` is how many. A tag in `unlocated_tags` owns no face of the finished part at all: everything it made was cut away or buried by a later boolean.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
+        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality, `bodies` (free-standing pieces: one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in.\n\nA part that is meant to be several solids — a base and its lid, a clamp in two halves — returns an object of named shapes, `return { base, lid }`, and the reply then carries `named_bodies`: each body measured alone (size, bounds, volume, faces, `watertight`, `pieces` — 1 when that body is intact, more when its own booleans left it split, the defect the part-level `bodies` cannot tell from a second body that was meant) and `between_bodies`: every pair measured on the exact solids, `clear` with a `clearance_mm` and the two `closest_mm` points, `touching`, or `interfering` with the mm³ they share. Read `between_bodies` for whether a lid clears its base or a clip is drawn through what it clips onto; for such a part `bodies` should equal the number of named bodies. Bodies are never fused, and selectors, tags and treatments work inside one body only. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Each view in the reply also carries `path`, the same image as a PNG file on this machine, and `markdown`, that file as an image line for your reply: the user does not see the pictures a tool returns in every client, so paste `markdown` whenever they should see the part, or save_project and open_project it to put it on the parcad screen they have open. A build is kept per script: asking again with other views, exporting, or putting the script on screen reuses it (`reused_build`), so render after measuring rather than instead of it. `timeout_s` gives a heavy part longer than the default 20 s. Use this to check that a script produces the part you intended.\n\nA part may be a *surface* — faces with no inside, from surfaceLoft, surfaceExtrude, surfaceRevolve, surfaceSweep, trim or patch. Its reply says `kind: \"surface\"` and carries `surface` instead of a volume: `area_mm2`, `open`, `free_edges` and `free_edge_length_mm` (the edges bordered by one face, where the surface ends; select them with { role: \"boundary\" }) and `boundary_loops`; there is no `volume_mm3`, `watertight`, `stands_on` or `prints_on`, because a surface has none. `.thicken(t)` makes it a solid and the reply's `thickened_mm` is the wall measured square to the surface at a grid on every face; `stitchSurfaces(...)` makes one a solid only when its free edges all meet. A part in named bodies may mix the two, `kind: \"mixed\"`.\n\nCurved outlines are drawn, not approximated: a section for extrude, revolve, loft or sweep is a list of corners [x, y], anticlockwise, closing itself; between two corners { through: [x, y] } is a circular arc through that point, { radius: r } the shorter arc of that radius (positive bulges out of the section), { spline: [[x, y], ...] } a smooth curve through the points, { bezier: [[x, y], ...] } one by control points, and { fit: [[x, y], ...], tolerance: 0.05 } a curve fitted through sampled points — a simulation's, a scan's — measured to lie within the tolerance of every one and reported back as `deviation_mm`; { at: [x, y], round: r } is a corner rounded by a tangent arc. A curve given by a formula — an involute, a cam law, a spiral — is { curve: (t) => [x, y], from, to, tolerance }, which brings its own two ends: the script draws it within the tolerance of the function everywhere and the reply's `curve_bound_mm` is that bound, `curve_bound` `certified` when the entry also gives its exact `derivative` and a `fourth`-derivative bound, `estimated` otherwise. spurGearOutline({ module, teeth, profileShift }) is a whole involute spur gear drawn that way, and spurGearPair({ module, teeth: [z1, z2], profileShift, backlash }) gives two that mesh with their centre distance. inset(outline, d) is that outline stepped inward by d, the way a wall is drawn. A pipe or sweep path may be { spline: [[x, y, z], ...] }, and a loft's first or last section { z, point: [x, y] }. Never fake a curve with many short straight edges. SectionEntry in read_docs `dsl` has the rules.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. Each box is the exact extent of the faces the kernel's own history says the tag still owns, and `faces` is how many. A tag in `unlocated_tags` owns no face of the finished part at all: everything it made was cut away or buried by a later boolean.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
     )]
     async fn evaluate_part(
         &self,
@@ -1001,7 +1001,7 @@ impl Parcad {
     #[tool(
         name = "save_project",
         annotations(title = "Save project", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Write a part to parcad's project folder so the user can open it in the app. Evaluate it first: saving a script that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not — the file is saved regardless), the `preview` thumbnail written for the app's picker, and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back."
+        description = "Write a part to parcad's project folder so the user can open it; open_project it afterwards to put it on their screen. Evaluate it first: saving a script that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not — the file is saved regardless), the `preview` thumbnail written for the app's picker, and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back."
     )]
     async fn save_project(
         &self,
@@ -1048,8 +1048,8 @@ impl Parcad {
     /// Put a project on the user's screen.
     #[tool(
         name = "open_project",
-        annotations(title = "Open a project on screen", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Open a project in the parcad window: the app loads it from disk and every open window switches to it, exactly as if the user had picked it. Takes a path from list_projects. Returns the session with the loaded script. Use this before set_script when the part you want to change is not the one on screen — get_session tells you which that is. Like set_script, the reply waits for a window to report evaluating it and carries `viewers`."
+        annotations(title = "Show a part on the user's screen", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        description = "Show the user a part: open a project on the screen they are watching — the parcad app, or the ParCAD web page in their browser — loaded from disk, exactly as if they had picked it, in every open window. To show a part you have built, save it with save_project under a name of its own and open that; the part that was open is left as it was. Takes a path from list_projects. Returns the session with the loaded script. Use this before set_script when the part you want to change is not the one on screen — get_session tells you which that is. Like set_script, the reply waits for a window to report evaluating it and carries `viewers`: tell the user the part is on screen only when one reports it built."
     )]
     async fn open_project(
         &self,
@@ -1065,7 +1065,7 @@ impl Parcad {
     #[tool(
         name = "set_script",
         annotations(title = "Replace the script on screen", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Replace the script in the open editor. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing — there is no lock, and you must not wait for one. It edits the screen only: nothing is written to disk until the user saves or you call save_project. Evaluate the script first with evaluate_part; putting a script that does not build in front of the user replaces their working part with an error. Read get_session first and base your edit on the script it returns, or you will silently revert what the user typed since you last looked.\n\nThe reply waits (up to `wait_s`, default 20 s) until a window reports evaluating this revision, and its `viewers` says what each window showed: built with which `volume_mm3`, or the `error` it hit. Do not tell the user the part is on screen unless a viewer reports this `revision` with built: true. Setting the same script again makes every window evaluate it again — the way to recover a window that is showing something stale."
+        description = "Change the part the user is looking at: replace the script of the project open on their screen. It is for editing that part; to show them a different one, save it with save_project and open it with open_project, or its text lands in the open project and a save writes it there. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing — there is no lock, and you must not wait for one. It edits the screen only: nothing is written to disk until the user saves or you call save_project. Evaluate the script first with evaluate_part; putting a script that does not build in front of the user replaces their working part with an error. Read get_session first and base your edit on the script it returns, or you will silently revert what the user typed since you last looked.\n\nThe reply waits (up to `wait_s`, default 20 s) until a window reports evaluating this revision, and its `viewers` says what each window showed: built with which `volume_mm3`, or the `error` it hit. Do not tell the user the part is on screen unless a viewer reports this `revision` with built: true. Setting the same script again makes every window evaluate it again — the way to recover a window that is showing something stale."
     )]
     async fn set_script(
         &self,
@@ -1129,31 +1129,48 @@ impl Parcad {
 /// The tool list changes only with the binary.
 const TOOL_LIST_TTL_MS: u64 = 86_400_000;
 
-const INSTRUCTIONS: &str = "parcad builds parts from a small JavaScript DSL and evaluates them with an exact \
+const LANGUAGE: &str = "parcad builds parts from a small JavaScript DSL and evaluates them with an exact \
 B-rep kernel. Everything is millimetres; primitives are centred on the origin and placed \
 with .at(x, y, z); a script ends by returning a shape, or { base, lid } for a part that \
 stays in several bodies, measured per body and between them.\n\n\
 Start from read_docs: its `dsl` topic is the whole language, generated from the source; \
 `gaps` and `gotchas` are what the kernel refuses and what silently returns a wrong answer. \
-list_projects and read_project show house style; save_project writes to the folder the \
-user opens in the app. Projects nest in folders: a name is a path like 'Mounts/bracket', \
-passed whole.\n\n\
-You share a live screen with the user: get_session reads what is open, open_project and \
-set_script change it in every window. An edit you make is an ordinary edit the user can \
-undo, so read before you write and evaluate before you set_script.\n\n\
-Select edges by intent, never by index: '>Z and >Y and |X', or a query: { curve: \"circle\", \
+list_projects and read_project show house style. Projects nest in folders: a name is a path \
+like 'Mounts/bracket', passed whole.";
+
+const SCREEN: &str = "You share the parcad app's screen with the user: get_session reads it, and \
+open_project and set_script change it in every window. To show a part you built, save_project \
+it under its own name and open_project it; set_script edits the part already open. Edits \
+are undoable; read before you write, evaluate before set_script.";
+
+const SELECTING: &str = "Select edges by intent, never by index: '>Z and >Y and |X', or a query: { curve: \"circle\", \
 role: \"hole\", adjacentTo: { faceNormal: \"+z\" } }; dihedral: \"convex\", \"concave\" or \
 \"smooth\"; parallel: \"z\"; longerThan: 3; on: \"lip\" for one tagged feature's edges, its at \
 extrema measured within that feature; between: [\"arm\", \"hub\"] for the seam where two \
 meet. A tag names a node's faces and survives booleans, fillets and rotations. Fillets skip \
 smooth edges unless asked. Add .expect({ count: n }) so a selector that drifts fails aloud. \
-The edge@N ids from list_entities describe one evaluation and are rejected in scripts.\n\n\
+edge@N ids from list_entities are for one evaluation and rejected in scripts.\n\n\
 The kernel refuses rather than approximating; a refusal names the fix and lists the edges \
 it means, so read it and change the script. Every report is measured, never requested: \
-quote its numbers rather than the script's. The user may not see a tool's pictures: to \
-show them a view, put its `markdown` line in your reply.\n\n\
-Which tag owns what a view shows: evaluate_part with regions: true. What is inside: \
-evaluate_part with a section. Where a tag is: tag_extents, in every evaluate_part reply.";
+quote its numbers rather than the script's.";
+
+/// Only where a view is a file the user can open.
+const PICTURES: &str = " The user may not see a tool's pictures: to show one, paste its \
+`markdown` line.";
+
+const WHERE: &str = "Which tag owns what a view shows: evaluate_part with regions: true. What is \
+inside: evaluate_part with a section. Where a tag is: tag_extents, in every evaluate_part reply.";
+
+/// What a model is told before its first call, for the host it is talking to.
+/// Claude Code keeps the first 2048 characters, so what differs by host comes
+/// early and both versions fit.
+fn instructions(in_tab: bool) -> String {
+    if in_tab {
+        format!("{LANGUAGE}\n\n{}\n\n{SELECTING}\n\n{WHERE}", crate::page::INSTRUCTIONS)
+    } else {
+        format!("{LANGUAGE}\n\n{SCREEN}\n\n{SELECTING}{PICTURES}\n\n{WHERE}")
+    }
+}
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Parcad {
@@ -1236,11 +1253,7 @@ impl ServerHandler for Parcad {
         // work out from the schemas: the unit rule, where the origin is,
         // and that a refusal is information rather than a wall to route
         // around.
-        info.instructions = Some(if crate::page::active() {
-            format!("{INSTRUCTIONS}\n\n{}", crate::page::INSTRUCTIONS)
-        } else {
-            INSTRUCTIONS.to_owned()
-        });
+        info.instructions = Some(instructions(crate::page::active()));
         info
     }
 }
@@ -1722,8 +1735,14 @@ mod tests {
     fn the_instructions_fit_the_client_window() {
         // Claude Code truncates server instructions at 2048 characters and
         // says so only in its debug log.
-        assert!(INSTRUCTIONS.len() <= 2048, "{} chars", INSTRUCTIONS.len());
-        assert!(INSTRUCTIONS.contains("between: [\"arm\", \"hub\"]"));
+        for in_tab in [false, true] {
+            let text = instructions(in_tab);
+            assert!(text.chars().count() <= 2048, "{} chars in_tab={in_tab}", text.chars().count());
+            assert!(text.contains("between: [\"arm\", \"hub\"]"));
+            assert!(text.contains("open_project"), "both say how to show the user a part");
+        }
+        assert!(instructions(true).contains("ParCAD web"));
+        assert!(!instructions(true).contains("`markdown`"), "a tab has no file to point at");
     }
 
     #[test]
