@@ -138,6 +138,18 @@
     @apply rounded-xs;
   }
 
+  /* The number the pointer engaged, and the chevrons beside it. The accent
+     rather than gold: gold means "this is the source the viewport is pointing
+     at", and a number you are about to dial is not that. The outline is drawn
+     with a ring rather than a background so the digits keep the colour the
+     syntax highlighter gave them — which is how you can still see that it is a
+     number and not, say, a string. */
+  .cm-number-dial {
+    @apply rounded-xs;
+    background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 45%, transparent);
+  }
+
   /* What the operation palette just wrote. The accent rather than gold: gold
      means "this is the source the viewport is pointing at" everywhere else in
      this app, and a write is not a selection.

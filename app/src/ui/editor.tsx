@@ -23,6 +23,7 @@ import { useEffect, useRef } from "preact/hooks";
 
 import { insertFlashField, treatmentHoverField } from "../editor-marks";
 import * as engine from "../engine";
+import { numberDial } from "../number-dial";
 import { selectorLinter } from "../selector-lint";
 import * as S from "../state";
 import { treatmentAtCursor } from "../source-link";
@@ -74,6 +75,10 @@ export function Editor() {
         // selector resolves, and to how many edges — waits for the evaluation,
         // because only the kernel knows.
         selectorLinter,
+        // Click a number to dial it with the arrow keys. Above the default
+        // keymap, and engaged by the pointer only, so keyboard navigation
+        // keeps Up and Down.
+        numberDial,
         treatmentHover(hoverSource),
         EditorView.updateListener.of((v) => {
           if (v.docChanged) {
