@@ -51,6 +51,9 @@ interface ViewedHeader {
 }
 
 const status = document.getElementById("status")!;
+const loading = document.getElementById("loading")!;
+const loadingText = document.getElementById("loading-text")!;
+const spinner = document.getElementById("spinner")!;
 const viewport = new Viewport(document.getElementById("viewport")!);
 const draco = DracoDecoderModule({});
 let shown: string | undefined;
@@ -120,22 +123,42 @@ function say(message: string, bad = false) {
   status.dataset.bad = String(bad);
 }
 
+/** The overlay over the view: a stage while working, the reason when it failed. */
+function progress(message: string) {
+  loading.hidden = false;
+  spinner.hidden = false;
+  loadingText.textContent = message;
+  loadingText.dataset.bad = "false";
+  say("");
+}
+
+function fail(message: string) {
+  loading.hidden = false;
+  spinner.hidden = true;
+  loadingText.textContent = message;
+  loadingText.dataset.bad = "true";
+  say(message, true);
+}
+
 async function show(script: string) {
   if (script === shown) return;
   shown = script;
-  say("Building…");
+  progress("Building the part…");
   const result = await app.callServerTool({ name: "view_part", arguments: { script } });
   if (script !== shown) return;
   if (result.isError) {
     const text = result.content.find((block) => block.type === "text");
-    say(text && "text" in text ? text.text : "The part did not build.", true);
+    fail(text && "text" in text ? text.text : "The part did not build.");
     return;
   }
   const reply = result.structuredContent as { format?: string; header?: string; draco?: string } | undefined;
   if (reply?.format !== "parcad-mesh/2" || !reply.header || !reply.draco) {
-    say(`The server sent a part this viewer cannot read (${reply?.format ?? "no format"}); update ParCAD.`, true);
+    fail(`The server sent a part this viewer cannot read (${reply?.format ?? "no format"}); update ParCAD.`);
     return;
   }
+  progress("Unpacking the mesh…");
+  // Decoding does not yield, so give the message a frame to paint first.
+  await new Promise((resolve) => requestAnimationFrame(resolve));
   const header = JSON.parse(new TextDecoder().decode(decompress(bytesOf(reply.header)))) as ViewedHeader;
   const mesh = await decodeMesh(bytesOf(reply.draco));
   if (script !== shown) return;
@@ -153,6 +176,7 @@ async function show(script: string) {
   viewport.frameAll(bounds);
   const size = snapshot.bounds_max.map((hi, i) => (hi - snapshot.bounds_min[i]).toFixed(1)).join(" × ");
   const volume = snapshot.volume_mm3 == null ? "" : ` · ${snapshot.volume_mm3.toFixed(1)} mm³`;
+  loading.hidden = true;
   say(`${size} mm${volume} · drag to turn, scroll to zoom`);
 }
 
@@ -160,7 +184,8 @@ const app = new App({ name: "ParCAD viewer", version: __PARCAD_VERSION__ });
 app.ontoolinput = ({ arguments: args }) => {
   const script = args?.script;
   if (typeof script === "string") {
-    show(script).catch((e: unknown) => say(e instanceof Error ? e.message : String(e), true));
+    show(script).catch((e: unknown) => fail(e instanceof Error ? e.message : String(e)));
   }
 };
-app.connect().catch((e: unknown) => say(`Could not reach the chat client: ${e}`, true));
+progress("Waiting for the part…");
+app.connect().catch((e: unknown) => fail(`Could not reach the chat client: ${e}`));

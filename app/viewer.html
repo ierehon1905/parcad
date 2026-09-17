@@ -8,9 +8,16 @@
   <!-- The part inside a chat client, built into one file by vite.viewer.config.ts
        and served by the MCP server as the resource ui://parcad/viewer. -->
   <body class="m-0 bg-bg text-ink font-sans">
-    <div id="viewport" class="h-[420px] w-full"></div>
+    <div class="relative h-[420px] w-full">
+      <div id="viewport" class="h-full w-full"></div>
+      <!-- Plain markup, so it shows before the packed scripts have unpacked. -->
+      <div id="loading" class="absolute inset-0 flex flex-col items-center justify-center gap-3 bg-bg px-6 text-center text-sm text-ink-dim">
+        <div id="spinner" class="size-8 animate-spin rounded-full border-2 border-line border-t-accent"></div>
+        <div id="loading-text" class="data-[bad=true]:text-bad">Loading the viewer…</div>
+      </div>
+    </div>
     <!-- A fixed height: a client may size the frame before the first status arrives. -->
-    <div id="status" class="h-8 truncate px-3 text-xs leading-8 text-ink-dim data-[bad=true]:h-auto data-[bad=true]:whitespace-normal data-[bad=true]:py-2 data-[bad=true]:leading-5 data-[bad=true]:text-bad">Loading…</div>
+    <div id="status" class="h-8 truncate px-3 text-xs leading-8 text-ink-dim data-[bad=true]:h-auto data-[bad=true]:whitespace-normal data-[bad=true]:py-2 data-[bad=true]:leading-5 data-[bad=true]:text-bad"></div>
     <script type="module" src="/src/viewer/main.ts"></script>
   </body>
 </html>
