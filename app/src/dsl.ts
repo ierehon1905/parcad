@@ -199,12 +199,38 @@ function treatmentSource(method: SourceLocation["method"]): SourceLocation | und
   return { line: Number(line[1]) - 2, column: Number(line[2]), method };
 }
 
-function assertEdgeSelector(selector: EdgeSelector) {
+function isQuery(value: unknown): value is object {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && !(value instanceof Shape);
+}
+
+function describeValue(value: unknown): string {
+  if (value instanceof Shape) return "a shape";
+  if (Array.isArray(value)) return "an array";
+  return typeof value === "function" ? "a function" : String(value);
+}
+
+function refuseSelector(value: unknown, call: string, entity: "edge" | "corner", examples: string): never {
+  const why =
+    value === undefined
+      ? `needs a selector; leaving it out does not select every ${entity}`
+      : `takes a selector, not ${describeValue(value)}`;
+  throw new Error(`${call} ${why}. Write ${examples}.`);
+}
+
+function assertEdgeSelector(selector: EdgeSelector, call: string, write: (selector: string) => string) {
   if (typeof selector === "string") {
     // The full grammar, not just a non-empty check: this used to accept any
     // non-blank string and let `>Q` survive until the kernel parsed it.
     parseEdgeSelector(selector);
     return;
+  }
+  if (!isQuery(selector)) {
+    refuseSelector(
+      selector,
+      call,
+      "edge",
+      `${write('">Z"')} for the edges furthest in +Z, or ${write('{ dihedral: "convex" }')} for every outside edge`,
+    );
   }
   if (
     !selector.generatedBy &&
@@ -249,12 +275,26 @@ function assertEdgeSelector(selector: EdgeSelector) {
   }
 }
 
+/** `shape.fillet(2)` with no selector: the fix is a second argument, in the call as written. */
+function assertTreatmentSelector(selector: EdgeSelector, method: "fillet" | "chamfer", size: unknown) {
+  const args = typeof size === "number" ? String(size) : method === "fillet" ? "radius" : "distance";
+  assertEdgeSelector(selector, `${method}(${args})`, (s) => `.${method}(${args}, ${s})`);
+}
+
 function assertVertexSelector(selector: VertexSelector) {
   if (typeof selector === "string") {
     // Previously a regex that collapsed every syntax mistake into the one
     // message about `|X`. The shared parser names the actual fault instead.
     parseVertexSelector(selector);
     return;
+  }
+  if (!isQuery(selector)) {
+    refuseSelector(
+      selector,
+      "vertices()",
+      "corner",
+      '.vertices(">X and >Y and >Z") for the corner furthest in +X, +Y and +Z, or .edges({ dihedral: "convex" }) for every outside edge',
+    );
   }
   if (!selector.at || !Object.values(selector.at).some(Boolean)) {
     throw new Error("vertex query is empty; specify at");
@@ -745,21 +785,46 @@ export class Shape {
   }
 
   /**
-   * Select B-rep edges with an authored selector for a later operation.
+   * The edges a selector matches, for a fillet, chamfer or patch to act on.
    *
-   * The selector is intentionally source-facing. The viewport's `edge@…` IDs
-   * are useful for inspection during one evaluation, but are never a durable
-   * script reference.
+   * - The selector is required: `.edges()` alone is refused, not read as
+   *   every edge. `{ dihedral: "convex" }` is every outside edge.
+   * - A string measures against the whole part: `>Z` is the edges furthest
+   *   in +Z, `|Z` the straight edges parallel to Z, joined by `and`.
+   * - An `EdgeQuery` object narrows by feature (`on`, `between`), corner
+   *   angle, curve kind or length.
+   * - `.expect({ count })` turns a change in how many edges match into a
+   *   build error.
+   *
+   * @example
+   *     // a 20 mm cube with all 12 edges rounded 2 mm: 16³ + 6·16²·2 + 3π·2²·16 + (4/3)π·2³ = 7,805 mm³
+   *     return box(20, 20, 20).edges({ dihedral: "convex" }).expect({ count: 12 }).fillet(2);
+   *
+   * @remarks
+   * The selector is intentionally source-facing and is resolved anew on every
+   * build. The viewport's `edge@…` IDs are useful for inspection during one
+   * evaluation, but are never a durable script reference.
    */
   edges(selector: EdgeSelector): EdgeSelection {
-    assertEdgeSelector(selector);
+    assertEdgeSelector(selector, "edges()", (s) => `.edges(${s})`);
     return new EdgeSelection(this, selector);
   }
 
   /**
-   * Select B-rep vertices for a corner treatment.
+   * The corners a selector matches, for a treatment of every edge meeting
+   * there.
    *
-   * `>X and >Y and >Z` means the outer corner at all three positive extrema.
+   * - The selector is required: `.vertices()` alone is refused, not read as
+   *   every corner. To round every outside edge, use
+   *   `.edges({ dihedral: "convex" })`.
+   * - `>X and >Y and >Z` is the corner furthest in +X, +Y and +Z. Vertex
+   *   strings take only `>` and `<` terms.
+   *
+   * @example
+   *     // one corner of a 20 mm cube rounded 2 mm: 8000 − 3·18·(4 − π) − (8 − (4/3)π) = 7,950 mm³
+   *     return box(20, 20, 20).vertices(">X and >Y and >Z").fillet(2);
+   *
+   * @remarks
    * The exact backend expands each selected vertex to its incident edge set;
    * it never stores a transient viewport vertex ID in the graph.
    */
@@ -776,7 +841,7 @@ export class Shape {
     options?: FilletOptions,
     source = treatmentSource("fillet"),
   ): Shape {
-    assertEdgeSelector(selector);
+    assertTreatmentSelector(selector, "fillet", radius);
     if (expectation) assertEdgeExpectation(expectation);
     assertFilletOptions(options);
     return new Shape(
@@ -795,7 +860,7 @@ export class Shape {
     options?: ChamferOptions,
     source = treatmentSource("chamfer"),
   ): Shape {
-    assertEdgeSelector(selector);
+    assertTreatmentSelector(selector, "chamfer", distance);
     if (expectation) assertEdgeExpectation(expectation);
     assertChamferOptions(options);
     return new Shape(

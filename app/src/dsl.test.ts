@@ -731,3 +731,72 @@ describe("spurGearPair", () => {
     expect(() => spurGearPair({ module: 2, teeth: 12 as unknown as [number, number] })).toThrow(/teeth is \[first, second\]/);
   });
 });
+
+describe("selector arguments", () => {
+  const part = box(10, 10, 10);
+  // Scripts are plain JavaScript: a missing or wrong argument gets past no type checker.
+  const loose = part as unknown as Record<string, (...args: unknown[]) => unknown>;
+
+  function refusal(run: () => unknown): Error {
+    try {
+      run();
+    } catch (e) {
+      expect(e).not.toBeInstanceOf(TypeError);
+      return e as Error;
+    }
+    throw new Error("expected a refusal");
+  }
+
+  /** Each call a refusal tells the script to write, run on the part it refused. */
+  function namedFixesBuild(message: string) {
+    const fixes = [...message.matchAll(/\.(?:edges|vertices|fillet|chamfer)\([^()]*\)/g)].map((m) => m[0]);
+    expect(fixes).toHaveLength(2);
+    for (const fix of fixes) {
+      const made = new Function("part", `return part${fix};`)(part) as Shape | { fillet(radius: number): Shape };
+      build(made instanceof Shape ? made : made.fillet(1));
+    }
+  }
+
+  test("edges() with no selector is refused, not read as every edge, and names selectors that work", () => {
+    const { message } = refusal(() => loose.edges());
+    expect(message).toBe(
+      'edges() needs a selector; leaving it out does not select every edge. Write .edges(">Z") for the edges furthest in +Z, or .edges({ dihedral: "convex" }) for every outside edge.',
+    );
+    namedFixesBuild(message);
+  });
+
+  test("a treatment with no selector names the second argument, at the size the script gave", () => {
+    const fillet = refusal(() => loose.fillet(2)).message;
+    expect(fillet).toBe(
+      'fillet(2) needs a selector; leaving it out does not select every edge. Write .fillet(2, ">Z") for the edges furthest in +Z, or .fillet(2, { dihedral: "convex" }) for every outside edge.',
+    );
+    namedFixesBuild(fillet);
+    const chamfer = refusal(() => loose.chamfer(1)).message;
+    expect(chamfer).toContain('Write .chamfer(1, ">Z")');
+    namedFixesBuild(chamfer);
+    expect(refusal(() => loose.fillet()).message).toContain('.fillet(radius, { dihedral: "convex" })');
+  });
+
+  test("vertices() with no selector is refused and points at the corner and edge forms", () => {
+    const { message } = refusal(() => loose.vertices());
+    expect(message).toBe(
+      'vertices() needs a selector; leaving it out does not select every corner. Write .vertices(">X and >Y and >Z") for the corner furthest in +X, +Y and +Z, or .edges({ dihedral: "convex" }) for every outside edge.',
+    );
+    namedFixesBuild(message);
+  });
+
+  test("a value that is not a selector is named, not read as an empty query", () => {
+    const values: [unknown, string][] = [
+      [null, "null"],
+      [5, "5"],
+      [[">Z"], "an array"],
+      [box(1, 1, 1), "a shape"],
+      [() => ">Z", "a function"],
+    ];
+    for (const [value, named] of values) {
+      expect(refusal(() => loose.edges(value)).message).toStartWith(`edges() takes a selector, not ${named}. Write .edges(">Z")`);
+      expect(refusal(() => loose.vertices(value)).message).toStartWith(`vertices() takes a selector, not ${named}. Write .vertices(`);
+    }
+    expect(refusal(() => loose.chamfer(1, null)).message).toStartWith("chamfer(1) takes a selector, not null.");
+  });
+});
