@@ -11,6 +11,7 @@ import corpus from "../../eval/selectors.json";
 import {
   parseEdgeSelector,
   parseVertexSelector,
+  queryShapeError,
   SelectorSyntaxError,
   termSource,
   type SpannedTerm,
@@ -55,6 +56,22 @@ test("agrees with the shared selector corpus", () => {
         expect([at, failure!.message]).toEqual([at, expected.error!.message]);
         expect([at, [failure!.from, failure!.to]]).toEqual([at, expected.error!.span]);
       }
+    }
+  }
+});
+
+test("agrees with the shared query corpus", () => {
+  // `agrees_with_the_shared_query_corpus` in selectors.rs reads the same cases.
+  expect(corpus.queries.length).toBeGreaterThanOrEqual(10);
+  for (const testCase of corpus.queries as Array<{
+    why: string;
+    query: Record<string, unknown>;
+    edge: { error: string | null };
+    vertex: { error: string | null };
+  }>) {
+    for (const kind of ["edge", "vertex"] as const) {
+      const at = `${kind} ${JSON.stringify(testCase.query)} (${testCase.why})`;
+      expect([at, queryShapeError(testCase.query, kind) ?? null]).toEqual([at, testCase[kind].error]);
     }
   }
 });

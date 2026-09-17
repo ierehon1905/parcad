@@ -139,3 +139,161 @@ function parseTerm(term: string, from: number, to: number): SpannedTerm {
 
   return { kind, axis, from, to };
 }
+
+/**
+ * Every key an edge query reads, in the order a refusal lists them. A new one
+ * also needs a `GRAPH_FEATURES` entry in dsl.ts: hosts through 0.0.7 drop unknown keys.
+ */
+export const EDGE_QUERY_KEYS: readonly string[] = [
+  "generatedBy",
+  "curve",
+  "role",
+  "adjacentTo",
+  "at",
+  "dihedral",
+  "parallel",
+  "longerThan",
+  "on",
+  "between",
+];
+
+const FACE_NORMALS = ["+x", "-x", "+y", "-y", "+z", "-z"];
+
+type Hint = (key: string, value: unknown) => string | undefined;
+
+/**
+ * Why a query object cannot be read, naming what to write instead, or
+ * `undefined` when it can: a key the query does not have, or an `at` or
+ * `adjacentTo` it cannot use.
+ *
+ * `check_query_shape` in `selectors.rs` is the same check in the same words;
+ * the `queries` in `eval/selectors.json` hold the two together.
+ */
+export function queryShapeError(query: Record<string, unknown>, kind: "edge" | "vertex"): string | undefined {
+  const [noun, known, listing] =
+    kind === "edge"
+      ? ["an edge query", EDGE_QUERY_KEYS, `Its keys are ${list(EDGE_QUERY_KEYS)}.`]
+      : ["a vertex query", ["at"], 'Its only key is at, e.g. { at: { z: "max" } }.'];
+  const named = unknownKeys(query, known, (key, value) => queryKeyHint(key, value, known));
+  if (named) return `${noun} ${named}. ${listing}`;
+  return atError(query.at) ?? adjacentToError(query.adjacentTo);
+}
+
+function unknownKeys(object: Record<string, unknown>, known: readonly string[], hint: Hint): string | undefined {
+  const unknown = Object.keys(object)
+    .filter((key) => !known.includes(key))
+    .sort();
+  if (unknown.length === 0) return undefined;
+  const named = unknown.map((key) => {
+    const fix = hint(key, object[key]);
+    return fix === undefined ? `"${key}"` : `"${key}" (write ${fix} instead)`;
+  });
+  return `has no ${unknown.length === 1 ? "key" : "keys"} ${list(named)}`;
+}
+
+const SYNONYMS: Record<string, string> = {
+  tag: "on",
+  tags: "on",
+  feature: "on",
+  features: "on",
+  length: "longerThan",
+  minlength: "longerThan",
+  type: "curve",
+  kind: "curve",
+  along: "parallel",
+  angle: "dihedral",
+  convexity: "dihedral",
+};
+
+function queryKeyHint(key: string, value: unknown, known: readonly string[]): string | undefined {
+  const normal = normalize(key);
+  const field = known.find((candidate) => normalize(candidate) === normal);
+  if (field !== undefined) return spelled(field, value);
+  const text = typeof value === "string" ? value : undefined;
+  if (["facenormal", "normal", "facing"].includes(normal) && known.includes("adjacentTo")) {
+    return `adjacentTo: { faceNormal: ${render(text ?? "+z")} }`;
+  }
+  if (["x", "y", "z"].includes(normal)) return `at: { ${normal}: ${render(text ?? "max")} }`;
+  if (normal === "top") return 'at: { z: "max" }';
+  if (normal === "bottom") return 'at: { z: "min" }';
+  if (normal === "count") {
+    const count = typeof value === "number" && Number.isInteger(value) && value > 0 ? value : undefined;
+    return count === undefined ? ".expect({ count }) on the selection" : `.expect({ count: ${count} }) on the selection`;
+  }
+  if (normal === "expect") return ".expect({ count }) on the selection";
+  const synonym = SYNONYMS[normal];
+  return synonym !== undefined && known.includes(synonym) ? spelled(synonym, value) : undefined;
+}
+
+function atError(at: unknown): string | undefined {
+  if (at === undefined || at === null) return undefined;
+  if (!isObject(at)) return `at is an object of axes, e.g. at: { z: "max" }, not ${render(at)}.`;
+  const named = unknownKeys(at, ["x", "y", "z"], (key, value) => {
+    const normal = normalize(key);
+    if (["x", "y", "z"].includes(normal)) return spelled(normal, value);
+    if (normal === "top") return 'z: "max"';
+    if (normal === "bottom") return 'z: "min"';
+    return undefined;
+  });
+  if (named) return `at ${named}. Its keys are x, y and z, e.g. at: { z: "max" }.`;
+  for (const axis of ["x", "y", "z"]) {
+    const extreme = at[axis];
+    if (extreme === undefined || extreme === null || extreme === "min" || extreme === "max") continue;
+    const lower = typeof extreme === "string" ? extreme.toLowerCase() : undefined;
+    const fix = lower === "min" || lower === "max" ? ` (write "${lower}" instead)` : "";
+    return `at.${axis} must be "min" or "max", not ${render(extreme)}${fix}.`;
+  }
+  return undefined;
+}
+
+function adjacentToError(adjacent: unknown): string | undefined {
+  if (adjacent === undefined || adjacent === null) return undefined;
+  if (!isObject(adjacent)) {
+    const normal = (typeof adjacent === "string" ? faceNormal(adjacent) : undefined) ?? "+z";
+    return `adjacentTo is an object, e.g. adjacentTo: { faceNormal: "${normal}" }, not ${render(adjacent)}.`;
+  }
+  const named = unknownKeys(adjacent, ["faceNormal"], (key, value) =>
+    ["facenormal", "normal", "facing"].includes(normalize(key)) ? spelled("faceNormal", value) : undefined,
+  );
+  if (named) {
+    return `adjacentTo ${named}. Its only key is faceNormal, e.g. adjacentTo: { faceNormal: "+z" }.`;
+  }
+  const normal = adjacent.faceNormal;
+  if (normal === undefined || normal === null) {
+    return 'adjacentTo needs faceNormal, e.g. adjacentTo: { faceNormal: "+z" }.';
+  }
+  if (typeof normal === "string" && FACE_NORMALS.includes(normal)) return undefined;
+  const meant = typeof normal === "string" ? faceNormal(normal) : undefined;
+  const fix = meant === undefined ? "" : ` (write "${meant}" instead)`;
+  return `adjacentTo.faceNormal must be "+x", "-x", "+y", "-y", "+z" or "-z", not ${render(normal)}${fix}.`;
+}
+
+/** The face normal a loosely written one means: `"+Z"` and `"z"` are `"+z"`. */
+function faceNormal(written: string): string | undefined {
+  const lower = written.toLowerCase();
+  const signed = lower.length === 1 ? `+${lower}` : lower;
+  return FACE_NORMALS.find((normal) => normal === signed);
+}
+
+/** The key a hint names, with the value the author wrote when it is a string or a whole number: `on: "lip"`. */
+function spelled(key: string, value: unknown): string {
+  return typeof value === "string" || Number.isSafeInteger(value) ? `${key}: ${render(value)}` : key;
+}
+
+/** A key as a person might have meant it: `generated_by` is `generatedby`. */
+function normalize(key: string): string {
+  return key.replace(/[_\- ]/g, "").toLowerCase();
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+function list(items: readonly string[]): string {
+  return items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function render(value: unknown): string {
+  return JSON.stringify(value) ?? String(value);
+}

@@ -19,16 +19,37 @@ use std::fmt;
 use std::ops::Range;
 
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Map, Value};
 
 /// An authored edge reference. Strings are concise for simple directional
 /// queries; objects name topology facts such as a circular edge bordering an
 /// upward-facing face.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum EdgeSelector {
     Directional(String),
     Query(EdgeQuery),
+}
+
+impl<'de> Deserialize<'de> for EdgeSelector {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match Value::deserialize(deserializer)? {
+            Value::String(source) => Ok(Self::Directional(source)),
+            Value::Object(query) => {
+                check_query_shape(&query, QueryKind::Edge).map_err(D::Error::custom)?;
+                serde_json::from_value(Value::Object(query))
+                    .map(Self::Query)
+                    .map_err(D::Error::custom)
+            }
+            other => Err(D::Error::custom(format!(
+                "an edge selector is a string such as \">Z\" or a query such as \
+                 {{ dihedral: \"convex\" }}, not {}",
+                render(&other)
+            ))),
+        }
+    }
 }
 
 /// An authored vertex reference for a corner treatment.
@@ -36,16 +57,35 @@ pub enum EdgeSelector {
 /// Vertices use directional extrema only for now. Unlike edges, there is no
 /// vertex lineage after Boolean operations yet, so accepting `generatedBy`
 /// here would promise a stable relation the exact backend cannot provide.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum VertexSelector {
     Directional(String),
     Query(VertexQuery),
 }
 
+impl<'de> Deserialize<'de> for VertexSelector {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        match Value::deserialize(deserializer)? {
+            Value::String(source) => Ok(Self::Directional(source)),
+            Value::Object(query) => {
+                check_query_shape(&query, QueryKind::Vertex).map_err(D::Error::custom)?;
+                serde_json::from_value(Value::Object(query))
+                    .map(Self::Query)
+                    .map_err(D::Error::custom)
+            }
+            other => Err(D::Error::custom(format!(
+                "a vertex selector is a string such as \">X and >Y and >Z\" or a query such as \
+                 {{ at: {{ z: \"max\" }} }}, not {}",
+                render(&other)
+            ))),
+        }
+    }
+}
+
 /// A composable query over B-rep vertex positions.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct VertexQuery {
     /// Match vertices at the requested document extrema.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -70,7 +110,7 @@ pub struct EdgeExpectation {
 
 /// A composable, AI-readable edge query.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EdgeQuery {
     /// Match edges created by a named source operation. The exact backend
     /// follows this lineage through supported Boolean operations instead of
@@ -198,7 +238,7 @@ pub enum EdgeRole {
 
 /// A face relationship for an edge query.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AdjacentFace {
     pub face_normal: AxisDirection,
 }
@@ -222,6 +262,7 @@ pub enum AxisDirection {
 
 /// Optional extrema for each document axis.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EdgeExtrema {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub x: Option<Extreme>,
@@ -286,6 +327,253 @@ impl EdgeSelectorTerm {
         };
         format!("{prefix}{}", ["X", "Y", "Z"][axis.component()])
     }
+}
+
+/// Every key an edge query reads, in the order a refusal lists them. A new one
+/// also needs a `GRAPH_FEATURES` entry: hosts through 0.0.7 drop unknown keys.
+pub const EDGE_QUERY_KEYS: [&str; 10] = [
+    "generatedBy",
+    "curve",
+    "role",
+    "adjacentTo",
+    "at",
+    "dihedral",
+    "parallel",
+    "longerThan",
+    "on",
+    "between",
+];
+
+const FACE_NORMALS: [&str; 6] = ["+x", "-x", "+y", "-y", "+z", "-z"];
+
+/// Which query object a key was found in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QueryKind {
+    Edge,
+    Vertex,
+}
+
+/// Refuse a key a query object does not read, or an `at` or `adjacentTo` it
+/// cannot, naming what to write instead.
+///
+/// serde would drop an unknown key and select other edges than the author
+/// wrote. `queryShapeError` in `app/src/selectors.ts` is the same check in the
+/// same words; the `queries` in `eval/selectors.json` hold the two together.
+pub fn check_query_shape(query: &Map<String, Value>, kind: QueryKind) -> Result<(), String> {
+    let (noun, known, listing): (&str, &[&str], String) = match kind {
+        QueryKind::Edge => (
+            "an edge query",
+            &EDGE_QUERY_KEYS,
+            format!(
+                "Its keys are {}.",
+                list(EDGE_QUERY_KEYS.iter().map(|k| k.to_string()))
+            ),
+        ),
+        QueryKind::Vertex => (
+            "a vertex query",
+            &["at"],
+            "Its only key is at, e.g. { at: { z: \"max\" } }.".to_string(),
+        ),
+    };
+    let unknown = unknown_keys(query, known, |key, value| query_key_hint(key, value, known));
+    if let Some(named) = unknown {
+        return Err(format!("{noun} {named}. {listing}"));
+    }
+    if let Some(at) = query.get("at") {
+        check_at(at)?;
+    }
+    if let Some(adjacent) = query.get("adjacentTo") {
+        check_adjacent_to(adjacent)?;
+    }
+    Ok(())
+}
+
+/// `has no key "a" (write b instead)`, or `None` when every key is known.
+fn unknown_keys(
+    object: &Map<String, Value>,
+    known: &[&str],
+    hint: impl Fn(&str, &Value) -> Option<String>,
+) -> Option<String> {
+    let mut unknown: Vec<&String> = object
+        .keys()
+        .filter(|k| !known.contains(&k.as_str()))
+        .collect();
+    if unknown.is_empty() {
+        return None;
+    }
+    unknown.sort();
+    let named = unknown
+        .iter()
+        .map(|key| match hint(key, &object[key.as_str()]) {
+            Some(fix) => format!("\"{key}\" (write {fix} instead)"),
+            None => format!("\"{key}\""),
+        });
+    let noun = if unknown.len() == 1 { "key" } else { "keys" };
+    Some(format!("has no {noun} {}", list(named)))
+}
+
+fn query_key_hint(key: &str, value: &Value, known: &[&str]) -> Option<String> {
+    let normal = normalize(key);
+    if let Some(field) = known.iter().find(|field| normalize(field) == normal) {
+        return Some(spelled(field, value));
+    }
+    let text = value.as_str();
+    let synonym = match normal.as_str() {
+        "facenormal" | "normal" | "facing" if known.contains(&"adjacentTo") => {
+            return Some(format!(
+                "adjacentTo: {{ faceNormal: {} }}",
+                render(&Value::from(text.unwrap_or("+z")))
+            ));
+        }
+        "x" | "y" | "z" => {
+            return Some(format!(
+                "at: {{ {normal}: {} }}",
+                render(&Value::from(text.unwrap_or("max")))
+            ));
+        }
+        "top" => return Some("at: { z: \"max\" }".into()),
+        "bottom" => return Some("at: { z: \"min\" }".into()),
+        "count" => {
+            return Some(match value.as_u64().filter(|n| *n > 0) {
+                Some(n) => format!(".expect({{ count: {n} }}) on the selection"),
+                None => ".expect({ count }) on the selection".into(),
+            });
+        }
+        "expect" => return Some(".expect({ count }) on the selection".into()),
+        "tag" | "tags" | "feature" | "features" => "on",
+        "length" | "minlength" => "longerThan",
+        "type" | "kind" => "curve",
+        "along" => "parallel",
+        "angle" | "convexity" => "dihedral",
+        _ => return None,
+    };
+    known.contains(&synonym).then(|| spelled(synonym, value))
+}
+
+fn check_at(at: &Value) -> Result<(), String> {
+    let axes = match at {
+        Value::Null => return Ok(()),
+        Value::Object(axes) => axes,
+        other => {
+            return Err(format!(
+                "at is an object of axes, e.g. at: {{ z: \"max\" }}, not {}.",
+                render(other)
+            ))
+        }
+    };
+    let hint = |key: &str, value: &Value| match normalize(key).as_str() {
+        axis @ ("x" | "y" | "z") => Some(spelled(axis, value)),
+        "top" => Some("z: \"max\"".into()),
+        "bottom" => Some("z: \"min\"".into()),
+        _ => None,
+    };
+    if let Some(named) = unknown_keys(axes, &["x", "y", "z"], hint) {
+        return Err(format!(
+            "at {named}. Its keys are x, y and z, e.g. at: {{ z: \"max\" }}."
+        ));
+    }
+    for axis in ["x", "y", "z"] {
+        match axes.get(axis) {
+            None | Some(Value::Null) => {}
+            Some(Value::String(extreme)) if extreme == "min" || extreme == "max" => {}
+            Some(other) => {
+                let fix = other
+                    .as_str()
+                    .map(str::to_lowercase)
+                    .filter(|e| e == "min" || e == "max")
+                    .map(|e| format!(" (write \"{e}\" instead)"))
+                    .unwrap_or_default();
+                return Err(format!(
+                    "at.{axis} must be \"min\" or \"max\", not {}{fix}.",
+                    render(other)
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn check_adjacent_to(adjacent: &Value) -> Result<(), String> {
+    let fields = match adjacent {
+        Value::Null => return Ok(()),
+        Value::Object(fields) => fields,
+        other => {
+            let normal = other.as_str().and_then(face_normal).unwrap_or("+z");
+            return Err(format!(
+                "adjacentTo is an object, e.g. adjacentTo: {{ faceNormal: \"{normal}\" }}, not {}.",
+                render(other)
+            ));
+        }
+    };
+    let hint = |key: &str, value: &Value| {
+        matches!(normalize(key).as_str(), "facenormal" | "normal" | "facing")
+            .then(|| spelled("faceNormal", value))
+    };
+    if let Some(named) = unknown_keys(fields, &["faceNormal"], hint) {
+        return Err(format!(
+            "adjacentTo {named}. Its only key is faceNormal, e.g. adjacentTo: {{ faceNormal: \"+z\" }}."
+        ));
+    }
+    match fields.get("faceNormal") {
+        None | Some(Value::Null) => {
+            Err("adjacentTo needs faceNormal, e.g. adjacentTo: { faceNormal: \"+z\" }.".into())
+        }
+        Some(Value::String(normal)) if FACE_NORMALS.contains(&normal.as_str()) => Ok(()),
+        Some(other) => {
+            let fix = other
+                .as_str()
+                .and_then(face_normal)
+                .map(|normal| format!(" (write \"{normal}\" instead)"))
+                .unwrap_or_default();
+            Err(format!(
+                "adjacentTo.faceNormal must be \"+x\", \"-x\", \"+y\", \"-y\", \"+z\" or \"-z\", not {}{fix}.",
+                render(other)
+            ))
+        }
+    }
+}
+
+/// The face normal a loosely written one means: `"+Z"` and `"z"` are `"+z"`.
+fn face_normal(written: &str) -> Option<&'static str> {
+    let lower = written.to_lowercase();
+    let signed = if lower.len() == 1 {
+        format!("+{lower}")
+    } else {
+        lower
+    };
+    FACE_NORMALS.into_iter().find(|n| *n == signed)
+}
+
+/// The key a hint names, with the value the author wrote when it is a string
+/// or a whole number: `on: "lip"`.
+fn spelled(key: &str, value: &Value) -> String {
+    match value {
+        Value::String(_) => format!("{key}: {}", render(value)),
+        Value::Number(n) if n.is_i64() || n.is_u64() => format!("{key}: {n}"),
+        _ => key.to_string(),
+    }
+}
+
+/// A key as a person might have meant it: `generated_by` is `generatedby`.
+fn normalize(key: &str) -> String {
+    key.chars()
+        .filter(|c| !matches!(c, '_' | '-' | ' '))
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+/// `a`, `a and b`, `a, b and c`.
+fn list(items: impl Iterator<Item = String>) -> String {
+    let items: Vec<String> = items.collect();
+    match items.split_last() {
+        None => String::new(),
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+fn render(value: &Value) -> String {
+    serde_json::to_string(value).unwrap_or_default()
 }
 
 /// One parsed term and the byte range of the source text it came from.
@@ -518,6 +806,64 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The query-object half of the corpus, which `selectors.test.ts` also
+    /// runs, read through the deserializers a graph goes through.
+    #[test]
+    fn agrees_with_the_shared_query_corpus() {
+        #[derive(Deserialize)]
+        struct Corpus {
+            queries: Vec<Case>,
+        }
+        #[derive(Deserialize)]
+        struct Case {
+            why: String,
+            query: Value,
+            edge: Expected,
+            vertex: Expected,
+        }
+        #[derive(Deserialize)]
+        struct Expected {
+            error: Option<String>,
+        }
+
+        let corpus: Corpus =
+            serde_json::from_str(include_str!("../../../eval/selectors.json")).unwrap();
+        assert!(corpus.queries.len() >= 10, "the query corpus is missing");
+
+        for case in &corpus.queries {
+            for (kind, expected, read) in [
+                (
+                    "edge",
+                    &case.edge,
+                    serde_json::from_value::<EdgeSelector>(case.query.clone()).map(|_| ()),
+                ),
+                (
+                    "vertex",
+                    &case.vertex,
+                    serde_json::from_value::<VertexSelector>(case.query.clone()).map(|_| ()),
+                ),
+            ] {
+                let at = format!("{kind} {} ({})", case.query, case.why);
+                assert_eq!(
+                    read.map_err(|e| e.to_string()).err(),
+                    expected.error,
+                    "{at}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_selector_that_is_neither_string_nor_query_says_what_it_is() {
+        let edge = serde_json::from_value::<EdgeSelector>(serde_json::json!([">Z"])).unwrap_err();
+        assert_eq!(
+            edge.to_string(),
+            "an edge selector is a string such as \">Z\" or a query such as { dihedral: \"convex\" }, not [\">Z\"]"
+        );
+        let vertex = serde_json::from_value::<VertexSelector>(serde_json::json!(5)).unwrap_err();
+        assert!(vertex.to_string().ends_with(", not 5"), "{vertex}");
     }
 
     #[test]

@@ -28,7 +28,7 @@
  * carries one exactly, and named bodies may mix solids and surfaces.
  */
 
-import { parseEdgeSelector, parseVertexSelector } from "./selectors";
+import { parseEdgeSelector, parseVertexSelector, queryShapeError } from "./selectors";
 
 export type Vec3 = { x: number; y: number; z: number };
 
@@ -49,7 +49,10 @@ export interface BoolOptions {
 /** The outward normal of a face, as `adjacentTo` spells it. */
 export type AxisDirection = "+x" | "-x" | "+y" | "-y" | "+z" | "-z";
 
-/** A topology-aware alternative to the compact directional selector string. */
+/**
+ * A topology-aware alternative to the compact directional selector string.
+ * Any other key is refused, naming the one it most likely meant.
+ */
 export interface EdgeQuery {
   /** Match edges created by this named Boolean operation. */
   generatedBy?: string;
@@ -232,6 +235,8 @@ function assertEdgeSelector(selector: EdgeSelector, call: string, write: (select
       `${write('">Z"')} for the edges furthest in +Z, or ${write('{ dihedral: "convex" }')} for every outside edge`,
     );
   }
+  const shape = queryShapeError(selector as Record<string, unknown>, "edge");
+  if (shape) throw new Error(shape);
   if (
     !selector.generatedBy &&
     !selector.curve &&
@@ -260,6 +265,9 @@ function assertEdgeSelector(selector: EdgeSelector, call: string, write: (select
   }
   if (selector.generatedBy !== undefined && !selector.generatedBy.trim()) {
     throw new Error("generatedBy must name a tagged operation");
+  }
+  if (selector.curve !== undefined && !["line", "circle", "spline"].includes(selector.curve)) {
+    throw new Error(`curve must be "line", "circle" or "spline", not ${JSON.stringify(selector.curve)}`);
   }
   if (selector.role !== undefined && !["hole", "boundary"].includes(selector.role)) {
     throw new Error(`role must be "hole" or "boundary", not ${JSON.stringify(selector.role)}`);
@@ -296,6 +304,8 @@ function assertVertexSelector(selector: VertexSelector) {
       '.vertices(">X and >Y and >Z") for the corner furthest in +X, +Y and +Z, or .edges({ dihedral: "convex" }) for every outside edge',
     );
   }
+  const shape = queryShapeError(selector as Record<string, unknown>, "vertex");
+  if (shape) throw new Error(shape);
   if (!selector.at || !Object.values(selector.at).some(Boolean)) {
     throw new Error("vertex query is empty; specify at");
   }

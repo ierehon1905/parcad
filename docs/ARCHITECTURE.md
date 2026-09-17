@@ -54,7 +54,11 @@ version. So:
   fix** — an unknown op, a missing field, a value of the wrong shape — and a
   field no slot reads is refused rather than dropped: serde ignored
   `"chamfer": 1` on a cylinder and built a plain one, which is how a newer
-  host's optional field would have arrived at an older one.
+  host's optional field would have arrived at an older one. A selector's query
+  object is held to the same rule key by key (`check_query_shape` in
+  `selectors.rs`, and `queryShapeError` in the editor, in the same words), and
+  an error inside a treatment's flattened `selector` or `vertices` carries its
+  own field name, because serde reads that field last and no probe can find it.
 
 **Features, not a schema number.** A version integer would say *that* a host
 is too old, never *what* it lacks; it would lock every new graph out of an old
@@ -70,7 +74,9 @@ its own words.
 **What already-shipped hosts do:** 0.0.6 and earlier ignore `requires`, so they
 still fail with serde's text on the first entry they cannot parse, and still
 silently drop a field they have no slot for. Nothing can change that
-retroactively; every host from this one on fails by name. `GRAPH_FEATURES`'s
+retroactively; every host from this one on fails by name. 0.0.7 and earlier
+also drop an unknown key inside a selector's query, so a new query key is a
+graph feature too. `GRAPH_FEATURES`'s
 `after` is the last release that cannot read a feature — a fact at the time it
 is written, not a guess at the next version number.
 

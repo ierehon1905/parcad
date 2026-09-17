@@ -9,7 +9,7 @@
 //! the node, the field and the fix instead of passing serde's words through.
 //! See docs/ARCHITECTURE.md, "A graph says what it needs".
 
-use crate::graph::{Doc, Node};
+use crate::graph::{Doc, Node, LOCATED};
 use serde::{Deserialize, Serialize};
 
 /// A feature a graph uses that a host released before it cannot read.
@@ -190,6 +190,16 @@ fn explain(
     object: &serde_json::Map<String, serde_json::Value>,
     error: &str,
 ) -> String {
+    if let Some((field, message)) = error
+        .strip_prefix(LOCATED)
+        .and_then(|rest| rest.split_once("\": "))
+    {
+        let message = message.strip_suffix('.').unwrap_or(message);
+        return format!(
+            "node {id} ({op}), field \"{field}\": {message}. {}",
+            if_newer()
+        );
+    }
     if error.starts_with("unknown variant") {
         return format!(
             "node {id} has op \"{op}\", which this host does not read. If it is a typo, the \
@@ -340,5 +350,105 @@ mod tests {
     fn an_unknown_top_level_field_is_refused() {
         let message = refusal(json!({ "root": 0, "lattice": {}, "nodes": [{ "op": "sphere", "r": 1 }] }));
         assert!(message.contains("top-level field \"lattice\""), "{message}");
+    }
+
+    fn treating(target: serde_json::Value) -> serde_json::Value {
+        let mut node = json!({ "op": "fillet", "child": 0, "radius": 1 });
+        node.as_object_mut()
+            .unwrap()
+            .extend(target.as_object().unwrap().clone());
+        json!({ "units": "mm", "root": 1, "nodes": [
+            { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } }, node
+        ] })
+    }
+
+    #[test]
+    fn a_query_key_nothing_reads_is_refused_on_its_node_and_field() {
+        let message = refusal(treating(
+            json!({ "selector": { "at": { "z": "max" }, "faceNormal": "+z" } }),
+        ));
+        assert!(
+            message.starts_with(
+                "node 1 (fillet), field \"selector\": an edge query has no key \"faceNormal\" \
+                 (write adjacentTo: { faceNormal: \"+z\" } instead). Its keys are generatedBy,"
+            ),
+            "{message}"
+        );
+        assert!(
+            message.contains("and between. If a newer parcad wrote the part"),
+            "{message}"
+        );
+
+        let message = refusal(treating(
+            json!({ "vertices": { "at": { "z": "max" }, "dihedral": "convex" } }),
+        ));
+        assert!(
+            message.starts_with(
+                "node 1 (fillet), field \"vertices\": a vertex query has no key \"dihedral\""
+            ),
+            "{message}"
+        );
+    }
+
+    /// A flattened field is read after its node's other fields are checked, so
+    /// this used to be reported as `field "child"`, in serde's words.
+    #[test]
+    fn a_bad_value_inside_a_treatment_target_names_the_target() {
+        let message = refusal(treating(json!({ "selector": { "at": { "z": "top" } } })));
+        assert!(
+            message.starts_with("node 1 (fillet), field \"selector\": at.z must be \"min\" or \"max\", not \"top\". If"),
+            "{message}"
+        );
+        let message = refusal(treating(json!({ "selector": { "curve": "arc" } })));
+        assert!(
+            message.starts_with("node 1 (fillet), field \"selector\": unknown variant `arc`"),
+            "{message}"
+        );
+        let message = refusal(treating(
+            json!({ "selector": ">Z", "expect": { "count": -1 } }),
+        ));
+        assert!(
+            message.starts_with("node 1 (fillet), field \"expect\": "),
+            "{message}"
+        );
+        assert!(!message.contains("untagged"), "{message}");
+    }
+
+    #[test]
+    fn a_treatment_takes_edges_or_corners() {
+        let message = refusal(treating(json!({})));
+        assert!(
+            message.starts_with("node 1 (fillet) has no \"selector\""),
+            "{message}"
+        );
+        let message = refusal(treating(
+            json!({ "selector": ">Z", "vertices": ">X and >Y and >Z" }),
+        ));
+        assert!(
+            message.starts_with("node 1 (fillet), field \"vertices\": a treatment takes selector for edges or vertices"),
+            "{message}"
+        );
+        parse_doc(treating(
+            json!({ "selector": null, "vertices": { "at": { "x": "max" } } }),
+        ))
+        .unwrap();
+        parse_doc(treating(
+            json!({ "selector": { "on": "lip", "at": { "z": "max" } }, "expect": { "count": 4 } }),
+        ))
+        .unwrap();
+    }
+
+    #[test]
+    fn a_query_key_nothing_reads_is_refused_on_a_patch_too() {
+        let message = refusal(json!({ "units": "mm", "root": 1, "nodes": [
+            { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+            { "op": "patch", "child": 0, "selector": { "role": "boundary", "top": true } }
+        ] }));
+        assert!(
+            message.starts_with(
+                "node 1 (patch), field \"selector\": an edge query has no key \"top\" (write at: { z: \"max\" } instead)"
+            ),
+            "{message}"
+        );
     }
 }

@@ -799,4 +799,32 @@ describe("selector arguments", () => {
     }
     expect(refusal(() => loose.chamfer(1, null)).message).toStartWith("chamfer(1) takes a selector, not null.");
   });
+
+  test("a query key the language does not have is refused with where it goes, and the fix builds", () => {
+    expect(refusal(() => loose.edges({ at: { z: "max" }, faceNormal: "+z" })).message).toBe(
+      'an edge query has no key "faceNormal" (write adjacentTo: { faceNormal: "+z" } instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on and between.',
+    );
+    build(part.edges({ at: { z: "max" }, adjacentTo: { faceNormal: "+z" } }).fillet(1));
+
+    expect(refusal(() => loose.fillet(1, { at: { z: "max" }, count: 4 })).message).toStartWith(
+      'an edge query has no key "count" (write .expect({ count: 4 }) on the selection instead).',
+    );
+    build(part.edges({ at: { z: "max" } }).expect({ count: 4 }).fillet(1));
+
+    expect(refusal(() => loose.vertices({ at: { z: "max" }, dihedral: "convex" })).message).toBe(
+      'a vertex query has no key "dihedral". Its only key is at, e.g. { at: { z: "max" } }.',
+    );
+  });
+
+  test("a key the empty-query check would have blamed is named instead", () => {
+    expect(refusal(() => loose.edges({ direction: ">Z" })).message).toStartWith('an edge query has no key "direction".');
+  });
+
+  test("at, adjacentTo and curve take only the values the kernel reads", () => {
+    expect(refusal(() => loose.edges({ at: { z: "top" } })).message).toBe('at.z must be "min" or "max", not "top".');
+    expect(refusal(() => loose.vertices({ at: { w: "max" } })).message).toStartWith('at has no key "w".');
+    expect(refusal(() => loose.edges({ adjacentTo: { faceNormal: "+Z" } })).message).toEndWith('not "+Z" (write "+z" instead).');
+    expect(refusal(() => loose.edges({ curve: "arc" })).message).toBe('curve must be "line", "circle" or "spline", not "arc"');
+    build(part.edges({ at: { x: undefined, z: "min" }, curve: "line" }).chamfer(1));
+  });
 });

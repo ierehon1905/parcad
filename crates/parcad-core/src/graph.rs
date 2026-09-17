@@ -7,7 +7,9 @@
 
 use crate::section::{self, BSpline, Section, SectionEntry};
 use crate::selectors::{EdgeExpectation, EdgeSelector, VertexSelector};
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
 /// Index into [`Doc::nodes`].
 pub type NodeId = usize;
@@ -78,7 +80,7 @@ impl FilletRecipe {
 /// `selector` and `expect` fields remain directly on the feature node. A
 /// vertex/corner target and a full-round face-set target can therefore become
 /// new variants without reinterpreting an edge selector as some other entity.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(untagged)]
 pub enum EdgeTarget {
     /// A selected set of B-rep edges, optionally guarded by its cardinality.
@@ -97,6 +99,47 @@ pub enum EdgeTarget {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expect: Option<EdgeExpectation>,
     },
+}
+
+/// By hand, and each error prefixed with its field (see [`LOCATED`]): a derived
+/// untagged enum says only that no variant matched, and serde reads a flattened
+/// field after checking every other, so no probe can find the one that failed.
+impl<'de> Deserialize<'de> for EdgeTarget {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let mut fields = serde_json::Map::<String, Value>::deserialize(deserializer)?;
+        let mut take = |name: &str| fields.remove(name).filter(|value| !value.is_null());
+        let (expect, selector, vertices) = (take("expect"), take("selector"), take("vertices"));
+        let expect = expect
+            .map(|value| read::<D, _>("expect", value))
+            .transpose()?;
+        match (selector, vertices) {
+            (Some(selector), None) => Ok(Self::Edges {
+                selector: read::<D, _>("selector", selector)?,
+                expect,
+            }),
+            (None, Some(vertices)) => Ok(Self::Vertices {
+                vertices: read::<D, _>("vertices", vertices)?,
+                expect,
+            }),
+            (None, None) => Err(D::Error::missing_field("selector")),
+            (Some(_), Some(_)) => Err(D::Error::custom(format!(
+                "{LOCATED}vertices\": a treatment takes selector for edges or vertices for corners, \
+                 not both; remove one"
+            ))),
+        }
+    }
+}
+
+/// How an error inside a flattened field starts, before the field's name and
+/// a closing quote; `envelope::parse_doc` puts the node in front of it.
+pub const LOCATED: &str = "field \"";
+
+fn read<'de, D: Deserializer<'de>, T: serde::de::DeserializeOwned>(
+    field: &str,
+    value: Value,
+) -> Result<T, D::Error> {
+    serde_json::from_value(value)
+        .map_err(|error| D::Error::custom(format!("{LOCATED}{field}\": {error}")))
 }
 
 /// How planar chamfers join where several selected edges meet.
