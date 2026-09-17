@@ -356,31 +356,10 @@ dependency.
   colours in 2024, and whether Fusion keeps body names is unconfirmed. So the
   docs say "where the importer supports it". Estimate 2–3 days.
 
-### A 3D viewer inside the chat — after launch, the second announcement
+### The in-chat viewer — built, not yet seen in a real client
 
-MCP Apps (the first official MCP extension, 2026-01-26) lets a tool point at a
-`ui://` HTML resource that the client renders in a sandboxed iframe. That
-iframe can call the server's tools back. Claude web and Desktop, VS Code
-Copilot, Goose and others render it. The official examples include a three.js
-server, Autodesk ships its APS viewer into chats this way, and an Onshape MCP
-server feeds a three.js view from glTF.
-
-- **The case for it:** today an agent's view is a PNG line in the reply. This
-  would put the orbitable part in the conversation, which is the demo
-  `docs/GROWTH.md` wants for "a second thing to announce within two weeks".
-- **Shape:**
-  - GLB export: OCCT's `RWGltf_CafWriter` (`TKRWMesh`/`TKDEGLTF`, not linked
-    yet), or written in Rust from the body meshes 3MF already uses.
-  - A self-contained viewer page reusing `app/src/viewport.ts`'s look, served
-    as the resource `evaluate_part` points at. The CSP is declared in
-    `_meta.ui.csp`, or everything is inlined.
-  - The same GLB serves `<model-viewer>` embeds and iOS AR Quick Look.
-- **Risks:**
-  - Client support varies (Claude Code in a terminal shows nothing).
-  - A large mesh inside an iframe is a practical limit.
-  - Whether a model *uses* it is a field case, not an assumption.
-- **Estimate:** 3–6 days.
-- **Sources:**
-  - <https://blog.modelcontextprotocol.io/posts/2026-01-26-mcp-apps/>
-  - <https://github.com/modelcontextprotocol/ext-apps/tree/main/examples/threejs-server>
-  - <https://aps.autodesk.com/blog/embedding-aps-viewer-ai-chats-mcp-apps>
+`evaluate_part` shows its part in 3D in MCP Apps clients (ARCHITECTURE, "The
+part inside a chat"); it was checked only in the reference host from
+`modelcontextprotocol/ext-apps`. Left: open it in Claude Desktop and web, where
+the iframe and message size limits are the client's; a GLB export, which
+`<model-viewer>` embeds and iOS AR Quick Look would use.

@@ -178,7 +178,7 @@ fn router(assets: Arc<dyn Assets>) -> Router {
         // The same application again, for a model rather than a person. It
         // reaches `service` through the same functions, and the scripts it
         // sends run in `script`'s sandbox rather than the webview.
-        .nest_service("/mcp", mcp::service())
+        .nest_service("/mcp", mcp::service(assets.clone()))
         // Everything else is the frontend. Registered last and as a fallback so
         // no asset name can ever shadow an API route.
         .fallback(asset)

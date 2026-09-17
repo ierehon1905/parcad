@@ -52,8 +52,8 @@ codegen-units = 1
 
 # Iterate is the profile you rebuild the worker in: release's opt-level, so a
 # part builds at a realistic speed, without what makes release slow to link.
-# The default of tools/build-worker.sh and playground/build-kernel.sh; the
-# corpus in tools/check.sh, the benchmarks, CI and the bundles stay on release,
+# The default of tools/build-worker.sh; the corpus in tools/check.sh, the
+# benchmarks, the WebAssembly kernel, CI and the bundles stay on release,
 # and a worker refuses a host of the other one (protocol::BuildId).
 [profile.iterate]
 inherits = "release"

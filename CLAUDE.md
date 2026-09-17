@@ -249,6 +249,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | lines, offsets, intersections and convex outlines in the plane | `line2d`, `Line2d`, `hull` in `app/src/dsl.ts` — arithmetic on numbers the script has; nothing reads the built part |
 | the real objects a holder wraps | `DEVICES` in `app/src/dsl.ts`, via `device(name, { clearance })` — sizes published, radii labelled as read off photographs |
 | what the app can do at all | `crates/parcad-host/src/service.rs` — never a transport file |
+| the part in 3D inside a chat client (MCP Apps) | `app/src/viewer/main.ts`, built by `app/vite.viewer.config.ts`; `view_part` and the `ui://parcad/viewer` resource in `mcp.rs` |
 | the HTTP and MCP hosts | `crates/parcad-host/src/http.rs`, `mcp.rs` — no Tauri in the crate; the app and `parcad serve` both embed it |
 | the IPC adapter, the window | `app/src-tauri/src/lib.rs` — the only file that knows there is a webview |
 | the host without a window, and its tools from a shell | `parcad serve`, `parcad tools`, `parcad call` in `crates/parcad-cli/src/main.rs` and `call.rs` — the CLI is an MCP client of the running host (or one it hosts for the command), so parity with `mcp.rs` is by construction |

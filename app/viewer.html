@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ParCAD part</title>
+  </head>
+  <!-- The part inside a chat client, built into one file by vite.viewer.config.ts
+       and served by the MCP server as the resource ui://parcad/viewer. -->
+  <body class="m-0 bg-bg text-ink font-sans">
+    <div id="viewport" class="h-[420px] w-full"></div>
+    <div id="status" class="px-3 py-2 text-xs text-ink-dim data-[bad=true]:text-bad"></div>
+    <script type="module" src="/src/viewer/main.ts"></script>
+  </body>
+</html>

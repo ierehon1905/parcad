@@ -107,13 +107,18 @@ contains OpenCASCADE code. So you only have to rebuild that one file.
 **1. Get the source.** All of it is public, including the copy of OpenCASCADE
 this project builds: <https://github.com/ierehon1905/parcad>
 
+Check out the tag of the version you have, e.g. `git checkout v0.0.6`. The app
+runs only a worker built from its own parcad sources, and says so if it is
+given another; OpenCASCADE and the LGPL wrapper crates in `vendor/` are not part
+of that check, so they are yours to change.
+
 **2. Change OpenCASCADE if you want to.** It is in `vendor/occt-sys/OCCT/`. You
 can edit it, or replace it with a different version.
 
 **3. Build a new worker.**
 
 ```bash
-tools/build-worker.sh
+tools/build-worker.sh --release
 ```
 
 This compiles OpenCASCADE the first time — about five minutes on a fast
@@ -122,7 +127,7 @@ If you already have an OpenCASCADE build, you can point at it instead and skip
 that:
 
 ```bash
-PARCAD_OCCT_PREBUILT=/path/to/occt-install tools/build-worker.sh
+PARCAD_OCCT_PREBUILT=/path/to/occt-install tools/build-worker.sh --release
 ```
 
 **4. Tell the app to use your worker.**

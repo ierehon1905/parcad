@@ -13,23 +13,10 @@
 //! compilations that nothing else keeps in step.
 use std::path::{Path, PathBuf};
 
-/// What the worker's behaviour is compiled from, relative to this crate. The
-/// OpenCASCADE install is not here: `occt-sys` owns that, and
-/// `PARCAD_OCCT_PREBUILT` is the caller's own assertion about it.
-const SOURCES: &[&str] = &[
-    "src",
-    "Cargo.toml",
-    "../parcad-core/src",
-    "../parcad-core/Cargo.toml",
-    "../../vendor/opencascade/src",
-    "../../vendor/opencascade/include",
-    "../../vendor/opencascade/build.rs",
-    "../../vendor/opencascade/Cargo.toml",
-    "../../vendor/opencascade-sys/src",
-    "../../vendor/opencascade-sys/include",
-    "../../vendor/opencascade-sys/build.rs",
-    "../../vendor/opencascade-sys/Cargo.toml",
-];
+/// What both halves compile, relative to this crate. The LGPL wrapper crates and
+/// OpenCASCADE are left out: only the worker links them, and NOTICE.md promises
+/// a user can rebuild the worker with their own.
+const SOURCES: &[&str] = &["src", "Cargo.toml", "../parcad-core/src", "../parcad-core/Cargo.toml"];
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");

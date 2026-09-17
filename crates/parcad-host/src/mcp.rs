@@ -19,7 +19,7 @@
 //! Scripts arrive from a model and run in `script`'s sandbox, never in the
 //! webview. That is the precondition this server was blocked on.
 
-use crate::{projects, script, service, session};
+use crate::{http::Assets, projects, script, service, session};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     path::PathBuf,
-    sync::{LazyLock, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
 
@@ -38,15 +38,29 @@ pub struct Parcad {
     // Named in the `#[tool_handler(router = …)]` attribute below, which is what
     // makes this the router that is served rather than the macro's own.
     tool_router: ToolRouter<Self>,
+    /// The frontend build, which carries the in-chat viewer's page.
+    assets: Option<Arc<dyn Assets>>,
 }
 
 impl Parcad {
     pub fn new() -> Self {
         Self {
             tool_router: surface(),
+            assets: None,
         }
     }
+
+    pub fn with_assets(mut self, assets: Arc<dyn Assets>) -> Self {
+        self.assets = Some(assets);
+        self
+    }
 }
+
+/// The in-chat viewer: an MCP Apps page a client renders beside `evaluate_part`.
+const VIEWER_URI: &str = "ui://parcad/viewer";
+const VIEWER_MIME: &str = "text/html;profile=mcp-app";
+/// The largest mesh `view_part` sends through a chat client.
+const VIEWER_MAX_TRIANGLES: usize = 300_000;
 
 /// The tool surface, with each title written once.
 ///
@@ -65,8 +79,26 @@ fn surface() -> ToolRouter<Parcad> {
         if route.attr.output_schema.is_some() {
             route.attr.output_schema = Some(reply_schema(name));
         }
+        // `ui/resourceUri` is the key hosts read before the extension was final.
+        route.attr.meta = match name.as_ref() {
+            "evaluate_part" => Some(rmcp::model::MetaObject(meta(serde_json::json!({
+                "ui": { "resourceUri": VIEWER_URI },
+                "ui/resourceUri": VIEWER_URI,
+            })))),
+            "view_part" => Some(rmcp::model::MetaObject(meta(serde_json::json!({
+                "ui": { "resourceUri": VIEWER_URI, "visibility": ["app"] },
+            })))),
+            _ => route.attr.meta.take(),
+        };
     }
     router
+}
+
+fn meta(value: serde_json::Value) -> rmcp::model::JsonObject {
+    match value {
+        serde_json::Value::Object(object) => object,
+        _ => unreachable!("written as an object literal"),
+    }
 }
 
 /// The schema of what a tool's reply *is*, rather than of what could be read
@@ -109,7 +141,7 @@ fn reply_schema(tool: &str) -> std::sync::Arc<rmcp::model::JsonObject> {
 /// Stateless: each request builds its own handler. There is no session to keep
 /// because there is no document to keep — a script carries its whole part, so
 /// two calls cannot disagree about what is on screen.
-pub fn service() -> axum::Router {
+pub fn service(assets: Arc<dyn Assets>) -> axum::Router {
     let mut config = rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default();
     // A tool call answers once; there is nothing to stream, and a plain JSON
     // reply is far easier to drive from a shell when something is wrong.
@@ -119,7 +151,7 @@ pub fn service() -> axum::Router {
         Parcad,
         rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
     >::new(
-        || Ok(Parcad::new()),
+        move || Ok(Parcad::new().with_assets(assets.clone())),
         Default::default(),
         config,
     );
@@ -135,6 +167,15 @@ pub fn service() -> axum::Router {
 }
 
 // ------------------------------------------------------------------ requests
+
+#[derive(Deserialize, schemars::JsonSchema)]
+pub struct ViewRequest {
+    /// The script an evaluate_part call was given.
+    pub script: String,
+    /// Seconds the kernel may take, as evaluate_part's.
+    #[serde(default)]
+    pub timeout_s: Option<f64>,
+}
 
 #[derive(Deserialize, schemars::JsonSchema)]
 pub struct EvaluateRequest {
@@ -614,6 +655,31 @@ impl Parcad {
         Ok(result)
     }
 
+    /// The mesh the in-chat viewer draws, for that page alone.
+    #[tool(
+        name = "view_part",
+        annotations(title = "Draw a part in the chat", read_only_hint = true, open_world_hint = false),
+        description = "Only for parcad's in-chat 3D viewer, which calls it itself with the script an evaluate_part call was given: it returns that build's mesh as binary arrays, which are no use to read. To build, measure or look at a part, call evaluate_part."
+    )]
+    async fn view_part(
+        &self,
+        Parameters(request): Parameters<ViewRequest>,
+    ) -> Result<rmcp::model::CallToolResult, ErrorData> {
+        let budget = budget(request.timeout_s);
+        let viewed = blocking(move || {
+            let built = script::build_within(&request.script, script_budget(request.timeout_s))?;
+            let doc = service::parse_graph(built.graph.clone())?;
+            let evaluated = service::evaluate(&doc, budget).map_err(|e| built.locate(e))?;
+            viewed(&evaluated)
+        })
+        .await?;
+        let mut result = rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(
+            "The part's mesh, for the viewer.",
+        )]);
+        result.structured_content = Some(viewed);
+        Ok(result)
+    }
+
     /// List the selectable edges and the described faces of an evaluated part.
     #[tool(
         name = "list_entities",
@@ -1077,6 +1143,57 @@ impl ServerHandler for Parcad {
             .with_cache_scope(rmcp::model::CacheScope::Public))
     }
 
+    async fn list_resources(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListResourcesResult, ErrorData> {
+        let viewer = rmcp::model::Resource::new(VIEWER_URI, "viewer")
+            .with_title("ParCAD part viewer")
+            .with_description("The part an evaluate_part call built, in 3D, for a chat client to show.")
+            .with_mime_type(VIEWER_MIME);
+        Ok(rmcp::model::ListResourcesResult::with_all_items(vec![viewer])
+            .with_ttl_ms(TOOL_LIST_TTL_MS)
+            .with_cache_scope(rmcp::model::CacheScope::Public))
+    }
+
+    async fn read_resource(
+        &self,
+        request: rmcp::model::ReadResourceRequestParams,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ReadResourceResponse, ErrorData> {
+        if request.uri != VIEWER_URI {
+            return Err(ErrorData::resource_not_found(
+                format!("no resource {}; the only one is {VIEWER_URI}", request.uri),
+                None,
+            ));
+        }
+        let assets = self
+            .assets
+            .as_ref()
+            .ok_or_else(|| ErrorData::internal_error("this host serves no frontend, so it has no viewer", None))?;
+        let page = assets.get("viewer.html").ok_or_else(|| {
+            ErrorData::internal_error(
+                format!("the frontend build has no viewer.html. {}", assets.how_to_embed()),
+                None,
+            )
+        })?;
+        let text = String::from_utf8(page.bytes)
+            .map_err(|e| ErrorData::internal_error(format!("viewer.html is not UTF-8: {e}"), None))?;
+        let contents = rmcp::model::ResourceContents::TextResourceContents {
+            uri: VIEWER_URI.to_owned(),
+            mime_type: Some(VIEWER_MIME.to_owned()),
+            text,
+            meta: Some(rmcp::model::MetaObject(meta(serde_json::json!({
+                "ui": { "prefersBorder": false },
+            })))),
+        };
+        Ok(rmcp::model::ReadResourceResult::new(vec![contents])
+            .with_ttl_ms(TOOL_LIST_TTL_MS)
+            .with_cache_scope(rmcp::model::CacheScope::Public)
+            .into())
+    }
+
     fn get_info(&self) -> ServerInfo {
         let mut server_info = Implementation::default();
         server_info.name = "parcad".into();
@@ -1084,7 +1201,7 @@ impl ServerHandler for Parcad {
 
         let mut info = ServerInfo::default();
         info.protocol_version = ProtocolVersion::default();
-        info.capabilities = ServerCapabilities::builder().enable_tools().build();
+        info.capabilities = ServerCapabilities::builder().enable_tools().enable_resources().build();
         info.server_info = server_info;
         // What a model needs to know before its first call, and cannot
         // work out from the schemas: the unit rule, where the origin is,
@@ -1384,6 +1501,93 @@ fn export_dir() -> PathBuf {
         .unwrap_or_else(|| std::env::temp_dir().join("parcad-exports"))
 }
 
+/// An evaluation packed for the viewer: the mesh as Draco, and the rest of the
+/// window's reply as zstd JSON. On the twisted planter that is 0.35 MB against
+/// 5.3 MB of JSON; Draco holds each vertex to 14 bits of the part's extent.
+fn viewed(evaluated: &service::Evaluated) -> Result<serde_json::Value, String> {
+    let triangles = evaluated.indices.len() / 3;
+    if triangles > VIEWER_MAX_TRIANGLES {
+        return Err(format!(
+            "the part meshes to {triangles} triangles, more than the {VIEWER_MAX_TRIANGLES} the chat \
+             viewer sends; open it in the ParCAD window with set_script instead"
+        ));
+    }
+    let header = serde_json::to_vec(&ViewedHeader {
+        edges: &evaluated.edges,
+        faces: &evaluated.faces,
+        snapshot: &evaluated.snapshot,
+    })
+    .map_err(|e| format!("serialising the part for the viewer: {e}"))?;
+    let header = zstd::encode_all(header.as_slice(), VIEWER_ZSTD_LEVEL)
+        .map_err(|e| format!("compressing the part for the viewer: {e}"))?;
+    let mesh = draco_mesh(&evaluated.positions, &evaluated.normals, &evaluated.indices, &evaluated.face_runs)?;
+    let base64 = |bytes: &[u8]| base64::Engine::encode(&base64::engine::general_purpose::STANDARD, bytes);
+    Ok(serde_json::json!({
+        "format": VIEWER_FORMAT,
+        "header": base64(&header),
+        "draco": base64(&mesh),
+    }))
+}
+
+/// Draco reorders triangles, and the viewport colours and picks faces by runs
+/// of them, so each vertex carries its kernel face number as a generic
+/// attribute: the tessellation never shares a vertex between two faces.
+fn draco_mesh(
+    positions: &[f32],
+    normals: &[f32],
+    indices: &[u32],
+    face_runs: &[parcad_occt::protocol::FaceRun],
+) -> Result<Vec<u8>, String> {
+    use draco_core::{DataType, EncoderBuffer, EncoderOptions, GeometryAttributeType, Mesh, MeshEncoder, PointAttribute};
+    let points = positions.len() / 3;
+    let mut face_of = vec![0u32; points];
+    for run in face_runs {
+        for &vertex in &indices[run.start as usize * 3..(run.start + run.count) as usize * 3] {
+            face_of[vertex as usize] = run.face;
+        }
+    }
+    let attribute = |kind, components, data_type, bytes: Vec<u8>| {
+        let mut attribute = PointAttribute::new();
+        attribute.init(kind, components, data_type, false, points);
+        attribute.buffer_mut().write(0, &bytes);
+        attribute
+    };
+    let floats = |values: &[f32]| values.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<u8>>();
+    let mut mesh = Mesh::new();
+    mesh.add_attribute(attribute(GeometryAttributeType::Position, 3, DataType::Float32, floats(positions)));
+    mesh.add_attribute(attribute(GeometryAttributeType::Normal, 3, DataType::Float32, floats(normals)));
+    let faces = face_of.iter().flat_map(|f| f.to_le_bytes()).collect();
+    mesh.add_attribute(attribute(GeometryAttributeType::Generic, 1, DataType::Uint32, faces));
+    mesh.set_num_faces(indices.len() / 3);
+    mesh.set_faces_from_flat_indices(indices);
+
+    let mut options = EncoderOptions::new();
+    options.set_global_int("encoding_speed", VIEWER_DRACO_SPEED);
+    options.set_global_int("decoding_speed", VIEWER_DRACO_SPEED);
+    options.set_attribute_int(0, "quantization_bits", 14);
+    options.set_attribute_int(1, "quantization_bits", 10);
+    let mut encoder = MeshEncoder::new();
+    encoder.set_mesh(mesh);
+    let mut buffer = EncoderBuffer::new();
+    encoder
+        .encode(&options, &mut buffer)
+        .map_err(|e| format!("encoding the part's mesh for the viewer: {e:?}"))?;
+    Ok(buffer.data().to_vec())
+}
+
+/// Level 3: level 19 is a sixth smaller and forty times slower.
+const VIEWER_ZSTD_LEVEL: i32 = 3;
+/// Speed 4 measured smallest on every mesh `draco-core` was tried on.
+const VIEWER_DRACO_SPEED: i32 = 4;
+const VIEWER_FORMAT: &str = "parcad-mesh/2";
+
+#[derive(Serialize)]
+struct ViewedHeader<'a, E: Serialize, F: Serialize, S: Serialize> {
+    edges: &'a [E],
+    faces: &'a [F],
+    snapshot: &'a S,
+}
+
 /// Geometry is blocking and can be a whole subprocess; keep it off the reactor.
 async fn blocking<T, F>(work: F) -> Result<T, ErrorData>
 where
@@ -1462,7 +1666,7 @@ mod tests {
         let wire = serde_json::to_value(&listed).unwrap();
         assert_eq!(wire["ttlMs"], serde_json::json!(TOOL_LIST_TTL_MS));
         assert_eq!(wire["cacheScope"], serde_json::json!("public"));
-        assert_eq!(wire["tools"].as_array().unwrap().len(), 18);
+        assert_eq!(wire["tools"].as_array().unwrap().len(), 19);
     }
 
     #[test]
@@ -1569,6 +1773,47 @@ mod tests {
             .map(|tool| tool.name.to_string())
             .collect();
         assert_eq!(writes, ["export_part", "save_project"]);
+    }
+
+    /// A client shows the viewer beside `evaluate_part`, and hides the tool
+    /// that feeds it from the model.
+    #[test]
+    fn evaluate_part_names_the_viewer_and_only_the_viewer_calls_view_part() {
+        let tools = Parcad::new().tool_router.list_all();
+        let meta_of = |name: &str| {
+            let tool = tools.iter().find(|t| t.name == name).unwrap();
+            serde_json::to_value(&tool.meta).unwrap()
+        };
+        assert_eq!(meta_of("evaluate_part")["ui"]["resourceUri"], VIEWER_URI);
+        assert_eq!(meta_of("view_part")["ui"]["visibility"], serde_json::json!(["app"]));
+        assert!(meta_of("read_docs").is_null());
+    }
+
+    /// Every triangle and vertex survives, each vertex keeps its face, and no
+    /// vertex moves by more than 14 bits of the extent.
+    #[test]
+    fn the_viewer_mesh_keeps_each_vertex_on_its_face() {
+        use draco_core::{DecoderBuffer, GeometryAttributeType, Mesh, MeshDecoder};
+        // Two triangles on two faces, apart, their vertices not shared.
+        let positions = [0.0, 0.0, 0.0, 10.0, 0.0, 0.0, 0.0, 10.0, 0.0, 20.0, 0.0, 0.0, 20.0, 10.0, 0.0, 20.0, 0.0, 10.0];
+        let normals = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+        let runs = [
+            parcad_occt::protocol::FaceRun { face: 7, start: 0, count: 1 },
+            parcad_occt::protocol::FaceRun { face: 3, start: 1, count: 1 },
+        ];
+        let bytes = draco_mesh(&positions, &normals, &[0, 1, 2, 3, 4, 5], &runs).unwrap();
+        let mut mesh = Mesh::new();
+        assert!(MeshDecoder::new().decode(&mut DecoderBuffer::new(&bytes), &mut mesh).is_ok());
+        assert_eq!((mesh.num_faces(), mesh.num_points()), (2, 6));
+        let decoded = mesh.named_attribute(GeometryAttributeType::Position).unwrap().read_f32s(6, 3);
+        let faces = mesh.named_attribute(GeometryAttributeType::Generic).unwrap();
+        for point in 0..6 {
+            let at = &decoded[point * 3..point * 3 + 3];
+            let face = u32::from_le_bytes(faces.buffer().data()[point * 4..point * 4 + 4].try_into().unwrap());
+            let source = (0..6).find(|&s| positions[s * 3..s * 3 + 3].iter().zip(at).all(|(a, b)| (a - b).abs() <= 20.0 / 16383.0));
+            let source = source.unwrap_or_else(|| panic!("decoded vertex {at:?} is no input vertex"));
+            assert_eq!(face, if source < 3 { 7 } else { 3 });
+        }
     }
 
     #[test]

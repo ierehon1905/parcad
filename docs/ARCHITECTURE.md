@@ -747,6 +747,39 @@ span without touching geometry, and `inspect_treatment_target` resolves a
 fillet's input edges against the shape *before* that fillet runs — the same
 question the editor's gold target preview answers, asked in text.
 
+### The part inside a chat
+
+A client that speaks MCP Apps shows `evaluate_part`'s part in 3D beside the
+call. The tool's `_meta.ui.resourceUri` names `ui://parcad/viewer`, which
+`read_resource` answers with `viewer.html` from the same frontend build the
+host serves (`vite.viewer.config.ts` inlines everything into that one file,
+because the client's iframe may load nothing). The page is
+`app/src/viewer/main.ts`: the client hands it the call's `script`, the page
+calls `view_part` for the mesh, and draws it with the window's own `Viewport`.
+`view_part` is marked `visibility: ["app"]`, so a client keeps it from the
+model; it runs the same cached build `evaluate_part` just made.
+
+The mesh goes through the client, not a socket, so its size matters.
+`view_part` sends the mesh as Draco and the rest of the window's reply (edges,
+faces, the snapshot) as zstd JSON, both base64: the twisted planter's 5.3 MB of
+JSON arrives as 0.53 MB, the wash bottle's 4.7 MB as 0.43, the bracket's 0.31
+as 0.034. Zstd alone reached 2.0, 2.7 and 0.08. Draco holds each vertex to 14
+bits of the part's extent, 0.005 mm on the planter, inside the mesher's own
+0.01; it reorders triangles, so each vertex carries its kernel face number and
+the page rebuilds the runs the viewport colours and picks by. `draco-core`
+(pure Rust) encodes the planter in about 40 ms. A part over 300 000 triangles
+is refused.
+
+The page decodes Draco with three's plain-JavaScript decoder: an MCP Apps
+host's default policy allows inline script and not WebAssembly. That decoder
+and the page's own bundle travel inside `viewer.html` as zstd, unpacked by
+`fzstd` and inserted as scripts, so the resource is 0.44 MB instead of 1.5.
+
+To try it without a chat client, run the reference host from
+`modelcontextprotocol/ext-apps` (`examples/basic-host`, `SERVERS=...`) against
+a `parcad serve` on a spare port. It connects from the browser, and `/mcp`
+sends no CORS headers, so put a proxy that adds them in between.
+
 ### Scripts from a model run in QuickJS
 
 The editor builds a graph with `new Function` in the webview, which is fine for a
