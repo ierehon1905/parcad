@@ -70,7 +70,8 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      substitute.
    - Dry-run it locally first (`act`, or the same shell steps by hand against a
      published tag): a blind CI round on a release path costs a release.
-4. **ParCAD web: agents through a relay** — built 2026-09-17, not deployed.
+4. **ParCAD web: agents through a relay** — live since 2026-09-17 at
+   <https://ierehon1905.github.io/parcad/>, relay deployed.
    The playground became ParCAD web, the app in a tab: `parcad-host` compiled to
    WebAssembly (`crates/parcad-wasm-host`, `page.rs`) beside the kernel, the
    same routes and MCP server, and a Cloudflare Worker (`relay/`) an AI client
