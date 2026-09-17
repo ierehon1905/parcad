@@ -47,9 +47,18 @@
       "icons/icon.ico"
     ],
     "macOS": {
+      "signingIdentity": "-",
       "files": {
         "MacOS/parcad": "../../target/release/parcad"
       }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEJFMjJFNzMwRDA4NUQ4RDYKUldUVzJJWFFNT2NpdnM2eFRVV01od3dPdkVsWUpVaUMvYWh4WWhtSnpnNlJ0MCtmeFY2b2QweEMK",
+      "endpoints": [
+        "https://github.com/ierehon1905/parcad/releases/latest/download/latest.json"
+      ]
     }
   }
 }

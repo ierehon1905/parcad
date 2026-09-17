@@ -536,6 +536,33 @@ export function watchMcp(): () => void {
   return () => window.clearInterval(handle);
 }
 
+// ------------------------------------------------------------ updates
+
+const UPDATE_POLL_MS = 6 * 60 * 60 * 1000;
+
+/** Look for a newer app now and every few hours; a failed check stays quiet until the next. */
+export function watchUpdates(): () => void {
+  const poll = async () => {
+    try {
+      const found = await backend.checkForUpdate();
+      if (found && found.version !== dismissedUpdate) S.update.value = found;
+    } catch (e) {
+      console.warn("parcad:", e);
+    }
+  };
+  void poll();
+  const handle = window.setInterval(poll, UPDATE_POLL_MS);
+  return () => window.clearInterval(handle);
+}
+
+let dismissedUpdate: string | undefined;
+
+/** Hide the prompt for this version until the app next starts. */
+export function dismissUpdate(): void {
+  dismissedUpdate = S.update.value?.version;
+  S.update.value = undefined;
+}
+
 // ------------------------------------------------------------ the kernel
 
 /** Follow a kernel that arrives over the network; a no-op when there is a host. */

@@ -18,16 +18,19 @@ import { ProjectBrowser } from "./ui/project-browser";
 import { Splitter } from "./ui/splitter";
 import { Titlebar } from "./ui/titlebar";
 import { TooltipLayer } from "./ui/tooltip";
+import { UpdateBar } from "./ui/update-bar";
 import { ViewportPane } from "./ui/viewport-pane";
 
 export function App() {
   useEffect(() => engine.watchMcp(), []);
   useEffect(() => engine.watchKernel(), []);
+  useEffect(() => engine.watchUpdates(), []);
   useEffect(keys, []);
 
   return (
     <div class="flex flex-col h-full">
       <Titlebar />
+      <UpdateBar />
       <InstallBar />
       <main class="flex flex-1 min-h-0">
         <section

@@ -209,6 +209,81 @@ fn host_port() -> u16 {
     http::port()
 }
 
+/// A release newer than this app, as the updater last found it.
+///
+/// Kept so installing downloads what the prompt announced, not whatever the
+/// endpoint says a minute later.
+#[derive(Default)]
+struct PendingUpdate(std::sync::Mutex<Option<tauri_plugin_updater::Update>>);
+
+/// Ask the release endpoint whether there is a newer app. `null` when there is
+/// none, and always in a debug build, which is not a bundle an update can replace.
+#[tauri::command]
+async fn check_for_update<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    pending: tauri::State<'_, PendingUpdate>,
+) -> Result<Option<serde_json::Value>, String> {
+    use tauri_plugin_updater::UpdaterExt;
+    if cfg!(debug_assertions) {
+        return Ok(None);
+    }
+    let update = app
+        .updater()
+        .map_err(|e| format!("the updater is not configured: {e}"))?
+        .check()
+        .await
+        .map_err(|e| format!("could not check for an update: {e}"))?;
+    let reply = update.as_ref().map(|u| {
+        serde_json::json!({ "version": u.version, "current": u.current_version, "notes": u.body })
+    });
+    *pending.0.lock().unwrap() = update;
+    Ok(reply)
+}
+
+/// Download, verify and install the update `check_for_update` found, then
+/// relaunch. On Windows the installer exits this process itself and restarts it.
+#[tauri::command]
+async fn install_update<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    pending: tauri::State<'_, PendingUpdate>,
+) -> Result<(), String> {
+    let update = pending.0.lock().unwrap().clone().ok_or(
+        "there is no update to install: check for one first, and if this repeats, \
+         download the latest release from https://github.com/ierehon1905/parcad/releases",
+    )?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| {
+            format!(
+                "the update to {} did not install: {e}\n\
+                 This copy of ParCAD is unchanged. Download the release by hand from \
+                 https://github.com/ierehon1905/parcad/releases/tag/v{}",
+                update.version, update.version
+            )
+        })?;
+    app.restart()
+}
+
+/// Host the UI, API and MCP, waiting briefly for a port the previous process
+/// still holds: an updated app is launched before the old one has exited.
+async fn serve_http<R: tauri::Runtime>(assets: std::sync::Arc<TauriAssets<R>>) {
+    let mut attempts = 0;
+    loop {
+        match http::serve(http::port(), assets.clone()).await {
+            Err(e) if attempts < 10 && e.contains("could not host") => {
+                attempts += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            }
+            Err(e) => {
+                eprintln!("parcad: {e}\nThe desktop window still works.");
+                return;
+            }
+            Ok(()) => return,
+        }
+    }
+}
+
 /// Say so when this window is pointed at a dev server that is not running.
 ///
 /// Tauri's dev/production switch is the `custom-protocol` feature the tauri CLI
@@ -295,6 +370,8 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_wdio_webdriver::init());
 
     builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(PendingUpdate::default())
         .setup(|app| {
             // Seed before the host comes up: the frontend asks for the project
             // list as it loads, and an empty first launch would look like a
@@ -306,11 +383,7 @@ pub fn run() {
             // but it must be visible, because the symptom otherwise is a
             // browser tab that cannot connect and nothing explaining why.
             let assets = std::sync::Arc::new(TauriAssets(app.handle().clone()));
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = http::serve(http::port(), assets).await {
-                    eprintln!("parcad: {e}\nThe desktop window still works.");
-                }
-            });
+            tauri::async_runtime::spawn(serve_http(assets));
             // After the host, so the message can point at it as the way out.
             warn_if_the_window_awaits_a_dev_server(app.handle());
             // One broadcast, two transports: browsers get SSE from the HTTP
@@ -356,7 +429,9 @@ pub fn run() {
             get_session,
             push_session,
             report_shown,
-            host_port
+            host_port,
+            check_for_update,
+            install_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running parcad");

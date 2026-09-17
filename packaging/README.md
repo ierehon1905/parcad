@@ -12,6 +12,7 @@ one costs something every release.
 | MCP Registry | `mcpb/server.json.in` | `publish.yml`, GitHub OIDC | none |
 | Claude Code / Codex plugin | `plugin/` | the repository itself; see `plugin/README.md` | none |
 | Claude Desktop extension | `mcpb/manifest.json` | `release.yml` packs it per platform | none |
+| the desktop app's updater | `updater-manifest.py` | `release.yml`'s draft job signs each bundle and attaches `latest.json` | `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
 
 ## Templates
 
@@ -24,6 +25,26 @@ writing a blank.
 ```bash
 packaging/render.py --version v0.0.6 --sums SHA256SUMS.txt --out rendered/
 ```
+
+## The updater
+
+The app asks `releases/latest/download/latest.json` for a newer version, so
+it only sees a release once that release is published. The manifest points at a
+signed bundle per platform: the macOS `.app.tar.gz`, the AppImage, the `.deb`,
+the NSIS installer and the `.msi`. An update is installed only if its
+signature matches the public key in `app/src-tauri/tauri.conf.json`.
+
+The private key and its password are the two secrets above. Only the draft
+job reads them, and it builds nothing: the build jobs, which run every build
+script and bundler plugin, never see the key. The owner keeps a copy in
+`~/.tauri/parcad-updater.key` and `~/.tauri/parcad-updater.password`.
+**Losing the key ends updates for every installed copy.** A tag without the
+secrets fails at signing.
+
+To try an update before releasing, pack and sign the new build the way
+`release.yml` does (`tar`, then `tauri signer sign`), and build an old one with
+`"version"` lowered and the updater's `endpoints` pointed at a local
+`latest.json` (`"dangerousInsecureTransportProtocol":true` for http).
 
 ## On each release
 

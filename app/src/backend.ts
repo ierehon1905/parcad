@@ -305,6 +305,30 @@ export function mcpStatus(): Promise<McpStatus> {
   return inTauri ? invoke<McpStatus>("mcp_status") : get<McpStatus>("mcp");
 }
 
+/** A release newer than the running app. */
+export interface AvailableUpdate {
+  version: string;
+  /** The version running now. */
+  current: string;
+  notes: string | null;
+}
+
+/**
+ * Whether the app hosting this window has a newer release. Only the desktop
+ * app can replace itself: a browser tab, `parcad serve` (updated by its
+ * package manager) and the playground answer that there is nothing to install.
+ */
+export function checkForUpdate(): Promise<AvailableUpdate | null> {
+  return inTauri ? invoke<AvailableUpdate | null>("check_for_update") : Promise.resolve(null);
+}
+
+/** Install the update `checkForUpdate` announced and relaunch; resolves only on failure paths. */
+export function installUpdate(): Promise<void> {
+  return inTauri
+    ? invoke<void>("install_update")
+    : Promise.reject(new Error("only the desktop app can update itself"));
+}
+
 /**
  * The live session: which part is on screen and what its script says, shared
  * by every window and by an agent over MCP. The state and the event are the

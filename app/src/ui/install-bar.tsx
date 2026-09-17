@@ -9,6 +9,7 @@
 import { useSignal } from "@preact/signals";
 
 import { mcpServedHere } from "../backend";
+import { Banner } from "./components/Banner";
 import { tip } from "./tooltip";
 
 const REPO = "https://github.com/ierehon1905/parcad";
@@ -48,11 +49,7 @@ export function InstallBar() {
   };
 
   return (
-    <div
-      id="install-bar"
-      class="flex flex-none flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5
-             bg-accent-deep/40 border-b border-accent-edge text-small text-ink"
-    >
+    <Banner id="install-bar" onDismiss={dismiss}>
       <span>
         Install ParCAD and your agent can build parts for you:
       </span>
@@ -80,14 +77,6 @@ export function InstallBar() {
       <a class="text-ink-dim hover:text-ink" href="licenses/NOTICE.md" target="_blank" rel="noopener">
         Built on Open CASCADE Technology
       </a>
-      <button
-        type="button"
-        aria-label="Hide this bar"
-        class="text-ink-dim hover:text-ink cursor-pointer px-1"
-        onClick={dismiss}
-      >
-        ×
-      </button>
-    </div>
+    </Banner>
   );
 }

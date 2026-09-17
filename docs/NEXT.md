@@ -230,7 +230,11 @@ a new session should keep doing:
 - **Signing.** The `.app` is unsigned and un-notarised, so a second Mac meets
   Gatekeeper before it meets the kernel; nothing is signed on any platform.
   See "Waiting on a decision".
-- **No updater.**
+- **The updater has not delivered a real release yet.** The app checks
+  GitHub Releases and installs signed updates (packaging/README.md, "The
+  updater"). 0.0.6 and earlier have no updater, so their users reinstall by
+  hand once. It was tested locally from a fake older build. Homebrew's
+  `parcad` is updated by `brew upgrade`, not by this.
 - **Never run from a fresh user account** — neither the `.app` nor
   `brew services`. Whether a launchd agent gets `~/Documents` without a TCC
   prompt there is the one claim the README does not yet make;

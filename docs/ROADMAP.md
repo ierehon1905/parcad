@@ -61,7 +61,7 @@ Each is blocked on a specific missing binding, not on design, and each
   longer hides it.
 - ~~**Sidecar packaging.**~~ *Done.* A `.app` copied out of the build tree and run
   with `PARCAD_OCCT_WORKER` unset measures the bracket at 55074.791 mm³,
-  watertight, the corpus value. Not done: signing, notarisation, an updater, or
+  watertight, the corpus value. Not done: signing, notarisation, or
   any target that is not this machine's — see [NEXT.md](NEXT.md) §1.
 - ~~**Debounce is the bottleneck.**~~ *Done.* It was 350 ms, chosen when a rebuild
   cost 300–450 ms; kernel time is now 76 ms (enclosure) to ~130 ms (bracket), so

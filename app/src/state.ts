@@ -25,7 +25,7 @@
 import { computed, signal } from "@preact/signals";
 import type { EditorView } from "codemirror";
 import type * as dsl from "./dsl";
-import type { KernelLoad, McpStatus } from "./backend";
+import type { AvailableUpdate, KernelLoad, McpStatus } from "./backend";
 import type { VertexPoint } from "./entities";
 import type { Projects } from "./projects";
 import type { FaceMaterial, Viewport } from "./viewport";
@@ -249,6 +249,9 @@ export const bounds = signal<Bounds | undefined>(undefined);
 export type Tone = "" | "busy" | "failed";
 export const status = signal<{ text: string; tone: Tone }>({ text: "ready", tone: "" });
 export const errorText = signal("");
+
+/** A newer release of the app, while the user has not dismissed it. */
+export const update = signal<AvailableUpdate | undefined>(undefined);
 
 /** Whether a model is on the third transport. Undefined until first answered. */
 export const mcp = signal<McpStatus | undefined>(undefined);

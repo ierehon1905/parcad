@@ -128,6 +128,8 @@ jobs:
         run: cargo run --locked --release -p parcad-eval
 
       # CLI and app in one cargo invocation; separately they rebuilt 98 crates (docs/GOTCHAS.md).
+      # No signing key here: this step runs every build script and bundler
+      # plugin. The draft job signs the updater bundles on a clean runner.
       - name: Bundle the app
         run: |
           cd app && bun run tauri build --bundles ${{ matrix.bundles }} \
@@ -220,18 +222,21 @@ jobs:
             macOS)
               app=$(find target/release/bundle/macos -maxdepth 1 -name '*.app' | head -1)
               test -n "$app" || { echo "no .app was bundled" >&2; exit 1; }
-              # The bundle arrives with a linker-embedded signature but no
-              # _CodeSignature, and macOS reads that inconsistency as a *damaged*
-              # app: the dialog offers only Move to Trash. An ad-hoc signature does
-              # not make it trusted — it is still rejected, unsigned and
-              # unnotarised — but rejected is the ordinary "unidentified developer"
-              # path, which the user can get past. Measured with spctl both ways.
-              codesign --force --deep --sign - "$app"
-              codesign --verify --deep "$app"
+              # Without a bundle signature, macOS reads the linker-embedded one as
+              # a *damaged* app: the dialog offers only Move to Trash. tauri.conf.json's
+              # ad-hoc signingIdentity signs it before the updater archive is packed,
+              # so the zip and the update carry the same signed bundle. Ad-hoc is
+              # still rejected, unsigned and unnotarised — but rejected is the
+              # ordinary "unidentified developer" path, which the user can get past.
+              codesign --verify --deep --strict "$app"
               # ditto, not zip: it preserves the bundle's symlinks and resource forks,
               # and an .app that loses those does not launch.
-              ditto -c -k --keepParent "$app" \
-                "dist/$(basename "$app" .app)-${{ matrix.triple }}.zip"
+              name=$(basename "$app" .app)
+              ditto -c -k --keepParent "$app" "dist/$name-${{ matrix.triple }}.zip"
+              # What the updater installs: the signed bundle at the archive's root.
+              # No AppleDouble files or xattr headers, which it would unpack as files.
+              COPYFILE_DISABLE=1 tar --no-mac-metadata -czf \
+                "dist/$name-${{ matrix.triple }}.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
               ;;
             Linux)
               cp target/release/bundle/deb/*.deb target/release/bundle/appimage/*.AppImage dist/
@@ -258,6 +263,7 @@ jobs:
   # Only a tag makes a release. A manual run is a build test: it still produces
   # the same artefacts, downloadable from the run's summary page, but leaves no
   # release behind — there is no version for one to be about.
+  # The only job that sees the updater's signing key, and it runs no project code.
   draft:
     needs: bundle
     if: startsWith(github.ref, 'refs/tags/')
@@ -267,6 +273,35 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+
+      # Published with the release, so the app's endpoint (releases/latest/
+      # download/latest.json) only moves when a human presses publish.
+      - uses: actions/checkout@v4
+        with:
+          path: source
+          sparse-checkout: packaging
+
+      - name: Sign the updater bundles
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY is not a repository secret; packaging/README.md, \"The updater\", says how to add it" >&2
+            exit 1
+          fi
+          shopt -s nullglob
+          for f in dist/*.app.tar.gz dist/*.AppImage dist/*.deb dist/*-setup.exe dist/*.msi; do
+            npx --yes @tauri-apps/cli@2.11.4 signer sign "$f" > /dev/null
+            test -s "$f.sig" || { echo "signing $f wrote no $f.sig" >&2; exit 1; }
+          done
+
+      - name: Write the updater manifest
+        run: |
+          python3 source/packaging/updater-manifest.py --version "$GITHUB_REF_NAME" \
+            --repo "$GITHUB_REPOSITORY" --dir dist \
+            --notes "https://github.com/$GITHUB_REPOSITORY/releases/tag/$GITHUB_REF_NAME"
 
       # One checksum file for every platform, written where the files meet.
       - name: Checksum the artefacts
@@ -287,6 +322,9 @@ jobs:
 
             **Windows SmartScreen will warn the same way** — the installer is
             unsigned. Choose *More info*, then *Run anyway*.
+
+            Once installed, the app offers each later release itself and
+            installs it in one click, without these steps again.
 
             On a Mac, Homebrew installs the host instead of the app. An agent
             starts it through `parcad mcp`; run `parcad serve` for the whole
