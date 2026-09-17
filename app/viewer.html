@@ -9,7 +9,8 @@
        and served by the MCP server as the resource ui://parcad/viewer. -->
   <body class="m-0 bg-bg text-ink font-sans">
     <div id="viewport" class="h-[420px] w-full"></div>
-    <div id="status" class="px-3 py-2 text-xs text-ink-dim data-[bad=true]:text-bad"></div>
+    <!-- A fixed height: a client may size the frame before the first status arrives. -->
+    <div id="status" class="h-8 truncate px-3 text-xs leading-8 text-ink-dim data-[bad=true]:h-auto data-[bad=true]:whitespace-normal data-[bad=true]:py-2 data-[bad=true]:leading-5 data-[bad=true]:text-bad">Loading…</div>
     <script type="module" src="/src/viewer/main.ts"></script>
   </body>
 </html>
