@@ -243,6 +243,10 @@ a new session should keep doing:
   Homebrew formula is macOS only. Linux arm64 measures 109 of 110 (the fillet
   bisection in `refuse-unblendable-junction` lands on 1.25 mm) and is not a
   release target.
+- **Linux x86_64 refuses the `untriangle-v3` seed part.** GCC's build meshes
+  two of its edges open, so the watertight backstop refuses it; macOS builds
+  it. `eval/cases/untriangle-v3.json` marks it `known_defect_on` that platform.
+  It passed there at 0.0.6, so something since changed the mesher's result.
 - **A stale sidecar ships silently.** `tauri build` does not run
   `tools/build-worker.sh`: a missing staging copy fails loudly, a stale one
   bundles last week's kernel and measures parts confidently with it. Free to

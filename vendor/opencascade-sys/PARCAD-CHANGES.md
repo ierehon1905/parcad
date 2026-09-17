@@ -379,6 +379,13 @@ is pruned by its triangles anyway, and `AddOptimal` on 546 offset B-spline
 faces was most of the cost of building one. A face with no mesh keeps the
 tight box.
 
+## `near` and `far` are not names on Windows
+
+`<windows.h>`, which OCCT pulls in under MSVC, defines both as empty macros,
+so `const double far = ...` reads as `const double = ...`. The wrapper
+`#undef`s them after its includes, and the parcad additions that used them as
+local names were renamed as well. 0.0.7's first Windows build failed on this.
+
 ## Not changed
 
 Everything else is upstream 0.2.0 verbatim. The OCCT it builds against is **not**

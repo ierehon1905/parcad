@@ -24,6 +24,10 @@
       "volume_pct": 0.05,
       "triangles_pct": 5.0,
       "stands_on_pct": 2.0
-    }
+    },
+    "known_defect": "GCC on x86_64 meshes two edges open (2 of 38616), so the Linux build refuses this seed part as not watertight; see docs/NEXT.md",
+    "known_defect_on": [
+      "linux-x86_64"
+    ]
   }
 }

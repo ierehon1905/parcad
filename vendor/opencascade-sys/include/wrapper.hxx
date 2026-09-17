@@ -125,6 +125,10 @@
 #include <gp_Trsf.hxx>
 #include <gp_Vec.hxx>
 
+// <windows.h>, which OCCT includes on Windows, defines `near` and `far` as empty macros.
+#undef near
+#undef far
+
 // Generic template constructor
 template <typename T, typename... Args> std::unique_ptr<T> construct_unique(Args... args) {
   return std::unique_ptr<T>(new T(args...));
@@ -1188,14 +1192,14 @@ std::vector<Hit> distinct_seeds(std::vector<Hit> hits, Where where, Size size, s
   for (const Hit &h : hits) {
     const gp_XYZ p = where(h);
     const double r = 3.0 * size(h);
-    bool near = false;
+    bool close_by = false;
     for (const auto &[q, s] : taken) {
       if ((p - q).SquareModulus() < std::max(r, s) * std::max(r, s)) {
-        near = true;
+        close_by = true;
         break;
       }
     }
-    if (near) {
+    if (close_by) {
       continue;
     }
     seeds.push_back(h);
@@ -1799,21 +1803,21 @@ public:
           continue;
         }
         const double slack = A.mesh.slack + B.mesh.slack;
-        const double far = reach + slack;
+        const double far_reach = reach + slack;
         const Box &x = A.box, &y = B.box;
         double gap = 0.0;
         for (int k = 0; k < 3; ++k) {
           const double d = std::max({0.0, y.lo[k] - x.hi[k], x.lo[k] - y.hi[k]});
           gap += d * d;
         }
-        if (gap >= far * far) {
+        if (gap >= far_reach * far_reach) {
           continue;
         }
         std::vector<parcad_proximity::PairHit> hits;
-        double least = far;
+        double least = far_reach;
         const auto shared = shared_vertices.find({i, j});
-        const double apart = 2.0 * far;
-        parcad_proximity::close_triangles(A.mesh, B.mesh, far, 2.0 * slack, far, hits, least, [&](const gp_XYZ &p) {
+        const double apart = 2.0 * far_reach;
+        parcad_proximity::close_triangles(A.mesh, B.mesh, far_reach, 2.0 * slack, far_reach, hits, least, [&](const gp_XYZ &p) {
           if (shared == shared_vertices.end()) {
             return false;
           }
@@ -2076,17 +2080,17 @@ inline std::unique_ptr<TopoDS_Shape> Shape_scaled_axes(const TopoDS_Shape &shape
 // needs no volume integral. Added for parcad: a walled smooth loft came back
 // inside out and nothing downstream asked.
 struct ParcadSolidFacing {
-  TopAbs_State far = TopAbs_UNKNOWN;           // the outer shell's verdict on the far point
+  TopAbs_State outside = TopAbs_UNKNOWN;       // the outer shell's verdict on the far point
   std::vector<std::pair<TopoDS_Shell, TopAbs_State>> shells;
   TopoDS_Shell outer_shell;
 };
 
-inline TopAbs_State parcad_shell_classifies(const TopoDS_Shell &shell, const gp_Pnt &far) {
+inline TopAbs_State parcad_shell_classifies(const TopoDS_Shell &shell, const gp_Pnt &outside) {
   BRep_Builder builder;
   TopoDS_Solid alone;
   builder.MakeSolid(alone);
   builder.Add(alone, shell);
-  BRepClass3d_SolidClassifier where(alone, far, Precision::Confusion());
+  BRepClass3d_SolidClassifier where(alone, outside, Precision::Confusion());
   return where.State();
 }
 
@@ -2100,7 +2104,7 @@ inline ParcadSolidFacing parcad_facing(const TopoDS_Solid &solid) {
   double x0, y0, z0, x1, y1, z1;
   box.Get(x0, y0, z0, x1, y1, z1);
   const double margin = 1.0 + 0.1 * std::sqrt(box.SquareExtent());
-  const gp_Pnt far(x1 + margin, y1 + 0.37 * margin, z1 + 0.61 * margin);
+  const gp_Pnt outside(x1 + margin, y1 + 0.37 * margin, z1 + 0.61 * margin);
   double largest = -1.0;
   for (TopExp_Explorer it(solid, TopAbs_SHELL); it.More(); it.Next()) {
     const TopoDS_Shell shell = TopoDS::Shell(it.Current());
@@ -2111,18 +2115,18 @@ inline ParcadSolidFacing parcad_facing(const TopoDS_Solid &solid) {
       largest = size;
       out.outer_shell = shell;
     }
-    out.shells.emplace_back(shell, parcad_shell_classifies(shell, far));
+    out.shells.emplace_back(shell, parcad_shell_classifies(shell, outside));
   }
   for (const auto &shell : out.shells) {
     if (shell.first.IsSame(out.outer_shell)) {
-      out.far = shell.second;
+      out.outside = shell.second;
     }
   }
   return out;
 }
 
 inline bool parcad_faces_out(const ParcadSolidFacing &f) {
-  if (f.far != TopAbs_OUT) {
+  if (f.outside != TopAbs_OUT) {
     return false;
   }
   for (const auto &shell : f.shells) {
@@ -2143,7 +2147,7 @@ inline rust::String Shape_orientation_report(const TopoDS_Shape &shape) {
     if (parcad_faces_out(f)) {
       continue;
     }
-    out << "solid " << index << ": a point outside it is " << states[f.far] << " its outer surface";
+    out << "solid " << index << ": a point outside it is " << states[f.outside] << " its outer surface";
     int bad = 0;
     for (const auto &shell : f.shells) {
       if (!shell.first.IsSame(f.outer_shell) && shell.second != TopAbs_IN) {
@@ -3102,17 +3106,17 @@ inline rust::String Shape_self_interference_since(const TopoDS_Shape &after, con
     return rust::String("");
   }
   BRep_Builder builder;
-  TopoDS_Compound near;
-  builder.MakeCompound(near);
+  TopoDS_Compound nearby;
+  builder.MakeCompound(nearby);
   for (TopExp_Explorer it(after, TopAbs_FACE); it.More(); it.Next()) {
     Bnd_Box box;
     BRepBndLib::Add(it.Current(), box);
     for (const Bnd_Box &region : regions) {
       if (!box.IsOut(region)) {
-        builder.Add(near, it.Current());
+        builder.Add(nearby, it.Current());
         break;
       }
     }
   }
-  return parcad_self_interference(near, fuzzy, located, &fresh);
+  return parcad_self_interference(nearby, fuzzy, located, &fresh);
 }

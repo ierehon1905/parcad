@@ -68,6 +68,26 @@ pub struct Refusal {
     /// A value the refusal says it built, which the harness builds again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub builds_with: Option<Suggestion>,
+    /// The whole part, which a compiler whose kernel gets the case right builds
+    /// instead of refusing. Anything else built still fails.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub or_builds: Option<WholePart>,
+}
+
+/// Enough of a part to tell it from the same part with an input missing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WholePart {
+    pub faces: usize,
+    pub volume_mm3: f64,
+    pub volume_pct: f64,
+}
+
+impl WholePart {
+    pub fn matches(&self, observed: &Observed) -> bool {
+        let mut off = Vec::new();
+        pct_check(&mut off, "volume_mm3", self.volume_mm3, observed.volume_mm3, self.volume_pct);
+        observed.watertight && observed.faces == Some(self.faces) && off.is_empty()
+    }
 }
 
 /// A refusal that names a value "measured to build" is held to that promise
@@ -263,6 +283,10 @@ pub struct Expect {
     /// the bug.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub known_defect: Option<String>,
+    /// The platforms `known_defect` holds on, as `os-arch` (`linux-x86_64`);
+    /// empty for every platform. Elsewhere the case must pass.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub known_defect_on: Vec<String>,
 }
 
 impl Expect {

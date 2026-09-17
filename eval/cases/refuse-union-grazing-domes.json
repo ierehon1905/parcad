@@ -1,7 +1,7 @@
 {
   "name": "refuse-union-grazing-domes",
   "script": "eval/scripts/refuse-union-grazing-domes.js",
-  "why": "Two domes whose flat feet overlap by 0.36 mm, unioned onto a plate: the fuse returned a watertight solid with one dome missing (1643.64 mm³, 7 faces, where both give about 1687 and 8) and raised no alert. A planter saucer lost 19 of 48 such bumps, and a denser layout lost the dish. Every point of an input's faces must be inside or on the union; the refusal names the lost input and the fix.",
+  "why": "Two domes whose flat feet overlap by 0.36 mm, unioned onto a plate: the fuse returned a watertight solid with one dome missing (1643.64 mm³, 7 faces, where both give about 1687 and 8) and raised no alert. A planter saucer lost 19 of 48 such bumps, and a denser layout lost the dish. Every point of an input's faces must be inside or on the union; the refusal names the lost input and the fix. GCC on x86_64 keeps both domes (1687.24 mm³), which is the right part, so the case also passes when the whole part is built: 8 faces, within 0.5% of 1687.2. A part with a dome missing is 2.6% light and 7 faces, and still fails.",
   "brep": {
     "refuses": {
       "kind": "rejected",
@@ -10,7 +10,12 @@
         "lie outside it",
         "grazing angle",
         "Move those inputs apart"
-      ]
+      ],
+      "or_builds": {
+        "faces": 8,
+        "volume_mm3": 1687.2,
+        "volume_pct": 0.5
+      }
     }
   }
 }

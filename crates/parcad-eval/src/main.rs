@@ -120,7 +120,9 @@ enum Verdict {
 /// bounds.
 fn evaluate(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (Verdict, bool, std::time::Duration) {
     let (verdict, recorded, waited) = judge(expect, doc, update);
-    let Some(reason) = expect.known_defect.clone() else {
+    let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+    let here = expect.known_defect_on.is_empty() || expect.known_defect_on.contains(&platform);
+    let Some(reason) = expect.known_defect.clone().filter(|_| here) else {
         return (verdict, recorded, waited);
     };
     let verdict = match verdict {
@@ -169,6 +171,10 @@ fn judge(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (V
             // the message, which is an editorial choice, not a measurement.
             (v, false)
         }
+        (Some(refusal), Outcome::Measured(o)) if refusal.or_builds.as_ref().is_some_and(|whole| whole.matches(&o)) => (
+            Verdict::Pass(format!("built whole instead of refusing: {:.2} mm³", o.volume_mm3)),
+            false,
+        ),
         // Required to refuse, but produced a part. This is the failure mode the
         // whole refusal corpus exists for: a believable but wrong answer.
         (Some(refusal), Outcome::Measured(o)) => (

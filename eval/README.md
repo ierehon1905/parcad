@@ -108,6 +108,12 @@ Reports `XFAIL` with the reason and stays out of the exit code. A case marked
 this way that *passes* fails the run instead — a stale marker hides the next
 regression in the same area. `--update` never records over one, because writing
 the wrong answer down as the expected one is exactly what the marker prevents.
+`known_defect_on: ["linux-x86_64"]` limits the marker to those platforms
+(`os-arch`, as Rust names them); everywhere else the case must pass.
+
+A refusal the kernel only needs on some compilers takes `or_builds`: the faces
+and volume of the part built right, which then passes in place of the refusal.
+`refuse-union-grazing-domes.json` uses it.
 
 ## The other half
 
