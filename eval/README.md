@@ -7,7 +7,7 @@ supposed to happen. Run it:
 cargo run -p parcad-eval                          # everything
 cargo run -p parcad-eval -- --case bracket        # substring match on the name
 cargo run -p parcad-eval -- --update              # re-record from what was measured
-tools/build-worker.sh                             # every case needs the worker
+tools/build-worker.sh --release                   # every case needs the worker
 ```
 
 Cases run the **DSL script**, not a checked-in graph, so `app/src/dsl.ts` is

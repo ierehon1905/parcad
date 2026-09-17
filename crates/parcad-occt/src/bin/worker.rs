@@ -14,7 +14,7 @@
 //! What a request does is `parcad_occt::serve`; this file is only the transport.
 
 use parcad_occt::backend::BuildCache;
-use parcad_occt::protocol::{Request, Response, REPLY};
+use parcad_occt::protocol::{BuildId, Request, Response, REPLY};
 use parcad_occt::serve::run;
 use std::io::{BufRead, Read};
 
@@ -63,11 +63,13 @@ fn main() {
         };
         // Answered rather than dropped: a dropped frame reads to the host as
         // a crash, and a request this build cannot read is a version mismatch.
-        let request = value
-            .get("request")
-            .cloned()
-            .ok_or_else(|| "the frame carries no request".to_owned())
-            .and_then(read_request);
+        let request = check_host(&value).and_then(|()| {
+            value
+                .get("request")
+                .cloned()
+                .ok_or_else(|| "the frame carries no request".to_owned())
+                .and_then(read_request)
+        });
         let request = match request {
             Ok(request) => request,
             Err(message) => {
@@ -80,6 +82,25 @@ fn main() {
         let response = run(request, &mut cache);
         write_reply(&reply, &response);
         eprintln!("{REPLY}{reply}");
+    }
+}
+
+/// Whether the host that sent `frame` is this worker's own build. The
+/// one-shot form a shell drives has no host to compare, so only frames are
+/// checked.
+fn check_host(frame: &serde_json::Value) -> Result<(), String> {
+    let host = frame
+        .get("build")
+        .cloned()
+        .and_then(|b| serde_json::from_value::<BuildId>(b).ok())
+        .ok_or_else(|| {
+            "the host sent no build identity, so it is an older build than this worker; \
+             rebuild the host, or unset PARCAD_OCCT_WORKER so it uses the worker installed beside it"
+                .to_owned()
+        })?;
+    match BuildId::this_build().refuse(&host) {
+        Some(reason) => Err(reason),
+        None => Ok(()),
     }
 }
 

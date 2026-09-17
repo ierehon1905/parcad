@@ -37,10 +37,11 @@ a component reported as progress.
 ```bash
 tools/check.sh                         # everything below that gates a change, in order
 tools/check.sh --fast                  # kernel crates only: <1 s warm, ~4 s after an edit
-cargo build --locked --release         # core, CLI, app host — no C++, and a dev window
-tools/build-worker.sh                  # B-rep worker; verifies OCCT is optimised
+cargo build --locked --profile iterate -p parcad-cli   # the CLI, for the local loop
+tools/build-worker.sh                  # B-rep worker, iterate profile: ~3 s after an edit
+tools/build-worker.sh --release        # the worker the corpus, benchmarks and bundles run
 cd app && bun install --frozen-lockfile && bun run tauri dev  # from app/
-cd app && bun run tauri build           # .app + .dmg; run build-worker.sh first
+cd app && bun run tauri build           # .app + .dmg; run build-worker.sh --release first
 bun tools/run.ts examples/bracket.js > /tmp/bracket.json   # DSL -> intent graph
 tools/bench-kernel.sh /tmp/bracket.json                    # medians, and the -O level
 cargo run -p parcad-eval               # the geometry + refusal corpus
@@ -72,8 +73,10 @@ git config core.hooksPath .githooks
 the `test` profile — incremental, opt-level 2 — and it deliberately skips
 `parcad-host`'s tests (a 5 s sleep in the sandbox test), `parcad-app`, and
 `tools/build-worker.sh` (relinking 26 MB of OpenCASCADE). Both belong to the full run. Release is
-compiled hard and slowly on purpose; never reach for it to make an edit-test
-loop faster, and see the profile comments in `Cargo.toml` before changing it.
+compiled hard and slowly on purpose; the edit loop is the `iterate` profile
+(release's opt-level, no LTO, incremental): a one-line kernel edit relinks the
+worker in ~3 s against ~30 s. A worker refuses a host of the other profile or of
+other sources, naming the rebuild. See the profile comments in `Cargo.toml`.
 
 **The running app also serves MCP at <http://127.0.0.1:4242/mcp>** — the same
 `service.rs` the UI uses. **So does `parcad serve`**, which is the same host

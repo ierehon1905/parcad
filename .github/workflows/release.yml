@@ -90,7 +90,7 @@ jobs:
         run: cd app && bun install --frozen-lockfile
 
       - name: Build the B-rep worker
-        run: tools/build-worker.sh
+        run: tools/build-worker.sh --release
 
       # Even when the worker failed: its OCCT install is still an hour of
       # Windows build, and the next attempt should not pay for it again.

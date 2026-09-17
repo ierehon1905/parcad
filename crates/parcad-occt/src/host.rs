@@ -18,7 +18,7 @@
 //! crashes or is stopped for taking too long is not returned to the pool, and
 //! the next request starts a fresh one.
 
-use crate::protocol::{Frame, Request, Response, Success, TargetPreview, BREADCRUMB, REPLY};
+use crate::protocol::{BuildId, Frame, Request, Response, Success, TargetPreview, BREADCRUMB, REPLY};
 use parcad_core::graph::Doc;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
@@ -167,7 +167,7 @@ fn worker_path() -> Result<PathBuf, OcctError> {
         format!(
             "this build of parcad shipped without its geometry kernel: no {WORKER} \
              beside {}. The bundle should carry one as a Tauri sidecar — rebuild it \
-             with `tools/build-worker.sh && (cd app && bun run tauri build)`, which \
+             with `tools/build-worker.sh --release && (cd app && bun run tauri build)`, which \
              stages the worker into app/src-tauri/binaries/ for the `externalBin` \
              entry in tauri.conf.json. To run this copy meanwhile, point \
              PARCAD_OCCT_WORKER at a worker binary.",
@@ -335,6 +335,7 @@ fn run_worker(request: Request, opts: &Options) -> Result<Response, OcctError> {
     let frame = serde_json::to_vec(&Frame {
         reply: reply_path.to_string_lossy().into_owned(),
         request,
+        build: BuildId::this_build(),
     })
     .map_err(|e| OcctError::Host(format!("cannot encode the request: {e}")))?;
 

@@ -38,6 +38,8 @@ tools/check.sh --fast   # kernel crates, editor tests, grader self-test (~4 s)
 `pre-commit` runs `--fast`, `pre-push` runs everything. `--fast` builds no worker
 and runs no geometry, so it is the edit loop, not the claim. Never reach for
 `--release` to speed up an edit loop; that profile is LTO'd on purpose.
+`tools/build-worker.sh` builds the `iterate` profile, ~3 s after an edit;
+`--release` is for the corpus, benchmarks and bundles.
 
 ## What a change has to satisfy
 

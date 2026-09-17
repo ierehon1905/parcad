@@ -50,6 +50,17 @@ glam = "0.30"
 lto = "thin"
 codegen-units = 1
 
+# Iterate is the profile you rebuild the worker in: release's opt-level, so a
+# part builds at a realistic speed, without what makes release slow to link.
+# The default of tools/build-worker.sh and playground/build-kernel.sh; the
+# corpus in tools/check.sh, the benchmarks, CI and the bundles stay on release,
+# and a worker refuses a host of the other one (protocol::BuildId).
+[profile.iterate]
+inherits = "release"
+lto = false
+codegen-units = 16
+incremental = true
+
 # Dev is the profile that compiles: cargo's defaults, incremental, unoptimised.
 #
 # The test profile inherits it and would therefore run unoptimised too, which

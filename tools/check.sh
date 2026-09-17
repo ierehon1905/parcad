@@ -92,8 +92,8 @@ need_frontend_deps
 step "field/selftest.py"
 field/selftest.py
 
-step "tools/build-worker.sh"
-tools/build-worker.sh
+step "tools/build-worker.sh --release"
+tools/build-worker.sh --release
 
 # The kernel's own tests — probes, the thickness sweep, face lineage — run
 # in-process against OpenCASCADE, so they need the `kernel` feature. Release,
@@ -109,6 +109,6 @@ PARCAD_OCCT_WORKER="$PWD/target/release/parcad-occt-worker" \
   cargo test --locked --release -p parcad-host -- --ignored
 
 step "eval corpus"
-cargo run -q -p parcad-eval
+cargo run -q --release -p parcad-eval
 
 printf '\n\033[1mall green\033[0m\n'

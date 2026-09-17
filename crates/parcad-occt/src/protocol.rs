@@ -821,6 +821,56 @@ pub enum Response {
 pub struct Frame {
     pub reply: String,
     pub request: Request,
+    pub build: BuildId,
+}
+
+/// Which compilation of this crate a process is. A host and its worker are two
+/// (the worker adds the `kernel` feature), and the worker refuses a host that
+/// is not its twin, so a stale worker or one from the other profile is an
+/// error and never a quietly different measurement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildId {
+    /// The cargo profile: `release`, `iterate`, or `debug` for dev and test.
+    pub profile: String,
+    /// A digest of the sources both halves compile, from `build.rs`.
+    pub source: String,
+}
+
+impl BuildId {
+    pub fn this_build() -> BuildId {
+        BuildId {
+            profile: env!("PARCAD_BUILD_PROFILE").to_owned(),
+            source: env!("PARCAD_SOURCE_DIGEST").to_owned(),
+        }
+    }
+
+    /// Why a worker that is `self` must not serve `host`, naming the fix, or
+    /// `None` when it may. Only `release` is measured, so it pairs only with
+    /// itself; `debug` and `iterate` are both the local loop and pair freely.
+    pub fn refuse(&self, host: &BuildId) -> Option<String> {
+        let rebuild = if host.profile == "release" {
+            "tools/build-worker.sh --release"
+        } else {
+            "tools/build-worker.sh"
+        };
+        if (self.profile == "release") != (host.profile == "release") {
+            return Some(format!(
+                "this worker was built with the `{}` cargo profile and the host with `{}`, \
+                 and a release host only runs a release worker. Rebuild the worker with \
+                 {rebuild}, or point PARCAD_OCCT_WORKER at one built with the host's profile",
+                self.profile, host.profile
+            ));
+        }
+        if self.source != host.source {
+            return Some(format!(
+                "this worker was built from different kernel sources than the host \
+                 (digest {} against the host's {}), so it is stale or the host is. \
+                 Rebuild the worker with {rebuild}, and the host if it is older",
+                self.source, host.source
+            ));
+        }
+        None
+    }
 }
 
 /// What a serving worker prints to stderr, followed by the reply path, once
@@ -843,6 +893,18 @@ pub fn breadcrumb(stage: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_worker_serves_only_a_host_of_its_own_sources_and_measured_profile() {
+        let build = |profile: &str, source: &str| BuildId { profile: profile.into(), source: source.into() };
+        let release = build("release", "a");
+        assert_eq!(release.refuse(&build("release", "a")), None);
+        assert_eq!(build("iterate", "a").refuse(&build("debug", "a")), None);
+        assert!(!release.refuse(&build("iterate", "a")).unwrap().contains("--release"));
+        assert!(build("iterate", "a").refuse(&release).unwrap().contains("--release"));
+        assert!(release.refuse(&build("release", "b")).unwrap().contains("stale"));
+        assert!(!build("debug", "a").refuse(&build("iterate", "b")).unwrap().contains("--release"));
+    }
 
     /// The exact shape `Shape_geometry_json` (vendored wrapper) emits, held
     /// here so a schema drift on either side goes red in a unit test instead
