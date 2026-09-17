@@ -17,6 +17,7 @@ e2e = ["dep:tauri-plugin-wdio-webdriver"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+serde_json.workspace = true
 
 [dependencies]
 # Everything the app can do, and the HTTP and MCP hosts, live there; this crate

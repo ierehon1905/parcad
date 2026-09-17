@@ -248,8 +248,8 @@ entirely. Use `tools/build-worker.sh`.
 ### A Tauri sidecar is declared, staged and installed under three names
 
 `externalBin` in `tauri.conf.json` names `binaries/parcad-occt-worker`. The file
-on disk has to be `binaries/parcad-occt-worker-aarch64-apple-darwin` or the build
-fails outright — that part is loud. What is quiet is the third name: the macOS
+on disk has to be `binaries/parcad-occt-worker-aarch64-apple-darwin` or a
+production build fails outright — that part is loud. What is quiet is the third name: the macOS
 bundler strips the triple again and writes
 `parcad.app/Contents/MacOS/parcad-occt-worker`. Nothing documents that as a
 promise, and it is not the same on every target.
@@ -264,6 +264,44 @@ or the thing being measured is your shell:
 cp -R target/release/bundle/macos/parcad.app /tmp/ && cd /tmp
 env -u PARCAD_OCCT_WORKER PARCAD_HTTP_PORT=4299 /tmp/parcad.app/Contents/MacOS/parcad-app
 ```
+
+### tauri-build copies the sidecar beside every app it builds
+
+Its build step (`copy_binaries`, tauri-build 2.6.3) deletes
+`target/<profile>/parcad-occt-worker` and copies the staged worker there each
+time the app's build script runs, and refuses to build when the staged file is
+missing. Both halves bit, measured on 2026-09-17:
+
+- **A fresh clone could not build the app at all.** In a new worktree,
+  `tools/check.sh` and a plain `cargo build` stopped at parcad-app's build
+  script: "resource path `binaries/parcad-occt-worker-aarch64-apple-darwin`
+  doesn't exist". Only `tools/build-worker.sh --release` writes that file,
+  which means compiling OpenCASCADE before a build documented not to need it.
+  CI runs `--fast`, which never builds the app, and a working checkout keeps a
+  staged copy from some earlier build, so nothing noticed.
+- **Where it did exist, a debug app got the release worker.** After
+  `tools/build-worker.sh`, then `--release`, then `cargo build -p parcad-app`,
+  `target/debug/parcad-occt-worker` was the release one, and the debug host
+  beside it refused it: "this worker was built with the `release` cargo profile
+  and the host with `debug`". Every restage also reran the build script and
+  recompiled the app.
+
+`app/src-tauri/build.rs` now removes `externalBin` from the configuration
+tauri-build reads — a `TAURI_CONFIG` merge patch, kept on top of any the caller
+set — when `DEP_TAURI_DEV` is `true`: tauri's `cargo:dev`, a build without
+`custom-protocol`, which is every `cargo build`, `cargo test` and `tauri dev`.
+Those builds need no staged worker and leave the one beside them alone, and a
+restage rebuilds nothing (0.34 s). A production build keeps it: `tauri build`,
+and `tauri build --debug` in `tools/test-desktop.sh`, still refuse a missing
+sidecar by name and still copy the release worker into their target
+directory, which is why test-desktop.sh runs `tools/build-worker.sh` after its
+build. A fresh worktree then passed the whole gate:
+`tools/check.sh` green in 486 s, with `PARCAD_OCCT_PREBUILT` set and the two
+`bun install`s it names, which it now asks for before it builds anything
+rather than after the release build. `bun run tauri build` still bundles a
+working kernel — the bundled `parcad` measured a 10 mm cube at 1000 mm³
+through the sidecar beside it, 18 KB larger than `target/release`'s because
+the bundler signs it.
 
 ### zsh aborts a command on an unmatched glob
 

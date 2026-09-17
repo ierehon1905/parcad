@@ -42,7 +42,17 @@ need_frontend_deps() {
   }
 }
 
+# The relay runs under `wrangler dev`, so it needs its own install.
+need_relay_deps() {
+  [ -d relay/node_modules ] || {
+    echo "relay/node_modules is missing. Run: (cd relay && bun install --frozen-lockfile)" >&2
+    exit 1
+  }
+}
+
 if [ "$fast" = 1 ]; then
+  need_frontend_deps
+
   # The kernel crates only. `parcad-host` and `parcad-app` are left out on
   # purpose: the host's test binary is slow to link and one of its tests sleeps
   # 5 s by design (the sandbox's endless-script timeout), which together are
@@ -59,7 +69,6 @@ if [ "$fast" = 1 ]; then
   cargo test --locked -p parcad-core -p parcad-occt -p parcad-cli
 
   step "bun test"
-  need_frontend_deps
   (cd app && bun test src)
 
   step "field/selftest.py"
@@ -72,6 +81,9 @@ if [ "$fast" = 1 ]; then
   printf '\n\033[1mok\033[0m — kernel only, no worker, no corpus. Run tools/check.sh before pushing.\n'
   exit 0
 fi
+
+need_frontend_deps
+need_relay_deps
 
 step "cargo build --locked --release"
 cargo build --locked --release
@@ -86,18 +98,12 @@ step "cargo test"
 cargo test --release --workspace --exclude occt-sys
 
 step "bun test"
-need_frontend_deps
 (cd app && bun test src)
 
 step "field/selftest.py"
 field/selftest.py
 
-# The relay runs under `wrangler dev`, so it needs its own install.
 step "relay"
-[ -d relay/node_modules ] || {
-  echo "relay/node_modules is missing. Run: (cd relay && bun install --frozen-lockfile)" >&2
-  exit 1
-}
 (cd relay && bun x tsc --noEmit && bun test test)
 
 step "tools/build-worker.sh --release"
