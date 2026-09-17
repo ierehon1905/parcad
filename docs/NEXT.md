@@ -70,35 +70,46 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      substitute.
    - Dry-run it locally first (`act`, or the same shell steps by hand against a
      published tag): a blind CI round on a release path costs a release.
-4. **WebMCP on the playground** — agreed 2026-09-15, waiting on the owner's
-   origin-trial token; the playground is live at
-   <https://ierehon1905.github.io/parcad/>. Time-boxed, page-only. The
-   playground's one missing surface is MCP;
-   [WebMCP](https://developer.chrome.com/docs/ai/webmcp) lets the page register tools for an agent in the visitor's browser (Chrome 149+, behind
-   `chrome://flags/#enable-webmcp-testing` or an origin trial; consumed by
-   Chrome's Gemini agent and the Model Context Tool Inspector extension, not by
-   Claude or Cursor). The tools are the ones `mcp.rs` already serves — same names,
-   descriptions generated from it at build time, never a second copy — each
-   calling the same `backend.ts` function the editor calls, so an agent's part
-   appears in the visitor's editor. Out of reach in a tab: the shared live
-   session, parts as files, builds over 60 s. `field/` cannot grade it (it speaks
-   MCP, and this is not an MCP server), so the evidence is inspector-extension
-   trials and a written record of whether an agent finds the tools, reads the
-   replies, and builds a part the editor shows; a weak result is recorded and not
-   shipped. Needs from the owner: an origin-trial token for
-   `ierehon1905.github.io`. Check on the live site that the document is
-   origin-isolated, which WebMCP requires.
+4. **ParCAD web: agents through a relay** — built 2026-09-17, not deployed.
+   The playground became ParCAD web, the app in a tab: `parcad-host` compiled to
+   WebAssembly (`crates/parcad-wasm-host`, `page.rs`) beside the kernel, the
+   same routes and MCP server, and a Cloudflare Worker (`relay/`) an AI client
+   reaches the tab through. Field cases over the relay with Haiku: 4/4 SOUND
+   (change-the-open-part, did-the-window-draw-it, how-thin-is-it ×2). The
+   desktop MCP path measured unchanged (cached evaluate 1.99 ms before and
+   after, fresh build 22.8 / 22.9 ms, render 47.5 / 48.2 ms). Left:
+   - **One URL for a directory.** A link is per tab, and a listing in the
+     ChatGPT app directory or Claude's connector directory is one production
+     URL every user connects to. The relay needs a pairing step: OAuth whose
+     consent page is ParCAD web itself, issuing a token bound to that browser's
+     link. OpenAI's review also wants a verified developer, a privacy policy
+     page, tool annotations (done) and test cases; submitting is the owner's
+     call, and says it was prepared with an AI assistant.
+   - **Try it in claude.ai and Claude Desktop** as a custom connector, and the
+     in-chat viewer there; only Claude Code (via the field harness) and curl
+     have connected so far, over a local relay.
+   - **Measure `show-me-the-part` for the web**: a tab gives no render path a
+     client can open, so the view's `markdown` is absent and the case, as
+     written, cannot pass there.
+   - **Phones**: the page's layout collapses the viewport to a strip at 375 px
+     (seen 2026-09-17, before this work), and a phone suspends a background tab,
+     which drops the link.
+   - WebMCP, the item this replaces, is still possible on top: the page's
+     tools are the host's, so registering them with `navigator.modelContext`
+     is a thin adapter, and nothing else here waits on it.
 5. **A measured parts library** — fasteners, bearings, boards, devices, each
    held by eval cases, and a way for one part to import another.
 
 ### Waiting on a decision
 
-- **How the playground is published.** Pages serves the `gh-pages` branch;
-  `playground.yml` is disabled (manually, 2026-09-15). The recipe used since:
-  `playground/build-kernel.sh`, the corpus against `playground/node-worker.sh`
-  (all green or no deploy), `playground/prebuild.sh`, `vite build --mode
-  playground` with `PARCAD_PLAYGROUND_BASE=/parcad/`, then the output committed
-  to `gh-pages` as "Playground from main <sha>" and pushed with the repository's
+- **How ParCAD web is published.** Pages serves the `gh-pages` branch;
+  `web.yml` (renamed from `playground.yml`, which was disabled by hand on 2026-09-15) runs only on a manual dispatch. The recipe used since:
+  `web/build-kernel.sh` (both kernels and the host), the corpus against
+  `web/node-worker.sh` (all green or no deploy), `web/prebuild.sh`,
+  `vite build --mode web` with `PARCAD_WEB_BASE=/parcad/` and
+  `VITE_PARCAD_RELAY` set to the deployed relay, the viewer build into the same
+  `dist-web` (web/README.md, "The site"), then the output committed
+  to `gh-pages` as "ParCAD web from main <sha>" and pushed with the repository's
   pre-push hook off (it runs the code gate, which a branch of build output
   cannot). Either script that recipe or re-enable the workflow; it is written
   down nowhere else.
@@ -116,7 +127,7 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
 - **Signing**: SignPath Foundation (free) for Windows; Apple Developer ID ($99/yr)
   for the `.app`. Neither is started.
 
-### Found designing the playground's planter saucer (2026-09-16)
+### Found designing ParCAD web's planter saucer (2026-09-16)
 
 - **Which OCCT step drops a union's input.** Refused since 2026-09-17 (GOTCHAS,
   "A union that drops solids"); still unknown is where the fuse loses it, and
@@ -183,6 +194,7 @@ In order.
 | Homebrew tap | `publish.yml` needs `HOMEBREW_TAP_TOKEN` (fine-grained, contents on `ierehon1905/homebrew-parcad`); without it render the formula with `packaging/render.py` and push it to the tap by hand | 0.0.6 pushed by hand; `brew audit --strict` clean; upgraded and tested on the owner's machine |
 | Claude Code community plugins | submitted by the owner 2026-09-14 11:11 UTC at platform.claude.com/plugins/submit (repo `ierehon1905/parcad`, path `packaging/plugin`); status only on the Console's "View submissions" page | under review: not in `anthropics/claude-plugins-community`'s `marketplace.json` as of 2026-09-15. The submission text says Apple silicon only, written before 0.0.6 |
 | winget | `publish.yml` needs `WINGET_TOKEN` (classic, `public_repo`) for Komac; the first version was submitted by hand | [microsoft/winget-pkgs#435026](https://github.com/microsoft/winget-pkgs/pull/435026) from the fork `ierehon1905/winget-pkgs`: CLA signed, every validation stage passed, awaiting a moderator. Its description discloses it was AI-generated |
+| ParCAD web relay | `relay/`, `bun x wrangler deploy` from the owner's Cloudflare account; the site needs `VITE_PARCAD_RELAY` at build time | deployed 2026-09-17 at <https://parcad-relay.ierehon1905.workers.dev> |
 
 Neither secret is set, so both of those jobs skip with a notice until the owner
 adds them. A release needs the build test first: dispatch `release.yml` on
@@ -316,7 +328,7 @@ through OCCT's `Font_BRepTextBuilder`; OpenSCAD has `text()` plus
 part that measures differently on another machine.
 
 **The likely shape: no kernel change.** One OFL font, so every machine — and
-the WebAssembly playground — builds the same outline. A build step reads it
+ParCAD web — builds the same outline. A build step reads it
 (`ttf-parser`, MIT/Apache, or a script) into a generated glyph table of contours
 and advance widths, the way `docs.rs` is generated from `dsl.ts` and never
 written beside it; the DSL function lays out a string from that table into

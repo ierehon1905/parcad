@@ -1,0 +1,15 @@
+[package]
+name = "parcad-wasm-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "parcad-host as a WebAssembly module, for ParCAD web"
+publish = false
+
+# Everything is behind the Emscripten target, as in parcad-wasm: elsewhere this
+# is an empty binary. Built in its own cargo invocation (playground/build-kernel.sh)
+# so the kernel's `kernel` feature never unifies into this module.
+[target.'cfg(target_os = "emscripten")'.dependencies]
+parcad-host = { path = "../parcad-host" }
+serde.workspace = true
+serde_json.workspace = true

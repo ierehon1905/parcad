@@ -666,42 +666,59 @@ The one honest difference left is where an export lands — a file on the deskto
 a download in the browser. Same bytes, same kernel; a property of the host, not
 of the model.
 
-### A third transport with no host: the playground
+### A third host: ParCAD web
 
-`vite build --mode playground` builds the same frontend as a static site, and
-`backend.ts` then answers every call inside the tab instead of over a socket:
+`vite build --mode web` builds the same frontend as a static site, and
+the host is in the tab: `parcad-host` itself, compiled to WebAssembly, in a Web
+Worker, beside the kernel in another.
 
 ```
-  webview  ──Tauri IPC──┐
-  browser  ──HTTP───────┼──> service.rs ──> parcad_evaluation ──┐
-  agent    ──MCP────────┘                  OCCT worker process ├─ parcad_occt::serve
-  playground ──Web Worker──> parcad-wasm.wasm ─────────────────┘
+  webview   ──Tauri IPC──┐
+  browser   ──HTTP───────┼──> service.rs ──> OCCT worker process ──┐
+  agent     ──MCP────────┘                                         ├─ parcad_occt::serve
+  web page  ──Web Worker──> service.rs ──> kernel Web Worker ───────┘
+  agent ──MCP──> relay ──WebSocket─┘  (the same host, in the tab)
 ```
 
-The kernel is not a reimplementation. `crates/parcad-wasm` compiles
-`parcad_occt::serve::run` — the function the native worker's stdin loop calls —
-and `parcad_evaluation::evaluated`, the function `service::evaluate` calls, with
-the patched OpenCASCADE, to one WebAssembly module (`playground/build-kernel.sh`).
-Five exported calls mirror the five HTTP routes the editor uses: evaluate,
-inspect an edge target, export STL, 3MF and STEP. The same Node build of the
-worker is what the eval corpus measures, and it passes it (playground/README.md
-has every number that moved).
+The tab mirrors the desktop's two processes. `crates/parcad-wasm-host` is the
+host process: the routes `http.rs` serves (`page.rs` answers them over the same
+`routes.rs` and `service.rs`), the MCP service `http.rs` mounts (rmcp's tower
+service, driven on a current-thread tokio runtime), the QuickJS sandbox, and
+`projects.rs` over a filesystem the page keeps in IndexedDB. `crates/parcad-wasm`
+is the worker process: a request packet in, `parcad_occt::serve::run`, a reply
+packet out (`parcad_occt::packet` — the JSON with the mesh as raw arrays, and
+the files the request reads or writes carried by path, since the two modules do
+not share a filesystem). `app/src/page/kernel.ts` supervises that worker the
+way `host.rs` supervises a process: one request at a time, the last `@stage`
+breadcrumb kept, a trap reported as a crash, a request past its deadline
+stopped, and the next one on a fresh worker.
 
-What `host.rs` does for a process, `app/src/page/kernel.ts` does for a Web
-Worker: one call at a time, the last `@stage` breadcrumb kept, a worker that
-traps terminated and reported as a crash naming that stage, one still running
-at the deadline (60 s, the desktop's 20 s times the measured slowdown)
-terminated as timed out, and the next call starting a fresh worker from the
-module already compiled. The module is downloaded after first paint, and the
-viewport says what is downloading and how big it is.
+The one thing a tab cannot do is wait. A native host blocks on its worker; the
+host module shares a thread with its worker's event loop, and only the page can
+reach the kernel. So `parcad_occt::with_kernel` routes a request to `page.rs`,
+which *pauses* the call: the request is kept under a ticket and the call unwinds
+to where it started. The page runs the kernel, hands the answer back, and the
+call runs again from the top, reaching the same request, which is now answered.
+Scripts are cached and a call is a function of its input, so the second pass
+costs little; the rule it imposes is that a call asks the kernel before it
+writes anything (`save_project` renders its thumbnail first). An MCP request
+that waits on the window — `set_script` with `wait_s` — is a future the host
+keeps between calls, polled again once the page reports what it drew. The
+desktop takes neither path: `page::active()` is false there, and a benchmark of
+the MCP tools over `parcad serve` before and after measured the same medians.
 
-The project folder is IndexedDB (`app/src/page/store.ts`), seeded from
-`examples/` at build time under the names `projects.rs` gives them and answering
-in the same shapes. What needs a host is absent rather than dimmed: no MCP
-endpoint answers, so the titlebar chip never appears; there is no shared session
-to subscribe to; an export is a download, which the browser transport already
-did. Nothing outside `backend.ts` knows which of the three it got — the loading
-state is a signal that simply never fires under a host.
+The window reaches the tab's host the way it reaches a desktop one:
+`backend.ts` hands `page/host.ts` the same route and request it would `fetch`
+and reads the same `Response` back, so the project picker, the session, the
+agent chip and the exports are the HTTP transport's code. Two things keep their
+own path: an evaluation arrives with its mesh as typed arrays, and session
+events arrive as worker messages rather than SSE.
+
+An agent reaches the tab through the relay (`relay/README.md`): a Cloudflare
+Worker that forwards each MCP request to the tab's socket and its answer back,
+and keeps nothing. The tab opens that socket only when the visitor asks for a
+link (`ui/agent-link.tsx`), under a key made in the browser that the link is
+derived from.
 
 Under `tauri dev` the UI comes from Vite on 1420, which proxies `/api` to the
 app's port. That keeps every frontend call same-origin, which is what lets the
@@ -718,6 +735,8 @@ something the UI cannot, or measure it differently.
   browser  ──HTTP───────┼──> service.rs ──> core / OCCT worker
   agent    ──MCP────────┘
 ```
+
+In ParCAD web the same server answers inside the tab, reached through the relay.
 
 Two things are shaped by the caller being a model, both from CLAUDE.md and both
 worth more here than anywhere else — a model cannot ask a follow-up question and

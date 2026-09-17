@@ -3,7 +3,7 @@
  *
  * A visitor waits twice on a first visit: for 6 MB of kernel, and then for the
  * seed part to build in it — seconds, on geometry nobody has edited yet. The
- * site ships that one evaluation (`playground/prebuild.sh` records it from the
+ * site ships that one evaluation (`web/prebuild.sh` records it from the
  * same kernel), so the part is on screen while the kernel is still arriving.
  *
  * It is offered exactly once, for the part it was recorded from and only while
@@ -16,7 +16,7 @@
 
 import { DRACOLoader } from "three/examples/jsm/loaders/DRACOLoader.js";
 
-import { call } from "./kernel";
+import { evaluate } from "./host";
 
 declare const __PARCAD_FIRST_PART__:
   | { url: string; mesh: string; decoder: string; part: string; script: string }
@@ -49,7 +49,7 @@ export async function take(part: string | undefined, source: string): Promise<un
  * Only the triangles travel that way, and only as far as the first rebuild:
  * Draco quantises positions to 14 bits of the part's own extent, 0.006 mm here,
  * where every number the page *reports* comes from the snapshot in the JSON.
- * playground/encode-draco.ts writes it.
+ * web/encode-draco.ts writes it.
  */
 async function triangles(url: string, decoderPath: string) {
   const response = await fetch(new URL(url, document.baseURI));
@@ -69,10 +69,7 @@ async function triangles(url: string, decoderPath: string) {
 
 /** Build that same graph in this tab, to replace what was shipped with it. */
 export function rebuild(graph: unknown): Promise<unknown> {
-  rebuilding = call({ op: "evaluate", graph }).then((reply) => {
-    if (!("json" in reply)) throw new Error("the kernel answered the rebuild with bytes, not an evaluation");
-    return reply.json;
-  });
+  rebuilding = evaluate(graph);
   return rebuilding;
 }
 

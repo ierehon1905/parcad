@@ -25,7 +25,7 @@
 import { computed, signal } from "@preact/signals";
 import type { EditorView } from "codemirror";
 import type * as dsl from "./dsl";
-import type { AvailableUpdate, KernelLoad, McpStatus } from "./backend";
+import type { AgentLink, AvailableUpdate, KernelLoad, McpStatus } from "./backend";
 import type { VertexPoint } from "./entities";
 import type { Projects } from "./projects";
 import type { FaceMaterial, Viewport } from "./viewport";
@@ -255,6 +255,11 @@ export const update = signal<AvailableUpdate | undefined>(undefined);
 
 /** Whether a model is on the third transport. Undefined until first answered. */
 export const mcp = signal<McpStatus | undefined>(undefined);
+
+/** Whether this tab is open to agents, and by which link: ParCAD web only. */
+export const agentLink = signal<AgentLink>({ kind: "off" });
+/** Whether the panel that gives an agent that link is showing. */
+export const agentPanel = signal(false);
 
 /**
  * How far a kernel that has to be downloaded has got. Undefined whenever the

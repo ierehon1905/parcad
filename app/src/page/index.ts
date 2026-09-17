@@ -1,9 +1,9 @@
 /**
- * The playground's host, which is the page itself: a kernel in a Web Worker
- * and a project folder in IndexedDB. Only `backend.ts` imports this, and only
- * in the playground build.
+ * ParCAD web's host, which is the page itself: `parcad-host` in one Web Worker,
+ * the kernel in another. Only `backend.ts` imports this, and only in the
+ * ParCAD web build.
  */
 
+export * as host from "./host";
 export * as kernel from "./kernel";
 export * as prebuilt from "./prebuilt";
-export * as store from "./store";

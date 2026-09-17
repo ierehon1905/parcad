@@ -264,12 +264,12 @@ pub fn live() -> Live {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// The session is one process-wide value, so tests that write it must not
     /// interleave. Same arrangement as `projects::tests::scoped`.
-    fn scoped<T>(work: impl FnOnce() -> T) -> T {
+    pub(crate) fn scoped<T>(work: impl FnOnce() -> T) -> T {
         static LOCK: Mutex<()> = Mutex::new(());
         let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let out = work();

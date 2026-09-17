@@ -155,6 +155,22 @@ impl Rgb {
         buf.write_to(&mut png, image::ImageFormat::Png)?;
         Ok(png.into_inner())
     }
+
+    /// Encode as lossless WebP: the same pixels as [`Self::to_png`] in 43% fewer
+    /// bytes over fifteen corpus renders, at the same speed, where PNG's best
+    /// compression bought 22% for thirty times the time. What an image in a
+    /// tool reply is sent as; a file a person opens stays PNG.
+    pub fn to_webp(&self) -> Result<Vec<u8>> {
+        use image::ImageEncoder;
+        let mut webp = Vec::new();
+        image::codecs::webp::WebPEncoder::new_lossless(&mut webp).write_image(
+            &self.data,
+            self.width,
+            self.height,
+            image::ExtendedColorType::Rgb8,
+        )?;
+        Ok(webp)
+    }
 }
 
 /// Render settings.

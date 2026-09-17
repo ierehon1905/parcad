@@ -6,7 +6,7 @@ which, because the difference matters if you redistribute a binary.
 ## Our own code — MIT OR Apache-2.0
 
 `crates/`, `app/` (both the Rust host and the TypeScript frontend), `tools/`,
-`field/`, `examples/`, `eval/`, `cmake/`, `playground/` and `docs/` — including the screenshots
+`field/`, `examples/`, `eval/`, `cmake/`, `web/` and `docs/` — including the screenshots
 in `docs/images/`, which are this application rendering its own examples — with
 one file excepted below, at your option under either:
 
@@ -142,9 +142,9 @@ with. You do not have to modify the app, and you do not need our permission.
 If any of this does not work for you, that is a bug in this project. Please open
 an issue.
 
-## The browser playground's kernel
+## ParCAD web's kernel
 
-The playground (`playground/`, published as a static site) is distributed
+ParCAD web (`web/`, published as a static site) is distributed
 differently, and the difference matters. There is no separate worker process in
 a browser tab: `parcad_wasm.wasm` is **one WebAssembly file holding OpenCASCADE,
 the LGPL-2.1 wrapper crates above, our MIT/Apache Rust (`parcad-occt`,
@@ -157,11 +157,11 @@ licences, and OCCT's two licence texts under `licenses/`.
 Because OpenCASCADE is statically linked into that file, relinking means
 rebuilding the file, and everything needed to do that is public: the whole
 source of the program, the exact build recipe, and the pinned tool versions in
-[playground/README.md](playground/README.md). To use your own OpenCASCADE:
+[web/README.md](web/README.md). To use your own OpenCASCADE:
 
 ```bash
-OCCT_SOURCE=/path/to/your/occt EMSDK=/path/to/emsdk playground/build-kernel.sh
-cd app && bun x vite build --mode playground        # a site built on your kernel
+OCCT_SOURCE=/path/to/your/occt EMSDK=/path/to/emsdk web/build-kernel.sh
+cd app && bun x vite build --mode web        # a site built on your kernel
 ```
 
 `build-kernel.sh` applies `vendor/occt-sys/patches` to whatever tree

@@ -3,7 +3,7 @@
  *
  * A page that carries its own kernel first downloads and compiles it; every
  * transport then builds the first part before there is geometry. Both waits
- * used to leave the viewport blank — the playground's first part takes seconds
+ * used to leave the viewport blank — ParCAD web's first part takes seconds
  * in a tab — so both say what is happening. Once a part has been drawn a
  * rebuild keeps the last one on screen, and this renders nothing.
  */

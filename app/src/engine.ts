@@ -536,6 +536,75 @@ export function watchMcp(): () => void {
   return () => window.clearInterval(handle);
 }
 
+// ------------------------------------------------------------ agents in a tab
+
+/**
+ * The relay ParCAD web opens itself to agents through. Set when the site is
+ * built; without one the connect panel says there is none.
+ */
+export const RELAY: string | undefined = import.meta.env.VITE_PARCAD_RELAY || undefined;
+const AGENT_KEY = "parcad.agents.key";
+const AGENT_OPEN = "parcad.agents.open";
+
+function stored(name: string): string | null {
+  try {
+    return localStorage.getItem(name);
+  } catch {
+    return null;
+  }
+}
+
+function store(name: string, value: string | null) {
+  try {
+    if (value === null) localStorage.removeItem(name);
+    else localStorage.setItem(name, value);
+  } catch {
+    // A private window: the link lasts as long as the tab, which is all it can.
+  }
+}
+
+/** This browser's key for its link, made on first use. The link is derived from it. */
+function agentKey(): string {
+  const kept = stored(AGENT_KEY);
+  if (kept) return kept;
+  const bytes = crypto.getRandomValues(new Uint8Array(32));
+  const key = btoa(String.fromCharCode(...bytes)).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+  store(AGENT_KEY, key);
+  return key;
+}
+
+/** Follow the tab's link, and reopen it on a later visit if it was left open. */
+export function watchAgentLink(): () => void {
+  if (!backend.mcpThroughRelay) return () => {};
+  const stopLink = backend.watchAgentLink((link) => (S.agentLink.value = link));
+  // The chip's poll is seconds apart; an agent's call is news now.
+  const stopRequests = backend.watchAgentRequests(() => {
+    void backend.mcpStatus().then((status) => (S.mcp.value = status)).catch(() => {});
+  });
+  if (RELAY && stored(AGENT_OPEN) === "1") void openToAgents();
+  return () => {
+    stopLink();
+    stopRequests();
+  };
+}
+
+export async function openToAgents(): Promise<void> {
+  if (!RELAY) return;
+  store(AGENT_OPEN, "1");
+  await backend.openToAgents(RELAY, agentKey());
+}
+
+export async function closeToAgents(): Promise<void> {
+  store(AGENT_OPEN, null);
+  await backend.openToAgents(null, agentKey());
+}
+
+/** Retire the link: whoever had the old one can no longer reach this tab. */
+export async function renewAgentLink(): Promise<void> {
+  store(AGENT_KEY, null);
+  if (stored(AGENT_OPEN) === "1") await openToAgents();
+}
+
 // ------------------------------------------------------------ updates
 
 const UPDATE_POLL_MS = 6 * 60 * 60 * 1000;

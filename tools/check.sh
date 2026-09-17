@@ -3,7 +3,7 @@
 # Everything that has to be true before a change lands, in the one order that
 # works. Run it bare for the full pass, or `--fast` to skip the corpus.
 #
-#     tools/check.sh              # build, unit tests, worker, eval corpus
+#     tools/check.sh              # build, unit tests, the relay, worker, eval corpus
 #     tools/check.sh --fast       # everything but the corpus (~20 s)
 #
 # The order is not arbitrary:
@@ -91,6 +91,14 @@ need_frontend_deps
 
 step "field/selftest.py"
 field/selftest.py
+
+# The relay runs under `wrangler dev`, so it needs its own install.
+step "relay"
+[ -d relay/node_modules ] || {
+  echo "relay/node_modules is missing. Run: (cd relay && bun install --frozen-lockfile)" >&2
+  exit 1
+}
+(cd relay && bun x tsc --noEmit && bun test test)
 
 step "tools/build-worker.sh --release"
 tools/build-worker.sh --release

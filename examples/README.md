@@ -51,7 +51,7 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 | `shaft-coupler.js` | 8-to-10 mm rigid coupler | two blind bores meeting at a web; radial grub screws breaking into them |
 | `spur-gears.js` | module 2 gear pair, 20 and 30 teeth, meshed | curves drawn from a formula: every flank an involute the script certifies to a few millionths of a millimetre, and `between_bodies` reading the 0.094 mm flank gap that 0.1 mm of backlash predicts |
 | `timing-pulley.js` | 20-tooth GT2 pulley | **approximate** — and says so; see docs/DSL_GAPS.md §5 |
-| `twisted-planter.js` | twisted star planter and drip saucer, two prints | the part the web playground opens first: a ruled loft twisted through nine star sections and hollowed along the same twist to a measured 2 mm wall, and a saucer of smooth bumps in rings of 1, 6, 12 and 18, each a revolved smootherstep profile that leaves the floor with no crease |
+| `twisted-planter.js` | twisted star planter and drip saucer, two prints | the part ParCAD web opens first: a ruled loft twisted through nine star sections and hollowed along the same twist to a measured 2 mm wall, and a saucer of smooth bumps in rings of 1, 6, 12 and 18, each a revolved smootherstep profile that leaves the floor with no crease |
 | `v-block.js` | 50 mm toolroom V-block | a 90° vee cut by a rotated cube, so the angle cannot drift |
 | `wash-bottle.js` | wash bottle with a curved spout | curves in section and path: a rounded base corner, a spline shoulder and an arc bead in one revolve section, a second section for the cavity, and a spout that is `pipe({ spline })` bored along the same spline |
 

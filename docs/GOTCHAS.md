@@ -276,7 +276,7 @@ find target -maxdepth 3 -name "occt-sys-*" -type d -exec rm -rf {} +
 
 ### The WebAssembly kernel: four ways a build links something else
 
-All met building `playground/build-kernel.sh`; each produced a binary, not an
+All met building `web/build-kernel.sh`; each produced a binary, not an
 error.
 
 - **A rebuilt OpenCASCADE is not relinked.** `opencascade-sys` asks for
@@ -296,7 +296,7 @@ error.
   instantiation ("br_table: label arity inconsistent",
   `ShapeUpgrade_ShapeDivide::Perform`) and binaryen could not parse. The define
   only matters once `OSD::SetSignal` installs a handler, which nothing in parcad
-  calls, and wasm has no signals; `playground/occt-emscripten.cmake` undefines it.
+  calls, and wasm has no signals; `web/occt-emscripten.cmake` undefines it.
 - **`--bin` filters every `-p`.** `cargo build -p a --bin x -p b` builds no
   binary of `b`; name each.
 
@@ -317,7 +317,7 @@ exactly, which is why the case holds the triangle count to 260% rather than
 either build's number. Across the whole corpus the WebAssembly build moves only
 tessellation-derived numbers — at most 1.7e-4 relative in volume or area, 0.002
 mm in size, 0.54% in bed contact and 9.8% in triangles elsewhere — and no face
-or edge count; playground/README.md has the table.
+or edge count; web/README.md has the table.
 
 The request itself was the defect: a planar wall's parametric diagonal
 midpoint is off the diagonal in its own plane, which the deflection check read
@@ -474,7 +474,7 @@ them: a union volume floor (result ≥ larger operand) and a volume check across
 
 `IMeshTools_Parameters::MeshAlgo`, or the `CSF_MeshAlgo=delabella` environment
 variable the default factory reads, swaps OpenCASCADE's Watson triangulator for
-Delabella. It is faster — on the playground's planter, 199k triangles over 37
+Delabella. It is faster — on ParCAD web's planter, 199k triangles over 37
 revolved bumps, the mesher went 1.27 s to 0.94 s and the whole part 3.29 to
 2.86 (M4 Max, release); in WebAssembly it saved 6% of the mesh time — and it
 returns meshes that do not close. Two lines are enough:
@@ -1496,3 +1496,79 @@ CI's, not tauri.conf.json's: a plain `bun run tauri build` still has to produce
 the `parcad` the macOS bundle carries, and `tauri dev` reads the same runner
 configuration. Do not add a `cargo build -p parcad-cli` after it; assert the
 binary exists instead.
+
+## ParCAD web: the host in a tab
+
+Found building `crates/parcad-wasm-host` on 2026-09-17; docs/ARCHITECTURE.md,
+"A third host: ParCAD web", is the design these constrain.
+
+### QuickJS's stack check misfires under Emscripten, and then trips too late
+
+With Emscripten's default 64 KB stack, every script failed with "Maximum call
+stack size exceeded": QuickJS measures its depth against the stack it starts on,
+and a stack that small puts the limit below address zero. The host links a
+16 MB stack. Then the opposite failure: QuickJS's recursion nests several wasm
+frames per JavaScript call on the *engine's* native stack, which runs out long
+before the 16 MB shadow stack does, as a `RangeError` trap that leaves the
+module's state unusable. Measured under Node 22, plain self-recursion:
+
+| `set_max_stack_size` | what a runaway recursion gets |
+|---|---|
+| 64 KB | a clean exception at depth 162 |
+| 256 KB | a clean exception at depth 654 |
+| 512 KB | the engine's trap |
+
+`script.rs` sets 256 KB on this target. In Chrome's worker the same runaway
+recursion came back as QuickJS's clean refusal, not a trap; Firefox and Safari
+are not measured. A script that recurses 650 deep builds on the desktop and not
+in a tab, and says so in words.
+
+### A tab's call runs twice when it needs the kernel, so it must ask before it writes
+
+`page.rs` pauses a call at its kernel request by unwinding, and runs it again
+once the page has the answer. Anything the call wrote before asking is written
+again on the second pass. `save_project` used to snapshot and write `part.js`
+and then build the thumbnail; its second pass then kept the *new* script as a
+snapshot and reported that. It builds the thumbnail first now. A tool that
+writes and then builds has the same bug in a tab only.
+
+The second pass also names new scratch files, so an answer is matched to its
+request with `step_path` and `stl_path` blanked, and a carried file is written
+to the new request's path by what it is (the STEP, the STL), not where it was.
+
+### A call that waits must hand the page its events first
+
+`set_script` with `wait_s` waits for the window to report the new revision —
+and the host worker delivered session events only when a call *finished*. So
+the page heard of the edit only when some other call ended, which was the agent
+chip's status poll four seconds later, and every `set_script` took 3.9 s. The
+worker now delivers events before any call waits: 0.14 s, measured through the
+relay with the window drawing the part.
+
+### rmcp's HTTP service answers only a loopback `Host`
+
+`StreamableHttpService` checks the `Host` header against an allow-list that
+defaults to loopback, and answers anything else with 403 "Host header is not
+allowed". The tab has no host name of its own, so `page.rs` builds every request
+as `http://localhost/mcp` with `Host: localhost`, whatever the relay received.
+
+### New page script against an old host module reads nonsense
+
+Under `vite --mode web`, rebuilding the host module while a page is open
+and letting the page reload can pair the new worker script with the module the
+old one fetched. An argument added to an export then lands in the wrong slot:
+`host_answer` read a pointer as a length, the reply packet "had 211936156 bytes
+past its end", and the call asked the kernel again, forever. A production build
+cannot mix them — both files sit under one content hash — and an unreadable
+reply now ends the call with "reload the tab", but restart the dev server after
+rebuilding either module.
+
+### Two checkouts sharing one `CARGO_TARGET_DIR` overwrite each other
+
+Cargo hashes a path dependency's artifacts by its path *relative to the
+workspace root*, so a git worktree building into the main checkout's `target/`
+writes the same files. Building the committed code for a benchmark that way
+left the main checkout's `parcad-host` compiling against the worktree's
+`parcad-occt` ("no `packet` in the root"). `cargo clean -p` the workspace
+crates afterwards, or give the worktree its own target directory and reuse only
+OpenCASCADE through `PARCAD_OCCT_PREBUILT`.

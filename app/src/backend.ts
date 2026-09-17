@@ -4,13 +4,12 @@
  * There are three transports and deliberately no third behaviour. Inside the
  * desktop webview a call goes over Tauri IPC; in a browser it goes to the API
  * the desktop process hosts on a local port, which lands in the same Rust
- * functions; and in the playground build there is no host at all, so the same
- * Rust — `parcad_occt::serve` and `parcad_evaluation`, compiled to WebAssembly
- * — runs in a Web Worker in the tab (`page/kernel.ts`) and parts live in the
- * browser's storage (`page/store.ts`). Nothing above this module may branch on
- * which one it got — the browser build used to serve a frozen geometry
- * fixture, and every feature the editor gated on `inTauri` was a difference
- * the user had to learn.
+ * functions; and in ParCAD web the host is in the tab — `parcad-host` compiled
+ * to WebAssembly in a Web Worker (`page/host.ts`), answering the same routes,
+ * with the kernel in a worker of its own and parts kept in the browser's
+ * storage. Nothing above this module may branch on which one it got — the
+ * browser build used to serve a frozen geometry fixture, and every feature the
+ * editor gated on `inTauri` was a difference the user had to learn.
  *
  * The one honest difference is where an export goes, and it is about the host,
  * not the model: the desktop writes a file, the browser downloads one. Both are
@@ -31,9 +30,9 @@ import { listen } from "@tauri-apps/api/event";
 const inTauri = "__TAURI_INTERNALS__" in window || "__TAURI__" in window;
 
 /**
- * The playground: a static site with the kernel in the page. Fixed when the
- * site is built (`vite build --mode playground`), so the desktop bundle carries
- * none of it, and not exported for the same reason `inTauri` is not.
+ * ParCAD web: a static site with its host in the page. Fixed when the site is
+ * built (`vite build --mode web`), so the desktop bundle carries none of
+ * it, and not exported for the same reason `inTauri` is not.
  */
 const inPage = import.meta.env.VITE_PARCAD_PAGE === "1";
 
@@ -42,7 +41,7 @@ const inPage = import.meta.env.VITE_PARCAD_PAGE === "1";
 const page = (): Promise<typeof import("./page")> =>
   import.meta.env.VITE_PARCAD_PAGE === "1"
     ? import("./page")
-    : Promise.reject(new Error("the page kernel exists only in the playground build"));
+    : Promise.reject(new Error("the page host exists only in the ParCAD web build"));
 
 const NOT_ANSWERING =
   "the parcad desktop process is not answering.\n" +
@@ -64,10 +63,14 @@ const sending = (method: string, body: unknown): RequestInit => ({
  */
 async function request(route: string, init: RequestInit, refused: string): Promise<Response> {
   let response: Response;
-  try {
-    response = await fetch(`/api/${route}`, init);
-  } catch {
-    throw new Error(NOT_ANSWERING);
+  if (inPage) {
+    response = await (await page()).host.request(route, init);
+  } else {
+    try {
+      response = await fetch(`/api/${route}`, init);
+    } catch {
+      throw new Error(NOT_ANSWERING);
+    }
   }
   if (!response.ok) {
     // The service layer writes messages that name the fix. Show them whole
@@ -139,7 +142,6 @@ export interface ProjectList {
 }
 
 export function listProjects(): Promise<ProjectList> {
-  if (inPage) return page().then((p) => p.store.list());
   return inTauri ? invoke<ProjectList>("list_projects") : get<ProjectList>("projects");
 }
 
@@ -154,9 +156,7 @@ export function listProjects(): Promise<ProjectList> {
 const route = (name: string) => name.split("/").map(encodeURIComponent).join("/");
 
 export async function readProject(name: string): Promise<string> {
-  const project = inPage
-    ? await (await page()).store.read(name)
-    : inTauri
+  const project = inTauri
     ? await invoke<{ script: string }>("read_project", { name })
     : await get<{ script: string }>(`projects/${route(name)}`);
   return project.script;
@@ -181,9 +181,7 @@ export async function saveProject(
   derived: Derived = {},
 ): Promise<string> {
   const body = { script, readme: derived.readme, preview: derived.preview };
-  const saved = inPage
-    ? await (await page()).store.save(name, script, derived.preview)
-    : inTauri
+  const saved = inTauri
     ? await invoke<{ path: string }>("save_project", { name, ...body })
     : await put<{ path: string }>(`projects/${route(name)}`, body);
   return saved.path;
@@ -191,18 +189,14 @@ export async function saveProject(
 
 /** Refuses to overwrite. "New part" and "save" must not be the same call. */
 export async function createProject(name: string, script: string): Promise<string> {
-  const made = inPage
-    ? await (await page()).store.create(name, script)
-    : inTauri
+  const made = inTauri
     ? await invoke<{ path: string }>("create_project", { name, script })
     : await post<{ path: string }>(`projects/${route(name)}`, { op: "create", script });
   return made.path;
 }
 
 export async function createFolder(name: string): Promise<string> {
-  const made = inPage
-    ? await (await page()).store.createFolder(name)
-    : inTauri
+  const made = inTauri
     ? await invoke<{ path: string }>("create_folder", { name })
     : await post<{ path: string }>(`projects/${route(name)}`, { op: "folder" });
   return made.path;
@@ -210,9 +204,7 @@ export async function createFolder(name: string): Promise<string> {
 
 /** Renames or moves; the two are one operation on disk and one here. */
 export async function renameProject(name: string, to: string): Promise<string> {
-  const moved = inPage
-    ? await (await page()).store.rename(name, to)
-    : inTauri
+  const moved = inTauri
     ? await invoke<{ path: string }>("rename_project", { name, to })
     : await post<{ path: string }>(`projects/${route(name)}`, { op: "rename", to });
   return moved.path;
@@ -220,7 +212,6 @@ export async function renameProject(name: string, to: string): Promise<string> {
 
 /** The readable name, which is not the path. */
 export async function setProjectTitle(name: string, title: string): Promise<void> {
-  if (inPage) return (await page()).store.setTitle(name, title);
   if (inTauri) {
     await invoke("set_project_title", { name, title });
     return;
@@ -230,9 +221,7 @@ export async function setProjectTitle(name: string, title: string): Promise<void
 
 /** Moves to the project folder's `.trash`. Not an unlink — say so in the UI. */
 export async function deleteProject(name: string): Promise<string> {
-  const gone = inPage
-    ? await (await page()).store.remove(name)
-    : inTauri
+  const gone = inTauri
     ? await invoke<{ trashed: string }>("delete_project", { name })
     : await send<{ trashed: string }>(`projects/${route(name)}`, { method: "DELETE" });
   return gone.trashed;
@@ -240,7 +229,6 @@ export async function deleteProject(name: string): Promise<string> {
 
 /** Loose `.js` to `.parcad` folder, keeping the script byte for byte. */
 export async function convertProject(name: string): Promise<string> {
-  if (inPage) throw new Error(`${JSON.stringify(name)} is already a project folder.`);
   const made = inTauri
     ? await invoke<{ path: string }>("convert_project", { name })
     : await post<{ path: string }>(`projects/${route(name)}`, { op: "convert" });
@@ -255,7 +243,6 @@ export async function convertProject(name: string): Promise<string> {
  * and its modified time, which the picker reports — to store a picture.
  */
 export async function saveProjectPreview(name: string, preview: string): Promise<void> {
-  if (inPage) return (await page()).store.setPreview(name, preview);
   if (inTauri) {
     await invoke("save_project_preview", { name, preview });
     return;
@@ -270,10 +257,8 @@ export async function saveProjectPreview(name: string, preview: string): Promise
  */
 export async function projectPreview(name: string): Promise<string | null> {
   try {
-    if (inPage) return await (await page()).store.preview(name);
     if (inTauri) return await invoke<string>("project_preview", { name });
-    const response = await fetch(`/api/preview/${route(name)}`);
-    if (!response.ok) return null;
+    const response = await request(`preview/${route(name)}`, { method: "GET" }, "no thumbnail");
     const blob = await response.blob();
     return URL.createObjectURL(blob);
   } catch {
@@ -296,12 +281,13 @@ export interface McpStatus {
   url: string;
 }
 
-/** Whether an agent can reach this kernel over MCP at all; the playground has no endpoint. */
-export const mcpServedHere = !inPage;
+/**
+ * Whether agents reach this window's host through a relay link it has to be
+ * given, rather than an endpoint a local client can already find: ParCAD web.
+ */
+export const mcpThroughRelay = inPage;
 
 export function mcpStatus(): Promise<McpStatus> {
-  // No host, so no endpoint: refused like an unreachable one, which hides the chip.
-  if (inPage) return Promise.reject(new Error("the playground has no MCP endpoint"));
   return inTauri ? invoke<McpStatus>("mcp_status") : get<McpStatus>("mcp");
 }
 
@@ -316,7 +302,7 @@ export interface AvailableUpdate {
 /**
  * Whether the app hosting this window has a newer release. Only the desktop
  * app can replace itself: a browser tab, `parcad serve` (updated by its
- * package manager) and the playground answer that there is nothing to install.
+ * package manager) and ParCAD web answer that there is nothing to install.
  */
 export function checkForUpdate(): Promise<AvailableUpdate | null> {
   return inTauri ? invoke<AvailableUpdate | null>("check_for_update") : Promise.resolve(null);
@@ -359,8 +345,6 @@ export function pushSession(
   origin: string,
   base: number | null,
 ): Promise<Session> {
-  // One window and no agent: the session is this tab's own, and nothing echoes.
-  if (inPage) return Promise.resolve({ name, script, revision: (base ?? 0) + 1, origin });
   return inTauri
     ? invoke<Session>("push_session", { name, script, origin, base })
     : post<Session>("session", { name, script, origin, base });
@@ -368,7 +352,6 @@ export function pushSession(
 
 /** The session as the host holds it, for a window that has just loaded. */
 export function getSession(): Promise<Session> {
-  if (inPage) return Promise.reject(new Error("the playground shares no session"));
   return inTauri ? invoke<Session>("get_session") : get<Session>("session");
 }
 
@@ -382,7 +365,6 @@ export interface Shown {
 }
 
 export function reportShown(shown: Shown): Promise<unknown> {
-  if (inPage) return Promise.resolve();
   const report = { ...shown, kind: inTauri ? "desktop" : "browser" };
   return inTauri
     ? invoke("report_shown", { shown: report })
@@ -397,7 +379,10 @@ export function reportShown(shown: Shown): Promise<unknown> {
  * that is this module's whole job.
  */
 export function subscribeSession(viewer: string, onEvent: (session: Session) => void): void {
-  if (inPage) return;
+  if (inPage) {
+    void page().then((p) => p.host.onSession(onEvent));
+    return;
+  }
   if (inTauri) {
     void listen<Session>("session-changed", (event) => onEvent(event.payload));
     return;
@@ -409,7 +394,7 @@ export function subscribeSession(viewer: string, onEvent: (session: Session) => 
 /**
  * What the shipped first build is replaced with, once this tab has built it.
  *
- * Only the playground ever calls back: every other transport builds the part it
+ * Only ParCAD web ever calls back: every other transport builds the part it
  * shows. See `page/prebuilt.ts` for why one evaluation travels with the site.
  */
 let onRebuilt: ((evaluated: unknown) => void) | undefined;
@@ -432,14 +417,13 @@ export async function evaluate<T>(graph: unknown, showing?: { part?: string; sou
     }
     const already = showing && host.prebuilt.inFlight(showing.part, showing.source);
     if (already) return (await already) as T;
-    return json<T>(await host.kernel.call({ op: "evaluate", graph }));
+    return (await host.host.evaluate(graph)) as T;
   }
   return inTauri ? invoke<T>("evaluate", { graph }) : post<T>("evaluate", { graph });
 }
 
 
 export async function inspectEdgeTarget<T>(graph: unknown, node: number): Promise<T> {
-  if (inPage) return json<T>(await (await page()).kernel.call({ op: "inspect-edge-target", graph, node }));
   return inTauri
     ? invoke<T>("inspect_edge_target", { graph, node })
     : post<T>("inspect-edge-target", { graph, node });
@@ -463,7 +447,7 @@ export async function exportStl(graph: unknown, project: string | undefined): Pr
   if (inTauri && project) {
     return invoke<string>("export_stl", { graph, project });
   }
-  save(inPage ? await pageExport("export-stl", graph, "model/stl") : await download("export/stl", { graph }), "part.stl");
+  save(await download("export/stl", { graph }), "part.stl");
   return "part.stl";
 }
 
@@ -471,7 +455,7 @@ export async function export3mf(graph: unknown, project: string | undefined): Pr
   if (inTauri && project) {
     return invoke<string>("export_3mf", { graph, project });
   }
-  save(inPage ? await pageExport("export-3mf", graph, "model/3mf") : await download("export/3mf", { graph }), "part.3mf");
+  save(await download("export/3mf", { graph }), "part.3mf");
   return "part.3mf";
 }
 
@@ -479,21 +463,8 @@ export async function exportStep(graph: unknown, project: string | undefined): P
   if (inTauri && project) {
     return invoke<string>("export_step", { graph, project });
   }
-  save(inPage ? await pageExport("export-step", graph, "application/step") : await download("export/step", { graph }), "part.step");
+  save(await download("export/step", { graph }), "part.step");
   return "part.step";
-}
-
-type PageReply = { json: unknown } | { bytes: Uint8Array };
-
-function json<T>(reply: PageReply): T {
-  if (!("json" in reply)) throw new Error("the kernel answered with bytes where a reply was expected");
-  return reply.json as T;
-}
-
-async function pageExport(op: string, graph: unknown, type: string): Promise<Blob> {
-  const reply = await (await page()).kernel.call({ op, graph });
-  if (!("bytes" in reply)) throw new Error("the kernel answered without the file");
-  return new Blob([reply.bytes as BlobPart], { type });
 }
 
 /**
@@ -516,9 +487,47 @@ export function watchKernelLoad(listener: (load: KernelLoad) => void): () => voi
     if (stopped) return;
     stop = p.kernel.watchLoad(listener);
     p.kernel.preload();
+    p.host.preload();
   });
   return () => {
     stopped = true;
     stop();
   };
+}
+
+/** Whether this tab is open to agents, and by which link. */
+export type AgentLink =
+  | { kind: "off" }
+  | { kind: "connecting" }
+  | { kind: "ready"; link: string }
+  | { kind: "elsewhere" }
+  | { kind: "failed"; error: string };
+
+export function watchAgentLink(listener: (link: AgentLink) => void): () => void {
+  if (!inPage) return () => {};
+  let stop = () => {};
+  let stopped = false;
+  void page().then((p) => {
+    if (!stopped) stop = p.host.watchRelay(listener);
+  });
+  return () => {
+    stopped = true;
+    stop();
+  };
+}
+
+/** Open this tab to agents through `relay` under `key`, or close it with null. */
+export async function openToAgents(relay: string | null, key: string): Promise<void> {
+  if (!inPage) throw new Error("only ParCAD web is reached through a relay link");
+  await (await page()).host.useRelay(relay, key);
+}
+
+/** Call `listener` whenever an agent's request reaches this tab. */
+export function watchAgentRequests(listener: () => void): () => void {
+  if (!inPage) return () => {};
+  let stop = () => {};
+  void page().then((p) => {
+    stop = p.host.onMcp(listener);
+  });
+  return () => stop();
 }

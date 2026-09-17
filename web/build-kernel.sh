@@ -1,19 +1,21 @@
 #!/usr/bin/env bash
-# Build the exact kernel for WebAssembly: the vendored, patched OpenCASCADE and
-# the Rust worker around it, compiled by Emscripten.
+# Build ParCAD web's two WebAssembly modules with Emscripten: the exact kernel
+# (the vendored, patched OpenCASCADE and the Rust worker around it) and the
+# host (parcad-host: the service, the script sandbox, projects and MCP).
 #
-#     EMSDK=/path/to/emsdk playground/build-kernel.sh           # everything
-#     EMSDK=/path/to/emsdk playground/build-kernel.sh occt      # OpenCASCADE only
-#     EMSDK=/path/to/emsdk playground/build-kernel.sh worker    # the Rust half only
+#     EMSDK=/path/to/emsdk web/build-kernel.sh           # everything
+#     EMSDK=/path/to/emsdk web/build-kernel.sh occt      # OpenCASCADE only
+#     EMSDK=/path/to/emsdk web/build-kernel.sh worker    # the kernel's Rust half only
+#     EMSDK=/path/to/emsdk web/build-kernel.sh host      # the host module only
 #
 # This is also the relinking recipe NOTICE.md promises: point OCCT_SOURCE at
 # another OpenCASCADE tree and the same commands produce a kernel built on it.
-# playground/README.md has the pinned versions and what each output is for.
+# web/README.md has the pinned versions and what each output is for.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 root=$PWD
 
-: "${EMSDK:?set EMSDK to an activated emsdk checkout (playground/README.md pins the version)}"
+: "${EMSDK:?set EMSDK to an activated emsdk checkout (web/README.md pins the version)}"
 # shellcheck disable=SC1091
 source "$EMSDK/emsdk_env.sh" >/dev/null 2>&1
 
@@ -45,7 +47,7 @@ build_occt() {
   # The same switches vendor/occt-sys/build.rs passes, so the wasm kernel is the
   # native one compiled by a different compiler.
   CMAKE_POLICY_VERSION_MINIMUM=3.5 emcmake cmake -G Ninja -S "$staged" -B "$build" \
-    -DCMAKE_TOOLCHAIN_FILE="$root/playground/occt-emscripten.cmake" \
+    -DCMAKE_TOOLCHAIN_FILE="$root/web/occt-emscripten.cmake" \
     -DCMAKE_BUILD_TYPE=Debug \
     -DBUILD_LIBRARY_TYPE=Static \
     -DBUILD_MODULE_Draw=FALSE \
@@ -108,10 +110,25 @@ build_worker() {
   ls -la "$work/node" "$work/web"
 }
 
+build_host() {
+  step "compiling the host module for wasm32-unknown-emscripten"
+  # Its own target directory, so parcad-occt's `kernel` feature, which the
+  # kernel's build turns on, never unifies into the host. QuickJS's bindings
+  # are generated against Emscripten's headers.
+  BINDGEN_EXTRA_CLANG_ARGS_wasm32_unknown_emscripten="--sysroot=$EMSDK/upstream/emscripten/cache/sysroot" \
+    CARGO_TARGET_DIR="$work/cargo-host" \
+    cargo build --locked --release --target wasm32-unknown-emscripten -p parcad-wasm-host --bin parcad-wasm-host
+  out=$work/cargo-host/wasm32-unknown-emscripten/release
+  mkdir -p "$work/web"
+  cp "$out/parcad-wasm-host.js" "$out/parcad_wasm_host.wasm" "$work/web/"
+  ls -la "$work/web"
+}
+
 case "$what" in
   occt) build_occt ;;
   worker) build_worker ;;
-  all) build_occt; build_worker ;;
-  *) echo "usage: $0 [occt|worker|all]" >&2; exit 2 ;;
+  host) build_host ;;
+  all) build_occt; build_worker; build_host ;;
+  *) echo "usage: $0 [occt|worker|host|all]" >&2; exit 2 ;;
 esac
 step "done"

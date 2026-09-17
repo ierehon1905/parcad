@@ -1,12 +1,11 @@
 //! What one evaluation of a part is: the snapshot every transport serialises,
 //! and the mesh beside it for something to draw.
 //!
-//! Its own crate so that there is still exactly one definition of it when the
-//! kernel runs somewhere with no host at all. `parcad-host` builds it from a
-//! worker's reply for the desktop window, the browser and MCP; the WebAssembly
-//! playground (`crates/parcad-wasm`) builds it from the same reply inside a Web
-//! Worker. Neither may assemble a summary of its own — see docs/ARCHITECTURE.md,
-//! "One application, two windows, and one with none".
+//! Its own crate so that there is exactly one definition of it wherever a host
+//! runs. `parcad-host` builds it from a worker's reply for the desktop window,
+//! the browser and MCP, natively and, as ParCAD web, compiled to WebAssembly in
+//! a tab (`crates/parcad-wasm-host`). Nothing may assemble a summary of its own
+//! — see docs/ARCHITECTURE.md, "One application, two windows, and one with none".
 
 use parcad_core::{
     graph::{Doc, Op},

@@ -17,7 +17,7 @@ use parcad_core::graph::Doc;
 use serde::Serialize;
 use std::path::Path;
 
-// What an evaluation *is* lives in its own crate, so the WebAssembly playground
+// What an evaluation *is* lives in its own crate, so ParCAD web
 // compiles the same definition; every path a transport names stays `service::`.
 pub use parcad_evaluation::{
     parse_graph, round_dir, round_fraction, round_mm, round_point, BodyFit, BodyReport, EvaluationSnapshot,
@@ -214,13 +214,13 @@ pub fn treatment_target(preview: &parcad_occt::TargetPreview) -> TreatmentTarget
 ///
 /// The two halves travel together but serialise apart. `summary` goes into the
 /// [`EvaluationSnapshot`], where a caller reading numbers can see what was drawn
-/// and what the colours mean; `png` is attached by the transport in whatever way that
-/// transport carries an image. Base64 inside the JSON would be the worst of
-/// both: it inflates a structure meant to be read, and a model still could not
-/// look at it.
+/// and what the colours mean; `image` is encoded by the transport in whatever
+/// way that transport carries an image. Base64 inside the JSON would be the
+/// worst of both: it inflates a structure meant to be read, and a model still
+/// could not look at it.
 pub struct Render {
     pub summary: RenderedView,
-    pub png: Vec<u8>,
+    pub image: parcad_core::render::Rgb,
 }
 
 /// Everything one render request produced.
@@ -343,10 +343,6 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                 (shaded.downsample(opts.supersample.clamp(1, 4)), None, None)
             };
 
-            let png = image
-                .to_png()
-                .map_err(|e| format!("encoding the {} view: {e:#}", view.name()))?;
-
             Ok(Render {
                 summary: RenderedView {
                     view: view.name().to_string(),
@@ -364,7 +360,7 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                     path: None,
                     markdown: None,
                 },
-                png,
+                image,
             })
         })
         .collect::<Result<Vec<_>, String>>()
@@ -933,7 +929,7 @@ fn build_exact(
     } else {
         (parcad_occt::evaluate(doc, &opts).map_err(|e| format!("{e}"))?, None)
     };
-    let wall_ms = t0.elapsed().as_millis() as u64;
+    let wall_ms = crate::page::kernel_took().unwrap_or_else(|| t0.elapsed()).as_millis() as u64;
 
     let success = std::sync::Arc::new(success);
     let mut builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
@@ -1408,7 +1404,7 @@ mod tests {
             // Encoded, not just allocated: a caller receives these bytes and
             // has no way to tell a truncated buffer from a dark render.
             assert_eq!(
-                &render.png[..8],
+                &render.image.to_png().unwrap()[..8],
                 b"\x89PNG\r\n\x1a\n",
                 "the {} view should be a PNG",
                 render.summary.view

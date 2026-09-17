@@ -230,7 +230,7 @@ export function ProjectBrowser() {
           class="overflow-hidden text-ellipsis whitespace-nowrap"
           {...tip({
             title: "Where the parts are",
-            text: "The app and parcad serve keep every part as a file in one folder, which you and any agent on MCP read and write too. The browser playground has no folder and no MCP: its parts stay in that browser.",
+            text: "The app and parcad serve keep every part as a file in one folder, which you and any agent on MCP read and write too. ParCAD web has no folder and no MCP: its parts stay in that browser.",
           })}
         >
           {projects?.directory ?? ""}

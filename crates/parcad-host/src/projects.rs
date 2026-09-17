@@ -900,12 +900,12 @@ fn seed_dir() -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// Every test here works in a directory of its own, and they share a
     /// process — so the env var they all read has to be set under one lock.
-    fn scoped<T>(work: impl FnOnce(&Path) -> T) -> T {
+    pub(crate) fn scoped<T>(work: impl FnOnce(&Path) -> T) -> T {
         use std::sync::atomic::{AtomicUsize, Ordering};
         use std::sync::Mutex;
         static LOCK: Mutex<()> = Mutex::new(());

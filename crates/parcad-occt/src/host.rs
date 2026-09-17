@@ -18,11 +18,16 @@
 //! crashes or is stopped for taking too long is not returned to the pool, and
 //! the next request starts a fresh one.
 
+// A tab has no processes to start: the pool below is the native host's alone.
+#![cfg_attr(target_os = "emscripten", allow(dead_code, unused_imports))]
+
 use crate::protocol::{BuildId, Frame, Request, Response, Success, TargetPreview, BREADCRUMB, REPLY};
 use parcad_core::graph::Doc;
+use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
+use std::rc::Rc;
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
@@ -70,12 +75,21 @@ impl std::fmt::Display for OcctError {
                  where several members meet or touch face-on, or a boolean \
                  between shapes that do not overlap."
             ),
+            #[cfg(not(target_os = "emscripten"))]
             OcctError::TimedOut { stage, seconds } => write!(
                 f,
                 "the geometry kernel was still {stage} after {seconds}s and was stopped. \
                  A part that needs longer, or a machine that is busy building something \
                  else, can have more: over MCP pass timeout_s (up to 600) and call again, \
                  or set PARCAD_OCCT_TIMEOUT to a number of seconds for every caller"
+            ),
+            #[cfg(target_os = "emscripten")]
+            OcctError::TimedOut { stage, seconds } => write!(
+                f,
+                "the geometry kernel was still {stage} after {seconds}s and was stopped. \
+                 This kernel is WebAssembly in a browser tab, two to three times slower \
+                 than the installed app: over MCP pass timeout_s (up to 600) and call \
+                 again, or build a part this heavy in the installed app"
             ),
             OcctError::Host(m) => write!(f, "{m}"),
         }
@@ -109,6 +123,14 @@ impl Default for Options {
 /// and not enough for the larger ones while a build is running beside the
 /// app, which is when the budget was first hit. The variable exists so that
 /// moment needs an environment change rather than a rebuild.
+#[cfg(target_os = "emscripten")]
+pub fn default_timeout() -> Duration {
+    // The native twenty seconds, with the margin the WebAssembly build needs
+    // for the same parts (web/README.md).
+    Duration::from_secs(60)
+}
+
+#[cfg(not(target_os = "emscripten"))]
 pub fn default_timeout() -> Duration {
     std::env::var("PARCAD_OCCT_TIMEOUT")
         .ok()
@@ -319,13 +341,56 @@ pub fn inspect_edge_target(
     }
 }
 
+/// Somewhere a request can go other than a child process.
+///
+/// In a browser tab the kernel is a WebAssembly module in a Web Worker of its
+/// own, and only the page can reach it; `crates/parcad-host/src/page.rs` is the
+/// one caller. Every outcome still arrives as a value, in the words a worker
+/// process would have earned.
+pub type Kernel = dyn Fn(Request, &Options) -> Result<Response, OcctError>;
+
+thread_local! {
+    static KERNEL: RefCell<Option<Rc<Kernel>>> = const { RefCell::new(None) };
+}
+
+/// Run `work` with this thread's kernel requests sent to `kernel` instead of a
+/// worker process, and the previous arrangement restored afterwards — on an
+/// unwind too.
+pub fn with_kernel<T>(kernel: Rc<Kernel>, work: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Rc<Kernel>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            KERNEL.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(KERNEL.with(|slot| slot.replace(Some(kernel))));
+    work()
+}
+
+fn run_worker(request: Request, opts: &Options) -> Result<Response, OcctError> {
+    match KERNEL.with(|slot| slot.borrow().clone()) {
+        Some(kernel) => kernel(request, opts),
+        None => run_process(request, opts),
+    }
+}
+
+#[cfg(target_os = "emscripten")]
+fn run_process(_request: Request, _opts: &Options) -> Result<Response, OcctError> {
+    Err(OcctError::Host(
+        "this build runs in a browser and has no kernel process to start; the page \
+         answers kernel requests through parcad_occt::with_kernel, and none was attached"
+            .into(),
+    ))
+}
+
 /// Send one request to a kernel worker and return its raw reply.
 ///
 /// The worker is taken from a small pool of warm ones, or started; a worker
 /// that answers goes back to the pool, and one that dies or is stopped does
 /// not. Every outcome still arrives as a value: the process boundary is
 /// unchanged, only crossed less often.
-fn run_worker(request: Request, opts: &Options) -> Result<Response, OcctError> {
+#[cfg(not(target_os = "emscripten"))]
+fn run_process(request: Request, opts: &Options) -> Result<Response, OcctError> {
     let path = worker_path()?;
     let reply_path = std::env::temp_dir().join(format!(
         "parcad-occt-{}-{}.json",

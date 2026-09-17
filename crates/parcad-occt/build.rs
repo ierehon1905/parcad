@@ -28,7 +28,7 @@ fn main() {
     if !target.contains("emscripten") {
         return;
     }
-    // The worker under Node, for the eval corpus (playground/node-worker.sh).
+    // The worker under Node, for the eval corpus (web/node-worker.sh).
     // NODERAWFS hands it the real stdin, stderr and reply files the host's
     // protocol runs on; DEFAULT_TO_CXX because rustc links with emcc, which
     // otherwise leaves libc++ out. OpenCASCADE recurses deeply, hence the stack.

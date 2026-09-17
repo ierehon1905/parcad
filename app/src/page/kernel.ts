@@ -3,25 +3,18 @@
  * in a Web Worker, and supervise that worker the way `host.rs` supervises a
  * native one.
  *
- * Imported only by `backend.ts`. Every outcome arrives as a value, in the same
- * words the desktop host uses for the same outcome: a refusal is the kernel's
- * own message; a worker that traps is a crash naming the last breadcrumb; one
- * still running at the deadline is terminated and reported as timed out. The
- * next call starts a fresh worker from the module already compiled, so a crash
- * costs an instantiation, not another download.
+ * Its only client is the host (`host.ts`), which hands it request packets.
+ * Every outcome is a value: a reply packet, a crash with the last breadcrumb,
+ * a stop at the deadline, or no kernel at all — and the host words each one
+ * the way the desktop does. The next request starts a fresh worker from the
+ * module already compiled, so a crash costs an instantiation, not another
+ * download.
  */
 
 import type { FromWorker, ToWorker } from "./kernel-worker";
 
 /** Where the build put the kernel, and how big it is. See `vite.config.ts`. */
 declare const __PARCAD_KERNEL__: { script: string; wasm: string; bytes: number };
-
-/**
- * Twenty seconds is the desktop's default, and the WebAssembly build measured
- * about two to three times slower than native on the corpus
- * (playground/README.md), so the same parts get the same margin.
- */
-const TIMEOUT_MS = 60_000;
 
 export interface KernelLoad {
   /** `downloading`, `compiling`, or `ready`. */
@@ -108,11 +101,12 @@ async function start(): Promise<Running> {
   const worker = new Worker(new URL("./kernel-worker.ts", import.meta.url), { type: "module" });
   const started: Running = { worker, stage: "starting up", ready: Promise.resolve() };
   started.ready = new Promise<void>((resolve, reject) => {
+    const failed = (detail: string) => reject(new Error(`the geometry kernel did not start in this tab (${detail}); reload the page`));
     worker.onmessage = (event: MessageEvent<FromWorker>) => {
       if (event.data.kind === "ready") resolve();
-      if (event.data.kind === "died") reject(new Error(crashed("starting up", event.data.detail)));
+      if (event.data.kind === "died") failed(event.data.detail);
     };
-    worker.onerror = (event) => reject(new Error(crashed("starting up", event.message)));
+    worker.onerror = (event) => failed(event.message);
   });
   const script = new URL(__PARCAD_KERNEL__.script, document.baseURI).href;
   worker.postMessage({ kind: "start", module, script } satisfies ToWorker);
@@ -125,62 +119,52 @@ function stop() {
   running = undefined;
 }
 
-/** `OcctError::Crashed`, for a tab. */
-const crashed = (stage: string, detail: string) =>
-  `the geometry kernel crashed while ${stage} (${detail}). ` +
-  "This is usually a dimension the operation cannot satisfy — a fillet larger than the material, " +
-  "a blend across a junction where several members meet or touch face-on, or a boolean between " +
-  "shapes that do not overlap. The next build starts a fresh kernel.";
+/** How one request ended, for the host to put into words. */
+export type KernelEnd =
+  | { kind: "replied"; packet: Uint8Array; ms: number }
+  | { kind: "crashed"; stage: string; detail: string }
+  | { kind: "timed_out"; stage: string; seconds: number }
+  | { kind: "unavailable"; message: string };
 
-/** `OcctError::TimedOut`, for a tab: there is no environment variable to raise here. */
-const timedOut = (stage: string) =>
-  `the geometry kernel was still ${stage} after ${TIMEOUT_MS / 1000}s and was stopped. ` +
-  "The WebAssembly kernel runs two to three times slower than the installed app, which gives a part 20 s " +
-  "by default and lets you raise it; a part this heavy is one to build there.";
-
-export type Reply = { json: unknown } | { bytes: Uint8Array };
-
-export function call(request: unknown): Promise<Reply> {
-  const turn = queue.then(() => send(request));
+export function run(packet: Uint8Array, timeoutMs: number): Promise<KernelEnd> {
+  const turn = queue.then(() => send(packet, timeoutMs));
   queue = turn.catch(() => {});
   return turn;
 }
 
-async function send(request: unknown): Promise<Reply> {
-  running ??= await start().catch((e: unknown) => {
+async function send(packet: Uint8Array, timeoutMs: number): Promise<KernelEnd> {
+  try {
+    running ??= await start();
+  } catch (e) {
     stop();
-    throw e;
-  });
+    return { kind: "unavailable", message: e instanceof Error ? e.message : String(e) };
+  }
   const current = running;
   const id = nextId++;
   current.stage = "reading the request";
+  const began = performance.now();
 
-  return new Promise<Reply>((resolve, reject) => {
+  return new Promise<KernelEnd>((resolve) => {
     const deadline = window.setTimeout(() => {
       stop();
-      reject(new Error(timedOut(current.stage)));
-    }, TIMEOUT_MS);
-    const finish = () => window.clearTimeout(deadline);
+      resolve({ kind: "timed_out", stage: current.stage, seconds: Math.round(timeoutMs / 1000) });
+    }, timeoutMs);
+    const end = (outcome: KernelEnd) => {
+      window.clearTimeout(deadline);
+      if (outcome.kind !== "replied") stop();
+      resolve(outcome);
+    };
 
     current.worker.onmessage = (event: MessageEvent<FromWorker>) => {
       const message = event.data;
-      if (message.kind === "stage") {
-        current.stage = message.stage;
-      } else if (message.kind === "died") {
-        finish();
-        stop();
-        reject(new Error(crashed(current.stage, message.detail)));
-      } else if (message.kind === "reply" && message.id === id) {
-        finish();
-        if (!message.ok) reject(new Error(message.message));
-        else resolve(message.bytes ? { bytes: message.bytes } : { json: message.json });
+      if (message.kind === "stage") current.stage = message.stage;
+      else if (message.kind === "died") end({ kind: "crashed", stage: current.stage, detail: message.detail });
+      else if (message.kind === "reply" && message.id === id) {
+        end({ kind: "replied", packet: message.packet, ms: Math.round(performance.now() - began) });
       }
     };
-    current.worker.onerror = (event) => {
-      finish();
-      stop();
-      reject(new Error(crashed(current.stage, event.message || "the worker failed")));
-    };
-    current.worker.postMessage({ kind: "call", id, request } satisfies ToWorker);
+    current.worker.onerror = (event) =>
+      end({ kind: "crashed", stage: current.stage, detail: event.message || "the worker failed" });
+    current.worker.postMessage({ kind: "call", id, packet } satisfies ToWorker, [packet.buffer]);
   });
 }

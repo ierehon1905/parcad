@@ -4,7 +4,7 @@
 # Node
 node_modules/
 app/dist/
-app/dist-playground/
+app/dist-web/
 
 # Tauri generated
 app/src-tauri/gen/schemas/
@@ -38,3 +38,6 @@ app/src-tauri/*.step
 # written by tools/build-worker.sh before every bundle.
 app/src-tauri/binaries/
 __pycache__/
+
+# Local state of `wrangler dev`.
+relay/.wrangler/

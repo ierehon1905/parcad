@@ -2,7 +2,7 @@
 
 Parametric CAD you write as code — for people, and for agents.
 
-**Status: 0.0.1, experimental.** One author, and the DSL still moves. Every
+**Status: 0.0.7, experimental.** One author, and the DSL still moves. Every
 operation is checked against measured geometry ([eval/cases/](eval/cases/)), but
 none of it has had the years of abuse that make a CAD kernel trustworthy.
 Measure a part before you machine it.
@@ -148,8 +148,15 @@ in `~/Documents/parcad` as plain `.js` files you can edit anywhere.
 
 ## Use it from an agent
 
-Every route below runs the same `parcad`: the one Homebrew installs, which the
-desktop app carries too. Install either first.
+With nothing installed: open [ParCAD web](https://ierehon1905.github.io/parcad/),
+choose **Connect your AI**, and give your client the link it shows — Claude
+Code, the Claude app as a custom connector, Cursor, VS Code, or any client that
+connects to a URL. The tab is the server, with the same tools as the app, and it
+has to stay open; a relay passes the messages and keeps none
+([relay/README.md](relay/README.md)).
+
+Every route below runs the same `parcad` on your machine: the one Homebrew
+installs, which the desktop app carries too. Install either first.
 
 As a plugin, which brings the MCP server and a skill that says how to use it:
 

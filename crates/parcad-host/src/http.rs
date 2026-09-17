@@ -23,6 +23,7 @@
 
 use crate::mcp;
 use crate::projects;
+use crate::routes::{self, ProjectOp, SaveRequest, SessionPush};
 use crate::service;
 use crate::session;
 use axum::{
@@ -36,23 +37,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::sync::Arc;
 
-/// Where the frontend's bytes come from.
-///
-/// The desktop app answers from Tauri's asset resolver, `parcad serve` from a
-/// copy of `app/dist` embedded when the CLI was built. The router does not
-/// know which, and that is what keeps the frontend one build: neither host can
-/// serve a different bundle from the other's.
-pub trait Assets: Send + Sync + 'static {
-    fn get(&self, path: &str) -> Option<Asset>;
-    /// What to do when `get` has nothing. The fix differs by host — a dev
-    /// server to open, or a binary to rebuild — so the host says it.
-    fn how_to_embed(&self) -> String;
-}
-
-pub struct Asset {
-    pub mime_type: String,
-    pub bytes: Vec<u8>,
-}
+pub use crate::assets::{Asset, Assets};
 
 /// The port the UI and API are hosted on, overridable for a second instance.
 pub fn port() -> u16 {
@@ -71,44 +56,6 @@ struct EvaluateRequest {
 struct InspectRequest {
     graph: serde_json::Value,
     node: usize,
-}
-
-#[derive(Deserialize)]
-struct SaveRequest {
-    script: String,
-    /// Written into the bundle beside the script. See the IPC adapter's
-    /// `save_project` for why the three travel together.
-    #[serde(default)]
-    readme: Option<String>,
-    /// A `data:image/png;base64,` URL from the viewport canvas.
-    #[serde(default)]
-    preview: Option<String>,
-}
-
-/// Everything a picker does to a project that is not reading or writing it.
-///
-/// One tagged POST rather than five routes: a project path contains slashes, so
-/// it has to be the trailing wildcard of its route, and nothing can follow a
-/// wildcard. The alternative is five parallel `/api/<verb>/{*path}` prefixes,
-/// which reads as five resources when there is one.
-#[derive(Deserialize)]
-#[serde(tag = "op", rename_all = "lowercase")]
-enum ProjectOp {
-    /// A new part, refusing to overwrite one that is there.
-    Create {
-        script: String,
-    },
-    /// A new empty folder.
-    Folder,
-    Rename {
-        to: String,
-    },
-    /// The readable name, which is not the path.
-    Title {
-        title: String,
-    },
-    /// Loose `.js` to `.parcad` folder.
-    Convert,
 }
 
 #[derive(Deserialize)]
@@ -199,24 +146,12 @@ async fn mcp_status() -> impl IntoResponse {
     Json(service::mcp_status())
 }
 
-#[derive(Deserialize)]
-struct SessionPush {
-    name: Option<String>,
-    script: String,
-    /// The pushing viewer's own id, echoed in the broadcast so that viewer can
-    /// ignore its reflection.
-    origin: String,
-    /// The revision the script was edited from; see `session::push`.
-    #[serde(default)]
-    base: Option<u64>,
-}
-
 async fn get_session() -> impl IntoResponse {
     Json(session::live())
 }
 
 async fn push_session(Json(request): Json<SessionPush>) -> impl IntoResponse {
-    Json(session::push(request.name, request.script, request.origin, request.base))
+    Json(routes::push_session(request))
 }
 
 async fn session_shown(Json(shown): Json<session::Shown>) -> impl IntoResponse {
@@ -326,55 +261,29 @@ fn download(export: service::Export) -> Response {
 }
 
 async fn list_projects() -> Result<Response, Failed> {
-    Ok(Json(json!({
-        // The flat list is what MCP answers with and what a caller that only
-        // wants names can use; the tree is the same parts with their folders.
-        "projects": projects::list().map_err(Failed)?,
-        "tree": projects::tree().map_err(Failed)?,
-        "directory": projects::dir().to_string_lossy(),
-    }))
-    .into_response())
+    Ok(Json(routes::list_projects().map_err(Failed)?).into_response())
 }
 
 async fn read_project(Path(name): Path<String>) -> Result<Response, Failed> {
-    let script = projects::read(&name).map_err(Failed)?;
-    Ok(Json(json!({ "name": name, "script": script })).into_response())
+    Ok(Json(routes::read_project(&name).map_err(Failed)?).into_response())
 }
 
 async fn save_project(
     Path(name): Path<String>,
     Json(request): Json<SaveRequest>,
 ) -> Result<Response, Failed> {
-    let path = projects::write(&name, &request.script).map_err(Failed)?;
-    if let Some(readme) = request.readme {
-        projects::write_readme(&name, &readme).map_err(Failed)?;
-    }
-    if let Some(preview) = request.preview {
-        projects::write_preview_data_url(&name, &preview).map_err(Failed)?;
-    }
-    Ok(Json(json!({ "name": name, "path": path })).into_response())
+    Ok(Json(routes::save_project(&name, request).map_err(Failed)?).into_response())
 }
 
 async fn project_op(
     Path(name): Path<String>,
     Json(request): Json<ProjectOp>,
 ) -> Result<Response, Failed> {
-    let (renamed, path) = match request {
-        ProjectOp::Create { script } => (name.clone(), projects::create(&name, &script)),
-        ProjectOp::Folder => (name.clone(), projects::create_folder(&name)),
-        ProjectOp::Rename { to } => (to.clone(), projects::rename(&name, &to)),
-        ProjectOp::Title { title } => (
-            name.clone(),
-            projects::set_title(&name, &title).map(|()| name.clone()),
-        ),
-        ProjectOp::Convert => (name.clone(), projects::convert(&name)),
-    };
-    Ok(Json(json!({ "name": renamed, "path": path.map_err(Failed)? })).into_response())
+    Ok(Json(routes::project_op(&name, request).map_err(Failed)?).into_response())
 }
 
 async fn delete_project(Path(name): Path<String>) -> Result<Response, Failed> {
-    let trashed = projects::remove(&name).map_err(Failed)?;
-    Ok(Json(json!({ "name": name, "trashed": trashed })).into_response())
+    Ok(Json(routes::delete_project(&name).map_err(Failed)?).into_response())
 }
 
 /// A part's thumbnail, as the image itself rather than base64 in JSON — this
@@ -385,18 +294,11 @@ struct PreviewRequest {
     preview: String,
 }
 
-/// The thumbnail on its own, without touching the script.
-///
-/// The app writes one the first time it draws a part that has none, so a folder
-/// of parts nobody has edited yet still shows what they are. Rewriting
-/// `part.js` to do that would touch the user's source — and its mtime, which
-/// the picker reports — for a picture.
 async fn save_project_preview(
     Path(name): Path<String>,
     Json(request): Json<PreviewRequest>,
 ) -> Result<Response, Failed> {
-    projects::write_preview_data_url(&name, &request.preview).map_err(Failed)?;
-    Ok(Json(json!({ "name": name })).into_response())
+    Ok(Json(routes::save_project_preview(&name, &request.preview).map_err(Failed)?).into_response())
 }
 
 async fn project_preview(Path(name): Path<String>) -> Result<Response, Failed> {

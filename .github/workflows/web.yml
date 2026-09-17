@@ -1,16 +1,16 @@
-# Build the browser playground and publish it to GitHub Pages: the editor with
+# Build ParCAD web and publish it to GitHub Pages: the app with its host and
 # the exact kernel compiled to WebAssembly, at https://<owner>.github.io/parcad/.
 #
 # The corpus runs first, against the same WebAssembly build of the worker the
 # site's module is linked from, and the site is only built if it passes. Clang
 # for wasm32 is a different compiler from the one the corpus was recorded with,
 # and a page that measures parts wrong in front of visitors is worse than no
-# page. playground/README.md has the recipe this follows and what it measured.
+# page. web/README.md has the recipe this follows and what it measured.
 #
 # Manual only: Pages has to be enabled for the repository (Settings → Pages →
 # Source: GitHub Actions) before the deploy job can succeed, and deploying on
 # every push to main is a decision to make then — add `push: branches: [main]`.
-name: playground
+name: web
 
 on:
   workflow_dispatch:
@@ -19,7 +19,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: playground
+  group: web
   cancel-in-progress: false
 
 defaults:
@@ -48,8 +48,9 @@ jobs:
         with:
           node-version: '22'
 
+      # libclang: bindgen generates the script sandbox's QuickJS bindings for wasm.
       - name: Build tools
-        run: sudo apt-get update && sudo apt-get install -y ninja-build
+        run: sudo apt-get update && sudo apt-get install -y ninja-build libclang-dev
 
       - name: Restore the Emscripten SDK
         id: emsdk
@@ -73,11 +74,11 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: target/wasm/occt
-          key: occt-wasm-${{ env.EMSDK_VERSION }}-${{ hashFiles('vendor/occt-sys/OCCT/adm/cmake/version.cmake', 'vendor/occt-sys/patches/*', 'cmake/occt-toolchain.cmake', 'playground/occt-emscripten.cmake', 'playground/build-kernel.sh', 'vendor/opencascade-sys/build.rs') }}
+          key: occt-wasm-${{ env.EMSDK_VERSION }}-${{ hashFiles('vendor/occt-sys/OCCT/adm/cmake/version.cmake', 'vendor/occt-sys/patches/*', 'cmake/occt-toolchain.cmake', 'web/occt-emscripten.cmake', 'web/build-kernel.sh', 'vendor/opencascade-sys/build.rs') }}
 
       - name: Build OpenCASCADE for wasm32
         if: steps.occt.outputs.cache-hit != 'true'
-        run: EMSDK=$PWD/emsdk playground/build-kernel.sh occt
+        run: EMSDK=$PWD/emsdk web/build-kernel.sh occt
 
       - name: Keep the WebAssembly OpenCASCADE for the next run
         if: steps.occt.outputs.cache-hit != 'true'
@@ -87,7 +88,10 @@ jobs:
           key: ${{ steps.occt.outputs.cache-primary-key }}
 
       - name: Build the worker and the browser kernel
-        run: EMSDK=$PWD/emsdk playground/build-kernel.sh worker
+        run: EMSDK=$PWD/emsdk web/build-kernel.sh worker
+
+      - name: Build the browser host
+        run: EMSDK=$PWD/emsdk web/build-kernel.sh host
 
       - name: bun install
         run: cd app && bun install --frozen-lockfile
@@ -97,18 +101,22 @@ jobs:
         # native 20 s: 20-turn thread clearance measured 20 s+ on a 4-vCPU runner.
         env:
           PARCAD_OCCT_TIMEOUT: 60
-        run: PARCAD_OCCT_WORKER=$PWD/playground/node-worker.sh cargo run --locked -q --release -p parcad-eval
+        run: PARCAD_OCCT_WORKER=$PWD/web/node-worker.sh cargo run --locked -q --release -p parcad-eval
 
+      # PARCAD_RELAY is a repository variable naming the deployed relay
+      # (relay/README.md); without it the site builds with no way to connect an agent.
       - name: Build the site
         env:
-          PARCAD_PLAYGROUND_BASE: /${{ github.event.repository.name }}/
+          PARCAD_WEB_BASE: /${{ github.event.repository.name }}/
+          VITE_PARCAD_RELAY: ${{ vars.PARCAD_RELAY }}
         run: |
-          cd app && bun x vite build --mode playground
-          du -sh dist-playground
+          cd app && bun x vite build --mode web
+          bun x vite build --config vite.viewer.config.ts --outDir dist-web
+          du -sh dist-web
 
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: app/dist-playground
+          path: app/dist-web
 
   deploy:
     needs: build

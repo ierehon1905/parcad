@@ -22,6 +22,7 @@ pub mod backend;
 pub mod bodies;
 pub mod drawing;
 pub mod host;
+pub mod packet;
 #[cfg(feature = "kernel")]
 pub mod perceive;
 pub mod protocol;
@@ -32,8 +33,8 @@ mod skinned;
 
 pub use bodies::{body_meshes, measure_bodies, MeasuredBody};
 pub use host::{
-    check_fit, default_timeout, evaluate, inspect_edge_target, perceive, probe_step, OcctError,
-    Options,
+    check_fit, default_timeout, evaluate, inspect_edge_target, perceive, probe_step, with_kernel,
+    Kernel, OcctError, Options,
 };
 pub use protocol::{
     BodyFit, BodyKind, BodySpan, SurfaceMeasure, CurveProbe, EdgeCurve, FaceProbe, FitReport, Perceive, Perceived,

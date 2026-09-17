@@ -1,0 +1,21 @@
+name = "parcad-relay"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+# What may open a link: the published site, and a local build of it.
+[vars]
+PAGE_ORIGINS = "https://ierehon1905.github.io,http://localhost:1420,http://127.0.0.1:1420,http://localhost:4173,http://127.0.0.1:4173"
+PAGE_URL = "https://ierehon1905.github.io/parcad/"
+
+[[durable_objects.bindings]]
+name = "LINKS"
+class_name = "Link"
+
+# SQLite-backed, which is what the free plan offers; nothing is written to it.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Link"]
+
+# No request or message is logged.
+[observability]
+enabled = false

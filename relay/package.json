@@ -1,0 +1,16 @@
+{
+  "name": "parcad-relay",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "deploy": "wrangler deploy",
+    "test": "bun test test",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260917.1",
+    "typescript": "^5.6.0",
+    "wrangler": "4.133.0"
+  }
+}

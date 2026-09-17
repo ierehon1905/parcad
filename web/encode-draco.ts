@@ -2,9 +2,9 @@
 /**
  * Squeeze the mesh out of a recorded evaluation and into a Draco file.
  *
- *     bun playground/encode-draco.ts target/playground/first-part.json
+ *     bun web/encode-draco.ts target/web/first-part.json
  *
- * `playground/prebuild.sh` runs this. The evaluation keeps everything measured
+ * `web/prebuild.sh` runs this. The evaluation keeps everything measured
  * — the snapshot, the edges, the faces — and loses only `positions`, `normals`
  * and `indices`, which are 97% of its bytes and are the one part a Draco file
  * carries better: about 0.3 MB in place of 3 MB gzipped.
@@ -19,7 +19,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import draco3d from "draco3d";
 
-const file = process.argv[2] ?? "target/playground/first-part.json";
+const file = process.argv[2] ?? "target/web/first-part.json";
 const drc = file.replace(/\.json$/, ".drc");
 
 const evaluated = JSON.parse(readFileSync(file, "utf8")) as {

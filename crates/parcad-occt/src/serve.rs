@@ -1,7 +1,7 @@
 //! What the worker does with one request, apart from how the request arrived.
 //!
 //! The native worker reads frames from stdin and writes each reply to a file
-//! (`bin/worker.rs`); the WebAssembly playground calls [`run`] from a Web
+//! (`bin/worker.rs`); ParCAD web calls [`run`] from a Web
 //! Worker and hands the reply straight back. Both answer from this code.
 
 use crate::backend::{self, BuildCache};

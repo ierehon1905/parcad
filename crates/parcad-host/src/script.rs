@@ -350,6 +350,10 @@ pub fn build_within(source: &str, backstop: Duration) -> Result<Script, String> 
 fn run(source: &str, meter: &Arc<Meter>) -> Result<(Script, usize), String> {
     let runtime = Runtime::new().map_err(|e| format!("could not start the script sandbox: {e}"))?;
     runtime.set_memory_limit(MEMORY_LIMIT_BYTES);
+    // Under Emscripten the engine's own call stack runs out before QuickJS's
+    // measured one; this limit trips first (docs/GOTCHAS.md).
+    #[cfg(target_os = "emscripten")]
+    runtime.set_max_stack_size(256 * 1024);
 
     // The handler is polled by the interpreter, so this stops a bare
     // `while (true)` that no timeout on an outer future could reach.

@@ -20,9 +20,10 @@
 import { useSignal } from "@preact/signals";
 import { useRef } from "preact/hooks";
 
-import type { McpStatus } from "../backend";
+import { mcpThroughRelay, type McpStatus } from "../backend";
 import * as engine from "../engine";
 import * as S from "../state";
+import { AgentLink } from "./agent-link";
 import { Glass } from "./components/Glass";
 import { Icon, type IconName } from "./icons";
 import { tip } from "./tooltip";
@@ -37,8 +38,9 @@ export function Titlebar() {
       <Save />
       <Export />
       <span class="w-px h-[18px] bg-line" />
-      <Agent />
+      {mcpThroughRelay ? <AgentLink /> : <Agent />}
       <span class="flex-1" />
+      {mcpThroughRelay && <WebLinks />}
       {/* Transient only: saving, exported, copied, and how long the last
           evaluation took. Everything durable about the part is measured, and
           lives in the report over the viewport. */}
@@ -193,6 +195,39 @@ function Export() {
         </Glass>
       )}
     </div>
+  );
+}
+
+const REPO = "https://github.com/ierehon1905/parcad";
+const LINK = "text-small text-ink-dim hover:text-ink whitespace-nowrap";
+
+/** Where ParCAD web leads: the app it is a tab of, its source, and what it is built on. */
+function WebLinks() {
+  return (
+    <nav class="flex items-center gap-3 pr-1">
+      <a
+        class={LINK}
+        href={`${REPO}#install-it`}
+        target="_blank"
+        rel="noopener"
+        {...tip({ title: "Get the app", text: "The same ParCAD on your machine: parts as files, and an agent needs no link." })}
+      >
+        Get the app
+      </a>
+      <a class={`${LINK} max-lg:hidden`} href={REPO} target="_blank" rel="noopener">
+        Source
+      </a>
+      <a
+        class={`${LINK} max-lg:hidden`}
+        href="licenses/NOTICE.md"
+        target="_blank"
+        rel="noopener"
+        {...tip({ title: "Licenses", text: "Built on Open CASCADE Technology, under the LGPL 2.1 with its exception." })}
+      >
+        Licenses
+      </a>
+      <span class="w-px h-[18px] bg-line" />
+    </nav>
   );
 }
 

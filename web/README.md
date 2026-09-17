@@ -1,9 +1,14 @@
-# The playground: the exact kernel in a browser tab
+# ParCAD web: the app in a browser tab
 
-A static site where a visitor edits a ParCAD part in the real editor and it is
-built by the same OpenCASCADE, patched the same way, running the same Rust — the
-native worker's `parcad_occt::serve::run` and `parcad_evaluation` — compiled to
-WebAssembly and running in a Web Worker. No server, no account.
+A static site where a visitor edits a ParCAD part in the real editor, and an AI
+client can build parts in the same tab. Two WebAssembly modules in two Web
+Workers stand in for the desktop's two processes: the kernel — the same
+OpenCASCADE, patched the same way, running the native worker's
+`parcad_occt::serve::run` — and the host, `parcad-host` itself: the service, the
+MCP server, the script sandbox and the project folder. No server of ours runs
+geometry and no account is needed; an agent reaches the tab through a relay
+that only passes messages (`relay/README.md`). docs/ARCHITECTURE.md, "A third
+host: ParCAD web", is the design.
 
 ## Build it
 
@@ -16,47 +21,65 @@ Pinned, and everything installed outside the repository:
 | Node | 22 | only to run the corpus against the build |
 
 ```bash
-EMSDK=/path/to/emsdk playground/build-kernel.sh          # OpenCASCADE, then both kernels
-PARCAD_OCCT_WORKER=$PWD/playground/node-worker.sh \
+EMSDK=/path/to/emsdk web/build-kernel.sh          # OpenCASCADE, both kernels, the host
+PARCAD_OCCT_WORKER=$PWD/web/node-worker.sh \
   cargo run -q --release -p parcad-eval                  # the corpus, against the wasm build
 ```
 
 `build-kernel.sh` stages `vendor/occt-sys/OCCT` with `vendor/occt-sys/patches`
 applied, configures it with the switches `vendor/occt-sys/build.rs` passes and
 the toolchain in `occt-emscripten.cmake`, compiles only the toolkits
-`vendor/opencascade-sys/build.rs` links, and then builds two binaries into
+`vendor/opencascade-sys/build.rs` links, and then builds three binaries into
 `target/wasm`:
 
 - `node/parcad-occt-worker.js` + `.wasm` — the worker proper, under Node with
   the real filesystem, speaking the stdin/stderr protocol `host.rs` drives. That
   is how the eval corpus measures the WebAssembly build without a line of
   harness changed.
-- `web/parcad-wasm.js` + `parcad_wasm.wasm` — `crates/parcad-wasm`, the module a
-  page loads: one exported call per HTTP route the host has.
+- `web/parcad-wasm.js` + `parcad_wasm.wasm` — `crates/parcad-wasm`, the kernel a
+  page loads: a request packet in, a reply packet out, as the worker process
+  answers a frame.
+- `web/parcad-wasm-host.js` + `parcad_wasm_host.wasm` — `crates/parcad-wasm-host`,
+  the host a page loads, built in its own cargo invocation so the kernel's
+  `kernel` feature never unifies into it. QuickJS's bindings are generated
+  against Emscripten's headers (`BINDGEN_EXTRA_CLANG_ARGS_wasm32_unknown_emscripten`,
+  set by the script).
 
 Measured on an M-series Mac: OpenCASCADE for wasm, 4651 translation units, 306 s
-cold; the Rust half, 48 s.
+cold (469 s on 2026-09-17); the kernel's Rust half, 48 s; the host, 76 s cold
+and under a minute after an edit.
 
 **Relinking with another OpenCASCADE**, which LGPL-2.1 section 6 asks us to make
-possible: `OCCT_SOURCE=/your/occt EMSDK=… playground/build-kernel.sh`, then the
+possible: `OCCT_SOURCE=/your/occt EMSDK=… web/build-kernel.sh`, then the
 site build below. The patches in `vendor/occt-sys/patches` are applied to
 whatever tree `OCCT_SOURCE` names.
 
 ## The site
 
 ```bash
-playground/prebuild.sh                 # record the first part (optional, and worth it)
+web/prebuild.sh                 # record the first part (optional, and worth it)
 cd app && bun install --frozen-lockfile
-bun x vite build --mode playground     # app/dist-playground, for https://<owner>.github.io/parcad/
-bun x vite preview --mode playground   # or any static server, with the files under /parcad/
-bun x vite --mode playground           # the same, live, while editing the frontend
+export VITE_PARCAD_RELAY=https://parcad-relay.ierehon1905.workers.dev   # relay/README.md
+bun x vite build --mode web     # app/dist-web, for https://<owner>.github.io/parcad/
+bun x vite build --config vite.viewer.config.ts --outDir dist-web   # the in-chat viewer
+bun x vite preview --mode web   # or any static server, with the files under /parcad/
+bun x vite --mode web           # the same, live, while editing the frontend
 ```
 
-`prebuild.sh` evaluates the part the playground opens first and writes the
-result to `target/playground/`, which the build ships beside the kernel. A
+`VITE_PARCAD_RELAY` is the relay the site opens links through; without it the
+connect panel says the build has none. For a local relay, `cd relay && bun x
+wrangler dev --port 8787` and `VITE_PARCAD_RELAY=http://127.0.0.1:8787`; its
+`PAGE_ORIGINS` already allows `localhost:1420` and `127.0.0.1:4173`. The viewer
+build puts `viewer.html` beside the site, which the tab hands its host so a chat
+client that speaks MCP Apps shows the part in 3D; a site without it offers no
+viewer. Restart the dev server after rebuilding either module (docs/GOTCHAS.md,
+"New page script against an old host module reads nonsense").
+
+`prebuild.sh` evaluates the part ParCAD web opens first and writes the
+result to `target/web/`, which the build ships beside the kernel. A
 visitor then has the part on screen about 3 s after navigating, instead of
 waiting out the kernel's download *and* a build — the twisted planter is 5 s of
-geometry in a tab. Its mesh travels as Draco (`playground/encode-draco.ts`, three's decoder beside
+geometry in a tab. Its mesh travels as Draco (`web/encode-draco.ts`, three's decoder beside
 it): 0.36 MB where the same triangles are 9.95 MB of JSON, so the whole
 recording is 0.6 MB against the kernel's own 6.3 MB. Draco quantises positions
 to 14 bits of the part's extent — 0.006 mm here, finer than the mesher's own
@@ -71,11 +94,12 @@ the site still builds; the first visit is simply slower. Re-run it whenever the
 part changes — a recording for a script that has moved on is ignored, not
 shown.
 
-`PARCAD_PLAYGROUND_BASE` changes the base path; `PARCAD_KERNEL_DIR` points at a
-kernel built somewhere other than `target/wasm/web`. The build copies the kernel
-under `kernel/<content hash>/`, so a deploy never pairs one build's JavaScript
-with another's module, and ships `licenses/` (NOTICE.md says why).
-`.github/workflows/playground.yml` does all of this on a manual dispatch — the
+`PARCAD_WEB_BASE` changes the base path; `PARCAD_KERNEL_DIR` points at
+modules built somewhere other than `target/wasm/web`. The build copies both
+modules under `kernel/<content hash>/`, one hash over the four files, so a
+deploy never pairs one build's JavaScript with another's module, and ships
+`licenses/` (NOTICE.md says why).
+`.github/workflows/web.yml` does all of this on a manual dispatch — the
 corpus against the WebAssembly worker first — and deploys with
 `actions/deploy-pages`.
 
@@ -88,18 +112,37 @@ it. Checked in headless Chrome and headless Firefox against `python3 -m
 http.server` serving the files under `/parcad/` (Firefox: 350 ms of kernel time
 for the bracket, the same 6822 triangles); not yet in Safari or on a phone.
 
-**A visitor can** open any of the 28 seed parts, edit them with the real editor
+On 2026-09-17, with the host added: the host module is 6.4 MB, 2.1 MB gzipped
+and 1.5 MB with brotli, downloaded and started beside the kernel; the site is
+34 MB of files before the first-part recording. The twisted planter's evaluation
+in the tab, timed at each hop: the kernel worker's run and reply packet 6252 ms
+(3.96 MB), handing that packet to the host 9 ms, and the host measuring it and
+packing the mesh for the window 117 ms — work the kernel-only page also did, in
+its kernel worker — for 6415 ms in all. Over a local relay, with the page
+drawing every change, `evaluate_part` on a small part answers in 20–40 ms and
+`set_script`, through to the window reporting what it drew, in 0.14 s.
+
+**A visitor can** open any of the seed parts, edit them with the real editor
 and op palette, see every change built by the exact kernel with the report,
 section view, edge and face inspection, and the gold treatment-target preview;
 read refusals that name the fix; save parts, make new ones and folders, rename
-and delete them, all in that browser's storage; and export STEP, 3MF and STL as
-downloads.
+and delete them, with snapshots, in that browser's storage; export STEP, 3MF and
+STL as downloads; and give an AI client a link, after which it has the app's
+own MCP tools on this tab — reading and editing what is on screen, saving
+parts, exporting files to the visitor's downloads, and, in a client that speaks
+MCP Apps, showing the part in 3D.
 
-**A visitor cannot** reach MCP (there is no endpoint, so the chip never shows),
-share a live session with another window or an agent, keep parts as files or see
-them anywhere but that browser, or give a heavy part more than 60 s. Nothing
-leaves the tab: scripts run in the page as they do in the desktop editor, and
-the kernel runs in a Web Worker beside it.
+**A visitor cannot** keep parts as files or see them anywhere but that browser,
+give a heavy part more than 60 s unless an agent asks for up to 600, reach the
+tab from an agent while the tab is closed, or run two shared windows on one
+session: the session lives in the tab, and a reload starts it again (a client
+re-initialises on the 404 it then gets). Scripts the visitor types run in the
+page as they do in the desktop editor; scripts an agent sends run in the host's
+QuickJS sandbox, never in the page.
+
+Parts the kernel-only page kept in IndexedDB (`parcad-playground`) move into
+the new folder on the first visit, with titles, thumbnails, and the seed parts
+the visitor had deleted staying deleted.
 
 ## What had to change for WebAssembly
 
@@ -117,7 +160,11 @@ the kernel runs in a Web Worker beside it.
   other build traps found here.
 - **Single-threaded.** OCCT is built without TBB, and the worker never asks
   BRepMesh for parallelism, so there is no `SharedArrayBuffer` and no
-  cross-origin-isolation header to need — which GitHub Pages cannot send.
+  cross-origin-isolation header to need — which GitHub Pages cannot send. It is
+  also why the host cannot block on the kernel and pauses its calls instead
+  (docs/ARCHITECTURE.md).
+- **The host's QuickJS gets a 256 KB stack limit**, because under Emscripten the
+  engine's own stack runs out first (docs/GOTCHAS.md).
 - **Memory** grows from 64 MB up to the 4 GB wasm32 ceiling; the shadow stack is
   16 MB because OpenCASCADE recurses deeply.
 
@@ -140,7 +187,7 @@ through a `coi-serviceworker` shim, because nothing in the worker is parallel.
 
 ## Is it the same kernel? The corpus says so
 
-`PARCAD_OCCT_WORKER=playground/node-worker.sh cargo run -q --release -p parcad-eval`:
+`PARCAD_OCCT_WORKER=web/node-worker.sh cargo run -q --release -p parcad-eval`:
 
 ```
 113 passed, 0 failed, 0 skipped, 0 known defect(s)     # 67 s; native 27 s

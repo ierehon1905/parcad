@@ -2,9 +2,10 @@
  * The Web Worker the WebAssembly kernel runs in — the tab's counterpart of the
  * `parcad-occt-worker` process, and expendable for the same reason.
  *
- * It instantiates the module the page already compiled, answers one call at a
- * time, and forwards every `@stage` breadcrumb the kernel prints, so that when
- * the page has to terminate it the last one says what it was doing.
+ * It instantiates the module the page already compiled, answers one request
+ * packet at a time with a reply packet (`parcad_occt::packet`), and forwards
+ * every `@stage` breadcrumb the kernel prints, so that when the page has to
+ * terminate it the last one says what it was doing.
  */
 
 /// <reference lib="webworker" />
@@ -21,19 +22,20 @@ type Factory = (options: Record<string, unknown>) => Promise<KernelModule>;
 
 export type ToWorker =
   | { kind: "start"; module: WebAssembly.Module; script: string }
-  | { kind: "call"; id: number; request: unknown };
+  | { kind: "call"; id: number; packet: Uint8Array };
 
 export type FromWorker =
   | { kind: "ready" }
   | { kind: "stage"; stage: string }
-  | { kind: "reply"; id: number; ok: true; json?: unknown; bytes?: Uint8Array }
-  | { kind: "reply"; id: number; ok: false; message: string }
+  | { kind: "reply"; id: number; packet: Uint8Array }
   | { kind: "died"; detail: string };
 
 const post = (message: FromWorker, transfer: Transferable[] = []) =>
   (self as unknown as DedicatedWorkerGlobalScope).postMessage(message, transfer);
 
 const BREADCRUMB = "@stage ";
+/** `parcad_call`'s reply kinds, from crates/parcad-wasm/src/kernel.rs. */
+const PACKET = 1;
 let kernel: KernelModule | undefined;
 
 self.onmessage = async (event: MessageEvent<ToWorker>) => {
@@ -61,34 +63,19 @@ self.onmessage = async (event: MessageEvent<ToWorker>) => {
 
   const k = kernel!;
   try {
-    const input = new TextEncoder().encode(JSON.stringify(message.request));
-    const ptr = k._parcad_alloc(input.length);
-    k.HEAPU8.set(input, ptr);
-    const reply = k._parcad_call(ptr, input.length);
+    const ptr = k._parcad_alloc(message.packet.length);
+    k.HEAPU8.set(message.packet, ptr);
+    const reply = k._parcad_call(ptr, message.packet.length);
     // Views are re-read after the call: memory may have grown during it.
-    // The kernel's last breadcrumb is "done"; a stop after it is in here.
+    // The kernel's last breadcrumb is "encoding the reply"; a stop after it is in here.
     post({ kind: "stage", stage: "handing the reply to the page" });
     const kind = k.HEAPU32[reply >>> 2];
     const len = k.HEAPU32[(reply >>> 2) + 1];
     const payload = k.HEAPU8.slice(reply + 8, reply + 8 + len);
     k._parcad_free(reply);
-    if (kind === 3) {
-      // `meshed` in crates/parcad-wasm/src/kernel.rs: lengths, JSON, then the arrays.
-      const [textLen, positionsLen, normalsLen, indicesLen] = new Uint32Array(payload.buffer, 0, 4);
-      const json = JSON.parse(new TextDecoder().decode(payload.subarray(16, 16 + textLen)));
-      let at = 16 + Math.ceil(textLen / 4) * 4;
-      const take = (count: number) => payload.buffer.slice(at, (at += 4 * count));
-      json.positions = new Float32Array(take(positionsLen));
-      json.normals = new Float32Array(take(normalsLen));
-      json.indices = new Uint32Array(take(indicesLen));
-      post({ kind: "reply", id: message.id, ok: true, json }, [json.positions.buffer, json.normals.buffer, json.indices.buffer]);
-    } else if (kind === 0) {
-      post({ kind: "reply", id: message.id, ok: true, json: JSON.parse(new TextDecoder().decode(payload)) });
-    } else if (kind === 1) {
-      post({ kind: "reply", id: message.id, ok: true, bytes: payload }, [payload.buffer]);
-    } else {
-      post({ kind: "reply", id: message.id, ok: false, message: new TextDecoder().decode(payload) });
-    }
+    if (kind === PACKET) post({ kind: "reply", id: message.id, packet: payload }, [payload.buffer]);
+    // The kernel could not read what it was sent: a host bug, and no state to trust after it.
+    else post({ kind: "died", detail: new TextDecoder().decode(payload) });
   } catch (e) {
     // A trap or an abort: the module's state is not to be trusted after one,
     // exactly as a native worker is not after a signal.

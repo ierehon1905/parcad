@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Record the part the playground opens first, so a visitor sees it while the
+# Record the part ParCAD web opens first, so a visitor sees it while the
 # kernel is still downloading. `app/src/page/prebuilt.ts` says what the page
 # does with this; in short, it stands in until the same graph has been built in
 # the visitor's own tab, and the page says so on screen meanwhile.
 #
-#     playground/prebuild.sh                 # examples/twisted-planter.js
-#     playground/prebuild.sh examples/bracket.js
+#     web/prebuild.sh                 # examples/twisted-planter.js
+#     web/prebuild.sh examples/bracket.js
 #
-# It writes target/playground/first-part.json — the evaluation as
+# It writes target/web/first-part.json — the evaluation as
 # `/api/evaluate` answers it, with the mesh moved into first-part.drc by
-# playground/encode-draco.ts — and the script beside it, which is what the page
+# web/encode-draco.ts — and the script beside it, which is what the page
 # matches the open part against: the same text, unedited, or the kernel in the
 # tab builds it. Neither is checked in: both are derived, and a stale one would
 # describe a part the script no longer builds.
@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.."
 root=$PWD
 
 part=${1:-examples/twisted-planter.js}
-out=$root/target/playground
+out=$root/target/web
 port=${PARCAD_PREBUILD_PORT:-4386}
 worker=${PARCAD_OCCT_WORKER:-$root/target/release/parcad-occt-worker}
 parcad=${PARCAD_BIN:-$root/target/release/parcad}
@@ -49,7 +49,7 @@ printf '{"graph": %s}' "$(cat "$out/first-part-graph.json")" |
   curl -sf -X POST "http://127.0.0.1:$port/api/evaluate" -H 'content-type: application/json' --data-binary @- \
     -o "$out/first-part.json"
 
-bun playground/encode-draco.ts "$out/first-part.json"
+bun web/encode-draco.ts "$out/first-part.json"
 
 python3 - "$out/first-part.json" <<'PY'
 import json, sys

@@ -19,7 +19,7 @@
 //! Scripts arrive from a model and run in `script`'s sandbox, never in the
 //! webview. That is the precondition this server was blocked on.
 
-use crate::{http::Assets, projects, script, service, session};
+use crate::{assets::Assets, projects, script, service, session};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
@@ -136,25 +136,34 @@ fn reply_schema(tool: &str) -> std::sync::Arc<rmcp::model::JsonObject> {
     }
 }
 
-/// The MCP endpoint, as a tower service to mount on the app's host.
+pub type Transport = rmcp::transport::streamable_http_server::StreamableHttpService<
+    Parcad,
+    rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
+>;
+
+/// The MCP endpoint as a tower service, before a host mounts it: on a socket
+/// by [`service`], or in a browser tab by `page.rs`.
 ///
 /// Stateless: each request builds its own handler. There is no session to keep
 /// because there is no document to keep — a script carries its whole part, so
 /// two calls cannot disagree about what is on screen.
-pub fn service(assets: Arc<dyn Assets>) -> axum::Router {
+pub fn transport(assets: Arc<dyn Assets>) -> Transport {
     let mut config = rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default();
     // A tool call answers once; there is nothing to stream, and a plain JSON
     // reply is far easier to drive from a shell when something is wrong.
     config.json_response = true;
 
-    let transport = rmcp::transport::streamable_http_server::StreamableHttpService::<
-        Parcad,
-        rmcp::transport::streamable_http_server::session::local::LocalSessionManager,
-    >::new(
+    Transport::new(
         move || Ok(Parcad::new().with_assets(assets.clone())),
         Default::default(),
         config,
-    );
+    )
+}
+
+/// The MCP endpoint, as a router to mount on the app's host.
+#[cfg(not(target_os = "emscripten"))]
+pub fn service(assets: Arc<dyn Assets>) -> axum::Router {
+    let transport = transport(assets);
 
     // Wrapped so every request passes `record`, which is the only place that
     // knows an agent is there at all. The tool functions cannot report it: they
@@ -482,6 +491,10 @@ pub struct Exported {
     /// Why the file could not be handed to an application, and what to do.
     #[serde(skip_serializing_if = "Option::is_none")]
     open_error: Option<String>,
+    /// In ParCAD web: true when the user's browser was given the file to
+    /// download, which is the only copy they can reach.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    downloaded: Option<bool>,
 }
 
 #[derive(Serialize, schemars::JsonSchema)]
@@ -595,7 +608,7 @@ impl Parcad {
         let size = request.image_size.unwrap_or(512).clamp(128, 1024);
         let budget = budget(request.timeout_s);
 
-        let (snapshot, pngs) = blocking(move || {
+        let (snapshot, pictures) = blocking(move || {
             let built = script::build_within(&request.script, script_budget(request.timeout_s))?;
             let doc = service::parse_graph(built.graph.clone())?;
             let evaluated = service::evaluate(&doc, budget).map_err(|e| built.locate(e))?;
@@ -615,11 +628,11 @@ impl Parcad {
             )
             .map_err(|e| built.locate(e))?;
             let stem = render_stem(&request.script, size, regions, materials, section.is_some());
-            let (summaries, pngs) = renders
+            let (summaries, pictures) = renders
                 .views
                 .into_iter()
                 .map(|mut render| {
-                    render.summary.path = keep_render(&stem, &render.summary.view, &render.png);
+                    render.summary.path = keep_render(&stem, &render.summary.view, &render.image);
                     // A tag-region map is for the caller to read, not a picture of the part.
                     if !regions {
                         render.summary.markdown = render
@@ -628,11 +641,17 @@ impl Parcad {
                             .as_deref()
                             .map(|path| markdown_image(&render.summary.view, path));
                     }
-                    (render.summary, render.png)
+                    let view = render.summary.view.clone();
+                    let picture = render
+                        .image
+                        .to_webp()
+                        .map_err(|e| format!("encoding the {view} view: {e:#}"));
+                    (render.summary, picture)
                 })
                 .unzip::<_, _, Vec<_>, Vec<_>>();
+            let pictures = pictures.into_iter().collect::<Result<Vec<_>, _>>()?;
 
-            Ok((evaluated.snapshot.with_views(summaries), pngs))
+            Ok((evaluated.snapshot.with_views(summaries), pictures))
         })
         .await?;
 
@@ -643,10 +662,10 @@ impl Parcad {
             ErrorData::internal_error(format!("serialising the snapshot: {e}"), None)
         })?;
         let mut content = vec![rmcp::model::ContentBlock::text(measured.to_string())];
-        content.extend(pngs.into_iter().map(|png| {
+        content.extend(pictures.into_iter().map(|webp| {
             rmcp::model::ContentBlock::image(
-                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, png),
-                "image/png",
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, webp),
+                "image/webp",
             )
         }));
 
@@ -869,13 +888,20 @@ impl Parcad {
                 .map_err(|e| format!("writing {}: {e}", path.display()))?;
 
             let path = path.to_string_lossy().to_string();
-            let open_error = request.open.then(|| service::open_in_default_app(&path).err()).flatten();
+            // A tab has no application to open a file in; it hands every
+            // export to the browser, which is the user's copy.
+            let downloaded = crate::page::active().then(|| crate::page::offer_download(&path));
+            let open_error = match downloaded {
+                Some(_) => None,
+                None => request.open.then(|| service::open_in_default_app(&path).err()).flatten(),
+            };
             Ok(Exported {
                 bytes: export.bytes.len(),
                 format,
                 measured: export.measured,
-                opened: request.open.then_some(open_error.is_none()),
+                opened: (request.open && downloaded.is_none()).then_some(open_error.is_none()),
                 open_error,
+                downloaded,
                 path,
             })
         })
@@ -982,9 +1008,12 @@ impl Parcad {
         Parameters(request): Parameters<SaveRequest>,
     ) -> Result<rmcp::handler::server::wrapper::Json<Saved>, ErrorData> {
         let saved = blocking(move || {
+            // Built before anything is written: a tab's host may pause at the
+            // kernel and run this again, and a write must not happen twice.
+            let thumbnail = preview_of(&request.script);
             let snapshot = projects::snapshot(&request.name)?;
             let path = projects::write(&request.name, &request.script)?;
-            let (built, error, preview) = match preview_of(&request.script) {
+            let (built, error, preview) = match thumbnail {
                 Ok(png) => match projects::write_preview(&request.name, &png) {
                     Ok(()) => (true, None, projects::preview_path(&request.name)),
                     Err(_) => (true, None, None),
@@ -1207,7 +1236,11 @@ impl ServerHandler for Parcad {
         // work out from the schemas: the unit rule, where the origin is,
         // and that a refusal is information rather than a wall to route
         // around.
-        info.instructions = Some(INSTRUCTIONS.to_owned());
+        info.instructions = Some(if crate::page::active() {
+            format!("{INSTRUCTIONS}\n\n{}", crate::page::INSTRUCTIONS)
+        } else {
+            INSTRUCTIONS.to_owned()
+        });
         info
     }
 }
@@ -1279,45 +1312,26 @@ pub fn status() -> Status {
         tool_calls: activity.tool_calls,
         last_tool: activity.last_tool.clone(),
         idle_secs: activity.last_seen.map(|at| at.elapsed().as_secs()),
-        url: format!("http://127.0.0.1:{}/mcp", crate::http::port()),
+        url: endpoint(),
     }
 }
 
-/// Note that a request happened, and what it was, on its way through.
-///
-/// The body is buffered because the JSON-RPC method is *in* it — the HTTP verb
-/// and path are the same for a handshake and for a fillet. These are small
-/// JSON documents; the limit below is generous enough for a long script and
-/// still refuses to hold an unbounded upload in memory.
-async fn record(
-    request: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    use axum::response::IntoResponse;
+/// Where a client connects: the loopback port, or the link a tab was given.
+fn endpoint() -> String {
+    if let Some(link) = crate::page::link() {
+        return link;
+    }
+    #[cfg(not(target_os = "emscripten"))]
+    return format!("http://127.0.0.1:{}/mcp", crate::http::port());
+    #[cfg(target_os = "emscripten")]
+    return String::new();
+}
 
-    const BODY_LIMIT: usize = 32 * 1024 * 1024;
-
-    let session_id = request
-        .headers()
-        .get("mcp-session-id")
-        .and_then(|value| value.to_str().ok())
-        .map(str::to_string);
-    let method = request.method().clone();
-
-    let (parts, body) = request.into_parts();
-    let bytes = match axum::body::to_bytes(body, BODY_LIMIT).await {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return (
-                axum::http::StatusCode::PAYLOAD_TOO_LARGE,
-                "the MCP request body is larger than 32 MB; send the script itself, \
-                 not a mesh",
-            )
-                .into_response()
-        }
-    };
-
-    let call: Option<serde_json::Value> = serde_json::from_slice(&bytes).ok();
+/// Note a request on its way in: who is calling, and which tool. Returns the
+/// client's own name when the request announces one, which only a handshake
+/// does, for [`note_session`] to pin to the session its reply mints.
+pub(crate) fn note_request(session_id: Option<&str>, closing: bool, body: &[u8]) -> Option<String> {
+    let call: Option<serde_json::Value> = serde_json::from_slice(body).ok();
     let rpc_method = call
         .as_ref()
         .and_then(|call| call.get("method"))
@@ -1333,39 +1347,91 @@ async fn record(
             _ => info.to_string(),
         });
 
-    {
-        let mut activity = ACTIVITY.lock().unwrap_or_else(|e| e.into_inner());
-        activity.last_seen = Some(Instant::now());
-        if let Some(name) = client.clone() {
-            activity.client = Some(name);
-        }
-        if rpc_method.as_deref() == Some("tools/call") {
-            activity.tool_calls += 1;
-            activity.last_tool = call
-                .as_ref()
-                .and_then(|call| call.pointer("/params/name"))
-                .and_then(|name| name.as_str())
-                .map(str::to_string);
-        }
-        match (&session_id, method) {
-            // A client saying goodbye is the one unambiguous disconnect there
-            // is; everything else is inferred from silence.
-            (Some(id), axum::http::Method::DELETE) => {
-                activity.sessions.remove(id);
-            }
-            (Some(id), _) => {
-                let entry = activity.sessions.entry(id.clone()).or_insert(Session {
-                    client: client.clone(),
-                    last_seen: Instant::now(),
-                });
-                entry.last_seen = Instant::now();
-                if entry.client.is_none() {
-                    entry.client = client.clone();
-                }
-            }
-            (None, _) => {}
-        }
+    let mut activity = ACTIVITY.lock().unwrap_or_else(|e| e.into_inner());
+    activity.last_seen = Some(Instant::now());
+    if let Some(name) = client.clone() {
+        activity.client = Some(name);
     }
+    if rpc_method.as_deref() == Some("tools/call") {
+        activity.tool_calls += 1;
+        activity.last_tool = call
+            .as_ref()
+            .and_then(|call| call.pointer("/params/name"))
+            .and_then(|name| name.as_str())
+            .map(str::to_string);
+    }
+    match session_id {
+        // A client saying goodbye is the one unambiguous disconnect there
+        // is; everything else is inferred from silence.
+        Some(id) if closing => {
+            activity.sessions.remove(id);
+        }
+        Some(id) => {
+            let entry = activity.sessions.entry(id.to_string()).or_insert(Session {
+                client: client.clone(),
+                last_seen: Instant::now(),
+            });
+            entry.last_seen = Instant::now();
+            if entry.client.is_none() {
+                entry.client = client.clone();
+            }
+        }
+        None => {}
+    }
+    client
+}
+
+/// Note the session a reply named. The id is minted in the reply to
+/// `initialize`, so a handshake is the one request that cannot name its own
+/// session on the way in.
+pub(crate) fn note_session(id: &str, client: Option<String>) {
+    let mut activity = ACTIVITY.lock().unwrap_or_else(|e| e.into_inner());
+    activity
+        .sessions
+        .entry(id.to_string())
+        .or_insert(Session {
+            client,
+            last_seen: Instant::now(),
+        })
+        .last_seen = Instant::now();
+}
+
+/// Note that a request happened, and what it was, on its way through.
+///
+/// The body is buffered because the JSON-RPC method is *in* it — the HTTP verb
+/// and path are the same for a handshake and for a fillet. These are small
+/// JSON documents; the limit below is generous enough for a long script and
+/// still refuses to hold an unbounded upload in memory.
+#[cfg(not(target_os = "emscripten"))]
+async fn record(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+
+    const BODY_LIMIT: usize = 32 * 1024 * 1024;
+
+    let session_id = request
+        .headers()
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let closing = request.method() == axum::http::Method::DELETE;
+
+    let (parts, body) = request.into_parts();
+    let bytes = match axum::body::to_bytes(body, BODY_LIMIT).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return (
+                axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+                "the MCP request body is larger than 32 MB; send the script itself, \
+                 not a mesh",
+            )
+                .into_response()
+        }
+    };
+
+    let client = note_request(session_id.as_deref(), closing, &bytes);
 
     let response = next
         .run(axum::extract::Request::from_parts(
@@ -1374,22 +1440,12 @@ async fn record(
         ))
         .await;
 
-    // The session id is minted in the reply to `initialize`, so a handshake is
-    // the one request that cannot name its own session on the way in.
     if let Some(id) = response
         .headers()
         .get("mcp-session-id")
         .and_then(|value| value.to_str().ok())
     {
-        let mut activity = ACTIVITY.lock().unwrap_or_else(|e| e.into_inner());
-        activity
-            .sessions
-            .entry(id.to_string())
-            .or_insert(Session {
-                client,
-                last_seen: Instant::now(),
-            })
-            .last_seen = Instant::now();
+        note_session(id, client);
     }
 
     response
@@ -1441,11 +1497,15 @@ fn render_stem(script: &str, size: u32, regions: bool, materials: bool, section:
 
 /// Write one rendered view where a person can open it, and say where. A
 /// render that cannot be written still rides inline, so this never fails the call.
-fn keep_render(stem: &str, view: &str, png: &[u8]) -> Option<String> {
+fn keep_render(stem: &str, view: &str, image: &parcad_core::render::Rgb) -> Option<String> {
+    // A tab's files are its own; no client could open one by this path.
+    if crate::page::active() {
+        return None;
+    }
     let dir = render_dir();
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join(format!("{stem}-{view}.png"));
-    std::fs::write(&path, png).ok()?;
+    std::fs::write(&path, image.to_png().ok()?).ok()?;
     Some(path.to_string_lossy().to_string())
 }
 
@@ -1480,8 +1540,10 @@ fn preview_of(script: &str) -> Result<Vec<u8>, String> {
         .views
         .into_iter()
         .next()
-        .map(|r| r.png)
-        .ok_or_else(|| "the iso view drew nothing".to_string())
+        .ok_or_else(|| "the iso view drew nothing".to_string())?
+        .image
+        .to_png()
+        .map_err(|e| format!("encoding the thumbnail: {e:#}"))
 }
 
 /// The session after a change, once a window has shown it or the wait is over.
@@ -1589,11 +1651,17 @@ struct ViewedHeader<'a, E: Serialize, F: Serialize, S: Serialize> {
 }
 
 /// Geometry is blocking and can be a whole subprocess; keep it off the reactor.
+///
+/// In a browser tab there is no other thread, and the kernel is reached
+/// through the page, so the work runs here and may pause for it (`page.rs`).
 async fn blocking<T, F>(work: F) -> Result<T, ErrorData>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, String> + Send + 'static,
 {
+    if crate::page::active() {
+        return crate::page::inline(work).map_err(invalid);
+    }
     match tokio::task::spawn_blocking(work).await {
         Ok(result) => result.map_err(invalid),
         Err(e) => Err(ErrorData::internal_error(
