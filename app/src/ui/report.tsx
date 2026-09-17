@@ -25,6 +25,7 @@
  * what eighteen stubs look like and a slab never does.
  */
 
+import { signal } from "@preact/signals";
 import type { ComponentChildren } from "preact";
 import { fmt } from "../engine";
 import * as S from "../state";
@@ -113,8 +114,59 @@ export function Report() {
           {snapshot.named_bodies && ` for ${snapshot.named_bodies.length} named`}
         </div>
       )}
-      {snapshot.named_bodies?.map((body) => (
-        <div key={body.name} class={body.pieces > 1 || body.watertight === false ? "text-bad" : undefined}>
+      {snapshot.named_bodies && <Bodies snapshot={snapshot} />}
+      {snapshot.watertight === false && (
+        <div class="text-bad">
+          NOT watertight — {snapshot.non_manifold_edges} bad edges
+        </div>
+      )}
+      {!linked && S.lastTreatments.value.length > 0 && (
+        <div class="text-bad">no final treatment curves are available</div>
+      )}
+      {dead > 0 && <div class="text-bad">{dead} unused nodes</div>}
+    </Glass>
+  );
+}
+
+/** Whether every body and pair is listed, or only the wrong ones. */
+const bodiesOpen = signal(false);
+
+type Snapshot = NonNullable<typeof S.snapshot.value>;
+
+/**
+ * The pairs grow as n², so seven bodies were twenty-eight lines over the part.
+ * Collapsed, one line counts them and only a broken body or an interfering pair
+ * is listed; the chevron lists the rest.
+ */
+function Bodies({ snapshot }: { snapshot: Snapshot }) {
+  const bodies = snapshot.named_bodies ?? [];
+  const pairs = snapshot.between_bodies ?? [];
+  const brokenBody = (body: (typeof bodies)[number]) => body.pieces > 1 || body.watertight === false;
+  const open = bodiesOpen.value;
+  const shownBodies = open ? bodies : bodies.filter(brokenBody);
+  const shownPairs = open ? pairs : pairs.filter((pair) => pair.verdict === "interfering");
+  const interfering = pairs.filter((pair) => pair.verdict === "interfering").length;
+
+  return (
+    <>
+      <button
+        type="button"
+        class="pointer-events-auto cursor-pointer text-left hover:text-ink"
+        onClick={() => (bodiesOpen.value = !open)}
+      >
+        {open ? "▾" : "▸"} <Strong>{bodies.length}</Strong> bodies ·{" "}
+        {interfering > 0 ? (
+          <span class="text-bad">
+            <Strong>{interfering}</Strong> of {pairs.length} pairs interfering
+          </span>
+        ) : (
+          <>
+            <Strong>{pairs.length}</Strong> {pairs.length === 1 ? "pair" : "pairs"}, none interfering
+          </>
+        )}
+      </button>
+      {shownBodies.map((body) => (
+        <div key={body.name} class={brokenBody(body) ? "text-bad" : undefined}>
           {body.name}:{" "}
           {body.volume_mm3 !== undefined ? (
             <>
@@ -126,7 +178,7 @@ export function Report() {
           {body.pieces > 1 && ` in ${body.pieces} pieces`}
         </div>
       ))}
-      {snapshot.between_bodies?.map((pair) => (
+      {shownPairs.map((pair) => (
         <div key={`${pair.a}/${pair.b}`} class={pair.verdict === "interfering" ? "text-bad" : undefined}>
           {pair.a} · {pair.b}: {pair.verdict}
           {pair.clearance_mm !== undefined && (
@@ -143,16 +195,7 @@ export function Report() {
           )}
         </div>
       ))}
-      {snapshot.watertight === false && (
-        <div class="text-bad">
-          NOT watertight — {snapshot.non_manifold_edges} bad edges
-        </div>
-      )}
-      {!linked && S.lastTreatments.value.length > 0 && (
-        <div class="text-bad">no final treatment curves are available</div>
-      )}
-      {dead > 0 && <div class="text-bad">{dead} unused nodes</div>}
-    </Glass>
+    </>
   );
 }
 
