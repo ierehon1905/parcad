@@ -905,6 +905,90 @@ mod tests {
         assert_eq!(treatment_edge_count(&doc, 7), 8);
     }
 
+    fn request(doc: &Doc, fit_against: Option<&Doc>) -> Request {
+        Request {
+            doc: Some(doc.clone()),
+            probe_step: None,
+            fit_against: fit_against.cloned(),
+            inspect_target: None,
+            perceive: None,
+            deflection: BINDING_DEFLECTION_MM,
+            step_path: None,
+            stl_path: None,
+        }
+    }
+
+    /// A 40 × 40 × 10 plate less a 20 mm cube raised by `z`: the plate is
+    /// node 0, the cube node 1.
+    fn plate(z: f64) -> Doc {
+        serde_json::from_str(&format!(
+            r#"{{"root": 3, "nodes": [
+                {{"op": "cuboid", "size": {{"x": 40, "y": 40, "z": 10}}}},
+                {{"op": "cuboid", "size": {{"x": 20, "y": 20, "z": 20}}}},
+                {{"op": "translate", "child": 1, "by": {{"x": 0, "y": 0, "z": {z}}}}},
+                {{"op": "difference", "base": 0, "tools": [2], "blend": 0}}
+            ]}}"#
+        ))
+        .unwrap()
+    }
+
+    /// `shape` as node 0, raised by `z` in node 1.
+    fn raised(shape: &str, z: f64) -> Doc {
+        serde_json::from_str(&format!(
+            r#"{{"root": 1, "nodes": [
+                {shape},
+                {{"op": "translate", "child": 0, "by": {{"x": 0, "y": 0, "z": {z}}}}}
+            ]}}"#
+        ))
+        .unwrap()
+    }
+
+    fn built(doc: &Doc, cache: &mut BuildCache) -> (Vec<f32>, usize) {
+        match run(request(doc, None), cache) {
+            Response::Ok(built) => (built.positions, built.topology.faces),
+            other => panic!("the part did not build: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_fit_on_a_warm_worker_measures_the_reference_it_was_given() {
+        // The block's nodes 0 and 1 share their numbers with the plate's,
+        // which the plate has built at the origin.
+        let part = plate(0.0);
+        let block = |z: f64| raised(r#"{"op": "cuboid", "size": {"x": 19.5, "y": 19.5, "z": 30}}"#, z);
+        let fit = |cache: &mut BuildCache, z: f64, pass: &str| {
+            let Response::Fit(fit) = run(request(&part, Some(&block(z))), cache) else {
+                panic!("the {pass} fit was not measured");
+            };
+            assert_eq!(fit.verdict, "clear", "{pass}: {fit:?}");
+            assert!((fit.clearance_mm.unwrap() - 0.25).abs() < 1e-9, "{pass}: {fit:?}");
+            assert_eq!(fit.interference_mm3, 0.0, "{pass}");
+            assert_eq!(fit.part_bounds, [[-20.0, -20.0, -5.0], [20.0, 20.0, 5.0]], "{pass}");
+            assert_eq!(fit.reference_bounds, [[-9.75, -9.75, z - 15.0], [9.75, 9.75, z + 15.0]], "{pass}");
+        };
+        let mut cache = BuildCache::default();
+        built(&part, &mut cache);
+        let part_only = cache.len();
+        fit(&mut cache, 0.0, "cold");
+        assert_eq!(cache.len(), part_only + 2, "the reference's two nodes are kept under keys of their own");
+        for (z, pass) in [(0.0, "warm"), (1.0, "moved"), (0.0, "back")] {
+            fit(&mut cache, z, pass);
+        }
+    }
+
+    #[test]
+    fn a_fit_leaves_nothing_a_later_part_can_mistake_for_its_own() {
+        // The ball misses the raised plate's builds and is kept, its move (node
+        // 1) at the origin, which is where the lower plate builds its node 1.
+        let mut cache = BuildCache::default();
+        let ball = raised(r#"{"op": "sphere", "r": 4}"#, 3.0);
+        assert!(matches!(run(request(&plate(3.0), Some(&ball)), &mut cache), Response::Fit(_)));
+        assert!(
+            built(&plate(0.0), &mut cache) == built(&plate(0.0), &mut BuildCache::default()),
+            "a part built after a fit differs from the same part built afresh"
+        );
+    }
+
     #[test]
     fn a_part_that_is_inside_out_is_refused_when_meshed_and_when_probed() {
         let doc: Doc = serde_json::from_str(

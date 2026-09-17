@@ -95,6 +95,23 @@ laid there, which moves between compilers. `stands_on_under_mm2` replaces
 `stands_on_mm2` with a ceiling derived by hand, and `--update` leaves it alone;
 `ellipsoid.json` derives its own.
 
+## A fit
+
+A case can lay other scripts against its part, as `check_fit` does:
+
+```json
+"fits": [
+  { "reference": "eval/scripts/fit-in-the-holes-pin.js", "verdict": "clear", "clearance_mm": 0.25 }
+]
+```
+
+Each reference is asked twice on the worker that has just evaluated the part,
+so the second answer is built from that worker's cache. `--update` records
+the first answer — verdict, clearance, shared volume and both solids' bounds —
+and holds the second to it; a reference that does not build, or a second
+answer that differs, fails even under `--update`. `fit-in-the-holes` is why: a
+worker once built a fit's reference from the part's cache.
+
 ## Known defects
 
 ```json

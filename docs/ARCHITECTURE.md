@@ -358,7 +358,9 @@ by the translation pushed down into it. An edit rebuilds the nodes it changed
 and the operations above them; a probe or a thickness sweep of the part just
 built builds nothing; an evaluate of an unchanged part is its mesh alone. A hit
 counts as a use of everything beneath it, and what two builds have not touched
-is dropped. Measured on `examples/plate-stand.js`, whose blended union is
+is dropped. The keys are remembered by node id for one document, so a request
+that builds two — `check_fit` — builds the second under keys of its own, and a
+node of any other document is built without the cache (docs/GOTCHAS.md). Measured on `examples/plate-stand.js`, whose blended union is
 2.7 s of its 3.2 s build: the same part again 475 ms, a ray probe 122 ms,
 and a change to the slot chamfer at the root 697 ms against 3.2 s cold. An
 edit to a peg still costs the blend above it, which is where the time is. A

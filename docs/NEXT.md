@@ -100,7 +100,9 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      3/4 SOUND without thinking (one trial saved the brick, then set_script
      wrote it over the open planter and said it was showing) and 4/4 with;
      sonnet not run. Left: sonnet before, the whole round after, then rebuild
-     and redeploy the site — the live site still serves the old wording.
+     and redeploy the site — the live site still serves the old wording, and
+     a kernel that builds a fit's reference from the part's cache
+     (docs/GOTCHAS.md).
    - **The in-chat viewer in claude.ai**: the connector works there; whether
      the 3D card showed under `evaluate_part` was not checked.
    - **Measure `show-me-the-part` for the web**: a tab gives no render path a

@@ -1497,6 +1497,38 @@ the `parcad` the macOS bundle carries, and `tauri dev` reads the same runner
 configuration. Do not add a `cargo build -p parcad-cli` after it; assert the
 binary exists instead.
 
+## A fit's reference was built from the part's cache
+
+Found on 2026-09-17, and there since the warm worker (`fdd010e7`,
+2026-09-14). `check_fit` builds the part and then the reference inside one
+build-cache scope, and the memo of subtree keys that scope keeps is indexed by
+node id and was filled by the part: the reference's node `i` was looked up
+under the part's node `i`.
+
+| `box(40,40,10).cut(box(20,20,20))` against | answered | right |
+|---|---|---|
+| `box(19.5,19.5,30)` | interfering by 12000 mm³: the plate, the part's node 0 | clear by 0.25 mm |
+| the same `.at(0,0,0.001)` | touching: the 20 mm cutter, the part's node 1 | clear by 0.25 mm |
+
+A cold worker answered the same: the part fills the cache in the same request.
+It is a hit only where the part built that node at the same offset, so a
+reference placed where the part built nothing came back right — the laptop in
+`does-the-laptop-fit` read 0.5 mm on the old worker — and was then kept under
+the part's keys. After fitting `box(40,40,10).cut(box(20,20,20).at(0,0,3))`
+against `sphere(4).at(0,0,3)`, which answered correctly, the next
+`evaluate_part` of `box(40,40,10).cut(box(20,20,20))` on that worker cut the
+ball: 15774.534 mm³ and 7 faces for 12000 and 10.
+
+A node id means something only in its own document. The scope now records the
+document its memo belongs to, a node of any other document is built without the
+cache, and `check_fit` builds its reference under a memo of its own
+(`in_document` in `backend.rs`), so both are reused. Nothing had caught it
+because nothing asked: no corpus case called `check_fit`, `between_bodies`
+measures the bodies of one document, and the unit test called
+`backend::check_fit` with no cache installed. `eval/cases/fit-in-the-holes.json`
+now asks three references twice each on the worker that has just evaluated
+the part.
+
 ## ParCAD web: the host in a tab
 
 Found building `crates/parcad-wasm-host` on 2026-09-17; docs/ARCHITECTURE.md,

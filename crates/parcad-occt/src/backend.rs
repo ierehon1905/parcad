@@ -2742,7 +2742,7 @@ pub fn check_fit(doc: &Doc, reference: &Doc) -> Result<crate::protocol::FitRepor
     let part = build_node(doc, doc.root, DVec3::ZERO)?.shape;
     check_finished(&part, "part")?;
     breadcrumb("building the reference");
-    let other = build_node(reference, reference.root, DVec3::ZERO)?.shape;
+    let other = in_document(reference, || build_node(reference, reference.root, DVec3::ZERO))?.shape;
     for (who, shape) in [("the part", &part), ("the reference", &other)] {
         if kind_of(shape)? != Kind::Solid {
             bail!(
@@ -3135,6 +3135,9 @@ impl BuildCache {
 /// built or reused under the node currently being built.
 struct Reuse {
     cache: BuildCache,
+    /// The document `memo` is indexed by, borrowed for as long as it is
+    /// installed, so no other document can be at this address meanwhile.
+    doc: *const Doc,
     memo: Vec<Option<String>>,
     under: Vec<Vec<CacheKey>>,
 }
@@ -3151,6 +3154,7 @@ pub fn with_reuse<T>(cache: &mut BuildCache, doc: &Doc, build: impl FnOnce() -> 
     REUSE.with(|slot| {
         *slot.borrow_mut() = Some(Reuse {
             cache: taken,
+            doc,
             memo: vec![None; doc.nodes.len()],
             under: vec![Vec::new()],
         })
@@ -3164,6 +3168,30 @@ pub fn with_reuse<T>(cache: &mut BuildCache, doc: &Doc, build: impl FnOnce() -> 
     let generation = kept.generation;
     kept.entries.retain(|_, entry| generation - entry.used <= 2);
     *cache = kept;
+    out
+}
+
+/// Run `build` with the installed cache serving `doc`, then give it back to
+/// the document it served before. Outside this, a node of any document but
+/// the one `with_reuse` was given is built without the cache.
+fn in_document<T>(doc: &Doc, build: impl FnOnce() -> T) -> T {
+    let outer = REUSE.with(|slot| {
+        slot.borrow_mut().as_mut().map(|reuse| {
+            (
+                std::mem::replace(&mut reuse.doc, doc),
+                std::mem::replace(&mut reuse.memo, vec![None; doc.nodes.len()]),
+            )
+        })
+    });
+    let out = build();
+    if let Some((outer_doc, outer_memo)) = outer {
+        REUSE.with(|slot| {
+            if let Some(reuse) = slot.borrow_mut().as_mut() {
+                reuse.doc = outer_doc;
+                reuse.memo = outer_memo;
+            }
+        });
+    }
     out
 }
 
@@ -3344,7 +3372,9 @@ fn profile_axes(tangent: DVec3, helix: bool) -> (DVec3, DVec3) {
 fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
     let key = REUSE.with(|slot| {
         let mut slot = slot.borrow_mut();
-        let Some(reuse) = slot.as_mut() else {
+        // The memo is indexed by node id, and an id names a different
+        // subtree in every other document.
+        let Some(reuse) = slot.as_mut().filter(|reuse| std::ptr::eq(reuse.doc, doc)) else {
             return Ok::<_, anyhow::Error>(None);
         };
         Ok(Some((subtree_key(doc, id, &mut reuse.memo)?, offset_key(offset))))
@@ -5136,6 +5166,23 @@ mod tests {
         assert!((overlap.interference_mm3 - 50.0).abs() < 1e-6, "{overlap:?}");
         assert!(overlap.clearance_mm.is_none());
         assert_eq!(overlap.part_bounds, [[-5.0, -5.0, -5.0], [5.0, 5.0, 5.0]]);
+    }
+
+    #[test]
+    fn a_document_the_cache_was_not_installed_for_is_built_as_itself() {
+        let cuboid = |x: f64, y: f64, z: f64| -> Doc {
+            serde_json::from_str(&format!(
+                r#"{{"root":0,"nodes":[{{"op":"cuboid","size":{{"x":{x},"y":{y},"z":{z}}}}}]}}"#
+            ))
+            .unwrap()
+        };
+        let plate = cuboid(40.0, 40.0, 10.0);
+        let block = cuboid(19.5, 19.5, 30.0);
+        let (lo, hi) = with_reuse(&mut BuildCache::default(), &plate, || {
+            build(&plate).unwrap();
+            bbox(&build(&block).unwrap())
+        });
+        assert_eq!((lo, hi), (DVec3::new(-9.75, -9.75, -15.0), DVec3::new(9.75, 9.75, 15.0)));
     }
 
     /// Two cubes 3 mm apart as named bodies, the second tagged `far`, and a

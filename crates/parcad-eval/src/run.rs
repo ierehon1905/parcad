@@ -207,6 +207,16 @@ pub fn perceive(
     parcad_occt::perceive(doc, &spec, &opts).map_err(|e| e.to_string())
 }
 
+/// Lay `reference` against the part in the isolated kernel, as `check_fit` does.
+pub fn fit(
+    doc: &Doc,
+    reference: &Doc,
+    timeout: std::time::Duration,
+) -> std::result::Result<parcad_occt::FitReport, String> {
+    let opts = parcad_occt::Options { timeout, ..Default::default() };
+    parcad_occt::check_fit(doc, reference, &opts).map_err(|e| e.to_string())
+}
+
 /// Whether the exact backend can run at all here.
 ///
 /// Checked once up front so that a missing worker reports as "skipped, build it

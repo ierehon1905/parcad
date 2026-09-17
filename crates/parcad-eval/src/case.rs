@@ -250,6 +250,13 @@ pub struct Expect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub between_bodies: Option<BTreeMap<String, BetweenExpect>>,
 
+    /// Other scripts laid against the part with `check_fit`. Each is asked
+    /// twice on the worker that has just evaluated the part, so the second
+    /// answer is built from that worker's cache; `--update` records the first
+    /// and holds the second to it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fits: Vec<FitExpect>,
+
     /// Closed forms measured on the exact solid: rays, points and a thickness
     /// sweep. Opt-in per case, and never written by `--update` —
     /// every number here is derived by hand and the case's `why` says how, so
@@ -568,6 +575,27 @@ pub struct BetweenExpect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clearance_mm: Option<f64>,
     pub interference_mm3: f64,
+}
+
+/// A reference script against the part, as `check_fit` reports it. Held like
+/// a pair of bodies: lengths to `size_mm`, the shared volume to `volume_pct`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FitExpect {
+    /// DSL script, relative to the repository root.
+    pub reference: String,
+    /// `clear`, `touching` or `interfering`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verdict: Option<String>,
+    /// Absent when the two overlap.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clearance_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub interference_mm3: Option<f64>,
+    /// `[min, max]` corners of each solid, as the reply carries them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub part_bounds: Option<[[f64; 3]; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference_bounds: Option<[[f64; 3]; 2]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -951,6 +979,51 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
     }
 
     out
+}
+
+/// Judge one `check_fit` answer; `label` names which asking it was.
+pub fn check_fit(want: &FitExpect, got: &parcad_occt::FitReport, label: &str, tol: &Tolerance) -> Vec<Mismatch> {
+    let mut out = Vec::new();
+    if let Some(verdict) = &want.verdict {
+        if verdict != &got.verdict {
+            out.push(Mismatch {
+                field: format!("{label}.verdict"),
+                detail: format!("expected {verdict}, measured {}", got.verdict),
+            });
+        }
+    }
+    match (want.clearance_mm, got.clearance_mm) {
+        (Some(w), Some(g)) => abs_check(&mut out, &format!("{label}.clearance_mm"), w, g, tol.size_mm),
+        (Some(w), None) => out.push(Mismatch {
+            field: format!("{label}.clearance_mm"),
+            detail: format!("expected {w:.3}, but the two overlap"),
+        }),
+        (None, _) => {}
+    }
+    if let Some(w) = want.interference_mm3 {
+        pct_check(&mut out, &format!("{label}.interference_mm3"), w, got.interference_mm3, tol.volume_pct);
+    }
+    for (name, want, got) in [
+        ("part_bounds", want.part_bounds, got.part_bounds),
+        ("reference_bounds", want.reference_bounds, got.reference_bounds),
+    ] {
+        let Some(want) = want else { continue };
+        for (corner, (want, got)) in ["min", "max"].iter().zip(want.iter().zip(&got)) {
+            for (axis, (w, g)) in ["x", "y", "z"].iter().zip(want.iter().zip(got)) {
+                abs_check(&mut out, &format!("{label}.{name}.{corner}.{axis}"), *w, *g, tol.size_mm);
+            }
+        }
+    }
+    out
+}
+
+/// Overwrite a fit's measurements with an answer, keeping its reference.
+pub fn record_fit(want: &mut FitExpect, got: &parcad_occt::FitReport) {
+    want.verdict = Some(got.verdict.clone());
+    want.clearance_mm = got.clearance_mm.map(round3);
+    want.interference_mm3 = Some(round3(got.interference_mm3));
+    want.part_bounds = Some(got.part_bounds.map(|corner| corner.map(round3)));
+    want.reference_bounds = Some(got.reference_bounds.map(|corner| corner.map(round3)));
 }
 
 /// Judge a failure against a required refusal.

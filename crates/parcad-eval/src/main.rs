@@ -222,6 +222,9 @@ fn judge(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (V
             if !expect.renders.is_empty() {
                 bad.extend(render::check(doc, &expect.renders));
             }
+            let (moved, disagreed, spent) = judge_fits(expect, doc, timeout, update);
+            waited = waited.max(spent);
+            bad.extend(moved);
             let summary = format!(
                 "{:.2} x {:.2} x {:.2} mm, {:.2} mm³, {} tris{}",
                 o.size[0],
@@ -234,7 +237,10 @@ fn judge(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (V
                     _ => String::new(),
                 }
             );
-            if update {
+            if !disagreed.is_empty() {
+                bad.extend(disagreed);
+                (Verdict::Fail(bad), false)
+            } else if update {
                 // Always record, so a case authored with no numbers at all gets
                 // filled in. UPDATED is reserved for a value that actually moved
                 // outside tolerance — that is the line worth reading.
@@ -253,6 +259,53 @@ fn judge(expect: &mut Expect, doc: &parcad_core::graph::Doc, update: bool) -> (V
         }
     };
     (verdict, recorded, waited)
+}
+
+/// Lay each of the case's references against the part, twice, on the worker
+/// that has just evaluated it. Returns where the first answers moved, which
+/// `--update` records, and every other failure, which nothing may record: a
+/// reference that does not build, or a second answer that differs.
+fn judge_fits(
+    expect: &mut Expect,
+    doc: &parcad_core::graph::Doc,
+    timeout: std::time::Duration,
+    update: bool,
+) -> (Vec<Mismatch>, Vec<Mismatch>, std::time::Duration) {
+    let tol = expect.tolerance_or(Tolerance::exact());
+    let root = repo_root();
+    let mut moved = Vec::new();
+    let mut failed = Vec::new();
+    let mut waited = std::time::Duration::ZERO;
+    for (i, want) in expect.fits.iter_mut().enumerate() {
+        let label = format!("fits[{i}]");
+        let reference = match run::build_doc(&root, &want.reference) {
+            Ok(reference) => reference,
+            Err(e) => {
+                failed.push(Mismatch { field: label, detail: format!("{e:#}") });
+                continue;
+            }
+        };
+        let mut answers = Vec::new();
+        for _ in 0..2 {
+            let started = std::time::Instant::now();
+            let answer = run::fit(doc, &reference, timeout);
+            waited = waited.max(started.elapsed());
+            match answer {
+                Ok(answer) => answers.push(answer),
+                Err(message) => {
+                    failed.push(Mismatch { field: label.clone(), detail: message });
+                    break;
+                }
+            }
+        }
+        let [first, again] = answers.as_slice() else { continue };
+        moved.extend(case::check_fit(want, first, &label, &tol));
+        if update {
+            case::record_fit(want, first);
+        }
+        failed.extend(case::check_fit(want, again, &format!("{label}.again"), &tol));
+    }
+    (moved, failed, waited)
 }
 
 /// Build the part again with the value the refusal named, which it says it

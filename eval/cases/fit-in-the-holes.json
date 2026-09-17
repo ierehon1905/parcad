@@ -1,0 +1,114 @@
+{
+  "name": "fit-in-the-holes",
+  "script": "eval/scripts/fit-in-the-holes.js",
+  "why": "check_fit on the worker the corpus shares, which no case called before this one. A worker keeps what it built between requests, keyed by what each subtree is, and from fdd010e7 (2026-09-14) it read a reference's keys by node position in the part: the block, whose node 0 is itself, came back as the plate, the part's node 0, interfering by the plate's whole volume; each pin, whose node 1 is its move, came back as the 20 mm cutter at the origin, the part's node 1. A reference that missed was kept under the part's keys, and the next evaluation of any part with that cutter at the origin built the reference in its place (docs/GOTCHAS.md). Closed forms: the block is 0.25 mm clear of the square hole's walls and spans +-9.75 x +-9.75 x +-15; the 9.5 mm pin is 0.25 mm clear of the 10 mm bore all round and spans 15.25..24.75 by +-4.75; the 10.5 mm pin shares the ring pi (5.25^2 - 5^2) x 10 = 80.503 mm3. Bounds are read off each solid's mesh, so a round side can sit up to the 0.01 mm deflection inside its radius. The plate is 60 x 40 x 10 less the square hole and the bore, 24000 - 4000 - 250 pi = 19214.602 mm3; its mesh reads 0.005 % over, the bore's chords. Every fit is asked twice after the part's evaluation, so the second answer is built from the worker's cache and must match the first.",
+  "brep": {
+    "size": [
+      60.0,
+      40.0,
+      10.0
+    ],
+    "volume_mm3": 19215.627,
+    "area_mm2": 6957.182,
+    "triangles": 320,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1921.563,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 11,
+    "edges": 54,
+    "curves": 26,
+    "fits": [
+      {
+        "reference": "eval/scripts/fit-in-the-holes-block.js",
+        "verdict": "clear",
+        "clearance_mm": 0.25,
+        "interference_mm3": 0.0,
+        "part_bounds": [
+          [
+            -30.0,
+            -20.0,
+            -5.0
+          ],
+          [
+            30.0,
+            20.0,
+            5.0
+          ]
+        ],
+        "reference_bounds": [
+          [
+            -9.75,
+            -9.75,
+            -15.0
+          ],
+          [
+            9.75,
+            9.75,
+            15.0
+          ]
+        ]
+      },
+      {
+        "reference": "eval/scripts/fit-in-the-holes-pin.js",
+        "verdict": "clear",
+        "clearance_mm": 0.25,
+        "interference_mm3": 0.0,
+        "part_bounds": [
+          [
+            -30.0,
+            -20.0,
+            -5.0
+          ],
+          [
+            30.0,
+            20.0,
+            5.0
+          ]
+        ],
+        "reference_bounds": [
+          [
+            15.255,
+            -4.749,
+            -15.0
+          ],
+          [
+            24.75,
+            4.749,
+            15.0
+          ]
+        ]
+      },
+      {
+        "reference": "eval/scripts/fit-in-the-holes-tight-pin.js",
+        "verdict": "interfering",
+        "interference_mm3": 80.503,
+        "part_bounds": [
+          [
+            -30.0,
+            -20.0,
+            -5.0
+          ],
+          [
+            30.0,
+            20.0,
+            5.0
+          ]
+        ],
+        "reference_bounds": [
+          [
+            14.75,
+            -5.25,
+            -15.0
+          ],
+          [
+            25.25,
+            5.25,
+            15.0
+          ]
+        ]
+      }
+    ]
+  }
+}
