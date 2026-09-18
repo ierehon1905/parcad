@@ -29,7 +29,7 @@ pub fn evaluated(
     reused: bool,
 ) -> Result<Evaluated, String> {
     let (report, tess) = measure_brep(doc, s)?;
-    let mut snapshot = describe(doc, &report, s, body_reports(s), tag_extents(s), wall_ms);
+    let mut snapshot = describe(doc, &report, s, body_reports(s), tag_extents(doc, s), wall_ms);
     if snapshot.kind != "solid" && s.bodies.is_empty() {
         let c = parcad_core::measure::area_centroid(&tess.vertices, &tess.triangles);
         snapshot.centroid = round_point([c.x, c.y, c.z]);
@@ -428,6 +428,8 @@ pub struct EvaluationSnapshot {
     /// Empty for a part with a surface body, which has nothing to print.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub prints_on: Vec<PrintsOn>,
+    /// Names available to selectors, each once; `tag_extents` says where
+    /// each one is and how many nodes wrote it.
     pub tags: Vec<String>,
     /// Where each of those tags actually is: the exact bounds of the faces the
     /// kernel's lineage says the tag still owns on the finished part.
@@ -673,6 +675,9 @@ pub struct TagExtent {
     /// How many faces of the finished part carry this tag. The box is the
     /// exact extent of those faces, from the kernel, not a sample.
     pub faces: usize,
+    /// How many nodes of the script wrote this tag: eight `.tag("nub")` calls
+    /// are one name, one box, and `nodes: 8`.
+    pub nodes: usize,
 }
 
 /// An edge treatment, as a handle a caller can inspect.
@@ -920,9 +925,22 @@ fn authored_materials(doc: &Doc) -> usize {
     seen.len()
 }
 
+/// The names a selector can use, each once in authoring order: eight nodes
+/// tagged `nub` are one name, and `tag_extents` carries the eight.
+pub fn selector_names(doc: &Doc) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for (_, tag) in doc.tags() {
+        if !names.iter().any(|n| n == tag) {
+            names.push(tag.to_string());
+        }
+    }
+    names
+}
+
 /// Every tag's extent as the kernel measured it, restated with its size and
 /// centre and rounded like every other length in a reply.
-pub fn tag_extents(s: &parcad_occt::Success) -> (Vec<TagExtent>, Vec<String>) {
+pub fn tag_extents(doc: &Doc, s: &parcad_occt::Success) -> (Vec<TagExtent>, Vec<String>) {
+    let authored = doc.tags();
     let extents = s
         .tag_extents
         .iter()
@@ -940,6 +958,7 @@ pub fn tag_extents(s: &parcad_occt::Success) -> (Vec<TagExtent>, Vec<String>) {
                 size: round_point(size),
                 center: round_point(center),
                 faces: e.faces,
+                nodes: authored.iter().filter(|(_, name)| *name == e.tag).count(),
             }
         })
         .collect();
@@ -1130,9 +1149,63 @@ pub fn measure_brep(
         mass: parcad_core::measure::mass_properties(&tess.vertices, &tess.triangles),
         mesh: tess.stats(),
         stands_on: tess.bed_contact(),
-        tags: doc.tags().into_iter().map(|(_, t)| t.to_string()).collect(),
+        tags: selector_names(doc),
         live_nodes: doc.topo_order().map_err(|e| format!("{e:#}"))?.len(),
         total_nodes: doc.nodes.len(),
     };
     Ok((report, tess))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use parcad_occt::protocol::{BodyKind, Success, TagBounds, Timings, Topology};
+
+    fn doc(json: serde_json::Value) -> Doc {
+        parse_graph(json).unwrap()
+    }
+
+    /// A slab with eight nubs answered `"tags": ["nub", … ×8, "holder"]` while
+    /// `tag_extents` beside it carried one `nub`. Selectors match by name.
+    #[test]
+    fn a_tag_written_by_many_nodes_is_one_name_and_counts_its_nodes() {
+        let doc = doc(serde_json::json!({ "units": "mm", "root": 3, "nodes": [
+            { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 2 }, "tag": "holder" },
+            { "op": "cylinder", "r": 1, "h": 1, "tag": "nub" },
+            { "op": "cylinder", "r": 1, "h": 1, "tag": "nub" },
+            { "op": "union", "children": [0, 1, 2], "blend": 0 },
+        ] }));
+        assert_eq!(selector_names(&doc), ["holder", "nub"]);
+        let success = Success {
+            positions: Vec::new(),
+            normals: Vec::new(),
+            indices: Vec::new(),
+            face_runs: Vec::new(),
+            faces: Vec::new(),
+            deflection_mm: 0.01,
+            deviation_mm: None,
+            loft_wall_mm: None,
+            facet_sag_mm: None,
+            thickened_mm: None,
+            offset_mm: None,
+            patch_gap_mm: None,
+            kind: BodyKind::default(),
+            surfaces: Vec::new(),
+            edges: Vec::new(),
+            topology: Topology { faces: 0, edges: 0 },
+            bodies: Vec::new(),
+            between: Vec::new(),
+            tag_extents: vec![
+                TagBounds { tag: "holder".into(), min: [0.0; 3], max: [10.0, 10.0, 2.0], faces: 6 },
+                TagBounds { tag: "nub".into(), min: [0.0; 3], max: [2.0, 2.0, 1.0], faces: 4 },
+            ],
+            unlocated_tags: Vec::new(),
+            timings: Timings::default(),
+            step_path: None,
+            stl_path: None,
+        };
+        let (extents, _) = tag_extents(&doc, &success);
+        let nodes: Vec<(&str, usize)> = extents.iter().map(|e| (e.tag.as_str(), e.nodes)).collect();
+        assert_eq!(nodes, [("holder", 1), ("nub", 2)]);
+    }
 }
