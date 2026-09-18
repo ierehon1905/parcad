@@ -304,6 +304,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | whether a skinned loft's skins cross themselves or each other | `crates/parcad-core/src/skin_crossing.rs`, called by `skinned.rs` — decided on the poles; the kernel's check only where it leaves something unsettled |
 | whether a sweep's path comes back near itself | `crates/parcad-core/src/spine_contact.rs` — a filter; the kernel's self-intersection check decides |
 | what every check says about a graph, and what each costs | `crates/parcad-occt/examples/validity_audit.rs` |
+| how far a mesh strays from its surface, when a triangle count moves | `crates/parcad-occt/examples/mesh_deviation.rs` |
 | what "SOUND" is still allowed to mean | `field/fixtures/expected.toml`, gated by `field/selftest.py` |
 
 A new op touches `graph.rs` (variant + `children_of`), `measure.rs` (its

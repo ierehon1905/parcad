@@ -57,3 +57,10 @@ dropping it.
   the edge pcurves a whole arc off its 3D curve. Appends instead, as the 3D
   `GeomConvert::ConcatC1` already does. Header inside the patch; not yet
   offered upstream.
+- `0005-split-edges-where-the-normal-turns.patch` — the edge tessellator
+  splits a boundary segment along which the face's normal turns more than
+  `AngleInterior`, the bound every interior link is held to. A straight
+  ruling of a twisted wall was one link however far the normal turned along
+  it, and the interior chased it in a chain of nodes closing on the ruling
+  that only the pass cap ended — one pass later on x86_64 than on arm64,
+  inside parcad's weld. Header inside the patch; not yet offered upstream.

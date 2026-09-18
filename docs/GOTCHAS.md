@@ -755,6 +755,34 @@ Two assumptions in BRepMesh, both about B-spline faces, and
   boundary, where no node is ever inserted; the row it added at v = 0.5
   doubled every flank. Only knots strictly inside a face count now.
 
+The node inserted for a failing element is the sample itself — the surface
+point that failed. Inserting it at the parametric middle with the sample at
+the foot was tried, and left every twisted or helical part measured outside
+its deflection (`untriangle-v3` 0.0096 → 0.0166 mm worst; the split no
+longer removed the deviation it was made for, and the passes ran out).
+
+### A twisted wall's straight edge was one link *(fixed)*
+
+`untriangle-v3` built on macOS and Linux arm64 and was refused on Linux
+x86_64 with two of 38616 mesh edges bordering one face. Not the compiler.
+BRepMesh discretises an edge by its own curve, so a straight ruling of a
+twisted wall stays one boundary link however far the face's normal turns
+along it, while every interior link is held to `AngleInterior` (1 rad). The
+triangle standing on the ruling then always has a side to the far corner
+spanning the whole turn; the interior splits that side at its middle each
+pass, the new node is the next apex, half as near the ruling, and only the
+11-pass cap ends it. On x86_64 the two walls sharing a ruling ended their
+chains 0.0008 mm from it, and the 0.001 mm weld fused the pair into one
+vertex with four triangles on each of its edges; arm64's rounding stopped a
+pass short and they stayed apart. A MinSize floor against frontier
+links was tried and measured inert: the chain runs through the angular
+check, which never asks it. `vendor/occt-sys/patches/0005-split-edges-where-
+the-normal-turns.patch` splits a boundary segment where the normal turns
+more than `AngleInterior`, a node both faces share by construction, and a
+Delaunay triangle cannot then reach from an apex near the ruling past its
+neighbours on it. `crates/parcad-occt/examples/mesh_deviation.rs` is how
+"the mesh got coarser" and "the mesh got worse" were told apart.
+
 After: that arc 252 triangles, the certified gear 1996 in 120 ms (the fit,
 1916 in 116), the seeded gear pair 36428 → 5452 and 415 → 302 ms. The whole
 corpus, read back from STEP and meshed both ways, lost 12.6 % of its

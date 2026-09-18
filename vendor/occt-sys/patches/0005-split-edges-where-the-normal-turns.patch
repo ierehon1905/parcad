@@ -1,0 +1,115 @@
+Split a boundary edge where the face's normal turns more than an interior
+link may.
+
+What it fixes
+  BRepMesh_CurveTessellator discretises an edge by its own curve — chord
+  and tangent deflection along the curve, GCPnts — and, per face, splits a
+  segment whose surface point at the pcurve's middle strays from the chord.
+  How the face's normal turns along the edge is never asked. A straight
+  ruling of a twisted wall (a bilinear patch through four corners, or a
+  ruled loft between two sections turned against each other) is one link
+  however far the normal turns along it, though every interior link is held
+  to AngleInterior (BRepMesh_DelaunayDeflectionControlMeshAlgo,
+  checkLinkEndsForAngularDeviation, default 2 * Angle = 1 rad).
+
+  The interior then chases what only the boundary can give. The triangle
+  standing on the ruling has an apex, the apex's link to the ruling's far
+  corner spans the whole turn, the angular check splits that link at its
+  parametric middle, and the new node is the next apex, half as far from
+  the ruling and joined to the far corner by a link just as long. Each
+  pass halves the distance; only the pass cap ends it, at d / 2^11. On the
+  two walls sharing a ruling of parcad's untriangle-v3 the chains ended
+  0.0008 mm from the ruling on x86_64, and parcad welds mesh vertices at
+  0.001 mm, so the two faces' last nodes became one vertex with four
+  triangles on each of its edges and the part was refused as not
+  watertight; arm64's rounding stopped the chain a pass short, and the
+  same part built there.
+
+  splitSegment now also splits a segment when the surface normals at its
+  ends turn by more than AngleInterior, with the GeomLib::NormEstim the
+  interior check uses. The node lands on the edge, shared by every face
+  that has the edge, so the two walls agree on it by construction; and
+  with nodes along the ruling no more than AngleInterior apart, a Delaunay
+  triangulation cannot hold a triangle from an apex near the ruling to a
+  far ruling node — its circumcircle would swallow the nodes between — so
+  the apex joins its neighbours on the ruling, whose normals it is within
+  AngleInterior of, and the chain never starts.
+
+  A straight edge whose face is a plane, cylinder or cone turns no normal
+  along it and is left as it was; a curved edge is already split by its
+  own tangent deflection at Angle, half of AngleInterior, before this test
+  sees it. What changes is the straight edge of a twisted or a ruled face.
+
+How it was measured
+  parcad's eval corpus, 193 cases, built in a Linux container under GCC
+  13 on x86_64 and on arm64, every recorded volume, size, face and edge
+  count held to its tolerance; and crates/parcad-occt/examples/
+  mesh_deviation, every triangle sampled at 15 barycentric points and each
+  projected onto its face's surface, the worst distance and the count of
+  samples over the 0.01 mm the mesher was asked for.
+  - untriangle-v3 on x86_64: refused, 2 of 38616 mesh edges bordering one
+    face -> builds watertight, 12288 triangles, 24801.75 mm3, worst sample
+    0.0100 mm and none over; on arm64 12726 -> 12288 triangles, 0.0096 ->
+    0.0100 mm worst, none over either way. Its bed contact, which the
+    case's own note says is read off saddle-wall slivers, reports two
+    patches instead of one on both builds; the case records that.
+  - twisted-loft, the corpus's other ruled twist: 3860 -> 3772 triangles
+    on arm64 and 3892 -> 3804 on x86_64, worst 0.0099 -> 0.0100 mm, none
+    over; volume 1999.93 -> 2000.39 mm3 against 2000 exact. Recorded.
+  - Two other cases moved, both within tolerance and both pleated walls:
+    pleated-shade-box-cut 136640 -> 136636 triangles (arm64), worst
+    0.0244 mm before and after, 549 -> 501 samples over; pleated-shade
+    3492540 -> 3492416, worst 0.0789 mm before this patch, 9759 samples
+    over: both were outside 0.01 mm already. Nothing else changed by one
+    triangle: 7996503 -> 7995849 over the arm64 run, the involute gear at
+    1996 as patch 0003 left it.
+  - The parts a boundary split could touch, measured before -> after:
+    helical-groove 0.0088 -> 0.0088 mm worst, helical-spring 0.0120 ->
+    0.0120 (508 over, both), left-hand-hook 0.0108 -> 0.0108 (4 over,
+    both); none of their counts moved by more than 1 %.
+  - pipe-tee is refused on x86_64 before and after, by the exact-geometry
+    self-crossing check on its 2 mm blend; arm64 builds it both times.
+    docs/NEXT.md carries it; it is not this patch's.
+  A MinSize floor against frontier links in rejectByMinSize, and moving
+  the inserted node to the parametric middle, were both built and
+  measured first: the floor changed nothing (the chain runs through the
+  angular check, which never asks it), and the node move left six of
+  seven measured parts outside their deflection (untriangle-v3 0.0096 ->
+  0.0166 mm). Neither shipped.
+
+Upstream status
+  Not yet offered upstream (github.com/Open-Cascade-SAS/OCCT).
+--- a4/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_CurveTessellator.cxx	2026-09-18 02:42:56
++++ b4/src/ModelingAlgorithms/TKMesh/BRepMesh/BRepMesh_CurveTessellator.cxx	2026-09-18 02:43:01
+@@ -26,6 +26,8 @@
+ #include <Adaptor2d_Curve2d.hxx>
+ #include <Standard_Failure.hxx>
+ #include <GCPnts_AbscissaPoint.hxx>
++#include <GeomLib.hxx>
++#include <Precision.hxx>
+ 
+ IMPLEMENT_STANDARD_RTTIEXT(BRepMesh_CurveTessellator, IMeshTools_CurveTessellator)
+ 
+@@ -307,6 +309,22 @@
+ 
+   if (P3dF.SquareDistance(P3dL) < mySquareMinSize)
+   {
++    return;
++  }
++
++  // Held to AngleInterior like an interior link: a boundary link no interior
++  // link could be leaves every triangle on it standing on the whole link.
++  gp_Dir aNormF, aNormL;
++  if (GeomLib::NormEstim(theSurf, uvf, Precision::Confusion(), aNormF) == 0
++      && GeomLib::NormEstim(theSurf, uvl, Precision::Confusion(), aNormL) == 0
++      && aNormF.Angle(aNormL) > myParameters.AngleInterior)
++  {
++    midpar = (theFirst + theLast) * 0.5;
++    myCurve.D0(midpar, midP3d);
++    myDiscretTool.AddPoint(midP3d, midpar, false);
++
++    splitSegment(theSurf, theCurve2d, theFirst, midpar, theNbIter + 1);
++    splitSegment(theSurf, theCurve2d, midpar, theLast, theNbIter + 1);
+     return;
+   }
+ 

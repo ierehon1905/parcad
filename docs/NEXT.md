@@ -272,10 +272,27 @@ a new session should keep doing:
   Homebrew formula is macOS only. Linux arm64 measures 109 of 110 (the fillet
   bisection in `refuse-unblendable-junction` lands on 1.25 mm) and is not a
   release target.
-- **Linux x86_64 refuses the `untriangle-v3` seed part.** GCC's build meshes
-  two of its edges open, so the watertight backstop refuses it; macOS builds
-  it. `eval/cases/untriangle-v3.json` marks it `known_defect_on` that platform.
-  It passed there at 0.0.6, so something since changed the mesher's result.
+- **Linux x86_64 refused the `untriangle-v3` seed part** *(fixed)*. Two of
+  its mesh edges came out open there and nowhere else — arm64 under GCC and
+  Clang agree to the triangle. Not the compiler: BRepMesh left each twisted
+  wall's straight ruling as one boundary link however far the normal turned
+  along it, and the interior chased that turn in a chain of nodes closing
+  on the ruling that only the pass cap ended — on x86_64 at 0.0008 mm from
+  the ruling, inside parcad's 0.001 mm weld, which fused the two walls' last
+  nodes into one vertex; arm64's rounding stopped a pass short. Vendor patch
+  0005 splits a boundary segment where the normal turns more than an
+  interior link may, a node both faces share; docs/GOTCHAS.md has the
+  mechanism.
+- **Linux x86_64 refuses the `pipe-tee` seed part.** The self-crossing check
+  reads its 2 mm blend as a face crossing itself near (22.636, 0.000, 24.068)
+  and refuses it, naming 1.94 mm as the largest radius it could build; arm64
+  under GCC and macOS under Clang build it. The check is exact geometry
+  (`IntTools_FaceFace` on the blend face against itself), so this is the
+  kernel's intersector landing on a different side of a knife edge under
+  x86_64's rounding, not the mesh: the blend's mesh measures 0.0100 mm from
+  its surface on arm64, exactly the budget. Measured on unmodified 0.0.8 in a
+  container, 191 of 193 with `untriangle-v3` then still marked. Not yet
+  diagnosed.
 - **A stale sidecar ships silently.** `tauri build` does not run
   `tools/build-worker.sh`: a missing staging copy fails loudly, a stale one
   bundles last week's kernel and measures parts confidently with it. Free to

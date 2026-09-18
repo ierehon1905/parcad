@@ -1,33 +1,30 @@
 {
   "name": "untriangle-v3",
   "script": "examples/fusion360/untriangle-v3.js",
-  "why": "A Fusion 360 recreation held to the export's own numbers: three quarter-twisted bars closed into a triangle, rebuilt as ruled lofts plus corner prisms. The export's B-rep measures 24799.94 mm3 exactly (BRepGProp); the clean parametric construction is 24800.00 exactly, +0.00024%, and every one of the twelve twisted walls is the bilinear patch through the same four corners as Fusion's, matched to 1.2e-4 mm — the export's own vertex scatter. The numbers recorded here are the runner's mesh-measured ones; their 0.4 mm3 gap to the exact volume is tessellation chord error on the saddle walls. The export carries one of the document's two bodies (Body12); this is that body. The bed contact picks up saddle-wall triangles lying within the mesh's resolution of the flat end, so it is held to 2%: GCC on x86_64 meshes it 0.54% larger.",
+  "why": "A Fusion 360 recreation held to the export's own numbers: three quarter-twisted bars closed into a triangle, rebuilt as ruled lofts plus corner prisms. The export's B-rep measures 24799.94 mm3 exactly (BRepGProp); the clean parametric construction is 24800.00 exactly, +0.00024%, and every one of the twelve twisted walls is the bilinear patch through the same four corners as Fusion's, matched to 1.2e-4 mm — the export's own vertex scatter. The numbers recorded here are the runner's mesh-measured ones; their 1.7 mm3 gap to the exact volume is tessellation chord error on the saddle walls. The export carries one of the document's two bodies (Body12); this is that body. The bed contact picks up saddle-wall triangles lying within the mesh's resolution of the flat end, so its area is held to 2% and its patch count is the triangulation's: two once vendor patch 0005 splits the bars' rulings, on x86_64 and arm64 alike.",
   "brep": {
     "size": [
       10.0,
       132.321,
       114.593
     ],
-    "volume_mm3": 24800.419,
-    "area_mm2": 11623.295,
-    "triangles": 12688,
+    "volume_mm3": 24801.748,
+    "area_mm2": 11622.505,
+    "triangles": 12288,
     "bodies": 1,
     "voids": 0,
-    "stands_on_mm2": 354.67,
-    "stands_on_patches": 1,
+    "stands_on_mm2": 353.205,
+    "stands_on_patches": 2,
     "watertight": true,
     "faces": 30,
     "edges": 132,
     "curves": 66,
+    "facet_sag_mm": 0.0,
     "tolerance": {
       "size_mm": 0.01,
       "volume_pct": 0.05,
       "triangles_pct": 5.0,
       "stands_on_pct": 2.0
-    },
-    "known_defect": "GCC on x86_64 meshes two edges open (2 of 38616), so the Linux build refuses this seed part as not watertight; see docs/NEXT.md",
-    "known_defect_on": [
-      "linux-x86_64"
-    ]
+    }
   }
 }

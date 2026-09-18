@@ -100,7 +100,7 @@ of `lib`, `libd`, `libi` holds `TKernel`, for a fresh build and for
 
 ## Changes to OCCT itself
 
-Four patches.
+Five patches.
 
 `patches/0004-concat-closed-chain-appends.patch`: `Geom2dConvert::ConcatC1`
 joins each piece of a chain with `CompCurveToBSplineCurve::Add`, whose `After`
@@ -128,6 +128,22 @@ deviation from its surface grew, and seven parts the old check had left
 outside the 0.01 mm deflection are now inside it. The header carries the
 measurements; docs/GOTCHAS.md, "A curve that starts slowly meshed in ten
 times the triangles", the mechanism. Not yet offered upstream.
+
+`patches/0005-split-edges-where-the-normal-turns.patch`: the edge
+tessellator splits a boundary segment along which the face's normal turns
+by more than `AngleInterior`, the bound the deflection control holds every
+interior link to. A straight ruling of a twisted wall was one link however
+far the normal turned along it, so the triangle standing on it always had
+a side spanning the whole turn; the interior split that side at its middle
+every pass, each new apex half as near the ruling, until the pass cap —
+which on x86_64 left the two walls' last nodes 0.0008 mm from the ruling,
+inside parcad's 0.001 mm weld, fused into one vertex, and
+`untriangle-v3` was refused there as not watertight. A node on the edge is
+shared by both faces by construction, and with the ruling's nodes within
+`AngleInterior` of each other no Delaunay triangle can reach from an apex
+near the ruling to a far ruling node. The header carries the measurements;
+docs/GOTCHAS.md, "A twisted wall's straight edge was one link", the
+mechanism. Not yet offered upstream.
 
 `patches/0002-unify-merge-must-not-abort.patch`: edge unification in
 `ShapeUpgrade_UnifySameDomain` no longer aborts wholesale when a single

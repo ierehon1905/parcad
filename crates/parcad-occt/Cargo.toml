@@ -29,6 +29,10 @@ required-features = ["kernel"]
 name = "validity_audit"
 required-features = ["kernel"]
 
+[[example]]
+name = "mesh_deviation"
+required-features = ["kernel"]
+
 [dependencies]
 parcad-core = { path = "../parcad-core" }
 anyhow.workspace = true
