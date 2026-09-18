@@ -31,7 +31,10 @@ import {
   torus,
   union,
   vesaPattern,
+  __parcadShadowedBuiltins,
+  __parcadShadowedBuiltinMessage,
 } from "./dsl";
+import * as everything from "./dsl";
 
 /**
  * The pattern helpers are pure arithmetic, which is exactly why they are worth
@@ -826,5 +829,33 @@ describe("selector arguments", () => {
     expect(refusal(() => loose.edges({ adjacentTo: { faceNormal: "+Z" } })).message).toEndWith('not "+Z" (write "+z" instead).');
     expect(refusal(() => loose.edges({ curve: "arc" })).message).toBe('curve must be "line", "circle" or "spline", not "arc"');
     build(part.edges({ at: { x: undefined, z: "min" }, curve: "line" }).chamfer(1));
+  });
+});
+
+/**
+ * Every export is a parameter of every script, so a local called `clearance`
+ * is a SyntaxError from an engine that names no identifier. The collision is
+ * proved by compiling, never read off the text: docs/DSL_GAPS.md §7.
+ */
+describe("a script that declares one of parcad's names", () => {
+  const names = Object.keys(everything);
+
+  test("is told which name, proved by compiling without it", () => {
+    expect(__parcadShadowedBuiltins("const clearance = 0.6;\nreturn box(1, 1, 1);", names)).toEqual(["clearance"]);
+    expect(__parcadShadowedBuiltins("let hull = 2, box = 3;\nreturn sphere(1);", names)).toEqual(["box", "hull"]);
+    expect(__parcadShadowedBuiltins("class Shape {}\nreturn sphere(1);", names)).toEqual(["Shape"]);
+    // A function declaration may shadow a parameter, so it is an override, not a fault.
+    expect(__parcadShadowedBuiltins("function torus() {}\nreturn sphere(1);", names)).toEqual([]);
+  });
+
+  test("a script with a fault of its own names nothing", () => {
+    expect(__parcadShadowedBuiltins("return box(1, 1, 1;", names)).toEqual([]);
+    expect(__parcadShadowedBuiltins("const closest = 0.6;\nreturn box(1, 1, 1);", names)).toEqual([]);
+  });
+
+  test("the refusal names the rename and the builtin", () => {
+    const message = __parcadShadowedBuiltinMessage(["clearance"], names);
+    expect(message).toStartWith(`\`clearance\` is one of the ${names.length} names parcad puts in every script, so a script cannot declare it again. Rename the local — \`clearanceMm\`, \`myClearance\`, or a name saying what it holds — or use parcad's own \`clearance\` instead of declaring one.`);
+    expect(__parcadShadowedBuiltinMessage(["box", "hull"], names)).toStartWith("`box` and `hull` are 2 of the");
   });
 });

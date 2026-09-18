@@ -103,6 +103,16 @@ const RUNNER: &str = r#"
   try {
     fn = new Function(...names, source);
   } catch (e) {
+    // QuickJS says "invalid redefinition of parameter name" and names
+    // nothing; which of parcad's names the script declared is proved by
+    // compiling it without them.
+    const shadowed = dsl.__parcadShadowedBuiltins(source, names);
+    if (shadowed.length) {
+      return failed("the script did not parse", {
+        message: dsl.__parcadShadowedBuiltinMessage(shadowed, names),
+        stack: e && e.stack,
+      });
+    }
     return failed("the script did not parse", e);
   }
 
@@ -921,6 +931,20 @@ return box(1, 1, 1);
             located,
             "node 2 (line 4, body) subtracts node 1 (line 2, untagged), and node 9 (x)"
         );
+    }
+
+    /// Every export is a parameter of every script, and the engine's own
+    /// refusal names no identifier. The coin-holder session hit this on its
+    /// first build and went to read_docs about an unrelated function.
+    #[test]
+    fn a_redeclared_builtin_is_named_with_its_fix() {
+        let error = build("const coin = 23.25;\nconst clearance = 0.6;\nreturn box(coin + clearance, 10, 10);")
+            .err()
+            .expect("clearance is a builtin");
+        assert!(error.starts_with("the script did not parse at line 2:\n`clearance` is one of the "), "{error}");
+        assert!(error.contains("names parcad puts in every script, so a script cannot declare it again. Rename the local — `clearanceMm`, `myClearance`,"), "{error}");
+        assert!(error.contains("\n  2 | const clearance = 0.6;"), "{error}");
+        assert!(!error.contains("invalid redefinition"), "{error}");
     }
 
     #[test]

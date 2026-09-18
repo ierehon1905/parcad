@@ -192,6 +192,48 @@ export function __parcadTreatmentSource<T>(source: SourceLocation, run: () => T)
   }
 }
 
+/**
+ * @internal Which of parcad's names a script declared as its own, proved by
+ * compiling it: every export is a parameter of every script, so a script that
+ * only fails to parse with a name among its parameters is one that declares
+ * that name. Nothing is read off the text. Empty when the script parses, or
+ * fails for a reason of its own.
+ */
+export function __parcadShadowedBuiltins(source: string, names: string[]): string[] {
+  const compiles = (parameters: string[]) => {
+    try {
+      new Function(...parameters, source);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (compiles(names) || !compiles([])) return [];
+  // Add the names back one at a time; each one that breaks the compile is a
+  // name the script declares.
+  const kept: string[] = [];
+  const shadowed: string[] = [];
+  for (const name of names) {
+    if (compiles([...kept, name])) kept.push(name);
+    else shadowed.push(name);
+  }
+  return shadowed;
+}
+
+/** @internal The refusal for a script that declares parcad's own names, written for whoever wrote it. */
+export function __parcadShadowedBuiltinMessage(shadowed: string[], names: string[]): string {
+  const quoted = shadowed.map((name) => `\`${name}\``);
+  const list = quoted.length === 1 ? quoted[0] : `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
+  const verb = quoted.length === 1 ? "is one" : `are ${quoted.length}`;
+  const example = shadowed[0];
+  return (
+    `${list} ${verb} of the ${names.length} names parcad puts in every script, so a script cannot declare ` +
+    `${quoted.length === 1 ? "it" : "them"} again. Rename the local — \`${example}Mm\`, \`my${example[0].toUpperCase()}${example.slice(1)}\`, ` +
+    `or a name saying what it holds — or use parcad's own \`${example}\` instead of declaring one. ` +
+    `read_docs (topic dsl, entry \`${example}\`) says what parcad's does.`
+  );
+}
+
 function treatmentSource(method: SourceLocation["method"]): SourceLocation | undefined {
   if (activeTreatmentSource?.method === method) return activeTreatmentSource;
   const line = new Error().stack

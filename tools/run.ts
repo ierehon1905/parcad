@@ -27,7 +27,9 @@ let fn: (...args: unknown[]) => unknown;
 try {
   fn = new Function(...names, source) as (...args: unknown[]) => unknown;
 } catch (e) {
-  console.error(`${file} did not parse: ${(e as Error).message}`);
+  const shadowed = dsl.__parcadShadowedBuiltins(source, names);
+  const why = shadowed.length ? dsl.__parcadShadowedBuiltinMessage(shadowed, names) : (e as Error).message;
+  console.error(`${file} did not parse: ${why}`);
   process.exit(1);
 }
 

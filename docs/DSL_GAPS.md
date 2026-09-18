@@ -374,6 +374,18 @@ matched at all".
   parcad builtin — rename your local" is a one-line fix for the reader; "Cannot
   declare a const variable twice" is not.
 
+  **Second instance, 2026-09-18.** The coin-holder session
+  (docs/COIN_HOLDER_REVIEW.md, L1) wrote `const clearance = 0.6` on its first
+  build, eleven calls after reading the rule in read_docs `dsl`, and got
+  QuickJS's "invalid redefinition of parameter name", which names nothing; it
+  went to read_docs about an unrelated function and resent the part. The fix
+  above was specified here and never built. **Built, the same day:**
+  `__parcadShadowedBuiltin` in `dsl.ts` proves which name collided by
+  recompiling without each declared builtin (never a regex guess), and all
+  three compilers say "`clearance` is one of the N names parcad puts in every
+  script, so it cannot be declared again; rename it". Measured by
+  `eval/field/which-name-is-taken.md`.
+
 ## 8. One Fusion feature costs a third of a part, because the language has no tool
 
 `examples/fusion360/retainer-v1.js`, the strongest evidence here because both

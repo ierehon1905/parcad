@@ -1062,8 +1062,12 @@ shade stood 0.155 mm below its lowest section on a line, and `stands_on` read
 ### `clearance` is a word a lamp script reaches for
 
 It is the fastener table's function, so `const clearance = wall + 0.8` does
-not parse (`Cannot declare a const variable twice`). Every export is a
-reserved word; name a local for what it is, `closest`.
+not parse. Every export is a reserved word; name a local for what it is,
+`closest`. Since 2026-09-18 the refusal names the word — the engine's own
+said `Cannot declare a const variable twice`, or under QuickJS `invalid
+redefinition of parameter name`, and a coin-holder session read that as a
+mystery — proved by compiling the script without each name
+(`__parcadShadowedBuiltins` in `dsl.ts`, docs/DSL_GAPS.md §7).
 
 ### `offset_surface` lies
 

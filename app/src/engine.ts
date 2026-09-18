@@ -176,6 +176,15 @@ function buildGraph(source: string): BuiltGraph {
       ...args: unknown[]
     ) => unknown;
   } catch (e) {
+    // The engine's own words name no identifier ("Cannot declare a const
+    // variable twice"); which of parcad's names the script declared is proved
+    // by compiling it without them.
+    const shadowed = dsl.__parcadShadowedBuiltins(source, names);
+    if (shadowed.length) {
+      const named = new Error(dsl.__parcadShadowedBuiltinMessage(shadowed, names));
+      named.stack = e instanceof Error ? e.stack : undefined;
+      throw atLine("the script did not parse", named, source);
+    }
     throw atLine("the script did not parse", e, source);
   }
 
