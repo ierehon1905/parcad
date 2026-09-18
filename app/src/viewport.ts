@@ -138,6 +138,17 @@ const BG_BOTTOM = "#c3ccd8";
 /** Diagnostic modes, via `?debug=` in the URL: `normals`, `flat`, `noedge`. */
 const DEBUG = new URLSearchParams(location.search).get("debug") ?? "";
 
+/**
+ * The deepest the depth range may be, as far / near. Wider lets the camera get
+ * closer; narrower keeps more depth-buffer precision. At 2000 a 24-bit buffer
+ * still resolves 1/15000 of the range at its far end.
+ */
+const DEPTH_RANGE = 2000;
+
+/** How opaque the material the camera has cut into is drawn: its cut face, then the walls behind it. */
+const CUT_VEIL_OPACITY = 0.45;
+const CUT_WALL_OPACITY = 0.55;
+
 /** How far the pointer may travel between down and up and still be a click. */
 const DRAG_SLOP_PX = 4;
 
@@ -188,6 +199,11 @@ export class Viewport {
   private sectionGroup?: THREE.Group;
   private partMesh?: THREE.Mesh;
   private partBounds?: Bounds;
+  /** Corners of the part's box and the ground's, which the depth range must enclose. */
+  private depthPoints: THREE.Vector3[] = [];
+  private partCorners: THREE.Vector3[] = [];
+  /** Where the near plane cuts into the part: see `buildNearCut`. */
+  private nearCut?: { world: THREE.Group; screen: THREE.Group };
   /** Set by the ResizeObserver; applied by the frame that then draws. */
   private pendingResize = false;
 
@@ -359,6 +375,7 @@ export class Viewport {
     this.frame = requestAnimationFrame(this.tick);
     if (this.pendingResize) this.resize();
     this.controls.update();
+    this.fitDepthRange();
     if (this.preview || DEBUG === "noedge" || DEBUG === "normals") {
       // No edge pass in preview: on a dual-contoured mesh the crease guess lands
       // on the zigzag of vertices that stands in for a sharp edge.
@@ -420,6 +437,7 @@ export class Viewport {
   /** One frame, outside the animation loop, for `snapshot` to read. */
   private tickOnce() {
     if (this.pendingResize) this.resize();
+    this.fitDepthRange();
     if (this.preview || DEBUG === "noedge" || DEBUG === "normals") {
       this.renderer.render(this.scene, this.camera);
     } else {
@@ -445,6 +463,9 @@ export class Viewport {
       -((event.clientY - rect.top) / rect.height) * 2 + 1,
     );
     this.edgeRaycaster.setFromCamera(pointer, this.camera);
+    // Nothing nearer than the near plane is drawn, so nothing there is picked.
+    this.edgeRaycaster.near = this.camera.near;
+    this.vertexRaycaster.near = this.camera.near;
 
     // The hit radius is in screen pixels, not world units, so it means the same
     // on a large part and a small one.
@@ -716,11 +737,19 @@ export class Viewport {
     };
     this.placeGround(bounds, size);
     this.aimSun(bounds, size);
+    this.partCorners = boxCorners(
+      new THREE.Box3(
+        new THREE.Vector3(bounds.min.x, bounds.min.y, bounds.min.z),
+        new THREE.Vector3(bounds.max.x, bounds.max.y, bounds.max.z),
+      ),
+    );
+    this.depthPoints = [...this.partCorners, ...boxCorners(new THREE.Box3().setFromObject(this.grid!))];
 
     // A new part keeps the plane the last one was cut on: the reason the
     // section is open is to watch one internal feature change.
     this.applyClipping();
     this.buildCap(this.section);
+    this.buildNearCut();
   }
 
   /** The plane currently cut, if any — `setSection`'s argument, remembered. */
@@ -744,7 +773,155 @@ export class Viewport {
 
     this.applyClipping();
     this.buildCap(section);
+    this.buildNearCut();
     this.outline.setClippingPlanes(this.clipPlanes);
+  }
+
+  /**
+   * Fit near and far to the part and the ground, from wherever the camera is
+   * now. Fixed once at framing, the far plane cut the part off as soon as it
+   * was zoomed out or grew, and the near plane sliced it on zooming in.
+   */
+  private fitDepthRange() {
+    if (this.depthPoints.length === 0) return;
+    this.camera.updateMatrixWorld();
+    const view = this.camera.matrixWorldInverse;
+    const depthOf = (p: THREE.Vector3) => -scratch.copy(p).applyMatrix4(view).z;
+    let nearest = Infinity;
+    let farthest = 0;
+    for (const p of this.depthPoints) {
+      const depth = depthOf(p);
+      nearest = Math.min(nearest, depth);
+      farthest = Math.max(farthest, depth);
+    }
+    const far = Math.max(farthest * 1.05, 1e-3);
+    const near = Math.max(nearest * 0.95, far / DEPTH_RANGE);
+    if (near !== this.camera.near || far !== this.camera.far) {
+      this.camera.near = near;
+      this.camera.far = far;
+      this.camera.updateProjectionMatrix();
+    }
+    if (this.nearCut) {
+      const cuts = this.partCorners.some((p) => depthOf(p) <= near);
+      this.nearCut.world.visible = cuts;
+      this.nearCut.screen.visible = cuts;
+      // Just past the near plane, and a little larger than the frustum there.
+      const at = near * 1.01;
+      const height = 2 * at * Math.tan((this.camera.fov * Math.PI) / 360) * 1.05;
+      this.nearCut.screen.position.set(0, 0, -at);
+      this.nearCut.screen.scale.set(height * this.camera.aspect, height, 1);
+    }
+  }
+
+  /**
+   * Where the near plane cuts into the part, draw what it cut through instead
+   * of a hole: the walls behind as a ghost of the part's own material, under a
+   * veil of it. The stencil counts crossings as `buildCap` does, but on the
+   * uncut part, so a count that does not cancel means the near plane is inside
+   * material. Drawn only while the near plane reaches the part's box.
+   */
+  private buildNearCut() {
+    if (this.nearCut) {
+      this.scene.remove(this.nearCut.world);
+      this.camera.remove(this.nearCut.screen);
+      disposeTree(this.nearCut.world);
+      disposeTree(this.nearCut.screen);
+      this.nearCut.screen.children.forEach((q) => (q as THREE.Mesh).geometry.dispose());
+      this.nearCut = undefined;
+    }
+    if (!this.partMesh || DEBUG === "normals") return;
+    const clipping = this.clipPlanes.length > 0 ? this.clipPlanes : null;
+    // Transparent, all of it, so it sorts after the part is drawn; ordered
+    // after the edges and before the marks, which stay unveiled.
+    const order = { clear: 1.2, count: 1.4, walls: 1.6, veil: 1.8 };
+
+    const world = new THREE.Group();
+    const geometry = this.partMesh.geometry;
+    for (const [side, op] of [
+      [THREE.BackSide, THREE.IncrementWrapStencilOp],
+      [THREE.FrontSide, THREE.DecrementWrapStencilOp],
+    ] as const) {
+      const counter = new THREE.Mesh(
+        geometry,
+        new THREE.MeshBasicMaterial({
+          side,
+          transparent: true,
+          colorWrite: false,
+          depthWrite: false,
+          depthTest: false,
+          stencilWrite: true,
+          stencilFunc: THREE.AlwaysStencilFunc,
+          stencilFail: op,
+          stencilZFail: op,
+          stencilZPass: op,
+        }),
+      );
+      counter.renderOrder = order.count;
+      world.add(counter);
+    }
+
+    const insideOnly = (m: THREE.Material, opacity: number) => {
+      m.transparent = true;
+      m.opacity *= opacity;
+      m.depthWrite = false;
+      m.clippingPlanes = clipping;
+      m.stencilWrite = true;
+      m.stencilRef = 0;
+      m.stencilFunc = THREE.NotEqualStencilFunc;
+      m.stencilFail = THREE.KeepStencilOp;
+      m.stencilZFail = THREE.KeepStencilOp;
+      m.stencilZPass = THREE.KeepStencilOp;
+      return m;
+    };
+    const own = this.partMesh.material;
+    const wallOf = (m: THREE.Material) => {
+      const wall = insideOnly(m.clone(), CUT_WALL_OPACITY);
+      wall.side = THREE.BackSide;
+      return wall;
+    };
+    const walls = new THREE.Mesh(geometry, Array.isArray(own) ? own.map(wallOf) : wallOf(own));
+    walls.renderOrder = order.walls;
+    world.add(walls);
+
+    const screen = new THREE.Group();
+    const quad = new THREE.PlaneGeometry(1, 1);
+    const clear = new THREE.Mesh(
+      quad,
+      new THREE.MeshBasicMaterial({
+        transparent: true,
+        colorWrite: false,
+        depthWrite: false,
+        depthTest: false,
+        stencilWrite: true,
+        stencilRef: 0,
+        stencilFunc: THREE.AlwaysStencilFunc,
+        stencilFail: THREE.ReplaceStencilOp,
+        stencilZFail: THREE.ReplaceStencilOp,
+        stencilZPass: THREE.ReplaceStencilOp,
+      }),
+    );
+    clear.renderOrder = order.clear;
+    const base = Array.isArray(own) ? own[0] : own;
+    const veilMaterial = insideOnly(base.clone(), CUT_VEIL_OPACITY);
+    veilMaterial.depthTest = false;
+    const veil = new THREE.Mesh(quad, veilMaterial);
+    veil.renderOrder = order.veil;
+    for (const q of [clear, veil]) {
+      q.frustumCulled = false;
+      q.raycast = () => {};
+      screen.add(q);
+    }
+    for (const object of [...world.children, ...screen.children]) {
+      object.castShadow = false;
+      object.receiveShadow = false;
+    }
+    world.children.forEach((o) => (o.raycast = () => {}));
+
+    world.visible = false;
+    screen.visible = false;
+    this.scene.add(world);
+    this.camera.add(screen);
+    this.nearCut = { world, screen };
   }
 
   /** Which half to keep so the cut faces the camera. `Section::resolve`, with an orbiting camera. */
@@ -902,6 +1079,7 @@ export class Viewport {
       this.sectionGroup = undefined;
     }
     this.partMesh = undefined;
+    this.buildNearCut();
     this.hoveredEdge = undefined;
     this.selectedEdge = undefined;
     this.hoveredVertex = undefined;
@@ -1012,11 +1190,6 @@ export class Viewport {
 
     const dir = new THREE.Vector3(0.72, -1, 0.62).normalize();
     this.camera.position.copy(center).addScaledVector(dir, distance);
-    // Hug the part: a frustum spanning five orders of magnitude leaves the
-    // depth buffer, which the outline pass reads, no precision across it.
-    this.camera.near = Math.max(distance - radius * 3, distance * 0.02);
-    this.camera.far = distance + radius * 6;
-    this.camera.updateProjectionMatrix();
 
     this.controls.target.copy(center);
     this.controls.update();
@@ -1248,6 +1421,18 @@ function disposeTree(root: THREE.Object3D) {
     const drawable = object as THREE.Mesh | THREE.LineSegments;
     releaseMaterial(drawable.material);
   });
+}
+
+const scratch = new THREE.Vector3();
+
+function boxCorners(box: THREE.Box3): THREE.Vector3[] {
+  const corners: THREE.Vector3[] = [];
+  for (const x of [box.min.x, box.max.x]) {
+    for (const y of [box.min.y, box.max.y]) {
+      for (const z of [box.min.z, box.max.z]) corners.push(new THREE.Vector3(x, y, z));
+    }
+  }
+  return corners;
 }
 
 /** Round to 1, 2 or 5 times a power of ten. */
