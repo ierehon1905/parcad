@@ -283,16 +283,16 @@ a new session should keep doing:
   0005 splits a boundary segment where the normal turns more than an
   interior link may, a node both faces share; docs/GOTCHAS.md has the
   mechanism.
-- **Linux x86_64 refuses the `pipe-tee` seed part.** The self-crossing check
-  reads its 2 mm blend as a face crossing itself near (22.636, 0.000, 24.068)
-  and refuses it, naming 1.94 mm as the largest radius it could build; arm64
-  under GCC and macOS under Clang build it. The check is exact geometry
-  (`IntTools_FaceFace` on the blend face against itself), so this is the
-  kernel's intersector landing on a different side of a knife edge under
-  x86_64's rounding, not the mesh: the blend's mesh measures 0.0100 mm from
-  its surface on arm64, exactly the budget. Measured on unmodified 0.0.8 in a
-  container, 191 of 193 with `untriangle-v3` then still marked. Not yet
-  diagnosed.
+- **`pipe-tee` is refused in an emulated x86_64 container, and builds on
+  real x86_64.** Under GCC 13 on Ubuntu 24.04, run as linux/amd64 in Docker
+  on Apple silicon, the self-crossing check reads its 2 mm blend as a face
+  crossing itself near (22.636, 0.000, 24.068) and refuses it. The v0.0.7
+  release run (35214816552) built it on a real ubuntu-22.04 x86_64 runner
+  under GCC 11 to the same numbers as macOS, 134874.46 mm³ and 12824
+  triangles, and Windows x86_64 passed too. The container differs in
+  compiler, libc and CPU emulation at once, so which one moves the exact
+  intersector is not isolated; a container reproduces CI's result only where
+  the two agree, as `untriangle-v3`'s did.
 - **A stale sidecar ships silently.** `tauri build` does not run
   `tools/build-worker.sh`: a missing staging copy fails loudly, a stale one
   bundles last week's kernel and measures parts confidently with it. Free to
