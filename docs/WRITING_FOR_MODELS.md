@@ -68,6 +68,35 @@ evidence for parcad.
   whose tests were green (field/README.md): a boolean read backwards every time,
   a field called `tag` read as the wrong noun until it became `surface_of`, a
   tool reached 1 time in 4 until its *description* was rewritten, then 8 in 8.
+- **An error is read at the moment of need; a description once.** The
+  coin-holder batch (2026-09-18, docs/COIN_HOLDER_REVIEW.md) put the fix in
+  the refusal and measured haiku on each, 3 trials per arm, before and after:
+  naming `inspect_treatment_target` with its node in the fillet refusal took
+  its reach from 4/6 to 6/6; naming the DSL call and dropping "this host is
+  too old" from a type error took refusals per trial from 1,5,1 / 3,3,3 to 1
+  in every trial; `edges` on every treatment took an authoring case for
+  `.expect()` from 5/6 to 6/6 with the count read off the first reply.
+- **A case at its ceiling measures nothing, and says so.** Three of the
+  batch's cases were 6/6 before the change — haiku already read "invalid
+  redefinition of parameter name" beside a line pointer as a name collision,
+  and found `check_selector` from the tool list when told a tool existed.
+  Those rounds are still recorded: what moved was the rename the model chose
+  (4 of 6 took the one the message suggested) and where the tool's name came
+  from. A case that cannot go down cannot show a regression either.
+- **A prompt that hands over the exact wrong call still gets it normalised.**
+  Told to send `section: { offset: -38 }` "exactly as written", every
+  thinking-arm trial wrote `at_mm` from the schema and never touched the
+  hazard; without `input` in the rubric they graded SOUND for a route they
+  had not taken. The non-thinking arm sent it: before, one trial read the
+  resolved plane honestly and answered the middle; after, all three were
+  refused, rewrote, and answered from the reply.
+- **What still reads wrong.** With `offset` refused and the meant field
+  named, the thinking arm's route is unchanged at 0/3 by `input` — it never
+  sends the hazard, so the refusal is unmeasured there. And on the rotate
+  case one thinking trial after the change gave the right call and cited the
+  script as its evidence (LUCKY); the message names the call that was given
+  the wrong argument, and a model that has the script in front of it quotes
+  the script.
 
 ## Rules
 

@@ -28,6 +28,7 @@ import { shortestUniqueSelector } from "./shortest-selector";
 import * as S from "./state";
 import { store, stored } from "./store";
 import type { EdgeCurve, Evaluated, TargetPreview } from "./state";
+import type { Shown } from "./backend";
 
 /** Whether the camera has been framed on this part yet. */
 let framed = false;
@@ -129,14 +130,7 @@ export async function run() {
     clearError();
     S.setStatus(reportOf(result), result.shipped ? "busy" : "");
     if (revision !== undefined) {
-      void backend
-        .reportShown({
-          id: viewerId,
-          revision,
-          built: true,
-          volume_mm3: result.snapshot.volume_mm3,
-        })
-        .catch(() => {});
+      report({ id: viewerId, revision, built: true, volume_mm3: result.snapshot.volume_mm3 });
     }
     void captureFirstThumbnail();
   } catch (e) {
@@ -144,14 +138,7 @@ export async function run() {
     showError(e);
     S.setStatus(shownPath === undefined ? "failed" : "failed · showing the last part that built", "failed");
     if (revision !== undefined) {
-      void backend
-        .reportShown({
-          id: viewerId,
-          revision,
-          built: false,
-          error: e instanceof Error ? e.message : String(e),
-        })
-        .catch(() => {});
+      report({ id: viewerId, revision, built: false, error: e instanceof Error ? e.message : String(e) });
     }
   } finally {
     running = false;
@@ -928,6 +915,25 @@ const viewerId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(
 
 /** The newest session revision this window has seen; a push says it built on it. */
 let sessionRevision: number | null = null;
+
+/**
+ * What this window last reported showing, sent again every 10 s while the
+ * page is alive: the host marks a window silent for 30 s `stale` and forgets
+ * one silent for 300 s, so a window that is merely idle has to keep saying it
+ * is there. A background tab's timers are throttled, and a tab the user is
+ * not looking at going stale is the right reading.
+ */
+let lastReport: Shown | undefined;
+const HEARTBEAT_MS = 10_000;
+
+function report(shown: Shown): void {
+  lastReport = shown;
+  void backend.reportShown(shown).catch(() => {});
+}
+
+setInterval(() => {
+  if (lastReport) void backend.reportShown(lastReport).catch(() => {});
+}, HEARTBEAT_MS);
 
 export function subscribeSession(): void {
   backend.subscribeSession(viewerId, (session) => {

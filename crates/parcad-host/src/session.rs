@@ -177,7 +177,10 @@ pub struct Viewer {
     pub stale: bool,
 }
 
-/// A window that has not reported for this long is marked `stale`.
+/// A window that has not reported for this long is marked `stale`. A window
+/// reports what it shows every 10 s while it is open (`engine.ts`), so
+/// silence this long is a tab the browser has throttled, put to sleep or
+/// closed — none of which is a user looking at the part.
 pub const STALE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// A window that has not reported for this long is gone as far as any caller
