@@ -1,0 +1,60 @@
+Append, never prepend, when Geom2dConvert::ConcatC1 joins a chain's pieces.
+
+What it fixes
+  ConcatC1 fuses each piece onto the group built so far with
+  Geom2dConvert_CompCurveToBSplineCurve::Add(curve, tolerance), whose
+  third argument, After, defaults to false. Add reads After in one place
+  only: when the new piece's ends meet both ends of the group, which
+  happens only on a chain that closes. There the default makes it
+  prepend the last piece, and the concatenation silently starts one
+  piece late. A caller that reparametrises the result against a curve
+  starting at the first piece is then off by that piece's whole span.
+  ShapeUpgrade_UnifySameDomain::UnionPCurves is one: merging the two arcs
+  of a closed intersection circle, it gave the new edge pcurves that sat
+  a constant 1.233 mm from its 3D circle on both faces (the chord of the
+  first arc, 1.673 rad), and the face fix after it rebuilt the smaller
+  face around a degenerate edge at its pole.
+
+  The 3D twin, GeomConvert::ConcatC1, already passes true at this step
+  (GeomConvert.cxx, "C.Add(Curve1, local_tolerance(j - 1), true)"); this
+  brings the 2D copy into line. Left alone, as in 3D: ConcatG1, which
+  nothing in OCCT calls; and the closed-group branch, which runs only
+  with ClosedFlag set — both UnifySameDomain callers pass false — and
+  whose one caller that can reach it, BRepLib::SameParameter through
+  C0BSplineToC1BSplineCurve, already restores the origin it moves.
+
+How it was measured
+  sphere(8) fused with sphere(1) centred 7.4 mm out at angle a in XY, then
+  UnifySameDomain (edges and faces, parcad's 1e-4 tolerances), at every
+  whole degree from 0 to 90. The fuse is exact and BRepCheck-valid at
+  every a (2145.1397 mm^3). Before: from 6 to 52 degrees the unify
+  returns 2140.7807 mm^3, BRepCheck_NotConnected, the bead's face
+  unorientable, the merged edge's pcurves 1.657 mm (6) to 0.854 mm (52)
+  off its 3D circle; at 53, 54, 55 and 56 degrees it returns a valid solid
+  with them 0.759, 0.641, 0.481 and 0.186 mm off (the surface at the
+  pcurve against the curve, 9 samples). The window is closed form: the
+  bead's kept cap has half-angle arccos(0.557) = 56.2 degrees, so its
+  seam cuts the circle only below that, and below 5.96 the big sphere's
+  seam cuts it too and the arcs never close. After: valid at every
+  angle, 2145.1397 mm^3, deviation 0.000 mm. Called directly, ConcatC1
+  returns byte-identical poles before and after for open chains of 2 to
+  5 arcs, a closed square and a circle with ClosedFlag set; only closed
+  chains move, to start at their first piece. Sixteen beads: 2152.3263
+  mm^3 exact against 2144.6606 + 16 x 0.4791 = 2152.3262. parcad's eval
+  corpus unchanged but for the case this adds
+  (eval/cases/beads-on-a-sphere.json).
+
+Upstream status
+  Not yet offered upstream (github.com/Open-Cascade-SAS/OCCT). Still
+  present on master as of 2026-09-18.
+--- a/src/ModelingData/TKGeomBase/Geom2dConvert/Geom2dConvert.cxx
++++ b/src/ModelingData/TKGeomBase/Geom2dConvert/Geom2dConvert.cxx
+@@ -1441,7 +1441,7 @@
+         else
+         {
+           Geom2dConvert_CompCurveToBSplineCurve C(ArrayOfConcatenated->Value(i));
+-          fusion = C.Add(Curve1, ArrayOfToler(j - 1)); // fusion de deux courbes adjacentes
++          fusion = C.Add(Curve1, ArrayOfToler(j - 1), true); // fusion de deux courbes adjacentes
+           if (!fusion)
+           {
+             throw Standard_ConstructionError("Geom2dConvert Concatenation Error");

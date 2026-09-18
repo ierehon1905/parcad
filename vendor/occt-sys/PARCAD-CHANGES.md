@@ -100,7 +100,20 @@ of `lib`, `libd`, `libi` holds `TKernel`, for a fresh build and for
 
 ## Changes to OCCT itself
 
-Three patches.
+Four patches.
+
+`patches/0004-concat-closed-chain-appends.patch`: `Geom2dConvert::ConcatC1`
+joins each piece of a chain with `CompCurveToBSplineCurve::Add`, whose `After`
+argument defaults to `false`; on a chain that closes, the last piece meets both
+ends and was prepended, so the concatenation started one piece late. Found
+through `ShapeUpgrade_UnifySameDomain`, merging the two arcs of a bead's
+intersection circle on a sphere: the new edge's pcurves ran a whole arc behind
+its 3D circle, and the bead was lost — loudly from 6° to 52°, and silently,
+0.19–0.76 mm off in a BRepCheck-valid solid, from 53° to 56°. The 3D twin
+`GeomConvert::ConcatC1` already passes `true` at the same step; the 2D copy now
+does too. Held by `eval/cases/beads-on-a-sphere.json`; the mechanism is in
+docs/GOTCHAS.md, "A closed chain of 2D curves concatenates starting at its last
+piece". Not yet offered upstream; present on master as of 2026-09-18.
 
 `patches/0003-mesh-deflection-at-the-foot.patch`: BRepMesh judges a B-spline
 face's mesh by where its elements are rather than where their parameters are.

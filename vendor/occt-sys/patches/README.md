@@ -51,3 +51,9 @@ dropping it.
   the face's boundary. A curve drawn from rest (an involute on its base
   circle) meshed in ten times the triangles; header inside the patch; not
   yet offered upstream.
+- `0004-concat-closed-chain-appends.patch` — `Geom2dConvert::ConcatC1`
+  prepends the last piece of a chain that closes, so the result starts one
+  piece late; merging a closed circle's arcs in `UnifySameDomain` then gave
+  the edge pcurves a whole arc off its 3D curve. Appends instead, as the 3D
+  `GeomConvert::ConcatC1` already does. Header inside the patch; not yet
+  offered upstream.

@@ -508,6 +508,71 @@ Two guards were tried first and taken out because the defect never reached
 them: a union volume floor (result ≥ larger operand) and a volume check across
 `UnifySameDomain`. Both read the exact B-rep, which was never wrong.
 
+### A closed chain of 2D curves concatenates starting at its last piece
+
+A part of 2026-09-18 put sixteen `sphere(1)` beads on a `sphere(8)` at a bolt
+circle of 7.4 mm and would not build: 116 of its mesh edges bordered one face.
+It reads like the section above, and it is not — those are an operand fused
+with a *copy of itself*. Here the boolean was exact every time:
+
+| stage | faces | volume | BRepCheck |
+|---|---|---|---|
+| `sphere(8)` | 1 | 2144.6606 | valid |
+| `sphere(1)` | 1 | 4.1888 | valid |
+| after `BRepAlgoAPI_Fuse` | 3 | **2145.1397** | valid |
+| after `clean()` | 2 | **2140.7807** | `BRepCheck_NotConnected`; the bead's face unorientable |
+
+When a bead's kept cap straddles the bead's own seam (u = 0), the fuse returns
+the cap as two faces sharing that seam, and the intersection circle as two arcs
+meeting where the seam crosses it. The unify's face pass welds the cap into one
+face and drops the seam, correctly. That leaves the arcs meeting at vertices of
+degree two, so the edge pass merges them into one closed circle — and the new
+edge's pcurves sit **1.233 mm off its 3D curve at every parameter**, on both
+faces: the chord of 1.673 rad, the first arc's span. `ShapeFix_Face` then
+rebuilds the bead's face around a degenerate edge at its pole, and the bead is
+gone.
+
+The shift is `Geom2dConvert::ConcatC1`. It joins each piece to the group so far
+with `Geom2dConvert_CompCurveToBSplineCurve::Add(curve, tolerance)`, whose
+`After` argument defaults to `false`. `Add` reads it only when the new piece
+meets both ends of the group — a chain that closes — and there the default
+prepends the last piece, so the concatenation starts one arc late.
+`UnionPCurves` reparametrises that curve against a 3D circle that starts at the
+first arc. The 3D twin, `GeomConvert::ConcatC1`, already passes `true` at the
+same step; `vendor/occt-sys/patches/0004-concat-closed-chain-appends.patch`
+makes the 2D copy do the same. Called directly, `ConcatC1` returns identical
+poles before and after for every open chain tried, so nothing else moves.
+
+What each suspect was cleared by, since each looked right at some point:
+
+- the mesher and the backstop — the B-rep was invalid and short of volume
+  before anything meshed it;
+- ParCAD's seam-pcurve pre-pass and `parcad_tidy_faces` — skipping either
+  changes nothing;
+- the loosened merge tolerances — 1e-4 through 1e-9 break identically;
+- the order of the unify's two passes. Edges before faces builds this part,
+  because the edge pass then runs while the seam still splits the circle — but
+  it leaves unmerged every edge a face merge would have exposed, and five corpus
+  cases gained edges. A third edge pass restores them and breaks the bead
+  again. Ordering only moves the defect;
+- `UnionPCurves`' projection fallback and `ShapeFix_Face` — each is correct
+  when handed a correctly parametrised edge.
+
+The window is narrow and closed form, which is why this arrived as "unions are
+broken" rather than as a seam question. The bead's kept cap has half-angle
+arccos(0.557) = 56.2°, so its seam cuts the circle only below that; below 5.96°
+the big sphere's seam cuts it too, the arcs meet a third edge, and they never
+merge. Swept a degree at a time, one bead failed from 6° to 52°. `polar(4, …)`
+puts every bead on ±X or ±Y and builds; `polar(16, …)` does not.
+`eval/cases/beads-on-a-sphere.json` holds it.
+
+**The failures were the loud end of it.** From 53° to 56° the first arc is short
+enough that `ShapeFix_Face` lets the shift through: the part builds, BRepCheck
+passes and the volume is right, while the merged edge's pcurves sit 0.759,
+0.641, 0.481 and 0.186 mm off its 3D circle. No backstop reads that and no corpus
+number moves with it; it is measured with the edge's own curves, the surface at
+its pcurve against its 3D curve.
+
 ### Delabella, OCCT's other triangulator, meshes an extruded spline open
 
 `IMeshTools_Parameters::MeshAlgo`, or the `CSF_MeshAlgo=delabella` environment
