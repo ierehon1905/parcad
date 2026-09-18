@@ -171,7 +171,19 @@ pub struct Viewer {
     pub volume_mm3: Option<f64>,
     /// Seconds since the report arrived.
     pub seconds_ago: u64,
+    /// True past [`STALE`]: this window has not reported for a while, and is
+    /// not evidence that the user is looking at anything. A slept tab and a
+    /// closed one look identical from here.
+    pub stale: bool,
 }
+
+/// A window that has not reported for this long is marked `stale`.
+pub const STALE: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// A window that has not reported for this long is gone as far as any caller
+/// is concerned. Only a tab's SSE stream ending removes one sooner, and a tab
+/// that slept, or a laptop that closed, never sends that.
+pub const FORGOTTEN: std::time::Duration = std::time::Duration::from_secs(300);
 
 /// A window's report, as a transport delivers it.
 #[derive(serde::Deserialize, Debug)]
@@ -192,9 +204,13 @@ static SHOWN: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify:
 
 /// Record what a window put on screen.
 pub fn report_shown(shown: Shown) {
+    report_shown_at(shown, std::time::Instant::now());
+}
+
+fn report_shown_at(shown: Shown, at: std::time::Instant) {
     let mut viewers = VIEWERS.lock().unwrap_or_else(|e| e.into_inner());
     viewers.retain(|(v, _)| v.id != shown.id);
-    viewers.push((shown, std::time::Instant::now()));
+    viewers.push((shown, at));
     drop(viewers);
     SHOWN.notify_waiters();
 }
@@ -208,33 +224,46 @@ pub fn forget_viewer(id: &str) {
     SHOWN.notify_waiters();
 }
 
-/// Every window that has reported, newest first.
+/// Every window heard from within [`FORGOTTEN`], newest first; the ones
+/// silent past [`STALE`] say so.
 pub fn viewers() -> Vec<Viewer> {
-    let viewers = VIEWERS.lock().unwrap_or_else(|e| e.into_inner());
+    viewers_at(std::time::Instant::now())
+}
+
+fn viewers_at(now: std::time::Instant) -> Vec<Viewer> {
+    let mut viewers = VIEWERS.lock().unwrap_or_else(|e| e.into_inner());
+    viewers.retain(|(_, at)| now.duration_since(*at) < FORGOTTEN);
     let mut out: Vec<Viewer> = viewers
         .iter()
-        .map(|(v, at)| Viewer {
-            id: v.id.clone(),
-            kind: v.kind.clone(),
-            revision: v.revision,
-            built: v.built,
-            error: v.error.clone(),
-            volume_mm3: v.volume_mm3,
-            seconds_ago: at.elapsed().as_secs(),
+        .map(|(v, at)| {
+            let silent = now.duration_since(*at);
+            Viewer {
+                id: v.id.clone(),
+                kind: v.kind.clone(),
+                revision: v.revision,
+                built: v.built,
+                error: v.error.clone(),
+                volume_mm3: v.volume_mm3,
+                seconds_ago: silent.as_secs(),
+                stale: silent > STALE,
+            }
         })
         .collect();
     out.sort_by_key(|v| v.seconds_ago);
     out
 }
 
-/// Wait until some window reports a revision at or past `revision`, or the
-/// budget runs out. Returns every window's state either way.
+/// Wait until some live window reports a revision at or past `revision`, or
+/// the budget runs out. Returns every window's state either way. A stale
+/// window is not waited for: it may never report again, and a caller that
+/// waited the whole budget on it would learn only that.
 pub async fn wait_until_shown(revision: u64, budget: std::time::Duration) -> Vec<Viewer> {
     let deadline = tokio::time::Instant::now() + budget;
     loop {
         let notified = SHOWN.notified();
         let now = viewers();
-        if now.is_empty() || now.iter().any(|v| v.revision >= revision) {
+        let live: Vec<&Viewer> = now.iter().filter(|v| !v.stale).collect();
+        if live.is_empty() || live.iter().any(|v| v.revision >= revision) {
             return now;
         }
         if tokio::time::timeout_at(deadline, notified).await.is_err() {
@@ -251,8 +280,10 @@ pub struct Live {
     pub session: Session,
     /// One entry per open window that has evaluated something. A window whose
     /// `revision` is below the session's has not caught up; one with `built`
-    /// false is drawing an older part beside an error. Empty when no window is
-    /// open — a headless `parcad serve`, or the app minimised to nothing.
+    /// false is drawing an older part beside an error; one marked `stale` has
+    /// not reported for over 30 s and is not evidence the user sees anything,
+    /// and one silent for 300 s is left out. Empty when no window is open — a
+    /// headless `parcad serve`, or the app minimised to nothing.
     pub viewers: Vec<Viewer>,
 }
 
@@ -357,6 +388,50 @@ pub(crate) mod tests {
                 Some(agent.revision),
             );
             assert_eq!(after.revision, agent.revision + 1, "an up-to-date push lands");
+        })
+    }
+
+    fn shown(id: &str, revision: u64) -> Shown {
+        Shown {
+            id: id.into(),
+            kind: "browser".into(),
+            revision,
+            built: true,
+            error: None,
+            volume_mm3: Some(1.0),
+        }
+    }
+
+    /// A tab last seen two hours ago was still a viewer, a revision behind,
+    /// with a volume from a part that no longer existed, and a model read it
+    /// as the window having built its part.
+    #[test]
+    fn a_silent_window_goes_stale_and_is_then_forgotten() {
+        scoped(|| {
+            let now = std::time::Instant::now();
+            report_shown_at(shown("fresh", 3), now);
+            report_shown_at(shown("napping", 2), now - STALE - std::time::Duration::from_secs(1));
+            report_shown_at(shown("gone", 1), now - FORGOTTEN);
+            let seen = viewers_at(now);
+            let by_id: Vec<(&str, bool, u64)> = seen.iter().map(|v| (v.id.as_str(), v.stale, v.seconds_ago)).collect();
+            assert_eq!(by_id, [("fresh", false, 0), ("napping", true, 31)]);
+            // Forgotten for good, not just left out of one reply.
+            assert_eq!(VIEWERS.lock().unwrap().len(), 2);
+        })
+    }
+
+    /// Nothing live to wait for returns at once rather than after the budget.
+    #[test]
+    fn a_wait_does_not_hold_for_a_stale_window() {
+        scoped(|| {
+            let now = std::time::Instant::now();
+            report_shown_at(shown("napping", 1), now - STALE - std::time::Duration::from_secs(1));
+            let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+            let started = std::time::Instant::now();
+            let seen = runtime.block_on(wait_until_shown(5, std::time::Duration::from_secs(5)));
+            assert!(started.elapsed() < std::time::Duration::from_secs(1), "waited on a window that may never report");
+            assert_eq!(seen.len(), 1);
+            assert!(seen[0].stale);
         })
     }
 
