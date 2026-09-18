@@ -130,7 +130,8 @@ fn reply_schema(tool: &str) -> std::sync::Arc<rmcp::model::JsonObject> {
         "list_projects" => of::<ProjectList>(),
         "read_project" => of::<Project>(),
         "save_project" => of::<Saved>(),
-        "get_session" | "open_project" | "set_script" | "restore_snapshot" => of::<session::Live>(),
+        "get_session" | "restore_snapshot" => of::<session::Live>(),
+        "open_project" | "set_script" => of::<OnScreen>(),
         "list_snapshots" => of::<SnapshotList>(),
         other => panic!("{other} has an output schema and no reply type in mcp::reply_schema; add it there"),
     }
@@ -444,6 +445,30 @@ pub struct RestoreRequest {
     pub wait_s: Option<f64>,
 }
 
+/// The session after open_project or set_script: what is on screen,
+/// identified rather than carried. The text is what the caller just sent, or
+/// can read from disk, so it is left out unless asked for; `revision` and
+/// `viewers` prove the windows took it.
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct OnScreen {
+    /// The open project's path, as `list_projects` spells it.
+    pub name: Option<String>,
+    /// The session revision this change made; a viewer at or past it shows it.
+    pub revision: u64,
+    pub origin: String,
+    /// Characters in the script now on screen.
+    pub script_chars: usize,
+    /// The first 12 hex digits of the SHA-256 of the script now on screen,
+    /// which is how a caller checks the text every window took is the one it
+    /// meant without reading it back.
+    pub script_sha256: String,
+    /// The script itself, only when `script: true` asked for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
+    /// What each open window is drawing, as in get_session.
+    pub viewers: Vec<session::Viewer>,
+}
+
 #[derive(Serialize, schemars::JsonSchema)]
 pub struct SnapshotList {
     name: String,
@@ -461,6 +486,11 @@ pub struct OpenRequest {
     /// the opened part. 0 to 60; defaults to 20.
     #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub wait_s: Option<f64>,
+    /// Also return the loaded script. Off by default: the reply identifies
+    /// it by `script_chars` and `script_sha256`, and read_project has the
+    /// text.
+    #[serde(default)]
+    pub script: bool,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -1067,15 +1097,15 @@ impl Parcad {
     #[tool(
         name = "open_project",
         annotations(title = "Show a part on the user's screen", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Show the user a part: open a project on the screen they are watching — the parcad app, or the ParCAD web page in their browser — loaded from disk, exactly as if they had picked it, in every open window. To show a part you have built, save it with save_project under a name of its own and open that; the part that was open is left as it was. Takes a path from list_projects. Returns the session with the loaded script. Use this before set_script when the part you want to change is not the one on screen — get_session tells you which that is. Like set_script, the reply waits for a window to report evaluating it and carries `viewers`: tell the user the part is on screen only when one reports it built. A viewer over 30 seconds old is marked `stale` and is not evidence the user is looking at anything; one silent for 300 seconds is left out, and is not waited for."
+        description = "Show the user a part: open a project on the screen they are watching — the parcad app, or the ParCAD web page in their browser — loaded from disk, exactly as if they had picked it, in every open window. To show a part you have built, save it with save_project under a name of its own and open that; the part that was open is left as it was. Takes a path from list_projects. Returns the session without the loaded script: `script_chars` and `script_sha256` identify the text every window took, `script: true` asks for it, and read_project has it anyway. Use this before set_script when the part you want to change is not the one on screen — get_session tells you which that is. Like set_script, the reply waits for a window to report evaluating it and carries `viewers`: tell the user the part is on screen only when one reports it built. A viewer over 30 seconds old is marked `stale` and is not evidence the user is looking at anything; one silent for 300 seconds is left out, and is not waited for."
     )]
     async fn open_project(
         &self,
         Parameters(Args(request)): Parameters<Args<OpenRequest>>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<session::Live>, ErrorData> {
+    ) -> Result<rmcp::handler::server::wrapper::Json<OnScreen>, ErrorData> {
         let opened = session::open(&request.name, session::AGENT_ORIGIN).map_err(invalid)?;
         Ok(rmcp::handler::server::wrapper::Json(
-            shown(opened, request.wait_s).await,
+            on_screen(opened, request.wait_s, request.script).await,
         ))
     }
 
@@ -1083,16 +1113,16 @@ impl Parcad {
     #[tool(
         name = "set_script",
         annotations(title = "Replace the script on screen", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Change the part the user is looking at: replace the script of the project open on their screen. It is for editing that part; to show them a different one, save it with save_project and open it with open_project, or its text lands in the open project and a save writes it there. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing — there is no lock, and you must not wait for one. It edits the screen only: nothing is written to disk until the user saves or you call save_project. Evaluate the script first with evaluate_part; putting a script that does not build in front of the user replaces their working part with an error. Read get_session first and base your edit on the script it returns, or you will silently revert what the user typed since you last looked.\n\nThe reply waits (up to `wait_s`, default 20 s) until a window reports evaluating this revision, and its `viewers` says what each window showed: built with which `volume_mm3`, or the `error` it hit. Do not tell the user the part is on screen unless a viewer reports this `revision` with built: true. Setting the same script again makes every window evaluate it again — the way to recover a window that is showing something stale."
+        description = "Change the part the user is looking at: replace the script of the project open on their screen. It is for editing that part; to show them a different one, save it with save_project and open it with open_project, or its text lands in the open project and a save writes it there. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing — there is no lock, and you must not wait for one. It edits the screen only: nothing is written to disk until the user saves or you call save_project. Evaluate the script first with evaluate_part; putting a script that does not build in front of the user replaces their working part with an error. Read get_session first and base your edit on the script it returns, or you will silently revert what the user typed since you last looked.\n\nThe reply waits (up to `wait_s`, default 20 s) until a window reports evaluating this revision, and its `viewers` says what each window showed: built with which `volume_mm3`, or the `error` it hit. It does not echo the script you sent: `script_chars` and `script_sha256` identify what landed, and get_session returns it whole. Do not tell the user the part is on screen unless a viewer reports this `revision` with built: true. Setting the same script again makes every window evaluate it again — the way to recover a window that is showing something stale."
     )]
     async fn set_script(
         &self,
         Parameters(Args(request)): Parameters<Args<SetScriptRequest>>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<session::Live>, ErrorData> {
+    ) -> Result<rmcp::handler::server::wrapper::Json<OnScreen>, ErrorData> {
         keep_screen(&request.script);
         let set = session::set_script(request.script, session::AGENT_ORIGIN).map_err(invalid)?;
         Ok(rmcp::handler::server::wrapper::Json(
-            shown(set, request.wait_s).await,
+            on_screen(set, request.wait_s, false).await,
         ))
     }
 
@@ -1587,6 +1617,27 @@ async fn shown(changed: session::Session, wait_s: Option<f64>) -> session::Live 
     }
 }
 
+/// [`shown`], identifying the script instead of echoing it.
+async fn on_screen(changed: session::Session, wait_s: Option<f64>, with_script: bool) -> OnScreen {
+    let live = shown(changed, wait_s).await;
+    identified(live.session, live.viewers, with_script)
+}
+
+fn identified(session: session::Session, viewers: Vec<session::Viewer>, with_script: bool) -> OnScreen {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(session.script.as_bytes());
+    let hex: String = digest.iter().map(|byte| format!("{byte:02x}")).collect();
+    OnScreen {
+        name: session.name,
+        revision: session.revision,
+        origin: session.origin,
+        script_chars: session.script.chars().count(),
+        script_sha256: hex[..12].to_string(),
+        script: with_script.then_some(session.script),
+        viewers,
+    }
+}
+
 /// Where exports land. One directory, so no call can choose a location.
 fn export_dir() -> PathBuf {
     std::env::var_os("PARCAD_EXPORT_DIR")
@@ -1935,6 +1986,30 @@ mod tests {
         assert_eq!(data["kind"], "script");
         assert_eq!(data["line"], 3);
         assert!(data["node"].is_null());
+    }
+
+    /// Eleven open_project calls in one session each echoed a script the
+    /// caller had sent thirty seconds earlier, up to 10 KB apiece. The reply
+    /// identifies the text instead, and hands it over only when asked.
+    #[test]
+    fn an_open_reply_identifies_the_script_without_carrying_it() {
+        let session = session::Session {
+            name: Some("bracket".into()),
+            script: "return box(1,1,1);".into(),
+            revision: 4,
+            origin: session::AGENT_ORIGIN.into(),
+        };
+        let reply = serde_json::to_value(identified(session.clone(), Vec::new(), false)).unwrap();
+        assert!(reply.get("script").is_none(), "{reply}");
+        assert_eq!(reply["script_chars"], 18);
+        // sha256("return box(1,1,1);"), as any other tool would compute it.
+        assert_eq!(reply["script_sha256"], "95bebadc1faf");
+        assert_eq!(reply["revision"], 4);
+        let asked = serde_json::to_value(identified(session, Vec::new(), true)).unwrap();
+        assert_eq!(asked["script"], "return box(1,1,1);");
+        let schema = reply_schema("open_project");
+        assert!(schema["properties"].get("script_sha256").is_some());
+        assert!(reply_schema("get_session")["properties"].get("script").is_some(), "get_session keeps the script");
     }
 
     /// The session that found this asked for a cut at x = -38 as `offset`,

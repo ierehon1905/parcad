@@ -32,6 +32,9 @@ schemars = "1.2.2"
 dirs = "6"
 # Images travel base64-encoded in an MCP reply; the protocol has no binary frame.
 base64 = "0.22"
+# open_project and set_script identify the script on screen by its digest
+# instead of echoing it.
+sha2 = "0.10"
 zstd = "0.13"
 draco-core = "2.1"
 

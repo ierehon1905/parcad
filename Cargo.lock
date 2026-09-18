@@ -2959,6 +2959,7 @@ dependencies = [
  "schemars 1.2.2",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tokio-stream",
  "tower-service",
