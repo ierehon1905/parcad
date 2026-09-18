@@ -146,6 +146,17 @@ fn convert_project(name: String) -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "name": name, "path": path }))
 }
 
+/// Hand the part's source to the user's own editor, and say which file it was.
+///
+/// The path is resolved here for the same reason an export's is: this window
+/// knows which part is open and not where the project folder lives.
+#[tauri::command]
+fn open_project_source(name: String) -> Result<serde_json::Value, String> {
+    let path = projects::source_path(&name)?.to_string_lossy().to_string();
+    let opened_with = service::open_in_editor(&path)?;
+    Ok(serde_json::json!({ "name": name, "path": path, "opened_with": opened_with }))
+}
+
 /// The thumbnail alone. See the HTTP adapter's `save_project_preview` for why
 /// this does not go through `save_project`.
 #[tauri::command]
@@ -423,6 +434,7 @@ pub fn run() {
             delete_project,
             set_project_title,
             convert_project,
+            open_project_source,
             project_preview,
             save_project_preview,
             mcp_status,

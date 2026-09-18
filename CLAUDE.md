@@ -264,6 +264,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | the MCP bundle and its registry entry | `packaging/mcpb/` — packed by the release workflow; its README is the per-release checklist |
 | which package managers carry parcad, and how a release reaches them | `packaging/README.md`; manifests are templates filled by `packaging/render.py` in `.github/workflows/publish.yml` |
 | the sandbox agent scripts run in | `crates/parcad-host/src/script.rs` |
+| opening the part in the user's own editor, and which one | `service::open_in_editor` — never the system's `.js` handler, which is a browser; the pencil is in `app/src/ui/titlebar.tsx` |
 | where parts are stored | `crates/parcad-host/src/projects.rs` — a `.parcad` folder per part |
 | the parts picker: folders, new part, rename, trash | `app/src/ui/project-browser.tsx`, rules in `app/src/projects.ts` |
 | how the frontend calls the backend | `app/src/backend.ts` — the only module that knows there are two |

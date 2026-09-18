@@ -1099,6 +1099,108 @@ pub fn reveal(path: &str) -> Result<(), String> {
         .map_err(|e| format!("could not open a file manager for {path}: {e}"))
 }
 
+/// The editor commands this looks for, in the order it tries them.
+///
+/// Each is the name the editor installs on PATH for exactly this — being
+/// handed a file from somewhere else. The order is preference between things
+/// the user has actually installed, not a ranking.
+const EDITORS: [&str; 7] =
+    ["cursor", "code", "code-insiders", "windsurf", "zed", "subl", "mate"];
+
+/// Open a part's source for editing, and say what opened it.
+///
+/// **Not the system's handler for the extension**, which is the obvious
+/// implementation and the wrong one: `.js` on a developer's machine is
+/// routinely registered to a browser (Chrome, on the machine this was written
+/// on), and on Windows it is registered to Windows Script Host, which *runs*
+/// the file. So the order is the user's own choice, then an editor that is
+/// actually installed, then the platform's text-editor opener:
+///
+/// 1. `PARCAD_EDITOR`, with any arguments it carries — `cursor`, `code -g`.
+/// 2. The first of [`EDITORS`] on PATH.
+/// 3. macOS `open -t`, the default *text* editor; Windows `notepad`; elsewhere
+///    `xdg-open`, which is the only opener a desktop is guaranteed to have.
+///
+/// `$EDITOR` is deliberately not consulted: it usually names a terminal editor,
+/// and there is no terminal here to run one in.
+pub fn open_in_editor(path: &str) -> Result<String, String> {
+    if cfg!(target_os = "emscripten") {
+        return Err(format!(
+            "{path} is kept in this browser's storage rather than in a file, so there is \
+             nothing for an editor to open. The app on your machine keeps every part as a \
+             file you can edit anywhere."
+        ));
+    }
+
+    let file = Path::new(path);
+    if !file.exists() {
+        return Err(format!("nothing at {path} to open"));
+    }
+
+    if let Some(chosen) = std::env::var("PARCAD_EDITOR").ok().filter(|e| !e.trim().is_empty()) {
+        let mut words = chosen.split_whitespace();
+        let program = words.next().expect("a command with a word in it has a first word");
+        return std::process::Command::new(program)
+            .args(words)
+            .arg(file)
+            .spawn()
+            .map(|_| chosen.clone())
+            .map_err(|e| {
+                format!(
+                    "PARCAD_EDITOR is {chosen:?} and it could not be run ({e}). Set it to a \
+                     command on PATH that takes a file — cursor, code, zed, subl — or unset it \
+                     and parcad will look for one."
+                )
+            });
+    }
+
+    if let Some(editor) = EDITORS.iter().find(|name| on_path(name)) {
+        return std::process::Command::new(editor)
+            .arg(file)
+            .spawn()
+            .map(|_| (*editor).to_string())
+            .map_err(|e| {
+                format!(
+                    "{editor} is on PATH but could not be run ({e}). Set PARCAD_EDITOR to the \
+                     command that opens your editor."
+                )
+            });
+    }
+
+    let (program, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+        // `-t` is the default *text* editor. Plain `open` would use whatever
+        // claims `.js`, which is as likely to be a browser as an editor.
+        ("open", &["-t"])
+    } else if cfg!(target_os = "windows") {
+        ("notepad", &[])
+    } else {
+        ("xdg-open", &[])
+    };
+    let status = std::process::Command::new(program)
+        .args(args)
+        .arg(file)
+        .status()
+        .map_err(|e| unopened(path, &format!("{program} could not be run ({e})")))?;
+    if status.success() {
+        return Ok(format!("{program} {}", args.join(" ")).trim().to_string());
+    }
+    Err(unopened(path, &format!("{program} exited {status}")))
+}
+
+fn unopened(path: &str, why: &str) -> String {
+    format!(
+        "could not open {path} for editing: {why}. Set PARCAD_EDITOR to the command that runs \
+         your editor — cursor, code, zed, subl — or install one of those on PATH."
+    )
+}
+
+/// Whether a bare command name would run: an executable file under PATH.
+fn on_path(name: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|path| {
+        std::env::split_paths(&path).any(|dir| dir.join(name).is_file())
+    })
+}
+
 /// Hand a written file to the application the system opens its extension with
 /// — for a 3MF, whichever slicer the user installed last claimed it.
 ///

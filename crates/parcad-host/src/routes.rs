@@ -3,7 +3,7 @@
 //! `http.rs` answers these on a socket and `page.rs` inside a browser tab, so the
 //! picker gets the same listing, and a save writes the same files, from either.
 
-use crate::{projects, session};
+use crate::{projects, service, session};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -25,6 +25,7 @@ pub enum ProjectOp {
     Rename { to: String },
     Title { title: String },
     Convert,
+    Open,
 }
 
 #[derive(Deserialize)]
@@ -75,8 +76,18 @@ pub fn project_op(name: &str, request: ProjectOp) -> Result<Value, String> {
             projects::set_title(name, &title).map(|()| name.to_string()),
         ),
         ProjectOp::Convert => (name.to_string(), projects::convert(name)),
+        // The one op that answers with something besides a path: which editor
+        // took the file, since it is a choice the user did not make here.
+        ProjectOp::Open => return open_source(name),
     };
     Ok(json!({ "name": renamed, "path": path? }))
+}
+
+/// Hand the part's source to the user's own editor. See `service::open_in_editor`.
+fn open_source(name: &str) -> Result<Value, String> {
+    let path = projects::source_path(name)?.to_string_lossy().to_string();
+    let opened_with = service::open_in_editor(&path)?;
+    Ok(json!({ "name": name, "path": path, "opened_with": opened_with }))
 }
 
 pub fn delete_project(name: &str) -> Result<Value, String> {

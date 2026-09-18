@@ -236,6 +236,27 @@ export async function convertProject(name: string): Promise<string> {
 }
 
 /**
+ * Hand this part's source to the user's own editor: which file, and what took
+ * it.
+ *
+ * The file is `part.js` itself — the authoritative one — and never a derived
+ * file beside it. `opened_with` is the command the host actually ran, measured
+ * rather than requested: `PARCAD_EDITOR` when it is set, and otherwise the
+ * editor it found. See `service::open_in_editor` for why it is not simply
+ * whatever the system opens a `.js` with.
+ */
+export interface Opened {
+  path: string;
+  opened_with: string;
+}
+
+export async function openProjectSource(name: string): Promise<Opened> {
+  return inTauri
+    ? await invoke<Opened>("open_project_source", { name })
+    : await post<Opened>(`projects/${route(name)}`, { op: "open" });
+}
+
+/**
  * Write a thumbnail without touching the script.
  *
  * The app does this the first time it draws a part that has none, so browsing
@@ -286,6 +307,19 @@ export interface McpStatus {
  * given, rather than an endpoint a local client can already find: ParCAD web.
  */
 export const mcpThroughRelay = inPage;
+
+/**
+ * Whether a part is a file on the machine the user is sitting at, so something
+ * else can be pointed at it.
+ *
+ * True of both host transports, which share one project folder with the user's
+ * filesystem and with agents. ParCAD web keeps its parts in the browser's
+ * storage, where there is no path to give an editor — so `openProjectSource`
+ * is not a thing that fails there, it is a thing that does not exist, and the
+ * button for it is not drawn. See CLAUDE.md, "A control that cannot do
+ * anything is deleted, not dimmed".
+ */
+export const partsAreFiles = !inPage;
 
 export function mcpStatus(): Promise<McpStatus> {
   return inTauri ? invoke<McpStatus>("mcp_status") : get<McpStatus>("mcp");

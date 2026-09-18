@@ -20,11 +20,12 @@
 import { useSignal } from "@preact/signals";
 import { useRef } from "preact/hooks";
 
-import { mcpThroughRelay, type McpStatus } from "../backend";
+import { mcpThroughRelay, partsAreFiles, type McpStatus } from "../backend";
 import * as engine from "../engine";
 import * as S from "../state";
 import { AgentLink } from "./agent-link";
 import { Glass } from "./components/Glass";
+import { Toggle } from "./components/Toggle";
 import { Icon, type IconName } from "./icons";
 import { tip } from "./tooltip";
 import { useDismiss } from "./use-dismiss";
@@ -37,6 +38,9 @@ export function Titlebar() {
       <OpenPart />
       <Save />
       <Export />
+      <span class="w-px h-[18px] bg-line" />
+      <ShowCode />
+      {partsAreFiles && <EditElsewhere />}
       <span class="w-px h-[18px] bg-line" />
       {mcpThroughRelay ? <AgentLink /> : <Agent />}
       <span class="flex-1" />
@@ -195,6 +199,62 @@ function Export() {
         </Glass>
       )}
     </div>
+  );
+}
+
+/**
+ * Whether the source is on screen.
+ *
+ * In the titlebar rather than on the viewport, where the section controls live,
+ * because it is not about the part: it decides what this window is *for* at the
+ * moment — an editor with a preview, or a preview of a part somebody else is
+ * authoring. Hiding it leaves the editor mounted and running; see
+ * `state.codeVisible`.
+ */
+function ShowCode() {
+  const showing = S.codeVisible.value;
+  return (
+    <Toggle
+      pressed={showing}
+      {...tip({
+        title: showing ? "Hide the code" : "Show the code",
+        key: "⌘\\",
+        text: "The part keeps building either way — an agent's edits and your own both land in the same source, whether or not it is on screen.",
+      })}
+      onClick={() => engine.showCode(!showing)}
+    >
+      <Icon name="code" class="size-4 shrink-0" />
+      <span class="font-mono text-small">code</span>
+    </Toggle>
+  );
+}
+
+/**
+ * The same file, in whatever the user writes JavaScript in.
+ *
+ * `part.js` is the authoritative file and the folder is shared, so editing it
+ * elsewhere was always allowed; this is only the shortcut to it. Which editor
+ * is `PARCAD_EDITOR`, or the first one the host finds installed — never the
+ * system's handler for `.js`, which is usually a browser. The status line says
+ * which one took it.
+ */
+function EditElsewhere() {
+  const path = S.openPath.value;
+  return (
+    <button
+      type="button"
+      disabled={!path}
+      class="flex p-1.5 rounded-md border border-transparent text-ink-dim cursor-pointer
+             hover:text-ink hover:border-line
+             disabled:opacity-45 disabled:cursor-default disabled:hover:border-transparent"
+      {...tip({
+        title: "Open part.js in your editor",
+        text: "Cursor, VS Code, Zed — whichever is installed, or the one PARCAD_EDITOR names. It opens the part itself, and this window follows what you save there.",
+      })}
+      onClick={() => void engine.openSourceInEditor()}
+    >
+      <Icon name="pencil" class="size-4 shrink-0" />
+    </button>
   );
 }
 

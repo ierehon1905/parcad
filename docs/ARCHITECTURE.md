@@ -873,6 +873,17 @@ difference is invisible until they try. It also gives an agent somewhere to put
 its work — `save_project` writes to the folder the picker lists, so a part
 written over MCP is one reload away from being on screen.
 
+**The window hands `part.js` to an editor rather than opening it itself.** The
+titlebar's pencil runs `PARCAD_EDITOR` when it is set — a command with its own
+arguments, `cursor` or `code -g` — and otherwise the first of `cursor`, `code`,
+`code-insiders`, `windsurf`, `zed`, `subl`, `mate` it finds on PATH, falling back
+to macOS `open -t`, Windows `notepad` or `xdg-open`. Deliberately *not* the
+system's handler for `.js`, which is the obvious implementation: on the machine
+this was written on that handler is Google Chrome, and on Windows it is Windows
+Script Host, which would *run* the part instead of showing it. The reply names
+the command that was used, because an editor found on PATH is a guess until it is
+named. `service::open_in_editor`.
+
 A project name is a path *inside that folder* and nothing else. `safe()` splits on
 `/` and refuses a segment that is empty, starts with a dot, carries a `.js` or
 `.parcad` extension, or is not exactly one path component — because two of the

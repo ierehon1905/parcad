@@ -32,9 +32,13 @@ export function App() {
       <Titlebar />
       <UpdateBar />
       <main class="flex flex-1 min-h-0">
+        {/* Hidden, never unmounted: CodeMirror owns the document and the
+            evaluation cycle starts with it, so a window showing only the part
+            is still building that part from the source it holds. */}
         <section
           id="editor-pane"
-          class="flex flex-col w-[42%] min-w-[280px] min-h-0 bg-panel"
+          hidden={!S.codeVisible.value}
+          class="flex flex-col w-[42%] min-w-[280px] min-h-0 bg-panel [&[hidden]]:hidden"
         >
           {/* Pressing an operation writes its call into the source at the
               cursor — it does not open a command, and there is nowhere else for
@@ -43,7 +47,7 @@ export function App() {
           <Editor />
           <ErrorPane />
         </section>
-        <Splitter />
+        {S.codeVisible.value && <Splitter />}
         <ViewportPane />
       </main>
       <ProjectBrowser />
@@ -82,12 +86,20 @@ function ErrorPane() {
  * ⇧ picks the exact format: STEP needs the B-rep kernel whatever the viewport
  * happens to be showing, because a mesh cannot be turned back into exact
  * surfaces after the fact.
+ *
+ * ⌘\ shows and hides the source, which is the key every editor with a side
+ * panel uses for the same thing.
  */
 function keys() {
   const onKey = async (e: KeyboardEvent) => {
     if (!(e.metaKey || e.ctrlKey)) return;
     const key = e.key.toLowerCase();
 
+    if (key === "\\") {
+      e.preventDefault();
+      engine.showCode(!S.codeVisible.peek());
+      return;
+    }
     if (key === "o") {
       e.preventDefault();
       S.browserOpen.value = true;

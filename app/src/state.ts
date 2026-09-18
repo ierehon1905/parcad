@@ -28,6 +28,7 @@ import type * as dsl from "./dsl";
 import type { AgentLink, AvailableUpdate, KernelLoad, McpStatus } from "./backend";
 import type { VertexPoint } from "./entities";
 import type { Projects } from "./projects";
+import { store, stored } from "./store";
 import type { FaceMaterial, Viewport } from "./viewport";
 
 /**
@@ -338,6 +339,22 @@ export function editor(): EditorView {
  * machinery below through these boxes.
  */
 export const viewportRef: { current: Viewport | undefined } = { current: undefined };
+
+/** Only a hidden editor is written down; showing the code is the default. */
+const CODE_VISIBLE = "parcad.code.visible";
+
+/**
+ * Whether the source is on screen at all.
+ *
+ * Remembered between sessions, because a window arranged to show only the part
+ * — on a second screen, or while a model is doing the authoring — should still
+ * be that window tomorrow. The editor itself is never unmounted when this is
+ * false: CodeMirror owns the document, the undo history and the evaluation
+ * cycle that starts with it, and none of that is a view.
+ */
+export const codeVisible = signal(stored(CODE_VISIBLE) !== "0");
+
+codeVisible.subscribe((visible) => store(CODE_VISIBLE, visible ? null : "0"));
 
 /** Whether the parts picker is open. */
 export const browserOpen = signal(false);

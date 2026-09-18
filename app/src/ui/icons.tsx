@@ -491,6 +491,16 @@ const DRAWINGS = {
       <Line d="M20.4 15.6H6.3M9.9 12l-3.6 3.6L9.9 19.2" />
     </>
   ),
+  // The source, as the two marks no part is ever drawn with.
+  code: <Line d="M9 7.8 4.2 12 9 16.2M15 7.8 19.8 12 15 16.2M13.4 4.4l-2.8 15.2" />,
+  // Writing, for the one button that hands the file to something that does the
+  // writing instead of this window.
+  pencil: (
+    <>
+      <Line d="M4.2 19.8v-3.6L16.4 4a1.8 1.8 0 0 1 2.6 0l1 1a1.8 1.8 0 0 1 0 2.6L7.8 19.8Z" />
+      <Line d="M14.8 5.6 18.4 9.2" o=".85" />
+    </>
+  ),
   chevron: <Line d="M6.6 9.3 12 14.7l5.4-5.4" />,
   plus: <Line d="M12 4.8v14.4M4.8 12h14.4" />,
   // The one mark in the set that is not geometry, because it is the only one

@@ -346,6 +346,14 @@ pub fn export_path(path: &str, extension: &str) -> Result<PathBuf, String> {
     })
 }
 
+/// The one authoritative file of a project: `part.js`, or the loose `.js`.
+///
+/// Derived files beside it are disposable, so this is the only path worth
+/// handing to an editor the user will type into.
+pub fn source_path(path: &str) -> Result<PathBuf, String> {
+    Ok(locate(path)?.source)
+}
+
 pub fn read(path: &str) -> Result<String, String> {
     let located = locate(path)?;
     std::fs::read_to_string(&located.source).map_err(|e| {

@@ -25,6 +25,7 @@ import { describeProjects, label as projectLabel, partAt } from "./projects";
 import { instrumentTreatmentCalls, sourceOffset, treatmentAtCursor, treatmentCallRange } from "./source-link";
 import { shortestUniqueSelector } from "./shortest-selector";
 import * as S from "./state";
+import { store, stored } from "./store";
 import type { EdgeCurve, Evaluated, TargetPreview } from "./state";
 
 /** Whether the camera has been framed on this part yet. */
@@ -546,23 +547,6 @@ export const RELAY: string | undefined = import.meta.env.VITE_PARCAD_RELAY || un
 const AGENT_KEY = "parcad.agents.key";
 const AGENT_OPEN = "parcad.agents.open";
 
-function stored(name: string): string | null {
-  try {
-    return localStorage.getItem(name);
-  } catch {
-    return null;
-  }
-}
-
-function store(name: string, value: string | null) {
-  try {
-    if (value === null) localStorage.removeItem(name);
-    else localStorage.setItem(name, value);
-  } catch {
-    // A private window: the link lasts as long as the tab, which is all it can.
-  }
-}
-
 /** This browser's key for its link, made on first use. The link is derived from it. */
 function agentKey(): string {
   const kept = stored(AGENT_KEY);
@@ -851,6 +835,42 @@ export async function runExport(format: keyof typeof EXPORTERS) {
     showError(err);
     S.setStatus("export failed", "failed");
   }
+}
+
+/**
+ * Hand the open part's source to the user's own editor.
+ *
+ * The file on disk is what opens, so a window with unsaved changes says so
+ * rather than quietly saving: ⌘S is the user's decision, and an "open" button
+ * that writes the file would make it ours.
+ */
+export async function openSourceInEditor() {
+  const project = S.openPath.value;
+  if (!project) return;
+  S.setStatus("opening", "busy");
+  try {
+    const opened = await backend.openProjectSource(project);
+    // What opened it, because the user did not choose it here: an editor found
+    // on PATH is a guess until it is named.
+    const where = `opened ${opened.path} in ${opened.opened_with}`;
+    S.setStatus(S.isDirty.value ? `${where} — unsaved edits are still here` : where);
+    clearError();
+  } catch (err) {
+    showError(err);
+    S.setStatus("could not open the file", "failed");
+  }
+}
+
+/**
+ * Show or hide the source.
+ *
+ * CodeMirror measures nothing while it is `display: none`, and comes back
+ * believing the viewport it last saw. Telling it to measure on the frame after
+ * it reappears is what stops the first click landing on the wrong line.
+ */
+export function showCode(visible: boolean) {
+  S.codeVisible.value = visible;
+  if (visible) requestAnimationFrame(() => S.editorRef.current?.requestMeasure());
 }
 
 // ------------------------------------------------------------- live session
