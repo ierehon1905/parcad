@@ -19,7 +19,7 @@
 //! Scripts arrive from a model and run in `script`'s sandbox, never in the
 //! webview. That is the precondition this server was blocked on.
 
-use crate::{assets::Assets, projects, script, service, session};
+use crate::{arguments::Args, assets::Assets, projects, script, service, session};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
@@ -178,6 +178,7 @@ pub fn service(assets: Arc<dyn Assets>) -> axum::Router {
 // ------------------------------------------------------------------ requests
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ViewRequest {
     /// The script an evaluate_part call was given.
     pub script: String,
@@ -187,6 +188,7 @@ pub struct ViewRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EvaluateRequest {
     /// A parcad DSL script. It must end by returning a shape, e.g.
     /// `return body.cut(hole)`, or an object of named shapes for a part that
@@ -245,6 +247,7 @@ pub struct EvaluateRequest {
 
 /// Where to cut a part open for the picture.
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SectionRequest {
     /// The axis the cutting plane is square to: `x`, `y` or `z`. Look at the
     /// section from a view that runs along that axis — `x` from `left` or
@@ -264,12 +267,14 @@ pub struct SectionRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ScriptRequest {
     /// A parcad DSL script ending in a returned shape.
     pub script: String,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct InspectRequest {
     /// A parcad DSL script ending in a returned shape.
     pub script: String,
@@ -279,6 +284,7 @@ pub struct InspectRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ProbeRequest {
     /// A parcad DSL script ending in a returned shape.
     pub script: String,
@@ -295,6 +301,7 @@ pub struct ProbeRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ThicknessRequest {
     /// A parcad DSL script ending in a returned shape.
     pub script: String,
@@ -317,6 +324,7 @@ pub struct ThicknessRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SelectorRequest {
     /// A selector to check, such as `>Z and >Y and |X`.
     pub selector: String,
@@ -327,6 +335,7 @@ pub struct SelectorRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ExportRequest {
     /// A parcad DSL script ending in a returned shape.
     pub script: String,
@@ -357,6 +366,7 @@ pub struct ExportRequest {
 
 /// Two scripts: the part, and the object it is meant to hold.
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FitRequest {
     /// The part, as a parcad script.
     pub script: String,
@@ -366,6 +376,7 @@ pub struct FitRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StepProbeRequest {
     /// Absolute path of the .step / .stp file to measure, on the machine
     /// parcad runs on.
@@ -378,6 +389,7 @@ pub struct StepProbeRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DocsRequest {
     /// Which document: `dsl` (the default) is the language reference; `gaps` is
     /// what the language cannot express; `gotchas` is what silently returns a
@@ -399,6 +411,7 @@ pub struct DocsRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectRequest {
     /// A project path exactly as `list_projects` gives it: slash-separated
     /// folder names and no extension, such as `bracket` or `Mounts/bracket`.
@@ -406,6 +419,7 @@ pub struct ProjectRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SetScriptRequest {
     /// The DSL source to put on screen, whole — this replaces the open
     /// document, it does not append to it.
@@ -418,6 +432,7 @@ pub struct SetScriptRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RestoreRequest {
     /// The project path, as `list_projects` gives it.
     pub name: String,
@@ -436,6 +451,7 @@ pub struct SnapshotList {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct OpenRequest {
     /// A project path exactly as `list_projects` gives it: slash-separated
     /// folder names and no extension, such as `bracket` or `Mounts/bracket`.
@@ -447,6 +463,7 @@ pub struct OpenRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SaveRequest {
     /// The project path to write: slash-separated folder names and no
     /// extension, such as `bracket` or `Mounts/bracket`. Folders are created
@@ -549,7 +566,7 @@ impl Parcad {
     )]
     async fn read_docs(
         &self,
-        Parameters(request): Parameters<DocsRequest>,
+        Parameters(Args(request)): Parameters<Args<DocsRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<crate::docs::Reference>, ErrorData> {
         Ok(rmcp::handler::server::wrapper::Json(
             service::read_docs(request.topic.as_deref(), request.section.as_deref(), request.detail).map_err(invalid)?,
@@ -569,7 +586,7 @@ impl Parcad {
     )]
     async fn evaluate_part(
         &self,
-        Parameters(request): Parameters<EvaluateRequest>,
+        Parameters(Args(request)): Parameters<Args<EvaluateRequest>>,
     ) -> Result<rmcp::model::CallToolResult, ErrorData> {
         let views =
             service::parse_views(request.views.as_deref().unwrap_or(&[])).map_err(invalid)?;
@@ -682,7 +699,7 @@ impl Parcad {
     )]
     async fn view_part(
         &self,
-        Parameters(request): Parameters<ViewRequest>,
+        Parameters(Args(request)): Parameters<Args<ViewRequest>>,
     ) -> Result<rmcp::model::CallToolResult, ErrorData> {
         let budget = budget(request.timeout_s);
         let viewed = blocking(move || {
@@ -707,7 +724,7 @@ impl Parcad {
     )]
     async fn list_entities(
         &self,
-        Parameters(request): Parameters<ScriptRequest>,
+        Parameters(Args(request)): Parameters<Args<ScriptRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<service::Entities>, ErrorData> {
         let entities = blocking(move || {
             let built = script::build(&request.script)?;
@@ -728,7 +745,7 @@ impl Parcad {
     )]
     async fn inspect_treatment_target(
         &self,
-        Parameters(request): Parameters<InspectRequest>,
+        Parameters(Args(request)): Parameters<Args<InspectRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<service::TreatmentTarget>, ErrorData> {
         let target = blocking(move || {
             let built = script::build(&request.script)?;
@@ -753,7 +770,7 @@ impl Parcad {
     )]
     async fn probe_part(
         &self,
-        Parameters(request): Parameters<ProbeRequest>,
+        Parameters(Args(request)): Parameters<Args<ProbeRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<service::ProbeReport>, ErrorData> {
         let budget = budget(request.timeout_s);
         let report = blocking(move || {
@@ -778,7 +795,7 @@ impl Parcad {
     )]
     async fn measure_wall_thickness(
         &self,
-        Parameters(request): Parameters<ThicknessRequest>,
+        Parameters(Args(request)): Parameters<Args<ThicknessRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<service::ThicknessReport>, ErrorData> {
         let budget = budget(request.timeout_s);
         let report = blocking(move || {
@@ -800,7 +817,7 @@ impl Parcad {
     )]
     async fn check_selector(
         &self,
-        Parameters(request): Parameters<SelectorRequest>,
+        Parameters(Args(request)): Parameters<Args<SelectorRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<SelectorCheck>, ErrorData> {
         let parsed = match request.kind.as_deref().unwrap_or("edge") {
             "edge" => {
@@ -838,7 +855,7 @@ impl Parcad {
     )]
     async fn export_part(
         &self,
-        Parameters(request): Parameters<ExportRequest>,
+        Parameters(Args(request)): Parameters<Args<ExportRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<Exported>, ErrorData> {
         let format = request.format.to_ascii_lowercase();
         if !["3mf", "stl", "step"].contains(&format.as_str()) {
@@ -918,7 +935,7 @@ impl Parcad {
     )]
     async fn probe_step_export(
         &self,
-        Parameters(request): Parameters<StepProbeRequest>,
+        Parameters(Args(request)): Parameters<Args<StepProbeRequest>>,
     ) -> Result<rmcp::model::CallToolResult, ErrorData> {
         let keep_faces = match request.detail.as_deref() {
             None | Some("faces") => true,
@@ -951,7 +968,7 @@ impl Parcad {
     )]
     async fn check_fit(
         &self,
-        Parameters(request): Parameters<FitRequest>,
+        Parameters(Args(request)): Parameters<Args<FitRequest>>,
     ) -> Result<rmcp::model::CallToolResult, ErrorData> {
         let report =
             blocking(move || service::check_fit(&request.script, &request.reference)).await?;
@@ -988,7 +1005,7 @@ impl Parcad {
     )]
     async fn read_project(
         &self,
-        Parameters(request): Parameters<ProjectRequest>,
+        Parameters(Args(request)): Parameters<Args<ProjectRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<Project>, ErrorData> {
         let script = projects::read(&request.name).map_err(invalid)?;
         Ok(rmcp::handler::server::wrapper::Json(Project {
@@ -1005,7 +1022,7 @@ impl Parcad {
     )]
     async fn save_project(
         &self,
-        Parameters(request): Parameters<SaveRequest>,
+        Parameters(Args(request)): Parameters<Args<SaveRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<Saved>, ErrorData> {
         let saved = blocking(move || {
             // Built before anything is written: a tab's host may pause at the
@@ -1053,7 +1070,7 @@ impl Parcad {
     )]
     async fn open_project(
         &self,
-        Parameters(request): Parameters<OpenRequest>,
+        Parameters(Args(request)): Parameters<Args<OpenRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<session::Live>, ErrorData> {
         let opened = session::open(&request.name, session::AGENT_ORIGIN).map_err(invalid)?;
         Ok(rmcp::handler::server::wrapper::Json(
@@ -1069,7 +1086,7 @@ impl Parcad {
     )]
     async fn set_script(
         &self,
-        Parameters(request): Parameters<SetScriptRequest>,
+        Parameters(Args(request)): Parameters<Args<SetScriptRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<session::Live>, ErrorData> {
         keep_screen(&request.script);
         let set = session::set_script(request.script, session::AGENT_ORIGIN).map_err(invalid)?;
@@ -1086,7 +1103,7 @@ impl Parcad {
     )]
     async fn list_snapshots(
         &self,
-        Parameters(request): Parameters<ProjectRequest>,
+        Parameters(Args(request)): Parameters<Args<ProjectRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<SnapshotList>, ErrorData> {
         let snapshots = projects::snapshots(&request.name).map_err(invalid)?;
         Ok(rmcp::handler::server::wrapper::Json(SnapshotList {
@@ -1103,7 +1120,7 @@ impl Parcad {
     )]
     async fn restore_snapshot(
         &self,
-        Parameters(request): Parameters<RestoreRequest>,
+        Parameters(Args(request)): Parameters<Args<RestoreRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<session::Live>, ErrorData> {
         let script = projects::read_snapshot(&request.name, &request.id).map_err(invalid)?;
         if session::get().name.as_deref() != Some(request.name.as_str()) {
@@ -1917,5 +1934,70 @@ mod tests {
         assert_eq!(data["kind"], "script");
         assert_eq!(data["line"], 3);
         assert!(data["node"].is_null());
+    }
+
+    /// The session that found this asked for a cut at x = -38 as `offset`,
+    /// got the cut through the middle, and reasoned from the picture. A field
+    /// the host does not read is refused, and the one that was meant is named.
+    #[test]
+    fn an_unknown_argument_is_refused_by_name() {
+        let refusal = serde_json::from_value::<Args<EvaluateRequest>>(serde_json::json!({
+            "script": "return box(1, 1, 1);", "views": ["iso"],
+            "section": { "axis": "x", "offset": -38 }
+        }))
+        .err()
+        .expect("offset is not a field")
+        .to_string();
+        assert!(
+            refusal.starts_with("`section` has no field \"offset\" — write \"at_mm\" instead. at_mm: Where the plane sits on that axis, in mm."),
+            "{refusal}"
+        );
+        assert!(refusal.ends_with("`section` is { axis: string, at_mm?: number, keep?: string }."), "{refusal}");
+        let refusal = serde_json::from_value::<Args<ThicknessRequest>>(serde_json::json!({
+            "script": "return box(1, 1, 1);", "threshold": 1.2
+        }))
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(refusal.starts_with("the arguments have no field \"threshold\" — write \"threshold_mm\" instead."), "{refusal}");
+        // Every request type refuses a field it would otherwise drop. The
+        // list is checked against the tool list, so a new tool's request
+        // type cannot be left off it.
+        fn refuses_bogus<P: serde::de::DeserializeOwned + schemars::JsonSchema>() -> bool {
+            let schema = serde_json::to_value(schemars::schema_for!(P)).unwrap();
+            let mut arguments = serde_json::Map::new();
+            for (key, property) in schema["properties"].as_object().unwrap() {
+                arguments.insert(key.clone(), match property["type"].as_str().or(property["type"][0].as_str()) {
+                    Some("string") => serde_json::json!("x"),
+                    Some("number") | Some("integer") => serde_json::json!(1),
+                    Some("boolean") => serde_json::json!(true),
+                    Some("array") => serde_json::json!([]),
+                    _ => serde_json::json!({ "axis": "x" }),
+                });
+            }
+            arguments.insert("bogus".into(), serde_json::json!(1));
+            serde_json::from_value::<Args<P>>(serde_json::Value::Object(arguments))
+                .err()
+                .is_some_and(|e| e.to_string().contains("no field \"bogus\""))
+        }
+        let refusals = [
+            refuses_bogus::<ViewRequest>(), refuses_bogus::<EvaluateRequest>(), refuses_bogus::<ScriptRequest>(),
+            refuses_bogus::<InspectRequest>(), refuses_bogus::<ProbeRequest>(), refuses_bogus::<ThicknessRequest>(),
+            refuses_bogus::<SelectorRequest>(), refuses_bogus::<ExportRequest>(), refuses_bogus::<FitRequest>(),
+            refuses_bogus::<StepProbeRequest>(), refuses_bogus::<DocsRequest>(), refuses_bogus::<ProjectRequest>(),
+            refuses_bogus::<SetScriptRequest>(), refuses_bogus::<RestoreRequest>(), refuses_bogus::<OpenRequest>(),
+            refuses_bogus::<SaveRequest>(), refuses_bogus::<SectionRequest>(),
+        ];
+        assert!(refusals.iter().all(|r| *r), "{refusals:?}");
+        let with_arguments = Parcad::new()
+            .tool_router
+            .list_all()
+            .iter()
+            .filter(|tool| serde_json::to_value(&tool.input_schema).unwrap()["properties"].as_object().is_some_and(|p| !p.is_empty()))
+            .count();
+        // Seventeen tools take arguments over sixteen request types (read_project
+        // and list_snapshots share one), plus the nested section.
+        assert_eq!(with_arguments, 17, "a tool was added; add its request type to this list");
+        assert_eq!(refusals.len(), 17);
     }
 }

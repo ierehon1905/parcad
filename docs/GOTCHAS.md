@@ -1585,6 +1585,24 @@ escaped — the client limit is a ceiling, not a target) as its contents and the
 reaching its tool, and shows how many replies were hidden: field/README.md,
 "A call is not a read".
 
+## An MCP argument the host did not read was dropped, not refused *(fixed 2026-09-18)*
+
+No request struct in `mcp.rs` carried `deny_unknown_fields`, so serde dropped
+a field it had no slot for and the call went ahead without it. The coin-holder
+session (docs/COIN_HOLDER_REVIEW.md, L4) asked `evaluate_part` for
+`section: { axis: "x", offset: -38 }`: `offset` is not a field — `at_mm` is —
+so the cut went through the middle of the part, and the model reasoned about
+coin fit from that picture. The reply's resolved `section` said where the cut
+really was, and nothing read it. A wrong measurement, not a retry, which is
+the class of failure this file exists for.
+
+Every request struct now refuses an unknown field, and `arguments::Args`
+names the field that was meant (`offset` → `at_mm`) and the shape of the whole
+argument, from the schema `tools/list` publishes, so the two cannot drift. The
+same rule one layer down is `envelope::check_node`, which refuses a graph
+field the host would silently drop. `eval/field/where-was-it-cut.md` measures
+whether a model reads the refusal.
+
 ## A union of pieces that do not touch each other kills the fuse that joins them
 
 `pipe()` builds a tube as runs and bend arcs and unions them. Assembled with
