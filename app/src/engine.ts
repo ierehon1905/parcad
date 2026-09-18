@@ -21,6 +21,7 @@ import * as dsl from "./dsl";
 import { Shape } from "./dsl";
 import { setTreatmentHover } from "./editor-marks";
 import { verticesFromEdges } from "./entities";
+import { formatSource } from "./format";
 import { describeProjects, label as projectLabel, partAt } from "./projects";
 import { instrumentTreatmentCalls, sourceOffset, treatmentAtCursor, treatmentCallRange } from "./source-link";
 import { shortestUniqueSelector } from "./shortest-selector";
@@ -41,6 +42,8 @@ let framed = false;
  */
 let shownPath: string | undefined;
 let targetPreviewRequest = 0;
+/** A save is between reading the editor and writing the disk. */
+let saving = false;
 /** A clicked treatment keeps its authored chain visible after pointer-leave. */
 let pinnedTreatment: dsl.TreatmentSource | undefined;
 
@@ -689,26 +692,49 @@ export async function openProject(path: string) {
  * nobody evaluated is the confident wrong answer this project refuses. If the
  * current source has not evaluated cleanly, the script is still saved and the
  * description is left alone rather than being rewritten from stale numbers.
+ *
+ * The script is run through Prettier first, as one undo step in the editor. A
+ * script that does not parse is saved as typed.
  */
 export async function saveOpenPart() {
   const path = S.openPath.value;
   if (!path) return;
-  const source = S.editor().state.doc.toString();
-  const clean = source === S.lastSource.value && S.snapshot.value !== undefined;
+  const editor = S.editor();
+  const typed = editor.state.doc.toString();
+  // Measured against the text as typed: formatting leaves the syntax tree, and so the part, as it was.
+  const clean = typed === S.lastSource.value && S.snapshot.value !== undefined;
 
   S.setStatus("saving", "busy");
+  saving = true;
   try {
+    const formatted = await formatSource(typed, editor.state.selection.main.head);
+    const source = formatted?.source ?? typed;
+    // Only onto the text it was formatted from: a keystroke or another part opened meanwhile wins.
+    if (formatted && source !== typed && S.openPath.value === path && editor.state.doc.toString() === typed) {
+      editor.dispatch({
+        changes: differingSpan(typed, source),
+        selection: { anchor: formatted.cursor },
+        annotations: isolateHistory.of("full"),
+      });
+    }
     await backend.saveProject(path, source, {
       readme: clean ? readmeFor(path, source) : undefined,
       preview: clean ? S.viewportRef.current?.snapshot() || undefined : undefined,
     });
-    S.savedSource.value = source;
+    if (S.openPath.value === path) S.savedSource.value = source;
     await reloadProjects();
     S.setStatus(clean ? "saved" : "saved — description left as it was");
   } catch (e) {
     showError(e);
     S.setStatus("could not save", "failed");
+  } finally {
+    saving = false;
   }
+}
+
+/** Save when the editor loses focus, as an editor set to save on focus change does — only if there is something to save. */
+export function saveOnBlur() {
+  if (!saving && S.isDirty.peek()) void saveOpenPart();
 }
 
 /**
@@ -927,17 +953,8 @@ export function subscribeSession(): void {
       // the moment the debounce dropped to 120 ms — `session.e2e.mjs` caught
       // it. An edit by another author is a separate action whoever is quick;
       // this says so instead of relying on them being slow.
-      let from = 0;
-      const next = session.script;
-      while (from < current.length && from < next.length && current[from] === next[from]) from++;
-      let toCurrent = current.length;
-      let toNext = next.length;
-      while (toCurrent > from && toNext > from && current[toCurrent - 1] === next[toNext - 1]) {
-        toCurrent--;
-        toNext--;
-      }
       editor.dispatch({
-        changes: { from, to: toCurrent, insert: next.slice(from, toNext) },
+        changes: differingSpan(current, session.script),
         annotations: isolateHistory.of("full"),
       });
     } else {
@@ -946,6 +963,19 @@ export function subscribeSession(): void {
       schedule();
     }
   });
+}
+
+/** The one change that turns `current` into `next`, trimmed to the span where they differ. */
+function differingSpan(current: string, next: string) {
+  let from = 0;
+  while (from < current.length && from < next.length && current[from] === next[from]) from++;
+  let toCurrent = current.length;
+  let toNext = next.length;
+  while (toCurrent > from && toNext > from && current[toCurrent - 1] === next[toNext - 1]) {
+    toCurrent--;
+    toNext--;
+  }
+  return { from, to: toCurrent, insert: next.slice(from, toNext) };
 }
 
 /**

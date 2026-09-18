@@ -80,6 +80,7 @@ export function Editor() {
         // keeps Up and Down.
         numberDial,
         treatmentHover(hoverSource),
+        EditorView.domEventHandlers({ blur: () => engine.saveOnBlur() }),
         EditorView.updateListener.of((v) => {
           if (v.docChanged) {
             // The titlebar's saved/unsaved mark is a fact about this keystroke,
