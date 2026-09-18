@@ -108,6 +108,7 @@ fn router(assets: Arc<dyn Assets>) -> Router {
         // MCP. The frontend reads them from here rather than from a build-time
         // glob, so a part an agent saves shows up in the picker.
         .route("/api/projects", get(list_projects))
+        .route("/api/editor", get(editor))
         // A project path may name folders, so it is a wildcard. Nothing can
         // follow one in a route, which is why the thumbnail has a prefix of its
         // own and everything else is a tagged POST.
@@ -262,6 +263,10 @@ fn download(export: service::Export) -> Response {
 
 async fn list_projects() -> Result<Response, Failed> {
     Ok(Json(routes::list_projects().map_err(Failed)?).into_response())
+}
+
+async fn editor() -> Response {
+    Json(routes::editor()).into_response()
 }
 
 async fn read_project(Path(name): Path<String>) -> Result<Response, Failed> {

@@ -15,7 +15,7 @@
 //! ## A project is a `.parcad` folder
 //!
 //! ```text
-//! ~/Documents/parcad/
+//! ~/Library/Application Support/parcad/     (~/.local/share, %APPDATA%)
 //! ├─ Mounts/                  an ordinary folder
 //! │  ├─ Bracket.parcad/       one project
 //! │  │  ├─ part.js            the source, and the only thing that is authoritative
@@ -81,20 +81,10 @@ pub fn dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("PARCAD_PROJECTS_DIR") {
         return PathBuf::from(dir);
     }
-    // `~/Documents/parcad` rather than an application-support directory: these
-    // are the user's files, and they should be somewhere a person would think
-    // to look without being told.
-    dirs_documents()
-        .unwrap_or_else(std::env::temp_dir)
-        .join("parcad")
-}
-
-/// The platform's own answer, not `$HOME/Documents`: Windows sets no `HOME` and
-/// may redirect Documents into OneDrive, and Linux names it in `user-dirs.dirs`.
-fn dirs_documents() -> Option<PathBuf> {
-    dirs::document_dir()
-        .filter(|documents| documents.is_dir())
-        .or_else(dirs::home_dir)
+    // The platform's application-data folder rather than Documents: macOS
+    // guards Documents per app, so an editor the user never granted it could
+    // not open a part there. docs/GOTCHAS.md, "Parts are not in Documents".
+    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("parcad")
 }
 
 // ------------------------------------------------------------------ the tree

@@ -23,5 +23,5 @@ the usual reason is that `parcad` is not installed:
 brew tap ierehon1905/parcad && brew trust ierehon1905/parcad && brew install parcad
 ```
 
-Parts are saved to `~/Documents/parcad`, and the user can watch them at
+Parts are saved to `~/Library/Application Support/parcad`, and the user can watch them at
 <http://127.0.0.1:4242> while you work.

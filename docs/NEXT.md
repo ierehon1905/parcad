@@ -233,7 +233,7 @@ a new session should keep doing:
   file-level.
 - **Safety rules in every brief**: start a host with scratch
   `PARCAD_PROJECTS_DIR` and `PARCAD_SEED_DIR` before any `parcad call` or
-  `parcad tools` — a bare `parcad` command hosts against `~/Documents/parcad` and
+  `parcad tools` — a bare `parcad` command hosts against the real project folder and
   seeds parts into it, which one session did; never push, never touch `main`,
   never force-push, no repository settings; commit with `TZ=UTC`; wait for long
   commands to finish (a session once stopped "waiting" on a background gate that
@@ -243,7 +243,7 @@ a new session should keep doing:
   `eval/cases/`, the corpus unchanged except where a case says why, a field
   case run for anything a model reads, and renders of what was built.
 - **Review before merge**: re-derive the recorded numbers by hand; diff every
-  existing case's expectations against `main`; check `~/Documents/parcad` and
+  existing case's expectations against `main`; check the project folder and
   its `.seeded` were not touched; rebase on `origin/main` and run `tools/check.sh`;
   try the feature on a part the session did not write; look at the renders; then
   fast-forward `main` through the pre-push gate. Remove the worktree afterwards —
@@ -264,10 +264,6 @@ a new session should keep doing:
   updater"). 0.0.6 and earlier have no updater, so their users reinstall by
   hand once. It was tested locally from a fake older build. Homebrew's
   `parcad` is updated by `brew upgrade`, not by this.
-- **Never run from a fresh user account** — neither the `.app` nor
-  `brew services`. Whether a launchd agent gets `~/Documents` without a TCC
-  prompt there is the one claim the README does not yet make;
-  `PARCAD_PROJECTS_DIR` is the way out if it refuses.
 - **The Linux and Windows bundles have not been opened on a desktop**, and the
   Homebrew formula is macOS only. Linux arm64 measures 109 of 110 (the fillet
   bisection in `refuse-unblendable-junction` lands on 1.25 mm) and is not a

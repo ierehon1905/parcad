@@ -50,6 +50,12 @@ pub fn list_projects() -> Result<Value, String> {
     }))
 }
 
+/// The editor a part's source would open in, for the titlebar to show. See
+/// `service::editor`.
+pub fn editor() -> Value {
+    json!(service::editor())
+}
+
 pub fn read_project(name: &str) -> Result<Value, String> {
     let script = projects::read(name)?;
     Ok(json!({ "name": name, "script": script }))

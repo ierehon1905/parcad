@@ -46,7 +46,7 @@ class Parcad < Formula
   end
 
   # `brew services start parcad`: the UI on http://127.0.0.1:4242 and MCP on
-  # /mcp, up at login. Parts live in ~/Documents/parcad, as they do for the
+  # /mcp, up at login. Parts live in ~/Library/Application Support/parcad, as they do for the
   # app; PARCAD_PROJECTS_DIR moves them.
   service do
     run [opt_bin/"parcad", "serve"]
@@ -62,7 +62,7 @@ class Parcad < Formula
       Or use the app yourself: run `parcad serve`, then open http://127.0.0.1:4242.
       A client that connects by URL (http://127.0.0.1:4242/mcp) needs a host
       already up; `brew services start parcad` keeps one up from login.
-      Parts are saved in ~/Documents/parcad. Set PARCAD_PROJECTS_DIR to move them.
+      Parts are saved in ~/Library/Application Support/parcad. Set PARCAD_PROJECTS_DIR to move them.
     EOS
   end
 

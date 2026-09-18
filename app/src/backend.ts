@@ -256,6 +256,18 @@ export async function openProjectSource(name: string): Promise<Opened> {
     : await post<Opened>(`projects/${route(name)}`, { op: "open" });
 }
 
+/** The editor `openProjectSource` would hand the file to, as the titlebar shows it. */
+export interface Editor {
+  /** The app's name where there is an app, and otherwise the command. */
+  name: string;
+  /** The app's own icon as a PNG data URL, where the host could read one. */
+  icon: string | null;
+}
+
+export function editor(): Promise<Editor | null> {
+  return inTauri ? invoke<Editor | null>("editor") : get<Editor | null>("editor");
+}
+
 /**
  * Write a thumbnail without touching the script.
  *

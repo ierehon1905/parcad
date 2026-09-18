@@ -89,7 +89,8 @@ also a client of whichever is running — `parcad tools` lists what `/mcp`
 offers and `parcad call <tool>` calls it, same names, same arguments, same
 reply — so a shell can do everything a model can. Scripts from an agent run in `script.rs`'s QuickJS
 sandbox, never in the webview; that is a hard rule, and docs/ROADMAP.md records
-why. Parts live in one shared folder (`~/Documents/parcad`, or
+why. Parts live in one shared folder (`~/Library/Application Support/parcad` — not
+Documents, which macOS guards per app — or
 `PARCAD_PROJECTS_DIR`) that the app, the user and MCP all read and write —
 `examples/` only seeds it on first run.
 
@@ -140,7 +141,7 @@ reply, description or error, and how to measure a change.
 **The product is called ParCAD; everything a machine reads is `parcad`.** The
 capitalised name belongs in the titlebar, the window title, `productName`, the
 HTML `<title>` and prose. It must never reach an identifier: the bundle id
-`dev.parcad.app`, the `~/Documents/parcad` project folder, the `PARCAD_*`
+`dev.parcad.app`, the `parcad` project folder, the `PARCAD_*`
 variables, the crate and binary names are all lowercase and stay that way.
 Renaming the bundle id makes macOS treat the app as a new one — it re-prompts
 for Documents access and orphans its settings — and renaming the project folder

@@ -15,7 +15,7 @@
 
 use parcad_core::graph::Doc;
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 // What an evaluation *is* lives in its own crate, so ParCAD web
 // compiles the same definition; every path a transport names stays `service::`.
@@ -1099,13 +1099,76 @@ pub fn reveal(path: &str) -> Result<(), String> {
         .map_err(|e| format!("could not open a file manager for {path}: {e}"))
 }
 
-/// The editor commands this looks for, in the order it tries them.
+/// The editors this looks for, in the order it tries them: the command each
+/// installs on PATH for being handed a file, and the name of its macOS app.
 ///
-/// Each is the name the editor installs on PATH for exactly this — being
-/// handed a file from somewhere else. The order is preference between things
-/// the user has actually installed, not a ranking.
-const EDITORS: [&str; 7] =
-    ["cursor", "code", "code-insiders", "windsurf", "zed", "subl", "mate"];
+/// The order is preference between things the user has actually installed,
+/// not a ranking. The app is how a window opened from the Finder finds one: its
+/// PATH is launchd's, which has none of these commands on it.
+const EDITORS: [(&str, &str); 7] = [
+    ("cursor", "Cursor"),
+    ("code", "Visual Studio Code"),
+    ("code-insiders", "Visual Studio Code - Insiders"),
+    ("windsurf", "Windsurf"),
+    ("zed", "Zed"),
+    ("subl", "Sublime Text"),
+    ("mate", "TextMate"),
+];
+
+/// Which editor a part's source goes to. See [`open_in_editor`] for the order.
+enum Choice {
+    /// `PARCAD_EDITOR`, with whatever arguments it carries.
+    Named(String),
+    /// One of [`EDITORS`], by its command.
+    OnPath { command: &'static str, app: &'static str },
+    /// One of [`EDITORS`], by its app bundle; macOS only.
+    Bundle(PathBuf),
+    /// The platform's text-editor opener.
+    Platform,
+}
+
+fn choose_editor() -> Choice {
+    if let Some(chosen) = std::env::var("PARCAD_EDITOR").ok().filter(|e| !e.trim().is_empty()) {
+        return Choice::Named(chosen);
+    }
+    if let Some((command, app)) = EDITORS.iter().find(|(command, _)| on_path(command)) {
+        return Choice::OnPath { command, app };
+    }
+    if let Some(bundle) = EDITORS.iter().find_map(|(_, app)| installed_app(app)) {
+        return Choice::Bundle(bundle);
+    }
+    Choice::Platform
+}
+
+/// The editor [`open_in_editor`] would hand a file to, as the titlebar shows it.
+#[derive(Serialize, Debug)]
+pub struct Editor {
+    /// The app's name where there is an app, and otherwise the command.
+    pub name: String,
+    /// The app's own icon as a PNG data URL, where the platform has one to read.
+    pub icon: Option<String>,
+}
+
+/// Which editor would take a part's source, without opening anything. None
+/// where parts are not files, so there is nothing to open.
+pub fn editor() -> Option<Editor> {
+    if cfg!(target_os = "emscripten") {
+        return None;
+    }
+    let (name, bundle) = match choose_editor() {
+        Choice::Named(chosen) => {
+            let program = chosen.split_whitespace().next().unwrap_or_default().to_string();
+            let bundle = app_of_command(&program);
+            (bundle.as_deref().map_or(program, app_name), bundle)
+        }
+        Choice::OnPath { command, app } => {
+            (app.to_string(), app_of_command(command).or_else(|| installed_app(app)))
+        }
+        Choice::Bundle(bundle) => (app_name(&bundle), Some(bundle)),
+        Choice::Platform => ("your text editor".to_string(), None),
+    };
+    Some(Editor { icon: bundle.as_deref().and_then(app_icon), name })
+}
 
 /// Open a part's source for editing, and say what opened it.
 ///
@@ -1118,7 +1181,8 @@ const EDITORS: [&str; 7] =
 ///
 /// 1. `PARCAD_EDITOR`, with any arguments it carries — `cursor`, `code -g`.
 /// 2. The first of [`EDITORS`] on PATH.
-/// 3. macOS `open -t`, the default *text* editor; Windows `notepad`; elsewhere
+/// 3. On macOS, the first of [`EDITORS`] installed as an app.
+/// 4. macOS `open -t`, the default *text* editor; Windows `notepad`; elsewhere
 ///    `xdg-open`, which is the only opener a desktop is guaranteed to have.
 ///
 /// `$EDITOR` is deliberately not consulted: it usually names a terminal editor,
@@ -1137,54 +1201,66 @@ pub fn open_in_editor(path: &str) -> Result<String, String> {
         return Err(format!("nothing at {path} to open"));
     }
 
-    if let Some(chosen) = std::env::var("PARCAD_EDITOR").ok().filter(|e| !e.trim().is_empty()) {
-        let mut words = chosen.split_whitespace();
-        let program = words.next().expect("a command with a word in it has a first word");
-        return std::process::Command::new(program)
-            .args(words)
+    match choose_editor() {
+        Choice::Named(chosen) => {
+            let mut words = chosen.split_whitespace();
+            let program = words.next().expect("a command with a word in it has a first word");
+            std::process::Command::new(program)
+                .args(words)
+                .arg(file)
+                .spawn()
+                .map(|_| chosen.clone())
+                .map_err(|e| {
+                    format!(
+                        "PARCAD_EDITOR is {chosen:?} and it could not be run ({e}). Set it to \
+                         a command on PATH that takes a file — cursor, code, zed, subl — or \
+                         unset it and parcad will look for one."
+                    )
+                })
+        }
+        Choice::OnPath { command, .. } => std::process::Command::new(command)
             .arg(file)
             .spawn()
-            .map(|_| chosen.clone())
+            .map(|_| command.to_string())
             .map_err(|e| {
                 format!(
-                    "PARCAD_EDITOR is {chosen:?} and it could not be run ({e}). Set it to a \
-                     command on PATH that takes a file — cursor, code, zed, subl — or unset it \
-                     and parcad will look for one."
+                    "{command} is on PATH but could not be run ({e}). Set PARCAD_EDITOR to \
+                     the command that opens your editor."
                 )
-            });
+            }),
+        Choice::Bundle(bundle) => {
+            let status = std::process::Command::new("open")
+                .arg("-a")
+                .arg(&bundle)
+                .arg(file)
+                .status()
+                .map_err(|e| unopened(path, &format!("open could not be run ({e})")))?;
+            if status.success() {
+                return Ok(app_name(&bundle));
+            }
+            Err(unopened(path, &format!("open -a {} exited {status}", bundle.display())))
+        }
+        Choice::Platform => {
+            let (program, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
+                // `-t` is the default *text* editor. Plain `open` would use
+                // whatever claims `.js`, which is as likely to be a browser.
+                ("open", &["-t"])
+            } else if cfg!(target_os = "windows") {
+                ("notepad", &[])
+            } else {
+                ("xdg-open", &[])
+            };
+            let status = std::process::Command::new(program)
+                .args(args)
+                .arg(file)
+                .status()
+                .map_err(|e| unopened(path, &format!("{program} could not be run ({e})")))?;
+            if status.success() {
+                return Ok(format!("{program} {}", args.join(" ")).trim().to_string());
+            }
+            Err(unopened(path, &format!("{program} exited {status}")))
+        }
     }
-
-    if let Some(editor) = EDITORS.iter().find(|name| on_path(name)) {
-        return std::process::Command::new(editor)
-            .arg(file)
-            .spawn()
-            .map(|_| (*editor).to_string())
-            .map_err(|e| {
-                format!(
-                    "{editor} is on PATH but could not be run ({e}). Set PARCAD_EDITOR to the \
-                     command that opens your editor."
-                )
-            });
-    }
-
-    let (program, args): (&str, &[&str]) = if cfg!(target_os = "macos") {
-        // `-t` is the default *text* editor. Plain `open` would use whatever
-        // claims `.js`, which is as likely to be a browser as an editor.
-        ("open", &["-t"])
-    } else if cfg!(target_os = "windows") {
-        ("notepad", &[])
-    } else {
-        ("xdg-open", &[])
-    };
-    let status = std::process::Command::new(program)
-        .args(args)
-        .arg(file)
-        .status()
-        .map_err(|e| unopened(path, &format!("{program} could not be run ({e})")))?;
-    if status.success() {
-        return Ok(format!("{program} {}", args.join(" ")).trim().to_string());
-    }
-    Err(unopened(path, &format!("{program} exited {status}")))
 }
 
 fn unopened(path: &str, why: &str) -> String {
@@ -1194,11 +1270,93 @@ fn unopened(path: &str, why: &str) -> String {
     )
 }
 
-/// Whether a bare command name would run: an executable file under PATH.
+/// Where a bare command name would run from: an executable file under PATH.
+fn which(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path).map(|dir| dir.join(name)).find(|file| file.is_file())
+}
+
 fn on_path(name: &str) -> bool {
-    std::env::var_os("PATH").is_some_and(|path| {
-        std::env::split_paths(&path).any(|dir| dir.join(name).is_file())
-    })
+    which(name).is_some()
+}
+
+/// The app bundle a command belongs to: the `.app` its real path is inside
+/// (`/usr/local/bin/code` links into `Visual Studio Code.app`), or the one
+/// [`EDITORS`] names for it when the command is a shim that only runs another.
+fn app_of_command(program: &str) -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let file = if program.contains('/') { Some(PathBuf::from(program)) } else { which(program) };
+    file.and_then(|file| file.canonicalize().ok())
+        .and_then(|real| {
+            real.ancestors()
+                .find(|dir| dir.extension().is_some_and(|e| e == "app"))
+                .map(Path::to_path_buf)
+        })
+        .or_else(|| {
+            let leaf = Path::new(program).file_name()?.to_str()?;
+            let (_, app) = EDITORS.iter().find(|(command, _)| *command == leaf)?;
+            installed_app(app)
+        })
+}
+
+/// `name.app` where macOS installs applications, if it is there.
+fn installed_app(name: &str) -> Option<PathBuf> {
+    if !cfg!(target_os = "macos") {
+        return None;
+    }
+    let home = dirs::home_dir().map(|home| home.join("Applications"));
+    [Some(PathBuf::from("/Applications")), home]
+        .into_iter()
+        .flatten()
+        .map(|dir| dir.join(format!("{name}.app")))
+        .find(|bundle| bundle.is_dir())
+}
+
+fn app_name(bundle: &Path) -> String {
+    bundle.file_stem().map_or_else(String::new, |stem| stem.to_string_lossy().to_string())
+}
+
+/// An app's icon, 64 px, as a PNG data URL: the `.icns` its `Info.plist` names,
+/// converted by `sips`, which every macOS has.
+fn app_icon(bundle: &Path) -> Option<String> {
+    use base64::Engine;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static CONVERSIONS: AtomicU64 = AtomicU64::new(0);
+
+    let named = std::process::Command::new("plutil")
+        .args(["-extract", "CFBundleIconFile", "raw", "-o", "-"])
+        .arg(bundle.join("Contents/Info.plist"))
+        .output()
+        .ok()
+        .filter(|out| out.status.success())?;
+    let named = String::from_utf8(named.stdout).ok()?;
+    let named = named.trim();
+    let icns = bundle.join("Contents/Resources").join(if named.ends_with(".icns") {
+        named.to_string()
+    } else {
+        format!("{named}.icns")
+    });
+
+    let png = std::env::temp_dir().join(format!(
+        "parcad-editor-icon-{}-{}.png",
+        std::process::id(),
+        CONVERSIONS.fetch_add(1, Ordering::Relaxed)
+    ));
+    let converted = std::process::Command::new("sips")
+        .args(["-s", "format", "png", "-Z", "64"])
+        .arg(&icns)
+        .arg("--out")
+        .arg(&png)
+        .output()
+        .is_ok_and(|out| out.status.success());
+    let bytes = converted.then(|| std::fs::read(&png).ok()).flatten();
+    let _ = std::fs::remove_file(&png);
+    Some(format!(
+        "data:image/png;base64,{}",
+        base64::engine::general_purpose::STANDARD.encode(bytes?)
+    ))
 }
 
 /// Hand a written file to the application the system opens its extension with

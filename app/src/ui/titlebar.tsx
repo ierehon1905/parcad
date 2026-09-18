@@ -18,9 +18,9 @@
  */
 
 import { useSignal } from "@preact/signals";
-import { useRef } from "preact/hooks";
+import { useEffect, useRef } from "preact/hooks";
 
-import { mcpThroughRelay, partsAreFiles, type McpStatus } from "../backend";
+import { editor as findEditor, mcpThroughRelay, partsAreFiles, type Editor, type McpStatus } from "../backend";
 import * as engine from "../engine";
 import * as S from "../state";
 import { AgentLink } from "./agent-link";
@@ -240,6 +240,15 @@ function ShowCode() {
  */
 function EditElsewhere() {
   const path = S.openPath.value;
+  const editor = useSignal<Editor | null>(null);
+  useEffect(() => {
+    void findEditor().then(
+      (found) => (editor.value = found),
+      () => {},
+    );
+  }, []);
+  const name = editor.value?.name;
+  const icon = editor.value?.icon;
   return (
     <button
       type="button"
@@ -248,12 +257,17 @@ function EditElsewhere() {
              hover:text-ink hover:border-line
              disabled:opacity-45 disabled:cursor-default disabled:hover:border-transparent"
       {...tip({
-        title: "Open part.js in your editor",
+        title: name ? `Open part.js in ${name}` : "Open part.js in your editor",
         text: "Cursor, VS Code, Zed — whichever is installed, or the one PARCAD_EDITOR names. It opens the part itself, and this window follows what you save there.",
       })}
       onClick={() => void engine.openSourceInEditor()}
     >
-      <Icon name="pencil" class="size-4 shrink-0" />
+      {icon ? (
+        // A macOS icon is drawn inset in its canvas; the margin gives the pencil's box back.
+        <img src={icon} alt="" class="size-6 max-w-none -m-1 shrink-0" draggable={false} />
+      ) : (
+        <Icon name="pencil" class="size-4 shrink-0" />
+      )}
     </button>
   );
 }

@@ -14,7 +14,7 @@ targets that still throw are in `eval/targets/fusion360/`.
 **A seeded copy is frozen, and for targets that is a trap.** Seeding runs once
 per path and never overwrites, which is right for a part the user has edited and
 wrong for reference material: land a recreation here and the copy in
-`~/Documents/parcad/fusion360` still throws the old reason, under the same name.
+`~/Library/Application Support/parcad/fusion360` still throws the old reason, under the same name.
 It reads as the work not having happened. It has caught two sessions, one of
 which refreshed *before* the recreation landed and reported it fixed — worse
 than not refreshing at all.
@@ -24,10 +24,10 @@ file in this directory:
 
 ```bash
 for f in examples/fusion360/*.js; do
-  n=$(basename "$f" .js); d="$HOME/Documents/parcad/fusion360/$n.parcad"
+  n=$(basename "$f" .js); d="$HOME/Library/Application Support/parcad/fusion360/$n.parcad"
   [ -d "$d" ] && cp "$f" "$d/part.js" && rm -f "$d/README.md" "$d/preview.png"
 done
-bun tools/run.ts ~/Documents/parcad/fusion360/untriangle-v3.parcad/part.js >/dev/null
+bun tools/run.ts ~/"Library/Application Support/parcad/fusion360/untriangle-v3.parcad/part.js" >/dev/null
 ```
 
 The `README.md` and `preview.png` go because they are derived from the old

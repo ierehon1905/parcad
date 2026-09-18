@@ -144,7 +144,7 @@ bun tools/run.ts examples/bracket.js > /tmp/bracket.json
 ```
 
 The app serves its UI and an MCP endpoint on <http://127.0.0.1:4242>. Parts live
-in `~/Documents/parcad` as plain `.js` files you can edit anywhere.
+in `~/Library/Application Support/parcad` as plain `.js` files you can edit anywhere.
 
 ## Use it from an agent
 

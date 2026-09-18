@@ -733,6 +733,7 @@ fn route(method: &str, path: &str, body: Value) -> Reply {
             }
             Ok(Reply::Json(listing))
         }
+        ("GET", "editor") => Ok(Reply::Json(routes::editor())),
         ("GET", "projects") => Ok(Reply::Json(routes::read_project(rest)?)),
         ("PUT", "projects") => Ok(Reply::Json(routes::save_project(rest, parse(body)?)?)),
         ("POST", "projects") => Ok(Reply::Json(routes::project_op(rest, parse(body)?)?)),

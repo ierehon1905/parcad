@@ -157,6 +157,12 @@ fn open_project_source(name: String) -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "name": name, "path": path, "opened_with": opened_with }))
 }
 
+/// The editor a part's source would open in. See `service::editor`.
+#[tauri::command]
+fn editor() -> Option<service::Editor> {
+    service::editor()
+}
+
 /// The thumbnail alone. See the HTTP adapter's `save_project_preview` for why
 /// this does not go through `save_project`.
 #[tauri::command]
@@ -435,6 +441,7 @@ pub fn run() {
             set_project_title,
             convert_project,
             open_project_source,
+            editor,
             project_preview,
             save_project_preview,
             mcp_status,

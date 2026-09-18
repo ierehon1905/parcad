@@ -1687,6 +1687,18 @@ measures the bodies of one document, and the unit test called
 now asks three references twice each on the worker that has just evaluated
 the part.
 
+## Parts are not in Documents
+
+Found 2026-09-18: the pencil handed `~/Documents/parcad/bracket.parcad/part.js`
+to Cursor, and Cursor answered `NoPermissions (FileSystemError)`. macOS guards
+Documents, Desktop, Downloads and iCloud Drive per app (TCC). ParCAD having the
+grant says nothing about the editor it hands a file to. That editor was
+already running, launched from the Dock, so the read was its own. The same
+wall stands in front of every agent, shell and launchd service that reads the
+folder. So the folder is `dirs::data_dir()/parcad` — `~/Library/Application
+Support/parcad` on macOS — which no app needs a grant for. The files are the
+same plain files. Nothing moved an older folder over; one user, done by hand.
+
 ## ParCAD web: the host in a tab
 
 Found building `crates/parcad-wasm-host` on 2026-09-17; docs/ARCHITECTURE.md,

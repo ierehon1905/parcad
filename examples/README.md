@@ -6,7 +6,7 @@ of them, two named shapes. Most are measured in
 surprising someone.
 
 This directory is the seed, not the live copy. On first run each part is copied
-into `~/Documents/parcad` (or `PARCAD_PROJECTS_DIR`) as a `<name>.parcad`
+into `~/Library/Application Support/parcad` (or `PARCAD_PROJECTS_DIR`) as a `<name>.parcad`
 folder and becomes an ordinary project. Editing a part in the app does not
 change it here, and a part the user moves or deletes is not put back.
 

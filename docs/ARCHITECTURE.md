@@ -838,7 +838,8 @@ would tell an agent that an operation exists which the kernel no longer has.
 
 ### Projects are files, not fixtures
 
-`projects.rs` owns one directory — `~/Documents/parcad`, or `PARCAD_PROJECTS_DIR`
+`projects.rs` owns one directory — `~/Library/Application Support/parcad` (the platform's
+data folder; docs/GOTCHAS.md says why not Documents), or `PARCAD_PROJECTS_DIR`
 — shared by all three callers. The parts that ship are *seeded* into it on first
 run and are then ordinary projects: editable, renamable, deletable. Seeding only
 ever adds what is missing, so a part the user deletes stays deleted.
@@ -846,7 +847,7 @@ ever adds what is missing, so a part the user deletes stays deleted.
 One project is a `.parcad` folder:
 
 ```text
-~/Documents/parcad/
+~/Library/Application Support/parcad/
 ├─ Mounts/                  an ordinary folder; projects nest
 │  ├─ Bracket.parcad/       one project
 │  │  ├─ part.js            the source, and the only authoritative file in it
