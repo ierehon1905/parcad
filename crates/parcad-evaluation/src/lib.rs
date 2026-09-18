@@ -695,6 +695,13 @@ pub struct Treatment {
     /// that wrote one cannot tell its request survived.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continuity: Option<String>,
+    /// How many edges the selector actually resolved to on the shape this
+    /// treatment ran against — measured, not the `.expect()` the script
+    /// wrote. Paste it into `.expect({ count })` so the next edit fails aloud
+    /// instead of treating something else. Absent only when the kernel that
+    /// built the part did not report it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edges: Option<usize>,
 }
 
 /// What one image shows, in the snapshot.
@@ -904,7 +911,7 @@ pub fn describe(
         tag_extents: extents,
         unlocated_tags: unlocated,
         materials: authored_materials(doc),
-        treatments: treatments(doc),
+        treatments: treatments(doc, &s.treatment_edges),
         unused_nodes: report.total_nodes.saturating_sub(report.live_nodes),
         backend: "brep".to_string(),
         kernel_ms,
@@ -975,7 +982,8 @@ pub fn tag_extents(doc: &Doc, s: &parcad_occt::Success) -> (Vec<TagExtent>, Vec<
 /// The match is exhaustive on purpose. A new treatment op fails to compile here
 /// rather than silently never appearing — which is what a `matches!` over op
 /// name strings does, and did.
-pub fn treatments(doc: &Doc) -> Vec<Treatment> {
+pub fn treatments(doc: &Doc, resolved: &[parcad_occt::protocol::TreatmentEdges]) -> Vec<Treatment> {
+    let edges_of = |node: usize| resolved.iter().find(|t| t.node == node).map(|t| t.edges);
     let Ok(order) = doc.topo_order() else {
         // An unorderable graph has no live nodes to report. It also cannot have
         // evaluated, so this is unreachable from `snapshot`; returning nothing
@@ -998,12 +1006,14 @@ pub fn treatments(doc: &Doc) -> Vec<Treatment> {
                         }
                         .to_string(),
                     ),
+                    edges: edges_of(node),
                 },
                 Op::Chamfer { distance, .. } => Treatment {
                     node,
                     op: "chamfer".to_string(),
                     amount_mm: *distance,
                     continuity: None,
+                    edges: edges_of(node),
                 },
                 Op::Cuboid { .. }
                 | Op::Sphere { .. }
@@ -1159,7 +1169,7 @@ pub fn measure_brep(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parcad_occt::protocol::{BodyKind, Success, TagBounds, Timings, Topology};
+    use parcad_occt::protocol::{BodyKind, Success, TagBounds, Timings, Topology, TreatmentEdges};
 
     fn doc(json: serde_json::Value) -> Doc {
         parse_graph(json).unwrap()
@@ -1200,6 +1210,7 @@ mod tests {
                 TagBounds { tag: "nub".into(), min: [0.0; 3], max: [2.0, 2.0, 1.0], faces: 4 },
             ],
             unlocated_tags: Vec::new(),
+            treatment_edges: Vec::new(),
             timings: Timings::default(),
             step_path: None,
             stl_path: None,
@@ -1207,5 +1218,22 @@ mod tests {
         let (extents, _) = tag_extents(&doc, &success);
         let nodes: Vec<(&str, usize)> = extents.iter().map(|e| (e.tag.as_str(), e.nodes)).collect();
         assert_eq!(nodes, [("holder", 1), ("nub", 2)]);
+    }
+
+    /// The count a treatment resolved to is the kernel's, reported beside the
+    /// treatment so `.expect({ count })` has a number to be written from.
+    #[test]
+    fn a_treatment_reports_the_edge_count_the_kernel_resolved() {
+        let doc = doc(serde_json::json!({ "units": "mm", "root": 1, "nodes": [
+            { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+            { "op": "fillet", "child": 0, "radius": 1, "selector": "|Z" },
+        ] }));
+        let reported = treatments(&doc, &[TreatmentEdges { node: 1, edges: 4 }]);
+        assert_eq!(reported[0].edges, Some(4));
+        let json = serde_json::to_value(&reported[0]).unwrap();
+        assert_eq!(json["edges"], 4);
+        // A kernel that did not say leaves the field out rather than writing 0.
+        let json = serde_json::to_value(&treatments(&doc, &[])[0]).unwrap();
+        assert!(json.get("edges").is_none(), "{json}");
     }
 }

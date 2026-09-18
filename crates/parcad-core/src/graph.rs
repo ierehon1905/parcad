@@ -110,8 +110,11 @@ impl<'de> Deserialize<'de> for EdgeTarget {
         let mut take = |name: &str| fields.remove(name).filter(|value| !value.is_null());
         let (expect, selector, vertices) = (take("expect"), take("selector"), take("vertices"));
         let expect = expect
-            .map(|value| read::<D, _>("expect", value))
+            .map(|value| read::<D, EdgeExpectation>("expect", value))
             .transpose()?;
+        if let Some(problem) = expect.as_ref().and_then(|e| e.check().err()) {
+            return Err(D::Error::custom(format!("{LOCATED}expect\": {problem}")));
+        }
         match (selector, vertices) {
             (Some(selector), None) => Ok(Self::Edges {
                 selector: read::<D, _>("selector", selector)?,

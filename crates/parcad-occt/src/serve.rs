@@ -8,7 +8,7 @@ use crate::backend::{self, BuildCache};
 use crate::perceive;
 use crate::protocol::{
     breadcrumb, edge_curve, BodyFit, BodyKind, BodySpan, EdgeCurve, FaceRun, FaceSummary, Request,
-    Response, Success, SurfaceMeasure, TargetPreview, Timings, Topology, WallRange,
+    Response, Success, SurfaceMeasure, TargetPreview, Timings, Topology, WallRange, TreatmentEdges,
 };
 use std::collections::BTreeMap;
 use std::time::Instant;
@@ -411,6 +411,11 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         between,
         tag_extents,
         unlocated_tags,
+        treatment_edges: part
+            .treatment_edges
+            .iter()
+            .map(|(node, edges)| TreatmentEdges { node: *node, edges: *edges })
+            .collect(),
         timings: Timings {
             build_ms,
             mesh_ms,

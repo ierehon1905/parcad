@@ -100,12 +100,68 @@ impl VertexQuery {
 
 /// A post-condition for a selector-backed edge operation.
 ///
-/// The expectation is checked against the exact B-rep at evaluation time. It
-/// does not identify an edge; it makes a topology change visible instead of
-/// allowing a later edit to silently affect more or fewer edges.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// What a selector must resolve to, checked on the shape the treatment runs
+/// against: an exact `count`, or a range (`at_least`, `at_most`) for an
+/// expectation written before the count is known. At least one is set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EdgeExpectation {
-    pub count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_least: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_most: Option<usize>,
+}
+
+impl EdgeExpectation {
+    /// Why `actual` fails this expectation, or `None` when it holds. `what`
+    /// is the noun: `edge` or `vertex`.
+    pub fn failure(&self, actual: usize, what: &str) -> Option<String> {
+        if let Some(count) = self.count {
+            if actual != count {
+                return Some(format!("expected {count} {what}(s), but matched {actual}"));
+            }
+        }
+        if let Some(least) = self.at_least {
+            if actual < least {
+                return Some(format!("expected at least {least} {what}(s), but matched {actual}"));
+            }
+        }
+        if let Some(most) = self.at_most {
+            if actual > most {
+                return Some(format!("expected at most {most} {what}(s), but matched {actual}"));
+            }
+        }
+        None
+    }
+
+    /// An expectation that can never hold, or says nothing: refused when the
+    /// graph is read, so the treatment never runs against it.
+    pub fn check(&self) -> Result<(), String> {
+        if self.count.is_none() && self.at_least.is_none() && self.at_most.is_none() {
+            return Err("an expectation names count, atLeast or atMost".into());
+        }
+        if self.count == Some(0) || self.at_most == Some(0) {
+            return Err("an edge treatment must select at least one edge, so an expectation of zero can never hold".into());
+        }
+        if let (Some(least), Some(most)) = (self.at_least, self.at_most) {
+            if least > most {
+                return Err(format!("atLeast {least} is above atMost {most}, which nothing can satisfy"));
+            }
+        }
+        if let (Some(count), Some(least)) = (self.count, self.at_least) {
+            if count < least {
+                return Err(format!("count {count} is below atLeast {least}, which nothing can satisfy"));
+            }
+        }
+        if let (Some(count), Some(most)) = (self.count, self.at_most) {
+            if count > most {
+                return Err(format!("count {count} is above atMost {most}, which nothing can satisfy"));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// A composable, AI-readable edge query.

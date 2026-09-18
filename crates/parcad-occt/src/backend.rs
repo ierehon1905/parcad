@@ -2494,11 +2494,8 @@ fn check_edge_expectation(
     id: NodeId,
     label: &str,
 ) -> Result<()> {
-    if expectation.count == 0 {
-        bail!("node {id} ({label}) has an edge expectation of zero; an edge treatment must select at least one edge");
-    }
     let actual = matched.len();
-    if actual != expectation.count {
+    if let Some(failure) = expectation.failure(actual, "edge") {
         let left = if left_out > 0 {
             format!(
                 " ({left_out} tangent-continuous edge(s) left out: a treatment skips them \
@@ -2508,10 +2505,9 @@ fn check_edge_expectation(
             String::new()
         };
         bail!(
-            "node {id} ({label}) selector {selector:?} expected {} edge(s), but matched {actual}{left}. \
+            "node {id} ({label}) selector {selector:?} {failure}{left}. \
              The model's topology changed; inspect the current edges and update the selector or expectation. \
              The edges matched, shortest first:{}",
-            expectation.count,
             list_edges(matched, 12),
         );
     }
@@ -2580,14 +2576,10 @@ fn check_vertex_expectation(
     id: NodeId,
     label: &str,
 ) -> Result<()> {
-    if expectation.count == 0 {
-        bail!("node {id} ({label}) has a vertex expectation of zero; a corner treatment must select at least one vertex");
-    }
-    if actual != expectation.count {
+    if let Some(failure) = expectation.failure(actual, "vertex") {
         bail!(
-            "node {id} ({label}) vertex selector {selector:?} expected {} vertex(s), but matched {actual}. \
+            "node {id} ({label}) vertex selector {selector:?} {failure}. \
              The model's topology changed; inspect the current vertices and update the selector or expectation",
-            expectation.count,
         );
     }
     Ok(())
@@ -2941,6 +2933,8 @@ pub struct BuiltPart {
     /// focus an authored fillet or chamfer after a viewport click; they are
     /// never accepted as graph input, and disappear when the model is rebuilt.
     pub treatment_owners: BTreeMap<Vec<[i64; 3]>, NodeId>,
+    /// How many edges each treatment's selector resolved to, by node.
+    pub treatment_edges: BTreeMap<NodeId, usize>,
     /// Each named body, in the order the script named them. Empty for a
     /// one-solid part, whose body is `shape`.
     pub bodies: Vec<(String, Shape)>,
@@ -3033,6 +3027,7 @@ pub fn build_part(doc: &Doc) -> Result<BuiltPart> {
             names: vec![NamedFaces::of(doc, &built.lineage)],
             shape: built.shape,
             treatment_owners: built.features.edge_owners(),
+            treatment_edges: built.features.treatment_edges(),
             bodies: Vec::new(),
         });
     };
@@ -3049,6 +3044,7 @@ pub fn build_part(doc: &Doc) -> Result<BuiltPart> {
     Ok(BuiltPart {
         shape: compound_of(bodies.iter().map(|(_, shape)| shape)),
         treatment_owners: features.edge_owners(),
+        treatment_edges: features.treatment_edges(),
         bodies,
         names,
     })
@@ -3135,11 +3131,20 @@ impl BuiltShape {
 #[derive(Default, Clone)]
 struct TreatmentFeatures {
     generated: Vec<(NodeId, Shape)>,
+    /// How many edges each treatment's selector resolved to, by node: the
+    /// count a reply reports beside the treatment, so `.expect({ count })`
+    /// has a number to be written from.
+    resolved: Vec<(NodeId, usize)>,
 }
 
 impl TreatmentFeatures {
     fn extend(&mut self, other: Self) {
         self.generated.extend(other.generated);
+        self.resolved.extend(other.resolved);
+    }
+
+    fn treatment_edges(&self) -> BTreeMap<NodeId, usize> {
+        self.resolved.iter().copied().collect()
     }
 
     fn add_generated(&mut self, node: NodeId, shapes: Vec<Shape>) {
@@ -3154,6 +3159,7 @@ impl TreatmentFeatures {
                 .into_iter()
                 .map(|(node, shape)| (node, shape.rotated(origin, axis, radians)))
                 .collect(),
+            resolved: self.resolved,
         }
     }
 
@@ -3164,6 +3170,7 @@ impl TreatmentFeatures {
                 .into_iter()
                 .map(|(node, shape)| (node, shape.scaled_uniform(origin, factor)))
                 .collect(),
+            resolved: self.resolved,
         }
     }
 
@@ -3174,6 +3181,7 @@ impl TreatmentFeatures {
                 .into_iter()
                 .map(|(node, shape)| (node, shape.translated(by)))
                 .collect(),
+            resolved: self.resolved,
         }
     }
 
@@ -3774,9 +3782,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             let built = build_bodies(doc, bodies, offset)?;
             let mut features = TreatmentFeatures::default();
             for (_, body) in &built {
-                features.extend(TreatmentFeatures {
-                    generated: body.features.generated.clone(),
-                });
+                features.extend(body.features.clone());
             }
             BuiltShape {
                 shape: compound_of(built.iter().map(|(_, body)| &body.shape)),
@@ -4513,6 +4519,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                     .into_iter()
                     .map(|(node, shape)| (node, place(reflect(shape))))
                     .collect(),
+                resolved: inner.features.resolved,
             };
             let lineage = inner
                 .lineage
@@ -4630,6 +4637,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                         .into_iter()
                         .filter_map(|(node, part)| Some((node, stretch(part)?)))
                         .collect(),
+                    resolved: inner.features.resolved,
                 };
                 let lineage = inner
                     .lineage
@@ -4891,6 +4899,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             surfaces::require_solid(doc, id, label, "fillets", *child, &solid)?;
             let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
             let count = selected.edges.len();
+            solid.features.resolved.push((id, count));
             breadcrumb(&format!(
                 "fillet node {id} ({label}) {radius} mm on {count} selected edge(s)"
             ));
@@ -4993,6 +5002,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             surfaces::require_solid(doc, id, label, "chamfers", *child, &solid)?;
             let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
             let count = selected.edges.len();
+            solid.features.resolved.push((id, count));
             breadcrumb(&format!(
                 "chamfer node {id} ({label}) {distance} mm on {count} selected edge(s)"
             ));
@@ -5235,7 +5245,7 @@ mod tests {
         });
         let matched = select_edges(&shape, &selector, &EdgeLineage::default(), 0, "box").unwrap();
         let error = check_edge_expectation(
-            EdgeExpectation { count: 4 },
+            EdgeExpectation { count: Some(4), ..Default::default() },
             &matched,
             0,
             &selector,
@@ -5415,7 +5425,7 @@ mod tests {
         .0;
         let target = EdgeTarget::Vertices {
             vertices: VertexSelector::Directional(">X and >Y and >Z".to_owned()),
-            expect: Some(EdgeExpectation { count: 1 }),
+            expect: Some(EdgeExpectation { count: Some(1), ..Default::default() }),
         };
 
         let selected = select_edge_target(&shape, &target, &EdgeLineage::default(), 0, "body")

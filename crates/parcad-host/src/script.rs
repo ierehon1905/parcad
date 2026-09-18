@@ -677,6 +677,10 @@ mod tests {
                 "surfaces",
                 "return surfaceExtrude([[0, 0], { through: [5, 3] }, [10, 0]], 5).thicken(1);".to_owned(),
             ),
+            (
+                "expect-range",
+                "return box(10, 10, 10).edges(\"|Z\").expect({ atLeast: 1 }).fillet(1);".to_owned(),
+            ),
         ];
         let stamped: Vec<&str> = cases.iter().map(|(id, _)| *id).collect();
         assert_eq!(stamped, parcad_core::envelope::FEATURES, "the host's feature list and this table differ");

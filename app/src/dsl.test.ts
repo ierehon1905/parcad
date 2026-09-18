@@ -891,3 +891,31 @@ describe("a transform given the wrong arguments", () => {
     expect(build(box(1, 1, 1).mirror({ x: 1, y: 1, z: 0 }).scale(2)).nodes.length).toBe(3);
   });
 });
+
+/**
+ * `.expect({ count })` was in 0 of 45 scripts of one session, because nothing
+ * told it n. The count is now in every reply, and a range lets an expectation
+ * be written before it is known.
+ */
+describe("an edge expectation", () => {
+  test("takes an exact count or a range, and refuses what cannot hold", () => {
+    const edges = () => box(40, 20, 10).edges("|Z");
+    expect(build(edges().expect({ count: 4 }).fillet(1)).nodes.at(-1)).toMatchObject({ expect: { count: 4 } });
+    expect(build(edges().expect({ atLeast: 1 }).fillet(1)).nodes.at(-1)).toMatchObject({ expect: { atLeast: 1 } });
+    expect(build(edges().expect({ atLeast: 2, atMost: 8 }).fillet(1)).nodes.at(-1)).toMatchObject({
+      expect: { atLeast: 2, atMost: 8 },
+    });
+    expect(() => edges().expect({} as never)).toThrow("expect takes { count: n }");
+    expect(() => edges().expect({ count: 0 })).toThrow("can never hold");
+    expect(() => edges().expect({ atLeast: 5, atMost: 2 })).toThrow("atLeast 5 is above atMost 2");
+    expect(() => edges().expect({ count: 1.5 })).toThrow("whole number");
+    expect(() => edges().expect(4 as never)).toThrow("Got 4.");
+  });
+
+  test("a range is stamped as a feature an older host cannot read", () => {
+    const ranged = build(box(1, 1, 1).edges("|Z").expect({ atLeast: 1 }).fillet(0.1));
+    expect(ranged.requires?.map((r) => r.feature)).toContain("expect-range");
+    const exact = build(box(1, 1, 1).edges("|Z").expect({ count: 4 }).fillet(0.1));
+    expect(exact.requires?.map((r) => r.feature) ?? []).not.toContain("expect-range");
+  });
+});

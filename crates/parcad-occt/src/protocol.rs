@@ -260,6 +260,13 @@ pub struct TagBounds {
     pub faces: usize,
 }
 
+/// One treatment's resolved edge count, keyed by its intent-graph node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreatmentEdges {
+    pub node: usize,
+    pub edges: usize,
+}
+
 /// Counts of the logical topology.
 ///
 /// The number an implicit model cannot produce at all, and the foundation for
@@ -540,6 +547,10 @@ pub struct Success {
     /// was cut away or buried, or the name is spelled differently.
     #[serde(default)]
     pub unlocated_tags: Vec<String>,
+    /// How many edges each treatment's selector resolved to on the shape it
+    /// ran against, by node — measured, not the `.expect()` the script wrote.
+    #[serde(default)]
+    pub treatment_edges: Vec<TreatmentEdges>,
     pub timings: Timings,
     pub step_path: Option<PathBuf>,
     pub stl_path: Option<PathBuf>,

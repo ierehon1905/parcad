@@ -1181,26 +1181,26 @@ const LANGUAGE: &str = "parcad builds parts from a small JavaScript DSL and eval
 B-rep kernel. Everything is millimetres; primitives are centred on the origin and placed \
 with .at(x, y, z); a script ends by returning a shape, or { base, lid } for a part that \
 stays in several bodies, measured per body and between them.\n\n\
-Start from read_docs: its `dsl` topic is the whole language, generated from the source; \
+Start from read_docs: its `dsl` topic is the whole language, from the source; \
 `gaps` and `gotchas` are what the kernel refuses and what silently returns a wrong answer. \
-list_projects and read_project show house style. Projects nest in folders: a name is a path \
-like 'Mounts/bracket', passed whole.";
+read_project shows house style. Projects nest in folders: a name is a path like \
+'Mounts/bracket', passed whole.";
 
 const SCREEN: &str = "You share the parcad app's screen with the user: get_session reads it, and \
-open_project and set_script change it in every window. To show a part you built, save_project \
-it under its own name and open_project it; set_script edits the part already open. Edits \
-are undoable; read before you write, evaluate before set_script.";
+open_project and set_script change it. To show a part you built, save_project it under its \
+own name and open_project it; set_script edits the part already open. Edits are undoable; \
+read before you write, evaluate before set_script.";
 
 const SELECTING: &str = "Select edges by intent, never by index: '>Z and >Y and |X', or a query: { curve: \"circle\", \
 role: \"hole\", adjacentTo: { faceNormal: \"+z\" } }; dihedral: \"convex\", \"concave\" or \
-\"smooth\"; parallel: \"z\"; longerThan: 3; on: \"lip\" for one tagged feature's edges, its at \
-extrema measured within that feature; between: [\"arm\", \"hub\"] for the seam where two \
-meet. A tag names a node's faces and survives booleans, fillets and rotations. Fillets skip \
-smooth edges unless asked. Add .expect({ count: n }) so a selector that drifts fails aloud. \
-edge@N ids from list_entities are for one evaluation and rejected in scripts.\n\n\
+\"smooth\"; parallel: \"z\"; longerThan: 3; on: \"lip\" for one tagged feature's edges, at \
+measured within it; between: [\"arm\", \"hub\"] for the seam where two meet. A tag names a node's faces and survives booleans, fillets and rotations. Fillets skip \
+smooth edges unless asked. Each evaluate_part treatment has `edges`, the count it resolved \
+to: write it in .expect({ count }) so drift fails aloud, or .expect({ atLeast: 1 }) until \
+you know it. edge@N ids from list_entities are for one evaluation and rejected in scripts.\n\n\
 The kernel refuses rather than approximating; a refusal names the fix and lists the edges \
-it means, so read it and change the script. Every report is measured, never requested: \
-quote its numbers rather than the script's.";
+it means. Every report is measured, never requested: quote its numbers rather than the \
+script's.";
 
 /// Only where a view is a file the user can open.
 const PICTURES: &str = " The user may not see a tool's pictures: to show one, paste its \

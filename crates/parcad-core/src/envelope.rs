@@ -42,6 +42,7 @@ pub const FEATURES: &[&str] = &[
     "held-curves",
     "loft-wall",
     "surfaces",
+    "expect-range",
 ];
 
 /// The version of parcad reading the graph.

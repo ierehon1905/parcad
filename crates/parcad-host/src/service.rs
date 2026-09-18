@@ -1522,17 +1522,17 @@ mod tests {
                 { "op": "fillet", "child": 0, "radius": 2, "selector": ">Z" },
                 { "op": "chamfer", "child": 1, "distance": 1, "selector": "<Z" },
             ],
-        })));
+        })), &[parcad_occt::protocol::TreatmentEdges { node: 1, edges: 4 }, parcad_occt::protocol::TreatmentEdges { node: 2, edges: 4 }]);
 
         let reported: Vec<_> = treatments
             .iter()
-            .map(|t| (t.node, t.op.as_str(), t.amount_mm, t.continuity.as_deref()))
+            .map(|t| (t.node, t.op.as_str(), t.amount_mm, t.continuity.as_deref(), t.edges))
             .collect();
         assert_eq!(
             reported,
             [
-                (1, "fillet", 2.0, Some("tangent")),
-                (2, "chamfer", 1.0, None),
+                (1, "fillet", 2.0, Some("tangent"), Some(4)),
+                (2, "chamfer", 1.0, None, Some(4)),
             ]
         );
     }
@@ -1554,7 +1554,7 @@ mod tests {
                     "recipe": { "continuity": "curvature" },
                 },
             ],
-        })));
+        })), &[]);
 
         assert_eq!(treatments.len(), 1);
         assert_eq!(treatments[0].op, "fillet");
@@ -2210,7 +2210,7 @@ mod tests {
                 { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
                 { "op": "fillet", "child": 0, "radius": 2, "selector": ">Z" },
             ],
-        })));
+        })), &[]);
 
         assert!(
             treatments.is_empty(),

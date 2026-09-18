@@ -109,10 +109,25 @@ export interface VertexQuery {
 /** A compact vertex selector such as `>X and >Y and >Z`, or a vertex query. */
 export type VertexSelector = string | VertexQuery;
 
-/** A post-condition checked against the selected B-rep entity count. */
+/**
+ * What a selector must resolve to, checked on the shape the treatment runs
+ * against, so a selector that drifts fails aloud instead of treating other
+ * edges. At least one field.
+ *
+ * - `count` is the number `edges` in an evaluate_part reply's `treatments`
+ *   reports for that treatment: paste it from a reply, never count by hand.
+ * - `atLeast` and `atMost` are for an expectation written before the count is
+ *   known: `{ atLeast: 1 }` says the selector must find something.
+ *
+ * @example box(40, 20, 10).edges("|Z").expect({ count: 4 }).fillet(2)
+ */
 export interface EdgeExpectation {
   /** The exact number of selected edges or vertices the selector must match. */
-  count: number;
+  count?: number;
+  /** The fewest the selector may match. */
+  atLeast?: number;
+  /** The most the selector may match. */
+  atMost?: number;
 }
 
 /**
@@ -392,8 +407,28 @@ function assertVertexSelector(selector: VertexSelector) {
 }
 
 function assertEdgeExpectation(expectation: EdgeExpectation) {
-  if (!Number.isInteger(expectation.count) || expectation.count <= 0) {
-    throw new Error("edge expectation count must be a positive integer");
+  const { count, atLeast, atMost } = expectation ?? {};
+  const given = [count, atLeast, atMost].filter((n) => n !== undefined);
+  if (!isQuery(expectation) || given.length === 0) {
+    throw new Error(
+      "expect takes { count: n } — n from `edges` on the treatment in an evaluate_part reply — or " +
+        "{ atLeast: n }, { atMost: n } for an expectation written before the count is known. Got " +
+        `${describeArgument(expectation)}.`,
+    );
+  }
+  for (const [name, value] of [["count", count], ["atLeast", atLeast], ["atMost", atMost]] as const) {
+    if (value !== undefined && !(Number.isInteger(value) && value >= 0)) {
+      throw new Error(`expect ${name} must be a whole number, not ${describeArgument(value)}`);
+    }
+  }
+  if (count === 0 || atMost === 0) {
+    throw new Error("expect of zero can never hold: an edge treatment must select at least one edge");
+  }
+  if (atLeast !== undefined && atMost !== undefined && atLeast > atMost) {
+    throw new Error(`expect atLeast ${atLeast} is above atMost ${atMost}, which nothing can satisfy`);
+  }
+  if (count !== undefined && ((atLeast !== undefined && count < atLeast) || (atMost !== undefined && count > atMost))) {
+    throw new Error(`expect count ${count} is outside atLeast ${atLeast ?? 0} to atMost ${atMost ?? "any"}`);
   }
 }
 
@@ -3819,6 +3854,15 @@ const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean })[] =
   },
   { feature: "fitted-sections", after: "0.0.6", what: "fitted sections ({ fit })", uses: (n) => entryHas(n, "fit") },
   { feature: "inset-sections", after: "0.0.6", what: "inset sections (inset(outline, d))", uses: (n) => entryHas(n, "inset") },
+  {
+    feature: "expect-range",
+    after: "0.0.9",
+    what: "ranged expectations (.expect({ atLeast, atMost }))",
+    uses: (n) => {
+      const expect = (n as { expect?: { atLeast?: number; atMost?: number } }).expect;
+      return expect !== undefined && (expect.atLeast !== undefined || expect.atMost !== undefined);
+    },
+  },
   {
     feature: "sweep-spline",
     after: "0.0.6",
