@@ -14,7 +14,7 @@
     "voids": 0,
     "faces": 2,
     "edges": 8,
-    "curves": 4,
+    "curves": 2,
     "requires": [
       "section-curves",
       "surfaces"

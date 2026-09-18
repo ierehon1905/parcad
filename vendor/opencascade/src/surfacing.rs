@@ -5,7 +5,7 @@
 //! Face histories are `(input face, output face)` pairs numbered as
 //! [`Shape::face_map`] numbers faces.
 
-use crate::primitives::{Compound, Shape, Wire};
+use crate::primitives::{Compound, Edge, Shape, Wire};
 use cxx::UniquePtr;
 use glam::DVec3;
 
@@ -197,10 +197,15 @@ impl Shape {
         boxed(ffi::parcad_free_edges(&self.inner))
     }
 
-    /// Every edge between two faces cut from one surface: a split in the
-    /// representation rather than an edge of the shape.
-    pub fn split_edges(&self) -> Result<Shape, String> {
-        boxed(ffi::parcad_split_edges(&self.inner))
+    /// The edges a person would count, each as the kernel edges it is made
+    /// of: no seams, no splits between faces of one surface, and pieces of
+    /// one curve joined where only such an edge cut them.
+    pub fn logical_edges(&self) -> Result<Vec<Vec<Edge>>, String> {
+        let groups = ffi::parcad_logical_edges(&self.inner).map_err(|e| e.what().to_string())?;
+        Ok(groups
+            .iter()
+            .map(|group| Shape { inner: opencascade_sys::ffi::TopoDS_Shape_to_owned(group) }.edges().collect())
+            .collect())
     }
 
     /// A wire swept along `by`: one face per edge, open or closed as the wire is.
@@ -313,7 +318,7 @@ pub(crate) mod ffi {
         fn parcad_volume_by_spans(shape: &TopoDS_Shape, eps: f64) -> Result<Vec<f64>>;
         fn parcad_uncovered_faces(shape: &TopoDS_Shape, rel: f64) -> Result<Vec<f64>>;
         fn parcad_free_edges(shape: &TopoDS_Shape) -> Result<UniquePtr<TopoDS_Shape>>;
-        fn parcad_split_edges(shape: &TopoDS_Shape) -> Result<UniquePtr<TopoDS_Shape>>;
+        fn parcad_logical_edges(shape: &TopoDS_Shape) -> Result<UniquePtr<CxxVector<TopoDS_Shape>>>;
         fn parcad_prism(wire: &TopoDS_Shape, dx: f64, dy: f64, dz: f64) -> Result<UniquePtr<TopoDS_Shape>>;
         fn parcad_revolve(wire: &TopoDS_Shape, degrees: f64) -> Result<UniquePtr<TopoDS_Shape>>;
         fn parcad_thru_sections(wires: &TopoDS_Shape, ruled: bool) -> Result<UniquePtr<TopoDS_Shape>>;

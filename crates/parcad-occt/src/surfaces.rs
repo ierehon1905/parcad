@@ -566,7 +566,7 @@ pub(super) fn patch(
         check_edge_expectation(*expectation, &free, 0, selector, id, label)?;
     }
     breadcrumb(&format!("patch node {id} ({label}) over {} free edge(s)", free.len()));
-    let edges: Shape = Compound::from_shapes(free.iter().map(|e| Shape::from(e.edge.clone()))).into();
+    let edges: Shape = Compound::from_shapes(free.iter().flat_map(|e| e.edges.iter().cloned()).map(Shape::from)).into();
     let (made, report) = base.shape.fill_loops(&edges, tangent).map_err(kernel(id, label))?;
     if report.open_chains > 0 {
         bail!(

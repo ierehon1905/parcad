@@ -728,7 +728,13 @@ fn op_phrase(op: &Op) -> String {
 /// mesh: selectors must keep meaning the same when tessellation tolerance or
 /// display resolution changes.
 struct SelectableEdge {
-    edge: Edge,
+    /// The kernel edges this edge is made of, more than one where a hidden
+    /// seam or split cut one curve; see [`logical_edges`].
+    edges: Vec<Edge>,
+    /// Each kernel edge's own key, as lineage records them.
+    piece_keys: Vec<Vec<[i64; 3]>>,
+    /// Where the edge starts and ends, one point for a closed curve.
+    ends: [DVec3; 2],
     centre: DVec3,
     direction: Option<DVec3>,
     curve: EdgeCurveKind,
@@ -786,6 +792,7 @@ struct CircleInfo {
     closed: bool,
 }
 
+#[derive(Clone)]
 struct AdjacentFaceInfo {
     normal: DVec3,
     /// A point on both the edge and this face, at which `normal` was measured.
@@ -878,11 +885,16 @@ fn selection_listing(shape: &Shape, edges: &[Edge]) -> String {
         .iter()
         .filter_map(|edge| describe_edge(edge.clone()).map(|described| described.key))
         .collect();
-    let described: Vec<SelectableEdge> = selectable_edges(shape)
-        .into_iter()
-        .filter(|edge| keys.contains(&edge.key))
-        .collect();
-    format!(" The edges, shortest first:{}", list_edges(&described, 6))
+    match selectable_edges(shape) {
+        Ok(edges) => {
+            let described: Vec<SelectableEdge> = edges
+                .into_iter()
+                .filter(|edge| edge.piece_keys.iter().any(|key| keys.contains(key)))
+                .collect();
+            format!(" The edges, shortest first:{}", list_edges(&described, 6))
+        }
+        Err(e) => format!(" The edges could not be listed: {e}"),
+    }
 }
 
 fn axis_vector(axis: Axis) -> DVec3 {
@@ -914,9 +926,13 @@ fn component(v: DVec3, axis: Axis) -> f64 {
 
 fn describe_edge(edge: Edge) -> Option<SelectableEdge> {
     let points: Vec<DVec3> = edge.approximation_segments().collect();
+    describe_samples(&points, vec![edge])
+}
+
+fn describe_samples(points: &[DVec3], edges: Vec<Edge>) -> Option<SelectableEdge> {
     let (start, end) = (*points.first()?, *points.last()?);
-    let key = edge_key(&points);
-    let circle = is_circular(&points);
+    let key = edge_key(points);
+    let circle = is_circular(points);
     let length: f64 = points.windows(2).map(|w| (w[1] - w[0]).length()).sum();
     let start_tangent = points
         .windows(2)
@@ -928,7 +944,9 @@ fn describe_edge(edge: Edge) -> Option<SelectableEdge> {
         // A closed curve such as a circular rim has no one direction, but can
         // still be selected by its centre with >X, <Y, and so on.
         return Some(SelectableEdge {
-            edge,
+            piece_keys: vec![key.clone()],
+            edges,
+            ends: [start, end],
             centre: circle.as_ref().map_or_else(
                 || points.iter().copied().sum::<DVec3>() / points.len() as f64,
                 |c| c.centre,
@@ -960,7 +978,9 @@ fn describe_edge(edge: Edge) -> Option<SelectableEdge> {
         .all(|p| ((*p - start).cross(chord)).length() <= line_tolerance);
 
     Some(SelectableEdge {
-        edge,
+        piece_keys: vec![key.clone()],
+        edges,
+        ends: [start, end],
         centre: points.iter().copied().sum::<DVec3>() / points.len() as f64,
         direction: straight.then_some(direction),
         curve: if straight {
@@ -1046,7 +1066,7 @@ fn edge_key(points: &[DVec3]) -> Vec<[i64; 3]> {
 /// spelling order, rather than a fragile sequence of filters. A selection that
 /// becomes empty after an edit refuses with the selector in the error; it never
 /// falls back to an edge index.
-fn selectable_edges(shape: &Shape) -> Vec<SelectableEdge> {
+fn selectable_edges(shape: &Shape) -> Result<Vec<SelectableEdge>> {
     use std::collections::HashMap;
 
     let mut adjacent_faces: HashMap<Vec<[i64; 3]>, Vec<AdjacentFaceInfo>> = HashMap::new();
@@ -1081,19 +1101,110 @@ fn selectable_edges(shape: &Shape) -> Vec<SelectableEdge> {
         .free_edges()
         .map(|edges| edges.edges().filter_map(|e| describe_edge(e).map(|d| d.key)).collect())
         .unwrap_or_default();
-    let mut seen = std::collections::HashSet::new();
+    Ok(logical_edges(shape)?
+        .into_iter()
+        .filter_map(|logical| {
+            let mut pieces: Vec<SelectableEdge> = logical
+                .pieces
+                .iter()
+                .filter_map(|edge| describe_edge(edge.clone()))
+                .map(|mut piece| {
+                    piece.free = free.contains(&piece.key);
+                    piece.adjacent_faces = adjacent_faces.get(&piece.key).cloned().unwrap_or_default();
+                    piece.classify();
+                    piece
+                })
+                .collect();
+            if pieces.len() == 1 {
+                return pieces.pop();
+            }
+            let mut joined = describe_samples(&logical.points?, logical.pieces)?;
+            joined.piece_keys = pieces.iter().map(|piece| piece.key.clone()).collect();
+            joined.free = pieces.iter().all(|piece| piece.free);
+            for face in pieces.iter().flat_map(|piece| &piece.adjacent_faces) {
+                if !joined.adjacent_faces.iter().any(|seen| seen.face_key == face.face_key) {
+                    joined.adjacent_faces.push(face.clone());
+                }
+            }
+            let first = &pieces[0];
+            if pieces.iter().all(|piece| piece.dihedral == first.dihedral) {
+                joined.dihedral = first.dihedral;
+                joined.angle_deg = first.angle_deg;
+            }
+            Some(joined)
+        })
+        .collect())
+}
+
+/// One edge of the part as [`Shape::logical_edges`] groups them: its kernel
+/// pieces, and for more than one, their samples joined end to end.
+pub(crate) struct LogicalEdge {
+    pub(crate) pieces: Vec<Edge>,
+    pub(crate) points: Option<Vec<DVec3>>,
+}
+
+/// The edges a person counts, for selection and for the viewer alike: no
+/// seam, no split between faces of one surface, and one edge where only such
+/// a line cut a curve in two — the rim of a bead a sphere's seam runs into.
+/// See docs/GOTCHAS.md, "A seam cut the rim of a bead in two".
+pub(crate) fn logical_edges(shape: &Shape) -> Result<Vec<LogicalEdge>> {
+    let groups = shape
+        .logical_edges()
+        .map_err(|e| anyhow::anyhow!("the kernel could not group the part's edges: {e}; please report the script"))?;
+    groups
+        .into_iter()
+        .map(|pieces| {
+            if pieces.len() == 1 {
+                return Ok(LogicalEdge { pieces, points: None });
+            }
+            let runs: Vec<Vec<DVec3>> = pieces.iter().map(|edge| edge.approximation_segments().collect()).collect();
+            let points = joined_end_to_end(runs).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "the kernel grouped {} edges into one that do not meet end to end; please report the script",
+                    pieces.len()
+                )
+            })?;
+            Ok(LogicalEdge { pieces, points: Some(points) })
+        })
+        .collect()
+}
+
+/// Sampled runs chained into one polyline, each turned to follow the last.
+fn joined_end_to_end(mut runs: Vec<Vec<DVec3>>) -> Option<Vec<DVec3>> {
+    const MEET: f64 = 1e-4;
+    let meets = |a: DVec3, b: DVec3| a.distance(b) <= MEET;
+    runs.retain(|run| run.len() >= 2);
+    let mut chain = runs.pop()?;
+    while !runs.is_empty() {
+        let (start, end) = (chain[0], *chain.last()?);
+        let next = runs.iter().position(|run| {
+            meets(run[0], end) || meets(*run.last().unwrap(), end) || meets(run[0], start) || meets(*run.last().unwrap(), start)
+        })?;
+        let mut run = runs.swap_remove(next);
+        if meets(run[0], end) || meets(*run.last()?, end) {
+            if !meets(run[0], end) {
+                run.reverse();
+            }
+            chain.extend(run.into_iter().skip(1));
+        } else {
+            if !meets(*run.last()?, start) {
+                run.reverse();
+            }
+            run.pop();
+            run.extend(chain);
+            chain = run;
+        }
+    }
+    Some(chain)
+}
+
+/// Every kernel edge once, seams included: what a tag records and lineage
+/// follows, below the edges selection counts.
+fn kernel_edges(shape: &Shape) -> Vec<Edge> {
+    let mut seen = HashSet::new();
     shape
         .edges()
-        .filter_map(describe_edge)
-        .filter_map(|mut edge| {
-            if !seen.insert(edge.key.clone()) {
-                return None;
-            }
-            edge.free = free.contains(&edge.key);
-            edge.adjacent_faces = adjacent_faces.remove(&edge.key).unwrap_or_default();
-            edge.classify();
-            Some(edge)
-        })
+        .filter(|edge| describe_edge(edge.clone()).is_some_and(|described| seen.insert(described.key)))
         .collect()
 }
 
@@ -1103,11 +1214,10 @@ fn selectable_edges(shape: &Shape) -> Vec<SelectableEdge> {
 /// These coordinates are exact B-rep values; the micro-millimetre key only
 /// reconciles tiny representation noise between incident edge endpoints. Closed
 /// curve seams do not make a geometric corner, so they are not a vertex target.
-fn selectable_vertices(shape: &Shape) -> Vec<SelectableVertex> {
+fn selectable_vertices(shape: &Shape) -> Result<Vec<SelectableVertex>> {
     let mut vertices = BTreeMap::<[i64; 3], SelectableVertex>::new();
-    for selectable in selectable_edges(shape) {
-        let start = selectable.edge.start_point();
-        let end = selectable.edge.end_point();
+    for selectable in selectable_edges(shape)? {
+        let [start, end] = selectable.ends;
         if (end - start).length_squared() <= 1e-16 {
             continue;
         }
@@ -1118,7 +1228,7 @@ fn selectable_vertices(shape: &Shape) -> Vec<SelectableVertex> {
                 incident: Vec::new(),
             })
             .incident
-            .push(selectable.edge.clone());
+            .extend(selectable.edges.iter().cloned());
         vertices
             .entry(vertex_key(end))
             .or_insert_with(|| SelectableVertex {
@@ -1126,9 +1236,9 @@ fn selectable_vertices(shape: &Shape) -> Vec<SelectableVertex> {
                 incident: Vec::new(),
             })
             .incident
-            .push(selectable.edge);
+            .extend(selectable.edges);
     }
-    vertices.into_values().collect()
+    Ok(vertices.into_values().collect())
 }
 
 fn vertex_key(point: DVec3) -> [i64; 3] {
@@ -1159,10 +1269,7 @@ impl EdgeLineage {
         if let Some(tag) = tag {
             lineage.by_source.insert(
                 tag.to_owned(),
-                selectable_edges(shape)
-                    .into_iter()
-                    .map(|edge| edge.edge)
-                    .collect(),
+                kernel_edges(shape),
             );
             lineage
                 .faces_by_source
@@ -1365,9 +1472,9 @@ impl EdgeLineage {
             .faces()
             .map(|face| (face_key(&face), face))
             .collect();
-        let own_edges: HashMap<Vec<[i64; 3]>, Edge> = selectable_edges(result)
+        let own_edges: HashMap<Vec<[i64; 3]>, Edge> = kernel_edges(result)
             .into_iter()
-            .map(|edge| (edge.key, edge.edge))
+            .filter_map(|edge| describe_edge(edge.clone()).map(|described| (described.key, edge)))
             .collect();
         Self {
             by_source: self
@@ -2200,7 +2307,7 @@ fn select_edges(
     id: NodeId,
     label: &str,
 ) -> Result<Vec<SelectableEdge>> {
-    let edges = selectable_edges(shape);
+    let edges = selectable_edges(shape)?;
     if edges.is_empty() {
         bail!("node {id} ({label}) cannot select {selector:?}: the shape has no usable edges");
     }
@@ -2356,7 +2463,8 @@ fn select_query(
                 .at
                 .as_ref()
                 .is_none_or(|at| matches_extrema(edge, at, minima, maxima));
-            let provenance_matches = generated_by.is_none_or(|keys| keys.contains(&edge.key));
+            let provenance_matches = generated_by
+                .is_none_or(|keys| edge.piece_keys.iter().all(|key| keys.contains(key)));
             let dihedral_matches = query
                 .dihedral
                 .is_none_or(|wanted| edge.dihedral == Some(wanted));
@@ -2416,7 +2524,7 @@ fn select_vertices(
     id: NodeId,
     label: &str,
 ) -> Result<Vec<SelectableVertex>> {
-    let vertices = selectable_vertices(shape);
+    let vertices = selectable_vertices(shape)?;
     if vertices.is_empty() {
         bail!("node {id} ({label}) cannot select {selector:?}: the shape has no usable corner vertices");
     }
@@ -2496,8 +2604,8 @@ fn select_edge_target(
         EdgeTarget::Edges { selector, expect } => {
             let selected = select_edges(shape, selector, lineage, id, label)?;
             // A tangent-continuous edge is the boundary an earlier fillet
-            // left, or a cylinder's seam: the faces already meet without a
-            // corner, and a rolling ball has nothing to build on there. It
+            // left: the faces already meet without a corner, and a rolling
+            // ball has nothing to build on there. It
             // was the commonest way a cosmetic pass failed, with a message
             // that named only a count. Left out unless asked for by name.
             let asked_smooth = matches!(
@@ -2510,9 +2618,9 @@ fn select_edge_target(
             if kept.is_empty() {
                 bail!(
                     "node {id} ({label}) selector {selector:?} matched {} edge(s), and every \
-                     one is tangent-continuous — the boundary an earlier fillet or a \
-                     cylinder's seam leaves, where the faces already meet without a corner \
-                     — so there is nothing to round or chamfer. Select the sharp edges \
+                     one is tangent-continuous — the boundary an earlier fillet leaves, \
+                     where the faces already meet without a corner — so there is nothing \
+                     to round or chamfer. Select the sharp edges \
                      instead, or ask for these with dihedral: \"smooth\". The edges, \
                      shortest first:{}",
                     smooth.len(),
@@ -2523,7 +2631,7 @@ fn select_edge_target(
                 check_edge_expectation(*expectation, &kept, smooth.len(), selector, id, label)?;
             }
             Ok(ResolvedEdgeTarget {
-                edges: kept.into_iter().map(|edge| edge.edge).collect(),
+                edges: kept.into_iter().flat_map(|edge| edge.edges).collect(),
                 vertices: Vec::new(),
             })
         }
@@ -3007,9 +3115,7 @@ impl BuiltShape {
     fn named(mut self, tag: Option<&str>) -> Self {
         if let Some(tag) = tag {
             self.lineage.by_source.entry(tag.to_owned()).or_default().extend(
-                selectable_edges(&self.shape)
-                    .into_iter()
-                    .map(|edge| edge.edge),
+                kernel_edges(&self.shape),
             );
             self.lineage
                 .faces_by_source
@@ -5092,7 +5198,7 @@ mod tests {
         };
         let both = select_edges(&cut.shape, &rim_query(None), &lineage, 0, "drilled").unwrap();
         assert_eq!(both.len(), 2);
-        let both: Vec<Edge> = both.into_iter().map(|edge| edge.edge).collect();
+        let both: Vec<Edge> = both.into_iter().flat_map(|edge| edge.edges).collect();
         assert_eq!(lineage.equivalent_sources(&both), ["hole"]);
 
         let top = select_edges(
@@ -5108,7 +5214,7 @@ mod tests {
         assert_eq!(top.len(), 1);
         // `hole` also owns the bottom rim, so it is not a replacement for a
         // selector that picked only the top one.
-        let top: Vec<Edge> = top.into_iter().map(|edge| edge.edge).collect();
+        let top: Vec<Edge> = top.into_iter().flat_map(|edge| edge.edges).collect();
         assert!(lineage.equivalent_sources(&top).is_empty());
     }
 
@@ -5252,6 +5358,28 @@ mod tests {
     }
 
     #[test]
+    fn a_seam_ending_on_a_rim_does_not_cut_it_in_two() {
+        // The bead sits on +X, where the big sphere's seam runs pole to pole,
+        // so the seam ends on the bead's rim and the kernel holds the rim as
+        // two arcs. It is one edge: the circle where the balls meet, radius
+        // sqrt(1 - 0.45^2), since the bead's centre is 7.5 out and
+        // 7.5^2 + 1 + 15 cos = 64.
+        let big = AdHocShape::make_sphere(DVec3::ZERO, 8.0).0;
+        let bead = AdHocShape::make_sphere(DVec3::new(7.5, 0.0, 0.0), 1.0).0;
+        let shape = unified(big.union(&bead).shape);
+        let edges = selectable_edges(&shape).unwrap();
+        let summary: Vec<_> = edges.iter().map(|e| (e.centre, e.length, e.edges.len())).collect();
+        assert_eq!(edges.len(), 1, "no seam, no pole, one rim: {summary:?}");
+        let rim = &edges[0];
+        assert_eq!(rim.edges.len(), 2, "the case is only a test while the kernel splits the rim");
+        assert!(rim.curve == EdgeCurveKind::Circle, "the rim reads as a circle");
+        assert!(rim.ends[0].distance(rim.ends[1]) < 1e-6, "one closed rim: {:?}", rim.ends);
+        let radius = (1.0_f64 - 0.45 * 0.45).sqrt();
+        assert!((rim.length - std::f64::consts::TAU * radius).abs() < 1e-2, "{} mm", rim.length);
+        assert!(selectable_vertices(&shape).unwrap().is_empty(), "where the seam meets the rim is no corner");
+    }
+
+    #[test]
     fn a_box_edge_is_convex_and_a_pocket_floor_edge_is_concave() {
         let block = AdHocShape::make_box_point_point(
             DVec3::new(-20.0, -20.0, 0.0),
@@ -5264,7 +5392,7 @@ mod tests {
         )
         .0;
         let shape = block.subtract(&pocket).shape;
-        let edges = selectable_edges(&shape);
+        let edges = selectable_edges(&shape).unwrap();
         let convex = edges.iter().filter(|e| e.dihedral == Some(Dihedral::Convex)).count();
         let concave = edges.iter().filter(|e| e.dihedral == Some(Dihedral::Concave)).count();
         // Twelve outer edges plus the pocket's four mouth edges are outside

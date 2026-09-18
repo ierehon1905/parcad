@@ -166,7 +166,8 @@ Every selectable edge also knows the angle its two faces make, read from the
 face's outward normal and the edge's direction of travel in that face's wire:
 `dihedral: "convex"` is an outside corner — "break every edge" —
 `"concave"` an inside one, `"smooth"` no corner at all, the boundary an
-earlier fillet left or a cylinder's seam. `parallel: "z"` is the object form
+earlier fillet left. A seam is no selectable edge; see "Edges are the kernel's,
+not inferred". `parallel: "z"` is the object form
 of `|Z`, and `longerThan` keeps a sliver out of a cosmetic pass. **A fillet or
 chamfer leaves smooth edges out unless asked for them by name**: a rolling
 ball has nothing to build on where two faces already meet tangent, and
@@ -603,17 +604,24 @@ computing mass properties or stats.
 ## Edges are the kernel's, not inferred
 
 The viewport draws OCCT's own edge curves rather than guessing creases in screen
-space. `serve.rs::edge_curves()` keys each edge by its rounded polyline and
-keeps those bordering **two or more distinct faces**, and a surface's free
-edges, which one face visits once — that filter is what removes *seam edges*,
-where a closed surface's parameterisation wraps and one face visits the edge
-twice. Seams are topologically real but visually an artifact: without the
-filter every bore has a line down it. For the bracket this takes 77 curves down
-to 67. An edge between two faces that meet with the same tangent plane and the
-same curvature along it (`Shape::split_edges`) is dropped for the same reason:
-it is a split inside one surface — a loft's bands, a torus in two halves, the
-flank strips of a thread — and a fillet's boundary, where the curvature jumps,
-stays.
+space, and it draws the same edges a selector counts: both read
+`backend::logical_edges()`, over `Shape::logical_edges` in the vendored crate.
+Three kinds of kernel edge are the representation's rather than the part's, and
+are no edge there:
+
+- a *seam*, where a closed surface's parameterisation wraps and one face borders
+  the edge on both sides. Without this every bore has a line down it; for the
+  bracket it takes 77 curves down to 67;
+- a *split*: two faces that meet with the same tangent plane and the same
+  curvature along it — a loft's bands, a torus in two halves, the flank strips of
+  a thread. A fillet's boundary, where the curvature jumps, stays;
+- a sphere's degenerate pole.
+
+And a vertex where only such an edge ends is no corner, so the two pieces of one
+curve meeting there are one edge: a sphere's seam runs into the rim of a bead
+fused onto it and used to halve that rim, for the viewer and for `expect({
+count })` alike. "One curve" is decided exactly — the same kernel curve, or equal
+lines or circles — and anything else stays apart.
 
 ## The app
 

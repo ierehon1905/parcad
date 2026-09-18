@@ -22,102 +22,60 @@ fn describe_faces(body: &perceive::Body) -> Vec<FaceSummary> {
     faces
 }
 
-/// Sample the logical edges worth drawing into polylines.
-///
-/// Walking edges face by face rather than over the whole shape, because *how
-/// many distinct faces an edge borders* is the thing that separates a real
-/// edge from an artefact:
-///
-/// - **Two faces.** A genuine edge of the solid. Keep it.
-/// - **One face, visited twice.** A seam: the line where a closed surface's
-///   parameterisation wraps around and meets itself. A cylinder has one running
-///   down its side. It is a bookkeeping entry, not a feature of the part — the
-///   material either side of it is the same smooth surface — and drawing it
-///   puts a crack down every bore. Drop it.
-///
-/// - **One face, visited once.** The free edge of a surface. Keep it.
-///
-/// Degenerate edges — the collapsed "edge" at the pole of a sphere, which is
-/// really a point — have no length and are dropped.
+/// The part's edges as polylines to draw: [`backend::logical_edges`], the
+/// same edges selection counts. A seam, a split between faces of one surface
+/// and a sphere's degenerate pole are bookkeeping, not features of the part —
+/// drawing a seam puts a crack down every bore — and a curve only such a line
+/// cut is drawn whole. An edge no face borders belongs to no surface drawn
+/// here; one face makes it a free edge.
 fn edge_curves(
     shape: &opencascade::primitives::Shape,
     treatment_owners: &std::collections::BTreeMap<Vec<[i64; 3]>, usize>,
-) -> Vec<EdgeCurve> {
-    use std::collections::HashMap;
+) -> anyhow::Result<Vec<EdgeCurve>> {
+    use std::collections::{HashMap, HashSet};
 
-    // Keyed on the sampled points: two visits of one edge produce identical
-    // coordinates, and two different edges cannot, since they would have to be
-    // the same curve. Quantised for the key only; emitted points stay exact.
-    type Key = Vec<[i64; 3]>;
-    let mut faces_touching: HashMap<Key, (usize, usize, Vec<[f32; 3]>)> = HashMap::new();
-    let key_of = |points: &[[f32; 3]]| -> Key {
-        let forward: Key = points
-            .iter()
-            .map(|p| [(p[0] as f64 * 1000.0).round() as i64, (p[1] as f64 * 1000.0).round() as i64, (p[2] as f64 * 1000.0).round() as i64])
-            .collect();
-        let backward: Key = forward.iter().rev().copied().collect();
-        forward.min(backward)
+    let samples = |edge: &opencascade::primitives::Edge| -> Vec<[f32; 3]> {
+        edge.approximation_segments().map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect()
     };
-    // A split between two faces of one surface is no more an edge of the
-    // part than a seam is.
-    let splits: std::collections::HashSet<Key> = shape
-        .split_edges()
-        .map(|edges| {
-            edges
-                .edges()
-                .map(|edge| key_of(&edge.approximation_segments().map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect::<Vec<_>>()))
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut seen_here: std::collections::HashSet<Key> = std::collections::HashSet::new();
-
+    let mut faces_bordering: HashMap<Vec<[i64; 3]>, usize> = HashMap::new();
     for face in shape.faces() {
-        seen_here.clear();
+        let mut seen_here = HashSet::new();
         for edge in face.edges() {
-            let points: Vec<[f32; 3]> = edge
-                .approximation_segments()
-                .map(|p| [p.x as f32, p.y as f32, p.z as f32])
-                .collect();
-            if points.len() < 2 {
-                continue;
+            let key = edge_key(&samples(&edge));
+            if seen_here.insert(key.clone()) {
+                *faces_bordering.entry(key).or_default() += 1;
             }
-            // An edge is the same curve whichever direction its neighbouring
-            // face happened to traverse it. Canonicalise that direction so its
-            // hover ID and face count are deterministic.
-            let key = key_of(&points);
-            if splits.contains(&key) {
-                continue;
-            }
-
-            // Count each face at most once, so a seam's two visits from the
-            // same face still total one; the visits tell a seam from the
-            // free edge of a surface, which its one face visits once.
-            let slot = faces_touching.entry(key.clone()).or_insert((0, 0, points));
-            slot.1 += 1;
-            if !seen_here.insert(key) {
-                continue;
-            }
-            slot.0 += 1;
         }
     }
 
-    let mut edges: Vec<EdgeCurve> = faces_touching
-        .into_values()
-        .filter(|(faces, visits, _)| *faces >= 2 || (*faces == 1 && *visits == 1))
-        .filter_map(|(faces, _, points)| {
-            let mut curve = edge_curve(points)?;
-            curve.free = faces == 1;
-            // A degenerate edge — a sphere's pole — is visited once too, and
-            // has no length to draw.
-            (curve.length_mm > 1e-6).then_some(curve)
-        })
-        .collect();
+    let mut edges = Vec::new();
+    for logical in backend::logical_edges(shape)? {
+        let runs: Vec<Vec<[f32; 3]>> = logical.pieces.iter().map(samples).collect();
+        let keys: Vec<Vec<[i64; 3]>> = runs.iter().map(|run| edge_key(run)).collect();
+        let faces: Vec<usize> = keys.iter().map(|key| faces_bordering.get(key).copied().unwrap_or(0)).collect();
+        if faces.contains(&0) {
+            continue;
+        }
+        let points = match logical.points {
+            Some(joined) => joined.iter().map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect(),
+            None => runs.into_iter().next().unwrap_or_default(),
+        };
+        let owners: HashSet<Option<usize>> = keys.iter().map(|key| treatment_owners.get(key).copied()).collect();
+        let Some(mut curve) = edge_curve(points) else {
+            continue;
+        };
+        if curve.length_mm <= 1e-6 {
+            continue;
+        }
+        curve.free = faces.iter().all(|&count| count == 1);
+        curve.treatment_node = if owners.len() == 1 { owners.into_iter().next().flatten() } else { None };
+        edges.push(curve);
+    }
     edges.sort_by_key(|edge| edge_key(&edge.points));
     for (index, edge) in edges.iter_mut().enumerate() {
         edge.id = format!("edge@{index}");
-        edge.treatment_node = treatment_owners.get(&edge_key(&edge.points)).copied();
     }
-    edges
+    Ok(edges)
 }
 
 /// Same stable key used to deduplicate an edge, independent of its curve
@@ -536,7 +494,10 @@ fn measure(
 
     breadcrumb("tessellating");
     let mesh = shape.mesh();
-    let edges = edge_curves(shape, treatment_owners);
+    let edges = match edge_curves(shape, treatment_owners) {
+        Ok(edges) => edges,
+        Err(e) => return Err(Response::Error { stage: "tessellating".into(), message: format!("{who}{e:#}") }),
+    };
     // The backstop, behind whatever the construction sites caught. A shape whose
     // triangles do not close is not a solid, whatever `IsDone()` said, and this
     // check does not depend on understanding why OCCT produced one — which
@@ -794,6 +755,7 @@ mod tests {
     fn treatment_edge_count(doc: &Doc, node: usize) -> usize {
         let (shape, owners) = backend::build_with_treatment_edges(doc).unwrap();
         edge_curves(&shape, &owners)
+            .unwrap()
             .iter()
             .filter(|edge| edge.treatment_node == Some(node))
             .count()

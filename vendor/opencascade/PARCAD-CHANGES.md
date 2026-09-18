@@ -473,10 +473,14 @@ made of arcs and splines.
   `GCPnts_AbscissaPoint`, edges met by more than two faces, faces in no solid,
   and the free edges joined into closed loops and open chains
   (`ShapeAnalysis_FreeBounds::ConnectEdgesToWires`, shared vertices only).
-  `Shape::free_edges` and `Shape::split_edges` return edges as compounds, the
-  latter every edge whose two faces have the same tangent plane and the same
-  mean and Gaussian curvature at three points along it (`BRepLProp_SLProps` at
-  the edge's parameter curve on each face). `prism_of`, `revolution_of`,
+  `Shape::free_edges` returns the free edges as a compound.
+  `Shape::logical_edges` groups the edges into the ones a person counts:
+  seams (one face, closed on it), degenerate edges and splits — edges whose two
+  faces have the same tangent plane and the same mean and Gaussian curvature at
+  three points along it (`BRepLProp_SLProps` at the edge's parameter curve on
+  each face) — are left out, and two edges meeting at a vertex that only such an
+  edge also reaches are one group when they lie on one curve: the same basis
+  `Geom_Curve` at the same location, or equal lines or circles. `prism_of`, `revolution_of`,
   `loft_surface` (`BRepOffsetAPI_ThruSections` with `isSolid` off and the
   compatibility pass off) and `pipe_surface` (`MakePipeShell`, no solid) build
   open shells from wires. `bspline_bands` builds a B-spline surface from poles

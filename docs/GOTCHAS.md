@@ -573,6 +573,33 @@ passes and the volume is right, while the merged edge's pcurves sit 0.759,
 number moves with it; it is measured with the edge's own curves, the surface at
 its pcurve against its 3D curve.
 
+### A seam cut the rim of a bead in two
+
+OpenCASCADE gives every closed surface a seam — a sphere's runs pole to pole
+along +X — and a seam has to end on whatever boundary it crosses. Fuse a ball
+onto a sphere on +X and the sphere's seam ends on the ball's rim, putting two
+vertices on it: the rim is two kernel edges. Nothing is wrong with the solid.
+But ParCAD already hid the seam itself, so what a person saw was one bead in a
+ring of fifteen with its rim halved, and a selector over the rims matched 16,
+so `.expect({ count: 15 })` failed on a part with fifteen beads.
+
+Moving the seam only moves the split: the big sphere turned 12° about Z put it
+between the beads and onto the fillets' circles instead, 21 faces and 27
+edges against 19 and 20. The representation needs its seam somewhere, so the
+fix is in what ParCAD counts, not in the solid. `Shape::logical_edges` groups
+the kernel's edges into the part's: seams, splits between faces of one surface
+and degenerate poles are no edge, and at a vertex that only such an edge also
+reaches, two pieces of one curve are one edge. The viewer and every selector
+read the same grouping, so they cannot disagree; a treatment still receives
+every kernel piece. "One curve" is exact — the same `Geom_Curve`, or equal
+lines or circles — and two different curves meeting there stay apart.
+
+What moved: the drawn-curve count of 16 corpus cases, each join checked to be
+two pieces of one circle at a seam or split (pipe and tube rims, a cylinder
+section drawn as two arcs, arcs across +X); one recorded `expect({ count: 2 })`
+that had been counting a tube rim's two halves, now 1; and no volume, face,
+kernel edge or validity anywhere, and every seed part still builds.
+
 ### Delabella, OCCT's other triangulator, meshes an extruded spline open
 
 `IMeshTools_Parameters::MeshAlgo`, or the `CSF_MeshAlgo=delabella` environment

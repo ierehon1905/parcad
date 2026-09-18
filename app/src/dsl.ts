@@ -74,8 +74,8 @@ export interface EdgeQuery {
   at?: Partial<Record<"x" | "y" | "z", "min" | "max">>;
   /**
    * `convex` (an outside corner), `concave` (inside) or `smooth` (no corner:
-   * a fillet's boundary, a cylinder's seam). Fillets and chamfers skip smooth
-   * edges unless asked for them.
+   * a fillet's boundary). Fillets and chamfers skip smooth edges unless asked
+   * for them.
    */
   dihedral?: "convex" | "concave" | "smooth";
   /** A straight edge parallel to this axis: the object form of `|Z`. */

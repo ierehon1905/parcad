@@ -44,6 +44,7 @@
 #include <Poly_PolygonOnTriangulation.hxx>
 #include <Poly_Triangulation.hxx>
 #include <Geom_Plane.hxx>
+#include <Geom_TrimmedCurve.hxx>
 #include <Geom_RectangularTrimmedSurface.hxx>
 #include <TopLoc_Location.hxx>
 #include <NCollection_Array1.hxx>
@@ -79,6 +80,7 @@
 #include <algorithm>
 #include <cmath>
 #include <functional>
+#include <map>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -389,45 +391,156 @@ inline bool parcad_bend_at(const TopoDS_Edge& edge, const TopoDS_Face& face, dou
 // surface do where a loft is cut into bands. A fillet's boundary keeps its
 // jump in curvature and stays an edge. Like a closed surface's seam, such an
 // edge is a split in the representation, not an edge of the shape.
-inline std::unique_ptr<TopoDS_Shape> parcad_split_edges(const TopoDS_Shape& shape) {
-  return parcad_surfacing_guard("finding split edges", [&]() {
+// Whether `edge` between `first` and `second` is a split in the
+// representation: the faces agree on position, normal and bend along it.
+inline bool parcad_is_split(const TopoDS_Edge& edge, const TopoDS_Face& first, const TopoDS_Face& second) {
+  for (double t : {0.2, 0.5, 0.8}) {
+    gp_Pnt p;
+    gp_Pnt q;
+    gp_Dir n;
+    gp_Dir m;
+    double h1 = 0.0, k1 = 0.0, h2 = 0.0, k2 = 0.0;
+    if (!parcad_bend_at(edge, first, t, p, n, h1, k1) || !parcad_bend_at(edge, second, t, q, m, h2, k2)) {
+      return false;
+    }
+    const double scale = 1.0 + std::abs(h1) + std::abs(h2);
+    if (n.Angle(m) > 1e-6 || std::abs(h1 - h2) > 1e-6 * scale ||
+        std::abs(k1 - k2) > 1e-6 * scale * scale || p.Distance(q) > 1e-6) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Whether two edges lie on one curve: the same underlying curve, or equal
+// lines or circles. Any other pair is kept apart rather than guessed at.
+inline bool parcad_same_curve(const TopoDS_Edge& a, const TopoDS_Edge& b) {
+  TopLoc_Location at_a, at_b;
+  double first = 0.0, last = 0.0;
+  Handle(Geom_Curve) curve_a = BRep_Tool::Curve(a, at_a, first, last);
+  Handle(Geom_Curve) curve_b = BRep_Tool::Curve(b, at_b, first, last);
+  if (curve_a.IsNull() || curve_b.IsNull()) {
+    return false;
+  }
+  const auto basis = [](Handle(Geom_Curve) curve) {
+    while (auto trimmed = Handle(Geom_TrimmedCurve)::DownCast(curve)) {
+      curve = trimmed->BasisCurve();
+    }
+    return curve;
+  };
+  if (basis(curve_a) == basis(curve_b) && at_a.IsEqual(at_b)) {
+    return true;
+  }
+  const BRepAdaptor_Curve along_a(a);
+  const BRepAdaptor_Curve along_b(b);
+  if (along_a.GetType() != along_b.GetType()) {
+    return false;
+  }
+  const double tolerance = std::max({BRep_Tool::Tolerance(a), BRep_Tool::Tolerance(b), Precision::Confusion()});
+  switch (along_a.GetType()) {
+    case GeomAbs_Line: {
+      const gp_Lin line_a = along_a.Line();
+      const gp_Lin line_b = along_b.Line();
+      return line_a.Direction().IsParallel(line_b.Direction(), Precision::Angular()) &&
+             line_a.Distance(line_b.Location()) <= tolerance;
+    }
+    case GeomAbs_Circle: {
+      const gp_Circ circle_a = along_a.Circle();
+      const gp_Circ circle_b = along_b.Circle();
+      return circle_a.Location().Distance(circle_b.Location()) <= tolerance &&
+             std::abs(circle_a.Radius() - circle_b.Radius()) <= tolerance &&
+             circle_a.Axis().Direction().IsParallel(circle_b.Axis().Direction(), Precision::Angular());
+    }
+    default:
+      return false;
+  }
+}
+
+// The edges of the shape as a person reads them, one compound of kernel
+// edges each. A seam, a split between faces of one surface and a degenerate
+// pole are the representation's, not the shape's, so none is an edge here;
+// and where only such an edge ends on a vertex, the vertex is no corner, so
+// the two pieces meeting there are one edge when they lie on one curve. A
+// sphere's seam ending on the rim of a boss fused onto it no longer halves
+// the rim. Added for parcad; see PARCAD-CHANGES.md.
+inline std::unique_ptr<std::vector<TopoDS_Shape>> parcad_logical_edges(const TopoDS_Shape& shape) {
+  return parcad_surfacing_guard("grouping the edges", [&]() {
     ParcadAncestors edge_faces;
     TopExp::MapShapesAndUniqueAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces);
-    std::vector<TopoDS_Shape> found;
-    for (int i = 1; i <= edge_faces.Extent(); ++i) {
-      const NCollection_List<TopoDS_Shape>& around = edge_faces.FindFromIndex(i);
-      if (around.Extent() != 2) {
-        continue;
-      }
+    const int count = edge_faces.Extent();
+    std::vector<bool> hidden(count + 1, false);
+    for (int i = 1; i <= count; ++i) {
       const TopoDS_Edge edge = TopoDS::Edge(edge_faces.FindKey(i));
-      if (BRep_Tool::Degenerated(edge)) {
+      const NCollection_List<TopoDS_Shape>& around = edge_faces.FindFromIndex(i);
+      hidden[i] = BRep_Tool::Degenerated(edge) ||
+                  (around.Extent() == 1 && BRep_Tool::IsClosed(edge, TopoDS::Face(around.First()))) ||
+                  (around.Extent() == 2 &&
+                   parcad_is_split(edge, TopoDS::Face(around.First()), TopoDS::Face(around.Last())));
+    }
+
+    std::vector<int> group(count + 1);
+    for (int i = 0; i <= count; ++i) {
+      group[i] = i;
+    }
+    const auto root = [&](int i) {
+      while (group[i] != i) {
+        i = group[i] = group[group[i]];
+      }
+      return i;
+    };
+
+    ParcadAncestors vertex_edges;
+    TopExp::MapShapesAndUniqueAncestors(shape, TopAbs_VERTEX, TopAbs_EDGE, vertex_edges);
+    for (int v = 1; v <= vertex_edges.Extent(); ++v) {
+      std::vector<int> shown;
+      bool passes_hidden = false;
+      for (const TopoDS_Shape& incident : vertex_edges.FindFromIndex(v)) {
+        const int index = edge_faces.FindIndex(incident);
+        if (index == 0) {
+          continue;
+        }
+        if (hidden[index]) {
+          passes_hidden = true;
+        } else {
+          shown.push_back(index);
+        }
+      }
+      if (!passes_hidden || shown.size() != 2) {
         continue;
       }
-      TopoDS_Face first = TopoDS::Face(around.First());
-      TopoDS_Face second = TopoDS::Face(around.Last());
-      bool invisible = true;
-      for (double t : {0.2, 0.5, 0.8}) {
-        gp_Pnt p;
-        gp_Pnt q;
-        gp_Dir n;
-        gp_Dir m;
-        double h1 = 0.0, k1 = 0.0, h2 = 0.0, k2 = 0.0;
-        if (!parcad_bend_at(edge, first, t, p, n, h1, k1) || !parcad_bend_at(edge, second, t, q, m, h2, k2)) {
-          invisible = false;
-          break;
-        }
-        const double scale = 1.0 + std::abs(h1) + std::abs(h2);
-        if (n.Angle(m) > 1e-6 || std::abs(h1 - h2) > 1e-6 * scale ||
-            std::abs(k1 - k2) > 1e-6 * scale * scale || p.Distance(q) > 1e-6) {
-          invisible = false;
-          break;
-        }
+      const TopoDS_Edge a = TopoDS::Edge(edge_faces.FindKey(shown[0]));
+      const TopoDS_Edge b = TopoDS::Edge(edge_faces.FindKey(shown[1]));
+      // An edge that starts and ends here is closed on its own.
+      const TopoDS_Vertex at = TopoDS::Vertex(vertex_edges.FindKey(v));
+      const auto ends_twice = [&](const TopoDS_Edge& edge) {
+        TopoDS_Vertex from, to;
+        TopExp::Vertices(edge, from, to);
+        return from.IsSame(at) && to.IsSame(at);
+      };
+      if (ends_twice(a) || ends_twice(b) || !parcad_same_curve(a, b)) {
+        continue;
       }
-      if (invisible) {
-        found.push_back(edge);
+      group[root(shown[0])] = root(shown[1]);
+    }
+
+    std::map<int, std::vector<TopoDS_Shape>> members;
+    for (int i = 1; i <= count; ++i) {
+      if (!hidden[i]) {
+        members[root(i)].push_back(edge_faces.FindKey(i));
       }
     }
-    return parcad_boxed(parcad_compound(found));
+    auto out = std::unique_ptr<std::vector<TopoDS_Shape>>(new std::vector<TopoDS_Shape>());
+    for (const auto& [_, edges] : members) {
+      out->push_back(parcad_compound(edges));
+    }
+    // An edge no face bounds, a loose wire's, is an edge of the shape by itself.
+    ParcadShapeMap loose;
+    for (TopExp_Explorer e(shape, TopAbs_EDGE); e.More(); e.Next()) {
+      if (!edge_faces.Contains(e.Current()) && loose.Add(e.Current())) {
+        out->push_back(parcad_compound({e.Current()}));
+      }
+    }
+    return out;
   });
 }
 

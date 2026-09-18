@@ -1,7 +1,7 @@
 {
   "name": "beads-on-a-sphere",
   "script": "eval/scripts/beads-on-a-sphere.js",
-  "why": "Sixteen sphere(1) beads on a sphere(8), centres 7.4 mm out. Where a bead's kept cap straddles the bead's own seam, the fuse returns it as two faces and the intersection circle as two arcs; the unify welds the faces, then merges the arcs, and Geom2dConvert::ConcatC1 prepended the closing arc, so the merged edge's pcurves ran one arc behind its 3D circle (1.233 mm at 45 degrees) and the face fix collapsed the bead to its pole: BRepCheck_NotConnected and a solid short of the bare big sphere. Patch 0004 appends, as GeomConvert::ConcatC1 already does in 3D. Exact B-rep 2152.326 mm3, the big sphere plus 16 of the 0.4791 mm3 one bead adds (2144.6606 + 16 x 0.4791 = 2152.3262); the mesh reads a chord short. Distinct from coincident-sphere-union: two radii, no shared surface.",
+  "why": "Sixteen sphere(1) beads on a sphere(8), centres 7.4 mm out. Where a bead's kept cap straddles the bead's own seam, the fuse returns it as two faces and the intersection circle as two arcs; the unify welds the faces, then merges the arcs, and Geom2dConvert::ConcatC1 prepended the closing arc, so the merged edge's pcurves ran one arc behind its 3D circle (1.233 mm at 45 degrees) and the face fix collapsed the bead to its pole: BRepCheck_NotConnected and a solid short of the bare big sphere. Patch 0004 appends, as GeomConvert::ConcatC1 already does in 3D. Exact B-rep 2152.326 mm3, the big sphere plus 16 of the 0.4791 mm3 one bead adds (2144.6606 + 16 x 0.4791 = 2152.3262); the mesh reads a chord short. Distinct from coincident-sphere-union: two radii, no shared surface. The bead on +X meets the big sphere's seam, which the kernel ends on its rim in two pieces; it is one edge, one curve per bead (docs/GOTCHAS.md, \"A seam cut the rim of a bead in two\").",
   "brep": {
     "size": [
       16.791,
@@ -18,6 +18,6 @@
     "watertight": true,
     "faces": 17,
     "edges": 40,
-    "curves": 17
+    "curves": 16
   }
 }
