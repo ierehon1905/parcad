@@ -55,13 +55,71 @@ fn update_now() -> String {
     )
 }
 
-/// For a failure a newer writer is one explanation of.
+/// For a failure a newer writer is one explanation of: an operation, a field
+/// or a query key this host has never heard of. Never for a value of the
+/// wrong type in a field it reads, which the bundled DSL cannot write and a
+/// newer one would not either.
 fn if_newer() -> String {
     format!(
         "If a newer parcad wrote the part, this host (parcad {HOST_VERSION}) is too old for \
          it: update it (brew upgrade parcad, or the latest release), or point the client at \
          a newer host"
     )
+}
+
+/// Whether a message from serde or a field's own reader describes something
+/// this host does not know, as opposed to a value it knows to be wrong.
+fn names_something_unknown(message: &str) -> bool {
+    message.contains("unknown variant") || message.contains("has no key")
+}
+
+/// serde's `invalid type: integer \`0\`, expected struct V3` in the words a
+/// caller can read: the struct name appears in no document, and the DSL
+/// method that writes the field is the thing to fix.
+fn in_the_callers_words(id: usize, op: &str, message: &str) -> String {
+    let Some(rest) = message.strip_prefix("invalid type: ") else {
+        return message.to_string();
+    };
+    let Some((got, expected)) = rest.split_once(", expected ") else {
+        return message.to_string();
+    };
+    let got = match got.split_once(' ') {
+        Some(("integer" | "floating point", value)) => format!("the number {}", value.trim_matches('`')),
+        Some(("string", value)) => format!("the string {value}"),
+        Some(("boolean", value)) => format!("the boolean {}", value.trim_matches('`')),
+        Some(("null", _)) => "null".to_string(),
+        Some(("sequence", _)) | Some(("a", "sequence")) => "a list".to_string(),
+        Some(("map", _)) | Some(("a", "map")) => "an object".to_string(),
+        _ => got.to_string(),
+    };
+    let expected = match expected {
+        "struct V3" => "a point { x, y, z }".to_string(),
+        other => other.to_string(),
+    };
+    let call = match op {
+        "rotate" => Some(".rotate(axis, degrees)"),
+        "translate" => Some(".at(x, y, z)"),
+        "mirror" => Some(".mirror(axis)"),
+        "scale" => Some(".scale(x, y, z)"),
+        "cuboid" => Some("box(x, y, z)"),
+        "cylinder" => Some("cylinder(r, h)"),
+        "sphere" => Some("sphere(r)"),
+        "fillet" => Some(".fillet(radius, selector)"),
+        "chamfer" => Some(".chamfer(distance, selector)"),
+        "extrude" => Some("extrude(section, height)"),
+        "revolve" => Some("revolve(section, degrees)"),
+        _ => None,
+    };
+    match call {
+        Some(call) => format!(
+            "expected {expected}, got {got}. The DSL writes this field from {call}, so the call that \
+             made node {id} was given the wrong argument"
+        ),
+        None => format!(
+            "expected {expected}, got {got}. The DSL writes this field, so the call that made node \
+             {id} was given the wrong argument"
+        ),
+    }
 }
 
 /// Refuse a graph that asks for a feature this host does not have. Lenient
@@ -195,10 +253,11 @@ fn explain(
         .and_then(|rest| rest.split_once("\": "))
     {
         let message = message.strip_suffix('.').unwrap_or(message);
-        return format!(
-            "node {id} ({op}), field \"{field}\": {message}. {}",
-            if_newer()
-        );
+        return if names_something_unknown(message) {
+            format!("node {id} ({op}), field \"{field}\": {message}. {}", if_newer())
+        } else {
+            format!("node {id} ({op}), field \"{field}\": {}.", in_the_callers_words(id, op, message))
+        };
     }
     if error.starts_with("unknown variant") {
         return format!(
@@ -232,10 +291,11 @@ fn explain(
         None => format!("node {id} ({op})"),
     };
     let error = error.strip_suffix('.').unwrap_or(error);
-    format!(
-        "{at}: {error}. {}",
-        if_newer()
-    )
+    if names_something_unknown(error) {
+        format!("{at}: {error}. {}", if_newer())
+    } else {
+        format!("{at}: {}.", in_the_callers_words(id, op, error))
+    }
 }
 
 fn kind_of(value: &serde_json::Value) -> &'static str {
@@ -329,7 +389,30 @@ mod tests {
         ] }));
         assert!(message.starts_with("node 0 (extrude), field \"profile\": a section entry is"), "{message}");
         let message = refusal(json!({ "root": 0, "nodes": [{ "op": "sphere", "r": "big" }] }));
-        assert!(message.starts_with("node 0 (sphere), field \"r\": invalid type"), "{message}");
+        assert_eq!(
+            message,
+            "node 0 (sphere), field \"r\": expected f64, got the string \"big\". The DSL writes this field \
+             from sphere(r), so the call that made node 0 was given the wrong argument."
+        );
+    }
+
+    /// `.rotate(0, 0, 45)` put the number 0 in a field that has always been a
+    /// point, and the refusal told the caller to upgrade the host. A wrong
+    /// value in a field this host reads is never a newer writer.
+    #[test]
+    fn a_wrong_type_in_a_known_field_does_not_blame_the_host_s_age() {
+        let message = refusal(json!({ "units": "mm", "root": 1, "nodes": [
+            { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+            { "op": "rotate", "child": 0, "axis": 0, "degrees": 0 }
+        ] }));
+        assert_eq!(
+            message,
+            "node 1 (rotate), field \"axis\": expected a point { x, y, z }, got the number 0. The DSL \
+             writes this field from .rotate(axis, degrees), so the call that made node 1 was given \
+             the wrong argument."
+        );
+        assert!(!message.contains("too old"), "{message}");
+        assert!(!message.contains("V3"), "{message}");
     }
 
     #[test]
@@ -395,9 +478,10 @@ mod tests {
     #[test]
     fn a_bad_value_inside_a_treatment_target_names_the_target() {
         let message = refusal(treating(json!({ "selector": { "at": { "z": "top" } } })));
-        assert!(
-            message.starts_with("node 1 (fillet), field \"selector\": at.z must be \"min\" or \"max\", not \"top\". If"),
-            "{message}"
+        assert_eq!(
+            message,
+            "node 1 (fillet), field \"selector\": at.z must be \"min\" or \"max\", not \"top\".",
+            "a value this host knows to be wrong is not a newer writer"
         );
         let message = refusal(treating(json!({ "selector": { "curve": "arc" } })));
         assert!(

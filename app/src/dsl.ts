@@ -254,6 +254,33 @@ function describeValue(value: unknown): string {
   return typeof value === "function" ? "a function" : String(value);
 }
 
+/** An argument as the caller wrote it, for a refusal that quotes the call back. */
+function describeArgument(value: unknown): string {
+  if (value instanceof Shape) return "a shape";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "function") return "a function";
+  if (Array.isArray(value) || (typeof value === "object" && value !== null)) {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+/** An axis name or a vector as the vector, or undefined for anything else. */
+function axisVector(axis: unknown): Vec3 | undefined {
+  if (axis === "x") return { x: 1, y: 0, z: 0 };
+  if (axis === "y") return { x: 0, y: 1, z: 0 };
+  if (axis === "z") return { x: 0, y: 0, z: 1 };
+  if (typeof axis !== "object" || axis === null || Array.isArray(axis)) return undefined;
+  const { x, y, z } = axis as Record<string, unknown>;
+  if (![x, y, z].every((n) => typeof n === "number" && Number.isFinite(n))) return undefined;
+  if (x === 0 && y === 0 && z === 0) return undefined;
+  return { x: x as number, y: y as number, z: z as number };
+}
+
 function refuseSelector(value: unknown, call: string, entity: "edge" | "corner", examples: string): never {
   const why =
     value === undefined
@@ -649,6 +676,13 @@ export class Shape {
 
   /** Move by `x`, `y`, `z` millimetres from where the shape currently sits. */
   translate(x: number, y: number, z = 0): Shape {
+    if (![x, y, z].every((n) => typeof n === "number" && Number.isFinite(n))) {
+      const given = [x, y, z].map(describeArgument).join(", ");
+      throw new Error(
+        `translate takes three finite distances in mm: .at(x, y, z). Got .at(${given}); an array of ` +
+          `coordinates is the OpenSCAD form, and NaN is usually arithmetic on a name that is undefined.`,
+      );
+    }
     return new Shape(
       ([child]) => ({ op: "translate", child, by: { x, y, z } }),
       [this],
@@ -666,14 +700,21 @@ export class Shape {
    * +Y, and `.rotate("x", 90)` takes +Z to -Y, so a Z cylinder lies along Y.
    */
   rotate(axis: Vec3 | "x" | "y" | "z", degrees: number): Shape {
-    const a: Vec3 =
-      axis === "x"
-        ? { x: 1, y: 0, z: 0 }
-        : axis === "y"
-          ? { x: 0, y: 1, z: 0 }
-          : axis === "z"
-            ? { x: 0, y: 0, z: 1 }
-            : axis;
+    const a = axisVector(axis);
+    // `arguments`, not a rest parameter: the signature is what read_docs
+    // shows, and a rest parameter would read as more arguments accepted.
+    const givenAll = Array.from(arguments as ArrayLike<unknown>);
+    if (givenAll.length > 2 || !a || !Number.isFinite(degrees)) {
+      const given = givenAll.map(describeArgument).join(", ");
+      const openscad =
+        givenAll.length > 2 || typeof axis === "number"
+          ? " Three angles is the OpenSCAD form; here it is three calls: .rotate(\"x\", a).rotate(\"y\", b).rotate(\"z\", c)."
+          : "";
+      throw new Error(
+        `rotate takes one axis and one angle in degrees: .rotate("z", 45), or .rotate({ x: 0, y: 1, z: 1 }, 30) ` +
+          `for a diagonal axis. Got .rotate(${given}).${openscad}`,
+      );
+    }
     return new Shape(
       ([child]) => ({ op: "rotate", child, axis: a, degrees }),
       [this],
@@ -694,14 +735,18 @@ export class Shape {
    * A reflection is an isometry, so no surface changes type.
    */
   mirror(axis: Vec3 | "x" | "y" | "z"): Shape {
-    const normal: Vec3 =
-      axis === "x"
-        ? { x: 1, y: 0, z: 0 }
-        : axis === "y"
-          ? { x: 0, y: 1, z: 0 }
-          : axis === "z"
-            ? { x: 0, y: 0, z: 1 }
-            : axis;
+    const normal = axisVector(axis);
+    const givenAll = Array.from(arguments as ArrayLike<unknown>);
+    if (givenAll.length > 1 || !normal) {
+      const given = givenAll.map(describeArgument).join(", ");
+      throw new Error(
+        `mirror takes the normal of the plane to reflect in: .mirror("x") flips X across the YZ plane, ` +
+          `or .mirror({ x: 1, y: 1, z: 0 }) for a diagonal plane. Got .mirror(${given}).` +
+          (givenAll.length > 1 || typeof axis === "number"
+            ? " A vector of flags is the OpenSCAD form; here it is one axis name, or one normal."
+            : ""),
+      );
+    }
     return new Shape(([child]) => ({ op: "mirror", child, normal }), [this]);
   }
 
@@ -714,6 +759,15 @@ export class Shape {
    *   longer finds. Fillet after stretching.
    */
   scale(x: number, y = x, z = x): Shape {
+    // Only the form is checked here; a negative factor reaches the kernel,
+    // whose refusal names mirror() and is what eval/cases measures.
+    if (![x, y, z].every((factor) => Number.isFinite(factor) && factor !== 0)) {
+      const given = [x, y, z].map(describeArgument).join(", ");
+      throw new Error(
+        `scale takes one factor, or three: .scale(2) doubles the part, .scale(2, 1, 0.5) stretches it ` +
+          `per axis. Got .scale(${given}). An array of factors is the OpenSCAD form, and a reflection is .mirror("x").`,
+      );
+    }
     return new Shape(
       ([child]) => ({ op: "scale", child, by: { x, y, z } }),
       [this],

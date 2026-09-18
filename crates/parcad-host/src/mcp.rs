@@ -1986,6 +1986,18 @@ mod tests {
         assert_eq!(data["kind"], "script");
         assert_eq!(data["line"], 3);
         assert!(data["node"].is_null());
+
+        // A wrong value in a known field, in the caller's words and without
+        // the host's version: still a refusal on that node.
+        let data = error_data(
+            "node 15 (line 9, rotate), field \"axis\": expected a point { x, y, z }, got the number 0. \
+             The DSL writes this field from .rotate(axis, degrees), so the call that made node 15 \
+             was given the wrong argument.",
+        );
+        assert_eq!(data["kind"], "refused");
+        assert_eq!(data["line"], 9);
+        assert_eq!(data["node"], 15);
+        assert!(data["stage"].is_null());
     }
 
     /// Eleven open_project calls in one session each echoed a script the

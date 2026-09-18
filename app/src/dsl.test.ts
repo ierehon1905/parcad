@@ -859,3 +859,35 @@ describe("a script that declares one of parcad's names", () => {
     expect(__parcadShadowedBuiltinMessage(["box", "hull"], names)).toStartWith("`box` and `hull` are 2 of the");
   });
 });
+
+/**
+ * `.rotate(0, 0, 45)` is the OpenSCAD form and the likeliest wrong call on
+ * this surface. It used to build a graph whose axis was the number 0, which
+ * the kernel refused with a type error blaming the host's version
+ * (docs/COIN_HOLDER_REVIEW.md, L3). The DSL refuses at the call and names the
+ * form.
+ */
+describe("a transform given the wrong arguments", () => {
+  test("rotate refuses three angles and names the form", () => {
+    expect(() => (box(1, 1, 1).rotate as (...a: unknown[]) => Shape)(0, 0, 45)).toThrow(
+      'rotate takes one axis and one angle in degrees: .rotate("z", 45), or .rotate({ x: 0, y: 1, z: 1 }, 30) for a diagonal axis. Got .rotate(0, 0, 45). Three angles is the OpenSCAD form; here it is three calls: .rotate("x", a).rotate("y", b).rotate("z", c).',
+    );
+    expect(() => box(1, 1, 1).rotate("z", Number.NaN)).toThrow("Got .rotate(\"z\", NaN).");
+    expect(() => box(1, 1, 1).rotate({ x: 0, y: 0, z: 0 }, 10)).toThrow("Got .rotate({\"x\":0,\"y\":0,\"z\":0}, 10).");
+    expect(() => box(1, 1, 1).rotate("w" as never, 10)).toThrow('Got .rotate("w", 10).');
+    expect(build(box(1, 1, 1).rotate({ x: 0, y: 1, z: 1 }, 30)).nodes.at(-1)).toMatchObject({ op: "rotate", degrees: 30 });
+  });
+
+  test("mirror, scale and translate refuse the OpenSCAD forms too", () => {
+    expect(() => (box(1, 1, 1).mirror as (...a: unknown[]) => Shape)(1, 0, 0)).toThrow(
+      "Got .mirror(1, 0, 0). A vector of flags is the OpenSCAD form; here it is one axis name, or one normal.",
+    );
+    expect(() => box(1, 1, 1).scale(2, 0, 1)).toThrow("Got .scale(2, 0, 1). An array of factors is the OpenSCAD form");
+    // A negative factor is the kernel's to refuse, naming mirror(): eval/cases/refuse-negative-scale.
+    expect(build(box(1, 1, 1).scale(1, 2, -1)).nodes.at(-1)).toMatchObject({ op: "scale" });
+    expect(() => box(1, 1, 1).scale([2, 1, 1] as never)).toThrow("Got .scale([2,1,1], [2,1,1], [2,1,1]).");
+    expect(() => box(1, 1, 1).at(Number.NaN, 0, 0)).toThrow("Got .at(NaN, 0, 0)");
+    expect(() => box(1, 1, 1).at([1, 2, 3] as never, 0)).toThrow("Got .at([1,2,3], 0, 0)");
+    expect(build(box(1, 1, 1).mirror({ x: 1, y: 1, z: 0 }).scale(2)).nodes.length).toBe(3);
+  });
+});
