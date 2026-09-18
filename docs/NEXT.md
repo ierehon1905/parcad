@@ -36,6 +36,11 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      collision; SOUND only when the reply tells the user both, both arms.
    - Server instructions and the skills say a part is done when `print_check` is
      clean or each flag has a reason — the weakest layer, and one line.
+   - **Grown by the coin-holder review** ([COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md)):
+     overhang per body in its *declared* print orientation (`stands_on` reads
+     0.4 % on every assembled plate today), laid-flat `print/<body>.3mf` written
+     on save, and the author's own `checks` on the returned object all pass
+     through this same door. Build them together.
 2. **Two more steps a model has to remember, found the same day.** Both are
    the shape of item 1: the mechanism exists, nothing makes it happen.
    - **A render is colourless unless asked.** A part carrying materials draws
@@ -116,6 +121,27 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      is a thin adapter, and nothing else here waits on it.
 5. **A measured parts library** — fasteners, bearings, boards, devices, each
    held by eval cases, and a way for one part to import another.
+6. **What the coin-holder session cost, in order** — reviewed 2026-09-18 from
+   three lenses, the order and every sample reply in
+   [COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md). One session designed a
+   3D-printable part in six user turns: every geometric claim measured, every
+   mechanical claim guessed, 241 KB of script resent, 11 round trips lost to
+   the tool surface, one of them a silently wrong section. In order:
+   - a one-day correctness batch: `deny_unknown_fields` on every request
+     struct, an edge count on every treatment, the shadowed builtin named,
+     `rotate` arguments validated, `--set` coerced by schema, dead viewers
+     expired, no script echo from `open_project`;
+   - `project` on every script tool and `edit_part` (old/new, refused on
+     ambiguity) — the one change that halves a session;
+   - `checks` in the returned object, reference bodies never exported, and
+     `note()` for a script's own numbers, labelled requested not measured;
+   - overhang and print files (item 1);
+   - `depth_mm` and `contact_mm2` in `between_bodies` — a 0.002 mm³ graze was
+     read as a catch;
+   - `brief()` with an envelope, judged every build, and a scale rule on renders;
+   - then vocabulary (`MATERIALS`, `OBJECTS` with profiles, `fit()`, `{ at, cut }`,
+     `not`, a listed `styles` topic), `compare_variants`, snapshot summaries,
+     and last the mechanics witness: `check_motion`, `check_flex`.
 
 ### Waiting on a decision
 
