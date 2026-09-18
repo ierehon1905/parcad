@@ -128,9 +128,9 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    mechanical claim guessed, 241 KB of script resent, 11 round trips lost to
    the tool surface, one of them a silently wrong section. In order:
    - a one-day correctness batch: an edge count on every treatment, the
-     shadowed builtin named, `rotate` arguments validated, `--set` coerced by
-     schema, dead viewers expired, no script echo from `open_project`
-     (`deny_unknown_fields` on every request struct landed 2026-09-18);
+     shadowed builtin named, `rotate` arguments validated, dead viewers
+     expired, no script echo from `open_project` (`deny_unknown_fields` on
+     every request struct and `--set` coerced by schema landed 2026-09-18);
    - `project` on every script tool and `edit_part` (old/new, refused on
      ambiguity) — the one change that halves a session;
    - `checks` in the returned object, reference bodies never exported, and

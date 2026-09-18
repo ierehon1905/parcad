@@ -183,7 +183,7 @@ pub struct ViewRequest {
     /// The script an evaluate_part call was given.
     pub script: String,
     /// Seconds the kernel may take, as evaluate_part's.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
 }
 
@@ -233,7 +233,7 @@ pub struct EvaluateRequest {
     #[serde(default)]
     pub section: Option<SectionRequest>,
     /// Pixels per side, 128 to 1024. Defaults to 512.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub image_size: Option<u32>,
     /// Seconds the kernel may take, 1 to 600. Defaults to 20, or
     /// PARCAD_OCCT_TIMEOUT. A part that timed out can be asked again with
@@ -241,7 +241,7 @@ pub struct EvaluateRequest {
     /// script — a render, an export, the window — does not wait again. A
     /// script's own work is counted rather than timed and is raised with
     /// `scriptBudget(n)` in the script, not here.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
 }
 
@@ -257,7 +257,7 @@ pub struct SectionRequest {
     pub axis: String,
     /// Where the plane sits on that axis, in mm. Omit to cut through the middle
     /// of the part, which is what puts a central bore in the picture.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub at_mm: Option<f64>,
     /// Which half survives: `below` or `above` the plane on its axis. Omit and
     /// the half between the plane and the viewer goes, which is the choice that
@@ -280,6 +280,7 @@ pub struct InspectRequest {
     pub script: String,
     /// The intent-graph node of the treatment to resolve, as reported in
     /// `treatments` by `evaluate_part`.
+    #[serde(deserialize_with = "crate::arguments::numeric_required")]
     pub node: usize,
 }
 
@@ -296,7 +297,7 @@ pub struct ProbeRequest {
     pub rays: Vec<service::RayRequest>,
     /// Seconds the kernel may take to build the part, 1 to 600. Defaults to
     /// 20, or PARCAD_OCCT_TIMEOUT.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
 }
 
@@ -308,18 +309,18 @@ pub struct ThicknessRequest {
     /// What counts as too thin, in mm — the process minimum, such as 1.2 for a
     /// typical print or 2.5 for a casting. Without it only the thinnest place
     /// is reported and nothing is counted.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub threshold_mm: Option<f64>,
     /// How many surface points the sweep measures from, 200 to 100000; the
     /// default, 6000, puts one at most about every hundredth of the part's
     /// diagonal, and the reply's `sample_spacing_mm` says how far apart they
     /// came out. Feathers and walls between faces that do not meet are found
     /// at any count; more samples narrow what else can fall between them.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub max_samples: Option<usize>,
     /// Seconds the kernel may take to build and sweep the part, 1 to 600.
     /// Defaults to 20, or PARCAD_OCCT_TIMEOUT.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
 }
 
@@ -360,7 +361,7 @@ pub struct ExportRequest {
     /// Seconds the kernel may take, 1 to 600. Defaults to 20, or
     /// PARCAD_OCCT_TIMEOUT. Reuses the build of an earlier evaluate_part on
     /// the same script when there is one.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
 }
 
@@ -427,7 +428,7 @@ pub struct SetScriptRequest {
     /// How long to wait, in seconds, for a window to report that it evaluated
     /// this revision. 0 to 60; defaults to 20. The reply comes as soon as one
     /// does, or when the time is up with `viewers` saying where each window got.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub wait_s: Option<f64>,
 }
 
@@ -439,7 +440,7 @@ pub struct RestoreRequest {
     /// The snapshot's `id`, from `list_snapshots`.
     pub id: String,
     /// How long to wait for a window to show it, as in `set_script`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub wait_s: Option<f64>,
 }
 
@@ -458,7 +459,7 @@ pub struct OpenRequest {
     pub name: String,
     /// How long to wait, in seconds, for a window to report that it evaluated
     /// the opened part. 0 to 60; defaults to 20.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub wait_s: Option<f64>,
 }
 
@@ -1960,6 +1961,20 @@ mod tests {
         .unwrap()
         .to_string();
         assert!(refusal.starts_with("the arguments have no field \"threshold\" — write \"threshold_mm\" instead."), "{refusal}");
+        // A number that arrives as text is the number; text that is not one
+        // is refused by the field's name.
+        let Args(request) = serde_json::from_value::<Args<ThicknessRequest>>(serde_json::json!({
+            "script": "return box(1, 1, 1);", "threshold_mm": "1.0", "max_samples": "500"
+        }))
+        .unwrap();
+        assert_eq!((request.threshold_mm, request.max_samples), (Some(1.0), Some(500)));
+        let refusal = serde_json::from_value::<Args<ThicknessRequest>>(serde_json::json!({
+            "script": "return box(1, 1, 1);", "threshold_mm": "thin"
+        }))
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(refusal.starts_with("`threshold_mm` is the string \"thin\", where the tool reads a number."), "{refusal}");
         // Every request type refuses a field it would otherwise drop. The
         // list is checked against the tool list, so a new tool's request
         // type cannot be left off it.
