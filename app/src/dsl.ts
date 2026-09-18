@@ -293,7 +293,18 @@ function assertEdgeSelector(selector: EdgeSelector, call: string, write: (select
   if (typeof selector === "string") {
     // The full grammar, not just a non-empty check: this used to accept any
     // non-blank string and let `>Q` survive until the kernel parsed it.
-    parseEdgeSelector(selector);
+    try {
+      parseEdgeSelector(selector);
+    } catch (e) {
+      // An error is read at the moment of need, where a tool description
+      // was read once at the start: the refusal names the tool that parses
+      // a selector without building anything. Only where that tool exists —
+      // the sandbox agents' scripts run in — and not in the editor.
+      if (e instanceof Error && "__parcadNative" in globalThis) {
+        e.message += `. check_selector with selector: ${JSON.stringify(selector)} parses one without building anything.`;
+      }
+      throw e;
+    }
     return;
   }
   if (!isQuery(selector)) {

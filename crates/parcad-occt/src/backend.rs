@@ -4906,7 +4906,9 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 Ok(treatment) => treatment,
                 Err(reason) => bail!(
                     "node {id} ({label}) fillets {count} edge(s) by {radius} mm, and \
-                     OpenCASCADE could not build it ({reason}).{measured}{listing}",
+                     OpenCASCADE could not build it ({reason}).{measured}{listing}\n\
+                     inspect_treatment_target with node: {id} lists every edge this fillet \
+                     would act on, without rebuilding.",
                     measured = repair_sentence(
                         &probe_below(&input, &selected.edges, *radius, false, before, &stage),
                         "these edges",
@@ -5006,7 +5008,9 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 Ok(treatment) => treatment,
                 Err(reason) => bail!(
                     "node {id} ({label}) chamfers {count} edge(s) by {distance} mm, and \
-                     OpenCASCADE could not build it ({reason}).{measured}{listing}",
+                     OpenCASCADE could not build it ({reason}).{measured}{listing}\n\
+                     inspect_treatment_target with node: {id} lists every edge this chamfer \
+                     would act on, without rebuilding.",
                     measured = repair_sentence(
                         &probe_below(&input, &selected.edges, *distance, true, before, &stage),
                         "these edges",

@@ -947,6 +947,21 @@ return box(1, 1, 1);
         assert!(!error.contains("invalid redefinition"), "{error}");
     }
 
+    /// An error is read at the moment of need; the selector refusal names
+    /// the tool that parses one without building anything, and only here,
+    /// where that tool exists.
+    #[test]
+    fn a_selector_refusal_names_check_selector_with_the_selector() {
+        let error = build("return box(20, 20, 20).edges(\">Z and not |Z\").fillet(1);")
+            .err()
+            .expect("not is not in the grammar");
+        assert!(error.contains("invalid edge-selector term \"not |Z\""), "{error}");
+        assert!(
+            error.contains("check_selector with selector: \">Z and not |Z\" parses one without building anything."),
+            "{error}"
+        );
+    }
+
     #[test]
     fn a_syntax_error_names_the_script_rather_than_the_sandbox() {
         let error = build_graph("return box(").expect_err("this does not parse");
