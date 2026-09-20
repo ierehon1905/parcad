@@ -14,6 +14,10 @@ use parcad_core::{
 use serde::Serialize;
 
 /// Read an intent graph, naming the fix if it will not parse.
+pub mod checks;
+
+pub use checks::{ChecksReport, FailedCheck};
+
 pub fn parse_graph(graph: serde_json::Value) -> Result<Doc, String> {
     parcad_core::envelope::parse_doc(graph)
 }
@@ -314,6 +318,12 @@ pub fn round_fraction(v: f64) -> f64 {
 /// exactly what a caller needs to be told about.
 #[derive(Serialize, schemars::JsonSchema)]
 pub struct EvaluationSnapshot {
+    /// The part's own checks, judged on this build: `verdict` `passed` with
+    /// the count, or `failed` with each failing check named, measured and
+    /// located. First, so it is the first thing read. Absent when the script
+    /// carries no `checks`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub checks: Option<ChecksReport>,
     /// Always "mm".
     pub units: String,
     /// `solid` — every body encloses a volume; `surface` — faces with no
@@ -863,6 +873,7 @@ pub fn describe(
         centroid
     };
     EvaluationSnapshot {
+        checks: None,
         units: report.units.clone(),
         kind,
         size: round_point([report.size.x, report.size.y, report.size.z]),

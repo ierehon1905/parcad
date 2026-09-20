@@ -681,6 +681,11 @@ mod tests {
                 "expect-range",
                 "return box(10, 10, 10).edges(\"|Z\").expect({ atLeast: 1 }).fillet(1);".to_owned(),
             ),
+            (
+                "part-checks",
+                "return { top: box(10, 10, 2), stack: cylinder(3, 5).at(0, 0, 4), checks: [{ clear: [\"top\", \"stack\"], atLeast: 0.2 }] };"
+                    .to_owned(),
+            ),
         ];
         let stamped: Vec<&str> = cases.iter().map(|(id, _)| *id).collect();
         assert_eq!(stamped, parcad_core::envelope::FEATURES, "the host's feature list and this table differ");

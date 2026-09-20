@@ -129,6 +129,31 @@ Region maps, `tag_extents`, `probe_part` and `measure_wall_thickness` run
 body by body: a crossing, a point and a thin spot each name the `body` they
 are in.
 
+**A part carries its own checks, and the verdict is read first.** A script
+may return `checks: [...]` beside its bodies — `{ clear: ["top", "stacks"],
+atLeast: 0.2, why }`, `{ interferes }`, `{ touching }`, `{ wall: { min },
+ignore, on }`, `{ size: { max } }`, `{ standsOn: { atLeast } }`, `{ bodies }`,
+`{ watertight }` — and `build()` stamps the list on the graph as a top-level
+key beside `requires` (`Doc::checks`, gated by `envelope.rs` and the
+`part-checks` feature id, validated against the part's body and tag names in
+`Doc::topo_order`). A check lives in the graph and not in a tool argument so
+that it travels with the part: the coin-holder session
+([COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md), B2) kept its checks in
+throwaway scripts and shipped a version they had never run against. It is
+judged in `service::evaluate`, after every build, by
+`parcad_evaluation::checks::judge` over the snapshot the build produced —
+`between_bodies` for the pair checks, the snapshot's size, bed contact, piece
+count and closure for the rest, and the thickness sweep at the check's own
+threshold for `wall` — and the verdict is the snapshot's **first** field
+(`checks: { verdict, passed, failed }`), which is why `serde_json` keeps
+struct order here (`preserve_order`): the first thing in a reply's text is
+the thing a model reads. `evaluate_part` never refuses over a failed check;
+`export_part`, `save_project` and a saving `edit_part` go through one door
+(`service::Door`) that refuses unless `allow_failing: "<reason>"` opens it,
+and the reason is echoed in the reply. `print_check` (NEXT.md, item 1) is the
+second verdict that door is shaped for. The window's own save is not gated:
+the person saving can see the red line in the report.
+
 ### `blend` is a boolean, then a fillet
 
 A `blend` is "do the boolean, then fillet the edges the boolean created": no

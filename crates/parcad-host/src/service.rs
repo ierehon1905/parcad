@@ -856,7 +856,78 @@ pub struct Export {
 /// rather than just the outermost message.
 pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evaluated, String> {
     let built = build_exact(doc, budget, false)?;
-    parcad_evaluation::evaluated(doc, &built.success, built.wall_ms, built.reused)
+    let mut evaluated = parcad_evaluation::evaluated(doc, &built.success, built.wall_ms, built.reused)?;
+    if !doc.checks.is_empty() {
+        // A `wall` check is the thickness sweep at the check's own threshold,
+        // on the build the worker has just made.
+        let mut sweep = |min: f64| {
+            let spec = parcad_occt::Perceive {
+                thickness: Some(parcad_occt::ThicknessSpec {
+                    max_samples: DEFAULT_THICKNESS_SAMPLES,
+                    threshold_mm: Some(min),
+                }),
+                ..Default::default()
+            };
+            perceive(doc, &spec, budget)?
+                .thickness
+                .ok_or_else(|| "the kernel measured no thickness for the wall check".to_string())
+        };
+        evaluated.snapshot.checks = Some(parcad_evaluation::checks::judge(doc, &evaluated.snapshot, &mut sweep)?);
+    }
+    Ok(evaluated)
+}
+
+// ------------------------------------------------------------------ the door
+//
+// What stands between a built part and a file. Every verdict a build carries
+// is judged on the way to `export_part`, `save_project` and a writing
+// `edit_part`, and a failing one refuses the write unless the caller gives a
+// reason. One door, with a slot per verdict: today the author's `checks`;
+// `print_check` (docs/NEXT.md, item 1) slots in beside it without a second
+// argument or a second refusal. evaluate_part never refuses over any of
+// them: a model exploring a change needs the picture of the part that failed.
+
+/// Every verdict a build carries, read off its snapshot.
+#[derive(Debug, Clone, Default)]
+pub struct Door {
+    pub checks: Option<parcad_evaluation::ChecksReport>,
+}
+
+impl Door {
+    pub fn of(snapshot: &parcad_evaluation::EvaluationSnapshot) -> Self {
+        Self { checks: snapshot.checks.clone() }
+    }
+
+    /// Each verdict that fails, as one sentence naming the check and what
+    /// was measured.
+    pub fn failing(&self) -> Vec<String> {
+        self.checks
+            .iter()
+            .flat_map(|report| report.failed.iter().map(|f| f.sentence()))
+            .collect()
+    }
+
+    /// Whether `action` may write: nothing fails, or `allow_failing` gives a
+    /// reason, which is returned to be echoed in the reply. A refusal names
+    /// every failing check with its measurement and the argument that opens
+    /// the door.
+    pub fn pass(&self, allow_failing: Option<&str>, action: &str) -> Result<Option<String>, String> {
+        let failing = self.failing();
+        if failing.is_empty() {
+            return Ok(None);
+        }
+        let count = failing.len();
+        let checks = if count == 1 { "check fails" } else { "checks fail" };
+        match allow_failing.map(str::trim).filter(|r| !r.is_empty()) {
+            Some(reason) => Ok(Some(reason.to_string())),
+            None => Err(format!(
+                "{action} refused: {count} of the part's own {checks} — {}. Fix the part and call \
+                 again, or pass allow_failing: \"<why it is acceptable>\" to write it anyway; the \
+                 reason is kept in the reply.",
+                failing.join("; ")
+            )),
+        }
+    }
 }
 
 // ------------------------------------------------------------- build cache

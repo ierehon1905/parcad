@@ -1,0 +1,70 @@
+{
+  "name": "checked-holder",
+  "script": "eval/scripts/checked-holder.js",
+  "why": "A part carrying five of its own checks, judged on the build: four hold and `clear plate↔stack atLeast 0.2` fails by the closed-form 0.13 mm the script places the stack at (underside at z = 3.13 over a plate top at z = 3). The verdict is the app's own judge over the same snapshot, so a check that quietly starts passing, or fails by another number, goes red here. docs/COIN_HOLDER_REVIEW.md, B2.",
+  "brep": {
+    "size": [
+      60.0,
+      40.0,
+      23.13
+    ],
+    "volume_mm3": 16242.777,
+    "area_mm2": 7812.033,
+    "triangles": 444,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 2400.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 9,
+    "edges": 30,
+    "curves": 14,
+    "requires": [
+      "part-checks"
+    ],
+    "named_bodies": {
+      "plate": {
+        "size": [
+          60.0,
+          40.0,
+          3.0
+        ],
+        "volume_mm3": 7200.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "stack": {
+        "size": [
+          23.995,
+          23.998,
+          20.0
+        ],
+        "volume_mm3": 9042.777,
+        "faces": 3,
+        "edges": 6,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "plate/stack": {
+        "verdict": "clear",
+        "clearance_mm": 0.13,
+        "interference_mm3": 0.0
+      }
+    },
+    "checks": {
+      "passed": 4,
+      "failed": [
+        {
+          "check": "clear plate↔stack atLeast 0.2",
+          "measured_mm": 0.13
+        }
+      ]
+    }
+  }
+}

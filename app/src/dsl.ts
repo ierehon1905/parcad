@@ -7,6 +7,8 @@
  * - A script returns one shape, or named bodies, `return { base, lid }`,
  *   which are measured apart and against each other and never fused.
  *   Selectors, tags and treatments work inside one body.
+ * - `checks: [...]` beside the bodies is a list of rules the build must
+ *   hold, judged on every build and reported first; see `Check`.
  * - A shape may be a *surface*: faces with no inside and free edges where it
  *   ends. It reports area and free edges instead of a volume; booleans,
  *   fillets, wall thickness and STL refuse it until `.thicken(t)` makes it a
@@ -28,7 +30,7 @@
  * carries one exactly, and named bodies may mix solids and surfaces.
  */
 
-import { parseEdgeSelector, parseVertexSelector, queryShapeError } from "./selectors";
+import { isObject, list, parseEdgeSelector, parseVertexSelector, queryShapeError, render, spelled, unknownKeys } from "./selectors";
 
 export type Vec3 = { x: number; y: number; z: number };
 
@@ -3799,6 +3801,8 @@ export interface Doc {
   nodes: Record<string, unknown>[];
   /** Features the graph uses that an older host cannot read; see {@link GRAPH_FEATURES}. */
   requires?: Requirement[];
+  /** The part's own checks, judged on every build; see {@link Check}. */
+  checks?: Check[];
 }
 
 /** @internal A feature a graph needs, in words a host that has never heard of it can print. */
@@ -3842,7 +3846,14 @@ function entryHas(node: GraphNode, key: string): boolean {
  * `crates/parcad-core/src/envelope.rs`; a host test holds the two together.
  * Not exported: every export is a reserved word in a script.
  */
-const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean })[] = [
+const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean; doc?: (doc: Doc) => boolean })[] = [
+  {
+    feature: "part-checks",
+    after: "0.0.9",
+    what: "checks carried in the part (checks: [...] beside the bodies)",
+    uses: () => false,
+    doc: (doc) => (doc.checks?.length ?? 0) > 0,
+  },
   {
     feature: "section-curves",
     after: "0.0.6",
@@ -3906,7 +3917,7 @@ const SURFACE_OPS = [
 ];
 
 function stamped(doc: Doc): Doc {
-  const requires = GRAPH_FEATURES.filter((f) => doc.nodes.some(f.uses)).map(({ feature, after, what }) => ({
+  const requires = GRAPH_FEATURES.filter((f) => doc.nodes.some(f.uses) || f.doc?.(doc)).map(({ feature, after, what }) => ({
     feature,
     after,
     what,
@@ -3916,9 +3927,133 @@ function stamped(doc: Doc): Doc {
 
 /**
  * What a script may return: one shape, or an object naming each body of a
- * part that stays in several — `return { base, lid }`.
+ * part that stays in several — `return { base, lid }` — where one key,
+ * `checks`, may be a list of {@link Check}s instead of a body.
  */
-export type Part = Shape | Record<string, Shape>;
+export type Part = Shape | Record<string, Shape | Check[]>;
+
+/**
+ * One rule the built part must hold, written as `checks: [...]` beside the
+ * bodies it is about. Judged on every build from what the kernel measured,
+ * and reported first: `{ verdict: "passed", passed: n }`, or each failing
+ * check with its measurement, where, and its `why`.
+ *
+ * - One head key per check: `clear`, `interferes`, `touching` (a pair of
+ *   body names), `wall`, `size`, `standsOn`, `bodies` or `watertight`.
+ * - `atLeast` qualifies `clear` (mm) and `interferes` (mm³); `ignore` and
+ *   `on` qualify `wall`. Names must be bodies and tags the part has.
+ * - evaluate_part reports a failed check and builds on; export_part and
+ *   save_project refuse it unless given `allow_failing: "<reason>"`.
+ *
+ * @example
+ *     const plate = box(60, 40, 3).tag("plate");
+ *     const stack = cylinder(12, 20).at(0, 0, 11.7).tag("stack");
+ *     return {
+ *       plate, stack,
+ *       checks: [
+ *         { clear: ["plate", "stack"], atLeast: 0.2, why: "coins must not bind on the plate" },
+ *         { wall: { min: 1 }, ignore: ["feather"] },
+ *         { size: { max: [115, 65, 40] } },
+ *       ],
+ *     };
+ *
+ * @remarks
+ * No new global: every export is a reserved word in a script (DSL_GAPS §7),
+ * so `assert`, `check` and `clear` would each break saved parts, and
+ * `clearance` is already taken. The one thing lost is a body named
+ * `checks`, refused in a sentence. The kernel already measures every pair
+ * and the snapshot already carries size, bed contact, piece count and
+ * watertightness; only `wall` costs anything, the thickness sweep at the
+ * check's own threshold. docs/COIN_HOLDER_REVIEW.md B2 is why a check lives
+ * in the part: a check in a throwaway script is one that stops being re-run.
+ */
+export interface Check {
+  /** The two bodies never touch, by at least `atLeast` mm. */
+  clear?: [string, string];
+  /** The two bodies overlap, by at least `atLeast` mm³: a catch that has to catch. */
+  interferes?: [string, string];
+  /** The two bodies are flush: neither gap nor overlap. */
+  touching?: [string, string];
+  /** Nothing in the part is thinner than `min` mm, measured as `measure_wall_thickness` does. */
+  wall?: { min: number };
+  /** The part fits inside `max` mm on each axis, as drawn. */
+  size?: { max: [number, number, number] };
+  /** At least this fraction of the footprint reaches the bed, 0 to 1. */
+  standsOn?: { atLeast: number };
+  /** The part is exactly this many free-standing pieces. */
+  bodies?: number;
+  /** The mesh closes. `true` is the only value. */
+  watertight?: true;
+  /** For `clear`, the least clearance in mm; for `interferes`, the least shared volume in mm³. */
+  atLeast?: number;
+  /** For `wall`: tags whose surfaces are left out, and `"feather"` or `"edge"` to leave out that kind of thin reading. */
+  ignore?: string[];
+  /** For `wall`: only material on these tags' surfaces counts. */
+  on?: string[];
+  /** Free text, echoed back when the check fails. */
+  why?: string;
+}
+
+/** The keys a check may carry, and the key an author might write for one. */
+const CHECK_KEYS = ["clear", "interferes", "touching", "wall", "size", "standsOn", "bodies", "watertight", "atLeast", "ignore", "on", "why"];
+const CHECK_HEADS = CHECK_KEYS.slice(0, 8);
+const CHECK_SYNONYMS: Record<string, string> = {
+  clearance: "atLeast",
+  clearancemm: "atLeast",
+  gap: "atLeast",
+  min: "atLeast",
+  minimum: "atLeast",
+  atmost: "atLeast",
+  thickness: "wall",
+  thin: "wall",
+  wallthickness: "wall",
+  interfere: "interferes",
+  interference: "interferes",
+  overlap: "interferes",
+  overlaps: "interferes",
+  touch: "touching",
+  touches: "touching",
+  envelope: "size",
+  fits: "size",
+  stands: "standsOn",
+  footprint: "standsOn",
+  bed: "standsOn",
+  reason: "why",
+  because: "why",
+  except: "ignore",
+  only: "on",
+};
+
+/**
+ * Why a check cannot be read, naming what to write instead, or `undefined`
+ * when it can. The shape only — which bodies exist is checked by `build`,
+ * and the numbers by the host (`Check::validate` in `parcad-core`).
+ */
+function checkShapeError(check: unknown, index: number): string | undefined {
+  const at = `check ${index + 1}`;
+  if (!isObject(check)) {
+    return `${at} is ${Array.isArray(check) ? "an array" : `a ${typeof check}`}, not an object such as { clear: ["top", "stacks"], atLeast: 0.2 }`;
+  }
+  const named = unknownKeys(check, CHECK_KEYS, (key, value) => {
+    const normal = key.replace(/[_\- ]/g, "").toLowerCase();
+    const own = CHECK_KEYS.find((known) => known.toLowerCase() === normal);
+    if (own !== undefined) return spelled(own, value);
+    const synonym = CHECK_SYNONYMS[normal];
+    return synonym === undefined ? undefined : spelled(synonym, value);
+  });
+  if (named) return `${at} ${named}. A check's keys are ${list(CHECK_KEYS)}.`;
+  const heads = CHECK_HEADS.filter((key) => check[key] !== undefined);
+  if (heads.length === 0) return `${at} names nothing to check; one of ${list(CHECK_HEADS)} says what it reads.`;
+  if (heads.length > 1) return `${at} carries ${list(heads)} at once; a check reads one thing, so write one check per key.`;
+  for (const key of ["clear", "interferes", "touching"]) {
+    const pair = check[key];
+    if (pair === undefined) continue;
+    if (!Array.isArray(pair) || pair.length !== 2 || !pair.every((name) => typeof name === "string")) {
+      return `${at}: ${key} is a pair of body names, e.g. ${key}: ["top", "stacks"], not ${render(pair)}.`;
+    }
+  }
+  return undefined;
+}
 
 // The runners (engine.ts, tools/run.ts, script.rs) say the same thing when a
 // script returns neither; not exported, because an export is a reserved word.
@@ -3972,10 +4107,13 @@ export function build(
     );
   }
   if (typeof root !== "object" || root === null) throw new Error(RETURN_HINT);
-  const entries = Object.entries(root);
+  const entries = Object.entries(root).filter(([name]) => name !== "checks");
+  const checks = checksOf(root);
   if (entries.length === 0) {
     throw new Error(
-      "the script returned an empty object; return one shape, or name each body: return { base, lid }",
+      checks === undefined
+        ? "the script returned an empty object; return one shape, or name each body: return { base, lid }"
+        : "the script returned checks and no bodies; name each body beside them: return { base, lid, checks }",
     );
   }
   const bodies = entries.map(([name, shape]) => {
@@ -3989,7 +4127,44 @@ export function build(
   });
   const rootId = nodes.length;
   nodes.push({ op: "bodies", bodies });
-  return stamped({ units: "mm", root: rootId, nodes });
+  if (checks !== undefined) {
+    const names = bodies.map((body) => body.name);
+    checks.forEach((check, index) => {
+      for (const key of ["clear", "interferes", "touching"]) {
+        const pair = (check as Record<string, unknown>)[key];
+        if (!Array.isArray(pair)) continue;
+        for (const name of pair) {
+          if (!names.includes(name as string)) {
+            throw new Error(
+              `check ${index + 1} names a body "${name}" the returned object does not have; its bodies are ${list(names.map((n) => `"${n}"`))}`,
+            );
+          }
+        }
+      }
+    });
+  }
+  return stamped({ units: "mm", root: rootId, nodes, ...(checks && { checks }) });
+}
+
+/** The `checks` list of a returned object, validated, or `undefined` when there is none. */
+function checksOf(root: Record<string, unknown>): Check[] | undefined {
+  if (!("checks" in root)) return undefined;
+  const checks = root.checks;
+  if (checks instanceof Shape) {
+    throw new Error(
+      'a body cannot be named "checks": that key holds the part\'s checks, a list of rules the build must hold (read_docs dsl, Check); rename the body',
+    );
+  }
+  if (!Array.isArray(checks)) {
+    throw new Error(
+      `checks is ${describe(checks)}, not a list of checks such as [{ clear: ["top", "stacks"], atLeast: 0.2 }] (read_docs dsl, Check)`,
+    );
+  }
+  checks.forEach((check, index) => {
+    const error = checkShapeError(check, index);
+    if (error !== undefined) throw new Error(error);
+  });
+  return checks as Check[];
 }
 
 function describe(value: unknown): string {

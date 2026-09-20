@@ -159,7 +159,7 @@ export const EDGE_QUERY_KEYS: readonly string[] = [
 
 const FACE_NORMALS = ["+x", "-x", "+y", "-y", "+z", "-z"];
 
-type Hint = (key: string, value: unknown) => string | undefined;
+export type Hint = (key: string, value: unknown) => string | undefined;
 
 /**
  * Why a query object cannot be read, naming what to write instead, or
@@ -179,7 +179,7 @@ export function queryShapeError(query: Record<string, unknown>, kind: "edge" | "
   return atError(query.at) ?? adjacentToError(query.adjacentTo);
 }
 
-function unknownKeys(object: Record<string, unknown>, known: readonly string[], hint: Hint): string | undefined {
+export function unknownKeys(object: Record<string, unknown>, known: readonly string[], hint: Hint): string | undefined {
   const unknown = Object.keys(object)
     .filter((key) => !known.includes(key))
     .sort();
@@ -276,24 +276,24 @@ function faceNormal(written: string): string | undefined {
 }
 
 /** The key a hint names, with the value the author wrote when it is a string or a whole number: `on: "lip"`. */
-function spelled(key: string, value: unknown): string {
+export function spelled(key: string, value: unknown): string {
   return typeof value === "string" || Number.isSafeInteger(value) ? `${key}: ${render(value)}` : key;
 }
 
 /** A key as a person might have meant it: `generated_by` is `generatedby`. */
-function normalize(key: string): string {
+export function normalize(key: string): string {
   return key.replace(/[_\- ]/g, "").toLowerCase();
 }
 
 /** `a`, `a and b`, `a, b and c`. */
-function list(items: readonly string[]): string {
+export function list(items: readonly string[]): string {
   return items.length < 2 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
-function isObject(value: unknown): value is Record<string, unknown> {
+export function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function render(value: unknown): string {
+export function render(value: unknown): string {
   return JSON.stringify(value) ?? String(value);
 }

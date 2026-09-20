@@ -249,6 +249,12 @@ pub struct Expect {
     /// order: the verdict, and the clearance or the shared volume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub between_bodies: Option<BTreeMap<String, BetweenExpect>>,
+    /// The part's own `checks`, judged as `evaluate_part` judges them: how
+    /// many hold, and each that does not with what was measured. Recorded
+    /// whenever the part carries checks; a check that quietly starts
+    /// passing, or failing by a different number, goes red.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<ChecksExpect>,
 
     /// Other scripts laid against the part with `check_fit`. Each is asked
     /// twice on the worker that has just evaluated the part, so the second
@@ -577,6 +583,38 @@ pub struct BetweenExpect {
     pub interference_mm3: f64,
 }
 
+/// The verdict on a part's own checks, as the reply carries it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChecksExpect {
+    pub passed: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<FailedCheckExpect>,
+}
+
+/// One failing check: its sentence and its measurement, held to `size_mm`
+/// for a length and `volume_pct` for a volume.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FailedCheckExpect {
+    pub check: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured_mm3: Option<f64>,
+}
+
+impl From<&parcad_evaluation::ChecksReport> for ChecksExpect {
+    fn from(report: &parcad_evaluation::ChecksReport) -> Self {
+        Self {
+            passed: report.passed,
+            failed: report
+                .failed
+                .iter()
+                .map(|f| FailedCheckExpect { check: f.check.clone(), measured_mm: f.measured_mm, measured_mm3: f.measured_mm3 })
+                .collect(),
+        }
+    }
+}
+
 /// A reference script against the part, as `check_fit` reports it. Held like
 /// a pair of bodies: lengths to `size_mm`, the shared volume to `volume_pct`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -651,6 +689,8 @@ pub struct Observed {
     /// one-solid part.
     pub named_bodies: BTreeMap<String, BodyExpect>,
     pub between_bodies: BTreeMap<String, BetweenExpect>,
+    /// The part's own checks judged, when it carries any.
+    pub checks: Option<ChecksExpect>,
 }
 
 /// One assertion that did not hold, phrased so the terminal line is enough to
@@ -956,6 +996,34 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
             pct_check(&mut out, &format!("between_bodies.{pair}.interference_mm3"), want.interference_mm3, got.interference_mm3, tol.volume_pct);
         }
     }
+    if let Some(want) = &expect.checks {
+        match &observed.checks {
+            None => out.push(Mismatch { field: "checks".into(), detail: "expected a verdict on the part's checks; the part carries none".into() }),
+            Some(got) => {
+                if want.passed != got.passed {
+                    out.push(Mismatch { field: "checks.passed".into(), detail: format!("expected {}, got {}", want.passed, got.passed) });
+                }
+                let names = |c: &ChecksExpect| c.failed.iter().map(|f| f.check.clone()).collect::<Vec<_>>();
+                if names(want) != names(got) {
+                    out.push(Mismatch { field: "checks.failed".into(), detail: format!("expected {:?} to fail, got {:?}", names(want), names(got)) });
+                } else {
+                    for (w, g) in want.failed.iter().zip(&got.failed) {
+                        let at = format!("checks.failed[{}]", w.check);
+                        match (w.measured_mm, g.measured_mm) {
+                            (Some(w), Some(g)) => abs_check(&mut out, &format!("{at}.measured_mm"), w, g, tol.size_mm),
+                            (None, None) => {}
+                            (w, g) => out.push(Mismatch { field: format!("{at}.measured_mm"), detail: format!("expected {w:?}, got {g:?}") }),
+                        }
+                        match (w.measured_mm3, g.measured_mm3) {
+                            (Some(w), Some(g)) => pct_check(&mut out, &format!("{at}.measured_mm3"), w, g, tol.volume_pct),
+                            (None, None) => {}
+                            (w, g) => out.push(Mismatch { field: format!("{at}.measured_mm3"), detail: format!("expected {w:?}, got {g:?}") }),
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Topology counts are exact integers or nothing. A face count that is
     // "close" is a different part.
@@ -1094,6 +1162,18 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
                 )
             })
             .collect()
+    });
+    expect.checks = observed.checks.as_ref().map(|c| ChecksExpect {
+        passed: c.passed,
+        failed: c
+            .failed
+            .iter()
+            .map(|f| FailedCheckExpect {
+                check: f.check.clone(),
+                measured_mm: f.measured_mm.map(round3),
+                measured_mm3: f.measured_mm3.map(round3),
+            })
+            .collect(),
     });
     expect.between_bodies = (!observed.between_bodies.is_empty()).then(|| {
         observed

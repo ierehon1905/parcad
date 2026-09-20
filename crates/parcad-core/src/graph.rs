@@ -2480,6 +2480,12 @@ pub struct Doc {
     /// [`crate::envelope::parse_doc`] and carried to the worker.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<crate::envelope::Requirement>,
+    /// Rules the build must hold, written by the author beside the bodies
+    /// they are about (`checks: [...]` on the returned object) and judged on
+    /// every build; see [`crate::checks`]. Data, not a body: nothing here
+    /// changes the geometry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<crate::checks::Check>,
 }
 
 fn default_units() -> String {
@@ -2535,6 +2541,7 @@ impl Doc {
         }
 
         self.validate_bodies(&order)?;
+        self.validate_checks()?;
         for &id in &order {
             if let Some(material) = &self.nodes[id].material {
                 material.validate(id)?;
@@ -2628,6 +2635,23 @@ impl Doc {
                     );
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Every check reads as written and names bodies and tags the part has.
+    /// Checked with the cycle check for the same reason bodies are: every
+    /// backend goes through [`Doc::topo_order`] first, so a check that names
+    /// a body the part lacks is refused before anything is built.
+    fn validate_checks(&self) -> anyhow::Result<()> {
+        if self.checks.is_empty() {
+            return Ok(());
+        }
+        let bodies: Vec<&str> = self.bodies().map(|b| b.iter().map(|b| b.name.as_str()).collect()).unwrap_or_default();
+        let mut tags: Vec<&str> = self.tags().into_iter().map(|(_, tag)| tag).collect();
+        tags.dedup();
+        for (index, check) in self.checks.iter().enumerate() {
+            check.validate(index + 1, &bodies, &tags).map_err(|e| anyhow::anyhow!("{e}"))?;
         }
         Ok(())
     }

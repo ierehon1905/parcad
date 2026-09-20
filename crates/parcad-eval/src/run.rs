@@ -1,6 +1,6 @@
 //! Script in, observation out.
 
-use crate::case::{BetweenExpect, BodyExpect, Observed, RefusalKind};
+use crate::case::{BetweenExpect, BodyExpect, ChecksExpect, Observed, RefusalKind};
 use anyhow::{Context, Result};
 use parcad_core::graph::Doc;
 use std::collections::BTreeMap;
@@ -95,6 +95,10 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
     let mass = parcad_core::measure::mass_properties(&tess.vertices, &tess.triangles);
     let size = bounds.size();
     let (tags, unlocated_tags) = locate_tags(&s);
+    let checks = match judge_checks(doc, &s, timeout) {
+        Ok(checks) => checks,
+        Err(message) => return Outcome::Refused { kind: RefusalKind::Host, message },
+    };
 
     let kinds: Vec<bool> = if s.bodies.is_empty() {
         vec![s.kind.is_solid()]
@@ -153,6 +157,7 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
                 )
             })
             .collect(),
+        checks,
         between_bodies: s
             .between
             .iter()
@@ -168,6 +173,29 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
             })
             .collect(),
     })
+}
+
+/// The part's own checks, judged exactly as the app's reply judges them: off
+/// the snapshot the same measure code builds, with a `wall` check's sweep
+/// asked of the worker that has just built the part.
+fn judge_checks(doc: &Doc, s: &parcad_occt::Success, timeout: std::time::Duration) -> Result<Option<ChecksExpect>, String> {
+    if doc.checks.is_empty() {
+        return Ok(None);
+    }
+    let evaluated = parcad_evaluation::evaluated(doc, s, 0, false)?;
+    let mut sweep = |min: f64| {
+        let spec = parcad_occt::Perceive {
+            thickness: Some(parcad_occt::ThicknessSpec { max_samples: 6000, threshold_mm: Some(min) }),
+            ..Default::default()
+        };
+        let opts = parcad_occt::Options { timeout, ..Default::default() };
+        parcad_occt::perceive(doc, &spec, &opts)
+            .map_err(|e| e.to_string())?
+            .thickness
+            .ok_or_else(|| "the kernel measured no thickness for the wall check".to_string())
+    };
+    let report = parcad_evaluation::checks::judge(doc, &evaluated.snapshot, &mut sweep)?;
+    Ok(Some(ChecksExpect::from(&report)))
 }
 
 /// Where each tag's faces sit, as the kernel reports them and the app's
@@ -235,6 +263,7 @@ pub fn brep_available() -> std::result::Result<(), String> {
         root: 0,
         units: "mm".to_string(),
         requires: Vec::new(),
+        checks: Vec::new(),
     };
 
     match parcad_occt::evaluate(&doc, &parcad_occt::Options::default()) {

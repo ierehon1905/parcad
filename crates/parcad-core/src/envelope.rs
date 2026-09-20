@@ -43,6 +43,7 @@ pub const FEATURES: &[&str] = &[
     "loft-wall",
     "surfaces",
     "expect-range",
+    "part-checks",
 ];
 
 /// The version of parcad reading the graph.
@@ -158,6 +159,52 @@ pub fn check_requires(graph: &serde_json::Value) -> Result<(), String> {
     Err(format!("this part uses {}. {}", missing.join(", and "), update_now()))
 }
 
+/// Refuse a check this host cannot read, naming the check, the key and the
+/// key that was meant. Shape only — whether a check names bodies the part
+/// has is `Doc::topo_order`'s, once the nodes have been read.
+pub fn check_checks(graph: &serde_json::Value) -> Result<(), String> {
+    use crate::checks::{meant, Check, KEYS};
+    let Some(checks) = graph.get("checks") else {
+        return Ok(());
+    };
+    let Some(checks) = checks.as_array() else {
+        return Err(format!(
+            "the graph's checks is {}, where this host reads a list of checks, e.g. [{{ clear: \
+             [\"top\", \"stacks\"], atLeast: 0.2 }}]",
+            kind_of(checks)
+        ));
+    };
+    for (index, check) in checks.iter().enumerate() {
+        let at = format!("check {}", index + 1);
+        let Some(object) = check.as_object() else {
+            return Err(format!(
+                "{at} is {}, not an object such as {{ clear: [\"top\", \"stacks\"], atLeast: 0.2 }}",
+                kind_of(check)
+            ));
+        };
+        let unknown: Vec<String> = object
+            .keys()
+            .filter(|key| !KEYS.contains(&key.as_str()))
+            .map(|key| match meant(key) {
+                Some(key_meant) => format!("\"{key}\" (write {key_meant} instead)"),
+                None => format!("\"{key}\""),
+            })
+            .collect();
+        if !unknown.is_empty() {
+            return Err(format!(
+                "{at} has no key {}. A check's keys are {}. {}",
+                unknown.join(", "),
+                KEYS.join(", "),
+                if_newer()
+            ));
+        }
+        if let Err(error) = serde_json::from_value::<Check>(check.clone()) {
+            return Err(format!("{at} could not be read: {error}."));
+        }
+    }
+    Ok(())
+}
+
 /// Read an intent graph, or say which node and field could not be read and
 /// what to do about it.
 pub fn parse_doc(graph: serde_json::Value) -> Result<Doc, String> {
@@ -168,6 +215,7 @@ pub fn parse_doc(graph: serde_json::Value) -> Result<Doc, String> {
         ));
     };
     check_requires(&graph)?;
+    check_checks(&graph)?;
     if let Some(units) = object.get("units") {
         if units.as_str() != Some("mm") {
             return Err(format!(
@@ -177,10 +225,10 @@ pub fn parse_doc(graph: serde_json::Value) -> Result<Doc, String> {
         }
     }
     for key in object.keys() {
-        if !["units", "root", "nodes", "requires"].contains(&key.as_str()) {
+        if !["units", "root", "nodes", "requires", "checks"].contains(&key.as_str()) {
             return Err(format!(
                 "the graph has a top-level field \"{key}\" this host does not read, alongside \
-                 units, root, nodes and requires. {}",
+                 units, root, nodes, requires and checks. {}",
                 if_newer()
             ));
         }
@@ -428,6 +476,35 @@ mod tests {
         assert!(message.starts_with("the graph's requires is an object"), "{message}");
         let message = refusal(json!({ "root": "0", "nodes": [{ "op": "sphere", "r": 1 }] }));
         assert!(message.starts_with("the graph's root is a string"), "{message}");
+    }
+
+    #[test]
+    fn a_check_key_nothing_reads_is_refused_with_the_key_that_was_meant() {
+        let graph = |check: serde_json::Value| {
+            json!({ "units": "mm", "root": 2, "checks": [check], "nodes": [
+                { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 }, "tag": "top" },
+                { "op": "cuboid", "size": { "x": 5, "y": 5, "z": 5 }, "tag": "stacks" },
+                { "op": "bodies", "bodies": [{ "name": "top", "child": 0 }, { "name": "stacks", "child": 1 }] }
+            ] })
+        };
+        let message = refusal(graph(json!({ "clear": ["top", "stacks"], "clearance": 0.2 })));
+        assert!(
+            message.starts_with("check 1 has no key \"clearance\" (write atLeast instead). A check's keys are clear,"),
+            "{message}"
+        );
+        let message = refusal(graph(json!({ "thickness": { "min": 1 } })));
+        assert!(message.starts_with("check 1 has no key \"thickness\" (write wall instead)"), "{message}");
+        let message = refusal(graph(json!({ "clear": "top" })));
+        assert!(message.starts_with("check 1 could not be read: "), "{message}");
+        let message = refusal(json!({ "units": "mm", "root": 0, "checks": { "clear": [] }, "nodes": [{ "op": "sphere", "r": 1 }] }));
+        assert!(message.starts_with("the graph's checks is an object"), "{message}");
+        let doc = parse_doc(graph(json!({ "clear": ["top", "stacks"], "atLeast": 0.2, "why": "coins" }))).unwrap();
+        assert_eq!(doc.checks.len(), 1);
+        assert_eq!(doc.checks[0].why.as_deref(), Some("coins"));
+        // Which bodies exist is the graph's own check, after the nodes are read.
+        let doc = parse_doc(graph(json!({ "clear": ["top", "stack"] }))).unwrap();
+        let err = doc.topo_order().unwrap_err().to_string();
+        assert!(err.contains("names a body \"stack\" the part does not return"), "{err}");
     }
 
     #[test]
