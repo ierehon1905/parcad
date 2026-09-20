@@ -1717,6 +1717,41 @@ pub fn read_docs(
 mod tests {
     use super::*;
 
+    /// The door refuses naming every failing check with its measurement and
+    /// the argument that opens it; a reason opens it and is handed back; an
+    /// empty reason is no reason.
+    #[test]
+    fn the_door_refuses_a_failing_check_and_a_reason_opens_it() {
+        let failed = parcad_evaluation::ChecksReport {
+            verdict: "failed",
+            passed: 4,
+            failed: vec![parcad_evaluation::FailedCheck {
+                check: "clear top↔stacks atLeast 0.2".into(),
+                measured_mm: Some(0.13),
+                measured_mm3: None,
+                measured: None,
+                at: None,
+                surface_of: None,
+                opposite_surface_of: None,
+                why: Some("coins must not bind on the plate".into()),
+            }],
+        };
+        let door = Door { checks: Some(failed) };
+        let refusal = door.pass(None, "export_part").unwrap_err();
+        assert_eq!(
+            refusal,
+            "export_part refused: 1 of the part's own check fails — clear top↔stacks atLeast 0.2 measured \
+             0.13 mm (coins must not bind on the plate). Fix the part and call again, or pass \
+             allow_failing: \"<why it is acceptable>\" to write it anyway; the reason is kept in the reply."
+        );
+        assert!(door.pass(Some("  "), "save_project").unwrap_err().starts_with("save_project refused"));
+        assert_eq!(door.pass(Some("the user accepts the binding"), "save_project").unwrap(), Some("the user accepts the binding".into()));
+        let open = Door { checks: Some(parcad_evaluation::ChecksReport { verdict: "passed", passed: 5, failed: Vec::new() }) };
+        assert_eq!(open.pass(None, "export_part").unwrap(), None);
+        assert_eq!(open.pass(Some("unneeded"), "export_part").unwrap(), None, "a reason nothing needs is not echoed");
+        assert_eq!(Door::default().pass(None, "export_part").unwrap(), None, "a part with no checks has no door");
+    }
+
     /// Documents are built from JSON rather than from `Op` values: this is the
     /// shape a DSL script actually produces, and the reporting bug these tests
     /// exist for was a mismatch between that shape and an assumption about it.

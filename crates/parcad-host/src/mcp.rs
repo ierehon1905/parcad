@@ -433,6 +433,12 @@ pub struct ExportRequest {
     /// the same script when there is one.
     #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
+    /// Write the file although one of the part's own `checks` fails, for
+    /// this reason — the user's decision, in their words. Without it a
+    /// failing check refuses the export, naming the check and what was
+    /// measured; with it the reason is kept in the reply.
+    #[serde(default)]
+    pub allow_failing: Option<String>,
 }
 
 /// Two scripts: the part, and the object it is meant to hold.
@@ -584,6 +590,13 @@ pub struct EditRequest {
     /// Seconds the kernel may take, 1 to 600, as evaluate_part's.
     #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
+    /// Write the part although one of its own `checks` fails, for this
+    /// reason — the user's decision, in their words. Without it a failing
+    /// check refuses an edit that writes part.js, naming the check and what
+    /// was measured; an edit to "@session" changes the screen only and is
+    /// never refused for it.
+    #[serde(default)]
+    pub allow_failing: Option<String>,
 }
 
 /// A measurement with the text it was taken on identified: `script_sha256`
@@ -639,6 +652,12 @@ pub struct SaveRequest {
     pub name: String,
     /// The DSL source to save.
     pub script: String,
+    /// Save although one of the part's own `checks` fails, for this reason —
+    /// the user's decision, in their words. Without it a failing check
+    /// refuses the save, naming the check and what was measured; with it the
+    /// reason is kept in the reply.
+    #[serde(default)]
+    pub allow_failing: Option<String>,
 }
 
 // ------------------------------------------------------------------ replies
@@ -680,6 +699,13 @@ pub struct Exported {
     /// download, which is the only copy they can reach.
     #[serde(skip_serializing_if = "Option::is_none")]
     downloaded: Option<bool>,
+    /// The part's own checks, judged on the build the file came from. A
+    /// failing check refuses the export unless `allow_failing` gave a reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checks: Option<parcad_evaluation::ChecksReport>,
+    /// The reason the file was written over a failing check, as given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allow_failing: Option<String>,
 }
 
 #[derive(Serialize, schemars::JsonSchema)]
@@ -716,6 +742,13 @@ pub struct Saved {
     /// `list_snapshots`.
     #[serde(skip_serializing_if = "Option::is_none")]
     snapshot: Option<String>,
+    /// The part's own checks, judged on the build. A failing check refuses
+    /// the save unless `allow_failing` gave a reason.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    checks: Option<parcad_evaluation::ChecksReport>,
+    /// The reason the part was saved over a failing check, as given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allow_failing: Option<String>,
 }
 
 // -------------------------------------------------------------------- tools
@@ -764,7 +797,7 @@ impl Parcad {
             request.image_size,
             request.timeout_s,
         )?;
-        let (measured, pictures) = blocking(move || {
+        let (measured, pictures, _) = blocking(move || {
             let source = service::resolve_script(
                 request.script.as_deref(),
                 request.project.as_deref(),
@@ -781,7 +814,7 @@ impl Parcad {
     #[tool(
         name = "edit_part",
         annotations(title = "Edit a part in place", read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
-        description = "Change part of a script without sending the whole thing: each edit replaces `old` with `new`, once, and the part is rebuilt and measured exactly as evaluate_part does — same reply, same views — then saved. `project` names the part to edit, or \"@session\" for the script on the user's screen. An `old` that appears twice, or not at all, is refused naming how many times it was found and where, and nothing is written: give more surrounding lines. The edited text is built before anything is written, so a change that does not build is refused and the part is left as it was. The previous text is kept as a snapshot (list_snapshots, restore_snapshot), so an edit is undoable, and an edit to the open part lands in the window's own undo history: the reply then carries `on_screen` with the revision and `viewers`, as set_script's does. A saved part that is also open on screen is put on screen too. Use it for every change after the first: a fillet radius, a dimension, one function — sending 10 KB of unchanged script to change two lines is the most common way a session runs out of room. To try a change without saving it, call evaluate_part with the same `project` and `edits`. The reply adds `edits_applied`, the new `script_sha256`, and for a saved part the `path` written and the `snapshot` kept; pass a reply's `script_sha256` back as `expect_sha256` to be refused if the text changed under you."
+        description = "Change part of a script without sending the whole thing: each edit replaces `old` with `new`, once, and the part is rebuilt and measured exactly as evaluate_part does — same reply, same views — then saved. `project` names the part to edit, or \"@session\" for the script on the user's screen. An `old` that appears twice, or not at all, is refused naming how many times it was found and where, and nothing is written: give more surrounding lines. The edited text is built before anything is written, so a change that does not build is refused and the part is left as it was. The previous text is kept as a snapshot (list_snapshots, restore_snapshot), so an edit is undoable, and an edit to the open part lands in the window's own undo history: the reply then carries `on_screen` with the revision and `viewers`, as set_script's does. A saved part that is also open on screen is put on screen too. Use it for every change after the first: a fillet radius, a dimension, one function — sending 10 KB of unchanged script to change two lines is the most common way a session runs out of room. To try a change without saving it, call evaluate_part with the same `project` and `edits`. The reply adds `edits_applied`, the new `script_sha256`, and for a saved part the `path` written and the `snapshot` kept; pass a reply's `script_sha256` back as `expect_sha256` to be refused if the text changed under you. An edit that writes part.js is refused when one of the part's own `checks` fails on the edited text, naming the check and its measurement, unless `allow_failing` gives the user's reason; an edit to \"@session\" changes only the screen and is never refused for a check — the window shows it red."
     )]
     async fn edit_part(
         &self,
@@ -801,7 +834,7 @@ impl Parcad {
             request.image_size,
             request.timeout_s,
         )?;
-        let (mut measured, pictures, written, changed, edits_applied) = blocking(move || {
+        let (mut measured, pictures, written, changed, edits_applied, allowed) = blocking(move || {
             let source = service::resolve_script(
                 None,
                 Some(&request.project),
@@ -819,11 +852,14 @@ impl Parcad {
                     request.project, on_screen.revision
                 ));
             }
-            let (measured, pictures) = measure(&source, &look)?;
+            let (measured, pictures, door) = measure(&source, &look)?;
             // Built and measured before anything is written, so a refusal
             // above leaves the file and the screen as they were; and a tab's
             // host may pause at the kernel and run this again, so the write
-            // comes after every kernel call, as save_project's does.
+            // comes after every kernel call, as save_project's does. The
+            // door stands before the file only: a screen edit is a proposal
+            // the user watches, with the check red in the window's report.
+            let allowed = if is_screen { None } else { door.pass(request.allow_failing.as_deref(), "edit_part")? };
             let written = if is_screen {
                 None
             } else {
@@ -840,10 +876,13 @@ impl Parcad {
             } else {
                 None
             };
-            Ok((measured, pictures, written, changed, source.edits_applied))
+            Ok((measured, pictures, written, changed, source.edits_applied, allowed))
         })
         .await?;
         measured["edits_applied"] = serde_json::json!(edits_applied);
+        if let Some(reason) = allowed {
+            measured["allow_failing"] = serde_json::json!(reason);
+        }
         if let Some((path, snapshot)) = written {
             measured["path"] = serde_json::json!(path);
             if let Some(snapshot) = snapshot {
@@ -1027,7 +1066,7 @@ impl Parcad {
     #[tool(
         name = "export_part",
         annotations(title = "Export a part to a file", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly."
+        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part that carries its own `checks` is refused when one fails, with the check and its measurement named, and nothing is written: fix the part, or, when the user has decided the failure is acceptable, pass `allow_failing` with their reason, which the reply keeps. The reply's `checks` is the verdict the file was written under."
     )]
     async fn export_part(
         &self,
@@ -1061,6 +1100,10 @@ impl Parcad {
             let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &request.edits, None)?;
             let built = script::build_within(&source.script, script_budget(request.timeout_s))?;
             let mut doc = service::parse_graph(built.graph.clone())?;
+            // The whole part's checks stand before the file, whichever body
+            // is written: the build is the one the export reuses.
+            let door = service::Door::of(&service::evaluate(&doc, budget).map_err(|e| built.locate(e))?.snapshot);
+            let allow_failing = door.pass(request.allow_failing.as_deref(), "export_part")?;
             if let Some(body) = &request.body {
                 doc = service::body_doc(&doc, body)?;
             }
@@ -1098,6 +1141,8 @@ impl Parcad {
                     open_error,
                     downloaded,
                     path,
+                    checks: door.checks,
+                    allow_failing,
                 },
                 &source,
             ))
@@ -1203,7 +1248,7 @@ impl Parcad {
     #[tool(
         name = "save_project",
         annotations(title = "Save project", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Write a new part to parcad's project folder so the user can open it; open_project it afterwards to put it on their screen. For a part that is already saved, call edit_part instead: it changes the lines you name, rebuilds, and saves in one call, without the whole script being sent again. Evaluate a script first: saving one that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not — the file is saved regardless), the `preview` thumbnail written for the app's picker, and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back."
+        description = "Write a new part to parcad's project folder so the user can open it; open_project it afterwards to put it on their screen. For a part that is already saved, call edit_part instead: it changes the lines you name, rebuilds, and saves in one call, without the whole script being sent again. Evaluate a script first: saving one that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not — the file is saved regardless), the `preview` thumbnail written for the app's picker, and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back. A part that builds and fails one of its own `checks` is not saved: the refusal names the check and its measurement; fix the part, or pass `allow_failing` with the user's reason, which the reply keeps beside the `checks` verdict."
     )]
     async fn save_project(
         &self,
@@ -1212,11 +1257,15 @@ impl Parcad {
         let saved = blocking(move || {
             // Built before anything is written: a tab's host may pause at the
             // kernel and run this again, and a write must not happen twice.
-            let thumbnail = preview_of(&request.script);
+            // A script that does not build is still saved, as it always was;
+            // one that builds and fails its own checks is not, without a reason.
+            let thumbnail = built_preview(&request.script);
+            let door = thumbnail.as_ref().map(|(_, door)| door.clone()).unwrap_or_default();
+            let allow_failing = door.pass(request.allow_failing.as_deref(), "save_project")?;
             let snapshot = projects::snapshot(&request.name)?;
             let path = projects::write(&request.name, &request.script)?;
             let (built, error, preview) = match thumbnail {
-                Ok(png) => match projects::write_preview(&request.name, &png) {
+                Ok((png, _)) => match projects::write_preview(&request.name, &png) {
                     Ok(()) => (true, None, projects::preview_path(&request.name)),
                     Err(_) => (true, None, None),
                 },
@@ -1229,6 +1278,8 @@ impl Parcad {
                 error,
                 preview,
                 snapshot,
+                checks: door.checks,
+                allow_failing,
             })
         })
         .await?;
@@ -1760,10 +1811,14 @@ impl Look {
 /// Build, measure and draw a resolved script: evaluate_part's reply as JSON,
 /// with the text it was measured on identified by `script_sha256`, and the
 /// views as WebP.
-fn measure(source: &service::Resolved, look: &Look) -> Result<(serde_json::Value, Vec<Vec<u8>>), String> {
+fn measure(
+    source: &service::Resolved,
+    look: &Look,
+) -> Result<(serde_json::Value, Vec<Vec<u8>>, service::Door), String> {
     let built = script::build_within(&source.script, script_budget(look.timeout_s))?;
     let doc = service::parse_graph(built.graph.clone())?;
     let evaluated = service::evaluate(&doc, budget(look.timeout_s)).map_err(|e| built.locate(e))?;
+    let door = service::Door::of(&evaluated.snapshot);
 
     // Render after measuring, so a part that cannot be built fails on
     // the geometry rather than after spending a render on it.
@@ -1806,7 +1861,7 @@ fn measure(source: &service::Resolved, look: &Look) -> Result<(serde_json::Value
     let mut measured = serde_json::to_value(evaluated.snapshot.with_views(summaries))
         .map_err(|e| format!("serialising the snapshot: {e}"))?;
     measured["script_sha256"] = serde_json::json!(service::script_sha256(&source.script));
-    Ok((measured, pictures))
+    Ok((measured, pictures, door))
 }
 
 /// The measurements as both text and structured content — a client that
@@ -1871,9 +1926,15 @@ fn markdown_image(view: &str, path: &str) -> String {
 
 /// The picker's thumbnail for a script: the iso view of its exact build.
 fn preview_of(script: &str) -> Result<Vec<u8>, String> {
+    built_preview(script).map(|(png, _)| png)
+}
+
+/// The picker's thumbnail, and the door read off the build that drew it.
+fn built_preview(script: &str) -> Result<(Vec<u8>, service::Door), String> {
     let built = script::build(script)?;
     let doc = service::parse_graph(built.graph.clone())?;
     let evaluated = service::evaluate(&doc, None).map_err(|e| built.locate(e))?;
+    let door = service::Door::of(&evaluated.snapshot);
     let views = service::parse_views(&["iso".to_string()])?;
     let renders = service::render(
         &evaluated,
@@ -1886,14 +1947,15 @@ fn preview_of(script: &str) -> Result<Vec<u8>, String> {
             section: None,
         },
     )?;
-    renders
+    let png = renders
         .views
         .into_iter()
         .next()
         .ok_or_else(|| "the iso view drew nothing".to_string())?
         .image
         .to_png()
-        .map_err(|e| format!("encoding the thumbnail: {e:#}"))
+        .map_err(|e| format!("encoding the thumbnail: {e:#}"))?;
+    Ok((png, door))
 }
 
 /// The session after a change, once a window has shown it or the wait is over.
@@ -2606,6 +2668,7 @@ mod tests {
                 let saved = run(Parcad::new().save_project(Parameters(Args(SaveRequest {
                     name: "block".into(),
                     script: script.into(),
+                    allow_failing: None,
                 }))))
                 .expect("saved");
                 assert!(saved.0.built);
@@ -2656,6 +2719,87 @@ mod tests {
                 assert_eq!(std::fs::read_to_string(&kept[0].path).unwrap(), "return box(10, 20, 30);");
                 assert_eq!(measured["snapshot"], kept[0].path);
                 assert!(projects::preview_path("block").is_some(), "the picker's thumbnail is rewritten");
+            })
+        })
+    }
+
+    /// The door: a part whose own check fails is not exported, saved or
+    /// written by an edit, and the refusal names the check and what was
+    /// measured; `allow_failing` opens it and the reason is in the reply. A
+    /// screen edit is not gated.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn a_failing_check_refuses_the_file_unless_told_why() {
+        projects::tests::scoped(|_| {
+            session::tests::scoped(|| {
+                let script = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../eval/scripts/checked-holder.js")).unwrap();
+                let named = "clear plate↔stack atLeast 0.2 measured 0.13 mm (coins must not bind on the plate)";
+
+                let refused = run(Parcad::new().save_project(Parameters(Args(SaveRequest {
+                    name: "holder".into(),
+                    script: script.clone(),
+                    allow_failing: None,
+                }))))
+                .err()
+                .expect("refused");
+                assert!(refused.message.starts_with("save_project refused: 1 of the part's own check fails — "), "{}", refused.message);
+                assert!(refused.message.contains(named), "{}", refused.message);
+                assert!(projects::read("holder").is_err(), "nothing was written");
+
+                let saved = run(Parcad::new().save_project(Parameters(Args(SaveRequest {
+                    name: "holder".into(),
+                    script: script.clone(),
+                    allow_failing: Some("the user accepts coins binding on this plate".into()),
+                }))))
+                .expect("saved over the failing check");
+                assert_eq!(saved.0.allow_failing.as_deref(), Some("the user accepts coins binding on this plate"));
+                let checks = saved.0.checks.as_ref().expect("the verdict rides with the save");
+                assert_eq!((checks.verdict, checks.passed, checks.failed[0].measured_mm), ("failed", 4, Some(0.13)));
+                assert_eq!(projects::read("holder").unwrap(), script);
+
+                let export = |allow: Option<&str>| {
+                    let request: Args<ExportRequest> = serde_json::from_value(serde_json::json!({
+                        "project": "holder", "format": "stl", "allow_failing": allow,
+                    }))
+                    .unwrap();
+                    run(Parcad::new().export_part(Parameters(request)))
+                };
+                let refused = export(None).err().expect("refused");
+                assert!(refused.message.starts_with("export_part refused: "), "{}", refused.message);
+                assert!(refused.message.contains(named), "{}", refused.message);
+                let exported = export(Some("printing a test piece")).expect("exported over the failing check").0;
+                assert_eq!(exported.measured.allow_failing.as_deref(), Some("printing a test piece"));
+                assert_eq!(exported.measured.checks.as_ref().unwrap().verdict, "failed");
+                assert!(std::path::Path::new(&exported.measured.path).exists());
+
+                // An edit that keeps the check failing is refused before the
+                // write; one with a reason lands; one that fixes the part needs none.
+                let edit = |edits: serde_json::Value, allow: Option<&str>| {
+                    run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                        "project": "holder", "edits": edits, "allow_failing": allow,
+                    }))))
+                };
+                let refused = edit(serde_json::json!([{ "old": "coins must not bind", "new": "coins must not stick" }]), None).err().expect("refused");
+                assert!(refused.message.starts_with("edit_part refused: "), "{}", refused.message);
+                assert_eq!(projects::read("holder").unwrap(), script, "refused before the write");
+                let measured = edit(serde_json::json!([{ "old": "coins must not bind", "new": "coins must not stick" }]), Some("wording only")).unwrap().structured_content.unwrap();
+                assert_eq!(measured["allow_failing"], "wording only");
+                assert_eq!(measured["checks"]["verdict"], "failed");
+                assert!(projects::read("holder").unwrap().contains("must not stick"));
+                let measured = edit(serde_json::json!([{ "old": "13.13", "new": "13.5" }]), None).unwrap().structured_content.unwrap();
+                assert_eq!(measured["checks"]["verdict"], "passed");
+                assert!(measured.get("allow_failing").is_none());
+                assert!(projects::read("holder").unwrap().contains("13.5"));
+
+                // The screen is a proposal: never gated.
+                session::push(Some("holder".into()), script.clone(), "tab-a".into(), None);
+                let measured = run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "@session", "edits": [{ "old": "13.13", "new": "13.1" }],
+                }))))
+                .expect("a screen edit is never refused for a check")
+                .structured_content
+                .unwrap();
+                assert_eq!(measured["checks"]["failed"][0]["measured_mm"], 0.1);
             })
         })
     }

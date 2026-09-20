@@ -36,6 +36,12 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      collision; SOUND only when the reply tells the user both, both arms.
    - Server instructions and the skills say a part is done when `print_check` is
      clean or each flag has a reason — the weakest layer, and one line.
+   - **The door exists** (2026-09-20): `service::Door` stands before
+     `export_part`, `save_project` and a saving `edit_part`, refuses naming
+     each failing verdict with its measurement, and `allow_failing: "<reason>"`
+     opens it with the reason echoed in the reply. Today it carries the
+     author's `checks`; `print_check` is the second slot, judged in the same
+     place (`service::evaluate`) and refused through the same argument.
    - **Grown by the coin-holder review** ([COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md)):
      overhang per body in its *declared* print orientation (`stands_on` reads
      0.4 % on every assembled plate today), laid-flat `print/<body>.3mf` written
