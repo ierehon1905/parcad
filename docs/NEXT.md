@@ -109,7 +109,7 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      a kernel that builds a fit's reference from the part's cache
      (docs/GOTCHAS.md).
    - **The in-chat viewer in claude.ai**: the connector works there; whether
-     the 3D card showed under `evaluate_part` was not checked.
+     the 3D card shows under `open_project` was not checked.
    - **Measure `show-me-the-part` for the web**: a tab gives no render path a
      client can open, so the view's `markdown` is absent and the case, as
      written, cannot pass there.
@@ -437,7 +437,7 @@ dependency.
 
 ### The in-chat viewer — built, not yet seen in a real client
 
-`evaluate_part` shows its part in 3D in MCP Apps clients (ARCHITECTURE, "The
+`open_project` shows its part in 3D in MCP Apps clients (ARCHITECTURE, "The
 part inside a chat"); it was checked only in the reference host from
 `modelcontextprotocol/ext-apps`. Left: open it in Claude Desktop and web, where
 the iframe and message size limits are the client's; a GLB export, which

@@ -56,7 +56,7 @@ impl Parcad {
     }
 }
 
-/// The in-chat viewer: an MCP Apps page a client renders beside `evaluate_part`.
+/// The in-chat viewer: an MCP Apps page a client renders beside `open_project`.
 const VIEWER_URI: &str = "ui://parcad/viewer";
 const VIEWER_MIME: &str = "text/html;profile=mcp-app";
 /// The largest mesh `view_part` sends through a chat client.
@@ -81,7 +81,7 @@ fn surface() -> ToolRouter<Parcad> {
         }
         // `ui/resourceUri` is the key hosts read before the extension was final.
         route.attr.meta = match name.as_ref() {
-            "evaluate_part" => Some(rmcp::model::MetaObject(meta(serde_json::json!({
+            "open_project" => Some(rmcp::model::MetaObject(meta(serde_json::json!({
                 "ui": { "resourceUri": VIEWER_URI },
                 "ui/resourceUri": VIEWER_URI,
             })))),
@@ -181,8 +181,13 @@ pub fn service(assets: Arc<dyn Assets>) -> axum::Router {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ViewRequest {
-    /// The script an evaluate_part call was given.
-    pub script: String,
+    /// The script to draw, whole. Give this or `project`.
+    #[serde(default)]
+    pub script: Option<String>,
+    /// The project to draw, as an open_project reply's `name` spells it, or
+    /// "@session" for the script on the user's screen.
+    #[serde(default)]
+    pub project: Option<String>,
     /// Seconds the kernel may take, as evaluate_part's.
     #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
@@ -738,7 +743,7 @@ impl Parcad {
     #[tool(
         name = "view_part",
         annotations(title = "Draw a part in the chat", read_only_hint = true, open_world_hint = false),
-        description = "Only for parcad's in-chat 3D viewer, which calls it itself with the script an evaluate_part call was given: it returns that build's mesh as binary arrays, which are no use to read. To build, measure or look at a part, call evaluate_part."
+        description = "Only for parcad's in-chat 3D viewer, which calls it itself with the project an open_project call opened: it returns that build's mesh as binary arrays, which are no use to read. To build, measure or look at a part, call evaluate_part."
     )]
     async fn view_part(
         &self,
@@ -746,10 +751,13 @@ impl Parcad {
     ) -> Result<rmcp::model::CallToolResult, ErrorData> {
         let budget = budget(request.timeout_s);
         let viewed = blocking(move || {
-            let built = script::build_within(&request.script, script_budget(request.timeout_s))?;
+            let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &[], None)?;
+            let built = script::build_within(&source.script, script_budget(request.timeout_s))?;
             let doc = service::parse_graph(built.graph.clone())?;
             let evaluated = service::evaluate(&doc, budget).map_err(|e| built.locate(e))?;
-            viewed(&evaluated)
+            let mut viewed = viewed(&evaluated)?;
+            viewed["script_sha256"] = serde_json::json!(service::script_sha256(&source.script));
+            Ok(viewed)
         })
         .await?;
         let mut result = rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(
@@ -1271,7 +1279,7 @@ impl ServerHandler for Parcad {
     ) -> Result<rmcp::model::ListResourcesResult, ErrorData> {
         let viewer = rmcp::model::Resource::new(VIEWER_URI, "viewer")
             .with_title("ParCAD part viewer")
-            .with_description("The part an evaluate_part call built, in 3D, for a chat client to show.")
+            .with_description("The part an open_project call opened, in 3D, for a chat client to show.")
             .with_mime_type(VIEWER_MIME);
         Ok(rmcp::model::ListResourcesResult::with_all_items(vec![viewer])
             .with_ttl_ms(TOOL_LIST_TTL_MS)
@@ -2085,16 +2093,21 @@ mod tests {
         assert_eq!(writes, ["export_part", "save_project"]);
     }
 
-    /// A client shows the viewer beside `evaluate_part`, and hides the tool
-    /// that feeds it from the model.
+    /// A client shows the viewer beside `open_project`, the call that shows a
+    /// finished part — not beside every draft `evaluate_part` builds — and
+    /// hides the tool that feeds it from the model. The page asks for the
+    /// part by the project the reply names, so the reply carries no script.
     #[test]
-    fn evaluate_part_names_the_viewer_and_only_the_viewer_calls_view_part() {
+    fn open_project_names_the_viewer_and_only_the_viewer_calls_view_part() {
         let tools = Parcad::new().tool_router.list_all();
         let meta_of = |name: &str| {
             let tool = tools.iter().find(|t| t.name == name).unwrap();
             serde_json::to_value(&tool.meta).unwrap()
         };
-        assert_eq!(meta_of("evaluate_part")["ui"]["resourceUri"], VIEWER_URI);
+        assert_eq!(meta_of("open_project")["ui"]["resourceUri"], VIEWER_URI);
+        assert!(meta_of("evaluate_part").is_null());
+        let view = serde_json::to_value(&tools.iter().find(|t| t.name == "view_part").unwrap().input_schema).unwrap();
+        assert!(view["properties"].get("project").is_some(), "the viewer names the project, not the text");
         assert_eq!(meta_of("view_part")["ui"]["visibility"], serde_json::json!(["app"]));
         assert!(meta_of("read_docs").is_null());
     }

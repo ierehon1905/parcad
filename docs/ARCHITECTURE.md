@@ -801,15 +801,21 @@ question the editor's gold target preview answers, asked in text.
 
 ### The part inside a chat
 
-A client that speaks MCP Apps shows `evaluate_part`'s part in 3D beside the
-call. The tool's `_meta.ui.resourceUri` names `ui://parcad/viewer`, which
+A client that speaks MCP Apps shows `open_project`'s part in 3D beside the
+call. The viewer hangs on the call that shows the user a finished part, not on
+`evaluate_part`: a model builds a part in many drafts, some of which fail, and
+a client draws a card for every call of a tool that names a view, whatever it
+returned. The tool's `_meta.ui.resourceUri` names `ui://parcad/viewer`, which
 `read_resource` answers with `viewer.html` from the same frontend build the
 host serves (`vite.viewer.config.ts` inlines everything into that one file,
 because the client's iframe may load nothing). The page is
-`app/src/viewer/main.ts`: the client hands it the call's `script`, the page
-calls `view_part` for the mesh, and draws it with the window's own `Viewport`.
-`view_part` is marked `visibility: ["app"]`, so a client keeps it from the
-model; it runs the same cached build `evaluate_part` just made.
+`app/src/viewer/main.ts`: the client hands it the call's result, whose `name`
+is the project opened; the page calls `view_part` with that `project` for the
+mesh, and draws it with the window's own `Viewport`. The reply carries no
+script since the 2026-09-18 batch, and the page never needs the text; a reply
+naming neither a project nor a script is said so on the card. `view_part` is
+marked `visibility: ["app"]`, so a client keeps it from the model; a part the
+model evaluated before saving it is already in the build cache.
 
 The mesh goes through the client, not a socket, so its size matters.
 `view_part` sends the mesh as Draco and the rest of the window's reply (edges,
