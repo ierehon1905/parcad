@@ -144,7 +144,11 @@ Read a table in this order:
 2. **`SOUND` second**, per case, never pooled with LUCKY.
 3. **The distribution, not the mean.** One trial cannot tell 3/4 from 4/4, which
    is why three is the floor and four is right when a case decides something.
-4. **Then the transcript.** `field/score.py --show <trial>.jsonl` prints one as
+4. **`sent`, when the tool exists to cut it.** The bytes of `bulky_args` a
+   trial sent — for a server whose bulky argument is the whole artefact, this
+   is what a session spends most of its room on, and a case can require the
+   route that avoids it with `input`. It is a mean per trial in `--suite`.
+5. **Then the transcript.** `field/score.py --show <trial>.jsonl` prints one as
    prose — what it thought, called, got back, answered. Every real finding here
    has been in the prose and none would have survived being turned into a
    regex; the table only says which transcript to read.

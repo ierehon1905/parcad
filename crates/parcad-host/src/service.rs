@@ -1469,6 +1469,164 @@ pub fn check_fit(part: &str, reference: &str) -> Result<parcad_occt::FitReport, 
         .map_err(|e| format!("{e}"))
 }
 
+// ------------------------------------------------------------ script sources
+//
+// A tool's script comes from one of three places — sent whole, read from a
+// saved project, or taken off the user's screen — and may then be edited
+// before it is built. Resolving that here rather than in each transport is
+// what keeps `parcad call`, MCP and a browser tab building the same text for
+// the same arguments; docs/ARCHITECTURE.md, "A third caller: MCP".
+
+/// The `project` that names the script on the user's screen.
+pub const SESSION: &str = "@session";
+
+/// One replacement in a script.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Edit {
+    /// The text to replace, copied exactly — spaces and line breaks included —
+    /// from the script as the previous edit left it. It must appear exactly
+    /// once; when it appears twice, give more of the lines around it.
+    pub old: String,
+    /// What to put in its place. Empty deletes `old`.
+    pub new: String,
+}
+
+/// A script a tool is about to build, and where it came from.
+#[derive(Debug, Clone)]
+pub struct Resolved {
+    /// The text to build, with every edit applied.
+    pub script: String,
+    /// The project it was read from: `None` for a script sent whole,
+    /// [`SESSION`] for the screen.
+    pub project: Option<String>,
+    /// The text before the edits — what `expect_sha256` was checked against,
+    /// and what a write replaces.
+    pub before: String,
+    pub edits_applied: usize,
+}
+
+/// The first 12 hex digits of the SHA-256 of a script: how every reply
+/// identifies the text it was measured on without carrying it.
+pub fn script_sha256(script: &str) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(script.as_bytes());
+    digest.iter().take(6).map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Which script a tool builds: `script` sent whole, or `project` as saved —
+/// [`SESSION`] for the screen — and then `edits`, in order. Refused by name
+/// when both or neither is given; `expect` refuses a project whose current
+/// text no longer hashes to what the caller last saw.
+pub fn resolve_script(
+    script: Option<&str>,
+    project: Option<&str>,
+    edits: &[Edit],
+    expect: Option<&str>,
+) -> Result<Resolved, String> {
+    let (before, project, what) = match (script, project) {
+        (Some(_), Some(_)) => {
+            return Err(
+                "give `project` or `script`, not both: `project` builds a saved part as it \
+                 stands (\"@session\" for the script on the user's screen) and costs no script \
+                 to send; `script` builds the text you send. To change a saved part, keep \
+                 `project` and add `edits`."
+                    .to_string(),
+            );
+        }
+        (None, None) => {
+            return Err(
+                "the arguments need `script` or `project`: `project` is a path from \
+                 list_projects, or \"@session\" for the script on the user's screen, and \
+                 builds that part without sending it; `script` is a whole part. Add `edits` \
+                 to build the part with lines changed."
+                    .to_string(),
+            );
+        }
+        (Some(script), None) => (script.to_string(), None, "the script sent".to_string()),
+        (None, Some(SESSION)) => {
+            let on_screen = crate::session::get();
+            if on_screen.name.is_none() || on_screen.script.trim().is_empty() {
+                return Err(
+                    "nothing is on the user's screen yet, so \"@session\" names no script: \
+                     open_project a part first, or give `project` its name, or send `script`."
+                        .to_string(),
+                );
+            }
+            (on_screen.script, Some(SESSION.to_string()), "the script on screen".to_string())
+        }
+        (None, Some(name)) => (
+            crate::projects::read(name)?,
+            Some(name.to_string()),
+            format!("`{name}`"),
+        ),
+    };
+    if let Some(expected) = expect {
+        let actual = script_sha256(&before);
+        let expected = expected.trim().to_ascii_lowercase();
+        if expected.len() < 12 || !actual.starts_with(&expected[..12]) {
+            return Err(format!(
+                "{what} is now {actual}, not {expected}: it changed since you last read it, so \
+                 these edits may not fit. Read it again ({}) and edit from that text, or leave \
+                 `expect_sha256` out to edit whatever is there now.",
+                if project.as_deref() == Some(SESSION) { "get_session" } else { "read_project" }
+            ));
+        }
+    }
+    let script = apply_edits(&before, edits, &what)?;
+    Ok(Resolved {
+        script,
+        project,
+        before,
+        edits_applied: edits.len(),
+    })
+}
+
+/// Every edit applied in order, each to the text as the previous one left it.
+/// An `old` found twice or never is refused with the count and where, and
+/// nothing is returned: a guess at which occurrence was meant is the kind of
+/// approximation this codebase refuses.
+pub fn apply_edits(text: &str, edits: &[Edit], what: &str) -> Result<String, String> {
+    let mut current = text.to_string();
+    for (index, edit) in edits.iter().enumerate() {
+        let nth = index + 1;
+        if edit.old.is_empty() {
+            return Err(format!("edit {nth}'s `old` is empty; give the text to replace."));
+        }
+        let found: Vec<usize> = current.match_indices(&edit.old).map(|(at, _)| at).collect();
+        match found.as_slice() {
+            [at] => {
+                current.replace_range(*at..*at + edit.old.len(), &edit.new);
+            }
+            [] => {
+                return Err(format!(
+                    "edit {nth}'s `old` appears nowhere in {what}, so nothing was changed. Copy \
+                     it exactly from the text as the earlier edits left it — spaces, quotes and \
+                     line breaks included — and check the earlier edits did not already remove it."
+                ));
+            }
+            many => {
+                let lines: Vec<usize> = many
+                    .iter()
+                    .take(2)
+                    .map(|at| 1 + current[..*at].matches('\n').count())
+                    .collect();
+                let first = if lines[0] == lines[1] {
+                    format!("twice on line {}", lines[0])
+                } else {
+                    format!("at lines {} and {}", lines[0], lines[1])
+                };
+                return Err(format!(
+                    "edit {nth}'s `old` appears {} times in {what} (first {first}), so nothing \
+                     was changed. Give more of the lines around it so it appears exactly once.",
+                    many.len(),
+                ));
+            }
+        }
+    }
+    Ok(current)
+}
+
 /// Read one of parcad's own documents: the language reference, or the prose the
 /// parts themselves cite.
 ///
@@ -2216,5 +2374,44 @@ mod tests {
             treatments.is_empty(),
             "a fillet outside the root's dependencies is not in the part: {treatments:?}"
         );
+    }
+
+    /// The hash every reply identifies its script by: twelve hex digits of
+    /// SHA-256, the same digits an OnScreen reply gives for the same text.
+    #[test]
+    fn a_script_is_identified_by_twelve_hex_digits_of_its_sha256() {
+        assert_eq!(script_sha256("return box(1,1,1);"), "95bebadc1faf");
+        assert_eq!(script_sha256("").len(), 12);
+    }
+
+    /// The saved text is what `project` builds; the screen is `@session`,
+    /// and only when something is on it.
+    #[test]
+    fn a_project_resolves_to_its_saved_text_and_the_session_to_the_screen() {
+        crate::projects::tests::scoped(|_| {
+            crate::session::tests::scoped(|| {
+                crate::projects::create("tray", "return box(1,1,1);").unwrap();
+                let saved = resolve_script(None, Some("tray"), &[], None).unwrap();
+                assert_eq!((saved.script.as_str(), saved.project.as_deref(), saved.edits_applied), ("return box(1,1,1);", Some("tray"), 0));
+                let missing = resolve_script(None, Some("nothing-here"), &[], None).err().unwrap();
+                assert!(missing.contains("nothing-here"), "{missing}");
+
+                let empty = resolve_script(None, Some(SESSION), &[], None).err().unwrap();
+                assert!(empty.starts_with("nothing is on the user's screen yet"), "{empty}");
+                crate::session::push(Some("tray".into()), "return box(2,2,2);".into(), "tab-a".into(), None);
+                let screen = resolve_script(None, Some(SESSION), &[Edit { old: "2,2,2".into(), new: "3,3,3".into() }], None).unwrap();
+                assert_eq!(screen.script, "return box(3,3,3);");
+                assert_eq!(screen.before, "return box(2,2,2);");
+                assert_eq!(screen.project.as_deref(), Some(SESSION));
+                assert_eq!(screen.edits_applied, 1);
+                assert_eq!(crate::session::get().script, "return box(2,2,2);", "resolving writes nothing");
+                assert_eq!(crate::projects::read("tray").unwrap(), "return box(1,1,1);");
+
+                let sent = resolve_script(Some("return box(4,4,4);"), None, &[], None).unwrap();
+                assert_eq!((sent.script.as_str(), sent.project), ("return box(4,4,4);", None));
+                let stale = resolve_script(None, Some(SESSION), &[], Some("000000000000")).err().unwrap();
+                assert!(stale.contains("get_session"), "{stale}");
+            })
+        })
     }
 }

@@ -776,6 +776,23 @@ fifteen minutes rather than asserting a connection nobody has heard from. The
 count is of *sessions* for the same reason — one client that reconnects opens a
 second, and the endpoint cannot tell that from a second client.
 
+Where a tool's script comes from is decided once, in `service::resolve_script`,
+and every transport goes through it: `script` is the text sent whole, `project`
+is a saved part read through `projects::read`, `"@session"` is the script on
+the user's screen read through `session::get`, and `edits` are old/new
+replacements applied in order to whichever of those was chosen — each `old`
+must appear exactly once, or the call is refused with the count and the lines,
+and nothing is built. Every measuring tool takes the three, so "what if the
+wall were 1.2 mm" is one `evaluate_part { project, edits }` that writes nothing;
+`edit_part` is the same resolution followed by a write — built and measured
+first, then snapshotted and saved, or set on screen through `session::set_script`
+so it lands in the window's undo history. Every reply names the text it
+measured by `script_sha256`, twelve hex digits of the script after the edits,
+and `edit_part` refuses when `expect_sha256` no longer matches what is there.
+The build cache is keyed on the graph, so a `project` build of a part just
+saved is a cache hit (`reused_build`). This exists because one session resent
+241 KB of script to change a few lines at a time (docs/COIN_HOLDER_REVIEW.md, B1).
+
 Selector work is where an agent needs the most help, so it gets two tools with no
 UI equivalent: `check_selector` parses a term and returns the error *and* its
 span without touching geometry, and `inspect_treatment_target` resolves a

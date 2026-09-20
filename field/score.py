@@ -132,6 +132,9 @@ def reads_of(rules, blob, final):
 
 def summarise(path, cfg):
     calls, final, think, results, errors = [], "", 0, [], []
+    # Bytes of `bulky_args` the trial sent: for a server whose bulky argument
+    # is the whole artefact, this is what a session spends most of its room on.
+    sent = 0
     # No closing `result` line means killed or still running, which grades OPEN
     # rather than WRONG: a trial that answered nothing is a different fact.
     finished = False
@@ -149,6 +152,8 @@ def summarise(path, cfg):
                     for k, v in (c.get("input") or {}).items():
                         if v not in (None, False, "", [], {}):
                             args[k] += 1
+                        if k in cfg.get("bulky_args", []) and isinstance(v, str):
+                            sent += len(v.encode())
                 elif c["type"] == "thinking":
                     think += 1
         elif m.get("type") == "user":
@@ -176,6 +181,7 @@ def summarise(path, cfg):
         "hidden": hidden,
         "args": args,
         "inputs": " ".join(inputs),
+        "sent": sent,
         "n": len(calls),
         "reads": ",".join(reads_of(cfg["reads"], " ".join(results), final)) or "-",
         # Anything that is neither the server's nor the search that loads it: a
@@ -255,12 +261,13 @@ GRADES = ("SOUND", "LUCKY", "WRONG", "VOID", "OPEN")
 
 def detail(rows):
     print(f'{"trial":10} {"grade":6} {"think":>5} {"calls":>5} {"err":>3} {"reach":>5} '
-          f'{"quote":>5} {"trap":>4} {"src?":4} {"hid":3} {"stray":8} tail')
+          f'{"quote":>5} {"trap":>4} {"src?":4} {"hid":3} {"sent":>6} {"stray":8} tail')
     for r in rows:
         print(f'{r["name"][:10]:10} {r["grade"]:6} {r["think"]:>5} {r["n"]:>5} '
               f'{len(r["errors"]) or "-":>3} {"yes" if r["reached"] else "NO":>5} {"yes" if r["quoted"] else "no":>5} '
               f'{"HIT" if r["trap"] else "-":>4} {"yes" if r["derived"] else "-":4} '
               f'{len(r["hidden"]) or "-":>3} '
+              f'{r["sent"]:>6} '
               f'{(",".join(r["stray"])[:8] if r["stray"] else "-"):8} '
               f'{" ".join(r["final"].split())[-80:]}')
 
@@ -279,7 +286,7 @@ def suite(root, cfg):
     """RUNDIR/<case>/<arm>/trial*.jsonl, plus RUNDIR/<case>/case.md."""
     cases = sorted(p for p in pathlib.Path(root).iterdir() if p.is_dir())
     print(f'{"case":28} {"tests":22} {"arm":6} {"n":>2} {"SLWVO":>7} '
-          f'{"sound":>6} {"reach":>6} {"quote":>6} {"trap":>4} {"hid":>4}')
+          f'{"sound":>6} {"reach":>6} {"quote":>6} {"trap":>4} {"hid":>4} {"sent/trial":>10}')
     per_tool = collections.defaultdict(lambda: [0, 0])   # tool -> [sound, trials]
     total = collections.Counter()
     lucky, wrong, void, hid = [], [], [], []
@@ -310,7 +317,8 @@ def suite(root, cfg):
             print(f'{case.name[:28]:28} {facet[:22]:22} {arm.name[:6]:6} {n:>2} '
                   f'{bar(c, n):>7} {c["SOUND"]}/{n:<4} {reach}/{n:<4} '
                   f'{quote}/{n:<4} {sum(r["trap"] for r in rows) or "-":>4} '
-                  f'{sum(bool(r["hidden"]) for r in rows) or "-":>4}')
+                  f'{sum(bool(r["hidden"]) for r in rows) or "-":>4} '
+                  f'{sum(r["sent"] for r in rows) // n:>10}')
 
     n = sum(total.values())
     if total["OPEN"]:
