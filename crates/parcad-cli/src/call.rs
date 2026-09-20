@@ -70,7 +70,8 @@ pub fn tools(args: impl Iterator<Item = String>) -> Result<()> {
     println!(
         "{} tools. `parcad call <tool> --set key=value --set key=@file --set key:=<json>`: \
          a value is read as the number, boolean or list the schema says it is; `:=` is JSON \
-         as written. `parcad tools --json` for the full schemas.",
+         as written, and `project=@session` is the script on screen. `parcad tools --json` \
+         for the full schemas.",
         tools.len()
     );
     Ok(())
@@ -204,9 +205,12 @@ fn parse_set(pair: &str) -> Result<(String, Value, bool)> {
     let (key, raw) = pair
         .split_once('=')
         .with_context(|| format!("--set needs key=value, got {pair:?}"))?;
+    // `@session` is the one `@` that names no file: the script on screen.
     let value = match raw.strip_prefix('@') {
-        Some(file) => std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?,
-        None => raw.to_string(),
+        Some(file) if raw != "@session" => {
+            std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?
+        }
+        _ => raw.to_string(),
     };
     Ok((key.to_string(), Value::String(value), false))
 }
@@ -254,9 +258,12 @@ fn coerce(arguments: &mut serde_json::Map<String, Value>, texts: &[String], sche
 /// what it is: the escape hatch is documented where it is needed.
 fn text_hint(error: anyhow::Error, texts: &[String], arguments: &serde_json::Map<String, Value>) -> anyhow::Error {
     let message = error.to_string();
-    let sent_as_text = texts
-        .iter()
-        .find(|key| arguments.get(*key).is_some_and(Value::is_string) && message.contains(key.as_str()));
+    // Only a refusal about the field's *type* — "`timeout_s` is the string" —
+    // and not one that merely mentions the field, such as "give `project` or
+    // `script`, not both".
+    let sent_as_text = texts.iter().find(|key| {
+        arguments.get(*key).is_some_and(Value::is_string) && message.contains(&format!("`{key}` is the"))
+    });
     match sent_as_text {
         Some(key) => {
             let text = arguments[key].as_str().unwrap_or_default();
@@ -578,6 +585,7 @@ mod tests {
         for pair in [
             "image_size=768", "timeout_s=120", "name=123", "open=true", "views=[\"iso\"]",
             "script=return box(1, 1, 1);", "section={\"axis\":\"x\"}", "timeout_s:=\"90\"",
+            "project=@session",
         ] {
             let (key, value, literal) = parse_set(pair).unwrap();
             texts.retain(|k| *k != key);
@@ -596,6 +604,7 @@ mod tests {
         assert_eq!(arguments["section"], json!("{\"axis\":\"x\"}"));
         // `:=` won: the text "90" stays a string even on a number field.
         assert_eq!(arguments["timeout_s"], json!("90"));
+        assert_eq!(arguments["project"], json!("@session"), "not a file called session");
     }
 
     #[test]
@@ -610,5 +619,14 @@ mod tests {
         assert!(hinted.to_string().ends_with("--set timeout_s=fast sent text; --set timeout_s:=fast sends it as JSON"), "{hinted}");
         let untouched = text_hint(anyhow::anyhow!("no field \"bogus\""), &["script".to_string()], &arguments);
         assert_eq!(untouched.to_string(), "no field \"bogus\"");
+        // A refusal that names the field for another reason is not about how
+        // its value travelled.
+        arguments.insert("project".into(), json!("bracket"));
+        let both = text_hint(
+            anyhow::anyhow!("give `project` or `script`, not both: `project` builds a saved part"),
+            &["project".to_string()],
+            &arguments,
+        );
+        assert_eq!(both.to_string(), "give `project` or `script`, not both: `project` builds a saved part");
     }
 }

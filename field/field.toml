@@ -26,7 +26,7 @@ hint = '''
 # rather than failed — README.md, "The config", for why that has bitten twice.
 tools = [
   "read_docs",
-  "list_projects", "read_project", "save_project", "evaluate_part",
+  "list_projects", "read_project", "save_project", "evaluate_part", "edit_part",
   "probe_part", "measure_wall_thickness", "list_entities",
   "inspect_treatment_target", "check_selector", "export_part",
   "probe_step_export", "check_fit",

@@ -548,6 +548,44 @@ pub struct OnScreen {
     pub viewers: Vec<session::Viewer>,
 }
 
+/// edit_part's arguments: which text, which changes, and then evaluate_part's
+/// own, so one call builds, measures, draws and saves.
+#[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditRequest {
+    /// The part to edit, as list_projects spells it — 'Mounts/bracket' — or
+    /// "@session" for the script on the user's screen.
+    pub project: String,
+    /// Each { old, new }, applied in order to the text as the previous edit
+    /// left it. `old` must appear exactly once.
+    pub edits: Vec<service::Edit>,
+    /// Refuse unless the part's current text still hashes to this — the
+    /// `script_sha256` a previous reply reported — so an edit written against
+    /// text the user has since changed is refused rather than applied. Leave
+    /// it out to edit whatever is there now.
+    #[serde(default)]
+    pub expect_sha256: Option<String>,
+    /// Also draw the edited part, as evaluate_part's `views`: `iso`, `front`,
+    /// `back`, `left`, `right`, `top`, `bottom`. Omit to measure only.
+    #[serde(default)]
+    pub views: Option<Vec<String>>,
+    /// Colour each view by the tag that owns the surface, as evaluate_part's.
+    #[serde(default)]
+    pub regions: Option<bool>,
+    /// Draw each face in its `.material()`, as evaluate_part's.
+    #[serde(default)]
+    pub materials: Option<bool>,
+    /// Cut the part open on a plane for the views, as evaluate_part's.
+    #[serde(default)]
+    pub section: Option<SectionRequest>,
+    /// Pixels per side, 128 to 1024, as evaluate_part's. Defaults to 512.
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
+    pub image_size: Option<u32>,
+    /// Seconds the kernel may take, 1 to 600, as evaluate_part's.
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
+    pub timeout_s: Option<f64>,
+}
+
 /// A measurement with the text it was taken on identified: `script_sha256`
 /// is the first 12 hex digits of the SHA-256 of the script that was built,
 /// after any `edits`. edit_part's `expect_sha256` takes it, and it is how a
@@ -736,6 +774,87 @@ impl Parcad {
             measure(&source, &look)
         })
         .await?;
+        Ok(pictured(measured, pictures))
+    }
+
+    /// Change a saved part, or the one on screen, by replacing text in it.
+    #[tool(
+        name = "edit_part",
+        annotations(title = "Edit a part in place", read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        description = "Change part of a script without sending the whole thing: each edit replaces `old` with `new`, once, and the part is rebuilt and measured exactly as evaluate_part does — same reply, same views — then saved. `project` names the part to edit, or \"@session\" for the script on the user's screen. An `old` that appears twice, or not at all, is refused naming how many times it was found and where, and nothing is written: give more surrounding lines. The edited text is built before anything is written, so a change that does not build is refused and the part is left as it was. The previous text is kept as a snapshot (list_snapshots, restore_snapshot), so an edit is undoable, and an edit to the open part lands in the window's own undo history: the reply then carries `on_screen` with the revision and `viewers`, as set_script's does. A saved part that is also open on screen is put on screen too. Use it for every change after the first: a fillet radius, a dimension, one function — sending 10 KB of unchanged script to change two lines is the most common way a session runs out of room. To try a change without saving it, call evaluate_part with the same `project` and `edits`. The reply adds `edits_applied`, the new `script_sha256`, and for a saved part the `path` written and the `snapshot` kept; pass a reply's `script_sha256` back as `expect_sha256` to be refused if the text changed under you."
+    )]
+    async fn edit_part(
+        &self,
+        Parameters(Args(request)): Parameters<Args<EditRequest>>,
+    ) -> Result<rmcp::model::CallToolResult, ErrorData> {
+        if request.edits.is_empty() {
+            return Err(invalid(
+                "`edits` is empty: give at least one { old, new }. To build a saved part \
+                 unchanged, call evaluate_part with `project`.",
+            ));
+        }
+        let look = Look::checked(
+            request.views.as_deref(),
+            request.regions,
+            request.materials,
+            request.section.as_ref(),
+            request.image_size,
+            request.timeout_s,
+        )?;
+        let (mut measured, pictures, written, changed, edits_applied) = blocking(move || {
+            let source = service::resolve_script(
+                None,
+                Some(&request.project),
+                &request.edits,
+                request.expect_sha256.as_deref(),
+            )?;
+            let on_screen = session::get();
+            let is_screen = source.project.as_deref() == Some(service::SESSION);
+            let open_here = !is_screen && on_screen.name.as_deref() == Some(request.project.as_str());
+            if open_here && on_screen.script != source.before {
+                return Err(format!(
+                    "`{}` is open on the user's screen with changes that are not in its part.js \
+                     (revision {}), so an edit to the file would not be what they see. Edit \
+                     \"@session\" to change the screen, or open_project it to reload the file first.",
+                    request.project, on_screen.revision
+                ));
+            }
+            let (measured, pictures) = measure(&source, &look)?;
+            // Built and measured before anything is written, so a refusal
+            // above leaves the file and the screen as they were; and a tab's
+            // host may pause at the kernel and run this again, so the write
+            // comes after every kernel call, as save_project's does.
+            let written = if is_screen {
+                None
+            } else {
+                let snapshot = projects::snapshot(&request.project)?;
+                let path = projects::write(&request.project, &source.script)?;
+                if let Ok(png) = preview_of(&source.script) {
+                    let _ = projects::write_preview(&request.project, &png);
+                }
+                Some((path, snapshot))
+            };
+            let changed = if is_screen || open_here {
+                keep_screen(&source.script);
+                Some(session::set_script(source.script.clone(), session::AGENT_ORIGIN)?)
+            } else {
+                None
+            };
+            Ok((measured, pictures, written, changed, source.edits_applied))
+        })
+        .await?;
+        measured["edits_applied"] = serde_json::json!(edits_applied);
+        if let Some((path, snapshot)) = written {
+            measured["path"] = serde_json::json!(path);
+            if let Some(snapshot) = snapshot {
+                measured["snapshot"] = serde_json::json!(snapshot);
+            }
+        }
+        if let Some(changed) = changed {
+            let shown = on_screen(changed, None, false).await;
+            measured["on_screen"] = serde_json::to_value(shown)
+                .map_err(|e| ErrorData::internal_error(format!("serialising the session: {e}"), None))?;
+        }
         Ok(pictured(measured, pictures))
     }
 
@@ -1984,7 +2103,7 @@ mod tests {
         let wire = serde_json::to_value(&listed).unwrap();
         assert_eq!(wire["ttlMs"], serde_json::json!(TOOL_LIST_TTL_MS));
         assert_eq!(wire["cacheScope"], serde_json::json!("public"));
-        assert_eq!(wire["tools"].as_array().unwrap().len(), 19);
+        assert_eq!(wire["tools"].as_array().unwrap().len(), 20);
     }
 
     #[test]
@@ -2090,7 +2209,7 @@ mod tests {
             })
             .map(|tool| tool.name.to_string())
             .collect();
-        assert_eq!(writes, ["export_part", "save_project"]);
+        assert_eq!(writes, ["edit_part", "export_part", "save_project"]);
     }
 
     /// A client shows the viewer beside `open_project`, the call that shows a
@@ -2255,7 +2374,7 @@ mod tests {
             refuses_bogus::<SelectorRequest>(), refuses_bogus::<ExportRequest>(), refuses_bogus::<FitRequest>(),
             refuses_bogus::<StepProbeRequest>(), refuses_bogus::<DocsRequest>(), refuses_bogus::<ProjectRequest>(),
             refuses_bogus::<SetScriptRequest>(), refuses_bogus::<RestoreRequest>(), refuses_bogus::<OpenRequest>(),
-            refuses_bogus::<SaveRequest>(), refuses_bogus::<SectionRequest>(),
+            refuses_bogus::<SaveRequest>(), refuses_bogus::<SectionRequest>(), refuses_bogus::<EditRequest>(),
         ];
         assert!(refusals.iter().all(|r| *r), "{refusals:?}");
         let with_arguments = Parcad::new()
@@ -2264,10 +2383,10 @@ mod tests {
             .iter()
             .filter(|tool| serde_json::to_value(&tool.input_schema).unwrap()["properties"].as_object().is_some_and(|p| !p.is_empty()))
             .count();
-        // Seventeen tools take arguments over sixteen request types (read_project
+        // Eighteen tools take arguments over seventeen request types (read_project
         // and list_snapshots share one), plus the nested section.
-        assert_eq!(with_arguments, 17, "a tool was added; add its request type to this list");
-        assert_eq!(refusals.len(), 17);
+        assert_eq!(with_arguments, 18, "a tool was added; add its request type to this list");
+        assert_eq!(refusals.len(), 18);
     }
 
     /// The tool functions are async; the tests run them to completion here.
@@ -2277,6 +2396,14 @@ mod tests {
             .build()
             .expect("a runtime")
             .block_on(future)
+    }
+
+    fn edit_request(value: serde_json::Value) -> Parameters<Args<EditRequest>> {
+        Parameters(serde_json::from_value(value).expect("a well-formed request"))
+    }
+
+    fn refused(result: Result<rmcp::model::CallToolResult, ErrorData>) -> String {
+        result.err().expect("refused").message.to_string()
     }
 
     /// A tool takes its script from one place: refused by name when it is
@@ -2356,6 +2483,90 @@ mod tests {
         assert_eq!(edited, "const wall = 3;\nconst lid = box(1, 1, wall);\nreturn lid;");
     }
 
+    /// An edit that does not build is refused before anything is written:
+    /// part.js is as it was, and no snapshot was taken.
+    #[test]
+    fn a_failed_edit_writes_nothing() {
+        projects::tests::scoped(|_| {
+            session::tests::scoped(|| {
+                projects::create("tray", "return box(1,1,1);").unwrap();
+                let refusal = refused(run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "tray",
+                    "edits": [{ "old": "return box(1,1,1);", "new": "return box(" }],
+                })))));
+                assert!(refusal.contains("did not parse"), "{refusal}");
+                assert_eq!(projects::read("tray").unwrap(), "return box(1,1,1);");
+                assert!(projects::snapshots("tray").unwrap().is_empty(), "nothing was kept, because nothing was replaced");
+                // The same through the screen: the revision does not move.
+                let before = session::push(Some("tray".into()), "return box(1,1,1);".into(), "tab-a".into(), None);
+                let refusal = refused(run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "@session",
+                    "edits": [{ "old": "box(1,1,1)", "new": "box(" }],
+                })))));
+                assert!(refusal.contains("did not parse"), "{refusal}");
+                assert_eq!(session::get().revision, before.revision);
+                assert_eq!(session::get().script, "return box(1,1,1);");
+            })
+        })
+    }
+
+    /// An edit carrying the hash of text the user has since changed is
+    /// refused naming both hashes, and nothing is written.
+    #[test]
+    fn an_expect_sha256_that_no_longer_matches_is_refused() {
+        projects::tests::scoped(|_| {
+            session::tests::scoped(|| {
+                projects::create("tray", "return box(1,1,1);").unwrap();
+                let refusal = refused(run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "tray",
+                    "expect_sha256": "000000000000",
+                    "edits": [{ "old": "box(1,1,1)", "new": "box(2,2,2)" }],
+                })))));
+                assert!(
+                    refusal.starts_with("`tray` is now 95bebadc1faf, not 000000000000: it changed since you last read it"),
+                    "{refusal}"
+                );
+                assert!(refusal.contains("read_project"), "{refusal}");
+                assert_eq!(projects::read("tray").unwrap(), "return box(1,1,1);");
+                assert!(projects::snapshots("tray").unwrap().is_empty());
+                // A hash too short to mean anything is refused the same way.
+                let refusal = refused(run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "tray", "expect_sha256": "95be",
+                    "edits": [{ "old": "box(1,1,1)", "new": "box(2,2,2)" }],
+                })))));
+                assert!(refusal.contains("not 95be:"), "{refusal}");
+                // The matching hash, in either length, is accepted as far as
+                // the edit; a bad edit is then the refusal, proving the hash passed.
+                for hash in ["95bebadc1faf", "95BEBADC1FAF", "95bebadc1faf0123456789"] {
+                    let refusal = refused(run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                        "project": "tray", "expect_sha256": hash,
+                        "edits": [{ "old": "nowhere", "new": "x" }],
+                    })))));
+                    assert!(refusal.starts_with("edit 1's `old` appears nowhere"), "{hash}: {refusal}");
+                }
+                // A project that is open on screen with unsaved changes is not
+                // edited on disk under the user.
+                session::push(Some("tray".into()), "return box(1,1,2);".into(), "tab-a".into(), None);
+                let refusal = refused(run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "tray",
+                    "edits": [{ "old": "box(1,1,1)", "new": "box(2,2,2)" }],
+                })))));
+                assert!(refusal.starts_with("`tray` is open on the user's screen with changes that are not in its part.js"), "{refusal}");
+                assert!(refusal.contains("\"@session\""), "{refusal}");
+                assert_eq!(projects::read("tray").unwrap(), "return box(1,1,1);");
+            })
+        })
+    }
+
+    /// `edits` is empty means the caller wanted evaluate_part.
+    #[test]
+    fn an_edit_with_nothing_to_change_names_evaluate_part() {
+        let refusal = refused(run(Parcad::new().edit_part(edit_request(serde_json::json!({
+            "project": "tray", "edits": [],
+        })))));
+        assert!(refusal.contains("evaluate_part"), "{refusal}");
+    }
+
     /// A save fills the build cache; a `project` evaluate of the same part
     /// finds it there and runs no second kernel build.
     #[test]
@@ -2391,4 +2602,77 @@ mod tests {
         })
     }
 
+    /// An edit is built, measured and then written: the file holds the new
+    /// text, the old text is a snapshot, and the reply says what was done.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn an_edit_is_built_measured_and_then_written() {
+        projects::tests::scoped(|_| {
+            session::tests::scoped(|| {
+                projects::create("block", "return box(10, 20, 30);").unwrap();
+                let reply = run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "block",
+                    "expect_sha256": service::script_sha256("return box(10, 20, 30);"),
+                    "edits": [{ "old": "30", "new": "40" }],
+                }))))
+                .expect("built and written");
+                let measured = reply.structured_content.unwrap();
+                assert_eq!(measured["volume_mm3"], 8000.0);
+                assert_eq!(measured["edits_applied"], 1);
+                assert_eq!(measured["script_sha256"], service::script_sha256("return box(10, 20, 40);"));
+                assert!(measured["path"].as_str().unwrap().ends_with("part.js"));
+                assert!(measured.get("on_screen").is_none(), "not open on screen, so not put there");
+                assert_eq!(projects::read("block").unwrap(), "return box(10, 20, 40);");
+                let kept = projects::snapshots("block").unwrap();
+                assert_eq!(kept.len(), 1);
+                assert_eq!(std::fs::read_to_string(&kept[0].path).unwrap(), "return box(10, 20, 30);");
+                assert_eq!(measured["snapshot"], kept[0].path);
+                assert!(projects::preview_path("block").is_some(), "the picker's thumbnail is rewritten");
+            })
+        })
+    }
+
+    /// An edit to the screen is an ordinary revision: every window is told,
+    /// the text before it is kept, and the file is not touched.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn an_edit_to_the_screen_is_an_ordinary_revision() {
+        projects::tests::scoped(|_| {
+            session::tests::scoped(|| {
+                projects::create("block", "return box(10, 20, 30);").unwrap();
+                let before = session::push(Some("block".into()), "return box(10, 20, 30);".into(), "tab-a".into(), None);
+                let mut events = session::subscribe();
+                let reply = run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "@session",
+                    "edits": [{ "old": "30", "new": "40" }],
+                }))))
+                .expect("built and shown");
+                let measured = reply.structured_content.unwrap();
+                assert_eq!(measured["volume_mm3"], 8000.0);
+                let now = session::get();
+                assert_eq!(now.revision, before.revision + 1);
+                assert_eq!(now.script, "return box(10, 20, 40);");
+                assert_eq!(now.origin, session::AGENT_ORIGIN);
+                assert_eq!(events.try_recv().unwrap(), now, "every window was told");
+                assert_eq!(measured["on_screen"]["revision"], now.revision);
+                assert_eq!(measured["on_screen"]["script_sha256"], measured["script_sha256"]);
+                assert!(measured.get("path").is_none());
+                assert_eq!(projects::read("block").unwrap(), "return box(10, 20, 30);", "the screen, not the file");
+                let kept = projects::snapshots("block").unwrap();
+                assert_eq!(std::fs::read_to_string(&kept[0].path).unwrap(), "return box(10, 20, 30);");
+                // Editing the saved part while it is open, and unchanged on
+                // screen, puts the edit on screen too.
+                session::push(Some("block".into()), "return box(10, 20, 30);".into(), "tab-a".into(), None);
+                let reply = run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "block",
+                    "edits": [{ "old": "20", "new": "25" }],
+                }))))
+                .expect("built, written and shown");
+                let measured = reply.structured_content.unwrap();
+                assert_eq!(projects::read("block").unwrap(), "return box(10, 25, 30);");
+                assert_eq!(session::get().script, "return box(10, 25, 30);");
+                assert_eq!(measured["on_screen"]["revision"], session::get().revision);
+            })
+        })
+    }
 }
