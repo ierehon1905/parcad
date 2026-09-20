@@ -471,7 +471,7 @@ mod tests {
         assert!(message.starts_with("the arguments have no field \"view\" — write \"views\" instead."), "{message}");
         let message = refusal(serde_json::json!({ "script": "x", "colour": true }));
         assert!(
-            message.starts_with("the arguments have no field \"colour\"; its fields are image_size, script, section, threshold_mm, views."),
+            message.starts_with("the arguments have no field \"colour\"; its fields are script, views, section, image_size, threshold_mm."),
             "{message}"
         );
     }
@@ -495,8 +495,8 @@ mod tests {
         assert_eq!(
             message,
             "the arguments need \"script\". script: The part. The arguments are { script: string, \
-             image_size?: integer, section?: { axis, at_mm, keep }, threshold_mm?: number, \
-             views?: string[] }."
+             views?: string[], section?: { axis, at_mm, keep }, image_size?: integer, \
+             threshold_mm?: number }."
         );
         let message = refusal(serde_json::json!({ "script": "x", "section": { "at_mm": 3 } }));
         assert!(message.starts_with("`section` needs \"axis\". axis: The axis the plane is square to."), "{message}");
