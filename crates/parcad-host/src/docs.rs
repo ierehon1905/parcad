@@ -774,8 +774,8 @@ mod tests {
     // The `__parcad` exports are the compilers' own helpers — the editor's
     // treatment locator, the proof of which builtin a script redeclared —
     // named so that no part would reach for them.
-    const NOT_IN_THE_LANGUAGE: [&str; 3] =
-        ["__parcadTreatmentSource", "__parcadShadowedBuiltins", "__parcadShadowedBuiltinMessage"];
+    const NOT_IN_THE_LANGUAGE: [&str; 4] =
+        ["__parcadTreatmentSource", "__parcadShadowedBuiltins", "__parcadShadowedBuiltinMessage", "__parcadTakeNotes"];
 
     /// Members the classes carry for the editor rather than for a script.
     const NOT_CALLABLE: [&str; 9] = [

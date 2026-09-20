@@ -114,6 +114,12 @@ export interface EvaluationSnapshot {
   treatments: { node: number; op: string; amount_mm: number; continuity?: string }[];
   /** Shapes the root never reaches. Absent when there are none. */
   unused_nodes?: number;
+  /** What the script reported with `note()`: requested, never measured. */
+  notes?: {
+    source: "from the script, not measured";
+    values: { label: string; value: number | string | number[] }[];
+    dropped?: number;
+  };
   /** Which kernel measured this: `brep`, the only one. */
   backend: "brep";
   kernel_ms: number;

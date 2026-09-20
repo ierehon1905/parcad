@@ -124,6 +124,13 @@ export function Report() {
         <div class="text-bad">no final treatment curves are available</div>
       )}
       {dead > 0 && <div class="text-bad">{dead} unused nodes</div>}
+      {snapshot.notes && (
+        <div>
+          {snapshot.notes.source}:{" "}
+          {snapshot.notes.values.map((n) => `${n.label} ${Array.isArray(n.value) ? n.value.join(", ") : n.value}`).join(" · ")}
+          {snapshot.notes.dropped ? ` · ${snapshot.notes.dropped} more dropped` : ""}
+        </div>
+      )}
     </Glass>
   );
 }

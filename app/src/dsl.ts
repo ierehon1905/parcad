@@ -216,6 +216,66 @@ export function __parcadTreatmentSource<T>(source: SourceLocation, run: () => T)
  * that name. Nothing is read off the text. Empty when the script parses, or
  * fails for a reason of its own.
  */
+/** Notes cap: past these the rest are counted, not kept. */
+const NOTES_MAX = 40;
+const NOTES_MAX_CHARS = 2000;
+let notes: { label: string; value: number | string | number[] }[] = [];
+let notesChars = 0;
+let notesDropped = 0;
+
+/**
+ * Report a value the script computed. It appears in the reply's `notes`,
+ * marked "from the script, not measured", and changes nothing about the
+ * part.
+ *
+ * - `value` is a number, a string or a list of numbers; `label` names it.
+ * - A note is what the script asked for or worked out, never what was
+ *   built: quote a measurement for anything that can be measured.
+ * - At most 40 notes and 2000 characters; the rest are counted as
+ *   `dropped`.
+ *
+ * @example
+ *     const mouth = 23.25 + 0.5;
+ *     note("mouth 2€", mouth);
+ *     return box(mouth + 4, 30, 10).cut(box(mouth, 30, 8).at(0, 0, 1));
+ *
+ * @remarks
+ * The coin-holder session (docs/COIN_HOLDER_REVIEW.md, §2.6) encoded a
+ * string's character count into a body's Y coordinate to read a number its
+ * own script had computed, because nothing else came out of the sandbox.
+ * This is that channel, capped so it cannot carry the script back out, and
+ * segregated in the reply so a requested number is never read as a measured
+ * one.
+ */
+export function note(label: string, value: number | string | number[]): void {
+  if (typeof label !== "string" || !label.trim()) {
+    throw new Error(`note() takes a label first, a short name for the value; got ${describeArgument(label)}`);
+  }
+  const ok =
+    (typeof value === "number" && Number.isFinite(value)) ||
+    typeof value === "string" ||
+    (Array.isArray(value) && value.every((v) => typeof v === "number" && Number.isFinite(v)));
+  if (!ok) {
+    throw new Error(`note("${label}", ...) takes a finite number, a string or a list of numbers; got ${describeArgument(value)}`);
+  }
+  const chars = label.length + JSON.stringify(value).length;
+  if (notes.length >= NOTES_MAX || notesChars + chars > NOTES_MAX_CHARS) {
+    notesDropped += 1;
+    return;
+  }
+  notes.push({ label, value });
+  notesChars += chars;
+}
+
+/** @internal Hand over the notes a run made, and start the next run empty. */
+export function __parcadTakeNotes(): { values: { label: string; value: number | string | number[] }[]; dropped: number } {
+  const taken = { values: notes, dropped: notesDropped };
+  notes = [];
+  notesChars = 0;
+  notesDropped = 0;
+  return taken;
+}
+
 export function __parcadShadowedBuiltins(source: string, names: string[]): string[] {
   const compiles = (parameters: string[]) => {
     try {

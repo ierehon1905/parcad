@@ -52,6 +52,8 @@ interface BuiltGraph {
   graph: dsl.Doc;
   source: string;
   treatments: dsl.TreatmentSource[];
+  /** What the script reported with `note()`; shown as requested, not measured. */
+  notes?: S.EvaluationSnapshot["notes"];
 }
 
 /** The snapshot's bounds in the shape the viewport and the section take. */
@@ -118,6 +120,8 @@ export async function run() {
   try {
     const built = buildGraph(source);
     const result = await backend.evaluate<Evaluated>(built.graph, { part: name ?? undefined, source });
+    // The host measured the graph; the notes came out of the script here.
+    if (built.notes) result.snapshot.notes = built.notes;
 
     S.lastGraph.value = built.graph;
     S.lastSource.value = built.source;
@@ -175,6 +179,7 @@ function buildGraph(source: string): BuiltGraph {
     throw atLine("the script did not parse", e, source);
   }
 
+  dsl.__parcadTakeNotes();
   let result: unknown;
   try {
     result = fn(...names.map((n) => api[n]));
@@ -191,7 +196,12 @@ function buildGraph(source: string): BuiltGraph {
   const stacks: (string | undefined)[] = [];
   const graph = dsl.build(result as dsl.Part, treatments, stacks);
   nodeLines = stacks.map(lineOf);
-  return { graph, source, treatments };
+  const taken = dsl.__parcadTakeNotes();
+  const notes =
+    taken.values.length || taken.dropped
+      ? { source: "from the script, not measured" as const, values: taken.values, ...(taken.dropped && { dropped: taken.dropped }) }
+      : undefined;
+  return { graph, source, treatments, notes };
 }
 
 const SCRIPT_URL = "parcad-editor.js";

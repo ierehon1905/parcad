@@ -18,6 +18,33 @@ pub mod checks;
 
 pub use checks::{ChecksReport, FailedCheck};
 
+/// One value a script reported with `note(label, value)`.
+#[derive(Debug, Clone, Serialize, serde::Deserialize, schemars::JsonSchema)]
+pub struct Note {
+    pub label: String,
+    /// A number, a string or a list of numbers, as the script gave it.
+    pub value: serde_json::Value,
+}
+
+/// What a script reported with `note()`: requested values, never measured
+/// ones, and said so in the reply itself so a model cannot read one as the
+/// other. Capped in the script sandbox at 40 notes and 2000 characters;
+/// `dropped` counts what the cap left out.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct Notes {
+    /// Always "from the script, not measured": what every value here is.
+    pub source: &'static str,
+    pub values: Vec<Note>,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub dropped: usize,
+}
+
+impl Notes {
+    pub fn of(values: Vec<Note>, dropped: usize) -> Self {
+        Self { source: "from the script, not measured", values, dropped }
+    }
+}
+
 pub fn parse_graph(graph: serde_json::Value) -> Result<Doc, String> {
     parcad_core::envelope::parse_doc(graph)
 }
@@ -481,6 +508,11 @@ pub struct EvaluationSnapshot {
     /// it is almost always a line that was meant to be cut with or unioned in.
     #[serde(skip_serializing_if = "is_zero")]
     pub unused_nodes: usize,
+    /// What the script reported with `note()`: values it computed or asked
+    /// for, never measured on the built part, and labelled so. Absent when
+    /// the script noted nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notes: Option<Notes>,
     /// Which kernel produced this: `brep`, the only one. Kept on the wire
     /// because readers ask for it by name — `eval/field/which-backend-measured`
     /// is the regression for a field the instructions name and the reply lacks.
@@ -947,6 +979,7 @@ pub fn describe(
         materials: authored_materials(doc),
         treatments: treatments(doc, &s.treatment_edges),
         unused_nodes: report.total_nodes.saturating_sub(report.live_nodes),
+        notes: None,
         backend: "brep".to_string(),
         kernel_ms,
         reused_build: false,

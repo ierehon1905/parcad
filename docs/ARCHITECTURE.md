@@ -173,6 +173,20 @@ window's mesh, and `Evaluated::bounds`, which frames everything drawn. The
 corpus case `reference-stack` pins `bodies: 1` and the tray's volume beside
 a `clear` check against the stack that passes.
 
+**`note()` is the one channel out of the sandbox, and it says what it is.**
+A script computes real engineering — mouth widths, tilt angles, pin
+positions — and none of it was visible in any reply, so one session encoded
+a string's length into a body's Y coordinate to read it back
+([COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md), §2.6). `note(label, value)`
+collects in `dsl.ts`, the runner hands the notes over beside the graph
+(`__parcadTakeNotes`, in `script.rs`'s runner and `engine.ts` alike), and
+`Script::notes` lands on the snapshot as `notes: { source: "from the script,
+not measured", values, dropped }`. The `source` line is the feature: a note is
+a requested value, the exact thing "report measured values, not requested
+ones" warns about, and the reply segregates it so a model cannot quote one as
+a measurement without saying so. Capped at 40 notes and 2000 characters in
+the sandbox, with the excess counted, so it cannot carry the script back out.
+
 ### `blend` is a boolean, then a fillet
 
 A `blend` is "do the boolean, then fillet the edges the boolean created": no

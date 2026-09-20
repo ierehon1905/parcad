@@ -145,8 +145,13 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      `edit_part` built before written and snapshotted, `script_sha256` on
      every reply, and the server instruction saying to send a script once;
      docs/PERCEPTION.md §19 has the bytes per case before and after;
-   - `checks` in the returned object, reference bodies never exported, and
-     `note()` for a script's own numbers, labelled requested not measured;
+   - ~~`checks` in the returned object, reference bodies never exported, and
+     `note()`~~ — landed 2026-09-20: `checks: [...]` beside the bodies, judged
+     on every build and first in every reply, with `export_part`,
+     `save_project` and a saving `edit_part` refusing a failing check unless
+     `allow_failing` gives a reason (the door item 1 shares); `.reference()`
+     bodies measured and drawn but in no file and no whole-part number; and
+     `note()`, carried in the reply as "from the script, not measured";
    - overhang and print files (item 1);
    - `depth_mm` and `contact_mm2` in `between_bodies` — a 0.002 mm³ graze was
      read as a catch;

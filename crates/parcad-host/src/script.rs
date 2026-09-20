@@ -116,6 +116,8 @@ const RUNNER: &str = r#"
     return failed("the script did not parse", e);
   }
 
+  // Notes from a run that threw before this one must not be read as this one's.
+  dsl.__parcadTakeNotes();
   let result;
   try {
     result = fn(...names.map((n) => dsl[n]));
@@ -132,7 +134,12 @@ const RUNNER: &str = r#"
   try {
     const stacks = [];
     const graph = dsl.build(result, undefined, stacks);
-    return JSON.stringify({ graph, lines: Array.from(graph.nodes, (_, i) => lineOf(stacks[i]) ?? null) });
+    const notes = dsl.__parcadTakeNotes();
+    return JSON.stringify({
+      graph,
+      lines: Array.from(graph.nodes, (_, i) => lineOf(stacks[i]) ?? null),
+      notes: notes.values.length || notes.dropped ? notes : undefined,
+    });
   } catch (e) {
     return failed("building the intent graph failed", e);
   }
@@ -144,7 +151,18 @@ struct Outcome {
     graph: Option<serde_json::Value>,
     #[serde(default)]
     lines: Vec<Option<u32>>,
+    #[serde(default)]
+    notes: Option<Taken>,
     error: Option<String>,
+}
+
+/// What `__parcadTakeNotes` hands over: the values kept and how many the
+/// cap dropped.
+#[derive(serde::Deserialize)]
+struct Taken {
+    values: Vec<parcad_evaluation::Note>,
+    #[serde(default)]
+    dropped: usize,
 }
 
 /// A script's graph, and the line of the script that made each node.
@@ -152,6 +170,9 @@ struct Outcome {
 pub struct Script {
     pub graph: serde_json::Value,
     lines: Vec<Option<u32>>,
+    /// What the script reported with `note()`, for the reply to carry as
+    /// requested and not measured. Absent when it noted nothing.
+    pub notes: Option<parcad_evaluation::Notes>,
     /// Interpreter steps the script took, measured to the nearest poll.
     pub work_steps: u64,
     /// Whether this came from [`CACHE`] rather than from running the script.
@@ -415,6 +436,7 @@ fn run(source: &str, meter: &Arc<Meter>) -> Result<(Script, usize), String> {
             Script {
                 graph,
                 lines: outcome.lines,
+                notes: outcome.notes.map(|taken| parcad_evaluation::Notes::of(taken.values, taken.dropped)),
                 work_steps: meter.steps(),
                 reused: false,
             },
@@ -706,6 +728,44 @@ mod tests {
         }
         let plain = build_graph(&format!("return extrude({triangle}, 2).cut(box(1, 1, 9));")).unwrap();
         assert!(plain.get("requires").is_none(), "a graph using nothing new requires nothing: {plain}");
+    }
+
+    /// `note()` is the one channel out of the sandbox for a number the
+    /// script computed: kept beside the graph, capped with the excess
+    /// counted, and never on the graph itself.
+    #[test]
+    fn notes_come_back_beside_the_graph_and_truncate_with_a_count() {
+        let script = "note(\"mouth 2€\", 23.75);\nnote(\"mouths\", [13.85, 15.05]);\nnote(\"finish\", \"PETG\");\nreturn box(10, 10, 10);";
+        let built = build(script).expect("builds");
+        let notes = built.notes.as_ref().expect("noted");
+        assert_eq!(notes.source, "from the script, not measured");
+        let values: Vec<(&str, &serde_json::Value)> = notes.values.iter().map(|n| (n.label.as_str(), &n.value)).collect();
+        assert_eq!(
+            values,
+            [
+                ("mouth 2€", &serde_json::json!(23.75)),
+                ("mouths", &serde_json::json!([13.85, 15.05])),
+                ("finish", &serde_json::json!("PETG")),
+            ]
+        );
+        assert_eq!(notes.dropped, 0);
+        assert!(built.graph.get("notes").is_none(), "a note is not part of the graph");
+        assert!(build("return box(1, 1, 1);").expect("builds").notes.is_none(), "nothing noted, nothing carried");
+
+        let many = "for (let i = 0; i < 50; i++) note(`n${i}`, i);\nreturn box(1, 1, 1);";
+        let notes = build(many).expect("builds").notes.expect("noted");
+        assert_eq!((notes.values.len(), notes.dropped), (40, 10));
+        let long = "note(\"a\", \"x\".repeat(1990));\nnote(\"b\", \"y\".repeat(100));\nnote(\"c\", 1);\nreturn box(1, 1, 1);";
+        let notes = build(long).expect("builds").notes.expect("noted");
+        let labels: Vec<&str> = notes.values.iter().map(|n| n.label.as_str()).collect();
+        assert_eq!((labels, notes.dropped), (vec!["a", "c"], 1), "the cap is on characters, and a short note still fits after a long one is dropped");
+        let error = build("note(3, 4); return box(1, 1, 1);").err().expect("refused");
+        assert!(error.contains("note() takes a label first"), "{error}");
+        let error = build("note(\"x\", { y: 1 }); return box(1, 1, 1);").err().expect("refused");
+        assert!(error.contains("takes a finite number, a string or a list of numbers"), "{error}");
+        // A run that threw leaves nothing for the next run to pick up.
+        build("note(\"stale\", 1); throw new Error(\"no\");").err().expect("threw");
+        assert!(build("return box(2, 2, 2);").expect("builds").notes.is_none());
     }
 
     /// The claim this module exists to make. Asserted rather than described,

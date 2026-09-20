@@ -280,6 +280,7 @@ mod tests {
             materials: 0,
             treatments: Vec::new(),
             unused_nodes: 0,
+            notes: None,
             backend: "brep".into(),
             kernel_ms: 0,
             reused_build: false,
