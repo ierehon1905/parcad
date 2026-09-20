@@ -1203,7 +1203,7 @@ impl Parcad {
     #[tool(
         name = "save_project",
         annotations(title = "Save project", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Write a part to parcad's project folder so the user can open it; open_project it afterwards to put it on their screen. Evaluate it first: saving a script that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not — the file is saved regardless), the `preview` thumbnail written for the app's picker, and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back."
+        description = "Write a new part to parcad's project folder so the user can open it; open_project it afterwards to put it on their screen. For a part that is already saved, call edit_part instead: it changes the lines you name, rebuilds, and saves in one call, without the whole script being sent again. Evaluate a script first: saving one that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not — the file is saved regardless), the `preview` thumbnail written for the app's picker, and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back."
     )]
     async fn save_project(
         &self,
@@ -1267,7 +1267,7 @@ impl Parcad {
     #[tool(
         name = "set_script",
         annotations(title = "Replace the script on screen", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Change the part the user is looking at: replace the script of the project open on their screen. It is for editing that part; to show them a different one, save it with save_project and open it with open_project, or its text lands in the open project and a save writes it there. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing — there is no lock, and you must not wait for one. It edits the screen only: nothing is written to disk until the user saves or you call save_project. Evaluate the script first with evaluate_part; putting a script that does not build in front of the user replaces their working part with an error. Read get_session first and base your edit on the script it returns, or you will silently revert what the user typed since you last looked.\n\nThe reply waits (up to `wait_s`, default 20 s) until a window reports evaluating this revision, and its `viewers` says what each window showed: built with which `volume_mm3`, or the `error` it hit. It does not echo the script you sent: `script_chars` and `script_sha256` identify what landed, and get_session returns it whole. Do not tell the user the part is on screen unless a viewer reports this `revision` with built: true. Setting the same script again makes every window evaluate it again — the way to recover a window that is showing something stale."
+        description = "Replace the whole script of the project open on the user's screen. For a change to that part — a dimension, a radius, one function — call edit_part with project \"@session\" instead: it sends only the lines that change, builds them first, and lands on screen the same way; set_script is for a script that is new from the first line. To show them a different part, save it with save_project and open it with open_project, or its text lands in the open project and a save writes it there. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing — there is no lock, and you must not wait for one. It edits the screen only: nothing is written to disk until the user saves or you call save_project. Evaluate the script first with evaluate_part; putting a script that does not build in front of the user replaces their working part with an error. Read get_session first and base your edit on the script it returns, or you will silently revert what the user typed since you last looked.\n\nThe reply waits (up to `wait_s`, default 20 s) until a window reports evaluating this revision, and its `viewers` says what each window showed: built with which `volume_mm3`, or the `error` it hit. It does not echo the script you sent: `script_chars` and `script_sha256` identify what landed, and get_session returns it whole. Do not tell the user the part is on screen unless a viewer reports this `revision` with built: true. Setting the same script again makes every window evaluate it again — the way to recover a window that is showing something stale."
     )]
     async fn set_script(
         &self,
@@ -1331,46 +1331,50 @@ impl Parcad {
 /// The tool list changes only with the binary.
 const TOOL_LIST_TTL_MS: u64 = 86_400_000;
 
-const LANGUAGE: &str = "parcad builds parts from a small JavaScript DSL and evaluates them with an exact \
-B-rep kernel. Everything is millimetres; primitives are centred on the origin and placed \
-with .at(x, y, z); a script ends by returning a shape, or { base, lid } for a part that \
-stays in several bodies, measured per body and between them.\n\n\
-Start from read_docs: its `dsl` topic is the whole language, from the source; \
-`gaps` and `gotchas` are what the kernel refuses and what silently returns a wrong answer. \
-read_project shows house style. Projects nest in folders: a name is a path like \
-'Mounts/bracket', passed whole.";
+const LANGUAGE: &str = "parcad builds parts from a small JavaScript DSL on an exact B-rep kernel. \
+Everything is millimetres; primitives are centred on the origin and placed \
+with .at(x, y, z); a script ends by returning a shape, or { base, lid } for a part in several \
+bodies, measured per body and between them.\n\n\
+Start from read_docs: `dsl` is the whole language; `gaps` and `gotchas` are what the kernel \
+refuses and what silently returns a wrong answer. read_project shows house style; a project \
+name is a path like 'Mounts/bracket', passed whole.";
 
-const SCREEN: &str = "You share the parcad app's screen with the user: get_session reads it, and \
-open_project and set_script change it. To show a part you built, save_project it under its \
-own name and open_project it; set_script edits the part already open. Edits are undoable; \
-read before you write, evaluate before set_script.";
+const SCREEN: &str = "You share the parcad app's screen with the user: get_session reads it, \
+open_project and set_script change it. To show a part you built, save_project it under its own \
+name and open_project it. Edits are undoable; read before you write, evaluate before set_script.";
+
+/// The rule the coin-holder session lacked: 241 KB of script resent to change
+/// a few lines at a time (docs/COIN_HOLDER_REVIEW.md, B1).
+const ONCE: &str = "Send a script once. Every change after the first is an edit_part ({ project, \
+edits: [{ old, new }] }; \"@session\" is the part on screen), and `project` on any measuring \
+tool builds a saved part without resending it.";
 
 const SELECTING: &str = "Select edges by intent, never by index: '>Z and >Y and |X', or a query: { curve: \"circle\", \
 role: \"hole\", adjacentTo: { faceNormal: \"+z\" } }; dihedral: \"convex\", \"concave\" or \
 \"smooth\"; parallel: \"z\"; longerThan: 3; on: \"lip\" for one tagged feature's edges, at \
-measured within it; between: [\"arm\", \"hub\"] for the seam where two meet. A tag names a node's faces and survives booleans, fillets and rotations. Fillets skip \
-smooth edges unless asked. Each evaluate_part treatment has `edges`, the count it resolved \
-to: write it in .expect({ count }) so drift fails aloud, or .expect({ atLeast: 1 }) until \
-you know it. edge@N ids from list_entities are for one evaluation and rejected in scripts.\n\n\
-The kernel refuses rather than approximating; a refusal names the fix and lists the edges \
-it means. Every report is measured, never requested: quote its numbers rather than the \
-script's.";
+measured within it; between: [\"arm\", \"hub\"] for the seam where two meet. A tag names a \
+node's faces and survives every later op. Fillets skip smooth edges unless asked. Each \
+treatment in an evaluate_part reply has `edges`, its resolved count: write it as \
+.expect({ count }) so drift fails aloud, .expect({ atLeast: 1 }) until you know it. edge@N ids \
+from list_entities are never written in scripts.\n\n\
+The kernel refuses rather than approximating; a refusal names the fix. Every report is \
+measured, never requested: quote its numbers rather than the script's.";
 
 /// Only where a view is a file the user can open.
 const PICTURES: &str = " The user may not see a tool's pictures: to show one, paste its \
 `markdown` line.";
 
-const WHERE: &str = "Which tag owns what a view shows: evaluate_part with regions: true. What is \
-inside: evaluate_part with a section. Where a tag is: tag_extents, in every evaluate_part reply.";
+const WHERE: &str = "Which tag owns what a view shows: regions: true. What is inside: a section. \
+ Where a tag is: tag_extents, in every evaluate_part reply.";
 
 /// What a model is told before its first call, for the host it is talking to.
 /// Claude Code keeps the first 2048 characters, so what differs by host comes
 /// early and both versions fit.
 fn instructions(in_tab: bool) -> String {
     if in_tab {
-        format!("{LANGUAGE}\n\n{}\n\n{SELECTING}\n\n{WHERE}", crate::page::INSTRUCTIONS)
+        format!("{LANGUAGE}\n\n{}\n\n{ONCE}\n\n{SELECTING}\n\n{WHERE}", crate::page::INSTRUCTIONS)
     } else {
-        format!("{LANGUAGE}\n\n{SCREEN}\n\n{SELECTING}{PICTURES}\n\n{WHERE}")
+        format!("{LANGUAGE}\n\n{SCREEN}\n\n{ONCE}\n\n{SELECTING}{PICTURES}\n\n{WHERE}")
     }
 }
 
@@ -2565,6 +2569,29 @@ mod tests {
             "project": "tray", "edits": [],
         })))));
         assert!(refusal.contains("evaluate_part"), "{refusal}");
+    }
+
+    /// The instruction and the descriptions send a model to edit_part rather
+    /// than back to a whole script.
+    #[test]
+    fn every_change_after_the_first_is_an_edit() {
+        assert!(instructions(false).contains("Every change after the first is an edit_part"));
+        let tools = Parcad::new().tool_router.list_all();
+        let description = |name: &str| tools.iter().find(|t| t.name == name).unwrap().description.clone().unwrap_or_default();
+        assert!(description("set_script").contains("edit_part with project \"@session\""));
+        assert!(description("save_project").contains("call edit_part instead"));
+        assert!(description("evaluate_part").contains("edit_part is the tool that saves"));
+        assert!(description("edit_part").contains("call evaluate_part with the same `project` and `edits`"));
+        // The seven script-taking tools all take a project and edits.
+        for name in [
+            "evaluate_part", "measure_wall_thickness", "probe_part", "export_part",
+            "inspect_treatment_target", "list_entities", "check_fit",
+        ] {
+            let schema = serde_json::to_value(&tools.iter().find(|t| t.name == name).unwrap().input_schema).unwrap();
+            let properties = schema["properties"].as_object().unwrap();
+            assert!(properties.contains_key("project") && properties.contains_key("edits"), "{name}");
+            assert!(!schema["required"].as_array().is_some_and(|r| r.iter().any(|v| v == "script")), "{name} still requires script");
+        }
     }
 
     /// A save fills the build cache; a `project` evaluate of the same part

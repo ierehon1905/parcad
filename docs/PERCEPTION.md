@@ -1231,6 +1231,50 @@ for a volume) and `eval/field/make-the-sheet-printable.md` (whether a refusal
 naming `thicken` is acted on); section 18's rounds are recorded below them
 when run.
 
+## 19. Editing in place — what a session spends on script bytes
+
+Every section above is about what a model reads. This one is about what it
+*sends*: the coin-holder session (docs/COIN_HOLDER_REVIEW.md, B1) sent 241 KB
+of script in 45 calls, nineteen of them to change under ten lines, and with
+one late edit to make it ran a Python old/new replacement on part.js from a
+shell. Since 2026-09-20 every script-taking tool takes `project` (or
+`"@session"`, the screen) and `edits` instead of a script, `edit_part` is that
+replacement as a tool — built before written, snapshotted — and the server
+instruction says to send a script once. `field/score.py` now reports `sent`,
+the bytes of `script` a trial sent, which is the number this exists to move.
+
+Measured 2026-09-20 on haiku, 4 trials per arm, one trial at a time on a
+fresh copy of the part (`examples/fusion360/retainer-v1.js`, 146 lines,
+6,561 bytes) — the two cases in `eval/field/` written with the change, and
+the two screen cases as regressions:
+
+| case | arm | before: sound / reach / bytes per trial | after: sound / reach / bytes per trial |
+|---|---|---|---|
+| change-one-dimension (`edit_part`) | thinking | 0/4 · 0/4 · 19,682 | 1/4 · 1/4 · 8,201 |
+| change-one-dimension (`edit_part`) | no thinking | 0/4 · 0/4 · 17,496 (1 VOID) | 1/4 (1 VOID reached it) · 2/4 · 1,640 |
+| what-if-it-were-thicker (`{ project, edits }`) | thinking | 0/4 · 0/4 · 8,216 | 4/4 · 4/4 · 0 |
+| what-if-it-were-thicker (`{ project, edits }`) | no thinking | 0/4 · 0/4 · 9,866 | 2/4 · 2/4 · 3,280 |
+| change-the-open-part (regression) | thinking | 3/3 · 3/3 · 2,408 | 2/3 · 2/3 · 1,204 (1 WRONG: never reached the server) |
+| change-the-open-part (regression) | no thinking | 3/3 · 3/3 · 2,408 | 2/3 · 2/3 · 1,204 (1 LUCKY: edit_part on the project, which saved) |
+| did-the-window-draw-it (regression) | thinking | 3/3 · 3/3 · 162 | 3/3 · 3/3 · 162 |
+| did-the-window-draw-it (regression) | no thinking | 3/3 · 3/3 · 162 | 3/3 · 3/3 · 162 |
+
+Before the change every trial was LUCKY by construction — the right volume,
+reached by resending the whole part once to evaluate and once to save, and
+the number to read is the bytes. After it, the what-if is answered the cheap
+way every time with thinking on, and the model that still resends is the one
+that must be read about in docs/WRITING_FOR_MODELS.md: a small model with
+`edit_part` on the surface reached for `save_project` with the whole script
+in 3 of 4 thinking trials, one of them after it had already measured the
+change with `{ project, edits }`. The screen cases were at their ceiling
+before and are worth one sentence after: asked to lengthen the open part as a
+proposal, not a save, one non-thinking trial called `edit_part` with the
+project's name rather than `"@session"`, which writes part.js (and puts it
+on screen, since it was open), and reported the screen honestly; the
+thinking-arm WRONG never reached the server. A model that has just opened a
+part by name reaches for that name; `"@session"` is the spelling the case
+wants and the description gives, and one trial in six did not take it.
+
 ## Suggested order
 
 Done, and what each cost is in its own section: point and ray probes and

@@ -90,6 +90,24 @@ evidence for parcad.
   had not taken. The non-thinking arm sent it: before, one trial read the
   resolved plane honestly and answered the middle; after, all three were
   refused, rewrote, and answered from the reply.
+- **A tool a model has not heard of is not on its surface.** The edit-in-place
+  batch (2026-09-20, docs/PERCEPTION.md §19) put `edit_part` and `project`
+  beside `evaluate_part` and measured haiku on each, 4 trials per arm. The
+  what-if — `evaluate_part { project, edits }`, nothing saved — went from 0/4
+  to 4/4 SOUND with thinking on and 0 bytes of script sent against 8 KB; the
+  edit itself reached `edit_part` in 1 of 4 thinking trials and 3 of 4
+  without thinking. The transcripts say why: Claude Code 2.1.277 defers every
+  MCP tool and the model loads schemas by name, so the trials that resent
+  loaded `read_project`, `evaluate_part` and `save_project` by name before
+  reading a word of any description, and one that had already measured the
+  change with `{ project, edits }` then called `save_project` with the whole
+  script because that was the "save" it had loaded. A description a model
+  never loads cannot redirect it; the server instruction, which every model
+  reads, now says every change after the first is an `edit_part`, and that
+  is the only lever this surface has on a deferred-tool client. Not iterated
+  further: the transcripts name the mechanism, the lever it leaves is already
+  pulled, and a second round of rewording would measure the client's tool
+  loading again, not the description.
 - **What still reads wrong.** With `offset` refused and the meant field
   named, the thinking arm's route is unchanged at 0/3 by `input` — it never
   sends the hazard, so the refusal is unmeasured there. And on the rotate

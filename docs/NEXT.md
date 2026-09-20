@@ -134,8 +134,11 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      validated, `edges` on every treatment with `.expect({ atLeast, atMost })`,
      `tags` each once with `nodes` on the extent, and the selector and fillet
      refusals naming `check_selector` and `inspect_treatment_target`;
-   - `project` on every script tool and `edit_part` (old/new, refused on
-     ambiguity) — the one change that halves a session;
+   - ~~`project` on every script tool and `edit_part`~~ — landed 2026-09-20:
+     `project` (or `"@session"`) and `edits` on all seven script-taking tools,
+     `edit_part` built before written and snapshotted, `script_sha256` on
+     every reply, and the server instruction saying to send a script once;
+     docs/PERCEPTION.md §19 has the bytes per case before and after;
    - `checks` in the returned object, reference bodies never exported, and
      `note()` for a script's own numbers, labelled requested not measured;
    - overhang and print files (item 1);

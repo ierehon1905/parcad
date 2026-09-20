@@ -42,8 +42,8 @@ use std::time::Duration;
 pub const INSTRUCTIONS: &str = "This is ParCAD web, a page in the user's browser that must stay \
 open; parts build and are kept there. That page is their screen: get_session reads it; to show \
 a part you built, save_project it under its own name and open_project it there, not as a \
-picture of your own; set_script edits the part already open. export_part downloads through \
-their browser, and `path` is only a name in the tab.";
+picture of your own. export_part downloads through their browser, and `path` is only a name \
+in the tab.";
 
 thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
