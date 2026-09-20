@@ -4,6 +4,7 @@
 //! (`bin/worker.rs`); ParCAD web calls [`run`] from a Web
 //! Worker and hands the reply straight back. Both answer from this code.
 
+use parcad_core::graph::Material;
 use crate::backend::{self, BuildCache};
 use crate::perceive;
 use crate::protocol::{
@@ -265,7 +266,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         let finished: Vec<(String, &opencascade::primitives::Shape)> = if part.bodies.is_empty() {
             vec![("part".to_string(), shape)]
         } else {
-            part.bodies.iter().map(|(name, body)| (format!("body `{name}`"), body)).collect()
+            part.bodies.iter().map(|body| (format!("body `{}`", body.name), &body.shape)).collect()
         };
         for (who, body) in finished {
             if let Err(e) = backend::check_finished(body, &who) {
@@ -287,17 +288,30 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
 
     let t1 = Instant::now();
     breadcrumb("naming the faces");
+    // Every body, references included, is measured and drawn; `bodies_of`
+    // is the part alone, which is what the probes and the tags read.
+    let every_body: Vec<perceive::Body> = if part.bodies.is_empty() {
+        perceive::bodies_of(&part)
+    } else {
+        part.bodies
+            .iter()
+            .zip(&part.names)
+            .map(|(body, names)| perceive::Body::new(Some(&body.name), &body.shape, names))
+            .collect()
+    };
     let bodies = perceive::bodies_of(&part);
     let materials = doc.body_materials();
+    let references = doc.reference_bodies();
     let mut whole = Assembled::default();
-    for (body, material) in bodies.iter().zip(materials) {
+    for (body, material) in every_body.iter().zip(materials) {
         let who = body.name.map(|name| format!("body `{name}`: ")).unwrap_or_default();
+        let reference = body.name.is_some_and(|name| references.contains(&name));
         match measure(body, &part.treatment_owners, &who) {
             Ok(mut measured) => {
                 for face in &mut measured.faces {
-                    face.material = material.cloned();
+                    face.material = if reference { Some(Material::reference()) } else { material.cloned() };
                 }
-                whole.append(body.name, measured)
+                whole.append(body.name, reference, measured)
             }
             Err(refusal) => return refusal,
         }
@@ -307,10 +321,11 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
     let (tag_extents, unlocated_tags) = perceive::tag_extents(&part, &bodies);
 
     let mut between = Vec::new();
-    for (i, (a, first)) in part.bodies.iter().enumerate() {
-        for (b, second) in &part.bodies[i + 1..] {
+    for (i, first) in part.bodies.iter().enumerate() {
+        for second in &part.bodies[i + 1..] {
+            let (a, b) = (&first.name, &second.name);
             breadcrumb(&format!("measuring body {a} against body {b}"));
-            match backend::fit_between(first, second) {
+            match backend::fit_between(&first.shape, &second.shape) {
                 Ok(fit) => between.push(BodyFit {
                     a: a.clone(),
                     b: b.clone(),
@@ -687,14 +702,17 @@ struct Assembled {
     face_runs: Vec<FaceRun>,
     faces: Vec<FaceSummary>,
     edges: Vec<EdgeCurve>,
+    /// The part's own faces and edges; a reference body's are drawn but
+    /// not counted.
     topology: Topology,
     bodies: Vec<BodySpan>,
+    /// The part's own bodies' kinds, which decide the part's.
     kinds: Vec<BodyKind>,
     surfaces: Vec<SurfaceMeasure>,
 }
 
 impl Assembled {
-    fn append(&mut self, body: Option<&str>, measured: Measured) {
+    fn append(&mut self, body: Option<&str>, reference: bool, measured: Measured) {
         let Measured {
             mesh,
             mut faces,
@@ -703,7 +721,9 @@ impl Assembled {
             kind,
             surface,
         } = measured;
-        self.kinds.push(kind);
+        if !reference {
+            self.kinds.push(kind);
+        }
         self.surfaces.extend(surface);
         let vertex_offset = (self.positions.len() / 3) as u32;
         let face_offset = self.topology.faces as u32;
@@ -741,14 +761,17 @@ impl Assembled {
             self.bodies.push(BodySpan {
                 name: name.to_owned(),
                 kind,
+                reference,
                 faces: topology.faces,
                 edges: topology.edges,
                 triangle_start: triangle_offset as usize,
                 triangle_count: mesh.indices.len() / 3,
             });
         }
-        self.topology.faces += topology.faces;
-        self.topology.edges += topology.edges;
+        if !reference {
+            self.topology.faces += topology.faces;
+            self.topology.edges += topology.edges;
+        }
     }
 }
 

@@ -686,6 +686,10 @@ mod tests {
                 "return { top: box(10, 10, 2), stack: cylinder(3, 5).at(0, 0, 4), checks: [{ clear: [\"top\", \"stack\"], atLeast: 0.2 }] };"
                     .to_owned(),
             ),
+            (
+                "reference-bodies",
+                "return { top: box(10, 10, 2), stack: cylinder(3, 5).at(0, 0, 4).reference() };".to_owned(),
+            ),
         ];
         let stamped: Vec<&str> = cases.iter().map(|(id, _)| *id).collect();
         assert_eq!(stamped, parcad_core::envelope::FEATURES, "the host's feature list and this table differ");

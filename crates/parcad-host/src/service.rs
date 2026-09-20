@@ -41,14 +41,22 @@ pub fn body_doc(doc: &Doc, body: &str) -> Result<Doc, String> {
         ));
     };
     let Some(found) = bodies.iter().find(|b| b.name == body) else {
-        let names: Vec<_> = bodies.iter().map(|b| format!("{:?}", b.name)).collect();
+        let names: Vec<_> = bodies.iter().filter(|b| !b.reference).map(|b| format!("{:?}", b.name)).collect();
         return Err(format!(
             "no body called {body:?}; the part's bodies are {}",
             names.join(", ")
         ));
     };
+    if found.reference {
+        return Err(format!(
+            "{body:?} is a reference body (.reference()), measured against the part and never \
+             written to a file; export one of the part's own bodies, or leave `body` out"
+        ));
+    }
     let mut alone = doc.clone();
     alone.root = found.child;
+    // A body alone carries no checks: they name the whole part's bodies.
+    alone.checks.clear();
     Ok(alone)
 }
 
@@ -295,11 +303,24 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
     // one a pixel is coloured for.
     let names = parcad_occt::drawing::tag_names(doc);
     let owner_of_face = parcad_occt::drawing::owner_of_face(&evaluated.faces, &names);
-    let face_colors: Vec<Option<[u8; 3]>> = if materials {
+    // A reference body is painted in its colour whether or not materials
+    // were asked for: grey would read as the part.
+    let is_reference = |face: &parcad_occt::protocol::FaceSummary| {
+        face.body.as_deref().is_some_and(|b| evaluated.reference_bodies.iter().any(|r| r == b))
+    };
+    let face_colors: Vec<Option<[u8; 3]>> = if materials || !evaluated.reference_bodies.is_empty() {
         evaluated
             .faces
             .iter()
-            .map(|face| face.material.as_ref().and_then(|m| m.rgb()))
+            .map(|face| {
+                if is_reference(face) {
+                    Some(parcad_core::graph::REFERENCE_RGB)
+                } else if materials {
+                    face.material.as_ref().and_then(|m| m.rgb())
+                } else {
+                    None
+                }
+            })
             .collect()
     } else {
         Vec::new()

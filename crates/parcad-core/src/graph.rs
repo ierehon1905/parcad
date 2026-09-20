@@ -1074,6 +1074,14 @@ pub const STITCH_MAX_TOLERANCE_MM: f64 = 0.5;
 pub struct NamedBody {
     pub name: String,
     pub child: NodeId,
+    /// A body the part is measured against and drawn with, but that is not
+    /// the part: a stack of coins in a holder, a tipped coin at a mouth.
+    /// Built, measured alone and against every other body (`between_bodies`),
+    /// and drawn in the reference colour; never exported, never probed, never
+    /// counted in `bodies`, `volume_mm3`, `size` or what the part stands on.
+    /// Written by `.reference()` in `app/src/dsl.ts`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reference: bool,
 }
 
 /// One [`Op::Loft`] section: an outline lying in the plane at `z`, or, for
@@ -2393,6 +2401,11 @@ pub struct Node {
     pub material: Option<Material>,
 }
 
+/// The reference colour, sRGB; `service::render` paints it whether or not a
+/// view asked for materials.
+pub const REFERENCE_COLOR: &str = "#5b8fd6";
+pub const REFERENCE_RGB: [u8; 3] = [0x5b, 0x8f, 0xd6];
+
 /// A surface appearance: glTF's metallic-roughness core, plus alpha, emissive
 /// and its clearcoat extension. Nothing heavier — see docs/PERCEPTION.md.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2419,6 +2432,19 @@ pub struct Material {
 }
 
 impl Material {
+    /// What a reference body is drawn in, everywhere: a translucent blue no
+    /// `.material()` writes, so a coin stack is never read as the part.
+    pub fn reference() -> Self {
+        Self {
+            color: REFERENCE_COLOR.to_string(),
+            roughness: 0.6,
+            metalness: 0.0,
+            opacity: 0.45,
+            emissive: None,
+            clearcoat: 0.0,
+        }
+    }
+
     fn default_roughness() -> f64 {
         0.5
     }
@@ -2588,6 +2614,14 @@ impl Doc {
             .collect()
     }
 
+    /// The names of the reference bodies, in the script's order; empty for a
+    /// part with none.
+    pub fn reference_bodies(&self) -> Vec<&str> {
+        self.bodies()
+            .map(|bodies| bodies.iter().filter(|b| b.reference).map(|b| b.name.as_str()).collect())
+            .unwrap_or_default()
+    }
+
     /// The named bodies of a part that returns several, or `None` for the
     /// ordinary one-solid document.
     pub fn bodies(&self) -> Option<&[NamedBody]> {
@@ -2618,6 +2652,12 @@ impl Doc {
                 anyhow::bail!(
                     "the part returns no bodies. Return one shape, or an object naming each \
                      body: `return {{ base, lid }}`"
+                );
+            }
+            if bodies.iter().all(|b| b.reference) {
+                anyhow::bail!(
+                    "every body is a reference; a reference is measured against the part, so at \
+                     least one body must be the part itself — leave .reference() off that one"
                 );
             }
             let mut seen = std::collections::HashSet::new();

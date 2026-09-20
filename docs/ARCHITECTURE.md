@@ -154,6 +154,25 @@ and the reason is echoed in the reply. `print_check` (NEXT.md, item 1) is the
 second verdict that door is shaped for. The window's own save is not gated:
 the person saving can see the red line in the report.
 
+**A reference body is measured and drawn, and is not the part.** The bodies
+a check talks about — a stack of coins, a tipped coin at a mouth — are marked
+`.reference()` on the shape the returned object names (`NamedBody::reference`,
+feature id `reference-bodies`; a method rather than a list, for the reasons in
+its doc comment). The worker builds a reference like any body, measures it
+alone and against every other body, and its faces wear
+`Material::reference()`, a translucent blue the window draws as it draws any
+material and `service::render` paints whether or not a view asked for
+materials. Everything that says what the *part* is leaves it out:
+`BuiltPart::shape` (so STEP, `check_fit` and the compound), `Success::
+part_indices` (so `measure_brep`, STL, 3MF and the corpus read the same
+triangles), `Assembled`'s topology and kinds (so `faces`, `edges` and `kind`),
+`describe`'s volume, watertightness and centroid, and `perceive::bodies_of`
+(so a probe or a thickness sweep never reads material inside a coin). What
+keeps it: `named_bodies` (with `reference: true`), `between_bodies`, the
+window's mesh, and `Evaluated::bounds`, which frames everything drawn. The
+corpus case `reference-stack` pins `bodies: 1` and the tray's volume beside
+a `clear` check against the stack that passes.
+
 ### `blend` is a boolean, then a fillet
 
 A `blend` is "do the boolean, then fillet the edges the boolean created": no

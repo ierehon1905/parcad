@@ -143,7 +143,8 @@ function Bodies({ snapshot }: { snapshot: Snapshot }) {
   const pairs = snapshot.between_bodies ?? [];
   const brokenBody = (body: (typeof bodies)[number]) => body.pieces > 1 || body.watertight === false;
   const open = bodiesOpen.value;
-  const shownBodies = open ? bodies : bodies.filter(brokenBody);
+  // A reference body is listed whenever the list is open, never as broken.
+  const shownBodies = open ? bodies : bodies.filter((body) => !body.reference && brokenBody(body));
   const shownPairs = open ? pairs : pairs.filter((pair) => pair.verdict === "interfering");
   const interfering = pairs.filter((pair) => pair.verdict === "interfering").length;
 
@@ -167,7 +168,8 @@ function Bodies({ snapshot }: { snapshot: Snapshot }) {
       </button>
       {shownBodies.map((body) => (
         <div key={body.name} class={brokenBody(body) ? "text-bad" : undefined}>
-          {body.name}:{" "}
+          {body.name}
+          {body.reference && " (reference)"}:{" "}
           {body.volume_mm3 !== undefined ? (
             <>
               <Strong>{fmt(body.volume_mm3)}</Strong> mm³

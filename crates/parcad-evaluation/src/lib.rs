@@ -38,6 +38,10 @@ pub fn evaluated(
         let c = parcad_core::measure::area_centroid(&tess.vertices, &tess.triangles);
         snapshot.centroid = round_point([c.x, c.y, c.z]);
     }
+    // Framed on everything drawn, reference bodies included; the snapshot's
+    // bounds are the part's alone.
+    let drawn: Vec<[f32; 3]> = s.positions.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+    let bounds = parcad_core::measure::Aabb::from_points(&drawn).unwrap_or(report.bounds);
     snapshot.reused_build = reused;
     snapshot.deviation_mm = s.deviation_mm.map(round_mm);
     if let Some(bound) = doc.stated_curve_bound() {
@@ -51,7 +55,8 @@ pub fn evaluated(
     snapshot.offset_mm = s.offset_mm.map(|w| WallRange { min: round_mm(w.min), max: round_mm(w.max) });
     snapshot.patch_gap_mm = s.patch_gap_mm.map(|d| (d * 1e6).ceil() / 1e6);
     Ok(Evaluated {
-        bounds: report.bounds,
+        bounds,
+        reference_bodies: s.reference_bodies().iter().map(|b| b.to_string()).collect(),
         snapshot,
         positions: s.positions.clone(),
         normals: s.normals.clone(),
@@ -81,7 +86,7 @@ fn refuse_surfaces(s: &parcad_occt::Success, format: &str) -> Result<(), String>
     let surfaces: Vec<String> = if s.bodies.is_empty() {
         if s.kind.is_solid() { Vec::new() } else { vec!["the part".to_string()] }
     } else {
-        s.bodies.iter().filter(|b| !b.kind.is_solid()).map(|b| format!("body `{}`", b.name)).collect()
+        s.bodies.iter().filter(|b| !b.kind.is_solid() && !b.reference).map(|b| format!("body `{}`", b.name)).collect()
     };
     if surfaces.is_empty() {
         return Ok(());
@@ -153,6 +158,10 @@ pub struct Evaluated {
     /// section decides what is material body by body.
     #[serde(skip)]
     pub triangle_bodies: Vec<u32>,
+    /// The reference bodies' names: drawn in the reference colour whether or
+    /// not a view asked for materials.
+    #[serde(skip)]
+    pub reference_bodies: Vec<String>,
 }
 
 /// Read access for callers that list entities rather than serialise geometry.
@@ -250,8 +259,9 @@ fn part_kind(s: &parcad_occt::Success) -> &'static str {
     if s.bodies.is_empty() {
         return if s.kind.is_solid() { "solid" } else { "surface" };
     }
-    let solids = s.bodies.iter().filter(|b| b.kind.is_solid()).count();
-    if solids == s.bodies.len() {
+    let own = s.bodies.iter().filter(|b| !b.reference).count();
+    let solids = s.bodies.iter().filter(|b| !b.reference && b.kind.is_solid()).count();
+    if solids == own {
         "solid"
     } else if solids == 0 {
         "surface"
@@ -502,6 +512,12 @@ pub struct BodyReport {
     pub name: String,
     /// `solid` or `surface`.
     pub kind: &'static str,
+    /// True for a reference body (`.reference()`): measured here and against
+    /// every other body in `between_bodies`, drawn in the reference colour,
+    /// and in no file and no whole-part number — not `bodies`, `volume_mm3`,
+    /// `size` or `stands_on`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub reference: bool,
     pub size: [f64; 3],
     pub bounds_min: [f64; 3],
     pub bounds_max: [f64; 3],
@@ -538,6 +554,7 @@ impl BodyReport {
         Self {
             name: b.name.clone(),
             kind: if solid { "solid" } else { "surface" },
+            reference: b.reference,
             size: round_point([size.x, size.y, size.z]),
             bounds_min: round_point([b.bounds.min.x, b.bounds.min.y, b.bounds.min.z]),
             bounds_max: round_point([b.bounds.max.x, b.bounds.max.y, b.bounds.max.z]),
@@ -828,7 +845,7 @@ pub fn describe(
     kernel_ms: u64,
 ) -> EvaluationSnapshot {
     let kind = part_kind(s);
-    let solids: Vec<&BodyReport> = named_bodies.iter().filter(|b| b.kind == "solid").collect();
+    let solids: Vec<&BodyReport> = named_bodies.iter().filter(|b| b.kind == "solid" && !b.reference).collect();
     let (volume, watertight, non_manifold, centroid) = match kind {
         "solid" => (
             Some(round_mm(report.mass.volume_mm3)),
@@ -854,16 +871,22 @@ pub fn describe(
         // A one-body surface's centroid is set from its mesh by the caller.
         _ => (None, None, None, [0.0; 3]),
     };
-    let surface_measures: Vec<&parcad_occt::SurfaceMeasure> = s.surfaces.iter().collect();
+    let references = s.reference_bodies();
+    let surface_measures: Vec<&parcad_occt::SurfaceMeasure> = s
+        .surfaces
+        .iter()
+        .filter(|m| !m.body.as_deref().is_some_and(|b| references.contains(&b)))
+        .collect();
+    let own: Vec<&BodyReport> = named_bodies.iter().filter(|b| !b.reference).collect();
     let surface_area: f64 = if s.bodies.is_empty() {
         report.mass.area_mm2
     } else {
-        named_bodies.iter().filter(|b| b.kind == "surface").map(|b| b.area_mm2).sum()
+        own.iter().filter(|b| b.kind == "surface").map(|b| b.area_mm2).sum()
     };
-    let centroid = if kind == "surface" && !named_bodies.is_empty() {
+    let centroid = if kind == "surface" && !own.is_empty() {
         let mut moment = [0.0; 3];
-        let area: f64 = named_bodies.iter().map(|b| b.area_mm2).sum();
-        for b in &named_bodies {
+        let area: f64 = own.iter().map(|b| b.area_mm2).sum();
+        for b in &own {
             for (m, c) in moment.iter_mut().zip(b.centroid) {
                 *m += c * b.area_mm2;
             }
@@ -1135,16 +1158,9 @@ pub fn measure_brep(
     doc: &Doc,
     s: &parcad_occt::Success,
 ) -> Result<(parcad_core::PartReport, Tessellation), String> {
-    let vertices: Vec<[f32; 3]> = s
-        .positions
-        .chunks_exact(3)
-        .map(|c| [c[0], c[1], c[2]])
-        .collect();
-    let triangles: Vec<[usize; 3]> = s
-        .indices
-        .chunks_exact(3)
-        .map(|c| [c[0] as usize, c[1] as usize, c[2] as usize])
-        .collect();
+    // The part's mesh only: a reference body is drawn beside the part and is
+    // in no measurement of it and no file.
+    let (vertices, triangles) = s.part_mesh();
 
     // Weld before measuring. OCCT triangulates face by face, so every shared
     // edge arrives as two coincident copies of its vertices; the surface has no
@@ -1229,6 +1245,89 @@ mod tests {
         let (extents, _) = tag_extents(&doc, &success);
         let nodes: Vec<(&str, usize)> = extents.iter().map(|e| (e.tag.as_str(), e.nodes)).collect();
         assert_eq!(nodes, [("holder", 1), ("nub", 2)]);
+    }
+
+    /// A reference body is measured and drawn, and is in no file and no
+    /// whole-part number: two unit cubes, one a reference, are one body of
+    /// one cubic millimetre whose STL holds twelve triangles.
+    #[test]
+    fn a_reference_body_is_measured_but_absent_from_the_part_and_the_export() {
+        let cube = |origin: [f32; 3]| -> (Vec<f32>, Vec<u32>) {
+            let mut positions = Vec::new();
+            for i in 0..8u32 {
+                positions.extend([
+                    origin[0] + (i & 1) as f32,
+                    origin[1] + ((i >> 1) & 1) as f32,
+                    origin[2] + ((i >> 2) & 1) as f32,
+                ]);
+            }
+            let indices = vec![
+                0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4, 2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5,
+            ];
+            (positions, indices)
+        };
+        let (mut positions, mut indices) = cube([0.0, 0.0, 0.0]);
+        let (far_positions, far_indices) = cube([5.0, 0.0, 2.0]);
+        positions.extend(far_positions);
+        indices.extend(far_indices.iter().map(|i| i + 8));
+        let span = |name: &str, reference: bool, start: usize| parcad_occt::protocol::BodySpan {
+            name: name.into(),
+            kind: BodyKind::default(),
+            reference,
+            faces: 6,
+            edges: 12,
+            triangle_start: start,
+            triangle_count: 12,
+        };
+        let success = Success {
+            positions,
+            normals: Vec::new(),
+            indices,
+            face_runs: Vec::new(),
+            faces: Vec::new(),
+            deflection_mm: 0.01,
+            deviation_mm: None,
+            loft_wall_mm: None,
+            facet_sag_mm: None,
+            thickened_mm: None,
+            offset_mm: None,
+            patch_gap_mm: None,
+            kind: BodyKind::default(),
+            surfaces: Vec::new(),
+            edges: Vec::new(),
+            topology: Topology { faces: 6, edges: 12 },
+            bodies: vec![span("near", false, 0), span("far", true, 12)],
+            between: Vec::new(),
+            tag_extents: Vec::new(),
+            unlocated_tags: Vec::new(),
+            treatment_edges: Vec::new(),
+            timings: Timings::default(),
+            step_path: None,
+            stl_path: None,
+        };
+        let doc = doc(serde_json::json!({ "units": "mm", "root": 2, "nodes": [
+            { "op": "cuboid", "size": { "x": 1, "y": 1, "z": 1 } },
+            { "op": "cuboid", "size": { "x": 1, "y": 1, "z": 1 } },
+            { "op": "bodies", "bodies": [{ "name": "near", "child": 0 }, { "name": "far", "child": 1, "reference": true }] }
+        ] }));
+        let evaluated = evaluated(&doc, &success, 0, false).unwrap();
+        let snapshot = &evaluated.snapshot;
+        assert_eq!(snapshot.bodies, 1);
+        assert_eq!(snapshot.volume_mm3, Some(1.0));
+        assert_eq!(snapshot.size, [1.0, 1.0, 1.0]);
+        assert_eq!(snapshot.faces, Some(6));
+        let flags: Vec<(&str, bool)> = snapshot.named_bodies.iter().map(|b| (b.name.as_str(), b.reference)).collect();
+        assert_eq!(flags, [("near", false), ("far", true)]);
+        assert_eq!(snapshot.named_bodies[1].volume_mm3, Some(1.0), "a reference is still measured");
+        assert_eq!(evaluated.reference_bodies, ["far"]);
+        // The renderer frames everything drawn; the snapshot reports the part.
+        assert_eq!((evaluated.bounds.max.x, snapshot.bounds_max[0]), (6.0, 1.0));
+        let (bytes, measured) = stl(&doc, &success, false).unwrap();
+        assert_eq!(bytes.len(), 84 + 12 * 50, "twelve triangles: the reference is not in the file");
+        assert_eq!((measured.bodies, measured.volume_mm3), (1, Some(1.0)));
+        let named: Vec<&str> = measured.named_bodies.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(named, ["near", "far"], "the file's report still says what the reference measured");
+        assert!(measured.named_bodies[1].reference);
     }
 
     /// The count a treatment resolved to is the kernel's, reported beside the

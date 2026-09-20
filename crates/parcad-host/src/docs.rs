@@ -778,11 +778,12 @@ mod tests {
         ["__parcadTreatmentSource", "__parcadShadowedBuiltins", "__parcadShadowedBuiltinMessage"];
 
     /// Members the classes carry for the editor rather than for a script.
-    const NOT_CALLABLE: [&str; 8] = [
+    const NOT_CALLABLE: [&str; 9] = [
         "constructor",
         "treatmentCall",
         "tagName",
         "materialSpec",
+        "referenceBody",
         "children",
         "toNode",
         "filletVertices",

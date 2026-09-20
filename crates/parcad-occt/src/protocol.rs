@@ -565,11 +565,65 @@ pub struct BodySpan {
     pub name: String,
     #[serde(default)]
     pub kind: BodyKind,
+    /// A reference body: drawn and measured against the others, never part
+    /// of the part. Left out of every whole-part number and every file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reference: bool,
     pub faces: usize,
     pub edges: usize,
     /// First triangle of this body in `indices`, counted in triangles.
     pub triangle_start: usize,
     pub triangle_count: usize,
+}
+
+impl Success {
+    /// The triangles of the part itself: every body's but the reference
+    /// bodies', which are drawn beside the part and are never in a file, a
+    /// volume or a piece count. The whole buffer when there are none.
+    pub fn part_indices(&self) -> std::borrow::Cow<'_, [u32]> {
+        if !self.bodies.iter().any(|b| b.reference) {
+            return std::borrow::Cow::Borrowed(&self.indices);
+        }
+        let mut out = Vec::with_capacity(self.indices.len());
+        for span in self.bodies.iter().filter(|b| !b.reference) {
+            let start = (span.triangle_start * 3).min(self.indices.len());
+            let end = ((span.triangle_start + span.triangle_count) * 3).min(self.indices.len());
+            out.extend_from_slice(&self.indices[start..end]);
+        }
+        std::borrow::Cow::Owned(out)
+    }
+
+    /// The names of the reference bodies, in the script's order.
+    pub fn reference_bodies(&self) -> Vec<&str> {
+        self.bodies.iter().filter(|b| b.reference).map(|b| b.name.as_str()).collect()
+    }
+
+    /// The part's mesh as every file and whole-part number reads it: the
+    /// triangles of [`Self::part_indices`], over only the vertices they use,
+    /// so a reference body's vertices cannot widen the bounds either.
+    pub fn part_mesh(&self) -> (Vec<[f32; 3]>, Vec<[usize; 3]>) {
+        let vertices: Vec<[f32; 3]> = self.positions.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let mut triangles: Vec<[usize; 3]> = self
+            .part_indices()
+            .chunks_exact(3)
+            .map(|c| [c[0] as usize, c[1] as usize, c[2] as usize])
+            .collect();
+        if self.reference_bodies().is_empty() {
+            return (vertices, triangles);
+        }
+        let mut kept = vec![usize::MAX; vertices.len()];
+        let mut compact = Vec::new();
+        for triangle in &mut triangles {
+            for index in triangle.iter_mut() {
+                if kept[*index] == usize::MAX {
+                    kept[*index] = compact.len();
+                    compact.push(vertices[*index]);
+                }
+                *index = kept[*index];
+            }
+        }
+        (compact, triangles)
+    }
 }
 
 /// Two named bodies of one part, and how they sit: the fit report's verdict,

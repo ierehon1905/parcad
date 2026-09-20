@@ -80,10 +80,13 @@ pub fn bodies_of(part: &BuiltPart) -> Vec<Body<'_>> {
     if part.bodies.is_empty() {
         return vec![Body::new(None, &part.shape, &part.names[0])];
     }
+    // A reference body is never probed: a point inside a coin stack reading
+    // `material` would be the part's answer about something that is not it.
     part.bodies
         .iter()
         .zip(&part.names)
-        .map(|((name, shape), names)| Body::new(Some(name), shape, names))
+        .filter(|(body, _)| !body.reference)
+        .map(|(body, names)| Body::new(Some(&body.name), &body.shape, names))
         .collect()
 }
 

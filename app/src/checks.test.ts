@@ -45,3 +45,28 @@ describe("checks in the returned object", () => {
     expect(() => part({ clear: ["top", "stack"] })).toThrow("checks is a plain object, not a list of checks");
   });
 });
+
+describe("reference bodies", () => {
+  test("the mark lands on the body the object names, and is stamped as a feature", () => {
+    const tray = box(60, 40, 3).tag("tray");
+    const stack = cylinder(12, 20).at(0, 0, 13.5).reference();
+    const doc = build({ tray, stack });
+    const bodies = (doc.nodes[doc.root] as { bodies: { name: string; reference?: boolean }[] }).bodies;
+    expect(bodies).toEqual([
+      { name: "tray", child: 0 },
+      { name: "stack", child: 2, reference: true },
+    ]);
+    expect(doc.requires?.map((r) => r.feature)).toEqual(["reference-bodies"]);
+  });
+
+  test("a reference is never part of the part", () => {
+    const coin = cylinder(12, 2).reference();
+    expect(() => build({ tray: box(60, 40, 3), stack: coin.at(0, 0, 10) })).toThrow(
+      "a shape marked .reference() was used to build another shape",
+    );
+    expect(() => build(box(1, 1, 1).reference())).toThrow("the script returned only a reference");
+    expect(() => build({ a: box(1, 1, 1).reference(), b: box(2, 2, 2).reference() })).toThrow(
+      "every body is a reference",
+    );
+  });
+});

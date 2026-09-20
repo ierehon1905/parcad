@@ -85,6 +85,8 @@ export interface EvaluationSnapshot {
   named_bodies?: {
     name: string;
     kind: "solid" | "surface";
+    /** A `.reference()` body: drawn and measured against the part, not part of it. */
+    reference?: boolean;
     volume_mm3?: number;
     faces: number;
     watertight?: boolean;

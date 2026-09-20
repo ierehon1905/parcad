@@ -2937,13 +2937,22 @@ pub struct BuiltPart {
     pub treatment_edges: BTreeMap<NodeId, usize>,
     /// Each named body, in the order the script named them. Empty for a
     /// one-solid part, whose body is `shape`.
-    pub bodies: Vec<(String, Shape)>,
+    pub bodies: Vec<BuiltBody>,
     /// What every tag names on each body's finished surface, one entry per
     /// body in `bodies`' order, or exactly one for a one-solid part. This is
     /// the lineage handed out: the faces the kernel's own history says a tag
     /// still owns, which is what a region map, a tag extent and a ray
     /// crossing's `surface_of` are read from.
     pub names: Vec<NamedFaces>,
+}
+
+/// One named body of a [`BuiltPart`], built on its own.
+pub struct BuiltBody {
+    pub name: String,
+    pub shape: Shape,
+    /// See `parcad_core::graph::NamedBody::reference`: measured against the
+    /// part and drawn, never part of `BuiltPart::shape`.
+    pub reference: bool,
 }
 
 /// Every tag's live faces on one finished body, in the order the tags were
@@ -3033,16 +3042,17 @@ pub fn build_part(doc: &Doc) -> Result<BuiltPart> {
     };
     let built = build_bodies(doc, named, DVec3::ZERO)?;
     let mut features = TreatmentFeatures::default();
-    let mut bodies = Vec::with_capacity(built.len());
+    let mut bodies: Vec<BuiltBody> = Vec::with_capacity(built.len());
     let mut names = Vec::with_capacity(built.len());
-    for (name, body) in built {
+    for ((name, body), named) in built.into_iter().zip(named) {
         validity_probe(&format!("body {name}"), &body.shape);
         features.extend(body.features);
         names.push(NamedFaces::of(doc, &body.lineage));
-        bodies.push((name, body.shape));
+        bodies.push(BuiltBody { name, shape: body.shape, reference: named.reference });
     }
     Ok(BuiltPart {
-        shape: compound_of(bodies.iter().map(|(_, shape)| shape)),
+        // The part is its own bodies: a reference is beside it, not in it.
+        shape: compound_of(bodies.iter().filter(|b| !b.reference).map(|b| &b.shape)),
         treatment_owners: features.edge_owners(),
         treatment_edges: features.treatment_edges(),
         bodies,
@@ -3785,7 +3795,9 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 features.extend(body.features.clone());
             }
             BuiltShape {
-                shape: compound_of(built.iter().map(|(_, body)| &body.shape)),
+                shape: compound_of(
+                    built.iter().zip(bodies).filter(|(_, named)| !named.reference).map(|((_, body), _)| &body.shape),
+                ),
                 lineage: EdgeLineage::default(),
                 features,
             }
@@ -5335,16 +5347,16 @@ mod tests {
     fn a_part_in_bodies_builds_each_body_apart_and_the_compound_of_them() {
         let part = build_part(&two_body_doc(false)).unwrap();
         assert_eq!(part.bodies.len(), 2);
-        assert_eq!(part.bodies[0].0, "near");
-        assert_eq!(part.bodies[1].0, "far");
+        assert_eq!(part.bodies[0].name, "near");
+        assert_eq!(part.bodies[1].name, "far");
         // Each body is its own closed solid; the compound holds both, unfused.
-        assert!((part.bodies[0].1.signed_volume() - 1000.0).abs() < 1e-6);
-        assert!((part.bodies[1].1.signed_volume() - 1000.0).abs() < 1e-6);
+        assert!((part.bodies[0].shape.signed_volume() - 1000.0).abs() < 1e-6);
+        assert!((part.bodies[1].shape.signed_volume() - 1000.0).abs() < 1e-6);
         assert!((part.shape.signed_volume() - 2000.0).abs() < 1e-6);
         assert_eq!(part.shape.faces().count(), 12);
         assert!(part.shape.single_solid().is_none(), "two solids must not unwrap to one");
 
-        let fit = fit_between(&part.bodies[0].1, &part.bodies[1].1).unwrap();
+        let fit = fit_between(&part.bodies[0].shape, &part.bodies[1].shape).unwrap();
         assert_eq!(fit.verdict, "clear");
         assert!((fit.clearance_mm.unwrap() - 3.0).abs() < 1e-6, "{fit:?}");
     }
@@ -5368,7 +5380,7 @@ mod tests {
         bodies[0].child = 0;
         bodies[1].child = 3;
         let part = build_part(&doc).unwrap();
-        assert!(part.bodies[1].1.signed_volume() < 1000.0, "the far cube's edges were rounded");
+        assert!(part.bodies[1].shape.signed_volume() < 1000.0, "the far cube's edges were rounded");
     }
 
     #[test]

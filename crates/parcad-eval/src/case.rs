@@ -562,6 +562,9 @@ pub fn check_perception(
 /// part's: `size_mm` per axis, `volume_pct` on volume, exact topology.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BodyExpect {
+    /// A `.reference()` body: measured, drawn, in no file and no whole-part number.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reference: bool,
     pub size: [f64; 3],
     pub volume_mm3: f64,
     pub faces: usize,

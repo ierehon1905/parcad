@@ -675,6 +675,44 @@ export class Shape {
   }
 
   /**
+   * Mark this body as a reference: a real object the part is checked
+   * against — a stack of coins, a tipped coin at a mouth — that is not the
+   * part. Call it last, on the shape the returned object names.
+   *
+   * - Built, drawn in blue, measured alone (`named_bodies`, `reference:
+   *   true`) and against every body (`between_bodies`), so a `clear` or
+   *   `interferes` check can name it.
+   * - Never exported, probed, or counted: not in `bodies`, `volume_mm3`,
+   *   `size` or `stands_on`.
+   * - At least one body must not be a reference.
+   *
+   * @example
+   *     const plate = box(60, 40, 3).at(0, 0, 1.5).tag("plate");
+   *     const stack = cylinder(12, 20).at(0, 0, 13.5).reference();
+   *     return { plate, stack, checks: [{ clear: ["plate", "stack"], atLeast: 0.2 }] };
+   *
+   * @remarks
+   * A method on the shape rather than a `reference: [...]` list on the
+   * returned object: the object then stays names-to-shapes with one data
+   * key (`checks`); a name in a list can be misspelt and refer to nothing;
+   * and the mark travels with the shape the way `.tag()` and `.material()`
+   * do, read off the body the object names. Like a tag it lands on the
+   * outermost node, so a reference used to build another shape is refused
+   * — call it last.
+   */
+  reference(): Shape {
+    this.isReference = true;
+    return this;
+  }
+
+  private isReference = false;
+
+  /** @internal */
+  get referenceBody(): boolean {
+    return this.isReference;
+  }
+
+  /**
    * How this body looks in the window. Visual only: nothing measured reads it,
    * and an agent's render shows it only with `materials: true`. Changes this
    * shape in place and returns it.
@@ -3855,6 +3893,12 @@ const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean; doc?:
     doc: (doc) => (doc.checks?.length ?? 0) > 0,
   },
   {
+    feature: "reference-bodies",
+    after: "0.0.9",
+    what: "reference bodies (.reference())",
+    uses: (n) => n.op === "bodies" && Array.isArray(n.bodies) && n.bodies.some((b) => (b as GraphNode)?.reference === true),
+  },
+  {
     feature: "section-curves",
     after: "0.0.6",
     what: "sections with rounded corners, arcs or splines",
@@ -4082,6 +4126,14 @@ export function build(
     if (seen !== undefined) return seen;
 
     // Children first, so their ids exist by the time this node is emitted.
+    for (const child of s.children) {
+      if (child.referenceBody) {
+        throw new Error(
+          "a shape marked .reference() was used to build another shape; a reference is measured against " +
+            "the part and never part of it, so call .reference() last, on the shape the returned object names",
+        );
+      }
+    }
     const kids = s.children.map(visit);
     const node = s.toNode(kids);
     if (s.tagName) node.tag = s.tagName;
@@ -4096,6 +4148,12 @@ export function build(
   };
 
   if (root instanceof Shape) {
+    if (root.referenceBody) {
+      throw new Error(
+        "the script returned only a reference; a reference is measured against the part, so return the part " +
+          "beside it: return { holder, stack: stack.reference() }",
+      );
+    }
     const rootId = visit(root);
     return stamped({ units: "mm", root: rootId, nodes });
   }
@@ -4123,8 +4181,14 @@ export function build(
       );
     }
     if (!name.trim()) throw new Error("a body has an empty name; name each body: return { base, lid }");
-    return { name, child: visit(shape) };
+    return { name, child: visit(shape), ...(shape.referenceBody && { reference: true }) };
   });
+  if (bodies.every((body) => body.reference)) {
+    throw new Error(
+      "every body is a reference; a reference is measured against the part, so at least one body must be the " +
+        "part itself — leave .reference() off that one",
+    );
+  }
   const rootId = nodes.length;
   nodes.push({ op: "bodies", bodies });
   if (checks !== undefined) {

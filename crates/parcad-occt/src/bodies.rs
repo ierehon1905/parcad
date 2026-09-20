@@ -18,6 +18,8 @@ use parcad_core::{
 pub struct MeasuredBody {
     pub name: String,
     pub kind: crate::protocol::BodyKind,
+    /// See `BodySpan::reference`.
+    pub reference: bool,
     /// The kernel's own counts for this body alone.
     pub faces: usize,
     pub edges: usize,
@@ -54,7 +56,12 @@ pub fn body_meshes(s: &Success) -> Vec<(String, Tessellation)> {
         return Vec::new();
     }
     let whole = unwelded(s);
-    s.bodies.iter().map(|span| (span.name.clone(), body_mesh(&whole, span))).collect()
+    // A file holds the part: a reference body has no object in it.
+    s.bodies
+        .iter()
+        .filter(|span| !span.reference)
+        .map(|span| (span.name.clone(), body_mesh(&whole, span)))
+        .collect()
 }
 
 fn body_mesh(whole: &Tessellation, span: &BodySpan) -> Tessellation {
@@ -68,6 +75,7 @@ fn measure_body(whole: &Tessellation, span: &BodySpan) -> Option<MeasuredBody> {
     Some(MeasuredBody {
         name: span.name.clone(),
         kind: span.kind,
+        reference: span.reference,
         faces: span.faces,
         edges: span.edges,
         bounds,
@@ -148,8 +156,8 @@ mod tests {
             edges: Vec::new(),
             topology: Topology { faces: 12, edges: 24 },
             bodies: vec![
-                BodySpan { name: "near".into(), kind: Default::default(), faces: 6, edges: 12, triangle_start: 0, triangle_count: 12 },
-                BodySpan { name: "far".into(), kind: Default::default(), faces: 6, edges: 12, triangle_start: 12, triangle_count: 12 },
+                BodySpan { name: "near".into(), kind: Default::default(), reference: false, faces: 6, edges: 12, triangle_start: 0, triangle_count: 12 },
+                BodySpan { name: "far".into(), kind: Default::default(), reference: true, faces: 6, edges: 12, triangle_start: 12, triangle_count: 12 },
             ],
             between: Vec::new(),
             tag_extents: Vec::new(),
@@ -172,9 +180,14 @@ mod tests {
         assert!((bed.z_mm - 2.0).abs() < 1e-6 && (bed.footprint_fraction - 1.0).abs() < 1e-6);
         assert!(far.stats.watertight);
         assert_eq!(far.stats.bodies, 1);
+        assert!(far.reference && !measured[0].reference);
 
+        // The far cube is a reference: measured above, drawn, but in no file
+        // and in none of the part's own triangles.
         let meshes = body_meshes(&s);
         let shapes: Vec<_> = meshes.iter().map(|(name, m)| (name.as_str(), m.vertices.len(), m.triangles.len())).collect();
-        assert_eq!(shapes, [("near", 8, 12), ("far", 8, 12)]);
+        assert_eq!(shapes, [("near", 8, 12)]);
+        assert_eq!(s.part_indices().len(), 36);
+        assert_eq!(s.reference_bodies(), ["far"]);
     }
 }
