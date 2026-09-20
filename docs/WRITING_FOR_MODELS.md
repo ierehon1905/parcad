@@ -108,6 +108,33 @@ evidence for parcad.
   further: the transcripts name the mechanism, the lever it leaves is already
   pulled, and a second round of rewording would measure the client's tool
   loading again, not the description.
+- **A verdict in the reply is quoted; a verdict in a comment is quoted too.**
+  The checks round (2026-09-20, docs/PERCEPTION.md §19) put the part's own
+  `checks` first in every reply and a door on every write. Asked to save a
+  part whose `clear` check fails by 0.13 mm, eight of eight small-model
+  trials after the change were refused, passed `allow_failing` with the
+  user's reason and named the check as the refusal spelled it; eight of
+  eight before the change reported the same check and the same 0.13, read
+  off the script's header comment, over a part the host could not even
+  build and had saved regardless. Both are fluent, both name the check, and
+  only the route tells them apart — which is why the harness grades a trial
+  and never passes it, and why a case that names its own answer in the
+  part's comments measures the comment. The number to move was `reach`
+  (0/8 to 8/8) and bytes (994 and 3,959 to 0 and 248), not the verdict.
+- **A note was never quoted, because a note was never written.** `note()`
+  landed with its "from the script, not measured" line, and the sliver case
+  was re-run in both arms to see whether trials would quote a note in place
+  of a measurement. No trial called `note()`; the honesty guard is
+  unmeasured until a part in the corpus carries notes and a case asks about
+  the number they hold.
+- **A longer description did not move a small model onto the cheap route,
+  and may have moved it off.** The what-if regression's non-thinking arm
+  resent the whole part in 4 of 4 trials after the round against 1 of 4
+  before, while `evaluate_part`'s description grew a paragraph on `checks`
+  and reference bodies and nothing on that route changed. Four trials is not
+  a measurement of the cause; it is a reason to keep the paragraph a model
+  must read to its first sentence, and to measure a description's length
+  as a variable of its own.
 - **What still reads wrong.** With `offset` refused and the meant field
   named, the thinking arm's route is unchanged at 0/3 by `input` — it never
   sends the hazard, so the refusal is unmeasured there. And on the rotate

@@ -1275,6 +1275,65 @@ thinking-arm WRONG never reached the server. A model that has just opened a
 part by name reaches for that name; `"@session"` is the spelling the case
 wants and the description gives, and one trial in six did not take it.
 
+**The checks round, 2026-09-20.** Three things from the coin-holder review
+landed together (docs/COIN_HOLDER_REVIEW.md, B2, workflow §2, mechanical
+§2.6): `checks: [...]` in the returned object, judged on every build and
+first in every reply; the door — `export_part`, `save_project` and a saving
+`edit_part` refuse a failing check unless `allow_failing` gives a reason;
+`.reference()` bodies measured and drawn but in no file; and `note()`, carried
+as "from the script, not measured". Measured on the same small model, 4
+trials per arm (3 for the screen case), two hosts on scratch ports, the
+in-place cases one trial at a time on a fresh copy:
+
+| case | arm | before: sound / reach / bytes per trial | after: sound / reach / bytes per trial |
+|---|---|---|---|
+| is-it-safe-to-save (the door, `allow_failing`) | thinking | 0/4 · 0/4 · 994 (4 LUCKY) | 4/4 · 4/4 · 0 |
+| is-it-safe-to-save | no thinking | 0/4 · 0/4 · 3,959 (4 LUCKY) | 4/4 · 4/4 · 248 |
+| is-the-catch-still-caught (`checks` of `{ project, edits }`) | thinking | 1/4 · 1/4 · 875 | 2/4 · 2/4 · 450 |
+| is-the-catch-still-caught | no thinking | 0/4 · 0/4 · 1,009 (2 VOID) | 0/4 · 1/4 · 675 (3 LUCKY, 1 VOID) |
+| where-is-the-sliver (§2.6's risk) | thinking | 4/4 · 4/4 · 402 | 4/4 · 4/4 · 287 |
+| where-is-the-sliver | no thinking | 2/4 · 4/4 · 287 | 1/4 · 4/4 · 287 |
+| change-one-dimension (regression) | thinking | 2/4 · 2/4 · 4,918 | 3/4 · 3/4 · 3,278 |
+| change-one-dimension | no thinking | 1/4 · 2/4 · 4,920 | 3/4 · 3/4 · 1,640 |
+| what-if-it-were-thicker (regression) | thinking | 4/4 · 4/4 · 0 | 3/4 · 3/4 · 1,639 |
+| what-if-it-were-thicker | no thinking | 1/4 · 1/4 · 3,292 | 0/4 · 0/4 · 8,200 |
+| change-the-open-part (regression, screen) | thinking | 3/3 · 3/3 · 2,006 | 2/3 · 2/3 · 2,408 |
+| change-the-open-part | no thinking | 3/3 · 3/3 · 2,408 | 2/3 · 2/3 · 1,605 |
+
+The door case is the one this round exists for, and it is the whole story
+in two rows. Before: eight trials of eight reported the part saved and named
+the failing check with its 0.13 mm, and every one is LUCKY — the before host
+has no `checks` key, so the part cannot build there, `save_project` wrote it
+anyway (built: false, as it always did), and the 0.13 came from the script's
+own header comment; two thinking trials deleted the `checks` entry to make the
+part build and put it back afterwards. After: eight of eight went through the
+door — refused once, then `edit_part` with `allow_failing` and the user's
+reason, 0 bytes of script sent — and quoted the check as the refusal named
+it. The trap (a save reported as done with the check unmentioned) fired in
+none of sixteen trials on either host, because both hosts' replies name the
+check: one from a comment, one from a measurement. The catch case reads the
+same way with a smaller signal: after the change every trial that reached
+a reply said `failed` with 16 mm³, and the LUCKY ones are the resend — the
+whole 900-byte part sent as `script` instead of `{ project, edits }`, the
+behaviour §19's first table already recorded. `note()` was never called in
+any transcript of either round, so the sliver case measures the risk §2.6
+named only as an absence: no trial quoted a note, and the non-thinking arm's
+0.725 mm wall (NEXT.md, "Left from the engine wave", item 10) is the same
+wrong answer as before.
+
+Two regressions to read rather than count. The screen case's two LUCKY trials
+each changed the screen through `edit_part "@session"` — the route the server
+instruction has named since the edit-in-place batch — and the rubric, written
+before that tool existed, requires `set_script`; the revision and the viewer's
+25 mm in their verdicts came from tool replies, and the case is the thing to
+update. The what-if's non-thinking arm resent the whole part in all four
+trials against one of four before (8,200 bytes against 3,292), with the
+volume right every time; the thinking arm's one LUCKY did the same. Nothing
+in this round touched that tool's route; the evaluate_part description grew a
+paragraph on `checks` and reference bodies, and whether a longer description
+moves a deferred-tool client's first call is the unmeasured variable —
+docs/WRITING_FOR_MODELS.md, "What parcad measured".
+
 ## Suggested order
 
 Done, and what each cost is in its own section: point and ray probes and

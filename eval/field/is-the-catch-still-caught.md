@@ -3,8 +3,8 @@ tool:    evaluate_part.checks
 also:    read_project, list_projects
 reach:   evaluate_part
 input:   ^(?!.*"script": "(?:[^"\\]|\\.){800,}")(?=.*"project": "catch-clip")(?=.*"edits").*
-verdict: CHECKS\s*[=:]\s*failed.*BITE\s*[=:]\s*16(?:\.0+)?
-trap:    CHECKS\s*[=:]\s*passed
+verdict: CHECKS\s*[=:]\s*\**failed.*BITE\s*[=:]\s*\**16(?:\.0+)?
+trap:    CHECKS\s*[=:]\s*\**passed
 quote:   \b16(?:\.0+)?\s*mm
 why:     |
   Checks that live in the part (docs/COIN_HOLDER_REVIEW.md, Appendix C §2),
