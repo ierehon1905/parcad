@@ -1,6 +1,6 @@
 //! Script in, observation out.
 
-use crate::case::{BetweenExpect, BodyExpect, ChecksExpect, Observed, RefusalKind};
+use crate::case::{BetweenExpect, BodyExpect, ChecksExpect, CollisionExpect, Observed, RefusalKind};
 use anyhow::{Context, Result};
 use parcad_core::graph::Doc;
 use std::collections::BTreeMap;
@@ -155,6 +155,11 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
             })
             .collect(),
         checks,
+        collisions: s
+            .collisions
+            .iter()
+            .map(|c| (format!("{}/{}", c.cut, c.feature), CollisionExpect { target: c.target.clone(), removed_mm3: c.removed_mm3 }))
+            .collect(),
         between_bodies: s
             .between
             .iter()

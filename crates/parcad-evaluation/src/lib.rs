@@ -496,6 +496,12 @@ pub struct EvaluationSnapshot {
     /// usually not what was meant.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub unlocated_tags: Vec<String>,
+    /// Every cut that took material from a named feature besides the one
+    /// it was for — "grille cuts boss" — measured on the exact solids as the
+    /// cut was made, with the volume it took and where. Empty is the common
+    /// case and is left out.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub collisions: Vec<Collision>,
     /// How many distinct materials the part's bodies wear, from `.material()`.
     /// Views are drawn in neutral grey regardless; pass `materials: true` to
     /// see them.
@@ -633,6 +639,41 @@ impl From<&parcad_occt::BodyFit> for BodyFit {
             interference_mm3: round_mm(f.interference_mm3),
             clearance_mm: f.clearance_mm.map(round_mm),
             closest_mm: f.closest_mm.map(|[a, b]| [round_point(a), round_point(b)]),
+        }
+    }
+}
+
+/// One cut that took material from a named feature besides the one it was
+/// for — `parcad_occt::protocol::Collision`, rounded for the reply.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct Collision {
+    /// The cut, by its tool's tag (`grille`), its own, or its tool's kind and node.
+    pub cut: String,
+    /// The feature the cut took the most material from: what it was for.
+    pub target: String,
+    /// The feature it also cut into.
+    pub feature: String,
+    /// How much it took from `feature`, mm³. Any amount is reported: a
+    /// grille 0.3 mm into a screw boss is a defect at 0.05 mm³.
+    pub removed_mm3: f64,
+    /// The centre and size of the box the removed material spans.
+    pub at: [f64; 3],
+    pub extent_mm: [f64; 3],
+    /// The named body the cut is in, for a part in several.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+impl From<&parcad_occt::protocol::Collision> for Collision {
+    fn from(c: &parcad_occt::protocol::Collision) -> Self {
+        Self {
+            cut: c.cut.clone(),
+            target: c.target.clone(),
+            feature: c.feature.clone(),
+            removed_mm3: round_mm(c.removed_mm3),
+            at: round_point(c.at),
+            extent_mm: round_point(c.extent_mm),
+            body: c.body.clone(),
         }
     }
 }
@@ -976,6 +1017,7 @@ pub fn describe(
         tags: report.tags.clone(),
         tag_extents: extents,
         unlocated_tags: unlocated,
+        collisions: s.collisions.iter().map(Collision::from).collect(),
         materials: authored_materials(doc),
         treatments: treatments(doc, &s.treatment_edges),
         unused_nodes: report.total_nodes.saturating_sub(report.live_nodes),
@@ -1270,6 +1312,7 @@ mod tests {
                 TagBounds { tag: "nub".into(), min: [0.0; 3], max: [2.0, 2.0, 1.0], faces: 4 },
             ],
             unlocated_tags: Vec::new(),
+            collisions: Vec::new(),
             treatment_edges: Vec::new(),
             timings: Timings::default(),
             step_path: None,
@@ -1333,6 +1376,7 @@ mod tests {
             between: Vec::new(),
             tag_extents: Vec::new(),
             unlocated_tags: Vec::new(),
+            collisions: Vec::new(),
             treatment_edges: Vec::new(),
             timings: Timings::default(),
             step_path: None,

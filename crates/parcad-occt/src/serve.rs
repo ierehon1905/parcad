@@ -406,6 +406,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         edge.id = format!("edge@{index}");
     }
     Response::Ok(Box::new(Success {
+        collisions: part.collisions.clone(),
         positions,
         normals,
         indices,

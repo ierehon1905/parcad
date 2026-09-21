@@ -260,6 +260,31 @@ pub struct TagBounds {
     pub faces: usize,
 }
 
+/// What one cut took from a named feature it was not for: the grille that
+/// nicked a screw boss (docs/NEXT.md, item 1). Measured as the cut is made,
+/// on the exact solids: the material the tool removed, intersected with the
+/// solid each tagged node of the base built. The feature that lost the most
+/// is the cut's `target`; every other feature that lost anything is one of
+/// these. Only the innermost tags count, so a tag on the whole body does not
+/// repeat what its features already say.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Collision {
+    /// The cut, by its tool's tag, its own, or its tool's kind and node.
+    pub cut: String,
+    /// The feature the cut took the most from: what it was for.
+    pub target: String,
+    /// The feature it also took material from.
+    pub feature: String,
+    /// How much, mm³. Any amount counts; there is no threshold.
+    pub removed_mm3: f64,
+    /// The centre and size of the box the removed material spans.
+    pub at: [f64; 3],
+    pub extent_mm: [f64; 3],
+    /// The named body the cut is in; absent for a one-solid part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
 /// One treatment's resolved edge count, keyed by its intent-graph node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TreatmentEdges {
@@ -547,6 +572,10 @@ pub struct Success {
     /// was cut away or buried, or the name is spelled differently.
     #[serde(default)]
     pub unlocated_tags: Vec<String>,
+    /// Every cut that took material from a named feature besides the one it
+    /// was for, measured on the exact solids as the cut was made.
+    #[serde(default)]
+    pub collisions: Vec<Collision>,
     /// How many edges each treatment's selector resolved to on the shape it
     /// ran against, by node — measured, not the `.expect()` the script wrote.
     #[serde(default)]

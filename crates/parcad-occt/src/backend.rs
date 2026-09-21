@@ -33,7 +33,7 @@ use parcad_core::{
     },
 };
 
-use crate::protocol::{breadcrumb, edge_curve, EdgeCurve, TargetVertex};
+use crate::protocol::{breadcrumb, edge_curve, Collision, EdgeCurve, TargetVertex};
 use std::collections::{BTreeMap, HashSet};
 
 #[path = "surfaces.rs"]
@@ -1261,6 +1261,11 @@ struct EdgeLineage {
     /// followed through what came after. This is what a tag *means* in the
     /// exact backend, and what an `on:` or `between:` query reads.
     faces_by_source: BTreeMap<String, Vec<Face>>,
+    /// The solid each tag named when it was written, moved with every
+    /// transform since and never cut: what a later cut is measured against
+    /// to say which features it took material from (`cut_collisions`). A
+    /// cutter's solid is a void and is not carried.
+    solids_by_source: BTreeMap<String, Shape>,
 }
 
 impl EdgeLineage {
@@ -1274,17 +1279,31 @@ impl EdgeLineage {
             lineage
                 .faces_by_source
                 .insert(tag.to_owned(), shape.faces().collect());
+            lineage.solids_by_source.insert(tag.to_owned(), shape.clone());
         }
         lineage
     }
 
     #[cfg(test)]
     fn through_boolean(self, other: Self, result: &BooleanShape, tag: Option<&str>) -> Self {
-        self.through_boolean_all(vec![other], result, tag)
+        self.through_boolean_all(vec![other], result, tag, true)
     }
 
-    /// [`Self::through_boolean`] for a boolean with several tools.
-    fn through_boolean_all(self, others: Vec<Self>, result: &BooleanShape, tag: Option<&str>) -> Self {
+    /// [`Self::through_boolean`] for a boolean with several tools. The tools'
+    /// solids are carried only for a fuse (`keep_solids`): a cutter's solid
+    /// is the void it left, not a feature a later cut can take material from.
+    fn through_boolean_all(self, others: Vec<Self>, result: &BooleanShape, tag: Option<&str>, keep_solids: bool) -> Self {
+        let mut solids_by_source = self.solids_by_source;
+        if keep_solids {
+            for other in &others {
+                for (source, solid) in &other.solids_by_source {
+                    solids_by_source.entry(source.clone()).or_insert_with(|| solid.clone());
+                }
+            }
+        }
+        if let Some(tag) = tag {
+            solids_by_source.insert(tag.to_owned(), result.shape.clone());
+        }
         let (other_edges, other_faces): (Vec<_>, Vec<_>) =
             others.into_iter().map(|o| (o.by_source, o.faces_by_source)).unzip();
         let mut by_source = BTreeMap::new();
@@ -1322,6 +1341,7 @@ impl EdgeLineage {
         Self {
             by_source,
             faces_by_source,
+            solids_by_source,
         }
     }
 
@@ -1331,6 +1351,10 @@ impl EdgeLineage {
     /// the seam of `arm` and `hub` is part of both; and the treatment's own
     /// tag names everything it left, its new edges included.
     fn through_treatment(self, treatment: &mut Treatment, result: &Shape, tag: Option<&str>) -> Self {
+        let mut solids_by_source = self.solids_by_source;
+        if let Some(tag) = tag {
+            solids_by_source.insert(tag.to_owned(), result.clone());
+        }
         // Who owned each treated edge, read off the input faces before they
         // change: an edge belongs to a feature when one of its faces does.
         let owners_of_edge: HashMap<Vec<[i64; 3]>, Vec<String>> = {
@@ -1416,11 +1440,13 @@ impl EdgeLineage {
         Self {
             by_source,
             faces_by_source,
+            solids_by_source,
         }
     }
 
     /// Carry every name through the same-domain merge after a boolean.
     fn through_unify(self, unification: &Unification) -> Self {
+        let solids_by_source = self.solids_by_source;
         let mut by_source: BTreeMap<String, Vec<Edge>> = BTreeMap::new();
         for (source, edges) in self.by_source {
             let evolved: Vec<Edge> = edges
@@ -1458,6 +1484,7 @@ impl EdgeLineage {
         Self {
             by_source,
             faces_by_source,
+            solids_by_source,
         }
     }
 
@@ -1506,6 +1533,11 @@ impl EdgeLineage {
                         .collect();
                     (!rebound.is_empty()).then_some((source, rebound))
                 })
+                .collect(),
+            solids_by_source: self
+                .solids_by_source
+                .into_iter()
+                .map(|(source, solid)| (source, transform(solid)))
                 .collect(),
         }
     }
@@ -2944,6 +2976,9 @@ pub struct BuiltPart {
     /// still owns, which is what a region map, a tag extent and a ray
     /// crossing's `surface_of` are read from.
     pub names: Vec<NamedFaces>,
+    /// Every cut that took material from a named feature besides its
+    /// target, each naming its body for a part in several.
+    pub collisions: Vec<Collision>,
 }
 
 /// One named body of a [`BuiltPart`], built on its own.
@@ -3038,16 +3073,22 @@ pub fn build_part(doc: &Doc) -> Result<BuiltPart> {
             treatment_owners: built.features.edge_owners(),
             treatment_edges: built.features.treatment_edges(),
             bodies: Vec::new(),
+            collisions: built.collisions,
         });
     };
     let built = build_bodies(doc, named, DVec3::ZERO)?;
     let mut features = TreatmentFeatures::default();
     let mut bodies: Vec<BuiltBody> = Vec::with_capacity(built.len());
     let mut names = Vec::with_capacity(built.len());
+    let mut collisions = Vec::new();
     for ((name, body), named) in built.into_iter().zip(named) {
         validity_probe(&format!("body {name}"), &body.shape);
         features.extend(body.features);
         names.push(NamedFaces::of(doc, &body.lineage));
+        collisions.extend(body.collisions.into_iter().map(|mut c| {
+            c.body = Some(name.clone());
+            c
+        }));
         bodies.push(BuiltBody { name, shape: body.shape, reference: named.reference });
     }
     Ok(BuiltPart {
@@ -3057,6 +3098,7 @@ pub fn build_part(doc: &Doc) -> Result<BuiltPart> {
         treatment_edges: features.treatment_edges(),
         bodies,
         names,
+        collisions,
     })
 }
 
@@ -3094,6 +3136,9 @@ struct BuiltShape {
     shape: Shape,
     lineage: EdgeLineage,
     features: TreatmentFeatures,
+    /// Every cut under this node that took material from a feature besides
+    /// its target, in this node's frame; see [`cut_collisions`].
+    collisions: Vec<Collision>,
 }
 
 impl BuiltShape {
@@ -3102,6 +3147,7 @@ impl BuiltShape {
             shape,
             lineage: EdgeLineage::default(),
             features: TreatmentFeatures::default(),
+            collisions: Vec::new(),
         }
     }
 
@@ -3111,6 +3157,7 @@ impl BuiltShape {
             shape,
             lineage,
             features: TreatmentFeatures::default(),
+            collisions: Vec::new(),
         }
     }
 
@@ -3128,9 +3175,168 @@ impl BuiltShape {
                 .entry(tag.to_owned())
                 .or_default()
                 .extend(self.shape.faces());
+            self.lineage.solids_by_source.insert(tag.to_owned(), self.shape.clone());
         }
         self
     }
+}
+
+/// A collision's places moved with the shape they are in.
+fn moved_collisions(collisions: Vec<Collision>, transform: &dyn Fn(DVec3) -> DVec3) -> Vec<Collision> {
+    collisions
+        .into_iter()
+        .map(|mut c| {
+            let at = DVec3::from_array(c.at);
+            let half = DVec3::from_array(c.extent_mm) * 0.5;
+            let mut lo = DVec3::splat(f64::INFINITY);
+            let mut hi = DVec3::splat(f64::NEG_INFINITY);
+            for corner in 0..8 {
+                let sign = DVec3::new(
+                    if corner & 1 == 0 { -1.0 } else { 1.0 },
+                    if corner & 2 == 0 { -1.0 } else { 1.0 },
+                    if corner & 4 == 0 { -1.0 } else { 1.0 },
+                );
+                let moved = transform(at + half * sign);
+                lo = lo.min(moved);
+                hi = hi.max(moved);
+            }
+            c.at = ((lo + hi) * 0.5).to_array();
+            c.extent_mm = (hi - lo).to_array();
+            c
+        })
+        .collect()
+}
+
+/// A tag's node ids, and every node under each: which tags lie inside
+/// which, so a name on a whole body does not repeat what its features say.
+fn tag_subtrees(doc: &Doc) -> HashMap<String, HashSet<NodeId>> {
+    let mut subtrees: HashMap<String, HashSet<NodeId>> = HashMap::new();
+    for (id, tag) in doc.tags() {
+        let under = subtrees.entry(tag.to_owned()).or_default();
+        let mut stack = vec![id];
+        while let Some(n) = stack.pop() {
+            if under.insert(n) {
+                stack.extend(doc.children_of(n).unwrap_or_default());
+            }
+        }
+    }
+    subtrees
+}
+
+/// What a cut is called in a collision: its tool's tag, or the first tag
+/// under the tool through its placements — `hole.tag("grille").at(..)` tags
+/// the cylinder and cuts by the translation — then the cut's own tag, then
+/// the tool's shape and node.
+fn cut_name(doc: &Doc, cut: NodeId, tool: NodeId) -> String {
+    let mut id = tool;
+    loop {
+        let Some(node) = doc.nodes.get(id) else { break };
+        if let Some(tag) = &node.tag {
+            return tag.clone();
+        }
+        match &node.op {
+            Op::Translate { child, .. } | Op::Rotate { child, .. } | Op::Scale { child, .. } | Op::Mirror { child, .. } => {
+                id = *child;
+            }
+            _ => break,
+        }
+    }
+    if let Some(tag) = doc.nodes.get(cut).and_then(|n| n.tag.clone()) {
+        return tag;
+    }
+    format!(
+        "{} cut at node {tool}",
+        doc.nodes.get(id).map(|n| op_phrase(&n.op)).unwrap_or_else(|| "a".to_owned())
+    )
+}
+
+/// What each tool of a cut took from the named features of its base, beyond
+/// the one it was for: the material the tool removed — the base's solid
+/// intersected with the tool's — intersected again with the solid each
+/// tagged node of the base built. Exact, on the B-rep, and any volume counts.
+/// The feature that lost the most is the target; the rest are collisions. A
+/// tag whose node encloses another hit tag's node is left out: `body`
+/// contains `boss`, and "grille cuts body" says nothing "grille cuts boss"
+/// does not. Skipped when fewer than two features' boxes meet the tool's.
+fn cut_collisions(
+    doc: &Doc,
+    id: NodeId,
+    tools: &[NodeId],
+    material: &Shape,
+    features: &BTreeMap<String, Shape>,
+    cut_tools: &[CombinedTool],
+) -> Vec<Collision> {
+    const ANY_MM3: f64 = 1e-6;
+    let boxes: Vec<(&String, &Shape, Option<(DVec3, DVec3)>)> =
+        features.iter().map(|(tag, solid)| (tag, solid, solid.bounds_optimal())).collect();
+    let meets = |a: Option<(DVec3, DVec3)>, b: Option<(DVec3, DVec3)>| match (a, b) {
+        (Some((a0, a1)), Some((b0, b1))) => {
+            !(a1.cmplt(b0 - MISS_GAP_MM).any() || b1.cmplt(a0 - MISS_GAP_MM).any())
+        }
+        _ => true,
+    };
+    let subtrees = tag_subtrees(doc);
+    let mut out = Vec::new();
+    for (&t, tool) in tools.iter().zip(cut_tools) {
+        let near: Vec<&(&String, &Shape, Option<(DVec3, DVec3)>)> =
+            boxes.iter().filter(|(_, _, b)| meets(*b, tool.bounds)).collect();
+        if near.len() < 2 {
+            continue;
+        }
+        breadcrumb(&format!("node {id}: measuring what the cut by node {t} took from each feature"));
+        let mut removed = AdHocShape(material.clone());
+        removed.intersect(&tool.shape);
+        if removed.0.signed_volume().abs() < ANY_MM3 {
+            continue;
+        }
+        let mut hits: Vec<(&str, f64, (DVec3, DVec3))> = Vec::new();
+        for (tag, solid, _) in near {
+            let mut piece = AdHocShape(removed.0.clone());
+            piece.intersect(solid);
+            let volume = piece.0.signed_volume().abs();
+            if volume < ANY_MM3 {
+                continue;
+            }
+            let Some(bounds) = piece.0.bounds_optimal() else { continue };
+            hits.push((tag.as_str(), volume, bounds));
+        }
+        // Innermost tags only.
+        let names: Vec<&str> = hits.iter().map(|(tag, _, _)| *tag).collect();
+        hits.retain(|(tag, _, _)| {
+            let Some(under) = subtrees.get(*tag) else { return true };
+            !names.iter().any(|other| {
+                other != tag
+                    && doc
+                        .tags()
+                        .iter()
+                        .any(|(id, name)| name == other && under.contains(id) && !subtrees.get(*other).is_some_and(|u| u.contains(id) && u.len() >= under.len()))
+            })
+        });
+        if hits.len() < 2 {
+            continue;
+        }
+        let target = hits
+            .iter()
+            .max_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(tag, _, _)| tag.to_string())
+            .expect("two or more hits");
+        let cut = cut_name(doc, id, t);
+        for (tag, volume, (lo, hi)) in hits {
+            if tag == target {
+                continue;
+            }
+            out.push(Collision {
+                cut: cut.clone(),
+                target: target.clone(),
+                feature: tag.to_owned(),
+                removed_mm3: volume,
+                at: ((lo + hi) * 0.5).to_array(),
+                extent_mm: (hi - lo).to_array(),
+                body: None,
+            });
+        }
+    }
+    out
 }
 
 /// Exact result shapes generated by selected-edge treatments.
@@ -3561,6 +3767,7 @@ struct Combined {
     shape: Shape,
     lineage: EdgeLineage,
     features: TreatmentFeatures,
+    collisions: Vec<Collision>,
     /// Every edge the booleans created that is still on the result.
     seam: Vec<Edge>,
     tools: Vec<CombinedTool>,
@@ -3609,6 +3816,7 @@ fn boolean_in_layers(base: BuiltShape, tools: Vec<BuiltShape>, cut: bool, tag: O
     let mut shape = base.shape;
     let mut lineage = base.lineage;
     let mut features = base.features;
+    let mut collisions = base.collisions;
     let mut seam: Vec<Edge> = Vec::new();
     let mut alerts: Vec<String> = Vec::new();
     let mut tools: Vec<Option<BuiltShape>> = tools.into_iter().map(Some).collect();
@@ -3651,15 +3859,17 @@ fn boolean_in_layers(base: BuiltShape, tools: Vec<BuiltShape>, cut: bool, tag: O
         let mut lineages = Vec::with_capacity(members.len());
         for member in members {
             features.extend(member.features);
+            collisions.extend(member.collisions);
             lineages.push(member.lineage);
         }
-        lineage = lineage.through_boolean_all(lineages, &result, tag);
+        lineage = lineage.through_boolean_all(lineages, &result, tag, !cut);
         shape = result.shape;
     }
     Combined {
         shape,
         lineage,
         features,
+        collisions,
         seam,
         tools: tools_out,
         alerts,
@@ -3791,8 +4001,10 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
         Op::Bodies { bodies } => {
             let built = build_bodies(doc, bodies, offset)?;
             let mut features = TreatmentFeatures::default();
+            let mut collisions = Vec::new();
             for (_, body) in &built {
                 features.extend(body.features.clone());
+                collisions.extend(body.collisions.clone());
             }
             BuiltShape {
                 shape: compound_of(
@@ -3800,6 +4012,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 ),
                 lineage: EdgeLineage::default(),
                 features,
+                collisions,
             }
         }
 
@@ -3848,6 +4061,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 shape,
                 lineage,
                 features: joined.features,
+                collisions: joined.collisions,
             }
         }
 
@@ -3866,9 +4080,10 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             }
             breadcrumb(&format!("subtract nodes {tools:?} from node {id} ({label})"));
             let material = acc.shape.clone();
+            let features = acc.lineage.solids_by_source.clone();
             let voids_before = material.internal_void_count();
             let faces_before = material.faces().count();
-            let cut = boolean_in_layers(acc, cutters, true, node.tag.as_deref());
+            let mut cut = boolean_in_layers(acc, cutters, true, node.tag.as_deref());
             let whom = nodes_phrase(doc, tools);
 
             // A cut that touches nothing. The tool made no new edge and
@@ -3969,6 +4184,8 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 );
             }
 
+            cut.collisions.extend(cut_collisions(doc, id, tools, &material, &features, &cut.tools));
+
             breadcrumb(&format!("node {id} ({label}): merging the cut's faces"));
             let (shape, lineage) = if *blend > 0.0 {
                 breadcrumb(&format!(
@@ -3991,6 +4208,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 shape,
                 lineage,
                 features: cut.features,
+                collisions: cut.collisions,
             }
         }
 
@@ -4039,10 +4257,13 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 }
                 let mut features = acc.features;
                 features.extend(other.features);
+                let mut collisions = acc.collisions;
+                collisions.extend(other.collisions);
                 acc = BuiltShape {
                     shape: unified(met.0),
                     lineage: EdgeLineage::default(),
                     features,
+                    collisions,
                 };
             }
             acc.named(node.tag.as_deref())
@@ -4536,10 +4757,12 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             let lineage = inner
                 .lineage
                 .through_transform(&shape, |shape| place(reflect(shape)));
+            let collisions = moved_collisions(inner.collisions, &|p| p - 2.0 * n.dot(p) * n + offset);
             BuiltShape {
                 shape,
                 lineage,
                 features,
+                collisions,
             }
             .named(node.tag.as_deref())
         }
@@ -4587,10 +4810,13 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                     turned.translated(offset)
                 }
             });
+            let turn = glam::DQuat::from_axis_angle(axis_dir, radians);
+            let collisions = moved_collisions(inner.collisions, &|p| turn * p + offset);
             BuiltShape {
                 shape,
                 lineage,
                 features,
+                collisions,
             }
             .named(node.tag.as_deref())
         }
@@ -4654,10 +4880,12 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 let lineage = inner
                     .lineage
                     .through_transform(&shape, |part| stretch(part.clone()).unwrap_or(part));
+                let collisions = moved_collisions(inner.collisions, &|p| p * factors + offset);
                 return Ok(BuiltShape {
                     shape,
                     lineage,
                     features,
+                    collisions,
                 }
                 .named(node.tag.as_deref()));
             }
@@ -4683,10 +4911,12 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                     scaled.translated(offset)
                 }
             });
+            let collisions = moved_collisions(inner.collisions, &|p| p * uniform + offset);
             BuiltShape {
                 shape,
                 lineage,
                 features,
+                collisions,
             }
             .named(node.tag.as_deref())
         }
@@ -4787,6 +5017,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 shape: grown,
                 lineage: EdgeLineage::default(),
                 features: solid.features,
+                collisions: solid.collisions,
             }
             .named(node.tag.as_deref())
         }
@@ -4864,6 +5095,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 shape: hollow,
                 lineage: EdgeLineage::default(),
                 features: solid.features,
+                collisions: solid.collisions,
             }
             .named(node.tag.as_deref())
         }
@@ -4988,6 +5220,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 shape: solid.shape,
                 lineage,
                 features: solid.features,
+                collisions: solid.collisions,
             }
         }
 
@@ -5092,6 +5325,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 shape: solid.shape,
                 lineage,
                 features: solid.features,
+                collisions: solid.collisions,
             }
         }
     })
@@ -5122,6 +5356,50 @@ mod tests {
         let (refused, _) = measuring_fits(|| section_wire(&section(0.1), place, "quarter"));
         let err = refused.err().unwrap().to_string();
         assert!(err.contains("past the 1.000e-1 mm the script stated (certified)"), "{err}");
+    }
+
+    /// docs/NEXT.md, item 1: a grille that nicks a screw boss. A 30 x 30 x 5
+    /// plate with a 6 x 6 x 8 boss on it, cut by a 2 mm slot 3 deep whose
+    /// floor runs 1 mm into the boss: 2 x 30 x 2 = 120 mm³ leaves the plate,
+    /// which is the target, and 1 x 6 x 1 = 6 mm³ leaves the boss, which the
+    /// cut was not for. A tag on the whole union says nothing more and is
+    /// not reported; a cut that meets one feature only reports nothing.
+    #[test]
+    fn a_collision_names_its_two_features_and_the_volume_it_took() {
+        let doc: Doc = serde_json::from_str(r#"{"units":"mm","root":6,"nodes":[
+            {"op":"cuboid","size":{"x":30,"y":30,"z":5},"tag":"plate"},
+            {"op":"translate","child":0,"by":{"x":0,"y":0,"z":2.5}},
+            {"op":"cuboid","size":{"x":6,"y":6,"z":8},"tag":"boss"},
+            {"op":"translate","child":2,"by":{"x":0,"y":0,"z":9}},
+            {"op":"union","children":[1,3],"blend":0,"tag":"body"},
+            {"op":"cuboid","size":{"x":2,"y":40,"z":3},"tag":"grille"},
+            {"op":"difference","base":4,"tools":[7],"blend":0},
+            {"op":"translate","child":5,"by":{"x":3,"y":0,"z":4.5}}]}"#).unwrap();
+        let part = build_part(&doc).unwrap();
+        assert_eq!(part.collisions.len(), 1, "{:?}", part.collisions);
+        let c = &part.collisions[0];
+        assert_eq!((c.cut.as_str(), c.target.as_str(), c.feature.as_str()), ("grille", "plate", "boss"));
+        assert!((c.removed_mm3 - 6.0).abs() < 1e-6, "{}", c.removed_mm3);
+        assert!((DVec3::from_array(c.at) - DVec3::new(2.5, 0.0, 5.5)).length() < 1e-6, "{:?}", c.at);
+        assert!((DVec3::from_array(c.extent_mm) - DVec3::new(1.0, 6.0, 1.0)).length() < 1e-6, "{:?}", c.extent_mm);
+        assert!((part.shape.signed_volume() - (4500.0 + 288.0 - 126.0)).abs() < 1e-6);
+
+        // The same cut with the boss out of its reach takes from the plate alone.
+        let mut alone = doc.clone();
+        alone.nodes[7].op = Op::Translate { child: 5, by: V3::new(-10.0, 0.0, 4.5) };
+        assert!(build_part(&alone).unwrap().collisions.is_empty());
+
+        // Rotated as a whole, the place turns with the part.
+        let mut turned = doc.clone();
+        turned.nodes.push(parcad_core::graph::Node {
+            op: Op::Rotate { child: 6, axis: V3::new(0.0, 0.0, 1.0), degrees: 90.0 },
+            tag: None,
+            material: None,
+        });
+        turned.root = 8;
+        let c = &build_part(&turned).unwrap().collisions[0];
+        assert!((DVec3::from_array(c.at) - DVec3::new(0.0, 2.5, 5.5)).length() < 1e-6, "{:?}", c.at);
+        assert!((DVec3::from_array(c.extent_mm) - DVec3::new(6.0, 1.0, 1.0)).length() < 1e-6, "{:?}", c.extent_mm);
     }
 
     #[test]

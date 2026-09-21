@@ -330,6 +330,7 @@ fn through_history(parts: Vec<EdgeLineage>, input: &Shape, history: &FaceHistory
     }
     EdgeLineage {
         by_source: BTreeMap::new(),
+        solids_by_source: BTreeMap::new(),
         faces_by_source: named
             .into_iter()
             .filter(|(_, js)| !js.is_empty())
@@ -663,7 +664,7 @@ pub(super) fn stitch(doc: &Doc, node: &Node, id: NodeId, offset: DVec3, children
             bail!("node {id} ({label}): the stitched shell closes but encloses {volume:.3} mm³; its faces do not bound one region. Check that no surface passes through another");
         }
         breadcrumb(&format!("stitch node {id} closed into a solid of {volume:.3} mm³"));
-        return Ok(BuiltShape { shape: closed, lineage, features }.named(node.tag.as_deref()));
+        return Ok(BuiltShape { shape: closed, lineage, features, collisions: Vec::new() }.named(node.tag.as_deref()));
     }
     if solid {
         bail!(
@@ -676,7 +677,7 @@ pub(super) fn stitch(doc: &Doc, node: &Node, id: NodeId, offset: DVec3, children
             free_edge_listing(&sewn, 6)
         );
     }
-    Ok(BuiltShape { shape: sewn, lineage, features }.named(node.tag.as_deref()))
+    Ok(BuiltShape { shape: sewn, lineage, features, collisions: Vec::new() }.named(node.tag.as_deref()))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -741,7 +742,7 @@ pub(super) fn trim(
     }
     let lineage = through_history(vec![base.lineage], &base.shape, &history, &split);
     if keep == TrimKeep::Both {
-        return Ok(BuiltShape { shape: split, lineage, features: base.features }.named(node.tag.as_deref()));
+        return Ok(BuiltShape { shape: split, lineage, features: base.features, collisions: base.collisions }.named(node.tag.as_deref()));
     }
     let inside = split.face_inside_points().map_err(kernel(id, label))?;
     let mut kept: Vec<Face> = Vec::new();
@@ -811,7 +812,7 @@ pub(super) fn trim(
     let pieces: Shape = Compound::from_shapes(kept.into_iter().map(Shape::from)).into();
     let (shape, sew_history, _) = pieces.sewn(1e-7).map_err(kernel(id, label))?;
     let lineage = through_history(vec![lineage], &pieces, &sew_history, &shape);
-    Ok(BuiltShape { shape, lineage, features: base.features }.named(node.tag.as_deref()))
+    Ok(BuiltShape { shape, lineage, features: base.features, collisions: base.collisions }.named(node.tag.as_deref()))
 }
 
 /// Where an offset of `distance` along the normal folds: the first sample at
@@ -961,7 +962,7 @@ pub(super) fn thicken(doc: &Doc, node: &Node, id: NodeId, offset: DVec3, child: 
     }
     breadcrumb(&format!("thicken node {id}: {read} of {} samples measure {lo:.5} to {hi:.5} mm, {thickness} asked", samples.len()));
     record(Measured { thickened_mm: Some([lo, hi]), ..Measured::default() });
-    Ok(BuiltShape { shape: solid, lineage, features: base.features }.named(node.tag.as_deref()))
+    Ok(BuiltShape { shape: solid, lineage, features: base.features, collisions: base.collisions }.named(node.tag.as_deref()))
 }
 
 pub(super) fn offset_surface(doc: &Doc, node: &Node, id: NodeId, offset: DVec3, child: NodeId, distance: f64) -> Result<BuiltShape> {
@@ -1012,7 +1013,7 @@ pub(super) fn offset_surface(doc: &Doc, node: &Node, id: NodeId, offset: DVec3, 
     }
     record(Measured { offset_mm: Some([lo, hi]), ..Measured::default() });
     let lineage = through_history(vec![base.lineage], &base.shape, &history, &moved);
-    Ok(BuiltShape { shape: moved, lineage, features: base.features }.named(node.tag.as_deref()))
+    Ok(BuiltShape { shape: moved, lineage, features: base.features, collisions: base.collisions }.named(node.tag.as_deref()))
 }
 
 #[cfg(test)]

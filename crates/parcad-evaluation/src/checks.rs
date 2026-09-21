@@ -277,6 +277,7 @@ mod tests {
             tags: Vec::new(),
             tag_extents: Vec::new(),
             unlocated_tags: Vec::new(),
+            collisions: Vec::new(),
             materials: 0,
             treatments: Vec::new(),
             unused_nodes: 0,

@@ -255,6 +255,12 @@ pub struct Expect {
     /// passing, or failing by a different number, goes red.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checks: Option<ChecksExpect>,
+    /// Every cut that took material from a named feature besides its
+    /// target, keyed `"cut/feature"`, with the mm³ it took held to
+    /// `volume_pct`. Recorded whenever the part has any: a nick that grows,
+    /// shrinks or vanishes goes red, and so does a new one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collisions: Option<BTreeMap<String, CollisionExpect>>,
 
     /// Other scripts laid against the part with `check_fit`. Each is asked
     /// twice on the worker that has just evaluated the part, so the second
@@ -586,6 +592,14 @@ pub struct BetweenExpect {
     pub interference_mm3: f64,
 }
 
+/// What one cut took from a feature it was not for, as the reply carries it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CollisionExpect {
+    /// The feature the cut was for.
+    pub target: String,
+    pub removed_mm3: f64,
+}
+
 /// The verdict on a part's own checks, as the reply carries it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChecksExpect {
@@ -694,6 +708,8 @@ pub struct Observed {
     pub between_bodies: BTreeMap<String, BetweenExpect>,
     /// The part's own checks judged, when it carries any.
     pub checks: Option<ChecksExpect>,
+    /// Every cut into a feature besides its target, keyed `"cut/feature"`.
+    pub collisions: BTreeMap<String, CollisionExpect>,
 }
 
 /// One assertion that did not hold, phrased so the terminal line is enough to
@@ -1028,6 +1044,32 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
         }
     }
 
+    if let Some(want) = &expect.collisions {
+        for (key, w) in want {
+            match observed.collisions.get(key) {
+                None => out.push(Mismatch {
+                    field: format!("collisions.{key}"),
+                    detail: format!(
+                        "expected this cut to take {:.3} mm³ from that feature; the build reports {}",
+                        w.removed_mm3,
+                        if observed.collisions.is_empty() { "no collision".to_string() } else { observed.collisions.keys().cloned().collect::<Vec<_>>().join(", ") }
+                    ),
+                }),
+                Some(g) => {
+                    if g.target != w.target {
+                        out.push(Mismatch { field: format!("collisions.{key}.target"), detail: format!("expected {:?}, got {:?}", w.target, g.target) });
+                    }
+                    pct_check(&mut out, &format!("collisions.{key}.removed_mm3"), w.removed_mm3, g.removed_mm3, tol.volume_pct);
+                }
+            }
+        }
+        for key in observed.collisions.keys() {
+            if !want.contains_key(key) {
+                out.push(Mismatch { field: format!("collisions.{key}"), detail: "a cut into a feature the case does not expect".into() });
+            }
+        }
+    }
+
     // Topology counts are exact integers or nothing. A face count that is
     // "close" is a different part.
     for (field, want, got) in [
@@ -1164,6 +1206,13 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
                     },
                 )
             })
+            .collect()
+    });
+    expect.collisions = (!observed.collisions.is_empty()).then(|| {
+        observed
+            .collisions
+            .iter()
+            .map(|(key, c)| (key.clone(), CollisionExpect { target: c.target.clone(), removed_mm3: round3(c.removed_mm3) }))
             .collect()
     });
     expect.checks = observed.checks.as_ref().map(|c| ChecksExpect {

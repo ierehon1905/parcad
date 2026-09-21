@@ -51,7 +51,7 @@ describe("reference bodies", () => {
     const tray = box(60, 40, 3).tag("tray");
     const stack = cylinder(12, 20).at(0, 0, 13.5).reference();
     const doc = build({ tray, stack });
-    const bodies = (doc.nodes[doc.root] as { bodies: { name: string; reference?: boolean }[] }).bodies;
+    const bodies = (doc.nodes[doc.root] as { bodies: { name: string; child: number; reference?: boolean }[] }).bodies;
     expect(bodies).toEqual([
       { name: "tray", child: 0 },
       { name: "stack", child: 2, reference: true },

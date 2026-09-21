@@ -546,6 +546,13 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         println!("stands   {}", stands_on_text(&contact));
     }
     println!("prints   {}", parcad_core::measure::beds_text(size));
+    for c in &s.collisions {
+        println!(
+            "cuts     {} cuts {} by {:.3} mm³ at ({:.2}, {:.2}, {:.2}) besides {}{}",
+            c.cut, c.feature, c.removed_mm3, c.at[0], c.at[1], c.at[2], c.target,
+            c.body.as_deref().map(|b| format!(" in body {b}")).unwrap_or_default()
+        );
+    }
     println!(
         "volume   {:.2} mm³   area {:.2} mm²",
         mass.volume_mm3, mass.area_mm2

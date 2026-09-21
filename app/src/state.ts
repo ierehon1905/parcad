@@ -111,6 +111,17 @@ export interface EvaluationSnapshot {
     tolerance_mm: number;
   };
   tags: string[];
+  /** Every cut that took material from a named feature besides its target:
+   *  "grille cuts boss", with the mm³ it took and where. Absent when none did. */
+  collisions?: {
+    cut: string;
+    target: string;
+    feature: string;
+    removed_mm3: number;
+    at: [number, number, number];
+    extent_mm: [number, number, number];
+    body?: string;
+  }[];
   treatments: { node: number; op: string; amount_mm: number; continuity?: string }[];
   /** Shapes the root never reaches. Absent when there are none. */
   unused_nodes?: number;

@@ -162,6 +162,7 @@ mod tests {
             between: Vec::new(),
             tag_extents: Vec::new(),
             unlocated_tags: Vec::new(),
+            collisions: Vec::new(),
             treatment_edges: Vec::new(),
             timings: Timings::default(),
             step_path: None,
