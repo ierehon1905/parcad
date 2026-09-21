@@ -135,6 +135,28 @@ evidence for parcad.
   a measurement of the cause; it is a reason to keep the paragraph a model
   must read to its first sentence, and to measure a description's length
   as a variable of its own.
+- **A check on the route is on the route only where the model goes.** The
+  print-check round (2026-09-21, docs/PERCEPTION.md §19) put `print_check`
+  first in every `evaluate_part` reply. Asked whether a part is ready to
+  print, half the small-model trials never called `evaluate_part`: they
+  opened the part, ran `measure_wall_thickness` and `probe_part` — the tools
+  their first ToolSearch loaded by name — and answered from those, finding
+  the feather (the sweep has it) and reaching for rays to find the collision
+  (which only `print_check` and `collisions` carry). Every trial that did
+  call `evaluate_part` read the verdict and named both defects; no trial on
+  either host read a failing verdict as ready, and none exported over it.
+  The lever this leaves is the same as the edit-in-place batch's: the server
+  instruction, which now says every reply opens with the verdicts — and a
+  verdict that only `evaluate_part` carries is invisible to a model whose
+  route is `open_project` then a probe. Not iterated here: whether the
+  sweep's and the probes' own replies should carry `print_check` too is a
+  reply-shape decision, and the transcripts say what it would buy.
+- **An area the reply carries is quoted; one it does not is computed.** The
+  support case: 0/8 trials before the feature, every one deriving a lip's
+  area from the script's box dimensions or from rays and each getting a
+  different number, against 4/4 with thinking after, all quoting the reply's
+  65.797 mm² and naming `lip` from the flag. The non-thinking arm split on
+  the same route question as above.
 - **What still reads wrong.** With `offset` refused and the meant field
   named, the thinking arm's route is unchanged at 0/3 by `input` — it never
   sends the hazard, so the refusal is unmeasured there. And on the rotate

@@ -311,7 +311,8 @@ pub struct Overhang {
     /// Ceilings held up on two or more sides.
     pub bridges: Vec<Bridge>,
     /// What a support prism under every overhanging face down to the bed
-    /// would hold, mm³, exact; absent when there are none, or too many.
+    /// would hold, mm³, exact; absent when there are none, too many, or a
+    /// curved face is among them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub support_mm3: Option<f64>,
     /// Some face here is curved, so its angle and area are read off the

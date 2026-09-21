@@ -99,7 +99,8 @@ pub struct BodyPrint {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub bridges: Vec<BridgeReport>,
     /// What a support prism under every overhanging face down to the bed
-    /// would hold, mm³; absent when nothing overhangs or too many faces do.
+    /// would hold, mm³, exact on planes; absent when nothing overhangs, too
+    /// many faces do, or a curved face is among them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub support_mm3: Option<f64>,
     /// True when a curved face is among the overhangs: its angle and area

@@ -187,7 +187,9 @@ same orientation (which is why the coin holder's assembled top plate no
 longer reads 0.4 % on ten stubs), a planar ceiling whose neighbours reach
 what lies beneath it on two sides is a `bridge` with its span and drop, and
 the support prism — every overhanging face extruded to the bed, fused, the
-body cut out, clipped above the bed — is one exact volume. It is reported,
+body cut out, clipped above the bed — is one exact volume, built only when
+every overhanging face is a plane (forty NURBS prisms fused took a thread
+past its budget). It is reported,
 never judged: a face exactly at 45° is listed, and a body with any
 unsupported area is a `flagged` finding naming its orientation, its worst
 face and its bridges. Reference bodies and surfaces are not measured.

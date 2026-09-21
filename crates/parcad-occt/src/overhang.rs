@@ -27,7 +27,10 @@ const BED_TOLERANCE_MM: f64 = 0.01;
 /// How many overhanging faces the reply lists; the rest are counted.
 const LISTED: usize = 8;
 /// Past this many overhanging faces the support prism is not built: one
-/// prism, fuse and cut per face is a boolean the size of the part.
+/// prism, fuse and cut per face is a boolean the size of the part. Nor is it
+/// built when a curved face overhangs: a prism under a NURBS flank is a
+/// NURBS-bounded solid, and forty of them fused took a thread past its
+/// budget (the corpus's M8 pairs). Report nothing rather than something.
 const SUPPORT_FACES: usize = 48;
 
 /// Measure one body as it prints, `up` a unit vector.
@@ -186,7 +189,9 @@ pub fn overhang(
         }
     }
 
-    let support_mm3 = (face_count > 0 && face_count <= SUPPORT_FACES).then(|| support_volume(body.shape, &hits.iter().map(|h| (h.face, h.top)).collect::<Vec<_>>(), up, bed));
+    let all_planar = hits.iter().all(|h| h.exact);
+    let support_mm3 = (face_count > 0 && face_count <= SUPPORT_FACES && all_planar)
+        .then(|| support_volume(body.shape, &hits.iter().map(|h| (h.face, h.top)).collect::<Vec<_>>(), up, bed));
 
     Overhang {
         body: body.name.map(str::to_owned),

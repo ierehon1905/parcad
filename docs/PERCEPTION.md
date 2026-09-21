@@ -1334,6 +1334,68 @@ paragraph on `checks` and reference bodies, and whether a longer description
 moves a deferred-tool client's first call is the unmeasured variable —
 docs/WRITING_FOR_MODELS.md, "What parcad measured".
 
+**The print-check round, 2026-09-21.** docs/NEXT.md's item 1 landed whole
+in four commits: `collisions` in every reply (what each cut took from the
+features it was not for), `print_check` beside the author's `checks` on every
+build with the door reading both slots through one `allow_failing`, overhang
+per body in the orientation it prints (`.printedUp()`), and `print/<body>.3mf`
+written on save with a Print button in the window. Measured on the same
+small model, 4 trials per arm (3 for the screen case), two hosts on scratch
+ports — the before host at d71392a8, the after host at the batch's last
+commit — the in-place cases one trial at a time on a fresh copy, the screen
+cases with a browser tab fronted on each host and the screen reset between
+trials. `field/run-case.sh` now passes `--strict-mcp-config`: a `parcad-web`
+relay entry scoped to the home directory was loaded beside the server under
+test, and 14 of 32 trials of the first before round answered nothing but that
+it had failed to connect; that round was discarded.
+
+| case | arm | before: sound / reach / bytes per trial | after: sound / reach / bytes per trial |
+|---|---|---|---|
+| is-this-ready-to-print (`print_check`, new) | thinking | 1/4 · 1/4 · 0 (1 LUCKY, 2 WRONG) | 2/4 · 2/4 · 0 (2 LUCKY) |
+| is-this-ready-to-print | no thinking | 0/4 · 1/4 · 0 (4 LUCKY) | 2/4 · 2/4 · 0 (1 LUCKY, 1 WRONG) |
+| where-does-it-need-support (overhang, new) | thinking | 0/4 · 1/4 · 0 (4 WRONG) | 4/4 · 4/4 · 0 |
+| where-does-it-need-support | no thinking | 0/4 · 0/4 · 0 (4 WRONG) | 1/4 · 2/4 · 0 (1 LUCKY, 2 WRONG) |
+| is-it-safe-to-save (regression) | thinking | 4/4 · 4/4 · 746 | 4/4 · 4/4 · 1,245 |
+| is-it-safe-to-save | no thinking | 4/4 · 4/4 · 993 | 4/4 · 4/4 · 1,242 |
+| is-the-catch-still-caught (regression) | thinking | 2/4 · 2/4 · 450 | 1/4 · 1/4 · 675 |
+| is-the-catch-still-caught | no thinking | 1/4 · 1/4 · 675 | 1/4 · 1/4 · 675 |
+| change-one-dimension (regression) | thinking | 1/4 · 1/4 · 8,199 | 4/4 · 4/4 · 0 |
+| change-one-dimension | no thinking | 2/4 · 2/4 · 6,561 | 1/4 · 1/4 · 6,561 |
+| change-the-open-part (regression, screen; rubric fixed) | thinking | 3/3 · 3/3 · 2,424 | 3/3 · 3/3 · 2,407 |
+| change-the-open-part | no thinking | 0/3 · 0/3 · 0 (2 LUCKY, 1 WRONG) | 2/3 · 2/3 · 802 (1 LUCKY: edit_part "@session", no evaluate) |
+
+The two new cases are the round. On the before host the ready-to-print part
+builds and the model has the sweep, so the feather is found by every trial
+that runs `measure_wall_thickness`; the collision is not in any reply there,
+and the answers that name `grille cuts boss` got it from probing the boss's
+side with rays (LUCKY: `evaluate_part` never read) or guessed the wrong pair
+(`channel cuts floor`, WRONG). After: every trial that called
+`evaluate_part` read the verdict off `print_check` and said both — READY no,
+the 0 mm feather between `floor` and `channel`, `grille` cuts `boss` — and no
+trial in either arm read the failing verdict as ready (trap 0 of 16). The
+trials that did not reach it took the same route as before: open the part,
+sweep, probe — `evaluate_part` never loaded — which is the finding in
+docs/WRITING_FOR_MODELS.md. The support case is the cleanest number here:
+0/8 before (no reply carried an overhang, and every trial computed one from
+the source or from rays and got a different figure) to 4/4 with thinking on,
+all four quoting 65.797 mm² off `print_check.bodies[0]` and naming `lip`;
+without thinking, the trials that never called `evaluate_part` probed the
+lips with rays and summed their own areas.
+
+The regressions hold where they were measured before, within the noise of
+four trials: the door case is 16/16 on both hosts; the catch case's LUCKY
+trials are the whole 900-byte part resent as `script`, exactly as in the
+checks round; change-one-dimension's thinking arm went from 1/4 to 4/4 with 0
+bytes sent and its plain arm from 2/4 to 1/4 with the same bytes, which four
+trials cannot separate from noise. The screen case's rubric no longer
+requires `set_script` — `edit_part "@session"` is the route the instructions
+name — and its one LUCKY after is a trial that changed the screen through
+`edit_part` and never called `evaluate_part`, measuring the 25 mm off the
+edit's own reply. The before host's plain arm reads the same way: one trial
+edited the part by name (which saved it, and put it on screen because it was
+open), one edited `"@session"` without evaluating first, and one changed
+nothing and asked whether it should.
+
 ## Suggested order
 
 Done, and what each cost is in its own section: point and ray probes and

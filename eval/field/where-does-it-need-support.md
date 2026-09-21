@@ -3,7 +3,7 @@ tool:    evaluate_part.print_check
 also:    read_project
 reach:   evaluate_part
 verdict: UNSUPPORTED\s*[=:]\s*\**6[56](\.[0-9]+)?\s*mm(2|²)?\s+(at|on|in)\s+\**`?lip`?
-trap:    UNSUPPORTED\s*[=:]\s*\**0\b|(?i)\bno (unsupported|overhang)
+trap:    UNSUPPORTED\s*[=:]\s*\**0\b|(?i:\bno (unsupported|overhang))
 quote:   \b65\.[0-9]\d*\b
 why: |
   The part prints flat, is watertight, stands on one patch over its whole
