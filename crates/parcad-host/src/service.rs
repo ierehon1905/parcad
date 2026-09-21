@@ -363,6 +363,10 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                 parcad_core::render::paint_faces(&mut shaded, &buffer, &face_colors);
                 (shaded.downsample(opts.supersample.clamp(1, 4)), None, None)
             };
+            // The rule goes on after the downsample so it is drawn at the
+            // size it is read at, and only on a shaded view.
+            let mut image = image;
+            let scale = (!regions).then(|| parcad_core::render::draw_scale(&mut image, bounds));
 
             Ok(Render {
                 summary: RenderedView {
@@ -378,6 +382,8 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                         keep: cut.keep.name().to_string(),
                         cut_fraction: round_fraction(buffer.cut_fraction()),
                     }),
+                    scale_mm: scale.as_ref().map(|bar| round_mm(bar.mm)),
+                    scale_px: scale.as_ref().map(|bar| bar.px),
                     path: None,
                     markdown: None,
                 },
@@ -895,6 +901,22 @@ pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evalua
     if !doc.checks.is_empty() {
         let mut at_default = |min: f64| sweep(min, DEFAULT_THICKNESS_SAMPLES);
         evaluated.snapshot.verdicts.checks = Some(parcad_evaluation::checks::judge(doc, &evaluated.snapshot, &mut at_default)?);
+    }
+    // The brief is in every solid reply whether the script carries one or
+    // not: with none, its one line is the nudge, and a model reads it on the
+    // first build of the first turn rather than in the turn that says "it's
+    // too big". Never a door — a part is over its envelope for most of the
+    // time it is designed.
+    if evaluated.snapshot.kind != "surface" {
+        evaluated.snapshot.verdicts.brief = Some(match &doc.brief {
+            Some(brief) => parcad_evaluation::brief::judge(
+                brief,
+                evaluated.snapshot.size,
+                evaluated.snapshot.volume_mm3,
+                &evaluated.snapshot.prints_on,
+            ),
+            None => parcad_evaluation::BriefReport::none(),
+        });
     }
     // Judged beside the author's checks, on every build, whether or not
     // anyone asked: docs/NEXT.md, item 1. evaluate_part never refuses over
@@ -1825,7 +1847,7 @@ mod tests {
                 why: Some("coins must not bind on the plate".into()),
             }],
         };
-        let door = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(failed.clone()), print_check: None } };
+        let door = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(failed.clone()), brief: None, print_check: None } };
         let refusal = door.pass(None, "export_part").unwrap_err();
         assert_eq!(
             refusal,
@@ -1836,7 +1858,7 @@ mod tests {
         assert!(door.pass(Some("  "), "save_project").unwrap_err().starts_with("save_project refused"));
         assert_eq!(door.pass(Some("the user accepts the binding"), "save_project").unwrap(), Some("the user accepts the binding".into()));
         let passed = parcad_evaluation::ChecksReport { verdict: "passed", passed: 5, failed: Vec::new() };
-        let open = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(passed.clone()), print_check: None } };
+        let open = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(passed.clone()), brief: None, print_check: None } };
         assert_eq!(open.pass(None, "export_part").unwrap(), None);
         assert_eq!(open.pass(Some("unneeded"), "export_part").unwrap(), None, "a reason nothing needs is not echoed");
         assert_eq!(Door::default().pass(None, "export_part").unwrap(), None, "a part with no checks has no door");
@@ -1869,7 +1891,7 @@ mod tests {
             opposite: None,
             between: None,
         };
-        let refused = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(passed.clone()), print_check: Some(print(vec![feather.clone()], Vec::new())) } };
+        let refused = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(passed.clone()), brief: None, print_check: Some(print(vec![feather.clone()], Vec::new())) } };
         assert_eq!(
             refused.pass(None, "export_part").unwrap_err(),
             "export_part refused: print_check fails, nothing prints under 0.3 mm — material thins to 0 mm \
@@ -1877,9 +1899,9 @@ mod tests {
              allow_failing: \"<why it is acceptable>\" to write it anyway; the reason is kept in the reply."
         );
         assert_eq!(refused.pass(Some("a knife edge the user wants"), "export_part").unwrap(), Some("a knife edge the user wants".into()));
-        let flagged = Door { verdicts: parcad_evaluation::Verdicts { checks: None, print_check: Some(print(Vec::new(), vec![feather.clone()])) } };
+        let flagged = Door { verdicts: parcad_evaluation::Verdicts { checks: None, brief: None, print_check: Some(print(Vec::new(), vec![feather.clone()])) } };
         assert_eq!(flagged.pass(None, "save_project").unwrap(), None, "a flag passes the door");
-        let both = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(failed), print_check: Some(print(vec![feather], Vec::new())) } };
+        let both = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(failed), brief: None, print_check: Some(print(vec![feather], Vec::new())) } };
         let message = both.pass(None, "save_project").unwrap_err();
         assert!(message.starts_with("save_project refused: 1 of the part's own check fails — clear top↔stacks"), "{message}");
         assert!(message.contains("; and print_check fails, nothing prints under 0.3 mm — material thins"), "{message}");

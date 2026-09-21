@@ -130,7 +130,16 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      on a touching one (the common of their two skins, exact), on
      `between_bodies` and `check_fit` alike, with `deeperThan` and
      `contactAtLeast` so a check can assert them; docs/PERCEPTION.md §20;
-   - `brief()` with an envelope, judged every build, and a scale rule on renders;
+   - ~~`brief()` with an envelope, judged every build, and a scale rule on
+     renders~~ — landed 2026-09-21: `brief({ envelope, budgetCm3, holds,
+     gesture, printer, material })` stamped on the graph beside `checks` and
+     judged on every build, the envelope in the best of the six axis
+     orientations, `brief` in every solid reply (with one line of nudge when
+     a script declares none), never a door; and the ruler that was only on
+     the contact sheet drawn on every shaded view, with `scale_mm` beside it.
+     docs/PERCEPTION.md §21. **A measured `POCKETS` table is still missing**
+     and was left out rather than invented — it wants somebody to measure
+     some pockets;
    - then vocabulary (`MATERIALS`, `OBJECTS` with profiles, `fit()`, `{ at, cut }`,
      `not`, a listed `styles` topic), `compare_variants`, snapshot summaries,
      and last the mechanics witness: `check_motion`, `check_flex`.

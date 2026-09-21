@@ -60,6 +60,17 @@ export interface PrintFinding {
 export interface EvaluationSnapshot {
   /** The part's own checks, judged on this build; absent when the script carries none. */
   checks?: { verdict: "passed" | "failed"; passed: number; failed?: { check: string; measured_mm?: number; measured_mm3?: number; why?: string }[] };
+  /** What the part is for, judged on every build; the verdict is `meets`,
+   *  `over: ...`, or the one line that says there is no brief to judge it by. */
+  brief?: {
+    verdict: string;
+    envelope?: { given: [number, number, number]; measured: [number, number, number]; fits: boolean; over_mm?: number; on?: string };
+    budget_cm3?: { given: number; measured: number; fits: boolean; over_cm3?: number };
+    printer?: { given: string; fits?: boolean; note?: string };
+    holds?: string[];
+    gesture?: string;
+    material?: string;
+  };
   /** Whether the part prints, judged on every build: `failed` where nothing
    *  prints (under `floor_mm`), `flagged` for what prints but should be read. */
   print_check?: {

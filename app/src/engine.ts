@@ -835,6 +835,14 @@ function readmeFor(path: string, source: string): string {
       const by = pair.clearance_mm !== undefined ? ` by ${fmt(pair.clearance_mm)} mm` : "";
       return `- ${pair.a} and ${pair.b}: ${pair.verdict}${by}`;
     }),
+    ...(snapshot.brief?.envelope
+      ? [
+          `- ${snapshot.brief.envelope.given.map(fmt).join(" × ")} mm envelope: ` +
+            (snapshot.brief.envelope.fits
+              ? "fits"
+              : `OVER by ${fmt(snapshot.brief.envelope.over_mm ?? 0)} mm along ${snapshot.brief.envelope.on}`),
+        ]
+      : []),
     ...(snapshot.stands_on
       ? [
           `- stands on ${fmt(snapshot.stands_on.area_mm2)} mm² in ${snapshot.stands_on.patches} ` +

@@ -255,6 +255,12 @@ pub struct Expect {
     /// passing, or failing by a different number, goes red.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub checks: Option<ChecksExpect>,
+    /// The verdict on the part's brief, and what the envelope and budget
+    /// measured. Recorded only for a part that declares one — every other
+    /// reply's brief is the same nudge sentence, which is a fact about the
+    /// host and not about the part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<BriefExpect>,
     /// Every cut that took material from a named feature besides its
     /// target, keyed `"cut/feature"`, with the mm³ it took held to
     /// `volume_pct`. Recorded whenever the part has any: a nick that grows,
@@ -635,6 +641,22 @@ pub struct CollisionExpect {
     pub removed_mm3: f64,
 }
 
+/// A brief's verdict and the two numbers behind it. The verdict is held
+/// word for word: it is the sentence a reader meets first, and a change to
+/// its wording is a change to what the part says about itself.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BriefExpect {
+    pub verdict: String,
+    /// The part's own extent against its envelope, mm, held to `size_mm`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub envelope_over_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub envelope_on: Option<String>,
+    /// What it uses against its budget, cm³, held to `volume_pct`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_cm3: Option<f64>,
+}
+
 /// The verdict on a part's own checks, as the reply carries it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChecksExpect {
@@ -743,6 +765,8 @@ pub struct Observed {
     pub between_bodies: BTreeMap<String, BetweenExpect>,
     /// The part's own checks judged, when it carries any.
     pub checks: Option<ChecksExpect>,
+    /// Its brief judged, when it declares one.
+    pub brief: Option<BriefExpect>,
     /// Every cut into a feature besides its target, keyed `"cut/feature"`.
     pub collisions: BTreeMap<String, CollisionExpect>,
     /// Each body's overhang as it prints, keyed by body.
@@ -1075,6 +1099,44 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
             }
         }
     }
+    if let Some(want) = &expect.brief {
+        match &observed.brief {
+            None => out.push(Mismatch {
+                field: "brief".into(),
+                detail: "expected a verdict on the part's brief; the script declares none".into(),
+            }),
+            Some(got) => {
+                if want.verdict != got.verdict {
+                    out.push(Mismatch {
+                        field: "brief.verdict".into(),
+                        detail: format!("expected {:?}, measured {:?}", want.verdict, got.verdict),
+                    });
+                }
+                match (want.envelope_over_mm, got.envelope_over_mm) {
+                    (Some(w), Some(g)) => abs_check(&mut out, "brief.envelope_over_mm", w, g, tol.size_mm),
+                    (None, None) => {}
+                    (w, g) => out.push(Mismatch {
+                        field: "brief.envelope_over_mm".into(),
+                        detail: format!("expected {w:?}, measured {g:?}"),
+                    }),
+                }
+                if want.envelope_on != got.envelope_on {
+                    out.push(Mismatch {
+                        field: "brief.envelope_on".into(),
+                        detail: format!("expected {:?}, measured {:?}", want.envelope_on, got.envelope_on),
+                    });
+                }
+                match (want.budget_cm3, got.budget_cm3) {
+                    (Some(w), Some(g)) => pct_check(&mut out, "brief.budget_cm3", w, g, tol.volume_pct),
+                    (None, None) => {}
+                    (w, g) => out.push(Mismatch {
+                        field: "brief.budget_cm3".into(),
+                        detail: format!("expected {w:?}, measured {g:?}"),
+                    }),
+                }
+            }
+        }
+    }
     if let Some(want) = &expect.checks {
         match &observed.checks {
             None => out.push(Mismatch { field: "checks".into(), detail: "expected a verdict on the part's checks; the part carries none".into() }),
@@ -1322,6 +1384,7 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
                 })
                 .collect()
         });
+    expect.brief = observed.brief.clone();
     expect.checks = observed.checks.as_ref().map(|c| ChecksExpect {
         passed: c.passed,
         failed: c

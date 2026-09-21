@@ -1479,6 +1479,90 @@ its 18 and 200 mm² seats, and `twisted-planter` the finding that its planter
 rests on the saucer's 37 bumps over **0.000 mm² in 0 patches** — a tangent
 line, not a seat, which nothing in the old reply could have said.
 
+## 21. The brief — what the part is *for*, judged on every build
+
+Every section above is about measuring the part that was built. This one is
+about the part that was *asked for*. The coin-holder session's first user
+message said "pocket"; the first build was 97.3 × 55.8 × 20.2 mm and every
+number in its report — watertight, `stands_on` 74 %, `prints_on` all three
+beds — was green. Message 2 was *"but i said pocket"*. Message 6 was *"its
+too big"*. Five designs were built against a requirement that lived only in
+the first four words of the conversation, and two of six user turns were
+corrections of it (docs/COIN_HOLDER_REVIEW.md, Appendix C §1). parcad held a
+part's units so a file could not be misread and held nothing about what the
+part was for.
+
+Since 2026-09-21 a script declares one — `brief({ envelope: [95, 70, 16],
+budgetCm3: 12, holds: [...], gesture: ..., printer: ..., material: ... })` —
+stamped on the graph beside `checks`, so it survives a redesign, a `.history`
+snapshot and a hand edit. Every solid reply carries `brief`, verdict first:
+`meets`, or `over:` naming what is over and by how much. Three things about
+the shape of it:
+
+- **The envelope is judged in the best of the six axis orientations.**
+  Turning an axis-aligned box inside an axis-aligned box can only permute its
+  three extents, so the answer is the two sorted triples compared term by
+  term — and it is a different answer from the one arithmetic down the axes
+  gives. `eval/cases/upright-caddy` is a 20 × 22 × 60 part in a 70 × 22 × 20
+  slot: 40 mm too tall axis for axis, and it fits.
+- **A part with no brief gets the key anyway**, carrying one line: that its
+  size and volume are measured against nothing, and what to write. That line
+  is the whole nudge — a model reads it on the first build of the first turn,
+  while the requirement it has just been given is still in front of it.
+- **It is never a door.** `checks` refuse an export; a brief does not. A part
+  is over its envelope for most of the time it is being designed, and a door
+  there would only teach an author to leave the brief out.
+
+`printer` is matched against `BEDS` and says whether *that* bed takes the
+part, rather than the three-bed list; a name no bed here knows is reported
+as unjudged with the names that are, instead of silently passing.
+
+**The render's half, shipped with it.** Every one of the twelve renders that
+session's user judged was an object floating on black at an unknown scale,
+and "but I said pocket" is a scale judgement made from a picture with no
+scale in it. A ruler already existed on the contact sheet and on no other
+view; it is now drawn along the bottom of every shaded view, and the reply
+carries `scale_mm` over `scale_px` so a model quotes the number rather than
+estimating off pixels. Not on a region map, which is an instrument read by
+colour and would gain a white region that is not one.
+
+Pinned by `eval/cases/briefed-tray` (the session's own v5 and its own brief:
+over by exactly 15 mm along x, and on no other axis) and
+`eval/cases/upright-caddy` (`meets`, and a volume of 13.389 cm³ where the two
+boxes give 13.856).
+
+**Measured, 2026-09-21.** `eval/field/does-it-meet-the-brief` asks whether a
+part meets what it is for. The part is the upright caddy, 20 × 22 × 60 into a
+70 × 22 × 20 slot; the before host is `39c90008`, where the same geometry
+carries the same requirement as a *comment* — the way the coin-holder session
+carried it — and the after host has it as `brief()`. 4 trials per arm on two
+scratch hosts:
+
+| arm | before: sound / reach / trap | after: sound / reach / trap |
+|---|---|---|
+| thinking | 0/4 · 3/4 · 4/4 (3 WRONG, 1 VOID) | 3/4 · 4/4 · 0/4 (1 LUCKY) |
+| no thinking | 0/4 · 4/4 · 4/4 (4 WRONG) | 4/4 · 4/4 · 0/4 |
+
+**Eight before trials, eight wrong answers, all the same wrong answer.** Every
+one reached `evaluate_part`, read `volume_mm3` and reported the plastic
+correctly to three decimals — and then compared 60 against 20 down the axes
+and said the part misses its slot. *"3× taller than the slot specification
+allows"*, *"exceeds the 20 mm slot height"*. After, seven of eight say `YES`
+and none hits the trap; the plain arm is 4/4. The one LUCKY quoted the script
+beside the reply.
+
+This is the largest before/after in this document, and the reason is that it
+is not a field a reader might overlook — it is a *judgement* that a reader
+who does the arithmetic gets wrong. Every other perception change here made
+something readable that was already derivable. This made something correct
+that was reliably derived wrong.
+
+**What is not here.** The review asks for a measured `POCKETS` table beside
+`DEVICES` so "pocket" is not a guess. It is not in this round and should not
+be invented: `DEVICES` carries published sizes and labels its two guessed
+radii as guesses, and a table of pocket dimensions with a plausible source
+line would be neither. It wants somebody to measure some pockets.
+
 ## Suggested order
 
 Done, and what each cost is in its own section: point and ray probes and

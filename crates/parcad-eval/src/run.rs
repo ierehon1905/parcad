@@ -1,6 +1,6 @@
 //! Script in, observation out.
 
-use crate::case::{BetweenExpect, BodyExpect, ChecksExpect, CollisionExpect, Observed, OverhangExpect, RefusalKind};
+use crate::case::{BetweenExpect, BodyExpect, BriefExpect, ChecksExpect, CollisionExpect, Observed, OverhangExpect, RefusalKind};
 use anyhow::{Context, Result};
 use parcad_core::graph::Doc;
 use std::collections::BTreeMap;
@@ -95,6 +95,10 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
         Ok(checks) => checks,
         Err(message) => return Outcome::Refused { kind: RefusalKind::Host, message },
     };
+    let brief = match judge_brief(doc, &s) {
+        Ok(brief) => brief,
+        Err(message) => return Outcome::Refused { kind: RefusalKind::Host, message },
+    };
 
     let kinds: Vec<bool> = if s.bodies.is_empty() {
         vec![s.kind.is_solid()]
@@ -155,6 +159,7 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
             })
             .collect(),
         checks,
+        brief,
         collisions: s
             .collisions
             .iter()
@@ -206,6 +211,22 @@ fn judge_checks(doc: &Doc, s: &parcad_occt::Success, timeout: std::time::Duratio
     };
     let report = parcad_evaluation::checks::judge(doc, &evaluated.snapshot, &mut sweep)?;
     Ok(Some(ChecksExpect::from(&report)))
+}
+
+/// The verdict on a part's brief, for a part that declares one. Judged from
+/// the same snapshot the app's reply carries, so a case pins what a reader
+/// is told rather than a second computation of it.
+fn judge_brief(doc: &Doc, s: &parcad_occt::Success) -> std::result::Result<Option<BriefExpect>, String> {
+    let Some(brief) = &doc.brief else { return Ok(None) };
+    let evaluated = parcad_evaluation::evaluated(doc, s, 0, false)?;
+    let snapshot = &evaluated.snapshot;
+    let report = parcad_evaluation::brief::judge(brief, snapshot.size, snapshot.volume_mm3, &snapshot.prints_on);
+    Ok(Some(BriefExpect {
+        verdict: report.verdict.clone(),
+        envelope_over_mm: report.envelope.as_ref().and_then(|e| e.over_mm),
+        envelope_on: report.envelope.as_ref().and_then(|e| e.on.clone()),
+        budget_cm3: report.budget_cm3.as_ref().map(|b| b.measured),
+    }))
 }
 
 /// Where each tag's faces sit, as the kernel reports them and the app's
@@ -273,6 +294,7 @@ pub fn brep_available() -> std::result::Result<(), String> {
         root: 0,
         units: "mm".to_string(),
         requires: Vec::new(),
+        brief: None,
         checks: Vec::new(),
     };
 

@@ -124,6 +124,26 @@ export function Report() {
         <div class="text-bad">no final treatment curves are available</div>
       )}
       {dead > 0 && <div class="text-bad">{dead} unused nodes</div>}
+      {snapshot.brief?.envelope && (
+        <div class={snapshot.brief.envelope.fits ? undefined : "text-bad"}>
+          {snapshot.brief.envelope.given.map((d) => fmt(d)).join(" × ")} envelope
+          {snapshot.brief.envelope.fits ? (
+            " — fits"
+          ) : (
+            <>
+              {" — over by "}
+              <Strong>{fmt(snapshot.brief.envelope.over_mm ?? 0)}</Strong> mm along{" "}
+              {snapshot.brief.envelope.on}
+            </>
+          )}
+        </div>
+      )}
+      {snapshot.brief?.budget_cm3 && !snapshot.brief.budget_cm3.fits && (
+        <div class="text-bad">
+          <Strong>{fmt(snapshot.brief.budget_cm3.measured)}</Strong> cm³ against a{" "}
+          {fmt(snapshot.brief.budget_cm3.given)} cm³ budget
+        </div>
+      )}
       {snapshot.checks?.failed?.map((f) => (
         <div class="text-bad" key={f.check}>
           check fails: <Strong>{f.check}</Strong>

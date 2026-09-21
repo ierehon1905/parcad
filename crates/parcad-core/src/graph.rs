@@ -2525,6 +2525,12 @@ pub struct Doc {
     /// changes the geometry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<crate::checks::Check>,
+    /// What the part is for, written by the author at the top of the script
+    /// (`brief({ envelope, budgetCm3, ... })`) and reported against on every
+    /// build; see [`crate::brief`]. Data, not a body, and never a door: a
+    /// part is over its envelope for most of the time it is designed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<crate::brief::Brief>,
 }
 
 fn default_units() -> String {
@@ -2581,6 +2587,9 @@ impl Doc {
 
         self.validate_bodies(&order)?;
         self.validate_checks()?;
+        if let Some(brief) = &self.brief {
+            brief.validate().map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
         for &id in &order {
             if let Some(material) = &self.nodes[id].material {
                 material.validate(id)?;

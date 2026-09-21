@@ -716,6 +716,10 @@ mod tests {
                 "print-orientation",
                 "return { top: box(10, 10, 2).printedUp(\"-z\"), base: box(10, 10, 5).at(0, 0, -4) };".to_owned(),
             ),
+            (
+                "part-brief",
+                "brief({ envelope: [95, 70, 16], budgetCm3: 12 });\nreturn box(10, 10, 10);".to_owned(),
+            ),
         ];
         let stamped: Vec<&str> = cases.iter().map(|(id, _)| *id).collect();
         assert_eq!(stamped, parcad_core::envelope::FEATURES, "the host's feature list and this table differ");

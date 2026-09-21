@@ -439,6 +439,11 @@ pub struct Verdicts {
     /// carries none.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub checks: Option<ChecksReport>,
+    /// What the part is for, judged on this build — or, with no `brief()` in
+    /// the script, the one line saying its size is measured against nothing.
+    /// Absent only for a surface, which has neither size nor volume to judge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub brief: Option<crate::BriefReport>,
     /// Whether the part prints; absent for a surface.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub print_check: Option<PrintCheck>,
@@ -453,8 +458,13 @@ impl Verdicts {
             .iter()
             .flat_map(|report| report.failed.iter().map(|f| f.sentence()))
             .collect();
+        out.extend(self.brief.iter().filter(|b| b.failing()).map(|b| b.verdict.clone()));
         out.extend(self.print_check.iter().flat_map(|p| p.failed.iter().map(|f| f.what.clone())));
         out
+    }
+
+    pub fn brief_failing(&self) -> bool {
+        self.brief.as_ref().is_some_and(crate::BriefReport::failing)
     }
 
     pub fn checks_failing(&self) -> bool {
@@ -466,22 +476,26 @@ impl Verdicts {
     }
 }
 
+/// A failing verdict is the first thing in the reply, and among those that
+/// fail — or those that do not — the order is the one a reader wants: what
+/// the author asked of the part, what the part is for, then whether it
+/// prints.
 impl Serialize for Verdicts {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let count = usize::from(self.checks.is_some()) + usize::from(self.print_check.is_some());
-        let mut map = serializer.serialize_map(Some(count))?;
-        let print_first = self.print_failing() && !self.checks_failing();
-        if print_first {
-            if let Some(print) = &self.print_check {
-                map.serialize_entry("print_check", print)?;
-            }
-        }
-        if let Some(checks) = &self.checks {
-            map.serialize_entry("checks", checks)?;
-        }
-        if !print_first {
-            if let Some(print) = &self.print_check {
-                map.serialize_entry("print_check", print)?;
+        let present: [(&str, bool, bool); 3] = [
+            ("checks", self.checks.is_some(), self.checks_failing()),
+            ("brief", self.brief.is_some(), self.brief_failing()),
+            ("print_check", self.print_check.is_some(), self.print_failing()),
+        ];
+        let mut map = serializer.serialize_map(Some(present.iter().filter(|(_, here, _)| *here).count()))?;
+        for failing in [true, false] {
+            for (key, here, fails) in present.iter().filter(|(_, here, fails)| *here && *fails == failing) {
+                let _ = (here, fails);
+                match *key {
+                    "checks" => map.serialize_entry(key, self.checks.as_ref().expect("checks"))?,
+                    "brief" => map.serialize_entry(key, self.brief.as_ref().expect("brief"))?,
+                    _ => map.serialize_entry(key, self.print_check.as_ref().expect("print_check"))?,
+                }
             }
         }
         map.end()
@@ -665,16 +679,16 @@ mod tests {
             let value = serde_json::to_value(v).unwrap();
             value.as_object().unwrap().keys().cloned().collect()
         };
-        assert_eq!(keys(&Verdicts { checks: Some(passed.clone()), print_check: Some(print("passed")) }), ["checks", "print_check"]);
-        assert_eq!(keys(&Verdicts { checks: Some(passed.clone()), print_check: Some(print("failed")) }), ["print_check", "checks"]);
-        assert_eq!(keys(&Verdicts { checks: Some(failing.clone()), print_check: Some(print("failed")) }), ["checks", "print_check"]);
-        assert_eq!(keys(&Verdicts { checks: Some(failing.clone()), print_check: Some(print("passed")) }), ["checks", "print_check"]);
-        assert_eq!(keys(&Verdicts { checks: None, print_check: Some(print("failed")) }), ["print_check"]);
-        let both = Verdicts { checks: Some(failing), print_check: Some(print("failed")) };
+        assert_eq!(keys(&Verdicts { checks: Some(passed.clone()), brief: None, print_check: Some(print("passed")) }), ["checks", "print_check"]);
+        assert_eq!(keys(&Verdicts { checks: Some(passed.clone()), brief: None, print_check: Some(print("failed")) }), ["print_check", "checks"]);
+        assert_eq!(keys(&Verdicts { checks: Some(failing.clone()), brief: None, print_check: Some(print("failed")) }), ["checks", "print_check"]);
+        assert_eq!(keys(&Verdicts { checks: Some(failing.clone()), brief: None, print_check: Some(print("passed")) }), ["checks", "print_check"]);
+        assert_eq!(keys(&Verdicts { checks: None, brief: None, print_check: Some(print("failed")) }), ["print_check"]);
+        let both = Verdicts { checks: Some(failing), brief: None, print_check: Some(print("failed")) };
         assert_eq!(both.failing().len(), 2, "one reason opens both");
         // Flattened into the snapshot, the verdicts are its first keys.
         let mut with = snapshot();
-        with.verdicts = Verdicts { checks: Some(passed), print_check: Some(print("failed")) };
+        with.verdicts = Verdicts { checks: Some(passed), brief: None, print_check: Some(print("failed")) };
         let text = serde_json::to_string(&with).unwrap();
         assert!(text.starts_with("{\"print_check\":{\"verdict\":\"failed\",\"failed\":[{\"kind\":\"collision\""), "{text}");
     }

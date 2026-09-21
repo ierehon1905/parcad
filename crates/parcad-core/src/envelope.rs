@@ -46,6 +46,7 @@ pub const FEATURES: &[&str] = &[
     "part-checks",
     "reference-bodies",
     "print-orientation",
+    "part-brief",
 ];
 
 /// The version of parcad reading the graph.
@@ -207,6 +208,42 @@ pub fn check_checks(graph: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Refuse a brief this host cannot read, naming the key and the key that was
+/// meant. Shape only — whether its numbers are usable is `Doc::topo_order`'s.
+pub fn check_brief(graph: &serde_json::Value) -> Result<(), String> {
+    use crate::brief::{meant, Brief, KEYS};
+    let Some(brief) = graph.get("brief") else {
+        return Ok(());
+    };
+    let Some(object) = brief.as_object() else {
+        return Err(format!(
+            "the graph's brief is {}, where this host reads an object such as \
+             {{ envelope: [95, 70, 16], budgetCm3: 12 }}",
+            kind_of(brief)
+        ));
+    };
+    let unknown: Vec<String> = object
+        .keys()
+        .filter(|key| !KEYS.contains(&key.as_str()))
+        .map(|key| match meant(key) {
+            Some(key_meant) => format!("\"{key}\" (write {key_meant} instead)"),
+            None => format!("\"{key}\""),
+        })
+        .collect();
+    if !unknown.is_empty() {
+        return Err(format!(
+            "the brief has no key {}. A brief's keys are {}. {}",
+            unknown.join(", "),
+            KEYS.join(", "),
+            if_newer()
+        ));
+    }
+    if let Err(error) = serde_json::from_value::<Brief>(brief.clone()) {
+        return Err(format!("the brief could not be read: {error}."));
+    }
+    Ok(())
+}
+
 /// Read an intent graph, or say which node and field could not be read and
 /// what to do about it.
 pub fn parse_doc(graph: serde_json::Value) -> Result<Doc, String> {
@@ -218,6 +255,7 @@ pub fn parse_doc(graph: serde_json::Value) -> Result<Doc, String> {
     };
     check_requires(&graph)?;
     check_checks(&graph)?;
+    check_brief(&graph)?;
     if let Some(units) = object.get("units") {
         if units.as_str() != Some("mm") {
             return Err(format!(
@@ -227,10 +265,10 @@ pub fn parse_doc(graph: serde_json::Value) -> Result<Doc, String> {
         }
     }
     for key in object.keys() {
-        if !["units", "root", "nodes", "requires", "checks"].contains(&key.as_str()) {
+        if !["units", "root", "nodes", "requires", "checks", "brief"].contains(&key.as_str()) {
             return Err(format!(
                 "the graph has a top-level field \"{key}\" this host does not read, alongside \
-                 units, root, nodes, requires and checks. {}",
+                 units, root, nodes, requires, checks and brief. {}",
                 if_newer()
             ));
         }

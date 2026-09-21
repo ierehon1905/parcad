@@ -216,6 +216,106 @@ export function __parcadTreatmentSource<T>(source: SourceLocation, run: () => T)
  * that name. Nothing is read off the text. Empty when the script parses, or
  * fails for a reason of its own.
  */
+/**
+ * What this part is for: the requirement it is judged against on every build.
+ *
+ * Every reply carries a `brief` key — with none declared it says the part's
+ * size and volume are measured against nothing, which is the whole nudge.
+ * A brief never refuses a save; it is a sentence, in the place a reader
+ * meets first.
+ *
+ * - `envelope` is `[x, y, z]` in mm and is judged in the best of the six
+ *   axis orientations, so the order does not matter.
+ * - `budgetCm3` is plastic in cm³; `printer` is a bed name from `BEDS`.
+ * - `holds`, `gesture` and `material` are prose, echoed and never judged.
+ * - Call it once, anywhere in the script, before or after the geometry.
+ *
+ * @example
+ *     brief({ envelope: [95, 70, 16], budgetCm3: 12, holds: ["3 × 2€"] });
+ *     return box(90, 60, 12).cut(box(80, 50, 10).at(0, 0, 2));
+ *
+ * @remarks
+ * The coin-holder session (docs/COIN_HOLDER_REVIEW.md, Appendix C §1) built
+ * five designs against "pocket", a word in the first user turn that no reply
+ * ever compared anything to: the first build was 97 × 56 × 20 mm and every
+ * number in its report was green. Two of that session's six user turns were
+ * corrections of a requirement the part did not carry. parcad already held a
+ * part's units so a file could not be misread and held nothing about what
+ * the part was for.
+ */
+export function brief(declared: Brief): void {
+  if (!isObject(declared)) {
+    throw new Error(`brief() takes an object such as { envelope: [95, 70, 16] }; got ${describeArgument(declared)}`);
+  }
+  const named = unknownKeys(declared, BRIEF_KEYS, (key, value) => {
+    const normal = key.replace(/[_\- ]/g, "").toLowerCase();
+    const own = BRIEF_KEYS.find((known) => known.toLowerCase() === normal);
+    if (own !== undefined) return spelled(own, value);
+    const synonym = BRIEF_SYNONYMS[normal];
+    return synonym === undefined ? undefined : spelled(synonym, value);
+  });
+  if (named) throw new Error(`brief() ${named}. A brief's keys are ${list(BRIEF_KEYS)}.`);
+  const envelope = declared.envelope;
+  if (envelope !== undefined) {
+    if (!Array.isArray(envelope) || envelope.length !== 3 || !envelope.every((d) => typeof d === "number" && d > 0 && Number.isFinite(d))) {
+      throw new Error(`brief() envelope is [x, y, z] in mm, each above zero; got ${describeArgument(envelope)}`);
+    }
+  }
+  if (declared.budgetCm3 !== undefined && !(typeof declared.budgetCm3 === "number" && declared.budgetCm3 > 0 && Number.isFinite(declared.budgetCm3))) {
+    throw new Error(`brief() budgetCm3 is a volume in cm³, above zero; got ${describeArgument(declared.budgetCm3)}`);
+  }
+  if (declared.holds !== undefined && !(Array.isArray(declared.holds) && declared.holds.every((h) => typeof h === "string"))) {
+    throw new Error(`brief() holds is a list of strings, what the part holds in your own words; got ${describeArgument(declared.holds)}`);
+  }
+  for (const key of ["gesture", "printer", "material"] as const) {
+    if (declared[key] !== undefined && typeof declared[key] !== "string") {
+      throw new Error(`brief() ${key} is a string; got ${describeArgument(declared[key])}`);
+    }
+  }
+  if (Object.keys(declared).length === 0) {
+    throw new Error(
+      `brief() was given nothing to judge the part against; its keys are ${list(BRIEF_KEYS)}, and envelope is the one that catches "that's too big"`,
+    );
+  }
+  declaredBrief = { ...declared };
+}
+
+/** What {@link brief} declares. Every key is optional; an empty brief is refused. */
+export interface Brief {
+  /** The box the part must fit inside, mm, in any of the six axis orientations. */
+  envelope?: [number, number, number];
+  /** The plastic it may use, cm³. */
+  budgetCm3?: number;
+  /** What it holds, in your own words. Prose: the measurement is a `Check`. */
+  holds?: string[];
+  /** How it is handled — "one hand, thumb only". Prose. */
+  gesture?: string;
+  /** The machine it is for, a bed name from `BEDS`. */
+  printer?: string;
+  /** The filament it is for. Prose. */
+  material?: string;
+}
+
+const BRIEF_KEYS = ["envelope", "budgetCm3", "holds", "gesture", "printer", "material"];
+const BRIEF_SYNONYMS: Record<string, string> = {
+  budget: "budgetCm3",
+  budgetcm: "budgetCm3",
+  budgetmm3: "budgetCm3",
+  volume: "budgetCm3",
+  maxvolume: "budgetCm3",
+  plastic: "budgetCm3",
+  size: "envelope",
+  maxsize: "envelope",
+  fitsin: "envelope",
+  bounds: "envelope",
+  pocket: "envelope",
+  holding: "holds",
+  for: "holds",
+  filament: "material",
+};
+
+let declaredBrief: Brief | undefined;
+
 /** Notes cap: past these the rest are counted, not kept. */
 const NOTES_MAX = 40;
 const NOTES_MAX_CHARS = 2000;
@@ -273,6 +373,9 @@ export function __parcadTakeNotes(): { values: { label: string; value: number | 
   notes = [];
   notesChars = 0;
   notesDropped = 0;
+  // Called once before every run to discard what a run that threw left
+  // behind; the brief is the other such leaving, and `build` consumes it.
+  declaredBrief = undefined;
   return taken;
 }
 
@@ -3946,6 +4049,8 @@ export interface Doc {
   requires?: Requirement[];
   /** The part's own checks, judged on every build; see {@link Check}. */
   checks?: Check[];
+  /** What the part is for, judged on every build; see {@link brief}. */
+  brief?: Brief;
 }
 
 /** @internal A feature a graph needs, in words a host that has never heard of it can print. */
@@ -3996,6 +4101,13 @@ const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean; doc?:
     what: "checks carried in the part (checks: [...] beside the bodies)",
     uses: () => false,
     doc: (doc) => (doc.checks?.length ?? 0) > 0,
+  },
+  {
+    feature: "part-brief",
+    after: "0.0.9",
+    what: "a brief carried in the part (brief({ envelope, budgetCm3, ... }))",
+    uses: () => false,
+    doc: (doc) => doc.brief !== undefined,
   },
   {
     feature: "reference-bodies",
@@ -4072,12 +4184,17 @@ const SURFACE_OPS = [
 ];
 
 function stamped(doc: Doc): Doc {
-  const requires = GRAPH_FEATURES.filter((f) => doc.nodes.some(f.uses) || f.doc?.(doc)).map(({ feature, after, what }) => ({
+  // A brief belongs to the run that declared it, and `build` is the end of
+  // that run: taking it here is what keeps one script's brief off the next.
+  const brief = declaredBrief;
+  declaredBrief = undefined;
+  const withBrief = brief ? { ...doc, brief } : doc;
+  const requires = GRAPH_FEATURES.filter((f) => withBrief.nodes.some(f.uses) || f.doc?.(withBrief)).map(({ feature, after, what }) => ({
     feature,
     after,
     what,
   }));
-  return requires.length ? { ...doc, requires } : doc;
+  return requires.length ? { ...withBrief, requires } : withBrief;
 }
 
 /** An axis that points up on the printer; see {@link Shape.printedUp}. */

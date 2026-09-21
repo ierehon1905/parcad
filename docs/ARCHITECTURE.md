@@ -139,7 +139,12 @@ ignore, on }`, `{ size: { max } }`, `{ standsOn: { atLeast } }`, `{ bodies }`,
 `{ watertight }` — and `build()` stamps the list on the graph as a top-level
 key beside `requires` (`Doc::checks`, gated by `envelope.rs` and the
 `part-checks` feature id, validated against the part's body and tag names in
-`Doc::topo_order`). A check lives in the graph and not in a tool argument so
+`Doc::topo_order`). `Doc::brief` rides beside it the same way — what the part
+is *for*, from `brief({ envelope, budgetCm3, ... })` at the top of the script
+— and is judged on every build by `parcad_evaluation::brief`, whose verdict
+is in every solid reply whether a script declares one or not. A brief is
+never a door: a part is over its envelope for most of the time it is being
+designed (docs/PERCEPTION.md §21). A check lives in the graph and not in a tool argument so
 that it travels with the part: the coin-holder session
 ([COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md), B2) kept its checks in
 throwaway scripts and shipped a version they had never run against. It is

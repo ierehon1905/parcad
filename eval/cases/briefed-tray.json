@@ -1,0 +1,32 @@
+{
+  "name": "briefed-tray",
+  "script": "eval/scripts/briefed-tray.js",
+  "why": "The part's own requirement, judged. 110 x 56.9 x 10.7 against a 95 x 70 x 16 envelope is over by exactly 15 mm along x and by nothing else — the envelope is matched in the best of the six axis orientations, so 56.9 takes the 70 and 10.7 the 16, and a case recording 'over' on y or z would mean that pairing had broken. The verdict is held word for word because it is the sentence a reader meets first. The budget is the measured volume over 1000 — 34.1 cm³ here, where the session's own v5 was 18.2 — so it moves with the geometry rather than with the brief, and both clauses of the verdict come from the build. This is the session's own v5 and its own brief: five designs, six user turns, two of them corrections of a requirement nothing in any reply compared anything to (docs/COIN_HOLDER_REVIEW.md, Appendix C §1).",
+  "brep": {
+    "size": [
+      110.0,
+      56.9,
+      10.7
+    ],
+    "volume_mm3": 34141.3,
+    "area_mm2": 18146.26,
+    "triangles": 28,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 6259.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 11,
+    "edges": 48,
+    "curves": 24,
+    "requires": [
+      "part-brief"
+    ],
+    "brief": {
+      "verdict": "over: 110.0 mm along x against a 95 mm envelope; 34.1 cm³ against 12",
+      "envelope_over_mm": 15.0,
+      "envelope_on": "x",
+      "budget_cm3": 34.141
+    }
+  }
+}

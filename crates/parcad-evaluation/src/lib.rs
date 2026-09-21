@@ -14,10 +14,12 @@ use parcad_core::{
 use serde::Serialize;
 
 /// Read an intent graph, naming the fix if it will not parse.
+pub mod brief;
 pub mod checks;
 pub mod print;
 pub mod print_files;
 
+pub use brief::BriefReport;
 pub use checks::{ChecksReport, FailedCheck};
 pub use print::{PrintCheck, PrintFinding, Verdicts};
 pub use print_files::{PrintFile, PrintFileReport, PrintFiles, SkippedPrint};
@@ -857,6 +859,16 @@ pub struct RenderedView {
     /// Where this view was cut open, if it was.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub section: Option<SectionCut>,
+    /// What the ruler drawn along the bottom of this view is worth, mm, and
+    /// how many pixels long it is. A render is otherwise an object floating
+    /// at an unknown scale, which is what a size judgement cannot be made
+    /// from; quote this rather than estimating from the picture, and read
+    /// `size` rather than either. Absent on a region map, which is an
+    /// instrument read by colour and carries no rule.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale_mm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scale_px: Option<u32>,
     /// The same image as a PNG file, for a person to open or a caller to
     /// attach. Set by the transport that kept it; the pixels ride inline too.
     #[serde(skip_serializing_if = "Option::is_none")]
