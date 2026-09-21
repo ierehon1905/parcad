@@ -54,11 +54,15 @@ budgeted() {
   if [ "$THINK" = default ]; then "$@"; else MAX_THINKING_TOKENS="$THINK" "$@"; fi
 }
 
+# --strict-mcp-config: the server under test is the only one. A server the
+# user has configured elsewhere under the same name — one round found a
+# `parcad-web` relay entry scoped to the home directory — is otherwise loaded
+# too, and a model told that one failed to connect answers nothing.
 run_one() {
   budgeted claude -p "$(prompt_body "$PROMPT")" \
     --model "$MODEL" \
     ${EFFORT:+--effort "$EFFORT"} \
-    --mcp-config "$RUN/mcp.json" \
+    --mcp-config "$RUN/mcp.json" --strict-mcp-config \
     --allowed-tools "$FIELD_ALLOW" \
     --disallowed-tools "$DENY" \
     --output-format stream-json --verbose < /dev/null > "$RUN/trial$1.jsonl" 2>&1 || true

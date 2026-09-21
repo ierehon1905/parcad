@@ -679,6 +679,14 @@ pub struct SelectorCheck {
 
 #[derive(Serialize, schemars::JsonSchema)]
 pub struct Exported {
+    /// The verdicts the file was written under, first: the part's own
+    /// `checks` and the `print_check`, either of which refuses the export
+    /// when it fails unless `allow_failing` gave a reason.
+    #[serde(flatten)]
+    verdicts: parcad_evaluation::Verdicts,
+    /// The reason the file was written over a failing verdict, as given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allow_failing: Option<String>,
     path: String,
     bytes: usize,
     format: String,
@@ -699,13 +707,6 @@ pub struct Exported {
     /// download, which is the only copy they can reach.
     #[serde(skip_serializing_if = "Option::is_none")]
     downloaded: Option<bool>,
-    /// The part's own checks, judged on the build the file came from. A
-    /// failing check refuses the export unless `allow_failing` gave a reason.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    checks: Option<parcad_evaluation::ChecksReport>,
-    /// The reason the file was written over a failing check, as given.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    allow_failing: Option<String>,
 }
 
 #[derive(Serialize, schemars::JsonSchema)]
@@ -726,6 +727,14 @@ pub struct Project {
 
 #[derive(Serialize, schemars::JsonSchema)]
 pub struct Saved {
+    /// The verdicts the part was saved under, first: its own `checks` and
+    /// the `print_check`. A failing one refuses the save unless
+    /// `allow_failing` gave a reason; absent for a script that does not build.
+    #[serde(flatten)]
+    verdicts: parcad_evaluation::Verdicts,
+    /// The reason the part was saved over a failing verdict, as given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allow_failing: Option<String>,
     name: String,
     path: String,
     /// Whether the saved script builds in the exact kernel.
@@ -742,13 +751,6 @@ pub struct Saved {
     /// `list_snapshots`.
     #[serde(skip_serializing_if = "Option::is_none")]
     snapshot: Option<String>,
-    /// The part's own checks, judged on the build. A failing check refuses
-    /// the save unless `allow_failing` gave a reason.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    checks: Option<parcad_evaluation::ChecksReport>,
-    /// The reason the part was saved over a failing check, as given.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    allow_failing: Option<String>,
 }
 
 // -------------------------------------------------------------------- tools
@@ -783,7 +785,7 @@ impl Parcad {
     #[tool(
         name = "evaluate_part",
         annotations(title = "Build and measure a part", read_only_hint = true, open_world_hint = false),
-        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality, `bodies` (free-standing pieces: one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in.\n\nA part that is meant to be several solids — a base and its lid, a clamp in two halves — returns an object of named shapes, `return { base, lid }`, and the reply then carries `named_bodies`: each body measured alone (size, bounds, volume, faces, `watertight`, `pieces` — 1 when that body is intact, more when its own booleans left it split, the defect the part-level `bodies` cannot tell from a second body that was meant) and `between_bodies`: every pair measured on the exact solids, `clear` with a `clearance_mm` and the two `closest_mm` points, `touching`, or `interfering` with the mm³ they share. Read `between_bodies` for whether a lid clears its base or a clip is drawn through what it clips onto; for such a part `bodies` should equal the number of named bodies. Bodies are never fused, and selectors, tags and treatments work inside one body only. A part may carry its own rules — `checks: [{ clear: [\"lid\", \"base\"], atLeast: 0.2, why: \"...\" }, { wall: { min: 1 } }, ...]` beside the bodies (read_docs dsl, `Check`) — and the reply then opens with `checks`: `{ verdict: \"passed\", passed: n }`, or `failed` with each failing check named, its measurement and where. A failed check never stops this tool, so you can see the part that failed; export_part and save_project refuse it unless given `allow_failing` with a reason. Read `checks.verdict` before anything else in the reply. A body a check talks about that is not the part — a stack of coins, a tipped coin — is marked `.reference()`: it is built, drawn in blue, measured in `named_bodies` (`reference: true`) and against every body in `between_bodies`, and left out of `bodies`, `volume_mm3`, `size`, `stands_on`, the probes and every export. A script may report a value it computed with `note(label, value)`; the reply carries these under `notes`, marked \"from the script, not measured\": they are what the script asked for, and only the measurements around them say what was built. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Each view in the reply also carries `path`, the same image as a PNG file on this machine, and `markdown`, that file as an image line for your reply: the user does not see the pictures a tool returns in every client, so paste `markdown` whenever they should see the part, or save_project and open_project it to put it on the parcad screen they have open. A build is kept per script: asking again with other views, exporting, or putting the script on screen reuses it (`reused_build`), so render after measuring rather than instead of it. `timeout_s` gives a heavy part longer than the default 20 s. Use this to check that a script produces the part you intended. Give `project` instead of `script` to build a saved part — or \"@session\", the one on screen — without sending it, and add `edits` to build it with lines changed and nothing saved: `{ project, edits }` answers 'what if the wall were 1.2 mm' in one call, and edit_part is the tool that saves. Every reply carries `script_sha256`, which identifies the text that was built.\n\nA part may be a *surface* — faces with no inside, from surfaceLoft, surfaceExtrude, surfaceRevolve, surfaceSweep, trim or patch. Its reply says `kind: \"surface\"` and carries `surface` instead of a volume: `area_mm2`, `open`, `free_edges` and `free_edge_length_mm` (the edges bordered by one face, where the surface ends; select them with { role: \"boundary\" }) and `boundary_loops`; there is no `volume_mm3`, `watertight`, `stands_on` or `prints_on`, because a surface has none. `.thicken(t)` makes it a solid and the reply's `thickened_mm` is the wall measured square to the surface at a grid on every face; `stitchSurfaces(...)` makes one a solid only when its free edges all meet. A part in named bodies may mix the two, `kind: \"mixed\"`.\n\nCurved outlines are drawn, not approximated: a section for extrude, revolve, loft or sweep is a list of corners [x, y], anticlockwise, closing itself; between two corners { through: [x, y] } is a circular arc through that point, { radius: r } the shorter arc of that radius (positive bulges out of the section), { spline: [[x, y], ...] } a smooth curve through the points, { bezier: [[x, y], ...] } one by control points, and { fit: [[x, y], ...], tolerance: 0.05 } a curve fitted through sampled points — a simulation's, a scan's — measured to lie within the tolerance of every one and reported back as `deviation_mm`; { at: [x, y], round: r } is a corner rounded by a tangent arc. A curve given by a formula — an involute, a cam law, a spiral — is { curve: (t) => [x, y], from, to, tolerance }, which brings its own two ends: the script draws it within the tolerance of the function everywhere and the reply's `curve_bound_mm` is that bound, `curve_bound` `certified` when the entry also gives its exact `derivative` and a `fourth`-derivative bound, `estimated` otherwise. spurGearOutline({ module, teeth, profileShift }) is a whole involute spur gear drawn that way, and spurGearPair({ module, teeth: [z1, z2], profileShift, backlash }) gives two that mesh with their centre distance. inset(outline, d) is that outline stepped inward by d, the way a wall is drawn. A pipe or sweep path may be { spline: [[x, y, z], ...] }, and a loft's first or last section { z, point: [x, y] }. Never fake a curve with many short straight edges. SectionEntry in read_docs `dsl` has the rules.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. Each box is the exact extent of the faces the kernel's own history says the tag still owns, and `faces` is how many. A tag in `unlocated_tags` owns no face of the finished part at all: everything it made was cut away or buried by a later boolean.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
+        description = "Build a part from a parcad DSL script and report its measured geometry, opening with `print_check` — the thinnest wall between its two features, every cut into a feature it was not for (`grille` cuts `boss`), `failed` where nothing prints (under 0.3 mm), `flagged` for what prints but should be read — then size, volume, area, face and edge counts, mesh quality, `bodies` (free-standing pieces: one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in.\n\nA part that is meant to be several solids — a base and its lid, a clamp in two halves — returns an object of named shapes, `return { base, lid }`, and the reply then carries `named_bodies`: each body measured alone (size, bounds, volume, faces, `watertight`, `pieces` — 1 when that body is intact, more when its own booleans left it split, the defect the part-level `bodies` cannot tell from a second body that was meant) and `between_bodies`: every pair measured on the exact solids, `clear` with a `clearance_mm` and the two `closest_mm` points, `touching`, or `interfering` with the mm³ they share. Read `between_bodies` for whether a lid clears its base or a clip is drawn through what it clips onto; for such a part `bodies` should equal the number of named bodies. Bodies are never fused, and selectors, tags and treatments work inside one body only. A part may carry its own rules — `checks: [{ clear: [\"lid\", \"base\"], atLeast: 0.2, why: \"...\" }, { wall: { min: 1 } }, ...]` beside the bodies (read_docs dsl, `Check`) — and the reply then opens with `checks`: `{ verdict: \"passed\", passed: n }`, or `failed` with each failing check named, its measurement and where. A failed check never stops this tool, so you can see the part that failed; export_part and save_project refuse it unless given `allow_failing` with a reason. Read `checks.verdict` before anything else in the reply. A body a check talks about that is not the part — a stack of coins, a tipped coin — is marked `.reference()`: it is built, drawn in blue, measured in `named_bodies` (`reference: true`) and against every body in `between_bodies`, and left out of `bodies`, `volume_mm3`, `size`, `stands_on`, the probes and every export. A script may report a value it computed with `note(label, value)`; the reply carries these under `notes`, marked \"from the script, not measured\": they are what the script asked for, and only the measurements around them say what was built. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Each view in the reply also carries `path`, the same image as a PNG file on this machine, and `markdown`, that file as an image line for your reply: the user does not see the pictures a tool returns in every client, so paste `markdown` whenever they should see the part, or save_project and open_project it to put it on the parcad screen they have open. A build is kept per script: asking again with other views, exporting, or putting the script on screen reuses it (`reused_build`), so render after measuring rather than instead of it. `timeout_s` gives a heavy part longer than the default 20 s. Use this to check that a script produces the part you intended. Give `project` instead of `script` to build a saved part — or \"@session\", the one on screen — without sending it, and add `edits` to build it with lines changed and nothing saved: `{ project, edits }` answers 'what if the wall were 1.2 mm' in one call, and edit_part is the tool that saves. Every reply carries `script_sha256`, which identifies the text that was built.\n\nA part may be a *surface* — faces with no inside, from surfaceLoft, surfaceExtrude, surfaceRevolve, surfaceSweep, trim or patch. Its reply says `kind: \"surface\"` and carries `surface` instead of a volume: `area_mm2`, `open`, `free_edges` and `free_edge_length_mm` (the edges bordered by one face, where the surface ends; select them with { role: \"boundary\" }) and `boundary_loops`; there is no `volume_mm3`, `watertight`, `stands_on` or `prints_on`, because a surface has none. `.thicken(t)` makes it a solid and the reply's `thickened_mm` is the wall measured square to the surface at a grid on every face; `stitchSurfaces(...)` makes one a solid only when its free edges all meet. A part in named bodies may mix the two, `kind: \"mixed\"`.\n\nCurved outlines are drawn, not approximated: a section for extrude, revolve, loft or sweep is a list of corners [x, y], anticlockwise, closing itself; between two corners { through: [x, y] } is a circular arc through that point, { radius: r } the shorter arc of that radius (positive bulges out of the section), { spline: [[x, y], ...] } a smooth curve through the points, { bezier: [[x, y], ...] } one by control points, and { fit: [[x, y], ...], tolerance: 0.05 } a curve fitted through sampled points — a simulation's, a scan's — measured to lie within the tolerance of every one and reported back as `deviation_mm`; { at: [x, y], round: r } is a corner rounded by a tangent arc. A curve given by a formula — an involute, a cam law, a spiral — is { curve: (t) => [x, y], from, to, tolerance }, which brings its own two ends: the script draws it within the tolerance of the function everywhere and the reply's `curve_bound_mm` is that bound, `curve_bound` `certified` when the entry also gives its exact `derivative` and a `fourth`-derivative bound, `estimated` otherwise. spurGearOutline({ module, teeth, profileShift }) is a whole involute spur gear drawn that way, and spurGearPair({ module, teeth: [z1, z2], profileShift, backlash }) gives two that mesh with their centre distance. inset(outline, d) is that outline stepped inward by d, the way a wall is drawn. A pipe or sweep path may be { spline: [[x, y, z], ...] }, and a loft's first or last section { z, point: [x, y] }. Never fake a curve with many short straight edges. SectionEntry in read_docs `dsl` has the rules.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. Each box is the exact extent of the faces the kernel's own history says the tag still owns, and `faces` is how many. A tag in `unlocated_tags` owns no face of the finished part at all: everything it made was cut away or buried by a later boolean.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
     )]
     async fn evaluate_part(
         &self,
@@ -814,7 +816,7 @@ impl Parcad {
     #[tool(
         name = "edit_part",
         annotations(title = "Edit a part in place", read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
-        description = "Change part of a script without sending the whole thing: each edit replaces `old` with `new`, once, and the part is rebuilt and measured exactly as evaluate_part does — same reply, same views — then saved. `project` names the part to edit, or \"@session\" for the script on the user's screen. An `old` that appears twice, or not at all, is refused naming how many times it was found and where, and nothing is written: give more surrounding lines. The edited text is built before anything is written, so a change that does not build is refused and the part is left as it was. The previous text is kept as a snapshot (list_snapshots, restore_snapshot), so an edit is undoable, and an edit to the open part lands in the window's own undo history: the reply then carries `on_screen` with the revision and `viewers`, as set_script's does. A saved part that is also open on screen is put on screen too. Use it for every change after the first: a fillet radius, a dimension, one function — sending 10 KB of unchanged script to change two lines is the most common way a session runs out of room. To try a change without saving it, call evaluate_part with the same `project` and `edits`. The reply adds `edits_applied`, the new `script_sha256`, and for a saved part the `path` written and the `snapshot` kept; pass a reply's `script_sha256` back as `expect_sha256` to be refused if the text changed under you. An edit that writes part.js is refused when one of the part's own `checks` fails on the edited text, naming the check and its measurement, unless `allow_failing` gives the user's reason; an edit to \"@session\" changes only the screen and is never refused for a check — the window shows it red."
+        description = "Change part of a script without sending the whole thing: each edit replaces `old` with `new`, once, and the part is rebuilt and measured exactly as evaluate_part does — same reply, same views — then saved. `project` names the part to edit, or \"@session\" for the script on the user's screen. An `old` that appears twice, or not at all, is refused naming how many times it was found and where, and nothing is written: give more surrounding lines. The edited text is built before anything is written, so a change that does not build is refused and the part is left as it was. The previous text is kept as a snapshot (list_snapshots, restore_snapshot), so an edit is undoable, and an edit to the open part lands in the window's own undo history: the reply then carries `on_screen` with the revision and `viewers`, as set_script's does. A saved part that is also open on screen is put on screen too. Use it for every change after the first: a fillet radius, a dimension, one function — sending 10 KB of unchanged script to change two lines is the most common way a session runs out of room. To try a change without saving it, call evaluate_part with the same `project` and `edits`. The reply adds `edits_applied`, the new `script_sha256`, and for a saved part the `path` written and the `snapshot` kept; pass a reply's `script_sha256` back as `expect_sha256` to be refused if the text changed under you. An edit that writes part.js is refused when the edited text fails its `print_check` (material under 0.3 mm) or one of the part's own `checks`, naming the finding or the check and its measurement, unless `allow_failing` gives the user's reason; an edit to \"@session\" changes only the screen and is never refused for a verdict — the window shows it red."
     )]
     async fn edit_part(
         &self,
@@ -1066,7 +1068,7 @@ impl Parcad {
     #[tool(
         name = "export_part",
         annotations(title = "Export a part to a file", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part that carries its own `checks` is refused when one fails, with the check and its measurement named, and nothing is written: fix the part, or, when the user has decided the failure is acceptable, pass `allow_failing` with their reason, which the reply keeps. The reply's `checks` is the verdict the file was written under."
+        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part whose `print_check` fails — material under 0.3 mm, where nothing prints — or that carries its own `checks` and fails one is refused, with the finding or the check and its measurement named, and nothing is written: fix the part, or, when the user has decided the failure is acceptable, pass `allow_failing` with their reason, which the reply keeps. The reply opens with `print_check` and `checks`, the verdicts the file was written under; a `flagged` print_check writes the file and lists what to read."
     )]
     async fn export_part(
         &self,
@@ -1141,7 +1143,7 @@ impl Parcad {
                     open_error,
                     downloaded,
                     path,
-                    checks: door.checks,
+                    verdicts: door.verdicts,
                     allow_failing,
                 },
                 &source,
@@ -1248,7 +1250,7 @@ impl Parcad {
     #[tool(
         name = "save_project",
         annotations(title = "Save project", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Write a new part to parcad's project folder so the user can open it; open_project it afterwards to put it on their screen. For a part that is already saved, call edit_part instead: it changes the lines you name, rebuilds, and saves in one call, without the whole script being sent again. Evaluate a script first: saving one that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not — the file is saved regardless), the `preview` thumbnail written for the app's picker, and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back. A part that builds and fails one of its own `checks` is not saved: the refusal names the check and its measurement; fix the part, or pass `allow_failing` with the user's reason, which the reply keeps beside the `checks` verdict."
+        description = "Write a new part to parcad's project folder so the user can open it; open_project it afterwards to put it on their screen. For a part that is already saved, call edit_part instead: it changes the lines you name, rebuilds, and saves in one call, without the whole script being sent again. Evaluate a script first: saving one that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not — the file is saved regardless), the `preview` thumbnail written for the app's picker, and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back. A part that builds and fails its `print_check` (material under 0.3 mm, where nothing prints) or one of its own `checks` is not saved: the refusal names the finding or the check and its measurement; fix the part, or pass `allow_failing` with the user's reason, which the reply keeps beside the verdicts it opens with."
     )]
     async fn save_project(
         &self,
@@ -1278,7 +1280,7 @@ impl Parcad {
                 error,
                 preview,
                 snapshot,
-                checks: door.checks,
+                verdicts: door.verdicts,
                 allow_failing,
             })
         })
@@ -1383,17 +1385,19 @@ impl Parcad {
 const TOOL_LIST_TTL_MS: u64 = 86_400_000;
 
 const LANGUAGE: &str = "parcad builds parts from a small JavaScript DSL on an exact B-rep kernel. \
-Everything is millimetres; primitives are centred on the origin and placed \
-with .at(x, y, z); a script ends by returning a shape, or { base, lid } for a part in several \
-bodies, measured per body and between them; checks: [...] beside them are rules judged first in \
-every reply (read_docs dsl, Check).\n\n\
+Everything is millimetres; primitives are centred on the origin, placed \
+with .at(x, y, z); a script returns a shape, or { base, lid } for a part in several \
+bodies, measured per body and between them. Every reply opens with verdicts: checks: [...] \
+beside the bodies are the part's own rules (read_docs dsl, Check); print_check is the thinnest \
+wall, cuts into other features and overhang; a part is done when print_check is clean or \
+each flag has a reason.\n\n\
 Start from read_docs: `dsl` is the whole language; `gaps` and `gotchas` are what the kernel \
-refuses and what returns a wrong answer. read_project shows house style; a project name is a \
-path like 'Mounts/bracket'.";
+refuses and what returns a wrong answer. read_project shows house style; a name is a path \
+like 'Mounts/bracket'.";
 
 const SCREEN: &str = "You share the parcad app's screen with the user: get_session reads it, \
 open_project and set_script change it. To show a part you built, save_project it under its own \
-name and open_project it. Edits are undoable; read before you write, evaluate before set_script.";
+name and open_project it. Edits are undoable; read before you write.";
 
 /// The rule the coin-holder session lacked: 241 KB of script resent to change
 /// a few lines at a time (docs/COIN_HOLDER_REVIEW.md, B1).
@@ -1405,19 +1409,18 @@ const SELECTING: &str = "Select edges by intent, never by index: '>Z and >Y and 
 role: \"hole\", adjacentTo: { faceNormal: \"+z\" } }; dihedral: \"convex\"|\"concave\"|\
 \"smooth\"; parallel: \"z\"; longerThan: 3; on: \"lip\" for one tagged feature's edges, at \
 measured within it; between: [\"arm\", \"hub\"] for the seam where two meet. A tag names a \
-node's faces and survives later ops. Fillets skip smooth edges unless asked. Each \
-treatment in a reply has `edges`, its resolved count: write it as \
-.expect({ count }) so drift fails aloud, .expect({ atLeast: 1 }) until you know it. edge@N ids \
-from list_entities never appear in scripts.\n\n\
+node's faces and survives later ops. Each treatment in a reply has `edges`, its resolved \
+count: write it as .expect({ count }) so drift fails aloud. edge@N ids never appear in \
+scripts.\n\n\
 The kernel refuses rather than approximating; a refusal names the fix. Every report is \
-measured, never requested: quote its numbers, not the script's.";
+measured, never requested: quote it, not the script.";
 
 /// Only where a view is a file the user can open.
 const PICTURES: &str = " The user may not see a tool's pictures: to show one, paste its \
 `markdown` line.";
 
-const WHERE: &str = "Which tag owns what a view shows: regions: true. What is inside: a section. \
-Where a tag is: tag_extents, in every reply.";
+const WHERE: &str = "Which tag owns what a view shows: regions: true; what is inside: a section; where a tag is: \
+tag_extents.";
 
 /// What a model is told before its first call, for the host it is talking to.
 /// Claude Code keeps the first 2048 characters, so what differs by host comes
@@ -2161,6 +2164,8 @@ mod tests {
         }
         assert!(instructions(true).contains("ParCAD web"));
         assert!(!instructions(true).contains("`markdown`"), "a tab has no file to point at");
+        // docs/NEXT.md, item 1: the weakest layer, and one line.
+        assert!(instructions(false).contains("a part is done when print_check is clean or each flag has a reason"));
     }
 
     #[test]
@@ -2754,7 +2759,7 @@ mod tests {
                 }))))
                 .expect("saved over the failing check");
                 assert_eq!(saved.0.allow_failing.as_deref(), Some("the user accepts coins binding on this plate"));
-                let checks = saved.0.checks.as_ref().expect("the verdict rides with the save");
+                let checks = saved.0.verdicts.checks.as_ref().expect("the verdict rides with the save");
                 assert_eq!((checks.verdict, checks.passed, checks.failed[0].measured_mm), ("failed", 4, Some(0.13)));
                 assert_eq!(projects::read("holder").unwrap(), script);
 
@@ -2770,7 +2775,7 @@ mod tests {
                 assert!(refused.message.contains(named), "{}", refused.message);
                 let exported = export(Some("printing a test piece")).expect("exported over the failing check").0;
                 assert_eq!(exported.measured.allow_failing.as_deref(), Some("printing a test piece"));
-                assert_eq!(exported.measured.checks.as_ref().unwrap().verdict, "failed");
+                assert_eq!(exported.measured.verdicts.checks.as_ref().unwrap().verdict, "failed");
                 assert!(std::path::Path::new(&exported.measured.path).exists());
 
                 // An edit that keeps the check failing is refused before the

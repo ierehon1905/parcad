@@ -15,8 +15,10 @@ use serde::Serialize;
 
 /// Read an intent graph, naming the fix if it will not parse.
 pub mod checks;
+pub mod print;
 
 pub use checks::{ChecksReport, FailedCheck};
+pub use print::{PrintCheck, PrintFinding, Verdicts};
 
 /// One value a script reported with `note(label, value)`.
 #[derive(Debug, Clone, Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -355,12 +357,14 @@ pub fn round_fraction(v: f64) -> f64 {
 /// exactly what a caller needs to be told about.
 #[derive(Serialize, schemars::JsonSchema)]
 pub struct EvaluationSnapshot {
-    /// The part's own checks, judged on this build: `verdict` `passed` with
-    /// the count, or `failed` with each failing check named, measured and
-    /// located. First, so it is the first thing read. Absent when the script
-    /// carries no `checks`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub checks: Option<ChecksReport>,
+    /// The verdicts, first, so they are the first thing read: the part's
+    /// own `checks`, judged on this build — `passed` with the count, or
+    /// `failed` with each failing check named, measured and located — and
+    /// `print_check`, whether the part prints. `checks` is absent when the
+    /// script carries none, `print_check` for a surface; the one that fails
+    /// comes first (see [`Verdicts`]).
+    #[serde(flatten)]
+    pub verdicts: Verdicts,
     /// Always "mm".
     pub units: String,
     /// `solid` — every body encloses a volume; `surface` — faces with no
@@ -969,7 +973,7 @@ pub fn describe(
         centroid
     };
     EvaluationSnapshot {
-        checks: None,
+        verdicts: Verdicts::default(),
         units: report.units.clone(),
         kind,
         size: round_point([report.size.x, report.size.y, report.size.z]),

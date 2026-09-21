@@ -238,13 +238,13 @@ fn judge_wall(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::{BodyReport, StandsOn};
 
-    fn snapshot(between: Vec<BodyFit>) -> EvaluationSnapshot {
+    pub(crate) fn snapshot(between: Vec<BodyFit>) -> EvaluationSnapshot {
         EvaluationSnapshot {
-            checks: None,
+            verdicts: crate::Verdicts::default(),
             units: "mm".into(),
             kind: "solid",
             size: [40.0, 40.0, 25.0],
@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(f.sentence(), "clear top↔stacks atLeast 0.2 measured 0.13 mm (coins must not bind on the plate)");
         // The verdict is the first thing in the reply's text.
         let mut with = snapshot;
-        with.checks = Some(report);
+        with.verdicts.checks = Some(report);
         let text = serde_json::to_string(&with).unwrap();
         assert!(text.starts_with("{\"checks\":{\"verdict\":\"failed\",\"passed\":4,\"failed\":[{\"check\":\"clear top↔stacks atLeast 0.2\",\"measured_mm\":0.13"), "{text}");
     }

@@ -25,13 +25,15 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    skip, so it moves onto the route every model already takes. The report is
    already trustworthy (thin readings classified and grouped into places, every
    feather and face pair found; `where-is-the-sliver`); what is left:
-   - **Collisions**: for each cut, the named features it removed material from
-     besides its target — "grille cuts boss" needs no threshold.
-   - **On the route**: `export_part` and `save_project` carry a `print_check`
-     (thinnest wall, its two features, collisions) from the cached build, its
-     verdict the first line of the reply. Below a floor nothing prints (≈0.3
-     mm) export refuses, naming the spot and the fix, unless given
-     `allow_thin: "reason"`; between that and the process minimum it flags.
+   - ~~**Collisions**~~: done 2026-09-21 — `collisions` in every reply, per
+     cut with its tag, the mm³ it took from each feature besides its target,
+     and where; `slot-nicks-boss` and `grille-nicks-boss` pin closed forms.
+   - ~~**On the route**~~: done 2026-09-21 — `print_check` on every snapshot
+     beside `checks` (thinnest wall, its two features, collisions), the
+     failing verdict first. Under 0.3 mm it fails and `export_part`,
+     `save_project` and a saving `edit_part` refuse through the same
+     `allow_failing: "reason"` the author's checks use — one argument, one
+     door, whichever verdict fails; between that and 0.8 mm it flags.
    - **Measured**: an `eval/field/` case whose part hides a sliver and a
      collision; SOUND only when the reply tells the user both, both arms.
    - Server instructions and the skills say a part is done when `print_check` is

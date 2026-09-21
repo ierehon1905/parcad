@@ -150,9 +150,29 @@ struct order here (`preserve_order`): the first thing in a reply's text is
 the thing a model reads. `evaluate_part` never refuses over a failed check;
 `export_part`, `save_project` and a saving `edit_part` go through one door
 (`service::Door`) that refuses unless `allow_failing: "<reason>"` opens it,
-and the reason is echoed in the reply. `print_check` (NEXT.md, item 1) is the
-second verdict that door is shaped for. The window's own save is not gated:
+and the reason is echoed in the reply. The window's own save is not gated:
 the person saving can see the red line in the report.
+
+**`print_check` is the second verdict, judged in the same place and read
+through the same door.** Two parts shipped as STLs with defects the thickness
+sweep finds at once, because the sweep was a tool a model had to remember
+(NEXT.md, item 1). So `service::evaluate` judges `parcad_evaluation::print::
+judge` right after the author's checks, on every build whether or not anyone
+asked: the sweep at 2000 samples and the 0.8 mm process minimum on the build
+the worker keeps (every feather and every wall between two faces that do not
+meet is certain at any count), plus the `collisions` the build carries — for
+each cut, what it took from every tagged feature of its base besides the one
+it took the most from, measured in `backend.rs`'s cut arm on the exact solids
+by intersecting the removed material with each feature's own solid, which the
+lineage now carries (`EdgeLineage::solids_by_source`) and moves with every
+transform. Under 0.3 mm nothing prints and the verdict is `failed`; a wall
+between that and 0.8 mm, and every collision, is `flagged`. The snapshot's
+first fields are the two verdicts (`Verdicts`, flattened): `checks` keeps its
+place first, and `print_check` moves ahead of it only when it alone fails, so
+whichever fails is the first thing in the reply and when both fail both are
+named at the top. `Door` reads both slots and refuses a `failed` print_check
+the way it refuses a failed check, through the one `allow_failing` argument;
+a flag passes the door and is listed. `evaluate_part` never refuses.
 
 **A reference body is measured and drawn, and is not the part.** The bodies
 a check talks about — a stack of coins, a tipped coin at a mouth — are marked

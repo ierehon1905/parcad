@@ -41,9 +41,8 @@ use std::time::Duration;
 /// What a model is told about the screen when the host is a tab, in place of the app's.
 pub const INSTRUCTIONS: &str = "This is ParCAD web, a page in the user's browser that must stay \
 open; parts build and are kept there. That page is their screen: get_session reads it; to show \
-a part you built, save_project it under its own name and open_project it there, not as a \
-picture of your own. export_part downloads through their browser, and `path` is only a name \
-in the tab.";
+a part you built, save_project it under its own name and open_project it, not as a picture of \
+your own. export_part downloads through their browser; `path` is only a name.";
 
 thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
@@ -973,7 +972,32 @@ mod tests {
             Outcome::Replied(&packed, Duration::from_millis(1234)),
         )
         .unwrap();
-        retry(call)
+        // The print check sweeps the build it just made: a second pause,
+        // answered with a sweep that found nothing.
+        let mut reply = retry(call);
+        while let Reply::Kernel { call, ticket, packet: bytes, .. } = &reply {
+            let (request, _) = packet::unpack_request(bytes).unwrap();
+            assert!(request.perceive.is_some(), "an unexpected second kernel request: {request:?}");
+            let swept = Response::Perceived(Box::new(parcad_occt::protocol::Perceived {
+                thickness: Some(parcad_occt::protocol::ThicknessResult {
+                    samples: 24,
+                    discarded: 0,
+                    min: None,
+                    below_threshold: 0,
+                    below_threshold_at_edges: 0,
+                    thin_spots: Vec::new(),
+                    spacing_mm: 1.0,
+                    edges_checked: 12,
+                    face_pairs_checked: 0,
+                    surfaces_skipped: Vec::new(),
+                }),
+                ..Default::default()
+            }));
+            let packed = packet::pack_response(swept, &[]).unwrap();
+            answer(*ticket, Outcome::Replied(&packed, Duration::from_millis(1))).unwrap();
+            reply = retry(*call);
+        }
+        reply
     }
 
     #[test]

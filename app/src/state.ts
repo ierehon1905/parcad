@@ -43,7 +43,33 @@ import type { FaceMaterial, Viewport } from "./viewport";
  *
  * Millimetres throughout. Triples are `[x, y, z]`.
  */
+/** One place the print check has something to say about. */
+export interface PrintFinding {
+  kind: "thin" | "collision" | "overhang";
+  what: string;
+  fix: string;
+  body?: string;
+  thickness_mm?: number;
+  thin_kind?: "feather" | "wall" | "edge";
+  removed_mm3?: number;
+  unsupported_mm2?: number;
+  at?: [number, number, number];
+  between?: [string, string];
+}
+
 export interface EvaluationSnapshot {
+  /** The part's own checks, judged on this build; absent when the script carries none. */
+  checks?: { verdict: "passed" | "failed"; passed: number; failed?: { check: string; measured_mm?: number; measured_mm3?: number; why?: string }[] };
+  /** Whether the part prints, judged on every build: `failed` where nothing
+   *  prints (under `floor_mm`), `flagged` for what prints but should be read. */
+  print_check?: {
+    verdict: "passed" | "flagged" | "failed";
+    failed?: PrintFinding[];
+    flagged?: PrintFinding[];
+    thinnest?: PrintFinding;
+    floor_mm: number;
+    minimum_mm: number;
+  };
   units: string;
   /** `solid`, `surface` (faces with no inside) or `mixed` (named bodies of both). */
   kind: "solid" | "surface" | "mixed";

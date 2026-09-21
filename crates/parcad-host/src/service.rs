@@ -878,23 +878,36 @@ pub struct Export {
 pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evaluated, String> {
     let built = build_exact(doc, budget, false)?;
     let mut evaluated = parcad_evaluation::evaluated(doc, &built.success, built.wall_ms, built.reused)?;
-    if !doc.checks.is_empty() {
-        // A `wall` check is the thickness sweep at the check's own threshold,
-        // on the build the worker has just made.
-        let mut sweep = |min: f64| {
-            let spec = parcad_occt::Perceive {
-                thickness: Some(parcad_occt::ThicknessSpec {
-                    max_samples: DEFAULT_THICKNESS_SAMPLES,
-                    threshold_mm: Some(min),
-                }),
-                ..Default::default()
-            };
-            perceive(doc, &spec, budget)?
-                .thickness
-                .ok_or_else(|| "the kernel measured no thickness for the wall check".to_string())
+    // A `wall` check and the print check are each the thickness sweep at
+    // their own threshold, on the build the worker has just made and keeps.
+    let sweep = |min: f64, samples: usize| {
+        let spec = parcad_occt::Perceive {
+            thickness: Some(parcad_occt::ThicknessSpec {
+                max_samples: samples,
+                threshold_mm: Some(min),
+            }),
+            ..Default::default()
         };
-        evaluated.snapshot.checks = Some(parcad_evaluation::checks::judge(doc, &evaluated.snapshot, &mut sweep)?);
+        perceive(doc, &spec, budget)?
+            .thickness
+            .ok_or_else(|| "the kernel measured no thickness for the wall check".to_string())
+    };
+    if !doc.checks.is_empty() {
+        let mut at_default = |min: f64| sweep(min, DEFAULT_THICKNESS_SAMPLES);
+        evaluated.snapshot.verdicts.checks = Some(parcad_evaluation::checks::judge(doc, &evaluated.snapshot, &mut at_default)?);
     }
+    // Judged beside the author's checks, on every build, whether or not
+    // anyone asked: docs/NEXT.md, item 1. evaluate_part never refuses over
+    // it; the door does. Kept with the build, so asking again costs nothing.
+    evaluated.snapshot.verdicts.print_check = match cached_print_check(&built.key) {
+        Some(judged) => judged,
+        None => {
+            let mut for_print = sweep;
+            let judged = parcad_evaluation::print::judge(&evaluated.snapshot, &mut for_print)?;
+            keep_print_check(&built.key, &judged);
+            judged
+        }
+    };
     Ok(evaluated)
 }
 
@@ -908,46 +921,55 @@ pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evalua
 // argument or a second refusal. evaluate_part never refuses over any of
 // them: a model exploring a change needs the picture of the part that failed.
 
-/// Every verdict a build carries, read off its snapshot.
+/// Every verdict a build carries, read off its snapshot: the author's
+/// `checks` and the `print_check`, in the one slot each.
 #[derive(Debug, Clone, Default)]
 pub struct Door {
-    pub checks: Option<parcad_evaluation::ChecksReport>,
+    pub verdicts: parcad_evaluation::Verdicts,
 }
 
 impl Door {
     pub fn of(snapshot: &parcad_evaluation::EvaluationSnapshot) -> Self {
-        Self { checks: snapshot.checks.clone() }
+        Self { verdicts: snapshot.verdicts.clone() }
     }
 
     /// Each verdict that fails, as one sentence naming the check and what
-    /// was measured.
+    /// was measured, or the print finding and where.
     pub fn failing(&self) -> Vec<String> {
-        self.checks
-            .iter()
-            .flat_map(|report| report.failed.iter().map(|f| f.sentence()))
-            .collect()
+        self.verdicts.failing()
     }
 
     /// Whether `action` may write: nothing fails, or `allow_failing` gives a
     /// reason, which is returned to be echoed in the reply. A refusal names
-    /// every failing check with its measurement and the argument that opens
-    /// the door.
+    /// every failing verdict with its measurement and the one argument that
+    /// opens the door for both.
     pub fn pass(&self, allow_failing: Option<&str>, action: &str) -> Result<Option<String>, String> {
-        let failing = self.failing();
-        if failing.is_empty() {
+        if self.failing().is_empty() {
             return Ok(None);
         }
-        let count = failing.len();
-        let checks = if count == 1 { "check fails" } else { "checks fail" };
-        match allow_failing.map(str::trim).filter(|r| !r.is_empty()) {
-            Some(reason) => Ok(Some(reason.to_string())),
-            None => Err(format!(
-                "{action} refused: {count} of the part's own {checks} — {}. Fix the part and call \
-                 again, or pass allow_failing: \"<why it is acceptable>\" to write it anyway; the \
-                 reason is kept in the reply.",
-                failing.join("; ")
-            )),
+        if let Some(reason) = allow_failing.map(str::trim).filter(|r| !r.is_empty()) {
+            return Ok(Some(reason.to_string()));
         }
+        let mut named = Vec::new();
+        if let Some(checks) = self.verdicts.checks.as_ref().filter(|c| c.failing()) {
+            let count = checks.failed.len();
+            let fail = if count == 1 { "check fails" } else { "checks fail" };
+            let sentences: Vec<String> = checks.failed.iter().map(|f| f.sentence()).collect();
+            named.push(format!("{count} of the part's own {fail} — {}", sentences.join("; ")));
+        }
+        if let Some(print) = self.verdicts.print_check.as_ref().filter(|p| !p.failed.is_empty()) {
+            let sentences: Vec<String> = print.failed.iter().map(|f| f.what.clone()).collect();
+            named.push(format!(
+                "print_check fails, nothing prints under {} mm — {}",
+                print.floor_mm,
+                sentences.join("; ")
+            ));
+        }
+        Err(format!(
+            "{action} refused: {}. Fix the part and call again, or pass allow_failing: \
+             \"<why it is acceptable>\" to write it anyway; the reason is kept in the reply.",
+            named.join("; and ")
+        ))
     }
 }
 
@@ -957,6 +979,9 @@ impl Door {
 struct Build {
     key: String,
     success: std::sync::Arc<parcad_occt::Success>,
+    /// The print check, once a build has been judged: the sweep is the same
+    /// every time for one build, and in a browser tab each sweep is a pause.
+    print_check: Option<Option<parcad_evaluation::PrintCheck>>,
     /// The STEP file, once something has asked for it.
     step: Option<std::sync::Arc<Vec<u8>>>,
     wall_ms: u64,
@@ -975,10 +1000,24 @@ static BUILDS: std::sync::LazyLock<std::sync::Mutex<std::collections::VecDeque<B
 const BUILDS_KEPT: usize = 8;
 
 struct Built {
+    key: String,
     success: std::sync::Arc<parcad_occt::Success>,
     step: Option<std::sync::Arc<Vec<u8>>>,
     wall_ms: u64,
     reused: bool,
+}
+
+/// The print check kept with a build, if it has been judged.
+fn cached_print_check(key: &str) -> Option<Option<parcad_evaluation::PrintCheck>> {
+    let builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
+    builds.iter().find(|b| b.key == key).and_then(|b| b.print_check.clone())
+}
+
+fn keep_print_check(key: &str, print_check: &Option<parcad_evaluation::PrintCheck>) {
+    let mut builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(build) = builds.iter_mut().find(|b| b.key == key) {
+        build.print_check = Some(print_check.clone());
+    }
 }
 
 fn build_exact(
@@ -995,6 +1034,7 @@ fn build_exact(
         {
             let hit = builds.remove(i).expect("the index was just found");
             let built = Built {
+                key: key.clone(),
                 success: hit.success.clone(),
                 step: hit.step.clone(),
                 wall_ms: hit.wall_ms,
@@ -1027,13 +1067,15 @@ fn build_exact(
     let mut builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
     builds.retain(|b| b.key != key);
     builds.push_front(Build {
-        key,
+        key: key.clone(),
         success: success.clone(),
+        print_check: None,
         step: step.clone(),
         wall_ms,
     });
     builds.truncate(BUILDS_KEPT);
     Ok(Built {
+        key,
         success,
         step,
         wall_ms,
@@ -1757,7 +1799,7 @@ mod tests {
                 why: Some("coins must not bind on the plate".into()),
             }],
         };
-        let door = Door { checks: Some(failed) };
+        let door = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(failed.clone()), print_check: None } };
         let refusal = door.pass(None, "export_part").unwrap_err();
         assert_eq!(
             refusal,
@@ -1767,10 +1809,53 @@ mod tests {
         );
         assert!(door.pass(Some("  "), "save_project").unwrap_err().starts_with("save_project refused"));
         assert_eq!(door.pass(Some("the user accepts the binding"), "save_project").unwrap(), Some("the user accepts the binding".into()));
-        let open = Door { checks: Some(parcad_evaluation::ChecksReport { verdict: "passed", passed: 5, failed: Vec::new() }) };
+        let passed = parcad_evaluation::ChecksReport { verdict: "passed", passed: 5, failed: Vec::new() };
+        let open = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(passed.clone()), print_check: None } };
         assert_eq!(open.pass(None, "export_part").unwrap(), None);
         assert_eq!(open.pass(Some("unneeded"), "export_part").unwrap(), None, "a reason nothing needs is not echoed");
         assert_eq!(Door::default().pass(None, "export_part").unwrap(), None, "a part with no checks has no door");
+
+        // The second slot: a failing print_check refuses through the same
+        // argument, a flagged one passes, and one reason opens both verdicts.
+        let print = |failed: Vec<parcad_evaluation::PrintFinding>, flagged: Vec<parcad_evaluation::PrintFinding>| parcad_evaluation::PrintCheck {
+            verdict: if !failed.is_empty() { "failed" } else if !flagged.is_empty() { "flagged" } else { "passed" },
+            failed,
+            flagged,
+            unlisted: 0,
+            thinnest: None,
+            floor_mm: parcad_evaluation::print::FLOOR_MM,
+            minimum_mm: parcad_evaluation::print::MINIMUM_MM,
+            samples: 1,
+            note: "",
+        };
+        let feather = parcad_evaluation::PrintFinding {
+            kind: "thin",
+            what: "material thins to 0 mm where `cable` meets `slot` at 15.0°, at [0, -13.768, 2]".into(),
+            fix: "",
+            body: None,
+            thickness_mm: Some(0.0),
+            thin_kind: Some("feather"),
+            removed_mm3: None,
+            unsupported_mm2: None,
+            at: Some([0.0, -13.768, 2.0]),
+            opposite: None,
+            between: None,
+        };
+        let refused = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(passed.clone()), print_check: Some(print(vec![feather.clone()], Vec::new())) } };
+        assert_eq!(
+            refused.pass(None, "export_part").unwrap_err(),
+            "export_part refused: print_check fails, nothing prints under 0.3 mm — material thins to 0 mm \
+             where `cable` meets `slot` at 15.0°, at [0, -13.768, 2]. Fix the part and call again, or pass \
+             allow_failing: \"<why it is acceptable>\" to write it anyway; the reason is kept in the reply."
+        );
+        assert_eq!(refused.pass(Some("a knife edge the user wants"), "export_part").unwrap(), Some("a knife edge the user wants".into()));
+        let flagged = Door { verdicts: parcad_evaluation::Verdicts { checks: None, print_check: Some(print(Vec::new(), vec![feather.clone()])) } };
+        assert_eq!(flagged.pass(None, "save_project").unwrap(), None, "a flag passes the door");
+        let both = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(failed), print_check: Some(print(vec![feather], Vec::new())) } };
+        let message = both.pass(None, "save_project").unwrap_err();
+        assert!(message.starts_with("save_project refused: 1 of the part's own check fails — clear top↔stacks"), "{message}");
+        assert!(message.contains("; and print_check fails, nothing prints under 0.3 mm — material thins"), "{message}");
+        assert_eq!(both.pass(Some("both accepted for a test piece"), "save_project").unwrap(), Some("both accepted for a test piece".into()));
     }
 
     /// Documents are built from JSON rather than from `Op` values: this is the

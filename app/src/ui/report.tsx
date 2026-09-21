@@ -124,6 +124,21 @@ export function Report() {
         <div class="text-bad">no final treatment curves are available</div>
       )}
       {dead > 0 && <div class="text-bad">{dead} unused nodes</div>}
+      {snapshot.checks?.failed?.map((f) => (
+        <div class="text-bad" key={f.check}>
+          check fails: <Strong>{f.check}</Strong>
+          {f.measured_mm !== undefined && ` measured ${fmt(f.measured_mm)} mm`}
+          {f.measured_mm3 !== undefined && ` measured ${fmt(f.measured_mm3)} mm³`}
+        </div>
+      ))}
+      {snapshot.print_check?.failed?.map((f) => (
+        <div class="text-bad" key={f.what}>
+          nothing prints: <Strong>{f.what}</Strong>
+        </div>
+      ))}
+      {snapshot.print_check?.flagged?.map((f) => (
+        <div key={f.what}>print: {f.what}</div>
+      ))}
       {snapshot.notes && (
         <div>
           {snapshot.notes.source}:{" "}
