@@ -751,6 +751,11 @@ pub struct Saved {
     /// `list_snapshots`.
     #[serde(skip_serializing_if = "Option::is_none")]
     snapshot: Option<String>,
+    /// The print files written beside `part.js`: one 3MF per body, laid flat
+    /// in the orientation it prints. Absent for a loose `.js` project, which
+    /// has nowhere to keep them, and for a script that does not build.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    print: Option<parcad_evaluation::PrintFiles>,
 }
 
 // -------------------------------------------------------------------- tools
@@ -836,7 +841,7 @@ impl Parcad {
             request.image_size,
             request.timeout_s,
         )?;
-        let (mut measured, pictures, written, changed, edits_applied, allowed) = blocking(move || {
+        let (mut measured, pictures, written, changed, edits_applied, allowed, print) = blocking(move || {
             let source = service::resolve_script(
                 None,
                 Some(&request.project),
@@ -862,13 +867,15 @@ impl Parcad {
             // door stands before the file only: a screen edit is a proposal
             // the user watches, with the check red in the window's report.
             let allowed = if is_screen { None } else { door.pass(request.allow_failing.as_deref(), "edit_part")? };
+            let mut print = None;
             let written = if is_screen {
                 None
             } else {
                 let snapshot = projects::snapshot(&request.project)?;
                 let path = projects::write(&request.project, &source.script)?;
-                if let Ok(png) = preview_of(&source.script) {
+                if let Ok((png, _, doc)) = built_preview(&source.script) {
                     let _ = projects::write_preview(&request.project, &png);
+                    print = write_print_files(&request.project, &doc, allowed.as_deref());
                 }
                 Some((path, snapshot))
             };
@@ -878,10 +885,14 @@ impl Parcad {
             } else {
                 None
             };
-            Ok((measured, pictures, written, changed, source.edits_applied, allowed))
+            Ok((measured, pictures, written, changed, source.edits_applied, allowed, print))
         })
         .await?;
         measured["edits_applied"] = serde_json::json!(edits_applied);
+        if let Some(print) = print {
+            measured["print"] = serde_json::to_value(print)
+                .map_err(|e| ErrorData::internal_error(format!("serialising the print files: {e}"), None))?;
+        }
         if let Some(reason) = allowed {
             measured["allow_failing"] = serde_json::json!(reason);
         }
@@ -1262,16 +1273,16 @@ impl Parcad {
             // A script that does not build is still saved, as it always was;
             // one that builds and fails its own checks is not, without a reason.
             let thumbnail = built_preview(&request.script);
-            let door = thumbnail.as_ref().map(|(_, door)| door.clone()).unwrap_or_default();
+            let door = thumbnail.as_ref().map(|(_, door, _)| door.clone()).unwrap_or_default();
             let allow_failing = door.pass(request.allow_failing.as_deref(), "save_project")?;
             let snapshot = projects::snapshot(&request.name)?;
             let path = projects::write(&request.name, &request.script)?;
-            let (built, error, preview) = match thumbnail {
-                Ok((png, _)) => match projects::write_preview(&request.name, &png) {
-                    Ok(()) => (true, None, projects::preview_path(&request.name)),
-                    Err(_) => (true, None, None),
-                },
-                Err(e) => (false, Some(e), None),
+            let (built, error, preview, print) = match thumbnail {
+                Ok((png, _, doc)) => {
+                    let preview = projects::write_preview(&request.name, &png).ok().and_then(|()| projects::preview_path(&request.name));
+                    (true, None, preview, write_print_files(&request.name, &doc, allow_failing.as_deref()))
+                }
+                Err(e) => (false, Some(e), None, None),
             };
             Ok(Saved {
                 name: request.name,
@@ -1280,6 +1291,7 @@ impl Parcad {
                 error,
                 preview,
                 snapshot,
+                print,
                 verdicts: door.verdicts,
                 allow_failing,
             })
@@ -1928,13 +1940,49 @@ fn markdown_image(view: &str, path: &str) -> String {
     }
 }
 
-/// The picker's thumbnail for a script: the iso view of its exact build.
-fn preview_of(script: &str) -> Result<Vec<u8>, String> {
-    built_preview(script).map(|(png, _)| png)
+/// The print files beside a saved part, from the build the save was judged
+/// on: every printable body, laid flat. A save that reached here passed the
+/// door, or gave `allow_failing` — in which case the files are written and
+/// the note says under what. `None` for a loose `.js`, which keeps none.
+fn write_print_files(name: &str, doc: &parcad_core::graph::Doc, allow_failing: Option<&str>) -> Option<parcad_evaluation::PrintFiles> {
+    let stem = name.rsplit('/').next().unwrap_or(name);
+    let built = service::print_files(doc, None, stem).ok()?;
+    let bytes: Vec<(String, Vec<u8>)> = built.files.iter().map(|f| (f.body.clone(), f.bytes.clone())).collect();
+    let written = projects::write_print_files(name, &bytes).ok()?;
+    if written.is_empty() && built.skipped.is_empty() {
+        return None;
+    }
+    let files = written
+        .into_iter()
+        .filter_map(|(body, path)| {
+            let file = built.files.iter().find(|f| f.body == body)?;
+            Some(parcad_evaluation::PrintFileReport {
+                body,
+                path,
+                laid: file.laid.clone(),
+                up: parcad_evaluation::print::up_name(file.up),
+            })
+        })
+        .collect::<Vec<_>>();
+    let failing: Vec<&String> = built.failing.keys().collect();
+    let note = match allow_failing {
+        Some(reason) if !failing.is_empty() => format!(
+            "{} file(s) laid flat in {}; written although print_check fails on {}, under the reason given: {reason}. Tell the user these paths; export_part with open: true hands one to their slicer",
+            files.len(),
+            projects::print_dir(name).unwrap_or_default(),
+            failing.iter().map(|b| format!("`{b}`")).collect::<Vec<_>>().join(", ")
+        ),
+        _ => format!(
+            "{} file(s) laid flat in {}, one per body, rewritten on every save. Tell the user these paths; export_part with open: true hands one to their slicer",
+            files.len(),
+            projects::print_dir(name).unwrap_or_default()
+        ),
+    };
+    Some(parcad_evaluation::PrintFiles { files, skipped: built.skipped, note })
 }
 
 /// The picker's thumbnail, and the door read off the build that drew it.
-fn built_preview(script: &str) -> Result<(Vec<u8>, service::Door), String> {
+fn built_preview(script: &str) -> Result<(Vec<u8>, service::Door, parcad_core::graph::Doc), String> {
     let built = script::build(script)?;
     let doc = service::parse_graph(built.graph.clone())?;
     let evaluated = service::evaluate(&doc, None).map_err(|e| built.locate(e))?;
@@ -1959,7 +2007,7 @@ fn built_preview(script: &str) -> Result<(Vec<u8>, service::Door), String> {
         .image
         .to_png()
         .map_err(|e| format!("encoding the thumbnail: {e:#}"))?;
-    Ok((png, door))
+    Ok((png, door, doc))
 }
 
 /// The session after a change, once a window has shown it or the wait is over.
@@ -2762,6 +2810,16 @@ mod tests {
                 let checks = saved.0.verdicts.checks.as_ref().expect("the verdict rides with the save");
                 assert_eq!((checks.verdict, checks.passed, checks.failed[0].measured_mm), ("failed", 4, Some(0.13)));
                 assert_eq!(projects::read("holder").unwrap(), script);
+                // The print files: one per body, laid flat, beside part.js.
+                let print = saved.0.print.as_ref().expect("a saved part has its print files");
+                let bodies: Vec<&str> = print.files.iter().map(|f| f.body.as_str()).collect();
+                assert_eq!(bodies, ["plate", "stack"]);
+                for file in &print.files {
+                    assert!(file.path.ends_with(&format!("holder.parcad/print/{}.3mf", file.body)), "{}", file.path);
+                    assert!(std::path::Path::new(&file.path).exists());
+                    assert_eq!(file.laid, "as drawn");
+                }
+                assert!(print.note.contains("Tell the user these paths"), "{}", print.note);
 
                 let export = |allow: Option<&str>| {
                     let request: Args<ExportRequest> = serde_json::from_value(serde_json::json!({

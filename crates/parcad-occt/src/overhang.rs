@@ -126,8 +126,8 @@ pub fn overhang(
     hits.sort_by(|a, b| b.area.total_cmp(&a.area));
 
     // Ceilings held at two ends are bridges: nothing under their middle, and
-    // material beside and below their boundary — a wall going down — at two
-    // places at least half the span apart. A lip hangs from one wall; a plate
+    // material beside and below their boundary — a wall going down — on
+    // opposite sides of it. A lip hangs from one wall; a plate
     // on a post is held in the middle; a wall merged with a lip's end face
     // is beside the lip, not under it, and reads as void where it matters.
     let mut caster = body.shape.ray_caster(1e-4);
@@ -148,17 +148,27 @@ pub fn overhang(
                 .map(|h| h.distance + 1e-3)
                 .next();
             let drop = below.unwrap_or(hit.bottom - bed);
+            // Held on opposite sides of its middle: the bridged span is the
+            // distance between those supports, not the face's own extent — a
+            // channel 8 wide and 40 long bridges 8.
             let held = held_edges(body.shape, mesh, hit.face, centre, up);
             let flat = |p: DVec3| p - up * p.dot(up);
-            let apart = held.iter().any(|a| held.iter().any(|b| (flat(*a) - flat(*b)).length() >= 0.5 * span));
-            let sides = held.len();
-            if apart {
+            let mut bridged: Option<f64> = None;
+            for a in &held {
+                for b in &held {
+                    if flat(*a - centre).dot(flat(*b - centre)) < 0.0 {
+                        let across = (flat(*a) - flat(*b)).length();
+                        bridged = Some(bridged.map_or(across, |best: f64| best.max(across)));
+                    }
+                }
+            }
+            if let Some(across) = bridged {
                 bridges.push(Bridge {
                     tag: tag.clone(),
-                    span_mm: span,
+                    span_mm: across,
                     drop_mm: drop,
                     at: centre.to_array(),
-                    sides,
+                    sides: held.len(),
                 });
             }
         }
@@ -341,7 +351,7 @@ mod tests {
         assert_eq!(o.bridges.len(), 1, "{:?}", o.bridges);
         let bridge = &o.bridges[0];
         assert_eq!(bridge.tag.as_deref(), Some("slot"));
-        assert!((bridge.span_mm - 20.0).abs() < 1e-6 && (bridge.drop_mm - 5.0).abs() < 1e-6, "{bridge:?}");
+        assert!((bridge.span_mm - 12.0).abs() < 1e-6 && (bridge.drop_mm - 5.0).abs() < 1e-6, "{bridge:?}");
         let lip = o.faces.iter().find(|f| f.tag.as_deref() == Some("lip")).expect("the lip overhangs");
         assert!((lip.area_mm2 - 80.0).abs() < 1e-6 && (lip.height_mm - 8.0).abs() < 1e-6, "{lip:?}");
     }

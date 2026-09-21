@@ -16,9 +16,11 @@ use serde::Serialize;
 /// Read an intent graph, naming the fix if it will not parse.
 pub mod checks;
 pub mod print;
+pub mod print_files;
 
 pub use checks::{ChecksReport, FailedCheck};
 pub use print::{PrintCheck, PrintFinding, Verdicts};
+pub use print_files::{PrintFile, PrintFileReport, PrintFiles, SkippedPrint};
 
 /// One value a script reported with `note(label, value)`.
 #[derive(Debug, Clone, Serialize, serde::Deserialize, schemars::JsonSchema)]
@@ -1382,6 +1384,7 @@ mod tests {
             tag_extents: Vec::new(),
             unlocated_tags: Vec::new(),
             collisions: Vec::new(),
+            overhang: Vec::new(),
             treatment_edges: Vec::new(),
             timings: Timings::default(),
             step_path: None,

@@ -94,8 +94,8 @@ pub struct BodyPrint {
     /// widest span across the bed and height above it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub overhangs: Vec<OverhangFaceReport>,
-    /// Ceilings held up on two or more sides: a span to bridge rather than
-    /// support, with the drop beneath it.
+    /// Ceilings held on opposite sides: the span between the supports, to
+    /// bridge rather than support, with the drop beneath it.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub bridges: Vec<BridgeReport>,
     /// What a support prism under every overhanging face down to the bed

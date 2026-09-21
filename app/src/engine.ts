@@ -894,6 +894,29 @@ export async function openSourceInEditor() {
 }
 
 /**
+ * Write the open part's print files and reveal them: the saved file, as the
+ * editor button opens the saved file, so a window with unsaved changes says so.
+ */
+export async function printOpenPart() {
+  const project = S.openPath.value;
+  if (!project) return;
+  S.setStatus("laying the part out to print", "busy");
+  try {
+    const printed = await backend.printProject(project);
+    const written = printed.files.map((f) => f.body).join(", ");
+    const skipped = printed.skipped.map((s) => `${s.body} left out — ${s.why}`).join("; ");
+    const where = printed.files.length
+      ? `print files for ${written} in ${printed.folder}${skipped ? `; ${skipped}` : ""}`
+      : skipped || "nothing to print";
+    S.setStatus(S.isDirty.value ? `${where} — unsaved edits are not in them` : where, printed.files.length ? undefined : "failed");
+    clearError();
+  } catch (err) {
+    showError(err);
+    S.setStatus("could not write the print files", "failed");
+  }
+}
+
+/**
  * Show or hide the source.
  *
  * CodeMirror measures nothing while it is `display: none`, and comes back

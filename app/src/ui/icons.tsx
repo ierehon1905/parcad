@@ -495,6 +495,15 @@ const DRAWINGS = {
   code: <Line d="M9 7.8 4.2 12 9 16.2M15 7.8 19.8 12 15 16.2M13.4 4.4l-2.8 15.2" />,
   // Writing, for the one button that hands the file to something that does the
   // writing instead of this window.
+  // A bed with a part on it and a layer going down: what the button writes.
+  printer: (
+    <>
+      <Line d="M3.6 18.6h16.8" />
+      <Line d="M7.2 18.6V9.6h9.6v9" />
+      <Line d="M9.6 9.6V6h4.8v3.6" o=".85" />
+      <Line d="M5.4 13.8h13.2" o=".55" />
+    </>
+  ),
   pencil: (
     <>
       <Line d="M4.2 19.8v-3.6L16.4 4a1.8 1.8 0 0 1 2.6 0l1 1a1.8 1.8 0 0 1 0 2.6L7.8 19.8Z" />

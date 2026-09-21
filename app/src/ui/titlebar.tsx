@@ -41,6 +41,7 @@ export function Titlebar() {
       <span class="w-px h-[18px] bg-line" />
       <ShowCode />
       {partsAreFiles && <EditElsewhere />}
+      {partsAreFiles && <Print />}
       <span class="w-px h-[18px] bg-line" />
       {mcpThroughRelay ? <AgentLink /> : <Agent />}
       <span class="flex-1" />
@@ -268,6 +269,34 @@ function EditElsewhere() {
       ) : (
         <Icon name="pencil" class="size-4 shrink-0" />
       )}
+    </button>
+  );
+}
+
+/**
+ * The part as files for the slicer: each body laid flat in the orientation
+ * it prints, `print/<body>.3mf` beside `part.js`, and the folder revealed.
+ * The same shape as the editor button, one icon over: the user who never
+ * answers a question in chat presses a button in the window they are
+ * watching (docs/COIN_HOLDER_REVIEW.md, workflow §4). A body whose
+ * print_check fails is left out and the status line says why.
+ */
+function Print() {
+  const path = S.openPath.value;
+  return (
+    <button
+      type="button"
+      disabled={!path}
+      class="flex p-1.5 rounded-md border border-transparent text-ink-dim cursor-pointer
+             hover:text-ink hover:border-line
+             disabled:opacity-45 disabled:cursor-default disabled:hover:border-transparent"
+      {...tip({
+        title: "Lay it out to print",
+        text: "Writes print/<body>.3mf beside the part, each body laid flat the way it prints — .printedUp() says which way — and opens the folder. A body whose print_check fails is left out and named.",
+      })}
+      onClick={() => void engine.printOpenPart()}
+    >
+      <Icon name="printer" class="size-4 shrink-0" />
     </button>
   );
 }

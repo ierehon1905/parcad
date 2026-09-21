@@ -16,42 +16,10 @@ only, and links rather than repeats.
 One session at a time, because each rewrites the same core files (`graph.rs`,
 `backend.rs`, `dsl.ts`). Done items are removed; `git log` has them.
 
-1. **Checks that run without being asked** — agreed 2026-09-16, next. Two
-   parts shipped as STLs from one session with defects `measure_wall_thickness`
-   finds at once: a 0.013 mm sliver between a cable channel and a slot, and a
-   grille cutting 0.319 mm into a screw boss. The model (Opus, with a memory
-   note saying to check) never called it, and every number `export_part`
-   returned passed. A check a model must remember is a check weaker models
-   skip, so it moves onto the route every model already takes. The report is
-   already trustworthy (thin readings classified and grouped into places, every
-   feather and face pair found; `where-is-the-sliver`); what is left:
-   - ~~**Collisions**~~: done 2026-09-21 — `collisions` in every reply, per
-     cut with its tag, the mm³ it took from each feature besides its target,
-     and where; `slot-nicks-boss` and `grille-nicks-boss` pin closed forms.
-   - ~~**On the route**~~: done 2026-09-21 — `print_check` on every snapshot
-     beside `checks` (thinnest wall, its two features, collisions), the
-     failing verdict first. Under 0.3 mm it fails and `export_part`,
-     `save_project` and a saving `edit_part` refuse through the same
-     `allow_failing: "reason"` the author's checks use — one argument, one
-     door, whichever verdict fails; between that and 0.8 mm it flags.
-   - **Measured**: an `eval/field/` case whose part hides a sliver and a
-     collision; SOUND only when the reply tells the user both, both arms.
-   - Server instructions and the skills say a part is done when `print_check` is
-     clean or each flag has a reason — the weakest layer, and one line.
-   - **The door exists** (2026-09-20): `service::Door` stands before
-     `export_part`, `save_project` and a saving `edit_part`, refuses naming
-     each failing verdict with its measurement, and `allow_failing: "<reason>"`
-     opens it with the reason echoed in the reply. Today it carries the
-     author's `checks`; `print_check` is the second slot, judged in the same
-     place (`service::evaluate`) and refused through the same argument.
-   - **Grown by the coin-holder review** ([COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md)):
-     ~~overhang per body in its *declared* print orientation~~ (done
-     2026-09-21: `.printedUp()`, `print_check.bodies`, bed contact measured
-     in the same orientation), laid-flat `print/<body>.3mf` written on save,
-     and ~~the author's own `checks`~~ (done 2026-09-20) all pass through
-     this same door.
-2. **Two more steps a model has to remember, found the same day.** Both are
-   the shape of item 1: the mechanism exists, nothing makes it happen.
+1. **Two more steps a model has to remember, found the same day.** Both are
+   the shape of the print check (landed 2026-09-21; `git log` has it, and
+   queue item 5 records what the coin-holder session cost): the mechanism
+   exists, nothing makes it happen.
    - **A render is colourless unless asked.** A part carrying materials draws
      grey for an agent and coloured in the window — `materials: true` is
      off by default, and nothing in a reply says the part has any. A model
@@ -67,7 +35,7 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      user asked "SHOW IT". Measure whether a model pastes it
      (`eval/field/`), and consider making the reply's first line say so when
      views were asked for.
-3. **Homebrew is published but never exercised.** `publish.yml` renders the
+2. **Homebrew is published but never exercised.** `publish.yml` renders the
    formula and pushes it to the tap, and `ruby -c` is the only thing that ever
    reads it. Nothing installs it, so a formula that installs the wrong path, a
    service that does not start, or an archive missing the worker would be found
@@ -84,7 +52,7 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      substitute.
    - Dry-run it locally first (`act`, or the same shell steps by hand against a
      published tag): a blind CI round on a release path costs a release.
-4. **ParCAD web: agents through a relay** — live since 2026-09-17 at
+3. **ParCAD web: agents through a relay** — live since 2026-09-17 at
    <https://ierehon1905.github.io/parcad/>, relay deployed.
    The playground became ParCAD web, the app in a tab: `parcad-host` compiled to
    WebAssembly (`crates/parcad-wasm-host`, `page.rs`) beside the kernel, the
@@ -128,9 +96,9 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    - WebMCP, the item this replaces, is still possible on top: the page's
      tools are the host's, so registering them with `navigator.modelContext`
      is a thin adapter, and nothing else here waits on it.
-5. **A measured parts library** — fasteners, bearings, boards, devices, each
+4. **A measured parts library** — fasteners, bearings, boards, devices, each
    held by eval cases, and a way for one part to import another.
-6. **What the coin-holder session cost, in order** — reviewed 2026-09-18 from
+5. **What the coin-holder session cost, in order** — reviewed 2026-09-18 from
    three lenses, the order and every sample reply in
    [COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md). One session designed a
    3D-printable part in six user turns: every geometric claim measured, every
@@ -152,10 +120,10 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      `note()`~~ — landed 2026-09-20: `checks: [...]` beside the bodies, judged
      on every build and first in every reply, with `export_part`,
      `save_project` and a saving `edit_part` refusing a failing check unless
-     `allow_failing` gives a reason (the door item 1 shares); `.reference()`
+     `allow_failing` gives a reason (the door the print check shares); `.reference()`
      bodies measured and drawn but in no file and no whole-part number; and
      `note()`, carried in the reply as "from the script, not measured";
-   - overhang and print files (item 1);
+   - ~~overhang and print files~~ — landed 2026-09-21 with the print check;
    - `depth_mm` and `contact_mm2` in `between_bodies` — a 0.002 mm³ graze was
      read as a catch;
    - `brief()` with an envelope, judged every build, and a scale rule on renders;

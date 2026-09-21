@@ -26,6 +26,8 @@ pub enum ProjectOp {
     Title { title: String },
     Convert,
     Open,
+    /// Write the print files from the saved part and reveal their folder.
+    Print,
 }
 
 #[derive(Deserialize)]
@@ -85,6 +87,7 @@ pub fn project_op(name: &str, request: ProjectOp) -> Result<Value, String> {
         // The one op that answers with something besides a path: which editor
         // took the file, since it is a choice the user did not make here.
         ProjectOp::Open => return open_source(name),
+        ProjectOp::Print => return print_files(name),
     };
     Ok(json!({ "name": renamed, "path": path? }))
 }
@@ -94,6 +97,40 @@ fn open_source(name: &str) -> Result<Value, String> {
     let path = projects::source_path(name)?.to_string_lossy().to_string();
     let opened_with = service::open_in_editor(&path)?;
     Ok(json!({ "name": name, "path": path, "opened_with": opened_with }))
+}
+
+/// The window's Print button: the saved part's bodies laid flat as they
+/// print, `print/<body>.3mf` beside `part.js`, and the folder revealed. No
+/// door here — the person pressing it can see the report — but a body whose
+/// print_check fails is left out and named, so nothing that cannot print
+/// reaches the slicer unremarked.
+pub fn print_files(name: &str) -> Result<Value, String> {
+    let script = projects::read(name)?;
+    let built = crate::script::build(&script)?;
+    let doc = service::parse_graph(built.graph)?;
+    let stem = name.rsplit('/').next().unwrap_or(name);
+    let files = service::print_files(&doc, None, stem)?;
+    let mut skipped: Vec<Value> = files.skipped.iter().map(|s| json!({ "body": s.body, "why": s.why })).collect();
+    let mut bytes = Vec::new();
+    for file in &files.files {
+        match files.failing.get(&file.body) {
+            Some(why) => skipped.push(json!({ "body": file.body, "why": format!("print_check fails: {why}") })),
+            None => bytes.push((file.body.clone(), file.bytes.clone())),
+        }
+    }
+    let written = projects::write_print_files(name, &bytes)?;
+    let folder = projects::print_dir(name).ok_or_else(|| format!("{name} is a loose .js file with no folder to keep print files in; convert it to a .parcad project first"))?;
+    if !written.is_empty() {
+        let _ = service::reveal(&written[0].1);
+    }
+    let laid: Vec<Value> = written
+        .iter()
+        .map(|(body, path)| {
+            let file = files.files.iter().find(|f| &f.body == body);
+            json!({ "body": body, "path": path, "laid": file.map(|f| f.laid.clone()).unwrap_or_default() })
+        })
+        .collect();
+    Ok(json!({ "name": name, "folder": folder, "files": laid, "skipped": skipped }))
 }
 
 pub fn delete_project(name: &str) -> Result<Value, String> {

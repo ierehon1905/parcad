@@ -256,6 +256,25 @@ export async function openProjectSource(name: string): Promise<Opened> {
     : await post<Opened>(`projects/${route(name)}`, { op: "open" });
 }
 
+/**
+ * The print files: the saved part's bodies laid flat as they print, one 3MF
+ * each in `print/` beside `part.js`, and the folder revealed. A body whose
+ * print_check fails is left out and named in `skipped`: nothing that cannot
+ * print reaches the slicer unremarked.
+ */
+export interface Printed {
+  name: string;
+  folder: string;
+  files: { body: string; path: string; laid: string }[];
+  skipped: { body: string; why: string }[];
+}
+
+export async function printProject(name: string): Promise<Printed> {
+  return inTauri
+    ? await invoke<Printed>("print_project", { name })
+    : await post<Printed>(`projects/${route(name)}`, { op: "print" });
+}
+
 /** The editor `openProjectSource` would hand the file to, as the titlebar shows it. */
 export interface Editor {
   /** The app's name where there is an app, and otherwise the command. */

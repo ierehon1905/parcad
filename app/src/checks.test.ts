@@ -81,7 +81,7 @@ describe("print orientation", () => {
     expect(bodies[1].printed_up).toEqual({ x: 0, y: 0, z: -1 });
     expect(doc.requires?.map((r) => r.feature)).toEqual(["print-orientation"]);
     const tilted = build({ base, lid: box(40, 40, 3).at(0, 0, 21.5).printedUp([3, 0, 4]) });
-    expect((tilted.nodes[tilted.root] as { bodies: { printed_up?: { x: number } }[] }).bodies[1].printed_up).toEqual({ x: 0.6, y: 0, z: 0.8 });
+    expect((tilted.nodes[tilted.root] as { bodies: { printed_up?: { x: number; y: number; z: number } }[] }).bodies[1].printed_up).toEqual({ x: 0.6, y: 0, z: 0.8 });
   });
 
   test("a reference, a lone shape and a bad axis are refused by name", () => {
