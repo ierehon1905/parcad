@@ -84,6 +84,18 @@ function Example({ code }: { code: string }) {
 const text = (spans: Span[]) => spans.map((span) => span.text).join("");
 
 /**
+ * The rule between two rows of a card, drawn edge to edge.
+ *
+ * Monaco's own trick, and its numbers: the negative side margins cancel the
+ * card's 8px padding so the line reaches the border, and the -4px bottom
+ * against the next block's 8px top leaves 4px under the rule and 4px over it.
+ * `hoverWidget.css`, `.monaco-hover hr`.
+ */
+export function Rule() {
+  return <hr class="h-px box-border border-0 border-t border-ink/15 mt-1 -mb-1 -mx-2 min-w-full" />;
+}
+
+/**
  * A doc comment's prose, as paragraphs rather than as it was typed.
  *
  * A comment in `dsl.ts` is wrapped to 80 columns for the person reading the
@@ -113,7 +125,7 @@ function Prose({ text: prose }: { text: string }) {
         i % 2 === 0 ? (
           part
         ) : (
-          <code key={i} class="font-mono text-ink">
+          <code key={i} class="font-mono text-ink bg-well/55 rounded-xs px-[3px]">
             {part}
           </code>
         ),
@@ -123,44 +135,55 @@ function Prose({ text: prose }: { text: string }) {
 }
 
 export function InfoCard({ info }: { info: Info }) {
-  const documentation = text(info.documentation).trim();
+  const documentation = paragraphs(text(info.documentation).trim());
   const examples = info.tags.filter((tag) => tag.name === "example");
   const params = info.tags.filter((tag) => tag.name === "param");
   const returns = info.tags.filter((tag) => tag.name === "returns");
+  const hasProse = documentation.length + params.length + returns.length + examples.length > 0;
 
   return (
-    <div class="font-mono text-small leading-normal">
-      <Code spans={info.signature} />
-      {paragraphs(documentation).map((paragraph, i) => (
-        <p key={i} class="m-0 mt-1.5 font-sans text-ink-dim [overflow-wrap:anywhere]">
-          <Prose text={paragraph} />
-        </p>
-      ))}
-      {params.length > 0 && (
-        <dl class="grid m-0 mt-1.5 gap-x-2.5 gap-y-px grid-cols-[max-content_1fr]">
-          {params.map((param) => {
-            const [name, ...rest] = text(param.text).split(/\s+/);
-            return [
-              <dt key={`${name}-t`} class="text-ink-dim">
-                {name}
-              </dt>,
-              <dd key={`${name}-d`} class="m-0 font-sans [overflow-wrap:anywhere]">
-                {rest.join(" ")}
-              </dd>,
-            ];
-          })}
-        </dl>
-      )}
-      {returns.map((tag, i) => (
-        <p key={i} class="m-0 mt-1.5 font-sans text-ink-dim">
-          returns {text(tag.text)}
-        </p>
-      ))}
-      {examples.map((tag, i) => (
-        <div key={i} class="mt-1.5 px-1.5 py-1 bg-well border border-line rounded-xs">
-          <Example code={text(tag.text).replace(/^```\w*\n?|```$/g, "").trim()} />
+    <>
+      {/* The declaration, alone above the rule. A reader who knows the function
+          is here for the argument order and nothing else, and the rule is what
+          lets them stop reading there. */}
+      <div class="font-mono text-small">
+        <Code spans={info.signature} />
+      </div>
+      {hasProse && <Rule />}
+      {hasProse && (
+        <div class="font-sans text-small mt-2">
+          {documentation.map((paragraph, i) => (
+            <p key={i} class={`m-0 [overflow-wrap:anywhere] ${i > 0 ? "mt-2" : ""}`}>
+              <Prose text={paragraph} />
+            </p>
+          ))}
+          {params.length > 0 && (
+            <dl class="grid m-0 mt-2 gap-x-2.5 gap-y-px grid-cols-[max-content_1fr]">
+              {params.map((param) => {
+                const [name, ...rest] = text(param.text).split(/\s+/);
+                return [
+                  <dt key={`${name}-t`} class="font-mono text-ink">
+                    {name}
+                  </dt>,
+                  <dd key={`${name}-d`} class="m-0 [overflow-wrap:anywhere]">
+                    <Prose text={rest.join(" ")} />
+                  </dd>,
+                ];
+              })}
+            </dl>
+          )}
+          {returns.map((tag, i) => (
+            <p key={i} class="m-0 mt-2">
+              returns <Prose text={text(tag.text)} />
+            </p>
+          ))}
+          {examples.map((tag, i) => (
+            <div key={i} class="mt-2 px-1.5 py-1 bg-well rounded-xs">
+              <Example code={text(tag.text).replace(/^```\w*\n?|```$/g, "").trim()} />
+            </div>
+          ))}
         </div>
-      ))}
-    </div>
+      )}
+    </>
   );
 }

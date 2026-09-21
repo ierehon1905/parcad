@@ -124,7 +124,12 @@ export function treatmentRows(
       rows.push({ label: "same as", value: target.provenance.join(", ") });
     }
   } else if (pending) {
+    // Every row the answer will bring, so the card is already the size it will
+    // be when it arrives. A tooltip that grows after it opens is one the
+    // editor has to measure and place a second time, and the second placement
+    // is what a reader sees as a jump.
     rows.push({ label: "resolves", value: "…" });
+    if (node.expect) rows.push({ label: "expect", value: `${node.expect.count} — …` });
   }
 
   return rows;

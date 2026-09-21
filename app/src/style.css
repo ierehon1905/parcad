@@ -130,6 +130,67 @@
     @apply outline-none;
   }
 
+  /* The floating widgets: the hover card, the completion list and its details
+     panel, the parameter hints. CodeMirror positions and names all four, and
+     One Dark gives them a background and no border at all, which leaves a card
+     looking printed into the code rather than floating over it.
+
+     The measurements are Monaco's, read off `hoverWidget.css` and
+     `hover.css` rather than guessed, because the thing a reader recognises
+     here is not a style — it is the editor they already use. Radius is
+     `--vscode-cornerRadius-large`, 8px; the shadow is `--vscode-shadow-lg`,
+     which is a spread with no offset. Its alpha is not theirs: 0.14 of black
+     is a visible lift on Monaco's #252526 and nothing at all on this app's
+     panel, which is much darker, so the shape is copied and the strength is
+     measured against the surface it actually falls on.
+
+     `overflow: hidden` is what makes the radius clip a card whose first row is
+     a block of its own colour. */
+  .cm-editor .cm-tooltip {
+    /* `border-ink/15` rather than the line token: a rule between two panels and
+       the edge of something floating over the text are different jobs, and
+       Monaco draws the second one far brighter against its surface than the
+       first. Same reasoning as the shadow above. */
+    @apply bg-panel-2 border border-ink/15 rounded-lg overflow-hidden;
+    box-shadow: 0 0 12px rgb(0 0 0 / 0.5);
+    line-height: 1.5em;
+  }
+
+  /* The completion list, given the editor's own font and the accent's deep
+     shade under the cursor — the shade this app uses wherever something is
+     selected rather than merely hovered. */
+  .cm-editor .cm-tooltip-autocomplete > ul {
+    @apply font-mono max-h-[22rem];
+    font-size: 12.5px;
+  }
+
+  .cm-editor .cm-tooltip-autocomplete > ul > li {
+    @apply px-2 leading-[22px];
+  }
+
+  .cm-editor .cm-tooltip-autocomplete > ul > li[aria-selected] {
+    @apply bg-accent-deep text-ink;
+  }
+
+  /* The details panel beside the list. CodeMirror puts it outside the list's
+     own box, so it needs the chrome again rather than inheriting it. */
+  .cm-editor .cm-completionInfo {
+    @apply bg-panel-2 border border-ink/15 rounded-lg p-0 m-0 ml-1 overflow-hidden;
+    box-shadow: 0 0 12px rgb(0 0 0 / 0.5);
+  }
+
+  /* The kind of each entry, as a letter in the accent rather than the theme's
+     washed-out grey: it is the one column a reader scans down. */
+  .cm-editor .cm-completionIcon {
+    @apply text-accent opacity-100 w-4 mr-1;
+  }
+
+  /* What the typed prefix matched, so a fuzzy match shows why it is in the
+     list at all. */
+  .cm-editor .cm-completionMatchedText {
+    @apply text-accent no-underline font-bold;
+  }
+
   /* The editor's mark for the treatment under the viewport pointer. Gold, like
      every other source-side selection. */
   .cm-treatment-hover {

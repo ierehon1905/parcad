@@ -151,6 +151,15 @@ describe("what a completion offers", () => {
     expect(labels).toContain("cylinder");
   });
 
+  test("never the DSL's own plumbing", () => {
+    // TypeScript answers with everything in scope and the editor narrows it to
+    // what was typed, so the only place this can be kept out is here.
+    analyzer.setPart("const a = __");
+    const labels = analyzer.completions(12).map((entry) => entry.label);
+    expect(labels).not.toContain("__parcadTreatmentSource");
+    expect(labels).toContain("around");
+  });
+
   test("the methods of what the expression is", () => {
     const source = "const plate = box(1, 2, 3);\nplate.";
     analyzer.setPart(source);

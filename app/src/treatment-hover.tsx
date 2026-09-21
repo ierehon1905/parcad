@@ -25,7 +25,7 @@ import type { Extension } from "@codemirror/state";
 import { Fragment, render } from "preact";
 
 import type { Info } from "./intellisense/analyzer";
-import { InfoCard } from "./intellisense/card";
+import { InfoCard, Rule } from "./intellisense/card";
 import {
   treatmentActions,
   treatmentRows,
@@ -60,7 +60,7 @@ export interface TreatmentHoverSource {
 
 export function treatmentHover(source: TreatmentHoverSource): Extension {
   return hoverTooltip(
-    (view, pos): Tooltip | null => {
+    async (view, pos): Promise<Tooltip | null> => {
       const treatment = source.treatmentAt(pos);
       const node = treatment && source.nodeAt(treatment.node);
       const range = treatment && source.callRange(treatment.node);
@@ -71,14 +71,22 @@ export function treatmentHover(source: TreatmentHoverSource): Extension {
       // which is the checker saying it gave up rather than anything to read.
       if (!measured && marked(view, pos)) return null;
 
-      // The word under the pointer, so that a tooltip opened on a five-line
-      // call chain still opens on the line the pointer is on. Widened to the
-      // symbol TypeScript names once it answers.
+      // Waited for rather than filled in later, which is the whole of the fix
+      // for a card that appeared below the line and then jumped above it: the
+      // signature and its prose are most of the height, so a card opened
+      // without them is measured at the wrong size and placed on the wrong
+      // side. CodeMirror drops the answer if the pointer has moved on.
+      const info = await source.info?.(pos).catch(() => undefined);
+      if (!measured && !info) return null;
+
+      // Anchored to the name itself — TypeScript's own span for it, or the
+      // word under the pointer — so that a tooltip opened on a five-line call
+      // chain still opens on the line the pointer is on.
       const word = view.state.wordAt(pos);
 
       return {
-        pos: word?.from ?? pos,
-        end: word?.to ?? pos,
+        pos: info?.from ?? word?.from ?? pos,
+        end: info?.to ?? word?.to ?? pos,
         above: true,
         create: () => {
           // CodeMirror positions a plain element and hands us the inside of it.
@@ -86,7 +94,6 @@ export function treatmentHover(source: TreatmentHoverSource): Extension {
           // same way as every other panel in the app rather than by hand.
           const dom = document.createElement("div");
 
-          let info: Info | undefined;
           let target: ResolvedTarget | undefined;
           let pending = measured && !!source.resolve;
 
@@ -108,14 +115,6 @@ export function treatmentHover(source: TreatmentHoverSource): Extension {
             );
 
           draw();
-          source
-            .info?.(pos)
-            .then((answer) => {
-              if (!answer) return;
-              info = answer;
-              draw();
-            })
-            .catch(() => {});
           if (measured) {
             source
               .resolve?.(treatment!.node)
@@ -182,45 +181,43 @@ function HoverCard({
   if (!info && !node) return null;
 
   return (
-    <div
-      class="bg-panel-2 text-ink font-mono text-small leading-normal px-2.5 py-2 max-w-[58ch]
-             max-h-[min(60vh,34rem)] overflow-y-auto overscroll-contain"
-    >
+    <div class="text-ink font-mono text-small px-2 py-1 max-w-[500px] max-h-[min(60vh,34rem)] overflow-y-auto overscroll-contain">
       {info && <InfoCard info={info} />}
       {node && (
         <>
           {/* The rule between what the language says and what this part did. */}
-          <div class={`text-accent mb-1 ${info ? "mt-2 pt-2 border-t border-line" : ""}`}>
-            {treatmentTitle(node, method)}
-          </div>
-          {/* Short labels, long values: give the value column the slack. */}
-          <dl class="grid m-0 gap-x-2.5 gap-y-px grid-cols-[max-content_1fr]">
-            {treatmentRows(node, target, pending).map((row) => (
-              <Fragment key={row.label}>
-                <dt class="text-ink-dim">{row.label}</dt>
-                {/* The data says ok or warn; only this file decides the colour. */}
-                <dd class={`m-0 [overflow-wrap:anywhere] ${row.tone ? TONE[row.tone] : ""}`}>
-                  {row.value}
-                </dd>
-              </Fragment>
+          {info && <Rule />}
+          <div class={info ? "mt-2" : ""}>
+            <div class="text-accent mb-1">{treatmentTitle(node, method)}</div>
+            {/* Short labels, long values: give the value column the slack. */}
+            <dl class="grid m-0 gap-x-2.5 gap-y-px grid-cols-[max-content_1fr]">
+              {treatmentRows(node, target, pending).map((row) => (
+                <Fragment key={row.label}>
+                  <dt class="text-ink-dim">{row.label}</dt>
+                  {/* The data says ok or warn; only this file decides the colour. */}
+                  <dd class={`m-0 [overflow-wrap:anywhere] ${row.tone ? TONE[row.tone] : ""}`}>
+                    {row.value}
+                  </dd>
+                </Fragment>
+              ))}
+            </dl>
+            {actions.map((action) => (
+              <button
+                key={action.label}
+                class="block w-full mt-1.5 px-1.5 py-1 text-left text-ink bg-panel border border-line
+                       rounded-xs cursor-pointer hover:border-accent hover:text-accent"
+                title={action.detail}
+                onClick={() => {
+                  view.dispatch({ changes: action.edit });
+                  view.focus();
+                }}
+              >
+                {action.label}
+              </button>
             ))}
-          </dl>
+          </div>
         </>
       )}
-      {actions.map((action) => (
-        <button
-          key={action.label}
-          class="block w-full mt-1.5 px-1.5 py-1 text-left text-ink bg-panel border border-line
-                 rounded-xs cursor-pointer hover:border-accent hover:text-accent"
-          title={action.detail}
-          onClick={() => {
-            view.dispatch({ changes: action.edit });
-            view.focus();
-          }}
-        >
-          {action.label}
-        </button>
-      ))}
     </div>
   );
 }

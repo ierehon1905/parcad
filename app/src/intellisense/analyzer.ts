@@ -164,7 +164,14 @@ export function createAnalyzer(sources: AnalyzerSources) {
         includeCompletionsForModuleExports: false,
         includeCompletionsWithInsertText: true,
       });
-      return (list?.entries ?? []).map((entry) => ({
+      return (list?.entries ?? [])
+        // The DSL's one piece of plumbing, which the editor wraps a treatment
+        // call in and a part never writes. It is bound, so rebinding it is
+        // still reported below; it is just not something to offer. `docs.rs`
+        // leaves the same name out of the reference, by name and for the same
+        // reason — a rule rather than a list, so the two cannot drift.
+        .filter((entry) => !entry.name.startsWith("__"))
+        .map((entry) => ({
         label: entry.name,
         kind: entry.kind,
         sortText: entry.sortText,

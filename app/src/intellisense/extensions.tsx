@@ -23,11 +23,17 @@ import type { SignatureInfo } from "./analyzer";
 import { Code, InfoCard } from "./card";
 import * as service from "./service";
 
-/** Render a Preact card into the element CodeMirror positions for us. */
+/**
+ * Render a Preact card into the element CodeMirror positions for us.
+ *
+ * Background, border, radius and shadow are on `.cm-tooltip` in `style.css`,
+ * because CodeMirror renders that element and there is nowhere to put a class
+ * on it. What is left here is the size a card may grow to.
+ */
 function card(draw: (into: HTMLElement) => void) {
   const dom = document.createElement("div");
   dom.className =
-    "bg-panel-2 text-ink px-2.5 py-2 max-w-[56ch] max-h-[min(60vh,34rem)] overflow-y-auto overscroll-contain";
+    "text-ink px-2 py-1 max-w-[500px] max-h-[min(60vh,34rem)] overflow-y-auto overscroll-contain";
   draw(dom);
   return { dom, destroy: () => render(null, dom) };
 }
@@ -110,7 +116,7 @@ function SignatureBar({ help }: { help: SignatureInfo }) {
   if (!item) return null;
   const active = item.params[help.argument];
   return (
-    <div class="font-mono text-small leading-normal">
+    <div class="font-mono text-small">
       <div>
         <Code spans={item.prefix} />
         {item.params.map((param, i) => (
