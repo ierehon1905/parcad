@@ -18,6 +18,35 @@ import { highlightCode, tags } from "@lezer/highlight";
 import type { Tag } from "@lezer/highlight";
 
 import type { Info, Span } from "./analyzer";
+import { wrapSignature } from "./signature";
+
+/** How wide a card may be, and the padding inside it. Monaco's 500, and 8 a side. */
+const CARD_WIDTH = 500;
+const CARD_PADDING = 16;
+
+/**
+ * How many characters of the card's own font fit across it.
+ *
+ * Measured rather than assumed: the alternative is a constant that is wrong on
+ * the first machine whose monospace font is not the one this was written on,
+ * and a signature broken two characters early looks exactly like a bug.
+ * Measured once — the font does not change under a running window.
+ */
+let columns: number | undefined;
+function cardColumns(): number {
+  if (columns !== undefined) return columns;
+  const probe = document.createElement("span");
+  probe.className = "font-mono text-small";
+  probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;top:-1000px";
+  probe.textContent = "0".repeat(100);
+  document.body.append(probe);
+  const advance = probe.getBoundingClientRect().width / 100;
+  probe.remove();
+  // A font that has not loaded measures zero, and a card is better unwrapped
+  // than wrapped at column zero.
+  columns = advance > 1 ? Math.floor((CARD_WIDTH - CARD_PADDING) / advance) : 60;
+  return columns;
+}
 
 /** How TypeScript names a run of a signature, as the editor's highlighter names it. */
 const KIND: Record<string, Tag> = {
@@ -147,7 +176,7 @@ export function InfoCard({ info }: { info: Info }) {
           is here for the argument order and nothing else, and the rule is what
           lets them stop reading there. */}
       <div class="font-mono text-small">
-        <Code spans={info.signature} />
+        <Code spans={wrapSignature(info.signature, cardColumns())} />
       </div>
       {hasProse && <Rule />}
       {hasProse && (
