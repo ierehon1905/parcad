@@ -26,14 +26,14 @@ import * as service from "./service";
 /**
  * Render a Preact card into the element CodeMirror positions for us.
  *
- * Background, border, radius and shadow are on `.cm-tooltip` in `style.css`,
- * because CodeMirror renders that element and there is nowhere to put a class
- * on it. What is left here is the size a card may grow to.
+ * Background, border, radius, shadow and the scrolling are on `.cm-tooltip` in
+ * `style.css`, because CodeMirror renders that element and there is nowhere to
+ * put a class on it. Height is its business too — it shrinks a card to the room
+ * `tooltipSpace` says there is. What is left here is how wide one may grow.
  */
 function card(draw: (into: HTMLElement) => void) {
   const dom = document.createElement("div");
-  dom.className =
-    "text-ink px-2 py-1 max-w-[500px] max-h-[min(60vh,34rem)] overflow-y-auto overscroll-contain";
+  dom.className = "text-ink px-2 py-1 max-w-[500px]";
   draw(dom);
   return { dom, destroy: () => render(null, dom) };
 }

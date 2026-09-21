@@ -16,6 +16,7 @@
  */
 
 import { EditorView, basicSetup } from "codemirror";
+import { tooltips } from "@codemirror/view";
 import { undo } from "@codemirror/commands";
 import { javascript } from "@codemirror/lang-javascript";
 import { oneDark } from "@codemirror/theme-one-dark";
@@ -82,6 +83,26 @@ export function Editor() {
         // keymap, and engaged by the pointer only, so keyboard navigation
         // keeps Up and Down.
         numberDial,
+        // Where a card may go. CodeMirror already flips a tooltip to the other
+        // side when it does not fit and shrinks it to the room that is left —
+        // it just assumes the whole window is the editor, and here the top of
+        // it is the titlebar and the operation palette, which paint over a
+        // card that runs up into them. Measured from the scroller, so the rows
+        // are the bound: the error pane opening takes the space with it.
+        tooltips({
+          tooltipSpace: (editor) => {
+            const rows = editor.scrollDOM.getBoundingClientRect();
+            // Wide horizontally on purpose: the editor pane is narrow, and a
+            // signature broken over six lines to stay inside it is worse than
+            // one that reaches over the viewport.
+            return {
+              top: rows.top,
+              bottom: rows.bottom,
+              left: 0,
+              right: document.documentElement.clientWidth,
+            };
+          },
+        }),
         treatmentHover(hoverSource),
         // Completion, signature help and type diagnostics, from a language
         // service that compiles `dsl.ts` itself. After the hover above, whose

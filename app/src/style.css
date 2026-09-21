@@ -156,6 +156,16 @@
     line-height: 1.5em;
   }
 
+  /* The two that carry prose, and so are the two CodeMirror may have to cut
+     short: it shrinks a card to the room `tooltipSpace` leaves and the rest
+     has to scroll rather than vanish. Only these two — a completion list is
+     already a millimetre taller than its own rows, and `auto` on it is a
+     scrollbar for one pixel of rounding. */
+  .cm-editor .cm-tooltip-hover,
+  .cm-editor .cm-completionInfo {
+    @apply overflow-auto overscroll-contain;
+  }
+
   /* The completion list, given the editor's own font and the accent's deep
      shade under the cursor — the shade this app uses wherever something is
      selected rather than merely hovered. */
@@ -175,7 +185,7 @@
   /* The details panel beside the list. CodeMirror puts it outside the list's
      own box, so it needs the chrome again rather than inheriting it. */
   .cm-editor .cm-completionInfo {
-    @apply bg-panel-2 border border-ink/15 rounded-lg p-0 m-0 ml-1 overflow-hidden;
+    @apply bg-panel-2 border border-ink/15 rounded-lg p-0 m-0 ml-1;
     box-shadow: 0 0 12px rgb(0 0 0 / 0.5);
   }
 
