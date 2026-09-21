@@ -1145,31 +1145,6 @@ pub fn export_3mf(doc: &Doc, budget: Option<std::time::Duration>, name: &str) ->
     })
 }
 
-/// The print files of a built part: each printable body laid flat in its
-/// print orientation, with, per body, the print_check finding that fails it
-/// — so a caller with no door (the window's *Lay out to print*) can leave that
-/// body out and say why, and one with a reason can write it and say so.
-pub struct PrintFilesBuilt {
-    pub files: Vec<parcad_evaluation::PrintFile>,
-    pub skipped: Vec<parcad_evaluation::SkippedPrint>,
-    /// Per body, the first failed finding's sentence, when print_check fails it.
-    pub failing: std::collections::BTreeMap<String, String>,
-}
-
-pub fn print_files(doc: &Doc, budget: Option<std::time::Duration>, stem: &str) -> Result<PrintFilesBuilt, String> {
-    let evaluated = evaluate(doc, budget)?;
-    let built = build_exact(doc, budget, false)?;
-    let (files, skipped) = parcad_evaluation::print_files::print_files(doc, &built.success, stem)?;
-    let mut failing = std::collections::BTreeMap::new();
-    if let Some(print) = &evaluated.snapshot.verdicts.print_check {
-        for finding in &print.failed {
-            let body = finding.body.clone().unwrap_or_else(|| stem.to_string());
-            failing.entry(body).or_insert_with(|| finding.what.clone());
-        }
-    }
-    Ok(PrintFilesBuilt { files, skipped, failing })
-}
-
 /// Produce the current part as STEP, the exact surfaces.
 pub fn export_step(doc: &Doc) -> Result<Export, String> {
     export_step_within(doc, None)

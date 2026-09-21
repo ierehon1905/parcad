@@ -464,20 +464,6 @@ const DRAWINGS = {
       <Line d="M6 5.8v6.4l6 3 6-3V5.8M12 8.8v6.4" o=".85" />
     </>
   ),
-  // `plate`'s bed with the body down on it, wide side to the bed, against that
-  // icon's taller box hovering above the same bed: the difference between the
-  // two exports, drawn. Not a printer — slicers call this laying flat, and a
-  // nozzle is a machine rather than a turn. The body is solid rather than
-  // outlined because a slab this low gives a stroked wall about two pixels of
-  // vertical edge, which reads as a flaw in the drawing.
-  bed: (
-    <>
-      <Line d="M2.4 17.2 12 22l9.6-4.8L12 12.4Z" o=".5" />
-      <Top d="M12 13.8 16.4 16 12 18.2 7.6 16Z" />
-      <Side d="M7.6 16 12 18.2v2.2L7.6 18.2Z" />
-      <Shade d="M16.4 16 12 18.2v2.2L16.4 18.2Z" />
-    </>
-  ),
   folder: (
     <Line d="M3 6.6A2 2 0 0 1 5 4.6h4.6l2.4 3h7A2 2 0 0 1 21 9.6v8A2 2 0 0 1 19 19.6H5a2 2 0 0 1-2-2Z" />
   ),

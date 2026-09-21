@@ -163,13 +163,6 @@ fn editor() -> Option<service::Editor> {
     service::editor()
 }
 
-/// The Print button: the saved part's bodies laid flat, and the folder
-/// revealed. See `routes::print_files`.
-#[tauri::command]
-fn print_project(name: String) -> Result<serde_json::Value, String> {
-    parcad_host::routes::print_files(&name)
-}
-
 /// The thumbnail alone. See the HTTP adapter's `save_project_preview` for why
 /// this does not go through `save_project`.
 #[tauri::command]
@@ -449,7 +442,6 @@ pub fn run() {
             convert_project,
             open_project_source,
             editor,
-            print_project,
             project_preview,
             save_project_preview,
             mcp_status,

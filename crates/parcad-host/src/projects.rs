@@ -21,8 +21,7 @@
 //! │  │  ├─ part.js            the source, and the only thing that is authoritative
 //! │  │  ├─ parcad.json        title and tags
 //! │  │  ├─ README.md          what the part is, written from measured values
-//! │  │  ├─ preview.png        the viewport at the last save
-//! │  │  └─ print/<body>.3mf   each body laid flat as it prints, at the last save
+//! │  │  └─ preview.png        the viewport at the last save
 //! │  └─ motor-mount.js        also a project
 //! └─ .trash/                  what `remove` moved, recoverable by hand
 //! ```
@@ -34,7 +33,7 @@
 //! for.
 //!
 //! **`part.js` is the source of truth and everything beside it is derived.**
-//! Deleting `README.md`, `preview.png` or `print/` loses nothing; they are
+//! Deleting `README.md` or `preview.png` loses nothing; they are
 //! rewritten by the next save. So no reader should ever prefer them to the script, and
 //! nothing here caches a measurement — a stale number that looks fresh is the
 //! failure this project refuses everywhere else.
@@ -54,8 +53,6 @@ const SOURCE: &str = "part.js";
 const MANIFEST: &str = "parcad.json";
 const README: &str = "README.md";
 const PREVIEW: &str = "preview.png";
-/// The print files' folder inside a bundle, emptied and rewritten on save.
-const PRINT: &str = "print";
 /// The suffix that makes a folder a project.
 const BUNDLE: &str = "parcad";
 /// Removed parts are moved here rather than unlinked. A project folder is the
@@ -412,35 +409,6 @@ pub fn write_preview(path: &str, png: &[u8]) -> Result<(), String> {
         return Ok(());
     };
     std::fs::write(&file, png).map_err(|e| format!("writing {}: {e}", file.display()))
-}
-
-/// The print files, one 3MF per body laid flat, replacing whatever was there:
-/// a body renamed or dropped leaves no stale file behind. Nothing for a loose
-/// `.js`, which has nowhere to keep them. Returns each file's absolute path.
-pub fn write_print_files(path: &str, files: &[(String, Vec<u8>)]) -> Result<Vec<(String, String)>, String> {
-    let Some(dir) = locate(path)?.in_bundle(PRINT) else {
-        return Ok(Vec::new());
-    };
-    if dir.is_dir() {
-        std::fs::remove_dir_all(&dir).map_err(|e| format!("clearing {}: {e}", dir.display()))?;
-    }
-    if files.is_empty() {
-        return Ok(Vec::new());
-    }
-    create_dir(&dir)?;
-    files
-        .iter()
-        .map(|(body, bytes)| {
-            let file = dir.join(format!("{}.3mf", body.replace(['/', '\\'], "_")));
-            std::fs::write(&file, bytes).map_err(|e| format!("writing {}: {e}", file.display()))?;
-            Ok((body.clone(), file.to_string_lossy().to_string()))
-        })
-        .collect()
-}
-
-/// Where the print files are, when the project has a folder for them.
-pub fn print_dir(path: &str) -> Option<String> {
-    locate(path).ok()?.in_bundle(PRINT).map(|dir| dir.to_string_lossy().to_string())
 }
 
 /// The same, from what a canvas hands the frontend.

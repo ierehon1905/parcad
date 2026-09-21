@@ -123,7 +123,10 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      `allow_failing` gives a reason (the door the print check shares); `.reference()`
      bodies measured and drawn but in no file and no whole-part number; and
      `note()`, carried in the reply as "from the script, not measured";
-   - ~~overhang and print files~~ — landed 2026-09-21 with the print check;
+   - ~~overhang and print files~~ — overhang landed 2026-09-21 with the print
+     check; the print files were removed again the next day, as a worse copy
+     of what every slicer's auto-orient and arrange already do (docs/ARCHITECTURE.md,
+     "The orientation is measured in, not exported");
    - ~~`depth_mm` and `contact_mm2` in `between_bodies`~~ — landed 2026-09-21:
      `depth_mm`/`deepest_mm` on an interfering pair (the widest ball inside
      what they share) and `contact_mm2`/`contact_patches`/`contact_center_mm`

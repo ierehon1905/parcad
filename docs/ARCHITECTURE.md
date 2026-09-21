@@ -202,22 +202,18 @@ never judged: a face exactly at 45° is listed, and a body with any
 unsupported area is a `flagged` finding naming its orientation, its worst
 face and its bridges. Reference bodies and surfaces are not measured.
 
-The print files come from the same build. `save_project` and a saving
-`edit_part` write `print/<body>.3mf` beside `part.js` — one file per
-printable body, `parcad_evaluation::print_files` turning the body's own
-welded triangles so its print axis points up, centred on the bed with its
-lowest point at z = 0, a reference body never among them — and the reply's
-`print` names each path and how the body was laid. The folder is emptied and
-rewritten on every save, derived and disposable like `preview.png`
-(`projects.rs`): a save the door refused writes none, and one written with
-`allow_failing` writes them and says under what reason. The window writes
-them from the saved part as **Lay out to print**, the first entry of the
-export menu (`routes::print_files`, `service::reveal`) — an export like the
-three files beside it, differing in orientation and in being one file per
-body — with no door, the person pressing it can see the report, but leaving
-out a body whose print_check fails and saying so in the status line. The
-session that ended five turns with an offer to export and never did
-(docs/COIN_HOLDER_REVIEW.md, workflow §4) is why a save produces the files.
+**The orientation is measured in, not exported.** A save used to also write
+`print/<body>.3mf` beside `part.js`, each body turned onto its print face,
+and the window offered the same as an export. That is removed, deliberately:
+every slicer orients and arranges for its own bed — OrcaSlicer and Bambu
+Studio score candidate orientations off the mesh, PrusaSlicer has Place on
+Face — and one of the 28 parts in `examples/` declares `.printedUp()` at
+all, so for the rest those files were the 3MF export split per body and
+dropped to z = 0, which is the first thing a slicer does on import. What is
+ours is upstream of the mesh: the overhang, the wall and the collisions are
+measured on the exact solid in the orientation the part declares, and handed
+to whoever is authoring it. `export_part` with `open: true` is the one call
+that ends a session in the user's slicer.
 
 **A reference body is measured and drawn, and is not the part.** The bodies
 a check talks about — a stack of coins, a tipped coin at a mouth — are marked

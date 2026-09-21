@@ -17,12 +17,10 @@ use serde::Serialize;
 pub mod brief;
 pub mod checks;
 pub mod print;
-pub mod print_files;
 
 pub use brief::BriefReport;
 pub use checks::{ChecksReport, FailedCheck};
 pub use print::{PrintCheck, PrintFinding, Verdicts};
-pub use print_files::{PrintFile, PrintFileReport, PrintFiles, SkippedPrint};
 
 /// One value a script reported with `note(label, value)`.
 #[derive(Debug, Clone, Serialize, serde::Deserialize, schemars::JsonSchema)]

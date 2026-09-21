@@ -883,7 +883,8 @@ export class Shape {
    * - `"+z"` is as drawn, the default; `"-z"` prints it upside down; `"x"`,
    *   `"-x"`, `"y"`, `"-y"` stand it on a side; `[x, y, z]` is any direction.
    * - `print_check` measures the body's overhang and bed contact in this
-   *   orientation, and `save_project` writes `print/<body>.3mf` laid flat in it.
+   *   orientation. It changes what is measured, never what is exported: a
+   *   slicer orients and arranges for its own bed.
    * - A reference body has no print orientation.
    *
    * @example
