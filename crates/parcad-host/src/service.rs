@@ -1147,7 +1147,7 @@ pub fn export_3mf(doc: &Doc, budget: Option<std::time::Duration>, name: &str) ->
 
 /// The print files of a built part: each printable body laid flat in its
 /// print orientation, with, per body, the print_check finding that fails it
-/// — so a caller with no door (the window's Print button) can leave that
+/// — so a caller with no door (the window's *Lay out to print*) can leave that
 /// body out and say why, and one with a reason can write it and say so.
 pub struct PrintFilesBuilt {
     pub files: Vec<parcad_evaluation::PrintFile>,

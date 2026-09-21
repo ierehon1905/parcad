@@ -41,7 +41,6 @@ export function Titlebar() {
       <span class="w-px h-[18px] bg-line" />
       <ShowCode />
       {partsAreFiles && <EditElsewhere />}
-      {partsAreFiles && <Print />}
       <span class="w-px h-[18px] bg-line" />
       {mcpThroughRelay ? <AgentLink /> : <Agent />}
       <span class="flex-1" />
@@ -113,33 +112,61 @@ function Save() {
  * here that genuinely needs a sentence, because "the viewport is showing a mesh
  * preview" and "the STEP file will be exact anyway" are both true at once and
  * look like a contradiction.
+ *
+ * Laying the part out to print is one of these rather than a button of its
+ * own. It is an export, and it differs from the 3MF beside it only in
+ * orientation and in being one file per body — exactly the kind of difference
+ * this list exists to state, and one no separate icon could have said.
  */
-const EXPORTS: { format: "3mf" | "stl" | "step"; icon: IconName; label: string; key?: string; detail: string }[] =
-  [
-    {
-      format: "3mf",
-      icon: "plate",
-      label: "3MF for a slicer",
-      detail:
-        "The same triangles as STL, in millimetres, with every body its own named object — a lid and its box arrive as two parts to place, not one. Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open it.",
-    },
-    {
-      format: "stl",
-      icon: "mesh",
-      label: "STL mesh",
-      key: "⌘E",
-      detail:
-        "The triangles the viewport shows, welded, with every body merged into one mesh. For any tool that reads a mesh, and for a quick look somewhere else.",
-    },
-    {
-      format: "step",
-      icon: "kernel",
-      label: "STEP solid",
-      key: "⇧⌘E",
-      detail:
-        "Exact surfaces from the B-rep kernel — a mesh cannot be turned back into surfaces after the fact. For a machine shop, and for another CAD program.",
-    },
-  ];
+type ExportEntry = {
+  label: string;
+  icon: IconName;
+  key?: string;
+  detail: string;
+  /** Files beside the part, and a file manager opened on them: a browser tab has neither. */
+  desktop?: boolean;
+  /** What this one needs to be pressable — a build to write out, or a part on disk to read. */
+  ready: () => boolean;
+  run: () => void;
+};
+
+const EXPORTS: ExportEntry[] = [
+  {
+    label: "Lay out to print",
+    icon: "bed",
+    detail:
+      "Every body turned the way the part itself says it prints — .printedUp() — which is the orientation its print check was measured in, rather than one a slicer guesses from the mesh afterwards. One print/<body>.3mf each beside part.js, and the folder opened. A body whose check fails is left out and named. Written from the part as saved, so unsaved edits are not in them.",
+    desktop: true,
+    ready: () => !!S.openPath.value,
+    run: () => void engine.printOpenPart(),
+  },
+  {
+    label: "3MF for a slicer",
+    icon: "plate",
+    detail:
+      "The same triangles as STL, in millimetres, with every body its own named object — a lid and its box arrive as two parts to place, not one. As drawn, not laid flat. Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open it.",
+    ready: () => !!S.lastGraph.value,
+    run: () => void engine.runExport("3mf"),
+  },
+  {
+    label: "STL mesh",
+    icon: "mesh",
+    key: "⌘E",
+    detail:
+      "The triangles the viewport shows, welded, with every body merged into one mesh. For any tool that reads a mesh, and for a quick look somewhere else.",
+    ready: () => !!S.lastGraph.value,
+    run: () => void engine.runExport("stl"),
+  },
+  {
+    label: "STEP solid",
+    icon: "kernel",
+    key: "⇧⌘E",
+    detail:
+      "Exact surfaces from the B-rep kernel — a mesh cannot be turned back into surfaces after the fact. For a machine shop, and for another CAD program.",
+    ready: () => !!S.lastGraph.value,
+    run: () => void engine.runExport("step"),
+  },
+];
 
 function Export() {
   const open = useSignal(false);
@@ -169,14 +196,14 @@ function Export() {
           variant="menu"
           layout="absolute top-full left-0 z-40 mt-1.5 w-[min(380px,86vw)] p-1.5"
         >
-          {EXPORTS.map((entry) => (
+          {EXPORTS.filter((entry) => !entry.desktop || partsAreFiles).map((entry) => (
             <button
-              key={entry.format}
+              key={entry.label}
               type="button"
               // Nothing has evaluated cleanly, so there is no graph to write
               // out. Say so by being unpressable rather than by failing after
               // the press.
-              disabled={!S.lastGraph.value}
+              disabled={!entry.ready()}
               class="flex w-full items-start gap-2.5 px-2 py-1.5 text-left rounded-lg cursor-pointer
                      border border-transparent text-ink-dim
                      hover:border-accent-edge hover:bg-accent-deep/35
@@ -184,7 +211,7 @@ function Export() {
                      disabled:hover:border-transparent disabled:hover:bg-transparent"
               onClick={() => {
                 open.value = false;
-                void engine.runExport(entry.format);
+                entry.run();
               }}
             >
               <Icon name={entry.icon} class="size-6 shrink-0 text-ink" />
@@ -269,34 +296,6 @@ function EditElsewhere() {
       ) : (
         <Icon name="pencil" class="size-4 shrink-0" />
       )}
-    </button>
-  );
-}
-
-/**
- * The part as files for the slicer: each body laid flat in the orientation
- * it prints, `print/<body>.3mf` beside `part.js`, and the folder revealed.
- * The same shape as the editor button, one icon over: the user who never
- * answers a question in chat presses a button in the window they are
- * watching (docs/COIN_HOLDER_REVIEW.md, workflow §4). A body whose
- * print_check fails is left out and the status line says why.
- */
-function Print() {
-  const path = S.openPath.value;
-  return (
-    <button
-      type="button"
-      disabled={!path}
-      class="flex p-1.5 rounded-md border border-transparent text-ink-dim cursor-pointer
-             hover:text-ink hover:border-line
-             disabled:opacity-45 disabled:cursor-default disabled:hover:border-transparent"
-      {...tip({
-        title: "Lay it out to print",
-        text: "Writes print/<body>.3mf beside the part, each body laid flat the way it prints — .printedUp() says which way — and opens the folder. A body whose print_check fails is left out and named.",
-      })}
-      onClick={() => void engine.printOpenPart()}
-    >
-      <Icon name="printer" class="size-4 shrink-0" />
     </button>
   );
 }

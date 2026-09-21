@@ -1339,7 +1339,7 @@ in four commits: `collisions` in every reply (what each cut took from the
 features it was not for), `print_check` beside the author's `checks` on every
 build with the door reading both slots through one `allow_failing`, overhang
 per body in the orientation it prints (`.printedUp()`), and `print/<body>.3mf`
-written on save with a Print button in the window. Measured on the same
+written on save and offered in the window's export menu. Measured on the same
 small model, 4 trials per arm (3 for the screen case), two hosts on scratch
 ports — the before host at d71392a8, the after host at the batch's last
 commit — the in-place cases one trial at a time on a fresh copy, the screen

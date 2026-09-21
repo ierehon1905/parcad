@@ -210,10 +210,12 @@ lowest point at z = 0, a reference body never among them — and the reply's
 `print` names each path and how the body was laid. The folder is emptied and
 rewritten on every save, derived and disposable like `preview.png`
 (`projects.rs`): a save the door refused writes none, and one written with
-`allow_failing` writes them and says under what reason. The window's Print
-button (`routes::print_files`, `service::reveal`) writes them from the saved
-part with no door — the person pressing it can see the report — but leaves
-out a body whose print_check fails and says so in the status line. The
+`allow_failing` writes them and says under what reason. The window writes
+them from the saved part as **Lay out to print**, the first entry of the
+export menu (`routes::print_files`, `service::reveal`) — an export like the
+three files beside it, differing in orientation and in being one file per
+body — with no door, the person pressing it can see the report, but leaving
+out a body whose print_check fails and saying so in the status line. The
 session that ended five turns with an offer to export and never did
 (docs/COIN_HOLDER_REVIEW.md, workflow §4) is why a save produces the files.
 

@@ -99,11 +99,11 @@ fn open_source(name: &str) -> Result<Value, String> {
     Ok(json!({ "name": name, "path": path, "opened_with": opened_with }))
 }
 
-/// The window's Print button: the saved part's bodies laid flat as they
-/// print, `print/<body>.3mf` beside `part.js`, and the folder revealed. No
-/// door here — the person pressing it can see the report — but a body whose
-/// print_check fails is left out and named, so nothing that cannot print
-/// reaches the slicer unremarked.
+/// The window's *Lay out to print*, in the export menu: the saved part's
+/// bodies laid flat as they print, `print/<body>.3mf` beside `part.js`, and
+/// the folder revealed. No door here — the person pressing it can see the
+/// report — but a body whose print_check fails is left out and named, so
+/// nothing that cannot print reaches the slicer unremarked.
 pub fn print_files(name: &str) -> Result<Value, String> {
     let script = projects::read(name)?;
     let built = crate::script::build(&script)?;
