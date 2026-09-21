@@ -33,7 +33,7 @@ import * as service from "./service";
  */
 function card(draw: (into: HTMLElement) => void) {
   const dom = document.createElement("div");
-  dom.className = "text-ink px-2 py-1 max-w-[500px]";
+  dom.className = "text-ink px-2 py-1 max-w-[720px]";
   draw(dom);
   return { dom, destroy: () => render(null, dom) };
 }

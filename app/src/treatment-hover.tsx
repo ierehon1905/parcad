@@ -35,8 +35,12 @@ import {
 } from "./treatment-info";
 
 export interface TreatmentHoverSource {
-  /** The treatment whose authored call contains this offset, if any. */
-  treatmentAt(pos: number): { node: number; method?: string } | undefined;
+  /**
+   * The treatment whose authored call contains this offset, if any, and
+   * whether the offset is on the chain's own method names rather than inside
+   * one of their arguments.
+   */
+  treatmentAt(pos: number): { node: number; method?: string; onChain: boolean } | undefined;
   /** The intent-graph node for a treatment, when the document is still current. */
   nodeAt(node: number): TreatmentNode | undefined;
   /** The authored call's document range. */
@@ -79,6 +83,14 @@ export function treatmentHover(source: TreatmentHoverSource): Extension {
       const info = await source.info?.(pos).catch(() => undefined);
       if (!measured && !info) return null;
 
+      // The rows are about the treatment. They belong under a signature only
+      // when the signature is the treatment's own — hovering `curve` inside
+      // its selector asks about `EdgeQuery.curve`, and answering with what the
+      // fillet rounded is answering a question nobody asked. When TypeScript
+      // has nothing to say the card has no other subject, so they stay.
+      const rows = measured && (treatment!.onChain || !info);
+      if (!rows && !info) return null;
+
       // Anchored to the name itself — TypeScript's own span for it, or the
       // word under the pointer — so that a tooltip opened on a five-line call
       // chain still opens on the line the pointer is on.
@@ -95,13 +107,13 @@ export function treatmentHover(source: TreatmentHoverSource): Extension {
           const dom = document.createElement("div");
 
           let target: ResolvedTarget | undefined;
-          let pending = measured && !!source.resolve;
+          let pending = rows && !!source.resolve;
 
           const draw = () =>
             render(
               <HoverCard
                 info={info}
-                node={measured ? node : undefined}
+                node={rows ? node : undefined}
                 method={treatment?.method}
                 target={target}
                 pending={pending}
@@ -115,7 +127,7 @@ export function treatmentHover(source: TreatmentHoverSource): Extension {
             );
 
           draw();
-          if (measured) {
+          if (rows) {
             source
               .resolve?.(treatment!.node)
               .then((answer) => {
@@ -181,7 +193,7 @@ function HoverCard({
   if (!info && !node) return null;
 
   return (
-    <div class="text-ink font-mono text-small px-2 py-1 max-w-[500px]">
+    <div class="text-ink font-mono text-small px-2 py-1 max-w-[720px]">
       {info && <InfoCard info={info} />}
       {node && (
         <>

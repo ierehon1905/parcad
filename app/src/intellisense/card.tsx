@@ -20,8 +20,17 @@ import type { Tag } from "@lezer/highlight";
 import type { Info, Span } from "./analyzer";
 import { wrapSignature } from "./signature";
 
-/** How wide a card may be, and the padding inside it. Monaco's 500, and 8 a side. */
-const CARD_WIDTH = 500;
+/**
+ * How wide a card may be, and the padding inside it.
+ *
+ * Wider than Monaco's 500, deliberately. That number is for an editor that
+ * fills its window; here the editor is one pane of two and a card is welcome
+ * over the viewport beside it, so the width that matters is the one that keeps
+ * a signature on one line — breaking one is a last resort, not a way to stay
+ * narrow. Prose is capped separately, further down: 96 columns of code is
+ * legible and 96 columns of sentence is not.
+ */
+const CARD_WIDTH = 720;
 const CARD_PADDING = 16;
 
 /**
@@ -179,8 +188,12 @@ export function InfoCard({ info }: { info: Info }) {
         <Code spans={wrapSignature(info.signature, cardColumns())} />
       </div>
       {hasProse && <Rule />}
+      {/* The prose is capped at a measure rather than at the card's width: a
+          paragraph past about seventy characters loses the reader on the way
+          back to the next line, and a doc comment is prose however wide the
+          signature above it is. */}
       {hasProse && (
-        <div class="font-sans text-small mt-2">
+        <div class="font-sans text-small mt-2 max-w-[68ch]">
           {documentation.map((paragraph, i) => (
             <p key={i} class={`m-0 [overflow-wrap:anywhere] ${i > 0 ? "mt-2" : ""}`}>
               <Prose text={paragraph} />

@@ -29,7 +29,7 @@ import * as languageService from "../intellisense/service";
 import { numberDial } from "../number-dial";
 import { selectorLinter } from "../selector-lint";
 import * as S from "../state";
-import { treatmentAtCursor } from "../source-link";
+import { onTreatmentChain, treatmentAtCursor } from "../source-link";
 import { treatmentHover, type TreatmentHoverSource } from "../treatment-hover";
 import type { TreatmentNode } from "../treatment-info";
 
@@ -48,7 +48,13 @@ const hoverSource: TreatmentHoverSource = {
     const source = editor.state.doc.toString();
     if (source !== S.lastSource.value) return undefined;
     const treatment = treatmentAtCursor(editor.state, source, S.lastTreatments.value, pos);
-    return treatment && { node: treatment.node, method: treatment.source?.method };
+    return (
+      treatment && {
+        node: treatment.node,
+        method: treatment.source?.method,
+        onChain: onTreatmentChain(editor.state, source, pos),
+      }
+    );
   },
   nodeAt: (node) => S.lastGraph.value?.nodes[node] as TreatmentNode | undefined,
   callRange: (node) =>

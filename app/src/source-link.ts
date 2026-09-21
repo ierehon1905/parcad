@@ -14,6 +14,26 @@ export interface SourceRange {
 
 const TREATMENT_METHODS = new Set(["fillet", "chamfer", "smooth", "squircle"]);
 
+/**
+ * The calls that make a treatment what it is: what it selects, what it
+ * expects of that selection, and what it does to it.
+ */
+const CHAIN_METHODS = new Set([...TREATMENT_METHODS, "edges", "vertices", "expect"]);
+
+/**
+ * Whether this offset is on one of those method names.
+ *
+ * A treatment's authored range is the whole chain, which is right for marking
+ * it and wrong for a tooltip: `drilled.edges({ curve: "circle" }).fillet(0.8)`
+ * contains `curve`, and a card about `EdgeQuery.curve` with the fillet's
+ * measured rows under it is a card with two subjects. The rows belong to the
+ * chain, so they are shown when the chain is what is under the pointer.
+ */
+export function onTreatmentChain(state: EditorState, source: string, at: number): boolean {
+  const node = syntaxTree(state).resolveInner(at, 1);
+  return node.name === "PropertyName" && CHAIN_METHODS.has(source.slice(node.from, node.to));
+}
+
 export function sourceOffset(source: string, line: number, column: number): number | undefined {
   let at = 0;
   for (let current = 1; current < line; current++) {
