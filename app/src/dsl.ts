@@ -93,6 +93,18 @@ export interface EdgeQuery {
   on?: string | string[];
   /** Only edges with one face from each of two features: the seam where one meets the other. */
   between?: [string, string];
+  /**
+   * Every edge the rest of this query matches, except those this sub-query
+   * matches. `{ dihedral: "convex", not: { parallel: "z" } }` is every
+   * outside edge but the upright ones.
+   *
+   * - Taken away before `at` picks extrema, so an extremum is the highest of
+   *   what is left rather than the highest edge if it survives.
+   * - One level: a `not` inside a `not` is refused, and so is an empty one.
+   * - Prefer a positive term where there is one — `{ dihedral: "convex" }`
+   *   says more than `{ not: { dihedral: "concave" } }`.
+   */
+  not?: EdgeQuery;
 }
 
 /**
@@ -4102,6 +4114,12 @@ const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean; doc?:
     what: "checks carried in the part (checks: [...] beside the bodies)",
     uses: () => false,
     doc: (doc) => (doc.checks?.length ?? 0) > 0,
+  },
+  {
+    feature: "query-not",
+    after: "0.0.9",
+    what: "not in an edge query ({ dihedral: \"convex\", not: { parallel: \"z\" } })",
+    uses: (n) => JSON.stringify(n.selector ?? null).includes('"not":'),
   },
   {
     feature: "part-brief",

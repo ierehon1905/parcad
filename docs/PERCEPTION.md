@@ -1564,6 +1564,53 @@ be invented: `DEVICES` carries published sizes and labels its two guessed
 radii as guesses, and a table of pocket dimensions with a plausible source
 line would be neither. It wants somebody to measure some pockets.
 
+## 22. Saying what you do not want
+
+The compact selector form is a conjunction of extrema and directions — `>Z`,
+`<Y`, `|X`, joined by `and` — and has no negation, no disjunction and no
+brackets. A session wrote `">Z and not |Z"` twice in one script and got back
+*"invalid edge-selector term \"not |Z\"; expected >X, <Y, or |Z (joined with
+`and`)"*: three spellings and a full stop, with no mention that a query form
+exists beside it holding every term the author was reaching for. Only the
+first of the two was reported. 3,346 bytes resent, twice
+(docs/COIN_HOLDER_REVIEW.md, L2).
+
+Two changes, and the cheap one is the one that helps a model that never reads
+this page:
+
+- **The refusal names the language that can say it.** When the term contains
+  `not`, `or` or a bracket — and only then, the way `queryShapeError` already
+  adds a key hint only when there is one — the message continues: the compact
+  form has none of those, say it in the query form, which has `dihedral`,
+  `parallel`, `longerThan`, `on`, `between` and `not`, and `check_selector`
+  parses one without building anything. The span is unchanged; the span is
+  what the editor underlines.
+- **`not` exists, in the query form only.** `{ dihedral: "convex", not: {
+  parallel: "z" } }` is every outside edge but the upright ones. It is
+  subtracted *before* `at` picks extrema, so an extremum is the highest of
+  what is left rather than the highest edge if it happens to survive — which
+  is the same rule `on` already set for scoped extrema, and the one a reader
+  would otherwise have to guess. One level deep: a `not` inside a `not` is
+  refused, and so is an empty one.
+
+`not` is not in the compact string and should not be: `not >Z` is close to
+meaningless ("not the furthest"), while every term in the query form is
+already a predicate over the same candidates, which is where a negation has a
+meaning to have.
+
+Both parsers say it in the same words, and `eval/selectors.json` — the
+specification, not either parser — carries the new listing, the session's own
+`">Z and not |Z"` with its span, and the four shapes a `not` is refused in.
+`eval/cases/all-but-the-uprights` holds the geometry: eight edges rounded and
+four left sharp, which the 14 faces state and `.expect({ count: 8 })` fails
+the build over. `eval/field/round-all-but-the-uprights` asks a model to write
+it, scored on `input` rather than the answer, because the volume is reachable
+by two fillets or by enumerating `|X` and `|Y` and neither is the language
+having grown. Not yet run.
+
+`or` is still not sayable — `any: [q1, q2]` in docs/SELECTORS.md §3 — and the
+refusal now says so outright rather than leaving a reader to discover it.
+
 ## Suggested order
 
 Done, and what each cost is in its own section: point and ray probes and

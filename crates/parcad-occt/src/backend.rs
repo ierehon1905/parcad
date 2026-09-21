@@ -2240,6 +2240,10 @@ fn evolve_edges(edges: Vec<Edge>, result: &BooleanShape) -> Vec<Edge> {
 }
 
 fn extrema(edges: &[SelectableEdge]) -> ([f64; 3], [f64; 3]) {
+    extrema_of(edges.iter())
+}
+
+fn extrema_of<'a>(edges: impl Iterator<Item = &'a SelectableEdge>) -> ([f64; 3], [f64; 3]) {
     let mut maxima = [f64::NEG_INFINITY; 3];
     let mut minima = [f64::INFINITY; 3];
     for edge in edges {
@@ -2376,12 +2380,19 @@ fn select_edges(
         EdgeSelector::Query(query) => {
             if query.is_empty() {
                 bail!(
-                    "node {id} ({label}) has an empty edge query; specify generatedBy, curve, adjacentTo, at, dihedral, parallel, longerThan, on, or between"
+                    "node {id} ({label}) has an empty edge query; specify generatedBy, curve, adjacentTo, at, dihedral, parallel, longerThan, on, between, or not"
                 );
             }
+            query.validate().map_err(|e| anyhow::anyhow!("node {id} ({label}) {e}"))?;
             let generated_by = query
                 .generated_by
                 .as_deref()
+                .map(|source| lineage.keys(source))
+                .transpose()?;
+            let not_generated_by = query
+                .not
+                .as_ref()
+                .and_then(|not| not.generated_by.as_deref())
                 .map(|source| lineage.keys(source))
                 .transpose()?;
             let named = query.named_features();
@@ -2405,7 +2416,15 @@ fn select_edges(
                 }
                 Some(lineage.face_tags())
             };
-            select_query(edges, query, minima, maxima, generated_by.as_ref(), face_tags.as_ref())
+            select_query(
+                edges,
+                query,
+                minima,
+                maxima,
+                generated_by.as_ref(),
+                not_generated_by.as_ref(),
+                face_tags.as_ref(),
+            )
         }
     };
 
@@ -2432,8 +2451,27 @@ fn select_query(
     minima: [f64; 3],
     maxima: [f64; 3],
     generated_by: Option<&HashSet<Vec<[i64; 3]>>>,
+    not_generated_by: Option<&HashSet<Vec<[i64; 3]>>>,
     face_tags: Option<&HashMap<FaceKey, Vec<String>>>,
 ) -> Vec<SelectableEdge> {
+    let kept = matches_query(&edges, query, minima, maxima, generated_by, not_generated_by, face_tags);
+    edges.into_iter().zip(kept).filter(|(_, keep)| *keep).map(|(edge, _)| edge).collect()
+}
+
+/// Which of these edges the query matches, by position.
+///
+/// The borrowing half of [`select_query`]: a `not` is the same query machinery
+/// run over the same edges, and an edge is not cloneable, so the answer is a
+/// mask rather than a list.
+fn matches_query(
+    edges: &[SelectableEdge],
+    query: &EdgeQuery,
+    minima: [f64; 3],
+    maxima: [f64; 3],
+    generated_by: Option<&HashSet<Vec<[i64; 3]>>>,
+    not_generated_by: Option<&HashSet<Vec<[i64; 3]>>>,
+    face_tags: Option<&HashMap<FaceKey, Vec<String>>>,
+) -> Vec<bool> {
     let tags_of = |face: &AdjacentFaceInfo| -> &[String] {
         face_tags
             .and_then(|tags| tags.get(&face.face_key))
@@ -2442,9 +2480,9 @@ fn select_query(
     // Everything but the extrema first: with `on`, the extremes are the
     // feature's own, so they are measured over what survives the other terms.
     let scoped = query.on.is_some();
-    let candidates: Vec<SelectableEdge> = edges
-        .into_iter()
-        .filter(|edge| {
+    let mut kept: Vec<bool> = edges
+        .iter()
+        .map(|edge| {
             let on_matches = query.on.as_ref().is_none_or(|names| {
                 edge.adjacent_faces.iter().any(|face| {
                     tags_of(face)
@@ -2466,56 +2504,66 @@ fn select_query(
             on_matches && between_matches
         })
         .collect();
+    // Subtracted before the extrema are taken, so `at` picks among what
+    // survives: `{ at: { z: "max" }, not: { parallel: "z" } }` is the highest
+    // of the edges that are left, not the highest edge if it happens to
+    // survive. One level deep, so this recursion is never deeper than one.
+    if let Some(not) = &query.not {
+        let removed = matches_query(edges, not, minima, maxima, not_generated_by, None, face_tags);
+        for (keep, remove) in kept.iter_mut().zip(removed) {
+            *keep &= !remove;
+        }
+    }
     let (minima, maxima) = if scoped {
-        extrema(&candidates)
+        let surviving: Vec<&SelectableEdge> =
+            edges.iter().zip(&kept).filter(|(_, keep)| **keep).map(|(edge, _)| edge).collect();
+        extrema_of(surviving.into_iter())
     } else {
         (minima, maxima)
     };
-    candidates
-        .into_iter()
-        .filter(|edge| {
-            let curve_matches = match query.curve {
-                None => true,
-                Some(CurveKind::Line) => edge.curve == EdgeCurveKind::Line,
-                Some(CurveKind::Circle) => edge.curve == EdgeCurveKind::Circle,
-                Some(CurveKind::Spline) => edge.curve == EdgeCurveKind::Other,
-            };
-            let role_matches = match query.role {
-                None => true,
-                Some(EdgeRole::Hole) => is_hole_rim(edge),
-                Some(EdgeRole::Boundary) => edge.free,
-            };
-            let adjacent_matches = query.adjacent_to.is_none_or(|adjacent| {
-                let wanted = axis_direction_vector(adjacent.face_normal);
-                edge.adjacent_faces
-                    .iter()
-                    .any(|face| face.normal.dot(wanted) >= PARALLEL_TOLERANCE)
-            });
-            let extrema_matches = query
-                .at
-                .as_ref()
-                .is_none_or(|at| matches_extrema(edge, at, minima, maxima));
-            let provenance_matches = generated_by
-                .is_none_or(|keys| edge.piece_keys.iter().all(|key| keys.contains(key)));
-            let dihedral_matches = query
-                .dihedral
-                .is_none_or(|wanted| edge.dihedral == Some(wanted));
-            let parallel_matches = query.parallel.is_none_or(|axis| {
-                edge.direction.is_some_and(|direction| {
-                    direction.dot(axis_vector(axis)).abs() >= PARALLEL_TOLERANCE
-                })
-            });
-            let length_matches = query.longer_than.is_none_or(|least| edge.length >= least);
-            curve_matches
-                && role_matches
-                && adjacent_matches
-                && extrema_matches
-                && provenance_matches
-                && dihedral_matches
-                && parallel_matches
-                && length_matches
-        })
-        .collect()
+    for (edge, keep) in edges.iter().zip(kept.iter_mut()).filter(|(_, keep)| **keep) {
+        let curve_matches = match query.curve {
+            None => true,
+            Some(CurveKind::Line) => edge.curve == EdgeCurveKind::Line,
+            Some(CurveKind::Circle) => edge.curve == EdgeCurveKind::Circle,
+            Some(CurveKind::Spline) => edge.curve == EdgeCurveKind::Other,
+        };
+        let role_matches = match query.role {
+            None => true,
+            Some(EdgeRole::Hole) => is_hole_rim(edge),
+            Some(EdgeRole::Boundary) => edge.free,
+        };
+        let adjacent_matches = query.adjacent_to.is_none_or(|adjacent| {
+            let wanted = axis_direction_vector(adjacent.face_normal);
+            edge.adjacent_faces
+                .iter()
+                .any(|face| face.normal.dot(wanted) >= PARALLEL_TOLERANCE)
+        });
+        let extrema_matches = query
+            .at
+            .as_ref()
+            .is_none_or(|at| matches_extrema(edge, at, minima, maxima));
+        let provenance_matches = generated_by
+            .is_none_or(|keys| edge.piece_keys.iter().all(|key| keys.contains(key)));
+        let dihedral_matches = query
+            .dihedral
+            .is_none_or(|wanted| edge.dihedral == Some(wanted));
+        let parallel_matches = query.parallel.is_none_or(|axis| {
+            edge.direction.is_some_and(|direction| {
+                direction.dot(axis_vector(axis)).abs() >= PARALLEL_TOLERANCE
+            })
+        });
+        let length_matches = query.longer_than.is_none_or(|least| edge.length >= least);
+        *keep = curve_matches
+            && role_matches
+            && adjacent_matches
+            && extrema_matches
+            && provenance_matches
+            && dihedral_matches
+            && parallel_matches
+            && length_matches;
+    }
+    kept
 }
 
 fn check_edge_expectation(
@@ -5445,6 +5493,56 @@ mod tests {
         let selector = EdgeSelector::Directional(">Z and >Y and |X".to_owned());
         let selected = select_edges(&shape, &selector, &EdgeLineage::default(), 0, "body").unwrap();
         assert_eq!(selected.len(), 1);
+    }
+
+    /// The selector a session wrote as `">Z and not |Z"` and could not say:
+    /// docs/COIN_HOLDER_REVIEW.md, L2.
+    #[test]
+    fn a_not_takes_its_edges_out_before_the_extrema_are_taken() {
+        let shape = AdHocShape::make_box_point_point(
+            DVec3::new(-20.0, -10.0, -5.0),
+            DVec3::new(20.0, 10.0, 5.0),
+        )
+        .0;
+        let query = |not: Option<EdgeQuery>| {
+            EdgeSelector::Query(EdgeQuery {
+                dihedral: Some(Dihedral::Convex),
+                not: not.map(Box::new),
+                ..Default::default()
+            })
+        };
+        let all = select_edges(&shape, &query(None), &EdgeLineage::default(), 0, "body").unwrap();
+        assert_eq!(all.len(), 12, "a box has twelve edges and every one is convex");
+
+        // Every outside edge except the four upright ones: the doc comment's
+        // own example, and the eight that are left are the two rectangles.
+        let without_uprights = select_edges(
+            &shape,
+            &query(Some(EdgeQuery { parallel: Some(Axis::Z), ..Default::default() })),
+            &EdgeLineage::default(),
+            0,
+            "body",
+        )
+        .unwrap();
+        assert_eq!(without_uprights.len(), 8);
+
+        // The extrema are taken among what survives: the top four edges are
+        // all at z = 5, so removing them leaves `at: { z: "max" }` naming the
+        // four uprights, whose centres are the next highest.
+        let top = EdgeSelector::Query(EdgeQuery {
+            at: Some(EdgeExtrema { z: Some(parcad_core::selectors::Extreme::Max), ..Default::default() }),
+            ..Default::default()
+        });
+        let untouched = select_edges(&shape, &top, &EdgeLineage::default(), 0, "body").unwrap();
+        assert_eq!(untouched.len(), 4);
+        let EdgeSelector::Query(mut with_not) = top else { unreachable!() };
+        with_not.not = Some(Box::new(EdgeQuery {
+            at: Some(EdgeExtrema { z: Some(parcad_core::selectors::Extreme::Max), ..Default::default() }),
+            parallel: Some(Axis::X),
+            ..Default::default()
+        }));
+        let rest = select_edges(&shape, &EdgeSelector::Query(with_not), &EdgeLineage::default(), 0, "body").unwrap();
+        assert_eq!(rest.len(), 2, "the top four less the two running along x");
     }
 
     #[test]

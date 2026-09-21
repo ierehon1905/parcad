@@ -109,10 +109,15 @@ is called (both, is the answer that never lies).
 ### 3. Queries are scoped, and extrema are local — **DONE, in part**
 
 `on` and `between` landed as below, and with `on` the `at` extrema are
-measured among the surviving candidates. Not landed: `facing` (still
-`adjacentTo.faceNormal`), `any`, and a first-class `faces()` query; the
-compact string keeps its document-global meaning rather than lowering to the
-object form. The V holder's neck blend is now `between: ["spine", "fan"]` and
+measured among the surviving candidates. `not` landed 2026-09-21 — one
+sub-query, subtracted before the extrema are taken, refused two levels deep
+or empty — and with it the compact form's refusal now says that negation is
+in the query form and that `check_selector` parses one for nothing: a session
+spent two round trips and 3,346 bytes on `">Z and not |Z"` against a message
+that named three spellings and stopped (docs/COIN_HOLDER_REVIEW.md, L2). Not
+landed: `facing` (still `adjacentTo.faceNormal`), `any`, and a first-class
+`faces()` query; the compact string keeps its document-global meaning rather
+than lowering to the object form. The V holder's neck blend is now `between: ["spine", "fan"]` and
 its lip rims `{ on: "cup", at: { z: "max" } }`, which is the reading test this
 section asked for.
 
@@ -137,7 +142,9 @@ block's vertical edges" is sayable. The object form becomes complete, with
 `"|Z and >X"` is `{ parallel: "z", at: { x: "max" } }`. One specification, the
 same two parsers as today, `eval/selectors.json` still the corpus.
 
-`any: [q1, q2]` covers the rare *or*. `faces(q)` becomes a first-class query
+`any: [q1, q2]` covers the rare *or*, and is the half of L2 still open:
+`not` is in, `or` is not, and the refusal says so rather than leaving a
+reader to find out. `faces(q)` becomes a first-class query
 with `.edges()` on the result, because "the top of the lip" is how people and
 models name things and a face is what a tag now is.
 

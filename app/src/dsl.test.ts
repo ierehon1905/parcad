@@ -805,7 +805,7 @@ describe("selector arguments", () => {
 
   test("a query key the language does not have is refused with where it goes, and the fix builds", () => {
     expect(refusal(() => loose.edges({ at: { z: "max" }, faceNormal: "+z" })).message).toBe(
-      'an edge query has no key "faceNormal" (write adjacentTo: { faceNormal: "+z" } instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on and between.',
+      'an edge query has no key "faceNormal" (write adjacentTo: { faceNormal: "+z" } instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on, between and not.',
     );
     build(part.edges({ at: { z: "max" }, adjacentTo: { faceNormal: "+z" } }).fillet(1));
 

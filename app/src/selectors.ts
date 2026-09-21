@@ -104,6 +104,23 @@ export function parseVertexSelector(source: string): SpannedTerm[] {
   return terms;
 }
 
+/**
+ * The sentence a compact-form refusal adds when the author reached for a word
+ * the compact form does not have. `wider_language` in `selectors.rs` says it
+ * in the same words; `eval/selectors.json` holds the two together.
+ */
+export function widerLanguage(term: string): string {
+  const lower = term.toLowerCase();
+  const words = lower.split(/[^a-z]+/);
+  const reached = ["not", "or"].some((word) => words.includes(word)) || term.includes("(") || term.includes(")");
+  if (!reached) return "";
+  return (
+    ". The compact form has no not, or or brackets: say it in the query form instead, " +
+    "which has dihedral, parallel, longerThan, on, between and not — " +
+    '{ dihedral: "convex", not: { parallel: "z" } }. check_selector parses one without building anything'
+  );
+}
+
 const AXES: Record<string, Axis> = { X: "X", Y: "Y", Z: "Z" };
 const KINDS: Record<string, TermKind> = { ">": "max", "<": "min", "|": "parallel" };
 
@@ -113,7 +130,7 @@ function parseTerm(term: string, from: number, to: number): SpannedTerm {
   const quoted = JSON.stringify(term);
   if (term.length !== 2) {
     throw new SelectorSyntaxError(
-      `invalid edge-selector term ${quoted}; expected >X, <Y, or |Z (joined with \`and\`)`,
+      `invalid edge-selector term ${quoted}; expected >X, <Y, or |Z (joined with \`and\`)${widerLanguage(term)}`,
       from,
       to,
     );
@@ -131,7 +148,7 @@ function parseTerm(term: string, from: number, to: number): SpannedTerm {
   const kind = KINDS[term[0]];
   if (!kind) {
     throw new SelectorSyntaxError(
-      `invalid edge-selector term ${quoted}; expected >X, <Y, or |Z`,
+      `invalid edge-selector term ${quoted}; expected >X, <Y, or |Z${widerLanguage(term)}`,
       from,
       to,
     );
@@ -155,6 +172,7 @@ export const EDGE_QUERY_KEYS: readonly string[] = [
   "longerThan",
   "on",
   "between",
+  "not",
 ];
 
 const FACE_NORMALS = ["+x", "-x", "+y", "-y", "+z", "-z"];
@@ -176,7 +194,23 @@ export function queryShapeError(query: Record<string, unknown>, kind: "edge" | "
       : ["a vertex query", ["at"], 'Its only key is at, e.g. { at: { z: "max" } }.'];
   const named = unknownKeys(query, known, (key, value) => queryKeyHint(key, value, known));
   if (named) return `${noun} ${named}. ${listing}`;
-  return atError(query.at) ?? adjacentToError(query.adjacentTo);
+  return atError(query.at) ?? adjacentToError(query.adjacentTo) ?? notError(query.not, kind);
+}
+
+/** Why a `not` cannot be read: it is one query, one level deep, and not empty. */
+function notError(not: unknown, kind: "edge" | "vertex"): string | undefined {
+  if (not === undefined) return undefined;
+  if (typeof not !== "object" || not === null || Array.isArray(not)) {
+    return `an edge query's not is ${render(not)}, where it takes a query of its own, e.g. not: { parallel: "z" }`;
+  }
+  const inner = not as Record<string, unknown>;
+  if ("not" in inner) {
+    return "an edge query's not holds another not; one level is all there is, and two negations are a positive term — say that instead";
+  }
+  if (Object.keys(inner).length === 0) {
+    return 'an edge query\'s not is empty, so it would take nothing away; give it a term, e.g. not: { parallel: "z" }';
+  }
+  return queryShapeError(inner, kind);
 }
 
 export function unknownKeys(object: Record<string, unknown>, known: readonly string[], hint: Hint): string | undefined {

@@ -47,6 +47,7 @@ pub const FEATURES: &[&str] = &[
     "reference-bodies",
     "print-orientation",
     "part-brief",
+    "query-not",
 ];
 
 /// The version of parcad reading the graph.
@@ -576,7 +577,7 @@ mod tests {
             "{message}"
         );
         assert!(
-            message.contains("and between. If a newer parcad wrote the part"),
+            message.contains("and not. If a newer parcad wrote the part"),
             "{message}"
         );
 

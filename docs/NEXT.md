@@ -143,9 +143,14 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      docs/PERCEPTION.md §21. **A measured `POCKETS` table is still missing**
      and was left out rather than invented — it wants somebody to measure
      some pockets;
-   - then vocabulary (`MATERIALS`, `OBJECTS` with profiles, `fit()`, `{ at, cut }`,
-     `not`, a listed `styles` topic), `compare_variants`, snapshot summaries,
-     and last the mechanics witness: `check_motion`, `check_flex`.
+   - vocabulary: ~~`not` in the query form~~ — landed 2026-09-21 with the
+     compact form's refusal naming the query form and `check_selector`
+     (docs/PERCEPTION.md §22); still open are `MATERIALS`, `OBJECTS` with
+     profiles, `fit()`, `{ at, cut }` and a listed `styles` topic — `fit()`
+     wants a sourced table and should not be invented, the same way `POCKETS`
+     was not;
+   - then `compare_variants`, snapshot summaries, and last the mechanics
+     witness: `check_motion`, `check_flex`.
 
 ### Waiting on a decision
 
