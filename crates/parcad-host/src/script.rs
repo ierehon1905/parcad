@@ -587,17 +587,17 @@ fn throw(ctx: &Ctx<'_>, message: String) -> rquickjs::Error {
 /// Every name the bundled DSL hands a script, and the methods of the classes
 /// among them.
 ///
-/// Test-only, and deliberately taken from the *running* bundle rather than from
-/// the TypeScript: it is the second reading that `docs.rs` checks its generated
-/// reference against, and two readings of one source is the whole point.
-#[cfg(test)]
+/// Deliberately taken from the *running* bundle rather than from the
+/// TypeScript: it is the second reading that `docs.rs` checks its generated
+/// reference against, and two readings of one source is the whole point. It is
+/// also the list `editor_types.rs` declares, so what another editor offers is
+/// what `new Function` binds rather than what a parser thought it saw.
 #[derive(serde::Deserialize)]
 pub struct Surface {
     pub exports: Vec<String>,
     pub methods: std::collections::BTreeMap<String, Vec<String>>,
 }
 
-#[cfg(test)]
 pub fn surface() -> Result<Surface, String> {
     const NAMES: &str = r#"
 (() => {

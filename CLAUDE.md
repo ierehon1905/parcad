@@ -271,6 +271,8 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | how the frontend calls the backend | `app/src/backend.ts` — the only module that knows there are two |
 | the selector grammar | `selectors.rs` **and** `app/src/selectors.ts` — see below |
 | what the editor marks as you type | `app/src/selector-lint.ts` |
+| completion, hover, signature help and type errors in the editor | `app/src/intellisense/` — a TypeScript language service over `dsl.ts` itself, in a worker; `analyzer.ts` is the whole of it and runs in bun, `part-file.ts` is why a part compiles at all |
+| what another editor needs to read a part | `crates/parcad-host/src/editor_types.rs` — `jsconfig.json` and `.types/` beside the parts, from `script::surface()`; docs/GOTCHAS.md has the three things it gets wrong if you change it |
 | what a treatment hover says, and offers to edit | `app/src/treatment-info.ts` (content), `treatment-hover.tsx` (the extension) |
 | the window's layout, and the keys | `app/src/app.tsx` |
 | the evaluation cycle, saving, the live session | `app/src/engine.ts` — machinery, not components |

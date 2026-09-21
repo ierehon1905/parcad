@@ -1774,3 +1774,51 @@ left the main checkout's `parcad-host` compiling against the worktree's
 `parcad-occt` ("no `packet` in the root"). `cargo clean -p` the workspace
 crates afterwards, or give the worktree its own target directory and reuse only
 OpenCASCADE through `PARCAD_OCCT_PREBUILT`.
+
+## The editor does not check the length of an array
+
+`app/src/intellisense/analyzer.ts` drops any diagnostic whose cause bottoms out
+in TypeScript's 2620 or 2621 — *"Target requires N element(s) but source may
+have fewer"* and its opposite. Both mean the same thing: the compiler agrees the
+element types are right and cannot prove how many there are.
+
+A part is JavaScript, so it never can. `hull(points).map(([x, y]) => [x, y * k])`
+is a `number[][]`, the DSL wants `[number, number][]`, and there is no
+annotation a `.js` file can carry to say otherwise. Before the filter the seed
+corpus produced ten of these and no other complaint at all — a checker that is
+wrong on every shipped example is worse than no checker, because the first
+squiggle a reader dismisses is the last one they read.
+
+What survives is everything that is not about length: a string among the
+numbers, a misspelt method, a missing argument, an option key that does not
+exist, and a written-out `[0, 0, 0]` where two are wanted, which is code 2618
+and still reported. `analyzer.test.ts` runs every part in `examples/` and
+requires zero, and runs seven mistakes and requires one each.
+
+## A part in somebody else's editor
+
+`crates/parcad-host/src/editor_types.rs` writes `jsconfig.json` and a `.types/`
+folder at the root of the parts directory, so the pencil in the titlebar opens a
+file VS Code can hover. Three things about that file were each measured wrong
+first:
+
+- **`"include": [".types"]` does not work.** TypeScript will not walk into a
+  directory whose name begins with a dot, and says nothing about it — the
+  declarations simply resolve to nothing and every DSL name reads as undefined.
+  It has to be spelt `".types/**/*"`. The folder stays dotted because
+  `projects::walk` skips dotted entries, and a visible one would appear in the
+  parts picker as a collection the user did not make.
+- **`"moduleDetection": "force"` is load-bearing.** Left as scripts, every
+  `part.js` shares one global scope, and the second part to write `const plate`
+  redeclares the first. Twenty parts in a folder is twenty files of errors about
+  each other.
+- **`"checkJs"` is off, and stays off.** A part ends in `return`, which is an
+  error outside a function body. The window's own editor compiles the document
+  wrapped in one (`intellisense/part-file.ts`); a file on disk cannot be.
+  Completion, hover and signature help need no wrapper, and they are the whole
+  point of the file.
+
+The declarations are generated from `script::surface()` — the DSL evaluated in
+the sandbox — so they are the names `new Function` binds, not the names a parser
+found. A `jsconfig.json` without parcad's marker comment belongs to the user and
+is never replaced.

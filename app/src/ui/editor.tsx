@@ -23,6 +23,8 @@ import { useEffect, useRef } from "preact/hooks";
 
 import { insertFlashField, treatmentHoverField } from "../editor-marks";
 import * as engine from "../engine";
+import { intellisense } from "../intellisense/extensions";
+import * as languageService from "../intellisense/service";
 import { numberDial } from "../number-dial";
 import { selectorLinter } from "../selector-lint";
 import * as S from "../state";
@@ -51,6 +53,7 @@ const hoverSource: TreatmentHoverSource = {
   callRange: (node) =>
     engine.treatmentRange(S.lastTreatments.value.find((t) => t.node === node)),
   resolve: engine.resolveTarget,
+  info: (pos) => languageService.quickInfo(pos),
 };
 
 export function Editor() {
@@ -80,6 +83,10 @@ export function Editor() {
         // keeps Up and Down.
         numberDial,
         treatmentHover(hoverSource),
+        // Completion, signature help and type diagnostics, from a language
+        // service that compiles `dsl.ts` itself. After the hover above, whose
+        // tooltip it renders into rather than beside.
+        intellisense(),
         EditorView.domEventHandlers({ blur: () => engine.saveOnBlur() }),
         EditorView.updateListener.of((v) => {
           if (v.docChanged) {
@@ -103,8 +110,13 @@ export function Editor() {
 
     void engine.start();
     engine.subscribeSession();
+    // The compiler costs a few hundred milliseconds to start and nothing until
+    // it is asked something, so it waits for the window to be done with the
+    // first part rather than competing with it.
+    const warm = requestIdleCallback(() => languageService.prewarm(), { timeout: 4000 });
 
     return () => {
+      cancelIdleCallback(warm);
       view.destroy();
       S.editorRef.current = undefined;
     };

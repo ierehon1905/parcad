@@ -1,21 +1,31 @@
 /**
- * Hover a treatment call to see what it currently resolves to, and fix it.
+ * The editor's hover: what a name means, and what it did.
  *
- * The source says `.edges(">Z and |X").fillet(2)`; the part says four edges are
- * rounded. Only the second is the thing you actually care about, and until now
- * it took a viewport hover to find out. This tooltip closes that gap in the
- * direction people read: from the code to the geometry.
+ * Two questions meet at the same pointer. TypeScript answers the first — the
+ * signature, the type, the doc comment `read_docs` serves and its worked
+ * example — for every name in the document. The kernel answers the second, for
+ * a treatment call only: the source says `.edges(">Z and |X").fillet(2)`, the
+ * part says four edges are rounded, and only the second is the thing you
+ * actually care about. One tooltip carries both, in that order, because that is
+ * the order they are read in: what does this take, and what did it do here.
  *
  * Resolving costs a kernel round trip per node, so the tooltip opens
  * immediately with what the graph already knows and fills in the measured rows
  * when the worker answers. A stale answer is worse than a slow one, so the
  * caller's cache is keyed to the evaluated graph and dropped when it changes.
+ *
+ * It is anchored to the name under the pointer, not to the start of the call. A
+ * treatment chain runs over several lines, and a card pinned to the top of it
+ * opens nowhere near what the pointer is on.
  */
 
+import { forEachDiagnostic } from "@codemirror/lint";
 import { hoverTooltip, type EditorView, type Tooltip } from "@codemirror/view";
 import type { Extension } from "@codemirror/state";
 import { Fragment, render } from "preact";
 
+import type { Info } from "./intellisense/analyzer";
+import { InfoCard } from "./intellisense/card";
 import {
   treatmentActions,
   treatmentRows,
@@ -39,6 +49,13 @@ export interface TreatmentHoverSource {
    * claiming a count it cannot check.
    */
   resolve?(node: number): Promise<ResolvedTarget>;
+  /**
+   * What TypeScript knows at this offset, and the span it knows it about.
+   *
+   * Optional for the same reason: the language service starts on demand, and
+   * until it has, a hover still says everything the graph knows.
+   */
+  info?(pos: number): Promise<(Info & { from: number; to: number }) | undefined>;
 }
 
 export function treatmentHover(source: TreatmentHoverSource): Extension {
@@ -47,11 +64,21 @@ export function treatmentHover(source: TreatmentHoverSource): Extension {
       const treatment = source.treatmentAt(pos);
       const node = treatment && source.nodeAt(treatment.node);
       const range = treatment && source.callRange(treatment.node);
-      if (!treatment || !node || !range) return null;
+      const measured = !!(treatment && node && range);
+      if (!measured && !source.info) return null;
+      // A name the type checker has already complained about gets one tooltip,
+      // not two. The complaint names the fix and the type under it is `any`,
+      // which is the checker saying it gave up rather than anything to read.
+      if (!measured && marked(view, pos)) return null;
+
+      // The word under the pointer, so that a tooltip opened on a five-line
+      // call chain still opens on the line the pointer is on. Widened to the
+      // symbol TypeScript names once it answers.
+      const word = view.state.wordAt(pos);
 
       return {
-        pos: range.from,
-        end: range.to,
+        pos: word?.from ?? pos,
+        end: word?.to ?? pos,
         above: true,
         create: () => {
           // CodeMirror positions a plain element and hands us the inside of it.
@@ -59,29 +86,51 @@ export function treatmentHover(source: TreatmentHoverSource): Extension {
           // same way as every other panel in the app rather than by hand.
           const dom = document.createElement("div");
 
-          const draw = (target?: ResolvedTarget, pending = false) =>
+          let info: Info | undefined;
+          let target: ResolvedTarget | undefined;
+          let pending = measured && !!source.resolve;
+
+          const draw = () =>
             render(
-              <TreatmentCard
-                node={node}
-                method={treatment.method}
+              <HoverCard
+                info={info}
+                node={measured ? node : undefined}
+                method={treatment?.method}
                 target={target}
                 pending={pending}
                 view={view}
                 // Recomputed from the live document: the call may have moved
                 // since the tooltip opened, and an edit applied at a stale
                 // offset would land in the middle of something else.
-                range={source.callRange(treatment.node)}
+                range={treatment && source.callRange(treatment.node)}
               />,
               dom,
             );
 
-          draw(undefined, !!source.resolve);
+          draw();
           source
-            .resolve?.(treatment.node)
-            .then((target) => draw(target))
-            // A treatment that cannot be resolved has already reported why in
-            // the error pane. Fall back to the rows that need no geometry.
-            .catch(() => draw(undefined));
+            .info?.(pos)
+            .then((answer) => {
+              if (!answer) return;
+              info = answer;
+              draw();
+            })
+            .catch(() => {});
+          if (measured) {
+            source
+              .resolve?.(treatment!.node)
+              .then((answer) => {
+                target = answer;
+                pending = false;
+                draw();
+              })
+              // A treatment that cannot be resolved has already reported why in
+              // the error pane. Fall back to the rows that need no geometry.
+              .catch(() => {
+                pending = false;
+                draw();
+              });
+          }
 
           return { dom, destroy: () => render(null, dom) };
         },
@@ -93,6 +142,15 @@ export function treatmentHover(source: TreatmentHoverSource): Extension {
   );
 }
 
+/** Whether a diagnostic already covers this offset. */
+function marked(view: EditorView, pos: number): boolean {
+  let found = false;
+  forEachDiagnostic(view.state, (_diagnostic, from, to) => {
+    if (from <= pos && pos <= to) found = true;
+  });
+  return found;
+}
+
 /**
  * How the tooltip looks, and what it offers to write.
  *
@@ -100,7 +158,8 @@ export function treatmentHover(source: TreatmentHoverSource): Extension {
  * supplies the positioned shell around it. The one thing left in `style.css` is
  * what CodeMirror itself renders and names.
  */
-function TreatmentCard({
+function HoverCard({
+  info,
   node,
   method,
   target,
@@ -108,32 +167,46 @@ function TreatmentCard({
   view,
   range,
 }: {
-  node: TreatmentNode;
+  info?: Info;
+  node?: TreatmentNode;
   method?: string;
   target?: ResolvedTarget;
   pending: boolean;
   view: EditorView;
   range?: { from: number; to: number };
 }) {
-  const call = range ? view.state.doc.sliceString(range.from, range.to) : undefined;
+  const call = node && range ? view.state.doc.sliceString(range.from, range.to) : undefined;
   const actions =
-    call !== undefined && range ? treatmentActions(node, call, range.from, target) : [];
+    node && call !== undefined && range ? treatmentActions(node, call, range.from, target) : [];
+
+  if (!info && !node) return null;
 
   return (
-    <div class="bg-panel-2 text-ink font-mono text-small leading-normal px-2.5 py-2 max-w-[42ch]">
-      <div class="text-accent mb-1">{treatmentTitle(node, method)}</div>
-      {/* Short labels, long values: give the value column the slack. */}
-      <dl class="grid m-0 gap-x-2.5 gap-y-px grid-cols-[max-content_1fr]">
-        {treatmentRows(node, target, pending).map((row) => (
-          <Fragment key={row.label}>
-            <dt class="text-ink-dim">{row.label}</dt>
-            {/* The data says ok or warn; only this file decides the colour. */}
-            <dd class={`m-0 [overflow-wrap:anywhere] ${row.tone ? TONE[row.tone] : ""}`}>
-              {row.value}
-            </dd>
-          </Fragment>
-        ))}
-      </dl>
+    <div
+      class="bg-panel-2 text-ink font-mono text-small leading-normal px-2.5 py-2 max-w-[58ch]
+             max-h-[min(60vh,34rem)] overflow-y-auto overscroll-contain"
+    >
+      {info && <InfoCard info={info} />}
+      {node && (
+        <>
+          {/* The rule between what the language says and what this part did. */}
+          <div class={`text-accent mb-1 ${info ? "mt-2 pt-2 border-t border-line" : ""}`}>
+            {treatmentTitle(node, method)}
+          </div>
+          {/* Short labels, long values: give the value column the slack. */}
+          <dl class="grid m-0 gap-x-2.5 gap-y-px grid-cols-[max-content_1fr]">
+            {treatmentRows(node, target, pending).map((row) => (
+              <Fragment key={row.label}>
+                <dt class="text-ink-dim">{row.label}</dt>
+                {/* The data says ok or warn; only this file decides the colour. */}
+                <dd class={`m-0 [overflow-wrap:anywhere] ${row.tone ? TONE[row.tone] : ""}`}>
+                  {row.value}
+                </dd>
+              </Fragment>
+            ))}
+          </dl>
+        </>
+      )}
       {actions.map((action) => (
         <button
           key={action.label}

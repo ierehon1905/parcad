@@ -776,6 +776,14 @@ pub fn seed() -> std::io::Result<()> {
     let dir = dir();
     std::fs::create_dir_all(&dir)?;
 
+    // The declarations somebody else's editor reads, beside the parts it will
+    // open. Not fatal: a folder without them holds parts that still open, just
+    // without a signature under the pointer.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Err(e) = crate::editor_types::ensure(&dir) {
+        eprintln!("parcad: {e}");
+    }
+
     let record = dir.join(SEEDED);
     let mut seeded: Vec<String> = std::fs::read_to_string(&record)
         .unwrap_or_default()
