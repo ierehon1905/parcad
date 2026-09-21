@@ -30,10 +30,15 @@ import * as service from "./service";
  * `style.css`, because CodeMirror renders that element and there is nowhere to
  * put a class on it. Height is its business too — it shrinks a card to the room
  * `tooltipSpace` says there is. What is left here is how wide one may grow.
+ *
+ * `w-max` is load-bearing: a floating box with an automatic width is as wide as
+ * the space beside it, so the width changes when CodeMirror moves it, and a
+ * card opens at its proper size and then squashes. `max-content` asks for the
+ * width the text wants and nothing else, which no later move can change.
  */
 function card(draw: (into: HTMLElement) => void) {
   const dom = document.createElement("div");
-  dom.className = "text-ink px-2 py-1 max-w-[720px]";
+  dom.className = "text-ink px-2 py-1 w-max max-w-[720px]";
   draw(dom);
   return { dom, destroy: () => render(null, dom) };
 }

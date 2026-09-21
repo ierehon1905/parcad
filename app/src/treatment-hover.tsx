@@ -193,7 +193,7 @@ function HoverCard({
   if (!info && !node) return null;
 
   return (
-    <div class="text-ink font-mono text-small px-2 py-1 max-w-[720px]">
+    <div class="text-ink font-mono text-small px-2 py-1 w-max max-w-[720px]">
       {info && <InfoCard info={info} />}
       {node && (
         <>
