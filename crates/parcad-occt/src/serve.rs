@@ -6,6 +6,7 @@
 
 use parcad_core::graph::Material;
 use crate::backend::{self, BuildCache};
+use crate::overhang;
 use crate::perceive;
 use crate::protocol::{
     breadcrumb, edge_curve, BodyFit, BodyKind, BodySpan, EdgeCurve, FaceRun, FaceSummary, Request,
@@ -303,6 +304,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
     let materials = doc.body_materials();
     let references = doc.reference_bodies();
     let mut whole = Assembled::default();
+    let mut overhangs = Vec::new();
     for (body, material) in every_body.iter().zip(materials) {
         let who = body.name.map(|name| format!("body `{name}`: ")).unwrap_or_default();
         let reference = body.name.is_some_and(|name| references.contains(&name));
@@ -310,6 +312,17 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
             Ok(mut measured) => {
                 for face in &mut measured.faces {
                     face.material = if reference { Some(Material::reference()) } else { material.cloned() };
+                }
+                // A reference body is never printed; a surface has nothing to
+                // hold up. Each body in the orientation it declared, or as drawn.
+                if !reference && measured.kind == BodyKind::Solid {
+                    breadcrumb(&format!("{who}measuring overhang as it prints"));
+                    let declared = doc
+                        .bodies()
+                        .and_then(|named| named.iter().find(|n| Some(n.name.as_str()) == body.name))
+                        .and_then(|n| n.printed_up);
+                    let up = declared.map_or(glam::DVec3::Z, |u| glam::DVec3::new(u.x, u.y, u.z));
+                    overhangs.push(overhang::overhang(body, &measured.mesh, &measured.faces, up, declared.is_some(), overhang::THRESHOLD_DEG));
                 }
                 whole.append(body.name, reference, measured)
             }
@@ -407,6 +420,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
     }
     Response::Ok(Box::new(Success {
         collisions: part.collisions.clone(),
+        overhang: overhangs,
         positions,
         normals,
         indices,

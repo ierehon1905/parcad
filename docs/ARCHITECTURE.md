@@ -174,6 +174,24 @@ named at the top. `Door` reads both slots and refuses a `failed` print_check
 the way it refuses a failed check, through the one `allow_failing` argument;
 a flag passes the door and is listed. `evaluate_part` never refuses.
 
+Overhang is the third thing `print_check` reads, and it is measured per body
+in the orientation the body prints, never the part's: `.printedUp("-z")` on
+the shape a returned object names lands on `NamedBody::printed_up` (feature
+id `print-orientation`, a unit vector, refused on a reference), the way
+`.reference()` does, and a body that declares nothing prints as drawn, +z.
+The worker (`parcad_occt::overhang`) reads each solid body's mesh face by
+face against that axis: a face's angle to the bed is exact on a plane and
+sampled on a curved face's triangles, faces at or under 45° that are not on
+the bed sum to `unsupported_mm2`, the bed and the footprint are taken in the
+same orientation (which is why the coin holder's assembled top plate no
+longer reads 0.4 % on ten stubs), a planar ceiling whose neighbours reach
+what lies beneath it on two sides is a `bridge` with its span and drop, and
+the support prism — every overhanging face extruded to the bed, fused, the
+body cut out, clipped above the bed — is one exact volume. It is reported,
+never judged: a face exactly at 45° is listed, and a body with any
+unsupported area is a `flagged` finding naming its orientation, its worst
+face and its bridges. Reference bodies and surfaces are not measured.
+
 **A reference body is measured and drawn, and is not the part.** The bodies
 a check talks about — a stack of coins, a tipped coin at a mouth — are marked
 `.reference()` on the shape the returned object names (`NamedBody::reference`,

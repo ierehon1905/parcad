@@ -1317,6 +1317,7 @@ mod tests {
             ],
             unlocated_tags: Vec::new(),
             collisions: Vec::new(),
+            overhang: Vec::new(),
             treatment_edges: Vec::new(),
             timings: Timings::default(),
             step_path: None,

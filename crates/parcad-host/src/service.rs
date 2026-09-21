@@ -903,7 +903,7 @@ pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evalua
         Some(judged) => judged,
         None => {
             let mut for_print = sweep;
-            let judged = parcad_evaluation::print::judge(&evaluated.snapshot, &mut for_print)?;
+            let judged = parcad_evaluation::print::judge(&evaluated.snapshot, &built.success.overhang, &mut for_print)?;
             keep_print_check(&built.key, &judged);
             judged
         }

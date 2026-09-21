@@ -45,6 +45,7 @@ pub const FEATURES: &[&str] = &[
     "expect-range",
     "part-checks",
     "reference-bodies",
+    "print-orientation",
 ];
 
 /// The version of parcad reading the graph.

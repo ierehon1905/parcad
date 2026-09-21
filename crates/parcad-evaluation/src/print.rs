@@ -12,7 +12,7 @@
 //! the reply.
 
 use crate::{round_mm, round_point, ChecksReport, Collision, EvaluationSnapshot};
-use parcad_occt::protocol::{ThicknessResult, ThicknessSample, ThinKind};
+use parcad_occt::protocol::{Overhang, ThicknessResult, ThicknessSample, ThinKind};
 use serde::ser::{SerializeMap, Serializer};
 use serde::Serialize;
 
@@ -53,8 +53,15 @@ pub struct PrintCheck {
     /// found nothing under `minimum_mm` and nothing else to report.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinnest: Option<PrintFinding>,
+    /// Each body as it prints — up its declared `.printedUp()` axis, or +z as
+    /// drawn — with its bed contact and overhang in that orientation. A
+    /// reference body is never printed and is not here.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub bodies: Vec<BodyPrint>,
     pub floor_mm: f64,
     pub minimum_mm: f64,
+    /// Faces at or under this angle to the bed are overhang.
+    pub overhang_deg: f64,
     /// Surface points the sweep measured from.
     pub samples: usize,
     /// What was measured and what the thresholds mean.
@@ -63,6 +70,168 @@ pub struct PrintCheck {
 
 fn is_zero(n: &usize) -> bool {
     *n == 0
+}
+
+/// One body as it prints.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct BodyPrint {
+    /// The body's name; `part` for a part in one solid.
+    pub body: String,
+    /// The axis that points up on the printer: `+z`, `-z`, `+x`, ... or a
+    /// direction, and whether the script declared it or it is as drawn.
+    pub up: String,
+    pub declared: bool,
+    /// What rests on the bed in this orientation, mm², and that over the
+    /// footprint: one slab near 1, a part on stubs near 0.
+    pub bed_mm2: f64,
+    pub footprint_fraction: f64,
+    /// Area facing down at or under `overhang_deg`, not on the bed, mm²,
+    /// and how many faces carry it. 0 is a part that prints without support.
+    pub unsupported_mm2: f64,
+    pub overhanging_faces: usize,
+    /// The largest of them: its angle to the bed (0° a ceiling, exact on a
+    /// plane, else the steepest sampled part of a curved face), area, centre,
+    /// widest span across the bed and height above it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub overhangs: Vec<OverhangFaceReport>,
+    /// Ceilings held up on two or more sides: a span to bridge rather than
+    /// support, with the drop beneath it.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub bridges: Vec<BridgeReport>,
+    /// What a support prism under every overhanging face down to the bed
+    /// would hold, mm³; absent when nothing overhangs or too many faces do.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub support_mm3: Option<f64>,
+    /// True when a curved face is among the overhangs: its angle and area
+    /// are read off the mesh, to its deflection, and the worst sample is
+    /// what is reported.
+    pub sampled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct OverhangFaceReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    pub surface: String,
+    pub angle_deg: f64,
+    pub exact: bool,
+    pub area_mm2: f64,
+    pub at: [f64; 3],
+    pub span_mm: f64,
+    pub height_mm: f64,
+}
+
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct BridgeReport {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    pub span_mm: f64,
+    pub drop_mm: f64,
+    pub at: [f64; 3],
+}
+
+/// `+z`, `-x`, or the direction, for the reply.
+pub fn up_name(up: [f64; 3]) -> String {
+    for (i, axis) in ["x", "y", "z"].iter().enumerate() {
+        if (up[i].abs() - 1.0).abs() < 1e-9 {
+            return format!("{}{axis}", if up[i] > 0.0 { "+" } else { "-" });
+        }
+    }
+    let r = round_point(up);
+    format!("[{}, {}, {}]", r[0], r[1], r[2])
+}
+
+impl BodyPrint {
+    fn of(o: &Overhang) -> Self {
+        let name = |tag: &Option<String>| tag.clone();
+        Self {
+            body: o.body.clone().unwrap_or_else(|| "part".to_string()),
+            up: up_name(o.up),
+            declared: o.declared,
+            bed_mm2: round_mm(o.bed_mm2),
+            footprint_fraction: (o.footprint_fraction * 1000.0).round() / 1000.0,
+            unsupported_mm2: round_mm(o.unsupported_mm2),
+            overhanging_faces: o.face_count,
+            overhangs: o
+                .faces
+                .iter()
+                .map(|f| OverhangFaceReport {
+                    tag: name(&f.tag),
+                    surface: f.surface.clone(),
+                    angle_deg: (f.angle_deg * 10.0).round() / 10.0,
+                    exact: f.exact,
+                    area_mm2: round_mm(f.area_mm2),
+                    at: round_point(f.at),
+                    span_mm: round_mm(f.span_mm),
+                    height_mm: round_mm(f.height_mm),
+                })
+                .collect(),
+            bridges: o
+                .bridges
+                .iter()
+                .map(|b| BridgeReport { tag: name(&b.tag), span_mm: round_mm(b.span_mm), drop_mm: round_mm(b.drop_mm), at: round_point(b.at) })
+                .collect(),
+            support_mm3: o.support_mm3.map(round_mm),
+            sampled: o.sampled,
+        }
+    }
+
+    /// The flag, when anything overhangs.
+    fn finding(&self, threshold_deg: f64) -> Option<PrintFinding> {
+        if self.unsupported_mm2 <= 0.0 {
+            return None;
+        }
+        let worst = self.overhangs.first();
+        let where_ = worst
+            .map(|f| {
+                format!(
+                    ", worst {}° on {} ({} mm², spanning {} mm, {} mm up{})",
+                    f.angle_deg,
+                    f.tag.as_deref().map(|t| format!("`{t}`")).unwrap_or_else(|| format!("a {}", f.surface)),
+                    f.area_mm2,
+                    f.span_mm,
+                    f.height_mm,
+                    if f.exact { "" } else { ", sampled" }
+                )
+            })
+            .unwrap_or_default();
+        let bridges = if self.bridges.is_empty() {
+            String::new()
+        } else {
+            let spans: Vec<String> = self
+                .bridges
+                .iter()
+                .map(|b| format!("{} mm{} over a {} mm drop", b.span_mm, b.tag.as_deref().map(|t| format!(" on `{t}`")).unwrap_or_default(), b.drop_mm))
+                .collect();
+            format!("; bridges: {}", spans.join(", "))
+        };
+        let support = self.support_mm3.map(|v| format!("; a support prism would hold {v} mm³")).unwrap_or_default();
+        Some(PrintFinding {
+            kind: "overhang",
+            what: format!(
+                "body `{}` printed up {}{}: {} mm² faces down at or under {}° on {} face{}{}{}{}",
+                self.body,
+                self.up,
+                if self.declared { "" } else { " (as drawn)" },
+                self.unsupported_mm2,
+                threshold_deg,
+                self.overhanging_faces,
+                if self.overhanging_faces == 1 { "" } else { "s" },
+                where_,
+                bridges,
+                support
+            ),
+            fix: "turn the body with .printedUp(), split it, bridge the span, or plan support; this is the geometry, not a verdict on the printer",
+            body: Some(self.body.clone()),
+            thickness_mm: None,
+            thin_kind: None,
+            removed_mm3: None,
+            unsupported_mm2: Some(self.unsupported_mm2),
+            at: worst.map(|f| f.at),
+            opposite: None,
+            between: None,
+        })
+    }
 }
 
 /// One place the print check has something to say about.
@@ -189,6 +358,7 @@ fn extent(sample: &ThicknessSample) -> String {
 /// thick and nothing to print.
 pub fn judge(
     snapshot: &EvaluationSnapshot,
+    overhang: &[Overhang],
     sweep: &mut dyn FnMut(f64, usize) -> Result<ThicknessResult, String>,
 ) -> Result<Option<PrintCheck>, String> {
     if snapshot.kind == "surface" {
@@ -220,6 +390,9 @@ pub fn judge(
             .map(PrintFinding::thin)
     });
     flagged.extend(snapshot.collisions.iter().map(PrintFinding::collision));
+    let bodies: Vec<BodyPrint> = overhang.iter().map(BodyPrint::of).collect();
+    let overhang_deg = overhang.first().map_or(45.0, |o| o.threshold_deg);
+    flagged.extend(bodies.iter().filter_map(|b| b.finding(overhang_deg)));
     let unlisted = failed.len().saturating_sub(LISTED) + flagged.len().saturating_sub(LISTED);
     failed.truncate(LISTED);
     flagged.truncate(LISTED);
@@ -235,18 +408,23 @@ pub fn judge(
         flagged,
         unlisted,
         thinnest,
+        bodies,
         floor_mm: FLOOR_MM,
         minimum_mm: MINIMUM_MM,
+        overhang_deg,
         samples: result.samples,
         note: "measured on the exact solid, every build: walls as the largest ball inside the \
                material (every feather — material thinning to 0 mm where two faces meet at under \
                60° — and every wall between two faces that do not meet is found; a thin pin across \
-               one curved face only where wider than the sample spacing), and every cut by what it \
-               took from each named feature besides its target. Under floor_mm nothing prints: \
-               `failed`, and export_part, save_project and a saving edit_part refuse it unless \
-               allow_failing gives the reason. Between floor_mm and minimum_mm, and every collision: \
-               `flagged`, which prints and is reported. A part is done when this is `passed` or \
-               each flag has a reason",
+               one curved face only where wider than the sample spacing); every cut by what it \
+               took from each named feature besides its target; and each body's overhang as it \
+               prints, up its .printedUp() axis or +z as drawn — the area facing down at or under \
+               overhang_deg, a plane's angle exact and a curved face's sampled on the mesh. Under \
+               floor_mm nothing prints: `failed`, and export_part, save_project and a saving \
+               edit_part refuse it unless allow_failing gives the reason. Between floor_mm and \
+               minimum_mm, every collision and any overhang: `flagged`, which prints and is \
+               reported, never judged for a printer. A part is done when this is `passed` or each \
+               flag has a reason",
     }))
 }
 
@@ -375,7 +553,7 @@ mod tests {
             sample(ThinKind::Wall, 0.5, ("lip", "floor"), Some("stand")),
             sample(ThinKind::Edge, 0.2, ("slab", "slab"), Some("stand")),
         ];
-        let check = judge(&snapshot(), &mut sweep_of(spots)).unwrap().unwrap();
+        let check = judge(&snapshot(), &[], &mut sweep_of(spots)).unwrap().unwrap();
         assert_eq!(check.verdict, "failed");
         assert_eq!(check.failed.len(), 1);
         assert_eq!(check.failed[0].between, Some(["`cable`".into(), "`slot`".into()]));
@@ -396,14 +574,56 @@ mod tests {
     fn a_clean_part_passes_and_a_collision_alone_flags() {
         let mut clean = snapshot();
         clean.collisions.clear();
-        let check = judge(&clean, &mut sweep_of(vec![sample(ThinKind::Edge, 0.2, ("a", "b"), None)])).unwrap().unwrap();
+        let check = judge(&clean, &[], &mut sweep_of(vec![sample(ThinKind::Edge, 0.2, ("a", "b"), None)])).unwrap().unwrap();
         assert_eq!((check.verdict, check.failed.len(), check.flagged.len()), ("passed", 0, 0));
         assert!(check.thinnest.is_none(), "an edge is not a wall");
-        let check = judge(&snapshot(), &mut sweep_of(Vec::new())).unwrap().unwrap();
+        let check = judge(&snapshot(), &[], &mut sweep_of(Vec::new())).unwrap().unwrap();
         assert_eq!((check.verdict, check.flagged.len()), ("flagged", 1));
         let mut surface = snapshot();
         surface.kind = "surface";
-        assert!(judge(&surface, &mut |_, _| panic!("a surface is not swept")).unwrap().is_none());
+        assert!(judge(&surface, &[], &mut |_, _| panic!("a surface is not swept")).unwrap().is_none());
+    }
+
+    /// An overhanging body flags, named with its orientation, the worst face
+    /// and its bridges; a clean one in its declared orientation does not.
+    #[test]
+    fn an_overhanging_body_flags_in_its_own_orientation() {
+        use parcad_occt::protocol::{Bridge, OverhangFace};
+        let lid = Overhang {
+            body: Some("lid".into()),
+            up: [0.0, 0.0, -1.0],
+            declared: true,
+            threshold_deg: 45.0,
+            bed_mm2: 1600.0,
+            footprint_fraction: 1.0,
+            unsupported_mm2: 214.3,
+            face_count: 9,
+            faces: vec![OverhangFace {
+                tag: Some("lip".into()),
+                surface: "plane".into(),
+                angle_deg: 0.0,
+                exact: true,
+                area_mm2: 186.2,
+                at: [-47.2, -19.1, 4.9],
+                span_mm: 1.5,
+                height_mm: 12.0,
+            }],
+            bridges: vec![Bridge { tag: Some("slot".into()), span_mm: 12.4, drop_mm: 7.4, at: [2.5, -29.9, 7.4], sides: 2 }],
+            support_mm3: Some(61.0),
+            sampled: false,
+        };
+        let base = Overhang { body: Some("base".into()), up: [0.0, 0.0, 1.0], declared: false, unsupported_mm2: 0.0, face_count: 0, faces: Vec::new(), bridges: Vec::new(), support_mm3: None, ..lid.clone() };
+        let mut clean = snapshot();
+        clean.collisions.clear();
+        let check = judge(&clean, &[lid, base], &mut sweep_of(Vec::new())).unwrap().unwrap();
+        assert_eq!(check.verdict, "flagged");
+        assert_eq!(check.flagged.len(), 1);
+        let f = &check.flagged[0];
+        assert_eq!((f.kind, f.body.as_deref(), f.unsupported_mm2), ("overhang", Some("lid"), Some(214.3)));
+        assert_eq!(f.what, "body `lid` printed up -z: 214.3 mm² faces down at or under 45° on 9 faces, worst 0° on `lip` (186.2 mm², spanning 1.5 mm, 12 mm up); bridges: 12.4 mm on `slot` over a 7.4 mm drop; a support prism would hold 61 mm³");
+        let names: Vec<(&str, &str, bool)> = check.bodies.iter().map(|b| (b.body.as_str(), b.up.as_str(), b.declared)).collect();
+        assert_eq!(names, [("lid", "-z", true), ("base", "+z", false)]);
+        assert_eq!(up_name([0.0, 0.6, 0.8]), "[0, 0.6, 0.8]");
     }
 
     /// The failing verdict is the first thing in the reply: `checks` keeps
@@ -432,8 +652,10 @@ mod tests {
             flagged: Vec::new(),
             unlisted: 0,
             thinnest: None,
+            bodies: Vec::new(),
             floor_mm: FLOOR_MM,
             minimum_mm: MINIMUM_MM,
+            overhang_deg: 45.0,
             samples: 1,
             note: "",
         };

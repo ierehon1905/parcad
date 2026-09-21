@@ -67,8 +67,21 @@ export interface EvaluationSnapshot {
     failed?: PrintFinding[];
     flagged?: PrintFinding[];
     thinnest?: PrintFinding;
+    /** Each body as it prints: its bed contact and overhang in that orientation. */
+    bodies?: {
+      body: string;
+      up: string;
+      declared: boolean;
+      bed_mm2: number;
+      footprint_fraction: number;
+      unsupported_mm2: number;
+      overhanging_faces: number;
+      support_mm3?: number;
+      sampled: boolean;
+    }[];
     floor_mm: number;
     minimum_mm: number;
+    overhang_deg: number;
   };
   units: string;
   /** `solid`, `surface` (faces with no inside) or `mixed` (named bodies of both). */

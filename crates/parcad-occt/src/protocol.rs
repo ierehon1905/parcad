@@ -285,6 +285,73 @@ pub struct Collision {
     pub body: Option<String>,
 }
 
+/// One body's overhang as it prints: which faces face down at or under the
+/// threshold, how much of it is unsupported, and what would hold it up.
+/// Measured on the mesh laid on the exact solid, face by face; a plane's
+/// angle is exact, a curved face's is sampled on its triangles.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Overhang {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// The unit direction that points up on the printer.
+    pub up: [f64; 3],
+    /// Whether the script declared it (`.printedUp()`), or it is as drawn.
+    pub declared: bool,
+    /// Faces at or under this angle to the bed count, degrees.
+    pub threshold_deg: f64,
+    /// What rests on the bed in this orientation, mm², and that over the
+    /// footprint the bounds suggest.
+    pub bed_mm2: f64,
+    pub footprint_fraction: f64,
+    /// Area facing down at or under the threshold, not on the bed, mm².
+    pub unsupported_mm2: f64,
+    /// How many faces carry any of it; `faces` lists the largest.
+    pub face_count: usize,
+    pub faces: Vec<OverhangFace>,
+    /// Ceilings held up on two or more sides.
+    pub bridges: Vec<Bridge>,
+    /// What a support prism under every overhanging face down to the bed
+    /// would hold, mm³, exact; absent when there are none, or too many.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub support_mm3: Option<f64>,
+    /// Some face here is curved, so its angle and area are read off the
+    /// mesh, to its deflection.
+    pub sampled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OverhangFace {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    /// `plane`, `cylinder`, `cone`, `sphere`, `torus`, `nurbs`.
+    pub surface: String,
+    /// The face's angle to the bed: 0° a ceiling, 90° a wall; for a curved
+    /// face its steepest overhanging part.
+    pub angle_deg: f64,
+    /// True for a plane, whose angle is one number.
+    pub exact: bool,
+    /// The overhanging area, mm².
+    pub area_mm2: f64,
+    /// Its area-weighted centre, in the part's frame.
+    pub at: [f64; 3],
+    /// Its widest extent across the bed plane, mm.
+    pub span_mm: f64,
+    /// How far its lowest point sits above the bed, mm.
+    pub height_mm: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Bridge {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    pub span_mm: f64,
+    /// How far down the nearest material, or the bed, lies under it.
+    pub drop_mm: f64,
+    pub at: [f64; 3],
+    /// How many of its boundary edges have a wall going down beside them.
+    pub sides: usize,
+}
+
 /// One treatment's resolved edge count, keyed by its intent-graph node.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TreatmentEdges {
@@ -576,6 +643,10 @@ pub struct Success {
     /// was for, measured on the exact solids as the cut was made.
     #[serde(default)]
     pub collisions: Vec<Collision>,
+    /// Each body's overhang in the orientation it prints, reference bodies
+    /// left out; one entry for a one-solid part.
+    #[serde(default)]
+    pub overhang: Vec<Overhang>,
     /// How many edges each treatment's selector resolved to on the shape it
     /// ran against, by node — measured, not the `.expect()` the script wrote.
     #[serde(default)]

@@ -773,6 +773,51 @@ export class Shape {
   }
 
   /**
+   * Which way this body prints: the axis that points up on the printer,
+   * for a body drawn in its assembled position. Call it last, on the shape
+   * the returned object names, the way `.reference()` is.
+   *
+   * - `"+z"` is as drawn, the default; `"-z"` prints it upside down; `"x"`,
+   *   `"-x"`, `"y"`, `"-y"` stand it on a side; `[x, y, z]` is any direction.
+   * - `print_check` measures the body's overhang and bed contact in this
+   *   orientation, and `save_project` writes `print/<body>.3mf` laid flat in it.
+   * - A reference body has no print orientation.
+   *
+   * @example
+   *     const lid = box(40, 40, 3).at(0, 0, 21.5).printedUp("-z");
+   *     const base = box(40, 40, 20).at(0, 0, 10);
+   *     return { base, lid };
+   */
+  printedUp(up: PrintAxis | [number, number, number]): Shape {
+    const axes: Record<PrintAxis, [number, number, number]> = {
+      "+x": [1, 0, 0], x: [1, 0, 0], "-x": [-1, 0, 0],
+      "+y": [0, 1, 0], y: [0, 1, 0], "-y": [0, -1, 0],
+      "+z": [0, 0, 1], z: [0, 0, 1], "-z": [0, 0, -1],
+    };
+    let dir: [number, number, number];
+    if (typeof up === "string" && up in axes) {
+      dir = axes[up];
+    } else if (Array.isArray(up) && up.length === 3 && up.every((n) => typeof n === "number" && Number.isFinite(n))) {
+      const len = Math.hypot(up[0], up[1], up[2]);
+      if (len === 0) throw new Error("printedUp takes a direction with some length; [0, 0, 0] points nowhere");
+      dir = [up[0] / len, up[1] / len, up[2] / len];
+    } else {
+      throw new Error(
+        `printedUp takes the axis that points up on the printer — "+z" (as drawn), "-z", "x", "-x", "y", "-y" — or a direction [x, y, z]; got ${describeArgument(up)}`,
+      );
+    }
+    this.printUp = dir;
+    return this;
+  }
+
+  private printUp?: [number, number, number];
+
+  /** @internal */
+  get printedUpDirection(): [number, number, number] | undefined {
+    return this.printUp;
+  }
+
+  /**
    * How this body looks in the window. Visual only: nothing measured reads it,
    * and an agent's render shows it only with `materials: true`. Changes this
    * shape in place and returns it.
@@ -3959,6 +4004,12 @@ const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean; doc?:
     uses: (n) => n.op === "bodies" && Array.isArray(n.bodies) && n.bodies.some((b) => (b as GraphNode)?.reference === true),
   },
   {
+    feature: "print-orientation",
+    after: "0.0.9",
+    what: "a body's print orientation (.printedUp())",
+    uses: (n) => n.op === "bodies" && Array.isArray(n.bodies) && n.bodies.some((b) => (b as GraphNode)?.printed_up !== undefined),
+  },
+  {
     feature: "section-curves",
     after: "0.0.6",
     what: "sections with rounded corners, arcs or splines",
@@ -4028,6 +4079,9 @@ function stamped(doc: Doc): Doc {
   }));
   return requires.length ? { ...doc, requires } : doc;
 }
+
+/** An axis that points up on the printer; see {@link Shape.printedUp}. */
+export type PrintAxis = "+x" | "x" | "-x" | "+y" | "y" | "-y" | "+z" | "z" | "-z";
 
 /**
  * What a script may return: one shape, or an object naming each body of a
@@ -4208,6 +4262,11 @@ export function build(
   };
 
   if (root instanceof Shape) {
+    if (root.printedUpDirection) {
+      throw new Error(
+        "printedUp names how a body prints, and a part in one shape prints as drawn; to print it another way up, return it as a named body: return { part: shape.printedUp(\"-z\") }",
+      );
+    }
     if (root.referenceBody) {
       throw new Error(
         "the script returned only a reference; a reference is measured against the part, so return the part " +
@@ -4241,7 +4300,17 @@ export function build(
       );
     }
     if (!name.trim()) throw new Error("a body has an empty name; name each body: return { base, lid }");
-    return { name, child: visit(shape), ...(shape.referenceBody && { reference: true }) };
+    if (shape.referenceBody && shape.printedUpDirection) {
+      throw new Error(
+        `body "${name}" is a reference and has a print orientation; a reference is never printed, so leave .printedUp() off it`,
+      );
+    }
+    return {
+      name,
+      child: visit(shape),
+      ...(shape.referenceBody && { reference: true }),
+      ...(shape.printedUpDirection && { printed_up: { x: shape.printedUpDirection[0], y: shape.printedUpDirection[1], z: shape.printedUpDirection[2] } }),
+    };
   });
   if (bodies.every((body) => body.reference)) {
     throw new Error(

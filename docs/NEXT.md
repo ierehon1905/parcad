@@ -45,10 +45,11 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      author's `checks`; `print_check` is the second slot, judged in the same
      place (`service::evaluate`) and refused through the same argument.
    - **Grown by the coin-holder review** ([COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md)):
-     overhang per body in its *declared* print orientation (`stands_on` reads
-     0.4 % on every assembled plate today), laid-flat `print/<body>.3mf` written
-     on save, and the author's own `checks` on the returned object all pass
-     through this same door. Build them together.
+     ~~overhang per body in its *declared* print orientation~~ (done
+     2026-09-21: `.printedUp()`, `print_check.bodies`, bed contact measured
+     in the same orientation), laid-flat `print/<body>.3mf` written on save,
+     and ~~the author's own `checks`~~ (done 2026-09-20) all pass through
+     this same door.
 2. **Two more steps a model has to remember, found the same day.** Both are
    the shape of item 1: the mechanism exists, nothing makes it happen.
    - **A render is colourless unless asked.** A part carrying materials draws

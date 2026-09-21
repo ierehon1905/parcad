@@ -261,6 +261,13 @@ pub struct Expect {
     /// shrinks or vanishes goes red, and so does a new one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub collisions: Option<BTreeMap<String, CollisionExpect>>,
+    /// Each body's overhang as it prints, keyed by body (`part` for one
+    /// solid): the unsupported mm², bed mm² and support mm³ in its declared
+    /// orientation, held to `volume_pct`, and its face and bridge counts
+    /// exactly. Recorded whenever any body overhangs or declares an
+    /// orientation; a lip that stops overhanging goes red.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overhang: Option<BTreeMap<String, OverhangExpect>>,
 
     /// Other scripts laid against the part with `check_fit`. Each is asked
     /// twice on the worker that has just evaluated the part, so the second
@@ -592,6 +599,24 @@ pub struct BetweenExpect {
     pub interference_mm3: f64,
 }
 
+/// One body's overhang as it prints, as the reply carries it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct OverhangExpect {
+    pub up: [f64; 3],
+    pub unsupported_mm2: f64,
+    pub bed_mm2: f64,
+    pub faces: usize,
+    pub bridges: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub support_mm3: Option<f64>,
+}
+
+impl From<&parcad_occt::protocol::Overhang> for OverhangExpect {
+    fn from(o: &parcad_occt::protocol::Overhang) -> Self {
+        Self { up: o.up, unsupported_mm2: o.unsupported_mm2, bed_mm2: o.bed_mm2, faces: o.face_count, bridges: o.bridges.len(), support_mm3: o.support_mm3 }
+    }
+}
+
 /// What one cut took from a feature it was not for, as the reply carries it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CollisionExpect {
@@ -710,6 +735,8 @@ pub struct Observed {
     pub checks: Option<ChecksExpect>,
     /// Every cut into a feature besides its target, keyed `"cut/feature"`.
     pub collisions: BTreeMap<String, CollisionExpect>,
+    /// Each body's overhang as it prints, keyed by body.
+    pub overhang: BTreeMap<String, OverhangExpect>,
 }
 
 /// One assertion that did not hold, phrased so the terminal line is enough to
@@ -1070,6 +1097,30 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
         }
     }
 
+    if let Some(want) = &expect.overhang {
+        for (body, w) in want {
+            let Some(g) = observed.overhang.get(body) else {
+                out.push(Mismatch { field: format!("overhang.{body}"), detail: "expected this body's overhang; the build reports none".into() });
+                continue;
+            };
+            if w.up != g.up {
+                out.push(Mismatch { field: format!("overhang.{body}.up"), detail: format!("expected {:?}, got {:?}", w.up, g.up) });
+            }
+            pct_check(&mut out, &format!("overhang.{body}.unsupported_mm2"), w.unsupported_mm2, g.unsupported_mm2, tol.volume_pct);
+            pct_check(&mut out, &format!("overhang.{body}.bed_mm2"), w.bed_mm2, g.bed_mm2, tol.stands_on_pct.unwrap_or(tol.volume_pct));
+            for (field, want, got) in [("faces", w.faces, g.faces), ("bridges", w.bridges, g.bridges)] {
+                if want != got {
+                    out.push(Mismatch { field: format!("overhang.{body}.{field}"), detail: format!("expected {want}, measured {got}") });
+                }
+            }
+            match (w.support_mm3, g.support_mm3) {
+                (Some(want), Some(got)) => pct_check(&mut out, &format!("overhang.{body}.support_mm3"), want, got, tol.volume_pct),
+                (None, None) => {}
+                (want, got) => out.push(Mismatch { field: format!("overhang.{body}.support_mm3"), detail: format!("expected {want:?}, got {got:?}") }),
+            }
+        }
+    }
+
     // Topology counts are exact integers or nothing. A face count that is
     // "close" is a different part.
     for (field, want, got) in [
@@ -1215,6 +1266,29 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
             .map(|(key, c)| (key.clone(), CollisionExpect { target: c.target.clone(), removed_mm3: round3(c.removed_mm3) }))
             .collect()
     });
+    expect.overhang = observed
+        .overhang
+        .values()
+        .any(|o| o.unsupported_mm2 > 0.0 || o.up != [0.0, 0.0, 1.0])
+        .then(|| {
+            observed
+                .overhang
+                .iter()
+                .map(|(body, o)| {
+                    (
+                        body.clone(),
+                        OverhangExpect {
+                            up: o.up,
+                            unsupported_mm2: round3(o.unsupported_mm2),
+                            bed_mm2: round3(o.bed_mm2),
+                            faces: o.faces,
+                            bridges: o.bridges,
+                            support_mm3: o.support_mm3.map(round3),
+                        },
+                    )
+                })
+                .collect()
+        });
     expect.checks = observed.checks.as_ref().map(|c| ChecksExpect {
         passed: c.passed,
         failed: c

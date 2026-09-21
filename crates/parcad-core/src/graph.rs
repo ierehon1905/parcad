@@ -1082,6 +1082,19 @@ pub struct NamedBody {
     /// Written by `.reference()` in `app/src/dsl.ts`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reference: bool,
+    /// The direction that points up on the printer, a unit vector, for a
+    /// body drawn in its assembled position: `print_check` measures overhang
+    /// and bed contact in this orientation and the print file lays the body
+    /// flat in it. Absent means as drawn, +z. Written by `.printedUp()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub printed_up: Option<V3>,
+}
+
+impl NamedBody {
+    /// The unit direction the body prints up, +z when none is declared.
+    pub fn up(&self) -> V3 {
+        self.printed_up.unwrap_or(V3::new(0.0, 0.0, 1.0))
+    }
 }
 
 /// One [`Op::Loft`] section: an outline lying in the plane at `z`, or, for
@@ -2659,6 +2672,25 @@ impl Doc {
                     "every body is a reference; a reference is measured against the part, so at \
                      least one body must be the part itself — leave .reference() off that one"
                 );
+            }
+            for body in bodies {
+                if let Some(up) = body.printed_up {
+                    let length = (up.x * up.x + up.y * up.y + up.z * up.z).sqrt();
+                    if !length.is_finite() || (length - 1.0).abs() > 1e-6 {
+                        anyhow::bail!(
+                            "body {:?} prints up ({}, {}, {}), which is not a unit direction; \
+                             .printedUp() takes an axis name or a direction it normalises",
+                            body.name, up.x, up.y, up.z
+                        );
+                    }
+                    if body.reference {
+                        anyhow::bail!(
+                            "body {:?} is a reference with a print orientation; a reference is \
+                             never printed, so leave .printedUp() off it",
+                            body.name
+                        );
+                    }
+                }
             }
             let mut seen = std::collections::HashSet::new();
             for body in bodies {

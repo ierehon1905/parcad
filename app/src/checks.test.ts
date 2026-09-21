@@ -70,3 +70,24 @@ describe("reference bodies", () => {
     );
   });
 });
+
+describe("print orientation", () => {
+  test("printedUp lands on the body the object names, as a unit direction, and is stamped as a feature", () => {
+    const base = box(40, 40, 20).at(0, 0, 10);
+    const lid = box(40, 40, 3).at(0, 0, 21.5).printedUp("-z");
+    const doc = build({ base, lid });
+    const bodies = (doc.nodes[doc.root] as { bodies: { name: string; child: number; printed_up?: { x: number; y: number; z: number } }[] }).bodies;
+    expect(bodies[0].printed_up).toBeUndefined();
+    expect(bodies[1].printed_up).toEqual({ x: 0, y: 0, z: -1 });
+    expect(doc.requires?.map((r) => r.feature)).toEqual(["print-orientation"]);
+    const tilted = build({ base, lid: box(40, 40, 3).at(0, 0, 21.5).printedUp([3, 0, 4]) });
+    expect((tilted.nodes[tilted.root] as { bodies: { printed_up?: { x: number } }[] }).bodies[1].printed_up).toEqual({ x: 0.6, y: 0, z: 0.8 });
+  });
+
+  test("a reference, a lone shape and a bad axis are refused by name", () => {
+    expect(() => build({ base: box(1, 1, 1), stack: cylinder(1, 1).reference().printedUp("-z") })).toThrow("is a reference and has a print orientation");
+    expect(() => build(box(1, 1, 1).printedUp("-z"))).toThrow("return it as a named body");
+    expect(() => box(1, 1, 1).printedUp("up" as never)).toThrow('"+z" (as drawn)');
+    expect(() => box(1, 1, 1).printedUp([0, 0, 0])).toThrow("points nowhere");
+  });
+});
