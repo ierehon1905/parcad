@@ -346,6 +346,11 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
                     interference_mm3: fit.interference_mm3,
                     clearance_mm: fit.clearance_mm,
                     closest_mm: fit.closest_mm,
+                    depth_mm: fit.depth_mm,
+                    deepest_mm: fit.deepest_mm,
+                    contact_mm2: fit.contact_mm2,
+                    contact_patches: fit.contact_patches,
+                    contact_center_mm: fit.contact_center_mm,
                 }),
                 Err(e) => {
                     return Response::Error {

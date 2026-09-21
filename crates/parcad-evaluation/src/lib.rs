@@ -634,6 +634,28 @@ pub struct BodyFit {
     /// A point on `a`, then one on `b`, where that clearance is measured.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub closest_mm: Option<[[f64; 3]; 2]>,
+    /// How far one reaches into the other, mm: the thickest the shared
+    /// material gets, and so what has to move for them to part. Present only
+    /// when they interfere, and the number to read there — a shared volume is
+    /// not a depth, and 0.002 mm³ along a rim is a graze of two microns.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub depth_mm: Option<f64>,
+    /// Where that depth is attained.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deepest_mm: Option<[f64; 3]>,
+    /// The surface the two share, mm². Present only when they touch, and the
+    /// number to read there: `touching` says the same for a face seated over
+    /// 2800 mm² and for two corners that graze at 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact_mm2: Option<f64>,
+    /// How many separate patches that contact is in: one seated face is 1,
+    /// a lid resting on two bosses is 2, a point or an edge is 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact_patches: Option<usize>,
+    /// Its area-weighted centre — a seat's is near the middle of the face,
+    /// a corner graze's is at the corner.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contact_center_mm: Option<[f64; 3]>,
 }
 
 impl From<&parcad_occt::BodyFit> for BodyFit {
@@ -645,6 +667,11 @@ impl From<&parcad_occt::BodyFit> for BodyFit {
             interference_mm3: round_mm(f.interference_mm3),
             clearance_mm: f.clearance_mm.map(round_mm),
             closest_mm: f.closest_mm.map(|[a, b]| [round_point(a), round_point(b)]),
+            depth_mm: f.depth_mm.map(round_mm),
+            deepest_mm: f.deepest_mm.map(round_point),
+            contact_mm2: f.contact_mm2.map(round_mm),
+            contact_patches: f.contact_patches,
+            contact_center_mm: f.contact_center_mm.map(round_point),
         }
     }
 }

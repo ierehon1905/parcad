@@ -820,13 +820,21 @@ function readmeFor(path: string, source: string): string {
         `- body ${body.name}: ${body.volume_mm3 !== undefined ? `${fmt(body.volume_mm3)} mm³` : "a surface"}, ${body.faces} faces` +
         (body.pieces > 1 ? `, in ${body.pieces} PIECES` : ""),
     ),
-    ...(snapshot.between_bodies ?? []).map(
-      (pair) =>
-        `- ${pair.a} and ${pair.b}: ${pair.verdict}` +
-        (pair.clearance_mm !== undefined
-          ? ` by ${fmt(pair.clearance_mm)} mm`
-          : `, ${fmt(pair.interference_mm3)} mm³ shared`),
-    ),
+    ...(snapshot.between_bodies ?? []).map((pair) => {
+      if (pair.verdict === "interfering") {
+        const deep = pair.depth_mm !== undefined ? `, ${fmt(pair.depth_mm)} mm deep` : "";
+        return `- ${pair.a} and ${pair.b}: interfering, ${fmt(pair.interference_mm3)} mm³ shared${deep}`;
+      }
+      if (pair.verdict === "touching" && pair.contact_mm2 !== undefined) {
+        const patches = pair.contact_patches ?? 0;
+        return (
+          `- ${pair.a} and ${pair.b}: touching over ${fmt(pair.contact_mm2)} mm² ` +
+          `in ${patches} ${patches === 1 ? "patch" : "patches"}`
+        );
+      }
+      const by = pair.clearance_mm !== undefined ? ` by ${fmt(pair.clearance_mm)} mm` : "";
+      return `- ${pair.a} and ${pair.b}: ${pair.verdict}${by}`;
+    }),
     ...(snapshot.stands_on
       ? [
           `- stands on ${fmt(snapshot.stands_on.area_mm2)} mm² in ${snapshot.stands_on.patches} ` +

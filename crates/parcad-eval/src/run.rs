@@ -175,6 +175,9 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
                         verdict: f.verdict.clone(),
                         clearance_mm: f.clearance_mm,
                         interference_mm3: f.interference_mm3,
+                        depth_mm: f.depth_mm,
+                        contact_mm2: f.contact_mm2,
+                        contact_patches: f.contact_patches,
                     },
                 )
             })

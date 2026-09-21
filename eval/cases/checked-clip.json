@@ -1,7 +1,7 @@
 {
   "name": "checked-clip",
   "script": "eval/scripts/checked-clip.js",
-  "why": "A part whose three checks all hold: the catch bites the latch by 1.8 x 10 x 4 = 72 mm³ against an atLeast of 30, the foot touches the latch's underside exactly, and the thinnest wall is the 2 mm foot against a min of 1. Recorded so that `passed: 3` is a number the corpus holds, and the field case that edits REACH to 0.4 (16 mm³, failing) starts from a part known to pass.",
+  "why": "A part whose three checks all hold: the catch bites the latch by 1.8 x 10 x 4 = 72 mm³ against an atLeast of 30, the foot touches the latch's underside exactly, and the thinnest wall is the 2 mm foot against a min of 1. Recorded so that `passed: 3` is a number the corpus holds, and the field case that edits REACH to 0.4 (16 mm³, failing) starts from a part known to pass. The pairwise depths and contacts are closed form too: the catch reaches REACH = 1.8 mm into the latch, the latch's whole 20 x 10 underside seats on the foot at 200 mm² in one patch, and the catch's own overhang onto the foot is the 1.8 x 10 = 18 mm² it laps over the foot's +x end.",
   "brep": {
     "size": [
       24.2,
@@ -67,16 +67,21 @@
       "catch/foot": {
         "verdict": "touching",
         "clearance_mm": 0.0,
-        "interference_mm3": 0.0
+        "interference_mm3": 0.0,
+        "contact_mm2": 18.0,
+        "contact_patches": 1
       },
       "latch/catch": {
         "verdict": "interfering",
-        "interference_mm3": 72.0
+        "interference_mm3": 72.0,
+        "depth_mm": 1.8
       },
       "latch/foot": {
         "verdict": "touching",
         "clearance_mm": 0.0,
-        "interference_mm3": 0.0
+        "interference_mm3": 0.0,
+        "contact_mm2": 200.0,
+        "contact_patches": 1
       }
     },
     "checks": {

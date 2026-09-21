@@ -744,6 +744,20 @@ pub struct BodyFit {
     /// A point on `a`, then one on `b`, where the clearance is measured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closest_mm: Option<[[f64; 3]; 2]>,
+    /// How far one reaches into the other, mm, and where: the thickest the
+    /// shared material gets. Absent unless they interfere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deepest_mm: Option<[f64; 3]>,
+    /// The surface they share, mm², in how many patches, centred where.
+    /// Absent unless they touch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_mm2: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_patches: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_center_mm: Option<[f64; 3]>,
 }
 
 /// One face's triangles, as a span of the index buffer. `start`/`count` are in
@@ -821,6 +835,26 @@ pub struct FitReport {
     /// Where that clearance is measured: a point on the part, then one on the
     /// reference. Absent when they interfere.
     pub closest_mm: Option<[[f64; 3]; 2]>,
+    /// How far one reaches into the other, mm — the thickest the shared
+    /// material gets, and so what has to move for the two to part. Absent
+    /// unless they interfere. The volume alone cannot be read as this:
+    /// 0.002 mm³ along a coin's rim is a couple of microns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_mm: Option<f64>,
+    /// Where that depth is attained. Absent unless they interfere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deepest_mm: Option<[f64; 3]>,
+    /// The surface the two share where they touch, mm². Absent unless they
+    /// touch; zero when they meet along a line or at a point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_mm2: Option<f64>,
+    /// How many separate patches that surface is in: one seated face is 1,
+    /// a lid on two bosses is 2, a corner graze is 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_patches: Option<usize>,
+    /// The area-weighted centre of the contact. Absent unless they touch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_center_mm: Option<[f64; 3]>,
     pub part_bounds: [[f64; 3]; 2],
     pub reference_bounds: [[f64; 3]; 2],
 }

@@ -1396,6 +1396,89 @@ edited the part by name (which saved it, and put it on screen because it was
 open), one edited `"@session"` without evaluating first, and one changed
 nothing and asked whether it should.
 
+## 20. How deep, and how much — the two numbers a verdict leaves out
+
+`between_bodies` and `check_fit` answered every pair with a word and a
+volume, and the coin-holder session read both wrongly in ways that decided
+the design (docs/COIN_HOLDER_REVIEW.md §2.3). A 0.002 mm³ overlap between a
+coin and a retention arm was written up as *"both flat and tilted €2 coins
+remain securely blocked"*: over a 2.2 mm coin edge that volume is a
+penetration of about two microns, an order of magnitude inside a printer's
+dimensional error, and it is evidence the coin is exactly *at* the escape
+boundary. And `{"a":"top","b":"cups","clearance_mm":0,"closest_mm":[[45,0,12.32],[45,0,12.32]]}`
+— one point, repeated, at the extreme +x end of the part — was read as
+*"the three touch without overlapping"*, evidence that the stack seats.
+`touching` is returned identically for two bodies sharing 2 800 mm² of face
+and for two that graze at a corner.
+
+Since 2026-09-21 an interfering pair carries `depth_mm` and `deepest_mm`, and
+a touching pair `contact_mm2`, `contact_patches` and `contact_center_mm`.
+Both are measured on the exact solids and neither is derivable from what was
+there before:
+
+- **Depth** is the diameter of the largest ball that fits inside the solid
+  the two share, and its centre — `perceive::deepest_inside`, the same
+  shrinking-ball search §5's wall sweep runs, pointed at the common instead
+  of the part. It is a lower bound that is *attained*, never an estimate
+  above the truth. A Ø10 boss sunk 5 mm into a plate reads 5.000; a catch
+  reaching 1.8 mm into a latch reads 1.800; a 5 mm cube sunk 0.4 mm into a
+  plate reads 0.400 against 10 mm³ of volume.
+- **Contact** is the common of the two bodies' *skins* — each body's faces,
+  with no inside — measured by `BRepGProp` over that compound and counted
+  into patches by which faces share an edge. A lid on a cup's Ø54–Ø60 rim
+  reads 537.212 mm² in one patch, exact on a face bounded by circles where
+  the same area off a 0.01 mm mesh is a tenth of a percent short; a ball
+  resting on that cup's floor reads 0.000 in none; a lid on two bosses reads
+  two patches. `Shape_faces_json` explores solids only and reads a compound
+  of loose faces as empty, which is why the vendored crate gained
+  `Shape::surface_properties` (PARCAD-CHANGES.md).
+
+A number a script cannot assert is half-landed, so `Check` gained the two
+qualifiers that name them: `{ interferes: [a, b], deeperThan: 0.3 }` and
+`{ touching: [a, b], contactAtLeast: 500 }`. `atLeast` on `interferes` still
+means mm³ and is still the wrong quantity to design a catch by; the new key
+is the right one, and a failing `deeperThan` reports the depth rather than
+the volume that misled.
+
+**Measured, 2026-09-21.** `eval/field/which-one-is-resting-on-it` puts one
+part to the model whose two pairs are both `touching`: a lid seated on a
+cup's whole rim and a ball resting on its floor at one point. Small model,
+4 trials per arm, two hosts on scratch ports — before at ef70c3c8, after at
+this round's last commit.
+
+| arm | before: sound / reach / quote | after: sound / reach / quote |
+|---|---|---|
+| thinking | 0/4 · 1/4 · 0/4 (4 WRONG) | 1/4 · 1/4 · 1/4 (2 WRONG, 1 VOID) |
+| no thinking | 0/4 · 1/4 · 1/4 (3 WRONG, 1 VOID, 1 trap) | 0/4 (2 LUCKY) · 0/4 · 2/4 |
+
+The cleanest number is not in the table: **`537.212` appears in none of the
+eight before transcripts and in one of the eight after**, the trial that
+called `evaluate_part`. Before, a trial that reached the tool still could
+not be right — trial 1 of the thinking arm called it, read `touching` with
+`clearance_mm: 0`, and then computed π(30²−27²) by hand to 537.5; another
+wrote "this is a point contact, not a surface" about the ball and reported
+the lid's derived figure anyway. After, the one trial that reached the tool
+quoted the measurement exactly and said the ball "touches the cup at a
+point, not bearing on a surface".
+
+Two things this round does *not* show. Reach did not move — 2/8 before, 1/8
+after — and it would not: this changed a reply, not a tool's pull, and the
+trials that never load `evaluate_part` open the part and reason from its
+source, which is the finding in docs/WRITING_FOR_MODELS.md. And the case
+is weaker than it looks: 537.212 is a closed form, so two after trials
+derived it, rounded to 537.2 and graded LUCKY on a number they never
+measured. A better version wants a contact area with no closed form; until
+then `reach` is the column to read.
+
+Pinned by `eval/cases/seated-and-sunk` (0.400 mm deep, 100 mm² in one patch,
+both closed form, both asserted by the part's own checks) and
+`eval/cases/rim-and-ball` (537.212 against 0.000, under one verdict). Three
+cases that already recorded a pair moved: `interfering-bodies` gained the
+5.0 mm the boss reaches into the plate, `checked-clip` the 1.8 mm bite and
+its 18 and 200 mm² seats, and `twisted-planter` the finding that its planter
+rests on the saucer's 37 bumps over **0.000 mm² in 0 patches** — a tangent
+line, not a seat, which nothing in the old reply could have said.
+
 ## Suggested order
 
 Done, and what each cost is in its own section: point and ray probes and

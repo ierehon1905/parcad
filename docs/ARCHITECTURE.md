@@ -106,9 +106,12 @@ code that measures a whole part, so a body's volume and the part's are the same
 kind of number and the bodies sum to the part; the same function serves the
 app's snapshot (`named_bodies`) and the eval corpus. Every pair is measured on
 the exact solids with `fit_between`, the measurement behind `check_fit`, and
-reported as `between_bodies`: `clear` by a clearance, `touching`, or
-`interfering` by a shared volume — a clip drawn through the body it clips onto
-is a design error the number states outright. STEP writes the compound, which
+reported as `between_bodies`: `clear` by a clearance, `touching` over a
+contact area in so many patches, or `interfering` by a shared volume and the
+depth one reaches into the other — a clip drawn through the body it clips onto
+is a design error the number states outright. The verdict alone is not the
+answer either way: a volume is not a depth, and `touching` is the same word
+for a seated face and a corner (docs/PERCEPTION.md §20). STEP writes the compound, which
 OCCT's writer turns into one solid per body; 3MF writes each body's welded
 triangles as its own named object, so a slicer can place the halves apart
 (`parcad_occt::body_meshes`, `parcad_core::threemf`); STL writes every body's

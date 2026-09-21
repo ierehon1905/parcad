@@ -18,6 +18,7 @@ use crate::protocol::{
 };
 use anyhow::{bail, Result};
 use glam::{DVec2, DVec3};
+use opencascade::adhoc::AdHocShape;
 use opencascade::mesh::Mesh;
 use opencascade::primitives::{ClosePair, Compound, Crossing, EdgeWedge, NearestBoundary, PointState, RayCaster, Shape};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -221,6 +222,92 @@ pub fn tag_extents(part: &BuiltPart, bodies: &[Body]) -> (Vec<TagBounds>, Vec<St
         }
     }
     (found, unlocated)
+}
+
+/// How thick the material of `shape` gets at its thickest, and where: the
+/// diameter of the largest ball that fits inside it, and that ball's centre.
+///
+/// Run on the solid two bodies share, this is the penetration depth — how far
+/// one reaches into the other before they part — which is the quantity a
+/// shared *volume* cannot be read as: 0.002 mm³ spread along a coin's rim is a
+/// graze of a couple of microns, and the same volume in a peg's bore is a
+/// press fit. Every ball is tangent at a sampled surface point, so a sliver
+/// too thin for any interior grid is still measured; the answer is a lower
+/// bound, attained, never an estimate above the truth.
+pub fn deepest_inside(shape: &Shape) -> Option<(f64, DVec3)> {
+    let mesh = shape.mesh();
+    let (mut lo, mut hi) = (DVec3::splat(f64::INFINITY), DVec3::splat(f64::NEG_INFINITY));
+    for v in &mesh.vertices {
+        lo = lo.min(*v);
+        hi = hi.max(*v);
+    }
+    let diagonal = (hi - lo).length();
+    if !diagonal.is_finite() || diagonal <= 0.0 {
+        return None;
+    }
+    let limit = diagonal * 0.5 + 1.0;
+    let meshes = [mesh];
+    let finest = (diagonal / DEEPEST_SAMPLES_PER_DIAGONAL).max(1e-4);
+    let spacing = plan_spacing(&meshes, DEEPEST_MAX_SAMPLES, finest);
+    let mut nearest = shape.nearest_boundary();
+    let mut best: Option<(f64, DVec3)> = None;
+    for Start { face, uv, may_be_outside, .. } in surface_samples(&meshes, spacing) {
+        let Some((p, outward)) = nearest.evaluate(face, uv, may_be_outside) else {
+            continue;
+        };
+        // The widest ball found so far is the right first guess for the next:
+        // the overlap is one region and its thickness moves slowly over it.
+        let guess = best.map_or(spacing, |(d, _)| 0.5 * d);
+        if let Some(ball) = inscribed(&mut nearest, p, -outward, guess, limit) {
+            if best.is_none_or(|(d, _)| 2.0 * ball.radius > d) {
+                best = Some((2.0 * ball.radius, ball.centre));
+            }
+        }
+    }
+    best
+}
+
+/// Where the two bodies touch: the surface they share in mm², how many
+/// separate patches it is in, and its area-weighted centre.
+///
+/// `touching` alone says nothing about how much: two plates seated face to
+/// face and two cubes meeting at one corner both return it. The shared
+/// surface is the common of the two skins — each body's faces, with no
+/// inside — measured exactly, so a contact that is a line or a point has no
+/// area and says so.
+pub fn contact_between(a: &Shape, b: &Shape) -> (f64, usize, DVec3) {
+    let skin = |s: &Shape| -> Shape { Compound::from_shapes(s.faces().map(Shape::from)).into() };
+    let mut shared = AdHocShape(skin(a));
+    shared.intersect(&skin(b));
+    let (area, centre) = shared.0.surface_properties();
+    match area > 0.0 {
+        true => (area, patches(&shared.0), centre),
+        false => (0.0, 0, DVec3::ZERO),
+    }
+}
+
+/// How many separate patches these faces make: two that share an edge are one
+/// patch, so a lid seated on one face is 1 and a lid on two bosses is 2.
+fn patches(shape: &Shape) -> usize {
+    let faces: Vec<FaceKey> = shape.faces().map(|face| face_key(&face)).collect();
+    let mut owner: Vec<usize> = (0..faces.len()).collect();
+    fn root(owner: &mut [usize], mut i: usize) -> usize {
+        while owner[i] != i {
+            owner[i] = owner[owner[i]];
+            i = owner[i];
+        }
+        i
+    }
+    let mut along: HashMap<Vec<[i64; 3]>, usize> = HashMap::new();
+    for (i, face) in faces.iter().enumerate() {
+        for edge in face {
+            if let Some(j) = along.insert(edge.clone(), i) {
+                let (a, b) = (root(&mut owner, i), root(&mut owner, j));
+                owner[a] = b;
+            }
+        }
+    }
+    (0..faces.len()).map(|i| root(&mut owner, i)).collect::<HashSet<_>>().len()
 }
 
 /// Answer every question in `spec` against these bodies.
@@ -472,6 +559,14 @@ fn cast(bodies: &[Body], casters: &mut [RayCaster], line: &RayLine, max: f64) ->
 /// How far the exact surface may lie from the mesh the sweep plans on, in mm:
 /// the mesher's linear deflection.
 const DEFLECTION_MM: f64 = 0.01;
+
+/// Surface samples across the diagonal of the solid two bodies share, for the
+/// deepest ball inside it. The overlap is small and its thickness is the whole
+/// answer, so it is sampled finer than the part-wide sweep's 96 — up to a
+/// budget, since two large solids drawn through each other share a large
+/// solid and a ball is a search apiece.
+const DEEPEST_SAMPLES_PER_DIAGONAL: f64 = 160.0;
+const DEEPEST_MAX_SAMPLES: usize = 4000;
 
 /// Edge samples per part diagonal for the feather search, at least eight per
 /// edge: the angle between two faces changes slowly along their edge.

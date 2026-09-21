@@ -23,7 +23,7 @@ describe("checks in the returned object", () => {
 
   test("an unknown key is refused with the key that was meant", () => {
     expect(() => part([{ clear: ["top", "stack"], clearance: 0.2 }])).toThrow(
-      'check 1 has no key "clearance" (write atLeast instead). A check\'s keys are clear, interferes, touching, wall, size, standsOn, bodies, watertight, atLeast, ignore, on and why.',
+      'check 1 has no key "clearance" (write atLeast instead). A check\'s keys are clear, interferes, touching, wall, size, standsOn, bodies, watertight, atLeast, deeperThan, contactAtLeast, ignore, on and why.',
     );
     expect(() => part([{ thickness: { min: 1 } }])).toThrow('check 1 has no key "thickness" (write wall instead)');
     expect(() => part([{ clear: ["top", "stack"] }, { why: "nothing" }])).toThrow("check 2 names nothing to check");

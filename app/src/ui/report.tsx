@@ -205,7 +205,7 @@ function Bodies({ snapshot }: { snapshot: Snapshot }) {
       {shownPairs.map((pair) => (
         <div key={`${pair.a}/${pair.b}`} class={pair.verdict === "interfering" ? "text-bad" : undefined}>
           {pair.a} · {pair.b}: {pair.verdict}
-          {pair.clearance_mm !== undefined && (
+          {pair.verdict !== "touching" && pair.clearance_mm !== undefined && (
             <>
               {" by "}
               <Strong>{fmt(pair.clearance_mm)}</Strong> mm
@@ -215,6 +215,19 @@ function Bodies({ snapshot }: { snapshot: Snapshot }) {
             <>
               {", "}
               <Strong>{fmt(pair.interference_mm3)}</Strong> mm³ shared
+              {pair.depth_mm !== undefined && (
+                <>
+                  {", "}
+                  <Strong>{fmt(pair.depth_mm)}</Strong> mm deep
+                </>
+              )}
+            </>
+          )}
+          {pair.verdict === "touching" && pair.contact_mm2 !== undefined && (
+            <>
+              {" over "}
+              <Strong>{fmt(pair.contact_mm2)}</Strong> mm²
+              {` in ${pair.contact_patches ?? 0} ${pair.contact_patches === 1 ? "patch" : "patches"}`}
             </>
           )}
         </div>

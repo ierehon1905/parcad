@@ -640,6 +640,7 @@ mod tests {
                 check: "wall min 1".into(),
                 measured_mm: Some(0.5),
                 measured_mm3: None,
+                measured_mm2: None,
                 measured: None,
                 at: None,
                 surface_of: None,

@@ -139,6 +139,13 @@ export interface EvaluationSnapshot {
     verdict: "clear" | "touching" | "interfering" | "crossing";
     interference_mm3: number;
     clearance_mm?: number;
+    /** How far one reaches into the other, when they interfere. */
+    depth_mm?: number;
+    deepest_mm?: [number, number, number];
+    /** The surface they share, when they touch: a seat, or a corner at 0. */
+    contact_mm2?: number;
+    contact_patches?: number;
+    contact_center_mm?: [number, number, number];
   }[];
   /** The surface in the part's lowest plane and how many patches it is in;
    *  what a printed part rests on. Absent only for an empty mesh. */

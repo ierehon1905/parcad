@@ -22,11 +22,12 @@ pub struct Check {
     /// The two bodies never touch, by at least `atLeast` mm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clear: Option<[String; 2]>,
-    /// The two bodies must overlap, by at least `atLeast` mm³: a catch that
-    /// has to catch.
+    /// The two bodies must overlap, by at least `atLeast` mm³ and
+    /// `deeperThan` mm: a catch that has to catch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interferes: Option<[String; 2]>,
-    /// The two bodies are flush: neither gap nor overlap.
+    /// The two bodies are flush: neither gap nor overlap, over at least
+    /// `contactAtLeast` mm² of shared surface.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub touching: Option<[String; 2]>,
     /// Nothing in the part is thinner than `min` mm.
@@ -48,6 +49,15 @@ pub struct Check {
     /// shared volume, mm³. Absent: any clearance, any overlap.
     #[serde(default, rename = "atLeast", skip_serializing_if = "Option::is_none")]
     pub at_least: Option<f64>,
+    /// For `interferes`: the least the two must reach into each other, mm.
+    /// This is the number a catch is designed to, and the one a volume
+    /// cannot stand in for — 0.002 mm³ along a coin's rim is two microns.
+    #[serde(default, rename = "deeperThan", skip_serializing_if = "Option::is_none")]
+    pub deeper_than: Option<f64>,
+    /// For `touching`: the least surface the two must share, mm². A seat is
+    /// a patch of a face; a corner graze is `touching` at 0 mm².
+    #[serde(default, rename = "contactAtLeast", skip_serializing_if = "Option::is_none")]
+    pub contact_at_least: Option<f64>,
     /// For `wall`: tags whose surfaces are left out, and `feather` or `edge`
     /// to leave out that kind of thin reading — an intended knife edge.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -111,7 +121,7 @@ impl CheckKind {
 pub const HEAD_KEYS: [&str; 8] = ["clear", "interferes", "touching", "wall", "size", "standsOn", "bodies", "watertight"];
 
 /// Every key a check may carry: what the envelope names when one is unknown.
-pub const KEYS: [&str; 12] = [
+pub const KEYS: [&str; 14] = [
     "clear",
     "interferes",
     "touching",
@@ -121,6 +131,8 @@ pub const KEYS: [&str; 12] = [
     "bodies",
     "watertight",
     "atLeast",
+    "deeperThan",
+    "contactAtLeast",
     "ignore",
     "on",
     "why",
@@ -128,7 +140,13 @@ pub const KEYS: [&str; 12] = [
 
 /// A key an author might write for one of [`KEYS`], and the key they meant.
 /// `app/src/dsl.ts` carries the same table for the editor's own refusal.
-pub const SYNONYMS: [(&str, &str); 24] = [
+pub const SYNONYMS: [(&str, &str); 30] = [
+    ("depth", "deeperThan"),
+    ("depthmm", "deeperThan"),
+    ("deeper", "deeperThan"),
+    ("bite", "deeperThan"),
+    ("contact", "contactAtLeast"),
+    ("contactmm2", "contactAtLeast"),
     ("clearance", "atLeast"),
     ("clearancemm", "atLeast"),
     ("gap", "atLeast"),
@@ -202,6 +220,12 @@ impl Check {
                 if let Some(least) = self.at_least {
                     s.push_str(&format!(" atLeast {least}"));
                 }
+                if let Some(deep) = self.deeper_than {
+                    s.push_str(&format!(" deeperThan {deep}"));
+                }
+                if let Some(contact) = self.contact_at_least {
+                    s.push_str(&format!(" contactAtLeast {contact}"));
+                }
                 s
             }
             CheckKind::Wall => format!("wall min {}", self.wall.as_ref().expect("wall").min),
@@ -260,6 +284,34 @@ impl Check {
             }
             if !(least >= 0.0) || !least.is_finite() {
                 return Err(format!("{at} ({}): atLeast must be a length of 0 mm or more, not {least}", self.sentence()));
+            }
+        }
+        if let Some(deep) = self.deeper_than {
+            if kind != CheckKind::Interferes {
+                return Err(format!(
+                    "{at} ({}) has deeperThan, which only interferes reads; a gap is measured by clear atLeast",
+                    self.sentence()
+                ));
+            }
+            if !(deep >= 0.0) || !deep.is_finite() {
+                return Err(format!(
+                    "{at} ({}): deeperThan is how far the two must reach into each other in mm, 0 or more, not {deep}",
+                    self.sentence()
+                ));
+            }
+        }
+        if let Some(contact) = self.contact_at_least {
+            if kind != CheckKind::Touching {
+                return Err(format!(
+                    "{at} ({}) has contactAtLeast, which only touching reads",
+                    self.sentence()
+                ));
+            }
+            if !(contact >= 0.0) || !contact.is_finite() {
+                return Err(format!(
+                    "{at} ({}): contactAtLeast is the shared surface in mm², 0 or more, not {contact}",
+                    self.sentence()
+                ));
             }
         }
         if kind != CheckKind::Wall && (!self.ignore.is_empty() || !self.on.is_empty()) {
@@ -370,6 +422,22 @@ mod tests {
         assert_eq!(meant("thickness"), Some("wall"));
         assert_eq!(meant("stands_on"), Some("standsOn"));
         assert_eq!(meant("lattice"), None);
+    }
+
+    #[test]
+    fn a_depth_and_a_contact_belong_to_the_kinds_that_measure_them() {
+        let bodies = ["coin", "arm"];
+        let catch = read(serde_json::json!({ "interferes": ["coin", "arm"], "deeperThan": 0.3 }));
+        catch.validate(1, &bodies, &[]).unwrap();
+        assert_eq!(catch.sentence(), "interferes coin↔arm deeperThan 0.3");
+        let seat = read(serde_json::json!({ "touching": ["coin", "arm"], "contactAtLeast": 20 }));
+        seat.validate(1, &bodies, &[]).unwrap();
+        let wrong = read(serde_json::json!({ "clear": ["coin", "arm"], "deeperThan": 0.3 }));
+        assert!(wrong.validate(1, &bodies, &[]).unwrap_err().contains("only interferes reads"));
+        let also = read(serde_json::json!({ "interferes": ["coin", "arm"], "contactAtLeast": 1 }));
+        assert!(also.validate(1, &bodies, &[]).unwrap_err().contains("only touching reads"));
+        assert_eq!(meant("depth"), Some("deeperThan"));
+        assert_eq!(meant("contact_mm2"), Some("contactAtLeast"));
     }
 
     #[test]

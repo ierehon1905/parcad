@@ -44,6 +44,9 @@ pub struct FailedCheck {
     /// What was measured, for `interferes`: the volume shared, in mm³.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub measured_mm3: Option<f64>,
+    /// What was measured, for `touching`: the surface shared, in mm².
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub measured_mm2: Option<f64>,
     /// What was measured, for a check about a count, a fraction, a size or a
     /// verdict: the value found.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -67,6 +70,7 @@ impl FailedCheck {
             check: check.sentence(),
             measured_mm: None,
             measured_mm3: None,
+            measured_mm2: None,
             measured: None,
             at: None,
             surface_of: None,
@@ -81,6 +85,8 @@ impl FailedCheck {
             format!("measured {mm} mm")
         } else if let Some(mm3) = self.measured_mm3 {
             format!("measured {mm3} mm³")
+        } else if let Some(mm2) = self.measured_mm2 {
+            format!("measured {mm2} mm²")
         } else if let Some(value) = &self.measured {
             format!("measured {value}")
         } else {
@@ -166,10 +172,18 @@ fn judge_pair(check: &Check, kind: CheckKind, snapshot: &EvaluationSnapshot) -> 
         return Some(f);
     };
     let least = check.at_least.unwrap_or(0.0);
+    let deep_enough = |fit: &BodyFit| match check.deeper_than {
+        Some(want) => fit.depth_mm.is_some_and(|deep| deep >= want),
+        None => true,
+    };
+    let wide_enough = |fit: &BodyFit| match check.contact_at_least {
+        Some(want) => fit.contact_mm2.is_some_and(|area| area >= want),
+        None => true,
+    };
     let holds = match kind {
         CheckKind::Clear => fit.verdict == "clear" && fit.clearance_mm.unwrap_or(0.0) >= least,
-        CheckKind::Interferes => fit.verdict == "interfering" && fit.interference_mm3 >= least,
-        CheckKind::Touching => fit.verdict == "touching",
+        CheckKind::Interferes => fit.verdict == "interfering" && fit.interference_mm3 >= least && deep_enough(fit),
+        CheckKind::Touching => fit.verdict == "touching" && wide_enough(fit),
         _ => unreachable!("not a pair check"),
     };
     if holds {
@@ -179,6 +193,9 @@ fn judge_pair(check: &Check, kind: CheckKind, snapshot: &EvaluationSnapshot) -> 
     match kind {
         CheckKind::Interferes => {
             f.measured_mm3 = Some(fit.interference_mm3);
+            // A depth the check asked for and did not get is the measurement
+            // it failed on; the volume beside it is the one that misled.
+            f.measured_mm = fit.depth_mm.filter(|_| check.deeper_than.is_some());
             if fit.verdict != "interfering" {
                 f.measured = Some(serde_json::json!(fit.verdict));
                 f.measured_mm = fit.clearance_mm;
@@ -188,6 +205,13 @@ fn judge_pair(check: &Check, kind: CheckKind, snapshot: &EvaluationSnapshot) -> 
             if fit.verdict == "interfering" {
                 f.measured_mm3 = Some(fit.interference_mm3);
                 f.measured = Some(serde_json::json!(fit.verdict));
+            } else if kind == CheckKind::Touching && fit.verdict == "touching" {
+                f.measured_mm2 = fit.contact_mm2;
+                f.measured = Some(serde_json::json!(format!(
+                    "touching over {} mm² in {} patch(es)",
+                    fit.contact_mm2.unwrap_or(0.0),
+                    fit.contact_patches.unwrap_or(0)
+                )));
             } else {
                 f.measured_mm = Some(fit.clearance_mm.unwrap_or(0.0));
                 if kind == CheckKind::Touching {
@@ -321,6 +345,11 @@ pub(crate) mod tests {
             interference_mm3: 0.0,
             clearance_mm: Some(0.13),
             closest_mm: Some([[25.95, 21.675, 12.32], [25.95, 21.675, 12.19]]),
+            depth_mm: None,
+            deepest_mm: None,
+            contact_mm2: None,
+            contact_patches: None,
+            contact_center_mm: None,
         }]);
         let report = judge(&doc, &snapshot, &mut no_wall).unwrap();
         assert_eq!(report.verdict, "failed");
@@ -352,6 +381,11 @@ pub(crate) mod tests {
             interference_mm3: 1.23,
             clearance_mm: None,
             closest_mm: None,
+            depth_mm: Some(0.08),
+            deepest_mm: Some([25.95, 21.675, 12.3]),
+            contact_mm2: None,
+            contact_patches: None,
+            contact_center_mm: None,
         }]);
         let report = judge(&doc, &bite, &mut no_wall).unwrap();
         assert_eq!(report.verdict, "failed");
@@ -361,6 +395,55 @@ pub(crate) mod tests {
         assert_eq!(report.failed[0].measured_mm3, Some(1.23));
         let text = serde_json::to_string(&ChecksReport { verdict: "passed", passed: 5, failed: Vec::new() }).unwrap();
         assert_eq!(text, "{\"verdict\":\"passed\",\"passed\":5}");
+    }
+
+    /// The two quantities a verdict leaves out, asserted: a volume large
+    /// enough with a bite too shallow fails on the depth, and a touch over
+    /// too little surface fails on the area. docs/COIN_HOLDER_REVIEW.md §2.3.
+    #[test]
+    fn a_depth_and_a_contact_are_judged_on_their_own_numbers() {
+        let graze = snapshot(vec![BodyFit {
+            a: "coin".into(),
+            b: "arm".into(),
+            verdict: "interfering".into(),
+            interference_mm3: 0.002,
+            clearance_mm: None,
+            closest_mm: None,
+            depth_mm: Some(0.002),
+            deepest_mm: Some([25.0, 0.0, 3.0]),
+            contact_mm2: None,
+            contact_patches: None,
+            contact_center_mm: None,
+        }]);
+        let catch = doc(serde_json::json!([
+            { "interferes": ["coin", "arm"], "deeperThan": 0.3, "why": "the arm must block the coin" }
+        ]));
+        let report = judge(&catch, &graze, &mut no_wall).unwrap();
+        assert_eq!(report.verdict, "failed");
+        assert_eq!(report.failed[0].measured_mm, Some(0.002));
+        assert!(report.failed[0].sentence().contains("measured 0.002 mm ("), "{}", report.failed[0].sentence());
+        // The same pair passes the check that only asks for an overlap.
+        let any = doc(serde_json::json!([{ "interferes": ["coin", "arm"] }]));
+        assert_eq!(judge(&any, &graze, &mut no_wall).unwrap().verdict, "passed");
+
+        let corner = snapshot(vec![BodyFit {
+            a: "coin".into(),
+            b: "arm".into(),
+            verdict: "touching".into(),
+            interference_mm3: 0.0,
+            clearance_mm: Some(0.0),
+            closest_mm: Some([[45.0, 0.0, 12.32], [45.0, 0.0, 12.32]]),
+            depth_mm: None,
+            deepest_mm: None,
+            contact_mm2: Some(0.0),
+            contact_patches: Some(0),
+            contact_center_mm: Some([45.0, 0.0, 12.32]),
+        }]);
+        let seat = doc(serde_json::json!([{ "touching": ["coin", "arm"], "contactAtLeast": 500 }]));
+        let report = judge(&seat, &corner, &mut no_wall).unwrap();
+        assert_eq!(report.verdict, "failed");
+        assert_eq!(report.failed[0].measured_mm2, Some(0.0));
+        assert_eq!(report.failed[0].measured, Some(serde_json::json!("touching over 0 mm² in 0 patch(es)")));
     }
 
     /// A wall check reads the sweep at its own threshold, leaves edges out

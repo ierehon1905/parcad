@@ -124,8 +124,12 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      bodies measured and drawn but in no file and no whole-part number; and
      `note()`, carried in the reply as "from the script, not measured";
    - ~~overhang and print files~~ — landed 2026-09-21 with the print check;
-   - `depth_mm` and `contact_mm2` in `between_bodies` — a 0.002 mm³ graze was
-     read as a catch;
+   - ~~`depth_mm` and `contact_mm2` in `between_bodies`~~ — landed 2026-09-21:
+     `depth_mm`/`deepest_mm` on an interfering pair (the widest ball inside
+     what they share) and `contact_mm2`/`contact_patches`/`contact_center_mm`
+     on a touching one (the common of their two skins, exact), on
+     `between_bodies` and `check_fit` alike, with `deeperThan` and
+     `contactAtLeast` so a check can assert them; docs/PERCEPTION.md §20;
    - `brief()` with an envelope, judged every build, and a scale rule on renders;
    - then vocabulary (`MATERIALS`, `OBJECTS` with profiles, `fit()`, `{ at, cut }`,
      `not`, a listed `styles` topic), `compare_variants`, snapshot summaries,

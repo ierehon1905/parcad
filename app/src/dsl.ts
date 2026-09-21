@@ -4093,15 +4093,16 @@ export type Part = Shape | Record<string, Shape | Check[]>;
 /**
  * One rule the built part must hold, written as `checks: [...]` beside the
  * bodies it is about. Judged on every build from what the kernel measured,
- * and reported first: `{ verdict: "passed", passed: n }`, or each failing
- * check with its measurement, where, and its `why`.
+ * and reported first: a verdict, then each failing check with its
+ * measurement, where, and its `why`.
  *
- * - One head key per check: `clear`, `interferes`, `touching` (a pair of
- *   body names), `wall`, `size`, `standsOn`, `bodies` or `watertight`.
- * - `atLeast` qualifies `clear` (mm) and `interferes` (mm³); `ignore` and
- *   `on` qualify `wall`. Names must be bodies and tags the part has.
- * - evaluate_part reports a failed check and builds on; export_part and
- *   save_project refuse it unless given `allow_failing: "<reason>"`.
+ * - One head key per check: `clear`, `interferes`, `touching` (body
+ *   pairs), `wall`, `size`, `standsOn`, `bodies` or `watertight`.
+ * - Qualifiers: `atLeast` (mm on `clear`, mm³ on `interferes`),
+ *   `deeperThan` (mm), `contactAtLeast` (mm²), `ignore` and `on` on `wall`.
+ *   Names must be bodies and tags the part has.
+ * - evaluate_part reports a failure and builds on; export_part and
+ *   save_project refuse it without `allow_failing: "<reason>"`.
  *
  * @example
  *     const plate = box(60, 40, 3).tag("plate");
@@ -4109,13 +4110,17 @@ export type Part = Shape | Record<string, Shape | Check[]>;
  *     return {
  *       plate, stack,
  *       checks: [
- *         { clear: ["plate", "stack"], atLeast: 0.2, why: "coins must not bind on the plate" },
+ *         { clear: ["plate", "stack"], atLeast: 0.2, why: "coins must not bind" },
  *         { wall: { min: 1 }, ignore: ["feather"] },
  *         { size: { max: [115, 65, 40] } },
  *       ],
  *     };
  *
  * @remarks
+ * A catch is designed to a depth and a seat is an area, so `deeperThan` and
+ * `contactAtLeast` are the qualifiers to reach for there: `atLeast` on
+ * `interferes` is a shared volume, which 0.002 mm³ along a coin's rim
+ * satisfies at a bite of two microns (docs/COIN_HOLDER_REVIEW.md §2.3).
  * No new global: every export is a reserved word in a script (DSL_GAPS §7),
  * so `assert`, `check` and `clear` would each break saved parts, and
  * `clearance` is already taken. The one thing lost is a body named
@@ -4128,7 +4133,7 @@ export type Part = Shape | Record<string, Shape | Check[]>;
 export interface Check {
   /** The two bodies never touch, by at least `atLeast` mm. */
   clear?: [string, string];
-  /** The two bodies overlap, by at least `atLeast` mm³: a catch that has to catch. */
+  /** The two bodies overlap: a catch that has to catch. */
   interferes?: [string, string];
   /** The two bodies are flush: neither gap nor overlap. */
   touching?: [string, string];
@@ -4142,8 +4147,12 @@ export interface Check {
   bodies?: number;
   /** The mesh closes. `true` is the only value. */
   watertight?: true;
-  /** For `clear`, the least clearance in mm; for `interferes`, the least shared volume in mm³. */
+  /** For `clear`, the least clearance, mm; for `interferes`, the least shared volume, mm³. */
   atLeast?: number;
+  /** For `interferes`: how far the two must reach into each other, mm. */
+  deeperThan?: number;
+  /** For `touching`: the least surface the two share, mm²; a corner graze is 0. */
+  contactAtLeast?: number;
   /** For `wall`: tags whose surfaces are left out, and `"feather"` or `"edge"` to leave out that kind of thin reading. */
   ignore?: string[];
   /** For `wall`: only material on these tags' surfaces counts. */
@@ -4153,9 +4162,15 @@ export interface Check {
 }
 
 /** The keys a check may carry, and the key an author might write for one. */
-const CHECK_KEYS = ["clear", "interferes", "touching", "wall", "size", "standsOn", "bodies", "watertight", "atLeast", "ignore", "on", "why"];
+const CHECK_KEYS = ["clear", "interferes", "touching", "wall", "size", "standsOn", "bodies", "watertight", "atLeast", "deeperThan", "contactAtLeast", "ignore", "on", "why"];
 const CHECK_HEADS = CHECK_KEYS.slice(0, 8);
 const CHECK_SYNONYMS: Record<string, string> = {
+  depth: "deeperThan",
+  depthmm: "deeperThan",
+  deeper: "deeperThan",
+  bite: "deeperThan",
+  contact: "contactAtLeast",
+  contactmm2: "contactAtLeast",
   clearance: "atLeast",
   clearancemm: "atLeast",
   gap: "atLeast",

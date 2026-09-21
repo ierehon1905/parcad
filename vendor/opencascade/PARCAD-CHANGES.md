@@ -193,6 +193,15 @@ whose faces point inward. parcad's offset lowering uses it to catch the
 inside-out result `MakeThickSolid` returns for a filleted body — the shape a
 later boolean reads as everything except the part.
 
+## `Shape::surface_properties`
+
+`BRepGProp::SurfaceProperties` with its centre of mass, over a whole shape
+rather than one face. The crate already bound it for `Face::center_of_mass`
+and threw the mass away. parcad measures the contact between two touching
+bodies with it: the common of their two skins is a compound of loose faces,
+which `Shape_faces_json` (solids only) reads as empty, and the area has to be
+exact on a curved seat rather than a tessellation's.
+
 ## Removed: `Shape::oriented_outward`
 
 It was `BRepLib::OrientClosedSolid` on the single solid a shape is, the pair

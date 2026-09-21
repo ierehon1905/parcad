@@ -597,6 +597,16 @@ pub struct BetweenExpect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clearance_mm: Option<f64>,
     pub interference_mm3: f64,
+    /// How far one reaches into the other, mm; recorded only where they
+    /// interfere. A volume that holds while this moves is a pair whose
+    /// overlap changed shape, which is what a catch is designed by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_mm: Option<f64>,
+    /// The surface they share, mm², and its patches; only where they touch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_mm2: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_patches: Option<usize>,
 }
 
 /// One body's overhang as it prints, as the reply carries it.
@@ -1040,6 +1050,29 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
                 }),
             }
             pct_check(&mut out, &format!("between_bodies.{pair}.interference_mm3"), want.interference_mm3, got.interference_mm3, tol.volume_pct);
+            // A depth is a length; a contact is an area, held like a volume.
+            match (want.depth_mm, got.depth_mm) {
+                (Some(w), Some(g)) => abs_check(&mut out, &format!("between_bodies.{pair}.depth_mm"), w, g, tol.size_mm),
+                (None, None) => {}
+                (w, g) => out.push(Mismatch {
+                    field: format!("between_bodies.{pair}.depth_mm"),
+                    detail: format!("expected {w:?}, measured {g:?}"),
+                }),
+            }
+            match (want.contact_mm2, got.contact_mm2) {
+                (Some(w), Some(g)) => pct_check(&mut out, &format!("between_bodies.{pair}.contact_mm2"), w, g, tol.volume_pct),
+                (None, None) => {}
+                (w, g) => out.push(Mismatch {
+                    field: format!("between_bodies.{pair}.contact_mm2"),
+                    detail: format!("expected {w:?}, measured {g:?}"),
+                }),
+            }
+            if want.contact_patches != got.contact_patches {
+                out.push(Mismatch {
+                    field: format!("between_bodies.{pair}.contact_patches"),
+                    detail: format!("expected {:?}, measured {:?}", want.contact_patches, got.contact_patches),
+                });
+            }
         }
     }
     if let Some(want) = &expect.checks {
@@ -1312,6 +1345,9 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
                         verdict: f.verdict.clone(),
                         clearance_mm: f.clearance_mm.map(round3),
                         interference_mm3: round3(f.interference_mm3),
+                        depth_mm: f.depth_mm.map(round3),
+                        contact_mm2: f.contact_mm2.map(round3),
+                        contact_patches: f.contact_patches,
                     },
                 )
             })

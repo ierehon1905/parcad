@@ -2914,6 +2914,11 @@ pub fn fit_between(part: &Shape, other: &Shape) -> Result<crate::protocol::FitRe
             interference_mm3: 0.0,
             clearance_mm: Some(distance),
             closest_mm: Some([on_part.to_array(), on_other.to_array()]),
+            depth_mm: None,
+            deepest_mm: None,
+            contact_mm2: None,
+            contact_patches: None,
+            contact_center_mm: None,
             part_bounds: [p0.to_array(), p1.to_array()],
             reference_bounds: [r0.to_array(), r1.to_array()],
         });
@@ -2944,11 +2949,36 @@ pub fn fit_between(part: &Shape, other: &Shape) -> Result<crate::protocol::FitRe
             ),
         }
     };
+    // A verdict is half an answer: a volume read as a depth calls a 2 µm graze
+    // retention, and `touching` is returned alike for a seated face and a
+    // corner. See docs/COIN_HOLDER_REVIEW.md §2.3.
+    let (depth_mm, deepest_mm) = match verdict {
+        "interfering" => {
+            breadcrumb("measuring how deep the overlap goes");
+            match crate::perceive::deepest_inside(&common.0) {
+                Some((depth, at)) => (Some(depth), Some(at.to_array())),
+                None => (None, None),
+            }
+        }
+        _ => (None, None),
+    };
+    let contact = match verdict {
+        "touching" => {
+            breadcrumb("measuring where the two touch");
+            Some(crate::perceive::contact_between(part, other))
+        }
+        _ => None,
+    };
     Ok(crate::protocol::FitReport {
         verdict: verdict.to_owned(),
         interference_mm3: interference,
         clearance_mm: clearance,
         closest_mm: closest,
+        depth_mm,
+        deepest_mm,
+        contact_mm2: contact.map(|(area, _, _)| area),
+        contact_patches: contact.map(|(_, patches, _)| patches),
+        contact_center_mm: contact.map(|(_, _, centre)| centre.to_array()),
         part_bounds: [p0.to_array(), p1.to_array()],
         reference_bounds: [r0.to_array(), r1.to_array()],
     })
@@ -5556,6 +5586,91 @@ mod tests {
             r#"{{"units":"mm","root":1,"nodes":[{{"op":"cuboid","size":{{"x":10,"y":10,"z":10}}}},{{"op":"translate","child":0,"by":{{"x":{x},"y":0,"z":0}}}}]}}"#
         ))
         .unwrap()
+    }
+
+    fn cube_offset(x: f64, y: f64, z: f64) -> Doc {
+        serde_json::from_str(&format!(
+            r#"{{"units":"mm","root":1,"nodes":[{{"op":"cuboid","size":{{"x":10,"y":10,"z":10}}}},{{"op":"translate","child":0,"by":{{"x":{x},"y":{y},"z":{z}}}}}]}}"#
+        ))
+        .unwrap()
+    }
+
+    /// A shared volume is not a penetration depth and `touching` is not a
+    /// seat: both were read as if they were, and both are now measured.
+    /// docs/COIN_HOLDER_REVIEW.md §2.3.
+    #[test]
+    fn a_fit_says_how_deep_it_reaches_and_how_much_it_touches() {
+        // 10 mm cubes overlapping by 0.4 mm: a 0.4 × 10 × 10 slab of shared
+        // material, 0.4 mm thick wherever it is thickest.
+        let deep = fit_between(&build(&cube_offset(0.0, 0.0, 0.0)).unwrap(), &build(&cube_offset(9.6, 0.0, 0.0)).unwrap()).unwrap();
+        assert_eq!(deep.verdict, "interfering");
+        assert!((deep.interference_mm3 - 40.0).abs() < 1e-6, "{deep:?}");
+        let depth = deep.depth_mm.expect("a depth for an overlap");
+        assert!((depth - 0.4).abs() < 1e-3, "depth {depth} is not 0.4: {deep:?}");
+        let at = deep.deepest_mm.expect("where it is deepest");
+        assert!((at[0] - 4.8).abs() < 1e-2, "deepest at {at:?}");
+
+        // Face to face: a seat, the whole 10 × 10 face, in one patch.
+        let seated = fit_between(&build(&cube_offset(0.0, 0.0, 0.0)).unwrap(), &build(&cube_offset(10.0, 0.0, 0.0)).unwrap()).unwrap();
+        assert_eq!(seated.verdict, "touching");
+        assert!((seated.contact_mm2.unwrap() - 100.0).abs() < 1e-6, "{seated:?}");
+        assert_eq!(seated.contact_patches, Some(1));
+        let centre = seated.contact_center_mm.unwrap();
+        assert!(centre.iter().zip([5.0, 0.0, 0.0]).all(|(c, want)| (c - want).abs() < 1e-6), "{centre:?}");
+        assert!(seated.depth_mm.is_none(), "nothing is shared, so nothing is deep");
+
+        // Half of that face, offset along it.
+        let half = fit_between(&build(&cube_offset(0.0, 0.0, 0.0)).unwrap(), &build(&cube_offset(10.0, 5.0, 0.0)).unwrap()).unwrap();
+        assert_eq!(half.verdict, "touching");
+        assert!((half.contact_mm2.unwrap() - 50.0).abs() < 1e-6, "{half:?}");
+
+        // Corner to corner: the same verdict, and no contact at all. This is
+        // the pair the session read as a seated stack.
+        let corner = fit_between(&build(&cube_offset(0.0, 0.0, 0.0)).unwrap(), &build(&cube_offset(10.0, 10.0, 10.0)).unwrap()).unwrap();
+        assert_eq!(corner.verdict, "touching");
+        assert_eq!(corner.contact_mm2, Some(0.0));
+        assert_eq!(corner.contact_patches, Some(0));
+    }
+
+    /// A lid on two bosses touches over two patches, not one: the count is
+    /// what tells a seat from several stubs.
+    #[test]
+    fn a_contact_in_two_places_is_counted_as_two_patches() {
+        let doc = |json: serde_json::Value| -> Doc { serde_json::from_value(json).unwrap() };
+        let plate = doc(serde_json::json!({"units":"mm","root":0,"nodes":[
+            {"op":"cuboid","size":{"x":40,"y":10,"z":4}}
+        ]}));
+        // Two 5 mm cubes resting on the plate's top face, 24 mm apart.
+        let feet = doc(serde_json::json!({"units":"mm","root":4,"nodes":[
+            {"op":"cuboid","size":{"x":5,"y":5,"z":5}},
+            {"op":"translate","child":0,"by":{"x":-12,"y":0,"z":4.5}},
+            {"op":"cuboid","size":{"x":5,"y":5,"z":5}},
+            {"op":"translate","child":2,"by":{"x":12,"y":0,"z":4.5}},
+            {"op":"union","children":[1,3],"blend":0}
+        ]}));
+        let fit = fit_between(&build(&plate).unwrap(), &build(&feet).unwrap()).unwrap();
+        assert_eq!(fit.verdict, "touching");
+        assert!((fit.contact_mm2.unwrap() - 50.0).abs() < 1e-6, "{fit:?}");
+        assert_eq!(fit.contact_patches, Some(2));
+    }
+
+    /// The review's own worked example: a 5 mm cube sunk 0.4 mm into a plate.
+    #[test]
+    fn a_cube_sunk_into_a_plate_reads_the_depth_it_was_sunk() {
+        let doc = |json: serde_json::Value| -> Doc { serde_json::from_value(json).unwrap() };
+        let plate = doc(serde_json::json!({"units":"mm","root":0,"nodes":[
+            {"op":"cuboid","size":{"x":40,"y":40,"z":4}}
+        ]}));
+        // Half of 5 is 2.5 above the plate's top face at z = 2, less 0.4 sunk.
+        let cube = doc(serde_json::json!({"units":"mm","root":1,"nodes":[
+            {"op":"cuboid","size":{"x":5,"y":5,"z":5}},
+            {"op":"translate","child":0,"by":{"x":0,"y":0,"z":4.1}}
+        ]}));
+        let fit = fit_between(&build(&plate).unwrap(), &build(&cube).unwrap()).unwrap();
+        assert_eq!(fit.verdict, "interfering");
+        assert!((fit.interference_mm3 - 10.0).abs() < 1e-6, "{fit:?}");
+        let depth = fit.depth_mm.expect("a depth");
+        assert!((depth - 0.4).abs() < 1e-3, "depth {depth} is not 0.4: {fit:?}");
     }
 
     #[test]
