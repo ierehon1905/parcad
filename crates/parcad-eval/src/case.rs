@@ -249,6 +249,31 @@ pub struct Expect {
     /// order: the verdict, and the clearance or the shared volume.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub between_bodies: Option<BTreeMap<String, BetweenExpect>>,
+    /// The part's own `checks`, judged as `evaluate_part` judges them: how
+    /// many hold, and each that does not with what was measured. Recorded
+    /// whenever the part carries checks; a check that quietly starts
+    /// passing, or failing by a different number, goes red.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checks: Option<ChecksExpect>,
+    /// The verdict on the part's brief, and what the envelope and budget
+    /// measured. Recorded only for a part that declares one — every other
+    /// reply's brief is the same nudge sentence, which is a fact about the
+    /// host and not about the part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<BriefExpect>,
+    /// Every cut that took material from a named feature besides its
+    /// target, keyed `"cut/feature"`, with the mm³ it took held to
+    /// `volume_pct`. Recorded whenever the part has any: a nick that grows,
+    /// shrinks or vanishes goes red, and so does a new one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub collisions: Option<BTreeMap<String, CollisionExpect>>,
+    /// Each body's overhang as it prints, keyed by body (`part` for one
+    /// solid): the unsupported mm², bed mm² and support mm³ in its declared
+    /// orientation, held to `volume_pct`, and its face and bridge counts
+    /// exactly. Recorded whenever any body overhangs or declares an
+    /// orientation; a lip that stops overhanging goes red.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overhang: Option<BTreeMap<String, OverhangExpect>>,
 
     /// Other scripts laid against the part with `check_fit`. Each is asked
     /// twice on the worker that has just evaluated the part, so the second
@@ -556,6 +581,9 @@ pub fn check_perception(
 /// part's: `size_mm` per axis, `volume_pct` on volume, exact topology.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct BodyExpect {
+    /// A `.reference()` body: measured, drawn, in no file and no whole-part number.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reference: bool,
     pub size: [f64; 3],
     pub volume_mm3: f64,
     pub faces: usize,
@@ -575,6 +603,90 @@ pub struct BetweenExpect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clearance_mm: Option<f64>,
     pub interference_mm3: f64,
+    /// How far one reaches into the other, mm; recorded only where they
+    /// interfere. A volume that holds while this moves is a pair whose
+    /// overlap changed shape, which is what a catch is designed by.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_mm: Option<f64>,
+    /// The surface they share, mm², and its patches; only where they touch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_mm2: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_patches: Option<usize>,
+}
+
+/// One body's overhang as it prints, as the reply carries it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct OverhangExpect {
+    pub up: [f64; 3],
+    pub unsupported_mm2: f64,
+    pub bed_mm2: f64,
+    pub faces: usize,
+    pub bridges: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub support_mm3: Option<f64>,
+}
+
+impl From<&parcad_occt::protocol::Overhang> for OverhangExpect {
+    fn from(o: &parcad_occt::protocol::Overhang) -> Self {
+        Self { up: o.up, unsupported_mm2: o.unsupported_mm2, bed_mm2: o.bed_mm2, faces: o.face_count, bridges: o.bridges.len(), support_mm3: o.support_mm3 }
+    }
+}
+
+/// What one cut took from a feature it was not for, as the reply carries it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct CollisionExpect {
+    /// The feature the cut was for.
+    pub target: String,
+    pub removed_mm3: f64,
+}
+
+/// A brief's verdict and the two numbers behind it. The verdict is held
+/// word for word: it is the sentence a reader meets first, and a change to
+/// its wording is a change to what the part says about itself.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct BriefExpect {
+    pub verdict: String,
+    /// The part's own extent against its envelope, mm, held to `size_mm`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub envelope_over_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub envelope_on: Option<String>,
+    /// What it uses against its budget, cm³, held to `volume_pct`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_cm3: Option<f64>,
+}
+
+/// The verdict on a part's own checks, as the reply carries it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ChecksExpect {
+    pub passed: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed: Vec<FailedCheckExpect>,
+}
+
+/// One failing check: its sentence and its measurement, held to `size_mm`
+/// for a length and `volume_pct` for a volume.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct FailedCheckExpect {
+    pub check: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured_mm3: Option<f64>,
+}
+
+impl From<&parcad_evaluation::ChecksReport> for ChecksExpect {
+    fn from(report: &parcad_evaluation::ChecksReport) -> Self {
+        Self {
+            passed: report.passed,
+            failed: report
+                .failed
+                .iter()
+                .map(|f| FailedCheckExpect { check: f.check.clone(), measured_mm: f.measured_mm, measured_mm3: f.measured_mm3 })
+                .collect(),
+        }
+    }
 }
 
 /// A reference script against the part, as `check_fit` reports it. Held like
@@ -651,6 +763,14 @@ pub struct Observed {
     /// one-solid part.
     pub named_bodies: BTreeMap<String, BodyExpect>,
     pub between_bodies: BTreeMap<String, BetweenExpect>,
+    /// The part's own checks judged, when it carries any.
+    pub checks: Option<ChecksExpect>,
+    /// Its brief judged, when it declares one.
+    pub brief: Option<BriefExpect>,
+    /// Every cut into a feature besides its target, keyed `"cut/feature"`.
+    pub collisions: BTreeMap<String, CollisionExpect>,
+    /// Each body's overhang as it prints, keyed by body.
+    pub overhang: BTreeMap<String, OverhangExpect>,
 }
 
 /// One assertion that did not hold, phrased so the terminal line is enough to
@@ -954,6 +1074,145 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
                 }),
             }
             pct_check(&mut out, &format!("between_bodies.{pair}.interference_mm3"), want.interference_mm3, got.interference_mm3, tol.volume_pct);
+            // A depth is a length; a contact is an area, held like a volume.
+            match (want.depth_mm, got.depth_mm) {
+                (Some(w), Some(g)) => abs_check(&mut out, &format!("between_bodies.{pair}.depth_mm"), w, g, tol.size_mm),
+                (None, None) => {}
+                (w, g) => out.push(Mismatch {
+                    field: format!("between_bodies.{pair}.depth_mm"),
+                    detail: format!("expected {w:?}, measured {g:?}"),
+                }),
+            }
+            match (want.contact_mm2, got.contact_mm2) {
+                (Some(w), Some(g)) => pct_check(&mut out, &format!("between_bodies.{pair}.contact_mm2"), w, g, tol.volume_pct),
+                (None, None) => {}
+                (w, g) => out.push(Mismatch {
+                    field: format!("between_bodies.{pair}.contact_mm2"),
+                    detail: format!("expected {w:?}, measured {g:?}"),
+                }),
+            }
+            if want.contact_patches != got.contact_patches {
+                out.push(Mismatch {
+                    field: format!("between_bodies.{pair}.contact_patches"),
+                    detail: format!("expected {:?}, measured {:?}", want.contact_patches, got.contact_patches),
+                });
+            }
+        }
+    }
+    if let Some(want) = &expect.brief {
+        match &observed.brief {
+            None => out.push(Mismatch {
+                field: "brief".into(),
+                detail: "expected a verdict on the part's brief; the script declares none".into(),
+            }),
+            Some(got) => {
+                if want.verdict != got.verdict {
+                    out.push(Mismatch {
+                        field: "brief.verdict".into(),
+                        detail: format!("expected {:?}, measured {:?}", want.verdict, got.verdict),
+                    });
+                }
+                match (want.envelope_over_mm, got.envelope_over_mm) {
+                    (Some(w), Some(g)) => abs_check(&mut out, "brief.envelope_over_mm", w, g, tol.size_mm),
+                    (None, None) => {}
+                    (w, g) => out.push(Mismatch {
+                        field: "brief.envelope_over_mm".into(),
+                        detail: format!("expected {w:?}, measured {g:?}"),
+                    }),
+                }
+                if want.envelope_on != got.envelope_on {
+                    out.push(Mismatch {
+                        field: "brief.envelope_on".into(),
+                        detail: format!("expected {:?}, measured {:?}", want.envelope_on, got.envelope_on),
+                    });
+                }
+                match (want.budget_cm3, got.budget_cm3) {
+                    (Some(w), Some(g)) => pct_check(&mut out, "brief.budget_cm3", w, g, tol.volume_pct),
+                    (None, None) => {}
+                    (w, g) => out.push(Mismatch {
+                        field: "brief.budget_cm3".into(),
+                        detail: format!("expected {w:?}, measured {g:?}"),
+                    }),
+                }
+            }
+        }
+    }
+    if let Some(want) = &expect.checks {
+        match &observed.checks {
+            None => out.push(Mismatch { field: "checks".into(), detail: "expected a verdict on the part's checks; the part carries none".into() }),
+            Some(got) => {
+                if want.passed != got.passed {
+                    out.push(Mismatch { field: "checks.passed".into(), detail: format!("expected {}, got {}", want.passed, got.passed) });
+                }
+                let names = |c: &ChecksExpect| c.failed.iter().map(|f| f.check.clone()).collect::<Vec<_>>();
+                if names(want) != names(got) {
+                    out.push(Mismatch { field: "checks.failed".into(), detail: format!("expected {:?} to fail, got {:?}", names(want), names(got)) });
+                } else {
+                    for (w, g) in want.failed.iter().zip(&got.failed) {
+                        let at = format!("checks.failed[{}]", w.check);
+                        match (w.measured_mm, g.measured_mm) {
+                            (Some(w), Some(g)) => abs_check(&mut out, &format!("{at}.measured_mm"), w, g, tol.size_mm),
+                            (None, None) => {}
+                            (w, g) => out.push(Mismatch { field: format!("{at}.measured_mm"), detail: format!("expected {w:?}, got {g:?}") }),
+                        }
+                        match (w.measured_mm3, g.measured_mm3) {
+                            (Some(w), Some(g)) => pct_check(&mut out, &format!("{at}.measured_mm3"), w, g, tol.volume_pct),
+                            (None, None) => {}
+                            (w, g) => out.push(Mismatch { field: format!("{at}.measured_mm3"), detail: format!("expected {w:?}, got {g:?}") }),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(want) = &expect.collisions {
+        for (key, w) in want {
+            match observed.collisions.get(key) {
+                None => out.push(Mismatch {
+                    field: format!("collisions.{key}"),
+                    detail: format!(
+                        "expected this cut to take {:.3} mm³ from that feature; the build reports {}",
+                        w.removed_mm3,
+                        if observed.collisions.is_empty() { "no collision".to_string() } else { observed.collisions.keys().cloned().collect::<Vec<_>>().join(", ") }
+                    ),
+                }),
+                Some(g) => {
+                    if g.target != w.target {
+                        out.push(Mismatch { field: format!("collisions.{key}.target"), detail: format!("expected {:?}, got {:?}", w.target, g.target) });
+                    }
+                    pct_check(&mut out, &format!("collisions.{key}.removed_mm3"), w.removed_mm3, g.removed_mm3, tol.volume_pct);
+                }
+            }
+        }
+        for key in observed.collisions.keys() {
+            if !want.contains_key(key) {
+                out.push(Mismatch { field: format!("collisions.{key}"), detail: "a cut into a feature the case does not expect".into() });
+            }
+        }
+    }
+
+    if let Some(want) = &expect.overhang {
+        for (body, w) in want {
+            let Some(g) = observed.overhang.get(body) else {
+                out.push(Mismatch { field: format!("overhang.{body}"), detail: "expected this body's overhang; the build reports none".into() });
+                continue;
+            };
+            if w.up != g.up {
+                out.push(Mismatch { field: format!("overhang.{body}.up"), detail: format!("expected {:?}, got {:?}", w.up, g.up) });
+            }
+            pct_check(&mut out, &format!("overhang.{body}.unsupported_mm2"), w.unsupported_mm2, g.unsupported_mm2, tol.volume_pct);
+            pct_check(&mut out, &format!("overhang.{body}.bed_mm2"), w.bed_mm2, g.bed_mm2, tol.stands_on_pct.unwrap_or(tol.volume_pct));
+            for (field, want, got) in [("faces", w.faces, g.faces), ("bridges", w.bridges, g.bridges)] {
+                if want != got {
+                    out.push(Mismatch { field: format!("overhang.{body}.{field}"), detail: format!("expected {want}, measured {got}") });
+                }
+            }
+            match (w.support_mm3, g.support_mm3) {
+                (Some(want), Some(got)) => pct_check(&mut out, &format!("overhang.{body}.support_mm3"), want, got, tol.volume_pct),
+                (None, None) => {}
+                (want, got) => out.push(Mismatch { field: format!("overhang.{body}.support_mm3"), detail: format!("expected {want:?}, got {got:?}") }),
+            }
         }
     }
 
@@ -1095,6 +1354,49 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
             })
             .collect()
     });
+    expect.collisions = (!observed.collisions.is_empty()).then(|| {
+        observed
+            .collisions
+            .iter()
+            .map(|(key, c)| (key.clone(), CollisionExpect { target: c.target.clone(), removed_mm3: round3(c.removed_mm3) }))
+            .collect()
+    });
+    expect.overhang = observed
+        .overhang
+        .values()
+        .any(|o| o.unsupported_mm2 > 0.0 || o.up != [0.0, 0.0, 1.0])
+        .then(|| {
+            observed
+                .overhang
+                .iter()
+                .map(|(body, o)| {
+                    (
+                        body.clone(),
+                        OverhangExpect {
+                            up: o.up,
+                            unsupported_mm2: round3(o.unsupported_mm2),
+                            bed_mm2: round3(o.bed_mm2),
+                            faces: o.faces,
+                            bridges: o.bridges,
+                            support_mm3: o.support_mm3.map(round3),
+                        },
+                    )
+                })
+                .collect()
+        });
+    expect.brief = observed.brief.clone();
+    expect.checks = observed.checks.as_ref().map(|c| ChecksExpect {
+        passed: c.passed,
+        failed: c
+            .failed
+            .iter()
+            .map(|f| FailedCheckExpect {
+                check: f.check.clone(),
+                measured_mm: f.measured_mm.map(round3),
+                measured_mm3: f.measured_mm3.map(round3),
+            })
+            .collect(),
+    });
     expect.between_bodies = (!observed.between_bodies.is_empty()).then(|| {
         observed
             .between_bodies
@@ -1106,6 +1408,9 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
                         verdict: f.verdict.clone(),
                         clearance_mm: f.clearance_mm.map(round3),
                         interference_mm3: round3(f.interference_mm3),
+                        depth_mm: f.depth_mm.map(round3),
+                        contact_mm2: f.contact_mm2.map(round3),
+                        contact_patches: f.contact_patches,
                     },
                 )
             })

@@ -110,8 +110,11 @@ impl<'de> Deserialize<'de> for EdgeTarget {
         let mut take = |name: &str| fields.remove(name).filter(|value| !value.is_null());
         let (expect, selector, vertices) = (take("expect"), take("selector"), take("vertices"));
         let expect = expect
-            .map(|value| read::<D, _>("expect", value))
+            .map(|value| read::<D, EdgeExpectation>("expect", value))
             .transpose()?;
+        if let Some(problem) = expect.as_ref().and_then(|e| e.check().err()) {
+            return Err(D::Error::custom(format!("{LOCATED}expect\": {problem}")));
+        }
         match (selector, vertices) {
             (Some(selector), None) => Ok(Self::Edges {
                 selector: read::<D, _>("selector", selector)?,
@@ -1071,6 +1074,27 @@ pub const STITCH_MAX_TOLERANCE_MM: f64 = 0.5;
 pub struct NamedBody {
     pub name: String,
     pub child: NodeId,
+    /// A body the part is measured against and drawn with, but that is not
+    /// the part: a stack of coins in a holder, a tipped coin at a mouth.
+    /// Built, measured alone and against every other body (`between_bodies`),
+    /// and drawn in the reference colour; never exported, never probed, never
+    /// counted in `bodies`, `volume_mm3`, `size` or what the part stands on.
+    /// Written by `.reference()` in `app/src/dsl.ts`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reference: bool,
+    /// The direction that points up on the printer, a unit vector, for a
+    /// body drawn in its assembled position: `print_check` measures overhang
+    /// and bed contact in this orientation and the print file lays the body
+    /// flat in it. Absent means as drawn, +z. Written by `.printedUp()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub printed_up: Option<V3>,
+}
+
+impl NamedBody {
+    /// The unit direction the body prints up, +z when none is declared.
+    pub fn up(&self) -> V3 {
+        self.printed_up.unwrap_or(V3::new(0.0, 0.0, 1.0))
+    }
 }
 
 /// One [`Op::Loft`] section: an outline lying in the plane at `z`, or, for
@@ -2390,6 +2414,11 @@ pub struct Node {
     pub material: Option<Material>,
 }
 
+/// The reference colour, sRGB; `service::render` paints it whether or not a
+/// view asked for materials.
+pub const REFERENCE_COLOR: &str = "#5b8fd6";
+pub const REFERENCE_RGB: [u8; 3] = [0x5b, 0x8f, 0xd6];
+
 /// A surface appearance: glTF's metallic-roughness core, plus alpha, emissive
 /// and its clearcoat extension. Nothing heavier — see docs/PERCEPTION.md.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -2416,6 +2445,19 @@ pub struct Material {
 }
 
 impl Material {
+    /// What a reference body is drawn in, everywhere: a translucent blue no
+    /// `.material()` writes, so a coin stack is never read as the part.
+    pub fn reference() -> Self {
+        Self {
+            color: REFERENCE_COLOR.to_string(),
+            roughness: 0.6,
+            metalness: 0.0,
+            opacity: 0.45,
+            emissive: None,
+            clearcoat: 0.0,
+        }
+    }
+
     fn default_roughness() -> f64 {
         0.5
     }
@@ -2477,6 +2519,18 @@ pub struct Doc {
     /// [`crate::envelope::parse_doc`] and carried to the worker.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<crate::envelope::Requirement>,
+    /// Rules the build must hold, written by the author beside the bodies
+    /// they are about (`checks: [...]` on the returned object) and judged on
+    /// every build; see [`crate::checks`]. Data, not a body: nothing here
+    /// changes the geometry.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<crate::checks::Check>,
+    /// What the part is for, written by the author at the top of the script
+    /// (`brief({ envelope, budgetCm3, ... })`) and reported against on every
+    /// build; see [`crate::brief`]. Data, not a body, and never a door: a
+    /// part is over its envelope for most of the time it is designed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub brief: Option<crate::brief::Brief>,
 }
 
 fn default_units() -> String {
@@ -2532,6 +2586,10 @@ impl Doc {
         }
 
         self.validate_bodies(&order)?;
+        self.validate_checks()?;
+        if let Some(brief) = &self.brief {
+            brief.validate().map_err(|e| anyhow::anyhow!("{e}"))?;
+        }
         for &id in &order {
             if let Some(material) = &self.nodes[id].material {
                 material.validate(id)?;
@@ -2578,6 +2636,14 @@ impl Doc {
             .collect()
     }
 
+    /// The names of the reference bodies, in the script's order; empty for a
+    /// part with none.
+    pub fn reference_bodies(&self) -> Vec<&str> {
+        self.bodies()
+            .map(|bodies| bodies.iter().filter(|b| b.reference).map(|b| b.name.as_str()).collect())
+            .unwrap_or_default()
+    }
+
     /// The named bodies of a part that returns several, or `None` for the
     /// ordinary one-solid document.
     pub fn bodies(&self) -> Option<&[NamedBody]> {
@@ -2610,6 +2676,31 @@ impl Doc {
                      body: `return {{ base, lid }}`"
                 );
             }
+            if bodies.iter().all(|b| b.reference) {
+                anyhow::bail!(
+                    "every body is a reference; a reference is measured against the part, so at \
+                     least one body must be the part itself — leave .reference() off that one"
+                );
+            }
+            for body in bodies {
+                if let Some(up) = body.printed_up {
+                    let length = (up.x * up.x + up.y * up.y + up.z * up.z).sqrt();
+                    if !length.is_finite() || (length - 1.0).abs() > 1e-6 {
+                        anyhow::bail!(
+                            "body {:?} prints up ({}, {}, {}), which is not a unit direction; \
+                             .printedUp() takes an axis name or a direction it normalises",
+                            body.name, up.x, up.y, up.z
+                        );
+                    }
+                    if body.reference {
+                        anyhow::bail!(
+                            "body {:?} is a reference with a print orientation; a reference is \
+                             never printed, so leave .printedUp() off it",
+                            body.name
+                        );
+                    }
+                }
+            }
             let mut seen = std::collections::HashSet::new();
             for body in bodies {
                 if body.name.trim().is_empty() {
@@ -2625,6 +2716,23 @@ impl Doc {
                     );
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Every check reads as written and names bodies and tags the part has.
+    /// Checked with the cycle check for the same reason bodies are: every
+    /// backend goes through [`Doc::topo_order`] first, so a check that names
+    /// a body the part lacks is refused before anything is built.
+    fn validate_checks(&self) -> anyhow::Result<()> {
+        if self.checks.is_empty() {
+            return Ok(());
+        }
+        let bodies: Vec<&str> = self.bodies().map(|b| b.iter().map(|b| b.name.as_str()).collect()).unwrap_or_default();
+        let mut tags: Vec<&str> = self.tags().into_iter().map(|(_, tag)| tag).collect();
+        tags.dedup();
+        for (index, check) in self.checks.iter().enumerate() {
+            check.validate(index + 1, &bodies, &tags).map_err(|e| anyhow::anyhow!("{e}"))?;
         }
         Ok(())
     }

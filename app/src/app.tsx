@@ -89,11 +89,28 @@ function ErrorPane() {
  *
  * ⌘\ shows and hides the source, which is the key every editor with a side
  * panel uses for the same thing.
+ *
+ * In the capture phase, and on the physical key rather than the character it
+ * types: a browser's own ⌘S is only suppressed by preventDefault on the way
+ * down, and under a non-Latin layout `e.key` for the S key is "ы", not "s".
  */
 function keys() {
   const onKey = async (e: KeyboardEvent) => {
     if (!(e.metaKey || e.ctrlKey)) return;
-    const key = e.key.toLowerCase();
+    const key = physicalKey(e);
+
+    // ⌘A pressed anywhere but a field has nothing to mean in a tool window:
+    // the browser's answer is to highlight the titlebar and the palette. Send
+    // it to the source instead, which is the only thing here made of text.
+    if (key === "a" && !editable(e.target)) {
+      e.preventDefault();
+      const view = S.editorRef.current;
+      if (!view) return;
+      engine.showCode(true);
+      view.focus();
+      view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+      return;
+    }
 
     if (key === "\\") {
       e.preventDefault();
@@ -116,6 +133,20 @@ function keys() {
     await engine.runExport(e.shiftKey ? "step" : "stl");
   };
 
-  window.addEventListener("keydown", onKey);
-  return () => window.removeEventListener("keydown", onKey);
+  window.addEventListener("keydown", onKey, true);
+  return () => window.removeEventListener("keydown", onKey, true);
+}
+
+/** Somewhere a ⌘A of its own belongs: a field, or the editor, which keeps one. */
+function editable(target: EventTarget | null): boolean {
+  const el = target instanceof Element ? target : null;
+  return !!el?.closest("input, textarea, [contenteditable=''], [contenteditable='true'], .cm-editor");
+}
+
+/** The key under the finger, named as a US layout would: "KeyS" -> "s", "Backslash" -> "\\". */
+function physicalKey(e: KeyboardEvent): string {
+  const code = e.code;
+  if (code.length === 4 && code.startsWith("Key")) return code[3].toLowerCase();
+  if (code === "Backslash") return "\\";
+  return e.key.toLowerCase();
 }

@@ -16,33 +16,10 @@ only, and links rather than repeats.
 One session at a time, because each rewrites the same core files (`graph.rs`,
 `backend.rs`, `dsl.ts`). Done items are removed; `git log` has them.
 
-1. **Checks that run without being asked** — agreed 2026-09-16, next. Two
-   parts shipped as STLs from one session with defects `measure_wall_thickness`
-   finds at once: a 0.013 mm sliver between a cable channel and a slot, and a
-   grille cutting 0.319 mm into a screw boss. The model (Opus, with a memory
-   note saying to check) never called it, and every number `export_part`
-   returned passed. A check a model must remember is a check weaker models
-   skip, so it moves onto the route every model already takes. The report is
-   already trustworthy (thin readings classified and grouped into places, every
-   feather and face pair found; `where-is-the-sliver`); what is left:
-   - **Collisions**: for each cut, the named features it removed material from
-     besides its target — "grille cuts boss" needs no threshold.
-   - **On the route**: `export_part` and `save_project` carry a `print_check`
-     (thinnest wall, its two features, collisions) from the cached build, its
-     verdict the first line of the reply. Below a floor nothing prints (≈0.3
-     mm) export refuses, naming the spot and the fix, unless given
-     `allow_thin: "reason"`; between that and the process minimum it flags.
-   - **Measured**: an `eval/field/` case whose part hides a sliver and a
-     collision; SOUND only when the reply tells the user both, both arms.
-   - Server instructions and the skills say a part is done when `print_check` is
-     clean or each flag has a reason — the weakest layer, and one line.
-   - **Grown by the coin-holder review** ([COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md)):
-     overhang per body in its *declared* print orientation (`stands_on` reads
-     0.4 % on every assembled plate today), laid-flat `print/<body>.3mf` written
-     on save, and the author's own `checks` on the returned object all pass
-     through this same door. Build them together.
-2. **Two more steps a model has to remember, found the same day.** Both are
-   the shape of item 1: the mechanism exists, nothing makes it happen.
+1. **Two more steps a model has to remember, found the same day.** Both are
+   the shape of the print check (landed 2026-09-21; `git log` has it, and
+   queue item 5 records what the coin-holder session cost): the mechanism
+   exists, nothing makes it happen.
    - **A render is colourless unless asked.** A part carrying materials draws
      grey for an agent and coloured in the window — `materials: true` is
      off by default, and nothing in a reply says the part has any. A model
@@ -58,7 +35,7 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      user asked "SHOW IT". Measure whether a model pastes it
      (`eval/field/`), and consider making the reply's first line say so when
      views were asked for.
-3. **Homebrew is published but never exercised.** `publish.yml` renders the
+2. **Homebrew is published but never exercised.** `publish.yml` renders the
    formula and pushes it to the tap, and `ruby -c` is the only thing that ever
    reads it. Nothing installs it, so a formula that installs the wrong path, a
    service that does not start, or an archive missing the worker would be found
@@ -75,7 +52,7 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      substitute.
    - Dry-run it locally first (`act`, or the same shell steps by hand against a
      published tag): a blind CI round on a release path costs a release.
-4. **ParCAD web: agents through a relay** — live since 2026-09-17 at
+3. **ParCAD web: agents through a relay** — live since 2026-09-17 at
    <https://ierehon1905.github.io/parcad/>, relay deployed.
    The playground became ParCAD web, the app in a tab: `parcad-host` compiled to
    WebAssembly (`crates/parcad-wasm-host`, `page.rs`) beside the kernel, the
@@ -109,7 +86,7 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      a kernel that builds a fit's reference from the part's cache
      (docs/GOTCHAS.md).
    - **The in-chat viewer in claude.ai**: the connector works there; whether
-     the 3D card showed under `evaluate_part` was not checked.
+     the 3D card shows under `open_project` was not checked.
    - **Measure `show-me-the-part` for the web**: a tab gives no render path a
      client can open, so the view's `markdown` is absent and the case, as
      written, cannot pass there.
@@ -119,29 +96,116 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    - WebMCP, the item this replaces, is still possible on top: the page's
      tools are the host's, so registering them with `navigator.modelContext`
      is a thin adapter, and nothing else here waits on it.
-5. **A measured parts library** — fasteners, bearings, boards, devices, each
+4. **A measured parts library** — fasteners, bearings, boards, devices, each
    held by eval cases, and a way for one part to import another.
-6. **What the coin-holder session cost, in order** — reviewed 2026-09-18 from
+5. **What the coin-holder session cost, in order** — reviewed 2026-09-18 from
    three lenses, the order and every sample reply in
    [COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md). One session designed a
    3D-printable part in six user turns: every geometric claim measured, every
    mechanical claim guessed, 241 KB of script resent, 11 round trips lost to
    the tool surface, one of them a silently wrong section. In order:
-   - a one-day correctness batch: `deny_unknown_fields` on every request
-     struct, an edge count on every treatment, the shadowed builtin named,
-     `rotate` arguments validated, `--set` coerced by schema, dead viewers
-     expired, no script echo from `open_project`;
-   - `project` on every script tool and `edit_part` (old/new, refused on
-     ambiguity) — the one change that halves a session;
-   - `checks` in the returned object, reference bodies never exported, and
-     `note()` for a script's own numbers, labelled requested not measured;
-   - overhang and print files (item 1);
-   - `depth_mm` and `contact_mm2` in `between_bodies` — a 0.002 mm³ graze was
-     read as a catch;
-   - `brief()` with an envelope, judged every build, and a scale rule on renders;
-   - then vocabulary (`MATERIALS`, `OBJECTS` with profiles, `fit()`, `{ at, cut }`,
-     `not`, a listed `styles` topic), `compare_variants`, snapshot summaries,
-     and last the mechanics witness: `check_motion`, `check_flex`.
+   - ~~a one-day correctness batch~~ — landed 2026-09-18: `deny_unknown_fields`
+     on every request struct with the meant field named, `--set` coerced by
+     schema, dead viewers expired, the script echo dropped from `open_project`
+     and `set_script`, the shadowed builtin named, `rotate` arguments
+     validated, `edges` on every treatment with `.expect({ atLeast, atMost })`,
+     `tags` each once with `nodes` on the extent, and the selector and fillet
+     refusals naming `check_selector` and `inspect_treatment_target`;
+   - ~~`project` on every script tool and `edit_part`~~ — landed 2026-09-20:
+     `project` (or `"@session"`) and `edits` on all seven script-taking tools,
+     `edit_part` built before written and snapshotted, `script_sha256` on
+     every reply, and the server instruction saying to send a script once;
+     docs/PERCEPTION.md §19 has the bytes per case before and after;
+   - ~~`checks` in the returned object, reference bodies never exported, and
+     `note()`~~ — landed 2026-09-20: `checks: [...]` beside the bodies, judged
+     on every build and first in every reply, with `export_part`,
+     `save_project` and a saving `edit_part` refusing a failing check unless
+     `allow_failing` gives a reason (the door the print check shares); `.reference()`
+     bodies measured and drawn but in no file and no whole-part number; and
+     `note()`, carried in the reply as "from the script, not measured";
+   - ~~overhang and print files~~ — overhang landed 2026-09-21 with the print
+     check; the print files were removed again the next day, as a worse copy
+     of what every slicer's auto-orient and arrange already do (docs/ARCHITECTURE.md,
+     "The orientation is measured in, not exported");
+   - ~~`depth_mm` and `contact_mm2` in `between_bodies`~~ — landed 2026-09-21:
+     `depth_mm`/`deepest_mm` on an interfering pair (the widest ball inside
+     what they share) and `contact_mm2`/`contact_patches`/`contact_center_mm`
+     on a touching one (the common of their two skins, exact), on
+     `between_bodies` and `check_fit` alike, with `deeperThan` and
+     `contactAtLeast` so a check can assert them; docs/PERCEPTION.md §20;
+   - ~~`brief()` with an envelope, judged every build, and a scale rule on
+     renders~~ — landed 2026-09-21: `brief({ envelope, budgetCm3, holds,
+     gesture, printer, material })` stamped on the graph beside `checks` and
+     judged on every build, the envelope in the best of the six axis
+     orientations, `brief` in every solid reply (with one line of nudge when
+     a script declares none), never a door; and the ruler that was only on
+     the contact sheet drawn on every shaded view, with `scale_mm` beside it.
+     docs/PERCEPTION.md §21. **A measured `POCKETS` table is still missing**
+     and was left out rather than invented — it wants somebody to measure
+     some pockets;
+   - vocabulary: ~~`not` in the query form~~ — landed 2026-09-21 with the
+     compact form's refusal naming the query form and `check_selector`
+     (docs/PERCEPTION.md §22). Its field case,
+     `eval/field/round-all-but-the-uprights`, is **written and never run**:
+     it is an authoring case scored on `input`, and only an after-only round
+     can measure it, since the key does not exist on a before host and the
+     graph is refused there. Still open: `{ at, cut }`, `MATERIALS`,
+     `OBJECTS` with profiles, `fit()`, and a listed `styles` topic;
+   - then `compare_variants`, snapshot summaries, and last the mechanics
+     witness: `check_motion`, `check_flex`.
+
+   **`{ at, cut }`, scoped (2026-09-22).** Ship the equal-distance form only:
+   `{ at: [20, 10], cut: 5 }`, the corner replaced by a straight diagonal 5 mm
+   back along each edge, the same slot `{ at, round: r }` already occupies. It
+   is not a selector — the corner names itself by its position in the list —
+   which is why a section needs it even though `.chamfer()` exists: `.chamfer`
+   runs on a *built solid*, and the session that needed this had to keep the
+   outline to `inset` it for a skirt (L8). Fusion ships three chamfers (equal
+   distance, two distance, distance-and-angle), so `cut: [5, 3]` is the
+   natural second form — left out on purpose, and addable later without
+   breaking a saved part, since `5` and `[5, 3]` are distinguishable at the
+   door. Of Fusion's eleven sketch Modify tools this is the only real gap:
+   fillet is `round`, offset is `inset`, scale and move are JavaScript on a
+   plain array, and trim/extend/break exist only because you drew geometry
+   interactively — a declarative list never draws the overhang.
+
+   **Blocked on a caliper, not on code.** Four queued items all want the same
+   physical afternoon, and none should be invented: `POCKETS` (a pocket is a
+   size, and `brief({ envelope })` has nothing to name), `fit(kind, nominal)`
+   (six unsourced printed clearances in one part, §2.5), `MATERIALS` by
+   filament, and `check_flex`'s per-axis material table. `DEVICES` sets the
+   standard — published sizes, and its two guessed radii labelled as guesses.
+   A table of plausible numbers with a source line would fail that standard
+   in the one place this repo refuses to. One test coupon printed on the
+   owner's own machine unblocks all four and makes the numbers *ours*.
+
+   **Name these edges** — not from the review, found while adding `not`
+   (2026-09-22). Every tool here goes *selector → edges*: `check_selector`
+   parses a string and touches no geometry, `inspect_treatment_target` needs
+   a treatment node that already exists, and `list_entities` hands out
+   `edge@12` marked "diagnostic data only". Nothing goes the other way, so
+   "I can see the edge I want, what do I write?" has no answer, and the loop
+   a model actually runs — build, look, point — ends with it guessing a
+   selector or pasting an id the DSL rejects.
+
+   `matches_query(edges, query) -> Vec<bool>` already exists: the borrowing
+   matcher `not` needed, which is exactly what a synthesiser wants. So the
+   tool is resolve the ids, enumerate candidate queries from the term
+   vocabulary, keep the masks that *equal* the wanted set — equality and not
+   containment, the rule `EdgeLineage::equivalent_sources` already holds for
+   the same reason. A few hundred candidates, each a linear pass, on a build
+   that is already cached.
+
+   Two risks, and the second is the design: nothing may match exactly, so the
+   reply has to carry the near misses and what each one over- or
+   under-selects; and a search returns technically-correct rubbish —
+   `{ longerThan: 12.7 }` fits this build and breaks the next. Offer
+   structural terms only (`on`, `generatedBy`, `dihedral`, `curve`, `role`,
+   `parallel`) and refuse a metric-only match rather than ranking it low,
+   which is "refuse rather than approximate" applied to a search. ~1 day plus
+   a field case. This is what makes an `edge@N` scaffolding rather than an
+   artefact: look, point, get back something that survives a dimension
+   change.
 
 ### Waiting on a decision
 
@@ -434,7 +498,7 @@ dependency.
 
 ### The in-chat viewer — built, not yet seen in a real client
 
-`evaluate_part` shows its part in 3D in MCP Apps clients (ARCHITECTURE, "The
+`open_project` shows its part in 3D in MCP Apps clients (ARCHITECTURE, "The
 part inside a chat"); it was checked only in the reference host from
 `modelcontextprotocol/ext-apps`. Left: open it in Claude Desktop and web, where
 the iframe and message size limits are the client's; a GLB export, which

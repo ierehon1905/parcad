@@ -346,14 +346,21 @@ fn main() -> Result<()> {
         }
         let report =
             parcad_occt::check_fit(&doc, &reference, &opts).map_err(|e| anyhow::anyhow!("{e}"))?;
-        match (&report.clearance_mm, &report.closest_mm) {
-            (Some(gap), Some([a, b])) => eprintln!(
+        match (&report.clearance_mm, &report.closest_mm, &report.contact_mm2) {
+            (_, _, Some(area)) => eprintln!(
+                "fit      {}: over {area:.3} mm² in {} patch(es) — 0 mm² is a point or an edge, not a seat",
+                report.verdict,
+                report.contact_patches.unwrap_or(0)
+            ),
+            (Some(gap), Some([a, b]), _) => eprintln!(
                 "fit      {}: clearance {gap:.3} mm, between ({:.2}, {:.2}, {:.2}) on the part and ({:.2}, {:.2}, {:.2}) on the reference",
                 report.verdict, a[0], a[1], a[2], b[0], b[1], b[2]
             ),
             _ => eprintln!(
-                "fit      {}: {:.3} mm³ shared — material that would have to go for the reference to fit",
-                report.verdict, report.interference_mm3
+                "fit      {}: {:.3} mm³ shared{} — material that would have to go for the reference to fit",
+                report.verdict,
+                report.interference_mm3,
+                report.depth_mm.map_or(String::new(), |deep| format!(", {deep:.3} mm deep"))
             ),
         }
         println!("{}", serde_json::to_string_pretty(&report)?);
@@ -546,6 +553,13 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         println!("stands   {}", stands_on_text(&contact));
     }
     println!("prints   {}", parcad_core::measure::beds_text(size));
+    for c in &s.collisions {
+        println!(
+            "cuts     {} cuts {} by {:.3} mm³ at ({:.2}, {:.2}, {:.2}) besides {}{}",
+            c.cut, c.feature, c.removed_mm3, c.at[0], c.at[1], c.at[2], c.target,
+            c.body.as_deref().map(|b| format!(" in body {b}")).unwrap_or_default()
+        );
+    }
     println!(
         "volume   {:.2} mm³   area {:.2} mm²",
         mass.volume_mm3, mass.area_mm2
@@ -602,14 +616,25 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         );
     }
     for fit in &s.between {
-        match fit.clearance_mm {
-            Some(gap) => println!(
+        match (fit.contact_mm2, fit.clearance_mm) {
+            (Some(area), _) => println!(
+                "between  {} and {}: {}, over {area:.3} mm² in {} patch(es)",
+                fit.a,
+                fit.b,
+                fit.verdict,
+                fit.contact_patches.unwrap_or(0)
+            ),
+            (None, Some(gap)) => println!(
                 "between  {} and {}: {}, clearance {gap:.3} mm",
                 fit.a, fit.b, fit.verdict
             ),
-            None => println!(
-                "between  {} and {}: {}, {:.3} mm³ shared",
-                fit.a, fit.b, fit.verdict, fit.interference_mm3
+            (None, None) => println!(
+                "between  {} and {}: {}, {:.3} mm³ shared{}",
+                fit.a,
+                fit.b,
+                fit.verdict,
+                fit.interference_mm3,
+                fit.depth_mm.map_or(String::new(), |deep| format!(", {deep:.3} mm deep"))
             ),
         }
     }

@@ -29,6 +29,7 @@ import { isolateHistory } from "@codemirror/commands";
 import { Decoration, EditorView, WidgetType, keymap } from "@codemirror/view";
 import { render } from "preact";
 
+import { beginDrag } from "./drag";
 import { tip } from "./ui/tooltip";
 
 /** The literal being dialled, as a document range. */
@@ -173,6 +174,7 @@ function Chevrons({ view }: { view: EditorView }) {
   const press = (direction: 1 | -1) => (event: PointerEvent) => {
     event.preventDefault();
     const origin = event.clientY;
+    const release = beginDrag();
     let applied = 0;
 
     const move = (e: PointerEvent) => {
@@ -183,6 +185,7 @@ function Chevrons({ view }: { view: EditorView }) {
       applied = want;
     };
     const up = () => {
+      release();
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
       // A press that never moved is an ordinary click on one of the two
@@ -202,7 +205,7 @@ function Chevrons({ view }: { view: EditorView }) {
 
   return (
     <span
-      class="mx-0.5 inline-flex cursor-ns-resize select-none flex-col items-center rounded-xs bg-panel-2 align-middle ring-1 ring-line"
+      class="mx-0.5 inline-flex cursor-ns-resize flex-col items-center rounded-xs bg-panel-2 align-middle ring-1 ring-line"
       {...tip({
         title: "dial this number",
         key: "↑ ↓",

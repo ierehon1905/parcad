@@ -10,17 +10,20 @@
 
 import { useRef } from "preact/hooks";
 
+import { beginDrag } from "../drag";
 
 export function Splitter() {
   // A ref rather than a local: a re-render would reset a plain variable
   // mid-drag, and the pointer would keep moving with nothing following it.
   const dragging = useRef(false);
+  const release = useRef<() => void>();
 
   return (
     <div
       class="flex-none w-px bg-line cursor-col-resize hover:bg-accent"
       onPointerDown={(e) => {
         dragging.current = true;
+        release.current = beginDrag();
         e.currentTarget.setPointerCapture(e.pointerId);
       }}
       onPointerMove={(e) => {
@@ -32,7 +35,12 @@ export function Splitter() {
       }}
       onPointerUp={(e) => {
         dragging.current = false;
+        release.current?.();
         e.currentTarget.releasePointerCapture(e.pointerId);
+      }}
+      onPointerCancel={() => {
+        dragging.current = false;
+        release.current?.();
       }}
     />
   );

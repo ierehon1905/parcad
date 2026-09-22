@@ -9,6 +9,8 @@
 //! [`graph`] is deliberately ignorant of how shapes are computed; the one
 //! kernel lives in the `parcad-occt` crate, behind a process boundary.
 
+pub mod brief;
+pub mod checks;
 pub mod envelope;
 pub mod font;
 pub mod graph;
@@ -56,7 +58,7 @@ pub struct PartReport {
     /// else measures.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stands_on: Option<mesh::BedContact>,
-    /// Names available to selectors.
+    /// Names available to selectors, each once however many nodes wrote it.
     pub tags: Vec<String>,
     /// Number of nodes the root actually depends on. A gap between this and
     /// `total_nodes` means the document has dead nodes.

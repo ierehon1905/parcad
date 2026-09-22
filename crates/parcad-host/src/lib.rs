@@ -13,6 +13,7 @@
 //! socket: the same routes, the same MCP server and the same project folder,
 //! kept in the browser's storage.
 
+pub mod arguments;
 pub mod assets;
 pub mod docs;
 /// Not in a browser tab: there is no editor there to hand declarations to, and

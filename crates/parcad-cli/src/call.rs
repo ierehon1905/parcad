@@ -68,8 +68,10 @@ pub fn tools(args: impl Iterator<Item = String>) -> Result<()> {
         println!();
     }
     println!(
-        "{} tools. `parcad call <tool> --set key=value --set key=@file --set key:=<json>`; \
-         `parcad tools --json` for the full schemas.",
+        "{} tools. `parcad call <tool> --set key=value --set key=@file --set key:=<json>`: \
+         a value is read as the number, boolean or list the schema says it is; `:=` is JSON \
+         as written, and `project=@session` is the script on screen. `parcad tools --json` \
+         for the full schemas.",
         tools.len()
     );
     Ok(())
@@ -78,10 +80,12 @@ pub fn tools(args: impl Iterator<Item = String>) -> Result<()> {
 /// `parcad call <tool> [JSON | @file | -] [--set ...] [--out DIR]`.
 ///
 /// Arguments are one JSON object, given inline, from a file, or from stdin,
-/// and then `--set` pairs laid over it: `key=value` a string, `key=@file` the
-/// file's contents as a string (which is how a script travels without shell
-/// quoting), `key:=<json>` anything else. Images in the reply are written to
-/// `--out` and named on stderr; everything else goes to stdout.
+/// and then `--set` pairs laid over it: `key=value` text, read as a number,
+/// boolean or list when the tool's own schema says the field is one;
+/// `key=@file` the file's contents as a string (which is how a script travels
+/// without shell quoting); `key:=<json>` anything, taken as written. Images in
+/// the reply are written to `--out` and named on stderr; everything else goes
+/// to stdout.
 pub fn call(args: impl Iterator<Item = String>) -> Result<()> {
     let mut args = args.peekable();
     let tool = match args.next() {
@@ -89,6 +93,9 @@ pub fn call(args: impl Iterator<Item = String>) -> Result<()> {
         _ => bail!("usage: parcad call <tool> [JSON | @file | -] [--set key=value]... [--out DIR]"),
     };
     let mut arguments = serde_json::Map::new();
+    // The keys given as bare `key=value` text, which the tool's schema may
+    // read as something else; `key:=json` is never touched.
+    let mut as_text: Vec<String> = Vec::new();
     let mut out = PathBuf::from("out");
     if let Some(first) = args.peek() {
         if !first.starts_with("--") {
@@ -118,7 +125,11 @@ pub fn call(args: impl Iterator<Item = String>) -> Result<()> {
                 let pair = args
                     .next()
                     .context("--set needs key=value, key=@file or key:=json")?;
-                let (key, value) = parse_set(&pair)?;
+                let (key, value, literal) = parse_set(&pair)?;
+                as_text.retain(|k| *k != key);
+                if !literal {
+                    as_text.push(key.clone());
+                }
                 arguments.insert(key, value);
             }
             "--out" => out = args.next().context("--out needs a directory")?.into(),
@@ -127,10 +138,19 @@ pub fn call(args: impl Iterator<Item = String>) -> Result<()> {
     }
 
     let mut client = Client::connect_or_host(parcad_host::http::port())?;
-    let result = client.request(
-        "tools/call",
-        json!({ "name": tool, "arguments": arguments }),
-    )?;
+    if !as_text.is_empty() {
+        let listed = client.request("tools/list", json!({}))?;
+        match schema_of(&listed, &tool) {
+            Some(schema) => coerce(&mut arguments, &as_text, schema),
+            None => eprintln!(
+                "parcad: the host lists no tool {tool:?}, so --set values are sent as text; \
+                 `parcad tools` lists what it has"
+            ),
+        }
+    }
+    let result = client
+        .request("tools/call", json!({ "name": tool, "arguments": arguments }))
+        .map_err(|e| text_hint(e, &as_text, &arguments))?;
 
     let failed = result["isError"].as_bool().unwrap_or(false);
     let mut texts = Vec::new();
@@ -174,20 +194,85 @@ pub fn call(args: impl Iterator<Item = String>) -> Result<()> {
     Ok(())
 }
 
-fn parse_set(pair: &str) -> Result<(String, Value)> {
+/// One `--set` pair: the key, the value, and whether it was `key:=json`,
+/// which is taken as written whatever the schema says.
+fn parse_set(pair: &str) -> Result<(String, Value, bool)> {
     if let Some((key, raw)) = pair.split_once(":=") {
         let value = serde_json::from_str(raw)
             .with_context(|| format!("{key}:= needs JSON, got {raw:?}"))?;
-        return Ok((key.to_string(), value));
+        return Ok((key.to_string(), value, true));
     }
     let (key, raw) = pair
         .split_once('=')
         .with_context(|| format!("--set needs key=value, got {pair:?}"))?;
+    // `@session` is the one `@` that names no file: the script on screen.
     let value = match raw.strip_prefix('@') {
-        Some(file) => std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?,
-        None => raw.to_string(),
+        Some(file) if raw != "@session" => {
+            std::fs::read_to_string(file).with_context(|| format!("reading {file}"))?
+        }
+        _ => raw.to_string(),
     };
-    Ok((key.to_string(), Value::String(value)))
+    Ok((key.to_string(), Value::String(value), false))
+}
+
+/// A tool's input schema out of a `tools/list` reply.
+fn schema_of<'a>(listed: &'a Value, tool: &str) -> Option<&'a Value> {
+    listed["tools"]
+        .as_array()?
+        .iter()
+        .find(|t| t["name"].as_str() == Some(tool))
+        .map(|t| &t["inputSchema"])
+}
+
+/// Read each bare `key=value` text as what the tool's schema says the field
+/// is: a number, a whole number, a boolean, a list or an object is parsed as
+/// JSON when it parses, and a string field keeps its text — `--set name=123`
+/// stays the string "123". Text that does not parse is sent as it is, and the
+/// host's refusal then names the field.
+fn coerce(arguments: &mut serde_json::Map<String, Value>, texts: &[String], schema: &Value) {
+    for key in texts {
+        let Some(Value::String(text)) = arguments.get(key) else { continue };
+        let kinds = match &schema["properties"][key]["type"] {
+            Value::String(one) => vec![one.as_str()],
+            Value::Array(many) => many.iter().filter_map(Value::as_str).collect(),
+            _ => Vec::new(),
+        };
+        if kinds.iter().any(|kind| *kind == "string") {
+            continue;
+        }
+        let wants_json = kinds
+            .iter()
+            .any(|kind| ["number", "integer", "boolean", "array", "object"].contains(kind));
+        if !wants_json {
+            continue;
+        }
+        if let Ok(parsed) = serde_json::from_str::<Value>(text.trim()) {
+            if !parsed.is_string() {
+                arguments.insert(key.clone(), parsed);
+            }
+        }
+    }
+}
+
+/// When the host refuses a value that arrived as text, say how to send it as
+/// what it is: the escape hatch is documented where it is needed.
+fn text_hint(error: anyhow::Error, texts: &[String], arguments: &serde_json::Map<String, Value>) -> anyhow::Error {
+    let message = error.to_string();
+    // Only a refusal about the field's *type* — "`timeout_s` is the string" —
+    // and not one that merely mentions the field, such as "give `project` or
+    // `script`, not both".
+    let sent_as_text = texts.iter().find(|key| {
+        arguments.get(*key).is_some_and(Value::is_string) && message.contains(&format!("`{key}` is the"))
+    });
+    match sent_as_text {
+        Some(key) => {
+            let text = arguments[key].as_str().unwrap_or_default();
+            anyhow::anyhow!(
+                "{message}\n--set {key}={text} sent text; --set {key}:={text} sends it as JSON"
+            )
+        }
+        None => error,
+    }
 }
 
 fn type_name(property: &Value) -> String {
@@ -472,5 +557,76 @@ fn dechunk(mut body: &[u8]) -> Result<Vec<u8>> {
         }
         out.extend_from_slice(body.get(..size).context("a chunk was cut short")?);
         body = body.get(size + 2..).unwrap_or(&[]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn listed() -> Value {
+        json!({ "tools": [{ "name": "evaluate_part", "inputSchema": { "type": "object", "properties": {
+            "script": { "type": "string" },
+            "name": { "type": "string" },
+            "image_size": { "type": ["integer", "null"] },
+            "timeout_s": { "type": ["number", "null"] },
+            "open": { "type": "boolean" },
+            "views": { "type": ["array", "null"] },
+            "section": { "anyOf": [{ "$ref": "#/$defs/SectionRequest" }, { "type": "null" }] }
+        } } }] })
+    }
+
+    /// `--set image_size=768` reaches the host as the number 768 and
+    /// `--set name=123` as the string; `:=` is never touched.
+    #[test]
+    fn a_set_value_is_read_as_what_the_schema_says_it_is() {
+        let mut arguments = serde_json::Map::new();
+        let mut texts = Vec::new();
+        for pair in [
+            "image_size=768", "timeout_s=120", "name=123", "open=true", "views=[\"iso\"]",
+            "script=return box(1, 1, 1);", "section={\"axis\":\"x\"}", "timeout_s:=\"90\"",
+            "project=@session",
+        ] {
+            let (key, value, literal) = parse_set(pair).unwrap();
+            texts.retain(|k| *k != key);
+            if !literal {
+                texts.push(key.clone());
+            }
+            arguments.insert(key, value);
+        }
+        coerce(&mut arguments, &texts, schema_of(&listed(), "evaluate_part").unwrap());
+        assert_eq!(arguments["image_size"], json!(768));
+        assert_eq!(arguments["name"], json!("123"));
+        assert_eq!(arguments["open"], json!(true));
+        assert_eq!(arguments["views"], json!(["iso"]));
+        assert_eq!(arguments["script"], json!("return box(1, 1, 1);"));
+        // A field whose type the schema does not spell out in `type` is sent as given.
+        assert_eq!(arguments["section"], json!("{\"axis\":\"x\"}"));
+        // `:=` won: the text "90" stays a string even on a number field.
+        assert_eq!(arguments["timeout_s"], json!("90"));
+        assert_eq!(arguments["project"], json!("@session"), "not a file called session");
+    }
+
+    #[test]
+    fn text_the_host_refuses_is_told_how_to_travel_as_json() {
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("timeout_s".into(), json!("fast"));
+        let hinted = text_hint(
+            anyhow::anyhow!("`timeout_s` is the string \"fast\", where the tool reads a number."),
+            &["timeout_s".to_string()],
+            &arguments,
+        );
+        assert!(hinted.to_string().ends_with("--set timeout_s=fast sent text; --set timeout_s:=fast sends it as JSON"), "{hinted}");
+        let untouched = text_hint(anyhow::anyhow!("no field \"bogus\""), &["script".to_string()], &arguments);
+        assert_eq!(untouched.to_string(), "no field \"bogus\"");
+        // A refusal that names the field for another reason is not about how
+        // its value travelled.
+        arguments.insert("project".into(), json!("bracket"));
+        let both = text_hint(
+            anyhow::anyhow!("give `project` or `script`, not both: `project` builds a saved part"),
+            &["project".to_string()],
+            &arguments,
+        );
+        assert_eq!(both.to_string(), "give `project` or `script`, not both: `project` builds a saved part");
     }
 }

@@ -120,7 +120,7 @@ const EXPORTS: { format: "3mf" | "stl" | "step"; icon: IconName; label: string; 
       icon: "plate",
       label: "3MF for a slicer",
       detail:
-        "The same triangles as STL, in millimetres, with every body its own named object — a lid and its box arrive as two parts to place, not one. Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open it.",
+        "The same triangles as STL, in millimetres, with every body its own named object — a lid and its box arrive as two parts to place, not one. Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open it, and orient and arrange it for the bed.",
     },
     {
       format: "stl",

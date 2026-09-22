@@ -1,11 +1,12 @@
 /**
  * The part inside a chat: an MCP App view, rendered by the client in a
- * sandboxed iframe beside an `evaluate_part` call.
+ * sandboxed iframe beside an `open_project` call.
  *
- * The client hands this page the call's arguments; the page asks the server
- * for the mesh through `view_part`, a tool only the page can call, and draws it
- * with the window's own viewport. No network: every byte arrives through the
- * client, which is all the iframe's default policy allows.
+ * The client hands this page the call's result, which names the project it
+ * opened; the page asks the server for that project's mesh through
+ * `view_part`, a tool only the page can call, and draws it with the window's
+ * own viewport. No network: every byte arrives through the client, which is
+ * all the iframe's default policy allows.
  */
 
 import { App } from "@modelcontextprotocol/ext-apps/app-with-deps";
@@ -56,6 +57,8 @@ const loadingText = document.getElementById("loading-text")!;
 const spinner = document.getElementById("spinner")!;
 const viewport = new Viewport(document.getElementById("viewport")!);
 const draco = DracoDecoderModule({});
+/** What `view_part` builds from: the project opened, or a script when the reply carried one. */
+type Source = { project: string } | { script: string };
 let shown: string | undefined;
 
 function bytesOf(base64: string): Uint8Array {
@@ -140,12 +143,13 @@ function fail(message: string) {
   say(message, true);
 }
 
-async function show(script: string) {
-  if (script === shown) return;
-  shown = script;
+async function show(source: Source) {
+  const key = JSON.stringify(source);
+  if (key === shown) return;
+  shown = key;
   progress("Building the part…");
-  const result = await app.callServerTool({ name: "view_part", arguments: { script } });
-  if (script !== shown) return;
+  const result = await app.callServerTool({ name: "view_part", arguments: source });
+  if (key !== shown) return;
   if (result.isError) {
     const text = result.content.find((block) => block.type === "text");
     fail(text && "text" in text ? text.text : "The part did not build.");
@@ -161,7 +165,7 @@ async function show(script: string) {
   await new Promise((resolve) => requestAnimationFrame(resolve));
   const header = JSON.parse(new TextDecoder().decode(decompress(bytesOf(reply.header)))) as ViewedHeader;
   const mesh = await decodeMesh(bytesOf(reply.draco));
-  if (script !== shown) return;
+  if (key !== shown) return;
   const snapshot = header.snapshot;
   const v = ([x, y, z]: [number, number, number]) => ({ x, y, z });
   const bounds = { min: v(snapshot.bounds_min), max: v(snapshot.bounds_max) };
@@ -181,11 +185,24 @@ async function show(script: string) {
 }
 
 const app = new App({ name: "ParCAD viewer", version: __PARCAD_VERSION__ });
-app.ontoolinput = ({ arguments: args }) => {
-  const script = args?.script;
-  if (typeof script === "string") {
-    show(script).catch((e: unknown) => fail(e instanceof Error ? e.message : String(e)));
+app.addEventListener("toolresult", (result) => {
+  if (result.isError) {
+    const text = result.content?.find((block) => block.type === "text");
+    fail(text && "text" in text ? text.text : "The part did not open.");
+    return;
   }
-};
+  const reply = result.structuredContent as { name?: unknown; script?: unknown } | undefined;
+  // A reply carries the script only when asked (`script: true`); the project
+  // it names is what the server builds from otherwise.
+  const source: Source | undefined =
+    typeof reply?.script === "string" ? { script: reply.script }
+    : typeof reply?.name === "string" ? { project: reply.name }
+    : undefined;
+  if (!source) {
+    fail("The server sent neither a project name nor a script with the part; update ParCAD.");
+    return;
+  }
+  show(source).catch((e: unknown) => fail(e instanceof Error ? e.message : String(e)));
+});
 progress("Waiting for the part…");
 app.connect().catch((e: unknown) => fail(`Could not reach the chat client: ${e}`));

@@ -29,6 +29,8 @@ pub mod protocol;
 #[cfg(feature = "kernel")]
 pub mod serve;
 #[cfg(feature = "kernel")]
+pub mod overhang;
+#[cfg(feature = "kernel")]
 mod skinned;
 
 pub use bodies::{body_meshes, measure_bodies, MeasuredBody};

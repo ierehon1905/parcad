@@ -374,6 +374,28 @@ matched at all".
   parcad builtin — rename your local" is a one-line fix for the reader; "Cannot
   declare a const variable twice" is not.
 
+  **Second instance, 2026-09-18.** The coin-holder session
+  (docs/COIN_HOLDER_REVIEW.md, L1) wrote `const clearance = 0.6` on its first
+  build, eleven calls after reading the rule in read_docs `dsl`, and got
+  QuickJS's "invalid redefinition of parameter name", which names nothing; it
+  went to read_docs about an unrelated function and resent the part. The fix
+  above was specified here and never built. **Built, the same day:**
+  `__parcadShadowedBuiltin` in `dsl.ts` proves which name collided by
+  recompiling without each declared builtin (never a regex guess), and all
+  three compilers say "`clearance` is one of the N names parcad puts in every
+  script, so it cannot be declared again; rename it". Measured by
+  `eval/field/which-name-is-taken.md`.
+
+  **The rule now shapes new features.** The part's own checks
+  (docs/COIN_HOLDER_REVIEW.md, B2) wanted `assert`, `check` or `clear` as a
+  global, and every one would have broken saved parts (`clearance` was
+  already taken by the fastener table). So they added no global at all: a
+  script already returns an object of named bodies, and one key of it,
+  `checks`, is data rather than a body. The only thing lost is a body named
+  `checks`, refused in one sentence. `note()` did become an export, because a
+  reporting call has to be one; the name was chosen for being one no part in
+  `examples/` or the corpus had used as a local.
+
 ## 8. One Fusion feature costs a third of a part, because the language has no tool
 
 `examples/fusion360/retainer-v1.js`, the strongest evidence here because both

@@ -124,6 +124,48 @@ export function Report() {
         <div class="text-bad">no final treatment curves are available</div>
       )}
       {dead > 0 && <div class="text-bad">{dead} unused nodes</div>}
+      {snapshot.brief?.envelope && (
+        <div class={snapshot.brief.envelope.fits ? undefined : "text-bad"}>
+          {snapshot.brief.envelope.given.map((d) => fmt(d)).join(" × ")} envelope
+          {snapshot.brief.envelope.fits ? (
+            " — fits"
+          ) : (
+            <>
+              {" — over by "}
+              <Strong>{fmt(snapshot.brief.envelope.over_mm ?? 0)}</Strong> mm along{" "}
+              {snapshot.brief.envelope.on}
+            </>
+          )}
+        </div>
+      )}
+      {snapshot.brief?.budget_cm3 && !snapshot.brief.budget_cm3.fits && (
+        <div class="text-bad">
+          <Strong>{fmt(snapshot.brief.budget_cm3.measured)}</Strong> cm³ against a{" "}
+          {fmt(snapshot.brief.budget_cm3.given)} cm³ budget
+        </div>
+      )}
+      {snapshot.checks?.failed?.map((f) => (
+        <div class="text-bad" key={f.check}>
+          check fails: <Strong>{f.check}</Strong>
+          {f.measured_mm !== undefined && ` measured ${fmt(f.measured_mm)} mm`}
+          {f.measured_mm3 !== undefined && ` measured ${fmt(f.measured_mm3)} mm³`}
+        </div>
+      ))}
+      {snapshot.print_check?.failed?.map((f) => (
+        <div class="text-bad" key={f.what}>
+          nothing prints: <Strong>{f.what}</Strong>
+        </div>
+      ))}
+      {snapshot.print_check?.flagged?.map((f) => (
+        <div key={f.what}>print: {f.what}</div>
+      ))}
+      {snapshot.notes && (
+        <div>
+          {snapshot.notes.source}:{" "}
+          {snapshot.notes.values.map((n) => `${n.label} ${Array.isArray(n.value) ? n.value.join(", ") : n.value}`).join(" · ")}
+          {snapshot.notes.dropped ? ` · ${snapshot.notes.dropped} more dropped` : ""}
+        </div>
+      )}
     </Glass>
   );
 }
@@ -143,7 +185,8 @@ function Bodies({ snapshot }: { snapshot: Snapshot }) {
   const pairs = snapshot.between_bodies ?? [];
   const brokenBody = (body: (typeof bodies)[number]) => body.pieces > 1 || body.watertight === false;
   const open = bodiesOpen.value;
-  const shownBodies = open ? bodies : bodies.filter(brokenBody);
+  // A reference body is listed whenever the list is open, never as broken.
+  const shownBodies = open ? bodies : bodies.filter((body) => !body.reference && brokenBody(body));
   const shownPairs = open ? pairs : pairs.filter((pair) => pair.verdict === "interfering");
   const interfering = pairs.filter((pair) => pair.verdict === "interfering").length;
 
@@ -167,7 +210,8 @@ function Bodies({ snapshot }: { snapshot: Snapshot }) {
       </button>
       {shownBodies.map((body) => (
         <div key={body.name} class={brokenBody(body) ? "text-bad" : undefined}>
-          {body.name}:{" "}
+          {body.name}
+          {body.reference && " (reference)"}:{" "}
           {body.volume_mm3 !== undefined ? (
             <>
               <Strong>{fmt(body.volume_mm3)}</Strong> mm³
@@ -181,7 +225,7 @@ function Bodies({ snapshot }: { snapshot: Snapshot }) {
       {shownPairs.map((pair) => (
         <div key={`${pair.a}/${pair.b}`} class={pair.verdict === "interfering" ? "text-bad" : undefined}>
           {pair.a} · {pair.b}: {pair.verdict}
-          {pair.clearance_mm !== undefined && (
+          {pair.verdict !== "touching" && pair.clearance_mm !== undefined && (
             <>
               {" by "}
               <Strong>{fmt(pair.clearance_mm)}</Strong> mm
@@ -191,6 +235,19 @@ function Bodies({ snapshot }: { snapshot: Snapshot }) {
             <>
               {", "}
               <Strong>{fmt(pair.interference_mm3)}</Strong> mm³ shared
+              {pair.depth_mm !== undefined && (
+                <>
+                  {", "}
+                  <Strong>{fmt(pair.depth_mm)}</Strong> mm deep
+                </>
+              )}
+            </>
+          )}
+          {pair.verdict === "touching" && pair.contact_mm2 !== undefined && (
+            <>
+              {" over "}
+              <Strong>{fmt(pair.contact_mm2)}</Strong> mm²
+              {` in ${pair.contact_patches ?? 0} ${pair.contact_patches === 1 ? "patch" : "patches"}`}
             </>
           )}
         </div>

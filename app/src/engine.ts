@@ -28,6 +28,7 @@ import { shortestUniqueSelector } from "./shortest-selector";
 import * as S from "./state";
 import { store, stored } from "./store";
 import type { EdgeCurve, Evaluated, TargetPreview } from "./state";
+import type { Shown } from "./backend";
 
 /** Whether the camera has been framed on this part yet. */
 let framed = false;
@@ -51,6 +52,8 @@ interface BuiltGraph {
   graph: dsl.Doc;
   source: string;
   treatments: dsl.TreatmentSource[];
+  /** What the script reported with `note()`; shown as requested, not measured. */
+  notes?: S.EvaluationSnapshot["notes"];
 }
 
 /** The snapshot's bounds in the shape the viewport and the section take. */
@@ -117,6 +120,8 @@ export async function run() {
   try {
     const built = buildGraph(source);
     const result = await backend.evaluate<Evaluated>(built.graph, { part: name ?? undefined, source });
+    // The host measured the graph; the notes came out of the script here.
+    if (built.notes) result.snapshot.notes = built.notes;
 
     S.lastGraph.value = built.graph;
     S.lastSource.value = built.source;
@@ -129,14 +134,7 @@ export async function run() {
     clearError();
     S.setStatus(reportOf(result), result.shipped ? "busy" : "");
     if (revision !== undefined) {
-      void backend
-        .reportShown({
-          id: viewerId,
-          revision,
-          built: true,
-          volume_mm3: result.snapshot.volume_mm3,
-        })
-        .catch(() => {});
+      report({ id: viewerId, revision, built: true, volume_mm3: result.snapshot.volume_mm3 });
     }
     void captureFirstThumbnail();
   } catch (e) {
@@ -144,14 +142,7 @@ export async function run() {
     showError(e);
     S.setStatus(shownPath === undefined ? "failed" : "failed · showing the last part that built", "failed");
     if (revision !== undefined) {
-      void backend
-        .reportShown({
-          id: viewerId,
-          revision,
-          built: false,
-          error: e instanceof Error ? e.message : String(e),
-        })
-        .catch(() => {});
+      report({ id: viewerId, revision, built: false, error: e instanceof Error ? e.message : String(e) });
     }
   } finally {
     running = false;
@@ -176,9 +167,19 @@ function buildGraph(source: string): BuiltGraph {
       ...args: unknown[]
     ) => unknown;
   } catch (e) {
+    // The engine's own words name no identifier ("Cannot declare a const
+    // variable twice"); which of parcad's names the script declared is proved
+    // by compiling it without them.
+    const shadowed = dsl.__parcadShadowedBuiltins(source, names);
+    if (shadowed.length) {
+      const named = new Error(dsl.__parcadShadowedBuiltinMessage(shadowed, names));
+      named.stack = e instanceof Error ? e.stack : undefined;
+      throw atLine("the script did not parse", named, source);
+    }
     throw atLine("the script did not parse", e, source);
   }
 
+  dsl.__parcadTakeNotes();
   let result: unknown;
   try {
     result = fn(...names.map((n) => api[n]));
@@ -195,7 +196,12 @@ function buildGraph(source: string): BuiltGraph {
   const stacks: (string | undefined)[] = [];
   const graph = dsl.build(result as dsl.Part, treatments, stacks);
   nodeLines = stacks.map(lineOf);
-  return { graph, source, treatments };
+  const taken = dsl.__parcadTakeNotes();
+  const notes =
+    taken.values.length || taken.dropped
+      ? { source: "from the script, not measured" as const, values: taken.values, ...(taken.dropped && { dropped: taken.dropped }) }
+      : undefined;
+  return { graph, source, treatments, notes };
 }
 
 const SCRIPT_URL = "parcad-editor.js";
@@ -814,13 +820,29 @@ function readmeFor(path: string, source: string): string {
         `- body ${body.name}: ${body.volume_mm3 !== undefined ? `${fmt(body.volume_mm3)} mm³` : "a surface"}, ${body.faces} faces` +
         (body.pieces > 1 ? `, in ${body.pieces} PIECES` : ""),
     ),
-    ...(snapshot.between_bodies ?? []).map(
-      (pair) =>
-        `- ${pair.a} and ${pair.b}: ${pair.verdict}` +
-        (pair.clearance_mm !== undefined
-          ? ` by ${fmt(pair.clearance_mm)} mm`
-          : `, ${fmt(pair.interference_mm3)} mm³ shared`),
-    ),
+    ...(snapshot.between_bodies ?? []).map((pair) => {
+      if (pair.verdict === "interfering") {
+        const deep = pair.depth_mm !== undefined ? `, ${fmt(pair.depth_mm)} mm deep` : "";
+        return `- ${pair.a} and ${pair.b}: interfering, ${fmt(pair.interference_mm3)} mm³ shared${deep}`;
+      }
+      if (pair.verdict === "touching" && pair.contact_mm2 !== undefined) {
+        const patches = pair.contact_patches ?? 0;
+        return (
+          `- ${pair.a} and ${pair.b}: touching over ${fmt(pair.contact_mm2)} mm² ` +
+          `in ${patches} ${patches === 1 ? "patch" : "patches"}`
+        );
+      }
+      const by = pair.clearance_mm !== undefined ? ` by ${fmt(pair.clearance_mm)} mm` : "";
+      return `- ${pair.a} and ${pair.b}: ${pair.verdict}${by}`;
+    }),
+    ...(snapshot.brief?.envelope
+      ? [
+          `- ${snapshot.brief.envelope.given.map(fmt).join(" × ")} mm envelope: ` +
+            (snapshot.brief.envelope.fits
+              ? "fits"
+              : `OVER by ${fmt(snapshot.brief.envelope.over_mm ?? 0)} mm along ${snapshot.brief.envelope.on}`),
+        ]
+      : []),
     ...(snapshot.stands_on
       ? [
           `- stands on ${fmt(snapshot.stands_on.area_mm2)} mm² in ${snapshot.stands_on.patches} ` +
@@ -919,6 +941,25 @@ const viewerId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(
 
 /** The newest session revision this window has seen; a push says it built on it. */
 let sessionRevision: number | null = null;
+
+/**
+ * What this window last reported showing, sent again every 10 s while the
+ * page is alive: the host marks a window silent for 30 s `stale` and forgets
+ * one silent for 300 s, so a window that is merely idle has to keep saying it
+ * is there. A background tab's timers are throttled, and a tab the user is
+ * not looking at going stale is the right reading.
+ */
+let lastReport: Shown | undefined;
+const HEARTBEAT_MS = 10_000;
+
+function report(shown: Shown): void {
+  lastReport = shown;
+  void backend.reportShown(shown).catch(() => {});
+}
+
+setInterval(() => {
+  if (lastReport) void backend.reportShown(lastReport).catch(() => {});
+}, HEARTBEAT_MS);
 
 export function subscribeSession(): void {
   backend.subscribeSession(viewerId, (session) => {

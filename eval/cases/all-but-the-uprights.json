@@ -1,0 +1,39 @@
+{
+  "name": "all-but-the-uprights",
+  "script": "eval/scripts/all-but-the-uprights.js",
+  "why": "Negation in the query form. Eight of the block's twelve edges are rounded at 1 mm and the four uprights are left sharp, which is what the 14 faces say: the box's own 6 plus one round per treated edge, where rounding all twelve would give 6 + 12 + 8 corner patches. The volume is the kernel's, 8000 mm³ less the 51.7 the eight rounds take. `.expect({ count: 8 })` fails the build if the negation ever stops taking the four uprights out, which is the defect this case exists for — a selector that silently matched twelve would round the part into a different shape and every other number here would still look reasonable. docs/COIN_HOLDER_REVIEW.md, L2.",
+  "brep": {
+    "size": [
+      40.0,
+      20.0,
+      10.0
+    ],
+    "volume_mm3": 7948.318,
+    "area_mm2": 2695.344,
+    "triangles": 156,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 684.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 14,
+    "edges": 56,
+    "curves": 28,
+    "requires": [
+      "query-not"
+    ],
+    "overhang": {
+      "part": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 80.344,
+        "bed_mm2": 684.0,
+        "faces": 4,
+        "bridges": 0
+      }
+    }
+  }
+}

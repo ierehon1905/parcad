@@ -1231,6 +1231,386 @@ for a volume) and `eval/field/make-the-sheet-printable.md` (whether a refusal
 naming `thicken` is acted on); section 18's rounds are recorded below them
 when run.
 
+## 19. Editing in place — what a session spends on script bytes
+
+Every section above is about what a model reads. This one is about what it
+*sends*: the coin-holder session (docs/COIN_HOLDER_REVIEW.md, B1) sent 241 KB
+of script in 45 calls, nineteen of them to change under ten lines, and with
+one late edit to make it ran a Python old/new replacement on part.js from a
+shell. Since 2026-09-20 every script-taking tool takes `project` (or
+`"@session"`, the screen) and `edits` instead of a script, `edit_part` is that
+replacement as a tool — built before written, snapshotted — and the server
+instruction says to send a script once. `field/score.py` now reports `sent`,
+the bytes of `script` a trial sent, which is the number this exists to move.
+
+Measured 2026-09-20 on haiku, 4 trials per arm, one trial at a time on a
+fresh copy of the part (`examples/fusion360/retainer-v1.js`, 146 lines,
+6,561 bytes) — the two cases in `eval/field/` written with the change, and
+the two screen cases as regressions:
+
+| case | arm | before: sound / reach / bytes per trial | after: sound / reach / bytes per trial |
+|---|---|---|---|
+| change-one-dimension (`edit_part`) | thinking | 0/4 · 0/4 · 19,682 | 1/4 · 1/4 · 8,201 |
+| change-one-dimension (`edit_part`) | no thinking | 0/4 · 0/4 · 17,496 (1 VOID) | 1/4 (1 VOID reached it) · 2/4 · 1,640 |
+| what-if-it-were-thicker (`{ project, edits }`) | thinking | 0/4 · 0/4 · 8,216 | 4/4 · 4/4 · 0 |
+| what-if-it-were-thicker (`{ project, edits }`) | no thinking | 0/4 · 0/4 · 9,866 | 2/4 · 2/4 · 3,280 |
+| change-the-open-part (regression) | thinking | 3/3 · 3/3 · 2,408 | 2/3 · 2/3 · 1,204 (1 WRONG: never reached the server) |
+| change-the-open-part (regression) | no thinking | 3/3 · 3/3 · 2,408 | 2/3 · 2/3 · 1,204 (1 LUCKY: edit_part on the project, which saved) |
+| did-the-window-draw-it (regression) | thinking | 3/3 · 3/3 · 162 | 3/3 · 3/3 · 162 |
+| did-the-window-draw-it (regression) | no thinking | 3/3 · 3/3 · 162 | 3/3 · 3/3 · 162 |
+
+Before the change every trial was LUCKY by construction — the right volume,
+reached by resending the whole part once to evaluate and once to save, and
+the number to read is the bytes. After it, the what-if is answered the cheap
+way every time with thinking on, and the model that still resends is the one
+that must be read about in docs/WRITING_FOR_MODELS.md: a small model with
+`edit_part` on the surface reached for `save_project` with the whole script
+in 3 of 4 thinking trials, one of them after it had already measured the
+change with `{ project, edits }`. The screen cases were at their ceiling
+before and are worth one sentence after: asked to lengthen the open part as a
+proposal, not a save, one non-thinking trial called `edit_part` with the
+project's name rather than `"@session"`, which writes part.js (and puts it
+on screen, since it was open), and reported the screen honestly; the
+thinking-arm WRONG never reached the server. A model that has just opened a
+part by name reaches for that name; `"@session"` is the spelling the case
+wants and the description gives, and one trial in six did not take it.
+
+**The checks round, 2026-09-20.** Three things from the coin-holder review
+landed together (docs/COIN_HOLDER_REVIEW.md, B2, workflow §2, mechanical
+§2.6): `checks: [...]` in the returned object, judged on every build and
+first in every reply; the door — `export_part`, `save_project` and a saving
+`edit_part` refuse a failing check unless `allow_failing` gives a reason;
+`.reference()` bodies measured and drawn but in no file; and `note()`, carried
+as "from the script, not measured". Measured on the same small model, 4
+trials per arm (3 for the screen case), two hosts on scratch ports, the
+in-place cases one trial at a time on a fresh copy:
+
+| case | arm | before: sound / reach / bytes per trial | after: sound / reach / bytes per trial |
+|---|---|---|---|
+| is-it-safe-to-save (the door, `allow_failing`) | thinking | 0/4 · 0/4 · 994 (4 LUCKY) | 4/4 · 4/4 · 0 |
+| is-it-safe-to-save | no thinking | 0/4 · 0/4 · 3,959 (4 LUCKY) | 4/4 · 4/4 · 248 |
+| is-the-catch-still-caught (`checks` of `{ project, edits }`) | thinking | 1/4 · 1/4 · 875 | 2/4 · 2/4 · 450 |
+| is-the-catch-still-caught | no thinking | 0/4 · 0/4 · 1,009 (2 VOID) | 0/4 · 1/4 · 675 (3 LUCKY, 1 VOID) |
+| where-is-the-sliver (§2.6's risk) | thinking | 4/4 · 4/4 · 402 | 4/4 · 4/4 · 287 |
+| where-is-the-sliver | no thinking | 2/4 · 4/4 · 287 | 1/4 · 4/4 · 287 |
+| change-one-dimension (regression) | thinking | 2/4 · 2/4 · 4,918 | 3/4 · 3/4 · 3,278 |
+| change-one-dimension | no thinking | 1/4 · 2/4 · 4,920 | 3/4 · 3/4 · 1,640 |
+| what-if-it-were-thicker (regression) | thinking | 4/4 · 4/4 · 0 | 3/4 · 3/4 · 1,639 |
+| what-if-it-were-thicker | no thinking | 1/4 · 1/4 · 3,292 | 0/4 · 0/4 · 8,200 |
+| change-the-open-part (regression, screen) | thinking | 3/3 · 3/3 · 2,006 | 2/3 · 2/3 · 2,408 |
+| change-the-open-part | no thinking | 3/3 · 3/3 · 2,408 | 2/3 · 2/3 · 1,605 |
+
+The door case is the one this round exists for, and it is the whole story
+in two rows. Before: eight trials of eight reported the part saved and named
+the failing check with its 0.13 mm, and every one is LUCKY — the before host
+has no `checks` key, so the part cannot build there, `save_project` wrote it
+anyway (built: false, as it always did), and the 0.13 came from the script's
+own header comment; two thinking trials deleted the `checks` entry to make the
+part build and put it back afterwards. After: eight of eight went through the
+door — refused once, then `edit_part` with `allow_failing` and the user's
+reason, 0 bytes of script sent — and quoted the check as the refusal named
+it. The trap (a save reported as done with the check unmentioned) fired in
+none of sixteen trials on either host, because both hosts' replies name the
+check: one from a comment, one from a measurement. The catch case reads the
+same way with a smaller signal: after the change every trial that reached
+a reply said `failed` with 16 mm³, and the LUCKY ones are the resend — the
+whole 900-byte part sent as `script` instead of `{ project, edits }`, the
+behaviour §19's first table already recorded. `note()` was never called in
+any transcript of either round, so the sliver case measures the risk §2.6
+named only as an absence: no trial quoted a note, and the non-thinking arm's
+0.725 mm wall (NEXT.md, "Left from the engine wave", item 10) is the same
+wrong answer as before.
+
+Two regressions to read rather than count. The screen case's two LUCKY trials
+each changed the screen through `edit_part "@session"` — the route the server
+instruction has named since the edit-in-place batch — and the rubric, written
+before that tool existed, requires `set_script`; the revision and the viewer's
+25 mm in their verdicts came from tool replies, and the case is the thing to
+update. The what-if's non-thinking arm resent the whole part in all four
+trials against one of four before (8,200 bytes against 3,292), with the
+volume right every time; the thinking arm's one LUCKY did the same. Nothing
+in this round touched that tool's route; the evaluate_part description grew a
+paragraph on `checks` and reference bodies, and whether a longer description
+moves a deferred-tool client's first call is the unmeasured variable —
+docs/WRITING_FOR_MODELS.md, "What parcad measured".
+
+**The print-check round, 2026-09-21.** docs/NEXT.md's item 1 landed whole
+in four commits: `collisions` in every reply (what each cut took from the
+features it was not for), `print_check` beside the author's `checks` on every
+build with the door reading both slots through one `allow_failing`, overhang
+per body in the orientation it prints (`.printedUp()`), and `print/<body>.3mf`
+written on save (since removed: every slicer orients and arranges for its own
+bed, and one part in `examples/` declares an orientation to carry). Measured on the same
+small model, 4 trials per arm (3 for the screen case), two hosts on scratch
+ports — the before host at d71392a8, the after host at the batch's last
+commit — the in-place cases one trial at a time on a fresh copy, the screen
+cases with a browser tab fronted on each host and the screen reset between
+trials. `field/run-case.sh` now passes `--strict-mcp-config`: a `parcad-web`
+relay entry scoped to the home directory was loaded beside the server under
+test, and 14 of 32 trials of the first before round answered nothing but that
+it had failed to connect; that round was discarded.
+
+| case | arm | before: sound / reach / bytes per trial | after: sound / reach / bytes per trial |
+|---|---|---|---|
+| is-this-ready-to-print (`print_check`, new) | thinking | 1/4 · 1/4 · 0 (1 LUCKY, 2 WRONG) | 2/4 · 2/4 · 0 (2 LUCKY) |
+| is-this-ready-to-print | no thinking | 0/4 · 1/4 · 0 (4 LUCKY) | 2/4 · 2/4 · 0 (1 LUCKY, 1 WRONG) |
+| where-does-it-need-support (overhang, new) | thinking | 0/4 · 1/4 · 0 (4 WRONG) | 4/4 · 4/4 · 0 |
+| where-does-it-need-support | no thinking | 0/4 · 0/4 · 0 (4 WRONG) | 1/4 · 2/4 · 0 (1 LUCKY, 2 WRONG) |
+| is-it-safe-to-save (regression) | thinking | 4/4 · 4/4 · 746 | 4/4 · 4/4 · 1,245 |
+| is-it-safe-to-save | no thinking | 4/4 · 4/4 · 993 | 4/4 · 4/4 · 1,242 |
+| is-the-catch-still-caught (regression) | thinking | 2/4 · 2/4 · 450 | 1/4 · 1/4 · 675 |
+| is-the-catch-still-caught | no thinking | 1/4 · 1/4 · 675 | 1/4 · 1/4 · 675 |
+| change-one-dimension (regression) | thinking | 1/4 · 1/4 · 8,199 | 4/4 · 4/4 · 0 |
+| change-one-dimension | no thinking | 2/4 · 2/4 · 6,561 | 1/4 · 1/4 · 6,561 |
+| change-the-open-part (regression, screen; rubric fixed) | thinking | 3/3 · 3/3 · 2,424 | 3/3 · 3/3 · 2,407 |
+| change-the-open-part | no thinking | 0/3 · 0/3 · 0 (2 LUCKY, 1 WRONG) | 2/3 · 2/3 · 802 (1 LUCKY: edit_part "@session", no evaluate) |
+
+The two new cases are the round. On the before host the ready-to-print part
+builds and the model has the sweep, so the feather is found by every trial
+that runs `measure_wall_thickness`; the collision is not in any reply there,
+and the answers that name `grille cuts boss` got it from probing the boss's
+side with rays (LUCKY: `evaluate_part` never read) or guessed the wrong pair
+(`channel cuts floor`, WRONG). After: every trial that called
+`evaluate_part` read the verdict off `print_check` and said both — READY no,
+the 0 mm feather between `floor` and `channel`, `grille` cuts `boss` — and no
+trial in either arm read the failing verdict as ready (trap 0 of 16). The
+trials that did not reach it took the same route as before: open the part,
+sweep, probe — `evaluate_part` never loaded — which is the finding in
+docs/WRITING_FOR_MODELS.md. The support case is the cleanest number here:
+0/8 before (no reply carried an overhang, and every trial computed one from
+the source or from rays and got a different figure) to 4/4 with thinking on,
+all four quoting 65.797 mm² off `print_check.bodies[0]` and naming `lip`;
+without thinking, the trials that never called `evaluate_part` probed the
+lips with rays and summed their own areas.
+
+The regressions hold where they were measured before, within the noise of
+four trials: the door case is 16/16 on both hosts; the catch case's LUCKY
+trials are the whole 900-byte part resent as `script`, exactly as in the
+checks round; change-one-dimension's thinking arm went from 1/4 to 4/4 with 0
+bytes sent and its plain arm from 2/4 to 1/4 with the same bytes, which four
+trials cannot separate from noise. The screen case's rubric no longer
+requires `set_script` — `edit_part "@session"` is the route the instructions
+name — and its one LUCKY after is a trial that changed the screen through
+`edit_part` and never called `evaluate_part`, measuring the 25 mm off the
+edit's own reply. The before host's plain arm reads the same way: one trial
+edited the part by name (which saved it, and put it on screen because it was
+open), one edited `"@session"` without evaluating first, and one changed
+nothing and asked whether it should.
+
+## 20. How deep, and how much — the two numbers a verdict leaves out
+
+`between_bodies` and `check_fit` answered every pair with a word and a
+volume, and the coin-holder session read both wrongly in ways that decided
+the design (docs/COIN_HOLDER_REVIEW.md §2.3). A 0.002 mm³ overlap between a
+coin and a retention arm was written up as *"both flat and tilted €2 coins
+remain securely blocked"*: over a 2.2 mm coin edge that volume is a
+penetration of about two microns, an order of magnitude inside a printer's
+dimensional error, and it is evidence the coin is exactly *at* the escape
+boundary. And `{"a":"top","b":"cups","clearance_mm":0,"closest_mm":[[45,0,12.32],[45,0,12.32]]}`
+— one point, repeated, at the extreme +x end of the part — was read as
+*"the three touch without overlapping"*, evidence that the stack seats.
+`touching` is returned identically for two bodies sharing 2 800 mm² of face
+and for two that graze at a corner.
+
+Since 2026-09-21 an interfering pair carries `depth_mm` and `deepest_mm`, and
+a touching pair `contact_mm2`, `contact_patches` and `contact_center_mm`.
+Both are measured on the exact solids and neither is derivable from what was
+there before:
+
+- **Depth** is the diameter of the largest ball that fits inside the solid
+  the two share, and its centre — `perceive::deepest_inside`, the same
+  shrinking-ball search §5's wall sweep runs, pointed at the common instead
+  of the part. It is a lower bound that is *attained*, never an estimate
+  above the truth. A Ø10 boss sunk 5 mm into a plate reads 5.000; a catch
+  reaching 1.8 mm into a latch reads 1.800; a 5 mm cube sunk 0.4 mm into a
+  plate reads 0.400 against 10 mm³ of volume.
+- **Contact** is the common of the two bodies' *skins* — each body's faces,
+  with no inside — measured by `BRepGProp` over that compound and counted
+  into patches by which faces share an edge. A lid on a cup's Ø54–Ø60 rim
+  reads 537.212 mm² in one patch, exact on a face bounded by circles where
+  the same area off a 0.01 mm mesh is a tenth of a percent short; a ball
+  resting on that cup's floor reads 0.000 in none; a lid on two bosses reads
+  two patches. `Shape_faces_json` explores solids only and reads a compound
+  of loose faces as empty, which is why the vendored crate gained
+  `Shape::surface_properties` (PARCAD-CHANGES.md).
+
+A number a script cannot assert is half-landed, so `Check` gained the two
+qualifiers that name them: `{ interferes: [a, b], deeperThan: 0.3 }` and
+`{ touching: [a, b], contactAtLeast: 500 }`. `atLeast` on `interferes` still
+means mm³ and is still the wrong quantity to design a catch by; the new key
+is the right one, and a failing `deeperThan` reports the depth rather than
+the volume that misled.
+
+**Measured, 2026-09-21.** `eval/field/which-one-is-resting-on-it` puts one
+part to the model whose two pairs are both `touching`: a lid seated on a
+cup's whole rim and a ball resting on its floor at one point. Small model,
+4 trials per arm, two hosts on scratch ports — before at ef70c3c8, after at
+this round's last commit.
+
+| arm | before: sound / reach / quote | after: sound / reach / quote |
+|---|---|---|
+| thinking | 0/4 · 1/4 · 0/4 (4 WRONG) | 1/4 · 1/4 · 1/4 (2 WRONG, 1 VOID) |
+| no thinking | 0/4 · 1/4 · 1/4 (3 WRONG, 1 VOID, 1 trap) | 0/4 (2 LUCKY) · 0/4 · 2/4 |
+
+The cleanest number is not in the table: **`537.212` appears in none of the
+eight before transcripts and in one of the eight after**, the trial that
+called `evaluate_part`. Before, a trial that reached the tool still could
+not be right — trial 1 of the thinking arm called it, read `touching` with
+`clearance_mm: 0`, and then computed π(30²−27²) by hand to 537.5; another
+wrote "this is a point contact, not a surface" about the ball and reported
+the lid's derived figure anyway. After, the one trial that reached the tool
+quoted the measurement exactly and said the ball "touches the cup at a
+point, not bearing on a surface".
+
+Two things this round does *not* show. Reach did not move — 2/8 before, 1/8
+after — and it would not: this changed a reply, not a tool's pull, and the
+trials that never load `evaluate_part` open the part and reason from its
+source, which is the finding in docs/WRITING_FOR_MODELS.md. And the case
+is weaker than it looks: 537.212 is a closed form, so two after trials
+derived it, rounded to 537.2 and graded LUCKY on a number they never
+measured. A better version wants a contact area with no closed form; until
+then `reach` is the column to read.
+
+Pinned by `eval/cases/seated-and-sunk` (0.400 mm deep, 100 mm² in one patch,
+both closed form, both asserted by the part's own checks) and
+`eval/cases/rim-and-ball` (537.212 against 0.000, under one verdict). Three
+cases that already recorded a pair moved: `interfering-bodies` gained the
+5.0 mm the boss reaches into the plate, `checked-clip` the 1.8 mm bite and
+its 18 and 200 mm² seats, and `twisted-planter` the finding that its planter
+rests on the saucer's 37 bumps over **0.000 mm² in 0 patches** — a tangent
+line, not a seat, which nothing in the old reply could have said.
+
+## 21. The brief — what the part is *for*, judged on every build
+
+Every section above is about measuring the part that was built. This one is
+about the part that was *asked for*. The coin-holder session's first user
+message said "pocket"; the first build was 97.3 × 55.8 × 20.2 mm and every
+number in its report — watertight, `stands_on` 74 %, `prints_on` all three
+beds — was green. Message 2 was *"but i said pocket"*. Message 6 was *"its
+too big"*. Five designs were built against a requirement that lived only in
+the first four words of the conversation, and two of six user turns were
+corrections of it (docs/COIN_HOLDER_REVIEW.md, Appendix C §1). parcad held a
+part's units so a file could not be misread and held nothing about what the
+part was for.
+
+Since 2026-09-21 a script declares one — `brief({ envelope: [95, 70, 16],
+budgetCm3: 12, holds: [...], gesture: ..., printer: ..., material: ... })` —
+stamped on the graph beside `checks`, so it survives a redesign, a `.history`
+snapshot and a hand edit. Every solid reply carries `brief`, verdict first:
+`meets`, or `over:` naming what is over and by how much. Three things about
+the shape of it:
+
+- **The envelope is judged in the best of the six axis orientations.**
+  Turning an axis-aligned box inside an axis-aligned box can only permute its
+  three extents, so the answer is the two sorted triples compared term by
+  term — and it is a different answer from the one arithmetic down the axes
+  gives. `eval/cases/upright-caddy` is a 20 × 22 × 60 part in a 70 × 22 × 20
+  slot: 40 mm too tall axis for axis, and it fits.
+- **A part with no brief gets the key anyway**, carrying one line: that its
+  size and volume are measured against nothing, and what to write. That line
+  is the whole nudge — a model reads it on the first build of the first turn,
+  while the requirement it has just been given is still in front of it.
+- **It is never a door.** `checks` refuse an export; a brief does not. A part
+  is over its envelope for most of the time it is being designed, and a door
+  there would only teach an author to leave the brief out.
+
+`printer` is matched against `BEDS` and says whether *that* bed takes the
+part, rather than the three-bed list; a name no bed here knows is reported
+as unjudged with the names that are, instead of silently passing.
+
+**The render's half, shipped with it.** Every one of the twelve renders that
+session's user judged was an object floating on black at an unknown scale,
+and "but I said pocket" is a scale judgement made from a picture with no
+scale in it. A ruler already existed on the contact sheet and on no other
+view; it is now drawn along the bottom of every shaded view, and the reply
+carries `scale_mm` over `scale_px` so a model quotes the number rather than
+estimating off pixels. Not on a region map, which is an instrument read by
+colour and would gain a white region that is not one.
+
+Pinned by `eval/cases/briefed-tray` (the session's own v5 and its own brief:
+over by exactly 15 mm along x, and on no other axis) and
+`eval/cases/upright-caddy` (`meets`, and a volume of 13.389 cm³ where the two
+boxes give 13.856).
+
+**Measured, 2026-09-21.** `eval/field/does-it-meet-the-brief` asks whether a
+part meets what it is for. The part is the upright caddy, 20 × 22 × 60 into a
+70 × 22 × 20 slot; the before host is `39c90008`, where the same geometry
+carries the same requirement as a *comment* — the way the coin-holder session
+carried it — and the after host has it as `brief()`. 4 trials per arm on two
+scratch hosts:
+
+| arm | before: sound / reach / trap | after: sound / reach / trap |
+|---|---|---|
+| thinking | 0/4 · 3/4 · 4/4 (3 WRONG, 1 VOID) | 3/4 · 4/4 · 0/4 (1 LUCKY) |
+| no thinking | 0/4 · 4/4 · 4/4 (4 WRONG) | 4/4 · 4/4 · 0/4 |
+
+**Eight before trials, eight wrong answers, all the same wrong answer.** Every
+one reached `evaluate_part`, read `volume_mm3` and reported the plastic
+correctly to three decimals — and then compared 60 against 20 down the axes
+and said the part misses its slot. *"3× taller than the slot specification
+allows"*, *"exceeds the 20 mm slot height"*. After, seven of eight say `YES`
+and none hits the trap; the plain arm is 4/4. The one LUCKY quoted the script
+beside the reply.
+
+This is the largest before/after in this document, and the reason is that it
+is not a field a reader might overlook — it is a *judgement* that a reader
+who does the arithmetic gets wrong. Every other perception change here made
+something readable that was already derivable. This made something correct
+that was reliably derived wrong.
+
+**What is not here.** The review asks for a measured `POCKETS` table beside
+`DEVICES` so "pocket" is not a guess. It is not in this round and should not
+be invented: `DEVICES` carries published sizes and labels its two guessed
+radii as guesses, and a table of pocket dimensions with a plausible source
+line would be neither. It wants somebody to measure some pockets.
+
+## 22. Saying what you do not want
+
+The compact selector form is a conjunction of extrema and directions — `>Z`,
+`<Y`, `|X`, joined by `and` — and has no negation, no disjunction and no
+brackets. A session wrote `">Z and not |Z"` twice in one script and got back
+*"invalid edge-selector term \"not |Z\"; expected >X, <Y, or |Z (joined with
+`and`)"*: three spellings and a full stop, with no mention that a query form
+exists beside it holding every term the author was reaching for. Only the
+first of the two was reported. 3,346 bytes resent, twice
+(docs/COIN_HOLDER_REVIEW.md, L2).
+
+Two changes, and the cheap one is the one that helps a model that never reads
+this page:
+
+- **The refusal names the language that can say it.** When the term contains
+  `not`, `or` or a bracket — and only then, the way `queryShapeError` already
+  adds a key hint only when there is one — the message continues: the compact
+  form has none of those, say it in the query form, which has `dihedral`,
+  `parallel`, `longerThan`, `on`, `between` and `not`, and `check_selector`
+  parses one without building anything. The span is unchanged; the span is
+  what the editor underlines.
+- **`not` exists, in the query form only.** `{ dihedral: "convex", not: {
+  parallel: "z" } }` is every outside edge but the upright ones. It is
+  subtracted *before* `at` picks extrema, so an extremum is the highest of
+  what is left rather than the highest edge if it happens to survive — which
+  is the same rule `on` already set for scoped extrema, and the one a reader
+  would otherwise have to guess. One level deep: a `not` inside a `not` is
+  refused, and so is an empty one.
+
+`not` is not in the compact string and should not be: `not >Z` is close to
+meaningless ("not the furthest"), while every term in the query form is
+already a predicate over the same candidates, which is where a negation has a
+meaning to have.
+
+Both parsers say it in the same words, and `eval/selectors.json` — the
+specification, not either parser — carries the new listing, the session's own
+`">Z and not |Z"` with its span, and the four shapes a `not` is refused in.
+`eval/cases/all-but-the-uprights` holds the geometry: eight edges rounded and
+four left sharp, which the 14 faces state and `.expect({ count: 8 })` fails
+the build over. `eval/field/round-all-but-the-uprights` asks a model to write
+it, scored on `input` rather than the answer, because the volume is reachable
+by two fillets or by enumerating `|X` and `|Y` and neither is the language
+having grown. Not yet run.
+
+`or` is still not sayable — `any: [q1, q2]` in docs/SELECTORS.md §3 — and the
+refusal now says so outright rather than leaving a reader to discover it.
+
 ## Suggested order
 
 Done, and what each cost is in its own section: point and ray probes and

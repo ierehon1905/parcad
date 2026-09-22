@@ -106,9 +106,12 @@ code that measures a whole part, so a body's volume and the part's are the same
 kind of number and the bodies sum to the part; the same function serves the
 app's snapshot (`named_bodies`) and the eval corpus. Every pair is measured on
 the exact solids with `fit_between`, the measurement behind `check_fit`, and
-reported as `between_bodies`: `clear` by a clearance, `touching`, or
-`interfering` by a shared volume — a clip drawn through the body it clips onto
-is a design error the number states outright. STEP writes the compound, which
+reported as `between_bodies`: `clear` by a clearance, `touching` over a
+contact area in so many patches, or `interfering` by a shared volume and the
+depth one reaches into the other — a clip drawn through the body it clips onto
+is a design error the number states outright. The verdict alone is not the
+answer either way: a volume is not a depth, and `touching` is the same word
+for a seated face and a corner (docs/PERCEPTION.md §20). STEP writes the compound, which
 OCCT's writer turns into one solid per body; 3MF writes each body's welded
 triangles as its own named object, so a slicer can place the halves apart
 (`parcad_occt::body_meshes`, `parcad_core::threemf`); STL writes every body's
@@ -128,6 +131,122 @@ cannot take the group as its child.
 Region maps, `tag_extents`, `probe_part` and `measure_wall_thickness` run
 body by body: a crossing, a point and a thin spot each name the `body` they
 are in.
+
+**A part carries its own checks, and the verdict is read first.** A script
+may return `checks: [...]` beside its bodies — `{ clear: ["top", "stacks"],
+atLeast: 0.2, why }`, `{ interferes }`, `{ touching }`, `{ wall: { min },
+ignore, on }`, `{ size: { max } }`, `{ standsOn: { atLeast } }`, `{ bodies }`,
+`{ watertight }` — and `build()` stamps the list on the graph as a top-level
+key beside `requires` (`Doc::checks`, gated by `envelope.rs` and the
+`part-checks` feature id, validated against the part's body and tag names in
+`Doc::topo_order`). `Doc::brief` rides beside it the same way — what the part
+is *for*, from `brief({ envelope, budgetCm3, ... })` at the top of the script
+— and is judged on every build by `parcad_evaluation::brief`, whose verdict
+is in every solid reply whether a script declares one or not. A brief is
+never a door: a part is over its envelope for most of the time it is being
+designed (docs/PERCEPTION.md §21). A check lives in the graph and not in a tool argument so
+that it travels with the part: the coin-holder session
+([COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md), B2) kept its checks in
+throwaway scripts and shipped a version they had never run against. It is
+judged in `service::evaluate`, after every build, by
+`parcad_evaluation::checks::judge` over the snapshot the build produced —
+`between_bodies` for the pair checks, the snapshot's size, bed contact, piece
+count and closure for the rest, and the thickness sweep at the check's own
+threshold for `wall` — and the verdict is the snapshot's **first** field
+(`checks: { verdict, passed, failed }`), which is why `serde_json` keeps
+struct order here (`preserve_order`): the first thing in a reply's text is
+the thing a model reads. `evaluate_part` never refuses over a failed check;
+`export_part`, `save_project` and a saving `edit_part` go through one door
+(`service::Door`) that refuses unless `allow_failing: "<reason>"` opens it,
+and the reason is echoed in the reply. The window's own save is not gated:
+the person saving can see the red line in the report.
+
+**`print_check` is the second verdict, judged in the same place and read
+through the same door.** Two parts shipped as STLs with defects the thickness
+sweep finds at once, because the sweep was a tool a model had to remember
+(NEXT.md, item 1). So `service::evaluate` judges `parcad_evaluation::print::
+judge` right after the author's checks, on every build whether or not anyone
+asked: the sweep at 2000 samples and the 0.8 mm process minimum on the build
+the worker keeps (every feather and every wall between two faces that do not
+meet is certain at any count), plus the `collisions` the build carries — for
+each cut, what it took from every tagged feature of its base besides the one
+it took the most from, measured in `backend.rs`'s cut arm on the exact solids
+by intersecting the removed material with each feature's own solid, which the
+lineage now carries (`EdgeLineage::solids_by_source`) and moves with every
+transform. Under 0.3 mm nothing prints and the verdict is `failed`; a wall
+between that and 0.8 mm, and every collision, is `flagged`. The snapshot's
+first fields are the two verdicts (`Verdicts`, flattened): `checks` keeps its
+place first, and `print_check` moves ahead of it only when it alone fails, so
+whichever fails is the first thing in the reply and when both fail both are
+named at the top. `Door` reads both slots and refuses a `failed` print_check
+the way it refuses a failed check, through the one `allow_failing` argument;
+a flag passes the door and is listed. `evaluate_part` never refuses.
+
+Overhang is the third thing `print_check` reads, and it is measured per body
+in the orientation the body prints, never the part's: `.printedUp("-z")` on
+the shape a returned object names lands on `NamedBody::printed_up` (feature
+id `print-orientation`, a unit vector, refused on a reference), the way
+`.reference()` does, and a body that declares nothing prints as drawn, +z.
+The worker (`parcad_occt::overhang`) reads each solid body's mesh face by
+face against that axis: a face's angle to the bed is exact on a plane and
+sampled on a curved face's triangles, faces at or under 45° that are not on
+the bed sum to `unsupported_mm2`, the bed and the footprint are taken in the
+same orientation (which is why the coin holder's assembled top plate no
+longer reads 0.4 % on ten stubs), a planar ceiling whose neighbours reach
+what lies beneath it on two sides is a `bridge` with its span and drop, and
+the support prism — every overhanging face extruded to the bed, fused, the
+body cut out, clipped above the bed — is one exact volume, built only when
+every overhanging face is a plane (forty NURBS prisms fused took a thread
+past its budget). It is reported,
+never judged: a face exactly at 45° is listed, and a body with any
+unsupported area is a `flagged` finding naming its orientation, its worst
+face and its bridges. Reference bodies and surfaces are not measured.
+
+**The orientation is measured in, not exported.** A save used to also write
+`print/<body>.3mf` beside `part.js`, each body turned onto its print face,
+and the window offered the same as an export. That is removed, deliberately:
+every slicer orients and arranges for its own bed — OrcaSlicer and Bambu
+Studio score candidate orientations off the mesh, PrusaSlicer has Place on
+Face — and one of the 28 parts in `examples/` declares `.printedUp()` at
+all, so for the rest those files were the 3MF export split per body and
+dropped to z = 0, which is the first thing a slicer does on import. What is
+ours is upstream of the mesh: the overhang, the wall and the collisions are
+measured on the exact solid in the orientation the part declares, and handed
+to whoever is authoring it. `export_part` with `open: true` is the one call
+that ends a session in the user's slicer.
+
+**A reference body is measured and drawn, and is not the part.** The bodies
+a check talks about — a stack of coins, a tipped coin at a mouth — are marked
+`.reference()` on the shape the returned object names (`NamedBody::reference`,
+feature id `reference-bodies`; a method rather than a list, for the reasons in
+its doc comment). The worker builds a reference like any body, measures it
+alone and against every other body, and its faces wear
+`Material::reference()`, a translucent blue the window draws as it draws any
+material and `service::render` paints whether or not a view asked for
+materials. Everything that says what the *part* is leaves it out:
+`BuiltPart::shape` (so STEP, `check_fit` and the compound), `Success::
+part_indices` (so `measure_brep`, STL, 3MF and the corpus read the same
+triangles), `Assembled`'s topology and kinds (so `faces`, `edges` and `kind`),
+`describe`'s volume, watertightness and centroid, and `perceive::bodies_of`
+(so a probe or a thickness sweep never reads material inside a coin). What
+keeps it: `named_bodies` (with `reference: true`), `between_bodies`, the
+window's mesh, and `Evaluated::bounds`, which frames everything drawn. The
+corpus case `reference-stack` pins `bodies: 1` and the tray's volume beside
+a `clear` check against the stack that passes.
+
+**`note()` is the one channel out of the sandbox, and it says what it is.**
+A script computes real engineering — mouth widths, tilt angles, pin
+positions — and none of it was visible in any reply, so one session encoded
+a string's length into a body's Y coordinate to read it back
+([COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md), §2.6). `note(label, value)`
+collects in `dsl.ts`, the runner hands the notes over beside the graph
+(`__parcadTakeNotes`, in `script.rs`'s runner and `engine.ts` alike), and
+`Script::notes` lands on the snapshot as `notes: { source: "from the script,
+not measured", values, dropped }`. The `source` line is the feature: a note is
+a requested value, the exact thing "report measured values, not requested
+ones" warns about, and the reply segregates it so a model cannot quote one as
+a measurement without saying so. Capped at 40 notes and 2000 characters in
+the sandbox, with the excess counted, so it cannot carry the script back out.
 
 ### `blend` is a boolean, then a fillet
 
@@ -776,6 +895,23 @@ fifteen minutes rather than asserting a connection nobody has heard from. The
 count is of *sessions* for the same reason — one client that reconnects opens a
 second, and the endpoint cannot tell that from a second client.
 
+Where a tool's script comes from is decided once, in `service::resolve_script`,
+and every transport goes through it: `script` is the text sent whole, `project`
+is a saved part read through `projects::read`, `"@session"` is the script on
+the user's screen read through `session::get`, and `edits` are old/new
+replacements applied in order to whichever of those was chosen — each `old`
+must appear exactly once, or the call is refused with the count and the lines,
+and nothing is built. Every measuring tool takes the three, so "what if the
+wall were 1.2 mm" is one `evaluate_part { project, edits }` that writes nothing;
+`edit_part` is the same resolution followed by a write — built and measured
+first, then snapshotted and saved, or set on screen through `session::set_script`
+so it lands in the window's undo history. Every reply names the text it
+measured by `script_sha256`, twelve hex digits of the script after the edits,
+and `edit_part` refuses when `expect_sha256` no longer matches what is there.
+The build cache is keyed on the graph, so a `project` build of a part just
+saved is a cache hit (`reused_build`). This exists because one session resent
+241 KB of script to change a few lines at a time (docs/COIN_HOLDER_REVIEW.md, B1).
+
 Selector work is where an agent needs the most help, so it gets two tools with no
 UI equivalent: `check_selector` parses a term and returns the error *and* its
 span without touching geometry, and `inspect_treatment_target` resolves a
@@ -784,15 +920,21 @@ question the editor's gold target preview answers, asked in text.
 
 ### The part inside a chat
 
-A client that speaks MCP Apps shows `evaluate_part`'s part in 3D beside the
-call. The tool's `_meta.ui.resourceUri` names `ui://parcad/viewer`, which
+A client that speaks MCP Apps shows `open_project`'s part in 3D beside the
+call. The viewer hangs on the call that shows the user a finished part, not on
+`evaluate_part`: a model builds a part in many drafts, some of which fail, and
+a client draws a card for every call of a tool that names a view, whatever it
+returned. The tool's `_meta.ui.resourceUri` names `ui://parcad/viewer`, which
 `read_resource` answers with `viewer.html` from the same frontend build the
 host serves (`vite.viewer.config.ts` inlines everything into that one file,
 because the client's iframe may load nothing). The page is
-`app/src/viewer/main.ts`: the client hands it the call's `script`, the page
-calls `view_part` for the mesh, and draws it with the window's own `Viewport`.
-`view_part` is marked `visibility: ["app"]`, so a client keeps it from the
-model; it runs the same cached build `evaluate_part` just made.
+`app/src/viewer/main.ts`: the client hands it the call's result, whose `name`
+is the project opened; the page calls `view_part` with that `project` for the
+mesh, and draws it with the window's own `Viewport`. The reply carries no
+script since the 2026-09-18 batch, and the page never needs the text; a reply
+naming neither a project nor a script is said so on the card. `view_part` is
+marked `visibility: ["app"]`, so a client keeps it from the model; a part the
+model evaluated before saving it is already in the build cache.
 
 The mesh goes through the client, not a socket, so its size matters.
 `view_part` sends the mesh as Draco and the rest of the window's reply (edges,

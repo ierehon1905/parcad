@@ -971,6 +971,21 @@ impl ScaleBar {
     }
 }
 
+/// Draw the ruler on a finished view, and say what it is worth.
+///
+/// Every render the coin-holder session's user judged was an object floating
+/// on black at an unknown scale, and two of that session's six turns were
+/// size corrections ("but i said pocket", "its too big"). A picture with no
+/// scale in it cannot be the thing a size judgement is made from.
+///
+/// Only on a shaded view: a region map is an instrument read by colour, and a
+/// white bar across it would be a region that is not one.
+pub fn draw_scale(image: &mut Rgb, bounds: Aabb) -> ScaleBar {
+    let bar = ScaleBar::for_bounds(bounds, image.width);
+    bar.draw(image, (image.width / 160).max(1));
+    bar
+}
+
 /// Snap to the nearest 1, 2 or 5 times a power of ten — how rulers are numbered.
 fn round_1_2_5(v: f64) -> f64 {
     if v <= 0.0 || !v.is_finite() {

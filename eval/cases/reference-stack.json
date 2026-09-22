@@ -1,0 +1,66 @@
+{
+  "name": "reference-stack",
+  "script": "eval/scripts/reference-stack.js",
+  "why": "A reference body is measured and drawn but is not the part: the tray alone is the part's one body, 7200 mm³ and 60 x 40 x 3, while the stack is in named_bodies with reference: true and clear of the tray by the closed-form 0.5 mm the script places it at, and the check that names it passes. The corpus reads the part's triangles the way every export does, so a reference that leaked into the file would move the volume here first.",
+  "brep": {
+    "size": [
+      60.0,
+      40.0,
+      3.0
+    ],
+    "volume_mm3": 7200.0,
+    "area_mm2": 5400.0,
+    "triangles": 12,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 2400.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 6,
+    "edges": 24,
+    "curves": 12,
+    "requires": [
+      "part-checks",
+      "reference-bodies"
+    ],
+    "named_bodies": {
+      "stack": {
+        "reference": true,
+        "size": [
+          23.995,
+          23.998,
+          20.0
+        ],
+        "volume_mm3": 9042.777,
+        "faces": 3,
+        "edges": 6,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "tray": {
+        "size": [
+          60.0,
+          40.0,
+          3.0
+        ],
+        "volume_mm3": 7200.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "tray/stack": {
+        "verdict": "clear",
+        "clearance_mm": 0.5,
+        "interference_mm3": 0.0
+      }
+    },
+    "checks": {
+      "passed": 1
+    }
+  }
+}

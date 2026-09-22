@@ -260,6 +260,106 @@ pub struct TagBounds {
     pub faces: usize,
 }
 
+/// What one cut took from a named feature it was not for: the grille that
+/// nicked a screw boss (docs/NEXT.md, item 1). Measured as the cut is made,
+/// on the exact solids: the material the tool removed, intersected with the
+/// solid each tagged node of the base built. The feature that lost the most
+/// is the cut's `target`; every other feature that lost anything is one of
+/// these. Only the innermost tags count, so a tag on the whole body does not
+/// repeat what its features already say.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Collision {
+    /// The cut, by its tool's tag, its own, or its tool's kind and node.
+    pub cut: String,
+    /// The feature the cut took the most from: what it was for.
+    pub target: String,
+    /// The feature it also took material from.
+    pub feature: String,
+    /// How much, mm³. Any amount counts; there is no threshold.
+    pub removed_mm3: f64,
+    /// The centre and size of the box the removed material spans.
+    pub at: [f64; 3],
+    pub extent_mm: [f64; 3],
+    /// The named body the cut is in; absent for a one-solid part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+}
+
+/// One body's overhang as it prints: which faces face down at or under the
+/// threshold, how much of it is unsupported, and what would hold it up.
+/// Measured on the mesh laid on the exact solid, face by face; a plane's
+/// angle is exact, a curved face's is sampled on its triangles.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Overhang {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    /// The unit direction that points up on the printer.
+    pub up: [f64; 3],
+    /// Whether the script declared it (`.printedUp()`), or it is as drawn.
+    pub declared: bool,
+    /// Faces at or under this angle to the bed count, degrees.
+    pub threshold_deg: f64,
+    /// What rests on the bed in this orientation, mm², and that over the
+    /// footprint the bounds suggest.
+    pub bed_mm2: f64,
+    pub footprint_fraction: f64,
+    /// Area facing down at or under the threshold, not on the bed, mm².
+    pub unsupported_mm2: f64,
+    /// How many faces carry any of it; `faces` lists the largest.
+    pub face_count: usize,
+    pub faces: Vec<OverhangFace>,
+    /// Ceilings held up on two or more sides.
+    pub bridges: Vec<Bridge>,
+    /// What a support prism under every overhanging face down to the bed
+    /// would hold, mm³, exact; absent when there are none, too many, or a
+    /// curved face is among them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub support_mm3: Option<f64>,
+    /// Some face here is curved, so its angle and area are read off the
+    /// mesh, to its deflection.
+    pub sampled: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OverhangFace {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    /// `plane`, `cylinder`, `cone`, `sphere`, `torus`, `nurbs`.
+    pub surface: String,
+    /// The face's angle to the bed: 0° a ceiling, 90° a wall; for a curved
+    /// face its steepest overhanging part.
+    pub angle_deg: f64,
+    /// True for a plane, whose angle is one number.
+    pub exact: bool,
+    /// The overhanging area, mm².
+    pub area_mm2: f64,
+    /// Its area-weighted centre, in the part's frame.
+    pub at: [f64; 3],
+    /// Its widest extent across the bed plane, mm.
+    pub span_mm: f64,
+    /// How far its lowest point sits above the bed, mm.
+    pub height_mm: f64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Bridge {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    pub span_mm: f64,
+    /// How far down the nearest material, or the bed, lies under it.
+    pub drop_mm: f64,
+    pub at: [f64; 3],
+    /// How many of its boundary edges have a wall going down beside them.
+    pub sides: usize,
+}
+
+/// One treatment's resolved edge count, keyed by its intent-graph node.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TreatmentEdges {
+    pub node: usize,
+    pub edges: usize,
+}
+
 /// Counts of the logical topology.
 ///
 /// The number an implicit model cannot produce at all, and the foundation for
@@ -540,6 +640,18 @@ pub struct Success {
     /// was cut away or buried, or the name is spelled differently.
     #[serde(default)]
     pub unlocated_tags: Vec<String>,
+    /// Every cut that took material from a named feature besides the one it
+    /// was for, measured on the exact solids as the cut was made.
+    #[serde(default)]
+    pub collisions: Vec<Collision>,
+    /// Each body's overhang in the orientation it prints, reference bodies
+    /// left out; one entry for a one-solid part.
+    #[serde(default)]
+    pub overhang: Vec<Overhang>,
+    /// How many edges each treatment's selector resolved to on the shape it
+    /// ran against, by node — measured, not the `.expect()` the script wrote.
+    #[serde(default)]
+    pub treatment_edges: Vec<TreatmentEdges>,
     pub timings: Timings,
     pub step_path: Option<PathBuf>,
     pub stl_path: Option<PathBuf>,
@@ -554,11 +666,65 @@ pub struct BodySpan {
     pub name: String,
     #[serde(default)]
     pub kind: BodyKind,
+    /// A reference body: drawn and measured against the others, never part
+    /// of the part. Left out of every whole-part number and every file.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reference: bool,
     pub faces: usize,
     pub edges: usize,
     /// First triangle of this body in `indices`, counted in triangles.
     pub triangle_start: usize,
     pub triangle_count: usize,
+}
+
+impl Success {
+    /// The triangles of the part itself: every body's but the reference
+    /// bodies', which are drawn beside the part and are never in a file, a
+    /// volume or a piece count. The whole buffer when there are none.
+    pub fn part_indices(&self) -> std::borrow::Cow<'_, [u32]> {
+        if !self.bodies.iter().any(|b| b.reference) {
+            return std::borrow::Cow::Borrowed(&self.indices);
+        }
+        let mut out = Vec::with_capacity(self.indices.len());
+        for span in self.bodies.iter().filter(|b| !b.reference) {
+            let start = (span.triangle_start * 3).min(self.indices.len());
+            let end = ((span.triangle_start + span.triangle_count) * 3).min(self.indices.len());
+            out.extend_from_slice(&self.indices[start..end]);
+        }
+        std::borrow::Cow::Owned(out)
+    }
+
+    /// The names of the reference bodies, in the script's order.
+    pub fn reference_bodies(&self) -> Vec<&str> {
+        self.bodies.iter().filter(|b| b.reference).map(|b| b.name.as_str()).collect()
+    }
+
+    /// The part's mesh as every file and whole-part number reads it: the
+    /// triangles of [`Self::part_indices`], over only the vertices they use,
+    /// so a reference body's vertices cannot widen the bounds either.
+    pub fn part_mesh(&self) -> (Vec<[f32; 3]>, Vec<[usize; 3]>) {
+        let vertices: Vec<[f32; 3]> = self.positions.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let mut triangles: Vec<[usize; 3]> = self
+            .part_indices()
+            .chunks_exact(3)
+            .map(|c| [c[0] as usize, c[1] as usize, c[2] as usize])
+            .collect();
+        if self.reference_bodies().is_empty() {
+            return (vertices, triangles);
+        }
+        let mut kept = vec![usize::MAX; vertices.len()];
+        let mut compact = Vec::new();
+        for triangle in &mut triangles {
+            for index in triangle.iter_mut() {
+                if kept[*index] == usize::MAX {
+                    kept[*index] = compact.len();
+                    compact.push(vertices[*index]);
+                }
+                *index = kept[*index];
+            }
+        }
+        (compact, triangles)
+    }
 }
 
 /// Two named bodies of one part, and how they sit: the fit report's verdict,
@@ -578,6 +744,20 @@ pub struct BodyFit {
     /// A point on `a`, then one on `b`, where the clearance is measured.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub closest_mm: Option<[[f64; 3]; 2]>,
+    /// How far one reaches into the other, mm, and where: the thickest the
+    /// shared material gets. Absent unless they interfere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deepest_mm: Option<[f64; 3]>,
+    /// The surface they share, mm², in how many patches, centred where.
+    /// Absent unless they touch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_mm2: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_patches: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_center_mm: Option<[f64; 3]>,
 }
 
 /// One face's triangles, as a span of the index buffer. `start`/`count` are in
@@ -655,6 +835,26 @@ pub struct FitReport {
     /// Where that clearance is measured: a point on the part, then one on the
     /// reference. Absent when they interfere.
     pub closest_mm: Option<[[f64; 3]; 2]>,
+    /// How far one reaches into the other, mm — the thickest the shared
+    /// material gets, and so what has to move for the two to part. Absent
+    /// unless they interfere. The volume alone cannot be read as this:
+    /// 0.002 mm³ along a coin's rim is a couple of microns.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub depth_mm: Option<f64>,
+    /// Where that depth is attained. Absent unless they interfere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deepest_mm: Option<[f64; 3]>,
+    /// The surface the two share where they touch, mm². Absent unless they
+    /// touch; zero when they meet along a line or at a point.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_mm2: Option<f64>,
+    /// How many separate patches that surface is in: one seated face is 1,
+    /// a lid on two bosses is 2, a corner graze is 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_patches: Option<usize>,
+    /// The area-weighted centre of the contact. Absent unless they touch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub contact_center_mm: Option<[f64; 3]>,
     pub part_bounds: [[f64; 3]; 2],
     pub reference_bounds: [[f64; 3]; 2],
 }

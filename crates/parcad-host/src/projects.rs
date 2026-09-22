@@ -33,8 +33,8 @@
 //! for.
 //!
 //! **`part.js` is the source of truth and everything beside it is derived.**
-//! Deleting `README.md` or `preview.png` loses nothing; they are rewritten by
-//! the next save. So no reader should ever prefer them to the script, and
+//! Deleting `README.md` or `preview.png` loses nothing; they are
+//! rewritten by the next save. So no reader should ever prefer them to the script, and
 //! nothing here caches a measurement — a stale number that looks fresh is the
 //! failure this project refuses everywhere else.
 //!

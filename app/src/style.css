@@ -104,6 +104,16 @@
     @apply block;
   }
 
+  /* The one `user-select` in the frontend. `app/src/drag.ts` says why it is
+     here rather than spread across the panes, and `selection.test.ts` keeps it
+     alone; `!important` because a drag that started on the splitter must also
+     outrank the rules CodeMirror sets on its own content. */
+  html[data-dragging],
+  html[data-dragging] * {
+    user-select: none !important;
+    -webkit-user-select: none !important;
+  }
+
   select,
   input[type="range"] {
     @apply bg-panel-2 border border-line rounded-md;

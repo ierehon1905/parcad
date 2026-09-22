@@ -19,7 +19,7 @@
 //! Scripts arrive from a model and run in `script`'s sandbox, never in the
 //! webview. That is the precondition this server was blocked on.
 
-use crate::{assets::Assets, projects, script, service, session};
+use crate::{arguments::Args, assets::Assets, projects, script, service, session};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
@@ -56,7 +56,7 @@ impl Parcad {
     }
 }
 
-/// The in-chat viewer: an MCP Apps page a client renders beside `evaluate_part`.
+/// The in-chat viewer: an MCP Apps page a client renders beside `open_project`.
 const VIEWER_URI: &str = "ui://parcad/viewer";
 const VIEWER_MIME: &str = "text/html;profile=mcp-app";
 /// The largest mesh `view_part` sends through a chat client.
@@ -81,7 +81,7 @@ fn surface() -> ToolRouter<Parcad> {
         }
         // `ui/resourceUri` is the key hosts read before the extension was final.
         route.attr.meta = match name.as_ref() {
-            "evaluate_part" => Some(rmcp::model::MetaObject(meta(serde_json::json!({
+            "open_project" => Some(rmcp::model::MetaObject(meta(serde_json::json!({
                 "ui": { "resourceUri": VIEWER_URI },
                 "ui/resourceUri": VIEWER_URI,
             })))),
@@ -121,16 +121,17 @@ fn reply_schema(tool: &str) -> std::sync::Arc<rmcp::model::JsonObject> {
     }
     match tool {
         "read_docs" => of::<crate::docs::Reference>(),
-        "list_entities" => of::<service::Entities>(),
-        "inspect_treatment_target" => of::<service::TreatmentTarget>(),
-        "probe_part" => of::<service::ProbeReport>(),
-        "measure_wall_thickness" => of::<service::ThicknessReport>(),
+        "list_entities" => of::<Sourced<service::Entities>>(),
+        "inspect_treatment_target" => of::<Sourced<service::TreatmentTarget>>(),
+        "probe_part" => of::<Sourced<service::ProbeReport>>(),
+        "measure_wall_thickness" => of::<Sourced<service::ThicknessReport>>(),
         "check_selector" => of::<SelectorCheck>(),
-        "export_part" => of::<Exported>(),
+        "export_part" => of::<Sourced<Exported>>(),
         "list_projects" => of::<ProjectList>(),
         "read_project" => of::<Project>(),
         "save_project" => of::<Saved>(),
-        "get_session" | "open_project" | "set_script" | "restore_snapshot" => of::<session::Live>(),
+        "get_session" | "restore_snapshot" => of::<session::Live>(),
+        "open_project" | "set_script" => of::<OnScreen>(),
         "list_snapshots" => of::<SnapshotList>(),
         other => panic!("{other} has an output schema and no reply type in mcp::reply_schema; add it there"),
     }
@@ -178,22 +179,43 @@ pub fn service(assets: Arc<dyn Assets>) -> axum::Router {
 // ------------------------------------------------------------------ requests
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ViewRequest {
-    /// The script an evaluate_part call was given.
-    pub script: String,
-    /// Seconds the kernel may take, as evaluate_part's.
+    /// The script to draw, whole. Give this or `project`.
     #[serde(default)]
+    pub script: Option<String>,
+    /// The project to draw, as an open_project reply's `name` spells it, or
+    /// "@session" for the script on the user's screen.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Seconds the kernel may take, as evaluate_part's.
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct EvaluateRequest {
     /// A parcad DSL script. It must end by returning a shape, e.g.
     /// `return body.cut(hole)`, or an object of named shapes for a part that
     /// stays in several bodies, e.g. `return { base, lid }`. Units are
     /// millimetres; primitives are centred on the origin and placed with
-    /// `.at(x, y, z)`.
-    pub script: String,
+    /// `.at(x, y, z)`. Give this or `project`, not both: `project` builds a
+    /// saved part without sending it.
+    #[serde(default)]
+    pub script: Option<String>,
+    /// The part to build instead of sending it, as list_projects spells it —
+    /// 'Mounts/bracket' — or "@session" for the script on the user's screen.
+    /// Costs no script to send, and reuses the build a save or an earlier call
+    /// made.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Changes to make before building, in order, each { old, new } replacing
+    /// text that appears exactly once. Nothing is written back — this is
+    /// "what if the wall were 1.2 mm" in one call; edit_part is the tool that
+    /// saves.
+    #[serde(default)]
+    pub edits: Vec<service::Edit>,
     /// Also draw the part, from these viewpoints: `iso`, `front`, `back`,
     /// `left`, `right`, `top`, `bottom`. Omit to measure without rendering,
     /// which is much faster. Every view shares one framing, so a feature at a
@@ -231,7 +253,7 @@ pub struct EvaluateRequest {
     #[serde(default)]
     pub section: Option<SectionRequest>,
     /// Pixels per side, 128 to 1024. Defaults to 512.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub image_size: Option<u32>,
     /// Seconds the kernel may take, 1 to 600. Defaults to 20, or
     /// PARCAD_OCCT_TIMEOUT. A part that timed out can be asked again with
@@ -239,12 +261,13 @@ pub struct EvaluateRequest {
     /// script — a render, an export, the window — does not wait again. A
     /// script's own work is counted rather than timed and is raised with
     /// `scriptBudget(n)` in the script, not here.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
 }
 
 /// Where to cut a part open for the picture.
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SectionRequest {
     /// The axis the cutting plane is square to: `x`, `y` or `z`. Look at the
     /// section from a view that runs along that axis — `x` from `left` or
@@ -254,7 +277,7 @@ pub struct SectionRequest {
     pub axis: String,
     /// Where the plane sits on that axis, in mm. Omit to cut through the middle
     /// of the part, which is what puts a central bore in the picture.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub at_mm: Option<f64>,
     /// Which half survives: `below` or `above` the plane on its axis. Omit and
     /// the half between the plane and the viewer goes, which is the choice that
@@ -264,24 +287,58 @@ pub struct SectionRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ScriptRequest {
-    /// A parcad DSL script ending in a returned shape.
-    pub script: String,
+    /// A parcad DSL script ending in a returned shape. Give this or
+    /// `project`, not both.
+    #[serde(default)]
+    pub script: Option<String>,
+    /// The part to build instead of sending it, as list_projects spells it,
+    /// or "@session" for the script on the user's screen.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Changes to make before building, in order, each { old, new } replacing
+    /// text that appears exactly once; nothing is written back.
+    #[serde(default)]
+    pub edits: Vec<service::Edit>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct InspectRequest {
-    /// A parcad DSL script ending in a returned shape.
-    pub script: String,
+    /// A parcad DSL script ending in a returned shape. Give this or
+    /// `project`, not both.
+    #[serde(default)]
+    pub script: Option<String>,
+    /// The part to build instead of sending it, as list_projects spells it,
+    /// or "@session" for the script on the user's screen.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Changes to make before building, in order, each { old, new } replacing
+    /// text that appears exactly once; nothing is written back.
+    #[serde(default)]
+    pub edits: Vec<service::Edit>,
     /// The intent-graph node of the treatment to resolve, as reported in
     /// `treatments` by `evaluate_part`.
+    #[serde(deserialize_with = "crate::arguments::numeric_required")]
     pub node: usize,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ProbeRequest {
-    /// A parcad DSL script ending in a returned shape.
-    pub script: String,
+    /// A parcad DSL script ending in a returned shape. Give this or
+    /// `project`, not both.
+    #[serde(default)]
+    pub script: Option<String>,
+    /// The part to build instead of sending it, as list_projects spells it,
+    /// or "@session" for the script on the user's screen.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Changes to make before building, in order, each { old, new } replacing
+    /// text that appears exactly once; nothing is written back.
+    #[serde(default)]
+    pub edits: Vec<service::Edit>,
     /// Points to test for material, in mm.
     #[serde(default)]
     pub points: Vec<[f64; 3]>,
@@ -290,33 +347,45 @@ pub struct ProbeRequest {
     pub rays: Vec<service::RayRequest>,
     /// Seconds the kernel may take to build the part, 1 to 600. Defaults to
     /// 20, or PARCAD_OCCT_TIMEOUT.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ThicknessRequest {
-    /// A parcad DSL script ending in a returned shape.
-    pub script: String,
+    /// A parcad DSL script ending in a returned shape. Give this or
+    /// `project`, not both.
+    #[serde(default)]
+    pub script: Option<String>,
+    /// The part to build instead of sending it, as list_projects spells it,
+    /// or "@session" for the script on the user's screen.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Changes to make before building, in order, each { old, new } replacing
+    /// text that appears exactly once; nothing is written back.
+    #[serde(default)]
+    pub edits: Vec<service::Edit>,
     /// What counts as too thin, in mm — the process minimum, such as 1.2 for a
     /// typical print or 2.5 for a casting. Without it only the thinnest place
     /// is reported and nothing is counted.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub threshold_mm: Option<f64>,
     /// How many surface points the sweep measures from, 200 to 100000; the
     /// default, 6000, puts one at most about every hundredth of the part's
     /// diagonal, and the reply's `sample_spacing_mm` says how far apart they
     /// came out. Feathers and walls between faces that do not meet are found
     /// at any count; more samples narrow what else can fall between them.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub max_samples: Option<usize>,
     /// Seconds the kernel may take to build and sweep the part, 1 to 600.
     /// Defaults to 20, or PARCAD_OCCT_TIMEOUT.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SelectorRequest {
     /// A selector to check, such as `>Z and >Y and |X`.
     pub selector: String,
@@ -327,9 +396,20 @@ pub struct SelectorRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ExportRequest {
-    /// A parcad DSL script ending in a returned shape.
-    pub script: String,
+    /// A parcad DSL script ending in a returned shape. Give this or
+    /// `project`, not both.
+    #[serde(default)]
+    pub script: Option<String>,
+    /// The part to export instead of sending it, as list_projects spells it,
+    /// or "@session" for the script on the user's screen.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Changes to make before building, in order, each { old, new } replacing
+    /// text that appears exactly once; nothing is written back to the part.
+    #[serde(default)]
+    pub edits: Vec<service::Edit>,
     /// `3mf` for a slicer, `stl` for a bare mesh, or `step` for exact surfaces.
     pub format: String,
     /// File name to write, without any directory part. Defaults to
@@ -351,21 +431,39 @@ pub struct ExportRequest {
     /// Seconds the kernel may take, 1 to 600. Defaults to 20, or
     /// PARCAD_OCCT_TIMEOUT. Reuses the build of an earlier evaluate_part on
     /// the same script when there is one.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
+    /// Write the file although one of the part's own `checks` fails, for
+    /// this reason — the user's decision, in their words. Without it a
+    /// failing check refuses the export, naming the check and what was
+    /// measured; with it the reason is kept in the reply.
+    #[serde(default)]
+    pub allow_failing: Option<String>,
 }
 
 /// Two scripts: the part, and the object it is meant to hold.
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct FitRequest {
-    /// The part, as a parcad script.
-    pub script: String,
+    /// The part, as a parcad script. Give this or `project`, not both.
+    #[serde(default)]
+    pub script: Option<String>,
+    /// The part as saved, instead of sending it: a path as list_projects
+    /// spells it, or "@session" for the script on the user's screen.
+    #[serde(default)]
+    pub project: Option<String>,
+    /// Changes to make to the part before building, in order, each
+    /// { old, new } replacing text that appears exactly once; nothing is
+    /// written back.
+    #[serde(default)]
+    pub edits: Vec<service::Edit>,
     /// The object laid against it, as a parcad script placed where it sits —
     /// usually one line, e.g. `return device("macbook-pro-16").at(0, 0, 18.4)`.
     pub reference: String,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct StepProbeRequest {
     /// Absolute path of the .step / .stp file to measure, on the machine
     /// parcad runs on.
@@ -378,6 +476,7 @@ pub struct StepProbeRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DocsRequest {
     /// Which document: `dsl` (the default) is the language reference; `gaps` is
     /// what the language cannot express; `gotchas` is what silently returns a
@@ -399,6 +498,7 @@ pub struct DocsRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ProjectRequest {
     /// A project path exactly as `list_projects` gives it: slash-separated
     /// folder names and no extension, such as `bracket` or `Mounts/bracket`.
@@ -406,6 +506,7 @@ pub struct ProjectRequest {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SetScriptRequest {
     /// The DSL source to put on screen, whole — this replaces the open
     /// document, it does not append to it.
@@ -413,19 +514,109 @@ pub struct SetScriptRequest {
     /// How long to wait, in seconds, for a window to report that it evaluated
     /// this revision. 0 to 60; defaults to 20. The reply comes as soon as one
     /// does, or when the time is up with `viewers` saying where each window got.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub wait_s: Option<f64>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct RestoreRequest {
     /// The project path, as `list_projects` gives it.
     pub name: String,
     /// The snapshot's `id`, from `list_snapshots`.
     pub id: String,
     /// How long to wait for a window to show it, as in `set_script`.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub wait_s: Option<f64>,
+}
+
+/// The session after open_project or set_script: what is on screen,
+/// identified rather than carried. The text is what the caller just sent, or
+/// can read from disk, so it is left out unless asked for; `revision` and
+/// `viewers` prove the windows took it.
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct OnScreen {
+    /// The open project's path, as `list_projects` spells it.
+    pub name: Option<String>,
+    /// The session revision this change made; a viewer at or past it shows it.
+    pub revision: u64,
+    pub origin: String,
+    /// Characters in the script now on screen.
+    pub script_chars: usize,
+    /// The first 12 hex digits of the SHA-256 of the script now on screen,
+    /// which is how a caller checks the text every window took is the one it
+    /// meant without reading it back.
+    pub script_sha256: String,
+    /// The script itself, only when `script: true` asked for it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub script: Option<String>,
+    /// What each open window is drawing, as in get_session.
+    pub viewers: Vec<session::Viewer>,
+}
+
+/// edit_part's arguments: which text, which changes, and then evaluate_part's
+/// own, so one call builds, measures, draws and saves.
+#[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct EditRequest {
+    /// The part to edit, as list_projects spells it — 'Mounts/bracket' — or
+    /// "@session" for the script on the user's screen.
+    pub project: String,
+    /// Each { old, new }, applied in order to the text as the previous edit
+    /// left it. `old` must appear exactly once.
+    pub edits: Vec<service::Edit>,
+    /// Refuse unless the part's current text still hashes to this — the
+    /// `script_sha256` a previous reply reported — so an edit written against
+    /// text the user has since changed is refused rather than applied. Leave
+    /// it out to edit whatever is there now.
+    #[serde(default)]
+    pub expect_sha256: Option<String>,
+    /// Also draw the edited part, as evaluate_part's `views`: `iso`, `front`,
+    /// `back`, `left`, `right`, `top`, `bottom`. Omit to measure only.
+    #[serde(default)]
+    pub views: Option<Vec<String>>,
+    /// Colour each view by the tag that owns the surface, as evaluate_part's.
+    #[serde(default)]
+    pub regions: Option<bool>,
+    /// Draw each face in its `.material()`, as evaluate_part's.
+    #[serde(default)]
+    pub materials: Option<bool>,
+    /// Cut the part open on a plane for the views, as evaluate_part's.
+    #[serde(default)]
+    pub section: Option<SectionRequest>,
+    /// Pixels per side, 128 to 1024, as evaluate_part's. Defaults to 512.
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
+    pub image_size: Option<u32>,
+    /// Seconds the kernel may take, 1 to 600, as evaluate_part's.
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
+    pub timeout_s: Option<f64>,
+    /// Write the part although one of its own `checks` fails, for this
+    /// reason — the user's decision, in their words. Without it a failing
+    /// check refuses an edit that writes part.js, naming the check and what
+    /// was measured; an edit to "@session" changes the screen only and is
+    /// never refused for it.
+    #[serde(default)]
+    pub allow_failing: Option<String>,
+}
+
+/// A measurement with the text it was taken on identified: `script_sha256`
+/// is the first 12 hex digits of the SHA-256 of the script that was built,
+/// after any `edits`. edit_part's `expect_sha256` takes it, and it is how a
+/// caller checks what a project builds without asking for the text.
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct Sourced<T> {
+    #[serde(flatten)]
+    pub measured: T,
+    pub script_sha256: String,
+}
+
+impl<T> Sourced<T> {
+    fn of(measured: T, source: &service::Resolved) -> Self {
+        Self {
+            measured,
+            script_sha256: service::script_sha256(&source.script),
+        }
+    }
 }
 
 #[derive(Serialize, schemars::JsonSchema)]
@@ -436,17 +627,24 @@ pub struct SnapshotList {
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct OpenRequest {
     /// A project path exactly as `list_projects` gives it: slash-separated
     /// folder names and no extension, such as `bracket` or `Mounts/bracket`.
     pub name: String,
     /// How long to wait, in seconds, for a window to report that it evaluated
     /// the opened part. 0 to 60; defaults to 20.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub wait_s: Option<f64>,
+    /// Also return the loaded script. Off by default: the reply identifies
+    /// it by `script_chars` and `script_sha256`, and read_project has the
+    /// text.
+    #[serde(default)]
+    pub script: bool,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SaveRequest {
     /// The project path to write: slash-separated folder names and no
     /// extension, such as `bracket` or `Mounts/bracket`. Folders are created
@@ -454,6 +652,12 @@ pub struct SaveRequest {
     pub name: String,
     /// The DSL source to save.
     pub script: String,
+    /// Save although one of the part's own `checks` fails, for this reason —
+    /// the user's decision, in their words. Without it a failing check
+    /// refuses the save, naming the check and what was measured; with it the
+    /// reason is kept in the reply.
+    #[serde(default)]
+    pub allow_failing: Option<String>,
 }
 
 // ------------------------------------------------------------------ replies
@@ -475,6 +679,14 @@ pub struct SelectorCheck {
 
 #[derive(Serialize, schemars::JsonSchema)]
 pub struct Exported {
+    /// The verdicts the file was written under, first: the part's own
+    /// `checks` and the `print_check`, either of which refuses the export
+    /// when it fails unless `allow_failing` gave a reason.
+    #[serde(flatten)]
+    verdicts: parcad_evaluation::Verdicts,
+    /// The reason the file was written over a failing verdict, as given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allow_failing: Option<String>,
     path: String,
     bytes: usize,
     format: String,
@@ -515,6 +727,14 @@ pub struct Project {
 
 #[derive(Serialize, schemars::JsonSchema)]
 pub struct Saved {
+    /// The verdicts the part was saved under, first: its own `checks` and
+    /// the `print_check`. A failing one refuses the save unless
+    /// `allow_failing` gave a reason; absent for a script that does not build.
+    #[serde(flatten)]
+    verdicts: parcad_evaluation::Verdicts,
+    /// The reason the part was saved over a failing verdict, as given.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    allow_failing: Option<String>,
     name: String,
     path: String,
     /// Whether the saved script builds in the exact kernel.
@@ -549,7 +769,7 @@ impl Parcad {
     )]
     async fn read_docs(
         &self,
-        Parameters(request): Parameters<DocsRequest>,
+        Parameters(Args(request)): Parameters<Args<DocsRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<crate::docs::Reference>, ErrorData> {
         Ok(rmcp::handler::server::wrapper::Json(
             service::read_docs(request.topic.as_deref(), request.section.as_deref(), request.detail).map_err(invalid)?,
@@ -565,131 +785,139 @@ impl Parcad {
     #[tool(
         name = "evaluate_part",
         annotations(title = "Build and measure a part", read_only_hint = true, open_world_hint = false),
-        description = "Build a part from a parcad DSL script and report its measured geometry: size, volume, area, face and edge counts, mesh quality, `bodies` (free-standing pieces: one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in.\n\nA part that is meant to be several solids — a base and its lid, a clamp in two halves — returns an object of named shapes, `return { base, lid }`, and the reply then carries `named_bodies`: each body measured alone (size, bounds, volume, faces, `watertight`, `pieces` — 1 when that body is intact, more when its own booleans left it split, the defect the part-level `bodies` cannot tell from a second body that was meant) and `between_bodies`: every pair measured on the exact solids, `clear` with a `clearance_mm` and the two `closest_mm` points, `touching`, or `interfering` with the mm³ they share. Read `between_bodies` for whether a lid clears its base or a clip is drawn through what it clips onto; for such a part `bodies` should equal the number of named bodies. Bodies are never fused, and selectors, tags and treatments work inside one body only. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Each view in the reply also carries `path`, the same image as a PNG file on this machine, and `markdown`, that file as an image line for your reply: the user does not see the pictures a tool returns in every client, so paste `markdown` whenever they should see the part, or save_project and open_project it to put it on the parcad screen they have open. A build is kept per script: asking again with other views, exporting, or putting the script on screen reuses it (`reused_build`), so render after measuring rather than instead of it. `timeout_s` gives a heavy part longer than the default 20 s. Use this to check that a script produces the part you intended.\n\nA part may be a *surface* — faces with no inside, from surfaceLoft, surfaceExtrude, surfaceRevolve, surfaceSweep, trim or patch. Its reply says `kind: \"surface\"` and carries `surface` instead of a volume: `area_mm2`, `open`, `free_edges` and `free_edge_length_mm` (the edges bordered by one face, where the surface ends; select them with { role: \"boundary\" }) and `boundary_loops`; there is no `volume_mm3`, `watertight`, `stands_on` or `prints_on`, because a surface has none. `.thicken(t)` makes it a solid and the reply's `thickened_mm` is the wall measured square to the surface at a grid on every face; `stitchSurfaces(...)` makes one a solid only when its free edges all meet. A part in named bodies may mix the two, `kind: \"mixed\"`.\n\nCurved outlines are drawn, not approximated: a section for extrude, revolve, loft or sweep is a list of corners [x, y], anticlockwise, closing itself; between two corners { through: [x, y] } is a circular arc through that point, { radius: r } the shorter arc of that radius (positive bulges out of the section), { spline: [[x, y], ...] } a smooth curve through the points, { bezier: [[x, y], ...] } one by control points, and { fit: [[x, y], ...], tolerance: 0.05 } a curve fitted through sampled points — a simulation's, a scan's — measured to lie within the tolerance of every one and reported back as `deviation_mm`; { at: [x, y], round: r } is a corner rounded by a tangent arc. A curve given by a formula — an involute, a cam law, a spiral — is { curve: (t) => [x, y], from, to, tolerance }, which brings its own two ends: the script draws it within the tolerance of the function everywhere and the reply's `curve_bound_mm` is that bound, `curve_bound` `certified` when the entry also gives its exact `derivative` and a `fourth`-derivative bound, `estimated` otherwise. spurGearOutline({ module, teeth, profileShift }) is a whole involute spur gear drawn that way, and spurGearPair({ module, teeth: [z1, z2], profileShift, backlash }) gives two that mesh with their centre distance. inset(outline, d) is that outline stepped inward by d, the way a wall is drawn. A pipe or sweep path may be { spline: [[x, y, z], ...] }, and a loft's first or last section { z, point: [x, y] }. Never fake a curve with many short straight edges. SectionEntry in read_docs `dsl` has the rules.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. Each box is the exact extent of the faces the kernel's own history says the tag still owns, and `faces` is how many. A tag in `unlocated_tags` owns no face of the finished part at all: everything it made was cut away or buried by a later boolean.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
+        description = "Build a part from a parcad DSL script and report its measured geometry, opening with `print_check` — the thinnest wall between its two features, every cut into a feature it was not for (`grille` cuts `boss`), each body's overhang as it prints (up its `.printedUp()` axis, or +z as drawn), `failed` where nothing prints (under 0.3 mm), `flagged` for what prints but should be read — then size, volume, area, face and edge counts, mesh quality, `bodies` (free-standing pieces: one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in.\n\nA part that is meant to be several solids — a base and its lid, a clamp in two halves — returns an object of named shapes, `return { base, lid }`, and the reply then carries `named_bodies`: each body measured alone (size, bounds, volume, faces, `watertight`, `pieces` — 1 when that body is intact, more when its own booleans left it split, the defect the part-level `bodies` cannot tell from a second body that was meant) and `between_bodies`: every pair measured on the exact solids, `clear` with a `clearance_mm` and the two `closest_mm` points, `touching` with the `contact_mm2` they share over `contact_patches` patches, or `interfering` with the mm³ they share and the `depth_mm` one reaches into the other at `deepest_mm`. Read the depth and the contact, not the verdict: `interfering` by 0.002 mm³ along a rim is a graze two microns deep, not a catch, and `touching` is the same word for a face seated over 2800 mm² and for two corners that meet at 0 mm². Read `between_bodies` for whether a lid clears its base or a clip is drawn through what it clips onto; for such a part `bodies` should equal the number of named bodies. Bodies are never fused, and selectors, tags and treatments work inside one body only. A part may carry its own rules — `checks: [{ clear: [\"lid\", \"base\"], atLeast: 0.2, why: \"...\" }, { interferes: [\"coin\", \"arm\"], deeperThan: 0.3 }, { wall: { min: 1 } }, ...]` beside the bodies (read_docs dsl, `Check`) — and the reply then opens with `checks`: `{ verdict: \"passed\", passed: n }`, or `failed` with each failing check named, its measurement and where. A failed check never stops this tool, so you can see the part that failed; export_part and save_project refuse it unless given `allow_failing` with a reason. Read `checks.verdict` before anything else in the reply.\n\nEvery solid reply also carries `brief`: what the part is *for*, judged against what was built. A script declares it with `brief({ envelope: [95, 70, 16], budgetCm3: 12, holds: [\"3 x 2EUR\"], gesture: \"one hand\", printer: \"Bambu A1 mini\" })` at the top (read_docs dsl, `brief`), and the reply's `brief.verdict` is `meets` or `over:` with what is over and by how much — the envelope judged in the best of the six axis orientations. A script with no brief gets one line there saying its size and volume are measured against nothing: write the brief you were given, in the first build of the first turn, because size is the requirement a report cannot check for you and \"that's too big\" is a correction that arrives late. A brief never refuses a save. A body a check talks about that is not the part — a stack of coins, a tipped coin — is marked `.reference()`: it is built, drawn in blue, measured in `named_bodies` (`reference: true`) and against every body in `between_bodies`, and left out of `bodies`, `volume_mm3`, `size`, `stands_on`, the probes and every export. A script may report a value it computed with `note(label, value)`; the reply carries these under `notes`, marked \"from the script, not measured\": they are what the script asked for, and only the measurements around them say what was built. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Each shaded view has a ruler drawn along its bottom edge and reports what it is worth as `scale_mm` over `scale_px`: a render is otherwise an object floating at an unknown scale, and a size cannot be judged from it. Quote `scale_mm` rather than estimating off the picture, and quote `size` rather than either. Each view in the reply also carries `path`, the same image as a PNG file on this machine, and `markdown`, that file as an image line for your reply: the user does not see the pictures a tool returns in every client, so paste `markdown` whenever they should see the part, or save_project and open_project it to put it on the parcad screen they have open. A build is kept per script: asking again with other views, exporting, or putting the script on screen reuses it (`reused_build`), so render after measuring rather than instead of it. `timeout_s` gives a heavy part longer than the default 20 s. Use this to check that a script produces the part you intended. Give `project` instead of `script` to build a saved part — or \"@session\", the one on screen — without sending it, and add `edits` to build it with lines changed and nothing saved: `{ project, edits }` answers 'what if the wall were 1.2 mm' in one call, and edit_part is the tool that saves. Every reply carries `script_sha256`, which identifies the text that was built.\n\nA part may be a *surface* — faces with no inside, from surfaceLoft, surfaceExtrude, surfaceRevolve, surfaceSweep, trim or patch. Its reply says `kind: \"surface\"` and carries `surface` instead of a volume: `area_mm2`, `open`, `free_edges` and `free_edge_length_mm` (the edges bordered by one face, where the surface ends; select them with { role: \"boundary\" }) and `boundary_loops`; there is no `volume_mm3`, `watertight`, `stands_on` or `prints_on`, because a surface has none. `.thicken(t)` makes it a solid and the reply's `thickened_mm` is the wall measured square to the surface at a grid on every face; `stitchSurfaces(...)` makes one a solid only when its free edges all meet. A part in named bodies may mix the two, `kind: \"mixed\"`.\n\nCurved outlines are drawn, not approximated: a section for extrude, revolve, loft or sweep is a list of corners [x, y], anticlockwise, closing itself; between two corners { through: [x, y] } is a circular arc through that point, { radius: r } the shorter arc of that radius (positive bulges out of the section), { spline: [[x, y], ...] } a smooth curve through the points, { bezier: [[x, y], ...] } one by control points, and { fit: [[x, y], ...], tolerance: 0.05 } a curve fitted through sampled points — a simulation's, a scan's — measured to lie within the tolerance of every one and reported back as `deviation_mm`; { at: [x, y], round: r } is a corner rounded by a tangent arc. A curve given by a formula — an involute, a cam law, a spiral — is { curve: (t) => [x, y], from, to, tolerance }, which brings its own two ends: the script draws it within the tolerance of the function everywhere and the reply's `curve_bound_mm` is that bound, `curve_bound` `certified` when the entry also gives its exact `derivative` and a `fourth`-derivative bound, `estimated` otherwise. spurGearOutline({ module, teeth, profileShift }) is a whole involute spur gear drawn that way, and spurGearPair({ module, teeth: [z1, z2], profileShift, backlash }) gives two that mesh with their centre distance. inset(outline, d) is that outline stepped inward by d, the way a wall is drawn. A pipe or sweep path may be { spline: [[x, y, z], ...] }, and a loft's first or last section { z, point: [x, y] }. Never fake a curve with many short straight edges. SectionEntry in read_docs `dsl` has the rules.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. Each box is the exact extent of the faces the kernel's own history says the tag still owns, and `faces` is how many. A tag in `unlocated_tags` owns no face of the finished part at all: everything it made was cut away or buried by a later boolean.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
     )]
     async fn evaluate_part(
         &self,
-        Parameters(request): Parameters<EvaluateRequest>,
+        Parameters(Args(request)): Parameters<Args<EvaluateRequest>>,
     ) -> Result<rmcp::model::CallToolResult, ErrorData> {
-        let views =
-            service::parse_views(request.views.as_deref().unwrap_or(&[])).map_err(invalid)?;
-        let regions = request.regions.unwrap_or(false);
-        let materials = request.materials.unwrap_or(false);
-        if materials && regions {
-            return Err(invalid(
-                "regions and materials both colour a view; ask for one per call, \
-                 regions for which tag owns a surface, materials for how it looks",
-            ));
-        }
-        if materials && views.is_empty() {
-            return Err(invalid(
-                "materials asks how a view is coloured, so it needs at least one \
-                 view; pass views: [\"iso\"]",
-            ));
-        }
-        if regions && views.is_empty() {
-            return Err(invalid(
-                "regions asks how a view is coloured, so it needs at least one \
-                 view; pass views: [\"iso\"]",
-            ));
-        }
-        let section = request
-            .section
-            .as_ref()
-            .map(|s| service::parse_section(&s.axis, s.at_mm, s.keep.as_deref()))
-            .transpose()
-            .map_err(invalid)?;
-        if section.is_some() && views.is_empty() {
-            return Err(invalid(
-                "a section is something to look at, so it needs at least one \
-                 view; pass views: [\"iso\"]",
-            ));
-        }
-        let size = request.image_size.unwrap_or(512).clamp(128, 1024);
-        let budget = budget(request.timeout_s);
-
-        let (snapshot, pictures) = blocking(move || {
-            let built = script::build_within(&request.script, script_budget(request.timeout_s))?;
-            let doc = service::parse_graph(built.graph.clone())?;
-            let evaluated = service::evaluate(&doc, budget).map_err(|e| built.locate(e))?;
-
-            // Render after measuring, so a part that cannot be built fails on
-            // the geometry rather than after spending a render on it.
-            let renders = service::render(
-                &evaluated,
-                &doc,
-                &service::RenderSpec {
-                    views: &views,
-                    size,
-                    regions,
-                    materials,
-                    section,
-                },
-            )
-            .map_err(|e| built.locate(e))?;
-            let stem = render_stem(&request.script, size, regions, materials, section.is_some());
-            let (summaries, pictures) = renders
-                .views
-                .into_iter()
-                .map(|mut render| {
-                    render.summary.path = keep_render(&stem, &render.summary.view, &render.image);
-                    // A tag-region map is for the caller to read, not a picture of the part.
-                    if !regions {
-                        render.summary.markdown = render
-                            .summary
-                            .path
-                            .as_deref()
-                            .map(|path| markdown_image(&render.summary.view, path));
-                    }
-                    let view = render.summary.view.clone();
-                    let picture = render
-                        .image
-                        .to_webp()
-                        .map_err(|e| format!("encoding the {view} view: {e:#}"));
-                    (render.summary, picture)
-                })
-                .unzip::<_, _, Vec<_>, Vec<_>>();
-            let pictures = pictures.into_iter().collect::<Result<Vec<_>, _>>()?;
-
-            Ok((evaluated.snapshot.with_views(summaries), pictures))
+        let look = Look::checked(
+            request.views.as_deref(),
+            request.regions,
+            request.materials,
+            request.section.as_ref(),
+            request.image_size,
+            request.timeout_s,
+        )?;
+        let (measured, pictures, _) = blocking(move || {
+            let source = service::resolve_script(
+                request.script.as_deref(),
+                request.project.as_deref(),
+                &request.edits,
+                None,
+            )?;
+            measure(&source, &look)
         })
         .await?;
+        Ok(pictured(measured, pictures))
+    }
 
-        // The measurements are both text and structured content: a client that
-        // understands the schema gets the typed object, and one that does not
-        // still shows the caller its numbers rather than an empty reply.
-        let measured = serde_json::to_value(&snapshot).map_err(|e| {
-            ErrorData::internal_error(format!("serialising the snapshot: {e}"), None)
-        })?;
-        let mut content = vec![rmcp::model::ContentBlock::text(measured.to_string())];
-        content.extend(pictures.into_iter().map(|webp| {
-            rmcp::model::ContentBlock::image(
-                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, webp),
-                "image/webp",
-            )
-        }));
-
-        let mut result = rmcp::model::CallToolResult::success(content);
-        result.structured_content = Some(measured);
-        Ok(result)
+    /// Change a saved part, or the one on screen, by replacing text in it.
+    #[tool(
+        name = "edit_part",
+        annotations(title = "Edit a part in place", read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
+        description = "Change part of a script without sending the whole thing: each edit replaces `old` with `new`, once, and the part is rebuilt and measured exactly as evaluate_part does — same reply, same views — then saved. `project` names the part to edit, or \"@session\" for the script on the user's screen. An `old` that appears twice, or not at all, is refused naming how many times it was found and where, and nothing is written: give more surrounding lines. The edited text is built before anything is written, so a change that does not build is refused and the part is left as it was. The previous text is kept as a snapshot (list_snapshots, restore_snapshot), so an edit is undoable, and an edit to the open part lands in the window's own undo history: the reply then carries `on_screen` with the revision and `viewers`, as set_script's does. A saved part that is also open on screen is put on screen too. Use it for every change after the first: a fillet radius, a dimension, one function — sending 10 KB of unchanged script to change two lines is the most common way a session runs out of room. To try a change without saving it, call evaluate_part with the same `project` and `edits`. The reply adds `edits_applied`, the new `script_sha256`, and for a saved part the `path` written and the `snapshot` kept; pass a reply's `script_sha256` back as `expect_sha256` to be refused if the text changed under you. An edit that writes part.js is refused when the edited text fails its `print_check` (material under 0.3 mm) or one of the part's own `checks`, naming the finding or the check and its measurement, unless `allow_failing` gives the user's reason; an edit to \"@session\" changes only the screen and is never refused for a verdict — the window shows it red."
+    )]
+    async fn edit_part(
+        &self,
+        Parameters(Args(request)): Parameters<Args<EditRequest>>,
+    ) -> Result<rmcp::model::CallToolResult, ErrorData> {
+        if request.edits.is_empty() {
+            return Err(invalid(
+                "`edits` is empty: give at least one { old, new }. To build a saved part \
+                 unchanged, call evaluate_part with `project`.",
+            ));
+        }
+        let look = Look::checked(
+            request.views.as_deref(),
+            request.regions,
+            request.materials,
+            request.section.as_ref(),
+            request.image_size,
+            request.timeout_s,
+        )?;
+        let (mut measured, pictures, written, changed, edits_applied, allowed) = blocking(move || {
+            let source = service::resolve_script(
+                None,
+                Some(&request.project),
+                &request.edits,
+                request.expect_sha256.as_deref(),
+            )?;
+            let on_screen = session::get();
+            let is_screen = source.project.as_deref() == Some(service::SESSION);
+            let open_here = !is_screen && on_screen.name.as_deref() == Some(request.project.as_str());
+            if open_here && on_screen.script != source.before {
+                return Err(format!(
+                    "`{}` is open on the user's screen with changes that are not in its part.js \
+                     (revision {}), so an edit to the file would not be what they see. Edit \
+                     \"@session\" to change the screen, or open_project it to reload the file first.",
+                    request.project, on_screen.revision
+                ));
+            }
+            let (measured, pictures, door) = measure(&source, &look)?;
+            // Built and measured before anything is written, so a refusal
+            // above leaves the file and the screen as they were; and a tab's
+            // host may pause at the kernel and run this again, so the write
+            // comes after every kernel call, as save_project's does. The
+            // door stands before the file only: a screen edit is a proposal
+            // the user watches, with the check red in the window's report.
+            let allowed = if is_screen { None } else { door.pass(request.allow_failing.as_deref(), "edit_part")? };
+            let written = if is_screen {
+                None
+            } else {
+                let snapshot = projects::snapshot(&request.project)?;
+                let path = projects::write(&request.project, &source.script)?;
+                if let Ok((png, _, _)) = built_preview(&source.script) {
+                    let _ = projects::write_preview(&request.project, &png);
+                }
+                Some((path, snapshot))
+            };
+            let changed = if is_screen || open_here {
+                keep_screen(&source.script);
+                Some(session::set_script(source.script.clone(), session::AGENT_ORIGIN)?)
+            } else {
+                None
+            };
+            Ok((measured, pictures, written, changed, source.edits_applied, allowed))
+        })
+        .await?;
+        measured["edits_applied"] = serde_json::json!(edits_applied);
+        if let Some(reason) = allowed {
+            measured["allow_failing"] = serde_json::json!(reason);
+        }
+        if let Some((path, snapshot)) = written {
+            measured["path"] = serde_json::json!(path);
+            if let Some(snapshot) = snapshot {
+                measured["snapshot"] = serde_json::json!(snapshot);
+            }
+        }
+        if let Some(changed) = changed {
+            let shown = on_screen(changed, None, false).await;
+            measured["on_screen"] = serde_json::to_value(shown)
+                .map_err(|e| ErrorData::internal_error(format!("serialising the session: {e}"), None))?;
+        }
+        Ok(pictured(measured, pictures))
     }
 
     /// The mesh the in-chat viewer draws, for that page alone.
     #[tool(
         name = "view_part",
         annotations(title = "Draw a part in the chat", read_only_hint = true, open_world_hint = false),
-        description = "Only for parcad's in-chat 3D viewer, which calls it itself with the script an evaluate_part call was given: it returns that build's mesh as binary arrays, which are no use to read. To build, measure or look at a part, call evaluate_part."
+        description = "Only for parcad's in-chat 3D viewer, which calls it itself with the project an open_project call opened: it returns that build's mesh as binary arrays, which are no use to read. To build, measure or look at a part, call evaluate_part."
     )]
     async fn view_part(
         &self,
-        Parameters(request): Parameters<ViewRequest>,
+        Parameters(Args(request)): Parameters<Args<ViewRequest>>,
     ) -> Result<rmcp::model::CallToolResult, ErrorData> {
         let budget = budget(request.timeout_s);
         let viewed = blocking(move || {
-            let built = script::build_within(&request.script, script_budget(request.timeout_s))?;
+            let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &[], None)?;
+            let built = script::build_within(&source.script, script_budget(request.timeout_s))?;
             let doc = service::parse_graph(built.graph.clone())?;
             let evaluated = service::evaluate(&doc, budget).map_err(|e| built.locate(e))?;
-            viewed(&evaluated)
+            let mut viewed = viewed(&evaluated)?;
+            viewed["script_sha256"] = serde_json::json!(service::script_sha256(&source.script));
+            Ok(viewed)
         })
         .await?;
         let mut result = rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(
@@ -707,13 +935,14 @@ impl Parcad {
     )]
     async fn list_entities(
         &self,
-        Parameters(request): Parameters<ScriptRequest>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<service::Entities>, ErrorData> {
+        Parameters(Args(request)): Parameters<Args<ScriptRequest>>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<Sourced<service::Entities>>, ErrorData> {
         let entities = blocking(move || {
-            let built = script::build(&request.script)?;
+            let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &request.edits, None)?;
+            let built = script::build(&source.script)?;
             let doc = service::parse_graph(built.graph.clone())?;
             let evaluated = service::evaluate(&doc, None).map_err(|e| built.locate(e))?;
-            Ok(service::entities(&evaluated))
+            Ok(Sourced::of(service::entities(&evaluated), &source))
         })
         .await?;
 
@@ -728,13 +957,14 @@ impl Parcad {
     )]
     async fn inspect_treatment_target(
         &self,
-        Parameters(request): Parameters<InspectRequest>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<service::TreatmentTarget>, ErrorData> {
+        Parameters(Args(request)): Parameters<Args<InspectRequest>>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<Sourced<service::TreatmentTarget>>, ErrorData> {
         let target = blocking(move || {
-            let built = script::build(&request.script)?;
+            let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &request.edits, None)?;
+            let built = script::build(&source.script)?;
             let doc = service::parse_graph(built.graph.clone())?;
             let preview = service::inspect_edge_target(&doc, request.node).map_err(|e| built.locate(e))?;
-            Ok(service::treatment_target(&preview))
+            Ok(Sourced::of(service::treatment_target(&preview), &source))
         })
         .await?;
 
@@ -753,13 +983,15 @@ impl Parcad {
     )]
     async fn probe_part(
         &self,
-        Parameters(request): Parameters<ProbeRequest>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<service::ProbeReport>, ErrorData> {
+        Parameters(Args(request)): Parameters<Args<ProbeRequest>>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<Sourced<service::ProbeReport>>, ErrorData> {
         let budget = budget(request.timeout_s);
         let report = blocking(move || {
-            let built = script::build_within(&request.script, script_budget(request.timeout_s))?;
+            let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &request.edits, None)?;
+            let built = script::build_within(&source.script, script_budget(request.timeout_s))?;
             let doc = service::parse_graph(built.graph.clone())?;
-            service::probe(&doc, &request.points, &request.rays, budget).map_err(|e| built.locate(e))
+            let report = service::probe(&doc, &request.points, &request.rays, budget).map_err(|e| built.locate(e))?;
+            Ok(Sourced::of(report, &source))
         })
         .await?;
 
@@ -778,14 +1010,16 @@ impl Parcad {
     )]
     async fn measure_wall_thickness(
         &self,
-        Parameters(request): Parameters<ThicknessRequest>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<service::ThicknessReport>, ErrorData> {
+        Parameters(Args(request)): Parameters<Args<ThicknessRequest>>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<Sourced<service::ThicknessReport>>, ErrorData> {
         let budget = budget(request.timeout_s);
         let report = blocking(move || {
-            let built = script::build_within(&request.script, script_budget(request.timeout_s))?;
+            let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &request.edits, None)?;
+            let built = script::build_within(&source.script, script_budget(request.timeout_s))?;
             let doc = service::parse_graph(built.graph.clone())?;
-            service::wall_thickness(&doc, request.threshold_mm, request.max_samples, budget)
-                .map_err(|e| built.locate(e))
+            let report = service::wall_thickness(&doc, request.threshold_mm, request.max_samples, budget)
+                .map_err(|e| built.locate(e))?;
+            Ok(Sourced::of(report, &source))
         })
         .await?;
 
@@ -800,7 +1034,7 @@ impl Parcad {
     )]
     async fn check_selector(
         &self,
-        Parameters(request): Parameters<SelectorRequest>,
+        Parameters(Args(request)): Parameters<Args<SelectorRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<SelectorCheck>, ErrorData> {
         let parsed = match request.kind.as_deref().unwrap_or("edge") {
             "edge" => {
@@ -834,12 +1068,12 @@ impl Parcad {
     #[tool(
         name = "export_part",
         annotations(title = "Export a part to a file", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly."
+        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part whose `print_check` fails — material under 0.3 mm, where nothing prints — or that carries its own `checks` and fails one is refused, with the finding or the check and its measurement named, and nothing is written: fix the part, or, when the user has decided the failure is acceptable, pass `allow_failing` with their reason, which the reply keeps. The reply opens with `print_check` and `checks`, the verdicts the file was written under; a `flagged` print_check writes the file and lists what to read."
     )]
     async fn export_part(
         &self,
-        Parameters(request): Parameters<ExportRequest>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<Exported>, ErrorData> {
+        Parameters(Args(request)): Parameters<Args<ExportRequest>>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<Sourced<Exported>>, ErrorData> {
         let format = request.format.to_ascii_lowercase();
         if !["3mf", "stl", "step"].contains(&format.as_str()) {
             return Err(invalid(format!(
@@ -865,8 +1099,13 @@ impl Parcad {
 
         let budget = budget(request.timeout_s);
         let exported = blocking(move || {
-            let built = script::build_within(&request.script, script_budget(request.timeout_s))?;
+            let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &request.edits, None)?;
+            let built = script::build_within(&source.script, script_budget(request.timeout_s))?;
             let mut doc = service::parse_graph(built.graph.clone())?;
+            // The whole part's checks stand before the file, whichever body
+            // is written: the build is the one the export reuses.
+            let door = service::Door::of(&service::evaluate(&doc, budget).map_err(|e| built.locate(e))?.snapshot);
+            let allow_failing = door.pass(request.allow_failing.as_deref(), "export_part")?;
             if let Some(body) = &request.body {
                 doc = service::body_doc(&doc, body)?;
             }
@@ -895,15 +1134,20 @@ impl Parcad {
                 Some(_) => None,
                 None => request.open.then(|| service::open_in_default_app(&path).err()).flatten(),
             };
-            Ok(Exported {
-                bytes: export.bytes.len(),
-                format,
-                measured: export.measured,
-                opened: (request.open && downloaded.is_none()).then_some(open_error.is_none()),
-                open_error,
-                downloaded,
-                path,
-            })
+            Ok(Sourced::of(
+                Exported {
+                    bytes: export.bytes.len(),
+                    format,
+                    measured: export.measured,
+                    opened: (request.open && downloaded.is_none()).then_some(open_error.is_none()),
+                    open_error,
+                    downloaded,
+                    path,
+                    verdicts: door.verdicts,
+                    allow_failing,
+                },
+                &source,
+            ))
         })
         .await?;
 
@@ -918,7 +1162,7 @@ impl Parcad {
     )]
     async fn probe_step_export(
         &self,
-        Parameters(request): Parameters<StepProbeRequest>,
+        Parameters(Args(request)): Parameters<Args<StepProbeRequest>>,
     ) -> Result<rmcp::model::CallToolResult, ErrorData> {
         let keep_faces = match request.detail.as_deref() {
             None | Some("faces") => true,
@@ -947,16 +1191,21 @@ impl Parcad {
     #[tool(
         name = "check_fit",
         annotations(title = "Check the fit", read_only_hint = true, open_world_hint = false),
-        description = "Lay a reference object against a part and measure how they sit, on the two exact solids: `verdict` is clear, touching or interfering; `interference_mm3` is the material the two share, which is what would have to be cut away for the object to fit; `clearance_mm` and `closest_mm` say how much room there is and where, when they do not overlap. This is the question 'does the laptop fit in its holder' or 'does the lid clear the boss', and neither a render nor arithmetic on the script can answer it — the script says what was asked for and this measures what was built.\n\nBoth arguments are scripts. The reference is usually one line placing a body from the DEVICES table, e.g. `return device(\"macbook-pro-16\").at(0, 0, 18.4)`, or any shape drawn where the object sits. A holder is right when the reference is `clear` by about the clearance it was drawn with, and wrong when it `interfering` — the volume and the two closest points say where. When both objects are bodies of one part — `return { holder, laptop }` — evaluate_part already measures the pair in `between_bodies`, with the same verdict and numbers, and no second call is needed."
+        description = "Lay a reference object against a part and measure how they sit, on the two exact solids: `verdict` is clear, touching or interfering; `interference_mm3` is the material the two share, which is what would have to be cut away for the object to fit, and `depth_mm` at `deepest_mm` is how far one reaches into the other — the number to read, since a volume is not a depth; `clearance_mm` and `closest_mm` say how much room there is and where, when they do not overlap, and `contact_mm2` over `contact_patches` patches says how much of a face they share when they touch, which is what tells a seat from a corner. This is the question 'does the laptop fit in its holder' or 'does the lid clear the boss', and neither a render nor arithmetic on the script can answer it — the script says what was asked for and this measures what was built.\n\nBoth arguments are scripts. The reference is usually one line placing a body from the DEVICES table, e.g. `return device(\"macbook-pro-16\").at(0, 0, 18.4)`, or any shape drawn where the object sits. A holder is right when the reference is `clear` by about the clearance it was drawn with, and wrong when it `interfering` — the depth and where it is deepest say by how much. When both objects are bodies of one part — `return { holder, laptop }` — evaluate_part already measures the pair in `between_bodies`, with the same verdict and numbers, and no second call is needed."
     )]
     async fn check_fit(
         &self,
-        Parameters(request): Parameters<FitRequest>,
+        Parameters(Args(request)): Parameters<Args<FitRequest>>,
     ) -> Result<rmcp::model::CallToolResult, ErrorData> {
-        let report =
-            blocking(move || service::check_fit(&request.script, &request.reference)).await?;
-        let value = serde_json::to_value(&report)
+        let (report, sha) = blocking(move || {
+            let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &request.edits, None)?;
+            let report = service::check_fit(&source.script, &request.reference)?;
+            Ok((report, service::script_sha256(&source.script)))
+        })
+        .await?;
+        let mut value = serde_json::to_value(&report)
             .map_err(|e| invalid(format!("encoding the fit report: {e}")))?;
+        value["script_sha256"] = serde_json::json!(sha);
         let mut result =
             rmcp::model::CallToolResult::success(vec![rmcp::model::ContentBlock::text(
                 value.to_string(),
@@ -988,7 +1237,7 @@ impl Parcad {
     )]
     async fn read_project(
         &self,
-        Parameters(request): Parameters<ProjectRequest>,
+        Parameters(Args(request)): Parameters<Args<ProjectRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<Project>, ErrorData> {
         let script = projects::read(&request.name).map_err(invalid)?;
         Ok(rmcp::handler::server::wrapper::Json(Project {
@@ -1001,23 +1250,27 @@ impl Parcad {
     #[tool(
         name = "save_project",
         annotations(title = "Save project", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Write a part to parcad's project folder so the user can open it; open_project it afterwards to put it on their screen. Evaluate it first: saving a script that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not — the file is saved regardless), the `preview` thumbnail written for the app's picker, and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back."
+        description = "Write a new part to parcad's project folder so the user can open it; open_project it afterwards to put it on their screen. For a part that is already saved, call edit_part instead: it changes the lines you name, rebuilds, and saves in one call, without the whole script being sent again. Evaluate a script first: saving one that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not — the file is saved regardless), the `preview` thumbnail written for the app's picker, and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back. A part that builds and fails its `print_check` (material under 0.3 mm, where nothing prints) or one of its own `checks` is not saved: the refusal names the finding or the check and its measurement; fix the part, or pass `allow_failing` with the user's reason, which the reply keeps beside the verdicts it opens with."
     )]
     async fn save_project(
         &self,
-        Parameters(request): Parameters<SaveRequest>,
+        Parameters(Args(request)): Parameters<Args<SaveRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<Saved>, ErrorData> {
         let saved = blocking(move || {
             // Built before anything is written: a tab's host may pause at the
             // kernel and run this again, and a write must not happen twice.
-            let thumbnail = preview_of(&request.script);
+            // A script that does not build is still saved, as it always was;
+            // one that builds and fails its own checks is not, without a reason.
+            let thumbnail = built_preview(&request.script);
+            let door = thumbnail.as_ref().map(|(_, door, _)| door.clone()).unwrap_or_default();
+            let allow_failing = door.pass(request.allow_failing.as_deref(), "save_project")?;
             let snapshot = projects::snapshot(&request.name)?;
             let path = projects::write(&request.name, &request.script)?;
             let (built, error, preview) = match thumbnail {
-                Ok(png) => match projects::write_preview(&request.name, &png) {
-                    Ok(()) => (true, None, projects::preview_path(&request.name)),
-                    Err(_) => (true, None, None),
-                },
+                Ok((png, _, _)) => {
+                    let preview = projects::write_preview(&request.name, &png).ok().and_then(|()| projects::preview_path(&request.name));
+                    (true, None, preview)
+                }
                 Err(e) => (false, Some(e), None),
             };
             Ok(Saved {
@@ -1027,6 +1280,8 @@ impl Parcad {
                 error,
                 preview,
                 snapshot,
+                verdicts: door.verdicts,
+                allow_failing,
             })
         })
         .await?;
@@ -1037,7 +1292,7 @@ impl Parcad {
     #[tool(
         name = "get_session",
         annotations(title = "Read the open editor", read_only_hint = true, open_world_hint = false),
-        description = "Read the live session: which project is open in the parcad window and the script as it currently stands in the editor, including anything the user has typed since you last looked. Call this before editing — the on-screen script may differ from the file on disk, and editing from a stale copy silently reverts the user's work. `name` is null until something is opened; `revision` increases with every change. The editor pushes its document a moment after typing stops, so the very last keystrokes can lag by about half a second.\n\n`viewers` is what each open window is actually drawing, as the window reported it: the `revision` it last evaluated, whether that `built`, the `error` if not, and the `volume_mm3` it measured. A window below the session's revision has not caught up; one with built: false is still drawing an older part beside that error. An empty list means no window is open, so nobody is looking."
+        description = "Read the live session: which project is open in the parcad window and the script as it currently stands in the editor, including anything the user has typed since you last looked. Call this before editing — the on-screen script may differ from the file on disk, and editing from a stale copy silently reverts the user's work. `name` is null until something is opened; `revision` increases with every change. The editor pushes its document a moment after typing stops, so the very last keystrokes can lag by about half a second.\n\n`viewers` is what each open window is actually drawing, as the window reported it: the `revision` it last evaluated, whether that `built`, the `error` if not, and the `volume_mm3` it measured. A window below the session's revision has not caught up; one with built: false is still drawing an older part beside that error. An empty list means no window is open, so nobody is looking. A viewer over 30 seconds old is marked `stale` and is not evidence the user is looking at anything; one silent for 300 seconds is left out."
     )]
     async fn get_session(
         &self,
@@ -1049,15 +1304,15 @@ impl Parcad {
     #[tool(
         name = "open_project",
         annotations(title = "Show a part on the user's screen", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Show the user a part: open a project on the screen they are watching — the parcad app, or the ParCAD web page in their browser — loaded from disk, exactly as if they had picked it, in every open window. To show a part you have built, save it with save_project under a name of its own and open that; the part that was open is left as it was. Takes a path from list_projects. Returns the session with the loaded script. Use this before set_script when the part you want to change is not the one on screen — get_session tells you which that is. Like set_script, the reply waits for a window to report evaluating it and carries `viewers`: tell the user the part is on screen only when one reports it built."
+        description = "Show the user a part: open a project on the screen they are watching — the parcad app, or the ParCAD web page in their browser — loaded from disk, exactly as if they had picked it, in every open window. To show a part you have built, save it with save_project under a name of its own and open that; the part that was open is left as it was. Takes a path from list_projects. Returns the session without the loaded script: `script_chars` and `script_sha256` identify the text every window took, `script: true` asks for it, and read_project has it anyway. Use this before set_script when the part you want to change is not the one on screen — get_session tells you which that is. Like set_script, the reply waits for a window to report evaluating it and carries `viewers`: tell the user the part is on screen only when one reports it built. A viewer over 30 seconds old is marked `stale` and is not evidence the user is looking at anything; one silent for 300 seconds is left out, and is not waited for."
     )]
     async fn open_project(
         &self,
-        Parameters(request): Parameters<OpenRequest>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<session::Live>, ErrorData> {
+        Parameters(Args(request)): Parameters<Args<OpenRequest>>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<OnScreen>, ErrorData> {
         let opened = session::open(&request.name, session::AGENT_ORIGIN).map_err(invalid)?;
         Ok(rmcp::handler::server::wrapper::Json(
-            shown(opened, request.wait_s).await,
+            on_screen(opened, request.wait_s, request.script).await,
         ))
     }
 
@@ -1065,16 +1320,16 @@ impl Parcad {
     #[tool(
         name = "set_script",
         annotations(title = "Replace the script on screen", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Change the part the user is looking at: replace the script of the project open on their screen. It is for editing that part; to show them a different one, save it with save_project and open it with open_project, or its text lands in the open project and a save writes it there. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing — there is no lock, and you must not wait for one. It edits the screen only: nothing is written to disk until the user saves or you call save_project. Evaluate the script first with evaluate_part; putting a script that does not build in front of the user replaces their working part with an error. Read get_session first and base your edit on the script it returns, or you will silently revert what the user typed since you last looked.\n\nThe reply waits (up to `wait_s`, default 20 s) until a window reports evaluating this revision, and its `viewers` says what each window showed: built with which `volume_mm3`, or the `error` it hit. Do not tell the user the part is on screen unless a viewer reports this `revision` with built: true. Setting the same script again makes every window evaluate it again — the way to recover a window that is showing something stale."
+        description = "Replace the whole script of the project open on the user's screen. For a change to that part — a dimension, a radius, one function — call edit_part with project \"@session\" instead: it sends only the lines that change, builds them first, and lands on screen the same way; set_script is for a script that is new from the first line. To show them a different part, save it with save_project and open it with open_project, or its text lands in the open project and a save writes it there. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing — there is no lock, and you must not wait for one. It edits the screen only: nothing is written to disk until the user saves or you call save_project. Evaluate the script first with evaluate_part; putting a script that does not build in front of the user replaces their working part with an error. Read get_session first and base your edit on the script it returns, or you will silently revert what the user typed since you last looked.\n\nThe reply waits (up to `wait_s`, default 20 s) until a window reports evaluating this revision, and its `viewers` says what each window showed: built with which `volume_mm3`, or the `error` it hit. It does not echo the script you sent: `script_chars` and `script_sha256` identify what landed, and get_session returns it whole. Do not tell the user the part is on screen unless a viewer reports this `revision` with built: true. Setting the same script again makes every window evaluate it again — the way to recover a window that is showing something stale."
     )]
     async fn set_script(
         &self,
-        Parameters(request): Parameters<SetScriptRequest>,
-    ) -> Result<rmcp::handler::server::wrapper::Json<session::Live>, ErrorData> {
+        Parameters(Args(request)): Parameters<Args<SetScriptRequest>>,
+    ) -> Result<rmcp::handler::server::wrapper::Json<OnScreen>, ErrorData> {
         keep_screen(&request.script);
         let set = session::set_script(request.script, session::AGENT_ORIGIN).map_err(invalid)?;
         Ok(rmcp::handler::server::wrapper::Json(
-            shown(set, request.wait_s).await,
+            on_screen(set, request.wait_s, false).await,
         ))
     }
 
@@ -1086,7 +1341,7 @@ impl Parcad {
     )]
     async fn list_snapshots(
         &self,
-        Parameters(request): Parameters<ProjectRequest>,
+        Parameters(Args(request)): Parameters<Args<ProjectRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<SnapshotList>, ErrorData> {
         let snapshots = projects::snapshots(&request.name).map_err(invalid)?;
         Ok(rmcp::handler::server::wrapper::Json(SnapshotList {
@@ -1103,7 +1358,7 @@ impl Parcad {
     )]
     async fn restore_snapshot(
         &self,
-        Parameters(request): Parameters<RestoreRequest>,
+        Parameters(Args(request)): Parameters<Args<RestoreRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<session::Live>, ErrorData> {
         let script = projects::read_snapshot(&request.name, &request.id).map_err(invalid)?;
         if session::get().name.as_deref() != Some(request.name.as_str()) {
@@ -1129,46 +1384,52 @@ impl Parcad {
 /// The tool list changes only with the binary.
 const TOOL_LIST_TTL_MS: u64 = 86_400_000;
 
-const LANGUAGE: &str = "parcad builds parts from a small JavaScript DSL and evaluates them with an exact \
-B-rep kernel. Everything is millimetres; primitives are centred on the origin and placed \
-with .at(x, y, z); a script ends by returning a shape, or { base, lid } for a part that \
-stays in several bodies, measured per body and between them.\n\n\
-Start from read_docs: its `dsl` topic is the whole language, generated from the source; \
-`gaps` and `gotchas` are what the kernel refuses and what silently returns a wrong answer. \
-list_projects and read_project show house style. Projects nest in folders: a name is a path \
-like 'Mounts/bracket', passed whole.";
+const LANGUAGE: &str = "parcad builds parts from a small JavaScript DSL on an exact B-rep kernel. \
+Everything is millimetres; primitives are centred on the origin, placed \
+with .at(x, y, z); a script returns a shape, or { base, lid } for a part in several \
+bodies, measured per body and between them. Every reply opens with verdicts: checks: [...] \
+beside the bodies are the part's own rules (read_docs dsl, Check); print_check is the thinnest \
+wall, cuts into other features and overhang; a part is done when print_check is clean or \
+each flag has a reason.\n\n\
+Start from read_docs: `dsl` is the whole language; `gaps` and `gotchas` are what the kernel \
+refuses and what returns a wrong answer. read_project shows house style; a name is a path \
+like 'Mounts/bracket'.";
 
-const SCREEN: &str = "You share the parcad app's screen with the user: get_session reads it, and \
-open_project and set_script change it in every window. To show a part you built, save_project \
-it under its own name and open_project it; set_script edits the part already open. Edits \
-are undoable; read before you write, evaluate before set_script.";
+const SCREEN: &str = "You share the parcad app's screen with the user: get_session reads it, \
+open_project and set_script change it. To show a part you built, save_project it under its own \
+name and open_project it. Edits are undoable; read before you write.";
+
+/// The rule the coin-holder session lacked: 241 KB of script resent to change
+/// a few lines at a time (docs/COIN_HOLDER_REVIEW.md, B1).
+const ONCE: &str = "Send a script once. Every change after the first is an edit_part ({ project, \
+edits: [{ old, new }] }; \"@session\" is the part on screen), and `project` on any measuring \
+tool builds a saved part unsent.";
 
 const SELECTING: &str = "Select edges by intent, never by index: '>Z and >Y and |X', or a query: { curve: \"circle\", \
-role: \"hole\", adjacentTo: { faceNormal: \"+z\" } }; dihedral: \"convex\", \"concave\" or \
-\"smooth\"; parallel: \"z\"; longerThan: 3; on: \"lip\" for one tagged feature's edges, its at \
-extrema measured within that feature; between: [\"arm\", \"hub\"] for the seam where two \
-meet. A tag names a node's faces and survives booleans, fillets and rotations. Fillets skip \
-smooth edges unless asked. Add .expect({ count: n }) so a selector that drifts fails aloud. \
-edge@N ids from list_entities are for one evaluation and rejected in scripts.\n\n\
-The kernel refuses rather than approximating; a refusal names the fix and lists the edges \
-it means, so read it and change the script. Every report is measured, never requested: \
-quote its numbers rather than the script's.";
+role: \"hole\", adjacentTo: { faceNormal: \"+z\" } }; dihedral: \"convex\"|\"concave\"|\
+\"smooth\"; parallel: \"z\"; longerThan: 3; on: \"lip\" for one tagged feature's edges, at \
+measured within it; between: [\"arm\", \"hub\"] for the seam where two meet. A tag names a \
+node's faces and survives later ops. Each treatment in a reply has `edges`, its resolved \
+count: write it as .expect({ count }) so drift fails aloud. edge@N ids never appear in \
+scripts.\n\n\
+The kernel refuses rather than approximating; a refusal names the fix. Every report is \
+measured, never requested: quote it, not the script.";
 
 /// Only where a view is a file the user can open.
 const PICTURES: &str = " The user may not see a tool's pictures: to show one, paste its \
 `markdown` line.";
 
-const WHERE: &str = "Which tag owns what a view shows: evaluate_part with regions: true. What is \
-inside: evaluate_part with a section. Where a tag is: tag_extents, in every evaluate_part reply.";
+const WHERE: &str = "Which tag owns what a view shows: regions: true; what is inside: a section; where a tag is: \
+tag_extents.";
 
 /// What a model is told before its first call, for the host it is talking to.
 /// Claude Code keeps the first 2048 characters, so what differs by host comes
 /// early and both versions fit.
 fn instructions(in_tab: bool) -> String {
     if in_tab {
-        format!("{LANGUAGE}\n\n{}\n\n{SELECTING}\n\n{WHERE}", crate::page::INSTRUCTIONS)
+        format!("{LANGUAGE}\n\n{}\n\n{ONCE}\n\n{SELECTING}\n\n{WHERE}", crate::page::INSTRUCTIONS)
     } else {
-        format!("{LANGUAGE}\n\n{SCREEN}\n\n{SELECTING}{PICTURES}\n\n{WHERE}")
+        format!("{LANGUAGE}\n\n{SCREEN}\n\n{ONCE}\n\n{SELECTING}{PICTURES}\n\n{WHERE}")
     }
 }
 
@@ -1196,7 +1457,7 @@ impl ServerHandler for Parcad {
     ) -> Result<rmcp::model::ListResourcesResult, ErrorData> {
         let viewer = rmcp::model::Resource::new(VIEWER_URI, "viewer")
             .with_title("ParCAD part viewer")
-            .with_description("The part an evaluate_part call built, in 3D, for a chat client to show.")
+            .with_description("The part an open_project call opened, in 3D, for a chat client to show.")
             .with_mime_type(VIEWER_MIME);
         Ok(rmcp::model::ListResourcesResult::with_all_items(vec![viewer])
             .with_ttl_ms(TOOL_LIST_TTL_MS)
@@ -1488,6 +1749,141 @@ fn script_budget(timeout_s: Option<f64>) -> std::time::Duration {
     budget(timeout_s).unwrap_or(script::BACKSTOP).max(script::BACKSTOP)
 }
 
+/// How evaluate_part and edit_part draw a part: their shared arguments, checked
+/// before any build so a bad combination costs no kernel time.
+struct Look {
+    views: Vec<parcad_core::view::View>,
+    regions: bool,
+    materials: bool,
+    section: Option<parcad_core::view::Section>,
+    size: u32,
+    timeout_s: Option<f64>,
+}
+
+impl Look {
+    fn checked(
+        views: Option<&[String]>,
+        regions: Option<bool>,
+        materials: Option<bool>,
+        section: Option<&SectionRequest>,
+        image_size: Option<u32>,
+        timeout_s: Option<f64>,
+    ) -> Result<Self, ErrorData> {
+        let views = service::parse_views(views.unwrap_or(&[])).map_err(invalid)?;
+        let regions = regions.unwrap_or(false);
+        let materials = materials.unwrap_or(false);
+        if materials && regions {
+            return Err(invalid(
+                "regions and materials both colour a view; ask for one per call, \
+                 regions for which tag owns a surface, materials for how it looks",
+            ));
+        }
+        if materials && views.is_empty() {
+            return Err(invalid(
+                "materials asks how a view is coloured, so it needs at least one \
+                 view; pass views: [\"iso\"]",
+            ));
+        }
+        if regions && views.is_empty() {
+            return Err(invalid(
+                "regions asks how a view is coloured, so it needs at least one \
+                 view; pass views: [\"iso\"]",
+            ));
+        }
+        let section = section
+            .map(|s| service::parse_section(&s.axis, s.at_mm, s.keep.as_deref()))
+            .transpose()
+            .map_err(invalid)?;
+        if section.is_some() && views.is_empty() {
+            return Err(invalid(
+                "a section is something to look at, so it needs at least one \
+                 view; pass views: [\"iso\"]",
+            ));
+        }
+        Ok(Self {
+            views,
+            regions,
+            materials,
+            section,
+            size: image_size.unwrap_or(512).clamp(128, 1024),
+            timeout_s,
+        })
+    }
+}
+
+/// Build, measure and draw a resolved script: evaluate_part's reply as JSON,
+/// with the text it was measured on identified by `script_sha256`, and the
+/// views as WebP.
+fn measure(
+    source: &service::Resolved,
+    look: &Look,
+) -> Result<(serde_json::Value, Vec<Vec<u8>>, service::Door), String> {
+    let built = script::build_within(&source.script, script_budget(look.timeout_s))?;
+    let doc = service::parse_graph(built.graph.clone())?;
+    let mut evaluated = service::evaluate(&doc, budget(look.timeout_s)).map_err(|e| built.locate(e))?;
+    evaluated.snapshot.notes = built.notes.clone();
+    let door = service::Door::of(&evaluated.snapshot);
+
+    // Render after measuring, so a part that cannot be built fails on
+    // the geometry rather than after spending a render on it.
+    let renders = service::render(
+        &evaluated,
+        &doc,
+        &service::RenderSpec {
+            views: &look.views,
+            size: look.size,
+            regions: look.regions,
+            materials: look.materials,
+            section: look.section,
+        },
+    )
+    .map_err(|e| built.locate(e))?;
+    let stem = render_stem(&source.script, look.size, look.regions, look.materials, look.section.is_some());
+    let (summaries, pictures) = renders
+        .views
+        .into_iter()
+        .map(|mut render| {
+            render.summary.path = keep_render(&stem, &render.summary.view, &render.image);
+            // A tag-region map is for the caller to read, not a picture of the part.
+            if !look.regions {
+                render.summary.markdown = render
+                    .summary
+                    .path
+                    .as_deref()
+                    .map(|path| markdown_image(&render.summary.view, path));
+            }
+            let view = render.summary.view.clone();
+            let picture = render
+                .image
+                .to_webp()
+                .map_err(|e| format!("encoding the {view} view: {e:#}"));
+            (render.summary, picture)
+        })
+        .unzip::<_, _, Vec<_>, Vec<_>>();
+    let pictures = pictures.into_iter().collect::<Result<Vec<_>, _>>()?;
+
+    let mut measured = serde_json::to_value(evaluated.snapshot.with_views(summaries))
+        .map_err(|e| format!("serialising the snapshot: {e}"))?;
+    measured["script_sha256"] = serde_json::json!(service::script_sha256(&source.script));
+    Ok((measured, pictures, door))
+}
+
+/// The measurements as both text and structured content — a client that
+/// understands the schema gets the typed object, and one that does not still
+/// shows the caller its numbers rather than an empty reply — then the views.
+fn pictured(measured: serde_json::Value, pictures: Vec<Vec<u8>>) -> rmcp::model::CallToolResult {
+    let mut content = vec![rmcp::model::ContentBlock::text(measured.to_string())];
+    content.extend(pictures.into_iter().map(|webp| {
+        rmcp::model::ContentBlock::image(
+            base64::Engine::encode(&base64::engine::general_purpose::STANDARD, webp),
+            "image/webp",
+        )
+    }));
+    let mut result = rmcp::model::CallToolResult::success(content);
+    result.structured_content = Some(measured);
+    result
+}
+
 /// Where renders are kept: beside exports, so one variable moves both.
 fn render_dir() -> PathBuf {
     export_dir().join("renders")
@@ -1532,11 +1928,12 @@ fn markdown_image(view: &str, path: &str) -> String {
     }
 }
 
-/// The picker's thumbnail for a script: the iso view of its exact build.
-fn preview_of(script: &str) -> Result<Vec<u8>, String> {
+/// The picker's thumbnail, and the door read off the build that drew it.
+fn built_preview(script: &str) -> Result<(Vec<u8>, service::Door, parcad_core::graph::Doc), String> {
     let built = script::build(script)?;
     let doc = service::parse_graph(built.graph.clone())?;
     let evaluated = service::evaluate(&doc, None).map_err(|e| built.locate(e))?;
+    let door = service::Door::of(&evaluated.snapshot);
     let views = service::parse_views(&["iso".to_string()])?;
     let renders = service::render(
         &evaluated,
@@ -1549,14 +1946,15 @@ fn preview_of(script: &str) -> Result<Vec<u8>, String> {
             section: None,
         },
     )?;
-    renders
+    let png = renders
         .views
         .into_iter()
         .next()
         .ok_or_else(|| "the iso view drew nothing".to_string())?
         .image
         .to_png()
-        .map_err(|e| format!("encoding the thumbnail: {e:#}"))
+        .map_err(|e| format!("encoding the thumbnail: {e:#}"))?;
+    Ok((png, door, doc))
 }
 
 /// The session after a change, once a window has shown it or the wait is over.
@@ -1565,6 +1963,24 @@ async fn shown(changed: session::Session, wait_s: Option<f64>) -> session::Live 
     let viewers = session::wait_until_shown(changed.revision, budget).await;
     session::Live {
         session: session::get(),
+        viewers,
+    }
+}
+
+/// [`shown`], identifying the script instead of echoing it.
+async fn on_screen(changed: session::Session, wait_s: Option<f64>, with_script: bool) -> OnScreen {
+    let live = shown(changed, wait_s).await;
+    identified(live.session, live.viewers, with_script)
+}
+
+fn identified(session: session::Session, viewers: Vec<session::Viewer>, with_script: bool) -> OnScreen {
+    OnScreen {
+        name: session.name,
+        revision: session.revision,
+        origin: session.origin,
+        script_chars: session.script.chars().count(),
+        script_sha256: service::script_sha256(&session.script),
+        script: with_script.then_some(session.script),
         viewers,
     }
 }
@@ -1743,6 +2159,8 @@ mod tests {
         }
         assert!(instructions(true).contains("ParCAD web"));
         assert!(!instructions(true).contains("`markdown`"), "a tab has no file to point at");
+        // docs/NEXT.md, item 1: the weakest layer, and one line.
+        assert!(instructions(false).contains("a part is done when print_check is clean or each flag has a reason"));
     }
 
     #[test]
@@ -1753,7 +2171,7 @@ mod tests {
         let wire = serde_json::to_value(&listed).unwrap();
         assert_eq!(wire["ttlMs"], serde_json::json!(TOOL_LIST_TTL_MS));
         assert_eq!(wire["cacheScope"], serde_json::json!("public"));
-        assert_eq!(wire["tools"].as_array().unwrap().len(), 19);
+        assert_eq!(wire["tools"].as_array().unwrap().len(), 20);
     }
 
     #[test]
@@ -1859,19 +2277,24 @@ mod tests {
             })
             .map(|tool| tool.name.to_string())
             .collect();
-        assert_eq!(writes, ["export_part", "save_project"]);
+        assert_eq!(writes, ["edit_part", "export_part", "save_project"]);
     }
 
-    /// A client shows the viewer beside `evaluate_part`, and hides the tool
-    /// that feeds it from the model.
+    /// A client shows the viewer beside `open_project`, the call that shows a
+    /// finished part — not beside every draft `evaluate_part` builds — and
+    /// hides the tool that feeds it from the model. The page asks for the
+    /// part by the project the reply names, so the reply carries no script.
     #[test]
-    fn evaluate_part_names_the_viewer_and_only_the_viewer_calls_view_part() {
+    fn open_project_names_the_viewer_and_only_the_viewer_calls_view_part() {
         let tools = Parcad::new().tool_router.list_all();
         let meta_of = |name: &str| {
             let tool = tools.iter().find(|t| t.name == name).unwrap();
             serde_json::to_value(&tool.meta).unwrap()
         };
-        assert_eq!(meta_of("evaluate_part")["ui"]["resourceUri"], VIEWER_URI);
+        assert_eq!(meta_of("open_project")["ui"]["resourceUri"], VIEWER_URI);
+        assert!(meta_of("evaluate_part").is_null());
+        let view = serde_json::to_value(&tools.iter().find(|t| t.name == "view_part").unwrap().input_schema).unwrap();
+        assert!(view["properties"].get("project").is_some(), "the viewer names the project, not the text");
         assert_eq!(meta_of("view_part")["ui"]["visibility"], serde_json::json!(["app"]));
         assert!(meta_of("read_docs").is_null());
     }
@@ -1917,5 +2340,512 @@ mod tests {
         assert_eq!(data["kind"], "script");
         assert_eq!(data["line"], 3);
         assert!(data["node"].is_null());
+
+        // A wrong value in a known field, in the caller's words and without
+        // the host's version: still a refusal on that node.
+        let data = error_data(
+            "node 15 (line 9, rotate), field \"axis\": expected a point { x, y, z }, got the number 0. \
+             The DSL writes this field from .rotate(axis, degrees), so the call that made node 15 \
+             was given the wrong argument.",
+        );
+        assert_eq!(data["kind"], "refused");
+        assert_eq!(data["line"], 9);
+        assert_eq!(data["node"], 15);
+        assert!(data["stage"].is_null());
+    }
+
+    /// Eleven open_project calls in one session each echoed a script the
+    /// caller had sent thirty seconds earlier, up to 10 KB apiece. The reply
+    /// identifies the text instead, and hands it over only when asked.
+    #[test]
+    fn an_open_reply_identifies_the_script_without_carrying_it() {
+        let session = session::Session {
+            name: Some("bracket".into()),
+            script: "return box(1,1,1);".into(),
+            revision: 4,
+            origin: session::AGENT_ORIGIN.into(),
+        };
+        let reply = serde_json::to_value(identified(session.clone(), Vec::new(), false)).unwrap();
+        assert!(reply.get("script").is_none(), "{reply}");
+        assert_eq!(reply["script_chars"], 18);
+        // sha256("return box(1,1,1);"), as any other tool would compute it.
+        assert_eq!(reply["script_sha256"], "95bebadc1faf");
+        assert_eq!(reply["revision"], 4);
+        let asked = serde_json::to_value(identified(session, Vec::new(), true)).unwrap();
+        assert_eq!(asked["script"], "return box(1,1,1);");
+        let schema = reply_schema("open_project");
+        assert!(schema["properties"].get("script_sha256").is_some());
+        assert!(reply_schema("get_session")["properties"].get("script").is_some(), "get_session keeps the script");
+    }
+
+    /// The session that found this asked for a cut at x = -38 as `offset`,
+    /// got the cut through the middle, and reasoned from the picture. A field
+    /// the host does not read is refused, and the one that was meant is named.
+    #[test]
+    fn an_unknown_argument_is_refused_by_name() {
+        let refusal = serde_json::from_value::<Args<EvaluateRequest>>(serde_json::json!({
+            "script": "return box(1, 1, 1);", "views": ["iso"],
+            "section": { "axis": "x", "offset": -38 }
+        }))
+        .err()
+        .expect("offset is not a field")
+        .to_string();
+        assert!(
+            refusal.starts_with("`section` has no field \"offset\" — write \"at_mm\" instead. at_mm: Where the plane sits on that axis, in mm."),
+            "{refusal}"
+        );
+        assert!(refusal.ends_with("`section` is { axis: string, at_mm?: number, keep?: string }."), "{refusal}");
+        let refusal = serde_json::from_value::<Args<ThicknessRequest>>(serde_json::json!({
+            "script": "return box(1, 1, 1);", "threshold": 1.2
+        }))
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(refusal.starts_with("the arguments have no field \"threshold\" — write \"threshold_mm\" instead."), "{refusal}");
+        // A number that arrives as text is the number; text that is not one
+        // is refused by the field's name.
+        let Args(request) = serde_json::from_value::<Args<ThicknessRequest>>(serde_json::json!({
+            "script": "return box(1, 1, 1);", "threshold_mm": "1.0", "max_samples": "500"
+        }))
+        .unwrap();
+        assert_eq!((request.threshold_mm, request.max_samples), (Some(1.0), Some(500)));
+        let refusal = serde_json::from_value::<Args<ThicknessRequest>>(serde_json::json!({
+            "script": "return box(1, 1, 1);", "threshold_mm": "thin"
+        }))
+        .err()
+        .unwrap()
+        .to_string();
+        assert!(refusal.starts_with("`threshold_mm` is the string \"thin\", where the tool reads a number."), "{refusal}");
+        // Every request type refuses a field it would otherwise drop. The
+        // list is checked against the tool list, so a new tool's request
+        // type cannot be left off it.
+        fn refuses_bogus<P: serde::de::DeserializeOwned + schemars::JsonSchema>() -> bool {
+            let schema = serde_json::to_value(schemars::schema_for!(P)).unwrap();
+            let mut arguments = serde_json::Map::new();
+            for (key, property) in schema["properties"].as_object().unwrap() {
+                arguments.insert(key.clone(), match property["type"].as_str().or(property["type"][0].as_str()) {
+                    Some("string") => serde_json::json!("x"),
+                    Some("number") | Some("integer") => serde_json::json!(1),
+                    Some("boolean") => serde_json::json!(true),
+                    Some("array") => serde_json::json!([]),
+                    _ => serde_json::json!({ "axis": "x" }),
+                });
+            }
+            arguments.insert("bogus".into(), serde_json::json!(1));
+            serde_json::from_value::<Args<P>>(serde_json::Value::Object(arguments))
+                .err()
+                .is_some_and(|e| e.to_string().contains("no field \"bogus\""))
+        }
+        let refusals = [
+            refuses_bogus::<ViewRequest>(), refuses_bogus::<EvaluateRequest>(), refuses_bogus::<ScriptRequest>(),
+            refuses_bogus::<InspectRequest>(), refuses_bogus::<ProbeRequest>(), refuses_bogus::<ThicknessRequest>(),
+            refuses_bogus::<SelectorRequest>(), refuses_bogus::<ExportRequest>(), refuses_bogus::<FitRequest>(),
+            refuses_bogus::<StepProbeRequest>(), refuses_bogus::<DocsRequest>(), refuses_bogus::<ProjectRequest>(),
+            refuses_bogus::<SetScriptRequest>(), refuses_bogus::<RestoreRequest>(), refuses_bogus::<OpenRequest>(),
+            refuses_bogus::<SaveRequest>(), refuses_bogus::<SectionRequest>(), refuses_bogus::<EditRequest>(),
+        ];
+        assert!(refusals.iter().all(|r| *r), "{refusals:?}");
+        let with_arguments = Parcad::new()
+            .tool_router
+            .list_all()
+            .iter()
+            .filter(|tool| serde_json::to_value(&tool.input_schema).unwrap()["properties"].as_object().is_some_and(|p| !p.is_empty()))
+            .count();
+        // Eighteen tools take arguments over seventeen request types (read_project
+        // and list_snapshots share one), plus the nested section.
+        assert_eq!(with_arguments, 18, "a tool was added; add its request type to this list");
+        assert_eq!(refusals.len(), 18);
+    }
+
+    /// The tool functions are async; the tests run them to completion here.
+    fn run<T>(future: impl std::future::Future<Output = T>) -> T {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime")
+            .block_on(future)
+    }
+
+    fn edit_request(value: serde_json::Value) -> Parameters<Args<EditRequest>> {
+        Parameters(serde_json::from_value(value).expect("a well-formed request"))
+    }
+
+    fn refused(result: Result<rmcp::model::CallToolResult, ErrorData>) -> String {
+        result.err().expect("refused").message.to_string()
+    }
+
+    /// A tool takes its script from one place: refused by name when it is
+    /// told two, or none.
+    #[test]
+    fn a_project_and_a_script_cannot_both_be_given() {
+        let both = service::resolve_script(Some("return box(1,1,1);"), Some("bracket"), &[], None)
+            .err()
+            .expect("refused");
+        assert!(both.starts_with("give `project` or `script`, not both:"), "{both}");
+        let neither = service::resolve_script(None, None, &[], None).err().expect("refused");
+        assert!(neither.starts_with("the arguments need `script` or `project`:"), "{neither}");
+        assert!(neither.contains("\"@session\""), "{neither}");
+        // Through the schema, so `script` is optional on every request that
+        // takes a project.
+        for value in [
+            serde_json::json!({ "project": "bracket" }),
+            serde_json::json!({ "project": "@session", "edits": [{ "old": "a", "new": "b" }] }),
+        ] {
+            serde_json::from_value::<Args<EvaluateRequest>>(value.clone()).expect("evaluate_part");
+            serde_json::from_value::<Args<ThicknessRequest>>(value.clone()).expect("measure_wall_thickness");
+            serde_json::from_value::<Args<ProbeRequest>>(value.clone()).expect("probe_part");
+            serde_json::from_value::<Args<ScriptRequest>>(value.clone()).expect("list_entities");
+            let mut fit = value.clone();
+            fit["reference"] = serde_json::json!("return box(1,1,1);");
+            serde_json::from_value::<Args<FitRequest>>(fit).expect("check_fit");
+            let mut export = value.clone();
+            export["format"] = serde_json::json!("stl");
+            serde_json::from_value::<Args<ExportRequest>>(export).expect("export_part");
+            let mut inspect = value;
+            inspect["node"] = serde_json::json!(1);
+            serde_json::from_value::<Args<InspectRequest>>(inspect).expect("inspect_treatment_target");
+        }
+    }
+
+    /// The coin-holder session wrote this replacement by hand in a shell: an
+    /// `old` found twice is refused with the count and where, never guessed.
+    #[test]
+    fn an_ambiguous_edit_is_refused_with_the_count_and_lines() {
+        let text = "const wall = 2;\nconst lid = box(1, 1, wall);\nconst wall2 = 2;\nreturn lid;";
+        let twice = service::apply_edits(
+            text,
+            &[service::Edit { old: "const wall".into(), new: "const w".into() }],
+            "`tray`",
+        )
+        .err()
+        .expect("refused");
+        assert_eq!(
+            twice,
+            "edit 1's `old` appears 2 times in `tray` (first at lines 1 and 3), so nothing was changed. \
+             Give more of the lines around it so it appears exactly once."
+        );
+        let never = service::apply_edits(
+            text,
+            &[
+                service::Edit { old: "const wall = 2;".into(), new: "const wall = 3;".into() },
+                service::Edit { old: "const wall = 2;".into(), new: "const wall = 4;".into() },
+            ],
+            "the script on screen",
+        )
+        .err()
+        .expect("the first edit consumed it");
+        assert!(never.starts_with("edit 2's `old` appears nowhere in the script on screen, so nothing was changed."), "{never}");
+        let empty = service::apply_edits(text, &[service::Edit { old: String::new(), new: "x".into() }], "`tray`")
+            .err()
+            .unwrap();
+        assert_eq!(empty, "edit 1's `old` is empty; give the text to replace.");
+        let edited = service::apply_edits(
+            text,
+            &[
+                service::Edit { old: "const wall = 2;".into(), new: "const wall = 3;".into() },
+                service::Edit { old: "const wall2 = 2;\n".into(), new: String::new() },
+            ],
+            "`tray`",
+        )
+        .unwrap();
+        assert_eq!(edited, "const wall = 3;\nconst lid = box(1, 1, wall);\nreturn lid;");
+    }
+
+    /// An edit that does not build is refused before anything is written:
+    /// part.js is as it was, and no snapshot was taken.
+    #[test]
+    fn a_failed_edit_writes_nothing() {
+        projects::tests::scoped(|_| {
+            session::tests::scoped(|| {
+                projects::create("tray", "return box(1,1,1);").unwrap();
+                let refusal = refused(run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "tray",
+                    "edits": [{ "old": "return box(1,1,1);", "new": "return box(" }],
+                })))));
+                assert!(refusal.contains("did not parse"), "{refusal}");
+                assert_eq!(projects::read("tray").unwrap(), "return box(1,1,1);");
+                assert!(projects::snapshots("tray").unwrap().is_empty(), "nothing was kept, because nothing was replaced");
+                // The same through the screen: the revision does not move.
+                let before = session::push(Some("tray".into()), "return box(1,1,1);".into(), "tab-a".into(), None);
+                let refusal = refused(run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "@session",
+                    "edits": [{ "old": "box(1,1,1)", "new": "box(" }],
+                })))));
+                assert!(refusal.contains("did not parse"), "{refusal}");
+                assert_eq!(session::get().revision, before.revision);
+                assert_eq!(session::get().script, "return box(1,1,1);");
+            })
+        })
+    }
+
+    /// An edit carrying the hash of text the user has since changed is
+    /// refused naming both hashes, and nothing is written.
+    #[test]
+    fn an_expect_sha256_that_no_longer_matches_is_refused() {
+        projects::tests::scoped(|_| {
+            session::tests::scoped(|| {
+                projects::create("tray", "return box(1,1,1);").unwrap();
+                let refusal = refused(run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "tray",
+                    "expect_sha256": "000000000000",
+                    "edits": [{ "old": "box(1,1,1)", "new": "box(2,2,2)" }],
+                })))));
+                assert!(
+                    refusal.starts_with("`tray` is now 95bebadc1faf, not 000000000000: it changed since you last read it"),
+                    "{refusal}"
+                );
+                assert!(refusal.contains("read_project"), "{refusal}");
+                assert_eq!(projects::read("tray").unwrap(), "return box(1,1,1);");
+                assert!(projects::snapshots("tray").unwrap().is_empty());
+                // A hash too short to mean anything is refused the same way.
+                let refusal = refused(run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "tray", "expect_sha256": "95be",
+                    "edits": [{ "old": "box(1,1,1)", "new": "box(2,2,2)" }],
+                })))));
+                assert!(refusal.contains("not 95be:"), "{refusal}");
+                // The matching hash, in either length, is accepted as far as
+                // the edit; a bad edit is then the refusal, proving the hash passed.
+                for hash in ["95bebadc1faf", "95BEBADC1FAF", "95bebadc1faf0123456789"] {
+                    let refusal = refused(run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                        "project": "tray", "expect_sha256": hash,
+                        "edits": [{ "old": "nowhere", "new": "x" }],
+                    })))));
+                    assert!(refusal.starts_with("edit 1's `old` appears nowhere"), "{hash}: {refusal}");
+                }
+                // A project that is open on screen with unsaved changes is not
+                // edited on disk under the user.
+                session::push(Some("tray".into()), "return box(1,1,2);".into(), "tab-a".into(), None);
+                let refusal = refused(run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "tray",
+                    "edits": [{ "old": "box(1,1,1)", "new": "box(2,2,2)" }],
+                })))));
+                assert!(refusal.starts_with("`tray` is open on the user's screen with changes that are not in its part.js"), "{refusal}");
+                assert!(refusal.contains("\"@session\""), "{refusal}");
+                assert_eq!(projects::read("tray").unwrap(), "return box(1,1,1);");
+            })
+        })
+    }
+
+    /// `edits` is empty means the caller wanted evaluate_part.
+    #[test]
+    fn an_edit_with_nothing_to_change_names_evaluate_part() {
+        let refusal = refused(run(Parcad::new().edit_part(edit_request(serde_json::json!({
+            "project": "tray", "edits": [],
+        })))));
+        assert!(refusal.contains("evaluate_part"), "{refusal}");
+    }
+
+    /// The instruction and the descriptions send a model to edit_part rather
+    /// than back to a whole script.
+    #[test]
+    fn every_change_after_the_first_is_an_edit() {
+        assert!(instructions(false).contains("Every change after the first is an edit_part"));
+        let tools = Parcad::new().tool_router.list_all();
+        let description = |name: &str| tools.iter().find(|t| t.name == name).unwrap().description.clone().unwrap_or_default();
+        assert!(description("set_script").contains("edit_part with project \"@session\""));
+        assert!(description("save_project").contains("call edit_part instead"));
+        assert!(description("evaluate_part").contains("edit_part is the tool that saves"));
+        assert!(description("edit_part").contains("call evaluate_part with the same `project` and `edits`"));
+        // The seven script-taking tools all take a project and edits.
+        for name in [
+            "evaluate_part", "measure_wall_thickness", "probe_part", "export_part",
+            "inspect_treatment_target", "list_entities", "check_fit",
+        ] {
+            let schema = serde_json::to_value(&tools.iter().find(|t| t.name == name).unwrap().input_schema).unwrap();
+            let properties = schema["properties"].as_object().unwrap();
+            assert!(properties.contains_key("project") && properties.contains_key("edits"), "{name}");
+            assert!(!schema["required"].as_array().is_some_and(|r| r.iter().any(|v| v == "script")), "{name} still requires script");
+        }
+    }
+
+    /// A save fills the build cache; a `project` evaluate of the same part
+    /// finds it there and runs no second kernel build.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn a_project_build_reuses_the_cache_a_save_filled() {
+        projects::tests::scoped(|_| {
+            session::tests::scoped(|| {
+                let script = "return box(10, 20, 30).tag(\"block\");";
+                let saved = run(Parcad::new().save_project(Parameters(Args(SaveRequest {
+                    name: "block".into(),
+                    script: script.into(),
+                    allow_failing: None,
+                }))))
+                .expect("saved");
+                assert!(saved.0.built);
+                let request: Args<EvaluateRequest> =
+                    serde_json::from_value(serde_json::json!({ "project": "block" })).unwrap();
+                let reply = run(Parcad::new().evaluate_part(Parameters(request))).expect("built");
+                let measured = reply.structured_content.unwrap();
+                assert_eq!(measured["reused_build"], true, "{measured}");
+                assert_eq!(measured["volume_mm3"], 6000.0);
+                assert_eq!(measured["script_sha256"], service::script_sha256(script));
+                // With edits, a different text, and a different hash.
+                let request: Args<EvaluateRequest> = serde_json::from_value(serde_json::json!({
+                    "project": "block", "edits": [{ "old": "30", "new": "40" }],
+                }))
+                .unwrap();
+                let measured = run(Parcad::new().evaluate_part(Parameters(request))).unwrap().structured_content.unwrap();
+                assert_eq!(measured["volume_mm3"], 8000.0);
+                assert_ne!(measured["reused_build"], true, "a different text is a different build");
+                assert_ne!(measured["script_sha256"], service::script_sha256(script));
+                assert_eq!(projects::read("block").unwrap(), script, "a what-if writes nothing");
+            })
+        })
+    }
+
+    /// An edit is built, measured and then written: the file holds the new
+    /// text, the old text is a snapshot, and the reply says what was done.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn an_edit_is_built_measured_and_then_written() {
+        projects::tests::scoped(|_| {
+            session::tests::scoped(|| {
+                projects::create("block", "return box(10, 20, 30);").unwrap();
+                let reply = run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "block",
+                    "expect_sha256": service::script_sha256("return box(10, 20, 30);"),
+                    "edits": [{ "old": "30", "new": "40" }],
+                }))))
+                .expect("built and written");
+                let measured = reply.structured_content.unwrap();
+                assert_eq!(measured["volume_mm3"], 8000.0);
+                assert_eq!(measured["edits_applied"], 1);
+                assert_eq!(measured["script_sha256"], service::script_sha256("return box(10, 20, 40);"));
+                assert!(measured["path"].as_str().unwrap().ends_with("part.js"));
+                assert!(measured.get("on_screen").is_none(), "not open on screen, so not put there");
+                assert_eq!(projects::read("block").unwrap(), "return box(10, 20, 40);");
+                let kept = projects::snapshots("block").unwrap();
+                assert_eq!(kept.len(), 1);
+                assert_eq!(std::fs::read_to_string(&kept[0].path).unwrap(), "return box(10, 20, 30);");
+                assert_eq!(measured["snapshot"], kept[0].path);
+                assert!(projects::preview_path("block").is_some(), "the picker's thumbnail is rewritten");
+            })
+        })
+    }
+
+    /// The door: a part whose own check fails is not exported, saved or
+    /// written by an edit, and the refusal names the check and what was
+    /// measured; `allow_failing` opens it and the reason is in the reply. A
+    /// screen edit is not gated.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn a_failing_check_refuses_the_file_unless_told_why() {
+        projects::tests::scoped(|_| {
+            session::tests::scoped(|| {
+                let script = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../eval/scripts/checked-holder.js")).unwrap();
+                let named = "clear plate↔stack atLeast 0.2 measured 0.13 mm (coins must not bind on the plate)";
+
+                let refused = run(Parcad::new().save_project(Parameters(Args(SaveRequest {
+                    name: "holder".into(),
+                    script: script.clone(),
+                    allow_failing: None,
+                }))))
+                .err()
+                .expect("refused");
+                assert!(refused.message.starts_with("save_project refused: 1 of the part's own check fails — "), "{}", refused.message);
+                assert!(refused.message.contains(named), "{}", refused.message);
+                assert!(projects::read("holder").is_err(), "nothing was written");
+
+                let saved = run(Parcad::new().save_project(Parameters(Args(SaveRequest {
+                    name: "holder".into(),
+                    script: script.clone(),
+                    allow_failing: Some("the user accepts coins binding on this plate".into()),
+                }))))
+                .expect("saved over the failing check");
+                assert_eq!(saved.0.allow_failing.as_deref(), Some("the user accepts coins binding on this plate"));
+                let checks = saved.0.verdicts.checks.as_ref().expect("the verdict rides with the save");
+                assert_eq!((checks.verdict, checks.passed, checks.failed[0].measured_mm), ("failed", 4, Some(0.13)));
+                assert_eq!(projects::read("holder").unwrap(), script);
+
+                let export = |allow: Option<&str>| {
+                    let request: Args<ExportRequest> = serde_json::from_value(serde_json::json!({
+                        "project": "holder", "format": "stl", "allow_failing": allow,
+                    }))
+                    .unwrap();
+                    run(Parcad::new().export_part(Parameters(request)))
+                };
+                let refused = export(None).err().expect("refused");
+                assert!(refused.message.starts_with("export_part refused: "), "{}", refused.message);
+                assert!(refused.message.contains(named), "{}", refused.message);
+                let exported = export(Some("printing a test piece")).expect("exported over the failing check").0;
+                assert_eq!(exported.measured.allow_failing.as_deref(), Some("printing a test piece"));
+                assert_eq!(exported.measured.verdicts.checks.as_ref().unwrap().verdict, "failed");
+                assert!(std::path::Path::new(&exported.measured.path).exists());
+
+                // An edit that keeps the check failing is refused before the
+                // write; one with a reason lands; one that fixes the part needs none.
+                let edit = |edits: serde_json::Value, allow: Option<&str>| {
+                    run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                        "project": "holder", "edits": edits, "allow_failing": allow,
+                    }))))
+                };
+                let refused = edit(serde_json::json!([{ "old": "coins must not bind", "new": "coins must not stick" }]), None).err().expect("refused");
+                assert!(refused.message.starts_with("edit_part refused: "), "{}", refused.message);
+                assert_eq!(projects::read("holder").unwrap(), script, "refused before the write");
+                let measured = edit(serde_json::json!([{ "old": "coins must not bind", "new": "coins must not stick" }]), Some("wording only")).unwrap().structured_content.unwrap();
+                assert_eq!(measured["allow_failing"], "wording only");
+                assert_eq!(measured["checks"]["verdict"], "failed");
+                assert!(projects::read("holder").unwrap().contains("must not stick"));
+                let measured = edit(serde_json::json!([{ "old": "13.13", "new": "13.5" }]), None).unwrap().structured_content.unwrap();
+                assert_eq!(measured["checks"]["verdict"], "passed");
+                assert!(measured.get("allow_failing").is_none());
+                assert!(projects::read("holder").unwrap().contains("13.5"));
+
+                // The screen is a proposal: never gated.
+                session::push(Some("holder".into()), script.clone(), "tab-a".into(), None);
+                let measured = run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "@session", "edits": [{ "old": "13.13", "new": "13.1" }],
+                }))))
+                .expect("a screen edit is never refused for a check")
+                .structured_content
+                .unwrap();
+                assert_eq!(measured["checks"]["failed"][0]["measured_mm"], 0.1);
+            })
+        })
+    }
+
+    /// An edit to the screen is an ordinary revision: every window is told,
+    /// the text before it is kept, and the file is not touched.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn an_edit_to_the_screen_is_an_ordinary_revision() {
+        projects::tests::scoped(|_| {
+            session::tests::scoped(|| {
+                projects::create("block", "return box(10, 20, 30);").unwrap();
+                let before = session::push(Some("block".into()), "return box(10, 20, 30);".into(), "tab-a".into(), None);
+                let mut events = session::subscribe();
+                let reply = run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "@session",
+                    "edits": [{ "old": "30", "new": "40" }],
+                }))))
+                .expect("built and shown");
+                let measured = reply.structured_content.unwrap();
+                assert_eq!(measured["volume_mm3"], 8000.0);
+                let now = session::get();
+                assert_eq!(now.revision, before.revision + 1);
+                assert_eq!(now.script, "return box(10, 20, 40);");
+                assert_eq!(now.origin, session::AGENT_ORIGIN);
+                assert_eq!(events.try_recv().unwrap(), now, "every window was told");
+                assert_eq!(measured["on_screen"]["revision"], now.revision);
+                assert_eq!(measured["on_screen"]["script_sha256"], measured["script_sha256"]);
+                assert!(measured.get("path").is_none());
+                assert_eq!(projects::read("block").unwrap(), "return box(10, 20, 30);", "the screen, not the file");
+                let kept = projects::snapshots("block").unwrap();
+                assert_eq!(std::fs::read_to_string(&kept[0].path).unwrap(), "return box(10, 20, 30);");
+                // Editing the saved part while it is open, and unchanged on
+                // screen, puts the edit on screen too.
+                session::push(Some("block".into()), "return box(10, 20, 30);".into(), "tab-a".into(), None);
+                let reply = run(Parcad::new().edit_part(edit_request(serde_json::json!({
+                    "project": "block",
+                    "edits": [{ "old": "20", "new": "25" }],
+                }))))
+                .expect("built, written and shown");
+                let measured = reply.structured_content.unwrap();
+                assert_eq!(projects::read("block").unwrap(), "return box(10, 25, 30);");
+                assert_eq!(session::get().script, "return box(10, 25, 30);");
+                assert_eq!(measured["on_screen"]["revision"], session::get().revision);
+            })
+        })
     }
 }

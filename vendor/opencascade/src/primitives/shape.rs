@@ -829,6 +829,17 @@ impl Shape {
         props.Mass()
     }
 
+    /// The area of every face in this shape, mm², and their area-weighted
+    /// centre — `BRepGProp` on the exact surfaces, never a tessellation.
+    /// Reads a compound of loose faces, which `faces_json` (solids only)
+    /// does not. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn surface_properties(&self) -> (f64, DVec3) {
+        let mut props = ffi::GProp_GProps_ctor();
+        ffi::BRepGProp_SurfaceProperties(&self.inner, props.pin_mut());
+        let centre = ffi::GProp_GProps_CentreOfMass(&props);
+        (props.Mass(), dvec3(centre.X(), centre.Y(), centre.Z()))
+    }
+
     /// Which side of the solid's boundary a point is on, `BRepClass3d`. Added
     /// for parcad; see PARCAD-CHANGES.md.
     pub fn classify_point(&self, point: DVec3, tolerance: f64) -> PointState {

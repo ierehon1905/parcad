@@ -1,0 +1,89 @@
+{
+  "name": "seated-and-sunk",
+  "script": "eval/scripts/seated-and-sunk.js",
+  "why": "A verdict is not a measurement. The stud is sunk 0.4 mm into the plate's top face, so the pair is `interfering` by 5 x 5 x 0.4 = 10 mm³ and depth_mm is the 0.4 mm the script sank it — both closed form, and the depth is what a catch is designed to: the session read 0.002 mm³ as retention when it was a 2 µm graze. The lid rests on that same face, so the pair is `touching` over the whole 10 x 10 = 100 mm² of its underside in one patch, against the 0 mm² a corner graze reports under the same word. The part's own checks name both numbers, so a depth or a contact that drifts fails twice, here and in checks. docs/COIN_HOLDER_REVIEW.md §2.3. The part-level `bodies` is 2, not 3: the stud's mesh shell crosses the plate's and the lid's rests on it, which is why the pairwise report is the number to read for a part in several bodies.",
+  "brep": {
+    "size": [
+      40.0,
+      40.0,
+      8.6
+    ],
+    "volume_mm3": 6825.0,
+    "area_mm2": 4310.0,
+    "triangles": 36,
+    "bodies": 2,
+    "voids": 1,
+    "stands_on_mm2": 1600.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 18,
+    "edges": 72,
+    "curves": 36,
+    "requires": [
+      "part-checks"
+    ],
+    "named_bodies": {
+      "lid": {
+        "size": [
+          10.0,
+          10.0,
+          3.0
+        ],
+        "volume_mm3": 300.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "plate": {
+        "size": [
+          40.0,
+          40.0,
+          4.0
+        ],
+        "volume_mm3": 6400.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "stud": {
+        "size": [
+          5.0,
+          5.0,
+          5.0
+        ],
+        "volume_mm3": 125.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "plate/lid": {
+        "verdict": "touching",
+        "clearance_mm": 0.0,
+        "interference_mm3": 0.0,
+        "contact_mm2": 100.0,
+        "contact_patches": 1
+      },
+      "plate/stud": {
+        "verdict": "interfering",
+        "interference_mm3": 10.0,
+        "depth_mm": 0.4
+      },
+      "stud/lid": {
+        "verdict": "clear",
+        "clearance_mm": 16.5,
+        "interference_mm3": 0.0
+      }
+    },
+    "checks": {
+      "passed": 2
+    }
+  }
+}
