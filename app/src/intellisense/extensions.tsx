@@ -107,33 +107,47 @@ async function complete(context: CompletionContext): Promise<CompletionResult | 
 // ---------------------------------------------------------------------------
 
 const setSignature = StateEffect.define<Tooltip | null>();
+const setHovering = StateEffect.define<boolean>();
 
 /**
- * Put the parameter hints away.
+ * Whether a hover card is open.
  *
- * The hints say where the caret is; a hover card says what the pointer is on.
- * When both want to speak they overlap, and the one the reader is looking at
- * is the one under the pointer — so opening a card closes the hints, and the
- * next keystroke or caret move brings them back. Deferred by a tick because a
- * tooltip is built inside an update, and CodeMirror will not take another one
- * while that is in progress.
+ * A state and not an event, because the hints arrive late. Asking for them is
+ * a round trip to the worker, so a caret placed inside a call and a pointer
+ * that then comes to rest race: dismissing the hints when the card opens only
+ * works if the answer has already come back, and otherwise it arrives
+ * afterwards and puts them straight up again. Holding "a card is open" means
+ * the late answer has somewhere to check.
  */
-export function hideSignatureHelp(view: EditorView) {
+const hovering = StateField.define<boolean>({
+  create: () => false,
+  update(value, transaction) {
+    for (const effect of transaction.effects) if (effect.is(setHovering)) return effect.value;
+    return value;
+  },
+});
+
+/**
+ * Say that a card has opened or closed.
+ *
+ * The hints say where the caret is; a card says what the pointer is on. When
+ * both want to speak they overlap, and the reader is looking at the one under
+ * the pointer. Deferred by a tick because a tooltip is created and destroyed
+ * inside an update, and CodeMirror will not take another one while that is in
+ * progress.
+ */
+export function hoverCardOpen(view: EditorView, open: boolean) {
   setTimeout(() => {
-    if (view.state.field(signatureField, false)) view.dispatch({ effects: setSignature.of(null) });
+    if (view.state.field(hovering, false) !== open) {
+      view.dispatch({ effects: setHovering.of(open) });
+    }
   }, 0);
 }
 
-/**
- * The call you are inside, above the caret.
- *
- * A `StateField` rather than a hover: the question is not "what is under the
- * pointer" but "where is the caret", and the answer has to survive every
- * keystroke that types an argument.
- */
 const signatureField = StateField.define<Tooltip | null>({
   create: () => null,
   update(value, transaction) {
+    if (transaction.state.field(hovering)) return null;
     for (const effect of transaction.effects) if (effect.is(setSignature)) return effect.value;
     // A tooltip pinned to a position the edit moved is a tooltip pointing at
     // the wrong argument, so it goes as soon as the document does.
@@ -175,9 +189,10 @@ function SignatureBar({ help }: { help: SignatureInfo }) {
 async function updateSignature(view: EditorView) {
   const pos = view.state.selection.main.head;
   const help = await service.signatureHelp(pos);
-  // The caret has moved on while the worker was answering; a bar for where it
-  // used to be is worse than none.
-  if (view.state.selection.main.head !== pos) return;
+  // The caret has moved on while the worker was answering, or a card has
+  // opened under the pointer since: a bar for where the caret used to be, or
+  // beside a card about something else, is worse than none.
+  if (view.state.selection.main.head !== pos || view.state.field(hovering)) return;
   view.dispatch({
     effects: setSignature.of(
       help && help.signatures.length > 0
@@ -227,6 +242,7 @@ async function typeDiagnostics(view: EditorView): Promise<Diagnostic[]> {
 export function intellisense(): Extension {
   return [
     autocompletion({ override: [complete], icons: true, activateOnTyping: true }),
+    hovering,
     signatureField,
     linter(typeDiagnostics, { delay: 400 }),
     EditorView.updateListener.of((update) => {
