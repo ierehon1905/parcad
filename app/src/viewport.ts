@@ -160,13 +160,10 @@ export class Viewport {
   private readonly controls: OrbitControls;
   private readonly partGroup = new THREE.Group();
   private readonly sun: THREE.DirectionalLight;
-  private ambient!: THREE.HemisphereLight;
   private outline!: OutlineRenderer;
   private grid?: THREE.GridHelper;
   private ground?: THREE.Mesh;
   private frame = 0;
-  /** True while showing a mesh preview rather than a solid with real edges. */
-  private preview = false;
   private readonly edgeRaycaster = new THREE.Raycaster();
   private readonly edgeLines: THREE.LineSegments[] = [];
   private readonly vertexRaycaster = new THREE.Raycaster();
@@ -297,12 +294,6 @@ export class Viewport {
     fill.target.position.set(0, 0, -1);
     this.camera.add(fill.target);
 
-    // Preview only: its cheap material cannot see the environment map the
-    // finished view takes its ambient from.
-    this.ambient = new THREE.HemisphereLight(0xdfe7f2, 0x6c7382, 2.1);
-    this.ambient.visible = false;
-    this.scene.add(this.ambient);
-
     this.outline = new OutlineRenderer(this.renderer, this.scene, this.camera);
 
     const highlight = (color: number, width: number, order: number, opacity = 1) => {
@@ -387,9 +378,7 @@ export class Viewport {
     if (this.pendingResize) this.resize();
     this.controls.update();
     this.fitDepthRange();
-    if (this.preview || DEBUG === "noedge" || DEBUG === "normals") {
-      // No edge pass in preview: on a dual-contoured mesh the crease guess lands
-      // on the zigzag of vertices that stands in for a sharp edge.
+    if (DEBUG === "noedge" || DEBUG === "normals") {
       this.renderer.render(this.scene, this.camera);
     } else {
       // Only the part gets edges; the grid is scenery, not geometry.
@@ -449,7 +438,7 @@ export class Viewport {
   private tickOnce() {
     if (this.pendingResize) this.resize();
     this.fitDepthRange();
-    if (this.preview || DEBUG === "noedge" || DEBUG === "normals") {
+    if (DEBUG === "noedge" || DEBUG === "normals") {
       this.renderer.render(this.scene, this.camera);
     } else {
       this.outline.render([this.partGroup]);
@@ -466,7 +455,7 @@ export class Viewport {
 
   /** Find the visible B-rep entity beneath the pointer. */
   private pickEntity = (event: PointerEvent | MouseEvent) => {
-    if (this.preview || this.edgeLines.length === 0) return;
+    if (this.edgeLines.length === 0) return;
 
     const rect = this.renderer.domElement.getBoundingClientRect();
     const pointer = new THREE.Vector2(
@@ -697,22 +686,9 @@ export class Viewport {
     }
     g.computeBoundingSphere();
 
-    const hasRealEdges = !!geo.edges?.length;
-    this.preview = !hasRealEdges;
-    this.ambient.visible = this.preview;
-
-    // Smooth shading even in preview: the mesher's normals are surface-aware,
-    // and flat shading would facet a cylinder the sampling got right.
     const mesh = new THREE.Mesh(
       g,
-      DEBUG === "normals"
-        ? new THREE.MeshNormalMaterial()
-        : this.preview
-          ? new THREE.MeshLambertMaterial({
-              color: 0x9aa6b6,
-              emissive: 0x0c1018,
-            })
-          : dressFaces(g, geo, this.scene.environment),
+      DEBUG === "normals" ? new THREE.MeshNormalMaterial() : dressFaces(g, geo, this.scene.environment),
     );
     mesh.castShadow = true;
     // Cast onto the ground, never onto itself: a hard shadow of a fin across
@@ -722,21 +698,16 @@ export class Viewport {
     this.partMesh = mesh;
     this.partBounds = bounds;
 
-    if (hasRealEdges) {
-      // Not `EdgesGeometry`: these are the kernel's own curves, sampled, and
-      // inferring them from triangles assumes a tidy triangulation that dual
-      // contouring never produces.
-      const renderedEdges = edgeLines(geo.edges!);
-      this.partGroup.add(renderedEdges.group);
-      this.edgeLines.push(...renderedEdges.lines);
-      const renderedVertices = vertexMarkers(verticesFromEdges(geo.edges!));
-      this.partGroup.add(renderedVertices.group);
-      this.vertexMarkers.push(...renderedVertices.markers);
-      // Only the exact kernel attributes a triangle to a face; empty otherwise.
-      this.faceRuns = geo.faceRuns ?? [];
-    } else {
-      this.partGroup.add(meshWireframe(g));
-    }
+    // Not `EdgesGeometry`: these are the kernel's own curves, sampled. A closed
+    // smooth solid — a sphere, a torus — has none a person would count, and
+    // draws as the silhouette alone.
+    const renderedEdges = edgeLines(geo.edges ?? []);
+    this.partGroup.add(renderedEdges.group);
+    this.edgeLines.push(...renderedEdges.lines);
+    const renderedVertices = vertexMarkers(verticesFromEdges(geo.edges ?? []));
+    this.partGroup.add(renderedVertices.group);
+    this.vertexMarkers.push(...renderedVertices.markers);
+    this.faceRuns = geo.faceRuns ?? [];
     // Stop guessing at creases once told where they are. The silhouette half of
     // the pass stays on: it is a property of the view, so no kernel supplies it.
     this.outline.setCreases(false);
@@ -1328,18 +1299,6 @@ function targetVertexMarkers(vertices: TargetVertex[]): THREE.Group {
     group.add(marker);
   }
   return group;
-}
-
-/** Where the mesher sampled densely or sparsely. Preview only. */
-function meshWireframe(g: THREE.BufferGeometry): THREE.LineSegments {
-  const lines = new THREE.LineSegments(
-    new THREE.WireframeGeometry(g),
-    // Faint: at fifty thousand triangles a solid wireframe is a grey wall.
-    new THREE.LineBasicMaterial({ color: 0x2b3440, transparent: true, opacity: 0.45 }),
-  );
-  lines.castShadow = false;
-  lines.receiveShadow = false;
-  return lines;
 }
 
 const shared = {
