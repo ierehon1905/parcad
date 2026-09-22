@@ -145,12 +145,39 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      some pockets;
    - vocabulary: ~~`not` in the query form~~ — landed 2026-09-21 with the
      compact form's refusal naming the query form and `check_selector`
-     (docs/PERCEPTION.md §22); still open are `MATERIALS`, `OBJECTS` with
-     profiles, `fit()`, `{ at, cut }` and a listed `styles` topic — `fit()`
-     wants a sourced table and should not be invented, the same way `POCKETS`
-     was not;
+     (docs/PERCEPTION.md §22). Its field case,
+     `eval/field/round-all-but-the-uprights`, is **written and never run**:
+     it is an authoring case scored on `input`, and only an after-only round
+     can measure it, since the key does not exist on a before host and the
+     graph is refused there. Still open: `{ at, cut }`, `MATERIALS`,
+     `OBJECTS` with profiles, `fit()`, and a listed `styles` topic;
    - then `compare_variants`, snapshot summaries, and last the mechanics
      witness: `check_motion`, `check_flex`.
+
+   **`{ at, cut }`, scoped (2026-09-22).** Ship the equal-distance form only:
+   `{ at: [20, 10], cut: 5 }`, the corner replaced by a straight diagonal 5 mm
+   back along each edge, the same slot `{ at, round: r }` already occupies. It
+   is not a selector — the corner names itself by its position in the list —
+   which is why a section needs it even though `.chamfer()` exists: `.chamfer`
+   runs on a *built solid*, and the session that needed this had to keep the
+   outline to `inset` it for a skirt (L8). Fusion ships three chamfers (equal
+   distance, two distance, distance-and-angle), so `cut: [5, 3]` is the
+   natural second form — left out on purpose, and addable later without
+   breaking a saved part, since `5` and `[5, 3]` are distinguishable at the
+   door. Of Fusion's eleven sketch Modify tools this is the only real gap:
+   fillet is `round`, offset is `inset`, scale and move are JavaScript on a
+   plain array, and trim/extend/break exist only because you drew geometry
+   interactively — a declarative list never draws the overhang.
+
+   **Blocked on a caliper, not on code.** Four queued items all want the same
+   physical afternoon, and none should be invented: `POCKETS` (a pocket is a
+   size, and `brief({ envelope })` has nothing to name), `fit(kind, nominal)`
+   (six unsourced printed clearances in one part, §2.5), `MATERIALS` by
+   filament, and `check_flex`'s per-axis material table. `DEVICES` sets the
+   standard — published sizes, and its two guessed radii labelled as guesses.
+   A table of plausible numbers with a source line would fail that standard
+   in the one place this repo refuses to. One test coupon printed on the
+   owner's own machine unblocks all four and makes the numbers *ours*.
 
    **Name these edges** — not from the review, found while adding `not`
    (2026-09-22). Every tool here goes *selector → edges*: `check_selector`
