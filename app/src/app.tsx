@@ -99,6 +99,19 @@ function keys() {
     if (!(e.metaKey || e.ctrlKey)) return;
     const key = physicalKey(e);
 
+    // ⌘A pressed anywhere but a field has nothing to mean in a tool window:
+    // the browser's answer is to highlight the titlebar and the palette. Send
+    // it to the source instead, which is the only thing here made of text.
+    if (key === "a" && !editable(e.target)) {
+      e.preventDefault();
+      const view = S.editorRef.current;
+      if (!view) return;
+      engine.showCode(true);
+      view.focus();
+      view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } });
+      return;
+    }
+
     if (key === "\\") {
       e.preventDefault();
       engine.showCode(!S.codeVisible.peek());
@@ -122,6 +135,12 @@ function keys() {
 
   window.addEventListener("keydown", onKey, true);
   return () => window.removeEventListener("keydown", onKey, true);
+}
+
+/** Somewhere a ⌘A of its own belongs: a field, or the editor, which keeps one. */
+function editable(target: EventTarget | null): boolean {
+  const el = target instanceof Element ? target : null;
+  return !!el?.closest("input, textarea, [contenteditable=''], [contenteditable='true'], .cm-editor");
 }
 
 /** The key under the finger, named as a US layout would: "KeyS" -> "s", "Backslash" -> "\\". */

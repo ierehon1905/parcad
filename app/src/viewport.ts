@@ -9,6 +9,7 @@ import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { beginDrag } from "./drag";
 import { verticesFromEdges, type VertexPoint } from "./entities";
 import { OutlineRenderer } from "./outline";
 
@@ -248,6 +249,16 @@ export class Viewport {
     // without the distance test orbiting to see the selection is what clears it.
     this.renderer.domElement.addEventListener("pointerdown", (event) => {
       this.pointerDownAt = { x: event.clientX, y: event.clientY };
+      // An orbit that leaves the canvas would otherwise select its way across
+      // whatever panel it crosses.
+      const release = beginDrag();
+      const end = () => {
+        release();
+        window.removeEventListener("pointerup", end);
+        window.removeEventListener("pointercancel", end);
+      };
+      window.addEventListener("pointerup", end);
+      window.addEventListener("pointercancel", end);
     });
     this.renderer.domElement.addEventListener("click", (event) => {
       const down = this.pointerDownAt;
