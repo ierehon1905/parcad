@@ -26,6 +26,7 @@ import { Fragment, render } from "preact";
 
 import type { Info } from "./intellisense/analyzer";
 import { Card, InfoCard, Rule } from "./intellisense/card";
+import { hideSignatureHelp } from "./intellisense/extensions";
 import {
   treatmentActions,
   treatmentRows,
@@ -101,6 +102,7 @@ export function treatmentHover(source: TreatmentHoverSource): Extension {
         end: info?.to ?? word?.to ?? pos,
         above: true,
         create: () => {
+          hideSignatureHelp(view);
           // CodeMirror positions a plain element and hands us the inside of it.
           // Preact renders into that element, so this tooltip is written the
           // same way as every other panel in the app rather than by hand.

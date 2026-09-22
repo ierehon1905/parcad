@@ -109,6 +109,22 @@ async function complete(context: CompletionContext): Promise<CompletionResult | 
 const setSignature = StateEffect.define<Tooltip | null>();
 
 /**
+ * Put the parameter hints away.
+ *
+ * The hints say where the caret is; a hover card says what the pointer is on.
+ * When both want to speak they overlap, and the one the reader is looking at
+ * is the one under the pointer — so opening a card closes the hints, and the
+ * next keystroke or caret move brings them back. Deferred by a tick because a
+ * tooltip is built inside an update, and CodeMirror will not take another one
+ * while that is in progress.
+ */
+export function hideSignatureHelp(view: EditorView) {
+  setTimeout(() => {
+    if (view.state.field(signatureField, false)) view.dispatch({ effects: setSignature.of(null) });
+  }, 0);
+}
+
+/**
  * The call you are inside, above the caret.
  *
  * A `StateField` rather than a hover: the question is not "what is under the
