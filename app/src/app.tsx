@@ -89,11 +89,15 @@ function ErrorPane() {
  *
  * ⌘\ shows and hides the source, which is the key every editor with a side
  * panel uses for the same thing.
+ *
+ * In the capture phase, and on the physical key rather than the character it
+ * types: a browser's own ⌘S is only suppressed by preventDefault on the way
+ * down, and under a non-Latin layout `e.key` for the S key is "ы", not "s".
  */
 function keys() {
   const onKey = async (e: KeyboardEvent) => {
     if (!(e.metaKey || e.ctrlKey)) return;
-    const key = e.key.toLowerCase();
+    const key = physicalKey(e);
 
     if (key === "\\") {
       e.preventDefault();
@@ -116,6 +120,14 @@ function keys() {
     await engine.runExport(e.shiftKey ? "step" : "stl");
   };
 
-  window.addEventListener("keydown", onKey);
-  return () => window.removeEventListener("keydown", onKey);
+  window.addEventListener("keydown", onKey, true);
+  return () => window.removeEventListener("keydown", onKey, true);
+}
+
+/** The key under the finger, named as a US layout would: "KeyS" -> "s", "Backslash" -> "\\". */
+function physicalKey(e: KeyboardEvent): string {
+  const code = e.code;
+  if (code.length === 4 && code.startsWith("Key")) return code[3].toLowerCase();
+  if (code === "Backslash") return "\\";
+  return e.key.toLowerCase();
 }
