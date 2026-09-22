@@ -68,6 +68,102 @@ evidence for parcad.
   whose tests were green (field/README.md): a boolean read backwards every time,
   a field called `tag` read as the wrong noun until it became `surface_of`, a
   tool reached 1 time in 4 until its *description* was rewritten, then 8 in 8.
+- **An error is read at the moment of need; a description once.** The
+  coin-holder batch (2026-09-18, docs/COIN_HOLDER_REVIEW.md) put the fix in
+  the refusal and measured haiku on each, 3 trials per arm, before and after:
+  naming `inspect_treatment_target` with its node in the fillet refusal took
+  its reach from 4/6 to 6/6; naming the DSL call and dropping "this host is
+  too old" from a type error took refusals per trial from 1,5,1 / 3,3,3 to 1
+  in every trial; `edges` on every treatment took an authoring case for
+  `.expect()` from 5/6 to 6/6 with the count read off the first reply.
+- **A case at its ceiling measures nothing, and says so.** Three of the
+  batch's cases were 6/6 before the change — haiku already read "invalid
+  redefinition of parameter name" beside a line pointer as a name collision,
+  and found `check_selector` from the tool list when told a tool existed.
+  Those rounds are still recorded: what moved was the rename the model chose
+  (4 of 6 took the one the message suggested) and where the tool's name came
+  from. A case that cannot go down cannot show a regression either.
+- **A prompt that hands over the exact wrong call still gets it normalised.**
+  Told to send `section: { offset: -38 }` "exactly as written", every
+  thinking-arm trial wrote `at_mm` from the schema and never touched the
+  hazard; without `input` in the rubric they graded SOUND for a route they
+  had not taken. The non-thinking arm sent it: before, one trial read the
+  resolved plane honestly and answered the middle; after, all three were
+  refused, rewrote, and answered from the reply.
+- **A tool a model has not heard of is not on its surface.** The edit-in-place
+  batch (2026-09-20, docs/PERCEPTION.md §19) put `edit_part` and `project`
+  beside `evaluate_part` and measured haiku on each, 4 trials per arm. The
+  what-if — `evaluate_part { project, edits }`, nothing saved — went from 0/4
+  to 4/4 SOUND with thinking on and 0 bytes of script sent against 8 KB; the
+  edit itself reached `edit_part` in 1 of 4 thinking trials and 3 of 4
+  without thinking. The transcripts say why: Claude Code 2.1.277 defers every
+  MCP tool and the model loads schemas by name, so the trials that resent
+  loaded `read_project`, `evaluate_part` and `save_project` by name before
+  reading a word of any description, and one that had already measured the
+  change with `{ project, edits }` then called `save_project` with the whole
+  script because that was the "save" it had loaded. A description a model
+  never loads cannot redirect it; the server instruction, which every model
+  reads, now says every change after the first is an `edit_part`, and that
+  is the only lever this surface has on a deferred-tool client. Not iterated
+  further: the transcripts name the mechanism, the lever it leaves is already
+  pulled, and a second round of rewording would measure the client's tool
+  loading again, not the description.
+- **A verdict in the reply is quoted; a verdict in a comment is quoted too.**
+  The checks round (2026-09-20, docs/PERCEPTION.md §19) put the part's own
+  `checks` first in every reply and a door on every write. Asked to save a
+  part whose `clear` check fails by 0.13 mm, eight of eight small-model
+  trials after the change were refused, passed `allow_failing` with the
+  user's reason and named the check as the refusal spelled it; eight of
+  eight before the change reported the same check and the same 0.13, read
+  off the script's header comment, over a part the host could not even
+  build and had saved regardless. Both are fluent, both name the check, and
+  only the route tells them apart — which is why the harness grades a trial
+  and never passes it, and why a case that names its own answer in the
+  part's comments measures the comment. The number to move was `reach`
+  (0/8 to 8/8) and bytes (994 and 3,959 to 0 and 248), not the verdict.
+- **A note was never quoted, because a note was never written.** `note()`
+  landed with its "from the script, not measured" line, and the sliver case
+  was re-run in both arms to see whether trials would quote a note in place
+  of a measurement. No trial called `note()`; the honesty guard is
+  unmeasured until a part in the corpus carries notes and a case asks about
+  the number they hold.
+- **A longer description did not move a small model onto the cheap route,
+  and may have moved it off.** The what-if regression's non-thinking arm
+  resent the whole part in 4 of 4 trials after the round against 1 of 4
+  before, while `evaluate_part`'s description grew a paragraph on `checks`
+  and reference bodies and nothing on that route changed. Four trials is not
+  a measurement of the cause; it is a reason to keep the paragraph a model
+  must read to its first sentence, and to measure a description's length
+  as a variable of its own.
+- **A check on the route is on the route only where the model goes.** The
+  print-check round (2026-09-21, docs/PERCEPTION.md §19) put `print_check`
+  first in every `evaluate_part` reply. Asked whether a part is ready to
+  print, half the small-model trials never called `evaluate_part`: they
+  opened the part, ran `measure_wall_thickness` and `probe_part` — the tools
+  their first ToolSearch loaded by name — and answered from those, finding
+  the feather (the sweep has it) and reaching for rays to find the collision
+  (which only `print_check` and `collisions` carry). Every trial that did
+  call `evaluate_part` read the verdict and named both defects; no trial on
+  either host read a failing verdict as ready, and none exported over it.
+  The lever this leaves is the same as the edit-in-place batch's: the server
+  instruction, which now says every reply opens with the verdicts — and a
+  verdict that only `evaluate_part` carries is invisible to a model whose
+  route is `open_project` then a probe. Not iterated here: whether the
+  sweep's and the probes' own replies should carry `print_check` too is a
+  reply-shape decision, and the transcripts say what it would buy.
+- **An area the reply carries is quoted; one it does not is computed.** The
+  support case: 0/8 trials before the feature, every one deriving a lip's
+  area from the script's box dimensions or from rays and each getting a
+  different number, against 4/4 with thinking after, all quoting the reply's
+  65.797 mm² and naming `lip` from the flag. The non-thinking arm split on
+  the same route question as above.
+- **What still reads wrong.** With `offset` refused and the meant field
+  named, the thinking arm's route is unchanged at 0/3 by `input` — it never
+  sends the hazard, so the refusal is unmeasured there. And on the rotate
+  case one thinking trial after the change gave the right call and cited the
+  script as its evidence (LUCKY); the message names the call that was given
+  the wrong argument, and a model that has the script in front of it quotes
+  the script.
 
 ## Rules
 

@@ -1,0 +1,37 @@
+{
+  "name": "coin-cups",
+  "script": "eval/scripts/coin-cups.js",
+  "why": "The coin holder's cups: a part every printability number before print_check was green on — watertight, one body, flat on its whole plate, fitting every bed — with eight retaining lips whose undersides are 0° ceilings 15 mm above the bed. Each lip's exposed underside is the 2 x 6 box clipped to the bore circle of radius 12 from x = 10.5: 8.2428 mm² by the segment integral, 65.942 mm² over eight (the mesh reads 65.80, its chords inside the bore circle), all exact planes, no bridge (each lip hangs from one wall), and a support prism to the bed through the 3 mm plate of 8 x 8.2428 x 12 = 791.31 mm³. docs/COIN_HOLDER_REVIEW.md, workflow §3 and §11.",
+  "brep": {
+    "size": [
+      60.0,
+      30.0,
+      17.0
+    ],
+    "volume_mm3": 10103.356,
+    "area_mm2": 8879.935,
+    "triangles": 1940,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1800.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 46,
+    "edges": 240,
+    "curves": 114,
+    "overhang": {
+      "part": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 65.797,
+        "bed_mm2": 1800.0,
+        "faces": 8,
+        "bridges": 8,
+        "support_mm3": 791.309
+      }
+    }
+  }
+}

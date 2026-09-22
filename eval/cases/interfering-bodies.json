@@ -1,7 +1,7 @@
 {
   "name": "interfering-bodies",
   "script": "eval/scripts/interfering-bodies.js",
-  "why": "Two bodies drawn through each other are reported, not refused: the boss's lower 5 mm lies inside the plate, so the pair is `interfering` by π·25·5 = 392.699 mm³ with no clearance to report, while each body alone is intact. The interference is exact (BRepGProp on the common solid) and holds at the corpus tolerance; the boss's own 1570.796 mm³ is read off its 0.01 mm mesh, which polygonises a Ø10 cylinder 0.13% short, hence the wider volume tolerance. The part-level bodies and voids are the count of two closed mesh shells that cross each other, recorded as measured and not to be read as the part's piece count — between_bodies is. The renders hold a section through the overlap: cut on Y at 0, the cut face is the union of the plate's 40 x 10 and the boss's 10 x 20, 400 + 200 - 50 = 550 mm², measured from the cut pixels and the plane's angle to the view (551.8 front, 549.6 iso). One crossing parity over both shells counts the shared 10 x 5 as empty and read 500, the boss's buried 5 mm drawn as a hole; every pixel of the plane inside that shared rectangle must now be cut face.",
+  "why": "Two bodies drawn through each other are reported, not refused: the boss's lower 5 mm lies inside the plate, so the pair is `interfering` by π·25·5 = 392.699 mm³ with no clearance to report, while each body alone is intact. The interference is exact (BRepGProp on the common solid) and holds at the corpus tolerance; the boss's own 1570.796 mm³ is read off its 0.01 mm mesh, which polygonises a Ø10 cylinder 0.13% short, hence the wider volume tolerance. The part-level bodies and voids are the count of two closed mesh shells that cross each other, recorded as measured and not to be read as the part's piece count — between_bodies is. The renders hold a section through the overlap: cut on Y at 0, the cut face is the union of the plate's 40 x 10 and the boss's 10 x 20, 400 + 200 - 50 = 550 mm², measured from the cut pixels and the plane's angle to the view (551.8 front, 549.6 iso). One crossing parity over both shells counts the shared 10 x 5 as empty and read 500, the boss's buried 5 mm drawn as a hole; every pixel of the plane inside that shared rectangle must now be cut face. depth_mm is 5.0: the widest ball inside the shared Ø10 × 5 cylinder is limited by its height, not its diameter, and 5 mm is how far the boss reaches into the plate — the number the volume alone does not give.",
   "brep": {
     "size": [
       40.0,
@@ -50,7 +50,8 @@
     "between_bodies": {
       "plate/boss": {
         "verdict": "interfering",
-        "interference_mm3": 392.699
+        "interference_mm3": 392.699,
+        "depth_mm": 5.0
       }
     },
     "renders": [

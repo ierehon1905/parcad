@@ -100,12 +100,68 @@ impl VertexQuery {
 
 /// A post-condition for a selector-backed edge operation.
 ///
-/// The expectation is checked against the exact B-rep at evaluation time. It
-/// does not identify an edge; it makes a topology change visible instead of
-/// allowing a later edit to silently affect more or fewer edges.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+/// What a selector must resolve to, checked on the shape the treatment runs
+/// against: an exact `count`, or a range (`at_least`, `at_most`) for an
+/// expectation written before the count is known. At least one is set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EdgeExpectation {
-    pub count: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub count: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_least: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at_most: Option<usize>,
+}
+
+impl EdgeExpectation {
+    /// Why `actual` fails this expectation, or `None` when it holds. `what`
+    /// is the noun: `edge` or `vertex`.
+    pub fn failure(&self, actual: usize, what: &str) -> Option<String> {
+        if let Some(count) = self.count {
+            if actual != count {
+                return Some(format!("expected {count} {what}(s), but matched {actual}"));
+            }
+        }
+        if let Some(least) = self.at_least {
+            if actual < least {
+                return Some(format!("expected at least {least} {what}(s), but matched {actual}"));
+            }
+        }
+        if let Some(most) = self.at_most {
+            if actual > most {
+                return Some(format!("expected at most {most} {what}(s), but matched {actual}"));
+            }
+        }
+        None
+    }
+
+    /// An expectation that can never hold, or says nothing: refused when the
+    /// graph is read, so the treatment never runs against it.
+    pub fn check(&self) -> Result<(), String> {
+        if self.count.is_none() && self.at_least.is_none() && self.at_most.is_none() {
+            return Err("an expectation names count, atLeast or atMost".into());
+        }
+        if self.count == Some(0) || self.at_most == Some(0) {
+            return Err("an edge treatment must select at least one edge, so an expectation of zero can never hold".into());
+        }
+        if let (Some(least), Some(most)) = (self.at_least, self.at_most) {
+            if least > most {
+                return Err(format!("atLeast {least} is above atMost {most}, which nothing can satisfy"));
+            }
+        }
+        if let (Some(count), Some(least)) = (self.count, self.at_least) {
+            if count < least {
+                return Err(format!("count {count} is below atLeast {least}, which nothing can satisfy"));
+            }
+        }
+        if let (Some(count), Some(most)) = (self.count, self.at_most) {
+            if count > most {
+                return Err(format!("count {count} is above atMost {most}, which nothing can satisfy"));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// A composable, AI-readable edge query.
@@ -155,6 +211,12 @@ pub struct EdgeQuery {
     /// where one meets the other.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub between: Option<[String; 2]>,
+    /// Every edge the rest of this query matches, except those this
+    /// sub-query matches. Resolved over the same candidates and subtracted
+    /// before `at` picks extrema, so an extremum is taken among what
+    /// survives. One level deep: a `not` inside a `not` is refused.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub not: Option<Box<EdgeQuery>>,
 }
 
 /// One tag or several, as `"lip"` or `["arm", "hub"]` in source.
@@ -186,16 +248,47 @@ impl EdgeQuery {
             && self.longer_than.is_none()
             && self.on.is_none()
             && self.between.is_none()
+            && self.not.is_none()
     }
 
-    /// Every tag the query names, whichever term names it.
+    /// Every tag the query names, whichever term names it, the `not`'s
+    /// included: a tag it names must have live faces too, or the subtraction
+    /// would quietly remove nothing.
     pub fn named_features(&self) -> Vec<&str> {
         let mut names: Vec<&str> = self.on.iter().flat_map(Names::iter).collect();
         if let Some([a, b]) = &self.between {
             names.push(a);
             names.push(b);
         }
+        if let Some(not) = &self.not {
+            names.extend(not.named_features());
+        }
         names
+    }
+
+    /// Why this query cannot be read, or nothing. Shape only: whether its
+    /// tags exist is the kernel's, once the lineage is known.
+    ///
+    /// `not` is one level deep on purpose. A second level buys nothing a
+    /// positive term does not already say, and every extra level is another
+    /// way for a selector to mean something its author did not read.
+    pub fn validate(&self) -> Result<(), String> {
+        let Some(not) = &self.not else { return Ok(()) };
+        if not.not.is_some() {
+            return Err(
+                "an edge query's not holds another not; one level is all there is, and two \
+                 negations are a positive term — say that instead"
+                    .to_string(),
+            );
+        }
+        if not.is_empty() {
+            return Err(
+                "an edge query's not is empty, so it would take nothing away; give it a term, \
+                 e.g. not: { parallel: \"z\" }"
+                    .to_string(),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -331,7 +424,7 @@ impl EdgeSelectorTerm {
 
 /// Every key an edge query reads, in the order a refusal lists them. A new one
 /// also needs a `GRAPH_FEATURES` entry: hosts through 0.0.7 drop unknown keys.
-pub const EDGE_QUERY_KEYS: [&str; 10] = [
+pub const EDGE_QUERY_KEYS: [&str; 11] = [
     "generatedBy",
     "curve",
     "role",
@@ -342,6 +435,7 @@ pub const EDGE_QUERY_KEYS: [&str; 10] = [
     "longerThan",
     "on",
     "between",
+    "not",
 ];
 
 const FACE_NORMALS: [&str; 6] = ["+x", "-x", "+y", "-y", "+z", "-z"];
@@ -384,6 +478,26 @@ pub fn check_query_shape(query: &Map<String, Value>, kind: QueryKind) -> Result<
     }
     if let Some(adjacent) = query.get("adjacentTo") {
         check_adjacent_to(adjacent)?;
+    }
+    if let Some(not) = query.get("not") {
+        let Some(inner) = not.as_object() else {
+            return Err(format!(
+                "an edge query's not is {}, where it takes a query of its own, \
+                 e.g. not: {{ parallel: \"z\" }}",
+                render(not)
+            ));
+        };
+        if inner.contains_key("not") {
+            return Err("an edge query's not holds another not; one level is all there is, and \
+                        two negations are a positive term — say that instead"
+                .to_string());
+        }
+        if inner.is_empty() {
+            return Err("an edge query's not is empty, so it would take nothing away; give it a \
+                        term, e.g. not: { parallel: \"z\" }"
+                .to_string());
+        }
+        check_query_shape(inner, kind)?;
     }
     Ok(())
 }
@@ -674,13 +788,43 @@ pub fn parse_vertex_selector_spanned(source: &str) -> Result<Vec<SpannedTerm>, S
     Ok(terms)
 }
 
+/// The sentence a compact-form refusal adds when the author reached for a
+/// word the compact form does not have.
+///
+/// The compact form is a conjunction of extrema and directions and nothing
+/// else; every term the author was reaching for lives in the query form,
+/// which the message never mentioned. A session spent two round trips and
+/// 3,346 bytes on `">Z and not |Z"` — docs/COIN_HOLDER_REVIEW.md, L2.
+/// `app/src/selectors.ts` says it in the same words; `eval/selectors.json`
+/// holds the two together.
+pub fn wider_language(term: &str) -> String {
+    let lower = term.to_ascii_lowercase();
+    let reached_for: Vec<&str> = ["not", "or", "and not", "(", ")"]
+        .into_iter()
+        .filter(|word| match *word {
+            "(" | ")" => term.contains(word),
+            word => lower.split(|c: char| !c.is_ascii_alphabetic()).any(|w| w == word),
+        })
+        .collect();
+    if reached_for.is_empty() {
+        return String::new();
+    }
+    format!(
+        ". The compact form has no not, or or brackets: say it in the query form instead, \
+         which has dihedral, parallel, longerThan, on, between and not — \
+         {{ dihedral: \"convex\", not: {{ parallel: \"z\" }} }}. check_selector parses one \
+         without building anything"
+    )
+}
+
 fn parse_term(term: &str, span: Range<usize>) -> Result<EdgeSelectorTerm, SelectorError> {
     let bad = |message: String| SelectorError { message, span };
 
     let bytes = term.as_bytes();
     if bytes.len() != 2 {
         return Err(bad(format!(
-            "invalid edge-selector term {term:?}; expected >X, <Y, or |Z (joined with `and`)"
+            "invalid edge-selector term {term:?}; expected >X, <Y, or |Z (joined with `and`){}",
+            wider_language(term)
         )));
     }
 
@@ -700,7 +844,8 @@ fn parse_term(term: &str, span: Range<usize>) -> Result<EdgeSelectorTerm, Select
         b'<' => Ok(EdgeSelectorTerm::Min(axis)),
         b'|' => Ok(EdgeSelectorTerm::Parallel(axis)),
         _ => Err(bad(format!(
-            "invalid edge-selector term {term:?}; expected >X, <Y, or |Z"
+            "invalid edge-selector term {term:?}; expected >X, <Y, or |Z{}",
+            wider_language(term)
         ))),
     }
 }

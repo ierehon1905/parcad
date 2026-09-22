@@ -31,7 +31,10 @@ import {
   torus,
   union,
   vesaPattern,
+  __parcadShadowedBuiltins,
+  __parcadShadowedBuiltinMessage,
 } from "./dsl";
+import * as everything from "./dsl";
 
 /**
  * The pattern helpers are pure arithmetic, which is exactly why they are worth
@@ -802,7 +805,7 @@ describe("selector arguments", () => {
 
   test("a query key the language does not have is refused with where it goes, and the fix builds", () => {
     expect(refusal(() => loose.edges({ at: { z: "max" }, faceNormal: "+z" })).message).toBe(
-      'an edge query has no key "faceNormal" (write adjacentTo: { faceNormal: "+z" } instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on and between.',
+      'an edge query has no key "faceNormal" (write adjacentTo: { faceNormal: "+z" } instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on, between and not.',
     );
     build(part.edges({ at: { z: "max" }, adjacentTo: { faceNormal: "+z" } }).fillet(1));
 
@@ -826,5 +829,93 @@ describe("selector arguments", () => {
     expect(refusal(() => loose.edges({ adjacentTo: { faceNormal: "+Z" } })).message).toEndWith('not "+Z" (write "+z" instead).');
     expect(refusal(() => loose.edges({ curve: "arc" })).message).toBe('curve must be "line", "circle" or "spline", not "arc"');
     build(part.edges({ at: { x: undefined, z: "min" }, curve: "line" }).chamfer(1));
+  });
+});
+
+/**
+ * Every export is a parameter of every script, so a local called `clearance`
+ * is a SyntaxError from an engine that names no identifier. The collision is
+ * proved by compiling, never read off the text: docs/DSL_GAPS.md §7.
+ */
+describe("a script that declares one of parcad's names", () => {
+  const names = Object.keys(everything);
+
+  test("is told which name, proved by compiling without it", () => {
+    expect(__parcadShadowedBuiltins("const clearance = 0.6;\nreturn box(1, 1, 1);", names)).toEqual(["clearance"]);
+    expect(__parcadShadowedBuiltins("let hull = 2, box = 3;\nreturn sphere(1);", names)).toEqual(["box", "hull"]);
+    expect(__parcadShadowedBuiltins("class Shape {}\nreturn sphere(1);", names)).toEqual(["Shape"]);
+    // A function declaration may shadow a parameter, so it is an override, not a fault.
+    expect(__parcadShadowedBuiltins("function torus() {}\nreturn sphere(1);", names)).toEqual([]);
+  });
+
+  test("a script with a fault of its own names nothing", () => {
+    expect(__parcadShadowedBuiltins("return box(1, 1, 1;", names)).toEqual([]);
+    expect(__parcadShadowedBuiltins("const closest = 0.6;\nreturn box(1, 1, 1);", names)).toEqual([]);
+  });
+
+  test("the refusal names the rename and the builtin", () => {
+    const message = __parcadShadowedBuiltinMessage(["clearance"], names);
+    expect(message).toStartWith(`\`clearance\` is one of the ${names.length} names parcad puts in every script, so a script cannot declare it again. Rename the local — \`clearanceMm\`, \`myClearance\`, or a name saying what it holds — or use parcad's own \`clearance\` instead of declaring one.`);
+    expect(__parcadShadowedBuiltinMessage(["box", "hull"], names)).toStartWith("`box` and `hull` are 2 of the");
+  });
+});
+
+/**
+ * `.rotate(0, 0, 45)` is the OpenSCAD form and the likeliest wrong call on
+ * this surface. It used to build a graph whose axis was the number 0, which
+ * the kernel refused with a type error blaming the host's version
+ * (docs/COIN_HOLDER_REVIEW.md, L3). The DSL refuses at the call and names the
+ * form.
+ */
+describe("a transform given the wrong arguments", () => {
+  test("rotate refuses three angles and names the form", () => {
+    expect(() => (box(1, 1, 1).rotate as (...a: unknown[]) => Shape)(0, 0, 45)).toThrow(
+      'rotate takes one axis and one angle in degrees: .rotate("z", 45), or .rotate({ x: 0, y: 1, z: 1 }, 30) for a diagonal axis. Got .rotate(0, 0, 45). Three angles is the OpenSCAD form; here it is three calls: .rotate("x", a).rotate("y", b).rotate("z", c).',
+    );
+    expect(() => box(1, 1, 1).rotate("z", Number.NaN)).toThrow("Got .rotate(\"z\", NaN).");
+    expect(() => box(1, 1, 1).rotate({ x: 0, y: 0, z: 0 }, 10)).toThrow("Got .rotate({\"x\":0,\"y\":0,\"z\":0}, 10).");
+    expect(() => box(1, 1, 1).rotate("w" as never, 10)).toThrow('Got .rotate("w", 10).');
+    expect(build(box(1, 1, 1).rotate({ x: 0, y: 1, z: 1 }, 30)).nodes.at(-1)).toMatchObject({ op: "rotate", degrees: 30 });
+  });
+
+  test("mirror, scale and translate refuse the OpenSCAD forms too", () => {
+    expect(() => (box(1, 1, 1).mirror as (...a: unknown[]) => Shape)(1, 0, 0)).toThrow(
+      "Got .mirror(1, 0, 0). A vector of flags is the OpenSCAD form; here it is one axis name, or one normal.",
+    );
+    expect(() => box(1, 1, 1).scale(2, 0, 1)).toThrow("Got .scale(2, 0, 1). An array of factors is the OpenSCAD form");
+    // A negative factor is the kernel's to refuse, naming mirror(): eval/cases/refuse-negative-scale.
+    expect(build(box(1, 1, 1).scale(1, 2, -1)).nodes.at(-1)).toMatchObject({ op: "scale" });
+    expect(() => box(1, 1, 1).scale([2, 1, 1] as never)).toThrow("Got .scale([2,1,1], [2,1,1], [2,1,1]).");
+    expect(() => box(1, 1, 1).at(Number.NaN, 0, 0)).toThrow("Got .at(NaN, 0, 0)");
+    expect(() => box(1, 1, 1).at([1, 2, 3] as never, 0)).toThrow("Got .at([1,2,3], 0, 0)");
+    expect(build(box(1, 1, 1).mirror({ x: 1, y: 1, z: 0 }).scale(2)).nodes.length).toBe(3);
+  });
+});
+
+/**
+ * `.expect({ count })` was in 0 of 45 scripts of one session, because nothing
+ * told it n. The count is now in every reply, and a range lets an expectation
+ * be written before it is known.
+ */
+describe("an edge expectation", () => {
+  test("takes an exact count or a range, and refuses what cannot hold", () => {
+    const edges = () => box(40, 20, 10).edges("|Z");
+    expect(build(edges().expect({ count: 4 }).fillet(1)).nodes.at(-1)).toMatchObject({ expect: { count: 4 } });
+    expect(build(edges().expect({ atLeast: 1 }).fillet(1)).nodes.at(-1)).toMatchObject({ expect: { atLeast: 1 } });
+    expect(build(edges().expect({ atLeast: 2, atMost: 8 }).fillet(1)).nodes.at(-1)).toMatchObject({
+      expect: { atLeast: 2, atMost: 8 },
+    });
+    expect(() => edges().expect({} as never)).toThrow("expect takes { count: n }");
+    expect(() => edges().expect({ count: 0 })).toThrow("can never hold");
+    expect(() => edges().expect({ atLeast: 5, atMost: 2 })).toThrow("atLeast 5 is above atMost 2");
+    expect(() => edges().expect({ count: 1.5 })).toThrow("whole number");
+    expect(() => edges().expect(4 as never)).toThrow("Got 4.");
+  });
+
+  test("a range is stamped as a feature an older host cannot read", () => {
+    const ranged = build(box(1, 1, 1).edges("|Z").expect({ atLeast: 1 }).fillet(0.1));
+    expect(ranged.requires?.map((r) => r.feature)).toContain("expect-range");
+    const exact = build(box(1, 1, 1).edges("|Z").expect({ count: 4 }).fillet(0.1));
+    expect(exact.requires?.map((r) => r.feature) ?? []).not.toContain("expect-range");
   });
 });

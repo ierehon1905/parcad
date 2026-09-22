@@ -1,0 +1,29 @@
+{
+  "name": "slot-nicks-boss",
+  "script": "eval/scripts/slot-nicks-boss.js",
+  "why": "A cut that takes material from a feature it was not for, with closed forms: a 2 mm slot 3 deep across a 30 x 30 x 5 plate whose floor passes 1 mm into the foot of a 6 x 6 x 8 boss. It takes 2 x 30 x 2 = 120 mm³ from the plate, its target, and 1 x 6 x 1 = 6 mm³ from the boss, which the reply reports as `slot` cuts `boss`. The tag on the union is not reported: it says nothing the boss does not. The part is 4500 + 288 - 126 = 4662 mm³. docs/NEXT.md, item 1.",
+  "brep": {
+    "size": [
+      30.0,
+      30.0,
+      13.0
+    ],
+    "volume_mm3": 4662.0,
+    "area_mm2": 2714.0,
+    "triangles": 52,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 900.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 16,
+    "edges": 84,
+    "curves": 42,
+    "collisions": {
+      "slot/boss": {
+        "target": "plate",
+        "removed_mm3": 6.0
+      }
+    }
+  }
+}

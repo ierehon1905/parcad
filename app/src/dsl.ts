@@ -7,6 +7,8 @@
  * - A script returns one shape, or named bodies, `return { base, lid }`,
  *   which are measured apart and against each other and never fused.
  *   Selectors, tags and treatments work inside one body.
+ * - `checks: [...]` beside the bodies is a list of rules the build must
+ *   hold, judged on every build and reported first; see `Check`.
  * - A shape may be a *surface*: faces with no inside and free edges where it
  *   ends. It reports area and free edges instead of a volume; booleans,
  *   fillets, wall thickness and STL refuse it until `.thicken(t)` makes it a
@@ -28,7 +30,7 @@
  * carries one exactly, and named bodies may mix solids and surfaces.
  */
 
-import { parseEdgeSelector, parseVertexSelector, queryShapeError } from "./selectors";
+import { isObject, list, parseEdgeSelector, parseVertexSelector, queryShapeError, render, spelled, unknownKeys } from "./selectors";
 
 export type Vec3 = { x: number; y: number; z: number };
 
@@ -91,6 +93,18 @@ export interface EdgeQuery {
   on?: string | string[];
   /** Only edges with one face from each of two features: the seam where one meets the other. */
   between?: [string, string];
+  /**
+   * Every edge the rest of this query matches, except those this sub-query
+   * matches. `{ dihedral: "convex", not: { parallel: "z" } }` is every
+   * outside edge but the upright ones.
+   *
+   * - Taken away before `at` picks extrema, so an extremum is the highest of
+   *   what is left rather than the highest edge if it survives.
+   * - One level: a `not` inside a `not` is refused, and so is an empty one.
+   * - Prefer a positive term where there is one — `{ dihedral: "convex" }`
+   *   says more than `{ not: { dihedral: "concave" } }`.
+   */
+  not?: EdgeQuery;
 }
 
 /**
@@ -109,10 +123,25 @@ export interface VertexQuery {
 /** A compact vertex selector such as `>X and >Y and >Z`, or a vertex query. */
 export type VertexSelector = string | VertexQuery;
 
-/** A post-condition checked against the selected B-rep entity count. */
+/**
+ * What a selector must resolve to, checked on the shape the treatment runs
+ * against, so a selector that drifts fails aloud instead of treating other
+ * edges. At least one field.
+ *
+ * - `count` is the number `edges` in an evaluate_part reply's `treatments`
+ *   reports for that treatment: paste it from a reply, never count by hand.
+ * - `atLeast` and `atMost` are for an expectation written before the count is
+ *   known: `{ atLeast: 1 }` says the selector must find something.
+ *
+ * @example box(40, 20, 10).edges("|Z").expect({ count: 4 }).fillet(2)
+ */
 export interface EdgeExpectation {
   /** The exact number of selected edges or vertices the selector must match. */
-  count: number;
+  count?: number;
+  /** The fewest the selector may match. */
+  atLeast?: number;
+  /** The most the selector may match. */
+  atMost?: number;
 }
 
 /**
@@ -192,6 +221,211 @@ export function __parcadTreatmentSource<T>(source: SourceLocation, run: () => T)
   }
 }
 
+/**
+ * @internal Which of parcad's names a script declared as its own, proved by
+ * compiling it: every export is a parameter of every script, so a script that
+ * only fails to parse with a name among its parameters is one that declares
+ * that name. Nothing is read off the text. Empty when the script parses, or
+ * fails for a reason of its own.
+ */
+/**
+ * What this part is for: the requirement it is judged against on every build.
+ *
+ * Every reply carries a `brief` key — with none declared it says the part's
+ * size and volume are measured against nothing, which is the whole nudge.
+ * A brief never refuses a save; it is a sentence, in the place a reader
+ * meets first.
+ *
+ * - `envelope` is `[x, y, z]` in mm and is judged in the best of the six
+ *   axis orientations, so the order does not matter.
+ * - `budgetCm3` is plastic in cm³; `printer` is a bed name from `BEDS`.
+ * - `holds`, `gesture` and `material` are prose, echoed and never judged.
+ * - Call it once, anywhere in the script, before or after the geometry.
+ *
+ * @example
+ *     brief({ envelope: [95, 70, 16], budgetCm3: 12, holds: ["3 × 2€"] });
+ *     return box(90, 60, 12).cut(box(80, 50, 10).at(0, 0, 2));
+ *
+ * @remarks
+ * The coin-holder session (docs/COIN_HOLDER_REVIEW.md, Appendix C §1) built
+ * five designs against "pocket", a word in the first user turn that no reply
+ * ever compared anything to: the first build was 97 × 56 × 20 mm and every
+ * number in its report was green. Two of that session's six user turns were
+ * corrections of a requirement the part did not carry. parcad already held a
+ * part's units so a file could not be misread and held nothing about what
+ * the part was for.
+ */
+export function brief(declared: Brief): void {
+  if (!isObject(declared)) {
+    throw new Error(`brief() takes an object such as { envelope: [95, 70, 16] }; got ${describeArgument(declared)}`);
+  }
+  const named = unknownKeys(declared, BRIEF_KEYS, (key, value) => {
+    const normal = key.replace(/[_\- ]/g, "").toLowerCase();
+    const own = BRIEF_KEYS.find((known) => known.toLowerCase() === normal);
+    if (own !== undefined) return spelled(own, value);
+    const synonym = BRIEF_SYNONYMS[normal];
+    return synonym === undefined ? undefined : spelled(synonym, value);
+  });
+  if (named) throw new Error(`brief() ${named}. A brief's keys are ${list(BRIEF_KEYS)}.`);
+  const envelope = declared.envelope;
+  if (envelope !== undefined) {
+    if (!Array.isArray(envelope) || envelope.length !== 3 || !envelope.every((d) => typeof d === "number" && d > 0 && Number.isFinite(d))) {
+      throw new Error(`brief() envelope is [x, y, z] in mm, each above zero; got ${describeArgument(envelope)}`);
+    }
+  }
+  if (declared.budgetCm3 !== undefined && !(typeof declared.budgetCm3 === "number" && declared.budgetCm3 > 0 && Number.isFinite(declared.budgetCm3))) {
+    throw new Error(`brief() budgetCm3 is a volume in cm³, above zero; got ${describeArgument(declared.budgetCm3)}`);
+  }
+  if (declared.holds !== undefined && !(Array.isArray(declared.holds) && declared.holds.every((h) => typeof h === "string"))) {
+    throw new Error(`brief() holds is a list of strings, what the part holds in your own words; got ${describeArgument(declared.holds)}`);
+  }
+  for (const key of ["gesture", "printer", "material"] as const) {
+    if (declared[key] !== undefined && typeof declared[key] !== "string") {
+      throw new Error(`brief() ${key} is a string; got ${describeArgument(declared[key])}`);
+    }
+  }
+  if (Object.keys(declared).length === 0) {
+    throw new Error(
+      `brief() was given nothing to judge the part against; its keys are ${list(BRIEF_KEYS)}, and envelope is the one that catches "that's too big"`,
+    );
+  }
+  declaredBrief = { ...declared };
+}
+
+/** What {@link brief} declares. Every key is optional; an empty brief is refused. */
+export interface Brief {
+  /** The box the part must fit inside, mm, in any of the six axis orientations. */
+  envelope?: [number, number, number];
+  /** The plastic it may use, cm³. */
+  budgetCm3?: number;
+  /** What it holds, in your own words. Prose: the measurement is a `Check`. */
+  holds?: string[];
+  /** How it is handled — "one hand, thumb only". Prose. */
+  gesture?: string;
+  /** The machine it is for, a bed name from `BEDS`. */
+  printer?: string;
+  /** The filament it is for. Prose. */
+  material?: string;
+}
+
+const BRIEF_KEYS = ["envelope", "budgetCm3", "holds", "gesture", "printer", "material"];
+const BRIEF_SYNONYMS: Record<string, string> = {
+  budget: "budgetCm3",
+  budgetcm: "budgetCm3",
+  budgetmm3: "budgetCm3",
+  volume: "budgetCm3",
+  maxvolume: "budgetCm3",
+  plastic: "budgetCm3",
+  size: "envelope",
+  maxsize: "envelope",
+  fitsin: "envelope",
+  bounds: "envelope",
+  pocket: "envelope",
+  holding: "holds",
+  for: "holds",
+  filament: "material",
+};
+
+let declaredBrief: Brief | undefined;
+
+/** Notes cap: past these the rest are counted, not kept. */
+const NOTES_MAX = 40;
+const NOTES_MAX_CHARS = 2000;
+let notes: { label: string; value: number | string | number[] }[] = [];
+let notesChars = 0;
+let notesDropped = 0;
+
+/**
+ * Report a value the script computed. It appears in the reply's `notes`,
+ * marked "from the script, not measured", and changes nothing about the
+ * part.
+ *
+ * - `value` is a number, a string or a list of numbers; `label` names it.
+ * - A note is what the script asked for or worked out, never what was
+ *   built: quote a measurement for anything that can be measured.
+ * - At most 40 notes and 2000 characters; the rest are counted as
+ *   `dropped`.
+ *
+ * @example
+ *     const mouth = 23.25 + 0.5;
+ *     note("mouth 2€", mouth);
+ *     return box(mouth + 4, 30, 10).cut(box(mouth, 30, 8).at(0, 0, 1));
+ *
+ * @remarks
+ * The coin-holder session (docs/COIN_HOLDER_REVIEW.md, §2.6) encoded a
+ * string's character count into a body's Y coordinate to read a number its
+ * own script had computed, because nothing else came out of the sandbox.
+ * This is that channel, capped so it cannot carry the script back out, and
+ * segregated in the reply so a requested number is never read as a measured
+ * one.
+ */
+export function note(label: string, value: number | string | number[]): void {
+  if (typeof label !== "string" || !label.trim()) {
+    throw new Error(`note() takes a label first, a short name for the value; got ${describeArgument(label)}`);
+  }
+  const ok =
+    (typeof value === "number" && Number.isFinite(value)) ||
+    typeof value === "string" ||
+    (Array.isArray(value) && value.every((v) => typeof v === "number" && Number.isFinite(v)));
+  if (!ok) {
+    throw new Error(`note("${label}", ...) takes a finite number, a string or a list of numbers; got ${describeArgument(value)}`);
+  }
+  const chars = label.length + JSON.stringify(value).length;
+  if (notes.length >= NOTES_MAX || notesChars + chars > NOTES_MAX_CHARS) {
+    notesDropped += 1;
+    return;
+  }
+  notes.push({ label, value });
+  notesChars += chars;
+}
+
+/** @internal Hand over the notes a run made, and start the next run empty. */
+export function __parcadTakeNotes(): { values: { label: string; value: number | string | number[] }[]; dropped: number } {
+  const taken = { values: notes, dropped: notesDropped };
+  notes = [];
+  notesChars = 0;
+  notesDropped = 0;
+  // Called once before every run to discard what a run that threw left
+  // behind; the brief is the other such leaving, and `build` consumes it.
+  declaredBrief = undefined;
+  return taken;
+}
+
+export function __parcadShadowedBuiltins(source: string, names: string[]): string[] {
+  const compiles = (parameters: string[]) => {
+    try {
+      new Function(...parameters, source);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if (compiles(names) || !compiles([])) return [];
+  // Add the names back one at a time; each one that breaks the compile is a
+  // name the script declares.
+  const kept: string[] = [];
+  const shadowed: string[] = [];
+  for (const name of names) {
+    if (compiles([...kept, name])) kept.push(name);
+    else shadowed.push(name);
+  }
+  return shadowed;
+}
+
+/** @internal The refusal for a script that declares parcad's own names, written for whoever wrote it. */
+export function __parcadShadowedBuiltinMessage(shadowed: string[], names: string[]): string {
+  const quoted = shadowed.map((name) => `\`${name}\``);
+  const list = quoted.length === 1 ? quoted[0] : `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
+  const verb = quoted.length === 1 ? "is one" : `are ${quoted.length}`;
+  const example = shadowed[0];
+  return (
+    `${list} ${verb} of the ${names.length} names parcad puts in every script, so a script cannot declare ` +
+    `${quoted.length === 1 ? "it" : "them"} again. Rename the local — \`${example}Mm\`, \`my${example[0].toUpperCase()}${example.slice(1)}\`, ` +
+    `or a name saying what it holds — or use parcad's own \`${example}\` instead of declaring one. ` +
+    `read_docs (topic dsl, entry \`${example}\`) says what parcad's does.`
+  );
+}
+
 function treatmentSource(method: SourceLocation["method"]): SourceLocation | undefined {
   if (activeTreatmentSource?.method === method) return activeTreatmentSource;
   const line = new Error().stack
@@ -212,6 +446,33 @@ function describeValue(value: unknown): string {
   return typeof value === "function" ? "a function" : String(value);
 }
 
+/** An argument as the caller wrote it, for a refusal that quotes the call back. */
+function describeArgument(value: unknown): string {
+  if (value instanceof Shape) return "a shape";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "function") return "a function";
+  if (Array.isArray(value) || (typeof value === "object" && value !== null)) {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+/** An axis name or a vector as the vector, or undefined for anything else. */
+function axisVector(axis: unknown): Vec3 | undefined {
+  if (axis === "x") return { x: 1, y: 0, z: 0 };
+  if (axis === "y") return { x: 0, y: 1, z: 0 };
+  if (axis === "z") return { x: 0, y: 0, z: 1 };
+  if (typeof axis !== "object" || axis === null || Array.isArray(axis)) return undefined;
+  const { x, y, z } = axis as Record<string, unknown>;
+  if (![x, y, z].every((n) => typeof n === "number" && Number.isFinite(n))) return undefined;
+  if (x === 0 && y === 0 && z === 0) return undefined;
+  return { x: x as number, y: y as number, z: z as number };
+}
+
 function refuseSelector(value: unknown, call: string, entity: "edge" | "corner", examples: string): never {
   const why =
     value === undefined
@@ -224,7 +485,18 @@ function assertEdgeSelector(selector: EdgeSelector, call: string, write: (select
   if (typeof selector === "string") {
     // The full grammar, not just a non-empty check: this used to accept any
     // non-blank string and let `>Q` survive until the kernel parsed it.
-    parseEdgeSelector(selector);
+    try {
+      parseEdgeSelector(selector);
+    } catch (e) {
+      // An error is read at the moment of need, where a tool description
+      // was read once at the start: the refusal names the tool that parses
+      // a selector without building anything. Only where that tool exists —
+      // the sandbox agents' scripts run in — and not in the editor.
+      if (e instanceof Error && "__parcadNative" in globalThis) {
+        e.message += `. check_selector with selector: ${JSON.stringify(selector)} parses one without building anything.`;
+      }
+      throw e;
+    }
     return;
   }
   if (!isQuery(selector)) {
@@ -312,8 +584,28 @@ function assertVertexSelector(selector: VertexSelector) {
 }
 
 function assertEdgeExpectation(expectation: EdgeExpectation) {
-  if (!Number.isInteger(expectation.count) || expectation.count <= 0) {
-    throw new Error("edge expectation count must be a positive integer");
+  const { count, atLeast, atMost } = expectation ?? {};
+  const given = [count, atLeast, atMost].filter((n) => n !== undefined);
+  if (!isQuery(expectation) || given.length === 0) {
+    throw new Error(
+      "expect takes { count: n } — n from `edges` on the treatment in an evaluate_part reply — or " +
+        "{ atLeast: n }, { atMost: n } for an expectation written before the count is known. Got " +
+        `${describeArgument(expectation)}.`,
+    );
+  }
+  for (const [name, value] of [["count", count], ["atLeast", atLeast], ["atMost", atMost]] as const) {
+    if (value !== undefined && !(Number.isInteger(value) && value >= 0)) {
+      throw new Error(`expect ${name} must be a whole number, not ${describeArgument(value)}`);
+    }
+  }
+  if (count === 0 || atMost === 0) {
+    throw new Error("expect of zero can never hold: an edge treatment must select at least one edge");
+  }
+  if (atLeast !== undefined && atMost !== undefined && atLeast > atMost) {
+    throw new Error(`expect atLeast ${atLeast} is above atMost ${atMost}, which nothing can satisfy`);
+  }
+  if (count !== undefined && ((atLeast !== undefined && count < atLeast) || (atMost !== undefined && count > atMost))) {
+    throw new Error(`expect count ${count} is outside atLeast ${atLeast ?? 0} to atMost ${atMost ?? "any"}`);
   }
 }
 
@@ -558,6 +850,90 @@ export class Shape {
   }
 
   /**
+   * Mark this body as a reference: a real object the part is checked
+   * against — a stack of coins, a tipped coin at a mouth — that is not the
+   * part. Call it last, on the shape the returned object names.
+   *
+   * - Built, drawn in blue, measured alone (`named_bodies`, `reference:
+   *   true`) and against every body (`between_bodies`), so a `clear` or
+   *   `interferes` check can name it.
+   * - Never exported, probed, or counted: not in `bodies`, `volume_mm3`,
+   *   `size` or `stands_on`.
+   * - At least one body must not be a reference.
+   *
+   * @example
+   *     const plate = box(60, 40, 3).at(0, 0, 1.5).tag("plate");
+   *     const stack = cylinder(12, 20).at(0, 0, 13.5).reference();
+   *     return { plate, stack, checks: [{ clear: ["plate", "stack"], atLeast: 0.2 }] };
+   *
+   * @remarks
+   * A method on the shape rather than a `reference: [...]` list on the
+   * returned object: the object then stays names-to-shapes with one data
+   * key (`checks`); a name in a list can be misspelt and refer to nothing;
+   * and the mark travels with the shape the way `.tag()` and `.material()`
+   * do, read off the body the object names. Like a tag it lands on the
+   * outermost node, so a reference used to build another shape is refused
+   * — call it last.
+   */
+  reference(): Shape {
+    this.isReference = true;
+    return this;
+  }
+
+  private isReference = false;
+
+  /** @internal */
+  get referenceBody(): boolean {
+    return this.isReference;
+  }
+
+  /**
+   * Which way this body prints: the axis that points up on the printer,
+   * for a body drawn in its assembled position. Call it last, on the shape
+   * the returned object names, the way `.reference()` is.
+   *
+   * - `"+z"` is as drawn, the default; `"-z"` prints it upside down; `"x"`,
+   *   `"-x"`, `"y"`, `"-y"` stand it on a side; `[x, y, z]` is any direction.
+   * - `print_check` measures the body's overhang and bed contact in this
+   *   orientation. It changes what is measured, never what is exported: a
+   *   slicer orients and arranges for its own bed.
+   * - A reference body has no print orientation.
+   *
+   * @example
+   *     const lid = box(40, 40, 3).at(0, 0, 21.5).printedUp("-z");
+   *     const base = box(40, 40, 20).at(0, 0, 10);
+   *     return { base, lid };
+   */
+  printedUp(up: PrintAxis | [number, number, number]): Shape {
+    const axes: Record<PrintAxis, [number, number, number]> = {
+      "+x": [1, 0, 0], x: [1, 0, 0], "-x": [-1, 0, 0],
+      "+y": [0, 1, 0], y: [0, 1, 0], "-y": [0, -1, 0],
+      "+z": [0, 0, 1], z: [0, 0, 1], "-z": [0, 0, -1],
+    };
+    let dir: [number, number, number];
+    if (typeof up === "string" && up in axes) {
+      dir = axes[up];
+    } else if (Array.isArray(up) && up.length === 3 && up.every((n) => typeof n === "number" && Number.isFinite(n))) {
+      const len = Math.hypot(up[0], up[1], up[2]);
+      if (len === 0) throw new Error("printedUp takes a direction with some length; [0, 0, 0] points nowhere");
+      dir = [up[0] / len, up[1] / len, up[2] / len];
+    } else {
+      throw new Error(
+        `printedUp takes the axis that points up on the printer — "+z" (as drawn), "-z", "x", "-x", "y", "-y" — or a direction [x, y, z]; got ${describeArgument(up)}`,
+      );
+    }
+    this.printUp = dir;
+    return this;
+  }
+
+  private printUp?: [number, number, number];
+
+  /** @internal */
+  get printedUpDirection(): [number, number, number] | undefined {
+    return this.printUp;
+  }
+
+  /**
    * How this body looks in the window. Visual only: nothing measured reads it,
    * and an agent's render shows it only with `materials: true`. Changes this
    * shape in place and returns it.
@@ -607,6 +983,13 @@ export class Shape {
 
   /** Move by `x`, `y`, `z` millimetres from where the shape currently sits. */
   translate(x: number, y: number, z = 0): Shape {
+    if (![x, y, z].every((n) => typeof n === "number" && Number.isFinite(n))) {
+      const given = [x, y, z].map(describeArgument).join(", ");
+      throw new Error(
+        `translate takes three finite distances in mm: .at(x, y, z). Got .at(${given}); an array of ` +
+          `coordinates is the OpenSCAD form, and NaN is usually arithmetic on a name that is undefined.`,
+      );
+    }
     return new Shape(
       ([child]) => ({ op: "translate", child, by: { x, y, z } }),
       [this],
@@ -624,14 +1007,21 @@ export class Shape {
    * +Y, and `.rotate("x", 90)` takes +Z to -Y, so a Z cylinder lies along Y.
    */
   rotate(axis: Vec3 | "x" | "y" | "z", degrees: number): Shape {
-    const a: Vec3 =
-      axis === "x"
-        ? { x: 1, y: 0, z: 0 }
-        : axis === "y"
-          ? { x: 0, y: 1, z: 0 }
-          : axis === "z"
-            ? { x: 0, y: 0, z: 1 }
-            : axis;
+    const a = axisVector(axis);
+    // `arguments`, not a rest parameter: the signature is what read_docs
+    // shows, and a rest parameter would read as more arguments accepted.
+    const givenAll = Array.from(arguments as ArrayLike<unknown>);
+    if (givenAll.length > 2 || !a || !Number.isFinite(degrees)) {
+      const given = givenAll.map(describeArgument).join(", ");
+      const openscad =
+        givenAll.length > 2 || typeof axis === "number"
+          ? " Three angles is the OpenSCAD form; here it is three calls: .rotate(\"x\", a).rotate(\"y\", b).rotate(\"z\", c)."
+          : "";
+      throw new Error(
+        `rotate takes one axis and one angle in degrees: .rotate("z", 45), or .rotate({ x: 0, y: 1, z: 1 }, 30) ` +
+          `for a diagonal axis. Got .rotate(${given}).${openscad}`,
+      );
+    }
     return new Shape(
       ([child]) => ({ op: "rotate", child, axis: a, degrees }),
       [this],
@@ -652,14 +1042,18 @@ export class Shape {
    * A reflection is an isometry, so no surface changes type.
    */
   mirror(axis: Vec3 | "x" | "y" | "z"): Shape {
-    const normal: Vec3 =
-      axis === "x"
-        ? { x: 1, y: 0, z: 0 }
-        : axis === "y"
-          ? { x: 0, y: 1, z: 0 }
-          : axis === "z"
-            ? { x: 0, y: 0, z: 1 }
-            : axis;
+    const normal = axisVector(axis);
+    const givenAll = Array.from(arguments as ArrayLike<unknown>);
+    if (givenAll.length > 1 || !normal) {
+      const given = givenAll.map(describeArgument).join(", ");
+      throw new Error(
+        `mirror takes the normal of the plane to reflect in: .mirror("x") flips X across the YZ plane, ` +
+          `or .mirror({ x: 1, y: 1, z: 0 }) for a diagonal plane. Got .mirror(${given}).` +
+          (givenAll.length > 1 || typeof axis === "number"
+            ? " A vector of flags is the OpenSCAD form; here it is one axis name, or one normal."
+            : ""),
+      );
+    }
     return new Shape(([child]) => ({ op: "mirror", child, normal }), [this]);
   }
 
@@ -672,6 +1066,15 @@ export class Shape {
    *   longer finds. Fillet after stretching.
    */
   scale(x: number, y = x, z = x): Shape {
+    // Only the form is checked here; a negative factor reaches the kernel,
+    // whose refusal names mirror() and is what eval/cases measures.
+    if (![x, y, z].every((factor) => Number.isFinite(factor) && factor !== 0)) {
+      const given = [x, y, z].map(describeArgument).join(", ");
+      throw new Error(
+        `scale takes one factor, or three: .scale(2) doubles the part, .scale(2, 1, 0.5) stretches it ` +
+          `per axis. Got .scale(${given}). An array of factors is the OpenSCAD form, and a reflection is .mirror("x").`,
+      );
+    }
     return new Shape(
       ([child]) => ({ op: "scale", child, by: { x, y, z } }),
       [this],
@@ -3657,6 +4060,10 @@ export interface Doc {
   nodes: Record<string, unknown>[];
   /** Features the graph uses that an older host cannot read; see {@link GRAPH_FEATURES}. */
   requires?: Requirement[];
+  /** The part's own checks, judged on every build; see {@link Check}. */
+  checks?: Check[];
+  /** What the part is for, judged on every build; see {@link brief}. */
+  brief?: Brief;
 }
 
 /** @internal A feature a graph needs, in words a host that has never heard of it can print. */
@@ -3700,7 +4107,39 @@ function entryHas(node: GraphNode, key: string): boolean {
  * `crates/parcad-core/src/envelope.rs`; a host test holds the two together.
  * Not exported: every export is a reserved word in a script.
  */
-const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean })[] = [
+const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean; doc?: (doc: Doc) => boolean })[] = [
+  {
+    feature: "part-checks",
+    after: "0.0.9",
+    what: "checks carried in the part (checks: [...] beside the bodies)",
+    uses: () => false,
+    doc: (doc) => (doc.checks?.length ?? 0) > 0,
+  },
+  {
+    feature: "query-not",
+    after: "0.0.9",
+    what: "not in an edge query ({ dihedral: \"convex\", not: { parallel: \"z\" } })",
+    uses: (n) => JSON.stringify(n.selector ?? null).includes('"not":'),
+  },
+  {
+    feature: "part-brief",
+    after: "0.0.9",
+    what: "a brief carried in the part (brief({ envelope, budgetCm3, ... }))",
+    uses: () => false,
+    doc: (doc) => doc.brief !== undefined,
+  },
+  {
+    feature: "reference-bodies",
+    after: "0.0.9",
+    what: "reference bodies (.reference())",
+    uses: (n) => n.op === "bodies" && Array.isArray(n.bodies) && n.bodies.some((b) => (b as GraphNode)?.reference === true),
+  },
+  {
+    feature: "print-orientation",
+    after: "0.0.9",
+    what: "a body's print orientation (.printedUp())",
+    uses: (n) => n.op === "bodies" && Array.isArray(n.bodies) && n.bodies.some((b) => (b as GraphNode)?.printed_up !== undefined),
+  },
   {
     feature: "section-curves",
     after: "0.0.6",
@@ -3712,6 +4151,15 @@ const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean })[] =
   },
   { feature: "fitted-sections", after: "0.0.6", what: "fitted sections ({ fit })", uses: (n) => entryHas(n, "fit") },
   { feature: "inset-sections", after: "0.0.6", what: "inset sections (inset(outline, d))", uses: (n) => entryHas(n, "inset") },
+  {
+    feature: "expect-range",
+    after: "0.0.9",
+    what: "ranged expectations (.expect({ atLeast, atMost }))",
+    uses: (n) => {
+      const expect = (n as { expect?: { atLeast?: number; atMost?: number } }).expect;
+      return expect !== undefined && (expect.atLeast !== undefined || expect.atMost !== undefined);
+    },
+  },
   {
     feature: "sweep-spline",
     after: "0.0.6",
@@ -3755,19 +4203,166 @@ const SURFACE_OPS = [
 ];
 
 function stamped(doc: Doc): Doc {
-  const requires = GRAPH_FEATURES.filter((f) => doc.nodes.some(f.uses)).map(({ feature, after, what }) => ({
+  // A brief belongs to the run that declared it, and `build` is the end of
+  // that run: taking it here is what keeps one script's brief off the next.
+  const brief = declaredBrief;
+  declaredBrief = undefined;
+  const withBrief = brief ? { ...doc, brief } : doc;
+  const requires = GRAPH_FEATURES.filter((f) => withBrief.nodes.some(f.uses) || f.doc?.(withBrief)).map(({ feature, after, what }) => ({
     feature,
     after,
     what,
   }));
-  return requires.length ? { ...doc, requires } : doc;
+  return requires.length ? { ...withBrief, requires } : withBrief;
 }
+
+/** An axis that points up on the printer; see {@link Shape.printedUp}. */
+export type PrintAxis = "+x" | "x" | "-x" | "+y" | "y" | "-y" | "+z" | "z" | "-z";
 
 /**
  * What a script may return: one shape, or an object naming each body of a
- * part that stays in several — `return { base, lid }`.
+ * part that stays in several — `return { base, lid }` — where one key,
+ * `checks`, may be a list of {@link Check}s instead of a body.
  */
-export type Part = Shape | Record<string, Shape>;
+export type Part = Shape | Record<string, Shape | Check[]>;
+
+/**
+ * One rule the built part must hold, written as `checks: [...]` beside the
+ * bodies it is about. Judged on every build from what the kernel measured,
+ * and reported first: a verdict, then each failing check with its
+ * measurement, where, and its `why`.
+ *
+ * - One head key per check: `clear`, `interferes`, `touching` (body
+ *   pairs), `wall`, `size`, `standsOn`, `bodies` or `watertight`.
+ * - Qualifiers: `atLeast` (mm on `clear`, mm³ on `interferes`),
+ *   `deeperThan` (mm), `contactAtLeast` (mm²), `ignore` and `on` on `wall`.
+ *   Names must be bodies and tags the part has.
+ * - evaluate_part reports a failure and builds on; export_part and
+ *   save_project refuse it without `allow_failing: "<reason>"`.
+ *
+ * @example
+ *     const plate = box(60, 40, 3).tag("plate");
+ *     const stack = cylinder(12, 20).at(0, 0, 11.7).tag("stack");
+ *     return {
+ *       plate, stack,
+ *       checks: [
+ *         { clear: ["plate", "stack"], atLeast: 0.2, why: "coins must not bind" },
+ *         { wall: { min: 1 }, ignore: ["feather"] },
+ *         { size: { max: [115, 65, 40] } },
+ *       ],
+ *     };
+ *
+ * @remarks
+ * A catch is designed to a depth and a seat is an area, so `deeperThan` and
+ * `contactAtLeast` are the qualifiers to reach for there: `atLeast` on
+ * `interferes` is a shared volume, which 0.002 mm³ along a coin's rim
+ * satisfies at a bite of two microns (docs/COIN_HOLDER_REVIEW.md §2.3).
+ * No new global: every export is a reserved word in a script (DSL_GAPS §7),
+ * so `assert`, `check` and `clear` would each break saved parts, and
+ * `clearance` is already taken. The one thing lost is a body named
+ * `checks`, refused in a sentence. The kernel already measures every pair
+ * and the snapshot already carries size, bed contact, piece count and
+ * watertightness; only `wall` costs anything, the thickness sweep at the
+ * check's own threshold. docs/COIN_HOLDER_REVIEW.md B2 is why a check lives
+ * in the part: a check in a throwaway script is one that stops being re-run.
+ */
+export interface Check {
+  /** The two bodies never touch, by at least `atLeast` mm. */
+  clear?: [string, string];
+  /** The two bodies overlap: a catch that has to catch. */
+  interferes?: [string, string];
+  /** The two bodies are flush: neither gap nor overlap. */
+  touching?: [string, string];
+  /** Nothing in the part is thinner than `min` mm, measured as `measure_wall_thickness` does. */
+  wall?: { min: number };
+  /** The part fits inside `max` mm on each axis, as drawn. */
+  size?: { max: [number, number, number] };
+  /** At least this fraction of the footprint reaches the bed, 0 to 1. */
+  standsOn?: { atLeast: number };
+  /** The part is exactly this many free-standing pieces. */
+  bodies?: number;
+  /** The mesh closes. `true` is the only value. */
+  watertight?: true;
+  /** For `clear`, the least clearance, mm; for `interferes`, the least shared volume, mm³. */
+  atLeast?: number;
+  /** For `interferes`: how far the two must reach into each other, mm. */
+  deeperThan?: number;
+  /** For `touching`: the least surface the two share, mm²; a corner graze is 0. */
+  contactAtLeast?: number;
+  /** For `wall`: tags whose surfaces are left out, and `"feather"` or `"edge"` to leave out that kind of thin reading. */
+  ignore?: string[];
+  /** For `wall`: only material on these tags' surfaces counts. */
+  on?: string[];
+  /** Free text, echoed back when the check fails. */
+  why?: string;
+}
+
+/** The keys a check may carry, and the key an author might write for one. */
+const CHECK_KEYS = ["clear", "interferes", "touching", "wall", "size", "standsOn", "bodies", "watertight", "atLeast", "deeperThan", "contactAtLeast", "ignore", "on", "why"];
+const CHECK_HEADS = CHECK_KEYS.slice(0, 8);
+const CHECK_SYNONYMS: Record<string, string> = {
+  depth: "deeperThan",
+  depthmm: "deeperThan",
+  deeper: "deeperThan",
+  bite: "deeperThan",
+  contact: "contactAtLeast",
+  contactmm2: "contactAtLeast",
+  clearance: "atLeast",
+  clearancemm: "atLeast",
+  gap: "atLeast",
+  min: "atLeast",
+  minimum: "atLeast",
+  atmost: "atLeast",
+  thickness: "wall",
+  thin: "wall",
+  wallthickness: "wall",
+  interfere: "interferes",
+  interference: "interferes",
+  overlap: "interferes",
+  overlaps: "interferes",
+  touch: "touching",
+  touches: "touching",
+  envelope: "size",
+  fits: "size",
+  stands: "standsOn",
+  footprint: "standsOn",
+  bed: "standsOn",
+  reason: "why",
+  because: "why",
+  except: "ignore",
+  only: "on",
+};
+
+/**
+ * Why a check cannot be read, naming what to write instead, or `undefined`
+ * when it can. The shape only — which bodies exist is checked by `build`,
+ * and the numbers by the host (`Check::validate` in `parcad-core`).
+ */
+function checkShapeError(check: unknown, index: number): string | undefined {
+  const at = `check ${index + 1}`;
+  if (!isObject(check)) {
+    return `${at} is ${Array.isArray(check) ? "an array" : `a ${typeof check}`}, not an object such as { clear: ["top", "stacks"], atLeast: 0.2 }`;
+  }
+  const named = unknownKeys(check, CHECK_KEYS, (key, value) => {
+    const normal = key.replace(/[_\- ]/g, "").toLowerCase();
+    const own = CHECK_KEYS.find((known) => known.toLowerCase() === normal);
+    if (own !== undefined) return spelled(own, value);
+    const synonym = CHECK_SYNONYMS[normal];
+    return synonym === undefined ? undefined : spelled(synonym, value);
+  });
+  if (named) return `${at} ${named}. A check's keys are ${list(CHECK_KEYS)}.`;
+  const heads = CHECK_HEADS.filter((key) => check[key] !== undefined);
+  if (heads.length === 0) return `${at} names nothing to check; one of ${list(CHECK_HEADS)} says what it reads.`;
+  if (heads.length > 1) return `${at} carries ${list(heads)} at once; a check reads one thing, so write one check per key.`;
+  for (const key of ["clear", "interferes", "touching"]) {
+    const pair = check[key];
+    if (pair === undefined) continue;
+    if (!Array.isArray(pair) || pair.length !== 2 || !pair.every((name) => typeof name === "string")) {
+      return `${at}: ${key} is a pair of body names, e.g. ${key}: ["top", "stacks"], not ${render(pair)}.`;
+    }
+  }
+  return undefined;
+}
 
 // The runners (engine.ts, tools/run.ts, script.rs) say the same thing when a
 // script returns neither; not exported, because an export is a reserved word.
@@ -3796,6 +4391,14 @@ export function build(
     if (seen !== undefined) return seen;
 
     // Children first, so their ids exist by the time this node is emitted.
+    for (const child of s.children) {
+      if (child.referenceBody) {
+        throw new Error(
+          "a shape marked .reference() was used to build another shape; a reference is measured against " +
+            "the part and never part of it, so call .reference() last, on the shape the returned object names",
+        );
+      }
+    }
     const kids = s.children.map(visit);
     const node = s.toNode(kids);
     if (s.tagName) node.tag = s.tagName;
@@ -3810,6 +4413,17 @@ export function build(
   };
 
   if (root instanceof Shape) {
+    if (root.printedUpDirection) {
+      throw new Error(
+        "printedUp names how a body prints, and a part in one shape prints as drawn; to print it another way up, return it as a named body: return { part: shape.printedUp(\"-z\") }",
+      );
+    }
+    if (root.referenceBody) {
+      throw new Error(
+        "the script returned only a reference; a reference is measured against the part, so return the part " +
+          "beside it: return { holder, stack: stack.reference() }",
+      );
+    }
     const rootId = visit(root);
     return stamped({ units: "mm", root: rootId, nodes });
   }
@@ -3821,10 +4435,13 @@ export function build(
     );
   }
   if (typeof root !== "object" || root === null) throw new Error(RETURN_HINT);
-  const entries = Object.entries(root);
+  const entries = Object.entries(root).filter(([name]) => name !== "checks");
+  const checks = checksOf(root);
   if (entries.length === 0) {
     throw new Error(
-      "the script returned an empty object; return one shape, or name each body: return { base, lid }",
+      checks === undefined
+        ? "the script returned an empty object; return one shape, or name each body: return { base, lid }"
+        : "the script returned checks and no bodies; name each body beside them: return { base, lid, checks }",
     );
   }
   const bodies = entries.map(([name, shape]) => {
@@ -3834,11 +4451,64 @@ export function build(
       );
     }
     if (!name.trim()) throw new Error("a body has an empty name; name each body: return { base, lid }");
-    return { name, child: visit(shape) };
+    if (shape.referenceBody && shape.printedUpDirection) {
+      throw new Error(
+        `body "${name}" is a reference and has a print orientation; a reference is never printed, so leave .printedUp() off it`,
+      );
+    }
+    return {
+      name,
+      child: visit(shape),
+      ...(shape.referenceBody && { reference: true }),
+      ...(shape.printedUpDirection && { printed_up: { x: shape.printedUpDirection[0], y: shape.printedUpDirection[1], z: shape.printedUpDirection[2] } }),
+    };
   });
+  if (bodies.every((body) => body.reference)) {
+    throw new Error(
+      "every body is a reference; a reference is measured against the part, so at least one body must be the " +
+        "part itself — leave .reference() off that one",
+    );
+  }
   const rootId = nodes.length;
   nodes.push({ op: "bodies", bodies });
-  return stamped({ units: "mm", root: rootId, nodes });
+  if (checks !== undefined) {
+    const names = bodies.map((body) => body.name);
+    checks.forEach((check, index) => {
+      for (const key of ["clear", "interferes", "touching"]) {
+        const pair = (check as Record<string, unknown>)[key];
+        if (!Array.isArray(pair)) continue;
+        for (const name of pair) {
+          if (!names.includes(name as string)) {
+            throw new Error(
+              `check ${index + 1} names a body "${name}" the returned object does not have; its bodies are ${list(names.map((n) => `"${n}"`))}`,
+            );
+          }
+        }
+      }
+    });
+  }
+  return stamped({ units: "mm", root: rootId, nodes, ...(checks && { checks }) });
+}
+
+/** The `checks` list of a returned object, validated, or `undefined` when there is none. */
+function checksOf(root: Record<string, unknown>): Check[] | undefined {
+  if (!("checks" in root)) return undefined;
+  const checks = root.checks;
+  if (checks instanceof Shape) {
+    throw new Error(
+      'a body cannot be named "checks": that key holds the part\'s checks, a list of rules the build must hold (read_docs dsl, Check); rename the body',
+    );
+  }
+  if (!Array.isArray(checks)) {
+    throw new Error(
+      `checks is ${describe(checks)}, not a list of checks such as [{ clear: ["top", "stacks"], atLeast: 0.2 }] (read_docs dsl, Check)`,
+    );
+  }
+  checks.forEach((check, index) => {
+    const error = checkShapeError(check, index);
+    if (error !== undefined) throw new Error(error);
+  });
+  return checks as Check[];
 }
 
 function describe(value: unknown): string {

@@ -4,37 +4,160 @@
     {
       "why": "the composed directional selector from the docs",
       "selector": ">Z and >Y and |X",
-      "edge": { "terms": [">Z", ">Y", "|X"], "spans": [[0, 2], [7, 9], [14, 16]] },
+      "edge": {
+        "terms": [
+          ">Z",
+          ">Y",
+          "|X"
+        ],
+        "spans": [
+          [
+            0,
+            2
+          ],
+          [
+            7,
+            9
+          ],
+          [
+            14,
+            16
+          ]
+        ]
+      },
       "vertex": {
         "error": {
           "message": "vertex selectors use only >X or <X extrema; |X applies to edges",
-          "span": [14, 16]
+          "span": [
+            14,
+            16
+          ]
         }
       }
     },
     {
       "why": "a single term is a whole selector",
       "selector": ">Z",
-      "edge": { "terms": [">Z"], "spans": [[0, 2]] },
-      "vertex": { "terms": [">Z"], "spans": [[0, 2]] }
+      "edge": {
+        "terms": [
+          ">Z"
+        ],
+        "spans": [
+          [
+            0,
+            2
+          ]
+        ]
+      },
+      "vertex": {
+        "terms": [
+          ">Z"
+        ],
+        "spans": [
+          [
+            0,
+            2
+          ]
+        ]
+      }
     },
     {
       "why": "an outer corner, which is what a vertex treatment selects",
       "selector": ">X and >Y and >Z",
-      "edge": { "terms": [">X", ">Y", ">Z"], "spans": [[0, 2], [7, 9], [14, 16]] },
-      "vertex": { "terms": [">X", ">Y", ">Z"], "spans": [[0, 2], [7, 9], [14, 16]] }
+      "edge": {
+        "terms": [
+          ">X",
+          ">Y",
+          ">Z"
+        ],
+        "spans": [
+          [
+            0,
+            2
+          ],
+          [
+            7,
+            9
+          ],
+          [
+            14,
+            16
+          ]
+        ]
+      },
+      "vertex": {
+        "terms": [
+          ">X",
+          ">Y",
+          ">Z"
+        ],
+        "spans": [
+          [
+            0,
+            2
+          ],
+          [
+            7,
+            9
+          ],
+          [
+            14,
+            16
+          ]
+        ]
+      }
     },
     {
       "why": "the minimum extreme, and a lowercase axis",
       "selector": "<y",
-      "edge": { "terms": ["<Y"], "spans": [[0, 2]] },
-      "vertex": { "terms": ["<Y"], "spans": [[0, 2]] }
+      "edge": {
+        "terms": [
+          "<Y"
+        ],
+        "spans": [
+          [
+            0,
+            2
+          ]
+        ]
+      },
+      "vertex": {
+        "terms": [
+          "<Y"
+        ],
+        "spans": [
+          [
+            0,
+            2
+          ]
+        ]
+      }
     },
     {
       "why": "surrounding whitespace is trimmed, and spans stay relative to the authored string",
       "selector": "  >Z  ",
-      "edge": { "terms": [">Z"], "spans": [[2, 4]] },
-      "vertex": { "terms": [">Z"], "spans": [[2, 4]] }
+      "edge": {
+        "terms": [
+          ">Z"
+        ],
+        "spans": [
+          [
+            2,
+            4
+          ]
+        ]
+      },
+      "vertex": {
+        "terms": [
+          ">Z"
+        ],
+        "spans": [
+          [
+            2,
+            4
+          ]
+        ]
+      }
     },
     {
       "why": "an empty selector names its own fix",
@@ -42,13 +165,19 @@
       "edge": {
         "error": {
           "message": "edge selector is empty; use a term such as >Z or |X",
-          "span": [0, 0]
+          "span": [
+            0,
+            0
+          ]
         }
       },
       "vertex": {
         "error": {
           "message": "edge selector is empty; use a term such as >Z or |X",
-          "span": [0, 0]
+          "span": [
+            0,
+            0
+          ]
         }
       }
     },
@@ -58,13 +187,19 @@
       "edge": {
         "error": {
           "message": "edge selector is empty; use a term such as >Z or |X",
-          "span": [0, 3]
+          "span": [
+            0,
+            3
+          ]
         }
       },
       "vertex": {
         "error": {
           "message": "edge selector is empty; use a term such as >Z or |X",
-          "span": [0, 3]
+          "span": [
+            0,
+            3
+          ]
         }
       }
     },
@@ -74,13 +209,19 @@
       "edge": {
         "error": {
           "message": "invalid edge-selector term \"+Z\"; expected >X, <Y, or |Z",
-          "span": [0, 2]
+          "span": [
+            0,
+            2
+          ]
         }
       },
       "vertex": {
         "error": {
           "message": "invalid edge-selector term \"+Z\"; expected >X, <Y, or |Z",
-          "span": [0, 2]
+          "span": [
+            0,
+            2
+          ]
         }
       }
     },
@@ -90,13 +231,19 @@
       "edge": {
         "error": {
           "message": "invalid edge-selector axis in \">Q\"; expected X, Y, or Z",
-          "span": [0, 2]
+          "span": [
+            0,
+            2
+          ]
         }
       },
       "vertex": {
         "error": {
           "message": "invalid edge-selector axis in \">Q\"; expected X, Y, or Z",
-          "span": [0, 2]
+          "span": [
+            0,
+            2
+          ]
         }
       }
     },
@@ -105,14 +252,20 @@
       "selector": ">Z or >Y",
       "edge": {
         "error": {
-          "message": "invalid edge-selector term \">Z or >Y\"; expected >X, <Y, or |Z (joined with `and`)",
-          "span": [0, 8]
+          "message": "invalid edge-selector term \">Z or >Y\"; expected >X, <Y, or |Z (joined with `and`). The compact form has no not, or or brackets: say it in the query form instead, which has dihedral, parallel, longerThan, on, between and not — { dihedral: \"convex\", not: { parallel: \"z\" } }. check_selector parses one without building anything",
+          "span": [
+            0,
+            8
+          ]
         }
       },
       "vertex": {
         "error": {
-          "message": "invalid edge-selector term \">Z or >Y\"; expected >X, <Y, or |Z (joined with `and`)",
-          "span": [0, 8]
+          "message": "invalid edge-selector term \">Z or >Y\"; expected >X, <Y, or |Z (joined with `and`). The compact form has no not, or or brackets: say it in the query form instead, which has dihedral, parallel, longerThan, on, between and not — { dihedral: \"convex\", not: { parallel: \"z\" } }. check_selector parses one without building anything",
+          "span": [
+            0,
+            8
+          ]
         }
       }
     },
@@ -122,13 +275,19 @@
       "edge": {
         "error": {
           "message": "invalid edge-selector term \">QQ\"; expected >X, <Y, or |Z (joined with `and`)",
-          "span": [7, 10]
+          "span": [
+            7,
+            10
+          ]
         }
       },
       "vertex": {
         "error": {
           "message": "invalid edge-selector term \">QQ\"; expected >X, <Y, or |Z (joined with `and`)",
-          "span": [7, 10]
+          "span": [
+            7,
+            10
+          ]
         }
       }
     },
@@ -138,13 +297,19 @@
       "edge": {
         "error": {
           "message": "invalid edge-selector term \">Z \"; expected >X, <Y, or |Z (joined with `and`)",
-          "span": [0, 3]
+          "span": [
+            0,
+            3
+          ]
         }
       },
       "vertex": {
         "error": {
           "message": "invalid edge-selector term \">Z \"; expected >X, <Y, or |Z (joined with `and`)",
-          "span": [0, 3]
+          "span": [
+            0,
+            3
+          ]
         }
       }
     },
@@ -154,24 +319,70 @@
       "edge": {
         "error": {
           "message": "invalid edge-selector term \">Z and\"; expected >X, <Y, or |Z (joined with `and`)",
-          "span": [0, 6]
+          "span": [
+            0,
+            6
+          ]
         }
       },
       "vertex": {
         "error": {
           "message": "invalid edge-selector term \">Z and\"; expected >X, <Y, or |Z (joined with `and`)",
-          "span": [0, 6]
+          "span": [
+            0,
+            6
+          ]
         }
       }
     },
     {
       "why": "a parallel term is rejected for vertices wherever it appears",
       "selector": "|X and >Z",
-      "edge": { "terms": ["|X", ">Z"], "spans": [[0, 2], [7, 9]] },
+      "edge": {
+        "terms": [
+          "|X",
+          ">Z"
+        ],
+        "spans": [
+          [
+            0,
+            2
+          ],
+          [
+            7,
+            9
+          ]
+        ]
+      },
       "vertex": {
         "error": {
           "message": "vertex selectors use only >X or <X extrema; |X applies to edges",
-          "span": [0, 2]
+          "span": [
+            0,
+            2
+          ]
+        }
+      }
+    },
+    {
+      "why": "the selector a session wrote and could not say; the refusal now names the language that can (docs/COIN_HOLDER_REVIEW.md, L2)",
+      "selector": ">Z and not |Z",
+      "edge": {
+        "error": {
+          "message": "invalid edge-selector term \"not |Z\"; expected >X, <Y, or |Z (joined with `and`). The compact form has no not, or or brackets: say it in the query form instead, which has dihedral, parallel, longerThan, on, between and not — { dihedral: \"convex\", not: { parallel: \"z\" } }. check_selector parses one without building anything",
+          "span": [
+            7,
+            13
+          ]
+        }
+      },
+      "vertex": {
+        "error": {
+          "message": "invalid edge-selector term \"not |Z\"; expected >X, <Y, or |Z (joined with `and`). The compact form has no not, or or brackets: say it in the query form instead, which has dihedral, parallel, longerThan, on, between and not — { dihedral: \"convex\", not: { parallel: \"z\" } }. check_selector parses one without building anything",
+          "span": [
+            7,
+            13
+          ]
         }
       }
     }
@@ -179,147 +390,403 @@
   "queries": [
     {
       "why": "a face normal written beside the query, not inside adjacentTo, is named with where it goes",
-      "query": {"at": {"z": "max"}, "faceNormal": "+z"},
-      "edge": { "error": "an edge query has no key \"faceNormal\" (write adjacentTo: { faceNormal: \"+z\" } instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on and between." },
-      "vertex": { "error": "a vertex query has no key \"faceNormal\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "at": {
+          "z": "max"
+        },
+        "faceNormal": "+z"
+      },
+      "edge": {
+        "error": "an edge query has no key \"faceNormal\" (write adjacentTo: { faceNormal: \"+z\" } instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on, between and not."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"faceNormal\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "the future spelling from docs/SELECTORS.md points at today's, keeping the direction written",
-      "query": {"facing": "-y"},
-      "edge": { "error": "an edge query has no key \"facing\" (write adjacentTo: { faceNormal: \"-y\" } instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on and between." },
-      "vertex": { "error": "a vertex query has no key \"facing\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "facing": "-y"
+      },
+      "edge": {
+        "error": "an edge query has no key \"facing\" (write adjacentTo: { faceNormal: \"-y\" } instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on, between and not."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"facing\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "a snake_case key is the camelCase one",
-      "query": {"generated_by": "spine"},
-      "edge": { "error": "an edge query has no key \"generated_by\" (write generatedBy: \"spine\" instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on and between." },
-      "vertex": { "error": "a vertex query has no key \"generated_by\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "generated_by": "spine"
+      },
+      "edge": {
+        "error": "an edge query has no key \"generated_by\" (write generatedBy: \"spine\" instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on, between and not."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"generated_by\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "a bare axis is an at term",
-      "query": {"z": "min"},
-      "edge": { "error": "an edge query has no key \"z\" (write at: { z: \"min\" } instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on and between." },
-      "vertex": { "error": "a vertex query has no key \"z\" (write at: { z: \"min\" } instead). Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "z": "min"
+      },
+      "edge": {
+        "error": "an edge query has no key \"z\" (write at: { z: \"min\" } instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on, between and not."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"z\" (write at: { z: \"min\" } instead). Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "top and bottom are at terms",
-      "query": {"top": true},
-      "edge": { "error": "an edge query has no key \"top\" (write at: { z: \"max\" } instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on and between." },
-      "vertex": { "error": "a vertex query has no key \"top\" (write at: { z: \"max\" } instead). Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "top": true
+      },
+      "edge": {
+        "error": "an edge query has no key \"top\" (write at: { z: \"max\" } instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on, between and not."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"top\" (write at: { z: \"max\" } instead). Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "a count belongs to .expect, not to the query",
-      "query": {"at": {"z": "max"}, "count": 4},
-      "edge": { "error": "an edge query has no key \"count\" (write .expect({ count: 4 }) on the selection instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on and between." },
-      "vertex": { "error": "a vertex query has no key \"count\" (write .expect({ count: 4 }) on the selection instead). Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "at": {
+          "z": "max"
+        },
+        "count": 4
+      },
+      "edge": {
+        "error": "an edge query has no key \"count\" (write .expect({ count: 4 }) on the selection instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on, between and not."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"count\" (write .expect({ count: 4 }) on the selection instead). Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "a tag is named with on",
-      "query": {"tag": "lip"},
-      "edge": { "error": "an edge query has no key \"tag\" (write on: \"lip\" instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on and between." },
-      "vertex": { "error": "a vertex query has no key \"tag\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "tag": "lip"
+      },
+      "edge": {
+        "error": "an edge query has no key \"tag\" (write on: \"lip\" instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on, between and not."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"tag\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "several unknown keys are listed together, sorted; vertex queries read only at",
-      "query": {"dihedral": "convex", "parallel": "z", "longerThan": 3},
-      "edge": { "error": null },
-      "vertex": { "error": "a vertex query has no keys \"dihedral\", \"longerThan\" and \"parallel\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "dihedral": "convex",
+        "parallel": "z",
+        "longerThan": 3
+      },
+      "edge": {
+        "error": null
+      },
+      "vertex": {
+        "error": "a vertex query has no keys \"dihedral\", \"longerThan\" and \"parallel\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "a length is longerThan, and the number written is kept",
-      "query": {"length": 3, "parallel": "z"},
-      "edge": { "error": "an edge query has no key \"length\" (write longerThan: 3 instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on and between." },
-      "vertex": { "error": "a vertex query has no keys \"length\" and \"parallel\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "length": 3,
+        "parallel": "z"
+      },
+      "edge": {
+        "error": "an edge query has no key \"length\" (write longerThan: 3 instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on, between and not."
+      },
+      "vertex": {
+        "error": "a vertex query has no keys \"length\" and \"parallel\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "a key nothing resembles is named alone",
-      "query": {"at": {"z": "max"}, "colour": "red"},
-      "edge": { "error": "an edge query has no key \"colour\". Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on and between." },
-      "vertex": { "error": "a vertex query has no key \"colour\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "at": {
+          "z": "max"
+        },
+        "colour": "red"
+      },
+      "edge": {
+        "error": "an edge query has no key \"colour\". Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on, between and not."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"colour\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "an unknown axis inside at",
-      "query": {"at": {"w": "max", "z": "max"}},
-      "edge": { "error": "at has no key \"w\". Its keys are x, y and z, e.g. at: { z: \"max\" }." },
-      "vertex": { "error": "at has no key \"w\". Its keys are x, y and z, e.g. at: { z: \"max\" }." }
+      "query": {
+        "at": {
+          "w": "max",
+          "z": "max"
+        }
+      },
+      "edge": {
+        "error": "at has no key \"w\". Its keys are x, y and z, e.g. at: { z: \"max\" }."
+      },
+      "vertex": {
+        "error": "at has no key \"w\". Its keys are x, y and z, e.g. at: { z: \"max\" }."
+      }
     },
     {
       "why": "an upper-case axis inside at",
-      "query": {"at": {"Z": "max"}},
-      "edge": { "error": "at has no key \"Z\" (write z: \"max\" instead). Its keys are x, y and z, e.g. at: { z: \"max\" }." },
-      "vertex": { "error": "at has no key \"Z\" (write z: \"max\" instead). Its keys are x, y and z, e.g. at: { z: \"max\" }." }
+      "query": {
+        "at": {
+          "Z": "max"
+        }
+      },
+      "edge": {
+        "error": "at has no key \"Z\" (write z: \"max\" instead). Its keys are x, y and z, e.g. at: { z: \"max\" }."
+      },
+      "vertex": {
+        "error": "at has no key \"Z\" (write z: \"max\" instead). Its keys are x, y and z, e.g. at: { z: \"max\" }."
+      }
     },
     {
       "why": "an at value other than min or max",
-      "query": {"at": {"z": "top"}},
-      "edge": { "error": "at.z must be \"min\" or \"max\", not \"top\"." },
-      "vertex": { "error": "at.z must be \"min\" or \"max\", not \"top\"." }
+      "query": {
+        "at": {
+          "z": "top"
+        }
+      },
+      "edge": {
+        "error": "at.z must be \"min\" or \"max\", not \"top\"."
+      },
+      "vertex": {
+        "error": "at.z must be \"min\" or \"max\", not \"top\"."
+      }
     },
     {
       "why": "an at value in the wrong case",
-      "query": {"at": {"x": "MAX"}},
-      "edge": { "error": "at.x must be \"min\" or \"max\", not \"MAX\" (write \"max\" instead)." },
-      "vertex": { "error": "at.x must be \"min\" or \"max\", not \"MAX\" (write \"max\" instead)." }
+      "query": {
+        "at": {
+          "x": "MAX"
+        }
+      },
+      "edge": {
+        "error": "at.x must be \"min\" or \"max\", not \"MAX\" (write \"max\" instead)."
+      },
+      "vertex": {
+        "error": "at.x must be \"min\" or \"max\", not \"MAX\" (write \"max\" instead)."
+      }
     },
     {
       "why": "at written as a compact string",
-      "query": {"at": ">Z"},
-      "edge": { "error": "at is an object of axes, e.g. at: { z: \"max\" }, not \">Z\"." },
-      "vertex": { "error": "at is an object of axes, e.g. at: { z: \"max\" }, not \">Z\"." }
+      "query": {
+        "at": ">Z"
+      },
+      "edge": {
+        "error": "at is an object of axes, e.g. at: { z: \"max\" }, not \">Z\"."
+      },
+      "vertex": {
+        "error": "at is an object of axes, e.g. at: { z: \"max\" }, not \">Z\"."
+      }
     },
     {
       "why": "a null axis is an absent one",
-      "query": {"at": {"x": null, "z": "min"}},
-      "edge": { "error": null },
-      "vertex": { "error": null }
+      "query": {
+        "at": {
+          "x": null,
+          "z": "min"
+        }
+      },
+      "edge": {
+        "error": null
+      },
+      "vertex": {
+        "error": null
+      }
     },
     {
       "why": "a face normal that is not a signed axis",
-      "query": {"adjacentTo": {"faceNormal": "up"}},
-      "edge": { "error": "adjacentTo.faceNormal must be \"+x\", \"-x\", \"+y\", \"-y\", \"+z\" or \"-z\", not \"up\"." },
-      "vertex": { "error": "a vertex query has no key \"adjacentTo\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "adjacentTo": {
+          "faceNormal": "up"
+        }
+      },
+      "edge": {
+        "error": "adjacentTo.faceNormal must be \"+x\", \"-x\", \"+y\", \"-y\", \"+z\" or \"-z\", not \"up\"."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"adjacentTo\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "a face normal in the wrong case",
-      "query": {"adjacentTo": {"faceNormal": "+Z"}},
-      "edge": { "error": "adjacentTo.faceNormal must be \"+x\", \"-x\", \"+y\", \"-y\", \"+z\" or \"-z\", not \"+Z\" (write \"+z\" instead)." },
-      "vertex": { "error": "a vertex query has no key \"adjacentTo\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "adjacentTo": {
+          "faceNormal": "+Z"
+        }
+      },
+      "edge": {
+        "error": "adjacentTo.faceNormal must be \"+x\", \"-x\", \"+y\", \"-y\", \"+z\" or \"-z\", not \"+Z\" (write \"+z\" instead)."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"adjacentTo\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "a face normal without its sign",
-      "query": {"adjacentTo": {"faceNormal": "z"}},
-      "edge": { "error": "adjacentTo.faceNormal must be \"+x\", \"-x\", \"+y\", \"-y\", \"+z\" or \"-z\", not \"z\" (write \"+z\" instead)." },
-      "vertex": { "error": "a vertex query has no key \"adjacentTo\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "adjacentTo": {
+          "faceNormal": "z"
+        }
+      },
+      "edge": {
+        "error": "adjacentTo.faceNormal must be \"+x\", \"-x\", \"+y\", \"-y\", \"+z\" or \"-z\", not \"z\" (write \"+z\" instead)."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"adjacentTo\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "a misnamed key inside adjacentTo",
-      "query": {"adjacentTo": {"normal": "+z"}},
-      "edge": { "error": "adjacentTo has no key \"normal\" (write faceNormal: \"+z\" instead). Its only key is faceNormal, e.g. adjacentTo: { faceNormal: \"+z\" }." },
-      "vertex": { "error": "a vertex query has no key \"adjacentTo\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "adjacentTo": {
+          "normal": "+z"
+        }
+      },
+      "edge": {
+        "error": "adjacentTo has no key \"normal\" (write faceNormal: \"+z\" instead). Its only key is faceNormal, e.g. adjacentTo: { faceNormal: \"+z\" }."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"adjacentTo\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "adjacentTo without its one key",
-      "query": {"adjacentTo": {}},
-      "edge": { "error": "adjacentTo needs faceNormal, e.g. adjacentTo: { faceNormal: \"+z\" }." },
-      "vertex": { "error": "a vertex query has no key \"adjacentTo\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "adjacentTo": {}
+      },
+      "edge": {
+        "error": "adjacentTo needs faceNormal, e.g. adjacentTo: { faceNormal: \"+z\" }."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"adjacentTo\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "adjacentTo written as the direction alone",
-      "query": {"adjacentTo": "-x"},
-      "edge": { "error": "adjacentTo is an object, e.g. adjacentTo: { faceNormal: \"-x\" }, not \"-x\"." },
-      "vertex": { "error": "a vertex query has no key \"adjacentTo\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "adjacentTo": "-x"
+      },
+      "edge": {
+        "error": "adjacentTo is an object, e.g. adjacentTo: { faceNormal: \"-x\" }, not \"-x\"."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"adjacentTo\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "the reference's scoped rim reads as an edge query",
-      "query": {"on": "lip", "at": {"z": "max"}},
-      "edge": { "error": null },
-      "vertex": { "error": "a vertex query has no key \"on\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "on": "lip",
+        "at": {
+          "z": "max"
+        }
+      },
+      "edge": {
+        "error": null
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"on\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     },
     {
       "why": "every edge key at once reads",
-      "query": {"generatedBy": "spine", "curve": "line", "role": "hole", "adjacentTo": {"faceNormal": "+z"}, "at": {"x": "min"}, "dihedral": "concave", "parallel": "y", "longerThan": 2, "on": ["arm", "hub"], "between": ["arm", "hub"]},
-      "edge": { "error": null },
-      "vertex": { "error": "a vertex query has no keys \"adjacentTo\", \"between\", \"curve\", \"dihedral\", \"generatedBy\", \"longerThan\", \"on\", \"parallel\" and \"role\". Its only key is at, e.g. { at: { z: \"max\" } }." }
+      "query": {
+        "generatedBy": "spine",
+        "curve": "line",
+        "role": "hole",
+        "adjacentTo": {
+          "faceNormal": "+z"
+        },
+        "at": {
+          "x": "min"
+        },
+        "dihedral": "concave",
+        "parallel": "y",
+        "longerThan": 2,
+        "on": [
+          "arm",
+          "hub"
+        ],
+        "between": [
+          "arm",
+          "hub"
+        ]
+      },
+      "edge": {
+        "error": null
+      },
+      "vertex": {
+        "error": "a vertex query has no keys \"adjacentTo\", \"between\", \"curve\", \"dihedral\", \"generatedBy\", \"longerThan\", \"on\", \"parallel\" and \"role\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
+    },
+    {
+      "why": "a not is a query of its own, and its keys are checked like any other",
+      "query": {
+        "dihedral": "convex",
+        "not": {
+          "parallel": "z"
+        }
+      },
+      "edge": {
+        "error": null
+      },
+      "vertex": {
+        "error": "a vertex query has no keys \"dihedral\" and \"not\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
+    },
+    {
+      "why": "one level: two negations are a positive term",
+      "query": {
+        "not": {
+          "not": {
+            "parallel": "z"
+          }
+        }
+      },
+      "edge": {
+        "error": "an edge query's not holds another not; one level is all there is, and two negations are a positive term — say that instead"
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"not\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
+    },
+    {
+      "why": "an empty not would take nothing away, which is never what was meant",
+      "query": {
+        "dihedral": "convex",
+        "not": {}
+      },
+      "edge": {
+        "error": "an edge query's not is empty, so it would take nothing away; give it a term, e.g. not: { parallel: \"z\" }"
+      },
+      "vertex": {
+        "error": "a vertex query has no keys \"dihedral\" and \"not\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
+    },
+    {
+      "why": "a key the language does not have is named inside a not too",
+      "query": {
+        "not": {
+          "facing": "-y"
+        }
+      },
+      "edge": {
+        "error": "an edge query has no key \"facing\" (write adjacentTo: { faceNormal: \"-y\" } instead). Its keys are generatedBy, curve, role, adjacentTo, at, dihedral, parallel, longerThan, on, between and not."
+      },
+      "vertex": {
+        "error": "a vertex query has no key \"not\". Its only key is at, e.g. { at: { z: \"max\" } }."
+      }
     }
   ]
 }

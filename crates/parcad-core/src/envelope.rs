@@ -42,6 +42,12 @@ pub const FEATURES: &[&str] = &[
     "held-curves",
     "loft-wall",
     "surfaces",
+    "expect-range",
+    "part-checks",
+    "reference-bodies",
+    "print-orientation",
+    "part-brief",
+    "query-not",
 ];
 
 /// The version of parcad reading the graph.
@@ -55,13 +61,71 @@ fn update_now() -> String {
     )
 }
 
-/// For a failure a newer writer is one explanation of.
+/// For a failure a newer writer is one explanation of: an operation, a field
+/// or a query key this host has never heard of. Never for a value of the
+/// wrong type in a field it reads, which the bundled DSL cannot write and a
+/// newer one would not either.
 fn if_newer() -> String {
     format!(
         "If a newer parcad wrote the part, this host (parcad {HOST_VERSION}) is too old for \
          it: update it (brew upgrade parcad, or the latest release), or point the client at \
          a newer host"
     )
+}
+
+/// Whether a message from serde or a field's own reader describes something
+/// this host does not know, as opposed to a value it knows to be wrong.
+fn names_something_unknown(message: &str) -> bool {
+    message.contains("unknown variant") || message.contains("has no key")
+}
+
+/// serde's `invalid type: integer \`0\`, expected struct V3` in the words a
+/// caller can read: the struct name appears in no document, and the DSL
+/// method that writes the field is the thing to fix.
+fn in_the_callers_words(id: usize, op: &str, message: &str) -> String {
+    let Some(rest) = message.strip_prefix("invalid type: ") else {
+        return message.to_string();
+    };
+    let Some((got, expected)) = rest.split_once(", expected ") else {
+        return message.to_string();
+    };
+    let got = match got.split_once(' ') {
+        Some(("integer" | "floating point", value)) => format!("the number {}", value.trim_matches('`')),
+        Some(("string", value)) => format!("the string {value}"),
+        Some(("boolean", value)) => format!("the boolean {}", value.trim_matches('`')),
+        Some(("null", _)) => "null".to_string(),
+        Some(("sequence", _)) | Some(("a", "sequence")) => "a list".to_string(),
+        Some(("map", _)) | Some(("a", "map")) => "an object".to_string(),
+        _ => got.to_string(),
+    };
+    let expected = match expected {
+        "struct V3" => "a point { x, y, z }".to_string(),
+        other => other.to_string(),
+    };
+    let call = match op {
+        "rotate" => Some(".rotate(axis, degrees)"),
+        "translate" => Some(".at(x, y, z)"),
+        "mirror" => Some(".mirror(axis)"),
+        "scale" => Some(".scale(x, y, z)"),
+        "cuboid" => Some("box(x, y, z)"),
+        "cylinder" => Some("cylinder(r, h)"),
+        "sphere" => Some("sphere(r)"),
+        "fillet" => Some(".fillet(radius, selector)"),
+        "chamfer" => Some(".chamfer(distance, selector)"),
+        "extrude" => Some("extrude(section, height)"),
+        "revolve" => Some("revolve(section, degrees)"),
+        _ => None,
+    };
+    match call {
+        Some(call) => format!(
+            "expected {expected}, got {got}. The DSL writes this field from {call}, so the call that \
+             made node {id} was given the wrong argument"
+        ),
+        None => format!(
+            "expected {expected}, got {got}. The DSL writes this field, so the call that made node \
+             {id} was given the wrong argument"
+        ),
+    }
 }
 
 /// Refuse a graph that asks for a feature this host does not have. Lenient
@@ -99,6 +163,88 @@ pub fn check_requires(graph: &serde_json::Value) -> Result<(), String> {
     Err(format!("this part uses {}. {}", missing.join(", and "), update_now()))
 }
 
+/// Refuse a check this host cannot read, naming the check, the key and the
+/// key that was meant. Shape only — whether a check names bodies the part
+/// has is `Doc::topo_order`'s, once the nodes have been read.
+pub fn check_checks(graph: &serde_json::Value) -> Result<(), String> {
+    use crate::checks::{meant, Check, KEYS};
+    let Some(checks) = graph.get("checks") else {
+        return Ok(());
+    };
+    let Some(checks) = checks.as_array() else {
+        return Err(format!(
+            "the graph's checks is {}, where this host reads a list of checks, e.g. [{{ clear: \
+             [\"top\", \"stacks\"], atLeast: 0.2 }}]",
+            kind_of(checks)
+        ));
+    };
+    for (index, check) in checks.iter().enumerate() {
+        let at = format!("check {}", index + 1);
+        let Some(object) = check.as_object() else {
+            return Err(format!(
+                "{at} is {}, not an object such as {{ clear: [\"top\", \"stacks\"], atLeast: 0.2 }}",
+                kind_of(check)
+            ));
+        };
+        let unknown: Vec<String> = object
+            .keys()
+            .filter(|key| !KEYS.contains(&key.as_str()))
+            .map(|key| match meant(key) {
+                Some(key_meant) => format!("\"{key}\" (write {key_meant} instead)"),
+                None => format!("\"{key}\""),
+            })
+            .collect();
+        if !unknown.is_empty() {
+            return Err(format!(
+                "{at} has no key {}. A check's keys are {}. {}",
+                unknown.join(", "),
+                KEYS.join(", "),
+                if_newer()
+            ));
+        }
+        if let Err(error) = serde_json::from_value::<Check>(check.clone()) {
+            return Err(format!("{at} could not be read: {error}."));
+        }
+    }
+    Ok(())
+}
+
+/// Refuse a brief this host cannot read, naming the key and the key that was
+/// meant. Shape only — whether its numbers are usable is `Doc::topo_order`'s.
+pub fn check_brief(graph: &serde_json::Value) -> Result<(), String> {
+    use crate::brief::{meant, Brief, KEYS};
+    let Some(brief) = graph.get("brief") else {
+        return Ok(());
+    };
+    let Some(object) = brief.as_object() else {
+        return Err(format!(
+            "the graph's brief is {}, where this host reads an object such as \
+             {{ envelope: [95, 70, 16], budgetCm3: 12 }}",
+            kind_of(brief)
+        ));
+    };
+    let unknown: Vec<String> = object
+        .keys()
+        .filter(|key| !KEYS.contains(&key.as_str()))
+        .map(|key| match meant(key) {
+            Some(key_meant) => format!("\"{key}\" (write {key_meant} instead)"),
+            None => format!("\"{key}\""),
+        })
+        .collect();
+    if !unknown.is_empty() {
+        return Err(format!(
+            "the brief has no key {}. A brief's keys are {}. {}",
+            unknown.join(", "),
+            KEYS.join(", "),
+            if_newer()
+        ));
+    }
+    if let Err(error) = serde_json::from_value::<Brief>(brief.clone()) {
+        return Err(format!("the brief could not be read: {error}."));
+    }
+    Ok(())
+}
+
 /// Read an intent graph, or say which node and field could not be read and
 /// what to do about it.
 pub fn parse_doc(graph: serde_json::Value) -> Result<Doc, String> {
@@ -109,6 +255,8 @@ pub fn parse_doc(graph: serde_json::Value) -> Result<Doc, String> {
         ));
     };
     check_requires(&graph)?;
+    check_checks(&graph)?;
+    check_brief(&graph)?;
     if let Some(units) = object.get("units") {
         if units.as_str() != Some("mm") {
             return Err(format!(
@@ -118,10 +266,10 @@ pub fn parse_doc(graph: serde_json::Value) -> Result<Doc, String> {
         }
     }
     for key in object.keys() {
-        if !["units", "root", "nodes", "requires"].contains(&key.as_str()) {
+        if !["units", "root", "nodes", "requires", "checks", "brief"].contains(&key.as_str()) {
             return Err(format!(
                 "the graph has a top-level field \"{key}\" this host does not read, alongside \
-                 units, root, nodes and requires. {}",
+                 units, root, nodes, requires, checks and brief. {}",
                 if_newer()
             ));
         }
@@ -195,10 +343,11 @@ fn explain(
         .and_then(|rest| rest.split_once("\": "))
     {
         let message = message.strip_suffix('.').unwrap_or(message);
-        return format!(
-            "node {id} ({op}), field \"{field}\": {message}. {}",
-            if_newer()
-        );
+        return if names_something_unknown(message) {
+            format!("node {id} ({op}), field \"{field}\": {message}. {}", if_newer())
+        } else {
+            format!("node {id} ({op}), field \"{field}\": {}.", in_the_callers_words(id, op, message))
+        };
     }
     if error.starts_with("unknown variant") {
         return format!(
@@ -232,10 +381,11 @@ fn explain(
         None => format!("node {id} ({op})"),
     };
     let error = error.strip_suffix('.').unwrap_or(error);
-    format!(
-        "{at}: {error}. {}",
-        if_newer()
-    )
+    if names_something_unknown(error) {
+        format!("{at}: {error}. {}", if_newer())
+    } else {
+        format!("{at}: {}.", in_the_callers_words(id, op, error))
+    }
 }
 
 fn kind_of(value: &serde_json::Value) -> &'static str {
@@ -329,7 +479,30 @@ mod tests {
         ] }));
         assert!(message.starts_with("node 0 (extrude), field \"profile\": a section entry is"), "{message}");
         let message = refusal(json!({ "root": 0, "nodes": [{ "op": "sphere", "r": "big" }] }));
-        assert!(message.starts_with("node 0 (sphere), field \"r\": invalid type"), "{message}");
+        assert_eq!(
+            message,
+            "node 0 (sphere), field \"r\": expected f64, got the string \"big\". The DSL writes this field \
+             from sphere(r), so the call that made node 0 was given the wrong argument."
+        );
+    }
+
+    /// `.rotate(0, 0, 45)` put the number 0 in a field that has always been a
+    /// point, and the refusal told the caller to upgrade the host. A wrong
+    /// value in a field this host reads is never a newer writer.
+    #[test]
+    fn a_wrong_type_in_a_known_field_does_not_blame_the_host_s_age() {
+        let message = refusal(json!({ "units": "mm", "root": 1, "nodes": [
+            { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+            { "op": "rotate", "child": 0, "axis": 0, "degrees": 0 }
+        ] }));
+        assert_eq!(
+            message,
+            "node 1 (rotate), field \"axis\": expected a point { x, y, z }, got the number 0. The DSL \
+             writes this field from .rotate(axis, degrees), so the call that made node 1 was given \
+             the wrong argument."
+        );
+        assert!(!message.contains("too old"), "{message}");
+        assert!(!message.contains("V3"), "{message}");
     }
 
     #[test]
@@ -344,6 +517,35 @@ mod tests {
         assert!(message.starts_with("the graph's requires is an object"), "{message}");
         let message = refusal(json!({ "root": "0", "nodes": [{ "op": "sphere", "r": 1 }] }));
         assert!(message.starts_with("the graph's root is a string"), "{message}");
+    }
+
+    #[test]
+    fn a_check_key_nothing_reads_is_refused_with_the_key_that_was_meant() {
+        let graph = |check: serde_json::Value| {
+            json!({ "units": "mm", "root": 2, "checks": [check], "nodes": [
+                { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 }, "tag": "top" },
+                { "op": "cuboid", "size": { "x": 5, "y": 5, "z": 5 }, "tag": "stacks" },
+                { "op": "bodies", "bodies": [{ "name": "top", "child": 0 }, { "name": "stacks", "child": 1 }] }
+            ] })
+        };
+        let message = refusal(graph(json!({ "clear": ["top", "stacks"], "clearance": 0.2 })));
+        assert!(
+            message.starts_with("check 1 has no key \"clearance\" (write atLeast instead). A check's keys are clear,"),
+            "{message}"
+        );
+        let message = refusal(graph(json!({ "thickness": { "min": 1 } })));
+        assert!(message.starts_with("check 1 has no key \"thickness\" (write wall instead)"), "{message}");
+        let message = refusal(graph(json!({ "clear": "top" })));
+        assert!(message.starts_with("check 1 could not be read: "), "{message}");
+        let message = refusal(json!({ "units": "mm", "root": 0, "checks": { "clear": [] }, "nodes": [{ "op": "sphere", "r": 1 }] }));
+        assert!(message.starts_with("the graph's checks is an object"), "{message}");
+        let doc = parse_doc(graph(json!({ "clear": ["top", "stacks"], "atLeast": 0.2, "why": "coins" }))).unwrap();
+        assert_eq!(doc.checks.len(), 1);
+        assert_eq!(doc.checks[0].why.as_deref(), Some("coins"));
+        // Which bodies exist is the graph's own check, after the nodes are read.
+        let doc = parse_doc(graph(json!({ "clear": ["top", "stack"] }))).unwrap();
+        let err = doc.topo_order().unwrap_err().to_string();
+        assert!(err.contains("names a body \"stack\" the part does not return"), "{err}");
     }
 
     #[test]
@@ -375,7 +577,7 @@ mod tests {
             "{message}"
         );
         assert!(
-            message.contains("and between. If a newer parcad wrote the part"),
+            message.contains("and not. If a newer parcad wrote the part"),
             "{message}"
         );
 
@@ -395,9 +597,10 @@ mod tests {
     #[test]
     fn a_bad_value_inside_a_treatment_target_names_the_target() {
         let message = refusal(treating(json!({ "selector": { "at": { "z": "top" } } })));
-        assert!(
-            message.starts_with("node 1 (fillet), field \"selector\": at.z must be \"min\" or \"max\", not \"top\". If"),
-            "{message}"
+        assert_eq!(
+            message,
+            "node 1 (fillet), field \"selector\": at.z must be \"min\" or \"max\", not \"top\".",
+            "a value this host knows to be wrong is not a newer writer"
         );
         let message = refusal(treating(json!({ "selector": { "curve": "arc" } })));
         assert!(

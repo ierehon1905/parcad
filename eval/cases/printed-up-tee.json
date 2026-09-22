@@ -1,0 +1,86 @@
+{
+  "name": "printed-up-tee",
+  "script": "eval/scripts/printed-up-tee.js",
+  "why": "Overhang is measured per body in the orientation it declares. Two copies of a 20 x 20 x 2 plate on a 4 x 4 x 8 post, drawn post down: `drawn` prints as drawn and its plate underside overhangs by 400 - 16 = 384 mm² over a 16 mm² foot on the bed, with a support prism of 384 x 8 = 3072 mm³; `flipped` declares .printedUp(\"-z\") and the same geometry is a plate on the bed with nothing overhanging and 400 mm² down. docs/COIN_HOLDER_REVIEW.md, mechanical §2.1 and §2.8: the stands_on false alarm on every assembled plate.",
+  "brep": {
+    "size": [
+      60.0,
+      20.0,
+      10.0
+    ],
+    "volume_mm3": 1856.0,
+    "area_mm2": 2176.0,
+    "triangles": 56,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 32.0,
+    "stands_on_patches": 2,
+    "watertight": true,
+    "faces": 22,
+    "edges": 96,
+    "curves": 48,
+    "requires": [
+      "print-orientation"
+    ],
+    "named_bodies": {
+      "drawn": {
+        "size": [
+          20.0,
+          20.0,
+          10.0
+        ],
+        "volume_mm3": 928.0,
+        "faces": 11,
+        "edges": 48,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "flipped": {
+        "size": [
+          20.0,
+          20.0,
+          10.0
+        ],
+        "volume_mm3": 928.0,
+        "faces": 11,
+        "edges": 48,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "drawn/flipped": {
+        "verdict": "clear",
+        "clearance_mm": 20.0,
+        "interference_mm3": 0.0
+      }
+    },
+    "overhang": {
+      "drawn": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 384.0,
+        "bed_mm2": 16.0,
+        "faces": 1,
+        "bridges": 0,
+        "support_mm3": 3072.0
+      },
+      "flipped": {
+        "up": [
+          0.0,
+          0.0,
+          -1.0
+        ],
+        "unsupported_mm2": 0.0,
+        "bed_mm2": 400.0,
+        "faces": 0,
+        "bridges": 0
+      }
+    }
+  }
+}

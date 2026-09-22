@@ -1,7 +1,7 @@
 {
   "name": "twisted-planter",
   "script": "examples/twisted-planter.js",
-  "why": "The part ParCAD web opens first, so it has to build, and read right, on a stranger's first visit. Two bodies. The planter: a ruled star loft twisted 60° through nine sections, cut hollow by the same star inset 3 mm at the same section heights, with six drains set between the saucer's first ring of bumps. The saucer: a revolved dish with 37 smooth bumps in rings of 1, 6, 12 and 18 (six more per ring keeps neighbours equally spaced), each a revolved smootherstep profile 2.4 mm tall that leaves the floor level. between_bodies reads the planter touching the bumps and nowhere else; 245 faces is the planter's plus the dish's 7 and one per bump, so no bump was lost (see GOTCHAS.md, a union that drops solids). measure_wall_thickness reads the planter's wall at 2.0 mm with its rim edge rounded; on the sharp rim it reports hundredths of a millimetre at the edge itself, where the flared facet meets the flat top at an acute angle.",
+  "why": "The part ParCAD web opens first, so it has to build, and read right, on a stranger's first visit. Two bodies. The planter: a ruled star loft twisted 60° through nine sections, cut hollow by the same star inset 3 mm at the same section heights, with six drains set between the saucer's first ring of bumps. The saucer: a revolved dish with 37 smooth bumps in rings of 1, 6, 12 and 18 (six more per ring keeps neighbours equally spaced), each a revolved smootherstep profile 2.4 mm tall that leaves the floor level. between_bodies reads the planter touching the bumps and nowhere else; 245 faces is the planter's plus the dish's 7 and one per bump, so no bump was lost (see GOTCHAS.md, a union that drops solids). measure_wall_thickness reads the planter's wall at 2.0 mm with its rim edge rounded; on the sharp rim it reports hundredths of a millimetre at the edge itself, where the flared facet meets the flat top at an acute angle. The planter rests on the bumps over 0.000 mm² in 0 patches: `touching` here is a tangent line where a domed bump meets the floor, not a seat, which is the distinction contact_mm2 exists to draw. Printed as drawn, up +z, the planter has no unsupported face at all and the saucer one, 623.453 mm² of dish underside over a 5280.166 mm² bed patch; facet_sag_mm 0.1845 is how far this ruled loft's walls lie from the smooth loft through the same sections, which is the part's shape and not a mesh artefact.",
   "brep": {
     "size": [
       104.0,
@@ -22,6 +22,7 @@
     "requires": [
       "section-curves"
     ],
+    "facet_sag_mm": 0.1845,
     "named_bodies": {
       "planter": {
         "size": [
@@ -54,7 +55,33 @@
       "planter/saucer": {
         "verdict": "touching",
         "clearance_mm": 0.0,
-        "interference_mm3": 0.0
+        "interference_mm3": 0.0,
+        "contact_mm2": 0.0,
+        "contact_patches": 0
+      }
+    },
+    "overhang": {
+      "planter": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 0.0,
+        "bed_mm2": 2587.54,
+        "faces": 0,
+        "bridges": 0
+      },
+      "saucer": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 623.453,
+        "bed_mm2": 5280.166,
+        "faces": 1,
+        "bridges": 0
       }
     }
   }

@@ -41,14 +41,22 @@ pub fn body_doc(doc: &Doc, body: &str) -> Result<Doc, String> {
         ));
     };
     let Some(found) = bodies.iter().find(|b| b.name == body) else {
-        let names: Vec<_> = bodies.iter().map(|b| format!("{:?}", b.name)).collect();
+        let names: Vec<_> = bodies.iter().filter(|b| !b.reference).map(|b| format!("{:?}", b.name)).collect();
         return Err(format!(
             "no body called {body:?}; the part's bodies are {}",
             names.join(", ")
         ));
     };
+    if found.reference {
+        return Err(format!(
+            "{body:?} is a reference body (.reference()), measured against the part and never \
+             written to a file; export one of the part's own bodies, or leave `body` out"
+        ));
+    }
     let mut alone = doc.clone();
     alone.root = found.child;
+    // A body alone carries no checks: they name the whole part's bodies.
+    alone.checks.clear();
     Ok(alone)
 }
 
@@ -295,11 +303,24 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
     // one a pixel is coloured for.
     let names = parcad_occt::drawing::tag_names(doc);
     let owner_of_face = parcad_occt::drawing::owner_of_face(&evaluated.faces, &names);
-    let face_colors: Vec<Option<[u8; 3]>> = if materials {
+    // A reference body is painted in its colour whether or not materials
+    // were asked for: grey would read as the part.
+    let is_reference = |face: &parcad_occt::protocol::FaceSummary| {
+        face.body.as_deref().is_some_and(|b| evaluated.reference_bodies.iter().any(|r| r == b))
+    };
+    let face_colors: Vec<Option<[u8; 3]>> = if materials || !evaluated.reference_bodies.is_empty() {
         evaluated
             .faces
             .iter()
-            .map(|face| face.material.as_ref().and_then(|m| m.rgb()))
+            .map(|face| {
+                if is_reference(face) {
+                    Some(parcad_core::graph::REFERENCE_RGB)
+                } else if materials {
+                    face.material.as_ref().and_then(|m| m.rgb())
+                } else {
+                    None
+                }
+            })
             .collect()
     } else {
         Vec::new()
@@ -342,6 +363,10 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                 parcad_core::render::paint_faces(&mut shaded, &buffer, &face_colors);
                 (shaded.downsample(opts.supersample.clamp(1, 4)), None, None)
             };
+            // The rule goes on after the downsample so it is drawn at the
+            // size it is read at, and only on a shaded view.
+            let mut image = image;
+            let scale = (!regions).then(|| parcad_core::render::draw_scale(&mut image, bounds));
 
             Ok(Render {
                 summary: RenderedView {
@@ -357,6 +382,8 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                         keep: cut.keep.name().to_string(),
                         cut_fraction: round_fraction(buffer.cut_fraction()),
                     }),
+                    scale_mm: scale.as_ref().map(|bar| round_mm(bar.mm)),
+                    scale_px: scale.as_ref().map(|bar| bar.px),
                     path: None,
                     markdown: None,
                 },
@@ -856,7 +883,116 @@ pub struct Export {
 /// rather than just the outermost message.
 pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evaluated, String> {
     let built = build_exact(doc, budget, false)?;
-    parcad_evaluation::evaluated(doc, &built.success, built.wall_ms, built.reused)
+    let mut evaluated = parcad_evaluation::evaluated(doc, &built.success, built.wall_ms, built.reused)?;
+    // A `wall` check and the print check are each the thickness sweep at
+    // their own threshold, on the build the worker has just made and keeps.
+    let sweep = |min: f64, samples: usize| {
+        let spec = parcad_occt::Perceive {
+            thickness: Some(parcad_occt::ThicknessSpec {
+                max_samples: samples,
+                threshold_mm: Some(min),
+            }),
+            ..Default::default()
+        };
+        perceive(doc, &spec, budget)?
+            .thickness
+            .ok_or_else(|| "the kernel measured no thickness for the wall check".to_string())
+    };
+    if !doc.checks.is_empty() {
+        let mut at_default = |min: f64| sweep(min, DEFAULT_THICKNESS_SAMPLES);
+        evaluated.snapshot.verdicts.checks = Some(parcad_evaluation::checks::judge(doc, &evaluated.snapshot, &mut at_default)?);
+    }
+    // The brief is in every solid reply whether the script carries one or
+    // not: with none, its one line is the nudge, and a model reads it on the
+    // first build of the first turn rather than in the turn that says "it's
+    // too big". Never a door — a part is over its envelope for most of the
+    // time it is designed.
+    if evaluated.snapshot.kind != "surface" {
+        evaluated.snapshot.verdicts.brief = Some(match &doc.brief {
+            Some(brief) => parcad_evaluation::brief::judge(
+                brief,
+                evaluated.snapshot.size,
+                evaluated.snapshot.volume_mm3,
+                &evaluated.snapshot.prints_on,
+            ),
+            None => parcad_evaluation::BriefReport::none(),
+        });
+    }
+    // Judged beside the author's checks, on every build, whether or not
+    // anyone asked: docs/NEXT.md, item 1. evaluate_part never refuses over
+    // it; the door does. Kept with the build, so asking again costs nothing.
+    evaluated.snapshot.verdicts.print_check = match cached_print_check(&built.key) {
+        Some(judged) => judged,
+        None => {
+            let mut for_print = sweep;
+            let judged = parcad_evaluation::print::judge(&evaluated.snapshot, &built.success.overhang, &mut for_print)?;
+            keep_print_check(&built.key, &judged);
+            judged
+        }
+    };
+    Ok(evaluated)
+}
+
+// ------------------------------------------------------------------ the door
+//
+// What stands between a built part and a file. Every verdict a build carries
+// is judged on the way to `export_part`, `save_project` and a writing
+// `edit_part`, and a failing one refuses the write unless the caller gives a
+// reason. One door, with a slot per verdict: today the author's `checks`;
+// `print_check` (docs/NEXT.md, item 1) slots in beside it without a second
+// argument or a second refusal. evaluate_part never refuses over any of
+// them: a model exploring a change needs the picture of the part that failed.
+
+/// Every verdict a build carries, read off its snapshot: the author's
+/// `checks` and the `print_check`, in the one slot each.
+#[derive(Debug, Clone, Default)]
+pub struct Door {
+    pub verdicts: parcad_evaluation::Verdicts,
+}
+
+impl Door {
+    pub fn of(snapshot: &parcad_evaluation::EvaluationSnapshot) -> Self {
+        Self { verdicts: snapshot.verdicts.clone() }
+    }
+
+    /// Each verdict that fails, as one sentence naming the check and what
+    /// was measured, or the print finding and where.
+    pub fn failing(&self) -> Vec<String> {
+        self.verdicts.failing()
+    }
+
+    /// Whether `action` may write: nothing fails, or `allow_failing` gives a
+    /// reason, which is returned to be echoed in the reply. A refusal names
+    /// every failing verdict with its measurement and the one argument that
+    /// opens the door for both.
+    pub fn pass(&self, allow_failing: Option<&str>, action: &str) -> Result<Option<String>, String> {
+        if self.failing().is_empty() {
+            return Ok(None);
+        }
+        if let Some(reason) = allow_failing.map(str::trim).filter(|r| !r.is_empty()) {
+            return Ok(Some(reason.to_string()));
+        }
+        let mut named = Vec::new();
+        if let Some(checks) = self.verdicts.checks.as_ref().filter(|c| c.failing()) {
+            let count = checks.failed.len();
+            let fail = if count == 1 { "check fails" } else { "checks fail" };
+            let sentences: Vec<String> = checks.failed.iter().map(|f| f.sentence()).collect();
+            named.push(format!("{count} of the part's own {fail} — {}", sentences.join("; ")));
+        }
+        if let Some(print) = self.verdicts.print_check.as_ref().filter(|p| !p.failed.is_empty()) {
+            let sentences: Vec<String> = print.failed.iter().map(|f| f.what.clone()).collect();
+            named.push(format!(
+                "print_check fails, nothing prints under {} mm — {}",
+                print.floor_mm,
+                sentences.join("; ")
+            ));
+        }
+        Err(format!(
+            "{action} refused: {}. Fix the part and call again, or pass allow_failing: \
+             \"<why it is acceptable>\" to write it anyway; the reason is kept in the reply.",
+            named.join("; and ")
+        ))
+    }
 }
 
 // ------------------------------------------------------------- build cache
@@ -865,6 +1001,9 @@ pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evalua
 struct Build {
     key: String,
     success: std::sync::Arc<parcad_occt::Success>,
+    /// The print check, once a build has been judged: the sweep is the same
+    /// every time for one build, and in a browser tab each sweep is a pause.
+    print_check: Option<Option<parcad_evaluation::PrintCheck>>,
     /// The STEP file, once something has asked for it.
     step: Option<std::sync::Arc<Vec<u8>>>,
     wall_ms: u64,
@@ -883,10 +1022,24 @@ static BUILDS: std::sync::LazyLock<std::sync::Mutex<std::collections::VecDeque<B
 const BUILDS_KEPT: usize = 8;
 
 struct Built {
+    key: String,
     success: std::sync::Arc<parcad_occt::Success>,
     step: Option<std::sync::Arc<Vec<u8>>>,
     wall_ms: u64,
     reused: bool,
+}
+
+/// The print check kept with a build, if it has been judged.
+fn cached_print_check(key: &str) -> Option<Option<parcad_evaluation::PrintCheck>> {
+    let builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
+    builds.iter().find(|b| b.key == key).and_then(|b| b.print_check.clone())
+}
+
+fn keep_print_check(key: &str, print_check: &Option<parcad_evaluation::PrintCheck>) {
+    let mut builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(build) = builds.iter_mut().find(|b| b.key == key) {
+        build.print_check = Some(print_check.clone());
+    }
 }
 
 fn build_exact(
@@ -903,6 +1056,7 @@ fn build_exact(
         {
             let hit = builds.remove(i).expect("the index was just found");
             let built = Built {
+                key: key.clone(),
                 success: hit.success.clone(),
                 step: hit.step.clone(),
                 wall_ms: hit.wall_ms,
@@ -935,13 +1089,15 @@ fn build_exact(
     let mut builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
     builds.retain(|b| b.key != key);
     builds.push_front(Build {
-        key,
+        key: key.clone(),
         success: success.clone(),
+        print_check: None,
         step: step.clone(),
         wall_ms,
     });
     builds.truncate(BUILDS_KEPT);
     Ok(Built {
+        key,
         success,
         step,
         wall_ms,
@@ -1469,6 +1625,164 @@ pub fn check_fit(part: &str, reference: &str) -> Result<parcad_occt::FitReport, 
         .map_err(|e| format!("{e}"))
 }
 
+// ------------------------------------------------------------ script sources
+//
+// A tool's script comes from one of three places — sent whole, read from a
+// saved project, or taken off the user's screen — and may then be edited
+// before it is built. Resolving that here rather than in each transport is
+// what keeps `parcad call`, MCP and a browser tab building the same text for
+// the same arguments; docs/ARCHITECTURE.md, "A third caller: MCP".
+
+/// The `project` that names the script on the user's screen.
+pub const SESSION: &str = "@session";
+
+/// One replacement in a script.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct Edit {
+    /// The text to replace, copied exactly — spaces and line breaks included —
+    /// from the script as the previous edit left it. It must appear exactly
+    /// once; when it appears twice, give more of the lines around it.
+    pub old: String,
+    /// What to put in its place. Empty deletes `old`.
+    pub new: String,
+}
+
+/// A script a tool is about to build, and where it came from.
+#[derive(Debug, Clone)]
+pub struct Resolved {
+    /// The text to build, with every edit applied.
+    pub script: String,
+    /// The project it was read from: `None` for a script sent whole,
+    /// [`SESSION`] for the screen.
+    pub project: Option<String>,
+    /// The text before the edits — what `expect_sha256` was checked against,
+    /// and what a write replaces.
+    pub before: String,
+    pub edits_applied: usize,
+}
+
+/// The first 12 hex digits of the SHA-256 of a script: how every reply
+/// identifies the text it was measured on without carrying it.
+pub fn script_sha256(script: &str) -> String {
+    use sha2::Digest;
+    let digest = sha2::Sha256::digest(script.as_bytes());
+    digest.iter().take(6).map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Which script a tool builds: `script` sent whole, or `project` as saved —
+/// [`SESSION`] for the screen — and then `edits`, in order. Refused by name
+/// when both or neither is given; `expect` refuses a project whose current
+/// text no longer hashes to what the caller last saw.
+pub fn resolve_script(
+    script: Option<&str>,
+    project: Option<&str>,
+    edits: &[Edit],
+    expect: Option<&str>,
+) -> Result<Resolved, String> {
+    let (before, project, what) = match (script, project) {
+        (Some(_), Some(_)) => {
+            return Err(
+                "give `project` or `script`, not both: `project` builds a saved part as it \
+                 stands (\"@session\" for the script on the user's screen) and costs no script \
+                 to send; `script` builds the text you send. To change a saved part, keep \
+                 `project` and add `edits`."
+                    .to_string(),
+            );
+        }
+        (None, None) => {
+            return Err(
+                "the arguments need `script` or `project`: `project` is a path from \
+                 list_projects, or \"@session\" for the script on the user's screen, and \
+                 builds that part without sending it; `script` is a whole part. Add `edits` \
+                 to build the part with lines changed."
+                    .to_string(),
+            );
+        }
+        (Some(script), None) => (script.to_string(), None, "the script sent".to_string()),
+        (None, Some(SESSION)) => {
+            let on_screen = crate::session::get();
+            if on_screen.name.is_none() || on_screen.script.trim().is_empty() {
+                return Err(
+                    "nothing is on the user's screen yet, so \"@session\" names no script: \
+                     open_project a part first, or give `project` its name, or send `script`."
+                        .to_string(),
+                );
+            }
+            (on_screen.script, Some(SESSION.to_string()), "the script on screen".to_string())
+        }
+        (None, Some(name)) => (
+            crate::projects::read(name)?,
+            Some(name.to_string()),
+            format!("`{name}`"),
+        ),
+    };
+    if let Some(expected) = expect {
+        let actual = script_sha256(&before);
+        let expected = expected.trim().to_ascii_lowercase();
+        if expected.len() < 12 || !actual.starts_with(&expected[..12]) {
+            return Err(format!(
+                "{what} is now {actual}, not {expected}: it changed since you last read it, so \
+                 these edits may not fit. Read it again ({}) and edit from that text, or leave \
+                 `expect_sha256` out to edit whatever is there now.",
+                if project.as_deref() == Some(SESSION) { "get_session" } else { "read_project" }
+            ));
+        }
+    }
+    let script = apply_edits(&before, edits, &what)?;
+    Ok(Resolved {
+        script,
+        project,
+        before,
+        edits_applied: edits.len(),
+    })
+}
+
+/// Every edit applied in order, each to the text as the previous one left it.
+/// An `old` found twice or never is refused with the count and where, and
+/// nothing is returned: a guess at which occurrence was meant is the kind of
+/// approximation this codebase refuses.
+pub fn apply_edits(text: &str, edits: &[Edit], what: &str) -> Result<String, String> {
+    let mut current = text.to_string();
+    for (index, edit) in edits.iter().enumerate() {
+        let nth = index + 1;
+        if edit.old.is_empty() {
+            return Err(format!("edit {nth}'s `old` is empty; give the text to replace."));
+        }
+        let found: Vec<usize> = current.match_indices(&edit.old).map(|(at, _)| at).collect();
+        match found.as_slice() {
+            [at] => {
+                current.replace_range(*at..*at + edit.old.len(), &edit.new);
+            }
+            [] => {
+                return Err(format!(
+                    "edit {nth}'s `old` appears nowhere in {what}, so nothing was changed. Copy \
+                     it exactly from the text as the earlier edits left it — spaces, quotes and \
+                     line breaks included — and check the earlier edits did not already remove it."
+                ));
+            }
+            many => {
+                let lines: Vec<usize> = many
+                    .iter()
+                    .take(2)
+                    .map(|at| 1 + current[..*at].matches('\n').count())
+                    .collect();
+                let first = if lines[0] == lines[1] {
+                    format!("twice on line {}", lines[0])
+                } else {
+                    format!("at lines {} and {}", lines[0], lines[1])
+                };
+                return Err(format!(
+                    "edit {nth}'s `old` appears {} times in {what} (first {first}), so nothing \
+                     was changed. Give more of the lines around it so it appears exactly once.",
+                    many.len(),
+                ));
+            }
+        }
+    }
+    Ok(current)
+}
+
 /// Read one of parcad's own documents: the language reference, or the prose the
 /// parts themselves cite.
 ///
@@ -1487,6 +1801,87 @@ pub fn read_docs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The door refuses naming every failing check with its measurement and
+    /// the argument that opens it; a reason opens it and is handed back; an
+    /// empty reason is no reason.
+    #[test]
+    fn the_door_refuses_a_failing_check_and_a_reason_opens_it() {
+        let failed = parcad_evaluation::ChecksReport {
+            verdict: "failed",
+            passed: 4,
+            failed: vec![parcad_evaluation::FailedCheck {
+                check: "clear top↔stacks atLeast 0.2".into(),
+                measured_mm: Some(0.13),
+                measured_mm3: None,
+                measured_mm2: None,
+                measured: None,
+                at: None,
+                surface_of: None,
+                opposite_surface_of: None,
+                why: Some("coins must not bind on the plate".into()),
+            }],
+        };
+        let door = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(failed.clone()), brief: None, print_check: None } };
+        let refusal = door.pass(None, "export_part").unwrap_err();
+        assert_eq!(
+            refusal,
+            "export_part refused: 1 of the part's own check fails — clear top↔stacks atLeast 0.2 measured \
+             0.13 mm (coins must not bind on the plate). Fix the part and call again, or pass \
+             allow_failing: \"<why it is acceptable>\" to write it anyway; the reason is kept in the reply."
+        );
+        assert!(door.pass(Some("  "), "save_project").unwrap_err().starts_with("save_project refused"));
+        assert_eq!(door.pass(Some("the user accepts the binding"), "save_project").unwrap(), Some("the user accepts the binding".into()));
+        let passed = parcad_evaluation::ChecksReport { verdict: "passed", passed: 5, failed: Vec::new() };
+        let open = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(passed.clone()), brief: None, print_check: None } };
+        assert_eq!(open.pass(None, "export_part").unwrap(), None);
+        assert_eq!(open.pass(Some("unneeded"), "export_part").unwrap(), None, "a reason nothing needs is not echoed");
+        assert_eq!(Door::default().pass(None, "export_part").unwrap(), None, "a part with no checks has no door");
+
+        // The second slot: a failing print_check refuses through the same
+        // argument, a flagged one passes, and one reason opens both verdicts.
+        let print = |failed: Vec<parcad_evaluation::PrintFinding>, flagged: Vec<parcad_evaluation::PrintFinding>| parcad_evaluation::PrintCheck {
+            verdict: if !failed.is_empty() { "failed" } else if !flagged.is_empty() { "flagged" } else { "passed" },
+            failed,
+            flagged,
+            unlisted: 0,
+            thinnest: None,
+            bodies: Vec::new(),
+            floor_mm: parcad_evaluation::print::FLOOR_MM,
+            minimum_mm: parcad_evaluation::print::MINIMUM_MM,
+            overhang_deg: 45.0,
+            samples: 1,
+            note: "",
+        };
+        let feather = parcad_evaluation::PrintFinding {
+            kind: "thin",
+            what: "material thins to 0 mm where `cable` meets `slot` at 15.0°, at [0, -13.768, 2]".into(),
+            fix: "",
+            body: None,
+            thickness_mm: Some(0.0),
+            thin_kind: Some("feather"),
+            removed_mm3: None,
+            unsupported_mm2: None,
+            at: Some([0.0, -13.768, 2.0]),
+            opposite: None,
+            between: None,
+        };
+        let refused = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(passed.clone()), brief: None, print_check: Some(print(vec![feather.clone()], Vec::new())) } };
+        assert_eq!(
+            refused.pass(None, "export_part").unwrap_err(),
+            "export_part refused: print_check fails, nothing prints under 0.3 mm — material thins to 0 mm \
+             where `cable` meets `slot` at 15.0°, at [0, -13.768, 2]. Fix the part and call again, or pass \
+             allow_failing: \"<why it is acceptable>\" to write it anyway; the reason is kept in the reply."
+        );
+        assert_eq!(refused.pass(Some("a knife edge the user wants"), "export_part").unwrap(), Some("a knife edge the user wants".into()));
+        let flagged = Door { verdicts: parcad_evaluation::Verdicts { checks: None, brief: None, print_check: Some(print(Vec::new(), vec![feather.clone()])) } };
+        assert_eq!(flagged.pass(None, "save_project").unwrap(), None, "a flag passes the door");
+        let both = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(failed), brief: None, print_check: Some(print(vec![feather], Vec::new())) } };
+        let message = both.pass(None, "save_project").unwrap_err();
+        assert!(message.starts_with("save_project refused: 1 of the part's own check fails — clear top↔stacks"), "{message}");
+        assert!(message.contains("; and print_check fails, nothing prints under 0.3 mm — material thins"), "{message}");
+        assert_eq!(both.pass(Some("both accepted for a test piece"), "save_project").unwrap(), Some("both accepted for a test piece".into()));
+    }
 
     /// Documents are built from JSON rather than from `Op` values: this is the
     /// shape a DSL script actually produces, and the reporting bug these tests
@@ -1522,17 +1917,17 @@ mod tests {
                 { "op": "fillet", "child": 0, "radius": 2, "selector": ">Z" },
                 { "op": "chamfer", "child": 1, "distance": 1, "selector": "<Z" },
             ],
-        })));
+        })), &[parcad_occt::protocol::TreatmentEdges { node: 1, edges: 4 }, parcad_occt::protocol::TreatmentEdges { node: 2, edges: 4 }]);
 
         let reported: Vec<_> = treatments
             .iter()
-            .map(|t| (t.node, t.op.as_str(), t.amount_mm, t.continuity.as_deref()))
+            .map(|t| (t.node, t.op.as_str(), t.amount_mm, t.continuity.as_deref(), t.edges))
             .collect();
         assert_eq!(
             reported,
             [
-                (1, "fillet", 2.0, Some("tangent")),
-                (2, "chamfer", 1.0, None),
+                (1, "fillet", 2.0, Some("tangent"), Some(4)),
+                (2, "chamfer", 1.0, None, Some(4)),
             ]
         );
     }
@@ -1554,7 +1949,7 @@ mod tests {
                     "recipe": { "continuity": "curvature" },
                 },
             ],
-        })));
+        })), &[]);
 
         assert_eq!(treatments.len(), 1);
         assert_eq!(treatments[0].op, "fillet");
@@ -2210,11 +2605,50 @@ mod tests {
                 { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
                 { "op": "fillet", "child": 0, "radius": 2, "selector": ">Z" },
             ],
-        })));
+        })), &[]);
 
         assert!(
             treatments.is_empty(),
             "a fillet outside the root's dependencies is not in the part: {treatments:?}"
         );
+    }
+
+    /// The hash every reply identifies its script by: twelve hex digits of
+    /// SHA-256, the same digits an OnScreen reply gives for the same text.
+    #[test]
+    fn a_script_is_identified_by_twelve_hex_digits_of_its_sha256() {
+        assert_eq!(script_sha256("return box(1,1,1);"), "95bebadc1faf");
+        assert_eq!(script_sha256("").len(), 12);
+    }
+
+    /// The saved text is what `project` builds; the screen is `@session`,
+    /// and only when something is on it.
+    #[test]
+    fn a_project_resolves_to_its_saved_text_and_the_session_to_the_screen() {
+        crate::projects::tests::scoped(|_| {
+            crate::session::tests::scoped(|| {
+                crate::projects::create("tray", "return box(1,1,1);").unwrap();
+                let saved = resolve_script(None, Some("tray"), &[], None).unwrap();
+                assert_eq!((saved.script.as_str(), saved.project.as_deref(), saved.edits_applied), ("return box(1,1,1);", Some("tray"), 0));
+                let missing = resolve_script(None, Some("nothing-here"), &[], None).err().unwrap();
+                assert!(missing.contains("nothing-here"), "{missing}");
+
+                let empty = resolve_script(None, Some(SESSION), &[], None).err().unwrap();
+                assert!(empty.starts_with("nothing is on the user's screen yet"), "{empty}");
+                crate::session::push(Some("tray".into()), "return box(2,2,2);".into(), "tab-a".into(), None);
+                let screen = resolve_script(None, Some(SESSION), &[Edit { old: "2,2,2".into(), new: "3,3,3".into() }], None).unwrap();
+                assert_eq!(screen.script, "return box(3,3,3);");
+                assert_eq!(screen.before, "return box(2,2,2);");
+                assert_eq!(screen.project.as_deref(), Some(SESSION));
+                assert_eq!(screen.edits_applied, 1);
+                assert_eq!(crate::session::get().script, "return box(2,2,2);", "resolving writes nothing");
+                assert_eq!(crate::projects::read("tray").unwrap(), "return box(1,1,1);");
+
+                let sent = resolve_script(Some("return box(4,4,4);"), None, &[], None).unwrap();
+                assert_eq!((sent.script.as_str(), sent.project), ("return box(4,4,4);", None));
+                let stale = resolve_script(None, Some(SESSION), &[], Some("000000000000")).err().unwrap();
+                assert!(stale.contains("get_session"), "{stale}");
+            })
+        })
     }
 }

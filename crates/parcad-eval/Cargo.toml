@@ -17,3 +17,6 @@ parcad-core = { path = "../parcad-core" }
 # the harness builds without a line of C++ and asks the worker for geometry the
 # same way the app does. Cases needing the kernel skip loudly when it is absent.
 parcad-occt = { path = "../parcad-occt" }
+# The judge of a part's own `checks`, so a case records the verdict the app's
+# reply carries and not a second reading of it.
+parcad-evaluation = { path = "../parcad-evaluation" }

@@ -43,7 +43,57 @@ import type { FaceMaterial, Viewport } from "./viewport";
  *
  * Millimetres throughout. Triples are `[x, y, z]`.
  */
+/** One place the print check has something to say about. */
+export interface PrintFinding {
+  kind: "thin" | "collision" | "overhang";
+  what: string;
+  fix: string;
+  body?: string;
+  thickness_mm?: number;
+  thin_kind?: "feather" | "wall" | "edge";
+  removed_mm3?: number;
+  unsupported_mm2?: number;
+  at?: [number, number, number];
+  between?: [string, string];
+}
+
 export interface EvaluationSnapshot {
+  /** The part's own checks, judged on this build; absent when the script carries none. */
+  checks?: { verdict: "passed" | "failed"; passed: number; failed?: { check: string; measured_mm?: number; measured_mm3?: number; why?: string }[] };
+  /** What the part is for, judged on every build; the verdict is `meets`,
+   *  `over: ...`, or the one line that says there is no brief to judge it by. */
+  brief?: {
+    verdict: string;
+    envelope?: { given: [number, number, number]; measured: [number, number, number]; fits: boolean; over_mm?: number; on?: string };
+    budget_cm3?: { given: number; measured: number; fits: boolean; over_cm3?: number };
+    printer?: { given: string; fits?: boolean; note?: string };
+    holds?: string[];
+    gesture?: string;
+    material?: string;
+  };
+  /** Whether the part prints, judged on every build: `failed` where nothing
+   *  prints (under `floor_mm`), `flagged` for what prints but should be read. */
+  print_check?: {
+    verdict: "passed" | "flagged" | "failed";
+    failed?: PrintFinding[];
+    flagged?: PrintFinding[];
+    thinnest?: PrintFinding;
+    /** Each body as it prints: its bed contact and overhang in that orientation. */
+    bodies?: {
+      body: string;
+      up: string;
+      declared: boolean;
+      bed_mm2: number;
+      footprint_fraction: number;
+      unsupported_mm2: number;
+      overhanging_faces: number;
+      support_mm3?: number;
+      sampled: boolean;
+    }[];
+    floor_mm: number;
+    minimum_mm: number;
+    overhang_deg: number;
+  };
   units: string;
   /** `solid`, `surface` (faces with no inside) or `mixed` (named bodies of both). */
   kind: "solid" | "surface" | "mixed";
@@ -85,6 +135,8 @@ export interface EvaluationSnapshot {
   named_bodies?: {
     name: string;
     kind: "solid" | "surface";
+    /** A `.reference()` body: drawn and measured against the part, not part of it. */
+    reference?: boolean;
     volume_mm3?: number;
     faces: number;
     watertight?: boolean;
@@ -98,6 +150,13 @@ export interface EvaluationSnapshot {
     verdict: "clear" | "touching" | "interfering" | "crossing";
     interference_mm3: number;
     clearance_mm?: number;
+    /** How far one reaches into the other, when they interfere. */
+    depth_mm?: number;
+    deepest_mm?: [number, number, number];
+    /** The surface they share, when they touch: a seat, or a corner at 0. */
+    contact_mm2?: number;
+    contact_patches?: number;
+    contact_center_mm?: [number, number, number];
   }[];
   /** The surface in the part's lowest plane and how many patches it is in;
    *  what a printed part rests on. Absent only for an empty mesh. */
@@ -109,9 +168,26 @@ export interface EvaluationSnapshot {
     tolerance_mm: number;
   };
   tags: string[];
+  /** Every cut that took material from a named feature besides its target:
+   *  "grille cuts boss", with the mm³ it took and where. Absent when none did. */
+  collisions?: {
+    cut: string;
+    target: string;
+    feature: string;
+    removed_mm3: number;
+    at: [number, number, number];
+    extent_mm: [number, number, number];
+    body?: string;
+  }[];
   treatments: { node: number; op: string; amount_mm: number; continuity?: string }[];
   /** Shapes the root never reaches. Absent when there are none. */
   unused_nodes?: number;
+  /** What the script reported with `note()`: requested, never measured. */
+  notes?: {
+    source: "from the script, not measured";
+    values: { label: string; value: number | string | number[] }[];
+    dropped?: number;
+  };
   /** Which kernel measured this: `brep`, the only one. */
   backend: "brep";
   kernel_ms: number;

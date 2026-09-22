@@ -1,6 +1,6 @@
 //! Script in, observation out.
 
-use crate::case::{BetweenExpect, BodyExpect, Observed, RefusalKind};
+use crate::case::{BetweenExpect, BodyExpect, BriefExpect, ChecksExpect, CollisionExpect, Observed, OverhangExpect, RefusalKind};
 use anyhow::{Context, Result};
 use parcad_core::graph::Doc;
 use std::collections::BTreeMap;
@@ -72,12 +72,8 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
     // Weld first. OCCT triangulates face by face, so an unwelded mesh reports
     // thousands of "bad edges" on a perfectly closed solid and every mass
     // property computed from it is wrong.
-    let vertices: Vec<[f32; 3]> = s.positions.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
-    let triangles: Vec<[usize; 3]> = s
-        .indices
-        .chunks_exact(3)
-        .map(|c| [c[0] as usize, c[1] as usize, c[2] as usize])
-        .collect();
+    // The part's own mesh, as every file and whole-part number reads it.
+    let (vertices, triangles) = s.part_mesh();
     let tess = parcad_core::mesh::Tessellation {
         vertices,
         triangles,
@@ -95,11 +91,19 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
     let mass = parcad_core::measure::mass_properties(&tess.vertices, &tess.triangles);
     let size = bounds.size();
     let (tags, unlocated_tags) = locate_tags(&s);
+    let checks = match judge_checks(doc, &s, timeout) {
+        Ok(checks) => checks,
+        Err(message) => return Outcome::Refused { kind: RefusalKind::Host, message },
+    };
+    let brief = match judge_brief(doc, &s) {
+        Ok(brief) => brief,
+        Err(message) => return Outcome::Refused { kind: RefusalKind::Host, message },
+    };
 
     let kinds: Vec<bool> = if s.bodies.is_empty() {
         vec![s.kind.is_solid()]
     } else {
-        s.bodies.iter().map(|b| b.kind.is_solid()).collect()
+        s.bodies.iter().filter(|b| !b.reference).map(|b| b.kind.is_solid()).collect()
     };
     let kind = if kinds.iter().all(|k| *k) {
         "solid"
@@ -121,7 +125,7 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
         watertight: stats.watertight,
         faces: Some(s.topology.faces),
         edges: Some(s.topology.edges),
-        curves: Some(s.edges.len()),
+        curves: Some(s.edges.iter().filter(|e| !e.body.as_deref().is_some_and(|b| s.reference_bodies().contains(&b))).count()),
         bodies: stats.bodies,
         voids: stats.voids,
         stands_on: tess.bed_contact(),
@@ -142,6 +146,7 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
                 (
                     b.name,
                     BodyExpect {
+                        reference: b.reference,
                         size: [size.x, size.y, size.z],
                         volume_mm3: b.mass.volume_mm3,
                         faces: b.faces,
@@ -153,6 +158,18 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
                 )
             })
             .collect(),
+        checks,
+        brief,
+        collisions: s
+            .collisions
+            .iter()
+            .map(|c| (format!("{}/{}", c.cut, c.feature), CollisionExpect { target: c.target.clone(), removed_mm3: c.removed_mm3 }))
+            .collect(),
+        overhang: s
+            .overhang
+            .iter()
+            .map(|o| (o.body.clone().unwrap_or_else(|| "part".to_string()), OverhangExpect::from(o)))
+            .collect(),
         between_bodies: s
             .between
             .iter()
@@ -163,11 +180,53 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
                         verdict: f.verdict.clone(),
                         clearance_mm: f.clearance_mm,
                         interference_mm3: f.interference_mm3,
+                        depth_mm: f.depth_mm,
+                        contact_mm2: f.contact_mm2,
+                        contact_patches: f.contact_patches,
                     },
                 )
             })
             .collect(),
     })
+}
+
+/// The part's own checks, judged exactly as the app's reply judges them: off
+/// the snapshot the same measure code builds, with a `wall` check's sweep
+/// asked of the worker that has just built the part.
+fn judge_checks(doc: &Doc, s: &parcad_occt::Success, timeout: std::time::Duration) -> Result<Option<ChecksExpect>, String> {
+    if doc.checks.is_empty() {
+        return Ok(None);
+    }
+    let evaluated = parcad_evaluation::evaluated(doc, s, 0, false)?;
+    let mut sweep = |min: f64| {
+        let spec = parcad_occt::Perceive {
+            thickness: Some(parcad_occt::ThicknessSpec { max_samples: 6000, threshold_mm: Some(min) }),
+            ..Default::default()
+        };
+        let opts = parcad_occt::Options { timeout, ..Default::default() };
+        parcad_occt::perceive(doc, &spec, &opts)
+            .map_err(|e| e.to_string())?
+            .thickness
+            .ok_or_else(|| "the kernel measured no thickness for the wall check".to_string())
+    };
+    let report = parcad_evaluation::checks::judge(doc, &evaluated.snapshot, &mut sweep)?;
+    Ok(Some(ChecksExpect::from(&report)))
+}
+
+/// The verdict on a part's brief, for a part that declares one. Judged from
+/// the same snapshot the app's reply carries, so a case pins what a reader
+/// is told rather than a second computation of it.
+fn judge_brief(doc: &Doc, s: &parcad_occt::Success) -> std::result::Result<Option<BriefExpect>, String> {
+    let Some(brief) = &doc.brief else { return Ok(None) };
+    let evaluated = parcad_evaluation::evaluated(doc, s, 0, false)?;
+    let snapshot = &evaluated.snapshot;
+    let report = parcad_evaluation::brief::judge(brief, snapshot.size, snapshot.volume_mm3, &snapshot.prints_on);
+    Ok(Some(BriefExpect {
+        verdict: report.verdict.clone(),
+        envelope_over_mm: report.envelope.as_ref().and_then(|e| e.over_mm),
+        envelope_on: report.envelope.as_ref().and_then(|e| e.on.clone()),
+        budget_cm3: report.budget_cm3.as_ref().map(|b| b.measured),
+    }))
 }
 
 /// Where each tag's faces sit, as the kernel reports them and the app's
@@ -235,6 +294,8 @@ pub fn brep_available() -> std::result::Result<(), String> {
         root: 0,
         units: "mm".to_string(),
         requires: Vec::new(),
+        brief: None,
+        checks: Vec::new(),
     };
 
     match parcad_occt::evaluate(&doc, &parcad_occt::Options::default()) {

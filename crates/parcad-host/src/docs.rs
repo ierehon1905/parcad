@@ -771,14 +771,20 @@ mod tests {
     /// and nothing a script would call. Adding a name here is a decision, which
     /// is the point — the alternative is an export quietly missing from the one
     /// document that claims to list all of them.
-    const NOT_IN_THE_LANGUAGE: [&str; 1] = ["__parcadTreatmentSource"];
+    // The `__parcad` exports are the compilers' own helpers — the editor's
+    // treatment locator, the proof of which builtin a script redeclared —
+    // named so that no part would reach for them.
+    const NOT_IN_THE_LANGUAGE: [&str; 4] =
+        ["__parcadTreatmentSource", "__parcadShadowedBuiltins", "__parcadShadowedBuiltinMessage", "__parcadTakeNotes"];
 
     /// Members the classes carry for the editor rather than for a script.
-    const NOT_CALLABLE: [&str; 8] = [
+    const NOT_CALLABLE: [&str; 10] = [
         "constructor",
         "treatmentCall",
         "tagName",
         "materialSpec",
+        "referenceBody",
+        "printedUpDirection",
         "children",
         "toNode",
         "filletVertices",

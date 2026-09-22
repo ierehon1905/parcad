@@ -13,6 +13,7 @@
 //! socket: the same routes, the same MCP server and the same project folder,
 //! kept in the browser's storage.
 
+pub mod arguments;
 pub mod assets;
 pub mod docs;
 pub mod generative;

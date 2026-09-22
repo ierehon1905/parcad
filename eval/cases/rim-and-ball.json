@@ -1,0 +1,126 @@
+{
+  "name": "rim-and-ball",
+  "script": "eval/scripts/rim-and-ball.js",
+  "why": "One word, two different things. Both pairs are `touching` with clearance 0, which is everything the reply used to carry about either. The lid seats on the cup's whole rim ring, π(30²-27²) = 537.212 mm² in one patch, and the number is exact on a face bounded by circles — BRepGProp on the shared skin, where the same area off a 0.01 mm mesh is a tenth of a percent short. The ball rests on the floor at one point: 0.000 mm² in 0 patches. The part's check asks the lid for 500 mm² and passes on the 537; drawn on the ball it would fail on 0. docs/COIN_HOLDER_REVIEW.md §2.3.",
+  "brep": {
+    "size": [
+      59.995,
+      59.998,
+      15.0
+    ],
+    "volume_mm3": 17738.002,
+    "area_mm2": 16314.184,
+    "triangles": 7038,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 2826.812,
+    "stands_on_patches": 1,
+    "watertight": false,
+    "faces": 9,
+    "edges": 22,
+    "curves": 6,
+    "requires": [
+      "part-checks"
+    ],
+    "named_bodies": {
+      "ball": {
+        "size": [
+          9.995,
+          9.998,
+          10.0
+        ],
+        "volume_mm3": 522.093,
+        "faces": 1,
+        "edges": 4,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "cup": {
+        "size": [
+          59.995,
+          59.998,
+          12.0
+        ],
+        "volume_mm3": 8735.473,
+        "faces": 5,
+        "edges": 12,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "lid": {
+        "size": [
+          59.995,
+          59.998,
+          3.0
+        ],
+        "volume_mm3": 8480.435,
+        "faces": 3,
+        "edges": 6,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "cup/ball": {
+        "verdict": "touching",
+        "clearance_mm": 0.0,
+        "interference_mm3": 0.0,
+        "contact_mm2": 0.0,
+        "contact_patches": 0
+      },
+      "cup/lid": {
+        "verdict": "touching",
+        "clearance_mm": 0.0,
+        "interference_mm3": 0.0,
+        "contact_mm2": 537.212,
+        "contact_patches": 1
+      },
+      "lid/ball": {
+        "verdict": "clear",
+        "clearance_mm": 1.0,
+        "interference_mm3": 0.0
+      }
+    },
+    "checks": {
+      "passed": 1
+    },
+    "overhang": {
+      "ball": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 45.916,
+        "bed_mm2": 0.0,
+        "faces": 1,
+        "bridges": 0
+      },
+      "cup": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 0.0,
+        "bed_mm2": 2826.812,
+        "faces": 0,
+        "bridges": 0
+      },
+      "lid": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 0.0,
+        "bed_mm2": 2826.812,
+        "faces": 0,
+        "bridges": 0
+      }
+    }
+  }
+}
