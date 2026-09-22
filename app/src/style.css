@@ -144,26 +144,48 @@
      panel, which is much darker, so the shape is copied and the strength is
      measured against the surface it actually falls on.
 
-     `overflow: hidden` is what makes the radius clip a card whose first row is
-     a block of its own colour. */
+     Nothing is clipped here, and that is deliberate: CodeMirror hangs the
+     completion details panel off the *list* as a child and then places it
+     entirely outside the list's own box, so an `overflow: hidden` for the sake
+     of the corners deletes it. docs/GOTCHAS.md, "The completion details panel
+     is outside its parent". */
   .cm-editor .cm-tooltip {
     /* `border-ink/15` rather than the line token: a rule between two panels and
        the edge of something floating over the text are different jobs, and
        Monaco draws the second one far brighter against its surface than the
        first. Same reasoning as the shadow above. */
-    @apply bg-panel-2 border border-ink/15 rounded-lg overflow-hidden;
+    @apply bg-panel-2 border border-ink/15 rounded-lg;
     box-shadow: 0 0 12px rgb(0 0 0 / 0.5);
     line-height: 1.5em;
   }
 
   /* The two that carry prose, and so are the two CodeMirror may have to cut
      short: it shrinks a card to the room `tooltipSpace` leaves and the rest
-     has to scroll rather than vanish. Only these two — a completion list is
-     already a millimetre taller than its own rows, and `auto` on it is a
-     scrollbar for one pixel of rounding. */
+     has to scroll rather than vanish. `auto` is also what keeps the corners
+     honest, because a section rule inside a card is drawn past the padding.
+     Only these two — a completion list is already a pixel taller than its own
+     rows, and `auto` on it is a scrollbar for nothing. */
   .cm-editor .cm-tooltip-hover,
   .cm-editor .cm-completionInfo {
     @apply overflow-auto overscroll-contain;
+  }
+
+  /* How wide this app's own cards may be — the hover and the parameter hints.
+     `max-content` is load-bearing: a floating box with an automatic width is
+     as wide as the space beside it, so it changes when CodeMirror moves the
+     card, and the card opens at its proper size and then squashes. The cap is
+     the smaller of a comfortable measure and the window, because `max-content`
+     will otherwise ask for more room than there is and be cut off at the edge
+     of the screen. A card may cover the viewport beside it; it may not fall
+     off the end of it.
+
+     The completion details panel is not in this list. CodeMirror sizes that
+     one itself, to the room beside the list, and a width of our own there is
+     only a way to be trimmed at its edge. */
+  .cm-editor .cm-tooltip-hover,
+  .cm-editor .cm-tooltip-signature {
+    width: max-content;
+    max-width: min(720px, calc(100vw - 1rem));
   }
 
   /* The completion list, given the editor's own font and the accent's deep

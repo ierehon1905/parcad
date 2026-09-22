@@ -170,6 +170,26 @@ describe("what a completion offers", () => {
   });
 });
 
+describe("what the panel beside a completion says", () => {
+  // The panel was a signature and nothing else for three commits, because a
+  // DSL name is declared as an alias with no comment of its own and only a
+  // hover resolves the alias. A check that reads the reply cannot see that a
+  // panel is empty on screen; a check that reads the reply's documentation can.
+  test("a DSL name carries the same prose and example as its hover", () => {
+    analyzer.setPart("const q = hole");
+    const detail = analyzer.completionDetail(14, "holeFor")!;
+    expect(detail.documentation.map((span) => span.text).join("")).toContain("named fastener");
+    expect(detail.tags.map((tag) => tag.name)).toContain("example");
+  });
+
+  test("and so does a method", () => {
+    const source = "const p = box(1, 2, 3);\np.";
+    analyzer.setPart(source);
+    const detail = analyzer.completionDetail(source.length, "fillet")!;
+    expect(detail.documentation.map((span) => span.text).join("")).toContain("Round the edges");
+  });
+});
+
 describe("which argument is being typed", () => {
   test("the second, after the comma", () => {
     const source = 'return holeFor("M5", ';

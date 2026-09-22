@@ -20,7 +20,7 @@ import { EditorView, showTooltip, type Tooltip } from "@codemirror/view";
 import { render } from "preact";
 
 import type { SignatureInfo } from "./analyzer";
-import { Code, InfoCard } from "./card";
+import { Card, Code, InfoCard } from "./card";
 import * as service from "./service";
 
 /**
@@ -31,14 +31,16 @@ import * as service from "./service";
  * put a class on it. Height is its business too — it shrinks a card to the room
  * `tooltipSpace` says there is. What is left here is how wide one may grow.
  *
- * `w-max` is load-bearing: a floating box with an automatic width is as wide as
- * the space beside it, so the width changes when CodeMirror moves it, and a
- * card opens at its proper size and then squashes. `max-content` asks for the
- * width the text wants and nothing else, which no later move can change.
+ * How wide one may grow is `Card`'s, which is the box each of these draws.
  */
-function card(draw: (into: HTMLElement) => void) {
+function card(draw: (into: HTMLElement) => void, name?: string) {
   const dom = document.createElement("div");
-  dom.className = "text-ink px-2 py-1 w-max max-w-[720px]";
+  // CodeMirror adds `cm-tooltip` to a tooltip's own element and names the hover
+  // and the completion list itself. The parameter hints are the one floating
+  // box with nothing to style them by, so they are named here — and the
+  // completion details panel is deliberately *not*, because the element this
+  // builds for it goes inside a panel CodeMirror has already sized.
+  if (name) dom.className = name;
   draw(dom);
   return { dom, destroy: () => render(null, dom) };
 }
@@ -84,7 +86,16 @@ async function complete(context: CompletionContext): Promise<CompletionResult | 
       boost: 99 - Math.min(99, Number(entry.sortText.slice(0, 2)) || 50),
       info: () =>
         service.completionDetail(context.pos, entry.label).then((info) =>
-          info ? card((into) => render(<InfoCard info={info} />, into)) : null,
+          info
+            ? card((into) =>
+                render(
+                  <Card>
+                    <InfoCard info={info} />
+                  </Card>,
+                  into,
+                ),
+              )
+            : null,
         ),
     })),
     validFor: /^[\w$]*$/,
@@ -157,7 +168,17 @@ async function updateSignature(view: EditorView) {
         ? {
             pos,
             above: true,
-            create: () => card((into) => render(<SignatureBar help={help} />, into)),
+            create: () =>
+              card(
+                (into) =>
+                  render(
+                    <Card>
+                      <SignatureBar help={help} />
+                    </Card>,
+                    into,
+                  ),
+                "cm-tooltip-signature",
+              ),
           }
         : null,
     ),

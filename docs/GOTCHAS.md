@@ -1822,3 +1822,21 @@ The declarations are generated from `script::surface()` — the DSL evaluated in
 the sandbox — so they are the names `new Function` binds, not the names a parser
 found. A `jsconfig.json` without parcad's marker comment belongs to the user and
 is never replaced.
+
+## The completion details panel is outside its parent
+
+CodeMirror hangs `.cm-completionInfo` off the completion list as a *child*, and
+then positions it entirely beside the list — parent right edge 361, panel left
+edge 365, in the measurement that found this. Any `overflow: hidden` on
+`.cm-tooltip` therefore does not trim the panel, it deletes it: the layout still
+reports a sensible box and sensible text, and nothing is painted.
+
+That is what makes it worth writing down. The panel was invisible for three
+commits while a check that read `innerText` off the element reported it working,
+because `innerText` cannot see a clip. `document.elementFromPoint` inside the
+panel's own box is the test that finds it — it answered `CANVAS`, the viewport
+behind.
+
+So the radius is clipped on `.cm-tooltip-hover` and `.cm-completionInfo`, which
+need it because a section rule is drawn past their padding, and never on the
+list.

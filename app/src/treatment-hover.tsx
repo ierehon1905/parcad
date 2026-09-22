@@ -25,7 +25,7 @@ import type { Extension } from "@codemirror/state";
 import { Fragment, render } from "preact";
 
 import type { Info } from "./intellisense/analyzer";
-import { InfoCard, Rule } from "./intellisense/card";
+import { Card, InfoCard, Rule } from "./intellisense/card";
 import {
   treatmentActions,
   treatmentRows,
@@ -193,7 +193,7 @@ function HoverCard({
   if (!info && !node) return null;
 
   return (
-    <div class="text-ink font-mono text-small px-2 py-1 w-max max-w-[720px]">
+    <Card>
       {info && <InfoCard info={info} />}
       {node && (
         <>
@@ -230,7 +230,7 @@ function HoverCard({
           </div>
         </>
       )}
-    </div>
+    </Card>
   );
 }
 

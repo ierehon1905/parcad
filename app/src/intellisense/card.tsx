@@ -17,6 +17,8 @@ import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { highlightCode, tags } from "@lezer/highlight";
 import type { Tag } from "@lezer/highlight";
 
+import type { ComponentChildren } from "preact";
+
 import type { Info, Span } from "./analyzer";
 import { wrapSignature } from "./signature";
 
@@ -120,6 +122,20 @@ function Example({ code }: { code: string }) {
 }
 
 const text = (spans: Span[]) => spans.map((span) => span.text).join("");
+
+/**
+ * The box every floating card is drawn in.
+ *
+ * It takes the width of whatever CodeMirror put it in and never asks for more:
+ * the completion details panel is sized by CodeMirror to the room beside the
+ * list, and a card that insists on its own width there is simply cut off at
+ * the panel's edge. How wide these boxes may be is in `style.css`, on the
+ * elements CodeMirror renders — which is also where the background, border,
+ * radius and shadow are, for the same reason.
+ */
+export function Card({ children }: { children: ComponentChildren }) {
+  return <div class="text-ink font-mono text-small px-2 py-1 max-w-full">{children}</div>;
+}
 
 /**
  * The rule between two rows of a card, drawn edge to edge.

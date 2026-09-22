@@ -15,6 +15,7 @@
 import ts from "typescript";
 
 import {
+  DSL_FILE,
   GLOBALS_FILE,
   PART_FILE,
   compilerText,
@@ -191,10 +192,18 @@ export function createAnalyzer(sources: AnalyzerSources) {
         undefined,
       );
       if (!details) return undefined;
+      const documentation = spans(details.documentation);
+      // A DSL name is declared as `declare const box: typeof import("./dsl").box`
+      // and that declaration carries no comment of its own, so the details for
+      // it come back with a signature and nothing else. A hover does not have
+      // this problem — it resolves the alias — and the difference is invisible
+      // unless the panel is actually looked at. So when the entry has nothing
+      // to say, the module's own export is asked instead.
+      const doc = documentation.length === 0 ? exported(label) : undefined;
       return {
         signature: spans(details.displayParts),
-        documentation: spans(details.documentation),
-        tags: tagsOf(details.tags),
+        documentation: doc ? spans(doc.documentation) : documentation,
+        tags: doc ? tagsOf(doc.tags) : tagsOf(details.tags),
       };
     },
 
@@ -250,6 +259,29 @@ export function createAnalyzer(sources: AnalyzerSources) {
       return [...problems, ...rebindings()];
     },
   };
+
+  /**
+   * What `dsl.ts` says about one of its exports, read off the compiler.
+   *
+   * The checker rather than a second parse of the source: the doc comment a
+   * completion shows is then the same text a hover shows and the same text
+   * `read_docs` serves, and there is no third reading of `dsl.ts` to keep in
+   * step with the other two.
+   */
+  function exported(name: string) {
+    const program = service.getProgram();
+    const file = program?.getSourceFile(DSL_FILE);
+    const checker = program?.getTypeChecker();
+    if (!file || !checker) return undefined;
+    const module = checker.getSymbolAtLocation(file);
+    if (!module) return undefined;
+    const symbol = checker.getExportsOfModule(module).find((one) => one.name === name);
+    if (!symbol) return undefined;
+    return {
+      documentation: symbol.getDocumentationComment(checker),
+      tags: symbol.getJsDocTags(checker),
+    };
+  }
 
   /**
    * Names the part declares that the DSL already holds.
