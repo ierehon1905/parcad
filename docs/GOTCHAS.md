@@ -1862,3 +1862,34 @@ behind.
 So the radius is clipped on `.cm-tooltip-hover` and `.cm-completionInfo`, which
 need it because a section rule is drawn past their padding, and never on the
 list.
+
+## The webview is not the browser you tested in
+
+`requestIdleCallback` does not exist in WKWebView. It is in Safari, it is in
+every browser this app is developed against, and it is not in the webview the
+desktop app actually ships. Calling it unguarded in `ui/editor.tsx` threw
+inside the editor's mount effect, which took the whole Preact tree with it: no
+viewport, no parts picker, nothing but a titlebar and a report — because the
+report's text comes from a path that had already rendered.
+
+Three things let it through, and all three are worth keeping in mind:
+
+- **Every check was a browser check.** The dev server, the production bundle
+  served over HTTP, a second app instance read through Chromium — all of them
+  render correctly, because all of them are not WKWebView. The failure needs
+  the app's own window.
+- **`tools/test-desktop.sh` was not in `tools/check.sh`.** Its own header says
+  browser-only tests are "intentionally insufficient for this suite: its
+  purpose is to catch failures in Tauri's WebKit host and IPC bridge" — and a
+  nine-stage green gate said nothing at all about this.
+- **The viewport spec asked what the viewport *knew*, not what it drew.**
+  `bracket.e2e.mjs` projects an edge and hovers it, and passes perfectly while
+  every mesh is invisible. `draws-the-part.e2e.mjs` renders the scene twice,
+  once with the part hidden, and compares the frames; it needs to know nothing
+  about the background or the theme, and a scene that draws everything except
+  the part cannot satisfy it.
+
+Before reaching for a browser API in the frontend, check it against WKWebView
+rather than against caniuse's "Safari" column — the two are not the same
+thing. Where one is worth using anyway, guard it and provide the fallback, as
+`idle()` in `ui/editor.tsx` does.

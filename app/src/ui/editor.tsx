@@ -35,6 +35,23 @@ import { treatmentHover, type TreatmentHoverSource } from "../treatment-hover";
 import type { TreatmentNode } from "../treatment-info";
 
 /**
+ * Run when the window has nothing better to do, wherever it is running.
+ *
+ * `requestIdleCallback` where there is one, a short timer where there is not.
+ * The fallback is not a nicety: WKWebView has no `requestIdleCallback`, and
+ * this app's own window is a WKWebView.
+ */
+function idle(run: () => void): { cancel: () => void } {
+  const request = window.requestIdleCallback;
+  if (request) {
+    const handle = request.call(window, run, { timeout: 4000 });
+    return { cancel: () => window.cancelIdleCallback?.(handle) };
+  }
+  const handle = window.setTimeout(run, 1200);
+  return { cancel: () => window.clearTimeout(handle) };
+}
+
+/**
  * What the hover tooltip is allowed to know.
  *
  * Declared apart from the editor so the editor's construction does not depend
@@ -151,10 +168,16 @@ export function Editor() {
     // The compiler costs a few hundred milliseconds to start and nothing until
     // it is asked something, so it waits for the window to be done with the
     // first part rather than competing with it.
-    const warm = requestIdleCallback(() => languageService.prewarm(), { timeout: 4000 });
+    //
+    // `requestIdleCallback` is not in the webview this app ships in — WebKit
+    // has it, WKWebView does not — and calling it here threw before the editor
+    // had mounted, which took the whole render down and left the window with
+    // no viewport at all. A timer is the fallback, and it has to be one:
+    // docs/GOTCHAS.md, "The webview is not the browser you tested in".
+    const warm = idle(() => languageService.prewarm());
 
     return () => {
-      cancelIdleCallback(warm);
+      warm.cancel();
       view.destroy();
       S.editorRef.current = undefined;
     };
