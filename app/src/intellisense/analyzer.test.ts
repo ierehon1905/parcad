@@ -137,6 +137,16 @@ describe("what a hover says", () => {
     expect(source.slice(info.from, info.to)).toBe("box");
   });
 
+  test("a link in a doc comment reads as the name, not as its markup", () => {
+    const source = "const p = box(1, 2, 3);\nreturn p.at(1, 2, 3);";
+    analyzer.setPart(source);
+    const info = analyzer.quickInfo(source.indexOf(".at(") + 2)!;
+    // TypeScript returns `{@link `, `translate`, `}` as three parts; the braces
+    // are markup and only the name is prose.
+    expect(info.documentation.filter((span) => span.kind === "link").length).toBe(2);
+    expect(info.documentation.some((span) => span.kind === "linkName")).toBe(true);
+  });
+
   test("a constant carries its type", () => {
     analyzer.setPart(source);
     const info = analyzer.quickInfo(source.indexOf("plate.edges") + 2)!;

@@ -121,7 +121,18 @@ function Example({ code }: { code: string }) {
   return <code class="block whitespace-pre-wrap [overflow-wrap:anywhere]">{out}</code>;
 }
 
-const text = (spans: Span[]) => spans.map((span) => span.text).join("");
+/**
+ * Spans as prose, with `{@link name}` read as the name it points at.
+ *
+ * TypeScript hands a link back in three parts — `{@link `, the name, `}` —
+ * and the braces are markup, not words. `docs.rs` strips them for the same
+ * reason before `read_docs` serves the same comment.
+ */
+const text = (spans: Span[]) =>
+  spans
+    .filter((span) => span.kind !== "link")
+    .map((span) => span.text)
+    .join("");
 
 /**
  * The box every floating card is drawn in.
