@@ -152,6 +152,34 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    - then `compare_variants`, snapshot summaries, and last the mechanics
      witness: `check_motion`, `check_flex`.
 
+   **Name these edges** — not from the review, found while adding `not`
+   (2026-09-22). Every tool here goes *selector → edges*: `check_selector`
+   parses a string and touches no geometry, `inspect_treatment_target` needs
+   a treatment node that already exists, and `list_entities` hands out
+   `edge@12` marked "diagnostic data only". Nothing goes the other way, so
+   "I can see the edge I want, what do I write?" has no answer, and the loop
+   a model actually runs — build, look, point — ends with it guessing a
+   selector or pasting an id the DSL rejects.
+
+   `matches_query(edges, query) -> Vec<bool>` already exists: the borrowing
+   matcher `not` needed, which is exactly what a synthesiser wants. So the
+   tool is resolve the ids, enumerate candidate queries from the term
+   vocabulary, keep the masks that *equal* the wanted set — equality and not
+   containment, the rule `EdgeLineage::equivalent_sources` already holds for
+   the same reason. A few hundred candidates, each a linear pass, on a build
+   that is already cached.
+
+   Two risks, and the second is the design: nothing may match exactly, so the
+   reply has to carry the near misses and what each one over- or
+   under-selects; and a search returns technically-correct rubbish —
+   `{ longerThan: 12.7 }` fits this build and breaks the next. Offer
+   structural terms only (`on`, `generatedBy`, `dihedral`, `curve`, `role`,
+   `parallel`) and refuse a metric-only match rather than ranking it low,
+   which is "refuse rather than approximate" applied to a search. ~1 day plus
+   a field case. This is what makes an `edge@N` scaffolding rather than an
+   artefact: look, point, get back something that survives a dimension
+   change.
+
 ### Waiting on a decision
 
 - **How ParCAD web is published.** Pages serves the `gh-pages` branch;
