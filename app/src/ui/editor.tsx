@@ -25,6 +25,7 @@ import { useEffect, useRef } from "preact/hooks";
 import { insertFlashField, treatmentHoverField } from "../editor-marks";
 import * as engine from "../engine";
 import { intellisense } from "../intellisense/extensions";
+import { cardTheme } from "../intellisense/theme";
 import * as languageService from "../intellisense/service";
 import { numberDial } from "../number-dial";
 import { selectorLinter } from "../selector-lint";
@@ -79,6 +80,9 @@ export function Editor() {
         basicSetup,
         javascript(),
         oneDark,
+        // After One Dark on purpose: it styles the tooltips too, and the later
+        // theme wins.
+        cardTheme,
         treatmentHoverField,
         insertFlashField,
         // Selector syntax is marked as you type. Everything else — whether the
@@ -96,6 +100,13 @@ export function Editor() {
         // card that runs up into them. Measured from the scroller, so the rows
         // are the bound: the error pane opening takes the space with it.
         tooltips({
+          // Out of the editor and onto the document, so that nothing between
+          // the two can trim a card: a hover that reaches over the viewport
+          // was being cut at the editor pane's edge. CodeMirror's own remedy
+          // for exactly this, and the reason `style.css` matches `.cm-tooltip`
+          // twice rather than under `.cm-editor` — a tooltip is no longer
+          // inside one.
+          parent: document.body,
           tooltipSpace: (editor) => {
             const rows = editor.scrollDOM.getBoundingClientRect();
             // Wide horizontally on purpose: the editor pane is narrow, and a

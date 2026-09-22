@@ -170,6 +170,16 @@ ones is the signal to make the component. The only CSS rules left are for
 elements CodeMirror renders and names itself, because there is nothing there to
 put a class on.
 
+**Except where CodeMirror is already styling it.** Its floating cards — the
+hover, the completion list and its details panel, the parameter hints — are
+styled by One Dark too, and a rule in `style.css` ties with the theme's on
+specificity and then loses on whichever CodeMirror mounted later. Those go
+through `EditorView.theme` instead (`app/src/intellisense/theme.ts`), reading
+the same `@theme` tokens as `var(--color-…)`, with each class named twice so the
+result does not depend on mount order at all. Everything else CodeMirror
+renders — a decoration's span, the editor surface — has no competition and
+stays in `style.css`.
+
 Two traps, both of which have already cost a session:
 
 - **A variant cannot be "the base plus a different colour".** Conflicting
@@ -272,6 +282,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | the selector grammar | `selectors.rs` **and** `app/src/selectors.ts` — see below |
 | what the editor marks as you type | `app/src/selector-lint.ts` |
 | completion, hover, signature help and type errors in the editor | `app/src/intellisense/` — a TypeScript language service over `dsl.ts` itself, in a worker; `analyzer.ts` is the whole of it and runs in bun, `part-file.ts` is why a part compiles at all |
+| how those cards look | `app/src/intellisense/theme.ts` — a CodeMirror theme, not `style.css`; see the styling rules above for why |
 | what another editor needs to read a part | `crates/parcad-host/src/editor_types.rs` — `jsconfig.json` and `.types/` beside the parts, from `script::surface()`; docs/GOTCHAS.md has the three things it gets wrong if you change it |
 | what a treatment hover says, and offers to edit | `app/src/treatment-info.ts` (content), `treatment-hover.tsx` (the extension) |
 | the window's layout, and the keys | `app/src/app.tsx` |
