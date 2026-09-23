@@ -4,7 +4,7 @@
 export const GH = "https://github.com/ierehon1905/parcad";
 export const BLOB = `${GH}/blob/main`;
 export const RELEASES = `${GH}/releases`;
-export const WEB = "https://ierehon1905.github.io/parcad/";
+export const WEB = "https://ierehon1905.github.io/parcad/app/";
 
 export const asset = (path: string) => `${import.meta.env.BASE_URL}${path}`;
 

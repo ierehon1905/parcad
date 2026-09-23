@@ -1,5 +1,7 @@
-# Build ParCAD web and publish it to GitHub Pages: the app with its host and
-# the exact kernel compiled to WebAssembly, at https://<owner>.github.io/parcad/.
+# Build ParCAD web and the landing page and publish both to GitHub Pages: the
+# landing page (site/) at https://<owner>.github.io/parcad/, and the app with its
+# host and the exact kernel compiled to WebAssembly at .../parcad/app/. Pages
+# serves one artifact per repository, so a change to either deploys both.
 #
 # The corpus runs first, against the same WebAssembly build of the worker the
 # site's module is linked from, and the site is only built if it passes. Clang
@@ -7,9 +9,10 @@
 # and a page that measures parts wrong in front of visitors is worse than no
 # page. web/README.md has the recipe this follows and what it measured.
 #
-# Manual only: Pages has to be enabled for the repository (Settings → Pages →
-# Source: GitHub Actions) before the deploy job can succeed, and deploying on
-# every push to main is a decision to make then — add `push: branches: [main]`.
+# Manual only: Pages has to be switched to Settings → Pages → Source: GitHub
+# Actions (it served the gh-pages branch until then) before the deploy job can
+# succeed, and deploying on every push to main is a decision to make then — add
+# `push: branches: [main]`.
 name: web
 
 on:
@@ -105,18 +108,26 @@ jobs:
 
       # PARCAD_RELAY is a repository variable naming the deployed relay
       # (relay/README.md); without it the site builds with no way to connect an agent.
-      - name: Build the site
+      - name: Build ParCAD web
         env:
-          PARCAD_WEB_BASE: /${{ github.event.repository.name }}/
+          PARCAD_WEB_BASE: /${{ github.event.repository.name }}/app/
           VITE_PARCAD_RELAY: ${{ vars.PARCAD_RELAY }}
         run: |
           cd app && bun x vite build --mode web
           bun x vite build --config vite.viewer.config.ts --outDir dist-web
           du -sh dist-web
 
+      - name: Build the landing page
+        env:
+          PARCAD_SITE_BASE: /${{ github.event.repository.name }}/
+        run: cd site && bun install --frozen-lockfile && bun run build
+
+      - name: Lay out Pages
+        run: site/pages.sh "${{ github.event.repository.name }}" site/build/client app/dist-web _site
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: app/dist-web
+          path: _site
 
   deploy:
     needs: build

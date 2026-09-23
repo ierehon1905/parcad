@@ -132,7 +132,7 @@ test("with no tab open, a client is told how to open one", async () => {
   expect(response.status).toBe(503);
   const body = await response.json();
   expect(body.id).toBe(7);
-  expect(body.error.message).toContain("https://ierehon1905.github.io/parcad/");
+  expect(body.error.message).toContain("https://ierehon1905.github.io/parcad/app/");
 });
 
 test("a client that asks for a stream is told there is none", async () => {

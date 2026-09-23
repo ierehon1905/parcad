@@ -13,6 +13,19 @@ bun run build        # build/client, static
 bun run typecheck
 ```
 
+## Deploying
+
+`.github/workflows/web.yml` publishes this page and ParCAD web as one Pages
+artifact: the page built with `PARCAD_SITE_BASE=/parcad/` at the root, the app
+built with `PARCAD_WEB_BASE=/parcad/app/` under `app/`. `pages.sh` lays them
+out; to check a layout by hand:
+
+```bash
+PARCAD_SITE_BASE=/parcad/ bun run build
+./pages.sh parcad build/client ../app/dist-web /tmp/pages/parcad
+python3 -m http.server -d /tmp/pages 8000   # http://localhost:8000/parcad/
+```
+
 ## Where every picture and number came from
 
 Nothing on the page is drawn or typed by hand. With the app running, each was
