@@ -267,6 +267,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | what the window's project and session routes do, for every host | `crates/parcad-host/src/routes.rs` |
 | the host inside a browser tab (ParCAD web) | `crates/parcad-host/src/page.rs`, compiled by `crates/parcad-wasm-host`; `app/src/page/host.ts` and `host-worker.ts` load it — a kernel request pauses the call, which runs again once the page has the answer (docs/ARCHITECTURE.md, "A third host") |
 | the kernel inside a browser tab | `crates/parcad-wasm`, request and reply as `parcad_occt::packet`; `app/src/page/kernel.ts` supervises it |
+| the landing page | `site/` — every picture and figure on it comes from the MCP tools; its README says which call made each |
 | how an agent reaches a ParCAD web tab | `relay/` — a Cloudflare Worker that forwards and keeps nothing; `app/src/ui/agent-link.tsx` is the panel that hands out the link |
 | the IPC adapter, the window | `app/src-tauri/src/lib.rs` — the only file that knows there is a webview |
 | the host without a window, and its tools from a shell | `parcad serve`, `parcad tools`, `parcad call` in `crates/parcad-cli/src/main.rs` and `call.rs` — the CLI is an MCP client of the running host (or one it hosts for the command), so parity with `mcp.rs` is by construction |
