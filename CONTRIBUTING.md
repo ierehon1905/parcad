@@ -81,10 +81,12 @@ the fix.**
 
 ## Vendored code
 
-`vendor/` is LGPL-2.1 while our crates are MIT/Apache-2.0. Don't move code
+`vendor/` is LGPL-2.1 while our crates are AGPL-3.0. Don't move code
 between them in either direction, and record every change to a vendored crate in
 that directory's `PARCAD-CHANGES.md`. See [NOTICE.md](NOTICE.md).
 
 ## Licence
 
-Contributions are licensed as MIT or Apache-2.0, at the user's option.
+ParCAD is AGPL-3.0-or-later, with the part exception in
+[NOTICE.md](NOTICE.md). A contribution you submit is licensed the same way, and
+a contribution to `examples/` under MIT. You keep the copyright.

@@ -158,8 +158,8 @@ function kernel(): Plugin {
       const repo = resolve(__dirname, "..");
       for (const [name, from] of [
         ["NOTICE.md", "NOTICE.md"],
+        ["LICENSE", "LICENSE"],
         ["LICENSE-MIT", "LICENSE-MIT"],
-        ["LICENSE-APACHE", "LICENSE-APACHE"],
         ["OCCT_LICENSE_LGPL_21.txt", "vendor/occt-sys/OCCT/LICENSE_LGPL_21.txt"],
         ["OCCT_LGPL_EXCEPTION.txt", "vendor/occt-sys/OCCT/OCCT_LGPL_EXCEPTION.txt"],
       ]) {

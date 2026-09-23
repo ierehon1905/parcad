@@ -370,7 +370,7 @@ standard of evidence, measured, not inferred from the source text.
 
 `vendor/opencascade` is a fork of the crates.io crate, kept minimal so it can go
 upstream. **Every change goes in `vendor/opencascade/PARCAD-CHANGES.md`.** It's
-LGPL-2.1 while our crates are MIT/Apache — don't move code between them.
+LGPL-2.1 while our crates are AGPL-3.0 — don't move code between them.
 
 ## Git
 

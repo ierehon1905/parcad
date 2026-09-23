@@ -6,7 +6,7 @@
   "description": "Parametric CAD you write as code: model 3D-printable parts in a JavaScript DSL, evaluated by an exact B-rep kernel.",
   "long_description": "ParCAD builds parts from a small JavaScript DSL and evaluates them with OpenCASCADE. Every report is measured from the geometry: bounds, volume, what the part stands on, whether it fits the object it holds. Parts are saved to ~/Library/Application Support/parcad, and the whole app is in your browser at http://127.0.0.1:4242 while the extension runs. It runs the parcad you already have from Homebrew or the app, and its own copy only when neither is installed.",
   "author": {
-    "name": "Leon Minasyan",
+    "name": "Leon Minasian",
     "url": "https://github.com/ierehon1905"
   },
   "homepage": "https://github.com/ierehon1905/parcad",
@@ -14,7 +14,7 @@
     "type": "git",
     "url": "https://github.com/ierehon1905/parcad"
   },
-  "license": "MIT OR Apache-2.0",
+  "license": "AGPL-3.0-or-later",
   "keywords": [
     "cad",
     "3d-printing",

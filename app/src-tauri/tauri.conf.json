@@ -31,8 +31,8 @@
       "binaries/parcad-occt-worker"
     ],
     "resources": {
+      "../../LICENSE": "licenses/LICENSE",
       "../../LICENSE-MIT": "licenses/LICENSE-MIT",
-      "../../LICENSE-APACHE": "licenses/LICENSE-APACHE",
       "../../NOTICE.md": "licenses/NOTICE.md",
       "../../vendor/occt-sys/OCCT/LICENSE_LGPL_21.txt": "licenses/LICENSE_LGPL_21.txt",
       "../../vendor/occt-sys/OCCT/OCCT_LGPL_EXCEPTION.txt": "licenses/OCCT_LGPL_EXCEPTION.txt",

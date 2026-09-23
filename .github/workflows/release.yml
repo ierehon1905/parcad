@@ -155,7 +155,7 @@ jobs:
           cp target/release/parcad$exe target/release/parcad-occt-worker$exe "$out/"
           # The Homebrew formula seeds the project folder from these.
           cp -R examples "$out/examples"
-          cp LICENSE-MIT LICENSE-APACHE NOTICE.md "$out/licenses/"
+          cp LICENSE LICENSE-MIT NOTICE.md "$out/licenses/"
           cp vendor/occt-sys/OCCT/LICENSE_LGPL_21.txt \
              vendor/occt-sys/OCCT/OCCT_LGPL_EXCEPTION.txt \
              vendor/opencascade/LICENSE "$out/licenses/"
