@@ -694,6 +694,7 @@ fn route(method: &str, path: &str, body: Value) -> Reply {
             session::report_shown(parse(body)?);
             Ok(Reply::Json(json!({})))
         }
+        ("GET", "built") => meshed(routes::build_project(rest)?),
         ("POST", "evaluate") => {
             let doc = service::parse_graph(field(body, "graph")?)?;
             meshed(service::evaluate(&doc, None)?)
@@ -742,9 +743,9 @@ fn route(method: &str, path: &str, body: Value) -> Reply {
             bytes: crate::projects::preview(rest)?,
         }),
         ("PUT", "preview") => {
-            let preview: String = serde_json::from_value(field(body, "preview")?)
-                .map_err(|e| format!("the preview is not a data URL string: {e}"))?;
-            Ok(Reply::Json(routes::save_project_preview(rest, &preview)?))
+            let request: routes::PreviewRequest = serde_json::from_value(body.clone())
+                .map_err(|e| format!("a preview is {{ preview, source, look }}: {e}"))?;
+            Ok(Reply::Json(routes::save_project_preview(rest, &request)?))
         }
         _ => Err(format!("this tab's host has no route {method} {path}")),
     });

@@ -206,7 +206,6 @@ interface EarlierPart {
   path: string;
   script: string;
   title?: string;
-  preview?: string;
 }
 
 const EARLIER = "parcad-playground";
@@ -255,7 +254,6 @@ async function adopt(earlier: { parts: EarlierPart[] }) {
       await run({ route: { method: "PUT", path: `projects/${name}`, body: { script: part.script } } });
     }
     if (part.title) await run({ route: { method: "POST", path: `projects/${name}`, body: { op: "title", title: part.title } } });
-    if (part.preview) await run({ route: { method: "PUT", path: `preview/${name}`, body: { preview: part.preview } } });
   }
   host!.FS.writeFile(MIGRATED, new Date().toISOString());
 }

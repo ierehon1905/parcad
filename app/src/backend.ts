@@ -114,11 +114,19 @@ export interface ProjectPart {
   title: string;
   /** False for a loose `.js`, which cannot carry a title or a thumbnail. */
   bundle: boolean;
-  /** Whether there is a `preview.png` to ask for. */
-  thumbnail: boolean;
+  /** The script's digest: what a thumbnail must have been drawn from to be current. */
+  source: string;
+  /** The `preview.png` there is to ask for, and what it was drawn from; null when there is none. */
+  thumbnail: Drawn | null;
   tags: string[];
   /** Seconds since the epoch, from the file itself. */
   modified: number | null;
+}
+
+/** Both null for a picture from before thumbnails carried them. */
+export interface Drawn {
+  source: string | null;
+  look: number | null;
 }
 
 export interface ProjectFolder {
@@ -163,16 +171,14 @@ export async function readProject(name: string): Promise<string> {
 }
 
 /**
- * The script, and the two derived files that live beside it.
+ * The script, and the README that lives beside it.
  *
  * They travel in one call because a README describing a shape the script no
- * longer builds is worse than no README. Both are dropped silently for a loose
- * `.js`, which has nowhere to keep them.
+ * longer builds is worse than no README. It is dropped silently for a loose
+ * `.js`, which has nowhere to keep one.
  */
 export interface Derived {
   readme?: string;
-  /** A `data:image/png;base64,` URL from the viewport canvas. */
-  preview?: string;
 }
 
 export async function saveProject(
@@ -180,7 +186,7 @@ export async function saveProject(
   script: string,
   derived: Derived = {},
 ): Promise<string> {
-  const body = { script, readme: derived.readme, preview: derived.preview };
+  const body = { script, readme: derived.readme };
   const saved = inTauri
     ? await invoke<{ path: string }>("save_project", { name, ...body })
     : await put<{ path: string }>(`projects/${route(name)}`, body);
@@ -269,18 +275,23 @@ export function editor(): Promise<Editor | null> {
 }
 
 /**
- * Write a thumbnail without touching the script.
- *
- * The app does this the first time it draws a part that has none, so browsing
- * fills the picker in. Going through `saveProject` would rewrite `part.js` —
- * and its modified time, which the picker reports — to store a picture.
+ * Write a thumbnail of the script whose digest is `source`, without touching
+ * the script. Refused when `part.js` has changed since.
  */
-export async function saveProjectPreview(name: string, preview: string): Promise<void> {
+export async function saveProjectPreview(name: string, preview: string, source: string, look: number): Promise<void> {
   if (inTauri) {
-    await invoke("save_project_preview", { name, preview });
+    await invoke("save_project_preview", { name, preview, source, look });
     return;
   }
-  await put(`preview/${route(name)}`, { preview });
+  await put(`preview/${route(name)}`, { preview, source, look });
+}
+
+/** A saved part built by the host, its script run in the host's sandbox rather than this page. */
+export async function buildProject<T>(name: string): Promise<T> {
+  if (inPage) return (await (await page()).host.buildProject(name)) as T;
+  if (inTauri) return invoke<T>("build_project", { name });
+  const response = await request(`built/${route(name)}`, { method: "GET" }, "could not build");
+  return (await response.json()) as T;
 }
 
 /**

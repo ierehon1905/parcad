@@ -208,6 +208,8 @@ export class Viewport {
   constructor(
     private readonly container: HTMLElement,
     private readonly edgeCallbacks: EdgeCallbacks = {},
+    /** False for a viewport nobody looks at: no render loop, a frame only when `snapshot` asks. */
+    live = true,
   ) {
     // `stencil` defaults to false since three r163, and the cap's stencil test
     // does not fail safe without a buffer: it passes over the whole viewport.
@@ -329,7 +331,7 @@ export class Viewport {
     ro.observe(container);
     this.resize();
 
-    this.tick();
+    if (live) this.tick();
   }
 
   private resize() {
@@ -1430,4 +1432,23 @@ function gradientTexture(): THREE.Texture {
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
+}
+
+/** Bump when the thumbnail's camera or scene changes, and every card redraws. */
+export const THUMBNAIL_LOOK = 1;
+
+let still: Viewport | undefined;
+
+/**
+ * The part as its picker card shows it: this viewport's scene, framed from the
+ * default angle, drawn off screen. One viewport serves every card, so a folder
+ * of a thousand parts is a thousand frames and still one WebGL context.
+ */
+export function drawThumbnail(geo: Geometry, bounds: Bounds): string {
+  still ??= new Viewport(document.createElement("div"), {}, false);
+  still.setGeometry(geo, bounds);
+  still.frameAll(bounds);
+  const png = still.snapshot();
+  still.clearPart();
+  return png;
 }

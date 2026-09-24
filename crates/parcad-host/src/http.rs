@@ -100,6 +100,7 @@ fn router(assets: Arc<dyn Assets>) -> Router {
         .route("/api/session/events", get(session_events))
         .route("/api/session/shown", post(session_shown))
         .route("/api/evaluate", post(evaluate))
+        .route("/api/built/{*name}", get(build_project))
         .route("/api/inspect-edge-target", post(inspect_edge_target))
         .route("/api/export/stl", post(export_stl))
         .route("/api/export/3mf", post(export_3mf))
@@ -223,6 +224,11 @@ async fn evaluate(Json(request): Json<EvaluateRequest>) -> Result<Response, Fail
     Ok(Json(evaluated).into_response())
 }
 
+async fn build_project(Path(name): Path<String>) -> Result<Response, Failed> {
+    let evaluated = blocking(move || routes::build_project(&name)).await?;
+    Ok(Json(evaluated).into_response())
+}
+
 async fn inspect_edge_target(Json(request): Json<InspectRequest>) -> Result<Response, Failed> {
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
     let preview = blocking(move || service::inspect_edge_target(&doc, request.node)).await?;
@@ -291,21 +297,15 @@ async fn delete_project(Path(name): Path<String>) -> Result<Response, Failed> {
     Ok(Json(routes::delete_project(&name).map_err(Failed)?).into_response())
 }
 
-/// A part's thumbnail, as the image itself rather than base64 in JSON — this
-/// one has a browser on the other end and `<img src>` is the whole point.
-#[derive(Deserialize)]
-struct PreviewRequest {
-    /// A `data:image/png;base64,` URL from the viewport canvas.
-    preview: String,
-}
-
 async fn save_project_preview(
     Path(name): Path<String>,
-    Json(request): Json<PreviewRequest>,
+    Json(request): Json<routes::PreviewRequest>,
 ) -> Result<Response, Failed> {
-    Ok(Json(routes::save_project_preview(&name, &request.preview).map_err(Failed)?).into_response())
+    Ok(Json(routes::save_project_preview(&name, &request).map_err(Failed)?).into_response())
 }
 
+/// A part's thumbnail, as the image itself rather than base64 in JSON — this
+/// one has a browser on the other end and `<img src>` is the whole point.
 async fn project_preview(Path(name): Path<String>) -> Result<Response, Failed> {
     let png = projects::preview(&name).map_err(Failed)?;
     Ok(([(header::CONTENT_TYPE, "image/png")], png).into_response())

@@ -742,11 +742,6 @@ pub struct Saved {
     /// Why it does not, when it does not. The file is saved either way.
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
-    /// The thumbnail written beside `part.js`, which the app's picker shows.
-    /// Absent for a loose `.js` project, which has nowhere to keep one, and
-    /// for a script that does not build.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    preview: Option<String>,
     /// The previous `part.js`, kept before it was replaced; see
     /// `list_snapshots`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -867,9 +862,6 @@ impl Parcad {
             } else {
                 let snapshot = projects::snapshot(&request.project)?;
                 let path = projects::write(&request.project, &source.script)?;
-                if let Ok((png, _, _)) = built_preview(&source.script) {
-                    let _ = projects::write_preview(&request.project, &png);
-                }
                 Some((path, snapshot))
             };
             let changed = if is_screen || open_here {
@@ -1250,7 +1242,7 @@ impl Parcad {
     #[tool(
         name = "save_project",
         annotations(title = "Save project", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Write a new part to parcad's project folder so the user can open it; open_project it afterwards to put it on their screen. For a part that is already saved, call edit_part instead: it changes the lines you name, rebuilds, and saves in one call, without the whole script being sent again. Evaluate a script first: saving one that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not — the file is saved regardless), the `preview` thumbnail written for the app's picker, and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back. A part that builds and fails its `print_check` (material under 0.3 mm, where nothing prints) or one of its own `checks` is not saved: the refusal names the finding or the check and its measurement; fix the part, or pass `allow_failing` with the user's reason, which the reply keeps beside the verdicts it opens with."
+        description = "Write a new part to parcad's project folder so the user can open it; open_project it afterwards to put it on their screen. For a part that is already saved, call edit_part instead: it changes the lines you name, rebuilds, and saves in one call, without the whole script being sent again. Evaluate a script first: saving one that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not — the file is saved regardless) and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back. A part that builds and fails its `print_check` (material under 0.3 mm, where nothing prints) or one of its own `checks` is not saved: the refusal names the finding or the check and its measurement; fix the part, or pass `allow_failing` with the user's reason, which the reply keeps beside the verdicts it opens with."
     )]
     async fn save_project(
         &self,
@@ -1261,24 +1253,20 @@ impl Parcad {
             // kernel and run this again, and a write must not happen twice.
             // A script that does not build is still saved, as it always was;
             // one that builds and fails its own checks is not, without a reason.
-            let thumbnail = built_preview(&request.script);
-            let door = thumbnail.as_ref().map(|(_, door, _)| door.clone()).unwrap_or_default();
+            let built = built_door(&request.script);
+            let door = built.as_ref().map(|door| door.clone()).unwrap_or_default();
             let allow_failing = door.pass(request.allow_failing.as_deref(), "save_project")?;
             let snapshot = projects::snapshot(&request.name)?;
             let path = projects::write(&request.name, &request.script)?;
-            let (built, error, preview) = match thumbnail {
-                Ok((png, _, _)) => {
-                    let preview = projects::write_preview(&request.name, &png).ok().and_then(|()| projects::preview_path(&request.name));
-                    (true, None, preview)
-                }
-                Err(e) => (false, Some(e), None),
+            let (built, error) = match built {
+                Ok(_) => (true, None),
+                Err(e) => (false, Some(e)),
             };
             Ok(Saved {
                 name: request.name,
                 path,
                 built,
                 error,
-                preview,
                 snapshot,
                 verdicts: door.verdicts,
                 allow_failing,
@@ -1928,33 +1916,12 @@ fn markdown_image(view: &str, path: &str) -> String {
     }
 }
 
-/// The picker's thumbnail, and the door read off the build that drew it.
-fn built_preview(script: &str) -> Result<(Vec<u8>, service::Door, parcad_core::graph::Doc), String> {
+/// The door read off a build of `script`: its verdicts, before it is saved.
+fn built_door(script: &str) -> Result<service::Door, String> {
     let built = script::build(script)?;
     let doc = service::parse_graph(built.graph.clone())?;
     let evaluated = service::evaluate(&doc, None).map_err(|e| built.locate(e))?;
-    let door = service::Door::of(&evaluated.snapshot);
-    let views = service::parse_views(&["iso".to_string()])?;
-    let renders = service::render(
-        &evaluated,
-        &doc,
-        &service::RenderSpec {
-            views: &views,
-            size: 512,
-            regions: false,
-            materials: false,
-            section: None,
-        },
-    )?;
-    let png = renders
-        .views
-        .into_iter()
-        .next()
-        .ok_or_else(|| "the iso view drew nothing".to_string())?
-        .image
-        .to_png()
-        .map_err(|e| format!("encoding the thumbnail: {e:#}"))?;
-    Ok((png, door, doc))
+    Ok(service::Door::of(&evaluated.snapshot))
 }
 
 /// The session after a change, once a window has shown it or the wait is over.
@@ -2719,7 +2686,7 @@ mod tests {
                 assert_eq!(kept.len(), 1);
                 assert_eq!(std::fs::read_to_string(&kept[0].path).unwrap(), "return box(10, 20, 30);");
                 assert_eq!(measured["snapshot"], kept[0].path);
-                assert!(projects::preview_path("block").is_some(), "the picker's thumbnail is rewritten");
+                assert!(projects::preview_path("block").is_none(), "a window draws the thumbnail, not the tool");
             })
         })
     }

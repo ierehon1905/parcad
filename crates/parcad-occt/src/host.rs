@@ -104,6 +104,8 @@ pub struct Options {
     pub timeout: Duration,
     pub step_path: Option<PathBuf>,
     pub stl_path: Option<PathBuf>,
+    /// See [`Request::uncached`].
+    pub uncached: bool,
 }
 
 impl Default for Options {
@@ -113,6 +115,7 @@ impl Default for Options {
             timeout: default_timeout(),
             step_path: None,
             stl_path: None,
+            uncached: false,
         }
     }
 }
@@ -217,6 +220,7 @@ pub fn evaluate(doc: &Doc, opts: &Options) -> Result<Success, OcctError> {
             deflection: opts.deflection,
             step_path: opts.step_path.clone(),
             stl_path: opts.stl_path.clone(),
+            uncached: opts.uncached,
         },
         opts,
     )? {
@@ -245,6 +249,7 @@ pub fn probe_step(path: &std::path::Path, opts: &Options) -> Result<crate::proto
             deflection: opts.deflection,
             step_path: None,
             stl_path: None,
+            uncached: false,
         },
         opts,
     )? {
@@ -274,6 +279,7 @@ pub fn check_fit(
             deflection: opts.deflection,
             step_path: None,
             stl_path: None,
+            uncached: false,
         },
         opts,
     )? {
@@ -303,6 +309,7 @@ pub fn perceive(
             deflection: opts.deflection,
             step_path: None,
             stl_path: None,
+            uncached: false,
         },
         opts,
     )? {
@@ -330,6 +337,7 @@ pub fn inspect_edge_target(
             deflection: opts.deflection,
             step_path: None,
             stl_path: None,
+            uncached: false,
         },
         opts,
     )? {

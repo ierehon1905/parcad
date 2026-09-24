@@ -11,7 +11,7 @@
  * Two rules this file follows:
  *
  * - **Every label is measured.** A card's timestamp comes from the file, its
- *   thumbnail from the last save, its title from the manifest. Nothing here
+ *   thumbnail is drawn from the script it names, its title from the manifest. Nothing here
  *   displays a value it was asked for rather than one it read.
  * - **The host is the gate.** Names are checked here so a bad one is marked as
  *   it is typed, but `projects.rs` re-checks everything and its refusals are
@@ -38,6 +38,7 @@ import {
   type ProjectPart,
 } from "../projects";
 import * as S from "../state";
+import { pictureKey } from "../thumbnails";
 import { Button } from "./components/Button";
 import { Chip } from "./components/Chip";
 import { type Ask, Dialogs, type Failed, type Tell, useDialogs } from "./components/Dialog";
@@ -48,13 +49,27 @@ import { tip } from "./tooltip";
 import { useDismiss } from "./use-dismiss";
 
 /**
- * Thumbnails already fetched, so reopening the dialog is not a reload.
- *
- * Module-level rather than component state: the picker unmounts nothing when it
- * closes, but the cache should survive a remount anyway, and nothing renders
- * from it directly — a card asks for its own picture.
+ * Thumbnails already fetched, so reopening the dialog is not a reload, keyed by
+ * path with what each picture is of. Oldest first, and capped, so scrolling a
+ * folder of thousands holds a few hundred pictures rather than all of them.
  */
-const thumbnails = new Map<string, string | null>();
+const thumbnails = new Map<string, { key: string; url: string | null }>();
+const THUMBNAILS_KEPT = 300;
+
+function forgetThumbnail(path: string) {
+  const url = thumbnails.get(path)?.url;
+  if (url?.startsWith("blob:")) URL.revokeObjectURL(url);
+  thumbnails.delete(path);
+}
+
+function keepThumbnail(path: string, entry: { key: string; url: string | null }) {
+  forgetThumbnail(path);
+  thumbnails.set(path, entry);
+  for (const oldest of thumbnails.keys()) {
+    if (thumbnails.size <= THUMBNAILS_KEPT) break;
+    forgetThumbnail(oldest);
+  }
+}
 
 
 export function ProjectBrowser() {
@@ -431,28 +446,41 @@ function Card({
 /**
  * A card's picture, or the part's initials.
  *
- * One request per card rather than base64 in the listing: a folder of a hundred
- * parts would otherwise be a megabyte of JSON to draw a dozen tiles.
+ * One request per card, and only once the card is scrolled into view: base64
+ * in the listing would make a folder of a thousand parts megabytes of JSON to
+ * draw a dozen tiles. A stale picture stays up until its redraw lands.
  */
 function Thumbnail({ part }: { part: ProjectPart }) {
-  const url = useSignal<string | null | undefined>(
-    part.thumbnail ? thumbnails.get(part.path) : null,
-  );
+  const key = pictureKey(part);
+  const cached = thumbnails.get(part.path);
+  const url = useSignal<string | null | undefined>(cached && cached.key === key ? cached.url : undefined);
+  const box = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
-    if (!part.thumbnail || url.value !== undefined) return;
+    if (!key) return;
+    const hit = thumbnails.get(part.path);
+    if (hit?.key === key) {
+      url.value = hit.url;
+      return;
+    }
     let live = true;
-    void backend.projectPreview(part.path).then((got) => {
-      thumbnails.set(part.path, got);
-      if (live) url.value = got;
+    const seen = new IntersectionObserver(([entry]) => {
+      if (!entry?.isIntersecting) return;
+      seen.disconnect();
+      void backend.projectPreview(part.path).then((got) => {
+        keepThumbnail(part.path, { key, url: got });
+        if (live) url.value = got;
+      });
     });
+    seen.observe(box.current!);
     return () => {
       live = false;
+      seen.disconnect();
     };
-  }, [part.path, part.thumbnail]);
+  }, [part.path, key]);
 
   return (
-    <span class="flex h-[108px] items-center justify-center overflow-hidden bg-well border-b border-line">
+    <span ref={box} class="flex h-[108px] items-center justify-center overflow-hidden bg-well border-b border-line">
       {url.value ? (
         <img src={url.value} alt="" class="w-full h-full object-cover" />
       ) : (
@@ -578,7 +606,7 @@ function PartMenu({
           try {
             await backend.deleteProject(part.path);
             if (S.openPath.peek() === part.path) S.openPath.value = undefined;
-            thumbnails.delete(part.path);
+            forgetThumbnail(part.path);
             await refresh();
           } catch (e) {
             await failed(e);

@@ -25,6 +25,7 @@ pub mod generative;
 pub mod http;
 pub mod mcp;
 pub mod page;
+mod png_text;
 pub mod projects;
 pub mod routes;
 pub mod script;

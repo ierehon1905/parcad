@@ -27,7 +27,8 @@ function bare(path: string) {
     path,
     title: name.replace(/-/g, " "),
     bundle: true,
-    thumbnail: false,
+    source: "",
+    thumbnail: null,
     tags: [] as string[],
     modified: null as number | null,
   };

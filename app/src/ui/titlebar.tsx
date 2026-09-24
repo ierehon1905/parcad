@@ -93,7 +93,7 @@ function Save() {
       {...tip({
         title: "Save this part",
         key: "⌘S",
-        text: "Writes part.js, and rewrites the README and thumbnail beside it from what was last measured.",
+        text: "Writes part.js, and rewrites the README beside it from what was last measured. The picker's thumbnail is redrawn from it on its own.",
       })}
       onClick={() => void engine.saveOpenPart()}
     >

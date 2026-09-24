@@ -10,6 +10,7 @@
 import { useEffect } from "preact/hooks";
 
 import * as engine from "./engine";
+import { watchThumbnails } from "./thumbnails";
 import * as S from "./state";
 import { Editor } from "./ui/editor";
 import { OpPalette } from "./ui/op-palette";
@@ -25,6 +26,7 @@ export function App() {
   useEffect(() => engine.watchAgentLink(), []);
   useEffect(() => engine.watchKernel(), []);
   useEffect(() => engine.watchUpdates(), []);
+  useEffect(watchThumbnails, []);
   useEffect(keys, []);
 
   return (

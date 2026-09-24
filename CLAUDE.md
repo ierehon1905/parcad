@@ -111,8 +111,9 @@ byte-identical sources; point `PARCAD_OCCT_PREBUILT` at an existing
 
 **A project is a `.parcad` folder, and `part.js` inside it is the only
 authoritative file.** `parcad.json`, `README.md` and `preview.png` beside it are
-derived and disposable — the app rewrites them on save, from *measured* values,
-and nothing reads them back as fact. A loose `.js` is still a project and must
+derived and disposable — the app rewrites them on save, from *measured* values
+(the thumbnail whenever the script it is keyed to changes), and nothing reads
+them back as fact. A loose `.js` is still a project and must
 stay one. Seeding records what it has placed in `.seeded` rather than checking
 whether a path is occupied: a part the user moved into a folder of their own is
 not a part that is missing. See docs/ARCHITECTURE.md, "Projects are files, not
@@ -278,6 +279,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | opening the part in the user's own editor, and which one | `service::open_in_editor` — never the system's `.js` handler, which is a browser; the pencil is in `app/src/ui/titlebar.tsx` |
 | where parts are stored | `crates/parcad-host/src/projects.rs` — a `.parcad` folder per part |
 | the parts picker: folders, new part, rename, trash | `app/src/ui/project-browser.tsx`, rules in `app/src/projects.ts` |
+| which thumbnails are stale, and drawing them in the background | `app/src/thumbnails.ts`; the key is `Drawn` in `projects.rs`, the mesh `routes::build_project` |
 | how the frontend calls the backend | `app/src/backend.ts` — the only module that knows there are two |
 | the selector grammar | `selectors.rs` **and** `app/src/selectors.ts` — see below |
 | what the editor marks as you type | `app/src/selector-lint.ts` |

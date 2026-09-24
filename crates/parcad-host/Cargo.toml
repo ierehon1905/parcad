@@ -32,6 +32,8 @@ schemars = "1.2.2"
 dirs = "6"
 # Images travel base64-encoded in an MCP reply; the protocol has no binary frame.
 base64 = "0.22"
+# A thumbnail carries the script it was drawn from as a `tEXt` chunk.
+png = "0.18"
 # open_project and set_script identify the script on screen by its digest
 # instead of echoing it.
 sha2 = "0.10"

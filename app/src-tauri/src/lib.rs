@@ -8,12 +8,19 @@
 //! capabilities and both hosts are `parcad-host`, which `parcad serve` embeds
 //! too, with no window.
 
-use parcad_host::{http, mcp, projects, service, session};
+use parcad_host::{http, mcp, projects, routes, service, session};
 use service::Evaluated;
 
 #[tauri::command]
 fn evaluate(graph: serde_json::Value) -> Result<Evaluated, String> {
     service::evaluate(&service::parse_graph(graph)?, None)
+}
+
+/// Off the main thread: a thumbnail is built in the background, and must not
+/// hold up the window while it is.
+#[tauri::command(async)]
+fn build_project(name: String) -> Result<Evaluated, String> {
+    routes::build_project(&name)
 }
 
 #[tauri::command]
@@ -88,25 +95,21 @@ fn read_project(name: String) -> Result<serde_json::Value, String> {
     Ok(serde_json::json!({ "name": name, "script": script }))
 }
 
-/// Save a part, and the two derived files that go beside it.
+/// Save a part, and the README that goes beside it.
 ///
-/// One call rather than three: a bundle whose `README.md` describes a shape its
+/// One call rather than two: a bundle whose `README.md` describes a shape its
 /// `part.js` no longer builds is worse than one with no README at all, and the
-/// only way to keep them together is to write them together. Both are optional
-/// because a loose `.js` has nowhere to put either.
+/// only way to keep them together is to write them together. It is optional
+/// because a loose `.js` has nowhere to put one.
 #[tauri::command]
 fn save_project(
     name: String,
     script: String,
     readme: Option<String>,
-    preview: Option<String>,
 ) -> Result<serde_json::Value, String> {
     let path = projects::write(&name, &script)?;
     if let Some(readme) = readme {
         projects::write_readme(&name, &readme)?;
-    }
-    if let Some(preview) = preview {
-        projects::write_preview_data_url(&name, &preview)?;
     }
     Ok(serde_json::json!({ "name": name, "path": path }))
 }
@@ -166,8 +169,8 @@ fn editor() -> Option<service::Editor> {
 /// The thumbnail alone. See the HTTP adapter's `save_project_preview` for why
 /// this does not go through `save_project`.
 #[tauri::command]
-fn save_project_preview(name: String, preview: String) -> Result<(), String> {
-    projects::write_preview_data_url(&name, &preview)
+fn save_project_preview(name: String, preview: String, source: String, look: u32) -> Result<(), String> {
+    projects::write_preview_data_url(&name, &preview, &source, look)
 }
 
 /// A part's thumbnail as a data URL, asked for one card at a time.
@@ -443,6 +446,7 @@ pub fn run() {
             open_project_source,
             editor,
             project_preview,
+            build_project,
             save_project_preview,
             mcp_status,
             get_session,

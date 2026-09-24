@@ -836,7 +836,7 @@ to where it started. The page runs the kernel, hands the answer back, and the
 call runs again from the top, reaching the same request, which is now answered.
 Scripts are cached and a call is a function of its input, so the second pass
 costs little; the rule it imposes is that a call asks the kernel before it
-writes anything (`save_project` renders its thumbnail first). An MCP request
+writes anything (`save_project` builds for its verdicts first). An MCP request
 that waits on the window — `set_script` with `wait_s` — is a future the host
 keeps between calls, polled again once the page reports what it drew. The
 desktop takes neither path: `page::active()` is false there, and a benchmark of
@@ -995,7 +995,7 @@ One project is a `.parcad` folder:
 │  │  ├─ part.js            the source, and the only authoritative file in it
 │  │  ├─ parcad.json        title and tags
 │  │  ├─ README.md          what the part is, from measured values
-│  │  └─ preview.png        the viewport at the last save
+│  │  └─ preview.png        the picker's thumbnail, keyed to the script it shows
 │  └─ motor-mount.js        a loose script is a project too
 └─ .trash/                  where a removed project goes
 ```
@@ -1010,6 +1010,16 @@ the README or the preview loses nothing — the next save rewrites them from the
 report the app just measured, naming which kernel measured it. Nothing is cached:
 a stored report is a stale measurement that looks fresh, which is precisely the
 confident wrong answer the rest of this codebase refuses.
+
+The thumbnail is the one derived file that says what it was derived from:
+`preview.png` carries the digest of the `part.js` it shows in a `tEXt` chunk,
+as the freedesktop thumbnail standard does with a file's mtime, and the listing
+reports each part's current digest beside it. Whichever window is open redraws
+the stale ones (`app/src/thumbnails.ts`) — one at a time, only while nobody is
+typing or building, with the viewport's own scene off screen, from a mesh the
+host built in the script sandbox with neither build cache touched. So an edit
+from an agent, git or another editor is redrawn without anything watching the
+folder, and the host refuses a picture of a script that has changed since.
 
 A loose `foo.js` stays a project, so an agent or a person can drop a file in
 without ceremony; the picker offers to convert one, which is the only thing that

@@ -207,6 +207,7 @@ mod tests {
             deflection: 0.05,
             step_path: Some("/tmp/out.step".into()),
             stl_path: None,
+            uncached: false,
         }
     }
 

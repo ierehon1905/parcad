@@ -21,7 +21,7 @@
 //! │  │  ├─ part.js            the source, and the only thing that is authoritative
 //! │  │  ├─ parcad.json        title and tags
 //! │  │  ├─ README.md          what the part is, written from measured values
-//! │  │  └─ preview.png        the viewport at the last save
+//! │  │  └─ preview.png        the picker's thumbnail, keyed to the script it shows
 //! │  └─ motor-mount.js        also a project
 //! └─ .trash/                  what `remove` moved, recoverable by hand
 //! ```
@@ -33,9 +33,9 @@
 //! for.
 //!
 //! **`part.js` is the source of truth and everything beside it is derived.**
-//! Deleting `README.md` or `preview.png` loses nothing; they are
-//! rewritten by the next save. So no reader should ever prefer them to the script, and
-//! nothing here caches a measurement — a stale number that looks fresh is the
+//! Deleting `README.md` or `preview.png` loses nothing; the next save
+//! rewrites the one, and a window redraws the other. So no reader should ever
+//! prefer them to the script, and nothing here caches a measurement — a stale number that looks fresh is the
 //! failure this project refuses everywhere else.
 //!
 //! A loose `foo.js` anywhere in the tree is a project too, and stays one. An
@@ -113,15 +113,33 @@ pub struct Part {
     /// False for a loose `.js`, which has nowhere to keep a title, a thumbnail
     /// or a description. The UI offers to convert those.
     pub bundle: bool,
-    /// Whether `preview.png` is there to be asked for. The image itself is a
-    /// separate request so that listing a hundred parts stays one small reply.
-    pub thumbnail: bool,
+    /// The script's digest, as [`crate::service::script_sha256`] gives it: what
+    /// a thumbnail must have been drawn from to be current.
+    pub source: String,
+    /// `preview.png`, when there is one to be asked for, and what it was drawn
+    /// from. The image itself is a separate request so that listing a hundred
+    /// parts stays one small reply.
+    pub thumbnail: Option<Drawn>,
     pub tags: Vec<String>,
     /// Seconds since the epoch, from the source file. Read from the filesystem
     /// rather than written into the manifest: a recorded timestamp is a claim,
     /// and this one is a measurement that cannot go stale.
     pub modified: Option<u64>,
 }
+
+/// What a thumbnail says it was drawn from. Both are `None` for a picture from
+/// before thumbnails carried them, which is as stale as a wrong one.
+#[derive(serde::Serialize, Debug, PartialEq, Default)]
+pub struct Drawn {
+    /// The digest of the `part.js` it shows.
+    pub source: Option<String>,
+    /// Which look drew it: the window bumps its own number when the camera or
+    /// the scene changes, and every card redraws.
+    pub look: Option<u32>,
+}
+
+const SOURCE_KEY: &str = "parcad:source";
+const LOOK_KEY: &str = "parcad:look";
 
 /// What a project's `parcad.json` carries.
 ///
@@ -212,7 +230,8 @@ fn describe(stem: &str, path: &str) -> Result<Part, String> {
         path: path.to_string(),
         title: manifest.title.unwrap_or_else(|| readable(stem)),
         bundle: located.bundle.is_some(),
-        thumbnail: located.in_bundle(PREVIEW).is_some_and(|p| p.is_file()),
+        source: crate::service::script_sha256(&std::fs::read_to_string(&located.source).unwrap_or_default()),
+        thumbnail: located.in_bundle(PREVIEW).and_then(|p| drawn(&p)),
         tags: manifest.tags,
         modified,
     })
@@ -402,13 +421,28 @@ pub fn write_readme(path: &str, text: &str) -> Result<(), String> {
     write_file(&file, text)
 }
 
-/// The viewport at the last save, so the picker can show the part rather than
-/// its name. Same trade as `write_readme` for a loose `.js`.
-pub fn write_preview(path: &str, png: &[u8]) -> Result<(), String> {
-    let Some(file) = locate(path)?.in_bundle(PREVIEW) else {
+/// A thumbnail of the script as it is now, keyed so the picker can tell when
+/// it no longer is. A loose `.js` has nowhere to keep one, which is not an
+/// error — the trade the loose form makes.
+///
+/// Refused when `part.js` has changed since `source`: a slow draw must not
+/// land over a newer edit and then read as current.
+pub fn write_preview(path: &str, png: &[u8], source: &str, look: u32) -> Result<(), String> {
+    let located = locate(path)?;
+    let Some(file) = located.in_bundle(PREVIEW) else {
         return Ok(());
     };
-    std::fs::write(&file, png).map_err(|e| format!("writing {}: {e}", file.display()))
+    let now = crate::service::script_sha256(&std::fs::read_to_string(&located.source).unwrap_or_default());
+    if now != source {
+        return Err(format!(
+            "{path:?} has changed since this thumbnail was drawn (script {source}, now {now}); draw it again from the script as it is"
+        ));
+    }
+    let keyed = crate::png_text::with_text(png, &[(SOURCE_KEY, source), (LOOK_KEY, &look.to_string())])?;
+    // Renamed into place, so the picker never reads half an image.
+    let partial = file.with_extension("png.partial");
+    std::fs::write(&partial, keyed).map_err(|e| format!("writing {}: {e}", partial.display()))?;
+    std::fs::rename(&partial, &file).map_err(|e| format!("writing {}: {e}", file.display()))
 }
 
 /// The same, from what a canvas hands the frontend.
@@ -416,7 +450,7 @@ pub fn write_preview(path: &str, png: &[u8]) -> Result<(), String> {
 /// The decode lives here rather than in each of the three adapters: a `data:`
 /// URL is the transport the preview arrives in, and one reader of that format
 /// is enough.
-pub fn write_preview_data_url(path: &str, data_url: &str) -> Result<(), String> {
+pub fn write_preview_data_url(path: &str, data_url: &str, source: &str, look: u32) -> Result<(), String> {
     use base64::Engine;
     let payload = data_url
         .strip_prefix("data:image/png;base64,")
@@ -424,7 +458,21 @@ pub fn write_preview_data_url(path: &str, data_url: &str) -> Result<(), String> 
     let png = base64::engine::general_purpose::STANDARD
         .decode(payload)
         .map_err(|e| format!("decoding the preview image: {e}"))?;
-    write_preview(path, &png)
+    write_preview(path, &png, source, look)
+}
+
+/// What `file` was drawn from, or `None` when there is no image there.
+fn drawn(file: &Path) -> Option<Drawn> {
+    let opened = std::io::BufReader::new(std::fs::File::open(file).ok()?);
+    let mut found = Drawn::default();
+    for (keyword, value) in crate::png_text::text(opened) {
+        match keyword.as_str() {
+            SOURCE_KEY => found.source = Some(value),
+            LOOK_KEY => found.look = value.parse().ok(),
+            _ => {}
+        }
+    }
+    Some(found)
 }
 
 /// Where the preview is, when the project has one.
@@ -1070,7 +1118,7 @@ pub(crate) mod tests {
             };
             assert_eq!(part.title, "pipe tee");
             assert!(part.bundle);
-            assert!(!part.thumbnail);
+            assert_eq!(part.thumbnail, None);
         })
     }
 
@@ -1162,15 +1210,52 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_preview_is_written_into_the_bundle_and_read_back() {
+    fn a_preview_is_written_into_the_bundle_and_read_back_with_what_it_shows() {
         scoped(|_| {
             write("knob", "return box(1,1,1);").unwrap();
-            write_preview("knob", b"\x89PNG-not-really").unwrap();
-            assert_eq!(preview("knob").unwrap(), b"\x89PNG-not-really");
+            let source = crate::service::script_sha256("return box(1,1,1);");
+            write_preview("knob", &crate::png_text::pixel(), &source, 3).unwrap();
+            assert!(preview("knob").unwrap().starts_with(b"\x89PNG"));
             let Entry::Part(part) = &tree().unwrap()[0] else {
                 panic!()
             };
-            assert!(part.thumbnail);
+            assert_eq!(part.source, source);
+            assert_eq!(
+                part.thumbnail,
+                Some(Drawn {
+                    source: Some(source.clone()),
+                    look: Some(3)
+                })
+            );
+
+            write("knob", "return box(2,2,2);").unwrap();
+            let Entry::Part(part) = &tree().unwrap()[0] else {
+                panic!()
+            };
+            assert_ne!(part.thumbnail.as_ref().unwrap().source.as_ref(), Some(&part.source), "an edit leaves it stale");
+        })
+    }
+
+    #[test]
+    fn a_preview_of_an_older_script_is_refused() {
+        scoped(|_| {
+            write("knob", "return box(2,2,2);").unwrap();
+            let drawn_from = crate::service::script_sha256("return box(1,1,1);");
+            let refused = write_preview("knob", &crate::png_text::pixel(), &drawn_from, 1).unwrap_err();
+            assert!(refused.contains("changed since"), "{refused}");
+            assert!(preview("knob").is_err(), "nothing was written");
+        })
+    }
+
+    #[test]
+    fn a_preview_from_before_keys_reads_as_drawn_from_nothing() {
+        scoped(|root| {
+            write("knob", "return box(1,1,1);").unwrap();
+            std::fs::write(root.join("knob.parcad").join(PREVIEW), crate::png_text::pixel()).unwrap();
+            let Entry::Part(part) = &tree().unwrap()[0] else {
+                panic!()
+            };
+            assert_eq!(part.thumbnail, Some(Drawn::default()));
         })
     }
 
@@ -1178,7 +1263,8 @@ pub(crate) mod tests {
     fn a_loose_part_swallows_a_preview_rather_than_failing() {
         scoped(|root| {
             std::fs::write(root.join("flange.js"), "return box(1,1,1);").unwrap();
-            write_preview("flange", b"png").expect("a loose part has nowhere to put it");
+            let source = crate::service::script_sha256("return box(1,1,1);");
+            write_preview("flange", &crate::png_text::pixel(), &source, 1).expect("a loose part has nowhere to put it");
             write_readme("flange", "# flange").expect("nor a readme");
             assert!(preview("flange").is_err());
         })

@@ -2955,6 +2955,7 @@ dependencies = [
  "parcad-core",
  "parcad-evaluation",
  "parcad-occt",
+ "png 0.18.1",
  "rmcp",
  "rquickjs",
  "schemars 1.2.2",

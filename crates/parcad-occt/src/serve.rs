@@ -209,6 +209,9 @@ fn volume_and_area(mesh: &opencascade::mesh::Mesh) -> (f64, f64) {
 }
 
 pub fn run(request: Request, cache: &mut BuildCache) -> Response {
+    if request.uncached {
+        return run(Request { uncached: false, ..request }, &mut BuildCache::default());
+    }
     breadcrumb("reading the request");
     if let Some(path) = &request.probe_step {
         return probe_step(path);
@@ -925,7 +928,23 @@ mod tests {
             deflection: BINDING_DEFLECTION_MM,
             step_path: None,
             stl_path: None,
+            uncached: false,
         }
+    }
+
+    /// A thumbnail builds other parts between two edits of this one; were it to
+    /// share the cache, two of them would age this part's subtrees out.
+    #[test]
+    fn an_uncached_request_leaves_the_cache_as_it_was() {
+        let mut cache = BuildCache::default();
+        assert!(matches!(run(request(&plate(5.0), None), &mut cache), Response::Ok(_)));
+        let kept = cache.len();
+        assert!(kept > 0);
+        for z in [30.0, 40.0, 50.0] {
+            let background = Request { uncached: true, ..request(&raised(r#"{"op": "sphere", "r": 4}"#, z), None) };
+            assert!(matches!(run(background, &mut cache), Response::Ok(_)));
+        }
+        assert_eq!(cache.len(), kept, "the edited part's subtrees are all still there");
     }
 
     /// A 40 × 40 × 10 plate less a 20 mm cube raised by `z`: the plate is

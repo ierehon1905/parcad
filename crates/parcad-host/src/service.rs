@@ -933,6 +933,22 @@ pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evalua
     Ok(evaluated)
 }
 
+/// The part's mesh and measurements, for a picture nobody is waiting on.
+///
+/// Neither build cache is touched — the worker's through `uncached`, the host's
+/// by not going through [`build_exact`] — so drawing a folder of thumbnails
+/// cannot evict the part being edited. No verdicts either: a thumbnail reads none.
+pub fn evaluate_in_background(doc: &Doc) -> Result<Evaluated, String> {
+    let t0 = std::time::Instant::now();
+    let opts = parcad_occt::Options {
+        uncached: true,
+        ..Default::default()
+    };
+    let success = parcad_occt::evaluate(doc, &opts).map_err(|e| format!("{e}"))?;
+    let wall_ms = crate::page::kernel_took().unwrap_or_else(|| t0.elapsed()).as_millis() as u64;
+    parcad_evaluation::evaluated(doc, &success, wall_ms, false)
+}
+
 // ------------------------------------------------------------------ the door
 //
 // What stands between a built part and a file. Every verdict a build carries

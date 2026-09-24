@@ -40,6 +40,10 @@ pub struct Request {
     pub deflection: f64,
     pub step_path: Option<PathBuf>,
     pub stl_path: Option<PathBuf>,
+    /// Build in a cache of its own, leaving the worker's alone: a background
+    /// build of another part must not age out the one being edited.
+    #[serde(default)]
+    pub uncached: bool,
 }
 
 /// What to ask of the built solid. Every answer is measured on the exact

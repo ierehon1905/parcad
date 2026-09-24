@@ -29,6 +29,7 @@ import * as S from "./state";
 import { store, stored } from "./store";
 import type { EdgeCurve, Evaluated, TargetPreview } from "./state";
 import type { Shown } from "./backend";
+import type { Geometry } from "./viewport";
 
 /** Whether the camera has been framed on this part yet. */
 let framed = false;
@@ -57,7 +58,7 @@ interface BuiltGraph {
 }
 
 /** The snapshot's bounds in the shape the viewport and the section take. */
-function boundsOf(snapshot: S.EvaluationSnapshot): S.Bounds {
+export function boundsOf(snapshot: S.EvaluationSnapshot): S.Bounds {
   const v = ([x, y, z]: [number, number, number]) => ({ x, y, z });
   return { min: v(snapshot.bounds_min), max: v(snapshot.bounds_max) };
 }
@@ -82,9 +83,18 @@ let dirty = false;
  */
 const DEBOUNCE_MS = 120;
 
+/** When this window last typed or built, for background work to keep out of its way. */
+let lastActive = 0;
+
 export function schedule() {
+  lastActive = performance.now();
   window.clearTimeout(timer);
   timer = window.setTimeout(run, DEBOUNCE_MS);
+}
+
+/** How long the window has neither typed nor built; 0 while it is building. */
+export function quietForMs(): number {
+  return running ? 0 : performance.now() - lastActive;
 }
 
 export async function run() {
@@ -136,7 +146,6 @@ export async function run() {
     if (revision !== undefined) {
       report({ id: viewerId, revision, built: true, volume_mm3: result.snapshot.volume_mm3 });
     }
-    void captureFirstThumbnail();
   } catch (e) {
     e = e instanceof Error ? new Error(locateNodes(e.message)) : e;
     showError(e);
@@ -146,8 +155,21 @@ export async function run() {
     }
   } finally {
     running = false;
+    lastActive = performance.now();
     if (dirty) schedule();
   }
+}
+
+/** An evaluation's mesh in the shape the viewport draws. */
+export function geometryOf(result: Evaluated): Geometry {
+  return {
+    positions: new Float32Array(result.positions),
+    normals: new Float32Array(result.normals),
+    indices: new Uint32Array(result.indices),
+    edges: result.edges,
+    faceRuns: result.face_runs,
+    faceMaterials: result.faces?.map((face) => face.material),
+  };
 }
 
 /**
@@ -267,17 +289,7 @@ function show(result: Evaluated) {
   S.visibleVertices.value = verticesFromEdges(edges);
   const bounds = boundsOf(snapshot);
 
-  S.viewportRef.current?.setGeometry(
-    {
-      positions: new Float32Array(result.positions),
-      normals: new Float32Array(result.normals),
-      indices: new Uint32Array(result.indices),
-      edges,
-      faceRuns: result.face_runs,
-      faceMaterials: result.faces?.map((face) => face.material),
-    },
-    bounds,
-  );
+  S.viewportRef.current?.setGeometry(geometryOf(result), bounds);
 
   // Frame once, then leave the camera alone — nothing is more irritating than a
   // view that resets itself every time you change a number.
@@ -725,7 +737,6 @@ export async function saveOpenPart() {
     }
     await backend.saveProject(path, source, {
       readme: clean ? readmeFor(path, source) : undefined,
-      preview: clean ? S.viewportRef.current?.snapshot() || undefined : undefined,
     });
     if (S.openPath.value === path) S.savedSource.value = source;
     await reloadProjects();
@@ -741,31 +752,6 @@ export async function saveOpenPart() {
 /** Save when the editor loses focus, as an editor set to save on focus change does — only if there is something to save. */
 export function saveOnBlur() {
   if (!saving && S.isDirty.peek()) void saveOpenPart();
-}
-
-/**
- * Give a part its first thumbnail, once, from the part as it is on disk.
- *
- * Without this a picker of thumbnails shows nothing until each part has been
- * edited and saved, which is backwards: the parts worth seeing are the ones
- * nobody has touched yet. Only when the editor still matches the file — a
- * picture of a half-typed edit would be a picture of something that is not
- * there — and only when the bundle has none, so it never fights a saved one.
- */
-async function captureFirstThumbnail() {
-  const path = S.openPath.value;
-  if (!path || S.editor().state.doc.toString() !== S.savedSource.value) return;
-  const part = partAt(S.projects.value?.tree ?? [], path);
-  if (!part?.bundle || part.thumbnail) return;
-
-  const png = S.viewportRef.current?.snapshot();
-  if (!png) return;
-  try {
-    await backend.saveProjectPreview(path, png);
-    await reloadProjects();
-  } catch {
-    // A thumbnail nobody asked for must not become an error anybody sees.
-  }
 }
 
 /** What a reader of the folder finds beside the script. */

@@ -154,6 +154,14 @@ export async function evaluate(graph: unknown): Promise<unknown> {
   return unpackMeshed(reply.bytes);
 }
 
+/** A saved part, built in the host's sandbox, with its mesh left as arrays. */
+export async function buildProject(name: string): Promise<unknown> {
+  const reply = await call(`built/${name}`, "GET", null);
+  if (reply.kind === "refused") throw new Error(reply.error);
+  if (reply.kind !== "meshed") throw new Error("the host answered a build without its mesh");
+  return unpackMeshed(reply.bytes);
+}
+
 /** `meshed` in crates/parcad-host/src/page.rs: lengths, JSON, then the arrays. */
 function unpackMeshed(payload: Uint8Array) {
   const buffer = payload.buffer.slice(payload.byteOffset, payload.byteOffset + payload.byteLength);

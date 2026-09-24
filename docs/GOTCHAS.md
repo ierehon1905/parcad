@@ -1753,7 +1753,7 @@ in a tab, and says so in words.
 once the page has the answer. Anything the call wrote before asking is written
 again on the second pass. `save_project` used to snapshot and write `part.js`
 and then build the thumbnail; its second pass then kept the *new* script as a
-snapshot and reported that. It builds the thumbnail first now. A tool that
+snapshot and reported that. It builds first now. A tool that
 writes and then builds has the same bug in a tab only.
 
 The second pass also names new scratch files, so an answer is matched to its
