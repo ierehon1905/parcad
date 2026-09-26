@@ -218,6 +218,25 @@ wire's direction of travel on that face, and with the face's outward normal it
 gives the side the face lies on. parcad reads the dihedral angle of every
 edge from it: convex, concave, or tangent-continuous.
 
+## `Edge::middle`, `Edge::approximation_within`
+
+`middle` is the point halfway along the edge's parameter range and the exact
+first derivative there, `BRepAdaptor_Curve::D1` through a new shim (see
+`vendor/opencascade-sys/PARCAD-CHANGES.md`). With `is_reversed` and the face's
+normal it says which side of that point the face lies on; parcad probes just
+past each boundary edge of a ceiling there, once per edge.
+
+`approximation_within(deflection)` is `approximation_segments` with the
+chord's deflection chosen by the caller instead of fixed at 0.1 mm;
+`approximation_segments` is now that call with 0.1.
+
+## `Face::outer_wire`, `Wire::edges`
+
+`outer_wire` wraps the already-bound `BRepTools::OuterWire`, which `Wire`'s own
+fillet and chamfer used privately; `Wire::edges` is `Face::edges` over a wire.
+parcad asks whether a ceiling's middle lies inside its outline with its holes
+filled: a screw hole in the middle of a bridge is still a bridge.
+
 ## Face history: `BooleanShape::modified_face`, `is_deleted_face`, `Treatment`
 
 The boolean history already answered what an *edge* became; `Modified` and

@@ -230,6 +230,12 @@ Two new includes for them: `BRepClass3d_SolidClassifier.hxx` and
 `GeomAdaptor_Curve.hxx`. Both classes are in `TKTopAlgo` / `TKG3d`, which
 `build.rs` already links.
 
+## Added: `BRepAdaptor_Curve_d1`
+
+`BRepAdaptor_Curve::D1` at one parameter, returned as the point and the first
+derivative, six doubles: the exact tangent of an edge where only its value was
+bound before. `BRepAdaptor_Curve` was already bound and included.
+
 ## Added: nearest boundary point, projectors kept
 
 `NearestBoundary`, a C++ class in `wrapper.hxx`, with `NearestBoundary_new`,

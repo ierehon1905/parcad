@@ -1621,6 +1621,20 @@ each step touches what is already there. **The rule:** when unioning a chain of
 shapes, union them in the order they touch. Cheap to get right and expensive to
 debug, because the failure is a SIGSEGV three operations later.
 
+## A point classification next to a B-spline edge costs milliseconds *(fixed 2026-09-27)*
+
+`BRepClass3d_SolidClassifier::Perform` asks whether its test ray passes through
+an edge, and for every edge whose box the ray crosses it runs `Extrema_ExtCC`,
+which on a B-spline edge is a global optimisation (`math_GlobOptMin`). Loading
+the solid is not the cost, so `classify_points` does not help. Bridge detection
+classified one probe per boundary *segment of the mesh*: on `blade-shade` the
+ring's ceiling meets four fitted blades, the 0.01 mm mesh cut their outlines
+into hundreds of segments, and the overhang pass took 11.7 s of a 20 s budget
+on an M4 Max and all of it on CI, where it failed the 0.0.10 release. **The
+rule:** probe per B-rep edge, never per mesh element; the count of exact
+classifications must follow the geometry, not the tessellation.
+`overhang::held_edges` does, and the case runs in 1.3 s.
+
 ## A coaxial torus groove in a cylinder segfaulted `UnifySameDomain` *(fixed)*
 
 ```js

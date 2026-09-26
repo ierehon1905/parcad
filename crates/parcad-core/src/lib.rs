@@ -20,6 +20,7 @@ pub mod mesh;
 mod occlusion;
 pub mod par;
 pub mod open_fit;
+pub mod planar_supports;
 pub mod render;
 pub mod section;
 pub mod section_crossing;

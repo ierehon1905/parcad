@@ -29,7 +29,7 @@
         "unsupported_mm2": 65.797,
         "bed_mm2": 1800.0,
         "faces": 8,
-        "bridges": 8,
+        "bridges": 0,
         "support_mm3": 791.309
       }
     }

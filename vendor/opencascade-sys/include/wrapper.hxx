@@ -255,6 +255,19 @@ inline std::unique_ptr<gp_Pnt> BRepAdaptor_Curve_value(const BRepAdaptor_Curve &
   return std::unique_ptr<gp_Pnt>(new gp_Pnt(curve.Value(U)));
 }
 
+// The point at U and the first derivative there, as x, y, z, dx, dy, dz —
+// added for parcad, see PARCAD-CHANGES.md.
+inline rust::Vec<double> BRepAdaptor_Curve_d1(const BRepAdaptor_Curve &curve, const double U) {
+  gp_Pnt point;
+  gp_Vec derivative;
+  curve.D1(U, point, derivative);
+  rust::Vec<double> out;
+  for (const double value : {point.X(), point.Y(), point.Z(), derivative.X(), derivative.Y(), derivative.Z()}) {
+    out.push_back(value);
+  }
+  return out;
+}
+
 // BRepLib
 inline bool BRepLibBuildCurves3d(const TopoDS_Shape &shape) { return BRepLib::BuildCurves3d(shape); }
 

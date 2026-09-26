@@ -99,9 +99,26 @@ impl Edge {
         dvec3(point.X(), point.Y(), point.Z())
     }
 
+    /// The point halfway along the edge's parameter range and the curve's
+    /// first derivative there, which runs in the curve's own direction, not
+    /// the wire's: see [`Edge::is_reversed`]. Added for parcad; see
+    /// PARCAD-CHANGES.md.
+    pub fn middle(&self) -> (DVec3, DVec3) {
+        let curve = ffi::BRepAdaptor_Curve_ctor(&self.inner);
+        let u = 0.5 * (curve.FirstParameter() + curve.LastParameter());
+        let d1 = ffi::BRepAdaptor_Curve_d1(&curve, u);
+        (dvec3(d1[0], d1[1], d1[2]), dvec3(d1[3], d1[4], d1[5]))
+    }
+
     pub fn approximation_segments(&self) -> ApproximationSegmentIterator {
+        self.approximation_within(0.1)
+    }
+
+    /// Points along the edge, first to last, whose chords stray at most
+    /// `deflection` from the curve. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn approximation_within(&self, deflection: f64) -> ApproximationSegmentIterator {
         let adaptor_curve = ffi::BRepAdaptor_Curve_ctor(&self.inner);
-        let approximator = ffi::GCPnts_TangentialDeflection_ctor(&adaptor_curve, 0.1, 0.1);
+        let approximator = ffi::GCPnts_TangentialDeflection_ctor(&adaptor_curve, 0.1, deflection);
 
         ApproximationSegmentIterator {
             count: 1,

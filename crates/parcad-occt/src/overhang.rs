@@ -14,7 +14,8 @@ use crate::protocol::{Bridge, FaceSummary, Overhang, OverhangFace};
 use glam::DVec3;
 use opencascade::mesh::Mesh;
 use opencascade::adhoc::AdHocShape;
-use opencascade::primitives::{BooleanShape, Crossing, Face, PointState, Shape};
+use opencascade::primitives::{BooleanShape, Crossing, Edge, Face, PointState, Shape};
+use parcad_core::planar_supports;
 
 /// Faces at or under this angle to the bed need support or a bridge: the
 /// slicers' usual default. Reported, never judged: a face exactly here is
@@ -24,6 +25,12 @@ pub const THRESHOLD_DEG: f64 = 45.0;
 const CEILING_DEG: f64 = 1.0;
 /// How near the lowest point a vertex may sit and still be on the bed.
 const BED_TOLERANCE_MM: f64 = 0.01;
+/// How far past a ceiling's edge, and how far below it, a wall must reach to
+/// hold that edge up.
+const PROBE_MM: f64 = 0.3;
+/// How far a support's sampled points may stray from its edge: the mesher's
+/// own deflection, so a span is as good as every other number here.
+const SUPPORT_DEFLECTION_MM: f64 = 0.01;
 /// How many overhanging faces the reply lists; the rest are counted.
 const LISTED: usize = 8;
 /// Past this many overhanging faces the support prism is not built: one
@@ -128,11 +135,15 @@ pub fn overhang(
     let face_count = hits.len();
     hits.sort_by(|a, b| b.area.total_cmp(&a.area));
 
-    // Ceilings held at two ends are bridges: nothing under their middle, and
-    // material beside and below their boundary — a wall going down — on
-    // opposite sides of it. A lip hangs from one wall; a plate
-    // on a post is held in the middle; a wall merged with a lip's end face
-    // is beside the lip, not under it, and reads as void where it matters.
+    // A ceiling is a bridge when a straight line through its middle meets
+    // walls going down at both ends, with walls on every side of that middle.
+    // The middle may sit in a hole in the ceiling, never in a bay beside it
+    // or over material. A lip hangs from one wall, however curved its root;
+    // three posts round the middle hold it, but no line through it reaches
+    // two. The span is the shortest such line: a bar on two towers 40 apart
+    // bridges 40, whatever its width.
+    let body_faces: Vec<Face> = body.shape.faces().collect();
+    let on_bed = |p: DVec3| [p.dot(u), p.dot(v)];
     let mut caster = body.shape.ray_caster(1e-4);
     let mut bridges = Vec::new();
     let mut listed = Vec::new();
@@ -142,34 +153,32 @@ pub fn overhang(
         let summary = faces.get(hit.face);
         let tag = summary.and_then(|f| f.tags.first().cloned());
         let surface = summary.map(|f| f.surface.kind.clone()).unwrap_or_else(|| "face".into());
-        let start = centre - up * 1e-3;
-        if hit.exact && hit.angle <= CEILING_DEG && body.shape.classify_point(start, 1e-4) != PointState::Inside {
-            let below = caster
-                .cast(start, -up)
-                .into_iter()
-                .filter(|h| h.distance > 1e-3 && h.crossing == Crossing::Entering)
-                .map(|h| h.distance + 1e-3)
-                .next();
-            let drop = below.unwrap_or(hit.bottom - bed);
-            // Held on opposite sides of its middle: the bridged span is the
-            // distance between those supports, not the face's own extent — a
-            // channel 8 wide and 40 long bridges 8.
-            let held = held_edges(body.shape, mesh, hit.face, centre, up);
-            let flat = |p: DVec3| p - up * p.dot(up);
-            let mut bridged: Option<f64> = None;
-            for a in &held {
-                for b in &held {
-                    if flat(*a - centre).dot(flat(*b - centre)) < 0.0 {
-                        let across = (flat(*a) - flat(*b)).length();
-                        bridged = Some(bridged.map_or(across, |best: f64| best.max(across)));
-                    }
-                }
-            }
-            if let Some(across) = bridged {
+        let middle = on_bed(centre);
+        let ceiling = body_faces.get(hit.face).filter(|face| {
+            hit.exact
+                && hit.angle <= CEILING_DEG
+                && planar_supports::encloses(&segments(&laid_flat(face.outer_wire().edges(), on_bed)), middle)
+                && body.shape.classify_point(centre - up * 1e-3, 1e-4) != PointState::Inside
+        });
+        if let Some(ceiling) = ceiling {
+            let held = held_edges(body.shape, ceiling, up);
+            let walls = laid_flat(held.iter().cloned(), on_bed);
+            let hull = planar_supports::convex_hull(&walls.concat());
+            let crossing = planar_supports::contains(&hull, middle, SUPPORT_DEFLECTION_MM)
+                .then(|| planar_supports::shortest_crossing(middle, &segments(&walls)))
+                .flatten();
+            if let Some(span_mm) = crossing {
+                let start = centre - up * 1e-3;
+                let below = caster
+                    .cast(start, -up)
+                    .into_iter()
+                    .filter(|h| h.distance > 1e-3 && h.crossing == Crossing::Entering)
+                    .map(|h| h.distance + 1e-3)
+                    .next();
                 bridges.push(Bridge {
                     tag: tag.clone(),
-                    span_mm: across,
-                    drop_mm: drop,
+                    span_mm,
+                    drop_mm: below.unwrap_or(hit.bottom - bed),
                     at: centre.to_array(),
                     sides: held.len(),
                 });
@@ -191,7 +200,7 @@ pub fn overhang(
 
     let all_planar = hits.iter().all(|h| h.exact);
     let support_mm3 = (face_count > 0 && face_count <= SUPPORT_FACES && all_planar)
-        .then(|| support_volume(body.shape, &hits.iter().map(|h| (h.face, h.top)).collect::<Vec<_>>(), up, bed));
+        .then(|| support_volume(body.shape, &body_faces, &hits.iter().map(|h| (h.face, h.top)).collect::<Vec<_>>(), up, bed));
 
     Overhang {
         body: body.name.map(str::to_owned),
@@ -209,39 +218,46 @@ pub fn overhang(
     }
 }
 
-/// Where a ceiling face is held: the midpoints of its boundary edges beside
-/// which, just below the ceiling and just outside the face, there is
-/// material — a wall going down from that edge.
-fn held_edges(shape: &Shape, mesh: &Mesh, face: usize, centre: DVec3, up: DVec3) -> Vec<DVec3> {
-    let Some(run) = mesh.faces.iter().find(|r| r.face == face) else { return Vec::new() };
-    let mut uses: std::collections::HashMap<(usize, usize), usize> = std::collections::HashMap::new();
-    for t in run.start..run.start + run.count {
-        let tri = [mesh.indices[3 * t], mesh.indices[3 * t + 1], mesh.indices[3 * t + 2]];
-        for k in 0..3 {
-            let (a, b) = (tri[k], tri[(k + 1) % 3]);
-            *uses.entry((a.min(b), a.max(b))).or_default() += 1;
-        }
-    }
+/// Each edge sampled to the support deflection and laid flat on the bed.
+fn laid_flat(edges: impl Iterator<Item = Edge>, on_bed: impl Fn(DVec3) -> [f64; 2]) -> Vec<Vec<[f64; 2]>> {
+    edges.map(|edge| edge.approximation_within(SUPPORT_DEFLECTION_MM).map(&on_bed).collect()).collect()
+}
+
+fn segments(lines: &[Vec<[f64; 2]>]) -> Vec<[[f64; 2]; 2]> {
+    lines.iter().flat_map(|line| line.windows(2).map(|w| [w[0], w[1]])).collect()
+}
+
+/// The ceiling's boundary edges with a wall going down beside them: material
+/// just past the edge's middle and just below the ceiling. One probe per
+/// B-rep edge, however finely the mesh cut it, classified against one loaded
+/// solid.
+fn held_edges(shape: &Shape, ceiling: &Face, up: DVec3) -> Vec<Edge> {
     let flat = |p: DVec3| p - up * p.dot(up);
-    uses.into_iter()
-        .filter(|(_, n)| *n == 1)
-        .filter_map(|((a, b), _)| {
-            let m = (mesh.vertices[a] + mesh.vertices[b]) * 0.5;
-            let inward = flat(centre - m);
-            if inward.length() < 1e-9 {
-                return None;
-            }
-            let probe = m - inward.normalize() * 0.3 - up * 0.3;
-            (shape.classify_point(probe, 1e-4) == PointState::Inside).then_some(m)
+    let (edges, probes): (Vec<Edge>, Vec<DVec3>) = ceiling
+        .edges()
+        .filter_map(|edge| {
+            let (at, derivative) = edge.middle();
+            let along = if edge.is_reversed() { -derivative } else { derivative };
+            // The face's normal across its direction of travel points into the
+            // face, as it does for `SelectableEdge::classify`.
+            let away = flat(-ceiling.normal_at(at).cross(along));
+            (away.length() > 1e-9).then(|| {
+                let probe = at + away.normalize() * PROBE_MM - up * PROBE_MM;
+                (edge, probe)
+            })
         })
+        .unzip();
+    edges
+        .into_iter()
+        .zip(shape.classify_points(&probes, 1e-4))
+        .filter_map(|(edge, state)| (state == PointState::Inside).then_some(edge))
         .collect()
 }
 
 /// The material a support prism under every overhanging face would hold:
 /// each face extruded down to the bed, fused, the body cut out, clipped to
 /// above the bed. One boolean per face plus three; exact.
-fn support_volume(shape: &Shape, faces: &[(usize, f64)], up: DVec3, bed: f64) -> f64 {
-    let all: Vec<Face> = shape.faces().collect();
+fn support_volume(shape: &Shape, all: &[Face], faces: &[(usize, f64)], up: DVec3, bed: f64) -> f64 {
     let prisms: Vec<Shape> = faces
         .iter()
         .filter_map(|&(index, top)| {
@@ -357,7 +373,152 @@ mod tests {
         let bridge = &o.bridges[0];
         assert_eq!(bridge.tag.as_deref(), Some("slot"));
         assert!((bridge.span_mm - 12.0).abs() < 1e-6 && (bridge.drop_mm - 5.0).abs() < 1e-6, "{bridge:?}");
+        assert_eq!(bridge.sides, 2, "the slot's two walls");
         let lip = o.faces.iter().find(|f| f.tag.as_deref() == Some("lip")).expect("the lip overhangs");
         assert!((lip.area_mm2 - 80.0).abs() < 1e-6 && (lip.height_mm - 8.0).abs() < 1e-6, "{lip:?}");
+    }
+
+    fn measure_as_drawn(json: &str) -> Overhang {
+        let doc: Doc = serde_json::from_str(json).unwrap();
+        let part = build_part(&doc).unwrap();
+        let body = Body::new(None, &part.shape, &part.names[0]);
+        let mesh = body.shape.mesh();
+        let mut faces = crate::perceive::describe_faces(body.shape);
+        for (face, tags) in faces.iter_mut().zip(&body.face_tags) {
+            face.tags = tags.clone();
+        }
+        overhang(&body, &mesh, &faces, DVec3::Z, false, THRESHOLD_DEG)
+    }
+
+    /// A lip inside a cup's bore hangs from the one wall its root is merged
+    /// into. That root is an arc, which the mesh cuts into many pieces whose
+    /// ends lie either side of the lip's middle; it is still one wall.
+    #[test]
+    fn a_lip_on_a_curved_wall_is_not_a_bridge() {
+        let o = measure_as_drawn(r#"{"units":"mm","root":6,"nodes":[
+            {"op":"cylinder","r":14,"h":14,"tag":"cup"},
+            {"op":"cylinder","r":12,"h":15,"tag":"bore"},
+            {"op":"translate","child":1,"by":{"x":0,"y":0,"z":1}},
+            {"op":"difference","base":0,"tools":[2],"blend":0},
+            {"op":"cuboid","size":{"x":2,"y":6,"z":2},"tag":"lip"},
+            {"op":"translate","child":4,"by":{"x":11.5,"y":0,"z":6}},
+            {"op":"union","children":[3,5],"blend":0}]}"#);
+        assert_eq!(o.face_count, 1, "{:?}", o.faces);
+        assert_eq!(o.faces[0].tag.as_deref(), Some("lip"));
+        assert!(o.bridges.is_empty(), "{:?}", o.bridges);
+    }
+
+    /// The ceiling of a hole bored up from below is held all round by the
+    /// bore, one closed edge: a bridge as wide as the hole, over the drop to
+    /// the bed it opens onto.
+    #[test]
+    fn a_round_ceiling_held_all_round_is_bridged_across_its_diameter() {
+        let o = measure_as_drawn(r#"{"units":"mm","root":4,"nodes":[
+            {"op":"cuboid","size":{"x":20,"y":20,"z":10},"tag":"block"},
+            {"op":"translate","child":0,"by":{"x":0,"y":0,"z":5}},
+            {"op":"cylinder","r":4,"h":6,"tag":"hole"},
+            {"op":"translate","child":2,"by":{"x":0,"y":0,"z":2}},
+            {"op":"difference","base":1,"tools":[3],"blend":0}]}"#);
+        assert_eq!(o.bridges.len(), 1, "{:?}", o.bridges);
+        let bridge = &o.bridges[0];
+        assert_eq!((bridge.tag.as_deref(), bridge.sides), (Some("hole"), 1), "{bridge:?}");
+        assert!((bridge.span_mm - 8.0).abs() <= 2.0 * SUPPORT_DEFLECTION_MM, "{bridge:?}");
+        assert!((bridge.drop_mm - 5.0).abs() < 1e-6, "{bridge:?}");
+    }
+
+    /// A bar 8 wide laid on two towers 40 apart bridges 40: the gap between
+    /// the walls that hold it, not the bar's own width.
+    #[test]
+    fn a_bar_on_two_towers_bridges_the_gap_between_them() {
+        let o = measure_as_drawn(r#"{"units":"mm","root":5,"nodes":[
+            {"op":"cuboid","size":{"x":8,"y":8,"z":10},"tag":"tower"},
+            {"op":"translate","child":0,"by":{"x":-24,"y":0,"z":5}},
+            {"op":"translate","child":0,"by":{"x":24,"y":0,"z":5}},
+            {"op":"cuboid","size":{"x":56,"y":8,"z":2},"tag":"bar"},
+            {"op":"translate","child":3,"by":{"x":0,"y":0,"z":11}},
+            {"op":"union","children":[1,2,4],"blend":0}]}"#);
+        assert_eq!(o.bridges.len(), 1, "{:?}", o.bridges);
+        let bridge = &o.bridges[0];
+        assert_eq!((bridge.tag.as_deref(), bridge.sides), (Some("bar"), 2), "{bridge:?}");
+        assert!((bridge.span_mm - 40.0).abs() < 1e-6 && (bridge.drop_mm - 10.0).abs() < 1e-6, "{bridge:?}");
+    }
+
+    /// A screw hole through the middle of that bar leaves its middle in the
+    /// hole: still inside the ceiling's outline, still a 40 mm bridge.
+    #[test]
+    fn a_hole_in_the_middle_of_a_bridge_leaves_it_a_bridge() {
+        let o = measure_as_drawn(r#"{"units":"mm","root":8,"nodes":[
+            {"op":"cuboid","size":{"x":8,"y":8,"z":10},"tag":"tower"},
+            {"op":"translate","child":0,"by":{"x":-24,"y":0,"z":5}},
+            {"op":"translate","child":0,"by":{"x":24,"y":0,"z":5}},
+            {"op":"cuboid","size":{"x":56,"y":8,"z":2},"tag":"bar"},
+            {"op":"translate","child":3,"by":{"x":0,"y":0,"z":11}},
+            {"op":"union","children":[1,2,4],"blend":0},
+            {"op":"cylinder","r":1.6,"h":4},
+            {"op":"translate","child":6,"by":{"x":0,"y":0,"z":11}},
+            {"op":"difference","base":5,"tools":[7],"blend":0}]}"#);
+        assert_eq!(o.bridges.len(), 1, "{:?}", o.bridges);
+        let bridge = &o.bridges[0];
+        assert_eq!((bridge.tag.as_deref(), bridge.sides), (Some("bar"), 2), "{bridge:?}");
+        assert!((bridge.span_mm - 40.0).abs() < 1e-6, "{bridge:?}");
+    }
+
+    /// Three posts round a plate's middle hold it on every side, but a line
+    /// through the middle that reaches one post leaves between the other two:
+    /// nothing bridges it, and the plate's underside stays an overhang.
+    #[test]
+    fn a_plate_on_three_posts_round_its_middle_is_not_bridged_through_it() {
+        let o = measure_as_drawn(r#"{"units":"mm","root":6,"nodes":[
+            {"op":"cuboid","size":{"x":4,"y":4,"z":10},"tag":"post"},
+            {"op":"translate","child":0,"by":{"x":15,"y":0,"z":5}},
+            {"op":"translate","child":0,"by":{"x":-7.5,"y":12.990381,"z":5}},
+            {"op":"translate","child":0,"by":{"x":-7.5,"y":-12.990381,"z":5}},
+            {"op":"cylinder","r":22,"h":2,"tag":"plate"},
+            {"op":"translate","child":4,"by":{"x":0,"y":0,"z":11}},
+            {"op":"union","children":[1,2,3,5],"blend":0}]}"#);
+        let plate = o.faces.iter().find(|f| f.tag.as_deref() == Some("plate")).expect("the plate overhangs");
+        assert_eq!((plate.exact, plate.angle_deg), (true, 0.0), "{plate:?}");
+        assert!(o.bridges.is_empty(), "{:?}", o.bridges);
+    }
+
+    /// A plate on two posts is held by the posts' four sides each, inside
+    /// its own outline, and bridges the 30 between their facing sides.
+    #[test]
+    fn a_plate_on_two_posts_bridges_between_their_facing_sides() {
+        let o = measure_as_drawn(r#"{"units":"mm","root":5,"nodes":[
+            {"op":"cuboid","size":{"x":4,"y":4,"z":10},"tag":"post"},
+            {"op":"translate","child":0,"by":{"x":-17,"y":0,"z":5}},
+            {"op":"translate","child":0,"by":{"x":17,"y":0,"z":5}},
+            {"op":"cuboid","size":{"x":50,"y":10,"z":2},"tag":"plate"},
+            {"op":"translate","child":3,"by":{"x":0,"y":0,"z":11}},
+            {"op":"union","children":[1,2,4],"blend":0}]}"#);
+        assert_eq!(o.bridges.len(), 1, "{:?}", o.bridges);
+        let bridge = &o.bridges[0];
+        assert_eq!((bridge.tag.as_deref(), bridge.sides), (Some("plate"), 8), "{bridge:?}");
+        assert!((bridge.span_mm - 30.0).abs() < 1e-6 && (bridge.drop_mm - 10.0).abs() < 1e-6, "{bridge:?}");
+    }
+
+    /// A shelf 2 deep round half a bore is held by one wall all along its
+    /// curve; its middle is out in the bore, off the shelf, so it is a ledge
+    /// however much of the circle the wall covers.
+    #[test]
+    fn a_half_ring_shelf_round_a_bore_is_not_a_bridge() {
+        let o = measure_as_drawn(r#"{"units":"mm","root":11,"nodes":[
+            {"op":"cylinder","r":16,"h":14,"tag":"cup"},
+            {"op":"cylinder","r":12,"h":15,"tag":"bore"},
+            {"op":"translate","child":1,"by":{"x":0,"y":0,"z":1}},
+            {"op":"difference","base":0,"tools":[2],"blend":0},
+            {"op":"cylinder","r":12.5,"h":2},
+            {"op":"cylinder","r":10,"h":3},
+            {"op":"difference","base":4,"tools":[5],"blend":0},
+            {"op":"cuboid","size":{"x":30,"y":15,"z":4}},
+            {"op":"translate","child":7,"by":{"x":0,"y":7.5,"z":0}},
+            {"op":"intersection","children":[6,8],"blend":0,"tag":"shelf"},
+            {"op":"translate","child":9,"by":{"x":0,"y":0,"z":4}},
+            {"op":"union","children":[3,10],"blend":0}]}"#);
+        let shelf = o.faces.iter().find(|f| f.tag.as_deref() == Some("shelf"));
+        let shelf = shelf.unwrap_or_else(|| panic!("the shelf overhangs: {:?}", o.faces));
+        assert_eq!((shelf.exact, shelf.angle_deg), (true, 0.0), "{shelf:?}");
+        assert!(o.bridges.is_empty(), "{:?}", o.bridges);
     }
 }

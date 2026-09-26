@@ -466,6 +466,7 @@ pub mod ffi {
         pub fn FirstParameter(self: &BRepAdaptor_Curve) -> f64;
         pub fn LastParameter(self: &BRepAdaptor_Curve) -> f64;
         pub fn BRepAdaptor_Curve_value(curve: &BRepAdaptor_Curve, u: f64) -> UniquePtr<gp_Pnt>;
+        pub fn BRepAdaptor_Curve_d1(curve: &BRepAdaptor_Curve, u: f64) -> Vec<f64>;
 
         // Primitives
         type BRepPrimAPI_MakePrism;

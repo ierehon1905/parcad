@@ -203,6 +203,12 @@ impl Face {
         EdgeIterator { explorer }
     }
 
+    /// The boundary the face's holes sit inside, `BRepTools::OuterWire`.
+    /// Added for parcad; see PARCAD-CHANGES.md.
+    pub fn outer_wire(&self) -> Wire {
+        Wire { inner: ffi::outer_wire(&self.inner) }
+    }
+
     pub fn center_of_mass(&self) -> DVec3 {
         let mut props = ffi::GProp_GProps_ctor();
 

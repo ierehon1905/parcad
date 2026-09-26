@@ -256,6 +256,18 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
   fillet; check prior art (FreeCAD, OCCT's own `BRepBlend` / `GeomFill`,
   licence fit) before building.
 
+### Left from the bridge fix (2026-09-27)
+
+**A filleted ceiling is never a bridge.** `overhang::held_edges` asks for
+material 0.3 mm past a ceiling's edge and 0.3 mm below it. A concave round of
+radius 0.3 mm or more where ceiling meets wall leaves that point in air, since
+the round's face is tangent to the ceiling at the edge, and so does a wall
+leaning outward past 45°. A filleted channel reads as an overhang face with no
+bridge. It always did; the probe is older than the per-edge rewrite. The fix
+walks from the edge across the faces that meet it until one goes down steeper
+than the threshold, instead of sampling one point; decide how far a support may
+be from the edge before building it.
+
 ### Left from the engine wave (2026-09-16)
 
 In order.

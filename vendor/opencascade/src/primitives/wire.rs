@@ -1,6 +1,6 @@
 use crate::{
     angle::{Angle, ToAngle},
-    primitives::{make_dir, make_point, make_vec, Edge, Face},
+    primitives::{make_dir, make_point, make_vec, Edge, EdgeIterator, Face},
 };
 use cxx::UniquePtr;
 use glam::{dvec3, DVec3};
@@ -17,6 +17,16 @@ impl AsRef<Wire> for Wire {
 }
 
 impl Wire {
+    /// The wire's edges. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn edges(&self) -> EdgeIterator {
+        let explorer = ffi::TopExp_Explorer_ctor(
+            ffi::cast_wire_to_shape(&self.inner),
+            ffi::TopAbs_ShapeEnum::TopAbs_EDGE,
+        );
+
+        EdgeIterator { explorer }
+    }
+
     fn from_make_wire(mut make_wire: UniquePtr<ffi::BRepBuilderAPI_MakeWire>) -> Self {
         let wire = make_wire.pin_mut().Wire();
         let inner = ffi::TopoDS_Wire_to_owned(wire);

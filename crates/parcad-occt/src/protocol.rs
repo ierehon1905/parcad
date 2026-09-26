@@ -312,7 +312,9 @@ pub struct Overhang {
     /// How many faces carry any of it; `faces` lists the largest.
     pub face_count: usize,
     pub faces: Vec<OverhangFace>,
-    /// Ceilings held up on two or more sides.
+    /// Ceilings a straight line through their middle crosses from one wall
+    /// going down to another, with walls on every side of that middle. Three
+    /// posts round the middle hold a ceiling that no such line crosses.
     pub bridges: Vec<Bridge>,
     /// What a support prism under every overhanging face down to the bed
     /// would hold, mm³, exact; absent when there are none, too many, or a
@@ -349,6 +351,7 @@ pub struct OverhangFace {
 pub struct Bridge {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tag: Option<String>,
+    /// The shortest line through its middle from one wall to another.
     pub span_mm: f64,
     /// How far down the nearest material, or the bed, lies under it.
     pub drop_mm: f64,
