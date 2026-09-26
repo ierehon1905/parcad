@@ -1907,3 +1907,18 @@ Before reaching for a browser API in the frontend, check it against WKWebView
 rather than against caniuse's "Safari" column — the two are not the same
 thing. Where one is worth using anyway, guard it and provide the fallback, as
 `idle()` in `ui/editor.tsx` does.
+
+## Bambu Studio 02.08.02 calls every plain 3MF "invalid config"
+
+Bambu Studio 02.08.02.60 and .61 open any 3MF that carries no Bambu project
+config behind a modal, "The 3mf file has invalid config, load geometry data
+only": ours, Fusion 360's, the 3MF Consortium's own samples
+([bambulab/BambuStudio#11927](https://github.com/bambulab/BambuStudio/issues/11927)).
+`check_project_config` in their `Plater.cpp` failed any config without
+`nozzle_diameter`, and a core-spec 3MF has no config at all. The geometry loads
+intact; the dialog is the only effect. Upstream fixed the check in `926a61e`
+and turned the dialog into a toast in `2ba84fc`, both in 02.08.03.66 and later.
+
+Don't silence it by writing `Metadata/project_settings.config`. That is
+Bambu's undocumented project format, which `threemf.rs` stays out of on
+purpose, and a non-empty config is one Bambu goes on to load as settings.

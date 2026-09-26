@@ -5,6 +5,8 @@
 //! This writes the 3MF core specification and nothing past it — no slicer's
 //! own project settings, which are undocumented and belong to that slicer:
 //! <https://github.com/3MFConsortium/spec_core/blob/master/3MF%20Core%20Specification.md>.
+//! Bambu Studio 02.08.02 warns that such a file has "invalid config"; that is
+//! their bug, fixed in 02.08.03 — docs/GOTCHAS.md has the diagnosis.
 //!
 //! The package is a ZIP, written here by hand: three entries, deflated, no
 //! ZIP64. A crate for it would be most of a ZIP implementation to use a tenth.
