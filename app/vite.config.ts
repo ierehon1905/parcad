@@ -17,8 +17,9 @@ export default defineConfig(({ mode }) => {
     // weight. `@preact/signals` carries the state the whole window shares — see
     // src/state.ts for why that is signals and not component state.
     plugins: [preact(), tailwindcss(), ...(web ? [kernel()] : [])],
-    // ParCAD web is served from a project page, https://<owner>.github.io/parcad/.
-    base: web ? (process.env.PARCAD_WEB_BASE ?? "/parcad/") : "/",
+    // ParCAD web is served under the project page, https://<owner>.github.io/parcad/app/;
+    // the landing page (site/) has the root.
+    base: web ? (process.env.PARCAD_WEB_BASE ?? "/parcad/app/") : "/",
     // Tauri drives the dev server on a fixed port and fails loudly rather than
     // silently moving if it is taken.
     clearScreen: false,
@@ -157,8 +158,8 @@ function kernel(): Plugin {
       const repo = resolve(__dirname, "..");
       for (const [name, from] of [
         ["NOTICE.md", "NOTICE.md"],
+        ["LICENSE", "LICENSE"],
         ["LICENSE-MIT", "LICENSE-MIT"],
-        ["LICENSE-APACHE", "LICENSE-APACHE"],
         ["OCCT_LICENSE_LGPL_21.txt", "vendor/occt-sys/OCCT/LICENSE_LGPL_21.txt"],
         ["OCCT_LGPL_EXCEPTION.txt", "vendor/occt-sys/OCCT/OCCT_LGPL_EXCEPTION.txt"],
       ]) {

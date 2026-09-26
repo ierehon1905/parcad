@@ -148,7 +148,7 @@ in `~/Library/Application Support/parcad` as plain `.js` files you can edit anyw
 
 ## Use it from an agent
 
-With nothing installed: open [ParCAD web](https://ierehon1905.github.io/parcad/),
+With nothing installed: open [ParCAD web](https://ierehon1905.github.io/parcad/app/),
 choose **Connect your AI**, and give your client the link it shows — Claude
 Code, the Claude app as a custom connector, Cursor, VS Code, or any client that
 connects to a URL. The tab is the server, with the same tools as the app, and it
@@ -210,7 +210,14 @@ one call.
 
 ## Licensing
 
-MIT or Apache-2.0, at your option. Built on components that are not: OpenCASCADE
+ParCAD is free software under the [GNU AGPL-3.0](LICENSE) or later: use it,
+change it and share it, but a modified ParCAD you distribute or run as a service
+must publish its source too. **The parts you make are yours** — part scripts and
+everything ParCAD exports from them can be licensed however you like, and the
+seed parts in `examples/` are MIT. Releases through v0.0.9 stay MIT or
+Apache-2.0.
+
+Built on components under other licences: OpenCASCADE
 and its bindings under `vendor/` are LGPL-2.1, and one file of our own,
 `crates/parcad-core/src/occlusion.rs`, is MPL-2.0 because it was ported from
 [fidget](https://github.com/mkeeter/fidget). Building from source is

@@ -8,8 +8,8 @@
 const CHROME = process.env.CHROME ??
   `${process.env.HOME}/Library/Caches/ms-playwright/chromium-1243/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing`;
 const REPO = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
-const PAGE = "http://localhost:1420/parcad/";
-const SAME_ORIGIN_BLANK = "http://localhost:1420/parcad/favicon.svg";
+const PAGE = "http://localhost:1420/parcad/app/";
+const SAME_ORIGIN_BLANK = "http://localhost:1420/parcad/app/favicon.svg";
 const [label, casePath] = process.argv.slice(2);
 const OUT = `${REPO}/target/field-web/${label}`;
 const PORT = 9400 + Math.floor(Math.random() * 100);

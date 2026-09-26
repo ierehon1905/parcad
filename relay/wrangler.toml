@@ -5,7 +5,7 @@ compatibility_date = "2026-09-01"
 # What may open a link: the published site, and a local build of it.
 [vars]
 PAGE_ORIGINS = "https://ierehon1905.github.io,http://localhost:1420,http://127.0.0.1:1420,http://localhost:4173,http://127.0.0.1:4173"
-PAGE_URL = "https://ierehon1905.github.io/parcad/"
+PAGE_URL = "https://ierehon1905.github.io/parcad/app/"
 
 [[durable_objects.bindings]]
 name = "LINKS"

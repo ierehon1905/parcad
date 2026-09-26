@@ -88,7 +88,7 @@ bun x tsc --noEmit
 ```
 
 A local site pointed at it: `cd app && VITE_PARCAD_RELAY=http://127.0.0.1:8787
-bun x vite --mode playground`, then <http://localhost:1420/parcad/>.
+bun x vite --mode playground`, then <http://localhost:1420/parcad/app/>.
 
 ## Deploy it
 

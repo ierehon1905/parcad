@@ -12,10 +12,10 @@
 class Parcad < Formula
   desc "Parametric CAD you write as code, with an MCP server for agents"
   homepage "https://github.com/ierehon1905/parcad"
-  # The Rust crates are MIT or Apache-2.0; the statically linked OpenCASCADE
+  # The Rust crates are AGPL-3.0-or-later; the statically linked OpenCASCADE
   # inside the worker is LGPL-2.1 with its exception. The texts are installed
   # beside the binaries, and NOTICE.md says how to relink your own OCCT.
-  license any_of: ["MIT", "Apache-2.0"]
+  license "AGPL-3.0-or-later"
 
   # One build per platform: Apple silicon, and x86_64 Linux on Homebrew on Linux.
   # `url` may not sit directly in an on_* block, so each sits behind its CPU.

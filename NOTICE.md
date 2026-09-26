@@ -3,18 +3,43 @@
 Not everything in this tree is under the same licence. This file says which is
 which, because the difference matters if you redistribute a binary.
 
-## Our own code — MIT OR Apache-2.0
+## Our own code — AGPL-3.0-or-later
+
+Copyright (C) 2026 Leon Minasian (Maging Studio).
 
 `crates/`, `app/` (both the Rust host and the TypeScript frontend), `tools/`,
-`field/`, `examples/`, `eval/`, `cmake/`, `web/` and `docs/` — including the screenshots
-in `docs/images/`, which are this application rendering its own examples — with
-one file excepted below, at your option under either:
+`field/`, `eval/`, `cmake/`, `web/`, `relay/`, `site/` and `docs/` — including
+the screenshots in `docs/images/`, which are this application rendering its own
+examples — with one file excepted below, are licensed under the GNU Affero
+General Public License, version 3 or (at your option) any later version:
+[LICENSE](LICENSE).
 
-- [LICENSE-MIT](LICENSE-MIT) — MIT
-- [LICENSE-APACHE](LICENSE-APACHE) — Apache License 2.0
+ParCAD is free, and this keeps it free: anyone may use, change and share it, but
+whoever distributes a modified version, or runs one as a service for others,
+must publish its source under the same licence. A contribution you submit is
+licensed the same way.
 
-Unless you state otherwise, a contribution you intentionally submit for
-inclusion is dual-licensed the same way, with no additional terms.
+### Your parts are yours
+
+As an additional permission under section 7 of the AGPL: a **part script** — a
+program written in ParCAD's DSL and evaluated by ParCAD — and **anything ParCAD
+produces** from one (its geometry, exported STEP, STL and other files, renders,
+measurements and reports, and the type declarations ParCAD writes beside parts
+for editors) are not covered by the AGPL merely because they use the DSL or
+were produced by ParCAD. License them however you like, including for sale or
+under closed terms. This permission does not extend to changes to ParCAD
+itself, the DSL's implementation included.
+
+### `examples/` — MIT
+
+The seed parts in `examples/` are under the [MIT licence](LICENSE-MIT), so a
+part started from one of them can be used for anything.
+
+### Earlier releases
+
+Every release through v0.0.9, and every commit before the one that added this
+section, was published under MIT OR Apache-2.0 and remains available under
+those terms.
 
 ## `vendor/opencascade` — LGPL-2.1
 
@@ -61,8 +86,7 @@ Note what that implies, because it is easy to miss: ParCAD-authored C++ lives in
 `vendor/opencascade-sys/include/wrapper.hxx` — `Shape_geometry_json`,
 `Shape_topology_report`, `BRepCheck_report` and others — and is LGPL-2.1 like the
 crate it extends. That is the correct direction for a contribution to an LGPL
-work, but it means those parts are not relicensable as MIT/Apache without being
-reimplemented.
+work, but it means those parts stay LGPL-2.1 rather than joining our AGPL code.
 
 Do not move code between any of these directories and `crates/`; the licences
 differ.
@@ -76,7 +100,7 @@ kernel. MPL-2.0 is file-level copyleft: that one file stays MPL-2.0, says so in
 its header, and is in **every** ParCAD binary — the app, the CLI and the eval
 harness alike. It does not reach our other code, but distributing a binary
 carries an obligation to make that file's source available, which this
-repository does. Do not move code between it and the MIT/Apache files.
+repository does. Do not move code between it and the AGPL files.
 
 `option-ext`, `cssparser`, `selectors` and `dtoa-short` arrive through Tauri,
 all MPL-2.0 on the same terms. No dependency of this project is GPL, AGPL or
@@ -84,15 +108,20 @@ SSPL.
 
 ## What this means for a binary you ship
 
-Building and running from source is unencumbered. Redistributing a **binary** is
-what triggers obligations, and there are three:
+Building and running ParCAD for yourself is unencumbered. Redistributing a
+**binary**, or letting others use a **modified** ParCAD over a network, is what
+triggers obligations, and there are four:
+
+- **AGPL-3.0 §6 and §13, source.** Whoever receives the binary, or uses your
+  modified version over a network, must be offered its complete source under the
+  AGPL. Unmodified ParCAD is covered by linking to this repository.
 
 - **LGPL-2.1 §6, relinking.** OCCT is built into `parcad-occt-worker`. Anyone who
   gets that binary must be able to use their own build of OCCT instead. The next
   section says how.
 - **MPL-2.0 §3.2**, source availability for `occlusion.rs` and the crates above.
 - **The licence texts themselves** must accompany the binary. `bundle.resources`
-  in `app/src-tauri/tauri.conf.json` ships this file, both of ours, and both of
+  in `app/src-tauri/tauri.conf.json` ships this file, the AGPL and MIT texts, and both of
   OCCT's into the bundle's `Resources/`.
 
 ## How to use your own OpenCASCADE
@@ -147,12 +176,12 @@ an issue.
 ParCAD web (`web/`, published as a static site) is distributed
 differently, and the difference matters. There is no separate worker process in
 a browser tab: `parcad_wasm.wasm` is **one WebAssembly file holding OpenCASCADE,
-the LGPL-2.1 wrapper crates above, our MIT/Apache Rust (`parcad-occt`,
+the LGPL-2.1 wrapper crates above, our AGPL Rust (`parcad-occt`,
 `parcad-evaluation`, `parcad-core` with the MPL-2.0 `occlusion.rs`) and
 Emscripten's runtime** — libc++, libc++abi and compiler-rt under Apache-2.0 with
 LLVM exceptions, musl under MIT. The JavaScript beside it, `parcad-wasm.js`, is
-Emscripten's generated loader (MIT). The site ships this file, both of our
-licences, and OCCT's two licence texts under `licenses/`.
+Emscripten's generated loader (MIT). The site ships this file, the AGPL and MIT
+texts, and OCCT's two licence texts under `licenses/`.
 
 Because OpenCASCADE is statically linked into that file, relinking means
 rebuilding the file, and everything needed to do that is public: the whole

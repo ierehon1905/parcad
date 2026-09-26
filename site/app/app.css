@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+/* The site's tokens. The hues are the app's own (app/src/style.css): accent
+   blue, the gold of a selection, the green of a pass, the orange of a cut face. */
+@theme {
+  --color-bg: #000000;
+  --color-panel: #0a0b0d;
+  --color-tile: #16181c;
+  --color-line: rgb(255 255 255 / 0.1);
+  --color-line-strong: rgb(255 255 255 / 0.18);
+  --color-ink: #eef1f5;
+  --color-ink-dim: #9aa2af;
+  --color-ink-faint: #5f6672;
+
+  --color-accent: #6ea8fe;
+  --color-gold: #f5b942;
+  --color-good: #7bd88f;
+  --color-cut: #c99454;
+  --color-tag: #b79cff;
+  --color-bad: #ff6b6b;
+
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  --animate-tab-progress: tab-progress 9s linear forwards;
+  @keyframes tab-progress {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+    color-scheme: dark;
+  }
+  body {
+    @apply bg-bg text-ink font-sans antialiased;
+    overflow-x: hidden;
+  }
+  ::selection {
+    background: rgb(110 168 254 / 0.35);
+  }
+}

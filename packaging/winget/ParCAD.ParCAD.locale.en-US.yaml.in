@@ -2,11 +2,11 @@
 PackageIdentifier: ParCAD.ParCAD
 PackageVersion: {{version}}
 PackageLocale: en-US
-Publisher: Leon Minasyan
+Publisher: Leon Minasian
 PublisherUrl: https://github.com/ierehon1905
 PackageName: ParCAD
 PackageUrl: https://github.com/ierehon1905/parcad
-License: MIT OR Apache-2.0; OpenCASCADE under LGPL-2.1
+License: AGPL-3.0-or-later; OpenCASCADE under LGPL-2.1
 LicenseUrl: https://github.com/ierehon1905/parcad/blob/main/NOTICE.md
 ShortDescription: Parametric CAD you write as code, with an MCP server for the model that writes it
 Description: ParCAD builds parts from a small JavaScript DSL and evaluates them with an exact B-rep kernel (OpenCASCADE). Every report is measured from the geometry, and the same host serves the app, an HTTP API and an MCP endpoint for agents.
