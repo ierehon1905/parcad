@@ -1621,6 +1621,19 @@ each step touches what is already there. **The rule:** when unioning a chain of
 shapes, union them in the order they touch. Cheap to get right and expensive to
 debug, because the failure is a SIGSEGV three operations later.
 
+## The MSI names a bundled file after its source, not its target *(fixed 2026-09-27)*
+
+Tauri 2.11's WiX template writes each resource as `<File Source="…"/>` with no
+`Name`, so Windows installs it under the source's file name and ignores the
+target's. `vendor/opencascade/LICENSE` mapped to
+`licenses/LICENSE_opencascade_LGPL_21.txt` was installed as `licenses/LICENSE`
+on Windows only; once ParCAD's own `LICENSE` joined it in `licenses/`, `light.exe`
+failed on two files of one name and the 0.0.11 tag built no release. The CLI
+archives had the same collision in a `cp`, which kept whichever came last.
+**The rule:** a resource keeps its own file name and gets a folder of its own
+when that name is taken; `bundled_resources_install_under_their_own_names`
+in `crates/parcad-cli/src/stdio.rs` holds it.
+
 ## A point classification next to a B-spline edge costs milliseconds *(fixed 2026-09-27)*
 
 `BRepClass3d_SolidClassifier::Perform` asks whether its test ray passes through

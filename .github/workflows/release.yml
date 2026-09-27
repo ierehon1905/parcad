@@ -157,8 +157,10 @@ jobs:
           cp -R examples "$out/examples"
           cp LICENSE LICENSE-MIT NOTICE.md "$out/licenses/"
           cp vendor/occt-sys/OCCT/LICENSE_LGPL_21.txt \
-             vendor/occt-sys/OCCT/OCCT_LGPL_EXCEPTION.txt \
-             vendor/opencascade/LICENSE "$out/licenses/"
+             vendor/occt-sys/OCCT/OCCT_LGPL_EXCEPTION.txt "$out/licenses/"
+          # Its own folder: this LICENSE and ParCAD's share a name.
+          mkdir -p "$out/licenses/opencascade-rs"
+          cp vendor/opencascade/LICENSE "$out/licenses/opencascade-rs/"
           if [ "$RUNNER_OS" = Windows ]; then
             7z a -tzip "$out.zip" "$out" > /dev/null
           else

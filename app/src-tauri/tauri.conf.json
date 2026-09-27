@@ -36,7 +36,7 @@
       "../../NOTICE.md": "licenses/NOTICE.md",
       "../../vendor/occt-sys/OCCT/LICENSE_LGPL_21.txt": "licenses/LICENSE_LGPL_21.txt",
       "../../vendor/occt-sys/OCCT/OCCT_LGPL_EXCEPTION.txt": "licenses/OCCT_LGPL_EXCEPTION.txt",
-      "../../vendor/opencascade/LICENSE": "licenses/LICENSE_opencascade_LGPL_21.txt",
+      "../../vendor/opencascade/LICENSE": "licenses/opencascade-rs/LICENSE",
       "../../examples": "examples"
     },
     "icon": [

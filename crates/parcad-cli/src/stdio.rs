@@ -312,4 +312,25 @@ mod tests {
             );
         }
     }
+
+    /// The Windows installer names each bundled file after its source, not
+    /// its target, so a rename there is silently dropped, and two sources
+    /// of one name in one folder fail the MSI build (docs/GOTCHAS.md).
+    #[test]
+    fn bundled_resources_install_under_their_own_names() {
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../app/src-tauri/tauri.conf.json");
+        let json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let resources = json["bundle"]["resources"].as_object().expect("bundle.resources is a map of source to target");
+        let mut targets = std::collections::HashSet::new();
+        for (source, target) in resources {
+            let target = target.as_str().unwrap();
+            let name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_owned());
+            assert_eq!(
+                name(source),
+                name(target),
+                "{source} is bundled as {target}; the MSI would install it as its own name, so give the target that name in a folder of its own"
+            );
+            assert!(targets.insert(target), "two resources are bundled as {target}");
+        }
+    }
 }
