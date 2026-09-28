@@ -3,8 +3,8 @@
 # as Formula/parcad.rb by .github/workflows/publish.yml. It replaced a cask on
 # 2026-09-14: a cask installs a window, and what a Homebrew user of this wants
 # is the host — MCP up at login, the UI in a browser — which `parcad serve` is.
-# A formula is also never quarantined, so the `xattr` step the .app needs does
-# not exist on this path.
+# A formula is also never quarantined, so Gatekeeper is not consulted on this
+# path at all.
 #
 # The archives are the ones .github/workflows/release.yml stages: `parcad`, its
 # B-rep worker, the seed parts and the licence texts. Nothing here is built from
