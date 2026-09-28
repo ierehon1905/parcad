@@ -94,14 +94,9 @@ Or the desktop app, from
 | Windows x86_64 | `.msi` or `-setup.exe` |
 
 Each platform's build measures the whole eval corpus with the worker it ships
-before it is uploaded. None of them is signed. **macOS will refuse to open the
-app the first time**, and again after each update. Clear the flag:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/ParCAD.app
-```
-
-Windows SmartScreen warns the same way: *More info*, then *Run anyway*. Every
+before it is uploaded. The Mac app and CLI are signed with a Developer ID and
+notarised by Apple, so they open like any other download. The Windows installer
+is not signed yet: SmartScreen warns, *More info*, then *Run anyway*. Every
 platform also has a `parcad-cli-*` archive — `parcad`, its worker beside it and
 the seed parts — for running the host without a window. Keep the two binaries
 together.

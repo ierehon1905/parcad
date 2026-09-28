@@ -289,7 +289,7 @@ export const PLANS: Plan[] = [
       "Every build measures the whole eval corpus before upload",
       "UI and MCP on 127.0.0.1:4242, shared live with your agent",
       "Parts are plain .js files you can edit in any editor",
-      "Unsigned for now: macOS asks you to clear the quarantine flag after each install",
+      "Signed and notarised on macOS: download, drag to Applications, open",
     ],
   },
   {
