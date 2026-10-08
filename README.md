@@ -7,6 +7,9 @@ operation is checked against measured geometry ([eval/cases/](eval/cases/)), but
 none of it has had the years of abuse that make a CAD kernel trustworthy.
 Measure a part before you machine it.
 
+Start here: [Getting started](docs/GETTING_STARTED.md), five minutes in a browser
+tab.
+
 ![A bracket built by the script below, in the parcad viewport](docs/images/bracket.jpg)
 
 ```js
@@ -197,6 +200,7 @@ one call.
 
 ## More
 
+- [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — five minutes, from the browser to your own agent
 - [examples/](examples/) — twenty-two parts, from a bracket to a hydraulic manifold
 - [CONTRIBUTING.md](CONTRIBUTING.md) — the gate, and what a change has to satisfy
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pieces fit, and why
