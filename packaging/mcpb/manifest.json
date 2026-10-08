@@ -15,6 +15,9 @@
     "url": "https://github.com/ierehon1905/parcad"
   },
   "license": "AGPL-3.0-or-later",
+  "privacy_policies": [
+    "https://github.com/ierehon1905/parcad/blob/main/PRIVACY.md"
+  ],
   "keywords": [
     "cad",
     "3d-printing",

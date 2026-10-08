@@ -207,6 +207,11 @@ one call.
 - [docs/GOTCHAS.md](docs/GOTCHAS.md) — traps that have already cost a day each
 - [docs/NEXT.md](docs/NEXT.md) — what's missing, in order
 
+## Privacy
+
+ParCAD collects nothing about you: no accounts, no analytics, no telemetry.
+[PRIVACY.md](PRIVACY.md) lists everything that touches the network.
+
 ## Licensing
 
 ParCAD is free software under the [GNU AGPL-3.0](LICENSE) or later: use it,
