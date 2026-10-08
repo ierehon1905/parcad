@@ -229,7 +229,8 @@ jobs:
               # ad-hoc signingIdentity signs it before the updater archive is packed,
               # so the zip and the update carry the same signed bundle. Ad-hoc is
               # still rejected, unsigned and unnotarised — but rejected is the
-              # ordinary "unidentified developer" path, which the user can get past.
+              # ordinary "unidentified developer" path. tools/sign-mac-release.sh
+              # replaces both archives on the draft with the notarised app.
               codesign --verify --deep --strict "$app"
               # ditto, not zip: it preserves the bundle's symlinks and resource forks,
               # and an .app that loses those does not launch.
@@ -314,19 +315,14 @@ jobs:
           draft: true
           files: dist/*
           body: |
-            **macOS will refuse to open this the first time.** These builds are
-            not signed with an Apple Developer ID or notarised. Clear the
-            quarantine flag once and it opens normally:
+            The Mac app is signed with a Developer ID and notarised by Apple:
+            unzip it, drag it to Applications and open it.
 
-            ```
-            xattr -dr com.apple.quarantine /Applications/ParCAD.app
-            ```
-
-            **Windows SmartScreen will warn the same way** — the installer is
+            **Windows SmartScreen will warn the first time** — the installer is
             unsigned. Choose *More info*, then *Run anyway*.
 
             Once installed, the app offers each later release itself and
-            installs it in one click, without these steps again.
+            installs it in one click.
 
             On a Mac, Homebrew installs the host instead of the app. An agent
             starts it through `parcad mcp`; run `parcad serve` for the whole

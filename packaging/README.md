@@ -46,12 +46,40 @@ To try an update before releasing, pack and sign the new build the way
 `"version"` lowered and the updater's `endpoints` pointed at a local
 `latest.json` (`"dangerousInsecureTransportProtocol":true` for http).
 
+## A signed Mac build
+
+The Developer ID never leaves the owner's Mac: no repository secret holds it,
+and CI's macOS bundle is ad-hoc signed. Between the tag's draft and publishing
+it, on a Mac with the *Developer ID Application* certificate in its keychain
+and a `parcad-notary` notarytool profile,
+
+```bash
+tools/sign-mac-release.sh v<version>
+```
+
+downloads the draft's Mac zip and CLI archive, signs every binary in them with
+the hardened runtime (`tools/sign-mac.sh`), notarises them, staples the app and
+uploads both back with their new lines in `SHA256SUMS.txt`. It then downloads
+the zip again, quarantines it as a browser would and checks Gatekeeper accepts
+it. With the updater key present it also replaces the updater archive and
+`latest.json`; without it the update stays ad-hoc, which is harmless, since an
+update is never quarantined. It refuses a published release, whose checksums
+Homebrew and winget already carry; `--dry-run` does everything but upload.
+
+The `parcad-mcp-*.mcpb` bundle still carries the ad-hoc CLI. Whether Gatekeeper
+stops it once Claude Desktop has unpacked it has not been checked.
+
+`tools/release-mac.sh` builds the app and a DMG from source instead, notarises
+the DMG and staples both.
+
 ## On each release
 
 1. Bump the version everywhere; `packaging_manifests_carry_the_crate_version`
    fails until `mcpb/manifest.json` and the plugin manifests carry it.
 2. Tag `v<version>`; `release.yml` drafts the release with every platform's files.
-3. Read the draft, then publish it. `publish.yml` runs on that publish.
+3. On the Mac with the Developer ID, `tools/sign-mac-release.sh v<version>`.
+   The draft's notes say the Mac app is notarised; until this runs, it is not.
+4. Read the draft, then publish it. `publish.yml` runs on that publish.
    A channel whose secret is missing skips with a notice and leaves its rendered
    manifest in the run's `manifests` artifact.
 
