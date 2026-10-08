@@ -38,6 +38,7 @@ produced by the MCP tools on `127.0.0.1:4242` from the scripts in `examples/`:
 | `renders/bracket-regions.webp` | the same, `regions: true` | |
 | `renders/manifold-section.webp` | the same, `section: { axis: "y" }` | |
 | `renders/features.webp`, `agent-view.webp` | `docs/images/*.png` | |
+| `public/og.png`, the link preview | `evaluate_part` on `examples/bracket.js`, `views: ["iso"]`, `regions: true`, `image_size: 1024` | `./og-card.sh` makes the call, trims the render and sets "ParCAD" and "Open-source CAD your AI can check" beside it in Geist; rerun it, never edit the PNG |
 
 The readouts and gallery figures in `app/content.ts` are the `measured` block
 of those same replies, and the refusal text is a real one: the README bracket
