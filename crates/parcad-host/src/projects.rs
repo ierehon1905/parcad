@@ -821,6 +821,13 @@ fn safe(path: &str) -> Result<PathBuf, String> {
 /// something at this path" would have missed: the part is still there, one
 /// directory down, and re-seeding it puts a stale second copy beside it.
 pub fn seed() -> std::io::Result<()> {
+    seed_bundled(None)
+}
+
+/// [`seed`], for an app that knows where its packager put its resources: the
+/// seed parts are `examples` inside that folder, which is somewhere else on
+/// each platform.
+pub fn seed_bundled(resources: Option<PathBuf>) -> std::io::Result<()> {
     let dir = dir();
     std::fs::create_dir_all(&dir)?;
 
@@ -839,7 +846,7 @@ pub fn seed() -> std::io::Result<()> {
         .map(str::to_string)
         .collect();
 
-    let Some(source) = seed_dir() else {
+    let Some(source) = seed_dir(resources) else {
         // Not fatal. An install with no seed parts is an empty folder, which is
         // a usable state; failing to launch over it would not be.
         eprintln!(
@@ -935,13 +942,15 @@ fn walk_seed(
 
 /// Where the shipped parts are read from at first run.
 ///
-/// Three places, in order, because the same binary runs from three situations:
-/// an explicit override, an installed bundle carrying them as resources, and a
-/// developer's checkout. The last is a compile-time path and is meaningless on
-/// another machine, which is exactly why it is last.
-fn seed_dir() -> Option<PathBuf> {
+/// Four places, in order, because the same code runs from four situations: an
+/// explicit override, an app that was told where its resources are, a binary
+/// inside a macOS bundle, and a developer's checkout. The last is a
+/// compile-time path and is meaningless on another machine, which is exactly
+/// why it is last.
+fn seed_dir(resources: Option<PathBuf>) -> Option<PathBuf> {
     let candidates = [
         std::env::var_os("PARCAD_SEED_DIR").map(PathBuf::from),
+        resources.map(|dir| dir.join("examples")),
         std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(|dir| dir.join("../Resources/examples"))),
@@ -1157,6 +1166,26 @@ pub(crate) mod tests {
             );
             unsafe { std::env::remove_var("PARCAD_SEED_DIR") };
             let _ = std::fs::remove_dir_all(&examples);
+        })
+    }
+
+    /// Linux and Windows install an app's resources away from the macOS
+    /// `../Resources` beside the binary, and their first launch seeded nothing.
+    #[test]
+    fn an_app_seeds_from_the_resource_folder_its_packager_names() {
+        scoped(|root| {
+            let resources = root.with_file_name(format!(
+                "{}-resources",
+                root.file_name().unwrap().to_string_lossy()
+            ));
+            std::fs::create_dir_all(resources.join("examples")).unwrap();
+            std::fs::write(resources.join("examples").join("bracket.js"), "return box(1,1,1);")
+                .unwrap();
+            unsafe { std::env::remove_var("PARCAD_SEED_DIR") };
+
+            seed_bundled(Some(resources.clone())).expect("the seed");
+            assert_eq!(list().unwrap(), vec!["bracket"]);
+            let _ = std::fs::remove_dir_all(&resources);
         })
     }
 

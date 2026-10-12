@@ -382,6 +382,8 @@ impl<R: tauri::Runtime> http::Assets for TauriAssets<R> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    use tauri::Manager;
+
     let builder = tauri::Builder::default();
     // WebDriver is an end-to-end test transport, not an application feature.
     // Keep its HTTP server out of release binaries even if somebody happens to
@@ -396,7 +398,7 @@ pub fn run() {
             // Seed before the host comes up: the frontend asks for the project
             // list as it loads, and an empty first launch would look like a
             // fresh install with nothing in it.
-            if let Err(e) = projects::seed() {
+            if let Err(e) = projects::seed_bundled(app.path().resource_dir().ok()) {
                 eprintln!("parcad: could not prepare the project folder: {e}");
             }
             // A failure to bind is not fatal — the window works regardless —
