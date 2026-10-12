@@ -303,6 +303,27 @@ working kernel — the bundled `parcad` measured a 10 mm cube at 1000 mm³
 through the sidecar beside it, 18 KB larger than `target/release`'s because
 the bundler signs it.
 
+### The AppImage's launcher could be run only by root
+
+Tauri's bundler (2.11.4) downloads `AppRun-x86_64` into `~/.cache/tauri` with
+mode 0770 (`write_and_make_executable`), copies it into the AppDir keeping that
+mode, and the GTK plugin renames it `AppRun.wrapped`. Inside the squashfs every
+file is root's, so the file is executable by root alone. A double-click never
+noticed: the AppImage's own FUSE mount does not enforce modes. Anything that
+mounts the image itself does — `firejail --appimage`, a loop mount, an install
+that root extracts — and there an ordinary user gets `AppRun.wrapped:
+Permission denied`. AppImageHub's test runs under firejail, which is how it
+surfaced; 0.0.11 shipped that way.
+
+The bundler only downloads when the file is missing, so release.yml puts a
+hash-checked 0755 copy there first, and "Collect the bundles" reads every mode
+in the built image with `unsquashfs -ll` and fails the build on one that only
+its owner can read or run. The guard is the part that matters: if a new
+bundler renames or moves the file, the seed silently stops applying and the
+guard says so. Reproduced in Docker (amd64 under emulation, the image's magic
+bytes 8–10 zeroed or qemu refuses it): on a root loop mount, 0.0.12 as built
+gave exit 126, and the same image repacked with 0755 reached `parcad-app`.
+
 ### zsh aborts a command on an unmatched glob
 
 `rm -rf target/release/build/occt-sys-* target/debug/build/occt-sys-*` dies on

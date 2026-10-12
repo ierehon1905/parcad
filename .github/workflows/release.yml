@@ -65,8 +65,9 @@ jobs:
         run: |
           sudo apt-get update
           # WebKitGTK for the window; libclang for rquickjs's bindgen.
+          # squashfs-tools reads the AppImage's file modes in "Collect the bundles".
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-            librsvg2-dev patchelf libclang-dev
+            librsvg2-dev patchelf libclang-dev squashfs-tools
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -126,6 +127,19 @@ jobs:
 
       - name: Measure the geometry this release would ship
         run: cargo run --locked --release -p parcad-eval
+
+      # The bundler writes AppRun as 0770 and fetches it only when missing (docs/GOTCHAS.md).
+      - name: Hand the AppImage bundler a launcher everyone can run
+        if: runner.os == 'Linux'
+        run: |
+          set -euo pipefail
+          tools="${XDG_CACHE_HOME:-$HOME/.cache}/tauri"
+          mkdir -p "$tools"
+          curl -fsSL --retry 3 -o "$tools/AppRun-x86_64" \
+            https://github.com/tauri-apps/binary-releases/releases/download/apprun-old/AppRun-x86_64
+          echo "f30140a43a0a59e46db21bdefdf749b9e9f2c6946e92afabbacf98b8ae73fb4f  $tools/AppRun-x86_64" | sha256sum -c - ||
+            { echo "AppRun-x86_64 changed upstream: read what changed, then update the hash here" >&2; exit 1; }
+          chmod 0755 "$tools/AppRun-x86_64"
 
       # CLI and app in one cargo invocation; separately they rebuilt 98 crates (docs/GOTCHAS.md).
       # No signing key here: this step runs every build script and bundler
@@ -242,7 +256,22 @@ jobs:
                 "dist/$name-${{ matrix.triple }}.app.tar.gz" -C "$(dirname "$app")" "$(basename "$app")"
               ;;
             Linux)
-              cp target/release/bundle/deb/*.deb target/release/bundle/appimage/*.AppImage dist/
+              img=$(find target/release/bundle/appimage -maxdepth 1 -name '*.AppImage' | head -1)
+              test -n "$img" || { echo "no .AppImage was bundled" >&2; exit 1; }
+              # firejail and root-extracted installs keep these files root's and enforce their modes.
+              off=$(env -u APPIMAGE_EXTRACT_AND_RUN "$img" --appimage-offset)
+              bad=$(unsquashfs -ll -o "$off" "$img" | awk '$1 ~ /^[-d]/ && length($1) == 10 {
+                m = $1
+                if (substr(m, 8, 1) != "r" || ((m ~ /^d/ || substr(m, 4, 1) ~ /[xs]/) && substr(m, 10, 1) !~ /[xt]/))
+                  print "  " m "  " $NF
+              }')
+              if [ -n "$bad" ]; then
+                echo "the AppImage holds files only their owner can read or run, so firejail cannot start it:" >&2
+                echo "$bad" >&2
+                echo "make the bundler's source 0755 in \"Hand the AppImage bundler a launcher everyone can run\"" >&2
+                exit 1
+              fi
+              cp target/release/bundle/deb/*.deb "$img" dist/
               ;;
             Windows)
               cp target/release/bundle/msi/*.msi target/release/bundle/nsis/*.exe dist/
