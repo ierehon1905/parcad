@@ -196,6 +196,10 @@ The same tools are on the command line, with the same names and arguments —
 `parcad tools` lists them, `parcad call evaluate_part --set script=@part.js`
 calls one — and they work whether or not the app is open.
 
+ParCAD is also in the official [MCP Registry](https://registry.modelcontextprotocol.io/v0/servers?search=io.github.ierehon1905/parcad)
+as `io.github.ierehon1905/parcad`, so clients that browse it can install it by
+that name.
+
 Start the agent on the `read_docs` tool, which hands over the whole language in
 one call.
 
