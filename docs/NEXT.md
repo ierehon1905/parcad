@@ -250,32 +250,34 @@ of 10 — how often a model or a user hits it times what it costs when they do,
 effort left out. Impact: ★★★ a model ships a wrong part or a user hits it on an
 ordinary part; ★★ it costs a round trip in many sessions or erodes trust in a
 number; ★ a stumble now and then. Effort: S a day or less, M a few days, L a
-strong-model kernel session. Details are in the bullets below and in the next
-two sections.
+strong-model kernel session. Model: who should do it — Fable at high effort
+for new exact geometry or deep kernel work (the OCCT core fix only landed
+that way), Opus for host, DSL and reply work. Details are in the bullets below
+and in the next two sections.
 
-| # | item | score | impact | effort |
-|---|---|---|---|---|
-| 1 | a part in several loose pieces passes `print_check` | 10 | ★★★ | S |
-| 2 | the tag that makes the saucer crawl | 8 | ★★★ | L |
-| 3 | `allow_failing` is taken on the model's own word | 7 | ★★★ | S |
-| 4 | `check_motion` | 7 | ★★★ | L |
-| 5 | `edit_part` refuses with an empty reason | 6 | ★★ | S |
-| 6 | a list argument sent as a JSON string is refused | 6 | ★★ | S |
-| 7 | field runs measure Haiku 4.5, not the current Haiku | 6 | ★★ | S |
-| 8 | a right part the model cannot verify goes out unvouched | 5 | ★★ | M |
-| 9 | a DSL name as a local is a parse error | 5 | ★★ | S |
-| 10 | `edit_part`'s exact-text `old` misses | 5 | ★★ | M |
-| 11 | `read_docs` has no search | 5 | ★★ | S |
-| 12 | the same signatures fetched every trial | 4 | ★★ | S |
-| 13 | the G2 blend behind `.smooth()` | 4 | ★★ | L |
-| 14 | a face's listed area misreads spline faces | 4 | ★★ | S |
-| 15 | tool schemas carry non-standard `uint` formats | 3 | ★ | S |
-| 16 | `fillet(selector, radius)` order | 2 | ★ | S |
-| 17 | `wait_s` on one script tool only | 2 | ★ | S |
-| 18 | `.union()` given an edge selection says "not a function" | 2 | ★ | S |
-| 19 | a vertex treatment's `edges` is not what its `.expect` counts | 2 | ★ | S |
-| 20 | the editor never shows `mixed_corners` | 2 | ★ | S |
-| 21 | the area integral costs a fitted ring 0.76 s | 2 | ★ | M |
+| # | item | score | impact | effort | model |
+|---|---|---|---|---|---|
+| 1 | a part in several loose pieces passes `print_check` | 10 | ★★★ | S | Opus |
+| 2 | the tag that makes the saucer crawl | 8 | ★★★ | L | Fable, high |
+| 3 | `allow_failing` is taken on the model's own word | 7 | ★★★ | S | Opus |
+| 4 | `check_motion` | 7 | ★★★ | L | Fable, high |
+| 5 | `edit_part` refuses with an empty reason | 6 | ★★ | S | Opus |
+| 6 | a list argument sent as a JSON string is refused | 6 | ★★ | S | Opus |
+| 7 | field runs measure Haiku 4.5, not the current Haiku | 6 | ★★ | S | Opus |
+| 8 | a right part the model cannot verify goes out unvouched | 5 | ★★ | M | Opus |
+| 9 | a DSL name as a local is a parse error | 5 | ★★ | S | Opus |
+| 10 | `edit_part`'s exact-text `old` misses | 5 | ★★ | M | Opus |
+| 11 | `read_docs` has no search | 5 | ★★ | S | Opus |
+| 12 | the same signatures fetched every trial | 4 | ★★ | S | Opus |
+| 13 | the G2 blend behind `.smooth()` | 4 | ★★ | L | Fable, high |
+| 14 | a face's listed area misreads spline faces | 4 | ★★ | S | Opus |
+| 15 | tool schemas carry non-standard `uint` formats | 3 | ★ | S | Opus |
+| 16 | `fillet(selector, radius)` order | 2 | ★ | S | Opus |
+| 17 | `wait_s` on one script tool only | 2 | ★ | S | Opus |
+| 18 | `.union()` given an edge selection says "not a function" | 2 | ★ | S | Opus |
+| 19 | a vertex treatment's `edges` is not what its `.expect` counts | 2 | ★ | S | Opus |
+| 20 | the editor never shows `mixed_corners` | 2 | ★ | S | Opus |
+| 21 | the area integral costs a fitted ring 0.76 s | 2 | ★ | M | Opus |
 
 - **A part in several loose pieces passes `print_check`.** Plate-stand brief,
   Haiku 4.5: the union left eight pegs floating free of the base, and one
