@@ -157,6 +157,22 @@ evidence for parcad.
   different number, against 4/4 with thinking after, all quoting the reply's
   65.797 mm² and naming `lip` from the flag. The non-thinking arm split on
   the same route question as above.
+- **A count is not a warning.** The head-to-head's one wrong ParCAD part
+  (2026-10-13) was a seam fillet whose query also took a rim; the reply said
+  `edges: 2` and nothing else. Handed that script and its brief, haiku shipped
+  the same wrong part in 7 of 8 trials (`round-only-the-seam`); with a
+  `mixed_corners` sentence on the treatment naming `dihedral: "concave"`, 8 of
+  8 fixed it and every transcript quoted the sentence. Sonnet was 8/8 either
+  way, finding the rim by inspecting edges and rendering: 7 to 16 calls
+  before, 3 to 9 after.
+- **The spelling a model reaches for is part of the API.** Unprompted, in a
+  case about something else, Sonnet wrote `.fillet(…).expect({ count: 1 })`
+  in 7 of 8 trials and met "not a function"; once `.expect` after a
+  treatment checked it, 6 of 8 wrote it again and none erred. On the case
+  built for it (`expect-after-the-fillet`) every trial had recovered before
+  the change too, so SOUND did not move (16/16 to 15/16, the miss a trial
+  that read another trial's script off the shared screen): what moved was
+  every trial erring at least once to none, and 7.5–10.5 calls to 3–3.5.
 - **What still reads wrong.** With `offset` refused and the meant field
   named, the thinking arm's route is unchanged at 0/3 by `input` — it never
   sends the hazard, so the refusal is unmeasured there. And on the rotate

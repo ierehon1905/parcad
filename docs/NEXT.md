@@ -253,32 +253,16 @@ the bullets below and in the next two sections.
 
 | # | item | impact | effort |
 |---|---|---|---|
-| 1 | a query spanning concave and convex edges passes silently | ★★★ | S |
-| 2 | `.expect` after a treatment is a bare "not a function" | ★★★ | S |
-| 3 | the tag that makes the saucer crawl | ★★★ | L |
-| 4 | `check_motion` | ★★★ | L |
-| 5 | the reported volume is the mesh's | ★★ | M |
-| 6 | a DSL name as a local is a parse error | ★★ | S |
-| 7 | `edit_part`'s exact-text `old` misses | ★★ | M |
-| 8 | the same signatures fetched every trial | ★★ | S |
-| 9 | the G2 blend behind `.smooth()` | ★★ | L |
-| 10 | `fillet(selector, radius)` order | ★ | S |
-| 11 | `wait_s` on one script tool only | ★ | S |
-
-Do 1 and 2 first: both are small, and they are the only two ways a model went
-wrong *with* ParCAD in 288 trials. Where they live:
-
-- **1:** the fillet arm of `build_node` in `crates/parcad-occt/src/backend.rs`
-  pushes only `(id, count)` into `features.resolved`, though each selected edge
-  already carries its `dihedral` (`SelectableEdge::classify`). Carry the
-  convex/concave split through `protocol::TreatmentEdges` to
-  `parcad_evaluation::treatments`, and say so in the treatment entry when both
-  are non-zero. Chamfer has the same push.
-- **2:** `Shape.fillet` / `Shape.chamfer` in `app/src/dsl.ts` build the node
-  with `expect: expectation`; a `Shape.expect` that rebuilds the treatment it
-  sits on with the expectation (and refuses, naming
-  `.edges(sel).expect({ count }).fillet(r)`, on any other shape) is the whole
-  change. A method, not an export, so no saved part can break on it.
+| 1 | the tag that makes the saucer crawl | ★★★ | L |
+| 2 | `check_motion` | ★★★ | L |
+| 3 | the reported volume is the mesh's | ★★ | M |
+| 4 | a DSL name as a local is a parse error | ★★ | S |
+| 5 | `edit_part`'s exact-text `old` misses | ★★ | M |
+| 6 | the same signatures fetched every trial | ★★ | S |
+| 7 | the G2 blend behind `.smooth()` | ★★ | L |
+| 8 | `fillet(selector, radius)` order | ★ | S |
+| 9 | `wait_s` on one script tool only | ★ | S |
+| 10 | a vertex treatment's `edges` is not what its `.expect` counts | ★ | S |
 
 - **The reported volume is the mesh's.** The beads brief reported 2148.23 mm³.
   Its STEP measures 2152.326 mm³ with stock `BRepGProp`, which is the analytic
@@ -288,22 +272,26 @@ wrong *with* ParCAD in 288 trials. Where they live:
   a gap it cannot explain. Fix: report the B-rep's own volume and area, keep
   mesh figures only where a mesh is what is measured, and re-record the corpus
   with `--update`.
-- **A query that catches a concave and a convex edge passes silently.** Haiku,
-  retainer brief: `fused.fillet(2, { curve: "circle", adjacentTo: { faceNormal:
-  "+z" } })` meant the seam where the cylinder meets the block. It also caught
-  the cylinder's top rim. The reply said `edges: 2`, the part came out 158 mm³
-  short, and the model said done. Fix: when a selection spans both dihedrals,
-  the treatment report says so and names `dihedral: "concave"`. Add a field
-  case.
+- **A vertex treatment's `edges` is not what its `.expect` counts.** Found
+  while making the edge count agree (2026-10-13):
+  `box(20, 20, 20).vertices(">X and >Y and >Z").fillet(2)` reports `edges: 3`,
+  the edges meeting at the corner, while `.vertices(sel).expect({ count })`
+  counts corners, so pasting 3 fails with "matched 1". Report the corner count
+  for a vertex target — the vertex arm of `select_edge_target` in
+  `backend.rs`, through `TreatmentEdges` to `parcad_evaluation::Treatment` —
+  and add a case beside `fillet-counts-a-split-rim-once`.
 - **The head-to-head, finished: 288 graded trials.** Haiku, six briefs, four
   trials each: ParCAD 23/24 right and 1 wrong part reported done; text-to-cad
   8/24 and 15; kernelCAD 5/24 and 15; build123d 5/24 and 19 (p < 1e-5 each).
   On the three briefs ParCAD has no special case for (plate, lidded box,
   notch): 12/12 against 5, 3 and 1. Sonnet and Opus are right with every tool,
-  partly by knowing OCCT workarounds. ParCAD ran as 0.0.11. Before quoting it:
-  fix the two items above, rerun on the current release, add briefs chosen
-  outside this repo and briefs that separate strong models (fit to a real
-  object, an edit that changes topology, an overhang), and publish the harness.
+  partly by knowing OCCT workarounds. ParCAD ran as 0.0.11. The two ways a
+  model went wrong with it — a selection spanning both kinds of corner, and
+  `.expect` after a treatment — are fixed (2026-10-13, field cases
+  `round-only-the-seam` and `expect-after-the-fillet`). Before quoting it:
+  rerun on a release carrying them, add briefs chosen outside this repo and
+  briefs that separate strong models (fit to a real object, an edit that
+  changes topology, an overhang), and publish the harness.
   `research_notes/hands-on/h2h/RESULTS.md` has the tables.
 
 ### What made modelling harder, from the head-to-head transcripts (2026-10-13)
@@ -312,13 +300,6 @@ wrong *with* ParCAD in 288 trials. Where they live:
 refusal on the way (7 of those are the boss's export refusal, which is the
 point). Counted by trial, most-hit first:
 
-- **`.expect` after a treatment is a bare "not a function"** — 5 trials, all
-  Opus or Sonnet: `box(…).fillet(4, "|Z").expect({ count: 4 })`,
-  `.edges("|Z").fillet(R).expect(…)`. The strong models reach for the count
-  *after* the treatment, as the reply reports it. Either accept it there (the
-  count of the treatment just applied) or throw an error that names the order:
-  `.edges(sel).expect({ count }).fillet(r)`. It is the one error message in
-  the run that doesn't name its fix.
 - **`edit_part`'s exact-text `old` missed** — 4 trials (Haiku, Sonnet), mostly
   on a second edit after the first changed spacing or quotes. Candidates: match
   ignoring whitespace runs when that match is unique; quote the nearest line in
