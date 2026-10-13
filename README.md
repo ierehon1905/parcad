@@ -2,7 +2,7 @@
 
 Parametric CAD you write as code — for people, and for agents.
 
-**Status: 0.0.13, experimental.** One author, and the DSL still moves. Every
+**Status: 0.0.13, experimental.** Made by Maging Studio, and the DSL still moves. Every
 operation is checked against measured geometry ([eval/cases/](eval/cases/)), but
 none of it has had the years of abuse that make a CAD kernel trustworthy.
 Measure a part before you machine it.
@@ -113,9 +113,7 @@ workflow builds and measures on all three, and Linux on arm64 builds too.
 
 You need [Rust](https://rustup.rs/) (the toolchain is pinned; rustup honours it),
 [Bun](https://bun.sh/), CMake, a C++ compiler, `patch(1)` and Python 3.11+. A
-clone is about a 90 MB download (29 MB with `--depth 1`) that checks out to
-120 MB, most of it a vendored OpenCASCADE tree, and a full build wants around
-20 GB free. On Linux the window also needs WebKitGTK
+full build wants around 20 GB free. On Linux the window also needs WebKitGTK
 (`libwebkit2gtk-4.1-dev`), and `libclang-dev` for the script sandbox's
 bindings. On Windows, use MSVC (Visual Studio Build Tools) and run the scripts
 from Git Bash, which also provides `patch`.
