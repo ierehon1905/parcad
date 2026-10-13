@@ -12,9 +12,8 @@ why: |
   floor, measured on the two exact solids. A model that compares dimensions
   in the script answers 1 mm; one that reasons from the pocket's walls says
   it touches; only check_fit says 0.5, and only check_fit can. The reference
-  is a one-line script from the DEVICES table, which is what the tool's
-  description says to do. The first round of this case shipped its tray with
-  the cutter 20 mm too high; every trial read the no-op-cut refusal, moved
+  is a one-line box, which is what the tool's description shows. The first
+  round of this case shipped its tray with the cutter 20 mm too high; every trial read the no-op-cut refusal, moved
   the cutter itself, and measured its own corrected tray. The second round
   gave the laptop's height in prose, and three of four trials placed it by
   their own arithmetic instead and measured that, honestly, at 1.0. Both
@@ -27,18 +26,21 @@ Use the parcad MCP tools.
 Here is a parcad script for a tray that a 16" MacBook Pro lies in:
 
 ```js
-const mac = DEVICES["macbook-pro-16"];
-const clear = 1, floor = 8, wall = 4;
-const block = box(mac.length + 2 * (clear + wall), mac.width + 2 * (clear + wall), floor + 12)
+const laptop = { length: 355.7, width: 248.1, thickness: 16.8 };
+const clear = 1;
+const floor = 8;
+const wall = 4;
+const block = box(laptop.length + 2 * (clear + wall), laptop.width + 2 * (clear + wall), floor + 12)
   .at(0, 0, (floor + 12) / 2);
-return block.cut(device("macbook-pro-16", { clearance: clear }).at(0, 0, floor + clear + mac.thickness / 2))
-  .tag("tray");
+const pocket = box(laptop.length + 2 * clear, laptop.width + 2 * clear, laptop.thickness + 2 * clear)
+  .at(0, 0, floor + clear + laptop.thickness / 2);
+return block.cut(pocket).tag("tray");
 ```
 
 The laptop lies in it where this script puts it, and this script is the reference to measure against, unchanged:
 
 ```js
-return device("macbook-pro-16").at(0, 0, 16.9);
+return box(355.7, 248.1, 16.8).at(0, 0, 16.9);
 ```
 
 Question: does the laptop fit, and what is the clearance in millimetres where it is closest to the tray?

@@ -98,7 +98,10 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      tools are the host's, so registering them with `navigator.modelContext`
      is a thin adapter, and nothing else here waits on it.
 4. **A measured parts library** — fasteners, bearings, boards, devices, each
-   held by eval cases, and a way for one part to import another.
+   held by eval cases, and a way for one part to import another. The library
+   is an extension, outside `dsl.ts`: `DEVICES` and `device()` were removed
+   from the language on 2026-10-13 for that reason, and come back as library
+   parts with measured radii.
 5. **What the coin-holder session cost, in order** — reviewed 2026-09-18 from
    three lenses, the order and every sample reply in
    [COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md). One session designed a
@@ -174,8 +177,8 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    physical afternoon, and none should be invented: `POCKETS` (a pocket is a
    size, and `brief({ envelope })` has nothing to name), `fit(kind, nominal)`
    (six unsourced printed clearances in one part, §2.5), `MATERIALS` by
-   filament, and `check_flex`'s per-axis material table. `DEVICES` sets the
-   standard — published sizes, and its two guessed radii labelled as guesses.
+   filament, and `check_flex`'s per-axis material table. `METRIC_FASTENERS` sets
+   the standard — every number from a cited ISO table.
    A table of plausible numbers with a source line would fail that standard
    in the one place this repo refuses to. One test coupon printed on the
    owner's own machine unblocks all four and makes the numbers *ours*.
@@ -439,9 +442,6 @@ small model reads SOUND. What is left, in the order it would pay:
    needs the graph to carry it, which is OP_ROADMAP's construction-plane row
    and the real "place against geometry". A week, and the product call in
    §2 above applies.
-4. **Measure the radii.** `DEVICES` carries corner and edge radii read off
-   photographs, labelled so. A caliper on each machine settles them for
-   everyone. An hour with the hardware.
 ## Text on a part — asked for, not started
 
 Wanted for labels, legends and model codes on instrument-like parts: small,

@@ -8,8 +8,6 @@ import {
   clearance,
   counterbore,
   cylinder,
-  device,
-  DEVICES,
   extrude,
   grid,
   holeFor,
@@ -401,33 +399,6 @@ describe("torus and pipe", () => {
     expect(() => pipe({ helix: { radius: 10, pitch: 5 } }, 2)).toThrow("turns or height");
     expect(() => pipe({ helix: { radius: 10, pitch: 5, turns: 2 } }, 2, { bend: 3 })).toThrow("no corners");
     expect(() => sweep([[0, 0], [1, 0], [0, 1]], [[0, 0, 0], [0, 0, 9]], { taper: 0 })).toThrow("more than 0");
-  });
-});
-
-describe("device", () => {
-  test("grows every dimension and both radii by the clearance", () => {
-    const body = DEVICES["macbook-pro-16"];
-    const doc = build(device("macbook-pro-16", { clearance: 1 }));
-    const nodes = Object.values(doc.nodes) as Array<{ op: string; size?: { x: number; y: number; z: number }; radius?: number }>;
-    const cuboid = nodes.find((n) => n.op === "cuboid");
-    expect(cuboid?.size).toEqual({ x: body.length + 2, y: body.width + 2, z: body.thickness + 2 });
-    const radii = nodes.filter((n) => n.op === "fillet").map((n) => n.radius).sort();
-    expect(radii).toEqual([body.edgeRadius + 1, body.edgeRadius + 1, body.cornerRadius + 1].sort());
-  });
-
-  test("names the table when the device is not in it", () => {
-    expect(() => device("thinkpad-x1")).toThrow(/DEVICES has macbook-air-13/);
-  });
-
-  test("every entry in the table is a body its own radii fit", () => {
-    // Clearance grows thickness and edge radius alike, so only the table can
-    // break this; each entry is checked once, here, rather than one refusal
-    // at a time.
-    for (const [name, body] of Object.entries(DEVICES)) {
-      expect(2 * body.edgeRadius, name).toBeLessThan(body.thickness);
-      expect(2 * body.cornerRadius, name).toBeLessThan(Math.min(body.length, body.width));
-      expect(body.source, name).toMatch(/spec/);
-    }
   });
 });
 

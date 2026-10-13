@@ -458,7 +458,7 @@ pub struct FitRequest {
     #[serde(default)]
     pub edits: Vec<service::Edit>,
     /// The object laid against it, as a parcad script placed where it sits —
-    /// usually one line, e.g. `return device("macbook-pro-16").at(0, 0, 18.4)`.
+    /// usually one line, e.g. `return box(355.7, 248.1, 16.8).at(0, 0, 18.4)`.
     pub reference: String,
 }
 
@@ -1183,7 +1183,7 @@ impl Parcad {
     #[tool(
         name = "check_fit",
         annotations(title = "Check the fit", read_only_hint = true, open_world_hint = false),
-        description = "Lay a reference object against a part and measure how they sit, on the two exact solids: `verdict` is clear, touching or interfering; `interference_mm3` is the material the two share, which is what would have to be cut away for the object to fit, and `depth_mm` at `deepest_mm` is how far one reaches into the other — the number to read, since a volume is not a depth; `clearance_mm` and `closest_mm` say how much room there is and where, when they do not overlap, and `contact_mm2` over `contact_patches` patches says how much of a face they share when they touch, which is what tells a seat from a corner. This is the question 'does the laptop fit in its holder' or 'does the lid clear the boss', and neither a render nor arithmetic on the script can answer it — the script says what was asked for and this measures what was built.\n\nBoth arguments are scripts. The reference is usually one line placing a body from the DEVICES table, e.g. `return device(\"macbook-pro-16\").at(0, 0, 18.4)`, or any shape drawn where the object sits. A holder is right when the reference is `clear` by about the clearance it was drawn with, and wrong when it `interfering` — the depth and where it is deepest say by how much. When both objects are bodies of one part — `return { holder, laptop }` — evaluate_part already measures the pair in `between_bodies`, with the same verdict and numbers, and no second call is needed."
+        description = "Lay a reference object against a part and measure how they sit, on the two exact solids: `verdict` is clear, touching or interfering; `interference_mm3` is the material the two share, which is what would have to be cut away for the object to fit, and `depth_mm` at `deepest_mm` is how far one reaches into the other — the number to read, since a volume is not a depth; `clearance_mm` and `closest_mm` say how much room there is and where, when they do not overlap, and `contact_mm2` over `contact_patches` patches says how much of a face they share when they touch, which is what tells a seat from a corner. This is the question 'does the laptop fit in its holder' or 'does the lid clear the boss', and neither a render nor arithmetic on the script can answer it — the script says what was asked for and this measures what was built.\n\nBoth arguments are scripts. The reference is usually one line drawing the object where it sits, e.g. a 16-inch MacBook Pro as `return box(355.7, 248.1, 16.8).at(0, 0, 18.4)`. A holder is right when the reference is `clear` by about the clearance it was drawn with, and wrong when it `interfering` — the depth and where it is deepest say by how much. When both objects are bodies of one part — `return { holder, laptop }` — evaluate_part already measures the pair in `between_bodies`, with the same verdict and numbers, and no second call is needed."
     )]
     async fn check_fit(
         &self,

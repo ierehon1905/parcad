@@ -1168,8 +1168,8 @@ sidesteps: lay the object in the part and say whether it fits. `check_fit`
 kernel, and report `clear`, `touching` or `interfering`, the volume the two
 share, and when they share none the clearance and the two points it is
 measured between (`BRepExtrema_DistShapeShape`, exact). The reference is
-usually one line from the `DEVICES` table: `return device("macbook-pro-16")
-.at(0, 0, 18.4)`. The V holder at rest touches; lifted half a millimetre it is
+usually one line: `return box(355.7, 248.1, 16.8).at(0, 0, 18.4)` for a
+16-inch MacBook Pro. The V holder at rest touches; lifted half a millimetre it is
 clear by 0.500; sunk one it shares 27 653 mm³, which is the floor area the
 report already gave, times one — the cross-check that says the number is
 real.
@@ -1558,11 +1558,10 @@ who does the arithmetic gets wrong. Every other perception change here made
 something readable that was already derivable. This made something correct
 that was reliably derived wrong.
 
-**What is not here.** The review asks for a measured `POCKETS` table beside
-`DEVICES` so "pocket" is not a guess. It is not in this round and should not
-be invented: `DEVICES` carries published sizes and labels its two guessed
-radii as guesses, and a table of pocket dimensions with a plausible source
-line would be neither. It wants somebody to measure some pockets.
+**What is not here.** The review asks for a measured `POCKETS` table so
+"pocket" is not a guess. It is not in this round and should not be invented:
+a table of pocket dimensions with a plausible source line would be a guess
+with a citation. It wants somebody to measure some pockets.
 
 ## 22. Saying what you do not want
 

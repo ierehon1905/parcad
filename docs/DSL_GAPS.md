@@ -525,15 +525,14 @@ recorded here:
   an edge ended up; `list_entities` and `check_fit` are the measured route,
   one evaluation later. A sketch on a face would need the graph itself to
   carry construction geometry, which is OP_ROADMAP's "construction plane" row.
-- **Real objects were guesses — FIXED, as far as a table can fix it.** The
+- **Real objects are guesses — OPEN, and moved out of the language.** The
   laptop's plan corner radius and bottom edge radius were assumed at 12 and
-  5 mm in a script. `DEVICES` in `dsl.ts` now holds four MacBooks with their
-  published sizes and those radii, labelled as read off photographs;
-  `device(name, { clearance })` is the grown body a holder cuts out of itself,
-  and `vesaPattern(size)` the four points. The V holder reads the table and
-  measures the same 302 406 mm³ it did with the literals. The radii are still
-  the honest weak point: a caliper on one machine would settle them for
-  everyone.
+  5 mm in a script. A `DEVICES` table of four MacBooks and `device(name,
+  { clearance })` sat in `dsl.ts` for a while and were removed on 2026-10-13:
+  objects a part holds are an extension, not the core language, and belong
+  in the parts library (NEXT.md, queue item 4) once one part can import
+  another. Until then a part draws the object itself and says where its
+  numbers came from. `vesaPattern(size)` stays: it is a published standard.
 - **Two printable halves need a flag and two evaluations — FIXED**, from the
   cheap end of the multi-body row of §0: `return { left, right: left.mirror("x") }`
   is one evaluation, measured per half and between them.

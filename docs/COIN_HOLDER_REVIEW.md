@@ -467,7 +467,7 @@ I checked them against the ECB's published dimensions: **they are all correct.**
 
 There is a real mechanical error hiding in it too. The **20 c coin is not a circle** — it is the "Spanish flower", seven rounded lobes, 22.25 mm across the lobes. A cup bored to Ø22.85 holds it with up to 0.6 mm of extra slop between lobes, and more importantly the *mouth squeeze* check — the whole retention argument — depends on which way round the coin is presented. The model's worst-case tilt study is exact for a cylinder and inapplicable to the one coin in eight that is not one. A catalogue that carries only `d` and `t` cannot express this; a catalogue that carries a **profile** can.
 
-**(b) The DSL.** Extend the existing `DeviceBody` / `device()` pattern rather than inventing a parallel one:
+**(b) The DSL.** *Superseded 2026-10-13: `DEVICES` and `device()` left `dsl.ts`; real objects are parts-library extensions (NEXT.md, queue item 4), so this table goes there.* Extend the existing `DeviceBody` / `device()` pattern rather than inventing a parallel one:
 
 ```ts
 export const OBJECTS: Record<string, ObjectBody>;   // "coin/eur-2", "cell/18650", "card/sd", "insert/m3-heatset"

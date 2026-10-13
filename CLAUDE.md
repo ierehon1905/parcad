@@ -261,7 +261,6 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | the authoring DSL | `app/src/dsl.ts` (shared with `tools/run.ts`) |
 | drill and clearance sizes | `METRIC_FASTENERS` in `app/src/dsl.ts` — never a literal in a part |
 | lines, offsets, intersections and convex outlines in the plane | `line2d`, `Line2d`, `hull` in `app/src/dsl.ts` — arithmetic on numbers the script has; nothing reads the built part |
-| the real objects a holder wraps | `DEVICES` in `app/src/dsl.ts`, via `device(name, { clearance })` — sizes published, radii labelled as read off photographs |
 | what the app can do at all | `crates/parcad-host/src/service.rs` — never a transport file |
 | the part in 3D inside a chat client (MCP Apps) | `app/src/viewer/main.ts`, built by `app/vite.viewer.config.ts`; `view_part` and the `ui://parcad/viewer` resource in `mcp.rs` |
 | the HTTP and MCP hosts | `crates/parcad-host/src/http.rs`, `mcp.rs` — no Tauri in the crate; the app and `parcad serve` both embed it |
@@ -306,7 +305,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | which op to add next, and why not the others | `docs/OP_ROADMAP.md` |
 | which of all the open fronts to do first | `docs/NEXT.md` |
 | measuring a part without looking at it | `crates/parcad-occt/src/perceive.rs`, reached as `probe_part` and `measure_wall_thickness` |
-| whether the part fits the thing it holds | `check_fit` (MCP), `parcad --fit REFERENCE.json` (CLI), both over `service::check_fit` and `backend::check_fit`; the reference is a script, usually `device(...)` |
+| whether the part fits the thing it holds | `check_fit` (MCP), `parcad --fit REFERENCE.json` (CLI), both over `service::check_fit` and `backend::check_fit`; the reference is a script, usually one `box` placed where the object sits |
 | reading a foreign STEP export into authorable numbers | `StepProbe` in `crates/parcad-occt/src/protocol.rs`; CLI `parcad --probe-step`, MCP `probe_step_export`, both over `service::probe_step` — the C++ half is `Shape_geometry_json` in the vendored wrapper |
 | cutting a part open to see inside it | `view.rs`'s `Section`, then `render.rs` for the agent and `app/src/viewport.ts` for the window |
 | what an agent can see, and what to tell it instead | `docs/PERCEPTION.md` |

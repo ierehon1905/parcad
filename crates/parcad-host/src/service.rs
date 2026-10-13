@@ -1628,7 +1628,7 @@ pub fn mcp_status() -> crate::mcp::Status {
 }
 
 /// Lay a reference body against a part and measure the fit: both are scripts,
-/// so the reference is usually one line, `return device("macbook-pro-16")
+/// so the reference is usually one line, `return box(355.7, 248.1, 16.8)
 /// .at(...)`. Refuses when either script does not build, with that script's
 /// own error.
 pub fn check_fit(part: &str, reference: &str) -> Result<parcad_occt::FitReport, String> {
