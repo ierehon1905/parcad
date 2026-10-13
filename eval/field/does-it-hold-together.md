@@ -2,9 +2,9 @@
 tool:    evaluate_part.print_check
 also:    read_project, export_part
 reach:   evaluate_part|export_part
-verdict: READY\s*[=:]\s*\**no\b[\s\S]*WHY\s*[=:][^\n]*(?i:\b9\b[^\n]*(?:pieces|parts|strips)|(?:separate|loose|disconnected|split)[^\n]*(?:pieces|parts|strips))
+verdict: READY\s*[=:]\s*\**no\b[\s\S]*WHY\s*[=:][^\n]*(?i:\b(?:9|nine)\b[^\n]*(?:pieces|parts|strips|bodies|ribs|bars)|(?:separate|loose|disconnected|unconnected|split)[^\n]*(?:pieces|parts|strips|bodies|ribs|bars))
 trap:    READY\s*[=:]\s*\**yes\b
-quote:   (?i)\b9 separate pieces\b|\b9 (?:pieces|parts|strips)\b
+quote:   (?i)\b(?:9|nine) (?:(?:separate|disconnected|unconnected|loose) )?(?:pieces|parts|strips|bodies)\b|bodies\W{1,4}9\b
 writes:  the parcad export directory
 why: |
   docs/NEXT.md, "Found by the competitor bench": the plate-stand brief, Haiku
@@ -24,7 +24,11 @@ why: |
   First round, 2026-10-13, Haiku 4.5, 4 trials per arm: before (8e487b20)
   0/8 SOUND, all 8 the trap; after 8/8 SOUND, every one through export_part's
   refusal. The cause is a separate fact: 2 of 4 thinking trials named the
-  slots, none of the 4 without thinking, which blamed the pegs.
+  slots, none of the 4 without thinking, which blamed the pegs. Haiku 5.5
+  (claude-haiku-5-5), same round: 7/8 SOUND on both hosts and all 16 right by
+  hand, 15 naming the slots; it evaluates before exporting and reads
+  `bodies: 9` unprompted, so the before host does not trap it. The two LUCKY
+  also cited the script.
 ---
 Use the parcad MCP tools. The part is `plate-rack` in the parcad project
 folder.
