@@ -2,7 +2,7 @@
 
 Parametric CAD you write as code — for people, and for agents.
 
-**Status: 0.0.7, experimental.** One author, and the DSL still moves. Every
+**Status: 0.0.13, experimental.** One author, and the DSL still moves. Every
 operation is checked against measured geometry ([eval/cases/](eval/cases/)), but
 none of it has had the years of abuse that make a CAD kernel trustworthy.
 Measure a part before you machine it.
@@ -56,7 +56,7 @@ built it.
 ![What an agent is shown: four views at one scale, two sections, and faces coloured by tag](docs/images/agent-view.png)
 
 It is aimed at small mechanical parts — brackets, flanges, manifolds, heat sinks,
-the things you print or machine one of. [examples/](examples/) is twenty-two.
+the things you print or machine one of. [examples/](examples/) has thirty-one.
 
 ## Why not CadQuery, build123d or OpenSCAD
 
@@ -83,12 +83,6 @@ Then [add it to your agent](#use-it-from-an-agent), which starts parcad when it
 needs it. To use the app yourself, run `parcad serve` and open
 <http://127.0.0.1:4242> — the whole app is there, in your browser.
 
-On Windows, from 0.0.6, the desktop app through winget:
-
-```powershell
-winget install ParCAD.ParCAD
-```
-
 Nothing on the Homebrew path is quarantined. The same `parcad` is the headless driver
 (`parcad part.js`), and a client of the running host: `parcad tools`
 lists what an agent can call over MCP and `parcad call <tool>` calls it from
@@ -100,8 +94,8 @@ Or the desktop app, from
 | platform | download |
 |---|---|
 | macOS, Apple silicon | `ParCAD-aarch64-apple-darwin.zip` — unzip, drag to Applications |
-| Linux x86_64 | `.deb` or `.AppImage` |
-| Windows x86_64 | `.msi` or `-setup.exe` |
+| Linux x86_64 | `.deb` or `.AppImage` (also on [AppImageHub](https://appimage.github.io/ParCAD/)) |
+| Windows x86_64 | `.msi` or `-setup.exe` (a winget package is waiting for review) |
 
 Each platform's build measures the whole eval corpus with the worker it ships
 before it is uploaded. The Mac app is not notarised yet, so macOS refuses it the
@@ -119,9 +113,10 @@ workflow builds and measures on all three, and Linux on arm64 builds too.
 
 You need [Rust](https://rustup.rs/) (the toolchain is pinned; rustup honours it),
 [Bun](https://bun.sh/), CMake, a C++ compiler, `patch(1)` and Python 3.11+. A
-clone is a 28 MB pack that expands to 144 MB, most of it a vendored OpenCASCADE
-tree, and a full build wants around 20 GB free. On Linux the window also needs
-WebKitGTK (`libwebkit2gtk-4.1-dev`), and `libclang-dev` for the script sandbox's
+clone is about a 90 MB download (29 MB with `--depth 1`) that checks out to
+120 MB, most of it a vendored OpenCASCADE tree, and a full build wants around
+20 GB free. On Linux the window also needs WebKitGTK
+(`libwebkit2gtk-4.1-dev`), and `libclang-dev` for the script sandbox's
 bindings. On Windows, use MSVC (Visual Studio Build Tools) and run the scripts
 from Git Bash, which also provides `patch`.
 
@@ -209,7 +204,7 @@ one call.
 ## More
 
 - [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — five minutes, from the browser to your own agent
-- [examples/](examples/) — twenty-two parts, from a bracket to a hydraulic manifold
+- [examples/](examples/) — thirty-one parts, from a bracket to a hydraulic manifold
 - [CONTRIBUTING.md](CONTRIBUTING.md) — the gate, and what a change has to satisfy
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pieces fit, and why
 - [docs/GOTCHAS.md](docs/GOTCHAS.md) — traps that have already cost a day each
