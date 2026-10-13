@@ -355,6 +355,40 @@ described where it lives:
 3. **The G2 blend** behind `.smooth()` / `.squircle()`, below under the
    planter saucer — prior art first.
 
+### New capabilities, from the competitor research (2026-10-13)
+
+Not fixes: things nobody in the field has, which widen what ParCAD's verdicts
+are worth. Leon's read is in brackets.
+
+1. **ParCAD as the verifier for anyone's part** [yes]. A light server, or tool,
+   that takes any STEP — from text-to-cad, Fusion, SolidWorks, a person — and
+   returns ParCAD's verdicts: walls, overhang, fit, between bodies, validity.
+   No competitor blocks a bad part; this rides their reach instead of fighting
+   it. `probe_step_export` is half of it already.
+2. **Requirements first** [yes]. Before modelling, the agent turns the request
+   ("80 × 50, Ø6 holes 10 mm in") into the part's own `checks`, so the verdict
+   tests that it made what was asked, not only that it prints. The bench's
+   commonest miss was a misread request: wrong holes, a notch on the wrong
+   edge. Likely a server-instruction and `checks` vocabulary change more than
+   new kernel work.
+3. **A verification certificate in the 3MF** [interesting]. The verdicts and
+   the script's hash in the file's metadata, shown by a slicer or on
+   MakerWorld/Printables, which now require AI disclosure.
+4. **A second-kernel witness.** SMLIB (usd-brep, Apache-2.0, builds here in
+   18 s) rebuilds the part and the reply says whether two independent kernels
+   agree on volume and validity. Its own failures on ParCAD's hard cases
+   (`research_notes/usd-brep-smlib.md`) say it is a witness, not a backend.
+5. **Declared relations resolved as a tree** [think later]. `mates: [{ place:
+   "lid", on: "base", along: "-z", clearance: 0.5 }, …]` in any order; most
+   assemblies have no loops, so each relation is one measured placement applied
+   in dependency order — declarative, as models like, with no constraint
+   solver. A loop (a linkage) is refused by name. Pairs with `check_motion`.
+6. **Close the physical loop** [ask Klim]. After a print, a few caliper readings
+   or a photo come back, ParCAD compares them with the model and tunes
+   clearance for that printer.
+7. **The head-to-head as a public leaderboard** [later, needs polish]. Open
+   grader, briefs and transcripts; anyone submits a tool.
+
 ### Found designing ParCAD web's planter saucer (2026-09-16)
 
 - **Which OCCT step drops a union's input.** Refused since 2026-09-17 (GOTCHAS,
