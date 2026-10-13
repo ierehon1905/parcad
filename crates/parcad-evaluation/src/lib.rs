@@ -830,11 +830,17 @@ pub struct Treatment {
     pub continuity: Option<String>,
     /// How many edges the selector actually resolved to on the shape this
     /// treatment ran against — measured, not the `.expect()` the script
-    /// wrote. Paste it into `.expect({ count })` so the next edit fails aloud
-    /// instead of treating something else. Absent only when the kernel that
-    /// built the part did not report it.
+    /// wrote, and counted the way `.expect` counts. Paste it into
+    /// `.expect({ count })` so the next edit fails aloud instead of treating
+    /// something else. Absent only when the kernel that built the part did
+    /// not report it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edges: Option<usize>,
+    /// Present when the selector caught inside and outside corners together,
+    /// saying how many of each and which `dihedral` keeps only one kind: a
+    /// seam fillet whose selector also took a rim rounds both.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mixed_corners: Option<String>,
 }
 
 /// What one image shows, in the snapshot.
@@ -1135,7 +1141,9 @@ pub fn tag_extents(doc: &Doc, s: &parcad_occt::Success) -> (Vec<TagExtent>, Vec<
 /// rather than silently never appearing — which is what a `matches!` over op
 /// name strings does, and did.
 pub fn treatments(doc: &Doc, resolved: &[parcad_occt::protocol::TreatmentEdges]) -> Vec<Treatment> {
-    let edges_of = |node: usize| resolved.iter().find(|t| t.node == node).map(|t| t.edges);
+    let resolved_at = |node: usize| resolved.iter().find(|t| t.node == node);
+    let edges_of = |node: usize| resolved_at(node).map(|t| t.edges);
+    let mixed_at = |node: usize| resolved_at(node).and_then(mixed_corners);
     let Ok(order) = doc.topo_order() else {
         // An unorderable graph has no live nodes to report. It also cannot have
         // evaluated, so this is unreachable from `snapshot`; returning nothing
@@ -1159,6 +1167,7 @@ pub fn treatments(doc: &Doc, resolved: &[parcad_occt::protocol::TreatmentEdges])
                         .to_string(),
                     ),
                     edges: edges_of(node),
+                    mixed_corners: mixed_at(node),
                 },
                 Op::Chamfer { distance, .. } => Treatment {
                     node,
@@ -1166,6 +1175,7 @@ pub fn treatments(doc: &Doc, resolved: &[parcad_occt::protocol::TreatmentEdges])
                     amount_mm: *distance,
                     continuity: None,
                     edges: edges_of(node),
+                    mixed_corners: mixed_at(node),
                 },
                 Op::Cuboid { .. }
                 | Op::Sphere { .. }
@@ -1199,6 +1209,19 @@ pub fn treatments(doc: &Doc, resolved: &[parcad_occt::protocol::TreatmentEdges])
             Some(treatment)
         })
         .collect()
+}
+
+/// The sentence for a selection that spans both kinds of corner, which is
+/// how a seam fillet came to round a rim as well and report only `edges: 2`.
+fn mixed_corners(resolved: &parcad_occt::protocol::TreatmentEdges) -> Option<String> {
+    let (concave, convex) = (resolved.concave, resolved.convex);
+    (concave > 0 && convex > 0).then(|| {
+        format!(
+            "{concave} concave, {convex} convex: this selector caught inside and outside corners \
+             together. Unless both were meant, add dihedral: \"concave\" to treat only the inside \
+             seams, or dihedral: \"convex\" for only the outside edges"
+        )
+    })
 }
 
 /// The part an export describes, so a caller need not evaluate it again to
@@ -1460,12 +1483,27 @@ mod tests {
             { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
             { "op": "fillet", "child": 0, "radius": 1, "selector": "|Z" },
         ] }));
-        let reported = treatments(&doc, &[TreatmentEdges { node: 1, edges: 4 }]);
+        let reported = treatments(&doc, &[TreatmentEdges { node: 1, edges: 4, convex: 4, concave: 0 }]);
         assert_eq!(reported[0].edges, Some(4));
         let json = serde_json::to_value(&reported[0]).unwrap();
         assert_eq!(json["edges"], 4);
+        assert!(json.get("mixed_corners").is_none(), "one kind of corner is not news: {json}");
         // A kernel that did not say leaves the field out rather than writing 0.
         let json = serde_json::to_value(&treatments(&doc, &[])[0]).unwrap();
         assert!(json.get("edges").is_none(), "{json}");
+    }
+
+    /// The retainer trial: a seam fillet whose query also took the rim of the
+    /// cylinder, reported as `edges: 2` and nothing else.
+    #[test]
+    fn a_selection_across_both_kinds_of_corner_names_the_dihedral_that_keeps_one() {
+        let doc = doc(serde_json::json!({ "units": "mm", "root": 1, "nodes": [
+            { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+            { "op": "chamfer", "child": 0, "distance": 1, "selector": { "curve": "circle" } },
+        ] }));
+        let reported = treatments(&doc, &[TreatmentEdges { node: 1, edges: 3, convex: 1, concave: 2 }]);
+        let mixed = reported[0].mixed_corners.as_deref().expect("a mixed selection says so");
+        assert!(mixed.starts_with("2 concave, 1 convex"), "{mixed}");
+        assert!(mixed.contains(r#"dihedral: "concave""#) && mixed.contains(r#"dihedral: "convex""#), "{mixed}");
     }
 }

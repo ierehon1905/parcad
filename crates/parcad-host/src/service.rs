@@ -1933,7 +1933,10 @@ mod tests {
                 { "op": "fillet", "child": 0, "radius": 2, "selector": ">Z" },
                 { "op": "chamfer", "child": 1, "distance": 1, "selector": "<Z" },
             ],
-        })), &[parcad_occt::protocol::TreatmentEdges { node: 1, edges: 4 }, parcad_occt::protocol::TreatmentEdges { node: 2, edges: 4 }]);
+        })), &[
+            parcad_occt::protocol::TreatmentEdges { node: 1, edges: 4, convex: 4, concave: 0 },
+            parcad_occt::protocol::TreatmentEdges { node: 2, edges: 4, convex: 4, concave: 0 },
+        ]);
 
         let reported: Vec<_> = treatments
             .iter()

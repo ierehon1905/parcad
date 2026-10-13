@@ -239,6 +239,15 @@ pub struct Expect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tags: Option<BTreeMap<String, [f64; 6]>>,
 
+    /// Each edge treatment the reply reports, in dependency order: its op,
+    /// the edge count `.expect({ count })` is written from, and the warning
+    /// when its selector caught inside and outside corners together. Held
+    /// exactly, the warning word for word. Opt-in per case like `tags`, and
+    /// recorded unasked when a treatment's corners are mixed, so a warning
+    /// once seen is pinned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub treatments: Option<Vec<TreatmentExpect>>,
+
     /// Each named body of a part that returns several, measured alone.
     /// Recorded whenever the part has bodies, because a body's own
     /// `pieces` is the one number that tells an accidental split from a
@@ -641,6 +650,22 @@ pub struct CollisionExpect {
     pub removed_mm3: f64,
 }
 
+/// One treatment as the reply reports it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TreatmentExpect {
+    pub op: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edges: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mixed_corners: Option<String>,
+}
+
+impl From<&parcad_evaluation::Treatment> for TreatmentExpect {
+    fn from(treatment: &parcad_evaluation::Treatment) -> Self {
+        Self { op: treatment.op.clone(), edges: treatment.edges, mixed_corners: treatment.mixed_corners.clone() }
+    }
+}
+
 /// A brief's verdict and the two numbers behind it. The verdict is held
 /// word for word: it is the sentence a reader meets first, and a change to
 /// its wording is a change to what the part says about itself.
@@ -769,6 +794,8 @@ pub struct Observed {
     pub brief: Option<BriefExpect>,
     /// Every cut into a feature besides its target, keyed `"cut/feature"`.
     pub collisions: BTreeMap<String, CollisionExpect>,
+    /// Each edge treatment, as the reply reports it.
+    pub treatments: Vec<TreatmentExpect>,
     /// Each body's overhang as it prints, keyed by body.
     pub overhang: BTreeMap<String, OverhangExpect>,
 }
@@ -1166,6 +1193,15 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
         }
     }
 
+    if let Some(want) = &expect.treatments {
+        if want != &observed.treatments {
+            out.push(Mismatch {
+                field: "treatments".into(),
+                detail: format!("expected {want:?}, got {:?}", observed.treatments),
+            });
+        }
+    }
+
     if let Some(want) = &expect.collisions {
         for (key, w) in want {
             match observed.collisions.get(key) {
@@ -1416,6 +1452,10 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
             })
             .collect()
     });
+    // See `Expect::treatments`.
+    if expect.treatments.is_some() || observed.treatments.iter().any(|t| t.mixed_corners.is_some()) {
+        expect.treatments = Some(observed.treatments.clone());
+    }
     // Only where the case already asks about tags. See `Expect::tags`.
     if expect.tags.is_some() {
         expect.tags = Some(

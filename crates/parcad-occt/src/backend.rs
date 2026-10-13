@@ -33,7 +33,7 @@ use parcad_core::{
     },
 };
 
-use crate::protocol::{breadcrumb, edge_curve, Collision, EdgeCurve, TargetVertex};
+use crate::protocol::{breadcrumb, edge_curve, Collision, EdgeCurve, TargetVertex, TreatmentEdges};
 use std::collections::{BTreeMap, HashSet};
 
 #[path = "surfaces.rs"]
@@ -774,6 +774,8 @@ struct SelectableVertex {
 struct ResolvedEdgeTarget {
     edges: Vec<Edge>,
     vertices: Vec<DVec3>,
+    /// What a reply reports beside the treatment.
+    report: TreatmentEdges,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -2702,9 +2704,17 @@ fn select_edge_target(
             if let Some(expectation) = expect {
                 check_edge_expectation(*expectation, &kept, smooth.len(), selector, id, label)?;
             }
+            let corners = |dihedral| kept.iter().filter(|edge| edge.dihedral == Some(dihedral)).count();
+            let report = TreatmentEdges {
+                node: id,
+                edges: kept.len(),
+                convex: corners(Dihedral::Convex),
+                concave: corners(Dihedral::Concave),
+            };
             Ok(ResolvedEdgeTarget {
                 edges: kept.into_iter().flat_map(|edge| edge.edges).collect(),
                 vertices: Vec::new(),
+                report,
             })
         }
         EdgeTarget::Vertices { vertices, expect } => {
@@ -2714,7 +2724,7 @@ fn select_edge_target(
             }
             let mut seen = HashSet::new();
             let vertices = selected.iter().map(|vertex| vertex.point).collect();
-            let edges = selected
+            let edges: Vec<Edge> = selected
                 .into_iter()
                 .flat_map(|vertex| vertex.incident)
                 .filter(|edge| {
@@ -2722,7 +2732,8 @@ fn select_edge_target(
                         .is_some_and(|described| seen.insert(described.key))
                 })
                 .collect();
-            Ok(ResolvedEdgeTarget { edges, vertices })
+            let report = TreatmentEdges { node: id, edges: edges.len(), convex: 0, concave: 0 };
+            Ok(ResolvedEdgeTarget { edges, vertices, report })
         }
     }
 }
@@ -3043,8 +3054,8 @@ pub struct BuiltPart {
     /// focus an authored fillet or chamfer after a viewport click; they are
     /// never accepted as graph input, and disappear when the model is rebuilt.
     pub treatment_owners: BTreeMap<Vec<[i64; 3]>, NodeId>,
-    /// How many edges each treatment's selector resolved to, by node.
-    pub treatment_edges: BTreeMap<NodeId, usize>,
+    /// What each treatment's selector resolved to, by node.
+    pub treatment_edges: BTreeMap<NodeId, TreatmentEdges>,
     /// Each named body, in the order the script named them. Empty for a
     /// one-solid part, whose body is `shape`.
     pub bodies: Vec<BuiltBody>,
@@ -3425,10 +3436,10 @@ fn cut_collisions(
 #[derive(Default, Clone)]
 struct TreatmentFeatures {
     generated: Vec<(NodeId, Shape)>,
-    /// How many edges each treatment's selector resolved to, by node: the
-    /// count a reply reports beside the treatment, so `.expect({ count })`
-    /// has a number to be written from.
-    resolved: Vec<(NodeId, usize)>,
+    /// What each treatment's selector resolved to: the count a reply
+    /// reports beside the treatment, so `.expect({ count })` has a number to
+    /// be written from, and the corners it spans.
+    resolved: Vec<TreatmentEdges>,
 }
 
 impl TreatmentFeatures {
@@ -3437,8 +3448,8 @@ impl TreatmentFeatures {
         self.resolved.extend(other.resolved);
     }
 
-    fn treatment_edges(&self) -> BTreeMap<NodeId, usize> {
-        self.resolved.iter().copied().collect()
+    fn treatment_edges(&self) -> BTreeMap<NodeId, TreatmentEdges> {
+        self.resolved.iter().map(|resolved| (resolved.node, resolved.clone())).collect()
     }
 
     fn add_generated(&mut self, node: NodeId, shapes: Vec<Shape>) {
@@ -5220,8 +5231,8 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             let mut solid = build_node(doc, *child, offset)?;
             surfaces::require_solid(doc, id, label, "fillets", *child, &solid)?;
             let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
-            let count = selected.edges.len();
-            solid.features.resolved.push((id, count));
+            let count = selected.report.edges;
+            solid.features.resolved.push(selected.report.clone());
             breadcrumb(&format!(
                 "fillet node {id} ({label}) {radius} mm on {count} selected edge(s)"
             ));
@@ -5324,8 +5335,8 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             let mut solid = build_node(doc, *child, offset)?;
             surfaces::require_solid(doc, id, label, "chamfers", *child, &solid)?;
             let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
-            let count = selected.edges.len();
-            solid.features.resolved.push((id, count));
+            let count = selected.report.edges;
+            solid.features.resolved.push(selected.report.clone());
             breadcrumb(&format!(
                 "chamfer node {id} ({label}) {distance} mm on {count} selected edge(s)"
             ));

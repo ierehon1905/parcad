@@ -1,0 +1,30 @@
+{
+  "name": "fillet-spans-seam-and-rim",
+  "script": "eval/scripts/fillet-spans-seam-and-rim.js",
+  "why": "The one wrong part ParCAD let a model ship in 288 head-to-head trials (research_notes/hands-on/h2h, retainer-P-haiku-2): { curve: \"circle\", adjacentTo: { faceNormal: \"+z\" } } was meant for the concave seam where the cylinder meets the block's top and also took the cylinder's convex top rim, and the reply said only edges: 2. The treatment must name both kinds and the dihedral that keeps one. The part itself is the wrong one on purpose: rounding the rim takes about 158 mm3 more than the seam's blend adds, so the volume sits below the plain union's.",
+  "brep": {
+    "size": [
+      59.49,
+      148.126,
+      36.664
+    ],
+    "volume_mm3": 177067.085,
+    "area_mm2": 26183.894,
+    "triangles": 9740,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 8431.963,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 9,
+    "edges": 42,
+    "curves": 19,
+    "treatments": [
+      {
+        "op": "fillet",
+        "edges": 2,
+        "mixed_corners": "1 concave, 1 convex: this selector caught inside and outside corners together. Unless both were meant, add dihedral: \"concave\" to treat only the inside seams, or dihedral: \"convex\" for only the outside edges"
+      }
+    ]
+  }
+}

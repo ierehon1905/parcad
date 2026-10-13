@@ -621,6 +621,12 @@ section drawn as two arcs, arcs across +X); one recorded `expect({ count: 2 })`
 that had been counting a tube rim's two halves, now 1; and no volume, face,
 kernel edge or validity anywhere, and every seed part still builds.
 
+One count was missed until 2026-10-13: `edges` beside a treatment in a reply
+counted the kernel pieces the builder receives, so the beads' rims read 17
+while `.expect` counts 16, and pasting the reply's number failed the build.
+It is now the selector's own logical count
+(`eval/cases/fillet-counts-a-split-rim-once.json`).
+
 ### Delabella, OCCT's other triangulator, meshes an extruded spline open
 
 `IMeshTools_Parameters::MeshAlgo`, or the `CSF_MeshAlgo=delabella` environment
