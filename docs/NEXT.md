@@ -245,27 +245,37 @@ ParCAD, text-to-cad, kernelCAD, Limo and plain build123d built the same parts,
 graded by one script on stock OCCT. The briefs, transcripts and grader are in
 `research_notes/hands-on/`, which is local and excluded from git.
 
-**Everything the bench found, biggest first.** Impact: ★★★ a model ships a
-wrong part or a user hits it on an ordinary part; ★★ it costs a round trip in
-many sessions or erodes trust in a number; ★ a stumble now and then. Effort:
-S a day or less, M a few days, L a strong-model kernel session. Details are in
-the bullets below and in the next two sections.
+**Everything the bench found, biggest first.** Score: relative importance out
+of 10 — how often a model or a user hits it times what it costs when they do,
+effort left out. Impact: ★★★ a model ships a wrong part or a user hits it on an
+ordinary part; ★★ it costs a round trip in many sessions or erodes trust in a
+number; ★ a stumble now and then. Effort: S a day or less, M a few days, L a
+strong-model kernel session. Details are in the bullets below and in the next
+two sections.
 
-| # | item | impact | effort |
-|---|---|---|---|
-| 1 | a part in several loose pieces passes `print_check` | ★★★ | S |
-| 2 | the tag that makes the saucer crawl | ★★★ | L |
-| 3 | `check_motion` | ★★★ | L |
-| 4 | a DSL name as a local is a parse error | ★★ | S |
-| 5 | `edit_part`'s exact-text `old` misses | ★★ | M |
-| 6 | the same signatures fetched every trial | ★★ | S |
-| 7 | the G2 blend behind `.smooth()` | ★★ | L |
-| 8 | a face's listed area misreads spline faces | ★★ | S |
-| 9 | `fillet(selector, radius)` order | ★ | S |
-| 10 | `wait_s` on one script tool only | ★ | S |
-| 11 | a vertex treatment's `edges` is not what its `.expect` counts | ★ | S |
-| 12 | the editor never shows `mixed_corners` | ★ | S |
-| 13 | the area integral costs a fitted ring 0.76 s | ★ | M |
+| # | item | score | impact | effort |
+|---|---|---|---|---|
+| 1 | a part in several loose pieces passes `print_check` | 10 | ★★★ | S |
+| 2 | the tag that makes the saucer crawl | 8 | ★★★ | L |
+| 3 | `allow_failing` is taken on the model's own word | 7 | ★★★ | S |
+| 4 | `check_motion` | 7 | ★★★ | L |
+| 5 | `edit_part` refuses with an empty reason | 6 | ★★ | S |
+| 6 | a list argument sent as a JSON string is refused | 6 | ★★ | S |
+| 7 | field runs measure Haiku 4.5, not the current Haiku | 6 | ★★ | S |
+| 8 | a right part the model cannot verify goes out unvouched | 5 | ★★ | M |
+| 9 | a DSL name as a local is a parse error | 5 | ★★ | S |
+| 10 | `edit_part`'s exact-text `old` misses | 5 | ★★ | M |
+| 11 | `read_docs` has no search | 5 | ★★ | S |
+| 12 | the same signatures fetched every trial | 4 | ★★ | S |
+| 13 | the G2 blend behind `.smooth()` | 4 | ★★ | L |
+| 14 | a face's listed area misreads spline faces | 4 | ★★ | S |
+| 15 | tool schemas carry non-standard `uint` formats | 3 | ★ | S |
+| 16 | `fillet(selector, radius)` order | 2 | ★ | S |
+| 17 | `wait_s` on one script tool only | 2 | ★ | S |
+| 18 | `.union()` given an edge selection says "not a function" | 2 | ★ | S |
+| 19 | a vertex treatment's `edges` is not what its `.expect` counts | 2 | ★ | S |
+| 20 | the editor never shows `mixed_corners` | 2 | ★ | S |
+| 21 | the area integral costs a fitted ring 0.76 s | 2 | ★ | M |
 
 - **A part in several loose pieces passes `print_check`.** Plate-stand brief,
   Haiku 4.5: the union left eight pegs floating free of the base, and one
@@ -277,6 +287,50 @@ the bullets below and in the next two sections.
   shape is more than one piece, `print_check` fails (so export refuses), naming
   each piece, its size and where it is; a piece that does not reach the bed
   fails on its own; `{ bodies }` and named bodies stay the way to mean several.
+- **`allow_failing` is taken on the model's own word.** The 0 mm-wall boss
+  through OpenCode: GLM 5.3 Flash, Qwen 3.8 Flash and DeepSeek v4.1 Flash each
+  passed `allow_failing` with a reason they wrote themselves ("the user fixed
+  these exact dimensions") and exported; GLM and Qwen then said DONE. The
+  parameter's description says the reason is the user's decision, in their
+  words — nothing holds a model to that. Fix candidates: an export written
+  under `allow_failing` says so in its first line and in the file's name or
+  metadata, and the server instruction says to ask the user before passing it.
+- **`edit_part` refuses with an empty reason.** GLM 5.3 Flash, plate brief
+  (`oc-glm-qwen/plate-P-glm-5.3-flash-1`): moving the holes produced
+  `edit_part refused: . Fix the part and call again, or pass allow_failing` —
+  the sentence that names what failed is empty. Find which check reaches the
+  refusal with no text and give it its message; an error that names nothing
+  breaks the rule every refusal here keeps.
+- **A list argument sent as a JSON string is refused.** Qwen 3.8 Flash through
+  OpenCode sent `views` as the string `"[\"iso\", \"top\"]"` in 8 calls, and
+  GLM sent `points[0]` as `"[[0"`; each is refused with a correct message and
+  retried. When a list parameter arrives as a string that parses as that list,
+  read it — `parcad call` already coerces `--set` by schema; the MCP door can
+  do the same.
+- **Field runs measure Haiku 4.5, not the current Haiku.** `field/run-case.sh:19`
+  and `field/run-suite.sh:35` pin `claude-haiku-4-5-20251001`; `haiku` now
+  resolves to `claude-haiku-5-5`, which built 21/21 right parts on ParCAD where
+  4.5 built 23/24 on the easier briefs and 0/2 on the plate stand. Every past
+  "small model" number in PERCEPTION.md and the field cases is 4.5's. Default
+  to 5.5 and say which in each table.
+- **A right part the model cannot verify goes out unvouched.** Haiku 5.5, plate
+  stand: two of three ParCAD stands passed every requirement and the model
+  still wrote STATUS: PROBLEM — it could not confirm the peg count, the rows'
+  spacing or the lean from what the replies give (Sonnet did the same once).
+  The verdicts measure printability and fit; nothing answers "are there 18 of
+  these, 28 mm apart, leaning 10° outward". The *requirements first* idea
+  (New capabilities, 2) is the fix.
+- **`read_docs` has no search.** Haiku 5.5 called `read_docs({ query: … })` 8
+  times in 2 trials (`haiku55/plate-P-haiku55-1`); the tool takes `topic`,
+  `section`, `detail`. Either accept `query` as a search over section names and
+  text, or name `section` and the contents list in the refusal.
+- **Tool schemas carry non-standard `uint` formats.** schemars writes
+  `"format": "uint"` / `"uint64"` on every count; OpenCode logs "unknown format
+  uint ignored" for each on every start, and a stricter client could refuse the
+  schema. Map them to `integer` with `minimum: 0`.
+- **`.union()` given an edge selection says "not a function".** Haiku 4.5, plate
+  stand: `.union(base.edges(…))` threw a bare "not a function" at that line.
+  Name what `union` takes when an argument is a selection.
 - **A face's listed area misreads spline faces.** Found while making the
   part's volume and area the B-rep's (2026-10-13): `Shape_faces_json` in the
   vendored wrapper reads each face with `BRepGProp`'s fixed-order rule, which
