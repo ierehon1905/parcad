@@ -245,6 +245,29 @@ ParCAD, text-to-cad, kernelCAD, Limo and plain build123d built the same parts,
 graded by one script on stock OCCT. The briefs, transcripts and grader are in
 `research_notes/hands-on/`, which is local and excluded from git.
 
+**Everything the bench found, biggest first.** Impact: ★★★ a model ships a
+wrong part or a user hits it on an ordinary part; ★★ it costs a round trip in
+many sessions or erodes trust in a number; ★ a stumble now and then. Effort:
+S a day or less, M a few days, L a strong-model kernel session. Details are in
+the bullets below and in the next two sections.
+
+| # | item | impact | effort |
+|---|---|---|---|
+| 1 | a query spanning concave and convex edges passes silently | ★★★ | S |
+| 2 | `.expect` after a treatment is a bare "not a function" | ★★★ | S |
+| 3 | the tag that makes the saucer crawl | ★★★ | L |
+| 4 | `check_motion` | ★★★ | L |
+| 5 | the reported volume is the mesh's | ★★ | M |
+| 6 | a DSL name as a local is a parse error | ★★ | S |
+| 7 | `edit_part`'s exact-text `old` misses | ★★ | M |
+| 8 | the same signatures fetched every trial | ★★ | S |
+| 9 | the G2 blend behind `.smooth()` | ★★ | L |
+| 10 | `fillet(selector, radius)` order | ★ | S |
+| 11 | `wait_s` on one script tool only | ★ | S |
+
+Do 1 and 2 first: both are small, and they are the only two ways a model went
+wrong *with* ParCAD in 288 trials.
+
 - **The reported volume is the mesh's.** The beads brief reported 2148.23 mm³.
   Its STEP measures 2152.326 mm³ with stock `BRepGProp`, which is the analytic
   value, so the geometry is right and the number is 0.19 % low.
@@ -260,12 +283,65 @@ graded by one script on stock OCCT. The briefs, transcripts and grader are in
   short, and the model said done. Fix: when a selection spans both dihedrals,
   the treatment report says so and names `dihedral: "concave"`. Add a field
   case.
-- **The head-to-head is not yet a claim.** Haiku, six briefs, two trials each:
-  ParCAD 12/12 right, text-to-cad 3/12, kernelCAD 3/12, build123d 2/12, and
-  most of the failures were reported as done. Sonnet and Opus were right with
-  every tool. Before quoting it anywhere, let round 3 finish, rerun it on
-  briefs chosen outside this repo (beads and the 0 mm wall are cases ParCAD was
-  built for), and publish the harness.
+- **The head-to-head, finished: 288 graded trials.** Haiku, six briefs, four
+  trials each: ParCAD 23/24 right and 1 wrong part reported done; text-to-cad
+  8/24 and 15; kernelCAD 5/24 and 15; build123d 5/24 and 19 (p < 1e-5 each).
+  On the three briefs ParCAD has no special case for (plate, lidded box,
+  notch): 12/12 against 5, 3 and 1. Sonnet and Opus are right with every tool,
+  partly by knowing OCCT workarounds. ParCAD ran as 0.0.11. Before quoting it:
+  fix the two items above, rerun on the current release, add briefs chosen
+  outside this repo and briefs that separate strong models (fit to a real
+  object, an edit that changes topology, an overhang), and publish the harness.
+  `research_notes/hands-on/h2h/RESULTS.md` has the tables.
+
+### What made modelling harder, from the head-to-head transcripts (2026-10-13)
+
+72 ParCAD trials across Haiku, Sonnet and Opus; 27 hit at least one error or
+refusal on the way (7 of those are the boss's export refusal, which is the
+point). Counted by trial, most-hit first:
+
+- **`.expect` after a treatment is a bare "not a function"** — 5 trials, all
+  Opus or Sonnet: `box(…).fillet(4, "|Z").expect({ count: 4 })`,
+  `.edges("|Z").fillet(R).expect(…)`. The strong models reach for the count
+  *after* the treatment, as the reply reports it. Either accept it there (the
+  count of the treatment just applied) or throw an error that names the order:
+  `.edges(sel).expect({ count }).fillet(r)`. It is the one error message in
+  the run that doesn't name its fix.
+- **`edit_part`'s exact-text `old` missed** — 4 trials (Haiku, Sonnet), mostly
+  on a second edit after the first changed spacing or quotes. Candidates: match
+  ignoring whitespace runs when that match is unique; quote the nearest line in
+  the refusal. kernelCAD's `set_param` (edit a named parameter, no text to
+  match) is the other shape this could take for the common "make it 100 long".
+- **A DSL name as a local is a parse error** — 2 trials (`const inset`).
+  Parts run as `new Function(...names, source)`; wrapping the source in a block
+  (`"{" + source + "\n}"`, same line numbers) lets a part's own `const` shadow a
+  DSL name. That would also retire the rule that every new export is a
+  compatibility change. Check QuickJS, the editor's type service and
+  `editor_types.rs` agree before relying on it.
+- **`fillet(selector, radius)`** — 2 trials (Sonnet), and this bench's author
+  wrote it too. The refusal names the fix; taking either order when one
+  argument is a number and the other a selector would remove the round trip
+  without guessing.
+- **The same signatures fetched every trial** — `read_docs` sections `box`,
+  `cylinder`, `Shape.fillet` 15–16 times each, `sphere` 8, after the `dsl`
+  index 50 times. The ten most-used signatures in the index reply would save a
+  call or two per trial.
+- **`wait_s` on one tool, not its sibling** — 1 trial sent it to `edit_part`.
+  Small; same parameter names across the script tools.
+
+### Kernel work for a strong-model session (Fable or Opus, high effort)
+
+Ranked by what the bench and the competitors make urgent; each is already
+described where it lives:
+
+1. **The tag that makes the saucer crawl** (1.3 s → over 120 s, lineage
+   bookkeeping), below under the planter saucer. A user hits it by adding one
+   `.tag()`.
+2. **`check_motion`** (queue item 5's mechanics witness): clearance certified
+   over a swing on the exact solids. Limo, QymCAD and STEVE Studio all check
+   motion; it is the feature gap the bench shows.
+3. **The G2 blend** behind `.smooth()` / `.squircle()`, below under the
+   planter saucer — prior art first.
 
 ### Found designing ParCAD web's planter saucer (2026-09-16)
 
