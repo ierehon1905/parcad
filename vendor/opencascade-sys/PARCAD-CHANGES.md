@@ -198,6 +198,19 @@ error estimate. The fixed-order integration behind the plain form is exact on
 analytic faces and not on B-splines: the elliptic cylinder `Shape_scaled_axes`
 makes of `cylinder(5, 20)` read 3168.66 mm³ against an exact 3141.59.
 
+## Added: `BRepGProp_SurfaceProperties_eps`
+
+The area counterpart, for the same reason: parcad reports a part's area from
+the B-rep, and the fixed-order rule is not exact on B-spline faces.
+
+## Added: `Shape_has_derived_surfaces`
+
+Whether any face of a shape lies on a surface other than the five elementary
+ones and a B-spline. parcad reports `BRepGProp`'s volume and area only where
+none does: over 169 corpus and seed parts the integral matched the mesh to its
+chord error on every other part, and read three of the seven parts with such a
+face 4.6 %, 18.7 % and 72 % wrong.
+
 ## Added: ray casting, point classification and exact bounds
 
 The three primitives parcad's perception runs on once the exact kernel is the

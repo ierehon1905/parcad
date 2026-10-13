@@ -247,6 +247,13 @@ impl Shape {
         ffi::Shape_faces_json(&self.inner)
     }
 
+    /// Whether any face lies on an offset, an extrusion or revolution of a
+    /// curve, or another surface `BRepGProp` cannot be trusted to integrate.
+    /// Added for parcad; see PARCAD-CHANGES.md.
+    pub fn has_derived_surfaces(&self) -> bool {
+        ffi::Shape_has_derived_surfaces(&self.inner)
+    }
+
     pub fn fillet_edge(&mut self, radius: f64, edge: &Edge) {
         let mut make_fillet = ffi::BRepFilletAPI_MakeFillet_ctor(&self.inner);
         make_fillet.pin_mut().add_edge(radius, &edge.inner);
@@ -822,11 +829,18 @@ impl Shape {
     /// oriented inward, which is what an inside-out solid looks like to every
     /// later boolean. Added for parcad; see PARCAD-CHANGES.md.
     pub fn signed_volume(&self) -> f64 {
+        self.volume_properties().0
+    }
+
+    /// [`Shape::signed_volume`] with the centre of that volume, which the
+    /// same integration computes. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn volume_properties(&self) -> (f64, DVec3) {
         let mut props = ffi::GProp_GProps_ctor();
         // Adaptive to 1e-7 relative: the fixed-order default is not exact on
         // B-spline faces, and every caller compares this against a closed form.
         ffi::BRepGProp_VolumeProperties_eps(&self.inner, props.pin_mut(), 1e-7);
-        props.Mass()
+        let centre = ffi::GProp_GProps_CentreOfMass(&props);
+        (props.Mass(), dvec3(centre.X(), centre.Y(), centre.Z()))
     }
 
     /// The area of every face in this shape, mm², and their area-weighted
@@ -835,7 +849,9 @@ impl Shape {
     /// does not. Added for parcad; see PARCAD-CHANGES.md.
     pub fn surface_properties(&self) -> (f64, DVec3) {
         let mut props = ffi::GProp_GProps_ctor();
-        ffi::BRepGProp_SurfaceProperties(&self.inner, props.pin_mut());
+        // Adaptive, for the reason `volume_properties` is. 1e-5 is a bound;
+        // what it achieves on the corpus is near 1e-7.
+        ffi::BRepGProp_SurfaceProperties_eps(&self.inner, props.pin_mut(), 1e-5);
         let centre = ffi::GProp_GProps_CentreOfMass(&props);
         (props.Mass(), dvec3(centre.X(), centre.Y(), centre.Z()))
     }

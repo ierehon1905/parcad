@@ -1988,6 +1988,11 @@ inline double BRepGProp_VolumeProperties_eps(const TopoDS_Shape &shape, GProp_GP
   return BRepGProp::VolumeProperties(shape, props, eps);
 }
 
+// The same for area. Added for parcad, for the same reason.
+inline double BRepGProp_SurfaceProperties_eps(const TopoDS_Shape &shape, GProp_GProps &props, double eps) {
+  return BRepGProp::SurfaceProperties(shape, props, eps);
+}
+
 // Fillets
 inline std::unique_ptr<TopoDS_Edge> BRepFilletAPI_MakeFillet2d_add_fillet(BRepFilletAPI_MakeFillet2d &make_fillet,
                                                                           const TopoDS_Vertex &vertex,
@@ -2648,6 +2653,29 @@ inline void write_solid(std::ostringstream &out, const TopoDS_Shape &solid) {
 // What each face of the first solid *is*, without its boundary or pole grid.
 // Why this exists rather than a flag on the full writer, with the measurements:
 // docs/GOTCHAS.md, "Two writers for measured geometry".
+// Whether any face of `shape`, in every solid and shell of it, lies on a surface
+// other than a plane, cylinder, cone, sphere, torus or B-spline: an offset, a
+// linear extrusion or revolution of a curve, a Bezier patch. BRepGProp's
+// integrals have read the first two hundreds of percent wrong. Added for parcad.
+inline bool Shape_has_derived_surfaces(const TopoDS_Shape &shape) {
+  for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next()) {
+    Handle(Geom_Surface) surf = BRep_Tool::Surface(TopoDS::Face(f.Current()));
+    while (!surf.IsNull() && surf->DynamicType() == STANDARD_TYPE(Geom_RectangularTrimmedSurface)) {
+      surf = Handle(Geom_RectangularTrimmedSurface)::DownCast(surf)->BasisSurface();
+    }
+    if (surf.IsNull()) {
+      return true;
+    }
+    const Handle(Standard_Type) &type = surf->DynamicType();
+    if (type != STANDARD_TYPE(Geom_Plane) && type != STANDARD_TYPE(Geom_CylindricalSurface) &&
+        type != STANDARD_TYPE(Geom_ConicalSurface) && type != STANDARD_TYPE(Geom_SphericalSurface) &&
+        type != STANDARD_TYPE(Geom_ToroidalSurface) && type != STANDARD_TYPE(Geom_BSplineSurface)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 inline rust::String Shape_faces_json(const TopoDS_Shape &shape) {
   using namespace parcad_geometry_json;
   std::ostringstream out;

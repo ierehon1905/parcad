@@ -610,6 +610,9 @@ pub mod ffi {
         // grid, for describing a part rather than recreating one — added for
         // parcad, see PARCAD-CHANGES.md.
         pub fn Shape_faces_json(shape: &TopoDS_Shape) -> String;
+        // Whether any face lies on a surface derived from another — added for
+        // parcad, see PARCAD-CHANGES.md.
+        pub fn Shape_has_derived_surfaces(shape: &TopoDS_Shape) -> bool;
         // Healing of stale seam representations — added for parcad, see
         // PARCAD-CHANGES.md.
         pub fn Shape_drop_unused_seam_pcurves(shape: &TopoDS_Shape) -> i32;
@@ -1174,6 +1177,11 @@ pub mod ffi {
         pub fn BRepGProp_VolumeProperties(shape: &TopoDS_Shape, props: Pin<&mut GProp_GProps>);
         // Adaptive, to a relative error — added for parcad, see PARCAD-CHANGES.md.
         pub fn BRepGProp_VolumeProperties_eps(
+            shape: &TopoDS_Shape,
+            props: Pin<&mut GProp_GProps>,
+            eps: f64,
+        ) -> f64;
+        pub fn BRepGProp_SurfaceProperties_eps(
             shape: &TopoDS_Shape,
             props: Pin<&mut GProp_GProps>,
             eps: f64,

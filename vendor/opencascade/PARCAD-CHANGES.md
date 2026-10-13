@@ -193,6 +193,19 @@ whose faces point inward. parcad's offset lowering uses it to catch the
 inside-out result `MakeThickSolid` returns for a filleted body — the shape a
 later boolean reads as everything except the part.
 
+## `Shape::volume_properties`
+
+`signed_volume` with the centre of mass the same `BRepGProp` call already
+computes and discarded. parcad reports a part's volume, area and centroid from
+the B-rep with it and `surface_properties`, where it used to read them off the
+tessellation, a chord's sag short of the solid. `surface_properties` now
+integrates adaptively, to 1e-5, through `BRepGProp_SurfaceProperties_eps`.
+
+## `Shape::has_derived_surfaces`
+
+`Shape_has_derived_surfaces`: whether the integrals above can be trusted on
+this shape. See opencascade-sys's PARCAD-CHANGES.md.
+
 ## `Shape::surface_properties`
 
 `BRepGProp::SurfaceProperties` with its centre of mass, over a whole shape
