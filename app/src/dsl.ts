@@ -202,6 +202,12 @@ export interface TreatmentSource {
 
 type TreatmentCall = Omit<TreatmentSource, "node">;
 
+/** A treatment's own expectation and how to make it again with one, for `.expect` written after it. */
+interface Expectable {
+  expectation?: EdgeExpectation;
+  rebuild: (expectation: EdgeExpectation) => Shape;
+}
+
 /**
  * A source transform normally supplies this location explicitly. The stack is
  * only a fallback for callers outside the editor, where it may not be portable
@@ -827,6 +833,7 @@ export class Shape {
     private readonly kids: Shape[],
     private name?: string,
     private readonly treatment?: TreatmentCall,
+    private readonly expectable?: Expectable,
   ) {}
 
   /** @internal Source call that authored this selected-edge treatment. */
@@ -1262,6 +1269,7 @@ export class Shape {
       [this],
       undefined,
       { kind: "fillet", source },
+      { expectation, rebuild: (e) => this.fillet(radius, selector, e, options, source) },
     );
   }
 
@@ -1281,6 +1289,7 @@ export class Shape {
       [this],
       undefined,
       { kind: "chamfer", source },
+      { expectation, rebuild: (e) => this.chamfer(distance, selector, e, options, source) },
     );
   }
 
@@ -1300,6 +1309,7 @@ export class Shape {
       [this],
       undefined,
       { kind: "fillet", source },
+      { expectation, rebuild: (e) => this.filletVertices(radius, vertices, e, options, source) },
     );
   }
 
@@ -1319,7 +1329,46 @@ export class Shape {
       [this],
       undefined,
       { kind: "chamfer", source },
+      { expectation, rebuild: (e) => this.chamferVertices(distance, vertices, e, options, source) },
     );
+  }
+
+  /**
+   * Check the fillet or chamfer just applied, as `.edges(sel).expect({ count })`
+   * before it would: a build where its selector matches a different number
+   * of edges fails aloud.
+   *
+   * - Only straight after `.fillet`, `.chamfer`, `.smooth` or `.squircle`;
+   *   anywhere else it is refused.
+   * - `count` is `edges` on that treatment in an evaluate_part reply.
+   * - One expectation per treatment: not here and on `.edges(...)` too.
+   *
+   * @example
+   *     // a 40 × 20 × 10 block with its 4 upright edges rounded 2 mm: 8000 − 4·10·(2² − π·2²/4) = 7,966 mm³
+   *     return box(40, 20, 10).fillet(2, "|Z").expect({ count: 4 });
+   */
+  expect(expectation: EdgeExpectation): Shape {
+    const asked = describeArgument(expectation);
+    if (!this.expectable) {
+      throw new Error(
+        `expect(${asked}) counts the edges of a fillet or chamfer, and this shape is neither. ` +
+          `Write it on the selection, before the treatment: .edges(selector).expect(${asked}).fillet(radius) — ` +
+          `or straight after the .fillet(...) or .chamfer(...) it checks.`,
+      );
+    }
+    if (this.expectable.expectation) {
+      throw new Error(
+        `this ${this.treatment?.kind ?? "treatment"} already expects ${describeArgument(this.expectable.expectation)}, ` +
+          `written before it; keep one of the two expectations.`,
+      );
+    }
+    assertEdgeExpectation(expectation);
+    const expecting = this.expectable.rebuild(expectation);
+    expecting.name = this.name;
+    expecting.look = this.look;
+    expecting.isReference = this.isReference;
+    expecting.printUp = this.printUp;
+    return expecting;
   }
 
   /** Fuse this shape with the others; `{ blend: r }` rounds where they meet. */

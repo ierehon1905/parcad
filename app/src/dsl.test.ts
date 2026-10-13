@@ -890,3 +890,42 @@ describe("an edge expectation", () => {
     expect(exact.requires?.map((r) => r.feature) ?? []).not.toContain("expect-range");
   });
 });
+
+/**
+ * Five of 72 head-to-head trials, all Opus or Sonnet, wrote the count after
+ * the treatment, where the reply reports it — and got "expect is not a
+ * function", the one error in the run that named no fix.
+ */
+describe("an expectation written after its treatment", () => {
+  const before = (treat: (s: Shape) => Shape) => build(treat(box(40, 20, 10))).nodes.at(-1);
+
+  test("is the graph the selection's expectation writes", () => {
+    const selected = before((s) => s.edges("|Z").expect({ count: 4 }).fillet(2));
+    expect(before((s) => s.fillet(2, "|Z").expect({ count: 4 }))).toEqual(selected!);
+    expect(before((s) => s.edges("|Z").fillet(2).expect({ count: 4 }))).toEqual(selected!);
+    expect(before((s) => s.edges("|Z").chamfer(1).expect({ atLeast: 1 }))).toMatchObject({ op: "chamfer", expect: { atLeast: 1 } });
+    expect(before((s) => s.vertices(">X and >Y and >Z").fillet(1).expect({ count: 1 }))).toMatchObject({
+      op: "fillet",
+      vertices: ">X and >Y and >Z",
+      expect: { count: 1 },
+    });
+  });
+
+  test("checks the last treatment and keeps what was set on it", () => {
+    const doc = build(box(40, 20, 10).fillet(2, "|Z").fillet(1, ">Z").tag("top").expect({ count: 4 }));
+    expect(doc.nodes.at(-1)).toMatchObject({ op: "fillet", radius: 1, expect: { count: 4 }, tag: "top" });
+    expect(doc.nodes.at(-2)).toMatchObject({ op: "fillet", radius: 2 });
+    expect(doc.nodes.at(-2)?.expect).toBeUndefined();
+  });
+
+  test("is refused anywhere else, naming the order that works", () => {
+    expect(() => box(40, 20, 10).at(0, 0, 5).expect({ count: 4 })).toThrow(
+      'expect({"count":4}) counts the edges of a fillet or chamfer, and this shape is neither. ' +
+        'Write it on the selection, before the treatment: .edges(selector).expect({"count":4}).fillet(radius)',
+    );
+    expect(() => box(40, 20, 10).edges("|Z").expect({ count: 4 }).fillet(2).expect({ count: 4 })).toThrow(
+      'this fillet already expects {"count":4}, written before it; keep one of the two expectations.',
+    );
+    expect(() => box(40, 20, 10).fillet(2, "|Z").expect({ count: 0 })).toThrow("can never hold");
+  });
+});
