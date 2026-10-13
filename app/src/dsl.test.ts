@@ -912,8 +912,10 @@ describe("an expectation written after its treatment", () => {
   });
 
   test("checks the last treatment and keeps what was set on it", () => {
-    const doc = build(box(40, 20, 10).fillet(2, "|Z").fillet(1, ">Z").tag("top").expect({ count: 4 }));
-    expect(doc.nodes.at(-1)).toMatchObject({ op: "fillet", radius: 1, expect: { count: 4 }, tag: "top" });
+    const doc = build(
+      box(40, 20, 10).fillet(2, "|Z").fillet(1, ">Z").tag("top").material({ color: "#c33" }).expect({ count: 4 }),
+    );
+    expect(doc.nodes.at(-1)).toMatchObject({ op: "fillet", radius: 1, expect: { count: 4 }, tag: "top", material: { color: "#cc3333" } });
     expect(doc.nodes.at(-2)).toMatchObject({ op: "fillet", radius: 2 });
     expect(doc.nodes.at(-2)?.expect).toBeUndefined();
   });

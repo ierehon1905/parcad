@@ -830,10 +830,12 @@ pub struct Treatment {
     pub continuity: Option<String>,
     /// How many edges the selector actually resolved to on the shape this
     /// treatment ran against — measured, not the `.expect()` the script
-    /// wrote, and counted the way `.expect` counts. Paste it into
-    /// `.expect({ count })` so the next edit fails aloud instead of treating
-    /// something else. Absent only when the kernel that built the part did
-    /// not report it.
+    /// wrote. For an `.edges(...)` selection it is counted the way `.expect`
+    /// counts: paste it into `.expect({ count })` so the next edit fails
+    /// aloud instead of treating something else. For a `.vertices(...)`
+    /// selection it is the edges meeting at those corners, while `.expect`
+    /// counts the corners (docs/NEXT.md). Absent only when the kernel that
+    /// built the part did not report it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edges: Option<usize>,
     /// Present when the selector caught inside and outside corners together,

@@ -166,3 +166,16 @@ different document; see DSL_GAPS §9.
 `expect({ count })` stays. It caught seven of twelve parts in the first corpus
 and four of five treatments in this one. The change is that when it fires, the
 message shows the edges rather than the number.
+
+It stays a count (decided 2026-10-13). A count survives the edits it is not
+about — "make it 100 long" — where a length, position or radius would fail on
+every dimension change. A property of the selected edges is already a query
+term: `{ dihedral: "concave" }` in the selector with `{ count: 1 }` says what
+an asserted dihedral would. And a model writes only what a reply hands it: the
+retainer trial could not have asserted a second edge it did not know about,
+and what fixed that was the reply saying so (`mixed_corners`, haiku 1/8 to
+8/8). So surprises go in the reply as warnings, rules about the part in
+`checks: [...]`, and "the same count, different edges" to selectors that name
+what made an edge — `on`, `between`, `generatedBy`. If transcripts show models
+writing a property beside the count, accept it as that query plus the count,
+as `.expect` after a treatment was accepted.

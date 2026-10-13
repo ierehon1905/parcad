@@ -263,6 +263,7 @@ the bullets below and in the next two sections.
 | 8 | `fillet(selector, radius)` order | ★ | S |
 | 9 | `wait_s` on one script tool only | ★ | S |
 | 10 | a vertex treatment's `edges` is not what its `.expect` counts | ★ | S |
+| 11 | the editor never shows `mixed_corners` | ★ | S |
 
 - **The reported volume is the mesh's.** The beads brief reported 2148.23 mm³.
   Its STEP measures 2152.326 mm³ with stock `BRepGProp`, which is the analytic
@@ -280,6 +281,12 @@ the bullets below and in the next two sections.
   for a vertex target — the vertex arm of `select_edge_target` in
   `backend.rs`, through `TreatmentEdges` to `parcad_evaluation::Treatment` —
   and add a case beside `fillet-counts-a-split-rim-once`.
+- **The editor never shows `mixed_corners`.** The warning reaches agents in
+  every reply and the window's snapshot carries it, but `app/src/state.ts`
+  types a treatment without it and the treatment hover
+  (`app/src/treatment-info.ts`) says nothing, so a person who writes the
+  retainer's fillet by hand gets no sign it took the rim too. Show it in the
+  hover beside the edge count.
 - **The head-to-head, finished: 288 graded trials.** Haiku, six briefs, four
   trials each: ParCAD 23/24 right and 1 wrong part reported done; text-to-cad
   8/24 and 15; kernelCAD 5/24 and 15; build123d 5/24 and 19 (p < 1e-5 each).

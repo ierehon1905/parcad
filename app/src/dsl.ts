@@ -978,6 +978,15 @@ export class Shape {
     return this.name;
   }
 
+  /** What `tag`, `reference`, `printedUp` and `material` set in place, carried to a shape that replaces this one. */
+  private static carryMarks(from: Shape, to: Shape): Shape {
+    to.name = from.name;
+    to.isReference = from.isReference;
+    to.printUp = from.printUp;
+    to.look = from.look;
+    return to;
+  }
+
   /** @internal Shapes this one is built from. */
   get children(): readonly Shape[] {
     return this.kids;
@@ -1363,12 +1372,7 @@ export class Shape {
       );
     }
     assertEdgeExpectation(expectation);
-    const expecting = this.expectable.rebuild(expectation);
-    expecting.name = this.name;
-    expecting.look = this.look;
-    expecting.isReference = this.isReference;
-    expecting.printUp = this.printUp;
-    return expecting;
+    return Shape.carryMarks(this, this.expectable.rebuild(expectation));
   }
 
   /** Fuse this shape with the others; `{ blend: r }` rounds where they meet. */
