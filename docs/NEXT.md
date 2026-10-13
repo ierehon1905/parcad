@@ -266,7 +266,19 @@ the bullets below and in the next two sections.
 | 11 | `wait_s` on one script tool only | ★ | S |
 
 Do 1 and 2 first: both are small, and they are the only two ways a model went
-wrong *with* ParCAD in 288 trials.
+wrong *with* ParCAD in 288 trials. Where they live:
+
+- **1:** the fillet arm of `build_node` in `crates/parcad-occt/src/backend.rs`
+  pushes only `(id, count)` into `features.resolved`, though each selected edge
+  already carries its `dihedral` (`SelectableEdge::classify`). Carry the
+  convex/concave split through `protocol::TreatmentEdges` to
+  `parcad_evaluation::treatments`, and say so in the treatment entry when both
+  are non-zero. Chamfer has the same push.
+- **2:** `Shape.fillet` / `Shape.chamfer` in `app/src/dsl.ts` build the node
+  with `expect: expectation`; a `Shape.expect` that rebuilds the treatment it
+  sits on with the expectation (and refuses, naming
+  `.edges(sel).expect({ count }).fillet(r)`, on any other shape) is the whole
+  change. A method, not an export, so no saved part can break on it.
 
 - **The reported volume is the mesh's.** The beads brief reported 2148.23 mm³.
   Its STEP measures 2152.326 mm³ with stock `BRepGProp`, which is the analytic
