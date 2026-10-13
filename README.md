@@ -37,6 +37,13 @@ OpenCASCADE: real faces and edges, STEP export, and a refusal rather than an
 approximation when it cannot do something faithfully. The graph is what keeps
 today's script working after tomorrow's kernel swap.
 
+Every kernel returns valid-looking wrong answers somewhere, OpenCASCADE and
+NVIDIA's newly open SMLIB included. ParCAD carries five patches to OpenCASCADE
+8.0.1 for the cases its parts ran into, and checks each build itself after the
+kernel reports success.
+
+![Three cases on stock OpenCASCADE 8.0.1, NVIDIA SMLIB 1.0 and ParCAD: sixteen beads fused on a sphere, a union with its mirror, and a round where a disc meets a plate as wide as itself](docs/images/kernels.png)
+
 ![The same manifold block cut open on a plane, cut faces in orange](docs/images/manifold-section.jpg)
 
 Parts get measured, not assumed — volume, wall thickness, whether two bores
