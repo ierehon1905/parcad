@@ -1,9 +1,9 @@
 ---
 tool: evaluate_part
 reach: evaluate_part
-verdict: CLOSED\s*[=:]\s*NO\b[\s\S]*OPEN\s*[=:]\s*75\.(39\d*|40*)\s*mm[\s\S]*AREA\s*[=:]\s*3\s?467\.6\d*\s*mm
+verdict: CLOSED\s*[=:]\s*NO\b[\s\S]*OPEN\s*[=:]\s*75\.(39\d*|40*)\s*mm[\s\S]*AREA\s*[=:]\s*3\s?468\.3\d*\s*mm
 trap: CLOSED\s*[=:]\s*YES\b|VOLUME\s*[=:]
-quote: \b3\s?467\.66\d*\b
+quote: \b3\s?468\.32\d*\b
 why: |
   A surface part, and the question a surface report exists to answer: does it
   close into something a printer can fill, and if not where is it open. The
@@ -13,10 +13,12 @@ why: |
   circumference, and no volume at all. The first trap is reading "stitched"
   as closed. The second is a volume: the reply has none, and a model that
   reports one computed it — pi 144 40 from the script — or took it from
-  somewhere that is not a measurement. The area is the quote: 3467.66 is the
-  mesh's, which no arithmetic on the script reproduces (the closed form is
-  3468.32). The script is inline because the subject is the report itself,
-  not a part in the folder.
+  somewhere that is not a measurement. The area is the quote, 3468.32. Since
+  2026-10-13 it is the B-rep's and equals the closed form, π 24 40 + π 144,
+  so arithmetic on the script now reproduces it too and `quote` no longer
+  separates a measurement from a sum: the mesh's 3467.66 used to. Read `src?`
+  and the transcript. The script is inline because the subject is the report
+  itself, not a part in the folder.
 ---
 Use the parcad MCP tools.
 

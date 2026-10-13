@@ -39,7 +39,7 @@ pub use host::{
     Kernel, OcctError, Options,
 };
 pub use protocol::{
-    BodyFit, BodyKind, BodySpan, SurfaceMeasure, CurveProbe, EdgeCurve, FaceProbe, FitReport, Perceive, Perceived,
+    BodyFit, BodyKind, BodySpan, SurfaceMeasure, CurveProbe, EdgeCurve, ExactMass, FaceProbe, FitReport, Perceive, Perceived,
     PointResult, RayHitResult, RayLine, RayResult, SolidProbe, StepProbe, Success, SurfaceProbe,
     TagBounds, TargetPreview, TargetVertex, ThicknessResult, ThicknessSample, ThicknessSpec, ThinKind,
     Timings, Topology, WireProbe,

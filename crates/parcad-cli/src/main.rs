@@ -439,7 +439,8 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
     let stats = tess.stats();
     let bounds = parcad_core::measure::Aabb::from_points(&tess.vertices)
         .context("the kernel returned a mesh with no vertices")?;
-    let mass = parcad_core::measure::mass_properties(&tess.vertices, &tess.triangles);
+    let (mass, mass_from_mesh) =
+        parcad_occt::protocol::mass_or(s.mass.as_ref(), parcad_core::measure::mass_properties(&tess.vertices, &tess.triangles));
 
     // The STL is these triangles, welded and binary — the same file the app
     // exports — rather than OCCT's own ASCII writer's view of the shape.
@@ -561,8 +562,10 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         );
     }
     println!(
-        "volume   {:.2} mm³   area {:.2} mm²",
-        mass.volume_mm3, mass.area_mm2
+        "volume   {:.2} mm³   area {:.2} mm²{}",
+        mass.volume_mm3,
+        mass.area_mm2,
+        if mass_from_mesh { "   (the mesh's: the B-rep's integrals misread this part's derived surfaces)" } else { "" }
     );
     println!(
         "topology {} faces, {} edges ({} unique curves)",

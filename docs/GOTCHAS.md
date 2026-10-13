@@ -770,11 +770,12 @@ the planar face a lamp section's fitted curve bounds (131 poles) it read
 on it refused a good inset for "growing". Faces from arcs, planes and smooth
 fits of few poles integrate to the last digit, which is why the corpus never
 saw it; the backstop's refusal on such a part is a false alarm that reads as
-a missing surface, and its message now says so. Not fixed at the integral:
-the mesh is what every reported number is read from already, so the volume
-defect reaches only that guard, extrusions no longer make the surface it
-misreads, and the inset guard measures both its areas by Green's theorem over
-dense samples of the wires instead. A sweep along a straight path still can. Fit the curve at
+a missing surface, and its message now says so. That was the fixed-order
+rule: the adaptive one a reply's area has been read from since 2026-10-13
+reads a 331-pole fitted cap to a millionth of Green's theorem over its
+samples. Extrusions no longer make the surface it misreads, and the inset
+guard measures both its areas by Green's theorem over dense samples of the
+wires instead. A sweep along a straight path still can. Fit the curve at
 a looser tolerance, or smooth the points, and the integral settles. `eps`
 stays 1e-7.
 
@@ -1011,10 +1012,42 @@ area must equal the area the face's own mesh boundary — the polygon every
 edge was discretised into — encloses, to rounding (`Shape::uncovered_faces`);
 a mesh of part of a face falls short. The nodes of a triangulation lie on
 their surface, so a mesh that covers every face bounds the solid to within
-its chord, and the part's reported volume is always the mesh's, never the
-integral's. Only when some face fails does the old verdict stand. Anything
+its chord, and on these walls the part's reported volume is the mesh's,
+never the integral's (see "A part's volume is the B-rep's, except on derived
+surfaces" below). Only when some face fails does the old verdict stand. Anything
 else that needs a B-spline solid's volume integrates span by span
 (`Shape::volume_by_spans`); `stitchSurfaces` does.
+
+### A part's volume is the B-rep's, except on derived surfaces
+
+A reply reported the mesh's volume, area and centroid, which sit a chord's sag
+inside every curved face: sixteen beads read 2148.23 mm³ against an exact
+2152.326, 0.19 % short, and a 1 mm tube 0.53 %. They are now `BRepGProp`'s,
+integrated adaptively over the exact surfaces (`Shape::volume_properties`, to
+1e-7; `Shape::surface_properties`, to 1e-5), on every body whose faces all lie
+on a plane, cylinder, cone, sphere, torus or B-spline surface, and whose
+integral agrees with its mesh to the backstop's allowance.
+
+The line was drawn by measuring, not assumed (`examples/volume_survey.rs`,
+169 corpus and seed parts that build). On the 162 parts with no other kind of
+face the integral and the mesh differ by a median 0.009 % and at most 0.54 %,
+always in the direction a chord errs, and every case with a closed form now
+records that closed form to its printed digits — the torus, the cone, the
+parabola's 400.000, the 848.230016 of a spline pipe. The seven parts with a
+face on an offset, an extrusion or revolution of a curve, or a Bezier patch
+(`Shape::has_derived_surfaces`) are where the integral fails: the thickened
+pleat 72 % low, the pleated shade 18.7 % high, a pleated cut 4.6 % low, while
+four others agree. Those keep the mesh's figures, and the reply says so in
+`volume_note`. Area follows the same line: the face listing's areas use the
+fixed-order rule and read a spline hook's wall 5.8 % off, so the part's area is
+the adaptive integral's, which read 1194.3795 mm² for a helix whose tube
+formula gives 1194.380.
+
+What it costs: the volume integral was already paid by the mesh backstop. The
+area integral adds 4–100 ms to the mesh phase of an ordinary part, and 0.76 s
+to `fitted-ring`, whose 187-pole inset wall the volume integral already takes
+0.78 s over; below 1e-3 the bound changes nothing in that time, and at 1e-3
+OCCT appears to fall back to the fixed-order rule.
 
 ### A skinned surface in whole bands meshes in minutes and unifies in seconds per face
 

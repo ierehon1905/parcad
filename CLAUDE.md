@@ -321,6 +321,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | whether a sweep's path comes back near itself | `crates/parcad-core/src/spine_contact.rs` — a filter; the kernel's self-intersection check decides |
 | what every check says about a graph, and what each costs | `crates/parcad-occt/examples/validity_audit.rs` |
 | how far a mesh strays from its surface, when a triangle count moves | `crates/parcad-occt/examples/mesh_deviation.rs` |
+| which parts the B-rep's own volume and area can be trusted on | `crates/parcad-occt/examples/volume_survey.rs`; the rule is `Shape::has_derived_surfaces` in `serve::measure` |
 | what "SOUND" is still allowed to mean | `field/fixtures/expected.toml`, gated by `field/selftest.py` |
 
 A new op touches `graph.rs` (variant + `children_of`), `measure.rs` (its

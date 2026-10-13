@@ -88,7 +88,9 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
             message: "the kernel returned a mesh with no vertices".into(),
         };
     };
-    let mass = parcad_core::measure::mass_properties(&tess.vertices, &tess.triangles);
+    // The figures the reply reports: the B-rep's, or the mesh's where it says so.
+    let (mass, _) =
+        parcad_occt::protocol::mass_or(s.mass.as_ref(), parcad_core::measure::mass_properties(&tess.vertices, &tess.triangles));
     let size = bounds.size();
     let (tags, unlocated_tags) = locate_tags(&s);
     let checks = match judge_checks(doc, &s, timeout) {

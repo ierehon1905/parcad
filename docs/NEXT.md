@@ -255,25 +255,31 @@ the bullets below and in the next two sections.
 |---|---|---|---|
 | 1 | the tag that makes the saucer crawl | ★★★ | L |
 | 2 | `check_motion` | ★★★ | L |
-| 3 | the reported volume is the mesh's | ★★ | M |
-| 4 | a DSL name as a local is a parse error | ★★ | S |
-| 5 | `edit_part`'s exact-text `old` misses | ★★ | M |
-| 6 | the same signatures fetched every trial | ★★ | S |
-| 7 | the G2 blend behind `.smooth()` | ★★ | L |
+| 3 | a DSL name as a local is a parse error | ★★ | S |
+| 4 | `edit_part`'s exact-text `old` misses | ★★ | M |
+| 5 | the same signatures fetched every trial | ★★ | S |
+| 6 | the G2 blend behind `.smooth()` | ★★ | L |
+| 7 | a face's listed area misreads spline faces | ★★ | S |
 | 8 | `fillet(selector, radius)` order | ★ | S |
 | 9 | `wait_s` on one script tool only | ★ | S |
 | 10 | a vertex treatment's `edges` is not what its `.expect` counts | ★ | S |
 | 11 | the editor never shows `mixed_corners` | ★ | S |
+| 12 | the area integral costs a fitted ring 0.76 s | ★ | M |
 
-- **The reported volume is the mesh's.** The beads brief reported 2148.23 mm³.
-  Its STEP measures 2152.326 mm³ with stock `BRepGProp`, which is the analytic
-  value, so the geometry is right and the number is 0.19 % low.
-  `eval/cases/beads-on-a-sphere.json` records the mesh figure too. An agent
-  comparing with a hand calculation, or with another tool's exact number, sees
-  a gap it cannot explain. Fix: report the B-rep's own volume and area, keep
-  mesh figures only where a mesh is what is measured, and re-record the corpus
-  with `--update`. `eval/field/round-only-the-seam.md` pins the reply's mesh
-  volumes (177,226 right, 177,067 wrong) in its verdict and trap; re-pin them.
+- **A face's listed area misreads spline faces.** Found while making the
+  part's volume and area the B-rep's (2026-10-13): `Shape_faces_json` in the
+  vendored wrapper reads each face with `BRepGProp`'s fixed-order rule, which
+  put a spline hook's wall 5.8 % and a six-lobe fit's 0.6 % off the adaptive
+  integral. `list_entities` and the viewport's face listing quote those
+  areas. Integrate each B-spline face adaptively there too, as the part's
+  area now is (docs/GOTCHAS.md, "A part's volume is the B-rep's, except on
+  derived surfaces"), and time it on `fitted-ring`.
+- **The area integral costs a fitted ring 0.76 s.** The part's area is
+  `BRepGProp`'s adaptive integral now, 4–100 ms on an ordinary part and 0.76 s
+  on `fitted-ring`, whose 187-pole inset wall the volume integral already
+  takes 0.78 s over (both in the mesh phase, `serve::measure`). Find where the
+  time goes — the planar caps' many-pole boundaries or the walls — and whether
+  the two integrals can share it.
 - **A vertex treatment's `edges` is not what its `.expect` counts.** Found
   while making the edge count agree (2026-10-13):
   `box(20, 20, 20).vertices(">X and >Y and >Z").fillet(2)` reports `edges: 3`,

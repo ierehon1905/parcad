@@ -2,9 +2,9 @@
 tool:    evaluate_part.treatments
 reach:   evaluate_part
 input:   \{\s*curve:\s*\\"circle\\",\s*adjacentTo:\s*\{\s*faceNormal:\s*\\"\+z\\"\s*\}\s*\}\s*\)
-verdict: VOLUME\s*[=:]\s*\**\s*(?:~|≈)?\s*177[,\s]?22\d
-trap:    VOLUME\s*[=:]\s*\**\s*(?:~|≈)?\s*(?:177[,\s]?(?:0[67]\d|15\d)|176[,\s]?99\d)
-quote:   \b177[,\s]?22\d
+verdict: VOLUME\s*[=:]\s*\**\s*(?:~|≈)?\s*177[,\s]?24[34]
+trap:    VOLUME\s*[=:]\s*\**\s*(?:~|≈)?\s*177[,\s]?(?:0[18]\d|17\d)
+quote:   \b177[,\s]?24[34]
 why:     |
   The one wrong part ParCAD let a model ship in 288 head-to-head trials
   (research_notes/hands-on/h2h, retainer-P-haiku-2). The query is the one
@@ -13,9 +13,11 @@ why:     |
   only `edges: 2`. Since the fix the treatment carries `mixed_corners`,
   naming `dihedral: "concave"`. `input` is the query as written, so a trial
   that rewrote it before sending grades LUCKY: it never met the reply this
-  case is about. Right is 177,226 mm³ (the seam alone); 177,067 is the seam
-  and the rim, the trial's part; 177,152 nothing rounded; 176,992 the rim
-  alone. Volumes are the reply's mesh figures.
+  case is about. Right is 177,243.59 mm³ (the seam alone); 177,085.57 is the
+  seam and the rim, the trial's part, 158.02 short; 177,170.25 nothing
+  rounded; 177,012.23 the rim alone. Before 2026-10-13 the reply reported
+  the mesh's, 177,226 and 177,067; the round of that date was graded on
+  those.
 ---
 Use the parcad MCP tools.
 

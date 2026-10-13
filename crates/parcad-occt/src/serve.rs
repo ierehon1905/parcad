@@ -9,7 +9,7 @@ use crate::backend::{self, BuildCache};
 use crate::overhang;
 use crate::perceive;
 use crate::protocol::{
-    breadcrumb, edge_curve, BodyFit, BodyKind, BodySpan, EdgeCurve, FaceRun, FaceSummary, Request,
+    breadcrumb, edge_curve, BodyFit, BodyKind, BodySpan, EdgeCurve, ExactMass, FaceRun, FaceSummary, Request,
     Response, Success, SurfaceMeasure, TargetPreview, Timings, Topology, WallRange,
 };
 use std::collections::BTreeMap;
@@ -421,6 +421,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         bodies,
         kinds,
         surfaces,
+        masses,
     } = whole;
     // One numbering across every body, in the same key order a one-solid
     // part's edges have always had.
@@ -452,6 +453,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         tag_extents,
         unlocated_tags,
         treatment_edges: part.treatment_edges.values().cloned().collect(),
+        mass: masses.into_iter().collect::<Option<Vec<_>>>().and_then(|all| ExactMass::combined(&all)),
         timings: Timings {
             build_ms,
             mesh_ms,
@@ -471,6 +473,7 @@ struct Measured {
     topology: Topology,
     kind: BodyKind,
     surface: Option<SurfaceMeasure>,
+    mass: Option<ExactMass>,
 }
 
 /// The total length of the mesh's own open edges — those one triangle
@@ -657,14 +660,15 @@ fn measure(
     // "A correct solid can mesh as a closed fragment of itself".
     breadcrumb("comparing the mesh's volume with the solid's");
     let (mesh_volume, mesh_area) = volume_and_area(&mesh);
-    let solid_volume = if kind == BodyKind::Solid { shape.signed_volume() } else { mesh_volume };
+    let (solid_volume, solid_centre) =
+        if kind == BodyKind::Solid { shape.volume_properties() } else { (mesh_volume, glam::DVec3::ZERO) };
     let allowed = 2.0 * mesh_area * BINDING_DEFLECTION_MM + 1e-6 * solid_volume.abs();
     // The integral misreads B-spline walls, by +257 % on a closed form
     // (docs/GOTCHAS.md, "The volume integral misreads a thickened pleat"), so
-    // before refusing, ask whether every face's mesh covers the face; the
-    // reported volume is the mesh's either way.
-    let disagrees = kind == BodyKind::Solid && (mesh_volume - solid_volume).abs() > allowed;
-    let disagrees = disagrees
+    // before refusing, ask whether every face's mesh covers the face; if it
+    // does, the mesh's volume is the one reported.
+    let integral_off = kind == BodyKind::Solid && (mesh_volume - solid_volume).abs() > allowed;
+    let disagrees = integral_off
         && match shape.uncovered_faces(UV_COVER_TOLERANCE) {
             Ok(uncovered) if uncovered.is_empty() => {
                 breadcrumb(&format!(
@@ -700,6 +704,19 @@ fn measure(
 
     breadcrumb("describing the faces");
     let faces = describe_faces(body);
+    // The B-rep's own figures wherever its integrals hold, and nothing — so the
+    // host reports the mesh's and says so — on a face they have misread. See
+    // docs/GOTCHAS.md, "A part's volume is the B-rep's, except on derived surfaces".
+    breadcrumb("integrating the area");
+    let mass = (!integral_off && !shape.has_derived_surfaces()).then(|| {
+        let (area, area_centre) = shape.surface_properties();
+        let solid = kind == BodyKind::Solid;
+        ExactMass {
+            volume_mm3: solid.then_some(solid_volume),
+            area_mm2: area,
+            centroid: if solid { solid_centre } else { area_centre }.to_array(),
+        }
+    });
     Ok(Measured {
         mesh,
         faces,
@@ -707,6 +724,7 @@ fn measure(
         topology,
         kind,
         surface,
+        mass,
     })
 }
 
@@ -729,6 +747,8 @@ struct Assembled {
     bodies: Vec<BodySpan>,
     /// The part's own bodies' kinds, which decide the part's.
     kinds: Vec<BodyKind>,
+    /// The part's own bodies' exact figures, `None` where the mesh's stand in.
+    masses: Vec<Option<ExactMass>>,
     surfaces: Vec<SurfaceMeasure>,
 }
 
@@ -741,9 +761,11 @@ impl Assembled {
             topology,
             kind,
             surface,
+            mass,
         } = measured;
         if !reference {
             self.kinds.push(kind);
+            self.masses.push(mass);
         }
         self.surfaces.extend(surface);
         let vertex_offset = (self.positions.len() / 3) as u32;
@@ -787,6 +809,7 @@ impl Assembled {
                 edges: topology.edges,
                 triangle_start: triangle_offset as usize,
                 triangle_count: mesh.indices.len() / 3,
+                mass,
             });
         }
         if !reference {
@@ -800,6 +823,37 @@ impl Assembled {
 mod tests {
     use super::*;
     use parcad_core::graph::Doc;
+
+    fn served(doc: serde_json::Value) -> Success {
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "doc": doc, "deflection": 0.01, "step_path": null, "stl_path": null,
+        }))
+        .unwrap();
+        match run(request, &mut backend::BuildCache::default()) {
+            Response::Ok(success) => *success,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// The figures a reply reports are the B-rep's wherever its integrals
+    /// hold — a sphere's to its closed form, where the mesh reads a chord
+    /// short — and the mesh's on an offset face, where they have read a
+    /// thickened pleat 257 % wrong (docs/GOTCHAS.md).
+    #[test]
+    fn a_reply_reports_the_b_rep_s_volume_except_on_a_derived_surface() {
+        let sphere = served(serde_json::json!({"units":"mm","root":0,"nodes":[{"op":"sphere","r":10}]}));
+        let mass = sphere.mass.expect("a sphere's faces are all elementary");
+        let (volume, area) = (4.0 / 3.0 * std::f64::consts::PI * 1000.0, 4.0 * std::f64::consts::PI * 100.0);
+        assert!((mass.volume_mm3.unwrap() - volume).abs() < 1e-6 * volume, "{mass:?}");
+        assert!((mass.area_mm2 - area).abs() < 1e-6 * area, "{mass:?}");
+        assert!(mass.centroid.iter().all(|c| c.abs() < 1e-9), "{mass:?}");
+
+        let sheet = served(serde_json::json!({"units":"mm","root":1,"nodes":[
+            {"op":"surface_extrude","curve":[[0,0],{"spline":[[10,4],[20,-3],[30,2]]},[40,0]],"height":20},
+            {"op":"thicken","child":0,"thickness":1}
+        ]}));
+        assert_eq!(sheet.mass, None, "a thickened spline sheet lies on offset surfaces");
+    }
 
     fn treatment_edge_count(doc: &Doc, node: usize) -> usize {
         let (shape, owners) = backend::build_with_treatment_edges(doc).unwrap();

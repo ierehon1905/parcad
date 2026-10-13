@@ -3,9 +3,9 @@ tool:    evaluate_part
 also:    read_project, list_snapshots
 reach:   evaluate_part, list_snapshots
 input:   ^(?!.*"script": "(?:[^"\\]|\\.){2048,}")(?=.*"project": "slot-retainer")(?=.*"edits").*
-verdict: VOLUME\s*[=:]\s*137,?32[3-5](?:\.\d+)?.*SNAPSHOTS\s*[=:]\s*0\b
+verdict: VOLUME\s*[=:]\s*137,?321(?:\.\d+)?.*SNAPSHOTS\s*[=:]\s*0\b
 trap:    VOLUME\s*[=:]\s*143,?8[23]\d(?:\.\d+)?
-quote:   137,?32[3-5]
+quote:   137,?321
 why:     |
   The what-if: "what would the volume be at 12 mm" is one evaluate_part call
   with `project` and `edits`, and nothing is written (docs/COIN_HOLDER_REVIEW.md,

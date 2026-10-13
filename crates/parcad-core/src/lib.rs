@@ -52,7 +52,14 @@ pub struct PartReport {
     /// only ever too big — a blend radius inflates it even when the blend is
     /// buried in the middle of the part. Never report this as a dimension.
     pub framing_bounds: measure::Aabb,
+    /// Volume, area and centroid: the B-rep's own, or the mesh's where
+    /// `mass_from_mesh` says so.
     pub mass: measure::MassProperties,
+    /// True when `mass` is the mesh's: the B-rep's integrals misread a face
+    /// this part has (docs/GOTCHAS.md, "A part's volume is the B-rep's, except
+    /// on derived surfaces").
+    #[serde(default)]
+    pub mass_from_mesh: bool,
     pub mesh: mesh::MeshStats,
     /// The surface in the part's lowest plane, and how many patches it is in.
     /// See [`mesh::BedContact`]: the number that catches an underside nothing

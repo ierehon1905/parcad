@@ -3,9 +3,9 @@ tool:    edit_part
 also:    read_project, evaluate_part, list_projects
 reach:   edit_part
 input:   ^(?!.*"script": "(?:[^"\\]|\\.){2048,}").*"edits"
-verdict: VOLUME\s*[=:]\s*152,?17[5-8](?:\.\d+)?
+verdict: VOLUME\s*[=:]\s*152,?172(?:\.\d+)?
 trap:    VOLUME\s*[=:]\s*143,?8[23]\d(?:\.\d+)?
-quote:   152,?17[5-8]
+quote:   152,?172
 writes:  disc-retainer, in place — reset it between trials
 why:     |
   The outcome test for editing in place. The coin-holder session sent 241 KB

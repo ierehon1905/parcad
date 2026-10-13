@@ -1,15 +1,15 @@
 {
   "name": "ellipsoid",
   "script": "eval/scripts/ellipsoid.js",
-  "why": "Non-uniform scale in the exact kernel, against a closed form: the ellipsoid of semi-axes 20, 10, 5 is 4188.790 mm3. The kernel refuses unless the B-rep volume equals the child's times the determinant, which is also what caught BRepGProp's fixed-order integration misreading B-spline faces (an elliptic cylinder by 0.86%); Shape::signed_volume integrates adaptively since. The mesh volume recorded here sits a tessellation under the closed form, as the plain sphere's does. It touches the bed at one point, so what it stands on is whichever triangles the mesher laid there (0.321 mm² natively, 0.284 under WebAssembly), and the case holds what is true of any mesh: one patch, inside the surface within the mesh's 0.01 mm resolution of the pole. With radii of curvature 20²/5 = 80 and 10²/5 = 20 there, that is an ellipse of 2π·√(80·20)·0.01 = 2.513 mm².",
+  "why": "Non-uniform scale in the exact kernel, against a closed form: the ellipsoid of semi-axes 20, 10, 5 is 4188.790 mm3. The kernel refuses unless the B-rep volume equals the child's times the determinant, which is also what caught BRepGProp's fixed-order integration misreading B-spline faces (an elliptic cylinder by 0.86%); Shape::signed_volume integrates adaptively since. The volume recorded here is the B-rep's, 4188.803, 3 ppm from the closed form; the mesh read 4183.995 until 2026-10-13. It touches the bed at one point, so what it stands on is whichever triangles the mesher laid there (0.321 mm² natively, 0.284 under WebAssembly), and the case holds what is true of any mesh: one patch, inside the surface within the mesh's 0.01 mm resolution of the pole. With radii of curvature 20²/5 = 80 and 10²/5 = 20 there, that is an ellipse of 2π·√(80·20)·0.01 = 2.513 mm².",
   "brep": {
     "size": [
       40.0,
       19.993,
       10.0
     ],
-    "volume_mm3": 4183.995,
-    "area_mm2": 1586.543,
+    "volume_mm3": 4188.803,
+    "area_mm2": 1586.854,
     "triangles": 24360,
     "bodies": 1,
     "voids": 0,

@@ -25,7 +25,9 @@ pub struct MeasuredBody {
     pub edges: usize,
     /// Tight bounds from the body's vertices.
     pub bounds: Aabb,
+    /// The B-rep's own figures, or the mesh's where `mass_from_mesh` says so.
     pub mass: MassProperties,
+    pub mass_from_mesh: bool,
     /// The centre of the body's area: where a surface, which encloses
     /// nothing, is.
     pub area_centroid: parcad_core::graph::V3,
@@ -72,6 +74,8 @@ fn body_mesh(whole: &Tessellation, span: &BodySpan) -> Tessellation {
 fn measure_body(whole: &Tessellation, span: &BodySpan) -> Option<MeasuredBody> {
     let tess = body_mesh(whole, span);
     let bounds = Aabb::from_points(&tess.vertices)?;
+    let (mass, mass_from_mesh) =
+        crate::protocol::mass_or(span.mass.as_ref(), measure::mass_properties(&tess.vertices, &tess.triangles));
     Some(MeasuredBody {
         name: span.name.clone(),
         kind: span.kind,
@@ -79,8 +83,12 @@ fn measure_body(whole: &Tessellation, span: &BodySpan) -> Option<MeasuredBody> {
         faces: span.faces,
         edges: span.edges,
         bounds,
-        mass: measure::mass_properties(&tess.vertices, &tess.triangles),
-        area_centroid: measure::area_centroid(&tess.vertices, &tess.triangles),
+        area_centroid: match &span.mass {
+            Some(_) if !span.kind.is_solid() => mass.centroid,
+            _ => measure::area_centroid(&tess.vertices, &tess.triangles),
+        },
+        mass,
+        mass_from_mesh,
         stats: tess.stats(),
         stands_on: tess.bed_contact(),
     })
@@ -156,8 +164,8 @@ mod tests {
             edges: Vec::new(),
             topology: Topology { faces: 12, edges: 24 },
             bodies: vec![
-                BodySpan { name: "near".into(), kind: Default::default(), reference: false, faces: 6, edges: 12, triangle_start: 0, triangle_count: 12 },
-                BodySpan { name: "far".into(), kind: Default::default(), reference: true, faces: 6, edges: 12, triangle_start: 12, triangle_count: 12 },
+                BodySpan { name: "near".into(), kind: Default::default(), reference: false, faces: 6, edges: 12, triangle_start: 0, triangle_count: 12, mass: None },
+                BodySpan { name: "far".into(), kind: Default::default(), reference: true, faces: 6, edges: 12, triangle_start: 12, triangle_count: 12, mass: None },
             ],
             between: Vec::new(),
             tag_extents: Vec::new(),
@@ -165,6 +173,7 @@ mod tests {
             collisions: Vec::new(),
             overhang: Vec::new(),
             treatment_edges: Vec::new(),
+            mass: None,
             timings: Timings::default(),
             step_path: None,
             stl_path: None,

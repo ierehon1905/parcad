@@ -5,6 +5,7 @@
 //! the protocol has to survive the connection simply stopping mid-sentence.
 
 use parcad_core::graph::Doc;
+use parcad_core::measure::MassProperties;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -675,6 +676,11 @@ pub struct Success {
     /// ran against, by node — measured, not the `.expect()` the script wrote.
     #[serde(default)]
     pub treatment_edges: Vec<TreatmentEdges>,
+    /// The part's volume, area and centre, integrated over the exact
+    /// surfaces; reference bodies left out. Absent from a worker older than
+    /// the field, whose host then falls back to the mesh.
+    #[serde(default)]
+    pub mass: Option<ExactMass>,
     pub timings: Timings,
     pub step_path: Option<PathBuf>,
     pub stl_path: Option<PathBuf>,
@@ -698,6 +704,65 @@ pub struct BodySpan {
     /// First triangle of this body in `indices`, counted in triangles.
     pub triangle_start: usize,
     pub triangle_count: usize,
+    /// This body's volume, area and centre on the exact surfaces.
+    #[serde(default)]
+    pub mass: Option<ExactMass>,
+}
+
+/// Volume, area and centre from `BRepGProp` on the B-rep, never a mesh: a
+/// tessellation sits a chord's sag inside every curved face and reads a
+/// sphere 0.2 % small.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ExactMass {
+    /// Absent for a surface, which encloses nothing.
+    pub volume_mm3: Option<f64>,
+    pub area_mm2: f64,
+    /// The centre of the volume, or of a surface's area.
+    pub centroid: [f64; 3],
+}
+
+impl ExactMass {
+    /// Several bodies as one: volumes and areas add, and the centre is the
+    /// volume-weighted one where there is volume, else the area-weighted one.
+    pub fn combined(parts: &[ExactMass]) -> Option<ExactMass> {
+        if parts.is_empty() {
+            return None;
+        }
+        let volume: f64 = parts.iter().filter_map(|p| p.volume_mm3).sum();
+        let area: f64 = parts.iter().map(|p| p.area_mm2).sum();
+        let solid = parts.iter().any(|p| p.volume_mm3.is_some());
+        let weight = |p: &ExactMass| if solid { p.volume_mm3.unwrap_or(0.0) } else { p.area_mm2 };
+        let total: f64 = parts.iter().map(weight).sum();
+        let mut centroid = [0.0; 3];
+        if total > 0.0 {
+            for p in parts {
+                for (c, pc) in centroid.iter_mut().zip(p.centroid) {
+                    *c += pc * weight(p) / total;
+                }
+            }
+        }
+        Some(ExactMass { volume_mm3: solid.then_some(volume), area_mm2: area, centroid })
+    }
+
+    /// These figures where there are any, `mesh`'s where there are not: a
+    /// surface's volume, which the B-rep leaves out.
+    pub fn over(&self, mesh: MassProperties) -> MassProperties {
+        let [x, y, z] = self.centroid;
+        MassProperties {
+            volume_mm3: self.volume_mm3.unwrap_or(mesh.volume_mm3),
+            area_mm2: self.area_mm2,
+            centroid: parcad_core::graph::V3::new(x, y, z),
+        }
+    }
+}
+
+/// The figures a reply reports for a part or a body: the B-rep's own where the
+/// worker could trust its integrals, otherwise `mesh`'s, and `true` then.
+pub fn mass_or(exact: Option<&ExactMass>, mesh: MassProperties) -> (MassProperties, bool) {
+    match exact {
+        Some(exact) => (exact.over(mesh), false),
+        None => (mesh, true),
+    }
 }
 
 impl Success {
@@ -1203,6 +1268,19 @@ mod tests {
         // single direction and no radius, so inventing one would be a lie.
         assert_eq!(faces[2].surface.direction, None);
         assert_eq!(faces[2].surface.radius, None);
+    }
+
+    /// Two bodies are one part: volumes and areas add, and the centre is
+    /// the volume-weighted one; a surface beside a solid weighs nothing.
+    #[test]
+    fn bodies_combine_into_the_part_s_figures() {
+        let solid = |v: f64, x: f64| ExactMass { volume_mm3: Some(v), area_mm2: 10.0, centroid: [x, 0.0, 0.0] };
+        let sheet = ExactMass { volume_mm3: None, area_mm2: 5.0, centroid: [100.0, 0.0, 0.0] };
+        let part = ExactMass::combined(&[solid(1.0, 0.0), solid(3.0, 4.0), sheet]).unwrap();
+        assert_eq!(part, ExactMass { volume_mm3: Some(4.0), area_mm2: 25.0, centroid: [3.0, 0.0, 0.0] });
+        let sheets = ExactMass::combined(&[sheet, ExactMass { centroid: [0.0; 3], ..sheet }]).unwrap();
+        assert_eq!(sheets, ExactMass { volume_mm3: None, area_mm2: 10.0, centroid: [50.0, 0.0, 0.0] });
+        assert_eq!(ExactMass::combined(&[]), None);
     }
 
     #[test]

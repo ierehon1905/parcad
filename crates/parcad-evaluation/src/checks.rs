@@ -277,6 +277,7 @@ pub(crate) mod tests {
             volume_mm3: Some(1000.0),
             area_mm2: 600.0,
             centroid: [0.0; 3],
+            volume_note: None,
             surface: None,
             faces: Some(12),
             topological_edges: Some(24),

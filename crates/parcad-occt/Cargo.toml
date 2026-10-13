@@ -33,6 +33,10 @@ required-features = ["kernel"]
 name = "mesh_deviation"
 required-features = ["kernel"]
 
+[[example]]
+name = "volume_survey"
+required-features = ["kernel"]
+
 [dependencies]
 parcad-core = { path = "../parcad-core" }
 anyhow.workspace = true

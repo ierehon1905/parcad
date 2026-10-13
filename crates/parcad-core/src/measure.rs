@@ -509,10 +509,10 @@ fn ordered(a: f64, b: f64) -> (f64, f64) {
     }
 }
 
-/// Mass properties, computed exactly for the triangle mesh that was produced.
-///
-/// These are properties of the *mesh*, so they carry the mesher's resolution
-/// error. [`crate::mesh::Tessellation::resolution_mm`] says how much that is.
+/// Volume, area and centre. [`mass_properties`] computes them exactly for a
+/// triangle mesh, which carries the mesher's resolution error
+/// ([`crate::mesh::Tessellation::resolution_mm`]); a reply reports the B-rep's
+/// own wherever the kernel can integrate them.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MassProperties {
     /// Enclosed volume in mm³.

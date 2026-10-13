@@ -8,8 +8,8 @@
       23.99,
       30.0
     ],
-    "volume_mm3": 11306.025,
-    "area_mm2": 12061.629,
+    "volume_mm3": 11309.734,
+    "area_mm2": 12063.716,
     "triangles": 2408,
     "bodies": 3,
     "voids": 0,
@@ -34,7 +34,7 @@
           21.99,
           30.0
         ],
-        "volume_mm3": 3768.683,
+        "volume_mm3": 3769.911,
         "faces": 8,
         "edges": 32,
         "watertight": true,
@@ -47,7 +47,7 @@
           20.0,
           30.0
         ],
-        "volume_mm3": 3391.619,
+        "volume_mm3": 3392.92,
         "faces": 8,
         "edges": 32,
         "watertight": true,
@@ -60,7 +60,7 @@
           23.99,
           30.0
         ],
-        "volume_mm3": 4145.723,
+        "volume_mm3": 4146.902,
         "faces": 8,
         "edges": 32,
         "watertight": true,

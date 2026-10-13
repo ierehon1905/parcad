@@ -66,8 +66,14 @@ pub fn evaluated(
     let (report, tess) = measure_brep(doc, s)?;
     let mut snapshot = describe(doc, &report, s, body_reports(s), tag_extents(doc, s), wall_ms);
     if snapshot.kind != "solid" && s.bodies.is_empty() {
-        let c = parcad_core::measure::area_centroid(&tess.vertices, &tess.triangles);
-        snapshot.centroid = round_point([c.x, c.y, c.z]);
+        let c = match &s.mass {
+            Some(exact) => exact.centroid,
+            None => {
+                let c = parcad_core::measure::area_centroid(&tess.vertices, &tess.triangles);
+                [c.x, c.y, c.z]
+            }
+        };
+        snapshot.centroid = round_point(c);
     }
     // Framed on everything drawn, reference bodies included; the snapshot's
     // bounds are the part's alone.
@@ -285,6 +291,11 @@ impl SurfaceSummary {
     }
 }
 
+/// Why a reply's volume, area and centroid are the mesh's, when they are.
+const MESH_MASS_NOTE: &str = "volume, area and centroid are the mesh's, within resolution_mm of the surface: \
+    the part has an offset or extruded-curve face, where OpenCASCADE's integrals have read volumes \
+    up to 72 % wrong";
+
 /// Whether a reply's part is solid, surface or mixed.
 fn part_kind(s: &parcad_occt::Success) -> &'static str {
     if s.bodies.is_empty() {
@@ -379,12 +390,18 @@ pub struct EvaluationSnapshot {
     pub bounds_min: [f64; 3],
     pub bounds_max: [f64; 3],
     /// The enclosed volume; for a mixed part, its solid bodies'. Absent for
-    /// a surface, which encloses none.
+    /// a surface, which encloses none. Integrated over the exact surfaces,
+    /// unless `volume_note` says otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volume_mm3: Option<f64>,
     pub area_mm2: f64,
     /// The centre of the volume, or of a surface's area.
     pub centroid: [f64; 3],
+    /// Present when the three figures above are the mesh's: the part has a
+    /// face OpenCASCADE's integrals have read wrong, so the mesh, which sits
+    /// within `resolution_mm` of the surface, is the better number.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub volume_note: Option<&'static str>,
     /// What is true of a surface: its area, its free edges and whether it
     /// closes. Present when any body is a surface.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1037,6 +1054,7 @@ pub fn describe(
         volume_mm3: volume,
         area_mm2: round_mm(report.mass.area_mm2),
         centroid,
+        volume_note: report.mass_from_mesh.then_some(MESH_MASS_NOTE),
         surface: (!surface_measures.is_empty()).then(|| SurfaceSummary::of(&surface_measures, surface_area)),
         faces: Some(s.topology.faces),
         topological_edges: Some(s.topology.edges),
@@ -1321,12 +1339,17 @@ pub fn measure_brep(
     let tight = parcad_core::measure::Aabb::from_points(&tess.vertices)
         .ok_or_else(|| "the kernel returned a mesh with no vertices".to_string())?;
 
+    let (mass, mass_from_mesh) = parcad_occt::protocol::mass_or(
+        s.mass.as_ref(),
+        parcad_core::measure::mass_properties(&tess.vertices, &tess.triangles),
+    );
     let report = parcad_core::PartReport {
         units: doc.units.clone(),
         bounds: tight,
         size: tight.size(),
         framing_bounds: parcad_core::measure::bounds(doc).map_err(|e| format!("{e:#}"))?,
-        mass: parcad_core::measure::mass_properties(&tess.vertices, &tess.triangles),
+        mass,
+        mass_from_mesh,
         mesh: tess.stats(),
         stands_on: tess.bed_contact(),
         tags: selector_names(doc),
@@ -1383,6 +1406,7 @@ mod tests {
             collisions: Vec::new(),
             overhang: Vec::new(),
             treatment_edges: Vec::new(),
+            mass: None,
             timings: Timings::default(),
             step_path: None,
             stl_path: None,
@@ -1423,6 +1447,7 @@ mod tests {
             edges: 12,
             triangle_start: start,
             triangle_count: 12,
+            mass: None,
         };
         let success = Success {
             positions,
@@ -1448,6 +1473,7 @@ mod tests {
             collisions: Vec::new(),
             overhang: Vec::new(),
             treatment_edges: Vec::new(),
+            mass: None,
             timings: Timings::default(),
             step_path: None,
             stl_path: None,
@@ -1475,6 +1501,60 @@ mod tests {
         let named: Vec<&str> = measured.named_bodies.iter().map(|b| b.name.as_str()).collect();
         assert_eq!(named, ["near", "far"], "the file's report still says what the reference measured");
         assert!(measured.named_bodies[1].reference);
+    }
+
+    /// The reply's volume, area and centroid are the worker's B-rep figures
+    /// when it sends them, and the mesh's — said in `volume_note` — when it
+    /// could not trust its integrals on this part.
+    #[test]
+    fn the_reply_reads_the_b_rep_s_figures_and_says_when_it_cannot() {
+        let positions: Vec<f32> = (0..8u32)
+            .flat_map(|i| [(i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32])
+            .collect();
+        let indices = vec![
+            0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4, 2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5,
+        ];
+        let success = |mass| Success {
+            positions: positions.clone(),
+            normals: Vec::new(),
+            indices: indices.clone(),
+            face_runs: Vec::new(),
+            faces: Vec::new(),
+            deflection_mm: 0.01,
+            deviation_mm: None,
+            loft_wall_mm: None,
+            facet_sag_mm: None,
+            thickened_mm: None,
+            offset_mm: None,
+            patch_gap_mm: None,
+            kind: BodyKind::default(),
+            surfaces: Vec::new(),
+            edges: Vec::new(),
+            topology: Topology { faces: 6, edges: 12 },
+            bodies: Vec::new(),
+            between: Vec::new(),
+            tag_extents: Vec::new(),
+            unlocated_tags: Vec::new(),
+            collisions: Vec::new(),
+            overhang: Vec::new(),
+            treatment_edges: Vec::new(),
+            mass,
+            timings: Timings::default(),
+            step_path: None,
+            stl_path: None,
+        };
+        let doc = doc(serde_json::json!({ "units": "mm", "root": 0, "nodes": [
+            { "op": "cuboid", "size": { "x": 1, "y": 1, "z": 1 } },
+        ] }));
+        // Figures no unit cube's mesh could give, so they can only have come from the worker.
+        let exact = parcad_occt::ExactMass { volume_mm3: Some(1.25), area_mm2: 6.5, centroid: [0.5, 0.5, 0.25] };
+        let snapshot = evaluated(&doc, &success(Some(exact)), 0, false).unwrap().snapshot;
+        assert_eq!((snapshot.volume_mm3, snapshot.area_mm2, snapshot.centroid), (Some(1.25), 6.5, [0.5, 0.5, 0.25]));
+        assert_eq!(snapshot.volume_note, None);
+
+        let snapshot = evaluated(&doc, &success(None), 0, false).unwrap().snapshot;
+        assert_eq!((snapshot.volume_mm3, snapshot.area_mm2), (Some(1.0), 6.0));
+        assert!(snapshot.volume_note.is_some_and(|note| note.contains("mesh's")), "{:?}", snapshot.volume_note);
     }
 
     /// The count a treatment resolved to is the kernel's, reported beside the
