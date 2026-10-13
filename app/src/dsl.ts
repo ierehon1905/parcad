@@ -617,6 +617,7 @@ function partLine(stack: string | undefined, name: string, source: string): numb
   return line >= 1 && line <= source.split("\n").length ? line : undefined;
 }
 
+/** @internal Which of parcad's names a script redeclares, found by compiling it with each as a parameter. */
 export function __parcadShadowedBuiltins(source: string, names: string[]): string[] {
   const compiles = (parameters: string[]) => {
     try {
