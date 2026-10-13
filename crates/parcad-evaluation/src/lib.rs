@@ -105,8 +105,9 @@ pub fn evaluated(
     })
 }
 
-/// A part as binary STL, and what the file holds: the welded triangles the
-/// viewport shows.
+/// A part as binary STL — the welded triangles the viewport shows — and the
+/// part it describes, measured as `evaluate_part` measures it; `deflection_mm`
+/// is how far the file's triangles may stray from that.
 pub fn stl(doc: &Doc, s: &parcad_occt::Success, reused: bool) -> Result<(Vec<u8>, ExportMeasured), String> {
     refuse_surfaces(s, "STL")?;
     let (report, tess) = measure_brep(doc, s)?;
@@ -134,7 +135,7 @@ fn refuse_surfaces(s: &parcad_occt::Success, format: &str) -> Result<(), String>
     ))
 }
 
-/// A part as 3MF, and what the file holds: the same welded triangles as
+/// A part as 3MF, measured as [`stl`] is: the same welded triangles as
 /// [`stl`], with each named body its own object so a slicer can place it
 /// apart. A one-solid part is one object called `name`.
 pub fn three_mf(
@@ -293,8 +294,8 @@ impl SurfaceSummary {
 
 /// Why a reply's volume, area and centroid are the mesh's, when they are.
 const MESH_MASS_NOTE: &str = "volume, area and centroid are the mesh's, within resolution_mm of the surface: \
-    the part has an offset or extruded-curve face, where OpenCASCADE's integrals have read volumes \
-    up to 72 % wrong";
+    OpenCASCADE's integrals cannot be trusted on this part — an offset or extruded-curve face, or a \
+    spline wall whose integral disagreed with its mesh — and have read such parts up to 72 % wrong";
 
 /// Whether a reply's part is solid, surface or mixed.
 fn part_kind(s: &parcad_occt::Success) -> &'static str {
@@ -1251,7 +1252,8 @@ pub struct ExportMeasured {
     /// `solid`, `surface` or `mixed`, as `evaluate_part` says.
     pub kind: &'static str,
     pub size: [f64; 3],
-    /// Absent when the file holds only surfaces.
+    /// The part's, as `evaluate_part` reports it, not the triangles'; absent
+    /// when the file holds only surfaces.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub volume_mm3: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]

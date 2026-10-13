@@ -565,7 +565,7 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         "volume   {:.2} mm³   area {:.2} mm²{}",
         mass.volume_mm3,
         mass.area_mm2,
-        if mass_from_mesh { "   (the mesh's: the B-rep's integrals misread this part's derived surfaces)" } else { "" }
+        if mass_from_mesh { "   (the mesh's: the B-rep's integrals cannot be trusted on this part)" } else { "" }
     );
     println!(
         "topology {} faces, {} edges ({} unique curves)",
