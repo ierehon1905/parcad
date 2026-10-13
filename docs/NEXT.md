@@ -253,19 +253,30 @@ the bullets below and in the next two sections.
 
 | # | item | impact | effort |
 |---|---|---|---|
-| 1 | the tag that makes the saucer crawl | ★★★ | L |
-| 2 | `check_motion` | ★★★ | L |
-| 3 | a DSL name as a local is a parse error | ★★ | S |
-| 4 | `edit_part`'s exact-text `old` misses | ★★ | M |
-| 5 | the same signatures fetched every trial | ★★ | S |
-| 6 | the G2 blend behind `.smooth()` | ★★ | L |
-| 7 | a face's listed area misreads spline faces | ★★ | S |
-| 8 | `fillet(selector, radius)` order | ★ | S |
-| 9 | `wait_s` on one script tool only | ★ | S |
-| 10 | a vertex treatment's `edges` is not what its `.expect` counts | ★ | S |
-| 11 | the editor never shows `mixed_corners` | ★ | S |
-| 12 | the area integral costs a fitted ring 0.76 s | ★ | M |
+| 1 | a part in several loose pieces passes `print_check` | ★★★ | S |
+| 2 | the tag that makes the saucer crawl | ★★★ | L |
+| 3 | `check_motion` | ★★★ | L |
+| 4 | a DSL name as a local is a parse error | ★★ | S |
+| 5 | `edit_part`'s exact-text `old` misses | ★★ | M |
+| 6 | the same signatures fetched every trial | ★★ | S |
+| 7 | the G2 blend behind `.smooth()` | ★★ | L |
+| 8 | a face's listed area misreads spline faces | ★★ | S |
+| 9 | `fillet(selector, radius)` order | ★ | S |
+| 10 | `wait_s` on one script tool only | ★ | S |
+| 11 | a vertex treatment's `edges` is not what its `.expect` counts | ★ | S |
+| 12 | the editor never shows `mixed_corners` | ★ | S |
+| 13 | the area integral costs a fitted ring 0.76 s | ★ | M |
 
+- **A part in several loose pieces passes `print_check`.** Plate-stand brief,
+  Haiku 4.5: the union left eight pegs floating free of the base, and one
+  export reply said `measured.bodies: 9` and `print_check: passed` together,
+  measuring it all as one body `part`; the model said "watertight solid, passed
+  print check" and DONE. A second trial had 25 pieces, some 26 mm off the bed,
+  and drew only an overhang flag. It is the commonest small-model failure on a
+  real part and exactly what the verdict exists to stop. Fix: when one returned
+  shape is more than one piece, `print_check` fails (so export refuses), naming
+  each piece, its size and where it is; a piece that does not reach the bed
+  fails on its own; `{ bodies }` and named bodies stay the way to mean several.
 - **A face's listed area misreads spline faces.** Found while making the
   part's volume and area the B-rep's (2026-10-13): `Shape_faces_json` in the
   vendored wrapper reads each face with `BRepGProp`'s fixed-order rule, which
@@ -296,7 +307,8 @@ the bullets below and in the next two sections.
   (`app/src/treatment-info.ts`) says nothing, so a person who writes the
   retainer's fillet by hand gets no sign it took the rim too. Show it in the
   hover beside the edge count.
-- **The head-to-head, finished: 288 graded trials.** Haiku, six briefs, four
+- **The head-to-head, finished: 288 graded trials.** Haiku 4.5
+  (`claude-haiku-4-5-20251001`, not the current Haiku), six briefs, four
   trials each: ParCAD 23/24 right and 1 wrong part reported done; text-to-cad
   8/24 and 15; kernelCAD 5/24 and 15; build123d 5/24 and 19 (p < 1e-5 each).
   On the three briefs ParCAD has no special case for (plate, lidded box,
@@ -309,6 +321,17 @@ the bullets below and in the next two sections.
   briefs that separate strong models (fit to a real object, an edit that
   changes topology, an overhang), and publish the harness.
   `research_notes/hands-on/h2h/RESULTS.md` has the tables.
+- **Then Haiku 5.5, a real part, and Chinese models (same day).** Haiku 5.5,
+  seven briefs × 3: ParCAD 19/21 and 0 wrong parts claimed done (the other two
+  right but unvouched); build123d 17/21 and 2; text-to-cad 12/21 and 3;
+  kernelCAD 12/21 and 5 — a narrower gap than 4.5's, widest on the 0 mm wall.
+  The plate stand (`examples/plate-stand.js` as a brief, graded on its
+  requirements) separates more: Opus is right with every tool, Sonnet loses
+  kernelCAD, Haiku 4.5 fails everywhere, ParCAD included — the loose-pieces
+  item above. DeepSeek v4.1 Flash, GLM 5.3 Flash and Qwen 3.8 Flash through
+  OpenCode sit near the ceiling with every tool; ParCAD is the fastest arm with
+  every model (DeepSeek 44 s against 134–201 s). Field runs still default to
+  Haiku 4.5 (`field/run-case.sh:19`, `field/run-suite.sh:35`).
 
 ### What made modelling harder, from the head-to-head transcripts (2026-10-13)
 
