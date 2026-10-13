@@ -88,6 +88,17 @@ impossible, check the layer that would implement it, not the layer above.
   the fit between two is measured, not solved. Nothing selects across bodies:
   a tag lives in the
   body that made it, and a treatment cannot take the group as its child.
+- **one part inside another** — `importPart(name, params)` runs a saved
+  part's `part.js` and returns what it returns, and `partParams(defaults)` in
+  that part declares what it takes; an importer passing a key it does not
+  declare, or a value of another type, is refused with the keys it does. Not
+  an op: the imported nodes enter the graph as if written inline, so the kernel
+  and every measurement are unchanged. Each runner hands the DSL a reader —
+  `projects::read` in the sandbox, the host's `read_project` in the window,
+  the script's own folder or `--parts` in `tools/run.ts`. `examples/` seeds
+  `templates/standoff` and `plate-on-standoffs`, which the corpus holds to its
+  closed form. docs/GOTCHAS.md, "An imported part is the saved file", has what
+  it does not do.
 - **a thin wall lofted through fitted sections** — `loft(sections, { wall: t })`
   for sections that are each one `{ fit }`: the kernel makes the inside itself,
   stepped `t` along the outside's surface normal at any lean, on the
@@ -530,9 +541,9 @@ recorded here:
   5 mm in a script. A `DEVICES` table of four MacBooks and `device(name,
   { clearance })` sat in `dsl.ts` for a while and were removed on 2026-10-13:
   objects a part holds are an extension, not the core language, and belong
-  in the parts library (NEXT.md, queue item 4) once one part can import
-  another. Until then a part draws the object itself and says where its
-  numbers came from. `vesaPattern(size)` stays: it is a published standard.
+  in the parts library (NEXT.md, queue item 4), as saved parts imported with
+  `importPart` (§0). Until that library exists a part draws the object itself
+  and says where its numbers came from. `vesaPattern(size)` stays: it is a published standard.
 - **Two printable halves need a flag and two evaluations — FIXED**, from the
   cheap end of the multi-body row of §0: `return { left, right: left.mirror("x") }`
   is one evaluation, measured per half and between them.

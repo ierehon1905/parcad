@@ -931,3 +931,48 @@ describe("an expectation written after its treatment", () => {
     expect(() => box(40, 20, 10).fillet(2, "|Z").expect({ count: 0 })).toThrow("can never hold");
   });
 });
+
+describe("importPart", () => {
+  const api = everything as unknown as Record<string, unknown>;
+  const names = Object.keys(api);
+  const run = (source: string, parts: Record<string, string>) => {
+    everything.__parcadTakeNotes();
+    everything.__parcadReadPartsWith((name) => {
+      if (!(name in parts)) throw new Error(`no part ${name}`);
+      return parts[name];
+    }, api);
+    const result = new Function(...names, source)(...names.map((n) => api[n]));
+    return build(result);
+  };
+  const spacer = 'const p = partParams({ od: 8, height: 10 });\nreturn cylinder(p.od / 2, p.height);';
+
+  test("a part run on its own gets its defaults, frozen", () => {
+    const doc = run('const p = partParams({ height: 10 });\nif (!Object.isFrozen(p)) throw new Error("open");\nreturn box(1, 1, p.height);', {});
+    expect(doc.nodes[0]).toMatchObject({ op: "cuboid", size: { z: 10 } });
+  });
+
+  test("an imported part's brief stays its own", () => {
+    const doc = run('return importPart("spacer");', {
+      spacer: `brief({ envelope: [9, 9, 9] });\n${spacer}`,
+    });
+    expect((doc as { brief?: unknown }).brief).toBeUndefined();
+    const own = run('brief({ envelope: [50, 50, 50] });\nreturn importPart("spacer");', {
+      spacer: `brief({ envelope: [9, 9, 9] });\n${spacer}`,
+    });
+    expect((own as { brief?: { envelope: number[] } }).brief?.envelope).toEqual([50, 50, 50]);
+  });
+
+  test("a treatment inside an import has no line in the importer's source", () => {
+    const treatments: everything.TreatmentSource[] = [];
+    everything.__parcadReadPartsWith(() => 'return box(10, 10, 10).edges(">Z").fillet(1);', api);
+    everything.__parcadTreatmentSource({ line: 1, column: 1, method: "fillet" }, () =>
+      build(everything.importPart("rounded"), treatments),
+    );
+    expect(treatments.length).toBe(1);
+    expect(treatments[0].source).toBeUndefined();
+  });
+
+  test("partParams twice in one part is refused", () => {
+    expect(() => run("partParams({ a: 1 });\npartParams({ b: 2 });\nreturn box(1, 1, 1);", {})).toThrow("once per part");
+  });
+});

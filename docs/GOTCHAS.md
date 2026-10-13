@@ -171,6 +171,27 @@ firing — so it can never *become* explicitly trusted, and the server stays
 `⏸ Pending approval` forever. Not parcad's bug, and it reads exactly like one;
 the fix is `hasTrustDialogAccepted: true` for that path in `~/.claude.json`.
 
+### An imported part is the saved file
+
+`importPart(name)` reads the part's `part.js` from the parts folder each time
+the importer builds, so an unsaved edit to the template in another tab is not
+what imports see; save it. Four things follow from the imported nodes being
+ordinary nodes of the importer's graph:
+
+- **Thumbnails go stale.** A thumbnail is keyed to the importer's own source,
+  so editing a template redraws its importers only when they are next saved or
+  the look changes. The sandbox's script cache does check every imported
+  source, so a build is never stale; only the picture is.
+- **Copies share tags.** Two imports of one template carry its tags twice, and
+  `on: "standoff"` in the importer reaches both. Inside each copy a selector
+  only sees that copy.
+- **`.tag()` on an import replaces the template's own outer tag**, as it does
+  on any shape. Tag a copy to tell it from another; its inner tags stay.
+- **The window builds twice when a script imports a part it has not read.**
+  A script runs synchronously and the host answers asynchronously, so the
+  first run stops at the new name, the window fetches it and runs again. The
+  next build reads every known part before it starts.
+
 ### `cargo build` needs bun, because the sandbox embeds the DSL
 
 `build.rs` shells out to `bun build` to compile `app/src/dsl.ts` into the script

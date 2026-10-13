@@ -1,0 +1,23 @@
+{
+  "name": "plate-on-standoffs",
+  "script": "examples/plate-on-standoffs.js",
+  "why": "One part imported into another as a parametric template. examples/templates/standoff.js declares od, bore and height with partParams; the plate imports it twice, once at height 6, and the two copies build as separate tubes. Volume by closed form: the 7200 mm³ plate plus pi * (4^2 - 1.7^2) * (6 + 10) = 658.980 mm³ of tube, 7858.980, which the B-rep reports exactly. Area likewise: the plate's 5400 less the two annuli the tubes stand on, 82.373, plus the tubes' outer walls 402.124, bores 170.903 and top annuli 82.373, 5973.027. Height 13 is the plate's 3 plus the default copy's 10: a height override that leaked into the other copy, or was dropped, moves it to 9 or the volume by 164.7 mm³.",
+  "brep": {
+    "size": [
+      60.0,
+      40.0,
+      13.0
+    ],
+    "volume_mm3": 7858.98,
+    "area_mm2": 5973.027,
+    "triangles": 844,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 2400.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 14,
+    "edges": 48,
+    "curves": 20
+  }
+}

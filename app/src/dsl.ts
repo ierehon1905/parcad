@@ -30,7 +30,7 @@
  * carries one exactly, and named bodies may mix solids and surfaces.
  */
 
-import { isObject, list, parseEdgeSelector, parseVertexSelector, queryShapeError, render, spelled, unknownKeys } from "./selectors";
+import { isObject, list, normalize, parseEdgeSelector, parseVertexSelector, queryShapeError, render, spelled, unknownKeys } from "./selectors";
 
 export type Vec3 = { x: number; y: number; z: number };
 
@@ -381,7 +381,7 @@ export function note(label: string, value: number | string | number[]): void {
     notesDropped += 1;
     return;
   }
-  notes.push({ label, value });
+  notes.push({ label: importing.length ? `${importing.map((frame) => frame.name).join(" > ")}: ${label}` : label, value });
   notesChars += chars;
 }
 
@@ -394,7 +394,227 @@ export function __parcadTakeNotes(): { values: { label: string; value: number | 
   // Called once before every run to discard what a run that threw left
   // behind; the brief is the other such leaving, and `build` consumes it.
   declaredBrief = undefined;
+  importing = [];
+  importCallStack = undefined;
+  topLevelDeclared = false;
   return taken;
+}
+
+// ---------------------------------------------------------------------------
+// One part inside another. A saved part is a template: `partParams` declares
+// what it takes, and `importPart` runs it with the importer's values.
+// ---------------------------------------------------------------------------
+
+/** @internal How a runner hands over a saved part's source by name, or throws why it cannot. */
+export type PartReader = (name: string) => string;
+
+let partReader: PartReader | undefined;
+let partApi: Record<string, unknown> | undefined;
+
+/**
+ * @internal Install how this runner reads saved parts, and the names it runs
+ * every script with, so an imported part sees exactly what its importer does.
+ */
+export function __parcadReadPartsWith(reader: PartReader | undefined, api: Record<string, unknown>): void {
+  partReader = reader;
+  partApi = api;
+}
+
+interface ImportFrame {
+  name: string;
+  given: Record<string, unknown>;
+  declared: boolean;
+}
+
+let importing: ImportFrame[] = [];
+/** The stack at the outermost `importPart` call: what every shape made inside it reports as where it was made. */
+let importCallStack: string | undefined;
+let topLevelDeclared = false;
+const MAX_IMPORT_DEPTH = 16;
+const PART_URL = "parcad-part:";
+
+/** A refusal about the importer's own call, which the importer reports as its line rather than the imported part's. */
+class ImportRefusal extends Error {}
+
+/** What a part returns, as `importPart` hands it back: a shape, or a multi-body part's object of bodies. */
+export type ImportedPart = Shape & { [body: string]: any };
+
+/**
+ * Declare the values this part takes when another part imports it, and read them.
+ *
+ * - Returns `defaults` with what an `importPart` call passed laid over them;
+ *   run on its own, the part gets `defaults` unchanged.
+ * - An importer may pass only keys in `defaults`, each of its default's type;
+ *   anything else is refused, naming the keys this part takes.
+ * - Call it once per part.
+ *
+ * @example
+ *     const p = partParams({ od: 8, bore: 3.4, height: 10 });
+ *     return cylinder(p.od / 2, p.height).cut(cylinder(p.bore / 2, p.height + 1));
+ */
+export function partParams<T extends Record<string, unknown>>(defaults: T): T {
+  if (!isObject(defaults) || defaults instanceof Shape) {
+    throw new Error(`partParams() takes this part's defaults as an object, e.g. partParams({ height: 10 }); got ${describeArgument(defaults)}`);
+  }
+  const frame = importing[importing.length - 1];
+  if (frame ? frame.declared : topLevelDeclared) {
+    throw new Error("partParams() is called once per part; put every parameter in that one call");
+  }
+  if (frame) frame.declared = true;
+  else topLevelDeclared = true;
+  if (!frame) return Object.freeze({ ...defaults });
+
+  const keys = Object.keys(defaults);
+  const takes = keys.length ? `takes ${list(keys.map((k) => `${k} (default ${describeArgument(defaults[k])})`))}` : "takes no parameters";
+  const unknown = Object.keys(frame.given).filter((key) => !keys.includes(key));
+  if (unknown.length) {
+    const named = unknown.map((key) => {
+      const own = keys.find((k) => normalize(k) === normalize(key));
+      return own === undefined ? key : `${key} (write ${spelled(own, frame.given[key])})`;
+    });
+    throw new ImportRefusal(
+      `importPart(${JSON.stringify(frame.name)}) was given ${list(named)}, which ${frame.name} does not take; it ${takes}`,
+    );
+  }
+  for (const [key, value] of Object.entries(frame.given)) {
+    const want = kindOf(defaults[key]);
+    if (want === "null") continue;
+    const got = kindOf(value);
+    if (got !== want || (got === "number" && !Number.isFinite(value as number))) {
+      throw new ImportRefusal(
+        `importPart(${JSON.stringify(frame.name)}) gave ${key} as ${describeArgument(value)}, ${got === "number" ? "not a finite number" : `${article(got)}`}; ` +
+          `its default is ${describeArgument(defaults[key])}, ${article(want)}`,
+      );
+    }
+  }
+  return Object.freeze({ ...defaults, ...frame.given });
+}
+
+function kindOf(value: unknown): string {
+  if (value === null || value === undefined) return "null";
+  if (value instanceof Shape) return "shape";
+  if (Array.isArray(value)) return "array";
+  return typeof value;
+}
+
+function article(kind: string): string {
+  return /^[aeiou]/.test(kind) ? `an ${kind}` : `a ${kind}`;
+}
+
+/**
+ * Build another saved part inside this one, with its parameters set.
+ *
+ * - `name` is the part's name in the parts list, e.g. `"Fasteners/spacer"`;
+ *   its saved `part.js` runs, not an unsaved edit of it.
+ * - `params` overrides what that part declares with `partParams`.
+ * - Returns what that part returns: a shape, placed like any other with
+ *   `.at()`, or a multi-body part's object of bodies.
+ * - Its tags come along; tag the import itself to tell two copies apart.
+ *
+ * @example
+ *     const spacer = importPart("spacer", { height: 12 });
+ *     return box(40, 20, 4).union(spacer.at(0, 0, 8));
+ *
+ * @remarks
+ * The imported part's `brief` stays its own, its notes arrive labelled with
+ * its name, and everything it makes reports the `importPart` line as where it
+ * was made, so an error or a treatment hover points into the importer.
+ */
+export function importPart(name: string, params: Record<string, unknown> = {}): ImportedPart {
+  if (typeof name !== "string" || !name.trim()) {
+    throw new Error(`importPart() takes a part's name first, as the parts list writes it, e.g. importPart("Fasteners/spacer"); got ${describeArgument(name)}`);
+  }
+  if (!isObject(params) || params instanceof Shape) {
+    throw new Error(`importPart(${JSON.stringify(name)}, ...) takes its parameters as an object, e.g. { height: 12 }; got ${describeArgument(params)}`);
+  }
+  if (importing.some((frame) => frame.name === name)) {
+    const chain = [...importing.map((frame) => frame.name), name].join(" → ");
+    throw new Error(`importPart(${JSON.stringify(name)}) would import a part into itself: ${chain}`);
+  }
+  if (importing.length >= MAX_IMPORT_DEPTH) {
+    throw new Error(`importPart(${JSON.stringify(name)}) is ${MAX_IMPORT_DEPTH} imports deep; flatten the chain`);
+  }
+  if (!partReader || !partApi) {
+    throw new Error("importPart() cannot read saved parts here; build the part in parcad, where they are");
+  }
+  const source = partReader(name);
+  const api = partApi;
+  const names = Object.keys(api);
+
+  let fn: (...args: unknown[]) => unknown;
+  try {
+    fn = new Function(...names, `${source}\n//# sourceURL=${PART_URL}${name}.js`) as typeof fn;
+  } catch (e) {
+    const shadowed = __parcadShadowedBuiltins(source, names);
+    const why = shadowed.length ? __parcadShadowedBuiltinMessage(shadowed, names) : messageOf(e);
+    throw new Error(`${name} did not parse: ${why}`);
+  }
+
+  const frame: ImportFrame = { name, given: params, declared: false };
+  const outerBrief = declaredBrief;
+  const outerCallStack = importCallStack;
+  importCallStack ??= new Error().stack;
+  importing.push(frame);
+  let result: unknown;
+  try {
+    result = fn(...names.map((n) => api[n]));
+  } catch (e) {
+    // A refusal of this call is the importer's line; deeper ones arrive here
+    // already plain, as a line of this part.
+    if (e instanceof ImportRefusal) throw new Error(e.message);
+    if (!(e instanceof Error)) throw e;
+    const line = partLine(e.stack, name, source);
+    throw new Error(`${name} threw${line === undefined ? "" : ` at line ${line}`}: ${e.message}`);
+  } finally {
+    importing.pop();
+    declaredBrief = outerBrief;
+    importCallStack = outerCallStack;
+  }
+
+  const given = Object.keys(params);
+  if (given.length && !frame.declared) {
+    throw new Error(
+      `importPart(${JSON.stringify(name)}) was given ${list(given)}, but ${name} takes no parameters: it never calls partParams(). ` +
+        `Add partParams({ ${given.map((k) => `${k}: ...`).join(", ")} }) to it, or import it without them`,
+    );
+  }
+  if (!(result instanceof Shape) && !isObject(result)) {
+    throw new Error(`${name} returned ${describeArgument(result)}; importPart needs a part that returns a shape, or an object of named shapes`);
+  }
+  return result as ImportedPart;
+}
+
+function messageOf(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * Lines `new Function` puts above a part's own first line. V8 and
+ * JavaScriptCore name the frame by its `sourceURL`; QuickJS names every
+ * Function `<input>`, innermost first. Measured, not assumed.
+ */
+let partHeader: number | undefined | null = null;
+
+function framedLine(stack: string | undefined, name: string): number | undefined {
+  if (!stack) return undefined;
+  const url = (PART_URL + name + ".js").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const tagged = new RegExp(`${url}:(\\d+)`).exec(stack) ?? /<input>:(\d+)/.exec(stack);
+  return tagged ? Number(tagged[1]) : undefined;
+}
+
+function partLine(stack: string | undefined, name: string, source: string): number | undefined {
+  if (partHeader === null) {
+    try {
+      new Function(`throw new Error()\n//# sourceURL=${PART_URL}probe.js`)();
+    } catch (e) {
+      const at = framedLine(e instanceof Error ? e.stack : undefined, "probe");
+      partHeader = at === undefined ? undefined : at - 1;
+    }
+  }
+  const at = framedLine(stack, name);
+  if (partHeader == null || at === undefined) return undefined;
+  const line = at - partHeader;
+  return line >= 1 && line <= source.split("\n").length ? line : undefined;
 }
 
 export function __parcadShadowedBuiltins(source: string, names: string[]): string[] {
@@ -433,6 +653,7 @@ export function __parcadShadowedBuiltinMessage(shadowed: string[], names: string
 }
 
 function treatmentSource(method: SourceLocation["method"]): SourceLocation | undefined {
+  if (importing.length) return undefined;
   if (activeTreatmentSource?.method === method) return activeTreatmentSource;
   const line = new Error().stack
     ?.split("\n")
@@ -825,7 +1046,7 @@ function fullHex(name: string, color: string | undefined): string {
  */
 export class Shape {
   /** @internal Where the script made this shape: the call stack, as the engine prints it. */
-  readonly createdAt = new Error().stack;
+  readonly createdAt = importCallStack ?? new Error().stack;
 
   /** @internal */
   constructor(

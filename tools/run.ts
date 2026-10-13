@@ -4,24 +4,46 @@
  *
  *   bun tools/run.ts examples/bracket.js > graph.json
  *   ./target/release/parcad graph.json --out out --regions
+ *   bun tools/run.ts part.js --parts ~/Library/Application\ Support/parcad
+ *
+ * `importPart(name)` reads `name.parcad/part.js` or `name.js` under `--parts`,
+ * or beside the script when that is not given.
  *
  * The GUI runs scripts in the webview and this runs them in bun, but both use
  * the same DSL and both hand the same JSON to the same core. Keeping the script
  * layer outside the Rust binary is what lets that be true.
  */
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import * as dsl from "../app/src/dsl";
 import { Shape, build } from "../app/src/dsl";
 
-const file = process.argv[2];
-if (!file) {
-  console.error("usage: bun tools/run.ts <script.js>");
+const args = process.argv.slice(2);
+const partsAt = args.indexOf("--parts");
+const partsDir = partsAt >= 0 ? args.splice(partsAt, 2)[1] : undefined;
+const file = args[0];
+if (!file || (partsAt >= 0 && !partsDir)) {
+  console.error("usage: bun tools/run.ts <script.js> [--parts DIR]");
   process.exit(2);
 }
 
 const source = readFileSync(file, "utf8");
 const names = Object.keys(dsl);
+const root = partsDir ?? dirname(file);
+
+/** A saved part's source by name, in either of the forms `projects.rs` reads. */
+function readPart(name: string): string {
+  const segments = name.split("/");
+  if (name.startsWith("/") || segments.some((s) => s === "" || s === "." || s === "..")) {
+    throw new Error(`importPart(${JSON.stringify(name)}): a part's name is a path inside the parts folder, like "Fasteners/spacer"`);
+  }
+  for (const path of [join(root, `${name}.parcad`, "part.js"), join(root, `${name}.js`)]) {
+    if (existsSync(path)) return readFileSync(path, "utf8");
+  }
+  throw new Error(`importPart(${JSON.stringify(name)}): no part at ${join(root, name)}(.parcad|.js); pass --parts DIR for another folder`);
+}
+dsl.__parcadReadPartsWith(readPart, dsl as Record<string, unknown>);
 
 let fn: (...args: unknown[]) => unknown;
 try {

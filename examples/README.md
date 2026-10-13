@@ -1,6 +1,6 @@
 # Examples
 
-Twenty-eight parts, each a `.js` script that returns a shape — or, for four
+Twenty-nine parts and a template, each a `.js` script that returns a shape — or, for four
 of them, two named shapes. Most are measured in
 `eval/cases/`, so an example that stops building fails a case rather than
 surprising someone.
@@ -54,6 +54,13 @@ cargo run -p parcad-eval -- --case flange                # against recorded valu
 | `twisted-planter.js` | twisted star planter and drip saucer, two prints | the part ParCAD web opens first: a ruled loft twisted through nine star sections and hollowed along the same twist to a measured 2 mm wall, and a saucer of smooth bumps in rings of 1, 6, 12 and 18, each a revolved smootherstep profile that leaves the floor with no crease |
 | `v-block.js` | 50 mm toolroom V-block | a 90° vee cut by a rotated cube, so the angle cannot drift |
 | `wash-bottle.js` | wash bottle with a curved spout | curves in section and path: a rounded base corner, a spline shoulder and an arc bead in one revolve section, a second section for the cavity, and a spout that is `pipe({ spline })` bored along the same spline |
+
+## `templates/` — parts other parts import
+
+| file | part | why it is here |
+|---|---|---|
+| `templates/standoff.js` | round standoff, Ø8 with a Ø3.4 bore | a template: `partParams({ od, bore, height })` declares what it takes, and it builds on its own with those defaults |
+| `plate-on-standoffs.js` | 60 x 40 plate on two standoffs | `importPart("templates/standoff", { height: 6 })` and the default beside it: two copies of one saved part at two heights |
 
 ## Conventions every one of them follows
 

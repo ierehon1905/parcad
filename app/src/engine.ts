@@ -128,7 +128,7 @@ export async function run() {
   }
 
   try {
-    const built = buildGraph(source);
+    const built = await buildWithParts(source);
     const result = await backend.evaluate<Evaluated>(built.graph, { part: name ?? undefined, source });
     // The host measured the graph; the notes came out of the script here.
     if (built.notes) result.snapshot.notes = built.notes;
@@ -172,6 +172,51 @@ export function geometryOf(result: Evaluated): Geometry {
   };
 }
 
+/** A saved part the script imported, as reading it last answered. */
+type PartSource = { source: string } | { error: string };
+
+/** Thrown by the reader for a part not fetched yet: not an `Error`, so no layer of the DSL wraps it. */
+class PartNotLoaded {
+  constructor(readonly name: string) {}
+}
+
+/** The parts the last build imported, read again before the next so an edit to one shows. */
+let importedParts: string[] = [];
+
+/**
+ * {@link buildGraph}, with every part it imports read from the host first. A
+ * part's script runs synchronously and the host answers asynchronously, so a
+ * part first imported by this build stops it, is fetched, and the build runs
+ * again from the top.
+ */
+async function buildWithParts(source: string): Promise<BuiltGraph> {
+  const read = (name: string): Promise<[string, PartSource]> =>
+    backend.readProject(name).then(
+      (script) => [name, { source: script }],
+      (e) => [name, { error: e instanceof Error ? e.message : String(e) }],
+    );
+  const parts = new Map(await Promise.all(importedParts.map(read)));
+  for (;;) {
+    const used = new Set<string>();
+    dsl.__parcadReadPartsWith((name) => {
+      const part = parts.get(name);
+      if (!part) throw new PartNotLoaded(name);
+      used.add(name);
+      if ("error" in part) throw new Error(`importPart(${JSON.stringify(name)}): ${part.error}`);
+      return part.source;
+    }, { ...dsl });
+    try {
+      const built = buildGraph(source);
+      importedParts = [...used];
+      return built;
+    } catch (e) {
+      if (!(e instanceof PartNotLoaded)) throw e;
+      const [name, part] = await read(e.name);
+      parts.set(name, part);
+    }
+  }
+}
+
 /**
  * Run a script and flatten what it returns.
  *
@@ -206,6 +251,7 @@ function buildGraph(source: string): BuiltGraph {
   try {
     result = fn(...names.map((n) => api[n]));
   } catch (e) {
+    if (e instanceof PartNotLoaded) throw e;
     throw atLine("the script threw", e, source);
   }
   if (!(result instanceof Shape) && (typeof result !== "object" || result === null)) {

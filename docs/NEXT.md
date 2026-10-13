@@ -98,10 +98,15 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      tools are the host's, so registering them with `navigator.modelContext`
      is a thin adapter, and nothing else here waits on it.
 4. **A measured parts library** — fasteners, bearings, boards, devices, each
-   held by eval cases, and a way for one part to import another. The library
-   is an extension, outside `dsl.ts`: `DEVICES` and `device()` were removed
-   from the language on 2026-10-13 for that reason, and come back as library
-   parts with measured radii.
+   held by eval cases. The library is an extension, outside `dsl.ts`:
+   `DEVICES` and `device()` were removed from the language on 2026-10-13 for
+   that reason, and come back as library parts with measured radii. The way
+   in landed the same day: `importPart(name, params)` and `partParams` (DSL_GAPS
+   §0). Left: where library parts live and ship (a seeded folder, like
+   `examples/templates/`, is the cheap end), the parts themselves, and a field
+   case for whether a model reaches for `importPart` when asked to reuse a
+   saved part — unmeasured so far, and the server instruction does not name
+   it, because its 2048 characters had 21 to spare.
 5. **What the coin-holder session cost, in order** — reviewed 2026-09-18 from
    three lenses, the order and every sample reply in
    [COIN_HOLDER_REVIEW.md](COIN_HOLDER_REVIEW.md). One session designed a

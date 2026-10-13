@@ -774,8 +774,13 @@ mod tests {
     // The `__parcad` exports are the compilers' own helpers — the editor's
     // treatment locator, the proof of which builtin a script redeclared —
     // named so that no part would reach for them.
-    const NOT_IN_THE_LANGUAGE: [&str; 4] =
-        ["__parcadTreatmentSource", "__parcadShadowedBuiltins", "__parcadShadowedBuiltinMessage", "__parcadTakeNotes"];
+    const NOT_IN_THE_LANGUAGE: [&str; 5] = [
+        "__parcadTreatmentSource",
+        "__parcadShadowedBuiltins",
+        "__parcadShadowedBuiltinMessage",
+        "__parcadTakeNotes",
+        "__parcadReadPartsWith",
+    ];
 
     /// Members the classes carry for the editor rather than for a script.
     const NOT_CALLABLE: [&str; 10] = [
@@ -1014,6 +1019,20 @@ mod tests {
     /// sandbox, which catches a wrong call; whether it builds is the corpus's job.
     #[test]
     fn every_example_runs() {
+        // `importPart`'s example imports a saved part, so one is saved: the
+        // template `partParams`'s own example is.
+        crate::projects::tests::scoped(|_| {
+            let template = parse(DSL_SOURCE)
+                .into_iter()
+                .find(|item| item.name == "partParams")
+                .and_then(|item| examples(&item.doc).into_iter().next())
+                .expect("partParams has an example");
+            crate::projects::write("spacer", &template).expect("a scratch parts folder");
+            every_example_runs_against_the_saved_parts();
+        });
+    }
+
+    fn every_example_runs_against_the_saved_parts() {
         let mut ran = 0;
         for item in parse(DSL_SOURCE) {
             for example in examples(&item.doc) {

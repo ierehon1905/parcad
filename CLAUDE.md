@@ -260,6 +260,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | probes, wall thickness, tag extents on the exact solid | `crates/parcad-occt/src/perceive.rs` |
 | the authoring DSL | `app/src/dsl.ts` (shared with `tools/run.ts`) |
 | drill and clearance sizes | `METRIC_FASTENERS` in `app/src/dsl.ts` — never a literal in a part |
+| one part inside another | `importPart` and `partParams` in `app/src/dsl.ts`; each runner installs its reader with `__parcadReadPartsWith` — `script.rs` (`readPart`, and the cache that checks imported sources), `engine.ts` (`buildWithParts`), `tools/run.ts` (`--parts`) |
 | lines, offsets, intersections and convex outlines in the plane | `line2d`, `Line2d`, `hull` in `app/src/dsl.ts` — arithmetic on numbers the script has; nothing reads the built part |
 | what the app can do at all | `crates/parcad-host/src/service.rs` — never a transport file |
 | the part in 3D inside a chat client (MCP Apps) | `app/src/viewer/main.ts`, built by `app/vite.viewer.config.ts`; `view_part` and the `ui://parcad/viewer` resource in `mcp.rs` |

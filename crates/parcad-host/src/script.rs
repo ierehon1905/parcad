@@ -9,10 +9,12 @@
 //! The realm here is created empty. QuickJS on its own has no `fetch`, no
 //! `require`, no filesystem, and no console — those come from `quickjs-libc`,
 //! which is not linked. The only host functions this file adds are in
-//! [`install_native`], and each is arithmetic on the numbers it is handed. So
+//! [`install_native`]: arithmetic on the numbers each is handed, and
+//! `readPart`, which returns a saved part's source by name for `importPart` —
+//! read-only, and only what `projects::read` would hand the parts list. So
 //! the sandbox is not a list of things that are blocked, which would need to be
 //! complete to be worth anything; it is a runtime that never had them. The only
-//! values a script can see are the DSL's own.
+//! values a script can see are the DSL's own and its fellow parts' sources.
 //!
 //! Two things QuickJS *can* still do to us, and their answers:
 //!
@@ -118,6 +120,7 @@ const RUNNER: &str = r#"
 
   // Notes from a run that threw before this one must not be read as this one's.
   dsl.__parcadTakeNotes();
+  dsl.__parcadReadPartsWith(globalThis.__parcadNative.readPart, dsl);
   let result;
   try {
     result = fn(...names.map((n) => dsl[n]));
@@ -243,6 +246,16 @@ struct Meter {
     /// The run reached an answer — a graph or the script's own error — rather
     /// than failing to start.
     finished: AtomicBool,
+    /// Every saved part the script imported, with what reading it gave, so a
+    /// cached result is only reused while each still reads the same.
+    parts: Mutex<Vec<PartRead>>,
+}
+
+/// A part's name and what [`crate::projects::read`] gave for it.
+type PartRead = (String, Result<String, String>);
+
+fn read_part(name: &str) -> Result<String, String> {
+    crate::projects::read(name).map_err(|e| format!("importPart({name:?}): {e}"))
 }
 
 impl Meter {
@@ -257,6 +270,7 @@ impl Meter {
             stopped: AtomicU8::new(RUNNING),
             impure: AtomicBool::new(false),
             finished: AtomicBool::new(false),
+            parts: Mutex::new(Vec::new()),
         };
         meter.allow(1);
         meter
@@ -369,10 +383,11 @@ pub fn build_within(source: &str, backstop: Duration) -> Result<Script, String> 
     let outcome = run(source, &meter);
     if meter.cacheable() {
         let weight = source.len() + outcome.as_ref().map_or(0, |(_, json_len)| *json_len);
+        let parts = std::mem::take(&mut *meter.parts.lock().unwrap_or_else(|e| e.into_inner()));
         CACHE
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(source, outcome.clone().map(|(script, _)| script), weight);
+            .insert(source, outcome.clone().map(|(script, _)| script), weight, parts);
     }
     outcome.map(|(script, _)| script)
 }
@@ -459,14 +474,18 @@ const CACHE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Default)]
 struct Cache {
-    entries: HashMap<String, (Result<Script, String>, usize)>,
+    entries: HashMap<String, (Result<Script, String>, usize, Vec<PartRead>)>,
     order: VecDeque<String>,
     weight: usize,
 }
 
 impl Cache {
     fn get(&mut self, source: &str) -> Option<Result<Script, String>> {
-        let (result, _) = self.entries.get(source)?;
+        let (result, _, parts) = self.entries.get(source)?;
+        if parts.iter().any(|(name, read)| read_part(name) != *read) {
+            self.remove(source);
+            return None;
+        }
         let result = result.clone();
         if let Some(at) = self.order.iter().position(|s| s == source) {
             let key = self.order.remove(at).expect("position is in range");
@@ -475,19 +494,26 @@ impl Cache {
         Some(result)
     }
 
-    fn insert(&mut self, source: &str, result: Result<Script, String>, weight: usize) {
+    fn insert(&mut self, source: &str, result: Result<Script, String>, weight: usize, parts: Vec<PartRead>) {
         if weight > CACHE_BYTES || self.entries.contains_key(source) {
             return;
         }
         while self.weight + weight > CACHE_BYTES {
             let Some(oldest) = self.order.pop_front() else { break };
-            if let Some((_, w)) = self.entries.remove(&oldest) {
+            if let Some((_, w, _)) = self.entries.remove(&oldest) {
                 self.weight -= w;
             }
         }
-        self.entries.insert(source.to_string(), (result, weight));
+        self.entries.insert(source.to_string(), (result, weight, parts));
         self.order.push_back(source.to_string());
         self.weight += weight;
+    }
+
+    fn remove(&mut self, source: &str) {
+        if let Some((_, w, _)) = self.entries.remove(source) {
+            self.weight -= w;
+            self.order.retain(|s| s != source);
+        }
     }
 }
 
@@ -528,12 +554,23 @@ fn watch_for_impurity<'js>(ctx: &Ctx<'js>, meter: Arc<Meter>) -> rquickjs::Resul
 }
 
 /// The host functions the DSL reaches through `globalThis.__parcadNative`.
-/// Each is arithmetic on the arguments it is handed; none reads anything else.
+/// Each is arithmetic on the arguments it is handed, except `readPart`, which
+/// reads one saved part's source and nothing else.
 /// The DSL validates arguments before calling, so these only refuse what
 /// would be unsafe to run; its JavaScript twins are what a script's mistakes
 /// are worded by.
 fn install_native<'js>(ctx: &Ctx<'js>, meter: Arc<Meter>) -> rquickjs::Result<()> {
     let native = Object::new(ctx.clone())?;
+    let m = meter.clone();
+    native.set(
+        "readPart",
+        Function::new(ctx.clone(), move |ctx: Ctx<'js>, name: String| -> rquickjs::Result<String> {
+            let read = read_part(&name);
+            m.parts.lock().unwrap_or_else(|e| e.into_inner()).push((name, read.clone()));
+            read.map_err(|e| throw(&ctx, e))
+        })?,
+    )?;
+
     let m = meter.clone();
     native.set(
         "scriptBudget",
@@ -1045,6 +1082,76 @@ return box(1, 1, 1);
             error.contains("check_selector with selector: \">Z and not |Z\" parses one without building anything."),
             "{error}"
         );
+    }
+
+    const SPACER: &str = "const p = partParams({ od: 8, height: 10 });\n\
+                          note(\"height\", p.height);\n\
+                          return cylinder(p.od / 2, p.height).tag(\"spacer\");";
+
+    #[test]
+    fn an_imported_part_takes_the_importer_s_values_and_reports_the_importer_s_line() {
+        crate::projects::tests::scoped(|_| {
+            crate::projects::write("Fasteners/spacer", SPACER).expect("a scratch parts folder");
+            let script = build(
+                "const plate = box(40, 20, 4);\n\
+                 const tall = importPart(\"Fasteners/spacer\", { height: 12 });\n\
+                 return plate.union(tall.at(0, 0, 8), importPart(\"Fasteners/spacer\").at(10, 0, 7));",
+            )
+            .expect("builds");
+            let heights: Vec<f64> = script.graph["nodes"]
+                .as_array()
+                .expect("nodes")
+                .iter()
+                .filter(|node| node["op"] == "cylinder")
+                .map(|node| node["h"].as_f64().expect("a height"))
+                .collect();
+            assert_eq!(heights, [12.0, 10.0]);
+            let cylinder = script.graph["nodes"]
+                .as_array()
+                .expect("nodes")
+                .iter()
+                .position(|node| node["op"] == "cylinder")
+                .expect("a cylinder");
+            assert_eq!(script.lines[cylinder], Some(2), "made inside the import, reported at its call");
+            let notes = serde_json::to_string(&script.notes).expect("notes");
+            assert!(notes.contains("Fasteners/spacer: height"), "{notes}");
+        });
+    }
+
+    #[test]
+    fn an_import_names_the_line_of_the_part_that_failed_and_the_keys_it_takes() {
+        crate::projects::tests::scoped(|_| {
+            crate::projects::write("Fasteners/spacer", SPACER).expect("a scratch parts folder");
+            crate::projects::write("broken", "const w = 10;\nreturn box(w, w, w).cut(holeFor(\"M99\", 3));")
+                .expect("saved");
+            let error = build_graph("const pad = 1;\nreturn importPart(\"broken\");").expect_err("M99 is not a size");
+            assert!(error.starts_with("the script threw at line 2:\nbroken threw at line 2: no fastener data for M99"), "{error}");
+
+            let error = build_graph("return importPart(\"Fasteners/spacer\", { heigth: 12 });").expect_err("a typo");
+            assert!(error.contains("was given heigth, which Fasteners/spacer does not take; it takes od (default 8) and height (default 10)"), "{error}");
+
+            let error = build_graph("return importPart(\"nowhere\");").expect_err("nothing saved there");
+            assert!(error.contains("importPart(\"nowhere\"): no project at"), "{error}");
+
+            crate::projects::write("a", "return importPart(\"b\");").expect("saved");
+            crate::projects::write("b", "return importPart(\"a\");").expect("saved");
+            let error = build_graph("return importPart(\"a\");").expect_err("a cycle");
+            assert!(error.contains("would import a part into itself: a → b → a"), "{error}");
+        });
+    }
+
+    #[test]
+    fn a_cached_build_is_dropped_when_a_part_it_imports_changes() {
+        crate::projects::tests::scoped(|_| {
+            crate::projects::write("Fasteners/spacer", SPACER).expect("a scratch parts folder");
+            let importer = "return importPart(\"Fasteners/spacer\").at(0, 0, 1);";
+            assert!(!build(importer).expect("builds").reused);
+            assert!(build(importer).expect("builds").reused, "nothing changed");
+            crate::projects::write("Fasteners/spacer", &SPACER.replace("height: 10", "height: 11")).expect("saved");
+            let rebuilt = build(importer).expect("builds");
+            assert!(!rebuilt.reused, "the spacer changed under it");
+            assert!(rebuilt.graph.to_string().contains("\"h\":11"), "{}", rebuilt.graph);
+        });
     }
 
     #[test]
