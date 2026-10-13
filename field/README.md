@@ -264,7 +264,7 @@ model** — a prompt that names its own expected answer measures nothing.
 ---
 tool:    list_entities          # what this case exists to test; `x.y` is a facet of x
 also:    list_projects          # other tools it exercises, for the coverage table
-reach:   list_entities          # every tool that must be called, or the answer is LUCKY
+reach:   list_entities          # every tool that must be called, or the answer is LUCKY; a|b is either
 arg:     section                # arguments that must be non-empty on some call
 input:   \.mirror\(             # a regex some call's arguments must match
 verdict: SELECTABLE EDGES\s*[=:]\s*122    # matched against the tail of the reply only

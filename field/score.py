@@ -102,8 +102,9 @@ def listed(rub, key):
 
 
 def routed(row, rub):
-    """Did the trial take the route the case requires — `reach`, `arg`, `input`?"""
-    if not all(t in row["read"] for t in listed(rub, "reach")):
+    """Did the trial take the route the case requires — `reach`, `arg`, `input`?
+    A `reach` entry `a|b` is reached through either tool."""
+    if not all(any(a in row["read"] for a in t.split("|")) for t in listed(rub, "reach")):
         return False
     if not all(row["args"].get(a) for a in listed(rub, "arg")):
         return False
@@ -297,7 +298,7 @@ def suite(root, cfg):
         # table lies in the one direction it exists to prevent.
         covers = {facet.split(".")[0]} | {
             x.strip() for k in ("also", "reach")
-            for x in rub.get(k, "").split(",") if x.strip()}
+            for x in rub.get(k, "").replace("|", ",").split(",") if x.strip()}
         for arm in sorted(p for p in case.iterdir() if p.is_dir()):
             rows = score_case(arm.glob("trial*.jsonl"), rub, cfg, case.name)
             if not rows:

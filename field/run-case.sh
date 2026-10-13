@@ -38,6 +38,8 @@ fi
 
 RUN=${RUN:-$(mktemp -d "${TMPDIR:-/tmp}/$FIELD_SERVER-field-XXXXXX")}
 mkdir -p "$RUN"   # RUN may name a directory that does not exist yet
+RUN=$(cd "$RUN" && pwd)
+BODY=$(prompt_body "$PROMPT")
 cat > "$RUN/mcp.json" <<EOF
 { "mcpServers": { "$FIELD_SERVER": { "type": "http", "url": "$FIELD_URL" } } }
 EOF
@@ -58,8 +60,11 @@ budgeted() {
 # user has configured elsewhere under the same name — one round found a
 # `parcad-web` relay entry scoped to the home directory — is otherwise loaded
 # too, and a model told that one failed to connect answers nothing.
+# From the run's own directory: a checkout's CLAUDE.md, memory and Stop hook
+# are not the server under test, and one hook rewoke trials with a failing gate.
 run_one() {
-  budgeted claude -p "$(prompt_body "$PROMPT")" \
+  cd "$RUN"
+  budgeted claude -p "$BODY" \
     --model "$MODEL" \
     ${EFFORT:+--effort "$EFFORT"} \
     --mcp-config "$RUN/mcp.json" --strict-mcp-config \
