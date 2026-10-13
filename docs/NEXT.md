@@ -234,8 +234,38 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
   replace `packaging/render.py` + `publish.yml` given the separate OCCT worker
   and the Tauri app; whether an existing mesh renderer should replace the
   software rasteriser in `render.rs`.
-- **Signing**: SignPath Foundation (free) for Windows; Apple Developer ID ($99/yr)
-  for the `.app`. Neither is started.
+- **Signing**: SignPath Foundation (free) for Windows, not started. The Mac has
+  a Developer ID and `tools/sign-mac-release.sh`, but the certificate is not on
+  Leon's Mac, so 0.0.12 and 0.0.13 shipped unsigned. Put it there, with the
+  notarisation credentials, before the next release.
+
+### Found by the competitor bench (2026-10-13)
+
+ParCAD, text-to-cad, kernelCAD, Limo and plain build123d built the same parts,
+graded by one script on stock OCCT. The briefs, transcripts and grader are in
+`research_notes/hands-on/`, which is local and excluded from git.
+
+- **The reported volume is the mesh's.** The beads brief reported 2148.23 mm³.
+  Its STEP measures 2152.326 mm³ with stock `BRepGProp`, which is the analytic
+  value, so the geometry is right and the number is 0.19 % low.
+  `eval/cases/beads-on-a-sphere.json` records the mesh figure too. An agent
+  comparing with a hand calculation, or with another tool's exact number, sees
+  a gap it cannot explain. Fix: report the B-rep's own volume and area, keep
+  mesh figures only where a mesh is what is measured, and re-record the corpus
+  with `--update`.
+- **A query that catches a concave and a convex edge passes silently.** Haiku,
+  retainer brief: `fused.fillet(2, { curve: "circle", adjacentTo: { faceNormal:
+  "+z" } })` meant the seam where the cylinder meets the block. It also caught
+  the cylinder's top rim. The reply said `edges: 2`, the part came out 158 mm³
+  short, and the model said done. Fix: when a selection spans both dihedrals,
+  the treatment report says so and names `dihedral: "concave"`. Add a field
+  case.
+- **The head-to-head is not yet a claim.** Haiku, six briefs, two trials each:
+  ParCAD 12/12 right, text-to-cad 3/12, kernelCAD 3/12, build123d 2/12, and
+  most of the failures were reported as done. Sonnet and Opus were right with
+  every tool. Before quoting it anywhere, let round 3 finish, rerun it on
+  briefs chosen outside this repo (beads and the 0 mm wall are cases ParCAD was
+  built for), and publish the harness.
 
 ### Found designing ParCAD web's planter saucer (2026-09-16)
 
