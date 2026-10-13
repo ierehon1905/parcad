@@ -2746,6 +2746,10 @@ fn select_edge_target(
 pub struct TargetGeometry {
     pub edges: Vec<EdgeCurve>,
     pub vertices: Vec<TargetVertex>,
+    /// One instance's counts, as `.expect` and the reply's `edges` count them:
+    /// `edges` above holds a curve per kernel piece, for every instance.
+    pub edge_count: usize,
+    pub vertex_count: usize,
     /// Tags that currently select exactly this edge set. See
     /// [`EdgeLineage::equivalent_sources`].
     pub provenance: Vec<String>,
@@ -2796,6 +2800,8 @@ pub fn inspect_edge_target(doc: &Doc, id: NodeId) -> Result<TargetGeometry> {
     Ok(TargetGeometry {
         edges,
         vertices,
+        edge_count: selected.report.edges,
+        vertex_count: selected.vertices.len(),
         provenance: solid.lineage.equivalent_sources(&selected.edges),
     })
 }
@@ -3452,6 +3458,18 @@ impl TreatmentFeatures {
         self.resolved.iter().map(|resolved| (resolved.node, resolved.clone())).collect()
     }
 
+    fn renumbered(self, renumber: &HashMap<NodeId, NodeId>) -> Self {
+        let id = |node: NodeId| renumber.get(&node).copied().unwrap_or(node);
+        Self {
+            generated: self.generated.into_iter().map(|(node, shape)| (id(node), shape)).collect(),
+            resolved: self
+                .resolved
+                .into_iter()
+                .map(|resolved| TreatmentEdges { node: id(resolved.node), ..resolved })
+                .collect(),
+        }
+    }
+
     fn add_generated(&mut self, node: NodeId, shapes: Vec<Shape>) {
         self.generated
             .extend(shapes.into_iter().map(|shape| (node, shape)));
@@ -3528,6 +3546,10 @@ type CacheKey = (String, [i64; 3]);
 
 struct CacheEntry {
     built: BuiltShape,
+    /// The subtree's node ids in pre-order, in the document it was built in.
+    /// `built.features` names treatments by these ids, and the key ignores
+    /// them, so a hit in a renumbered document maps them across.
+    ids: Vec<NodeId>,
     /// What building this subtree measured, re-reported on a hit as if it
     /// had been built again.
     measured: Measured,
@@ -3626,6 +3648,17 @@ fn touch(cache: &mut BuildCache, key: &CacheKey) {
         entry.used = generation;
         pending.extend(entry.deps.iter().cloned());
     }
+}
+
+/// A subtree's node ids in pre-order, a shared node once per use: the same
+/// walk `subtree_key` makes, so two subtrees with one key list their ids in
+/// corresponding order.
+fn subtree_ids(doc: &Doc, id: NodeId) -> Result<Vec<NodeId>> {
+    let mut ids = vec![id];
+    for child in doc.children_of(id)? {
+        ids.extend(subtree_ids(doc, child)?);
+    }
+    Ok(ids)
 }
 
 /// What a subtree is, as text: its op with the child indices blanked, its
@@ -3801,11 +3834,16 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
     let Some(key) = key else {
         return build_node_afresh(doc, id, offset);
     };
+    let ids = subtree_ids(doc, id)?;
     let hit = REUSE.with(|slot| {
         let mut slot = slot.borrow_mut();
         let reuse = slot.as_mut()?;
         let entry = reuse.cache.entries.get(&key)?;
-        let built = entry.built.clone();
+        let mut built = entry.built.clone();
+        if entry.ids != ids {
+            let renumber: HashMap<NodeId, NodeId> = entry.ids.iter().copied().zip(ids.iter().copied()).collect();
+            built.features = built.features.renumbered(&renumber);
+        }
         record(entry.measured);
         touch(&mut reuse.cache, &key);
         if let Some(frame) = reuse.under.last_mut() {
@@ -3834,6 +3872,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     key.clone(),
                     CacheEntry {
                         built: built.clone(),
+                        ids,
                         measured,
                         used: generation,
                         deps,
@@ -5817,6 +5856,32 @@ mod tests {
             bbox(&build(&block).unwrap())
         });
         assert_eq!((lo, hi), (DVec3::new(-9.75, -9.75, -15.0), DVec3::new(9.75, 9.75, 15.0)));
+    }
+
+    /// A line inserted above a fillet renumbers it, and the cache, keyed by
+    /// what a subtree is, still serves it: its report must follow it to the
+    /// new id or the reply loses the treatment's edge count and warning.
+    #[test]
+    fn a_reused_treatment_reports_under_its_new_node_id() {
+        let doc = |json: serde_json::Value| -> Doc { serde_json::from_value(json).unwrap() };
+        let first = doc(serde_json::json!({"units":"mm","root":1,"nodes":[
+            {"op":"cuboid","size":{"x":10,"y":10,"z":10}},
+            {"op":"fillet","child":0,"radius":1,"selector":"|Z"}
+        ]}));
+        let renumbered = doc(serde_json::json!({"units":"mm","root":2,"nodes":[
+            {"op":"sphere","r":1},
+            {"op":"cuboid","size":{"x":10,"y":10,"z":10}},
+            {"op":"fillet","child":1,"radius":1,"selector":"|Z"}
+        ]}));
+        let mut cache = BuildCache::default();
+        let before = with_reuse(&mut cache, &first, || build_part(&first).unwrap().treatment_edges);
+        assert_eq!(before.keys().copied().collect::<Vec<_>>(), [1]);
+        let after = with_reuse(&mut cache, &renumbered, || build_part(&renumbered).unwrap().treatment_edges);
+        assert_eq!(
+            after.values().cloned().collect::<Vec<_>>(),
+            [TreatmentEdges { node: 2, edges: 4, convex: 4, concave: 0 }],
+            "the fillet is node 2 now",
+        );
     }
 
     /// Two cubes 3 mm apart as named bodies, the second tagged `far`, and a

@@ -134,9 +134,12 @@ pub struct Entities {
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct TreatmentTarget {
     pub node: usize,
-    /// How many edges this treatment applies to. `expect({ count })` in the
-    /// script asserts this, and a changed count then fails loudly.
+    /// How many edges this treatment applies to, where it is used once.
+    /// `expect({ count })` on an `.edges()` selection asserts this, and a
+    /// changed count then fails loudly.
     pub edge_count: usize,
+    /// How many corners, for a `.vertices()` selection: what its
+    /// `expect({ count })` asserts.
     pub vertex_count: usize,
     pub edges: Vec<EdgeEntity>,
     /// Tags whose live edge set is *exactly* this target. These are authored
@@ -211,8 +214,8 @@ pub fn entities(evaluated: &Evaluated) -> Entities {
 pub fn treatment_target(preview: &parcad_occt::TargetPreview) -> TreatmentTarget {
     TreatmentTarget {
         node: preview.node,
-        edge_count: preview.edges.len(),
-        vertex_count: preview.vertices.len(),
+        edge_count: preview.edge_count,
+        vertex_count: preview.vertex_count,
         edges: preview.edges.iter().take(ENTITY_LIMIT).map(entity).collect(),
         equivalent_tags: preview.provenance.clone(),
     }

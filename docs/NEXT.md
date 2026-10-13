@@ -272,7 +272,8 @@ the bullets below and in the next two sections.
   comparing with a hand calculation, or with another tool's exact number, sees
   a gap it cannot explain. Fix: report the B-rep's own volume and area, keep
   mesh figures only where a mesh is what is measured, and re-record the corpus
-  with `--update`.
+  with `--update`. `eval/field/round-only-the-seam.md` pins the reply's mesh
+  volumes (177,226 right, 177,067 wrong) in its verdict and trap; re-pin them.
 - **A vertex treatment's `edges` is not what its `.expect` counts.** Found
   while making the edge count agree (2026-10-13):
   `box(20, 20, 20).vertices(">X and >Y and >Z").fillet(2)` reports `edges: 3`,
@@ -280,7 +281,9 @@ the bullets below and in the next two sections.
   counts corners, so pasting 3 fails with "matched 1". Report the corner count
   for a vertex target — the vertex arm of `select_edge_target` in
   `backend.rs`, through `TreatmentEdges` to `parcad_evaluation::Treatment` —
-  and add a case beside `fillet-counts-a-split-rim-once`.
+  and add a case beside `fillet-counts-a-split-rim-once`. The same arm reports
+  no convex/concave split, so a corner where a seam meets an outside edge
+  never carries `mixed_corners`; classify the incident edges there too.
 - **The editor never shows `mixed_corners`.** The warning reaches agents in
   every reply and the window's snapshot carries it, but `app/src/state.ts`
   types a treatment without it and the treatment hover

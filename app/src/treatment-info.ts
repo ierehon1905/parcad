@@ -17,6 +17,9 @@ export interface ResolvedTarget {
   node: number;
   edges: unknown[];
   vertices?: unknown[];
+  /** What `.expect({ count })` checks, for one use of the treatment; `edges` holds a curve per kernel piece. */
+  edge_count?: number;
+  vertex_count?: number;
   /** Tags whose live edge set is exactly this target. */
   provenance?: string[];
 }
@@ -66,10 +69,10 @@ export function resolvedCount(target: ResolvedTarget): {
   count: number;
   noun: "edge" | "corner";
 } {
-  const corners = target.vertices?.length ?? 0;
+  const corners = target.vertex_count ?? target.vertices?.length ?? 0;
   return corners > 0
     ? { count: corners, noun: "corner" }
-    : { count: target.edges.length, noun: "edge" };
+    : { count: target.edge_count ?? target.edges.length, noun: "edge" };
 }
 
 function plural(count: number, noun: string) {

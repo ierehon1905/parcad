@@ -449,6 +449,14 @@ pub struct TargetPreview {
     /// edge-targeted treatment.
     #[serde(default)]
     pub vertices: Vec<TargetVertex>,
+    /// What `.expect({ count })` checks, for one instance of the treatment:
+    /// the edges a person counts for an `.edges()` selection, the corners
+    /// for `.vertices()`. `edges` and `vertices` above are what is drawn — a
+    /// curve per kernel piece, repeated for every place the treatment is used.
+    #[serde(default)]
+    pub edge_count: usize,
+    #[serde(default)]
+    pub vertex_count: usize,
     /// Tags whose live edge set is exactly this target.
     ///
     /// Unlike `edge@…`, these *are* authored references: swapping a directional
@@ -1206,6 +1214,8 @@ mod tests {
                 id: "target-vertex@3.0".into(),
                 point: [10.0, 0.0, 0.0],
             }],
+            edge_count: 1,
+            vertex_count: 1,
             provenance: vec!["mount_holes".into()],
         });
 

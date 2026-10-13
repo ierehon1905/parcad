@@ -240,6 +240,8 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
                 node,
                 edges: target.edges,
                 vertices: target.vertices,
+                edge_count: target.edge_count,
+                vertex_count: target.vertex_count,
                 provenance: target.provenance,
             }),
             Err(e) => Response::Error {

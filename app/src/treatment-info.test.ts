@@ -61,6 +61,14 @@ test("counts corners, not their incident edges, for a vertex treatment", () => {
   ]);
 });
 
+test("counts what expect counts, not the curves it draws", () => {
+  // One rim a seam cut in two, in a treatment placed twice: four curves, one edge.
+  const split = target({ edges: [1, 2, 3, 4], edge_count: 1 });
+  expect(rows(FILLET, split)).toContain("resolves: 1 edge");
+  const call = `.edges(">Z and |X").fillet(2)`;
+  expect(treatmentActions(FILLET, call, 0, split)[0].label).toBe("pin expect({ count: 1 })");
+});
+
 test("offers to pin the count it just measured", () => {
   const call = `.edges(">Z and |X").fillet(2)`;
   const [action, ...rest] = treatmentActions(FILLET, call, 100, target());
