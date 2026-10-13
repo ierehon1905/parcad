@@ -260,24 +260,65 @@ and in the next two sections.
 | 1 | the tag that makes the saucer crawl | 8 | ★★★ | L | Fable, high |
 | 2 | `allow_failing` is taken on the model's own word | 7 | ★★★ | S | Opus |
 | 3 | `check_motion` | 7 | ★★★ | L | Fable, high |
-| 4 | `edit_part` refuses with an empty reason | 6 | ★★ | S | Opus |
-| 5 | a list argument sent as a JSON string is refused | 6 | ★★ | S | Opus |
-| 6 | field runs measure Haiku 4.5, not the current Haiku | 6 | ★★ | S | Opus |
-| 7 | a right part the model cannot verify goes out unvouched | 5 | ★★ | M | Opus |
-| 8 | a DSL name as a local is a parse error | 5 | ★★ | S | Opus |
-| 9 | `edit_part`'s exact-text `old` misses | 5 | ★★ | M | Opus |
-| 10 | `read_docs` has no search | 5 | ★★ | S | Opus |
-| 11 | the same signatures fetched every trial | 4 | ★★ | S | Opus |
-| 12 | the G2 blend behind `.smooth()` | 4 | ★★ | L | Fable, high |
-| 13 | a face's listed area misreads spline faces | 4 | ★★ | S | Opus |
-| 14 | tool schemas carry non-standard `uint` formats | 3 | ★ | S | Opus |
-| 15 | `fillet(selector, radius)` order | 2 | ★ | S | Opus |
-| 16 | `wait_s` on one script tool only | 2 | ★ | S | Opus |
-| 17 | `.union()` given an edge selection says "not a function" | 2 | ★ | S | Opus |
-| 18 | a vertex treatment's `edges` is not what its `.expect` counts | 2 | ★ | S | Opus |
-| 19 | the editor never shows `mixed_corners` | 2 | ★ | S | Opus |
-| 20 | the area integral costs a fitted ring 0.76 s | 2 | ★ | M | Opus |
+| 4 | a fillet that ends exactly on a hole's rim is refused | 7 | ★★★ | M | Fable, high |
+| 5 | `edit_part` refuses with an empty reason | 6 | ★★ | S | Opus |
+| 6 | a list argument sent as a JSON string is refused | 6 | ★★ | S | Opus |
+| 7 | field runs measure Haiku 4.5, not the current Haiku | 6 | ★★ | S | Opus |
+| 8 | a right part the model cannot verify goes out unvouched | 5 | ★★ | M | Opus |
+| 9 | a DSL name as a local is a parse error | 5 | ★★ | S | Opus |
+| 10 | `edit_part`'s exact-text `old` misses | 5 | ★★ | M | Opus |
+| 11 | `read_docs` has no search | 5 | ★★ | S | Opus |
+| 12 | the same signatures fetched every trial | 4 | ★★ | S | Opus |
+| 13 | the G2 blend behind `.smooth()` | 4 | ★★ | L | Fable, high |
+| 14 | a face's listed area misreads spline faces | 4 | ★★ | S | Opus |
+| 15 | tool schemas carry non-standard `uint` formats | 3 | ★ | S | Opus |
+| 16 | `fillet(selector, radius)` order | 2 | ★ | S | Opus |
+| 17 | `wait_s` on one script tool only | 2 | ★ | S | Opus |
+| 18 | `.union()` given an edge selection says "not a function" | 2 | ★ | S | Opus |
+| 19 | a vertex treatment's `edges` is not what its `.expect` counts | 2 | ★ | S | Opus |
+| 20 | the editor never shows `mixed_corners` | 2 | ★ | S | Opus |
+| 21 | the area integral costs a fitted ring 0.76 s | 2 | ★ | M | Opus |
 
+- **A fillet that ends exactly on a hole's rim is refused.** Found by
+  @FuruRok comparing OCCT with NVIDIA's usd-brep on X (2026-10-13), and
+  reproduced here: a 40 × 30 × 5 base, a 3 mm fin across it, a Ø5 through
+  hole at x = 6, and a 2 mm fillet on the fin's concave root edges — so the
+  fillet's edge on the floor (x = 3.5) touches the hole's rim at one point.
+
+  ```js
+  const base = box(40, 30, 5).at(0, 0, 2.5).tag("base");
+  const fin = box(3, 30, 15).at(0, 0, 12.5).tag("fin");
+  const hole = cylinder(2.5, 20).at(6, 0, 0);
+  return union(base, fin).cut(hole)
+    .edges({ between: ["base", "fin"], dihedral: "concave" })
+    .fillet(2);
+  ```
+
+  The part is well defined: stock OCCT's result has the same volume as the
+  hole moved clear (7303.330 mm³), which is what a point contact gives. What is
+  wrong is the B-rep. Stock OCCT 8.0.1 builds it `IsDone()` and `BRepCheck`
+  marks exactly one sub-shape invalid: the floor face right of the fillet
+  (bbox x 3.5–20, z = 5), whose outer wire touches its inner wire, the hole,
+  at (3.5, 0, 5) with no vertex there. Every wire, edge and vertex on its own
+  is valid; a STEP round trip even reads back "valid", so this survives
+  export unnoticed. ParCAD refuses it ("its surface runs into itself … an edge
+  meets an edge") and offers 1.94 mm, its largest measured success; the 0.5 mm
+  overlap and a hole well clear both build. Two things to fix:
+  - **The kernel:** make the face valid instead of refusing. The touch point
+    has to become a vertex shared by both boundaries, i.e. the floor face split
+    there (one wire passing through the vertex, or two faces), either in
+    `ChFi3d`'s trimming of the support face (a patch beside 0001's tangent
+    pinch) or as a post-fillet repair in `backend.rs` that finds a face whose
+    wires touch and splits it through the contact (`BRepFeat_SplitShape` /
+    `BRepAlgoAPI_Splitter` with an edge from the contact to the outer
+    boundary). Exact either way, so "refuse rather than approximate" holds.
+    Done when the script above builds one valid solid of 7303.330 mm³ that
+    passes `BRepCheck` in memory, with an `eval/cases/` case for touch,
+    overlap and clear, and the 1.94 mm search no longer needed for it.
+  - **The message:** the refusal says "OpenCASCADE's validity check passes
+    such a shape"; here the in-memory check fails it (only the STEP round trip
+    passes). Say which check caught it.
+  Repro scripts, stock-OCCT runs and the renders: `research_notes/smlib-vs-occt/fillet-hole/`.
 - **`allow_failing` is taken on the model's own word.** The 0 mm-wall boss
   through OpenCode: GLM 5.3 Flash, Qwen 3.8 Flash and DeepSeek v4.1 Flash each
   passed `allow_failing` with a reason they wrote themselves ("the user fixed
@@ -420,6 +461,9 @@ described where it lives:
    motion; it is the feature gap the bench shows.
 3. **The G2 blend** behind `.smooth()` / `.squircle()`, below under the
    planter saucer — prior art first.
+4. **A fillet that ends exactly on a hole's rim**, in the bench section above:
+   split the floor face at the touch point so the result is valid, instead of
+   refusing. A user meets it on an ordinary heat sink.
 
 ### New capabilities, from the competitor research (2026-10-13)
 
