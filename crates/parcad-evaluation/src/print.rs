@@ -12,6 +12,7 @@
 //! the reply.
 
 use crate::{round_mm, round_point, ChecksReport, Collision, EvaluationSnapshot};
+use parcad_core::mesh::Tessellation;
 use parcad_occt::protocol::{Overhang, ThicknessResult, ThicknessSample, ThinKind};
 use serde::ser::{SerializeMap, Serializer};
 use serde::Serialize;
@@ -30,6 +31,8 @@ pub const SAMPLES: usize = 2000;
 
 /// How many findings of each kind the reply lists; the rest are counted.
 const LISTED: usize = 6;
+/// How many of a body's pieces the reply lists, largest first.
+const PIECES_LISTED: usize = 12;
 
 /// The verdict on whether the part prints, judged on the build it is about.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
@@ -38,11 +41,14 @@ pub struct PrintCheck {
     /// (nothing prints there; export_part, save_project and a saving
     /// edit_part refuse it unless `allow_failing` gives a reason).
     pub verdict: &'static str,
-    /// What fails: material under `floor_mm`, worst first.
+    /// What fails: the one shape a script returns, in several pieces; a
+    /// piece that starts above its body's bed; then material under
+    /// `floor_mm`, worst first.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub failed: Vec<PrintFinding>,
-    /// What is flagged: walls between `floor_mm` and `minimum_mm`, every
-    /// cut into a feature it was not for, and unsupported overhang.
+    /// What is flagged: a named body in several pieces, walls between
+    /// `floor_mm` and `minimum_mm`, every cut into a feature it was not
+    /// for, and unsupported overhang.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub flagged: Vec<PrintFinding>,
     /// Findings past the `LISTED` each list carries.
@@ -231,6 +237,7 @@ impl BodyPrint {
             at: worst.map(|f| f.at),
             opposite: None,
             between: None,
+            pieces: Vec::new(),
         })
     }
 }
@@ -238,8 +245,9 @@ impl BodyPrint {
 /// One place the print check has something to say about.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct PrintFinding {
-    /// `thin` (a wall or a feather), `collision` (a cut into a feature it
-    /// was not for) or `overhang`.
+    /// `pieces` (a body in several), `floating` (pieces that start above
+    /// the bed), `thin` (a wall or a feather), `collision` (a cut into a
+    /// feature it was not for) or `overhang`.
     pub kind: &'static str,
     /// The finding in one sentence, with its measurement and where.
     pub what: String,
@@ -268,9 +276,230 @@ pub struct PrintFinding {
     /// feature it took from: tags where there are tags, else the geometry.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub between: Option<[String; 2]>,
+    /// For `pieces`: each piece, largest first, the first `PIECES_LISTED`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub pieces: Vec<PieceReport>,
+}
+
+/// One free-standing piece of a printed body, off the mesh, to its
+/// `resolution_mm`.
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+pub struct PieceReport {
+    pub size: [f64; 3],
+    pub bounds_min: [f64; 3],
+    pub bounds_max: [f64; 3],
+    pub volume_mm3: f64,
+    /// How far its lowest point sits above the body's bed, along the axis
+    /// the body prints up: 0 on the bed.
+    pub above_bed_mm: f64,
+}
+
+/// A printed body that is more than one piece, as it prints.
+#[derive(Debug, Clone)]
+pub struct BodyPieces {
+    /// `None` for a part in one returned shape.
+    pub body: Option<String>,
+    pub up: [f64; 3],
+    pub declared: bool,
+    /// Every piece, largest first.
+    pub pieces: Vec<PieceReport>,
+    /// Within this of the bed is on it: the mesh's own resolution.
+    pub tolerance_mm: f64,
+}
+
+impl BodyPieces {
+    fn named(&self) -> String {
+        self.body.as_deref().map_or_else(|| "the part".to_string(), |b| format!("body `{b}`"))
+    }
+
+    fn floating(&self) -> impl Iterator<Item = &PieceReport> {
+        self.pieces.iter().filter(|p| p.above_bed_mm > self.tolerance_mm)
+    }
+}
+
+/// Every printed body that is more than one piece, each piece measured off
+/// the mesh in the orientation its body prints: the one `overhang` reports.
+/// The counts already in the snapshot say which bodies to walk, so a part in
+/// one piece costs nothing here.
+pub fn pieces(snapshot: &EvaluationSnapshot, s: &parcad_occt::Success, overhang: &[Overhang]) -> Vec<BodyPieces> {
+    let split = |o: &Overhang| match &o.body {
+        None => snapshot.bodies > 1,
+        Some(name) => snapshot.named_bodies.iter().any(|b| &b.name == name && b.pieces > 1),
+    };
+    let printed: Vec<&Overhang> = overhang.iter().filter(|o| split(o)).collect();
+    if printed.is_empty() {
+        return Vec::new();
+    }
+    let named = if s.bodies.is_empty() { Vec::new() } else { parcad_occt::body_meshes(s) };
+    printed
+        .into_iter()
+        .filter_map(|o| {
+            let whole;
+            let mesh = match &o.body {
+                None => {
+                    let (vertices, triangles) = s.part_mesh();
+                    whole = Tessellation { vertices, triangles, resolution_mm: s.deflection_mm }.weld(1e-3);
+                    &whole
+                }
+                Some(name) => &named.iter().find(|(n, _)| n == name)?.1,
+            };
+            Some(BodyPieces {
+                body: o.body.clone(),
+                up: o.up,
+                declared: o.declared,
+                pieces: measure_pieces(mesh, o.up),
+                tolerance_mm: s.deflection_mm.max(1e-3),
+            })
+        })
+        .filter(|b| b.pieces.len() > 1)
+        .collect()
+}
+
+fn measure_pieces(mesh: &Tessellation, up: [f64; 3]) -> Vec<PieceReport> {
+    let point = |i: usize| mesh.vertices[i].map(f64::from);
+    let height = |p: [f64; 3]| p[0] * up[0] + p[1] * up[1] + p[2] * up[2];
+    let pieces = mesh.pieces();
+    let lowest: Vec<f64> = pieces
+        .iter()
+        .map(|p| p.vertices.iter().map(|&i| height(point(i))).fold(f64::INFINITY, f64::min))
+        .collect();
+    let bed = lowest.iter().copied().fold(f64::INFINITY, f64::min);
+    pieces
+        .iter()
+        .zip(lowest)
+        .map(|(piece, low)| {
+            let mut lo = [f64::INFINITY; 3];
+            let mut hi = [f64::NEG_INFINITY; 3];
+            for &i in &piece.vertices {
+                let p = point(i);
+                for k in 0..3 {
+                    lo[k] = lo[k].min(p[k]);
+                    hi[k] = hi[k].max(p[k]);
+                }
+            }
+            PieceReport {
+                size: round_point([hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]]),
+                bounds_min: round_point(lo),
+                bounds_max: round_point(hi),
+                volume_mm3: round_mm(piece.volume_mm3),
+                above_bed_mm: round_mm(low - bed),
+            }
+        })
+        .collect()
+}
+
+/// ` Each spans the whole part in y (240 mm), side by side along x and z.` when
+/// every piece spans the body on some axes: what parts them runs right through.
+fn side_by_side(body: &BodyPieces) -> String {
+    const AXES: [&str; 3] = ["x", "y", "z"];
+    let near = |a: f64, b: f64| (a - b).abs() <= body.tolerance_mm + 0.01;
+    let spanned: Vec<usize> = (0..3)
+        .filter(|&k| {
+            let lo = body.pieces.iter().map(|p| p.bounds_min[k]).fold(f64::INFINITY, f64::min);
+            let hi = body.pieces.iter().map(|p| p.bounds_max[k]).fold(f64::NEG_INFINITY, f64::max);
+            body.pieces.iter().all(|p| near(p.bounds_min[k], lo) && near(p.bounds_max[k], hi))
+        })
+        .collect();
+    if spanned.is_empty() || spanned.len() == 3 {
+        return String::new();
+    }
+    let axes: Vec<&str> = spanned.iter().map(|&k| AXES[k]).collect();
+    let sizes: Vec<String> = spanned.iter().map(|&k| body.pieces[0].size[k].to_string()).collect();
+    let along: Vec<&str> = (0..3).filter(|k| !spanned.contains(k)).map(|k| AXES[k]).collect();
+    format!(
+        " Each spans the whole {} in {} ({} mm), side by side along {}.",
+        if body.body.is_none() { "part" } else { "body" },
+        axes.join(" and "),
+        sizes.join(" and "),
+        along.join(" and ")
+    )
+}
+
+/// `14 x 240 x 6 mm from [-120, -120, 0] to [-106, 120, 6]`.
+fn placed(p: &PieceReport) -> String {
+    let [a, b, c] = p.size;
+    let [x0, y0, z0] = p.bounds_min;
+    let [x1, y1, z1] = p.bounds_max;
+    format!("{a} x {b} x {c} mm from [{x0}, {y0}, {z0}] to [{x1}, {y1}, {z1}]")
 }
 
 impl PrintFinding {
+    /// A body in several pieces: a slicer prints each apart. Failed for the
+    /// one shape a script returns unnamed; flagged for a named body, since
+    /// naming is how a script says it means several.
+    fn pieces(body: &BodyPieces) -> Self {
+        let n = body.pieces.len();
+        let floating = body.floating().count();
+        let next = body.pieces.get(1).map(|p| format!("; next {}", placed(p))).unwrap_or_default();
+        let listed = if n > PIECES_LISTED { format!("the largest {PIECES_LISTED} are") } else { "each is".to_string() };
+        let off_bed = match floating {
+            0 => String::new(),
+            1 => ", and 1 starts above the bed".to_string(),
+            k => format!(", and {k} start above the bed"),
+        };
+        let (said, fix) = match body.body {
+            None => (
+                "not one: nothing joins them, so it prints as",
+                "join each piece to what it belongs on: overlap a placed shape into the one that carries it, and stop a cut before it runs through the part; pieces meant to print apart go in a named body, return { clips } or { a, b }",
+            ),
+            Some(_) => (
+                "which print as",
+                "nothing to change if they are meant apart; if not, join each piece to what it belongs on: overlap a placed shape into the one that carries it, and stop a cut before it runs through the part",
+            ),
+        };
+        Self {
+            kind: "pieces",
+            what: format!(
+                "{} is {n} separate pieces, {said} {n} parts{off_bed}.{} Largest {}{next}; {listed} in `pieces`",
+                body.named(),
+                side_by_side(body),
+                placed(&body.pieces[0]),
+            ),
+            fix,
+            body: body.body.clone(),
+            thickness_mm: None,
+            thin_kind: None,
+            removed_mm3: None,
+            unsupported_mm2: None,
+            at: None,
+            opposite: None,
+            between: None,
+            pieces: body.pieces.iter().take(PIECES_LISTED).cloned().collect(),
+        }
+    }
+
+    /// Pieces that start above the bed: nothing is under them to print on.
+    fn floating(body: &BodyPieces) -> Option<Self> {
+        let floating: Vec<&PieceReport> = body.floating().collect();
+        let largest = *floating.first()?;
+        let low = floating.iter().map(|p| p.above_bed_mm).fold(f64::INFINITY, f64::min);
+        let high = floating.iter().map(|p| p.above_bed_mm).fold(f64::NEG_INFINITY, f64::max);
+        let heights = if low == high { format!("{low} mm") } else { format!("{low} to {high} mm") };
+        let (starts, them, which) = if floating.len() == 1 { ("starts", "it", "it is") } else { ("start", "them", "the largest is") };
+        Some(Self {
+            kind: "floating",
+            what: format!(
+                "{} of the {} pieces of {} {starts} {heights} above the bed printed up {}{}, with nothing under {them} to print on: {which} {}",
+                floating.len(),
+                body.pieces.len(),
+                body.named(),
+                up_name(body.up),
+                if body.declared { "" } else { " (as drawn)" },
+                placed(largest),
+            ),
+            fix: "move each down into what should carry it, overlapping it a little; a piece meant to print apart is a named body, which prints on its own bed",
+            body: body.body.clone(),
+            thickness_mm: None,
+            thin_kind: None,
+            removed_mm3: None,
+            unsupported_mm2: None,
+            at: None,
+            opposite: None,
+            between: None,
+            pieces: Vec::new(),
+        })
+    }
+
     fn thin(sample: &ThicknessSample) -> Self {
         let name = |tags: &[String], surface: &Option<String>| {
             tags.first()
@@ -319,6 +548,7 @@ impl PrintFinding {
             at: Some(at),
             opposite: Some(round_point(sample.opposite)),
             between: Some([a, b]),
+            pieces: Vec::new(),
         }
     }
 
@@ -339,6 +569,7 @@ impl PrintFinding {
             at: Some(c.at),
             opposite: None,
             between: Some([c.cut.clone(), c.feature.clone()]),
+            pieces: Vec::new(),
         }
     }
 }
@@ -354,12 +585,13 @@ fn extent(sample: &ThicknessSample) -> String {
     }
 }
 
-/// Judge the part. `sweep` runs the thickness sweep at the threshold given
-/// and is called once; `None` for a surface, which has no material to be
-/// thick and nothing to print.
+/// Judge the part. `pieces` is [`pieces`] of the same build. `sweep` runs the
+/// thickness sweep at the threshold given and is called once; `None` for a
+/// surface, which has no material to be thick and nothing to print.
 pub fn judge(
     snapshot: &EvaluationSnapshot,
     overhang: &[Overhang],
+    pieces: &[BodyPieces],
     sweep: &mut dyn FnMut(f64, usize) -> Result<ThicknessResult, String>,
 ) -> Result<Option<PrintCheck>, String> {
     if snapshot.kind == "surface" {
@@ -390,6 +622,20 @@ pub fn judge(
             .filter(|m| m.kind != ThinKind::Edge)
             .map(PrintFinding::thin)
     });
+    // A part in pieces is read before anything about its walls: first in
+    // each list.
+    let mut split = Vec::new();
+    let mut named = Vec::new();
+    for body in pieces {
+        if body.body.is_none() {
+            split.push(PrintFinding::pieces(body));
+        } else {
+            named.push(PrintFinding::pieces(body));
+        }
+        split.extend(PrintFinding::floating(body));
+    }
+    failed.splice(0..0, split);
+    flagged.splice(0..0, named);
     flagged.extend(snapshot.collisions.iter().map(PrintFinding::collision));
     let bodies: Vec<BodyPrint> = overhang.iter().map(BodyPrint::of).collect();
     let overhang_deg = overhang.first().map_or(45.0, |o| o.threshold_deg);
@@ -420,12 +666,14 @@ pub fn judge(
                one curved face only where wider than the sample spacing); every cut by what it \
                took from each named feature besides its target; and each body's overhang as it \
                prints, up its .printedUp() axis or +z as drawn — the area facing down at or under \
-               overhang_deg, a plane's angle exact and a curved face's sampled on the mesh. Under \
-               floor_mm nothing prints: `failed`, and export_part, save_project and a saving \
-               edit_part refuse it unless allow_failing gives the reason. Between floor_mm and \
-               minimum_mm, every collision and any overhang: `flagged`, which prints and is \
-               reported, never judged for a printer. A part is done when this is `passed` or each \
-               flag has a reason",
+               overhang_deg, a plane's angle exact and a curved face's sampled on the mesh; and \
+               each body's free-standing pieces, off the mesh. A shape returned unnamed in \
+               several pieces, a piece starting above its body's bed, and material under \
+               floor_mm are `failed`: export_part, save_project and a saving edit_part refuse it \
+               unless allow_failing gives the reason. A named body in several pieces, a wall \
+               between floor_mm and minimum_mm, every collision and any overhang: `flagged`, \
+               which prints and is reported, never judged for a printer. A part is done when this \
+               is `passed` or each flag has a reason",
     }))
 }
 
@@ -568,7 +816,7 @@ mod tests {
             sample(ThinKind::Wall, 0.5, ("lip", "floor"), Some("stand")),
             sample(ThinKind::Edge, 0.2, ("slab", "slab"), Some("stand")),
         ];
-        let check = judge(&snapshot(), &[], &mut sweep_of(spots)).unwrap().unwrap();
+        let check = judge(&snapshot(), &[], &[], &mut sweep_of(spots)).unwrap().unwrap();
         assert_eq!(check.verdict, "failed");
         assert_eq!(check.failed.len(), 1);
         assert_eq!(check.failed[0].between, Some(["`cable`".into(), "`slot`".into()]));
@@ -589,14 +837,14 @@ mod tests {
     fn a_clean_part_passes_and_a_collision_alone_flags() {
         let mut clean = snapshot();
         clean.collisions.clear();
-        let check = judge(&clean, &[], &mut sweep_of(vec![sample(ThinKind::Edge, 0.2, ("a", "b"), None)])).unwrap().unwrap();
+        let check = judge(&clean, &[], &[], &mut sweep_of(vec![sample(ThinKind::Edge, 0.2, ("a", "b"), None)])).unwrap().unwrap();
         assert_eq!((check.verdict, check.failed.len(), check.flagged.len()), ("passed", 0, 0));
         assert!(check.thinnest.is_none(), "an edge is not a wall");
-        let check = judge(&snapshot(), &[], &mut sweep_of(Vec::new())).unwrap().unwrap();
+        let check = judge(&snapshot(), &[], &[], &mut sweep_of(Vec::new())).unwrap().unwrap();
         assert_eq!((check.verdict, check.flagged.len()), ("flagged", 1));
         let mut surface = snapshot();
         surface.kind = "surface";
-        assert!(judge(&surface, &[], &mut |_, _| panic!("a surface is not swept")).unwrap().is_none());
+        assert!(judge(&surface, &[], &[], &mut |_, _| panic!("a surface is not swept")).unwrap().is_none());
     }
 
     /// An overhanging body flags, named with its orientation, the worst face
@@ -630,7 +878,7 @@ mod tests {
         let base = Overhang { body: Some("base".into()), up: [0.0, 0.0, 1.0], declared: false, unsupported_mm2: 0.0, face_count: 0, faces: Vec::new(), bridges: Vec::new(), support_mm3: None, ..lid.clone() };
         let mut clean = snapshot();
         clean.collisions.clear();
-        let check = judge(&clean, &[lid, base], &mut sweep_of(Vec::new())).unwrap().unwrap();
+        let check = judge(&clean, &[lid, base], &[], &mut sweep_of(Vec::new())).unwrap().unwrap();
         assert_eq!(check.verdict, "flagged");
         assert_eq!(check.flagged.len(), 1);
         let f = &check.flagged[0];
@@ -691,5 +939,152 @@ mod tests {
         with.verdicts = Verdicts { checks: Some(passed), brief: None, print_check: Some(print("failed")) };
         let text = serde_json::to_string(&with).unwrap();
         assert!(text.starts_with("{\"print_check\":{\"verdict\":\"failed\",\"failed\":[{\"kind\":\"collision\""), "{text}");
+    }
+
+    /// Cubes as one reply's mesh, each `(min corner, edge)`, wound outward.
+    fn cubes(cubes: &[([f32; 3], f32)]) -> parcad_occt::Success {
+        let mut positions: Vec<f32> = Vec::new();
+        let mut indices: Vec<u32> = Vec::new();
+        for &(lo, edge) in cubes {
+            let base = (positions.len() / 3) as u32;
+            for i in 0..8u32 {
+                positions.extend([
+                    lo[0] + edge * (i & 1) as f32,
+                    lo[1] + edge * ((i >> 1) & 1) as f32,
+                    lo[2] + edge * ((i >> 2) & 1) as f32,
+                ]);
+            }
+            let outward = [0, 2, 1, 1, 2, 3, 4, 5, 6, 5, 7, 6, 0, 1, 4, 1, 5, 4, 2, 6, 3, 3, 6, 7, 0, 4, 2, 2, 4, 6, 1, 3, 5, 3, 7, 5];
+            indices.extend(outward.map(|k| base + k));
+        }
+        serde_json::from_value(serde_json::json!({
+            "positions": positions,
+            "normals": [],
+            "indices": indices,
+            "deflection_mm": 0.01,
+            "edges": [],
+            "topology": { "faces": 6 * cubes.len(), "edges": 12 * cubes.len() },
+            "timings": serde_json::to_value(parcad_occt::protocol::Timings::default()).unwrap(),
+            "step_path": null,
+            "stl_path": null,
+        }))
+        .unwrap()
+    }
+
+    fn as_drawn() -> Overhang {
+        Overhang {
+            body: None,
+            up: [0.0, 0.0, 1.0],
+            declared: false,
+            threshold_deg: 45.0,
+            bed_mm2: 100.0,
+            footprint_fraction: 1.0,
+            unsupported_mm2: 0.0,
+            face_count: 0,
+            faces: Vec::new(),
+            bridges: Vec::new(),
+            support_mm3: None,
+            sampled: false,
+        }
+    }
+
+    /// The plate stand's two defects in miniature: a 10 mm cube on the bed
+    /// and a 2 mm cube 15 mm above it, returned as one shape. The split
+    /// fails, the piece in mid-air fails on its own, and both come before any
+    /// wall, naming each piece's size and place.
+    #[test]
+    fn one_shape_in_two_pieces_fails_and_a_piece_off_the_bed_fails_on_its_own() {
+        let mut clean = snapshot();
+        clean.collisions.clear();
+        let success = cubes(&[([0.0, 0.0, 0.0], 10.0), ([4.0, 4.0, 15.0], 2.0)]);
+        let found = pieces(&clean, &success, &[as_drawn()]);
+        assert_eq!(found.len(), 1);
+        let listed: Vec<(f64, f64)> = found[0].pieces.iter().map(|p| (p.volume_mm3, p.above_bed_mm)).collect();
+        assert_eq!(listed, [(1000.0, 0.0), (8.0, 15.0)]);
+        assert_eq!((found[0].pieces[1].bounds_min, found[0].pieces[1].bounds_max), ([4.0, 4.0, 15.0], [6.0, 6.0, 17.0]));
+
+        let thin = vec![sample(ThinKind::Feather, 0.0, ("cable", "slot"), None)];
+        let check = judge(&clean, &[as_drawn()], &found, &mut sweep_of(thin)).unwrap().unwrap();
+        assert_eq!(check.verdict, "failed");
+        let kinds: Vec<&str> = check.failed.iter().map(|f| f.kind).collect();
+        assert_eq!(kinds, ["pieces", "floating", "thin"]);
+        assert_eq!(
+            check.failed[0].what,
+            "the part is 2 separate pieces, not one: nothing joins them, so it prints as 2 parts, and 1 starts above the bed. \
+             Largest 10 x 10 x 10 mm from [0, 0, 0] to [10, 10, 10]; next 2 x 2 x 2 mm from [4, 4, 15] to [6, 6, 17]; each is in `pieces`"
+        );
+        assert_eq!(check.failed[0].pieces.len(), 2);
+        assert_eq!(
+            check.failed[1].what,
+            "1 of the 2 pieces of the part starts 15 mm above the bed printed up +z (as drawn), with nothing under it to print on: \
+             it is 2 x 2 x 2 mm from [4, 4, 15] to [6, 6, 17]"
+        );
+        assert_eq!(check.thinnest.as_ref().unwrap().kind, "thin", "the thinnest is a wall, never a piece");
+        assert_eq!(Verdicts { checks: None, brief: None, print_check: Some(check) }.failing().len(), 3);
+    }
+
+    /// Two pieces side by side on the bed still fail, with no floating
+    /// finding; a part in one piece, or one with a cavity, walks no mesh.
+    #[test]
+    fn pieces_side_by_side_fail_without_floating_and_one_piece_is_not_walked() {
+        let mut clean = snapshot();
+        clean.collisions.clear();
+        let side_by_side = cubes(&[([0.0, 0.0, 0.0], 10.0), ([20.0, 0.0, 0.0], 10.0)]);
+        let found = pieces(&clean, &side_by_side, &[as_drawn()]);
+        let check = judge(&clean, &[as_drawn()], &found, &mut sweep_of(Vec::new())).unwrap().unwrap();
+        let kinds: Vec<&str> = check.failed.iter().map(|f| f.kind).collect();
+        assert_eq!(kinds, ["pieces"]);
+        assert!(
+            check.failed[0].what.starts_with(
+                "the part is 2 separate pieces, not one: nothing joins them, so it prints as 2 parts. \
+                 Each spans the whole part in y and z (10 and 10 mm), side by side along x. Largest"
+            ),
+            "{}",
+            check.failed[0].what
+        );
+
+        clean.bodies = 1;
+        assert!(pieces(&clean, &side_by_side, &[as_drawn()]).is_empty(), "the snapshot's count decides whether the mesh is walked");
+    }
+
+    /// A named body is how a script means several pieces: the control
+    /// box's seven caps, drawn seated, are a flag. A piece above that body's
+    /// own bed still fails, named or not.
+    #[test]
+    fn a_named_body_in_pieces_flags_and_its_piece_off_the_bed_still_fails() {
+        let check_of = |cubes_drawn: &[([f32; 3], f32)]| {
+            let mut success = cubes(cubes_drawn);
+            success.bodies = vec![serde_json::from_value(serde_json::json!({
+                "name": "caps",
+                "faces": 6 * cubes_drawn.len(),
+                "edges": 12 * cubes_drawn.len(),
+                "triangle_start": 0,
+                "triangle_count": 12 * cubes_drawn.len(),
+            }))
+            .unwrap()];
+            let mut snap = snapshot();
+            snap.collisions.clear();
+            snap.named_bodies = parcad_occt::measure_bodies(&success).iter().map(|b| crate::BodyReport::of(b, None)).collect();
+            let up = Overhang { body: Some("caps".into()), ..as_drawn() };
+            let found = pieces(&snap, &success, std::slice::from_ref(&up));
+            judge(&snap, &[up], &found, &mut sweep_of(Vec::new())).unwrap().unwrap()
+        };
+        let seated = check_of(&[([0.0, 0.0, 30.0], 4.0), ([10.0, 0.0, 30.0], 4.0)]);
+        assert_eq!((seated.verdict, seated.failed.len()), ("flagged", 0));
+        assert_eq!(seated.flagged[0].kind, "pieces");
+        assert!(
+            seated.flagged[0].what.starts_with(
+                "body `caps` is 2 separate pieces, which print as 2 parts. Each spans the whole body in y and z (4 and 4 mm), \
+                 side by side along x. Largest 4 x 4 x 4 mm"
+            ),
+            "{}",
+            seated.flagged[0].what
+        );
+        assert!(seated.flagged[0].fix.starts_with("nothing to change if they are meant apart"));
+
+        let stepped = check_of(&[([0.0, 0.0, 30.0], 4.0), ([10.0, 0.0, 32.0], 4.0)]);
+        let kinds: Vec<&str> = stepped.failed.iter().map(|f| f.kind).collect();
+        assert_eq!((stepped.verdict, kinds), ("failed", vec!["floating"]));
+        assert!(stepped.failed[0].what.starts_with("1 of the 2 pieces of body `caps` starts 2 mm above the bed"), "{}", stepped.failed[0].what);
     }
 }

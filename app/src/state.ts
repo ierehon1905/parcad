@@ -45,7 +45,7 @@ import type { FaceMaterial, Viewport } from "./viewport";
  */
 /** One place the print check has something to say about. */
 export interface PrintFinding {
-  kind: "thin" | "collision" | "overhang";
+  kind: "pieces" | "floating" | "thin" | "collision" | "overhang";
   what: string;
   fix: string;
   body?: string;
@@ -55,6 +55,8 @@ export interface PrintFinding {
   unsupported_mm2?: number;
   at?: [number, number, number];
   between?: [string, string];
+  /** For `pieces`: each piece, largest first, and how far it starts above its body's bed. */
+  pieces?: { size: [number, number, number]; bounds_min: [number, number, number]; bounds_max: [number, number, number]; volume_mm3: number; above_bed_mm: number }[];
 }
 
 export interface EvaluationSnapshot {

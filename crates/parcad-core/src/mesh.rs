@@ -30,10 +30,22 @@ pub struct MeshStats {
     /// to — `examples/extrusion-2020.js` shipped that way.
     #[serde(default = "one")]
     pub bodies: usize,
-    /// Closed surfaces lying inside another: a `shell()`'s cavity, or a void a
-    /// cut sealed. Counted apart from bodies so a hollow part is still one.
+    /// Closed surfaces lying inside an odd number of others: a `shell()`'s
+    /// cavity, or a void a cut sealed. Counted apart from bodies so a hollow
+    /// part is still one; a ball caged in that cavity is a body again.
     #[serde(default)]
     pub voids: usize,
+}
+
+/// One free-standing piece of a mesh: a closed outer surface, with the
+/// cavities directly inside it, which belong to it and are not pieces.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Piece {
+    /// Every vertex on its outer surface, as indices into the mesh.
+    pub vertices: Vec<usize>,
+    /// What it encloses, its cavities taken out. Meaningful on a watertight
+    /// mesh, whose triangles wind as the solid's faces do.
+    pub volume_mm3: f64,
 }
 
 fn one() -> usize {
@@ -216,7 +228,7 @@ impl Tessellation {
         let (watertight, non_manifold_edges) = self.edge_check();
         let shells = self.shells(self.triangles.iter());
         let depths = self.depths(&shells);
-        let voids = depths.iter().filter(|&&d| d > 0).count();
+        let voids = depths.iter().filter(|&&d| d % 2 == 1).count();
         let bodies = shells.len() - voids;
         let inward = self.wrong_way(&shells, &depths);
         let stats = MeshStats {
@@ -231,14 +243,46 @@ impl Tessellation {
         (stats, inward)
     }
 
+    /// The free-standing pieces, largest first: what `stats().bodies` counts,
+    /// each with the vertices that bound it and the volume it holds.
+    pub fn pieces(&self) -> Vec<Piece> {
+        let shells = self.shells(self.triangles.iter());
+        let containers = self.containers(&shells);
+        let depth = |i: usize| containers[i].len();
+        let mut piece_of: Vec<Option<usize>> = vec![None; shells.len()];
+        let mut pieces: Vec<Piece> = Vec::new();
+        for (i, shell) in shells.iter().enumerate().filter(|(i, _)| depth(*i) % 2 == 0) {
+            let mut vertices: Vec<usize> = shell.iter().flatten().copied().collect();
+            vertices.sort_unstable();
+            vertices.dedup();
+            piece_of[i] = Some(pieces.len());
+            pieces.push(Piece { vertices, volume_mm3: self.enclosed(shell) });
+        }
+        // A cavity belongs to the innermost shell around it: the one a
+        // level shallower.
+        for (i, shell) in shells.iter().enumerate().filter(|(i, _)| depth(*i) % 2 == 1) {
+            let owner = containers[i].iter().find(|&&j| depth(j) + 1 == depth(i)).and_then(|&j| piece_of[j]);
+            if let Some(owner) = owner {
+                pieces[owner].volume_mm3 += self.enclosed(shell);
+            }
+        }
+        pieces.sort_by(|a, b| b.volume_mm3.total_cmp(&a.volume_mm3));
+        pieces
+    }
+
     /// How many other shells each shell lies inside.
+    fn depths(&self, shells: &[Vec<[usize; 3]>]) -> Vec<usize> {
+        self.containers(shells).iter().map(Vec::len).collect()
+    }
+
+    /// The other shells each shell lies inside.
     ///
     /// Decided by ray parity against each other shell's triangles from a
     /// point of this one. The ray runs in a direction off every axis, so a
     /// mesh of axis-aligned faces cannot have it graze an edge.
-    fn depths(&self, shells: &[Vec<[usize; 3]>]) -> Vec<usize> {
+    fn containers(&self, shells: &[Vec<[usize; 3]>]) -> Vec<Vec<usize>> {
         if shells.len() <= 1 {
-            return vec![0; shells.len()];
+            return vec![Vec::new(); shells.len()];
         }
         let dir = [0.3163_f64, 0.5203, 0.7933];
         shells
@@ -251,9 +295,26 @@ impl Tessellation {
                     .iter()
                     .enumerate()
                     .filter(|(j, other)| *j != i && other.iter().filter(|t| self.ray_hits(origin, dir, t)).count() % 2 == 1)
-                    .count()
+                    .map(|(j, _)| j)
+                    .collect()
             })
             .collect()
+    }
+
+    /// The volume a closed shell encloses, signed by the way its triangles
+    /// wind: positive facing out.
+    fn enclosed(&self, shell: &[[usize; 3]]) -> f64 {
+        shell
+            .iter()
+            .map(|t| {
+                let v = |i: usize| {
+                    let p = self.vertices[t[i]];
+                    [p[0] as f64, p[1] as f64, p[2] as f64]
+                };
+                let (a, b, c) = (v(0), v(1), v(2));
+                (a[0] * (b[1] * c[2] - b[2] * c[1]) + a[1] * (b[2] * c[0] - b[0] * c[2]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6.0
+            })
+            .sum()
     }
 
     /// The closed shells that face the wrong way, as the volume each encloses
@@ -272,17 +333,7 @@ impl Tessellation {
             .iter()
             .zip(depths.iter().copied())
             .filter_map(|(shell, depth)| {
-                let volume: f64 = shell
-                    .iter()
-                    .map(|t| {
-                        let v = |i: usize| {
-                            let p = self.vertices[t[i]];
-                            [p[0] as f64, p[1] as f64, p[2] as f64]
-                        };
-                        let (a, b, c) = (v(0), v(1), v(2));
-                        (a[0] * (b[1] * c[2] - b[2] * c[1]) + a[1] * (b[2] * c[0] - b[0] * c[2]) + a[2] * (b[0] * c[1] - b[1] * c[0])) / 6.0
-                    })
-                    .sum();
+                let volume = self.enclosed(shell);
                 let wrong = if depth % 2 == 0 { volume <= 0.0 } else { volume >= 0.0 };
                 wrong.then_some(InwardShell { volume_mm3: volume, depth, triangles: shell.len() })
             })
@@ -464,5 +515,27 @@ mod tests {
         let void_turned = mesh(&[(0.0, 10.0, true), (3.0, 6.0, true)]).inward_shells();
         assert_eq!(void_turned.len(), 1);
         assert!((void_turned[0].volume_mm3 - 27.0).abs() < 1e-6 && void_turned[0].depth == 1, "{void_turned:?}");
+    }
+
+    /// A hollow cube is one piece holding 1000 − 216 mm³; a ball caged in
+    /// its cavity is a second piece, not a second void; a cube beside it is
+    /// a third.
+    #[test]
+    fn a_cavity_belongs_to_its_piece_and_what_it_cages_is_a_piece() {
+        let hollow = mesh(&[(0.0, 10.0, true), (2.0, 8.0, false)]);
+        let pieces = hollow.pieces();
+        assert_eq!(pieces.len(), 1);
+        assert!((pieces[0].volume_mm3 - 784.0).abs() < 1e-6, "{pieces:?}");
+        assert_eq!(pieces[0].vertices.len(), 8);
+        assert_eq!((hollow.stats().bodies, hollow.stats().voids), (1, 1));
+
+        let mut caged = mesh(&[(0.0, 10.0, true), (2.0, 8.0, false), (4.0, 6.0, true)]);
+        cube(20.0, 23.0, true, &mut caged);
+        let volumes: Vec<f64> = caged.pieces().iter().map(|p| p.volume_mm3).collect();
+        assert_eq!(volumes.len(), 3, "{volumes:?}");
+        for (got, want) in volumes.iter().zip([784.0, 27.0, 8.0]) {
+            assert!((got - want).abs() < 1e-6, "{volumes:?}");
+        }
+        assert_eq!((caged.stats().bodies, caged.stats().voids), (3, 1));
     }
 }

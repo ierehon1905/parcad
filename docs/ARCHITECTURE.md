@@ -202,6 +202,18 @@ never judged: a face exactly at 45° is listed, and a body with any
 unsupported area is a `flagged` finding naming its orientation, its worst
 face and its bridges. Reference bodies and surfaces are not measured.
 
+Pieces are the fourth, and the first a reader meets. A body whose mesh is
+several free-standing pieces (`Tessellation::pieces`, the same walk that
+counts `bodies`) has each piece listed with its bounds, volume and height
+above the body's bed in the orientation the overhang uses —
+`print::pieces`, host-side, walked only when the snapshot's counts say a body
+is split. The one shape a script returns unnamed, in several pieces, is
+`failed`: a plate stand whose slots cut its base into strips exported with
+`bodies: 9` beside `print_check: passed`. A named body in several is
+`flagged`, because a name is how a script means several — the control box's
+seven caps. A piece that starts above its body's bed is `failed` either way;
+a slicer prints it in mid-air.
+
 **The orientation is measured in, not exported.** A save used to also write
 `print/<body>.3mf` beside `part.js`, each body turned onto its print face,
 and the window offered the same as an export. That is removed, deliberately:

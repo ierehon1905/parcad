@@ -257,38 +257,27 @@ and in the next two sections.
 
 | # | item | score | impact | effort | model |
 |---|---|---|---|---|---|
-| 1 | a part in several loose pieces passes `print_check` | 10 | ★★★ | S | Opus |
-| 2 | the tag that makes the saucer crawl | 8 | ★★★ | L | Fable, high |
-| 3 | `allow_failing` is taken on the model's own word | 7 | ★★★ | S | Opus |
-| 4 | `check_motion` | 7 | ★★★ | L | Fable, high |
-| 5 | `edit_part` refuses with an empty reason | 6 | ★★ | S | Opus |
-| 6 | a list argument sent as a JSON string is refused | 6 | ★★ | S | Opus |
-| 7 | field runs measure Haiku 4.5, not the current Haiku | 6 | ★★ | S | Opus |
-| 8 | a right part the model cannot verify goes out unvouched | 5 | ★★ | M | Opus |
-| 9 | a DSL name as a local is a parse error | 5 | ★★ | S | Opus |
-| 10 | `edit_part`'s exact-text `old` misses | 5 | ★★ | M | Opus |
-| 11 | `read_docs` has no search | 5 | ★★ | S | Opus |
-| 12 | the same signatures fetched every trial | 4 | ★★ | S | Opus |
-| 13 | the G2 blend behind `.smooth()` | 4 | ★★ | L | Fable, high |
-| 14 | a face's listed area misreads spline faces | 4 | ★★ | S | Opus |
-| 15 | tool schemas carry non-standard `uint` formats | 3 | ★ | S | Opus |
-| 16 | `fillet(selector, radius)` order | 2 | ★ | S | Opus |
-| 17 | `wait_s` on one script tool only | 2 | ★ | S | Opus |
-| 18 | `.union()` given an edge selection says "not a function" | 2 | ★ | S | Opus |
-| 19 | a vertex treatment's `edges` is not what its `.expect` counts | 2 | ★ | S | Opus |
-| 20 | the editor never shows `mixed_corners` | 2 | ★ | S | Opus |
-| 21 | the area integral costs a fitted ring 0.76 s | 2 | ★ | M | Opus |
+| 1 | the tag that makes the saucer crawl | 8 | ★★★ | L | Fable, high |
+| 2 | `allow_failing` is taken on the model's own word | 7 | ★★★ | S | Opus |
+| 3 | `check_motion` | 7 | ★★★ | L | Fable, high |
+| 4 | `edit_part` refuses with an empty reason | 6 | ★★ | S | Opus |
+| 5 | a list argument sent as a JSON string is refused | 6 | ★★ | S | Opus |
+| 6 | field runs measure Haiku 4.5, not the current Haiku | 6 | ★★ | S | Opus |
+| 7 | a right part the model cannot verify goes out unvouched | 5 | ★★ | M | Opus |
+| 8 | a DSL name as a local is a parse error | 5 | ★★ | S | Opus |
+| 9 | `edit_part`'s exact-text `old` misses | 5 | ★★ | M | Opus |
+| 10 | `read_docs` has no search | 5 | ★★ | S | Opus |
+| 11 | the same signatures fetched every trial | 4 | ★★ | S | Opus |
+| 12 | the G2 blend behind `.smooth()` | 4 | ★★ | L | Fable, high |
+| 13 | a face's listed area misreads spline faces | 4 | ★★ | S | Opus |
+| 14 | tool schemas carry non-standard `uint` formats | 3 | ★ | S | Opus |
+| 15 | `fillet(selector, radius)` order | 2 | ★ | S | Opus |
+| 16 | `wait_s` on one script tool only | 2 | ★ | S | Opus |
+| 17 | `.union()` given an edge selection says "not a function" | 2 | ★ | S | Opus |
+| 18 | a vertex treatment's `edges` is not what its `.expect` counts | 2 | ★ | S | Opus |
+| 19 | the editor never shows `mixed_corners` | 2 | ★ | S | Opus |
+| 20 | the area integral costs a fitted ring 0.76 s | 2 | ★ | M | Opus |
 
-- **A part in several loose pieces passes `print_check`.** Plate-stand brief,
-  Haiku 4.5: the union left eight pegs floating free of the base, and one
-  export reply said `measured.bodies: 9` and `print_check: passed` together,
-  measuring it all as one body `part`; the model said "watertight solid, passed
-  print check" and DONE. A second trial had 25 pieces, some 26 mm off the bed,
-  and drew only an overhang flag. It is the commonest small-model failure on a
-  real part and exactly what the verdict exists to stop. Fix: when one returned
-  shape is more than one piece, `print_check` fails (so export refuses), naming
-  each piece, its size and where it is; a piece that does not reach the bed
-  fails on its own; `{ bodies }` and named bodies stay the way to mean several.
 - **`allow_failing` is taken on the model's own word.** The 0 mm-wall boss
   through OpenCode: GLM 5.3 Flash, Qwen 3.8 Flash and DeepSeek v4.1 Flash each
   passed `allow_failing` with a reason they wrote themselves ("the user fixed
@@ -383,8 +372,9 @@ and in the next two sections.
   kernelCAD 12/21 and 5 — a narrower gap than 4.5's, widest on the 0 mm wall.
   The plate stand (`examples/plate-stand.js` as a brief, graded on its
   requirements) separates more: Opus is right with every tool, Sonnet loses
-  kernelCAD, Haiku 4.5 fails everywhere, ParCAD included — the loose-pieces
-  item above. DeepSeek v4.1 Flash, GLM 5.3 Flash and Qwen 3.8 Flash through
+  kernelCAD, Haiku 4.5 fails everywhere, ParCAD included — a part in loose
+  pieces that `print_check` passed, and now fails (`eval/field/does-it-hold-together.md`).
+  DeepSeek v4.1 Flash, GLM 5.3 Flash and Qwen 3.8 Flash through
   OpenCode sit near the ceiling with every tool; ParCAD is the fastest arm with
   every model (DeepSeek 44 s against 134–201 s). Field runs still default to
   Haiku 4.5 (`field/run-case.sh:19`, `field/run-suite.sh:35`).

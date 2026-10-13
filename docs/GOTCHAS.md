@@ -436,6 +436,14 @@ number. `bodies` in `MeshStats` (connected components of the mesh, joined by
 vertex position) is the number that does, and `stands_on` found it first by way
 of the end face being five patches. Both are recorded for every case now.
 
+A number in the reply was still not a verdict: on 2026-10-13 a model exported a
+plate stand whose through-slots had cut the base into nine strips, with
+`bodies: 9` and `print_check: passed` in the same reply, and called it a
+watertight solid. `print_check` now fails one returned shape in several pieces,
+listing each piece's size and place, and fails any piece that starts above its
+body's bed; a named body in several pieces is flagged, since naming is how a
+script says it means several.
+
 ### A solid can cross itself, or face inward, and pass every check
 
 `BRepCheck_Analyzer` judges each face against its own boundary; it does not ask

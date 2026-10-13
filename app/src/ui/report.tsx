@@ -153,7 +153,7 @@ export function Report() {
       ))}
       {snapshot.print_check?.failed?.map((f) => (
         <div class="text-bad" key={f.what}>
-          nothing prints: <Strong>{f.what}</Strong>
+          {f.kind === "thin" ? "nothing prints" : "won't print"}: <Strong>{f.what}</Strong>
         </div>
       ))}
       {snapshot.print_check?.flagged?.map((f) => (
