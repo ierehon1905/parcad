@@ -526,7 +526,13 @@ are worth. Leon's read is in brackets.
   easing into the floor with no crease and no jump in curvature — and got it only
   by hand-writing a smootherstep profile into a revolve. OCCT has no ready G2
   fillet; check prior art (FreeCAD, OCCT's own `BRepBlend` / `GeomFill`,
-  licence fit) before building.
+  licence fit) before building. Since 2026-10-13 the nearest prior art is
+  NVIDIA's SMLIB (usd-brep, Apache-2.0, so it can come into AGPL code): its
+  fillets take G2/G3 blend sections with a "thumbweight", per edge, though its
+  three-edge corner patches are only G1 (`research_notes/usd-brep-smlib.md`).
+  OCCT's `BRepOffsetAPI_MakeFilling` takes G2 boundary constraints but
+  approximates (GeomPlate), which is acceptable only with the deviation
+  measured and reported, as fitted sections already are.
 
 ### Left from the bridge fix (2026-09-27)
 
