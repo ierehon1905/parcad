@@ -159,6 +159,7 @@ mod tests {
             thickened_mm: None,
             offset_mm: None,
             patch_gap_mm: None,
+            curvature_jump_per_mm: None,
             kind: Default::default(),
             surfaces: Vec::new(),
             edges: Vec::new(),

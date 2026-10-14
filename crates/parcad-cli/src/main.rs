@@ -600,6 +600,9 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
     if let Some(sag) = s.facet_sag_mm {
         println!("facets   ruled loft walls lie up to {sag:.4} mm from the smooth loft through their sections");
     }
+    if let Some(jump) = s.curvature_jump_per_mm {
+        println!("smooth   curvature steps by at most {jump:.1e}/mm where a smooth() blend meets its faces");
+    }
     for body in parcad_occt::measure_bodies(&s) {
         let size = body.bounds.size();
         println!(

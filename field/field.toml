@@ -63,6 +63,13 @@ name = "deviation"
 capture = ['\\"deviation_mm\\":\s*(\d+\.\d+)']
 final = '\b{}\s*mm'
 
+# The step in curvature where a smooth() blend meets its faces, as the reply
+# rounds it up: 0.000001 or an exponent form.
+[[reads]]
+name = "curvature jump"
+capture = ['\\"curvature_jump_per_mm\\":\s*([0-9.]+(?:e-?\d+)?)']
+final = '\b{}\s*/?\s*mm'
+
 # The bound a curve drawn from a formula states, to the nanometre it is
 # rounded up to.
 [[reads]]

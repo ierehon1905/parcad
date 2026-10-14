@@ -445,6 +445,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         thickened_mm: measured.thickened_mm.map(|[min, max]| WallRange { min, max }),
         offset_mm: measured.offset_mm.map(|[min, max]| WallRange { min, max }),
         patch_gap_mm: measured.patch_gap_mm,
+        curvature_jump_per_mm: measured.curvature_jump_per_mm,
         kind: if kinds.iter().all(BodyKind::is_solid) { BodyKind::Solid } else { BodyKind::Surface },
         surfaces,
         topology,

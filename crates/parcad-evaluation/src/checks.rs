@@ -291,6 +291,7 @@ pub(crate) mod tests {
             thickened_mm: None,
             offset_mm: None,
             patch_gap_mm: None,
+            curvature_jump_per_mm: None,
             watertight: Some(true),
             non_manifold_edges: Some(0),
             bodies: 2,

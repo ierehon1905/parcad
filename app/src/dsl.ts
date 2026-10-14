@@ -172,7 +172,7 @@ export interface Material {
 
 /** How a constant-radius edge fillet meets its neighbouring faces. */
 export interface FilletOptions {
-  /** Tangent (G1) is available now; curvature (G2) is reserved for the exact backend. */
+  /** Tangent (G1) is `fillet()`; curvature (G2) is `smooth()`, which sets it. */
   continuity?: "tangent" | "curvature";
   /** Rolling-ball is available now; setback is reserved for the exact backend. */
   corner?: "rollingBall" | "setback";
@@ -908,11 +908,31 @@ export class EdgeSelection {
   }
 
   /**
-   * Request a curvature-continuous (G2) blend.
+   * Round the selected edges with a blend that is curvature-continuous (G2)
+   * to the faces it joins: no crease and no change in curvature where it
+   * meets them, where a `fillet()` leaves a kink in the reflection.
    *
-   * This is the precise CAD term for the "squircle-like" smooth transition.
-   * It is kept as authored intent now; the exact backend rejects it until it
-   * has a true G2 surface construction.
+   * - It meets the faces along the same lines as `fillet(radius)`, at the
+   *   same depth, so the two are interchangeable.
+   * - Every edge must run face to face: three or more selected edges meeting
+   *   at a corner are refused, naming the corner. `fillet()` those.
+   * - The reply's `curvature_jump_per_mm` is the step in curvature measured
+   *   where the blend meets the part: 0 here, 1/radius for a fillet.
+   *
+   * @example return box(40, 30, 10).edges("|Z").expect({ count: 4 }).smooth(4);
+   *
+   * @remarks
+   * The section is a quintic through the rolling ball's contact points,
+   * leaving each face along the circle's tangent with the face's own normal
+   * curvature in that direction (zero on a plane, 1/r across a cylinder),
+   * and passing through the circle's midpoint. Two surfaces tangent along a
+   * curve are G2 when their normal curvatures agree in one transverse
+   * direction (Pegna and Wolter), which is what the kernel measures at 33
+   * points of every rail after building. The blend is a vendored kernel
+   * patch, vendor/occt-sys/patches/0006, inside OpenCASCADE's own fillet
+   * machinery; a three-edge corner has no G2 patch there yet, which is why
+   * it is refused rather than built G1. `.vertices()` has no `smooth()` for
+   * the same reason: every corner vertex of a solid is such a corner.
    */
   smooth(radius: number, options?: Omit<FilletOptions, "continuity">): Shape {
     return this.owner.fillet(
@@ -924,7 +944,12 @@ export class EdgeSelection {
     );
   }
 
-  /** Alias for {@link smooth}; a true squircle is a 2D superellipse, not this 3D blend. */
+  /**
+   * The same blend as {@link smooth}, under the name a "squircle" corner is
+   * asked for; a true squircle is a 2D superellipse, this is a 3D blend.
+   *
+   * @example return box(40, 30, 10).edges("|Z").squircle(4);
+   */
   squircle(radius: number, options?: Omit<FilletOptions, "continuity">): Shape {
     return this.owner.fillet(
       radius,
@@ -1006,27 +1031,6 @@ export class VertexSelection {
     );
   }
 
-  /** Request a curvature-continuous (G2) corner blend. */
-  smooth(radius: number, options?: Omit<FilletOptions, "continuity">): Shape {
-    return this.owner.filletVertices(
-      radius,
-      this.selector,
-      this.expectation,
-      { ...options, continuity: "curvature" },
-      treatmentSource("smooth"),
-    );
-  }
-
-  /** Alias for {@link smooth}; it describes a G2 blend, not a 2D superellipse. */
-  squircle(radius: number, options?: Omit<FilletOptions, "continuity">): Shape {
-    return this.owner.filletVertices(
-      radius,
-      this.selector,
-      this.expectation,
-      { ...options, continuity: "curvature" },
-      treatmentSource("squircle"),
-    );
-  }
 }
 
 function fullHex(name: string, color: string | undefined): string {

@@ -2024,3 +2024,27 @@ and turned the dialog into a toast in `2ba84fc`, both in 02.08.03.66 and later.
 Don't silence it by writing `Metadata/project_settings.config`. That is
 Bambu's undocumented project format, which `threemf.rs` stays out of on
 purpose, and a non-empty config is one Bambu goes on to load as settings.
+
+## A smoothed three-edge corner is not even tangent
+
+`smooth()` is a fillet with a different cross-section, built inside
+OpenCASCADE's own fillet machinery (`vendor/occt-sys/patches/0006`), so every
+part of a fillet it does not change is inherited, the corner construction
+included. Where two smoothed edges meet at a vertex the two blends are
+intersected, which is right. Where three meet, `ChFi3d` fills the corner with
+its generic plate patch, and against curvature-continuous blends that patch
+measures 2.8° off tangent with a curvature jump of 12.9/mm, on a solid
+`BRepCheck` calls valid: the circular case's spherical corner, by contrast,
+meets its cylinders at 8.5e-7°. The harness that measured it is described in
+the patch's header.
+
+So the kernel is not asked: `backend.rs` counts the selected edges at each
+vertex before building and refuses a `smooth()` whose edges meet three or more
+at a corner, naming the corner and the count, and says to `fillet()` those. The
+same reasoning removed `.vertices().smooth()` from the language, since every
+corner vertex of a solid is such a corner. After every `smooth()` that does
+build, the angle and the step in normal curvature between each blend and the
+face it was rolled on are measured along every rail, and the build is refused
+above 0.05° or 1 % of 1/R; the number is the reply's `curvature_jump_per_mm`.
+A G2 corner patch, an n-sided patch with curvature constraints, is the open
+item in docs/NEXT.md.

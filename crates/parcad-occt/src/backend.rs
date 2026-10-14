@@ -8,7 +8,7 @@
 //! This code runs only inside the worker process. It is allowed to die.
 
 use anyhow::{bail, Result};
-use opencascade::primitives::{Treatment, Unification};
+use opencascade::primitives::{BlendContinuity, Treatment, Unification};
 use parcad_core::selectors::Dihedral;
 use std::collections::HashMap;
 use glam::{DMat3, DVec3};
@@ -534,6 +534,9 @@ pub struct Measured {
     pub offset_mm: Option<[f64; 2]>,
     /// The widest any filled patch's boundary strays from the edges it fills.
     pub patch_gap_mm: Option<f64>,
+    /// The largest step in normal curvature where any `smooth()` blend meets
+    /// the faces it joins, per mm; 0 is curvature continuous.
+    pub curvature_jump_per_mm: Option<f64>,
 }
 
 fn widen(range: &mut Option<[f64; 2]>, other: Option<[f64; 2]>) {
@@ -557,6 +560,9 @@ impl Measured {
         }
         if let Some(sag) = other.facet_sag_mm {
             self.facet_sag_mm = Some(self.facet_sag_mm.map_or(sag, |worst| worst.max(sag)));
+        }
+        if let Some(jump) = other.curvature_jump_per_mm {
+            self.curvature_jump_per_mm = Some(self.curvature_jump_per_mm.map_or(jump, |worst| worst.max(jump)));
         }
     }
 }
@@ -660,6 +666,46 @@ fn growth_slip(before: (DVec3, DVec3), after: (DVec3, DVec3)) -> f64 {
 /// Five times the mesher's deflection: loose enough not to trip on
 /// tessellation, far tighter than any real geometry error.
 const SLIP_TOLERANCE_MM: f64 = 0.05;
+
+/// The widest a `smooth()` blend's normal may lean from its face's along a
+/// rail before the blend is refused as not tangent. The kernel's blends
+/// measure under 0.001° on cylinders; the three-edge corner it cannot make
+/// measures 2.8°.
+const SMOOTH_TANGENT_TOLERANCE_DEG: f64 = 0.05;
+
+/// The largest step in normal curvature a `smooth()` blend may have along a
+/// rail, as a fraction of the 1/R a fillet steps by. The built sections
+/// measure 1e-13/mm and below; this is where a reflection line would start
+/// to show a kink.
+const SMOOTH_CURVATURE_TOLERANCE: f64 = 0.01;
+
+/// Where three or more of the edges a `smooth()` selects meet, as a sentence
+/// naming the first such corner, or `None` when every vertex has at most two.
+/// A closed edge, a hole's rim, has no corner and does not count.
+fn smoothed_corner(edges: &[Edge]) -> Option<String> {
+    let mut incident: BTreeMap<[i64; 3], (usize, DVec3)> = BTreeMap::new();
+    for edge in edges {
+        let (start, end) = (edge.start_point(), edge.end_point());
+        if (end - start).length_squared() <= 1e-16 {
+            continue;
+        }
+        for point in [start, end] {
+            incident.entry(vertex_key(point)).or_insert((0, point)).0 += 1;
+        }
+    }
+    let corners: Vec<(usize, DVec3)> = incident.into_values().filter(|(n, _)| *n >= 3).collect();
+    let (ways, at) = corners.iter().max_by_key(|(n, _)| *n)?;
+    Some(format!(
+        "{ways} of them meet at ({:.2}, {:.2}, {:.2}){}",
+        at.x,
+        at.y,
+        at.z,
+        match corners.len() {
+            1 => String::new(),
+            n => format!(", one of {n} such corners"),
+        }
+    ))
+}
 
 /// How far a helical sweep's fitted spine may stray from the exact helix, and
 /// how many points along it that is measured at.
@@ -1906,14 +1952,13 @@ fn attempt_treatment(
     base: &Shape,
     edges: &[Edge],
     size: f64,
-    chamfer: bool,
+    kind: Treat,
     before: (DVec3, DVec3),
 ) -> Result<Shape, String> {
     let mut candidate = base.clone();
-    let treatment = if chamfer {
-        candidate.chamfer_edges_with_history(size, edges)?
-    } else {
-        candidate.fillet_edges_with_history(size, edges)?
+    let treatment = match kind {
+        Treat::Chamfer => candidate.chamfer_edges_with_history(size, edges)?,
+        Treat::Fillet(continuity) => candidate.fillet_edges_with_history(size, edges, continuity)?,
     };
     let slip = growth_slip(before, bbox(&candidate));
     if slip > SLIP_TOLERANCE_MM {
@@ -1948,11 +1993,18 @@ struct ProbedRepair {
 /// has already cost more than these probes will; five probes bound it, and the
 /// worker's deadline still covers a probe that spins. The breadcrumb carries
 /// the original failure so a probe that dies keeps it named.
+/// Which edge treatment a probe rebuilds: the one that failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Treat {
+    Fillet(BlendContinuity),
+    Chamfer,
+}
+
 fn probe_below(
     base: &Shape,
     edges: &[Edge],
     failed: f64,
-    chamfer: bool,
+    kind: Treat,
     before: (DVec3, DVec3),
     stage: &str,
 ) -> ProbedRepair {
@@ -1969,7 +2021,7 @@ fn probe_below(
         breadcrumb(&format!("{stage}: {failed} mm failed; probing {size} mm"));
         tried += 1;
         floor = floor.min(size);
-        match attempt_treatment(base, edges, size, chamfer, before) {
+        match attempt_treatment(base, edges, size, kind, before) {
             Ok(_) => lo = size,
             Err(why) => {
                 breadcrumb(&format!("{stage}: {size} mm refused: {why}"));
@@ -2165,7 +2217,7 @@ fn blend_seam(
     validity_probe(&format!("{stage} before blend"), joined);
     let before = bbox(joined);
     let mut built = joined.clone();
-    let mut treatment = match built.fillet_edges_with_history(radius, seam) {
+    let mut treatment = match built.fillet_edges_with_history(radius, seam, BlendContinuity::Tangent) {
         Ok(treatment) => treatment,
         Err(reason) => bail!(
             "{what} blends by {radius} mm, and OpenCASCADE could not build the \
@@ -2177,7 +2229,7 @@ fn blend_seam(
                 String::new()
             },
             measured = repair_sentence(
-                &probe_below(joined, seam, radius, false, before, stage),
+                &probe_below(joined, seam, radius, Treat::Fillet(BlendContinuity::Tangent), before, stage),
                 "this seam",
                 "radius",
                 "write that as the blend",
@@ -2190,7 +2242,7 @@ fn blend_seam(
         bail!(
             "{refusal}\n{}",
             repair_sentence(
-                &probe_below(joined, seam, radius, false, before, stage),
+                &probe_below(joined, seam, radius, Treat::Fillet(BlendContinuity::Tangent), before, stage),
                 "this seam",
                 "radius",
                 "write that as the blend",
@@ -2202,7 +2254,7 @@ fn blend_seam(
         bail!(
             "{what} blends by {radius} mm, and {crossing}. The round is wider than the room it has: a neighbouring face, wall or other round is closer to the seam than the radius. Reduce the radius, move the solids apart, or build the round as geometry.{}",
             repair_sentence(
-                &probe_below(joined, seam, radius, false, before, stage),
+                &probe_below(joined, seam, radius, Treat::Fillet(BlendContinuity::Tangent), before, stage),
                 "this seam",
                 "radius",
                 "write that as the blend",
@@ -5251,29 +5303,34 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             if *radius <= 0.0 {
                 bail!("node {id} ({label}) fillets by {radius} mm, which is not a radius");
             }
-            if recipe.continuity != FilletContinuity::Tangent
-                || recipe.corner != FilletCorner::RollingBall
-            {
-                let continuity = match recipe.continuity {
-                    FilletContinuity::Tangent => "tangent",
-                    FilletContinuity::Curvature => "curvature",
-                };
-                let corner = match recipe.corner {
-                    FilletCorner::RollingBall => "rollingBall",
-                    FilletCorner::Setback => "setback",
-                };
+            if recipe.corner != FilletCorner::RollingBall {
                 bail!(
-                    "node {id} ({label}) requests fillet recipe {{ continuity: {continuity:?}, corner: {corner:?} }}, \
-                     but the exact backend currently supports only {{ continuity: \"tangent\", corner: \"rollingBall\" }}",
+                    "node {id} ({label}) requests fillet corner \"setback\", but the exact backend \
+                     currently supports only \"rollingBall\"",
                 );
             }
+            let (continuity, verb) = match recipe.continuity {
+                FilletContinuity::Tangent => (BlendContinuity::Tangent, "fillets"),
+                FilletContinuity::Curvature => (BlendContinuity::Curvature, "smooths"),
+            };
             let mut solid = build_node(doc, *child, offset)?;
-            surfaces::require_solid(doc, id, label, "fillets", *child, &solid)?;
+            surfaces::require_solid(doc, id, label, verb, *child, &solid)?;
             let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
             let count = selected.report.edges;
             solid.features.resolved.push(selected.report.clone());
+            if continuity == BlendContinuity::Curvature {
+                if let Some(corner) = smoothed_corner(&selected.edges) {
+                    bail!(
+                        "node {id} ({label}) smooths {count} edge(s) by {radius} mm, and {corner}. \
+                         A curvature-continuous blend has no corner patch where three or more of \
+                         its edges meet: the kernel's would leave the corner 2.8° off tangent, \
+                         measured. Smooth edges that run face to face, and fillet() the ones \
+                         that meet at a corner."
+                    );
+                }
+            }
             breadcrumb(&format!(
-                "fillet node {id} ({label}) {radius} mm on {count} selected edge(s)"
+                "{verb} node {id} ({label}) {radius} mm on {count} selected edge(s)"
             ));
             let before = bbox(&solid.shape);
             let stage = format!("fillet at node {id}");
@@ -5282,16 +5339,16 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             let input = solid.shape.clone();
             let mut treatment = match solid
                 .shape
-                .fillet_edges_with_history(*radius, &selected.edges)
+                .fillet_edges_with_history(*radius, &selected.edges, continuity)
             {
                 Ok(treatment) => treatment,
                 Err(reason) => bail!(
-                    "node {id} ({label}) fillets {count} edge(s) by {radius} mm, and \
+                    "node {id} ({label}) {verb} {count} edge(s) by {radius} mm, and \
                      OpenCASCADE could not build it ({reason}).{measured}{listing}\n\
                      inspect_treatment_target with node: {id} lists every edge this fillet \
                      would act on, without rebuilding.",
                     measured = repair_sentence(
-                        &probe_below(&input, &selected.edges, *radius, false, before, &stage),
+                        &probe_below(&input, &selected.edges, *radius, Treat::Fillet(continuity), before, &stage),
                         "these edges",
                         "radius",
                         "reduce the fillet to that, or select fewer edges",
@@ -5310,7 +5367,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                      surprising. The radius is too large for the material along those \
                      edges — reduce it, or select fewer edges.{measured}",
                     measured = repair_sentence(
-                        &probe_below(&input, &selected.edges, *radius, false, before, &stage),
+                        &probe_below(&input, &selected.edges, *radius, Treat::Fillet(continuity), before, &stage),
                         "these edges",
                         "radius",
                         "reduce the fillet to that",
@@ -5324,12 +5381,54 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                      floor thinner than the radius — or into a neighbouring face or fillet. \
                      Reduce it, or select fewer edges.{measured}",
                     measured = repair_sentence(
-                        &probe_below(&input, &selected.edges, *radius, false, before, &stage),
+                        &probe_below(&input, &selected.edges, *radius, Treat::Fillet(continuity), before, &stage),
                         "these edges",
                         "radius",
                         "reduce the fillet to that",
                     ),
                 );
+            }
+            if continuity == BlendContinuity::Curvature {
+                let join = treatment.join_continuity();
+                breadcrumb(&format!(
+                    "smooth node {id} ({label}): {} rail(s), {:.2e}° between normals, curvature step {:.2e}/mm",
+                    join.rails, join.angle_deg, join.curvature_jump_per_mm
+                ));
+                if join.rails == 0 {
+                    bail!(
+                        "node {id} ({label}) smooths {count} edge(s) by {radius} mm, and the kernel's \
+                         history names no edge where a blend meets the face it was rolled on, so \
+                         whether it is curvature-continuous cannot be measured. This is a kernel \
+                         defect; fillet() these edges, and please report the script."
+                    );
+                }
+                if join.angle_deg > SMOOTH_TANGENT_TOLERANCE_DEG {
+                    bail!(
+                        "node {id} ({label}) smooths {count} edge(s) by {radius} mm, and the blend \
+                         built is not even tangent to the faces it joins: their normals differ by \
+                         {:.3}° at worst along its {} rail(s). Reduce the radius, or select fewer edges.",
+                        join.angle_deg, join.rails
+                    );
+                }
+                let allowed = SMOOTH_CURVATURE_TOLERANCE / radius;
+                if join.curvature_jump_per_mm > allowed {
+                    bail!(
+                        "node {id} ({label}) smooths {count} edge(s) by {radius} mm, and the blend \
+                         built is not curvature-continuous: its curvature steps by {:.3e}/mm where \
+                         it meets the part, {:.1}% of the 1/R = {:.4}/mm a fillet would step by, \
+                         measured along {} rail(s). A smooth() is held to {:.0e}/mm here. Reduce the \
+                         radius, or fillet() these edges.",
+                        join.curvature_jump_per_mm,
+                        100.0 * join.curvature_jump_per_mm * radius,
+                        1.0 / radius,
+                        join.rails,
+                        allowed
+                    );
+                }
+                record(Measured {
+                    curvature_jump_per_mm: Some(join.curvature_jump_per_mm),
+                    ..Measured::default()
+                });
             }
             let lineage = std::mem::take(&mut solid.lineage).through_treatment(
                 &mut treatment,
@@ -5395,7 +5494,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                      inspect_treatment_target with node: {id} lists every edge this chamfer \
                      would act on, without rebuilding.",
                     measured = repair_sentence(
-                        &probe_below(&input, &selected.edges, *distance, true, before, &stage),
+                        &probe_below(&input, &selected.edges, *distance, Treat::Chamfer, before, &stage),
                         "these edges",
                         "distance",
                         "reduce the chamfer to that, or select fewer edges",
@@ -5415,7 +5514,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                      wrong rather than merely surprising. The distance is too large for \
                      the material along those edges — reduce it, or select fewer edges.{measured}",
                     measured = repair_sentence(
-                        &probe_below(&input, &selected.edges, *distance, true, before, &stage),
+                        &probe_below(&input, &selected.edges, *distance, Treat::Chamfer, before, &stage),
                         "these edges",
                         "distance",
                         "reduce the chamfer to that",
@@ -5429,7 +5528,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                      or floor thinner than the distance — or into a neighbouring face. Reduce it, \
                      or select fewer edges.{measured}",
                     measured = repair_sentence(
-                        &probe_below(&input, &selected.edges, *distance, true, before, &stage),
+                        &probe_below(&input, &selected.edges, *distance, Treat::Chamfer, before, &stage),
                         "these edges",
                         "distance",
                         "reduce the chamfer to that",
@@ -6321,7 +6420,7 @@ mod tests {
                         "child": 0,
                         "radius": 1,
                         "selector": ">Z and |X",
-                        "recipe": { "continuity": "curvature", "corner": "rollingBall" }
+                        "recipe": { "continuity": "tangent", "corner": "setback" }
                     }
                 ]
             }"#,
@@ -6329,12 +6428,49 @@ mod tests {
         .unwrap();
 
         let error = match build_node(&doc, doc.root, DVec3::ZERO) {
-            Ok(_) => panic!("curvature fillets must not be silently accepted"),
+            Ok(_) => panic!("setback corners must not be silently accepted"),
             Err(error) => error,
         };
-        assert!(error.to_string().contains(
-            "currently supports only { continuity: \"tangent\", corner: \"rollingBall\" }"
-        ));
+        assert!(error.to_string().contains("currently supports only \"rollingBall\""));
+    }
+
+    /// A box's four vertical edges run face to face and build curvature
+    /// continuous, measured; all twelve meet three at a corner and are refused
+    /// before the kernel is asked, naming a corner.
+    #[test]
+    fn smoothed_edges_are_measured_curvature_continuous_or_refused_at_a_corner() {
+        let smooth = |selector: &str| -> Doc {
+            serde_json::from_str(&format!(
+                r#"{{
+                    "root": 1,
+                    "nodes": [
+                        {{ "op": "cuboid", "size": {{ "x": 40, "y": 30, "z": 10 }} }},
+                        {{
+                            "op": "fillet",
+                            "child": 0,
+                            "radius": 4,
+                            "selector": {selector},
+                            "recipe": {{ "continuity": "curvature", "corner": "rollingBall" }}
+                        }}
+                    ]
+                }}"#
+            ))
+            .unwrap()
+        };
+
+        let doc = smooth(r#""|Z""#);
+        let (built, measured) = measuring_fits(|| build_node(&doc, doc.root, DVec3::ZERO));
+        let built = built.expect("four vertical edges smooth");
+        assert_eq!(built.shape.faces().count(), 10);
+        let jump = measured.curvature_jump_per_mm.expect("a smooth() records its curvature step");
+        assert!(jump < 1e-9, "curvature step {jump}/mm where a fillet's would be 0.25");
+
+        let doc = smooth(r#"{ "dihedral": "convex" }"#);
+        let error = match build_node(&doc, doc.root, DVec3::ZERO) {
+            Ok(_) => panic!("three smoothed edges at a corner must be refused"),
+            Err(error) => error.to_string(),
+        };
+        assert!(error.contains("3 of them meet at") && error.contains("fillet() the ones"), "{error}");
     }
 
     /// Adjacency must be symmetric, and indexed as the writer says it is.
@@ -6639,7 +6775,7 @@ mod tests {
         let bounds = bbox(&joined.shape);
         // The sequence a refused 2 mm blend probes.
         for size in [2.0, 1.0, 1.5, 1.25] {
-            let _ = attempt_treatment(&joined.shape, &seam, size, false, bounds);
+            let _ = attempt_treatment(&joined.shape, &seam, size, Treat::Fillet(BlendContinuity::Tangent), bounds);
             assert!(joined.shape.topology_report() == before, "the {size} mm attempt changed its input");
         }
     }

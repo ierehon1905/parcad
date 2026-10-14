@@ -136,6 +136,7 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
         curve_bound: doc.stated_curve_bound(),
         loft_wall_mm: s.loft_wall_mm.map(|w| [w.min, w.max]),
         facet_sag_mm: s.facet_sag_mm,
+        curvature_jump_per_mm: s.curvature_jump_per_mm,
         tags,
         unlocated_tags,
         // The same slice-and-measure the app's reply uses, for the same

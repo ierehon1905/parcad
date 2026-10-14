@@ -206,6 +206,11 @@ pub struct Expect {
     /// loft through the same sections, as the kernel measured it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub facet_sag_mm: Option<f64>,
+    /// For a part with a `smooth()`: the largest step in normal curvature
+    /// where a blend meets its faces, per mm, as the kernel measured it on the
+    /// built solid and rounded up to 1e-6. 0 is curvature continuous.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curvature_jump_per_mm: Option<f64>,
 
     /// `surface` or `mixed` for a part with a surface body; absent for a
     /// solid, which is what every case written before surfaces is.
@@ -781,6 +786,7 @@ pub struct Observed {
     pub curve_bound: Option<parcad_core::section::StatedBound>,
     pub loft_wall_mm: Option<[f64; 2]>,
     pub facet_sag_mm: Option<f64>,
+    pub curvature_jump_per_mm: Option<f64>,
     /// Every tag's own box, and the ones no surface point could be found for.
     pub tags: BTreeMap<String, [f64; 6]>,
     pub unlocated_tags: Vec<String>,
@@ -982,6 +988,15 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
             None => out.push(Mismatch {
                 field: "facet_sag_mm".into(),
                 detail: format!("expected {want:.3}, but the part has no ruled loft"),
+            }),
+        }
+    }
+    if let Some(want) = expect.curvature_jump_per_mm {
+        match observed.curvature_jump_per_mm {
+            Some(got) => abs_check(&mut out, "curvature_jump_per_mm", want, got, 1e-6),
+            None => out.push(Mismatch {
+                field: "curvature_jump_per_mm".into(),
+                detail: format!("expected {want:.1e}, but the part has no smooth()"),
             }),
         }
     }
@@ -1372,6 +1387,7 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
     expect.curve_bound = observed.curve_bound.map(|b| if b.certified { "certified" } else { "estimated" }.to_string());
     expect.loft_wall_mm = observed.loft_wall_mm.map(|w| w.map(|d| (d * 1e4).round() / 1e4));
     expect.facet_sag_mm = observed.facet_sag_mm.map(|d| (d * 1e4).round() / 1e4);
+    expect.curvature_jump_per_mm = observed.curvature_jump_per_mm.map(|d| (d * 1e6).ceil() / 1e6);
     // Bodies are recorded whenever the part has them: a case about a part in
     // several bodies is about those bodies.
     expect.named_bodies = (!observed.named_bodies.is_empty()).then(|| {

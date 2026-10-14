@@ -404,15 +404,27 @@ geometric recipe: selectors say *what* changes; the treatment says *how*.
 
 | source operation | exact support | extensible recipe |
 |---|---|---|
-| `.fillet(radius)` | tangent (G1), rolling-ball | G2 curvature, setback, variable/chord/asymmetric size laws |
+| `.fillet(radius)` | tangent (G1), rolling-ball | setback, variable/chord/asymmetric size laws |
 | `.chamfer(distance)` | equal-distance, planar corner | two-distance, distance/angle, miter and blend corners |
-| `.smooth(radius)` / `.squircle(radius)` | declared intent; rejected until a true G2 surface builder exists | curvature-continuous blend shape and weights |
+| `.smooth(radius)` / `.squircle(radius)` | curvature-continuous (G2) between two faces, measured; refused where three meet | a G2 corner patch; a shape weight |
 
 `continuity: "tangent"` is G1; `"curvature"` is G2. The fillet `corner` describes
 how several selected edges are solved at a shared vertex: `"rollingBall"` or
 `"setback"`. Chamfers independently have `"chamfer"`, `"miter"` and `"blend"`
 corner policies. Unsupported but valid recipes are rejected by the exact backend
 rather than being accepted and ignored.
+
+The G2 blend is a section law inside OpenCASCADE's own fillet machinery
+(`vendor/occt-sys/patches/0006`): it runs between the rolling ball's contact
+lines and through the circle's midpoint, so it is a `fillet()` with a different
+cross-section, a quintic whose curvature at each contact point is the face's
+own. After building, `backend.rs` measures the angle and the step in normal
+curvature between every blend and the face it was rolled on, along every rail,
+and refuses anything that is not tangent or steps by more than 1 % of 1/R; the
+number is the reply's `curvature_jump_per_mm`. Where three or more smoothed
+edges meet, the kernel's corner patch is 2.8° off tangent, so that selection is
+refused before the kernel is asked. research_notes/g2-blend.md has the prior
+art and the measurements.
 
 `squircle` is an ergonomic alias for `.smooth()`, not a claim that this 3D edge
 treatment is a 2D superellipse. In CAD terms the intended property is G2

@@ -2,8 +2,8 @@
 //
 // The planter is a six-point star lofted through nine sections, each wider
 // and turned further than the last, so its walls come out as twisted facets.
-// The saucer is a dish of smooth bumps in rings of 1, 6, 12 and 18, which the
-// planter stands on.
+// The saucer is a dish of domed bumps in rings of 1, 6, 12 and 18, each eased
+// into the floor with a curvature-continuous blend, which the planter stands on.
 
 const points = 6;
 const height = 90;
@@ -43,22 +43,24 @@ const planter = outside
 // Wide enough that the 34 mm star base sits inside with room for runoff.
 const saucerRadius = 42;
 const saucerFloor = 2;
-const bumpRadius = 5.4;
 const bumpHeight = 2.4;
 const ringSpacing = 11;
 const ringCount = 3;
 
-// Smootherstep: no slope and no curvature where a bump leaves the floor or at its top.
-const ease = (x) => x * x * x * (x * (6 * x - 15) + 10);
+// Each bump is a dome: the cap of a sphere whose centre is at the saucer's
+// underside, so it stays inside the floor. Its crease with the floor is eased
+// afterwards with smooth(), a blend with no jump in curvature at either end.
+const domeRadius = saucerFloor + bumpHeight;
+const easeRadius = 2; // the blend's foot lands 5.0 mm from the bump's axis
 
 function bump() {
-  const z = (r) => saucerFloor + bumpHeight * (1 - ease(r / bumpRadius));
-  const profile = [0.92, 0.82, 0.7, 0.58, 0.46, 0.34, 0.2].map((t) => [t * bumpRadius, z(t * bumpRadius)]);
+  const foot = Math.sqrt(domeRadius ** 2 - saucerFloor ** 2); // where the sphere crosses the floor
+  const shoulder = domeRadius / Math.SQRT2;
   return revolve([
     [0, 0],
-    [bumpRadius, 0],
-    [bumpRadius, saucerFloor],
-    { spline: profile, start: [-1, 0], end: [-1, 0] },
+    [foot, 0],
+    [foot, saucerFloor],
+    { through: [shoulder, shoulder] },
     [0, saucerFloor + bumpHeight],
   ]);
 }
@@ -84,7 +86,13 @@ for (let ring = 1; ring <= ringCount; ring++) {
   for (const [x, y] of polar(count, ring * ringSpacing, { start })) bumps.push(one.at(x, y));
 }
 
-const saucer = dish.union(...bumps);
+// Every bump's root is the saucer's only sharp concave circle; the dish's own
+// corners are rounds, which read as smooth.
+const saucer = dish
+  .union(...bumps)
+  .edges({ dihedral: "concave", curve: "circle" })
+  .expect({ count: 1 + 6 * ((ringCount * (ringCount + 1)) / 2) })
+  .smooth(easeRadius);
 
 return {
   planter: planter.at(0, 0, saucerFloor + bumpHeight),

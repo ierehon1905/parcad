@@ -628,6 +628,12 @@ pub struct Success {
     /// The widest any filled patch's boundary strays from the edges it fills.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub patch_gap_mm: Option<f64>,
+    /// The largest step in normal curvature where any `smooth()` blend meets
+    /// the faces it joins, per mm, measured along every such edge of the built
+    /// solid: 0 is curvature continuous, where a `fillet()` of radius R steps
+    /// by 1/R. Absent when the part has no `smooth()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub curvature_jump_per_mm: Option<f64>,
     /// What a one-body part is: a solid, or a surface. For a part in named
     /// bodies each body says so in `bodies`.
     #[serde(default)]

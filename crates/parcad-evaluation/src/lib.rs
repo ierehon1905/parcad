@@ -91,6 +91,8 @@ pub fn evaluated(
     snapshot.thickened_mm = s.thickened_mm.map(|w| WallRange { min: round_mm(w.min), max: round_mm(w.max) });
     snapshot.offset_mm = s.offset_mm.map(|w| WallRange { min: round_mm(w.min), max: round_mm(w.max) });
     snapshot.patch_gap_mm = s.patch_gap_mm.map(|d| (d * 1e6).ceil() / 1e6);
+    // An error bound rounds up: a step of 1e-15 must not read as none.
+    snapshot.curvature_jump_per_mm = s.curvature_jump_per_mm.map(|d| (d * 1e6).ceil() / 1e6);
     Ok(Evaluated {
         bounds,
         reference_bodies: s.reference_bodies().iter().map(|b| b.to_string()).collect(),
@@ -460,6 +462,11 @@ pub struct EvaluationSnapshot {
     /// strays from the edges it fills.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub patch_gap_mm: Option<f64>,
+    /// For a part with a `smooth()`: the largest step in normal curvature where
+    /// a blend meets the faces it joins, per mm, rounded up to 1e-6. 0 is
+    /// curvature continuous; a `fillet()` of radius R would step by 1/R.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub curvature_jump_per_mm: Option<f64>,
     /// Whether the solid bodies' mesh closes; absent for a surface.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub watertight: Option<bool>,
@@ -1069,6 +1076,7 @@ pub fn describe(
         thickened_mm: None,
         offset_mm: None,
         patch_gap_mm: None,
+        curvature_jump_per_mm: None,
         watertight,
         non_manifold_edges: non_manifold,
         bodies: report.mesh.bodies,
@@ -1394,6 +1402,7 @@ mod tests {
             thickened_mm: None,
             offset_mm: None,
             patch_gap_mm: None,
+            curvature_jump_per_mm: None,
             kind: BodyKind::default(),
             surfaces: Vec::new(),
             edges: Vec::new(),
@@ -1464,6 +1473,7 @@ mod tests {
             thickened_mm: None,
             offset_mm: None,
             patch_gap_mm: None,
+            curvature_jump_per_mm: None,
             kind: BodyKind::default(),
             surfaces: Vec::new(),
             edges: Vec::new(),
@@ -1529,6 +1539,7 @@ mod tests {
             thickened_mm: None,
             offset_mm: None,
             patch_gap_mm: None,
+            curvature_jump_per_mm: None,
             kind: BodyKind::default(),
             surfaces: Vec::new(),
             edges: Vec::new(),

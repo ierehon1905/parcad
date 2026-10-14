@@ -276,7 +276,7 @@ and in the next two sections.
 | 10 | `edit_part`'s exact-text `old` misses | 5 | ★★ | M | Opus |
 | 11 | `read_docs` has no search | 5 | ★★ | S | Opus |
 | 12 | the same signatures fetched every trial | 4 | ★★ | S | Opus |
-| 13 | the G2 blend behind `.smooth()` | 4 | ★★ | L | Fable, high |
+| 13 | the G2 blend behind `.smooth()` — built 2026-10-14; a three-edge corner is still refused | 4 | ★★ | L | Fable, high |
 | 14 | a face's listed area misreads spline faces | 4 | ★★ | S | Opus |
 | 15 | tool schemas carry non-standard `uint` formats | 3 | ★ | S | Opus |
 | 16 | `fillet(selector, radius)` order | 2 | ★ | S | Opus |
@@ -466,8 +466,8 @@ described where it lives:
 2. **`check_motion`** (queue item 5's mechanics witness): clearance certified
    over a swing on the exact solids. Limo, QymCAD and STEVE Studio all check
    motion; it is the feature gap the bench shows.
-3. **The G2 blend** behind `.smooth()` / `.squircle()`, below under the
-   planter saucer — prior art first.
+3. **The G2 blend** behind `.smooth()` / `.squircle()` — built 2026-10-14,
+   below under the planter saucer; what is left is the three-edge corner.
 4. **A fillet that ends exactly on a hole's rim**, in the bench section above:
    split the floor face at the touch point so the result is valid, instead of
    refusing. A user meets it on an ordinary heat sink.
@@ -519,20 +519,25 @@ are worth. Leon's read is in brackets.
   untagged and runs past 120 s with `.tag("saucer")` on the union — the graphs
   differ only by that tag, so it is the lineage bookkeeping, not the boolean.
   The example drops the tag; the body is named by `return { saucer }` anyway.
-- **`.smooth()` / `.squircle()` are declared and refused.** The DSL has had the
-  curvature-continuous (G2) blend since the treatment recipes landed
-  (`app/src/dsl.ts`, ARCHITECTURE "edge treatments"); the kernel rejects it until
-  a true G2 surface builder exists. The saucer wanted exactly this — a bump
-  easing into the floor with no crease and no jump in curvature — and got it only
-  by hand-writing a smootherstep profile into a revolve. OCCT has no ready G2
-  fillet; check prior art (FreeCAD, OCCT's own `BRepBlend` / `GeomFill`,
-  licence fit) before building. Since 2026-10-13 the nearest prior art is
-  NVIDIA's SMLIB (usd-brep, Apache-2.0, so it can come into AGPL code): its
-  fillets take G2/G3 blend sections with a "thumbweight", per edge, though its
-  three-edge corner patches are only G1 (`research_notes/usd-brep-smlib.md`).
-  OCCT's `BRepOffsetAPI_MakeFilling` takes G2 boundary constraints but
-  approximates (GeomPlate), which is acceptable only with the deviation
-  measured and reported, as fitted sections already are.
+- **`.smooth()` / `.squircle()` build, measured G2 (2026-10-14).** A fourth
+  fillet section inside OpenCASCADE's own machinery
+  (`vendor/occt-sys/patches/0006`): the rolling ball's rails with a quintic
+  whose curvature at each contact point is the face's own, so the blend is
+  curvature continuous where a fillet is only tangent. After each build the
+  angle and the step in normal curvature between every blend and its face are
+  measured along every rail (`curvature_jump_per_mm` in the reply, 1e-13/mm
+  and below on the corpus, where a fillet reads 1/R), and anything over 0.05°
+  or 1 % of 1/R is refused. The saucer's bumps are now domes eased in with
+  `smooth(2)`, 37 stripes in 2 s. Prior art, the choice and the numbers:
+  research_notes/g2-blend.md; the trap it leaves, GOTCHAS "A smoothed
+  three-edge corner is not even tangent". **Open: a G2 corner patch.** Where
+  three smoothed edges meet, `ChFi3d`'s generic corner is 2.8° off tangent
+  against these blends, so that selection is refused before the kernel is
+  asked and `.vertices().smooth()` was removed. An n-sided patch with
+  curvature constraints where `PerformThreeCorner` runs today (GeomPlate with
+  order-2 constraints is the candidate, approximate and measurable) would
+  lift the refusal; SMLib's corners are only G1 too, so there is no prior art
+  to copy. A strong-model kernel session, and the patch is the place.
 
 ### Left from the bridge fix (2026-09-27)
 

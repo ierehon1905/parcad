@@ -1,0 +1,15 @@
+{
+  "name": "refuse-smooth-corner",
+  "script": "eval/scripts/refuse-smooth-corner.js",
+  "why": "Three smoothed edges at a corner. OpenCASCADE builds the twelve blends curvature-continuous (rails at 2e-15 per mm in the patch's harness) but fills each corner with its generic patch, which meets the blends 2.8 degrees off tangent with a curvature jump of 12.9 per mm: not G2, not even G1, on a solid its checker calls valid. So the kernel is not asked: the refusal is read off the selection, names a corner and how many, and says to fillet() the edges that meet. Never silently G1 is the rule this case holds.",
+  "brep": {
+    "refuses": {
+      "kind": "rejected",
+      "message_contains": [
+        "3 of them meet at",
+        "one of 8 such corners",
+        "fillet() the ones that meet"
+      ]
+    }
+  }
+}

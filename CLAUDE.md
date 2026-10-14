@@ -255,6 +255,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | the graph schema / a new op | `crates/parcad-core/src/graph.rs` |
 | sections: corners, arcs, rounds, splines, and how they resolve to exact curves | `crates/parcad-core/src/section.rs`, built by `section_wire` in `backend.rs`; `SectionEntry` in `app/src/dsl.ts` is what a model reads |
 | how an op becomes a B-rep | `crates/parcad-occt/src/backend.rs` |
+| the curvature-continuous section behind `.smooth()`, and the measurement that holds it G2 | `vendor/occt-sys/patches/0006-curvature-continuous-fillet-section.patch` (the section, in `BlendFunc_ConstRad`); `ParcadEdgeTreatment::join_continuity` in `vendor/opencascade/include/history.hxx` (the rails measured); the gate and the three-edge-corner refusal in `backend.rs`'s `Op::Fillet` |
 | crash handling, timeouts, breadcrumbs, the worker pool | `crates/parcad-occt/src/host.rs` |
 | what a worker keeps between requests | `backend::BuildCache` and the serve loop in `crates/parcad-occt/src/bin/worker.rs` |
 | probes, wall thickness, tag extents on the exact solid | `crates/parcad-occt/src/perceive.rs` |

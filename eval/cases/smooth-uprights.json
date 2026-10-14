@@ -1,0 +1,24 @@
+{
+  "name": "smooth-uprights",
+  "script": "eval/scripts/smooth-uprights.js",
+  "why": "The first curvature-continuous blend: a block's four vertical edges eased into its sides with smooth(4). Each blend runs face to face and is cut by the top and bottom, so there is no corner. The kernel's history names 8 rails (two per blend), and curvature_jump_per_mm is the largest step in normal curvature measured along them on the built solid, where a fillet(4) steps by 0.25; the section is exact, so the step is round-off and the recorded 1e-6 is its ceiling. 10 faces is the box's 6 plus one blend per edge, as a fillet gives; the volume is more than the fillet's 11862.65 because a section with zero end curvature bulges a little further out than the circle it shares a midpoint with (research_notes/g2-blend.md).",
+  "brep": {
+    "size": [
+      40.0,
+      30.0,
+      10.0
+    ],
+    "volume_mm3": 11867.373,
+    "area_mm2": 3706.068,
+    "triangles": 284,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1186.665,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 10,
+    "edges": 48,
+    "curves": 16,
+    "curvature_jump_per_mm": 1e-6
+  }
+}

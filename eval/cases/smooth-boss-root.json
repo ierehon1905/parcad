@@ -1,0 +1,24 @@
+{
+  "name": "smooth-boss-root",
+  "script": "eval/scripts/smooth-boss-root.js",
+  "why": "The concave case the planter saucer needed: a boss on a plate with its root eased into the floor and its rim into its wall, both closed circles, one stripe each and no corner. The root blend must match zero curvature on the floor and zero across the wall (a cylinder is straight along its axis); so must the rim. The two blends are 2 mm apart on the 8 mm wall, so neither touches the other. between selects the root, on/at the rim; the counts fail aloud if a selector drifts. 10 faces: the fuse's 8 plus two blends.",
+  "brep": {
+    "size": [
+      40.0,
+      40.0,
+      12.0
+    ],
+    "volume_mm3": 7309.326,
+    "area_mm2": 4078.064,
+    "triangles": 9942,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1600.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 10,
+    "edges": 38,
+    "curves": 14,
+    "curvature_jump_per_mm": 1e-6
+  }
+}

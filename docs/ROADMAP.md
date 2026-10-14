@@ -48,8 +48,8 @@ Each is blocked on a specific missing binding, not on design, and each
   before treating it as universal. An ordinal selector (`nth`) may follow as an
   explicitly fragile, sorted tie-breaker; `op#3.edge[2]` will not be an authored
   reference.
-- **Complete edge-treatment recipes.** Vertex provenance/adjacency, G2 blends,
-  setback/miter/blend corners, chamfer two-distance and distance/angle modes, and
+- **Complete edge-treatment recipes.** Vertex provenance/adjacency, a G2 corner
+  patch where three `smooth()` edges meet, setback/miter/blend corners, chamfer two-distance and distance/angle modes, and
   variable/chord/asymmetric fillets — only with exact kernel support, and
   declared-but-unsupported recipes must keep failing explicitly.
 - **Bidirectional feature inspection.** Extend the treatment-target preview to

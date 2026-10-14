@@ -1,0 +1,24 @@
+{
+  "name": "smooth-bar-root",
+  "script": "eval/scripts/smooth-bar-root.js",
+  "why": "The case that proves the section reads the face's own curvature: a dia. 12 bar buried to its axis along a 40 x 40 x 8 plate, its two straight root generators smoothed. On the plate the blend leaves with zero curvature; on the bar the section direction runs round the cylinder, so it must leave with 1/6 per mm, and curvature_jump_per_mm measures whether it did: a section that assumed planes would read 0.167 here. The bar's ends cut the blends, which is a crease by design and not a rail.",
+  "brep": {
+    "size": [
+      40.0,
+      40.0,
+      13.995
+    ],
+    "volume_mm3": 14528.223,
+    "area_mm2": 4764.164,
+    "triangles": 244,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1600.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 11,
+    "edges": 56,
+    "curves": 24,
+    "curvature_jump_per_mm": 1e-6
+  }
+}

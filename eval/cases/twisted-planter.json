@@ -1,28 +1,29 @@
 {
   "name": "twisted-planter",
   "script": "examples/twisted-planter.js",
-  "why": "The part ParCAD web opens first, so it has to build, and read right, on a stranger's first visit. Two bodies. The planter: a ruled star loft twisted 60° through nine sections, cut hollow by the same star inset 3 mm at the same section heights, with six drains set between the saucer's first ring of bumps. The saucer: a revolved dish with 37 smooth bumps in rings of 1, 6, 12 and 18 (six more per ring keeps neighbours equally spaced), each a revolved smootherstep profile 2.4 mm tall that leaves the floor level. between_bodies reads the planter touching the bumps and nowhere else; 245 faces is the planter's plus the dish's 7 and one per bump, so no bump was lost (see GOTCHAS.md, a union that drops solids). measure_wall_thickness reads the planter's wall at 2.0 mm with its rim edge rounded; on the sharp rim it reports hundredths of a millimetre at the edge itself, where the flared facet meets the flat top at an acute angle. The planter rests on the bumps over 0.000 mm² in 0 patches: `touching` here is a tangent line where a domed bump meets the floor, not a seat, which is the distinction contact_mm2 exists to draw. Printed as drawn, up +z, the planter has no unsupported face at all and the saucer one, 623.453 mm² of dish underside over a 5280.166 mm² bed patch; facet_sag_mm 0.1845 is how far this ruled loft's walls lie from the smooth loft through the same sections, which is the part's shape and not a mesh artefact.",
+  "why": "The part ParCAD web opens first, so it has to build, and read right, on a stranger's first visit. Two bodies. The planter: a ruled star loft twisted 60° through nine sections, cut hollow by the same star inset 3 mm at the same section heights, with six drains set between the saucer's first ring of bumps. The saucer: a revolved dish with 37 domed bumps in rings of 1, 6, 12 and 18 (six more per ring keeps neighbours equally spaced), each the cap of a 4.4 mm sphere eased into the floor by smooth(2), the curvature-continuous blend, 37 closed stripes in one treatment and 2 s of the 3.3 s build; curvature_jump_per_mm is the largest step in curvature measured where any of them meets the floor or its dome, 1e-6 being the ceiling the reply rounds a round-off number up to. between_bodies reads the planter touching the bumps and nowhere else; 282 faces is the planter's 201 plus the dish's 7, one per dome and one per blend, so no bump was lost (see GOTCHAS.md, a union that drops solids). measure_wall_thickness reads the planter's wall at 2.0 mm with its rim edge rounded; on the sharp rim it reports hundredths of a millimetre at the edge itself, where the flared facet meets the flat top at an acute angle. The planter rests on the bumps over 0.000 mm² in 0 patches: `touching` here is a tangent point where a dome's top meets the planter's floor, not a seat, which is the distinction contact_mm2 exists to draw. Printed as drawn, up +z, the planter has no unsupported face at all and the saucer one, the dish underside over its bed patch; facet_sag_mm 0.1845 is how far this ruled loft's walls lie from the smooth loft through the same sections, which is the part's shape and not a mesh artefact.",
   "brep": {
     "size": [
       104.0,
       97.809,
       94.4
     ],
-    "volume_mm3": 88708.244,
-    "area_mm2": 72954.295,
-    "triangles": 148296,
+    "volume_mm3": 88942.159,
+    "area_mm2": 73047.46,
+    "triangles": 146716,
     "bodies": 2,
     "voids": 0,
     "stands_on_mm2": 5280.166,
     "stands_on_patches": 1,
     "watertight": true,
-    "faces": 245,
-    "edges": 1059,
+    "faces": 282,
+    "edges": 1207,
     "curves": 463,
     "requires": [
       "section-curves"
     ],
     "facet_sag_mm": 0.1845,
+    "curvature_jump_per_mm": 1e-06,
     "named_bodies": {
       "planter": {
         "size": [
@@ -43,9 +44,9 @@
           87.998,
           12.0
         ],
-        "volume_mm3": 19468.203,
-        "faces": 44,
-        "edges": 207,
+        "volume_mm3": 19700.301,
+        "faces": 81,
+        "edges": 355,
         "watertight": true,
         "pieces": 1,
         "voids": 0
