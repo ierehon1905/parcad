@@ -1,0 +1,872 @@
+A curvature-continuous (G2) fillet section: ChFi3d_CurvatureContinuous.
+
+What it adds
+  A fourth ChFi3d_FilletShape. The fillet runs between the same contact
+  lines as the rolling ball of the given radius, so everything upstream of
+  the section (the walking, the extremities, the corners and the topology)
+  is untouched; only the cross-section changes. Where the circle meets each
+  face with curvature 1/R against the face's own, the new section is the
+  quintic Bezier that leaves each contact point along the circle's tangent
+  with the face's normal curvature in that direction, so the blend is G2
+  to its faces (Pegna & Wolter's linkage curve theorem: two surfaces
+  tangent along a curve are curvature continuous when their normal
+  curvatures agree in one transverse direction). The section passes
+  through the circle's midpoint, so it adds or removes the depth the
+  circular fillet would; its control polygon is convex for every dihedral
+  angle below pi, so it has no inflection.
+
+  BlendFunc_ConstRad builds the section (BlendFunc_CurvatureContinuous) and
+  its first and second derivatives along the spine as central differences
+  of the pole function at the contact data carried to first, respectively
+  second, order with the derivatives it already has exactly, which makes
+  both differences exact to O(h^2) with h a thousandth of the radius. The
+  shape travels on ChFiDS_FilSpine, where ChFi3d_KParticular reads it to
+  keep the analytic cylinder and torus shortcuts, which are circular in
+  section, for the circular shapes. A contour this section cannot be
+  built on, a variable radius, a blend that follows a face boundary or a
+  circular simulation, is marked ChFiDS_SectionNotApplicable and
+  abandoned rather than given a circle it did not ask for.
+
+How it was measured
+  On every edge a blend shares with the image of a face its edge lay on
+  (the rails), sampled 33 times, the normal angle and the jump in normal
+  curvature between the blend and the face, both faces' second derivative
+  taken along one transverse direction against one reference normal:
+  - box 40 x 30 x 10, the four vertical edges, R = 4: valid, no shell
+    fault, no gap; rails G1 to 0 deg, curvature jump 1.0e-16 /mm where the
+    circular fillet's is 0.25 /mm (= 1/R). Volume 11867.37 against the
+    circular 11862.65 mm^3.
+  - the same box, R = 4.9 (the two blends 0.2 mm apart): valid, 8.3e-16.
+  - the box's four top edges (two-edge corners), R = 2: valid, 2.9e-15.
+  - a dia. 12 boss on a 40 x 40 x 4 plate, its concave root circle, R = 4
+    and R = 2: valid, 9.3e-16 and 5.6e-15 /mm, 1.5e-4 deg at the cylinder.
+  - its convex rim, and root and rim together, R = 2: valid, 1.8e-13.
+  - a dia. 12 bar half buried along the plate, its two straight root
+    generators, R = 2, where the matched curvature is 1/6 on the cylinder
+    side and 0 on the plate: valid, 4.8e-15 /mm.
+  - all twelve box edges, R = 2 (three-edge corners): valid solid, rails
+    2.1e-15 /mm, but the generic corner patch meets the blends at 2.78 deg
+    and a curvature jump of 12.9 /mm where the circular case's spherical
+    patch meets its cylinders at 8.5e-7 deg. The caller must refuse a
+    vertex where three such edges meet; OCCT's corner construction is not
+    changed here.
+  The circular shapes are unchanged: the harness read 1/R at every rail of
+  every control, and the same volumes, faces and validity as before.
+
+Upstream status
+  Not yet offered upstream. It is additive (a new enum value in three
+  enums, a member on ChFiDS_FilSpine, a gate in ChFi3d_KParticular, the
+  section itself) and would be a candidate once the three-edge corner has
+  a G2 construction of its own.
+
+diff --color -ruN a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc.cxx b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc.cxx
+--- a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc.cxx	2026-10-14 12:16:45
++++ b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc.cxx	2026-10-14 12:19:31
+@@ -84,6 +84,13 @@
+       Degree  = 1;
+     }
+     break;
++    case BlendFunc_CurvatureContinuous: {
++      // A quintic Bezier: position, tangent and curvature at both ends.
++      NbPoles = 6;
++      NbKnots = 2;
++      Degree  = 5;
++    }
++    break;
+   }
+ }
+ 
+@@ -103,7 +110,8 @@
+   switch (SShape)
+   {
+     case BlendFunc_Polynomial:
+-    case BlendFunc_Linear: {
++    case BlendFunc_Linear:
++    case BlendFunc_CurvatureContinuous: {
+       Weights.Init(1);
+     }
+     break;
+diff --color -ruN a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx
+--- a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx	2026-10-14 12:16:45
++++ b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_ConstRad.cxx	2026-10-14 12:21:32
+@@ -40,6 +40,146 @@
+ 
+ #define Eps 1.e-15
+ 
++//=======================================================================
++// function : SectionCurvature
++// purpose  : The curvature a planar section curve leaving S at (U, V)
++//           along the unit tangent T must have for the swept blend to be
++//           curvature continuous with S there, counted positive towards the
++//           unit in-plane normal M.
++//
++//           Two surfaces tangent along a common curve are G2 as soon as
++//           their normal curvatures agree in one direction transverse to it
++//           (Pegna & Wolter's linkage curve theorem), and the section's
++//           tangent is such a direction. The section is a normal section of
++//           the blend, so the blend's normal curvature along T is the
++//           section's curvature times M.N, where N is the common unit
++//           normal: hence the ratio.
++//=======================================================================
++static double SectionCurvature(const Adaptor3d_Surface& S,
++                               const double             U,
++                               const double             V,
++                               const gp_Vec&            T,
++                               const gp_Vec&            M)
++{
++  gp_Pnt P;
++  gp_Vec Du, Dv, Duu, Dvv, Duv;
++  S.D2(U, V, P, Du, Dv, Duu, Dvv, Duv);
++  gp_Vec N = Du.Crossed(Dv);
++  if (N.SquareMagnitude() < Eps)
++  {
++    // A singular point of the surface has no second fundamental form to read.
++    return 0.;
++  }
++  N.Normalize();
++  // T in the tangent basis (Du, Dv), through the first fundamental form.
++  const double E = Du.Dot(Du), F = Du.Dot(Dv), G = Dv.Dot(Dv);
++  const double a = T.Dot(Du), b = T.Dot(Dv);
++  const double det = E * G - F * F;
++  if (std::abs(det) < Eps)
++  {
++    return 0.;
++  }
++  const double alpha = (G * a - F * b) / det;
++  const double beta  = (E * b - F * a) / det;
++  gp_Vec       Dtt;
++  Dtt.SetLinearForm(alpha * alpha, Duu, 2. * alpha * beta, Duv, beta * beta, Dvv);
++  const double speed2 = alpha * alpha * E + 2. * alpha * beta * F + beta * beta * G;
++  if (speed2 < Eps)
++  {
++    return 0.;
++  }
++  return (Dtt.Dot(N) / speed2) / M.Dot(N);
++}
++
++//=======================================================================
++// function : CurvatureContinuousPoles
++// purpose  : The curvature-continuous section between the rolling ball's
++//           contact points: a quintic Bezier that leaves each point along
++//           the circle's own tangent, with the face's normal curvature in
++//           that direction (SectionCurvature), and passes through the
++//           circle's midpoint, so the blend removes or adds the depth the
++//           circular one would.
++//
++//           E1 and E2 point from the ball's centre to the contact points,
++//           NP is the section plane's normal, as GeomFill::GetCircle takes
++//           them; none need be unit, which is what lets Section
++//           differentiate this by perturbing its arguments.
++//
++//           With d the length of the tangent legs and phi the arc's angle,
++//           the midpoint condition gives d = (16/25) R tan(phi/4), and the
++//           end curvature of a quintic with collinear P0 P1 P2 offset by c
++//           normal to the leg is (4/5) c / d^2, hence c = (5/4) kappa d^2.
++//           P1, P2 then lie on the tangent line from P0 and 2d stays short
++//           of where the two tangent lines meet, R tan(phi/2), for every
++//           phi below pi, so the control polygon is convex and the section
++//           has no inflection.
++//=======================================================================
++static void CurvatureContinuousPoles(const Adaptor3d_Surface&    S1,
++                                     const double                U1,
++                                     const double                V1,
++                                     const Adaptor3d_Surface&    S2,
++                                     const double                U2,
++                                     const double                V2,
++                                     const gp_Pnt&               Pts1,
++                                     const gp_Pnt&               Pts2,
++                                     const gp_Vec&               E1,
++                                     const gp_Vec&               E2,
++                                     const gp_Vec&               NP,
++                                     const double                R,
++                                     NCollection_Array1<gp_Pnt>& Poles)
++{
++  const gp_Vec n1 = E1.Normalized(), n2 = E2.Normalized(), nz = NP.Normalized();
++  const double cosphi = std::max(-1., std::min(1., n1.Dot(n2)));
++  const double d      = (16. / 25.) * R * std::tan(std::acos(cosphi) / 4.);
++
++  // The tangents along the section, each pointing towards the other end.
++  const gp_Vec chord(Pts1, Pts2);
++  gp_Vec       t1 = nz.Crossed(n1);
++  if (t1.Dot(chord) < 0.)
++  {
++    t1.Reverse();
++  }
++  gp_Vec t2 = nz.Crossed(n2);
++  if (t2.Dot(chord) > 0.)
++  {
++    t2.Reverse();
++  }
++  // In-plane normals towards the centre, the side the section bends to.
++  const gp_Vec m1 = n1.Reversed(), m2 = n2.Reversed();
++  const double c1 = 1.25 * SectionCurvature(S1, U1, V1, t1, m1) * d * d;
++  const double c2 = 1.25 * SectionCurvature(S2, U2, V2, t2, m2) * d * d;
++
++  const int low = Poles.Lower();
++  Poles(low)     = Pts1;
++  Poles(low + 1) = Pts1.Translated(d * t1);
++  Poles(low + 2).SetXYZ(Pts1.XYZ() + 2. * d * t1.XYZ() + c1 * m1.XYZ());
++  Poles(low + 3).SetXYZ(Pts2.XYZ() + 2. * d * t2.XYZ() + c2 * m2.XYZ());
++  Poles(low + 4) = Pts2.Translated(d * t2);
++  Poles(low + 5) = Pts2;
++}
++
++//=======================================================================
++// function : DerivativeStep
++// purpose  : A parameter step along the spine that moves every argument of
++//           CurvatureContinuousPoles by about a thousandth of the radius:
++//           small enough for the O(h^2) truncation of a central difference,
++//           large enough to stay clear of round-off. Zero rates mean the
++//           section does not move and any step will do.
++//=======================================================================
++static double DerivativeStep(const double  R,
++                             const gp_Vec& Tg1,
++                             const gp_Vec& Tg2,
++                             const gp_Vec& DE1,
++                             const gp_Vec& DE2,
++                             const gp_Vec& DNP)
++{
++  double rate = std::max(Tg1.Magnitude(), Tg2.Magnitude());
++  rate        = std::max(rate, R * DE1.Magnitude());
++  rate        = std::max(rate, R * DE2.Magnitude());
++  rate        = std::max(rate, R * DNP.Magnitude());
++  return rate > Eps ? 1.e-3 * R / rate : 1.;
++}
++
+ //=================================================================================================
+ 
+ BlendFunc_ConstRad::BlendFunc_ConstRad(const occ::handle<Adaptor3d_Surface>& S1,
+@@ -1204,6 +1344,19 @@
+   return (mySShape == BlendFunc_Rational || mySShape == BlendFunc_QuasiAngular);
+ }
+ 
++//=======================================================================
++// function : TangentLeg
++// purpose  : The length of the curvature-continuous section's tangent legs
++//           for the narrowest section met, the distance over which a pole
++//           error turns into a tangent error there; as GeomFill::GetTolerance
++//           does for the circle, an angle under about a degree is not held
++//           to a tangent tolerance.
++//=======================================================================
++static double TangentLeg(const double R, const double MinAng)
++{
++  return (16. / 25.) * R * std::tan(std::max(MinAng, 0.02) / 4.);
++}
++
+ //=================================================================================================
+ 
+ double BlendFunc_ConstRad::GetSectionSize() const
+@@ -1253,9 +1406,18 @@
+ {
+   int    low = Tol3d.Lower(), up = Tol3d.Upper();
+   double Tol;
+-  Tol = GeomFill::GetTolerance(myTConv, minang, std::abs(ray1), AngleTol, SurfTol);
+   Tol1d.Init(SurfTol);
+   Tol3d.Init(SurfTol);
++  if (mySShape == BlendFunc_CurvatureContinuous)
++  {
++    // A Bezier lies within the largest error of its poles, and the three
++    // poles at each end fix that end's position, tangent and curvature.
++    Tol            = (TangentLeg(std::abs(ray1), minang) + SurfTol) * AngleTol / 2.;
++    Tol3d(low + 1) = Tol3d(low + 2) = Tol3d(up - 2) = Tol3d(up - 1) = std::min(Tol, SurfTol);
++    Tol3d(low) = Tol3d(up) = std::min(Tol, BoundTol);
++    return;
++  }
++  Tol            = GeomFill::GetTolerance(myTConv, minang, std::abs(ray1), AngleTol, SurfTol);
+   Tol3d(low + 1) = Tol3d(up - 1) = std::min(Tol, SurfTol);
+   Tol3d(low) = Tol3d(up) = std::min(Tol, BoundTol);
+ }
+@@ -1264,6 +1426,12 @@
+ 
+ void BlendFunc_ConstRad::Knots(NCollection_Array1<double>& TKnots)
+ {
++  if (mySShape == BlendFunc_CurvatureContinuous)
++  {
++    TKnots(TKnots.Lower()) = 0.;
++    TKnots(TKnots.Upper()) = 1.;
++    return;
++  }
+   GeomFill::Knots(myTConv, TKnots);
+ }
+ 
+@@ -1271,6 +1439,12 @@
+ 
+ void BlendFunc_ConstRad::Mults(NCollection_Array1<int>& TMults)
+ {
++  if (mySShape == BlendFunc_CurvatureContinuous)
++  {
++    TMults(TMults.Lower()) = 6;
++    TMults(TMults.Upper()) = 6;
++    return;
++  }
+   GeomFill::Mults(myTConv, TMults);
+ }
+ 
+@@ -1346,6 +1520,14 @@
+     np.Reverse();
+   }
+ 
++  if (mySShape == BlendFunc_CurvatureContinuous)
++  {
++    Weights.Init(1.);
++    CurvatureContinuousPoles(*surf1, X(1), X(2), *surf2, X(3), X(4), pts1, pts2, ns1, ns2, np,
++                             std::abs(ray1), Poles);
++    return;
++  }
++
+   GeomFill::GetCircle(myTConv, ns1, ns2, np, pts1, pts2, std::abs(ray1), Center, Poles, Weights);
+ }
+ 
+@@ -1493,6 +1675,56 @@
+     dnp.Reverse();
+   }
+ 
++  if (mySShape == BlendFunc_CurvatureContinuous)
++  {
++    const double R = std::abs(ray1);
++    Weights.Init(1.);
++    CurvatureContinuousPoles(*surf1, sol(1), sol(2), *surf2, sol(3), sol(4), pts1, pts2, ns1, ns2,
++                             np, R, Poles);
++    if (istgt)
++    {
++      return false;
++    }
++    // The poles are a smooth function of the contact data, whose rates of
++    // change along the spine are exact here; the central difference of the
++    // poles at the data advanced and retreated by h is their derivative to
++    // O(h^2).
++    DWeights.Init(0.);
++    const double               h = DerivativeStep(R, tg1, tg2, dnorm1w, dnorm2w, dnp);
++    NCollection_Array1<gp_Pnt> ahead(low, upp), behind(low, upp);
++    CurvatureContinuousPoles(*surf1,
++                             sol(1) + h * secmember(1),
++                             sol(2) + h * secmember(2),
++                             *surf2,
++                             sol(3) + h * secmember(3),
++                             sol(4) + h * secmember(4),
++                             pts1.Translated(h * tg1),
++                             pts2.Translated(h * tg2),
++                             ns1 + h * dnorm1w,
++                             ns2 + h * dnorm2w,
++                             np + h * dnp,
++                             R,
++                             ahead);
++    CurvatureContinuousPoles(*surf1,
++                             sol(1) - h * secmember(1),
++                             sol(2) - h * secmember(2),
++                             *surf2,
++                             sol(3) - h * secmember(3),
++                             sol(4) - h * secmember(4),
++                             pts1.Translated(-h * tg1),
++                             pts2.Translated(-h * tg2),
++                             ns1 - h * dnorm1w,
++                             ns2 - h * dnorm2w,
++                             np - h * dnp,
++                             R,
++                             behind);
++    for (int i = low; i <= upp; i++)
++    {
++      DPoles(i).SetXYZ((ahead(i).XYZ() - behind(i).XYZ()) / (2. * h));
++    }
++    return true;
++  }
++
+   if (!istgt)
+   {
+     return GeomFill::GetCircle(myTConv,
+@@ -1852,6 +2084,48 @@
+     np.Reverse();
+     dnp.Reverse();
+     d2np.Reverse();
++  }
++
++  if (mySShape == BlendFunc_CurvatureContinuous)
++  {
++    const double R = std::abs(ray1);
++    Weights.Init(1.);
++    CurvatureContinuousPoles(*surf1, X(1), X(2), *surf2, X(3), X(4), pts1, pts2, ns1, ns2, np, R,
++                             Poles);
++    if (istgt)
++    {
++      return false;
++    }
++    // As in the first-derivative Section, with the contact data carried to
++    // second order so that the second difference is exact to O(h^2) too.
++    DWeights.Init(0.);
++    D2Weights.Init(0.);
++    const double               h = DerivativeStep(R, tg1, tg2, dnorm1w, dnorm2w, dnp);
++    NCollection_Array1<gp_Pnt> ahead(low, upp), behind(low, upp);
++    for (int side = 0; side < 2; side++)
++    {
++      const double s  = side == 0 ? h : -h;
++      const double s2 = 0.5 * s * s;
++      CurvatureContinuousPoles(*surf1,
++                               X(1) + s * sol(1) + s2 * secmember(1),
++                               X(2) + s * sol(2) + s2 * secmember(2),
++                               *surf2,
++                               X(3) + s * sol(3) + s2 * secmember(3),
++                               X(4) + s * sol(4) + s2 * secmember(4),
++                               pts1.Translated(s * tg1 + s2 * dtg1),
++                               pts2.Translated(s * tg2 + s2 * dtg2),
++                               ns1 + s * dnorm1w + s2 * d2norm1w,
++                               ns2 + s * dnorm2w + s2 * d2norm2w,
++                               np + s * dnp + s2 * d2np,
++                               R,
++                               side == 0 ? ahead : behind);
++    }
++    for (int i = low; i <= upp; i++)
++    {
++      DPoles(i).SetXYZ((ahead(i).XYZ() - behind(i).XYZ()) / (2. * h));
++      D2Poles(i).SetXYZ((ahead(i).XYZ() - 2. * Poles(i).XYZ() + behind(i).XYZ()) / (h * h));
++    }
++    return true;
+   }
+ 
+   if (!istgt)
+diff --color -ruN a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_SectionShape.hxx b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_SectionShape.hxx
+--- a/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_SectionShape.hxx	2026-10-14 12:16:45
++++ b/src/ModelingAlgorithms/TKFillet/BlendFunc/BlendFunc_SectionShape.hxx	2026-10-14 12:19:31
+@@ -17,12 +17,18 @@
+ #ifndef _BlendFunc_SectionShape_HeaderFile
+ #define _BlendFunc_SectionShape_HeaderFile
+ 
++//! How a blend's cross-section is represented. The first three are circles
++//! in different parameterisations, Linear is a straight line (a chamfer),
++//! and CurvatureContinuous is a quintic between the rolling ball's contact
++//! points that matches each face's normal curvature, so the blend is G2 to
++//! its faces where a circle is only G1.
+ enum BlendFunc_SectionShape
+ {
+   BlendFunc_Rational,
+   BlendFunc_QuasiAngular,
+   BlendFunc_Polynomial,
+-  BlendFunc_Linear
++  BlendFunc_Linear,
++  BlendFunc_CurvatureContinuous
+ };
+ 
+ #endif // _BlendFunc_SectionShape_HeaderFile
+diff --color -ruN a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx	2026-10-14 12:16:45
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx	2026-10-14 12:19:31
+@@ -615,6 +615,11 @@
+   {
+     return !bRet;
+   }
++  // The particular cases are cylinders, tori and cones: circular in section.
++  if (!fs.IsNull() && fs->SectionShape() == BlendFunc_CurvatureContinuous)
++  {
++    return !bRet;
++  }
+   //
+   bool                bIsPlane1, bIsPlane2;
+   double              aPA;
+diff --color -ruN a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx	2026-10-14 12:16:45
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilBuilder.cxx	2026-10-14 12:24:21
+@@ -57,6 +57,7 @@
+ #include <Precision.hxx>
+ #include <Standard_ConstructionError.hxx>
+ #include <Standard_Failure.hxx>
++#include <Standard_NotImplemented.hxx>
+ #include <TopoDS_Edge.hxx>
+ #include <TopoDS_Shape.hxx>
+ #include <TopoDS_Vertex.hxx>
+@@ -74,6 +75,24 @@
+ extern void ChFi3d_ResultChron(OSD_Chronometer& ch, double& time);
+ #endif
+ 
++//=======================================================================
++// function : RequireCircularSection
++// purpose  : The curvature-continuous section is built by BlendFunc_ConstRad
++//           alone: between two faces, with a constant radius, and without a
++//           circular simulation. Anywhere else the spine is marked and the
++//           stripe abandoned, so the caller learns which contour and why
++//           rather than receiving a circular section it did not ask for.
++//=======================================================================
++static void RequireCircularSection(const occ::handle<ChFiDS_FilSpine>& fsp, const char* why)
++{
++  if (fsp->SectionShape() != BlendFunc_CurvatureContinuous)
++  {
++    return;
++  }
++  fsp->SetErrorStatus(ChFiDS_SectionNotApplicable);
++  throw Standard_NotImplemented(why);
++}
++
+ static double MaxRad(const occ::handle<ChFiDS_FilSpine>& fsp,
+ 
+                      const TopoDS_Edge& E)
+@@ -167,7 +186,21 @@
+     case ChFi3d_Polynomial:
+       myShape = BlendFunc_Polynomial;
+       break;
++    case ChFi3d_CurvatureContinuous:
++      myShape = BlendFunc_CurvatureContinuous;
++      break;
+   }
++  // Each spine carries the shape of its own sections; the builder's is the
++  // default for the spines it adds, and a later choice reaches them all.
++  NCollection_List<occ::handle<ChFiDS_Stripe>>::Iterator itel;
++  for (itel.Initialize(myListStripe); itel.More(); itel.Next())
++  {
++    occ::handle<ChFiDS_FilSpine> fsp = occ::down_cast<ChFiDS_FilSpine>(itel.Value()->Spine());
++    if (!fsp.IsNull())
++    {
++      fsp->SetSectionShape(myShape);
++    }
++  }
+ }
+ 
+ //=================================================================================================
+@@ -186,6 +219,9 @@
+     case BlendFunc_Polynomial:
+       filshape = ChFi3d_Polynomial;
+       break;
++    case BlendFunc_CurvatureContinuous:
++      filshape = ChFi3d_CurvatureContinuous;
++      break;
+     default:
+       break;
+   }
+@@ -204,6 +240,7 @@
+     occ::handle<ChFiDS_Spine>& Sp      = Stripe->ChangeSpine();
+     Sp                                 = new ChFiDS_FilSpine(tolesp);
+     occ::handle<ChFiDS_FilSpine> Spine = occ::down_cast<ChFiDS_FilSpine>(Sp);
++    Spine->SetSectionShape(myShape);
+ 
+     TopoDS_Edge E_wnt = E;
+     E_wnt.Orientation(TopAbs_FORWARD);
+@@ -580,6 +617,7 @@
+   {
+     throw Standard_ConstructionError("SimulSurf : this is not the spine of the fillet");
+   }
++  RequireCircularSection(fsp, "SimulSurf : a curvature-continuous section has no circular simulation");
+   occ::handle<BRepBlend_Line> lin;
+ #ifdef OCCT_DEBUG
+ //  TopAbs_Orientation Or = S1->Face().Orientation();
+@@ -607,7 +645,7 @@
+     BRepBlend_ConstRadInv FInv(S1, S2, HGuide);
+     Func.Set(fsp->Radius(), Choix);
+     FInv.Set(fsp->Radius(), Choix);
+-    Func.Set(myShape);
++    Func.Set(fsp->SectionShape());
+     done = SimulData(Data,
+                      HGuide,
+                      EmptyHGuide,
+@@ -662,11 +700,13 @@
+   }
+   else
+   {
++    RequireCircularSection(fsp,
++                           "PerformSurf : a curvature-continuous section needs a constant radius");
+     BRepBlend_EvolRad    Func(S1, S2, HGuide, fsp->Law(HGuide));
+     BRepBlend_EvolRadInv FInv(S1, S2, HGuide, fsp->Law(HGuide));
+     Func.Set(Choix);
+     FInv.Set(Choix);
+-    Func.Set(myShape);
++    Func.Set(fsp->SectionShape());
+     done = SimulData(Data,
+                      HGuide,
+                      EmptyHGuide,
+@@ -815,6 +855,7 @@
+   {
+     throw Standard_ConstructionError("PerformSurf : this is not the spine of the fillet");
+   }
++  RequireCircularSection(fsp, "SimulSurf : a curvature-continuous section has no circular simulation");
+   occ::handle<BRepBlend_Line> lin;
+ 
+   // Flexible parameters!
+@@ -849,7 +890,7 @@
+     finvc.Set(rad, petitchoix);
+     finvp.Set(rad, petitchoix);
+     func.Set(rad, petitchoix);
+-    func.Set(myShape);
++    func.Set(fsp->SectionShape());
+ 
+     done = SimulData(Data,
+                      HGuide,
+@@ -931,7 +972,7 @@
+     finvc.Set(petitchoix);
+     finvp.Set(petitchoix);
+     func.Set(petitchoix);
+-    func.Set(myShape);
++    func.Set(fsp->SectionShape());
+     done = SimulData(Data,
+                      HGuide,
+                      lin,
+@@ -1047,6 +1088,7 @@
+   {
+     throw Standard_ConstructionError("PerformSurf : it is not the spine of a fillet");
+   }
++  RequireCircularSection(fsp, "SimulSurf : a curvature-continuous section has no circular simulation");
+   occ::handle<BRepBlend_Line> lin;
+ 
+   // Flexible parameters!
+@@ -1081,7 +1123,7 @@
+     finvc.Set(rad, petitchoix);
+     finvp.Set(rad, petitchoix);
+     func.Set(rad, petitchoix);
+-    func.Set(myShape);
++    func.Set(fsp->SectionShape());
+ 
+     done = SimulData(Data,
+                      HGuide,
+@@ -1163,7 +1205,7 @@
+     finvc.Set(petitchoix);
+     finvp.Set(petitchoix);
+     func.Set(petitchoix);
+-    func.Set(myShape);
++    func.Set(fsp->SectionShape());
+     done = SimulData(Data,
+                      HGuide,
+                      lin,
+@@ -1285,6 +1327,7 @@
+   {
+     throw Standard_ConstructionError("PerformSurf : it is not the spine of a fillet");
+   }
++  RequireCircularSection(fsp, "SimulSurf : a curvature-continuous section has no circular simulation");
+   occ::handle<BRepBlend_Line> lin;
+ 
+   // Flexible parameters!
+@@ -1327,7 +1370,7 @@
+     finv2.Set(rad, ch2);
+     finvp2.Set(Choix);
+     func.Set(rad, Choix);
+-    func.Set(myShape);
++    func.Set(fsp->SectionShape());
+ 
+     done = SimulData(Data,
+                      HGuide,
+@@ -1414,7 +1457,7 @@
+     finv2.Set(ch22);
+     finvp2.Set(Choix);
+     func.Set(Choix);
+-    func.Set(myShape);
++    func.Set(fsp->SectionShape());
+ 
+     done = SimulData(Data,
+                      HGuide,
+@@ -1519,7 +1562,7 @@
+   {
+     BRepBlend_ConstRad Func(S1, S2, HGuide);
+     Func.Set(fsp->Radius(), Choix);
+-    Func.Set(myShape);
++    Func.Set(fsp->SectionShape());
+     BRepBlend_Walking TheWalk(S1, S2, I1, I2, HGuide);
+     return TheWalk.PerformFirstSection(Func, Par, SolDep, tolapp3d, TolGuide, Pos1, Pos2);
+   }
+@@ -1527,7 +1570,7 @@
+   {
+     BRepBlend_EvolRad Func(S1, S2, HGuide, fsp->Law(HGuide));
+     Func.Set(Choix);
+-    Func.Set(myShape);
++    Func.Set(fsp->SectionShape());
+     BRepBlend_Walking TheWalk(S1, S2, I1, I2, HGuide);
+     return TheWalk.PerformFirstSection(Func, Par, SolDep, tolapp3d, TolGuide, Pos1, Pos2);
+   }
+@@ -1584,7 +1627,7 @@
+     BRepBlend_ConstRadInv FInv(S1, S2, HGuide);
+     Func.Set(fsp->Radius(), Choix);
+     FInv.Set(fsp->Radius(), Choix);
+-    Func.Set(myShape);
++    Func.Set(fsp->SectionShape());
+ 
+ #ifdef OCCT_DEBUG
+     ChFi3d_InitChron(ch); // init perf ComputeData
+@@ -1646,11 +1689,13 @@
+   }
+   else
+   {
++    RequireCircularSection(fsp,
++                           "PerformSurf : a curvature-continuous section needs a constant radius");
+     BRepBlend_EvolRad    Func(S1, S2, HGuide, fsp->Law(HGuide));
+     BRepBlend_EvolRadInv FInv(S1, S2, HGuide, fsp->Law(HGuide));
+     Func.Set(Choix);
+     FInv.Set(Choix);
+-    Func.Set(myShape);
++    Func.Set(fsp->SectionShape());
+ 
+ #ifdef OCCT_DEBUG
+     ChFi3d_InitChron(ch); // init perf ComputeData
+@@ -1750,6 +1795,9 @@
+   {
+     throw Standard_ConstructionError("PerformSurf : this is not the spine of a fillet");
+   }
++  RequireCircularSection(fsp,
++                         "PerformSurf : a curvature-continuous section is built between two faces, "
++                         "not along a face boundary");
+   occ::handle<BRepBlend_Line> lin;
+   double                      PFirst = First;
+   bool                        maybesingular;
+@@ -1779,7 +1827,7 @@
+     finvc.Set(rad, petitchoix);
+     finvp.Set(rad, petitchoix);
+     func.Set(rad, petitchoix);
+-    func.Set(myShape);
++    func.Set(fsp->SectionShape());
+ 
+     done = ComputeData(Data,
+                        HGuide,
+@@ -1843,7 +1891,7 @@
+     finvc.Set(petitchoix);
+     finvp.Set(petitchoix);
+     func.Set(petitchoix);
+-    func.Set(myShape);
++    func.Set(fsp->SectionShape());
+     done = ComputeData(Data,
+                        HGuide,
+                        lin,
+@@ -1923,6 +1971,9 @@
+   {
+     throw Standard_ConstructionError("PerformSurf : this is not the spine of a fillet");
+   }
++  RequireCircularSection(fsp,
++                         "PerformSurf : a curvature-continuous section is built between two faces, "
++                         "not along a face boundary");
+   occ::handle<BRepBlend_Line> lin;
+   double                      PFirst = First;
+   bool                        maybesingular;
+@@ -1952,7 +2003,7 @@
+     finvc.Set(rad, petitchoix);
+     finvp.Set(rad, petitchoix);
+     func.Set(rad, petitchoix);
+-    func.Set(myShape);
++    func.Set(fsp->SectionShape());
+ 
+     done = ComputeData(Data,
+                        HGuide,
+@@ -2016,7 +2067,7 @@
+     finvc.Set(petitchoix);
+     finvp.Set(petitchoix);
+     func.Set(petitchoix);
+-    func.Set(myShape);
++    func.Set(fsp->SectionShape());
+ 
+     done = ComputeData(Data,
+                        HGuide,
+@@ -2103,6 +2154,9 @@
+   {
+     throw Standard_ConstructionError("PerformSurf : this is not the spine of a fillet");
+   }
++  RequireCircularSection(fsp,
++                         "PerformSurf : a curvature-continuous section is built between two faces, "
++                         "not along a face boundary");
+   occ::handle<BRepBlend_Line> lin;
+   double                      PFirst = First;
+   bool                        maybesingular;
+@@ -2139,7 +2193,7 @@
+     finv2.Set(rad, ch2);
+     finvp2.Set(Choix);
+     func.Set(rad, Choix);
+-    func.Set(myShape);
++    func.Set(fsp->SectionShape());
+ 
+     done = ComputeData(Data,
+                        HGuide,
+@@ -2217,7 +2271,7 @@
+     finv2.Set(ch2);
+     finvp2.Set(Choix);
+     func.Set(Choix);
+-    func.Set(myShape);
++    func.Set(fsp->SectionShape());
+ 
+     done = ComputeData(Data,
+                        HGuide,
+diff --color -ruN a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilletShape.hxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilletShape.hxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilletShape.hxx	2026-10-14 12:16:45
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_FilletShape.hxx	2026-10-14 12:19:31
+@@ -26,11 +26,19 @@
+ //! -   ChFi3d_Polynomial, which corresponds to a
+ //! polynomial approximation of circles. This type
+ //! facilitates the implementation of the construction algorithm.
++//! -   ChFi3d_CurvatureContinuous, a blend that is G2 to the
++//! faces it joins: it runs between the same contact lines as the
++//! rolling ball of the given radius, but its section is a quintic
++//! whose curvature at each contact point equals the face's normal
++//! curvature there, zero on a plane. It is built only between two
++//! faces with a constant radius; a contour that needs anything else
++//! is reported with ChFiDS_SectionNotApplicable.
+ enum ChFi3d_FilletShape
+ {
+   ChFi3d_Rational,
+   ChFi3d_QuasiAngular,
+-  ChFi3d_Polynomial
++  ChFi3d_Polynomial,
++  ChFi3d_CurvatureContinuous
+ };
+ 
+ #endif // _ChFi3d_FilletShape_HeaderFile
+diff --color -ruN a/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_ErrorStatus.hxx b/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_ErrorStatus.hxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_ErrorStatus.hxx	2026-10-14 12:16:45
++++ b/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_ErrorStatus.hxx	2026-10-14 12:19:31
+@@ -24,7 +24,11 @@
+   ChFiDS_Error,
+   ChFiDS_WalkingFailure,
+   ChFiDS_StartsolFailure,
+-  ChFiDS_TwistedSurface
++  ChFiDS_TwistedSurface,
++  //! The section shape asked for cannot be built on this contour: a
++  //! curvature-continuous section needs a constant radius and two faces to
++  //! run between, and has no circular simulation.
++  ChFiDS_SectionNotApplicable
+ };
+ 
+ #endif // _ChFiDS_ErrorStatus_HeaderFile
+diff --color -ruN a/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_FilSpine.cxx b/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_FilSpine.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_FilSpine.cxx	2026-10-14 12:16:45
++++ b/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_FilSpine.cxx	2026-10-14 12:19:31
+@@ -47,6 +47,20 @@
+ 
+ //=================================================================================================
+ 
++void ChFiDS_FilSpine::SetSectionShape(const BlendFunc_SectionShape S)
++{
++  mySectionShape = S;
++}
++
++//=================================================================================================
++
++BlendFunc_SectionShape ChFiDS_FilSpine::SectionShape() const
++{
++  return mySectionShape;
++}
++
++//=================================================================================================
++
+ void ChFiDS_FilSpine::Reset(const bool AllData)
+ {
+   ChFiDS_Spine::Reset(AllData);
+diff --color -ruN a/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_FilSpine.hxx b/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_FilSpine.hxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_FilSpine.hxx	2026-10-14 12:16:45
++++ b/src/ModelingAlgorithms/TKFillet/ChFiDS/ChFiDS_FilSpine.hxx	2026-10-14 12:19:31
+@@ -17,6 +17,7 @@
+ #ifndef _ChFiDS_FilSpine_HeaderFile
+ #define _ChFiDS_FilSpine_HeaderFile
+ 
++#include <BlendFunc_SectionShape.hxx>
+ #include <ChFiDS_Spine.hxx>
+ #include <ChFiDS_ElSpine.hxx>
+ #include <Law_Function.hxx>
+@@ -93,6 +94,13 @@
+   //! returns the maximum radius if the fillet is non-constant
+   Standard_EXPORT double MaxRadFromSeqAndLaws() const;
+ 
++  //! sets the shape of the sections built along this spine;
++  //! circular (BlendFunc_Rational) unless told otherwise.
++  Standard_EXPORT void SetSectionShape(const BlendFunc_SectionShape S);
++
++  //! returns the shape of the sections built along this spine.
++  Standard_EXPORT BlendFunc_SectionShape SectionShape() const;
++
+   DEFINE_STANDARD_RTTIEXT(ChFiDS_FilSpine, ChFiDS_Spine)
+ 
+ private:
+@@ -102,6 +110,7 @@
+ 
+   NCollection_Sequence<gp_XY>                 parandrad;
+   NCollection_List<occ::handle<Law_Function>> laws;
++  BlendFunc_SectionShape                      mySectionShape = BlendFunc_Rational;
+ };
+ 
+ #endif // _ChFiDS_FilSpine_HeaderFile

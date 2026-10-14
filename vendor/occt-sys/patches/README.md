@@ -64,3 +64,11 @@ dropping it.
   it, and the interior chased it in a chain of nodes closing on the ruling
   that only the pass cap ended — one pass later on x86_64 than on arm64,
   inside parcad's weld. Header inside the patch; not yet offered upstream.
+- `0006-curvature-continuous-fillet-section.patch` — a fourth fillet shape,
+  `ChFi3d_CurvatureContinuous`: the rolling ball's contact lines with a
+  quintic section whose curvature at each contact point is the face's own, so
+  the blend is G2 to its faces where a circle is G1. Only the section changes;
+  the analytic cylinder and torus shortcuts are gated off for it, and a
+  contour it cannot be built on is marked `ChFiDS_SectionNotApplicable`.
+  Header inside the patch, with the harness measurements; not yet offered
+  upstream.

@@ -100,7 +100,33 @@ of `lib`, `libd`, `libi` holds `TKernel`, for a fresh build and for
 
 ## Changes to OCCT itself
 
-Five patches.
+Six patches.
+
+`patches/0006-curvature-continuous-fillet-section.patch`: a fourth
+`ChFi3d_FilletShape`, `ChFi3d_CurvatureContinuous`, behind parcad's
+`.smooth()`. The fillet keeps the rolling ball's contact lines, walking,
+extremities and corners; only the cross-section changes, from the circle to
+the quintic Bezier that leaves each contact point along the circle's tangent
+with the face's own normal curvature in that direction and passes through the
+circle's midpoint, so the blend is G2 to its faces where a fillet is G1 (Pegna
+and Wolter's linkage curve theorem is why one transverse direction suffices).
+`BlendFunc_ConstRad` builds the section and its two derivatives along the
+spine as central differences of the pole function at contact data carried to
+first and second order, exact to O(h²); the shape travels on
+`ChFiDS_FilSpine` so `ChFi3d_KParticular` keeps the analytic cylinder and
+torus for the circular shapes only; a variable radius, a blend along a face
+boundary or a circular simulation is marked `ChFiDS_SectionNotApplicable` and
+abandoned rather than given a circle. Measured on a box's four uprights (R =
+4 and 4.9), its top loop, a boss's root and rim, and a bar half buried along a
+plate (where the matched curvature is 1/6): every rail G2 to 1e-13/mm or
+better, every solid valid, the circular shapes unchanged. Where three such
+edges meet, the generic corner patch sits 2.8° off tangent, which is why
+`backend.rs` refuses that selection before asking. Held by
+`eval/cases/smooth-*.json`, `refuse-smooth-corner.json` and the planter
+saucer; research_notes/g2-blend.md has the prior art. Not yet offered
+upstream; it is additive and should be, once the three-edge corner has a G2
+construction.
+
 
 `patches/0004-concat-closed-chain-appends.patch`: `Geom2dConvert::ConcatC1`
 joins each piece of a chain with `CompCurveToBSplineCurve::Add`, whose `After`
