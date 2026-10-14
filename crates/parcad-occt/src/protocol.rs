@@ -374,6 +374,12 @@ pub struct TreatmentEdges {
     pub convex: usize,
     #[serde(default)]
     pub concave: usize,
+    /// Cuts made after this treatment instead of before it: its stripe ran
+    /// over a hole they cut, so it was built on the solid before them and
+    /// they were made again through it, which keeps the hole through. Inner
+    /// cut first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub before_cuts: Vec<usize>,
 }
 
 /// Counts of the logical topology.

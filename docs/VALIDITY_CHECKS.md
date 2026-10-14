@@ -124,7 +124,10 @@ to be intersected with itself.
 ## Not done
 
 - A fillet or chamfer node does not run `BRepCheck`, as a blend does, nor
-  classify the part's orientation. One `BRepCheck` fault the fillet builder
+  classify the part's orientation. The tray chamfered through its walls, the
+  self-intersection gate's founding chamfer case, is held on the kernel
+  directly now: through the graph it is built before the pocket
+  (docs/GOTCHAS.md, "A fillet that runs over a hole is built before the cut"). One `BRepCheck` fault the fillet builder
   used to produce, two wires of a face touching with no vertex there when a
   trim line ends exactly on a hole's rim, is now built right by the vendored
   kernel (docs/GOTCHAS.md, "A fillet that ends exactly on a hole's rim"). Of 400 fuzzed treatments, one fails

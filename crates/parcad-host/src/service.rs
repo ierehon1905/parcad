@@ -1942,8 +1942,8 @@ mod tests {
                 { "op": "chamfer", "child": 1, "distance": 1, "selector": "<Z" },
             ],
         })), &[
-            parcad_occt::protocol::TreatmentEdges { node: 1, edges: 4, convex: 4, concave: 0 },
-            parcad_occt::protocol::TreatmentEdges { node: 2, edges: 4, convex: 4, concave: 0 },
+            parcad_occt::protocol::TreatmentEdges { node: 1, edges: 4, convex: 4, concave: 0, before_cuts: Vec::new() },
+            parcad_occt::protocol::TreatmentEdges { node: 2, edges: 4, convex: 4, concave: 0, before_cuts: Vec::new() },
         ]);
 
         let reported: Vec<_> = treatments

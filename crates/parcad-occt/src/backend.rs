@@ -2762,6 +2762,7 @@ fn select_edge_target(
                 edges: kept.len(),
                 convex: corners(Dihedral::Convex),
                 concave: corners(Dihedral::Concave),
+                before_cuts: Vec::new(),
             };
             Ok(ResolvedEdgeTarget {
                 edges: kept.into_iter().flat_map(|edge| edge.edges).collect(),
@@ -2784,7 +2785,7 @@ fn select_edge_target(
                         .is_some_and(|described| seen.insert(described.key))
                 })
                 .collect();
-            let report = TreatmentEdges { node: id, edges: edges.len(), convex: 0, concave: 0 };
+            let report = TreatmentEdges { node: id, edges: edges.len(), convex: 0, concave: 0, before_cuts: Vec::new() };
             Ok(ResolvedEdgeTarget { edges, vertices, report })
         }
     }
@@ -4139,6 +4140,493 @@ fn nodes_phrase(doc: &Doc, ids: &[NodeId]) -> String {
     }
 }
 
+/// Subtract `cutters` (built from `tools`) from `acc`, the body of a
+/// `difference` node, with every check a cut is held to. A function rather
+/// than the match arm so that a treatment built before its cuts can make them
+/// again through it, see [`treat_before_cuts`].
+#[allow(clippy::too_many_arguments)]
+fn cut_node(
+    doc: &Doc,
+    id: NodeId,
+    label: &str,
+    tag: Option<&str>,
+    base: NodeId,
+    tools: &[NodeId],
+    blend: f64,
+    acc: BuiltShape,
+    cutters: Vec<BuiltShape>,
+) -> Result<BuiltShape> {
+    surfaces::require_solid(doc, id, label, "cuts", base, &acc)?;
+    for (&t, built) in tools.iter().zip(&cutters) {
+        surfaces::require_solid(doc, id, label, "cuts with", t, built)?;
+    }
+    breadcrumb(&format!("subtract nodes {tools:?} from node {id} ({label})"));
+    let material = acc.shape.clone();
+    let features = acc.lineage.solids_by_source.clone();
+    let voids_before = material.internal_void_count();
+    let faces_before = material.faces().count();
+    let mut cut = boolean_in_layers(acc, cutters, true, tag);
+    let whom = nodes_phrase(doc, tools);
+
+    // A cut that touches nothing. The tool made no new edge and
+    // took no face, so it lies wholly outside the material — a
+    // hole pattern drawn past the edge of the part, a cutter for
+    // a feature that has since moved. It used to pass silently
+    // and show up, one evaluation later, as a missing hole.
+    // With several tools, one can miss while the rest cut: it left
+    // no face and lies clear of the material. A tool inside a region
+    // another tool removed leaves no face either, but meets the
+    // material, so it is not a miss.
+    let nothing_at_all = cut.seam.is_empty() && cut.shape.faces().count() == faces_before;
+    let missed = tools.iter().zip(&cut.tools).find(|(_, tool)| {
+        nothing_at_all
+            || (tool.vanished
+                && tool
+                    .shape
+                    .least_distance_to(&material)
+                    .is_some_and(|(gap, _, _)| gap > MISS_GAP_MM))
+    });
+    if let Some((t, tool)) = missed {
+        let (a0, a1) = bbox(&material);
+        let (t0, t1) = bbox(&tool.shape);
+        bail!(
+            "node {id} ({label}) subtracts {}, and the cut removed \
+             nothing: the tool spans x {:.2}..{:.2}, y {:.2}..{:.2}, \
+             z {:.2}..{:.2} and the material x {:.2}..{:.2}, y {:.2}..{:.2}, \
+             z {:.2}..{:.2}, and they meet nowhere. A cutter that misses is \
+             usually placed against the wrong feature or drawn for a part \
+             that has since changed size; a cut that is meant to do nothing \
+             is a tool to leave out",
+            nodes_phrase(doc, std::slice::from_ref(t)),
+            t0.x, t1.x, t0.y, t1.y, t0.z, t1.z, a0.x, a1.x, a0.y, a1.y, a0.z, a1.z
+        );
+    }
+
+    // A cut that entombs its tool instead of opening the surface.
+    // Topology, not a threshold: an extra closed shell is a cavity
+    // whatever its clearance measures, so exact coincidence and a
+    // proud cutter stay silent. See docs/GOTCHAS.md, the entry end
+    // of the cut rule.
+    breadcrumb(&format!("node {id} ({label}): the cut is made; checking it"));
+    let voids = cut.shape.internal_void_bounds();
+    let sealed = voids.len().saturating_sub(voids_before);
+    if sealed > 0 {
+        let located = if tools.len() == 1 {
+            "The tool broke through no face — it sits entirely inside the material, \
+             usually a fraction of a millimetre short of the face it was meant to \
+             enter —"
+                .to_owned()
+        } else {
+            let places: Vec<String> = voids
+                .iter()
+                .map(|&(lo, hi)| {
+                    let near = |pick: &dyn Fn(DVec3, DVec3) -> bool| -> Vec<NodeId> {
+                        tools
+                            .iter()
+                            .zip(&cut.tools)
+                            .filter(|(_, tool)| tool.bounds.is_some_and(|(c0, c1)| pick(c0, c1)))
+                            .map(|(t, _)| *t)
+                            .collect()
+                    };
+                    let mut by = near(&|c0, c1| {
+                        c0.cmple(lo + MISS_GAP_MM).all() && hi.cmple(c1 + MISS_GAP_MM).all()
+                    });
+                    if by.is_empty() {
+                        by = near(&|c0, c1| {
+                            c0.cmplt(hi - MISS_GAP_MM).all() && lo.cmplt(c1 - MISS_GAP_MM).all()
+                        });
+                    }
+                    format!(
+                        "x {:.2}..{:.2}, y {:.2}..{:.2}, z {:.2}..{:.2}, cut by {}",
+                        lo.x, hi.x, lo.y, hi.y, lo.z, hi.z,
+                        nodes_phrase(doc, &by)
+                    )
+                })
+                .collect();
+            format!(
+                "The tools are cut together and the result is what is judged, and no \
+                 tool of this cut breaks through to the cavity at {} — it sits \
+                 entirely inside the material, usually a fraction of a millimetre short \
+                 of the face it was meant to open onto —",
+                places.join("; ")
+            )
+        };
+        bail!(
+            "node {id} ({label}) subtracts {whom}, and the cut sealed \
+             {sealed} closed void(s) inside the part instead of opening its \
+             surface. {located} so the result is a solid \
+             block with an unreachable cavity: watertight, plausible in \
+             every render, and unmanufacturable. Run the cutter proud of \
+             the material where it enters and past it where it exits, the \
+             way holeFor(thread, depth, {{ through: true }}) overshoots both \
+             faces; exactly on a face also cuts clean, but only the exact \
+             value does. A cavity is also opened by another tool of the same \
+             cut that reaches it, such as a bore, in any order. A sealed \
+             cavity that is wanted is what shell() builds. See docs/GOTCHAS.md"
+        );
+    }
+
+    cut.collisions.extend(cut_collisions(doc, id, tools, &material, &features, &cut.tools));
+
+    breadcrumb(&format!("node {id} ({label}): merging the cut's faces"));
+    let (shape, lineage) = if blend > 0.0 {
+        breadcrumb(&format!(
+            "fillet {blend} mm on edges created by cut at node {id} ({label})"
+        ));
+        let (shape, lineage) = blend_seam(
+            &cut.shape,
+            &cut.seam,
+            cut.lineage,
+            blend,
+            &format!("node {id} ({label}) subtracts {whom}"),
+            &format!("cut at node {id}"),
+            SeamOf::Cut,
+        )?;
+        unified_tracked(shape, lineage)
+    } else {
+        unified_tracked(cut.shape, cut.lineage)
+    };
+    Ok(BuiltShape {
+        shape,
+        lineage,
+        features: cut.features,
+        collisions: cut.collisions,
+    })
+}
+
+/// A fillet or a chamfer, with the words its refusals use.
+#[derive(Clone, Copy)]
+enum TreatmentKind {
+    Fillet(f64, BlendContinuity),
+    Chamfer(f64),
+}
+
+impl TreatmentKind {
+    fn size(self) -> f64 {
+        match self {
+            Self::Fillet(r, _) | Self::Chamfer(r) => r,
+        }
+    }
+
+    fn chamfer(self) -> bool {
+        matches!(self, Self::Chamfer(_))
+    }
+
+    fn treat(self) -> Treat {
+        match self {
+            Self::Fillet(_, continuity) => Treat::Fillet(continuity),
+            Self::Chamfer(_) => Treat::Chamfer,
+        }
+    }
+
+    fn thing(self) -> &'static str {
+        if self.chamfer() { "chamfer" } else { "fillet" }
+    }
+
+    fn verb(self) -> &'static str {
+        match self {
+            Self::Chamfer(_) => "chamfers",
+            Self::Fillet(_, BlendContinuity::Curvature) => "smooths",
+            Self::Fillet(_, BlendContinuity::Tangent) => "fillets",
+        }
+    }
+
+    fn noun(self) -> &'static str {
+        if self.chamfer() { "distance" } else { "radius" }
+    }
+
+    fn slip_reason(self) -> &'static str {
+        if self.chamfer() {
+            "A chamfer only cuts material away, so this result is wrong rather than merely \
+             surprising. The distance is too large for the material along those edges — reduce \
+             it, or select fewer edges."
+        } else {
+            "A fillet can only remove material at a convex edge or fill a concave one, so this \
+             result is wrong rather than merely surprising. The radius is too large for the \
+             material along those edges — reduce it, or select fewer edges."
+        }
+    }
+
+    fn crossing_reason(self) -> &'static str {
+        if self.chamfer() {
+            "A chamfer this size cuts past the material behind the edge — through a wall or \
+             floor thinner than the distance — or into a neighbouring face. Reduce it, or \
+             select fewer edges."
+        } else {
+            "A fillet this size reaches past the material behind the edge — a wall or floor \
+             thinner than the radius — or into a neighbouring face or fillet. Reduce it, or \
+             select fewer edges."
+        }
+    }
+}
+
+/// Treat `selected` on `solid`, held to the gates every treatment passes: it
+/// builds, it stays inside the solid it started from, and no face it made
+/// runs into another. The lineage follows the treatment and `tag` names the
+/// result.
+fn apply_treatment(
+    tag: Option<&str>,
+    id: NodeId,
+    label: &str,
+    kind: TreatmentKind,
+    mut solid: BuiltShape,
+    selected: &ResolvedEdgeTarget,
+) -> Result<BuiltShape> {
+    let count = selected.report.edges;
+    let size = kind.size();
+    let (thing, verb, noun) = (kind.thing(), kind.verb(), kind.noun());
+    let before = bbox(&solid.shape);
+    let stage = format!("{thing} at node {id}");
+    // A cheap handle clone: probes on a failure need the pre-treatment
+    // shape, and success replaces `solid.shape` in place.
+    let input = solid.shape.clone();
+    let built = match kind {
+        TreatmentKind::Chamfer(_) => solid.shape.chamfer_edges_with_history(size, &selected.edges),
+        TreatmentKind::Fillet(_, continuity) => solid.shape.fillet_edges_with_history(size, &selected.edges, continuity),
+    };
+    let mut treatment = match built {
+        Ok(treatment) => treatment,
+        Err(reason) => bail!(
+            "node {id} ({label}) {verb} {count} edge(s) by {size} mm, and \
+             OpenCASCADE could not build it ({reason}).{measured}{listing}\n\
+             inspect_treatment_target with node: {id} lists every edge this {thing} \
+             would act on, without rebuilding.",
+            measured = repair_sentence(
+                &probe_below(&input, &selected.edges, size, kind.treat(), before, &stage),
+                "these edges",
+                noun,
+                &format!("reduce the {thing} to that, or select fewer edges"),
+            ),
+            listing = selection_listing(&input, &selected.edges),
+        ),
+    };
+
+    let slip = growth_slip(before, bbox(&solid.shape));
+    if slip > SLIP_TOLERANCE_MM {
+        bail!(
+            "node {id} ({label}) {verb} {count} edge(s) by {size} mm, and the \
+             kernel returned a shape reaching {slip:.2} mm outside the solid it \
+             started from. {}{measured}",
+            kind.slip_reason(),
+            measured = repair_sentence(
+                &probe_below(&input, &selected.edges, size, kind.treat(), before, &stage),
+                "these edges",
+                noun,
+                &format!("reduce the {thing} to that"),
+            ),
+        );
+    }
+    if let Some(crossing) = self_crossing(&solid.shape, Some(&treatment.input())) {
+        bail!(
+            "node {id} ({label}) {verb} {count} edge(s) by {size} mm, and {crossing}. {}{measured}",
+            kind.crossing_reason(),
+            measured = repair_sentence(
+                &probe_below(&input, &selected.edges, size, kind.treat(), before, &stage),
+                "these edges",
+                noun,
+                &format!("reduce the {thing} to that"),
+            ),
+        );
+    }
+    if let TreatmentKind::Fillet(radius, BlendContinuity::Curvature) = kind {
+        let join = treatment.join_continuity();
+        breadcrumb(&format!(
+            "smooth node {id} ({label}): {} rail(s), {:.2e}° between normals, curvature step {:.2e}/mm",
+            join.rails, join.angle_deg, join.curvature_jump_per_mm
+        ));
+        if join.rails == 0 {
+            bail!(
+                "node {id} ({label}) smooths {count} edge(s) by {radius} mm, and the kernel's \
+                 history names no edge where a blend meets the face it was rolled on, so \
+                 whether it is curvature-continuous cannot be measured. This is a kernel \
+                 defect; fillet() these edges, and please report the script."
+            );
+        }
+        if join.angle_deg > SMOOTH_TANGENT_TOLERANCE_DEG {
+            bail!(
+                "node {id} ({label}) smooths {count} edge(s) by {radius} mm, and the blend \
+                 built is not even tangent to the faces it joins: their normals differ by \
+                 {:.3}° at worst along its {} rail(s). Reduce the radius, or select fewer edges.",
+                join.angle_deg, join.rails
+            );
+        }
+        let allowed = SMOOTH_CURVATURE_TOLERANCE / radius;
+        if join.curvature_jump_per_mm > allowed {
+            bail!(
+                "node {id} ({label}) smooths {count} edge(s) by {radius} mm, and the blend \
+                 built is not curvature-continuous: its curvature steps by {:.3e}/mm where \
+                 it meets the part, {:.1}% of the 1/R = {:.4}/mm a fillet would step by, \
+                 measured along {} rail(s). A smooth() is held to {:.0e}/mm here. Reduce the \
+                 radius, or fillet() these edges.",
+                join.curvature_jump_per_mm,
+                100.0 * join.curvature_jump_per_mm * radius,
+                1.0 / radius,
+                join.rails,
+                allowed
+            );
+        }
+        record(Measured {
+            curvature_jump_per_mm: Some(join.curvature_jump_per_mm),
+            ..Measured::default()
+        });
+    }
+    let lineage = std::mem::take(&mut solid.lineage).through_treatment(&mut treatment, &solid.shape, tag);
+    solid.features.add_generated(
+        id,
+        treatment
+            .generated
+            .into_iter()
+            .flat_map(|(_, made)| made)
+            .collect(),
+    );
+    Ok(BuiltShape {
+        shape: solid.shape,
+        lineage,
+        features: solid.features,
+        collisions: solid.collisions,
+    })
+}
+
+/// The chain of plain cuts `child` is, outermost first, and the node they
+/// started from; `None` when `child` is not a cut. A blended cut stops the
+/// chain: its blend runs on the seam the cut makes, which a treatment made
+/// before it would change.
+fn cuts_under(doc: &Doc, child: NodeId) -> Option<(NodeId, Vec<NodeId>)> {
+    let mut chain = Vec::new();
+    let mut at = child;
+    while let Ok(node) = doc.node(at) {
+        match &node.op {
+            Op::Difference { base, tools, blend } if !tools.is_empty() && *blend == 0.0 => {
+                chain.push(at);
+                at = *base;
+            }
+            _ => break,
+        }
+    }
+    (!chain.is_empty()).then_some((at, chain))
+}
+
+/// How far from an edge a treatment of `size` can reach, along the faces
+/// that meet there at the turn `angle_deg` between their normals: the
+/// rolling ball's centre sits size / sin(φ/2) from the edge for the dihedral
+/// φ, and nothing it makes is further than `size` from the centre. A
+/// chamfer's face lies inside the same bound.
+fn treatment_reach(size: f64, angle_deg: f64) -> f64 {
+    let dihedral = (180.0 - angle_deg).clamp(0.5, 180.0).to_radians();
+    size * (1.0 + 1.0 / (dihedral / 2.0).sin())
+}
+
+/// A treatment whose stripe would run over a hole cut before it, built before
+/// that cut, with the cut made again through it: the hole stays through, as
+/// it would in any CAD system, where the kernel alone would roll the ball
+/// along the hole's rim and roof it, or fail (docs/GOTCHAS.md, "A fillet
+/// that runs over a hole"). Taken only when the selector names the same edges
+/// on the solid before the cuts as on `selected`, measured piece by piece,
+/// and a tool of those cuts comes within the treatment's reach of one of
+/// them; otherwise `None`, and the treatment runs where it was written.
+#[allow(clippy::too_many_arguments)]
+fn treat_before_cuts(
+    doc: &Doc,
+    node: &parcad_core::graph::Node,
+    id: NodeId,
+    label: &str,
+    child: NodeId,
+    kind: TreatmentKind,
+    target: &EdgeTarget,
+    selected: &ResolvedEdgeTarget,
+    offset: DVec3,
+) -> Result<Option<BuiltShape>> {
+    let EdgeTarget::Edges { selector, .. } = target else {
+        return Ok(None);
+    };
+    let Some((origin, chain)) = cuts_under(doc, child) else {
+        return Ok(None);
+    };
+    let mut base = build_node(doc, origin, offset)?;
+    if surfaces::require_solid(doc, id, label, kind.verb(), origin, &base).is_err() {
+        return Ok(None);
+    }
+    let Ok(found) = select_edges(&base.shape, selector, &base.lineage, id, label) else {
+        return Ok(None);
+    };
+    let asked_smooth = matches!(selector, EdgeSelector::Query(query) if query.dihedral == Some(Dihedral::Smooth));
+    let found: Vec<SelectableEdge> = found
+        .into_iter()
+        .filter(|edge| asked_smooth || edge.dihedral != Some(Dihedral::Smooth))
+        .collect();
+    let pieces: Vec<(&Edge, f64)> = found
+        .iter()
+        .flat_map(|edge| edge.edges.iter().map(move |piece| (piece, treatment_reach(kind.size(), edge.angle_deg))))
+        .collect();
+    if pieces.is_empty() {
+        return Ok(None);
+    }
+    // The same edges, before and after the cuts: every selected piece lies on
+    // a piece found before them, and every piece found carries one.
+    let on = |piece: &Edge, point: DVec3| {
+        Shape::from(piece.clone())
+            .distance_to_point(point)
+            .is_some_and(|(gap, _)| gap <= EDGE_MATCH_MM)
+    };
+    let covered: Vec<Vec<bool>> = pieces
+        .iter()
+        .map(|(piece, _)| selected.edges.iter().map(|edge| on(piece, edge.middle().0)).collect())
+        .collect();
+    let every_selected_on_one = (0..selected.edges.len()).all(|k| covered.iter().any(|row| row[k]));
+    let every_found_carries_one = covered.iter().all(|row| row.iter().any(|&hit| hit));
+    if !every_selected_on_one || !every_found_carries_one {
+        return Ok(None);
+    }
+    let mut cuts: Vec<(NodeId, Vec<BuiltShape>)> = Vec::new();
+    for &cut in chain.iter().rev() {
+        let Op::Difference { tools, .. } = &doc.node(cut)?.op else {
+            return Ok(None);
+        };
+        let cutters = tools.iter().map(|&t| build_node(doc, t, offset)).collect::<Result<Vec<_>>>()?;
+        cuts.push((cut, cutters));
+    }
+    let within_reach = cuts.iter().any(|(_, cutters)| {
+        cutters.iter().any(|cutter| {
+            pieces.iter().any(|(piece, reach)| {
+                cutter
+                    .shape
+                    .least_distance_to(&Shape::from((*piece).clone()))
+                    .is_some_and(|(gap, _, _)| gap <= *reach)
+            })
+        })
+    });
+    if !within_reach {
+        return Ok(None);
+    }
+    let order: Vec<NodeId> = cuts.iter().map(|(cut, _)| *cut).collect();
+    breadcrumb(&format!(
+        "{} node {id} ({label}): its stripe runs over the cut at node(s) {order:?}; built before them, and the cuts made again through it",
+        kind.thing()
+    ));
+    let mut report = selected.report.clone();
+    report.before_cuts = order;
+    base.features.resolved.push(report);
+    let on_origin = ResolvedEdgeTarget {
+        edges: pieces.iter().map(|(piece, _)| (*piece).clone()).collect(),
+        vertices: Vec::new(),
+        report: selected.report.clone(),
+    };
+    let mut acc = apply_treatment(None, id, label, kind, base, &on_origin)?;
+    for (cut, cutters) in cuts {
+        let cut_node_ref = doc.node(cut)?;
+        let Op::Difference { base: cut_base, tools, blend } = &cut_node_ref.op else {
+            unreachable!("cuts_under keeps only cuts");
+        };
+        let cut_label = cut_node_ref.tag.as_deref().unwrap_or("untagged");
+        acc = cut_node(doc, cut, cut_label, cut_node_ref.tag.as_deref(), *cut_base, tools, *blend, acc, cutters)?;
+    }
+    Ok(Some(acc.named(node.tag.as_deref())))
+}
+
+/// How far a treated edge's midpoint may sit from the edge it lay on before
+/// the cuts, for the two to count as the same edge.
+const EDGE_MATCH_MM: f64 = 1.0e-4;
+
 /// Build one node, with `offset` accumulated from enclosing translations.
 ///
 /// Translation is carried down and applied at the primitives rather than moving
@@ -4254,142 +4742,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 .iter()
                 .map(|&t| build_node(doc, t, offset))
                 .collect::<Result<Vec<_>>>()?;
-            surfaces::require_solid(doc, id, label, "cuts", *base, &acc)?;
-            for (&t, built) in tools.iter().zip(&cutters) {
-                surfaces::require_solid(doc, id, label, "cuts with", t, built)?;
-            }
-            breadcrumb(&format!("subtract nodes {tools:?} from node {id} ({label})"));
-            let material = acc.shape.clone();
-            let features = acc.lineage.solids_by_source.clone();
-            let voids_before = material.internal_void_count();
-            let faces_before = material.faces().count();
-            let mut cut = boolean_in_layers(acc, cutters, true, node.tag.as_deref());
-            let whom = nodes_phrase(doc, tools);
-
-            // A cut that touches nothing. The tool made no new edge and
-            // took no face, so it lies wholly outside the material — a
-            // hole pattern drawn past the edge of the part, a cutter for
-            // a feature that has since moved. It used to pass silently
-            // and show up, one evaluation later, as a missing hole.
-            // With several tools, one can miss while the rest cut: it left
-            // no face and lies clear of the material. A tool inside a region
-            // another tool removed leaves no face either, but meets the
-            // material, so it is not a miss.
-            let nothing_at_all = cut.seam.is_empty() && cut.shape.faces().count() == faces_before;
-            let missed = tools.iter().zip(&cut.tools).find(|(_, tool)| {
-                nothing_at_all
-                    || (tool.vanished
-                        && tool
-                            .shape
-                            .least_distance_to(&material)
-                            .is_some_and(|(gap, _, _)| gap > MISS_GAP_MM))
-            });
-            if let Some((t, tool)) = missed {
-                let (a0, a1) = bbox(&material);
-                let (t0, t1) = bbox(&tool.shape);
-                bail!(
-                    "node {id} ({label}) subtracts {}, and the cut removed \
-                     nothing: the tool spans x {:.2}..{:.2}, y {:.2}..{:.2}, \
-                     z {:.2}..{:.2} and the material x {:.2}..{:.2}, y {:.2}..{:.2}, \
-                     z {:.2}..{:.2}, and they meet nowhere. A cutter that misses is \
-                     usually placed against the wrong feature or drawn for a part \
-                     that has since changed size; a cut that is meant to do nothing \
-                     is a tool to leave out",
-                    nodes_phrase(doc, std::slice::from_ref(t)),
-                    t0.x, t1.x, t0.y, t1.y, t0.z, t1.z, a0.x, a1.x, a0.y, a1.y, a0.z, a1.z
-                );
-            }
-
-            // A cut that entombs its tool instead of opening the surface.
-            // Topology, not a threshold: an extra closed shell is a cavity
-            // whatever its clearance measures, so exact coincidence and a
-            // proud cutter stay silent. See docs/GOTCHAS.md, the entry end
-            // of the cut rule.
-            breadcrumb(&format!("node {id} ({label}): the cut is made; checking it"));
-            let voids = cut.shape.internal_void_bounds();
-            let sealed = voids.len().saturating_sub(voids_before);
-            if sealed > 0 {
-                let located = if tools.len() == 1 {
-                    "The tool broke through no face — it sits entirely inside the material, \
-                     usually a fraction of a millimetre short of the face it was meant to \
-                     enter —"
-                        .to_owned()
-                } else {
-                    let places: Vec<String> = voids
-                        .iter()
-                        .map(|&(lo, hi)| {
-                            let near = |pick: &dyn Fn(DVec3, DVec3) -> bool| -> Vec<NodeId> {
-                                tools
-                                    .iter()
-                                    .zip(&cut.tools)
-                                    .filter(|(_, tool)| tool.bounds.is_some_and(|(c0, c1)| pick(c0, c1)))
-                                    .map(|(t, _)| *t)
-                                    .collect()
-                            };
-                            let mut by = near(&|c0, c1| {
-                                c0.cmple(lo + MISS_GAP_MM).all() && hi.cmple(c1 + MISS_GAP_MM).all()
-                            });
-                            if by.is_empty() {
-                                by = near(&|c0, c1| {
-                                    c0.cmplt(hi - MISS_GAP_MM).all() && lo.cmplt(c1 - MISS_GAP_MM).all()
-                                });
-                            }
-                            format!(
-                                "x {:.2}..{:.2}, y {:.2}..{:.2}, z {:.2}..{:.2}, cut by {}",
-                                lo.x, hi.x, lo.y, hi.y, lo.z, hi.z,
-                                nodes_phrase(doc, &by)
-                            )
-                        })
-                        .collect();
-                    format!(
-                        "The tools are cut together and the result is what is judged, and no \
-                         tool of this cut breaks through to the cavity at {} — it sits \
-                         entirely inside the material, usually a fraction of a millimetre short \
-                         of the face it was meant to open onto —",
-                        places.join("; ")
-                    )
-                };
-                bail!(
-                    "node {id} ({label}) subtracts {whom}, and the cut sealed \
-                     {sealed} closed void(s) inside the part instead of opening its \
-                     surface. {located} so the result is a solid \
-                     block with an unreachable cavity: watertight, plausible in \
-                     every render, and unmanufacturable. Run the cutter proud of \
-                     the material where it enters and past it where it exits, the \
-                     way holeFor(thread, depth, {{ through: true }}) overshoots both \
-                     faces; exactly on a face also cuts clean, but only the exact \
-                     value does. A cavity is also opened by another tool of the same \
-                     cut that reaches it, such as a bore, in any order. A sealed \
-                     cavity that is wanted is what shell() builds. See docs/GOTCHAS.md"
-                );
-            }
-
-            cut.collisions.extend(cut_collisions(doc, id, tools, &material, &features, &cut.tools));
-
-            breadcrumb(&format!("node {id} ({label}): merging the cut's faces"));
-            let (shape, lineage) = if *blend > 0.0 {
-                breadcrumb(&format!(
-                    "fillet {blend} mm on edges created by cut at node {id} ({label})"
-                ));
-                let (shape, lineage) = blend_seam(
-                    &cut.shape,
-                    &cut.seam,
-                    cut.lineage,
-                    *blend,
-                    &format!("node {id} ({label}) subtracts {whom}"),
-                    &format!("cut at node {id}"),
-                    SeamOf::Cut,
-                )?;
-                unified_tracked(shape, lineage)
-            } else {
-                unified_tracked(cut.shape, cut.lineage)
-            };
-            BuiltShape {
-                shape,
-                lineage,
-                features: cut.features,
-                collisions: cut.collisions,
-            }
+            cut_node(doc, id, label, node.tag.as_deref(), *base, tools, *blend, acc, cutters)?
         }
 
         Op::Intersection { children, blend } => {
@@ -5332,123 +5685,11 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             breadcrumb(&format!(
                 "{verb} node {id} ({label}) {radius} mm on {count} selected edge(s)"
             ));
-            let before = bbox(&solid.shape);
-            let stage = format!("fillet at node {id}");
-            // A cheap handle clone: probes on a failure need the pre-treatment
-            // shape, and success replaces `solid.shape` in place.
-            let input = solid.shape.clone();
-            let mut treatment = match solid
-                .shape
-                .fillet_edges_with_history(*radius, &selected.edges, continuity)
-            {
-                Ok(treatment) => treatment,
-                Err(reason) => bail!(
-                    "node {id} ({label}) {verb} {count} edge(s) by {radius} mm, and \
-                     OpenCASCADE could not build it ({reason}).{measured}{listing}\n\
-                     inspect_treatment_target with node: {id} lists every edge this fillet \
-                     would act on, without rebuilding.",
-                    measured = repair_sentence(
-                        &probe_below(&input, &selected.edges, *radius, Treat::Fillet(continuity), before, &stage),
-                        "these edges",
-                        "radius",
-                        "reduce the fillet to that, or select fewer edges",
-                    ),
-                    listing = selection_listing(&input, &selected.edges),
-                ),
-            };
-
-            let slip = growth_slip(before, bbox(&solid.shape));
-            if slip > SLIP_TOLERANCE_MM {
-                bail!(
-                    "node {id} ({label}) fillets {count} edge(s) by {radius} mm, and the \
-                     kernel returned a shape reaching {slip:.2} mm outside the solid it \
-                     started from. A fillet can only remove material at a convex edge or \
-                     fill a concave one, so this result is wrong rather than merely \
-                     surprising. The radius is too large for the material along those \
-                     edges — reduce it, or select fewer edges.{measured}",
-                    measured = repair_sentence(
-                        &probe_below(&input, &selected.edges, *radius, Treat::Fillet(continuity), before, &stage),
-                        "these edges",
-                        "radius",
-                        "reduce the fillet to that",
-                    ),
-                );
+            let kind = TreatmentKind::Fillet(*radius, continuity);
+            if let Some(built) = treat_before_cuts(doc, node, id, label, *child, kind, target, &selected, offset)? {
+                return Ok(built);
             }
-            if let Some(crossing) = self_crossing(&solid.shape, Some(&treatment.input())) {
-                bail!(
-                    "node {id} ({label}) fillets {count} edge(s) by {radius} mm, and {crossing}. \
-                     A fillet this size reaches past the material behind the edge — a wall or \
-                     floor thinner than the radius — or into a neighbouring face or fillet. \
-                     Reduce it, or select fewer edges.{measured}",
-                    measured = repair_sentence(
-                        &probe_below(&input, &selected.edges, *radius, Treat::Fillet(continuity), before, &stage),
-                        "these edges",
-                        "radius",
-                        "reduce the fillet to that",
-                    ),
-                );
-            }
-            if continuity == BlendContinuity::Curvature {
-                let join = treatment.join_continuity();
-                breadcrumb(&format!(
-                    "smooth node {id} ({label}): {} rail(s), {:.2e}° between normals, curvature step {:.2e}/mm",
-                    join.rails, join.angle_deg, join.curvature_jump_per_mm
-                ));
-                if join.rails == 0 {
-                    bail!(
-                        "node {id} ({label}) smooths {count} edge(s) by {radius} mm, and the kernel's \
-                         history names no edge where a blend meets the face it was rolled on, so \
-                         whether it is curvature-continuous cannot be measured. This is a kernel \
-                         defect; fillet() these edges, and please report the script."
-                    );
-                }
-                if join.angle_deg > SMOOTH_TANGENT_TOLERANCE_DEG {
-                    bail!(
-                        "node {id} ({label}) smooths {count} edge(s) by {radius} mm, and the blend \
-                         built is not even tangent to the faces it joins: their normals differ by \
-                         {:.3}° at worst along its {} rail(s). Reduce the radius, or select fewer edges.",
-                        join.angle_deg, join.rails
-                    );
-                }
-                let allowed = SMOOTH_CURVATURE_TOLERANCE / radius;
-                if join.curvature_jump_per_mm > allowed {
-                    bail!(
-                        "node {id} ({label}) smooths {count} edge(s) by {radius} mm, and the blend \
-                         built is not curvature-continuous: its curvature steps by {:.3e}/mm where \
-                         it meets the part, {:.1}% of the 1/R = {:.4}/mm a fillet would step by, \
-                         measured along {} rail(s). A smooth() is held to {:.0e}/mm here. Reduce the \
-                         radius, or fillet() these edges.",
-                        join.curvature_jump_per_mm,
-                        100.0 * join.curvature_jump_per_mm * radius,
-                        1.0 / radius,
-                        join.rails,
-                        allowed
-                    );
-                }
-                record(Measured {
-                    curvature_jump_per_mm: Some(join.curvature_jump_per_mm),
-                    ..Measured::default()
-                });
-            }
-            let lineage = std::mem::take(&mut solid.lineage).through_treatment(
-                &mut treatment,
-                &solid.shape,
-                node.tag.as_deref(),
-            );
-            solid.features.add_generated(
-                id,
-                treatment
-                    .generated
-                    .into_iter()
-                    .flat_map(|(_, made)| made)
-                    .collect(),
-            );
-            BuiltShape {
-                shape: solid.shape,
-                lineage,
-                features: solid.features,
-                collisions: solid.collisions,
-            }
+            apply_treatment(node.tag.as_deref(), id, label, kind, solid, &selected)?
         }
 
         Op::Chamfer {
@@ -5478,82 +5719,11 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             breadcrumb(&format!(
                 "chamfer node {id} ({label}) {distance} mm on {count} selected edge(s)"
             ));
-            let before = bbox(&solid.shape);
-            let stage = format!("chamfer at node {id}");
-            // A cheap handle clone: probes on a failure need the pre-treatment
-            // shape, and success replaces `solid.shape` in place.
-            let input = solid.shape.clone();
-            let mut treatment = match solid
-                .shape
-                .chamfer_edges_with_history(*distance, &selected.edges)
-            {
-                Ok(treatment) => treatment,
-                Err(reason) => bail!(
-                    "node {id} ({label}) chamfers {count} edge(s) by {distance} mm, and \
-                     OpenCASCADE could not build it ({reason}).{measured}{listing}\n\
-                     inspect_treatment_target with node: {id} lists every edge this chamfer \
-                     would act on, without rebuilding.",
-                    measured = repair_sentence(
-                        &probe_below(&input, &selected.edges, *distance, Treat::Chamfer, before, &stage),
-                        "these edges",
-                        "distance",
-                        "reduce the chamfer to that, or select fewer edges",
-                    ),
-                    listing = selection_listing(&input, &selected.edges),
-                ),
-            };
-
-            // Identical argument to the fillet above: cutting a corner off
-            // cannot push the part outward.
-            let slip = growth_slip(before, bbox(&solid.shape));
-            if slip > SLIP_TOLERANCE_MM {
-                bail!(
-                    "node {id} ({label}) chamfers {count} edge(s) by {distance} mm, and the \
-                     kernel returned a shape reaching {slip:.2} mm outside the solid it \
-                     started from. A chamfer only cuts material away, so this result is \
-                     wrong rather than merely surprising. The distance is too large for \
-                     the material along those edges — reduce it, or select fewer edges.{measured}",
-                    measured = repair_sentence(
-                        &probe_below(&input, &selected.edges, *distance, Treat::Chamfer, before, &stage),
-                        "these edges",
-                        "distance",
-                        "reduce the chamfer to that",
-                    ),
-                );
+            let kind = TreatmentKind::Chamfer(*distance);
+            if let Some(built) = treat_before_cuts(doc, node, id, label, *child, kind, target, &selected, offset)? {
+                return Ok(built);
             }
-            if let Some(crossing) = self_crossing(&solid.shape, Some(&treatment.input())) {
-                bail!(
-                    "node {id} ({label}) chamfers {count} edge(s) by {distance} mm, and {crossing}. \
-                     A chamfer this size cuts past the material behind the edge — through a wall \
-                     or floor thinner than the distance — or into a neighbouring face. Reduce it, \
-                     or select fewer edges.{measured}",
-                    measured = repair_sentence(
-                        &probe_below(&input, &selected.edges, *distance, Treat::Chamfer, before, &stage),
-                        "these edges",
-                        "distance",
-                        "reduce the chamfer to that",
-                    ),
-                );
-            }
-            let lineage = std::mem::take(&mut solid.lineage).through_treatment(
-                &mut treatment,
-                &solid.shape,
-                node.tag.as_deref(),
-            );
-            solid.features.add_generated(
-                id,
-                treatment
-                    .generated
-                    .into_iter()
-                    .flat_map(|(_, made)| made)
-                    .collect(),
-            );
-            BuiltShape {
-                shape: solid.shape,
-                lineage,
-                features: solid.features,
-                collisions: solid.collisions,
-            }
+            apply_treatment(node.tag.as_deref(), id, label, kind, solid, &selected)?
         }
     })
 }
@@ -5978,7 +6148,7 @@ mod tests {
         let after = with_reuse(&mut cache, &renumbered, || build_part(&renumbered).unwrap().treatment_edges);
         assert_eq!(
             after.values().cloned().collect::<Vec<_>>(),
-            [TreatmentEdges { node: 2, edges: 4, convex: 4, concave: 0 }],
+            [TreatmentEdges { node: 2, edges: 4, convex: 4, concave: 0, before_cuts: Vec::new() }],
             "the fillet is node 2 now",
         );
     }
@@ -6138,32 +6308,40 @@ mod tests {
         build(&doc).unwrap();
     }
 
-    /// A fillet whose trim line on the floor ends exactly on a hole's rim: stock
-    /// OCCT returns the floor face with its outer wire touching the hole at a
-    /// point no vertex marks, which `BRepCheck` rejects. The vendored kernel
-    /// patch 0007 has the fillet builder cut both edges there, sharing one
-    /// vertex, and the volume is the one a point contact gives — the same part
-    /// with the hole clear. docs/GOTCHAS.md, "A fillet that ends exactly on a
-    /// hole's rim".
+    /// A fillet whose trim line on the floor ends exactly on a hole's rim, put
+    /// to the kernel directly: stock OCCT returns the floor face with its
+    /// outer wire touching the hole at a point no vertex marks, which
+    /// `BRepCheck` rejects. The vendored kernel patch 0007 has the fillet
+    /// builder cut both edges there, sharing one vertex, and the volume is the
+    /// one a point contact gives — the same part with the hole clear.
+    /// docs/GOTCHAS.md, "A fillet that ends exactly on a hole's rim". Through
+    /// the graph the same part is built before its cut (see
+    /// `treat_before_cuts`), which is why this test does not go that way.
     #[test]
     fn a_fillet_ending_on_a_hole_rim_builds_valid_with_the_touch_as_a_vertex() {
-        let part = |hole_x: f64| -> Doc {
-            serde_json::from_str(&format!(
-                r#"{{"units":"mm","root":8,"nodes":[
-                    {{"op":"cuboid","size":{{"x":40,"y":30,"z":5}}}},
-                    {{"op":"translate","child":0,"by":{{"x":0,"y":0,"z":2.5}},"tag":"base"}},
-                    {{"op":"cuboid","size":{{"x":3,"y":30,"z":15}}}},
-                    {{"op":"translate","child":2,"by":{{"x":0,"y":0,"z":12.5}},"tag":"fin"}},
-                    {{"op":"union","children":[1,3],"blend":0}},
-                    {{"op":"cylinder","r":2.5,"h":20}},
-                    {{"op":"translate","child":5,"by":{{"x":{hole_x},"y":0,"z":0}}}},
-                    {{"op":"difference","base":4,"tools":[6],"blend":0}},
-                    {{"op":"fillet","child":7,"radius":2,"selector":{{"between":["base","fin"],"dihedral":"concave"}}}}]}}"#
-            ))
-            .unwrap()
+        let part = |hole_x: f64| -> Shape {
+            let base = AdHocShape::make_box_point_point(DVec3::new(-20.0, -15.0, 0.0), DVec3::new(20.0, 15.0, 5.0)).0;
+            let fin = AdHocShape::make_box_point_point(DVec3::new(-1.5, -15.0, 5.0), DVec3::new(1.5, 15.0, 20.0)).0;
+            let body = unified(base.union(&fin).shape);
+            let hole = AdHocShape::make_cylinder(DVec3::new(hole_x, 0.0, -5.0), 2.5, 20.0).0;
+            let mut cut = unified(body.subtract(&hole).shape);
+            let roots: Vec<Edge> = cut
+                .edges()
+                .filter(|e| {
+                    let (p, _) = e.middle();
+                    (p.x.abs() - 1.5).abs() < 1e-6 && (p.z - 5.0).abs() < 1e-6 && p.y.abs() < 1e-6
+                })
+                .collect();
+            let unique: Vec<Edge> = {
+                let mut seen = HashSet::new();
+                roots.into_iter().filter(|e| describe_edge(e.clone()).is_some_and(|d| seen.insert(d.key))).collect()
+            };
+            assert_eq!(unique.len(), 2, "the fin's two root edges");
+            cut.fillet_edges_with_history(2.0, &unique, BlendContinuity::Tangent).expect("the fillet builds");
+            cut
         };
-        let touching = build(&part(6.0)).expect("the touching fillet builds");
-        let clear = build(&part(8.0)).expect("the clear fillet builds");
+        let touching = part(6.0);
+        let clear = part(8.0);
         touching.check_validity(true).expect("BRepCheck accepts the builder's own result");
         let touched = touching.signed_volume();
         let cleared = clear.signed_volume();
@@ -6772,15 +6950,47 @@ mod tests {
         assert!(err.contains("lofts through 2 sections") && err.contains("runs into itself"), "{err}");
     }
 
+    /// Written cut-then-chamfer, built chamfer-then-cut: the chamfer's reach
+    /// meets the pocket, so the box is chamfered first and the pocket cut
+    /// through it. The kernel's own chamfer of the cut tray is the self-
+    /// crossing solid the test below refuses.
     #[test]
-    fn a_chamfer_through_the_wall_behind_it_is_refused_with_a_size_that_builds() {
-        let err = refusal_of(
+    fn a_chamfer_through_the_wall_behind_it_is_built_before_the_pocket() {
+        let doc: Doc = serde_json::from_str(
             r#"{"root": 4, "nodes": [{"op": "cuboid", "size": {"x": 40, "y": 40, "z": 20}},
                 {"op": "cuboid", "size": {"x": 32.45, "y": 34.35, "z": 20}},
                 {"op": "translate", "child": 1, "by": {"x": 0, "y": 0, "z": 1.63}},
                 {"op": "difference", "base": 0, "tools": [2], "blend": 0},
                 {"op": "chamfer", "child": 3, "distance": 5.41, "selector": "<Z"}]}"#,
-        );
+        )
+        .unwrap();
+        let part = build_part(&doc).unwrap();
+        let report = part.treatment_edges.get(&4).expect("the chamfer reports");
+        assert_eq!(report.before_cuts, vec![3]);
+        assert_eq!(report.edges, 4);
+        part.shape.check_validity(true).unwrap();
+        assert!(part.shape.signed_volume() > 0.0);
+    }
+
+    /// The kernel on its own: a tray chamfered deeper than its walls comes
+    /// back closed with its chamfer faces through the pocket, and the self-
+    /// intersection check refuses it with a size measured to build.
+    #[test]
+    fn a_chamfer_through_the_wall_behind_it_is_refused_with_a_size_that_builds() {
+        let block = AdHocShape::make_box_point_point(DVec3::new(-20.0, -20.0, 0.0), DVec3::new(20.0, 20.0, 20.0)).0;
+        let pocket = AdHocShape::make_box_point_point(
+            DVec3::new(-16.225, -17.175, 1.63),
+            DVec3::new(16.225, 17.175, 21.63),
+        )
+        .0;
+        let tray = unified(block.subtract(&pocket).shape);
+        let target = EdgeTarget::Edges { selector: EdgeSelector::Directional("<Z".to_owned()), expect: None };
+        let selected = select_edge_target(&tray, &target, &EdgeLineage::default(), 4, "tray").unwrap();
+        assert_eq!(selected.report.edges, 4);
+        let err = apply_treatment(None, 4, "tray", TreatmentKind::Chamfer(5.41), BuiltShape::untracked(tray), &selected)
+            .err()
+            .map(|e| format!("{e:#}"))
+            .expect("the kernel's own chamfer is refused");
         assert!(err.contains("chamfers 4 edge(s) by 5.41 mm") && err.contains("runs into itself"), "{err}");
         assert!(err.contains("Largest distance measured to build on these edges"), "{err}");
     }

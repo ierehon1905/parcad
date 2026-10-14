@@ -853,6 +853,10 @@ pub struct Treatment {
     /// that wrote one cannot tell its request survived.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub continuity: Option<String>,
+    /// Cuts made again after this treatment, inner first: its stripe ran over
+    /// a hole they cut, so it was built before them and the hole stays through.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub before_cuts: Vec<usize>,
     /// How many edges the selector actually resolved to on the shape this
     /// treatment ran against — measured, not the `.expect()` the script
     /// wrote. For an `.edges(...)` selection it is counted the way `.expect`
@@ -1173,6 +1177,7 @@ pub fn treatments(doc: &Doc, resolved: &[parcad_occt::protocol::TreatmentEdges])
     let resolved_at = |node: usize| resolved.iter().find(|t| t.node == node);
     let edges_of = |node: usize| resolved_at(node).map(|t| t.edges);
     let mixed_at = |node: usize| resolved_at(node).and_then(mixed_corners);
+    let before_cuts_of = |node: usize| resolved_at(node).map(|t| t.before_cuts.clone()).unwrap_or_default();
     let Ok(order) = doc.topo_order() else {
         // An unorderable graph has no live nodes to report. It also cannot have
         // evaluated, so this is unreachable from `snapshot`; returning nothing
@@ -1195,6 +1200,7 @@ pub fn treatments(doc: &Doc, resolved: &[parcad_occt::protocol::TreatmentEdges])
                         }
                         .to_string(),
                     ),
+                    before_cuts: before_cuts_of(node),
                     edges: edges_of(node),
                     mixed_corners: mixed_at(node),
                 },
@@ -1203,6 +1209,7 @@ pub fn treatments(doc: &Doc, resolved: &[parcad_occt::protocol::TreatmentEdges])
                     op: "chamfer".to_string(),
                     amount_mm: *distance,
                     continuity: None,
+                    before_cuts: before_cuts_of(node),
                     edges: edges_of(node),
                     mixed_corners: mixed_at(node),
                 },
@@ -1578,7 +1585,7 @@ mod tests {
             { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
             { "op": "fillet", "child": 0, "radius": 1, "selector": "|Z" },
         ] }));
-        let reported = treatments(&doc, &[TreatmentEdges { node: 1, edges: 4, convex: 4, concave: 0 }]);
+        let reported = treatments(&doc, &[TreatmentEdges { node: 1, edges: 4, convex: 4, concave: 0, before_cuts: Vec::new() }]);
         assert_eq!(reported[0].edges, Some(4));
         let json = serde_json::to_value(&reported[0]).unwrap();
         assert_eq!(json["edges"], 4);
@@ -1596,7 +1603,7 @@ mod tests {
             { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
             { "op": "chamfer", "child": 0, "distance": 1, "selector": { "curve": "circle" } },
         ] }));
-        let reported = treatments(&doc, &[TreatmentEdges { node: 1, edges: 3, convex: 1, concave: 2 }]);
+        let reported = treatments(&doc, &[TreatmentEdges { node: 1, edges: 3, convex: 1, concave: 2, before_cuts: Vec::new() }]);
         let mixed = reported[0].mixed_corners.as_deref().expect("a mixed selection says so");
         assert!(mixed.starts_with("2 concave, 1 convex"), "{mixed}");
         assert!(mixed.contains(r#"dihedral: "concave""#) && mixed.contains(r#"dihedral: "convex""#), "{mixed}");

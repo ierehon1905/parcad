@@ -882,9 +882,12 @@ export class EdgeSelection {
   /**
    * Round the selected logical edges by `radius` millimetres.
    *
-   * The default recipe is tangent, rolling-ball. Other valid recipes are kept
-   * in the intent graph but the exact backend refuses them until it can produce
-   * that geometry exactly.
+   * - A fillet whose stripe runs over a hole cut before it is built before
+   *   that cut, and the cut made again through it: the hole stays through.
+   *   The reply's treatment lists the cuts as `before_cuts`.
+   * - The default recipe is tangent, rolling-ball. Other valid recipes are
+   *   kept in the intent graph but the exact backend refuses them until it
+   *   can produce that geometry exactly.
    */
   fillet(radius: number, options?: FilletOptions): Shape {
     return this.owner.fillet(
@@ -896,7 +899,12 @@ export class EdgeSelection {
     );
   }
 
-  /** Bevel the selected edges by an equal distance in millimetres. */
+  /**
+   * Bevel the selected edges by an equal distance in millimetres.
+   *
+   * - A chamfer that runs over a hole cut before it is built before that cut,
+   *   and the cut made again through it, as a fillet is.
+   */
   chamfer(distance: number, options?: ChamferOptions): Shape {
     return this.owner.chamfer(
       distance,

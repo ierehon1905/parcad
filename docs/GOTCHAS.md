@@ -1309,7 +1309,8 @@ half past the seam vertex: 7297.122 mm³, a shell that would not close), and
 a face in the data structure is rebuilt when an edge of it carries geometry
 (the hole's cylinder kept the whole rim while the floor had its pieces:
 three free edges). A crossing is left alone: the 0.5 mm overlap trims
-itself as it always did.
+itself as it always did. What the kernel does once the foot runs *into* the
+hole is the next entry.
 
 The session that landed it first wrote the same vertex in after the build,
 in the treatment history. That mended ParCAD's result and nothing else, and
@@ -1331,6 +1332,51 @@ writes the same data structure, and by
 the three patched sources compiled against the prebuilt static libraries,
 shadowing the archive members, a two-second cycle instead of an OCCT
 rebuild — is the way to iterate on any kernel patch.
+
+### A fillet that runs over a hole is built before the cut, and the cut made again
+
+Sweeping the radius on the hole-rim part above, once the touch built: from
+2 to 4.5 mm OpenCASCADE builds something, from 4.6 to 7 mm it reports not
+done (`ChFiDS_TwistedSurface`, then a faulty vertex at the far rim), and from
+7.1 mm it returns `IsDone()` with the hole's rim left dangling in the
+cylinder's face — one free edge, `BRepCheck_NotClosed`. Stock 8.0.1 and the
+patched kernel behave identically. The cause is a definition, not a bug:
+ChFi3d treats the rim as an *obstacle edge* and, between the two points where
+the foot crosses it, rolls the ball along the rim (its surface/rest-line
+blend, "bypass of obstacle" in `ChFi3d_Builder_6.cxx`). That bridges the
+hole. It works only while the contact stays on the near half of the rim,
+folds once the foot passes the hole's centre, has no corner case for the
+tangency at the far rim, and is never triggered when the foot clears the
+hole, so the cylinder is then never cut up through the new material. And
+where it works it is a different solid from what anyone means by a hole:
+7366.770 mm³ at 3 mm against 7367.599 for the hole through the fillet.
+
+**The kernel cannot know the edge is a hole; the graph can.** A fillet or
+chamfer whose stripe runs over a cut made before it means "the treatment as
+if the cut were not there, then the cut through it" — the only reading with
+one meaning at every radius, and what every mainstream CAD builds. So
+`treat_before_cuts` in `backend.rs` builds the treatment on the solid before
+the chain of plain cuts under it and makes those cuts again through the
+result, exactly, and the reply's treatment lists them as `before_cuts`.
+Measured: every radius from 1 to 8 mm builds valid with the same 13 faces
+(7570.740 at 5, 7870.907 at 7, 8057.336 at 8, the harness's fillet-then-cut
+numbers to the micron), the chamfer the same, and the tray whose bottom
+chamfer ran through its walls into the pocket — refused since the
+self-intersection gate landed — now builds as a tray with its corners cut
+open, 9423.01 mm³. It is taken only on evidence: the selector must name the
+same edges on the solid before the cuts as after them, piece by piece
+(`EDGE_MATCH_MM`), so edges a cut created are never treated before it, and a
+tool of those cuts must come within the treatment's reach of a selected
+edge (`treatment_reach`, the rolling ball's centre distance plus its radius,
+a bound and not an estimate); otherwise the treatment runs where it was
+written. A blended cut ends the chain: its blend runs on the seam the cut
+makes. Held by `fillet-over-a-hole-centre`, `fillet-past-a-hole`,
+`chamfer-over-a-hole` and `chamfer-through-a-tray-wall`, with
+`fillet-overlaps-a-hole` re-recorded for the hole through the fillet, and
+by `a_chamfer_through_the_wall_behind_it_is_built_before_the_pocket`; the
+kernel's own self-crossing chamfer stays refused in
+`a_chamfer_through_the_wall_behind_it_is_refused_with_a_size_that_builds`,
+which puts the cut tray to the kernel directly.
 
 ### `ThruSections` quietly untwisted a loft — `CheckCompatibility` re-origins wires
 

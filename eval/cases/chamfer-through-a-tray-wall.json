@@ -1,0 +1,36 @@
+{
+  "name": "chamfer-through-a-tray-wall",
+  "script": "eval/scripts/chamfer-through-a-tray-wall.js",
+  "why": "A tray chamfered deeper than its walls, written cut-then-chamfer. OpenCASCADE's chamfer on the cut tray returns a closed solid whose faces run through the pocket, which the self-intersection check refuses (held by a_chamfer_through_the_wall_behind_it_is_refused in backend.rs, on the kernel directly). The chamfer's reach meets the pocket, so the part is built chamfer-then-cut and the pocket breaks out through the chamfer faces: a thin-walled tray with its bottom corners cut open, which print_check is there to judge.",
+  "brep": {
+    "size": [
+      40.0,
+      40.0,
+      20.0
+    ],
+    "volume_mm3": 9423.01,
+    "area_mm2": 8084.139,
+    "triangles": 52,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 851.472,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 19,
+    "edges": 88,
+    "curves": 44,
+    "overhang": {
+      "part": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 970.467,
+        "bed_mm2": 851.472,
+        "faces": 8,
+        "bridges": 0
+      }
+    }
+  }
+}
