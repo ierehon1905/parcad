@@ -528,7 +528,10 @@ are worth. Leon's read is in brackets.
   measured along every rail (`curvature_jump_per_mm` in the reply, 1e-13/mm
   and below on the corpus, where a fillet reads 1/R), and anything over 0.05°
   or 1 % of 1/R is refused. The saucer's bumps are now domes eased in with
-  `smooth(2)`, 37 stripes in 2 s. Prior art, the choice and the numbers:
+  `smooth(2)`, 37 stripes in 2 s. `eval/field/does-it-ease-in.md` asks a
+  model for a soft corner and the measured step: 2/2 SOUND on Haiku 5.5, both
+  trials reaching for `smooth()` and quoting the field. Prior art, the choice
+  and the numbers:
   research_notes/g2-blend.md; the trap it leaves, GOTCHAS "A smoothed
   three-edge corner is not even tangent". **Open: a G2 corner patch.** Where
   three smoothed edges meet, `ChFi3d`'s generic corner is 2.8° off tangent
