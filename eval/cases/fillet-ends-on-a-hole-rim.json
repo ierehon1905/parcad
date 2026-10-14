@@ -1,0 +1,23 @@
+{
+  "name": "fillet-ends-on-a-hole-rim",
+  "script": "eval/scripts/fillet-ends-on-a-hole-rim.js",
+  "why": "A 2 mm fillet on a fin's root whose trim line on the floor (x = 3.5) touches a Ø5 hole's rim at exactly one point. Stock OCCT 8.0.1 builds it IsDone and BRepCheck rejects the floor face, whose outer wire meets its inner one with no vertex there; the vendored kernel patch 0007 has the fillet builder record the touch and cut both edges there, sharing one vertex. The volume must equal fillet-clear-of-a-hole's: a point contact removes nothing. Found by @FuruRok comparing OCCT with usd-brep (2026-10-13).",
+  "brep": {
+    "size": [
+      40.0,
+      30.0,
+      20.0
+    ],
+    "volume_mm3": 7303.33,
+    "area_mm2": 4081.199,
+    "triangles": 328,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1180.417,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 13,
+    "edges": 70,
+    "curves": 33
+  }
+}

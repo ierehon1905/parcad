@@ -100,7 +100,7 @@ of `lib`, `libd`, `libi` holds `TKernel`, for a fresh build and for
 
 ## Changes to OCCT itself
 
-Six patches.
+Seven patches.
 
 `patches/0006-curvature-continuous-fillet-section.patch`: a fourth
 `ChFi3d_FilletShape`, `ChFi3d_CurvatureContinuous`, behind parcad's
@@ -127,6 +127,26 @@ saucer; research_notes/g2-blend.md has the prior art. Not yet offered
 upstream; it is additive and should be, once the three-edge corner has a G2
 construction.
 
+`patches/0007-fillet-touch-on-a-face-edge.patch`: a fillet or chamfer
+whose contact curve on a support face ends exactly on another edge of that
+face — a through hole whose rim is tangent to the fillet's foot — built
+`IsDone()` with the trimmed face's outer wire touching its inner one at a
+point no vertex marked: every curve right, the volume right, `BRepCheck`
+rejecting the face. `ChFi3d_FilDS` now intersects each contact curve with
+the edges of the face it is drawn on, the test `BRepCheck_Face` itself
+runs, and writes a touch as a data-structure point with a leaving and an
+entering interference on the curve and on the edge, so the builder cuts
+both there. Two things in the builder it relies on had to follow: a pave
+pair of one vertex at one parameter no longer counts as a closed edge cut
+there (it had rotated the rim to start at the touch and lost the half past
+its seam vertex), and a face in the data structure is rebuilt when an edge
+of it carries geometry (the hole's cylinder had kept the whole rim while the
+floor had its pieces). Measured on a 40 × 30 × 5 base, a fin, a Ø5 hole and
+a 2 mm fillet: 7303.330 mm³ touching and clear alike, 35 edges against 33,
+one vertex at the contact; held by `eval/cases/fillet-ends-on-a-hole-rim.json`
+and its two controls. The header carries the measurements; docs/GOTCHAS.md,
+"A fillet that ends exactly on a hole's rim", the mechanism. Not yet
+offered upstream.
 
 `patches/0004-concat-closed-chain-appends.patch`: `Geom2dConvert::ConcatC1`
 joins each piece of a chain with `CompCurveToBSplineCurve::Add`, whose `After`

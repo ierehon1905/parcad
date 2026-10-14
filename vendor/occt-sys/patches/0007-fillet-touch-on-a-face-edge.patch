@@ -1,0 +1,299 @@
+Mark where a fillet's trim curve touches an edge of the face it trims.
+
+What it fixes
+  A fillet or chamfer whose contact curve on a support face ends exactly
+  on another edge of that face - a through hole whose rim is tangent to
+  the fillet's foot - builds IsDone() with the trimmed face's outer wire
+  touching its inner wire at a point no vertex marks. Every curve in it
+  is right and the volume is the volume a point contact gives, but
+  BRepCheck_Analyzer rejects the face (IntersectingWires), the mesh of it
+  is not watertight, and a boolean on it fails. ChFi3d writes its own
+  interferences into the TopOpeBRepDS data structure (ChFi3d_FilDS), and
+  recorded the contact curve's ends on the arcs they land on but never a
+  touch along its length.
+
+  Three changes, two of them in the builder the fillet relies on:
+
+  - ChFi3d_Builder_0.cxx, ChFi3d_TouchesOnFace: after a stripe's contact
+    curve is written on a face, the curve's pcurve is intersected with
+    every edge of that face in the face's parameter space, the test
+    BRepCheck_Face itself runs (Geom2dInt_GInter at 1e-10). A meeting
+    inside both, where the edge stays on one side of the curve through
+    the point, is a touch: one data-structure point, a leaving and an
+    entering interference on the curve and on the edge at that parameter,
+    and the edge's other faces added to the data structure. A crossing is
+    left alone, as is a contact at a vertex.
+  - TopOpeBRepBuild_PaveSet::HasEqualParameters: two paves of one vertex
+    at one parameter, leaving and entering, are the edge passing through
+    the vertex, not a closed edge cut there. Before, the pair rotated a
+    closed edge to start at the touch and the edge's own seam vertex,
+    landing inside the rotated range, lost the half of the rim after it:
+    7297.122 mm^3, a shell that would not close.
+  - TopOpeBRepBuild_Builder::ToSplit: a face in the data structure is
+    rebuilt when one of its edges carries geometry, so an edge cut on one
+    face is cut on every face it bounds. Before, the hole's cylindrical
+    face kept the whole rim while the floor had its two pieces: three free
+    edges, BRepCheck_NotClosed on the shell.
+
+How it was measured
+  A 40 x 30 x 5 base with a 3 x 30 x 15 fin across it, a diameter 5 through
+  hole at x = 6 so the rim meets the fillet's foot at (3.5, 0, 5), and a
+  2 mm fillet on the fin's two root edges; the same with the hole at
+  x = 8 (clear) and x = 5.5 (0.5 mm into the foot, where the fillet
+  surface meets the hole's cylinder and is trimmed by it). Stock 8.0.1:
+  touch IsDone, BRepCheck invalid, 7303.330 mm^3, 22 vertices, 33 edges.
+  Patched: touch valid, 7303.330 mm^3, 23 vertices, 35 edges, all four
+  edges at the contact sharing one vertex; clear and overlap unchanged
+  (valid, 7303.330 and 7303.151 mm^3, 33 and 40 edges). parcad's
+  eval/cases/fillet-ends-on-a-hole-rim.json and its two controls hold
+  the numbers; the full corpus (210 cases) builds the same before and
+  after.
+
+Upstream status
+  Not yet reported. Should be offered as an issue with the three parts
+  above and the box-fin-hole model.
+
+diff -ru a/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_Builder.cxx b/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_Builder.cxx
+--- a/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_Builder.cxx	2026-10-14 02:16:00
++++ b/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_Builder.cxx	2026-10-14 02:16:24
+@@ -14,6 +14,7 @@
+ // Alternatively, this file may be used under the terms of Open CASCADE
+ // commercial license or contractual agreement.
+ 
++#include <TopExp_Explorer.hxx>
+ #include <BRepClass3d_SolidClassifier.hxx>
+ #include <Geom_Curve.hxx>
+ #include <gp_Pnt.hxx>
+@@ -311,6 +312,15 @@
+   bool issplit = IsSplit(S, ToBuild);
+   bool hasgeom = myDataStructure->HasGeometry(S);
+   bool hassame = myDataStructure->HasSameDomain(S);
++  // A face is rebuilt when an edge of it carries geometry, so that an edge
++  // cut on one of its faces is cut on every face it bounds.
++  if (!hasgeom && S.ShapeType() == TopAbs_FACE && myDataStructure->HasShape(S))
++  {
++    for (TopExp_Explorer ex(S, TopAbs_EDGE); ex.More() && !hasgeom; ex.Next())
++    {
++      hasgeom = myDataStructure->HasGeometry(ex.Current());
++    }
++  }
+   bool tosplit = (!issplit) && (hasgeom || hassame);
+ 
+ #ifdef OCCT_DEBUG
+diff -ru a/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_PaveSet.cxx b/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_PaveSet.cxx
+--- a/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_PaveSet.cxx	2026-10-14 02:16:00
++++ b/src/ModelingAlgorithms/TKBool/TopOpeBRepBuild/TopOpeBRepBuild_PaveSet.cxx	2026-10-14 02:16:08
+@@ -374,7 +374,9 @@
+     for (it2.Initialize(myVertices); (!myHasEqualParameters) && it2.More(); it2.Next())
+     {
+       const TopoDS_Shape& v2 = it2.Value()->Vertex();
+-      if (v2.IsEqual(v1))
++      // One vertex twice at a parameter, leaving and entering, is the edge
++      // passing through it, not a closed edge cut there.
++      if (v2.IsSame(v1))
+       {
+         continue;
+       }
+diff -ru a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx
+--- a/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx	2026-10-14 02:16:01
++++ b/src/ModelingAlgorithms/TKFillet/ChFi3d/ChFi3d_Builder_0.cxx	2026-10-14 02:16:08
+@@ -18,6 +18,12 @@
+ //  Modified by skv - Fri Oct 24 14:24:47 2003 OCC4077
+ //  Modified by skv - Mon Jun 16 15:50:44 2003 OCC615
+ 
++#include <Bnd_Box2d.hxx>
++#include <BndLib_Add2dCurve.hxx>
++#include <Geom2dAPI_ProjectPointOnCurve.hxx>
++#include <Geom2dInt_GInter.hxx>
++#include <IntRes2d_Domain.hxx>
++#include <IntRes2d_IntersectionPoint.hxx>
+ #include <ChFi3d_Builder_0.hxx>
+ 
+ #include <AppParCurves_MultiBSpCurve.hxx>
+@@ -2560,6 +2566,170 @@
+   return false;
+ }
+ 
++//=======================================================================
++// function : ChFi3d_SideOfPCurve
++// purpose  : which side of the pcurve <C> the point <q> lies on, as a sign;
++//           0 on the curve within confusion, or with no foot on it.
++//=======================================================================
++
++static int ChFi3d_SideOfPCurve(const occ::handle<Geom2d_Curve>& C,
++                               const double                     f,
++                               const double                     l,
++                               const gp_Pnt2d&                  q)
++{
++  Geom2dAPI_ProjectPointOnCurve foot(q, C, f, l);
++  if (foot.NbPoints() == 0)
++  {
++    return 0;
++  }
++  gp_Pnt2d p;
++  gp_Vec2d t;
++  C->D1(foot.LowerDistanceParameter(), p, t);
++  if (t.Magnitude() < gp::Resolution())
++  {
++    return 0;
++  }
++  const double side = t.Crossed(gp_Vec2d(p, q)) / t.Magnitude();
++  if (std::abs(side) <= Precision::PConfusion())
++  {
++    return 0;
++  }
++  return side > 0 ? 1 : -1;
++}
++
++//=======================================================================
++// function : ChFi3d_TouchesOnFace
++// purpose  : where the contact curve <IcFil> of a stripe, drawn on the face
++//           <Ishape>, touches an edge of that face inside both with no vertex
++//           to say so: a point on the curve and on the edge, with the edge
++//           leaving and entering it, so that the builder cuts both there and
++//           the face's wires meet at a vertex. Without it the trimmed face's
++//           outer wire touches its inner one at a point no vertex marks,
++//           which BRepCheck rejects. The edge's other faces are put in the
++//           data structure, which is what has them rebuilt with its pieces.
++//           A crossing of the edge is left alone, and so is a contact at a
++//           vertex.
++//=======================================================================
++
++static void ChFi3d_TouchesOnFace(TopOpeBRepDS_DataStructure&    DStr,
++                                 const int                      SolidIndex,
++                                 const int                      IcFil,
++                                 const int                      Ishape,
++                                 const ChFiDS_FaceInterference& Fi,
++                                 const double                   tol3d)
++{
++  if (Ishape <= 0 || IcFil == 0)
++  {
++    return;
++  }
++  const TopOpeBRepDS_Curve&        DSC = DStr.Curve(IcFil);
++  const occ::handle<Geom_Curve>&   C3d = DSC.Curve();
++  const occ::handle<Geom2d_Curve>& PC  = Fi.PCurveOnFace();
++  if (C3d.IsNull() || PC.IsNull())
++  {
++    return;
++  }
++  const TopoDS_Shape& FS = DStr.Shape(Ishape);
++  if (FS.ShapeType() != TopAbs_FACE)
++  {
++    return;
++  }
++  const TopoDS_Face& F  = TopoDS::Face(FS);
++  double             f1 = Fi.FirstParameter();
++  double             l1 = Fi.LastParameter();
++  if (f1 > l1)
++  {
++    std::swap(f1, l1);
++  }
++  const double        tol2d = 1.0e-10;
++  Geom2dAdaptor_Curve AC(PC, f1, l1);
++  IntRes2d_Domain     D1(PC->Value(f1), f1, tol2d, PC->Value(l1), l1, tol2d);
++  Bnd_Box2d           box1;
++  BndLib_Add2dCurve::Add(AC, 0.0, box1);
++  for (TopExp_Explorer ex(F, TopAbs_EDGE); ex.More(); ex.Next())
++  {
++    const TopoDS_Edge& E = TopoDS::Edge(ex.Current());
++    if (BRep_Tool::Degenerated(E))
++    {
++      continue;
++    }
++    double                    f2;
++    double                    l2;
++    occ::handle<Geom2d_Curve> PE = BRep_Tool::CurveOnSurface(E, F, f2, l2);
++    if (PE.IsNull())
++    {
++      continue;
++    }
++    Geom2dAdaptor_Curve AE(PE, f2, l2);
++    Bnd_Box2d           box2;
++    BndLib_Add2dCurve::Add(AE, 0.0, box2);
++    if (box1.IsOut(box2))
++    {
++      continue;
++    }
++    gp_Pnt2d pf;
++    gp_Pnt2d pl;
++    BRep_Tool::UVPoints(E, F, pf, pl);
++    IntRes2d_Domain  D2(pf, f2, tol2d, pl, l2, tol2d);
++    Geom2dInt_GInter Inter;
++    Inter.Perform(AC, D1, AE, D2, tol2d, tol2d);
++    if (!Inter.IsDone() || Inter.NbSegments() > 0)
++    {
++      continue;
++    }
++    for (int k = 1; k <= Inter.NbPoints(); ++k)
++    {
++      const double u = Inter.Point(k).ParamOnFirst();
++      const double v = Inter.Point(k).ParamOnSecond();
++      if (u <= f1 + Precision::PConfusion() || u >= l1 - Precision::PConfusion()
++          || v <= f2 + Precision::PConfusion() || v >= l2 - Precision::PConfusion())
++      {
++        continue;
++      }
++      // A touch keeps the edge on one side of the curve through the point.
++      const double step =
++        std::min({(l2 - f2) * 1.0e-3, (v - f2) / 2.0, (l2 - v) / 2.0});
++      const int before = ChFi3d_SideOfPCurve(PC, f1, l1, PE->Value(v - step));
++      const int after  = ChFi3d_SideOfPCurve(PC, f1, l1, PE->Value(v + step));
++      if (before == 0 || before != after)
++      {
++        continue;
++      }
++      double                  fe;
++      double                  le;
++      occ::handle<Geom_Curve> CE = BRep_Tool::Curve(E, fe, le);
++      if (CE.IsNull())
++      {
++        continue;
++      }
++      const gp_Pnt P   = C3d->Value(u);
++      const gp_Pnt Q   = CE->Value(v);
++      const double tol = std::max({tol3d, P.Distance(Q), BRep_Tool::Tolerance(E), DSC.Tolerance()});
++      const int Ipt = DStr.AddPoint(TopOpeBRepDS_Point(gp_Pnt((P.XYZ() + Q.XYZ()) / 2.0), tol));
++      const int IE  = DStr.AddShape(E);
++      DStr.ChangeCurveInterferences(IcFil).Append(ChFi3d_FilPointInDS(TopAbs_REVERSED, IcFil, Ipt, u));
++      DStr.ChangeCurveInterferences(IcFil).Append(ChFi3d_FilPointInDS(TopAbs_FORWARD, IcFil, Ipt, u));
++      DStr.ChangeShapeInterferences(IE).Append(ChFi3d_FilPointInDS(TopAbs_REVERSED, IE, Ipt, v));
++      DStr.ChangeShapeInterferences(IE).Append(ChFi3d_FilPointInDS(TopAbs_FORWARD, IE, Ipt, v));
++      for (TopExp_Explorer fx(DStr.Shape(SolidIndex), TopAbs_FACE); fx.More(); fx.Next())
++      {
++        if (fx.Current().IsSame(F))
++        {
++          continue;
++        }
++        for (TopExp_Explorer ex2(fx.Current(), TopAbs_EDGE); ex2.More(); ex2.Next())
++        {
++          if (ex2.Current().IsSame(E))
++          {
++            DStr.AddShape(fx.Current());
++            break;
++          }
++        }
++      }
++    }
++  }
++}
++
+ //=================================================================================================
+ 
+ void ChFi3d_FilDS(const int                         SolidIndex,
+@@ -3051,6 +3221,7 @@
+       }
+       Ipoin1    = ipoin;
+       isVertex1 = isVertex;
++      ChFi3d_TouchesOnFace(DStr, SolidIndex, IcFil1, Fd->IndexOfS1(), Fi1, tol3d);
+     }
+ 
+     IcFil2 = Fi2.LineIndex();
+@@ -3155,6 +3326,7 @@
+       }
+       Ipoin2    = ipoin;
+       isVertex2 = isVertex;
++      ChFi3d_TouchesOnFace(DStr, SolidIndex, IcFil2, Fd->IndexOfS2(), Fi2, tol3d);
+     }
+ 
+     ET1 = trafil1;

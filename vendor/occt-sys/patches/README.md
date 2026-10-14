@@ -72,3 +72,9 @@ dropping it.
   contour it cannot be built on is marked `ChFiDS_SectionNotApplicable`.
   Header inside the patch, with the harness measurements; not yet offered
   upstream.
+- `0007-fillet-touch-on-a-face-edge.patch` — `ChFi3d_FilDS` records where
+  a stripe's contact curve touches another edge of the face it trims, as a
+  point both pass through, and the TopOpeBRep builder cuts a closed edge
+  at such a pass-through and rebuilds every face of a cut edge. A fillet
+  ending exactly on a hole's rim built with two wires touching at no
+  vertex. Header inside the patch; not yet offered upstream.

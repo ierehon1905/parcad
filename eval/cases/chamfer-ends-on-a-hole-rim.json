@@ -1,0 +1,23 @@
+{
+  "name": "chamfer-ends-on-a-hole-rim",
+  "script": "eval/scripts/chamfer-ends-on-a-hole-rim.js",
+  "why": "The fillet-ends-on-a-hole-rim part with a 2 mm chamfer in place of the fillet: its trim line on the floor is the same x = 3.5 line, touching the Ø5 hole's rim at one point, and the chamfer builder writes the same data structure the fillet does, so the vendored patch 0007 must hold here too. The volume is the clear part's 7303.330 plus the 2 x 2 / 2 x 30 mm triangular prism on each side of the fin, less the 2 mm fillet's share: a point contact removes nothing.",
+  "brep": {
+    "size": [
+      40.0,
+      30.0,
+      20.0
+    ],
+    "volume_mm3": 7371.825,
+    "area_mm2": 4066.976,
+    "triangles": 240,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1180.417,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 13,
+    "edges": 70,
+    "curves": 33
+  }
+}

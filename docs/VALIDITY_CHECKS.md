@@ -124,7 +124,10 @@ to be intersected with itself.
 ## Not done
 
 - A fillet or chamfer node does not run `BRepCheck`, as a blend does, nor
-  classify the part's orientation. Of 400 fuzzed treatments, one fails
+  classify the part's orientation. One `BRepCheck` fault the fillet builder
+  used to produce, two wires of a face touching with no vertex there when a
+  trim line ends exactly on a hole's rim, is now built right by the vendored
+  kernel (docs/GOTCHAS.md, "A fillet that ends exactly on a hole's rim"). Of 400 fuzzed treatments, one fails
   `BRepCheck` and one leaves a second shell enclosing material; both are
   refused by the mesh backstop, with its generic message. Fed into a cut or a
   union, both still failed the mesh backstop (4 of 4 tried), or were cut away

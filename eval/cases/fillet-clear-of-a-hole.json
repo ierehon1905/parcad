@@ -1,0 +1,23 @@
+{
+  "name": "fillet-clear-of-a-hole",
+  "script": "eval/scripts/fillet-clear-of-a-hole.js",
+  "why": "The hole clear of the fillet's foot (x = 8). The control for fillet-ends-on-a-hole-rim: the same part with nothing touching, whose volume the touching case must match.",
+  "brep": {
+    "size": [
+      40.0,
+      30.0,
+      20.0
+    ],
+    "volume_mm3": 7303.33,
+    "area_mm2": 4081.199,
+    "triangles": 328,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 1180.417,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 13,
+    "edges": 66,
+    "curves": 32
+  }
+}

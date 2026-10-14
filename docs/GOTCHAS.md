@@ -1279,6 +1279,59 @@ family above is a different defect, still refused rather than fixed
 `eval/cases/blend-runs-off-the-edge.json` remains the control proving overrun was
 never the problem.
 
+
+### A fillet that ends exactly on a hole's rim — fixed in the kernel
+
+A 40 × 30 × 5 base, a 3 mm fin across it, a Ø5 through hole at x = 6 and a
+2 mm fillet on the fin's root: the fillet's trim line on the floor (x = 3.5)
+touches the hole's rim at one point. Found by @FuruRok comparing OCCT with
+NVIDIA's usd-brep (2026-10-13). The part is well defined — a point contact
+removes nothing, so its volume is the hole-clear part's, 7303.330 mm³ — and
+stock OCCT 8.0.1 builds it `IsDone()`. What it hands back is a floor face
+whose outer wire touches its inner wire with no vertex there, which
+`BRepCheck_Analyzer` rejects (`IntersectingWires`) and ParCAD's
+self-intersection check reported as an edge meeting an edge. Every curve in
+it is right; only the topology does not say the two boundaries meet.
+
+**The fix is a vertex, and it belongs to the fillet builder.** ChFi3d is
+its own filler for the TopOpeBRep data structure: it writes the contact
+curves, their ends, and the points where they land on the face's edges, but
+never asked where a curve touches an edge along its length.
+`vendor/occt-sys/patches/0007-fillet-touch-on-a-face-edge.patch` adds that
+question to `ChFi3d_FilDS`, with the test `BRepCheck_Face` itself runs
+(pcurves intersected in the face's parameter space), and writes a touch as
+one point with a leaving and an entering interference on the curve and on
+the edge; the builder then cuts both there and the face's boundary passes
+through the vertex. Two builder rules had to follow, each measured on the
+way: a pave pair of one vertex at one parameter is a pass-through, not a
+closed-edge cut (it rotated the rim to start at the touch and dropped the
+half past the seam vertex: 7297.122 mm³, a shell that would not close), and
+a face in the data structure is rebuilt when an edge of it carries geometry
+(the hole's cylinder kept the whole rim while the floor had its pieces:
+three free edges). A crossing is left alone: the 0.5 mm overlap trims
+itself as it always did.
+
+The session that landed it first wrote the same vertex in after the build,
+in the treatment history. That mended ParCAD's result and nothing else, and
+recomputed an intersection the filler had in hand; it was taken out once
+the kernel did the work.
+
+**The STEP export carries the touch as two vertices on purpose.** OCCT's
+writer runs `SplitCommonVertex` before `DirectFaces` (`ToSTEP.exec.op`),
+because the STEP schema does not let a face's bounds share a vertex; its
+reader's `FixShape` heals it on the way back.
+
+Held by `eval/cases/fillet-ends-on-a-hole-rim.json`, with
+`fillet-overlaps-a-hole` (the hole 0.5 mm into the fillet's foot) and
+`fillet-clear-of-a-hole` (the volume the touching part must match) as its
+controls, by `chamfer-ends-on-a-hole-rim` for the chamfer builder, which
+writes the same data structure, and by
+`a_fillet_ending_on_a_hole_rim_builds_valid_with_the_touch_as_a_vertex` in
+`backend.rs`. The standalone harness that found the two builder rules —
+the three patched sources compiled against the prebuilt static libraries,
+shadowing the archive members, a two-second cycle instead of an OCCT
+rebuild — is the way to iterate on any kernel patch.
+
 ### `ThruSections` quietly untwisted a loft — `CheckCompatibility` re-origins wires
 
 A ruled loft between a square and the same square listed a quarter turn on should

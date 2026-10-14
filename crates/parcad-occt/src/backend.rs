@@ -1837,7 +1837,7 @@ fn self_crossing(shape: &Shape, since: Option<&Shape>) -> Option<String> {
             })
             .unwrap_or_else(|| "two of its faces meet".to_string());
         format!(
-            "its surface runs into itself{place} ({kinds}{}), so it bounds no single solid — OpenCASCADE's validity check passes such a shape, and its volume, mesh and export are all wrong",
+            "its surface runs into itself{place} ({kinds}{}), so it bounds no single solid; the kernel's self-intersection check caught it, which OpenCASCADE's validity check need not, and its volume, mesh and export are all wrong",
             if found.pairs > 1 { format!("; {} such places", found.pairs) } else { String::new() }
         )
     })
@@ -6136,6 +6136,43 @@ mod tests {
         assert_eq!(target.vertices.len(), 1);
         assert_eq!(target.vertices[0].point, [5.0, 5.0, 5.0]);
         build(&doc).unwrap();
+    }
+
+    /// A fillet whose trim line on the floor ends exactly on a hole's rim: stock
+    /// OCCT returns the floor face with its outer wire touching the hole at a
+    /// point no vertex marks, which `BRepCheck` rejects. The vendored kernel
+    /// patch 0007 has the fillet builder cut both edges there, sharing one
+    /// vertex, and the volume is the one a point contact gives — the same part
+    /// with the hole clear. docs/GOTCHAS.md, "A fillet that ends exactly on a
+    /// hole's rim".
+    #[test]
+    fn a_fillet_ending_on_a_hole_rim_builds_valid_with_the_touch_as_a_vertex() {
+        let part = |hole_x: f64| -> Doc {
+            serde_json::from_str(&format!(
+                r#"{{"units":"mm","root":8,"nodes":[
+                    {{"op":"cuboid","size":{{"x":40,"y":30,"z":5}}}},
+                    {{"op":"translate","child":0,"by":{{"x":0,"y":0,"z":2.5}},"tag":"base"}},
+                    {{"op":"cuboid","size":{{"x":3,"y":30,"z":15}}}},
+                    {{"op":"translate","child":2,"by":{{"x":0,"y":0,"z":12.5}},"tag":"fin"}},
+                    {{"op":"union","children":[1,3],"blend":0}},
+                    {{"op":"cylinder","r":2.5,"h":20}},
+                    {{"op":"translate","child":5,"by":{{"x":{hole_x},"y":0,"z":0}}}},
+                    {{"op":"difference","base":4,"tools":[6],"blend":0}},
+                    {{"op":"fillet","child":7,"radius":2,"selector":{{"between":["base","fin"],"dihedral":"concave"}}}}]}}"#
+            ))
+            .unwrap()
+        };
+        let touching = build(&part(6.0)).expect("the touching fillet builds");
+        let clear = build(&part(8.0)).expect("the clear fillet builds");
+        touching.check_validity(true).expect("BRepCheck accepts the builder's own result");
+        let touched = touching.signed_volume();
+        let cleared = clear.signed_volume();
+        assert!((touched - cleared).abs() < 1e-3, "touching {touched} vs clear {cleared}");
+        assert!((touched - 7303.330).abs() < 1e-3, "{touched}");
+        assert_eq!(touching.faces().count(), clear.faces().count());
+        // The floor's trim line and the rim are each cut in two at the touch;
+        // the explorer visits an edge once per face, so two edges in two faces.
+        assert_eq!(touching.edges().count(), clear.edges().count() + 4);
     }
 
     /// The coincident-face trap, measured as topology. A cutter 0.004 mm short
