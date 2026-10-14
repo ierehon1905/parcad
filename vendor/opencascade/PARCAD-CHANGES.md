@@ -594,3 +594,27 @@ an earlier step replaced — has no copy, and `BRepTools_Modifier::ModifiedShape
 raises `Standard_NoSuchObject` for it, which killed the worker on
 `examples/fusion360/retainer-v1.js`. The history answers for such a shape that
 it made nothing and is deleted.
+
+## `BlendContinuity`, `Treatment::join_continuity`, and a fillet's own reasons
+
+`Shape::fillet_edges_with_history` takes a `BlendContinuity`: `Tangent` is the
+rolling ball's circle, `Curvature` the G2 section `vendor/occt-sys/patches/0006`
+adds (`ChFi3d_CurvatureContinuous`), passed as the `BRepFilletAPI_MakeFillet`
+shape. Three things came with it in `history.hxx`:
+
+- `ParcadEdgeTreatment::join_continuity(angle_deg, curvature_jump_per_mm)`,
+  reached as `Treatment::join_continuity()`: on the built result, along every
+  *rail* (an edge a blend face `Generated` from a treated edge shares with the
+  `Modified` image of a face that edge lay on), at 33 points, the angle between
+  the two normals and the difference of their normal curvatures across the
+  rail, both second derivatives taken along one transverse direction against
+  one reference normal. A fillet reads 1/R, a curvature-continuous blend
+  reads round-off; a blend's ends, cut by a third face, are creases by design
+  and are not rails. The rails are found through the history, not by an angle
+  threshold, so a blend that failed to be tangent is measured rather than
+  skipped.
+- When `Build` reports not done without raising, `failure()` now carries each
+  abandoned contour's `StripeStatus` in words (walking failure, no starting
+  section, twisted surface, the section not applicable here) instead of the
+  empty string the caller used to turn into "raised nothing".
+- The treated edges are kept, since the history is queried by them.

@@ -37,11 +37,19 @@ pub(crate) mod ffi {
         fn is_deleted(self: &ParcadBoolean, original: &TopoDS_Shape) -> bool;
         fn alerts(self: &ParcadBoolean) -> String;
 
-        fn parcad_fillet_with_history(base: &TopoDS_Shape) -> UniquePtr<ParcadEdgeTreatment>;
+        fn parcad_fillet_with_history(
+            base: &TopoDS_Shape,
+            curvature_continuous: bool,
+        ) -> UniquePtr<ParcadEdgeTreatment>;
         fn parcad_chamfer_with_history(base: &TopoDS_Shape) -> UniquePtr<ParcadEdgeTreatment>;
         fn add(self: Pin<&mut ParcadEdgeTreatment>, distance: f64, edge: &TopoDS_Edge);
         fn build(self: Pin<&mut ParcadEdgeTreatment>) -> bool;
         fn failure(self: &ParcadEdgeTreatment) -> String;
+        fn join_continuity(
+            self: Pin<&mut ParcadEdgeTreatment>,
+            angle_deg: &mut f64,
+            curvature_jump_per_mm: &mut f64,
+        ) -> usize;
         fn result(self: Pin<&mut ParcadEdgeTreatment>) -> &TopoDS_Shape;
         fn input(self: &ParcadEdgeTreatment) -> &TopoDS_Shape;
         fn generated(

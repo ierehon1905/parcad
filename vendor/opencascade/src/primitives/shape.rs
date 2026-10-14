@@ -324,7 +324,7 @@ impl Shape {
         let mut treatment = if chamfer {
             history::parcad_chamfer_with_history(&self.inner)
         } else {
-            history::parcad_fillet_with_history(&self.inner)
+            history::parcad_fillet_with_history(&self.inner, false)
         };
         for edge in edges {
             treatment.pin_mut().add(distance, &edge.as_ref().inner);
@@ -346,8 +346,9 @@ impl Shape {
         &mut self,
         radius: f64,
         edges: impl IntoIterator<Item = T>,
+        continuity: BlendContinuity,
     ) -> Result<Treatment, String> {
-        self.treat_edges_with_history(radius, edges, false)
+        self.treat_edges_with_history(radius, edges, TreatmentKind::Fillet(continuity))
     }
 
     pub fn chamfer_edges<T: AsRef<Edge>>(
@@ -374,23 +375,25 @@ impl Shape {
         distance: f64,
         edges: impl IntoIterator<Item = T>,
     ) -> Result<Treatment, String> {
-        self.treat_edges_with_history(distance, edges, true)
+        self.treat_edges_with_history(distance, edges, TreatmentKind::Chamfer)
     }
 
     fn treat_edges_with_history<T: AsRef<Edge>>(
         &mut self,
         distance: f64,
         edges: impl IntoIterator<Item = T>,
-        chamfer: bool,
+        kind: TreatmentKind,
     ) -> Result<Treatment, String> {
         let edges: Vec<Edge> = edges
             .into_iter()
             .map(|edge| edge.as_ref().clone())
             .collect();
-        let mut treatment = if chamfer {
-            history::parcad_chamfer_with_history(&self.inner)
-        } else {
-            history::parcad_fillet_with_history(&self.inner)
+        let mut treatment = match kind {
+            TreatmentKind::Chamfer => history::parcad_chamfer_with_history(&self.inner),
+            TreatmentKind::Fillet(continuity) => history::parcad_fillet_with_history(
+                &self.inner,
+                continuity == BlendContinuity::Curvature,
+            ),
         };
         for edge in &edges {
             treatment.pin_mut().add(distance, &edge.inner);
@@ -1241,12 +1244,54 @@ pub struct Treatment {
     history: UniquePtr<history::ParcadEdgeTreatment>,
 }
 
+/// How a fillet's surface meets the faces it joins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlendContinuity {
+    /// The rolling ball's circle: tangent to each face, its curvature 1/R
+    /// against the face's own.
+    Tangent,
+    /// A section whose curvature matches each face's where it meets it, so
+    /// the blend is G2 to its faces. Built by a vendored kernel patch.
+    Curvature,
+}
+
+/// Which local operation `Shape::treat_edges_with_history` runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TreatmentKind {
+    Fillet(BlendContinuity),
+    Chamfer,
+}
+
+/// How a fillet's blends meet the faces they were rolled on, measured on the
+/// result along every rail (see `ParcadEdgeTreatment::join_continuity`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct JoinContinuity {
+    /// The widest angle between a blend's normal and its face's, in degrees.
+    pub angle_deg: f64,
+    /// The largest difference in normal curvature across a rail, per mm.
+    pub curvature_jump_per_mm: f64,
+    /// How many rails were measured.
+    pub rails: usize,
+}
+
 impl Treatment {
     /// The copy of the input the builder treated, which the result shares its
     /// untouched faces with. The builder is given a copy because it widens
     /// tolerances on what it is given, even when the result is then refused.
     pub fn input(&self) -> Shape {
         Shape { inner: ffi::TopoDS_Shape_to_owned(self.history.input()) }
+    }
+
+    /// How the blends meet the faces they were rolled on, measured on the
+    /// result. No rails for a chamfer.
+    pub fn join_continuity(&mut self) -> JoinContinuity {
+        let mut angle_deg = 0.0;
+        let mut curvature_jump_per_mm = 0.0;
+        let rails = self
+            .history
+            .pin_mut()
+            .join_continuity(&mut angle_deg, &mut curvature_jump_per_mm);
+        JoinContinuity { angle_deg, curvature_jump_per_mm, rails }
     }
 
     pub fn modified_edge(&mut self, edge: &Edge) -> Vec<Edge> {
