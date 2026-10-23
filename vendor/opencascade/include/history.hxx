@@ -37,8 +37,9 @@
 #include <Precision.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
-#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
-#include <TopTools_MapOfShape.hxx>
+#include <NCollection_IndexedDataMap.hxx>
+#include <NCollection_Map.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Iterator.hxx>
@@ -193,13 +194,14 @@ class ParcadEdgeTreatment {
     angle_deg = 0.;
     curvature_jump_per_mm = 0.;
     if (!fillet_ || !fillet_->IsDone()) return 0;
-    TopTools_IndexedDataMapOfShapeListOfShape input_faces_of, result_faces_of;
+    NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher>
+        input_faces_of, result_faces_of;
     TopExp::MapShapesAndAncestors(input_, TopAbs_EDGE, TopAbs_FACE, input_faces_of);
     TopExp::MapShapesAndAncestors(fillet_->Shape(), TopAbs_EDGE, TopAbs_FACE, result_faces_of);
     size_t rails = 0;
     for (const TopoDS_Edge& treated : treated_) {
       if (!input_faces_of.Contains(treated)) continue;
-      TopTools_MapOfShape images;
+      NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> images;
       for (const TopoDS_Shape& adjacent : input_faces_of.FindFromKey(treated)) {
         for (const TopoDS_Shape& image : fillet_->Modified(adjacent)) images.Add(image);
       }

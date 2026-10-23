@@ -153,7 +153,10 @@ out. Everything below could otherwise have lived in our own crate.
   which is what that alias' own header names as the replacement. Three
   `-Wdeprecated-declarations` and one `-W#pragma-messages` per build. The
   matching change on the other side of the bridge is in
-  `vendor/opencascade-sys/PARCAD-CHANGES.md`.
+  `vendor/opencascade-sys/PARCAD-CHANGES.md`. `join_continuity` likewise
+  spells `TopTools_IndexedDataMapOfShapeListOfShape` and `TopTools_MapOfShape`
+  as their `NCollection` templates: their headers exist only as deprecated
+  aliases, which the WebAssembly install (`web/build-kernel.sh`) does not carry.
 - `ParcadBoolean` builds its boolean once, in parallel. It used the
   `BRepAlgoAPI_Fuse(S1, S2)` / `BRepAlgoAPI_Cut(S1, S2)` constructors, which
   call `Build()` themselves, and then called `Build()` again — every fuse and
