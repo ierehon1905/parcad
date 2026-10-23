@@ -1,14 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { AGENT_CARDS, BLOB, CASE, EXAMPLES, FAQS, GH, HUE, PLANS, REFUSAL, RELEASES, WEB, asset, type CaseItem, type Hue } from "../content";
+import { AGENT_CARDS, BLOB, CASE, EXAMPLES, FAQS, GET_IT, GH, HUE, LICENCE, PLANS, REFUSAL, RELEASES, WEB, asset, type CaseItem, type Hue } from "../content";
 import { Button, Rail, SectionHead, Square, cn } from "./frame";
 
 export function GetIt() {
-  const options = [
-    { os: "macOS · Linux", label: "brew install parcad", copy: "brew tap ierehon1905/parcad && brew install parcad" },
-    { os: "Windows", label: "winget install ParCAD.ParCAD", copy: "winget install ParCAD.ParCAD" },
-    { os: "Desktop app", label: "Download from Releases", href: RELEASES },
-    { os: "No install", label: "Open ParCAD web", href: WEB },
-  ];
   return (
     <section className="py-16 md:py-20">
       <Rail className="max-w-[720px] space-y-6">
@@ -16,7 +10,7 @@ export function GetIt() {
           Free and open source · macOS, Linux, Windows, browser
         </p>
         <div className="grid gap-2 sm:grid-cols-2">
-          {options.map((o) => (
+          {GET_IT.map((o) => (
             <GetButton key={o.label} {...o} />
           ))}
         </div>
@@ -245,7 +239,7 @@ export function Plans() {
           ))}
         </div>
         <p className="max-w-2xl text-[13px] leading-relaxed text-ink-faint">
-          MIT or Apache-2.0, at your option. OpenCASCADE and its bindings are LGPL-2.1, so redistributing a binary carries
+          {LICENCE}. Parts you make are yours. OpenCASCADE and its bindings are LGPL-2.1, so redistributing a binary carries
           obligations — <a className="underline decoration-line-strong underline-offset-4 hover:text-ink" href={`${BLOB}/NOTICE.md`}>NOTICE.md</a> spells them out.
           Builds are unsigned for now; the <a className="underline decoration-line-strong underline-offset-4 hover:text-ink" href={`${GH}#install-it`}>README</a> says how to open them.
         </p>
@@ -396,6 +390,8 @@ export function Footer() {
         ["Perception", `${BLOB}/docs/PERCEPTION.md`],
         ["Writing for models", `${BLOB}/docs/WRITING_FOR_MODELS.md`],
         ["Field suite", `${GH}/tree/main/field`],
+        ["llms.txt", asset("llms.txt")],
+        ["Language reference", asset("docs/dsl.md")],
       ],
     },
     {
@@ -441,7 +437,7 @@ export function Footer() {
           ))}
         </nav>
         <div className="flex flex-wrap items-center justify-between gap-4 border-t border-line pt-6 font-mono text-[10.5px] tracking-wider text-ink-faint uppercase">
-          <span>ParCAD · MIT or Apache-2.0</span>
+          <span>ParCAD · {LICENCE}</span>
           <span>Uses Open CASCADE Technology</span>
         </div>
       </Rail>

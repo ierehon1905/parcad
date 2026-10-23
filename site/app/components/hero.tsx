@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { GH, HUE, NAV, SHOWCASE, WEB, asset } from "../content";
+import { GH, HUE, LICENCE, NAV, SHOWCASE, WEB, asset } from "../content";
 import { Code } from "./code";
 import { Button, Rail, Square, cn } from "./frame";
 import { PartViewer } from "./part-viewer";
@@ -63,7 +63,7 @@ export function Hero() {
           </Button>
         </div>
         <p className="mt-5 font-mono text-[11px] tracking-wider text-ink-faint uppercase">
-          Free · MIT or Apache-2.0 · Experimental
+          Free · {LICENCE} · Experimental
         </p>
       </Rail>
       <Showcase />

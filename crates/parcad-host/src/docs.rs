@@ -442,6 +442,14 @@ pub fn reference_in_full() -> String {
     Document::from_dsl(DSL_SOURCE, true).whole()
 }
 
+/// Every topic `read_docs` serves, whole and in its order, as (name, source, answers, text).
+pub fn every_topic() -> Vec<(&'static str, &'static str, &'static str, String)> {
+    TOPICS
+        .iter()
+        .map(|t| (t.name, t.source, t.answers, t.text.map_or_else(reference, str::to_string)))
+        .collect()
+}
+
 /// A doc comment's text for the reader: all of it, or what precedes `@remarks`.
 fn shown(doc: &str, detail: bool) -> String {
     match doc.split_once("\n@remarks") {

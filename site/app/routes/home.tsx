@@ -2,11 +2,8 @@ import type { Route } from "./+types/home";
 import { Divider, Rails } from "../components/frame";
 import { Hero, Nav } from "../components/hero";
 import { Agents, Case, Examples, FAQ, Footer, GetIt, Operations, Plans } from "../components/sections";
-import { SITE } from "../content";
+import { DESCRIPTION, GH, LICENCE, RELEASES, SITE, TITLE, WEB } from "../content";
 
-const TITLE = "ParCAD — parametric CAD you write as code";
-const DESCRIPTION =
-  "Parametric CAD you write as code, for people and their AI agents: selectors that describe edges and check their count, an OpenCASCADE B-rep kernel, measured reports, and the same tools over MCP.";
 // Crawlers fetch the card from an absolute URL, so it names the deployed site rather than BASE_URL.
 const CARD = `${SITE}og.png`;
 const CARD_ALT =
@@ -27,6 +24,25 @@ export const meta: Route.MetaFunction = () => [
   { name: "twitter:card", content: "summary_large_image" },
   { name: "twitter:image", content: CARD },
   { name: "twitter:image:alt", content: CARD_ALT },
+  { tagName: "link", rel: "canonical", href: SITE },
+  { tagName: "link", rel: "alternate", type: "text/markdown", href: `${SITE}index.html.md` },
+  {
+    "script:ld+json": {
+      "@context": "https://schema.org",
+      "@type": "SoftwareApplication",
+      name: "ParCAD",
+      description: DESCRIPTION,
+      url: SITE,
+      image: CARD,
+      applicationCategory: "DesignApplication",
+      operatingSystem: "macOS, Linux, Windows, Web",
+      downloadUrl: RELEASES,
+      installUrl: WEB,
+      license: `https://spdx.org/licenses/${LICENCE}-or-later.html`,
+      sameAs: GH,
+      offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+    },
+  },
 ];
 
 export default function Home() {

@@ -7,7 +7,22 @@ export const RELEASES = `${GH}/releases`;
 export const SITE = "https://ierehon1905.github.io/parcad/";
 export const WEB = `${SITE}app/`;
 
+export const LICENCE = "AGPL-3.0";
+
+export const TITLE = "ParCAD — parametric CAD you write as code";
+export const DESCRIPTION =
+  "Parametric CAD you write as code, for people and their AI agents: selectors that describe edges and check their count, an OpenCASCADE B-rep kernel, measured reports, and the same tools over MCP.";
+
 export const asset = (path: string) => `${import.meta.env.BASE_URL}${path}`;
+
+export type GetItOption = { os: string; label: string; copy?: string; href?: string };
+
+export const GET_IT: GetItOption[] = [
+  { os: "macOS · Linux", label: "brew install parcad", copy: "brew tap ierehon1905/parcad && brew install parcad" },
+  { os: "Windows", label: "winget install ParCAD.ParCAD", copy: "winget install ParCAD.ParCAD" },
+  { os: "Desktop app", label: "Download from Releases", href: RELEASES },
+  { os: "No install", label: "Open ParCAD web", href: WEB },
+];
 
 export type Hue = "accent" | "gold" | "good" | "cut" | "tag" | "bad";
 
@@ -377,7 +392,8 @@ export const FAQS: Faq[] = [
   {
     q: "How is it licensed?",
     a: [
-      "MIT or Apache-2.0, at your option. OpenCASCADE and its bindings are LGPL-2.1, so redistributing a binary carries obligations; NOTICE.md spells them out.",
+      "GNU AGPL-3.0 or later. The parts you make are yours: part scripts and everything ParCAD exports from them can be licensed however you like, and the seed parts are MIT. Releases through v0.0.9 stay MIT or Apache-2.0.",
+      "OpenCASCADE and its bindings are LGPL-2.1, so redistributing a binary carries obligations; NOTICE.md spells them out.",
     ],
   },
 ];

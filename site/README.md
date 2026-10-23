@@ -13,6 +13,16 @@ bun run build        # build/client, static
 bun run typecheck
 ```
 
+## For models
+
+`bun run build` ends with `llms.ts`, which writes beside the page:
+[`llms.txt`](https://llmstxt.org), the page as `index.html.md`, every
+`read_docs` topic as `docs/<topic>.md`, all of it in `llms-full.txt`, and
+`sitemap.xml`. The page's words come from `app/content.ts` and the topics from
+`cargo run -p parcad-host --example docs_pages`, the same Rust that serves the
+tool, so the build needs the Rust toolchain. There is no `robots.txt`: a
+crawler reads it only at the host's root, which on Pages is not this repository.
+
 ## Deploying
 
 `.github/workflows/web.yml` publishes this page and ParCAD web as one Pages
