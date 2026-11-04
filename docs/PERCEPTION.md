@@ -1610,6 +1610,87 @@ having grown. Not yet run.
 `or` is still not sayable — `any: [q1, q2]` in docs/SELECTORS.md §3 — and the
 refusal now says so outright rather than leaving a reader to discover it.
 
+## 23. Requirements first — the request's numbers as the part's own checks
+
+§21 holds what a part is *for*; this holds what was *asked*. The head-to-head
+(research_notes/hands-on/h2h, 2026-10-13) found ParCAD's parts almost always
+geometrically sound and its commonest remaining miss a misread request: a
+`Hole(6)` read as a radius, so one Ø12 where four Ø6 were asked, with the
+volume matching to the cubic millimetre; a notch cut on the 50 mm edge; holes
+cut half way. Every one of those parts was watertight, the right size, clean
+on `print_check`, and said DONE. The verdicts tested that the part prints,
+and nothing in a reply could test that it was the part the request named.
+The checks a model wrote unprompted were `clear` and an envelope-only brief —
+3 of 26 Opus trials, 2 of 21 Haiku 5.5, 0 of 27 Haiku 4.5 (the count is in
+`research_notes/Higher level checks for strong LLMs/internal_evidence.md`).
+
+Since 2026-11-04 three check kinds carry the request, beside the eight that
+carry the design (`checks.rs` in `parcad-core`, judged in `parcad-evaluation`):
+
+- **`size: { is: [80, 50, 6] }`**, beside the existing `max`, to 0.01 mm plus
+  the mesh's resolution.
+- **`holes: { diameter: 6, count: 4, through: true, at: [[-30, -15], …],
+  axis }`**, measured on the exact solid in the worker (`perceive::holes`):
+  every closed circular rim whose wall faces its axis — the same test
+  `role: "hole"` selects by — grouped by radius and axis line into one hole
+  however many features cross it, each end then tested for material just
+  past the outermost rim near the wall, so a counterbore reads as a blind
+  Ø11 above a through Ø6. Asked of the worker only when a part carries a
+  `holes` check, once for any number of them, so a part without one costs
+  nothing more. A hole with one circular rim, its other end on a slanted or
+  curved face, is found but `through` is not measured for it; a hole whose
+  both ends leave through such faces has no rim and is not a hole here —
+  refused by absence, named in the failure's list, never approximated.
+- **`feature: { tag: "notch", size: [10, 8, 6], center: [0, 21, 0] }`**,
+  read off `tag_extents`: the faces carrying the tag in the finished part,
+  which for a cutter are the walls it cut.
+
+A failure says what differs in words — `mismatch: "0 Ø6 holes along z, not
+4"` — and lists what the part has, so a Ø12 is in front of the reader rather
+than a count of zero. `holes: { radius: 3 }` is refused naming `diameter: 6`,
+because reading Ø as a radius is the bench's own misread. The server
+instructions open with the rule and the three spellings; the `Check` entry
+leads with it and its example is the bench's plate. Pinned by
+`eval/cases/requested-plate`: the right numbers hold, and the two misreads
+written as checks fail on the measured part.
+
+**Measured, 2026-11-04**, Haiku 5.5 (`claude-haiku-5-5`), 4 trials per arm,
+two scratch hosts built from the commit before and the commit of the change,
+`--strict-mcp-config`. The prompts are the bench's briefs and say nothing
+about checks: SOUND is a check carrying the request's numbers in the script
+the model sent, and the right part; a right part with no such check is LUCKY.
+
+| case | before: sound (think / plain) | after: sound (think / plain) |
+|---|---|---|
+| `four-holes-ten-in` — the plate brief, modelled fresh | 0/4 · 0/4 (8 LUCKY) | 4/4 · 3/4 (1 LUCKY) |
+| `notch-from-the-request` — the notch brief, modelled fresh | — (`feature` did not exist) | 3/4 · 4/4 (1 LUCKY) |
+| `notch-on-the-long-edge` — a colleague's misread script, to check | 0/4 · 0/4 (8 LUCKY) | 0/4 · 0/4 (8 LUCKY) |
+
+Every trial on both hosts built the right part. What moved is whether the
+part holds the request: 0 of 16 before-trials wrote a check of any kind; 14
+of 16 after-trials modelling a brief wrote `size: { is }` and the brief's
+`holes` or `feature`, in the spelling the instructions gave. The one trial
+that wrote the cutter's own size into the feature check (`[10, 10, 10]` at
+`(0, 22, 0)`) read the mismatch sentence, wrote the measured `[10, 8, 6]` at
+`(0, 21, 0)` and rebuilt — the check reads the finished faces, and the
+failure said so in a way a small model acted on first time.
+
+**The third row is the honest null.** Handed a colleague's script with the
+notch on the wrong edge, every trial on both hosts found it in `tag_extents`
+(a measurement, not the source), fixed it, and wrote no check — a model
+checking someone else's script adds nothing to it, instruction or not. The
+fix is right and unvouched: nothing in the part stops the next edit putting
+the notch back. The lever that remains is the reply's shape (a line in a
+reply whose part carries no request check), not the instruction, and it is
+unmeasured.
+
+**What is not here.** Sonnet and Opus are unmeasured, and the bench's P arm
+has not been re-run on the misread briefs. Holes with no circular rim. A
+feature's *orientation* — the bench's reversed car cabin would still pass a
+`feature` check on its box. And a check that reads the *request*: the model
+still translates "10 mm in from both edges" to `(±30, ±15)` itself, and a
+wrong translation written as a check fails nothing.
+
 ## Suggested order
 
 Done, and what each cost is in its own section: point and ray probes and

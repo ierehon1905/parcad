@@ -438,12 +438,16 @@ are worth. Leon's read is in brackets.
    returns ParCAD's verdicts: walls, overhang, fit, between bodies, validity.
    No competitor blocks a bad part; this rides their reach instead of fighting
    it. `probe_step_export` is half of it already.
-2. **Requirements first** [yes]. Before modelling, the agent turns the request
-   ("80 × 50, Ø6 holes 10 mm in") into the part's own `checks`, so the verdict
-   tests that it made what was asked, not only that it prints. The bench's
-   commonest miss was a misread request: wrong holes, a notch on the wrong
-   edge. Likely a server-instruction and `checks` vocabulary change more than
-   new kernel work.
+2. **Requirements first** [yes] — **done 2026-11-04**, docs/PERCEPTION.md
+   §23. `size: { is }`, `holes` (measured by rim on the exact solid) and
+   `feature` (off `tag_extents`), the server instructions opening with the
+   rule. Haiku 5.5 modelling the bench's plate and notch briefs went from
+   0/16 to 14/16 trials writing the request as checks; handed a colleague's
+   misread script to check, 0/8 on both hosts wrote one (the fix was right,
+   from `tag_extents`, and unvouched). Left: strong models and the bench's P
+   arm unmeasured; holes with no circular rim; a feature's orientation; and
+   the translation from "10 mm in" to `(±30, ±15)`, which the model still
+   does itself.
 3. **A verification certificate in the 3MF** [interesting]. The verdicts and
    the script's hash in the file's metadata, shown by a slicer or on
    MakerWorld/Printables, which now require AI disclosure.

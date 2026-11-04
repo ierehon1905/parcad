@@ -173,6 +173,18 @@ evidence for parcad.
   the change too, so SOUND did not move (16/16 to 15/16, the miss a trial
   that read another trial's script off the shared screen): what moved was
   every trial erring at least once to none, and 7.5–10.5 calls to 3–3.5.
+- **A rule in the server instructions is followed when the task is the
+  model's own, and not when it is checking someone else's.** The
+  requirements-first round (2026-11-04, docs/PERCEPTION.md §23) put "before
+  modelling, write the request's numbers as checks" with three spellings at
+  the top of the instructions, inside the 2048 characters Claude Code keeps,
+  and changed nothing else a model reads before its first call. Haiku 5.5
+  given the bench's plate and notch briefs wrote them as `size`, `holes` and
+  `feature` checks in 14 of 16 trials, against 0 of 16 before, every one in
+  the spelling given. Handed a colleague's script to check, 0 of 8 wrote a
+  check on either host: it fixed the part from `tag_extents` and left the
+  script otherwise alone. The one trial that wrote a wrong check read the
+  failure's `mismatch` sentence and corrected it on the next call.
 - **What still reads wrong.** With `offset` refused and the meant field
   named, the thinking arm's route is unchanged at 0/3 by `input` — it never
   sends the hazard, so the refusal is unmeasured there. And on the rotate
