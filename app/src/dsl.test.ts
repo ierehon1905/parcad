@@ -29,6 +29,7 @@ import {
   torus,
   union,
   vesaPattern,
+  __parcadLabelledPartKeys,
   __parcadShadowedBuiltins,
   __parcadShadowedBuiltinMessage,
 } from "./dsl";
@@ -828,6 +829,64 @@ describe("a script that declares one of parcad's names", () => {
     const message = __parcadShadowedBuiltinMessage(["clearance"], names);
     expect(message).toStartWith(`\`clearance\` is one of the ${names.length} names parcad puts in every script, so a script cannot declare it again. Rename the local — \`clearanceMm\`, \`myClearance\`, or a name saying what it holds — or use parcad's own \`clearance\` instead of declaring one.`);
     expect(__parcadShadowedBuiltinMessage(["box", "hull"], names)).toStartWith("`box` and `hull` are 2 of the");
+  });
+});
+
+/**
+ * `checks: [...]` as a statement is a labelled expression: legal, evaluated,
+ * discarded. A Haiku 5.5 field run wrote it that way before `return part;`
+ * and the host built the part with no checks and said nothing.
+ */
+describe("a script that writes checks: as a statement of its own", () => {
+  /** The underlined range, as `~` under the source. */
+  const underline = (source: string) =>
+    __parcadLabelledPartKeys(source).map(({ from, to }) => " ".repeat(from) + "~".repeat(to - from));
+
+  test("is refused at the label, with the fix", () => {
+    const source = "const part = box(10, 10, 10);\nchecks: [{ size: { is: [10, 10, 10] } }];\nreturn part;";
+    const [label, ...rest] = __parcadLabelledPartKeys(source);
+    expect(rest).toEqual([]);
+    expect(source.slice(label.from, label.to)).toBe("checks");
+    expect(label.message).toBe(
+      "`checks:` at line 2 is a JavaScript label, so the list after it is built and thrown away and the part has no checks. " +
+        "Put it in the returned object: return { part, checks: [...] }",
+    );
+  });
+
+  test("is found wherever a statement may stand, and once per label", () => {
+    expect(underline("if (true) checks: [1];\nreturn box(1, 1, 1);")).toEqual([
+      //            if (true) checks: [1];
+      "          ~~~~~~",
+    ]);
+    expect(underline("checks: [\n  { size: { is: [1, 1, 1] } },\n]\nreturn box(1, 1, 1);")).toEqual(["~~~~~~"]);
+    expect(underline("checks: [1];\nchecks: [2];\nreturn box(1, 1, 1);")).toEqual(["~~~~~~", "             ~~~~~~"]);
+    // The decoy in the string is not the one renamed away.
+    expect(underline('const s = "checks";\nchecks: [1];\nreturn box(1, 1, 1);')).toEqual(["                    ~~~~~~"]);
+  });
+
+  test("leaves a key, a word and a label of another function alone", () => {
+    for (const source of [
+      "return {\n  part: box(1, 1, 1),\n  checks: [\n    { size: { is: [1, 1, 1] } },\n  ],\n};",
+      "const spec = { inner: { checks: [1] }, checks: 2 };\nreturn { part: box(1, 1, 1), checks: [] };",
+      'const s = "checks: [1]";\nreturn box(1, 1, 1);',
+      "// checks: [1]\n/* checks:\n [2] */\nreturn box(1, 1, 1);",
+      "const t = `checks: ${1}`;\nreturn box(1, 1, 1);",
+      "const r = /checks:/;\nreturn box(1, 1, 1);",
+      "const a = true ? checks : 2;\nreturn box(1, 1, 1);",
+      "switch (1) { case checks: break; }\nreturn box(1, 1, 1);",
+      "function f() {\n  checks: [1];\n}\nreturn box(1, 1, 1);",
+    ]) {
+      expect(__parcadLabelledPartKeys(source)).toEqual([]);
+    }
+  });
+
+  test("says nothing about a script with a fault of its own", () => {
+    expect(__parcadLabelledPartKeys("checks: [1];\nreturn box(1, 1, 1;")).toEqual([]);
+  });
+
+  test("the object form builds the checks it writes", () => {
+    const doc = build({ part: box(1, 1, 1), checks: [{ size: { is: [1, 1, 1] } }] });
+    expect(doc.checks).toEqual([{ size: { is: [1, 1, 1] } }]);
   });
 });
 
