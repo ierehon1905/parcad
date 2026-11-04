@@ -103,7 +103,7 @@ pub struct Perceived {
 /// closed circles where its wall, facing its axis, meets the faces around
 /// it — what `role: "hole"` selects. Rims of one diameter on one axis line
 /// are one hole, however many features cross it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HoleMeasure {
     pub diameter_mm: f64,
     /// Unit, along the hole, its largest component positive.

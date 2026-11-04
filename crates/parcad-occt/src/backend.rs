@@ -837,6 +837,7 @@ enum EdgeCurveKind {
 struct CircleInfo {
     centre: DVec3,
     normal: DVec3,
+    radius: f64,
     closed: bool,
 }
 
@@ -1088,6 +1089,7 @@ fn is_circular(points: &[DVec3]) -> Option<CircleInfo> {
         .then_some(CircleInfo {
             centre,
             normal: unit_normal,
+            radius,
             closed: (points[0] - points[points.len() - 1]).length() <= tolerance,
         })
 }
@@ -2390,16 +2392,21 @@ fn is_hole_rim(edge: &SelectableEdge) -> bool {
     })
 }
 
-/// Every closed hole rim of `shape` — the edges `role: "hole"` selects — as
-/// its centre, its axis and its radius.
-pub(crate) fn hole_rims(shape: &Shape) -> Result<Vec<(DVec3, DVec3, f64)>> {
+/// A closed circular edge whose wall faces its centre: one end of a round
+/// hole, or a step in one.
+pub(crate) struct HoleRim {
+    pub(crate) centre: DVec3,
+    pub(crate) axis: DVec3,
+    pub(crate) radius: f64,
+}
+
+/// Every hole rim of `shape`: the edges `role: "hole"` selects.
+pub(crate) fn hole_rims(shape: &Shape) -> Result<Vec<HoleRim>> {
     Ok(selectable_edges(shape)?
         .iter()
         .filter(|edge| is_hole_rim(edge))
-        .filter_map(|edge| {
-            let circle = edge.circle.as_ref()?;
-            Some((circle.centre, circle.normal, (edge.ends[0] - circle.centre).length()))
-        })
+        .filter_map(|edge| edge.circle.as_ref())
+        .map(|circle| HoleRim { centre: circle.centre, axis: circle.normal, radius: circle.radius })
         .collect())
 }
 

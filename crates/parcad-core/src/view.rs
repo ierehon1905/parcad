@@ -173,7 +173,8 @@ fn components(v: Vector3<f64>) -> String {
 }
 
 /// A model axis. The planes people actually cut on are the three of them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Axis {
     X,
     Y,
@@ -209,6 +210,16 @@ impl Axis {
             Axis::X => 0,
             Axis::Y => 1,
             Axis::Z => 2,
+        }
+    }
+
+    /// A point's two coordinates in the plane across this axis, the other
+    /// two axes in xyz order: `[x, y]` across z, `[y, z]` across x.
+    pub fn across(self, p: [f64; 3]) -> [f64; 2] {
+        match self {
+            Axis::X => [p[1], p[2]],
+            Axis::Y => [p[0], p[2]],
+            Axis::Z => [p[0], p[1]],
         }
     }
 }

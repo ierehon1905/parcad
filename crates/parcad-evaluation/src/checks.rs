@@ -8,7 +8,8 @@
 //! taken: what the author asked and what the kernel found, in one place.
 
 use crate::{round_mm, round_point, BodyFit, EvaluationSnapshot};
-use parcad_core::checks::{Check, CheckAxis, CheckKind, MATCH_MM};
+use parcad_core::checks::{dimensions, Check, CheckKind, MATCH_MM};
+use parcad_core::view::Axis;
 use parcad_core::graph::Doc;
 use parcad_occt::protocol::{HoleMeasure, ThicknessResult, ThicknessSample, ThinKind};
 use serde::Serialize;
@@ -119,7 +120,7 @@ pub struct Measures<'a> {
 /// the snapshot does not carry.
 pub fn judge(doc: &Doc, snapshot: &EvaluationSnapshot, measure: Measures) -> Result<ChecksReport, String> {
     let Measures { wall, holes } = measure;
-    let mut found_holes: Option<Vec<HoleMeasure>> = None;
+    let found_holes = if doc.checks.iter().any(|check| check.holes.is_some()) { holes()? } else { Vec::new() };
     let mut failed = Vec::new();
     for check in &doc.checks {
         let kind = check.kind().map_err(|why| format!("check {}: {why}", check.sentence()))?;
@@ -127,12 +128,7 @@ pub fn judge(doc: &Doc, snapshot: &EvaluationSnapshot, measure: Measures) -> Res
             CheckKind::Clear | CheckKind::Interferes | CheckKind::Touching => judge_pair(check, kind, snapshot),
             CheckKind::Wall => judge_wall(check, wall)?,
             CheckKind::Size => judge_size(check, snapshot),
-            CheckKind::Holes => {
-                if found_holes.is_none() {
-                    found_holes = Some(holes()?);
-                }
-                judge_holes(check, found_holes.as_deref().unwrap_or_default())
-            }
+            CheckKind::Holes => judge_holes(check, &found_holes),
             CheckKind::Feature => judge_feature(check, snapshot),
             CheckKind::StandsOn => {
                 let least = check.stands_on.as_ref().expect("standsOn").at_least;
@@ -172,19 +168,18 @@ pub fn judge(doc: &Doc, snapshot: &EvaluationSnapshot, measure: Measures) -> Res
     })
 }
 
-const AXES: [&str; 3] = ["x", "y", "z"];
-
 /// `is` to the request's rounding plus the mesh's resolution, which the
 /// snapshot's size is measured on; `max` as a box the part must fit in.
 fn judge_size(check: &Check, snapshot: &EvaluationSnapshot) -> Option<FailedCheck> {
     let size = check.size.as_ref().expect("size");
     let mut wrong = Vec::new();
-    for (i, got) in snapshot.size.iter().enumerate() {
-        if let Some(want) = size.is.map(|is| is[i]).filter(|want| (got - want).abs() > MATCH_MM + snapshot.resolution_mm) {
-            wrong.push(format!("{} is {got}, not {want}", AXES[i]));
+    for axis in Axis::ALL {
+        let got = snapshot.size[axis.index()];
+        if let Some(want) = size.is.map(|is| is[axis.index()]).filter(|want| (got - want).abs() > MATCH_MM + snapshot.resolution_mm) {
+            wrong.push(format!("{} is {got}, not {want}", axis.name()));
         }
-        if let Some(limit) = size.max.map(|max| max[i]).filter(|limit| *got > limit + 1e-6) {
-            wrong.push(format!("{} is {got}, over {limit}", AXES[i]));
+        if let Some(limit) = size.max.map(|max| max[axis.index()]).filter(|limit| got > limit + 1e-6) {
+            wrong.push(format!("{} is {got}, over {limit}", axis.name()));
         }
     }
     (!wrong.is_empty()).then(|| {
@@ -195,6 +190,9 @@ fn judge_size(check: &Check, snapshot: &EvaluationSnapshot) -> Option<FailedChec
     })
 }
 
+/// A failure lists at most this many holes; a plate of 200 is not a reply.
+const MAX_HOLES_LISTED: usize = 16;
+
 /// The holes of the check's diameter along its axis: how many, whether each
 /// goes through, and whether one stands at every place it names. A failure
 /// lists every hole the part has, so a Ø12 read for a Ø6 is in front of the
@@ -202,37 +200,37 @@ fn judge_size(check: &Check, snapshot: &EvaluationSnapshot) -> Option<FailedChec
 fn judge_holes(check: &Check, found: &[HoleMeasure]) -> Option<FailedCheck> {
     let want = check.holes.as_ref().expect("holes");
     let axis = want.axis();
-    let unit = axis.unit();
-    let along = |h: &HoleMeasure| h.axis.iter().zip(unit).map(|(a, b)| a * b).sum::<f64>().abs() >= 1.0 - 1e-6;
-    let place = |h: &HoleMeasure| axis.across(h.center).map(crate::round_mm);
     let matching: Vec<&HoleMeasure> =
-        found.iter().filter(|h| along(h) && (h.diameter_mm - want.diameter).abs() <= MATCH_MM).collect();
-    let named = format!("Ø{} hole{} along {}", want.diameter, if matching.len() == 1 { "" } else { "s" }, axis.name());
+        found.iter().filter(|h| runs_along(h, axis) && (h.diameter_mm - want.diameter).abs() <= MATCH_MM).collect();
     let mut wrong = Vec::new();
     match want.wanted() {
-        Some(n) if matching.len() != n => wrong.push(format!("{} {named}, not {n}", matching.len())),
+        Some(n) if matching.len() != n => wrong.push(format!(
+            "{} Ø{} hole{} along {}, not {n}",
+            matching.len(),
+            want.diameter,
+            if matching.len() == 1 { "" } else { "s" },
+            axis.name()
+        )),
         None if matching.is_empty() => wrong.push(format!("no Ø{} hole along {}", want.diameter, axis.name())),
         _ => {}
     }
     if let Some(through) = want.through {
         for h in matching.iter().filter(|h| h.through != Some(through)) {
-            let [a, b] = place(h);
-            wrong.push(format!(
-                "the one at ({a}, {b}) {}",
-                match h.through {
-                    Some(true) => "goes through",
-                    Some(false) => "is blind",
-                    None => "has one circular rim, its other end on a slanted or curved face, so through is not measured",
-                }
-            ));
+            let [a, b] = axis.across(h.center).map(crate::round_mm);
+            let end = match h.through {
+                Some(true) => "goes through",
+                Some(false) => "is blind",
+                None => "has one circular rim, its other end on a slanted or curved face, so through is not measured",
+            };
+            wrong.push(format!("the one at ({a}, {b}) {end}"));
         }
     }
     for [a, b] in &want.at {
-        let here = |h: &&&HoleMeasure| {
+        let here = |h: &HoleMeasure| {
             let [x, y] = axis.across(h.center);
             (x - a).hypot(y - b) <= MATCH_MM
         };
-        if !matching.iter().any(|h| here(&h)) {
+        if !matching.iter().any(|h| here(h)) {
             wrong.push(format!("none at ({a}, {b})"));
         }
     }
@@ -240,25 +238,25 @@ fn judge_holes(check: &Check, found: &[HoleMeasure]) -> Option<FailedCheck> {
         return None;
     }
     let mut f = FailedCheck::of(check);
-    f.measured = Some(serde_json::Value::Array(found.iter().take(MAX_HOLES_LISTED).map(described).collect()));
-    if found.is_empty() {
-        f.measured = Some(serde_json::json!("no round hole: none of the part's circular edges is the rim of one"));
-    }
+    f.measured = Some(if found.is_empty() {
+        serde_json::json!("no round hole: none of the part's circular edges is the rim of one")
+    } else {
+        serde_json::Value::Array(found.iter().take(MAX_HOLES_LISTED).map(described).collect())
+    });
     f.mismatch = Some(wrong.join("; "));
     Some(f)
 }
 
-/// A failure lists at most this many holes; a plate of 200 is not a reply.
-const MAX_HOLES_LISTED: usize = 16;
+/// Whether a hole's unit axis is this one, either way along it.
+fn runs_along(h: &HoleMeasure, axis: Axis) -> bool {
+    h.axis[axis.index()].abs() >= 1.0 - 1e-6
+}
 
-/// One hole as a failure lists it: where it stands across its axis
-/// when it runs along a cardinal axis, its centre and direction otherwise.
+/// One hole as a failure lists it: where it stands across its axis when
+/// that is a model axis, its centre and direction otherwise.
 fn described(h: &HoleMeasure) -> serde_json::Value {
-    let cardinal = [CheckAxis::X, CheckAxis::Y, CheckAxis::Z]
-        .into_iter()
-        .find(|a| h.axis.iter().zip(a.unit()).map(|(p, q)| p * q).sum::<f64>().abs() >= 1.0 - 1e-6);
     let mut out = serde_json::json!({ "diameter": crate::round_mm(h.diameter_mm) });
-    match cardinal {
+    match Axis::ALL.into_iter().find(|axis| runs_along(h, *axis)) {
         Some(axis) => {
             out["along"] = serde_json::json!(axis.name());
             out["at"] = serde_json::json!(axis.across(h.center).map(crate::round_mm));
@@ -279,8 +277,8 @@ fn described(h: &HoleMeasure) -> serde_json::Value {
 /// The tag's own box in the finished part against the size and centre asked.
 fn judge_feature(check: &Check, snapshot: &EvaluationSnapshot) -> Option<FailedCheck> {
     let want = check.feature.as_ref().expect("feature");
+    let mut f = FailedCheck::of(check);
     let Some(extent) = snapshot.tag_extents.iter().find(|e| e.tag == want.tag) else {
-        let mut f = FailedCheck::of(check);
         f.measured = Some(serde_json::json!(format!(
             "no face of the finished part carries {}: what it made was cut away, or was itself a cut that removed nothing",
             want.tag
@@ -290,16 +288,14 @@ fn judge_feature(check: &Check, snapshot: &EvaluationSnapshot) -> Option<FailedC
     };
     let off = |got: [f64; 3], asked: [f64; 3]| got.iter().zip(asked).any(|(g, a)| (g - a).abs() > MATCH_MM);
     let mut wrong = Vec::new();
-    if let Some(size) = want.size.filter(|size| off(extent.size, *size)) {
-        let [x, y, z] = extent.size;
-        wrong.push(format!("size is {x}×{y}×{z}, not {}×{}×{}", size[0], size[1], size[2]));
+    if let Some([x, y, z]) = want.size.filter(|size| off(extent.size, *size)) {
+        wrong.push(format!("size is {}, not {x}×{y}×{z}", dimensions(extent.size)));
     }
-    if let Some(center) = want.center.filter(|center| off(extent.center, *center)) {
-        let [x, y, z] = extent.center;
-        wrong.push(format!("center is ({x}, {y}, {z}), not ({}, {}, {})", center[0], center[1], center[2]));
+    if let Some([x, y, z]) = want.center.filter(|center| off(extent.center, *center)) {
+        let [gx, gy, gz] = extent.center;
+        wrong.push(format!("center is ({gx}, {gy}, {gz}), not ({x}, {y}, {z})"));
     }
     (!wrong.is_empty()).then(|| {
-        let mut f = FailedCheck::of(check);
         f.measured = Some(serde_json::json!({
             "size": extent.size,
             "center": extent.center,

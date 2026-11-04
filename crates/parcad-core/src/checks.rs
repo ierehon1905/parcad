@@ -10,6 +10,7 @@
 //! several bodies", and docs/COIN_HOLDER_REVIEW.md, B2, for why: a check
 //! that lives in a throwaway script is a check that stops being re-run.
 
+use crate::view::Axis;
 use serde::{Deserialize, Serialize};
 
 /// One check. Exactly one of the head keys — `clear`, `interferes`,
@@ -117,43 +118,7 @@ pub struct HolesCheck {
     pub at: Vec<[f64; 2]>,
     /// The axis they run along. Absent: `z`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub axis: Option<CheckAxis>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum CheckAxis {
-    X,
-    Y,
-    Z,
-}
-
-impl CheckAxis {
-    pub fn unit(self) -> [f64; 3] {
-        match self {
-            Self::X => [1.0, 0.0, 0.0],
-            Self::Y => [0.0, 1.0, 0.0],
-            Self::Z => [0.0, 0.0, 1.0],
-        }
-    }
-
-    /// The two coordinates of a point in the plane across this axis, in the
-    /// order a check's `at` writes them.
-    pub fn across(self, p: [f64; 3]) -> [f64; 2] {
-        match self {
-            Self::X => [p[1], p[2]],
-            Self::Y => [p[0], p[2]],
-            Self::Z => [p[0], p[1]],
-        }
-    }
-
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::X => "x",
-            Self::Y => "y",
-            Self::Z => "z",
-        }
-    }
+    pub axis: Option<Axis>,
 }
 
 /// A tagged feature's own box in the finished part: the faces that carry
@@ -334,21 +299,16 @@ impl Check {
             CheckKind::Wall => format!("wall min {}", self.wall.as_ref().expect("wall").min),
             CheckKind::Size => {
                 let size = self.size.as_ref().expect("size");
-                let mut parts = vec!["size".to_string()];
-                if let Some(is) = size.is {
-                    parts.push(format!("is {}", by(is)));
-                }
-                if let Some(max) = size.max {
-                    parts.push(format!("max {}", by(max)));
-                }
-                parts.join(" ")
+                let is = size.is.map(|is| format!(" is {}", dimensions(is))).unwrap_or_default();
+                let max = size.max.map(|max| format!(" max {}", dimensions(max))).unwrap_or_default();
+                format!("size{is}{max}")
             }
             CheckKind::Holes => self.holes.as_ref().expect("holes").sentence(),
             CheckKind::Feature => {
                 let feature = self.feature.as_ref().expect("feature");
                 let mut s = format!("feature {}", feature.tag);
                 if let Some(size) = feature.size {
-                    s.push_str(&format!(" size {}", by(size)));
+                    s.push_str(&format!(" size {}", dimensions(size)));
                 }
                 if let Some(center) = feature.center {
                     s.push_str(&format!(" center ({}, {}, {})", center[0], center[1], center[2]));
@@ -554,8 +514,8 @@ impl Check {
 }
 
 impl HolesCheck {
-    pub fn axis(&self) -> CheckAxis {
-        self.axis.unwrap_or(CheckAxis::Z)
+    pub fn axis(&self) -> Axis {
+        self.axis.unwrap_or(Axis::Z)
     }
 
     /// How many holes the check asks for, if it says.
@@ -585,8 +545,8 @@ impl HolesCheck {
     }
 }
 
-/// `80×50×6`.
-fn by([x, y, z]: [f64; 3]) -> String {
+/// `80×50×6`: a size as a sentence writes it.
+pub fn dimensions([x, y, z]: [f64; 3]) -> String {
     format!("{x}×{y}×{z}")
 }
 

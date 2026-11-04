@@ -11,7 +11,7 @@
 //! lie near the surface and are projected onto it, and its triangles give the
 //! middle of a face the mesher never puts a node in.
 
-use crate::backend::{face_key, BuiltPart, FaceKey, NamedFaces};
+use crate::backend::{face_key, BuiltPart, FaceKey, HoleRim, NamedFaces};
 use crate::protocol::{
     FaceSummary, HoleMeasure, Perceive, Perceived, PointResult, PointWhere, RayHitResult, RayLine, RayResult,
     TagBounds, ThicknessResult, ThicknessSample, ThicknessSpec, ThinKind,
@@ -364,13 +364,11 @@ pub fn perceive(bodies: &[Body], spec: &Perceive) -> Result<Perceived> {
         result
     });
 
-    let holes = if spec.holes { holes(bodies)? } else { Vec::new() };
-
     Ok(Perceived {
         points,
         rays,
         thickness,
-        holes,
+        holes: if spec.holes { find_holes(bodies)? } else { Vec::new() },
     })
 }
 
@@ -385,52 +383,70 @@ const HOLE_END_RADIUS: f64 = 0.99;
 
 /// Every round hole in the solid bodies: rims of one radius on one axis line
 /// grouped, and each end of the group tested for material just past it.
-fn holes(bodies: &[Body]) -> Result<Vec<HoleMeasure>> {
-    struct Group {
-        origin: DVec3,
-        axis: DVec3,
-        radius: f64,
-        along: Vec<f64>,
-    }
+fn find_holes(bodies: &[Body]) -> Result<Vec<HoleMeasure>> {
     let mut out = Vec::new();
     for body in bodies.iter().filter(|b| !b.surface) {
-        let mut groups: Vec<Group> = Vec::new();
-        for (centre, normal, radius) in crate::backend::hole_rims(body.shape)? {
-            let leading = normal.to_array().into_iter().max_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap_or(1.0);
-            let axis = if leading < 0.0 { -normal } else { normal };
-            let same = groups.iter_mut().find(|g| {
-                let off = centre - g.origin;
-                (g.radius - radius).abs() <= SAME_RIM_MM
-                    && g.axis.dot(axis) >= 1.0 - 1e-6
-                    && (off - g.axis * off.dot(g.axis)).length() <= SAME_RIM_MM
-            });
-            match same {
-                Some(g) => g.along.push((centre - g.origin).dot(g.axis)),
-                None => groups.push(Group { origin: centre, axis, radius, along: vec![0.0] }),
+        let mut holes: Vec<Hole> = Vec::new();
+        for rim in crate::backend::hole_rims(body.shape)? {
+            match holes.iter_mut().find(|hole| hole.takes(&rim)) {
+                Some(hole) => hole.along.push((rim.centre - hole.origin).dot(hole.axis)),
+                None => holes.push(Hole::from_rim(rim)),
             }
         }
-        for g in groups {
-            let lo = g.along.iter().copied().fold(f64::INFINITY, f64::min);
-            let hi = g.along.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-            let open = |t: f64| {
-                let (u, v) = g.axis.any_orthonormal_pair();
-                let end = g.origin + g.axis * t;
-                [u, -u, v, -v].into_iter().all(|side| {
-                    let p = end + side * (g.radius * HOLE_END_RADIUS);
-                    matches!(body.shape.classify_point(p, SURFACE_TOLERANCE_MM), PointState::Outside)
-                })
-            };
-            out.push(HoleMeasure {
-                diameter_mm: 2.0 * g.radius,
-                axis: g.axis.to_array(),
-                center: (g.origin + g.axis * ((lo + hi) / 2.0)).to_array(),
-                length_mm: hi - lo,
-                through: (hi - lo > SAME_RIM_MM).then(|| open(hi + HOLE_END_STEP_MM) && open(lo - HOLE_END_STEP_MM)),
-                body: body.name.map(str::to_owned),
-            });
-        }
+        out.extend(holes.into_iter().map(|hole| hole.measure(body)));
     }
     Ok(out)
+}
+
+/// The rims of one hole, as they are found: the first rim's centre is the
+/// origin and the others are placed along the axis from it.
+struct Hole {
+    origin: DVec3,
+    /// The first rim's normal, turned so its largest component is positive:
+    /// two rims of one hole face opposite ways.
+    axis: DVec3,
+    radius: f64,
+    along: Vec<f64>,
+}
+
+impl Hole {
+    fn from_rim(rim: HoleRim) -> Self {
+        let leading = rim.axis.to_array().into_iter().fold(0.0_f64, |best, c| if c.abs() > best.abs() { c } else { best });
+        Self {
+            origin: rim.centre,
+            axis: if leading < 0.0 { -rim.axis } else { rim.axis },
+            radius: rim.radius,
+            along: vec![0.0],
+        }
+    }
+
+    fn takes(&self, rim: &HoleRim) -> bool {
+        let off = rim.centre - self.origin;
+        (self.radius - rim.radius).abs() <= SAME_RIM_MM
+            && self.axis.dot(rim.axis).abs() >= 1.0 - 1e-6
+            && (off - self.axis * off.dot(self.axis)).length() <= SAME_RIM_MM
+    }
+
+    fn measure(self, body: &Body) -> HoleMeasure {
+        let lo = self.along.iter().copied().fold(f64::INFINITY, f64::min);
+        let hi = self.along.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let (u, v) = self.axis.any_orthonormal_pair();
+        let open = |t: f64| {
+            let end = self.origin + self.axis * t;
+            [u, -u, v, -v].into_iter().all(|side| {
+                let p = end + side * (self.radius * HOLE_END_RADIUS);
+                matches!(body.shape.classify_point(p, SURFACE_TOLERANCE_MM), PointState::Outside)
+            })
+        };
+        HoleMeasure {
+            diameter_mm: 2.0 * self.radius,
+            axis: self.axis.to_array(),
+            center: (self.origin + self.axis * ((lo + hi) / 2.0)).to_array(),
+            length_mm: hi - lo,
+            through: (hi - lo > SAME_RIM_MM).then(|| open(hi + HOLE_END_STEP_MM) && open(lo - HOLE_END_STEP_MM)),
+            body: body.name.map(str::to_owned),
+        }
+    }
 }
 
 /// Which side of the boundary a point is on, and how far from it.
@@ -1723,6 +1739,7 @@ mod tests {
         let seen: Vec<(f64, [f64; 3], [f64; 3], f64, Option<bool>)> = found
             .iter()
             .map(|h| {
+                // To the micron, and -0 read as 0.
                 let r = |v: f64| (v * 1000.0).round() / 1000.0 + 0.0;
                 (r(h.diameter_mm), h.axis.map(r), h.center.map(r), r(h.length_mm), h.through)
             })

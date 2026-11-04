@@ -1374,15 +1374,15 @@ const TOOL_LIST_TTL_MS: u64 = 86_400_000;
 
 const LANGUAGE: &str = "parcad builds parts from a JavaScript DSL on an exact B-rep kernel, in \
 millimetres; primitives are centred on the origin, placed with .at(x, y, z); a script returns a \
-shape, or { base, lid } for several bodies, measured each and between.\n\n\
+shape, or { base, lid } for several bodies, measured each and between them.\n\n\
 Before modelling, write the request's numbers as checks: [...] beside the bodies (read_docs dsl, \
 Check): { size: { is: [80, 50, 6] } }, { holes: { diameter: 6, count: 4, through: true } }, \
 { feature: { tag: \"notch\", center: [0, 21, 0] } }. Every reply opens with verdicts: those \
-checks, saying if it is what was asked, and print_check (loose pieces, thin walls, \
+checks, saying whether it is what was asked, and print_check (loose pieces, thin walls, \
 cuts, overhang). A part is done when its checks pass and print_check is clean or each flag has \
 a reason.\n\n\
-Start from read_docs: `dsl` is the whole language; `gaps` and `gotchas` are what it refuses and \
-gets wrong. A name is a path like 'Mounts/bracket'.";
+Start from read_docs: `dsl` is the language; `gaps` and `gotchas` what it refuses and gets \
+wrong. A name is a path like 'Mounts/bracket'.";
 
 const SCREEN: &str = "You share the parcad app's screen with the user: get_session reads it, \
 open_project and set_script change it. To show a part you built, save_project it under its own \
@@ -1397,7 +1397,7 @@ tool builds a saved part unsent.";
 const SELECTING: &str = "Select edges by intent, never by index: '>Z and >Y and |X', or a query: { curve: \"circle\", \
 role: \"hole\", adjacentTo: { faceNormal: \"+z\" } }; dihedral: \"convex\"|\"concave\"|\
 \"smooth\"; parallel: \"z\"; on: \"lip\" for one tagged feature's edges; between: [\"arm\", \
-\"hub\"] for the seam where two meet. A tag names a node's faces, through later ops. Each treatment in a reply has `edges`, its resolved \
+\"hub\"] for the seam where two meet. A tag names a node's faces and survives later ops. Each treatment in a reply has `edges`, its resolved \
 count: write it as .expect({ count }).\n\n\
 The kernel refuses rather than approximates, naming the fix. Every report is \
 measured, never requested: quote it, not the script.";
