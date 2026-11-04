@@ -45,7 +45,7 @@
 //! The folder is plain files on purpose. Nothing here owns a database, a lock,
 //! or a binary format — `ls`, `grep`, an editor and git all work.
 
-use crate::tenant;
+use crate::tenant::{self, Mode};
 use std::path::{Path, PathBuf};
 
 /// The part, inside a bundle. The name is fixed so a reader never has to guess
@@ -179,12 +179,15 @@ fn walk(at: &Path, prefix: &str, depth: usize) -> Result<Vec<Entry>, String> {
             format!("{prefix}/{file}")
         };
 
+        // An entry no project path can name — a hosted root's link outside
+        // it — is not a part of this folder, and one such entry must not cost
+        // the listing of every other.
         let suffix = format!(".{BUNDLE}");
         if path.is_dir() {
             match file.strip_suffix(&suffix) {
                 Some(stem) => {
                     let at = child.strip_suffix(&suffix).unwrap_or(&child).to_string();
-                    parts.push(Entry::Part(describe(stem, &at)?));
+                    parts.extend(describe(stem, &at).map(Entry::Part));
                 }
                 None => folders.push(Entry::Folder {
                     name: file,
@@ -194,7 +197,7 @@ fn walk(at: &Path, prefix: &str, depth: usize) -> Result<Vec<Entry>, String> {
             }
         } else if let Some(stem) = file.strip_suffix(".js") {
             let at = child.strip_suffix(".js").unwrap_or(&child).to_string();
-            parts.push(Entry::Part(describe(stem, &at)?));
+            parts.extend(describe(stem, &at).map(Entry::Part));
         }
     }
 
@@ -294,6 +297,7 @@ fn locate(path: &str) -> Result<Located, String> {
     let base = safe(path)?;
     let bundle = suffixed(&base, BUNDLE);
     if bundle.is_dir() {
+        let bundle = confined(bundle)?;
         return Ok(Located {
             source: bundle.join(SOURCE),
             bundle: Some(bundle),
@@ -302,7 +306,7 @@ fn locate(path: &str) -> Result<Located, String> {
     let loose = suffixed(&base, "js");
     if loose.is_file() {
         return Ok(Located {
-            source: loose,
+            source: confined(loose)?,
             bundle: None,
         });
     }
@@ -802,7 +806,20 @@ fn safe(path: &str) -> Result<PathBuf, String> {
         }
         resolved.push(part);
     }
-    Ok(resolved)
+    confined(resolved)
+}
+
+/// On a hosted root, refuse a path a link carries outside it: that root is one
+/// account's folder among many, and a link is the one way a plain name could
+/// reach another's. A local user's links are their own — people symlink their
+/// parts folders. Applied to every name resolved and to the file or bundle
+/// found under it, since the name alone never carries the suffix.
+fn confined(path: PathBuf) -> Result<PathBuf, String> {
+    let tenant = tenant::current();
+    if tenant.mode == Mode::Hosted {
+        tenant.confine(&path)?;
+    }
+    Ok(path)
 }
 
 // ------------------------------------------------------------------ seeding
@@ -882,17 +899,20 @@ pub fn seed_from(source: &Path) -> std::io::Result<()> {
 
 /// The project folder, created, with what belongs beside the parts.
 fn prepare() -> std::io::Result<PathBuf> {
-    let dir = dir();
-    std::fs::create_dir_all(&dir)?;
+    let tenant = tenant::current();
+    std::fs::create_dir_all(&tenant.root)?;
 
     // The declarations somebody else's editor reads, beside the parts it will
-    // open. Not fatal: a folder without them holds parts that still open, just
-    // without a signature under the pointer.
+    // open; nobody opens an editor on a server. Not fatal: a folder without
+    // them holds parts that still open, just without a signature under the
+    // pointer.
     #[cfg(not(target_arch = "wasm32"))]
-    if let Err(e) = crate::editor_types::ensure(&dir) {
-        eprintln!("parcad: {e}");
+    if tenant.mode == Mode::Local {
+        if let Err(e) = crate::editor_types::ensure(&tenant.root) {
+            eprintln!("parcad: {e}");
+        }
     }
-    Ok(dir)
+    Ok(tenant.root.clone())
 }
 
 /// Every `.js` part under the seed folder, as `(name, path)` where `name` is the
@@ -1011,6 +1031,55 @@ pub(crate) mod tests {
         assert!(tenants.join("b/bracket.parcad/part.js").is_file());
         assert_eq!(tenant::scope(a, list).unwrap(), vec!["bracket"]);
         assert_eq!(tenant::scope(b, dir), tenants.join("b"));
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    /// A link inside a hosted root that points outside it is refused with the
+    /// link named, and not listed; the same folder read as a local user's
+    /// follows it, since people symlink their parts folders.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_out_of_a_hosted_root_is_refused_and_a_local_one_followed() {
+        let tenants = tenant::tests::fresh_root("tenants");
+        let a = tenant::tests::hosted_at("a", &tenants);
+        let b = tenant::tests::hosted_at("b", &tenants);
+        tenant::scope(b, || write("bracket", "return box(2,2,2);")).unwrap();
+        std::os::unix::fs::symlink("../b/bracket.parcad", tenants.join("a/leak.parcad")).unwrap();
+        std::os::unix::fs::symlink("../b", tenants.join("a/Mounts")).unwrap();
+
+        let refused = tenant::scope(a.clone(), || read("leak")).unwrap_err();
+        assert!(refused.contains("leak.parcad is a link to"), "{refused}");
+        assert!(refused.contains("outside this account's folder"), "{refused}");
+        assert!(refused.contains("operator"), "the refusal names the fix: {refused}");
+        assert!(tenant::scope(a.clone(), list).unwrap().is_empty(), "nor is the link listed");
+        let refused = tenant::scope(a, || write("Mounts/plate", "return box(1,1,1);")).unwrap_err();
+        assert!(refused.contains("Mounts is a link to"), "a folder about to be written into is judged too: {refused}");
+        assert!(!tenants.join("b/plate.parcad").exists(), "nothing landed in the other account");
+
+        let local = tenant::tests::local_at(&tenants.join("a"));
+        assert_eq!(tenant::scope(local.clone(), || read("leak")).unwrap(), "return box(2,2,2);");
+        assert_eq!(tenant::scope(local, list).unwrap(), vec!["Mounts/bracket", "leak"]);
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    /// Nobody opens an editor on a server: a hosted root is seeded without
+    /// the declarations a local one gets beside its parts.
+    #[test]
+    fn a_hosted_root_is_seeded_without_editor_declarations() {
+        let tenants = tenant::tests::fresh_root("tenants");
+        let a = tenant::tests::hosted_at("a", &tenants);
+        let examples = seed_folder(&a.root, &[("bracket", "return box(1,1,1);")]);
+        tenant::scope(a, || {
+            seed_from(&examples).expect("the seed");
+            assert_eq!(list().unwrap(), vec!["bracket"]);
+        });
+        assert!(!tenants.join("a/jsconfig.json").exists());
+        assert!(!tenants.join("a/.types").exists());
+
+        scoped(|root| {
+            seed_from(&examples).expect("the seed");
+            assert!(root.join("jsconfig.json").is_file(), "a local folder gets them");
+        });
         let _ = std::fs::remove_dir_all(&tenants);
     }
 

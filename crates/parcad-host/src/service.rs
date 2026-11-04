@@ -13,6 +13,7 @@
 //! beside it for the window and the perception tools; docs/ARCHITECTURE.md
 //! records why it went.
 
+use crate::tenant::Mode;
 use parcad_core::graph::Doc;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
@@ -1218,6 +1219,14 @@ fn with_scratch_file(
     Ok(bytes)
 }
 
+/// Whether this request is one account's on a server: a machine with no
+/// screen, no editor and no slicer, whose disk is not the account's to read.
+/// Every capability hosted mode refuses asks this, and refuses naming what to
+/// do instead.
+fn hosted() -> bool {
+    crate::tenant::current().mode == Mode::Hosted
+}
+
 /// Write an export where the desktop asked for it.
 pub fn write_export(export: &Export, path: &str) -> Result<String, String> {
     std::fs::write(path, &export.bytes).map_err(|e| format!("writing {path}: {e}"))?;
@@ -1243,6 +1252,12 @@ pub fn write_export(export: &Export, path: &str) -> Result<String, String> {
 /// either way. Failing to reveal never fails the export; the file is written
 /// and its path has already been reported.
 pub fn reveal(path: &str) -> Result<(), String> {
+    if hosted() {
+        return Err(
+            "a hosted parcad has no file manager to show the file in; the reply carries its path"
+                .to_string(),
+        );
+    }
     let file = Path::new(path);
     if !file.exists() {
         return Err(format!("nothing at {path} to show"));
@@ -1328,7 +1343,7 @@ pub struct Editor {
 /// Which editor would take a part's source, without opening anything. None
 /// where parts are not files, so there is nothing to open.
 pub fn editor() -> Option<Editor> {
-    if cfg!(target_os = "emscripten") {
+    if cfg!(target_os = "emscripten") || hosted() {
         return None;
     }
     let (name, bundle) = match choose_editor() {
@@ -1370,6 +1385,13 @@ pub fn open_in_editor(path: &str) -> Result<String, String> {
              nothing for an editor to open. The app on your machine keeps every part as a \
              file you can edit anywhere."
         ));
+    }
+    if hosted() {
+        return Err(
+            "this part is on a hosted parcad, which has no editor to open it in: read_project \
+             returns its text, and the parcad app on your own machine opens a part in yours"
+                .to_string(),
+        );
     }
 
     let file = Path::new(path);
@@ -1544,6 +1566,13 @@ fn app_icon(bundle: &Path) -> Option<String> {
 /// Windows' `start` reports nothing either way, and asks the user for an
 /// application when none is registered.
 pub fn open_in_default_app(path: &str) -> Result<(), String> {
+    if hosted() {
+        return Err(format!(
+            "a hosted parcad has no application to open the file in; it is written at {path} on \
+             the server. Fetch it from there, or export from parcad on your own machine, where \
+             `open: true` hands it to the slicer"
+        ));
+    }
     let file = Path::new(path);
     if !file.exists() {
         return Err(format!("nothing at {path} to open"));
@@ -1593,6 +1622,14 @@ pub fn open_in_default_app(path: &str) -> Result<(), String> {
 /// summary — volume, area, bounding box, face-type tally — which is the right
 /// first look at an unfamiliar file.
 pub fn probe_step(path: &str, keep_faces: bool) -> Result<parcad_occt::StepProbe, String> {
+    if hosted() {
+        return Err(
+            "a hosted parcad reads no file from its own disk, so there is nothing here for \
+             probe_step_export to open: measure a parcad part with evaluate_part, or run parcad \
+             on your own machine (brew install parcad) to probe a STEP file there"
+                .to_string(),
+        );
+    }
     let p = std::path::Path::new(path);
     if !p.is_absolute() {
         let example = if cfg!(windows) {
@@ -1923,6 +1960,34 @@ mod tests {
         let error = probe_step("exports/part.step", true).unwrap_err();
         assert!(error.contains("not an absolute path"), "{error}");
         assert!(error.contains("full path"), "{error}");
+    }
+
+    /// A hosted account has no screen, editor or slicer, and the server's disk
+    /// is not its to read: each refusal names what to do instead, and a local
+    /// user is unchanged.
+    #[test]
+    fn hosted_mode_refuses_what_only_a_machine_of_your_own_can_do() {
+        let tenants = crate::tenant::tests::fresh_root("tenants");
+        crate::tenant::scope(crate::tenant::tests::hosted_at("a", &tenants), || {
+            assert!(editor().is_none(), "no pencil to show");
+            let error = open_in_editor("/nowhere/part.js").unwrap_err();
+            assert!(error.contains("read_project returns its text"), "{error}");
+            let error = open_in_default_app("/nowhere/part.stl").unwrap_err();
+            assert!(error.contains("written at /nowhere/part.stl on the server"), "{error}");
+            assert!(error.contains("your own machine"), "{error}");
+            let error = reveal("/nowhere/part.stl").unwrap_err();
+            assert!(error.contains("no file manager"), "{error}");
+            // A file that exists and is not the account's: refused before it is looked at.
+            let error = probe_step("/etc/passwd", true).unwrap_err();
+            assert!(error.contains("reads no file from its own disk"), "{error}");
+            assert!(error.contains("evaluate_part"), "{error}");
+        });
+
+        assert!(editor().is_some(), "a local user is offered an editor");
+        assert!(open_in_editor("/nowhere/part.js").unwrap_err().contains("nothing at"));
+        assert!(open_in_default_app("/nowhere/part.stl").unwrap_err().contains("nothing at"));
+        assert!(reveal("/nowhere/part.stl").unwrap_err().contains("nothing at"));
+        let _ = std::fs::remove_dir_all(&tenants);
     }
 
     /// "@session" is the script on *this* account's screen: another account's

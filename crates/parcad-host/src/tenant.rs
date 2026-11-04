@@ -109,6 +109,36 @@ impl Tenant {
             mode: Mode::Hosted,
         }
     }
+
+    /// Refuse a path under this root that a link carries outside it. A path
+    /// about to be created is judged by the nearest folder that exists, since
+    /// only that can be resolved.
+    pub fn confine(&self, path: &Path) -> Result<(), String> {
+        let root = self.root.canonicalize().map_err(|e| {
+            format!(
+                "the folder for account {} is missing ({e}); it is made when the account is resolved",
+                self.id
+            )
+        })?;
+        let mut nearest = path;
+        let real = loop {
+            if let Ok(real) = nearest.canonicalize() {
+                break real;
+            }
+            nearest = nearest
+                .parent()
+                .ok_or_else(|| format!("{} is under no folder at all", path.display()))?;
+        };
+        if real.starts_with(&root) {
+            return Ok(());
+        }
+        Err(format!(
+            "{} is a link to {}, outside this account's folder, and a hosted parcad does not \
+             follow one: ask the server's operator to replace the link with the files",
+            nearest.display(),
+            real.display()
+        ))
+    }
 }
 
 tokio::task_local! {
