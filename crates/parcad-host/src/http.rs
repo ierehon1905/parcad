@@ -26,6 +26,7 @@ use crate::projects;
 use crate::routes::{self, ProjectOp, SaveRequest, SessionPush};
 use crate::service;
 use crate::session;
+use crate::tenant;
 use axum::{
     extract::{Path, State},
     http::{header, StatusCode, Uri},
@@ -206,13 +207,16 @@ async fn session_events(uri: Uri) -> impl IntoResponse {
 /// Geometry work is blocking and slow — the OCCT path is a whole subprocess.
 ///
 /// Running it on the async runtime's threads would let one fillet stall every
-/// other request, including the asset requests that load the page.
+/// other request, including the asset requests that load the page. The
+/// request's tenant is a task-local, which no blocking thread sees until it
+/// is re-entered there (`tenant.rs`).
 async fn blocking<T, F>(work: F) -> Result<T, Failed>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, String> + Send + 'static,
 {
-    match tokio::task::spawn_blocking(work).await {
+    let tenant = tenant::current();
+    match tokio::task::spawn_blocking(move || tenant::scope(tenant, work)).await {
         Ok(result) => result.map_err(Failed),
         Err(e) => Err(Failed(format!("the evaluation task did not finish: {e}"))),
     }

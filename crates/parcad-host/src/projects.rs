@@ -45,6 +45,7 @@
 //! The folder is plain files on purpose. Nothing here owns a database, a lock,
 //! or a binary format — `ls`, `grep`, an editor and git all work.
 
+use crate::tenant;
 use std::path::{Path, PathBuf};
 
 /// The part, inside a bundle. The name is fixed so a reader never has to guess
@@ -75,16 +76,11 @@ const SEEDED: &str = ".seeded";
 /// nobody nests parts eight deep on purpose.
 const MAX_DEPTH: usize = 8;
 
-/// Where projects live. `PARCAD_PROJECTS_DIR` overrides it, which is also how
-/// a test gets a directory of its own.
+/// Where the current tenant's projects live: the one path everything below
+/// is joined onto. `tenant::Tenant::local` says where that is for this
+/// machine's own user, and how `PARCAD_PROJECTS_DIR` moves it.
 pub fn dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("PARCAD_PROJECTS_DIR") {
-        return PathBuf::from(dir);
-    }
-    // The platform's application-data folder rather than Documents: macOS
-    // guards Documents per app, so an editor the user never granted it could
-    // not open a part there. docs/GOTCHAS.md, "Parts are not in Documents".
-    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("parcad")
+    tenant::current().root.clone()
 }
 
 // ------------------------------------------------------------------ the tree
@@ -828,27 +824,10 @@ pub fn seed() -> std::io::Result<()> {
 /// seed parts are `examples` inside that folder, which is somewhere else on
 /// each platform.
 pub fn seed_bundled(resources: Option<PathBuf>) -> std::io::Result<()> {
-    let dir = dir();
-    std::fs::create_dir_all(&dir)?;
-
-    // The declarations somebody else's editor reads, beside the parts it will
-    // open. Not fatal: a folder without them holds parts that still open, just
-    // without a signature under the pointer.
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Err(e) = crate::editor_types::ensure(&dir) {
-        eprintln!("parcad: {e}");
-    }
-
-    let record = dir.join(SEEDED);
-    let mut seeded: Vec<String> = std::fs::read_to_string(&record)
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_string)
-        .collect();
-
     let Some(source) = seed_dir(resources) else {
         // Not fatal. An install with no seed parts is an empty folder, which is
         // a usable state; failing to launch over it would not be.
+        let dir = prepare()?;
         eprintln!(
             "parcad: no seed parts found; {} starts empty. \
              Set PARCAD_SEED_DIR to a folder of .js parts to change that.",
@@ -856,8 +835,21 @@ pub fn seed_bundled(resources: Option<PathBuf>) -> std::io::Result<()> {
         );
         return Ok(());
     };
+    seed_from(&source)
+}
 
-    for (name, path) in seed_parts(&source)? {
+/// [`seed`] from one folder of `.js` parts, named rather than looked for: a
+/// browser tab's, which the page wrote where only it knows.
+pub fn seed_from(source: &Path) -> std::io::Result<()> {
+    let dir = prepare()?;
+    let record = dir.join(SEEDED);
+    let mut seeded: Vec<String> = std::fs::read_to_string(&record)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+
+    for (name, path) in seed_parts(source)? {
         if seeded.contains(&name) {
             continue;
         }
@@ -886,6 +878,21 @@ pub fn seed_bundled(resources: Option<PathBuf>) -> std::io::Result<()> {
     // would lose them permanently.
     std::fs::write(&record, seeded.join("\n"))?;
     Ok(())
+}
+
+/// The project folder, created, with what belongs beside the parts.
+fn prepare() -> std::io::Result<PathBuf> {
+    let dir = dir();
+    std::fs::create_dir_all(&dir)?;
+
+    // The declarations somebody else's editor reads, beside the parts it will
+    // open. Not fatal: a folder without them holds parts that still open, just
+    // without a signature under the pointer.
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Err(e) = crate::editor_types::ensure(&dir) {
+        eprintln!("parcad: {e}");
+    }
+    Ok(dir)
 }
 
 /// Every `.js` part under the seed folder, as `(name, path)` where `name` is the
@@ -966,27 +973,45 @@ fn seed_dir(resources: Option<PathBuf>) -> Option<PathBuf> {
 pub(crate) mod tests {
     use super::*;
 
-    /// Every test here works in a directory of its own, and they share a
-    /// process — so the env var they all read has to be set under one lock.
+    /// Every test here works in a folder of its own, as a tenant of its own:
+    /// nothing is shared across the process, so nothing is locked.
     pub(crate) fn scoped<T>(work: impl FnOnce(&Path) -> T) -> T {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Mutex;
-        static LOCK: Mutex<()> = Mutex::new(());
-        static NTH: AtomicUsize = AtomicUsize::new(0);
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-        let root = std::env::temp_dir().join(format!(
-            "parcad-projects-test-{}-{}",
-            std::process::id(),
-            NTH.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("a test directory");
-        // SAFETY-adjacent: single-threaded within the lock above.
-        unsafe { std::env::set_var("PARCAD_PROJECTS_DIR", &root) };
-        let out = work(&root);
+        let root = tenant::tests::fresh_root("projects");
+        let out = tenant::scope(tenant::tests::local_at(&root), || work(&root));
         let _ = std::fs::remove_dir_all(&root);
         out
+    }
+
+    /// A folder of seed parts, laid out as a packager's `<resources>/examples`
+    /// and kept beside `root` so the seed parts are not listed as projects.
+    fn seed_folder(root: &Path, parts: &[(&str, &str)]) -> PathBuf {
+        let examples = root
+            .with_file_name(format!("{}-resources", root.file_name().unwrap().to_string_lossy()))
+            .join("examples");
+        for (name, script) in parts {
+            let file = examples.join(format!("{name}.js"));
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, script).unwrap();
+        }
+        examples
+    }
+
+    /// The whole point of the seam: one name, two accounts, two files.
+    #[test]
+    fn two_tenants_keep_the_same_name_in_two_roots() {
+        let tenants = tenant::tests::fresh_root("tenants");
+        let a = tenant::tests::hosted_at("a", &tenants);
+        let b = tenant::tests::hosted_at("b", &tenants);
+        tenant::scope(a.clone(), || write("bracket", "return box(1,1,1);")).unwrap();
+        tenant::scope(b.clone(), || write("bracket", "return box(2,2,2);")).unwrap();
+
+        assert_eq!(tenant::scope(a.clone(), || read("bracket")).unwrap(), "return box(1,1,1);");
+        assert_eq!(tenant::scope(b.clone(), || read("bracket")).unwrap(), "return box(2,2,2);");
+        assert!(tenants.join("a/bracket.parcad/part.js").is_file());
+        assert!(tenants.join("b/bracket.parcad/part.js").is_file());
+        assert_eq!(tenant::scope(a, list).unwrap(), vec!["bracket"]);
+        assert_eq!(tenant::scope(b, dir), tenants.join("b"));
+        let _ = std::fs::remove_dir_all(&tenants);
     }
 
     /// The bug this replaced: the desktop wrote to the relative path
@@ -1136,36 +1161,27 @@ pub(crate) mod tests {
     #[test]
     fn seeding_does_not_restore_a_part_the_user_moved_or_deleted() {
         scoped(|root| {
-            // Outside the project folder, or the seed parts would be listed as
-            // projects in their own right.
-            let examples = root.with_file_name(format!(
-                "{}-seed",
-                root.file_name().unwrap().to_string_lossy()
-            ));
-            std::fs::create_dir_all(&examples).unwrap();
-            std::fs::write(examples.join("bracket.js"), "// A bracket.\nreturn box(1,1,1);")
-                .unwrap();
-            std::fs::write(examples.join("flange.js"), "return box(1,1,1);").unwrap();
-            unsafe { std::env::set_var("PARCAD_SEED_DIR", &examples) };
-
-            seed().expect("the first seed");
+            let examples = seed_folder(
+                root,
+                &[("bracket", "// A bracket.\nreturn box(1,1,1);"), ("flange", "return box(1,1,1);")],
+            );
+            seed_from(&examples).expect("the first seed");
             assert_eq!(list().unwrap(), vec!["bracket", "flange"]);
 
             create_folder("Mounts").unwrap();
             rename("bracket", "Mounts/bracket").unwrap();
             remove("flange").unwrap();
 
-            seed().expect("the second seed");
+            seed_from(&examples).expect("the second seed");
             // And once more, to cover a folder that predates the record: the
             // first run adopts what is already there rather than reseeding it.
-            seed().expect("the third seed");
+            seed_from(&examples).expect("the third seed");
             assert_eq!(
                 list().unwrap(),
                 vec!["Mounts/bracket"],
                 "a moved part must not be restored, and a deleted one must stay gone"
             );
-            unsafe { std::env::remove_var("PARCAD_SEED_DIR") };
-            let _ = std::fs::remove_dir_all(&examples);
+            let _ = std::fs::remove_dir_all(examples.parent().unwrap());
         })
     }
 
@@ -1174,15 +1190,8 @@ pub(crate) mod tests {
     #[test]
     fn an_app_seeds_from_the_resource_folder_its_packager_names() {
         scoped(|root| {
-            let resources = root.with_file_name(format!(
-                "{}-resources",
-                root.file_name().unwrap().to_string_lossy()
-            ));
-            std::fs::create_dir_all(resources.join("examples")).unwrap();
-            std::fs::write(resources.join("examples").join("bracket.js"), "return box(1,1,1);")
-                .unwrap();
-            unsafe { std::env::remove_var("PARCAD_SEED_DIR") };
-
+            let examples = seed_folder(root, &[("bracket", "return box(1,1,1);")]);
+            let resources = examples.parent().unwrap().to_path_buf();
             seed_bundled(Some(resources.clone())).expect("the seed");
             assert_eq!(list().unwrap(), vec!["bracket"]);
             let _ = std::fs::remove_dir_all(&resources);
@@ -1196,27 +1205,17 @@ pub(crate) mod tests {
     #[test]
     fn seeding_keeps_the_seed_folders_structure() {
         scoped(|root| {
-            let examples = root.with_file_name(format!(
-                "{}-seed",
-                root.file_name().unwrap().to_string_lossy()
-            ));
-            std::fs::create_dir_all(examples.join("fusion360")).unwrap();
-            std::fs::write(examples.join("bracket.js"), "return box(1,1,1);").unwrap();
-            std::fs::write(
-                examples.join("fusion360").join("retainer.js"),
-                "// Retainer.\nreturn box(2,2,2);",
-            )
-            .unwrap();
-            // Same leaf as a top-level part, to prove the record is keyed on the
-            // whole path and not the stem.
-            std::fs::write(
-                examples.join("fusion360").join("bracket.js"),
-                "return box(3,3,3);",
-            )
-            .unwrap();
-            unsafe { std::env::set_var("PARCAD_SEED_DIR", &examples) };
-
-            seed().expect("the first seed");
+            // The same leaf as a top-level part, to prove the record is keyed
+            // on the whole path and not the stem.
+            let examples = seed_folder(
+                root,
+                &[
+                    ("bracket", "return box(1,1,1);"),
+                    ("fusion360/retainer", "// Retainer.\nreturn box(2,2,2);"),
+                    ("fusion360/bracket", "return box(3,3,3);"),
+                ],
+            );
+            seed_from(&examples).expect("the first seed");
             assert_eq!(
                 list().unwrap(),
                 vec!["bracket", "fusion360/bracket", "fusion360/retainer"],
@@ -1226,15 +1225,13 @@ pub(crate) mod tests {
             // The guarantee that motivated `.seeded` has to hold one level down
             // too: a target the user deletes must stay deleted.
             remove("fusion360/retainer").unwrap();
-            seed().expect("the second seed");
+            seed_from(&examples).expect("the second seed");
             assert_eq!(
                 list().unwrap(),
                 vec!["bracket", "fusion360/bracket"],
                 "a deleted part inside a seeded folder must not come back"
             );
-
-            unsafe { std::env::remove_var("PARCAD_SEED_DIR") };
-            let _ = std::fs::remove_dir_all(&examples);
+            let _ = std::fs::remove_dir_all(examples.parent().unwrap());
         })
     }
 

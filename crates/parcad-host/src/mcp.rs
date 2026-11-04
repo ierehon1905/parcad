@@ -19,7 +19,7 @@
 //! Scripts arrive from a model and run in `script`'s sandbox, never in the
 //! webview. That is the precondition this server was blocked on.
 
-use crate::{arguments::Args, assets::Assets, projects, script, service, session};
+use crate::{arguments::Args, assets::Assets, projects, script, service, session, tenant};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
@@ -1423,6 +1423,23 @@ fn instructions(in_tab: bool) -> String {
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Parcad {
+    /// The generated `call_tool`, run as the request's tenant. rmcp serves a
+    /// request on a task of its own, which no middleware's task-local reaches,
+    /// so the tenant rides on the request: in the HTTP parts rmcp hands every
+    /// handler, where the host that authenticated the request put it.
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, ErrorData> {
+        let tenant = context
+            .extensions
+            .get::<http::request::Parts>()
+            .map_or_else(tenant::current, |parts| tenant::carried(&parts.extensions));
+        let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        tenant::scoped(tenant, self.tool_router.call(call)).await
+    }
+
     /// The generated `list_tools` sends no `ttlMs` and no `cacheScope`, and
     /// Claude Code's MCP runtime (2.1.268, protocol 2026-07-28) rejects a
     /// tools/list reply without both — quietly:
@@ -2050,6 +2067,8 @@ struct ViewedHeader<'a, E: Serialize, F: Serialize, S: Serialize> {
 ///
 /// In a browser tab there is no other thread, and the kernel is reached
 /// through the page, so the work runs here and may pause for it (`page.rs`).
+/// Elsewhere the request's tenant is a task-local, which no blocking thread
+/// sees until it is re-entered there (`tenant.rs`).
 async fn blocking<T, F>(work: F) -> Result<T, ErrorData>
 where
     T: Send + 'static,
@@ -2058,7 +2077,8 @@ where
     if crate::page::active() {
         return crate::page::inline(work).map_err(invalid);
     }
-    match tokio::task::spawn_blocking(work).await {
+    let tenant = tenant::current();
+    match tokio::task::spawn_blocking(move || tenant::scope(tenant, work)).await {
         Ok(result) => result.map_err(invalid),
         Err(e) => Err(ErrorData::internal_error(
             format!("the evaluation task did not finish: {e}"),
