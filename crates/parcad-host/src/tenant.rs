@@ -151,6 +151,14 @@ pub fn carried(extensions: &http::Extensions) -> Arc<Tenant> {
     extensions.get::<Arc<Tenant>>().cloned().unwrap_or_else(current)
 }
 
+/// `of` as a key only the current tenant's requests produce. The host's two
+/// caches are process-wide; keyed this way a hit is never another account's
+/// build, and a script that imports a saved part is cached beside the copy of
+/// that part its own account holds.
+pub fn key(of: &str) -> String {
+    format!("{}\n{of}", current().id)
+}
+
 /// Run `work` as `tenant` on this thread. For the inside of a `spawn_blocking`,
 /// which no task-local reaches.
 pub fn scope<T>(tenant: Arc<Tenant>, work: impl FnOnce() -> T) -> T {

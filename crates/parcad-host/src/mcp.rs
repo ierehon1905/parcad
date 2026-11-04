@@ -1537,20 +1537,29 @@ impl ServerHandler for Parcad {
 
 /// A client that completed `initialize` and has not closed its session.
 struct Session {
+    /// The account the session was minted for. An id presented under another
+    /// is no session at all.
+    tenant: tenant::TenantId,
     /// Name and version as the client announced itself, if it did.
     client: Option<String>,
     last_seen: Instant,
 }
 
+/// What one account's clients have done.
 #[derive(Default)]
-struct Activity {
-    sessions: HashMap<String, Session>,
+struct Calls {
     /// The most recent client to handshake, kept after it goes so the UI can
     /// still say who was here.
     client: Option<String>,
     tool_calls: u64,
     last_tool: Option<String>,
     last_seen: Option<Instant>,
+}
+
+#[derive(Default)]
+struct Activity {
+    sessions: HashMap<String, Session>,
+    calls: HashMap<tenant::TenantId, Calls>,
 }
 
 static ACTIVITY: LazyLock<Mutex<Activity>> = LazyLock::new(Default::default);
@@ -1580,17 +1589,19 @@ pub struct Status {
 }
 
 pub fn status() -> Status {
+    let me = tenant::current().id.clone();
     let mut activity = ACTIVITY.lock().unwrap_or_else(|e| e.into_inner());
     activity
         .sessions
         .retain(|_, session| session.last_seen.elapsed() < SESSION_IDLE_LIMIT);
+    let calls = activity.calls.get(&me);
 
     Status {
-        clients: activity.sessions.len(),
-        client: activity.client.clone(),
-        tool_calls: activity.tool_calls,
-        last_tool: activity.last_tool.clone(),
-        idle_secs: activity.last_seen.map(|at| at.elapsed().as_secs()),
+        clients: activity.sessions.values().filter(|session| session.tenant == me).count(),
+        client: calls.and_then(|calls| calls.client.clone()),
+        tool_calls: calls.map_or(0, |calls| calls.tool_calls),
+        last_tool: calls.and_then(|calls| calls.last_tool.clone()),
+        idle_secs: calls.and_then(|calls| calls.last_seen).map(|at| at.elapsed().as_secs()),
         url: endpoint(),
     }
 }
@@ -1608,8 +1619,14 @@ fn endpoint() -> String {
 
 /// Note a request on its way in: who is calling, and which tool. Returns the
 /// client's own name when the request announces one, which only a handshake
-/// does, for [`note_session`] to pin to the session its reply mints.
-pub(crate) fn note_request(session_id: Option<&str>, closing: bool, body: &[u8]) -> Option<String> {
+/// does, for [`note_session`] to pin to the session its reply mints. A
+/// session minted for another account is refused, with the message to answer.
+pub(crate) fn note_request(
+    session_id: Option<&str>,
+    closing: bool,
+    body: &[u8],
+) -> Result<Option<String>, String> {
+    let me = tenant::current().id.clone();
     let call: Option<serde_json::Value> = serde_json::from_slice(body).ok();
     let rpc_method = call
         .as_ref()
@@ -1627,13 +1644,22 @@ pub(crate) fn note_request(session_id: Option<&str>, closing: bool, body: &[u8])
         });
 
     let mut activity = ACTIVITY.lock().unwrap_or_else(|e| e.into_inner());
-    activity.last_seen = Some(Instant::now());
+    if let Some(id) = session_id {
+        if activity.sessions.get(id).is_some_and(|session| session.tenant != me) {
+            return Err(format!(
+                "no such session {id:?}. An Mcp-Session-Id is the client's own: \
+                 initialize again and use the id that reply carries."
+            ));
+        }
+    }
+    let calls = activity.calls.entry(me.clone()).or_default();
+    calls.last_seen = Some(Instant::now());
     if let Some(name) = client.clone() {
-        activity.client = Some(name);
+        calls.client = Some(name);
     }
     if rpc_method.as_deref() == Some("tools/call") {
-        activity.tool_calls += 1;
-        activity.last_tool = call
+        calls.tool_calls += 1;
+        calls.last_tool = call
             .as_ref()
             .and_then(|call| call.pointer("/params/name"))
             .and_then(|name| name.as_str())
@@ -1647,6 +1673,7 @@ pub(crate) fn note_request(session_id: Option<&str>, closing: bool, body: &[u8])
         }
         Some(id) => {
             let entry = activity.sessions.entry(id.to_string()).or_insert(Session {
+                tenant: me,
                 client: client.clone(),
                 last_seen: Instant::now(),
             });
@@ -1657,7 +1684,7 @@ pub(crate) fn note_request(session_id: Option<&str>, closing: bool, body: &[u8])
         }
         None => {}
     }
-    client
+    Ok(client)
 }
 
 /// Note the session a reply named. The id is minted in the reply to
@@ -1669,6 +1696,7 @@ pub(crate) fn note_session(id: &str, client: Option<String>) {
         .sessions
         .entry(id.to_string())
         .or_insert(Session {
+            tenant: tenant::current().id.clone(),
             client,
             last_seen: Instant::now(),
         })
@@ -1690,6 +1718,7 @@ async fn record(
 
     const BODY_LIMIT: usize = 32 * 1024 * 1024;
 
+    let tenant = tenant::carried(request.extensions());
     let session_id = request
         .headers()
         .get("mcp-session-id")
@@ -1710,24 +1739,30 @@ async fn record(
         }
     };
 
-    let client = note_request(session_id.as_deref(), closing, &bytes);
+    tenant::scoped(tenant, async move {
+        let client = match note_request(session_id.as_deref(), closing, &bytes) {
+            Ok(client) => client,
+            Err(refusal) => return (axum::http::StatusCode::NOT_FOUND, refusal).into_response(),
+        };
 
-    let response = next
-        .run(axum::extract::Request::from_parts(
-            parts,
-            axum::body::Body::from(bytes),
-        ))
-        .await;
+        let response = next
+            .run(axum::extract::Request::from_parts(
+                parts,
+                axum::body::Body::from(bytes),
+            ))
+            .await;
 
-    if let Some(id) = response
-        .headers()
-        .get("mcp-session-id")
-        .and_then(|value| value.to_str().ok())
-    {
-        note_session(id, client);
-    }
+        if let Some(id) = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|value| value.to_str().ok())
+        {
+            note_session(id, client);
+        }
 
-    response
+        response
+    })
+    .await
 }
 
 // ------------------------------------------------------------------ helpers
@@ -1969,11 +2004,10 @@ fn identified(session: session::Session, viewers: Vec<session::Viewer>, with_scr
     }
 }
 
-/// Where exports land. One directory, so no call can choose a location.
+/// Where exports land: one directory per tenant, so no call can choose a
+/// location and no account's file lands where another's did.
 fn export_dir() -> PathBuf {
-    std::env::var_os("PARCAD_EXPORT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("parcad-exports"))
+    tenant::current().exports.clone()
 }
 
 /// An evaluation packed for the viewer: the mesh as Draco, and the rest of the
@@ -2679,6 +2713,91 @@ mod tests {
                 assert_eq!(projects::read("block").unwrap(), script, "a what-if writes nothing");
             })
         })
+    }
+
+    /// The same graph under two accounts is two builds: `reused_build` never
+    /// reports another account's.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn a_build_is_reused_within_an_account_and_never_across() {
+        fn evaluate() -> serde_json::Value {
+            let request: Args<EvaluateRequest> =
+                serde_json::from_value(serde_json::json!({ "script": "return box(10, 20, 30);" })).unwrap();
+            run(Parcad::new().evaluate_part(Parameters(request))).expect("built").structured_content.unwrap()
+        }
+        let tenants = tenant::tests::fresh_root("tenants");
+        let a = tenant::tests::hosted_at("a", &tenants);
+        let b = tenant::tests::hosted_at("b", &tenants);
+        assert_ne!(tenant::scope(a.clone(), evaluate)["reused_build"], true);
+        assert_eq!(tenant::scope(a, evaluate)["reused_build"], true, "the account's own build is reused");
+        let other = tenant::scope(b, evaluate);
+        assert_ne!(other["reused_build"], true, "another account's build is not");
+        assert_eq!(other["volume_mm3"], 6000.0);
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    /// Two accounts export `part.stl`: two files, each under its own root.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn each_account_exports_into_its_own_folder() {
+        fn export() -> Exported {
+            let request: Args<ExportRequest> = serde_json::from_value(serde_json::json!({
+                "script": "return box(10, 20, 30);", "format": "stl",
+            }))
+            .unwrap();
+            run(Parcad::new().export_part(Parameters(request))).expect("exported").0.measured
+        }
+        let tenants = tenant::tests::fresh_root("tenants");
+        let a = tenant::tests::hosted_at("a", &tenants);
+        let b = tenant::tests::hosted_at("b", &tenants);
+        let on_a = tenant::scope(a.clone(), export);
+        let on_b = tenant::scope(b.clone(), export);
+        assert_eq!(std::path::Path::new(&on_a.path), tenants.join("a/.exports/part.stl"));
+        assert_eq!(std::path::Path::new(&on_b.path), tenants.join("b/.exports/part.stl"));
+        assert!(std::path::Path::new(&on_a.path).is_file());
+        assert!(std::path::Path::new(&on_b.path).is_file());
+        assert!(!std::path::Path::new(&on_a.path).starts_with(&b.root));
+        assert_eq!(tenant::scope(a, render_dir), tenants.join("a/.exports/renders"));
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    /// An `Mcp-Session-Id` minted under one account is no session under
+    /// another, and the refusal comes from the middleware every request passes.
+    #[test]
+    fn a_session_minted_for_one_account_is_refused_under_another() {
+        struct NoAssets;
+        impl Assets for NoAssets {
+            fn get(&self, _: &str) -> Option<crate::assets::Asset> {
+                None
+            }
+            fn how_to_embed(&self) -> String {
+                String::new()
+            }
+        }
+        let tenants = tenant::tests::fresh_root("tenants");
+        let a = tenant::tests::hosted_at("a", &tenants);
+        let b = tenant::tests::hosted_at("b", &tenants);
+        tenant::scope(a.clone(), || note_session("s-1", Some("claude 1.0".into())));
+        assert_eq!(tenant::scope(a.clone(), || note_request(Some("s-1"), false, b"{}")), Ok(None));
+        assert_eq!(tenant::scope(a, status).clients, 1);
+        assert_eq!(tenant::scope(b.clone(), status).clients, 0, "the session is not counted for the other account");
+
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("mcp-session-id", "s-1")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap();
+        request.extensions_mut().insert(b);
+        let mut router = service(Arc::new(NoAssets));
+        let response = run(tower_service::Service::call(&mut router, request)).expect("the router answers");
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+        let body = run(axum::body::to_bytes(response.into_body(), 4096)).unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("no such session \"s-1\""), "{text}");
+        assert!(text.contains("initialize again"), "the refusal names the fix: {text}");
+        let _ = std::fs::remove_dir_all(&tenants);
     }
 
     /// An edit is built, measured and then written: the file holds the new

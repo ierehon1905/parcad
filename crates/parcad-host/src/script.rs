@@ -376,7 +376,8 @@ const HOT_LOOPS: &str = "The loops generative parts spend their work in — a re
 /// the caller's to raise: it belongs to the source (`scriptBudget`), so every
 /// route that builds the part — MCP, the CLI, a thumbnail — agrees on it.
 pub fn build_within(source: &str, backstop: Duration) -> Result<Script, String> {
-    if let Some(known) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(source) {
+    let key = crate::tenant::key(source);
+    if let Some(known) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
         return known.map(|script| Script { reused: true, ..script });
     }
     let meter = Arc::new(Meter::new(backstop.clamp(BACKSTOP, MAX_BACKSTOP)));
@@ -387,7 +388,7 @@ pub fn build_within(source: &str, backstop: Duration) -> Result<Script, String> 
         CACHE
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert(source, outcome.clone().map(|(script, _)| script), weight, parts);
+            .insert(&key, outcome.clone().map(|(script, _)| script), weight, parts);
     }
     outcome.map(|(script, _)| script)
 }
@@ -462,8 +463,8 @@ fn run(source: &str, meter: &Arc<Meter>) -> Result<(Script, usize), String> {
     }
 }
 
-/// Every result a script reached, by its exact source, so asking again — an
-/// export after an evaluation, a thumbnail after a save — skips the
+/// Every result a script reached, by its account and exact source, so asking
+/// again — an export after an evaluation, a thumbnail after a save — skips the
 /// interpreter. Sound because a script sees nothing but its source and the
 /// DSL: the realm is empty, the budget is counted, and a run that read the
 /// clock or `Math.random` is never kept ([`watch_for_impurity`]).
@@ -480,22 +481,22 @@ struct Cache {
 }
 
 impl Cache {
-    fn get(&mut self, source: &str) -> Option<Result<Script, String>> {
-        let (result, _, parts) = self.entries.get(source)?;
+    fn get(&mut self, key: &str) -> Option<Result<Script, String>> {
+        let (result, _, parts) = self.entries.get(key)?;
         if parts.iter().any(|(name, read)| read_part(name) != *read) {
-            self.remove(source);
+            self.remove(key);
             return None;
         }
         let result = result.clone();
-        if let Some(at) = self.order.iter().position(|s| s == source) {
+        if let Some(at) = self.order.iter().position(|s| s == key) {
             let key = self.order.remove(at).expect("position is in range");
             self.order.push_back(key);
         }
         Some(result)
     }
 
-    fn insert(&mut self, source: &str, result: Result<Script, String>, weight: usize, parts: Vec<PartRead>) {
-        if weight > CACHE_BYTES || self.entries.contains_key(source) {
+    fn insert(&mut self, key: &str, result: Result<Script, String>, weight: usize, parts: Vec<PartRead>) {
+        if weight > CACHE_BYTES || self.entries.contains_key(key) {
             return;
         }
         while self.weight + weight > CACHE_BYTES {
@@ -504,15 +505,15 @@ impl Cache {
                 self.weight -= w;
             }
         }
-        self.entries.insert(source.to_string(), (result, weight, parts));
-        self.order.push_back(source.to_string());
+        self.entries.insert(key.to_string(), (result, weight, parts));
+        self.order.push_back(key.to_string());
         self.weight += weight;
     }
 
-    fn remove(&mut self, source: &str) {
-        if let Some((_, w, _)) = self.entries.remove(source) {
+    fn remove(&mut self, key: &str) {
+        if let Some((_, w, _)) = self.entries.remove(key) {
             self.weight -= w;
-            self.order.retain(|s| s != source);
+            self.order.retain(|s| s != key);
         }
     }
 }

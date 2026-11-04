@@ -1031,9 +1031,9 @@ struct Build {
 /// Recent builds, newest first. A model's turn is evaluate, then render or
 /// export or set_script, and the window then evaluates the same graph again:
 /// every one of those was a fresh worker, and on a figurine each was most of
-/// the 20 s budget. Keyed by the whole serialised graph, so a hit is the same
-/// part and never a similar one; failures are not kept, because a timeout is a
-/// fact about the machine at the time.
+/// the 20 s budget. Keyed by the tenant and the whole serialised graph, so a
+/// hit is the same part of the same account and never a similar one; failures
+/// are not kept, because a timeout is a fact about the machine at the time.
 static BUILDS: std::sync::LazyLock<std::sync::Mutex<std::collections::VecDeque<Build>>> =
     std::sync::LazyLock::new(Default::default);
 
@@ -1066,7 +1066,8 @@ fn build_exact(
     budget: Option<std::time::Duration>,
     want_step: bool,
 ) -> Result<Built, String> {
-    let key = serde_json::to_string(doc).map_err(|e| format!("encoding the graph: {e}"))?;
+    let graph = serde_json::to_string(doc).map_err(|e| format!("encoding the graph: {e}"))?;
+    let key = crate::tenant::key(&graph);
     {
         let mut builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(i) = builds
@@ -1922,6 +1923,24 @@ mod tests {
         let error = probe_step("exports/part.step", true).unwrap_err();
         assert!(error.contains("not an absolute path"), "{error}");
         assert!(error.contains("full path"), "{error}");
+    }
+
+    /// "@session" is the script on *this* account's screen: another account's
+    /// open part is not it.
+    #[test]
+    fn the_session_script_belongs_to_the_account_that_opened_it() {
+        let tenants = crate::tenant::tests::fresh_root("tenants");
+        let a = crate::tenant::tests::hosted_at("a", &tenants);
+        let b = crate::tenant::tests::hosted_at("b", &tenants);
+        crate::tenant::scope(a.clone(), || {
+            crate::projects::write("bracket", "return box(1,1,1);").unwrap();
+            crate::session::open("bracket", "tab-a").unwrap();
+        });
+        let on_a = crate::tenant::scope(a, || resolve_script(None, Some(SESSION), &[], None)).unwrap();
+        assert_eq!(on_a.script, "return box(1,1,1);");
+        let on_b = crate::tenant::scope(b, || resolve_script(None, Some(SESSION), &[], None)).unwrap_err();
+        assert!(on_b.contains("open_project"), "the refusal names the fix: {on_b}");
+        let _ = std::fs::remove_dir_all(&tenants);
     }
 
     #[test]

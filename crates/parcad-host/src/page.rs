@@ -549,7 +549,16 @@ fn respond(id: u64, request: HttpIn, fresh: bool) -> Reply {
         .unwrap_or(true);
     if !noted {
         let closing = request.method.eq_ignore_ascii_case("DELETE");
-        let client = mcp::note_request(session_id.as_deref(), closing, request.body.as_bytes());
+        let client = match mcp::note_request(session_id.as_deref(), closing, request.body.as_bytes()) {
+            Ok(client) => client,
+            Err(refusal) => {
+                return Reply::Http(HttpOut {
+                    status: 404,
+                    headers: BTreeMap::new(),
+                    body: refusal,
+                })
+            }
+        };
         EVENTS.with(|events| events.borrow_mut().push(Event::Mcp));
         CALLS.with(|calls| {
             if let Some(call) = calls.borrow_mut().get_mut(&id) {

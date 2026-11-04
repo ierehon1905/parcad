@@ -1014,6 +1014,31 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&tenants);
     }
 
+    /// Versions and removed parts are kept under the account's own root, so
+    /// another account lists neither.
+    #[test]
+    fn history_and_trash_stay_with_their_account() {
+        let tenants = tenant::tests::fresh_root("tenants");
+        let a = tenant::tests::hosted_at("a", &tenants);
+        let b = tenant::tests::hosted_at("b", &tenants);
+        tenant::scope(a, || {
+            write("bracket", "return box(1,1,1);").unwrap();
+            snapshot("bracket").unwrap().expect("a version to keep");
+            write("bracket", "return box(2,2,2);").unwrap();
+            assert_eq!(snapshots("bracket").unwrap().len(), 1);
+            remove("bracket").unwrap();
+        });
+        tenant::scope(b, || {
+            assert!(snapshots("bracket").unwrap().is_empty(), "another account's versions");
+            assert!(list().unwrap().is_empty());
+        });
+        assert!(tenants.join("a/.history/bracket").is_dir());
+        assert!(tenants.join("a/.trash/bracket.parcad/part.js").is_file());
+        assert!(!tenants.join("b/.history").exists());
+        assert!(!tenants.join("b/.trash").exists());
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
     /// The bug this replaced: the desktop wrote to the relative path
     /// `"part.stl"`, which a bundled `.app` resolved against whatever working
     /// directory macOS had handed it. Both forms of project must resolve to an
