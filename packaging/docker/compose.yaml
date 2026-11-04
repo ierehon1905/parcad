@@ -1,0 +1,16 @@
+services:
+  parcad:
+    build:
+      context: .
+      args:
+        PARCAD_VERSION: "0.0.13"
+    image: parcad:0.0.13
+    platform: linux/amd64
+    ports:
+      - "127.0.0.1:4242:4242"
+    volumes:
+      - parcad-data:/data
+    restart: unless-stopped
+
+volumes:
+  parcad-data:
