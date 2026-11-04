@@ -13,7 +13,7 @@
 
 use crate::backend::{face_key, BuiltPart, FaceKey, NamedFaces};
 use crate::protocol::{
-    FaceSummary, Perceive, Perceived, PointResult, PointWhere, RayHitResult, RayLine, RayResult,
+    FaceSummary, HoleMeasure, Perceive, Perceived, PointResult, PointWhere, RayHitResult, RayLine, RayResult,
     TagBounds, ThicknessResult, ThicknessSample, ThicknessSpec, ThinKind,
 };
 use anyhow::{bail, Result};
@@ -364,11 +364,73 @@ pub fn perceive(bodies: &[Body], spec: &Perceive) -> Result<Perceived> {
         result
     });
 
+    let holes = if spec.holes { holes(bodies)? } else { Vec::new() };
+
     Ok(Perceived {
         points,
         rays,
         thickness,
+        holes,
     })
+}
+
+/// Two rims of one hole agree on radius and axis line to within this, mm.
+const SAME_RIM_MM: f64 = 1e-3;
+/// How far past a hole's outermost rim an end is tested, mm: beyond the rim
+/// so a chamfer or round on it reads as open.
+const HOLE_END_STEP_MM: f64 = 0.05;
+/// How far out toward its wall, as a fraction of its radius, an end is
+/// tested: a counterbore's floor is material there, not the bore below it.
+const HOLE_END_RADIUS: f64 = 0.99;
+
+/// Every round hole in the solid bodies: rims of one radius on one axis line
+/// grouped, and each end of the group tested for material just past it.
+fn holes(bodies: &[Body]) -> Result<Vec<HoleMeasure>> {
+    struct Group {
+        origin: DVec3,
+        axis: DVec3,
+        radius: f64,
+        along: Vec<f64>,
+    }
+    let mut out = Vec::new();
+    for body in bodies.iter().filter(|b| !b.surface) {
+        let mut groups: Vec<Group> = Vec::new();
+        for (centre, normal, radius) in crate::backend::hole_rims(body.shape)? {
+            let leading = normal.to_array().into_iter().max_by(|a, b| a.abs().total_cmp(&b.abs())).unwrap_or(1.0);
+            let axis = if leading < 0.0 { -normal } else { normal };
+            let same = groups.iter_mut().find(|g| {
+                let off = centre - g.origin;
+                (g.radius - radius).abs() <= SAME_RIM_MM
+                    && g.axis.dot(axis) >= 1.0 - 1e-6
+                    && (off - g.axis * off.dot(g.axis)).length() <= SAME_RIM_MM
+            });
+            match same {
+                Some(g) => g.along.push((centre - g.origin).dot(g.axis)),
+                None => groups.push(Group { origin: centre, axis, radius, along: vec![0.0] }),
+            }
+        }
+        for g in groups {
+            let lo = g.along.iter().copied().fold(f64::INFINITY, f64::min);
+            let hi = g.along.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let open = |t: f64| {
+                let (u, v) = g.axis.any_orthonormal_pair();
+                let end = g.origin + g.axis * t;
+                [u, -u, v, -v].into_iter().all(|side| {
+                    let p = end + side * (g.radius * HOLE_END_RADIUS);
+                    matches!(body.shape.classify_point(p, SURFACE_TOLERANCE_MM), PointState::Outside)
+                })
+            };
+            out.push(HoleMeasure {
+                diameter_mm: 2.0 * g.radius,
+                axis: g.axis.to_array(),
+                center: (g.origin + g.axis * ((lo + hi) / 2.0)).to_array(),
+                length_mm: hi - lo,
+                through: (hi - lo > SAME_RIM_MM).then(|| open(hi + HOLE_END_STEP_MM) && open(lo - HOLE_END_STEP_MM)),
+                body: body.name.map(str::to_owned),
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Which side of the boundary a point is on, and how far from it.
@@ -1632,6 +1694,49 @@ mod tests {
         // Named: the faces read plate, bore, bore, plate.
         let named: Vec<&str> = r.hits.iter().map(|h| h.tags[0].as_str()).collect();
         assert_eq!(named, ["plate", "bore", "bore", "plate"]);
+    }
+
+    /// A 40 × 40 × 10 block with every kind of hole a request names: a Ø6
+    /// through, a Ø4 blind 5 deep, a Ø6 through under a Ø11 counterbore 3
+    /// deep, and a Ø3 cross hole along x. Each is measured where the graph
+    /// puts it, the counterbore as a blind Ø11 above a through Ø6.
+    #[test]
+    fn holes_are_found_by_their_rims_and_their_ends_say_whether_they_go_through() {
+        let part = built(
+            r#"{"units":"mm","root":11,"nodes":[
+            {"op":"cuboid","size":{"x":40,"y":40,"z":10}},
+            {"op":"cylinder","r":3,"h":20},
+            {"op":"translate","child":1,"by":{"x":-10,"y":-10,"z":0}},
+            {"op":"cylinder","r":2,"h":10},
+            {"op":"translate","child":3,"by":{"x":10,"y":-10,"z":5}},
+            {"op":"translate","child":1,"by":{"x":10,"y":10,"z":0}},
+            {"op":"cylinder","r":5.5,"h":6},
+            {"op":"translate","child":6,"by":{"x":10,"y":10,"z":5}},
+            {"op":"cylinder","r":1.5,"h":60},
+            {"op":"rotate","child":8,"axis":{"x":0,"y":1,"z":0},"degrees":90},
+            {"op":"translate","child":9,"by":{"x":0,"y":0,"z":0}},
+            {"op":"difference","base":0,"tools":[2,4,5,7,10],"blend":0}]}"#,
+        );
+        let spec = Perceive { holes: true, ..Default::default() };
+        let mut found = ask(&part, spec).holes;
+        found.sort_by(|a, b| a.diameter_mm.total_cmp(&b.diameter_mm).then(a.center[0].total_cmp(&b.center[0])));
+        let seen: Vec<(f64, [f64; 3], [f64; 3], f64, Option<bool>)> = found
+            .iter()
+            .map(|h| {
+                let r = |v: f64| (v * 1000.0).round() / 1000.0 + 0.0;
+                (r(h.diameter_mm), h.axis.map(r), h.center.map(r), r(h.length_mm), h.through)
+            })
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                (3.0, [1.0, 0.0, 0.0], [0.0, 0.0, 0.0], 40.0, Some(true)),
+                (4.0, [0.0, 0.0, 1.0], [10.0, -10.0, 2.5], 5.0, Some(false)),
+                (6.0, [0.0, 0.0, 1.0], [-10.0, -10.0, 0.0], 10.0, Some(true)),
+                (6.0, [0.0, 0.0, 1.0], [10.0, 10.0, -1.5], 7.0, Some(true)),
+                (11.0, [0.0, 0.0, 1.0], [10.0, 10.0, 3.5], 3.0, Some(false)),
+            ]
+        );
     }
 
     #[test]

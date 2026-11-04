@@ -61,6 +61,9 @@ pub struct Perceive {
     /// Sweep the whole surface for the thinnest material.
     #[serde(default)]
     pub thickness: Option<ThicknessSpec>,
+    /// Find every round hole: what a `holes` check reads.
+    #[serde(default)]
+    pub holes: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +94,30 @@ pub struct Perceived {
     pub rays: Vec<RayResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thickness: Option<ThicknessResult>,
+    /// Every round hole, when asked for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub holes: Vec<HoleMeasure>,
+}
+
+/// One round hole of the finished part, found by its circular rims: the
+/// closed circles where its wall, facing its axis, meets the faces around
+/// it — what `role: "hole"` selects. Rims of one diameter on one axis line
+/// are one hole, however many features cross it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HoleMeasure {
+    pub diameter_mm: f64,
+    /// Unit, along the hole, its largest component positive.
+    pub axis: [f64; 3],
+    /// On the axis, midway between the outermost rims.
+    pub center: [f64; 3],
+    /// Between the outermost rims, mm: 0 for a hole with one circular rim.
+    pub length_mm: f64,
+    /// Open past both outermost rims; `None` for a hole with one circular
+    /// rim, whose other end leaves through a slanted or curved face.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub through: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
 }
 
 /// Which side of the boundary a point is on, from `BRepClass3d`.

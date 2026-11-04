@@ -559,6 +559,7 @@ pub fn probe(
             })
             .collect(),
         thickness: None,
+        holes: false,
     };
     let answer = perceive(doc, &spec, budget)?;
 
@@ -903,7 +904,12 @@ pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evalua
     };
     if !doc.checks.is_empty() {
         let mut at_default = |min: f64| sweep(min, DEFAULT_THICKNESS_SAMPLES);
-        evaluated.snapshot.verdicts.checks = Some(parcad_evaluation::checks::judge(doc, &evaluated.snapshot, &mut at_default)?);
+        let mut holes = || {
+            let spec = parcad_occt::Perceive { holes: true, ..Default::default() };
+            Ok(perceive(doc, &spec, budget)?.holes)
+        };
+        let measures = parcad_evaluation::checks::Measures { wall: &mut at_default, holes: &mut holes };
+        evaluated.snapshot.verdicts.checks = Some(parcad_evaluation::checks::judge(doc, &evaluated.snapshot, measures)?);
     }
     // The brief is in every solid reply whether the script carries one or
     // not: with none, its one line is the nudge, and a model reads it on the
@@ -1835,6 +1841,7 @@ mod tests {
                 measured_mm3: None,
                 measured_mm2: None,
                 measured: None,
+                mismatch: None,
                 at: None,
                 surface_of: None,
                 opposite_surface_of: None,

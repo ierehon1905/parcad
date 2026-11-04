@@ -4321,6 +4321,13 @@ const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean; doc?:
     doc: (doc) => (doc.checks?.length ?? 0) > 0,
   },
   {
+    feature: "request-checks",
+    after: "0.0.13",
+    what: "checks of the request's numbers (size: { is }, holes, feature)",
+    uses: () => false,
+    doc: (doc) => (doc.checks ?? []).some((c) => c.holes !== undefined || c.feature !== undefined || c.size?.is !== undefined),
+  },
+  {
     feature: "query-not",
     after: "0.0.9",
     what: "not in an edge query ({ dihedral: \"convex\", not: { parallel: \"z\" } })",
@@ -4433,31 +4440,44 @@ export type Part = Shape | Record<string, Shape | Check[]>;
 
 /**
  * One rule the built part must hold, written as `checks: [...]` beside the
- * bodies it is about. Judged on every build from what the kernel measured,
- * and reported first: a verdict, then each failing check with its
- * measurement, where, and its `why`.
+ * bodies. Judged on every build and reported first: a verdict, then each
+ * failure with what differs, what was measured and where.
  *
- * - One head key per check: `clear`, `interferes`, `touching` (body
- *   pairs), `wall`, `size`, `standsOn`, `bodies` or `watertight`.
- * - Qualifiers: `atLeast` (mm on `clear`, mm³ on `interferes`),
- *   `deeperThan` (mm), `contactAtLeast` (mm²), `ignore` and `on` on `wall`.
- *   Names must be bodies and tags the part has.
- * - evaluate_part reports a failure and builds on; export_part and
- *   save_project refuse it without `allow_failing: "<reason>"`.
+ * - Before modelling, write the request's numbers as checks — its size, its
+ *   holes, where its features sit — so the verdict says the part is what was
+ *   asked, not only that it prints.
+ * - One head key per check: `size`, `holes`, `feature`, `clear`,
+ *   `interferes`, `touching`, `wall`, `standsOn`, `bodies` or `watertight`;
+ *   the rest qualify it. Numbers match to 0.01 mm.
+ * - evaluate_part reports a failure; export_part and save_project refuse it
+ *   without `allow_failing: "<reason>"`.
  *
  * @example
- *     const plate = box(60, 40, 3).tag("plate");
- *     const stack = cylinder(12, 20).at(0, 0, 11.7).tag("stack");
+ *     // "80 × 50 × 6, four Ø6 holes 10 mm in, a 10 × 8 notch on a long edge"
+ *     const at = [[-30, -15], [30, -15], [-30, 15], [30, 15]];
+ *     const notch = box(10, 10, 10).at(0, 22, 0).tag("notch");
+ *     let plate = box(80, 50, 6).cut(notch);
+ *     for (const [x, y] of at) plate = plate.cut(cylinder(3, 10).at(x, y, 0));
  *     return {
- *       plate, stack,
+ *       plate,
  *       checks: [
- *         { clear: ["plate", "stack"], atLeast: 0.2, why: "coins must not bind" },
- *         { wall: { min: 1 }, ignore: ["feather"] },
- *         { size: { max: [115, 65, 40] } },
+ *         { size: { is: [80, 50, 6] } },
+ *         { holes: { diameter: 6, through: true, at } },
+ *         { feature: { tag: "notch", size: [10, 8, 6], center: [0, 21, 0] } },
  *       ],
  *     };
  *
  * @remarks
+ * A request's numbers are the commonest thing a model gets wrong while every
+ * other verdict passes: a Ø6 read as a radius, a notch on the short edge
+ * (research_notes/hands-on/h2h). A hole is found by its circular rims —
+ * the closed circles `role: "hole"` selects — so rims of one diameter on one
+ * axis line are one hole, and a hole whose ends both leave through slanted
+ * or curved faces has no rim to find. `through` tests just past each
+ * outermost rim, near the wall, so a counterbore reads as a blind hole above
+ * a through one. `feature` reads `tag_extents`: the faces carrying the tag in
+ * the finished part, which for a cutter are the walls it cut.
+ *
  * A catch is designed to a depth and a seat is an area, so `deeperThan` and
  * `contactAtLeast` are the qualifiers to reach for there: `atLeast` on
  * `interferes` is a shared volume, which 0.002 mm³ along a coin's rim
@@ -4478,23 +4498,27 @@ export interface Check {
   interferes?: [string, string];
   /** The two bodies are flush: neither gap nor overlap. */
   touching?: [string, string];
-  /** Nothing in the part is thinner than `min` mm, measured as `measure_wall_thickness` does. */
+  /** Nothing in the part is thinner than `min` mm. */
   wall?: { min: number };
-  /** The part fits inside `max` mm on each axis, as drawn. */
-  size?: { max: [number, number, number] };
+  /** The part is `is` [x, y, z] mm, or fits in `max`, as drawn. */
+  size?: { is?: number[]; max?: number[] };
+  /** Round holes of `diameter` (a Ø) along `axis` (default z): `count`, `through` or not, one at each `at`, [x, y] across z. */
+  holes?: { diameter: number; count?: number; through?: boolean; at?: number[][]; axis?: "x" | "y" | "z" };
+  /** The faces tagged `tag` span `size` [x, y, z] centred at `center`; tag the cutter. */
+  feature?: { tag: string; size?: number[]; center?: number[] };
   /** At least this fraction of the footprint reaches the bed, 0 to 1. */
   standsOn?: { atLeast: number };
   /** The part is exactly this many free-standing pieces. */
   bodies?: number;
   /** The mesh closes. `true` is the only value. */
   watertight?: true;
-  /** For `clear`, the least clearance, mm; for `interferes`, the least shared volume, mm³. */
+  /** For `clear` the least gap, mm; for `interferes` the least shared volume, mm³. */
   atLeast?: number;
   /** For `interferes`: how far the two must reach into each other, mm. */
   deeperThan?: number;
-  /** For `touching`: the least surface the two share, mm²; a corner graze is 0. */
+  /** For `touching`: the least shared surface, mm²; a corner graze is 0. */
   contactAtLeast?: number;
-  /** For `wall`: tags whose surfaces are left out, and `"feather"` or `"edge"` to leave out that kind of thin reading. */
+  /** For `wall`: tags left out, and `"feather"` or `"edge"` to leave out that kind of reading. */
   ignore?: string[];
   /** For `wall`: only material on these tags' surfaces counts. */
   on?: string[];
@@ -4503,8 +4527,8 @@ export interface Check {
 }
 
 /** The keys a check may carry, and the key an author might write for one. */
-const CHECK_KEYS = ["clear", "interferes", "touching", "wall", "size", "standsOn", "bodies", "watertight", "atLeast", "deeperThan", "contactAtLeast", "ignore", "on", "why"];
-const CHECK_HEADS = CHECK_KEYS.slice(0, 8);
+const CHECK_KEYS = ["clear", "interferes", "touching", "wall", "size", "holes", "feature", "standsOn", "bodies", "watertight", "atLeast", "deeperThan", "contactAtLeast", "ignore", "on", "why"];
+const CHECK_HEADS = CHECK_KEYS.slice(0, 10);
 const CHECK_SYNONYMS: Record<string, string> = {
   depth: "deeperThan",
   depthmm: "deeperThan",
@@ -4529,6 +4553,12 @@ const CHECK_SYNONYMS: Record<string, string> = {
   touches: "touching",
   envelope: "size",
   fits: "size",
+  dimensions: "size",
+  hole: "holes",
+  bore: "holes",
+  bores: "holes",
+  tag: "feature",
+  tagextent: "feature",
   stands: "standsOn",
   footprint: "standsOn",
   bed: "standsOn",

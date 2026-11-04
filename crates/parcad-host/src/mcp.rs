@@ -1372,20 +1372,21 @@ impl Parcad {
 /// The tool list changes only with the binary.
 const TOOL_LIST_TTL_MS: u64 = 86_400_000;
 
-const LANGUAGE: &str = "parcad builds parts from a small JavaScript DSL on an exact B-rep kernel. \
-Everything is millimetres; primitives are centred on the origin, placed \
-with .at(x, y, z); a script returns a shape, or { base, lid } for a part in several \
-bodies, measured per body and between them. Every reply opens with verdicts: checks: [...] \
-beside the bodies are the part's own rules (read_docs dsl, Check); print_check is loose \
-pieces, thin walls, cuts into other features, overhang; a part is done when print_check \
-is clean or each flag has a reason.\n\n\
-Start from read_docs: `dsl` is the whole language; `gaps` and `gotchas` are what the kernel \
-refuses and what returns a wrong answer. read_project shows house style; a name is a path \
-like 'Mounts/bracket'.";
+const LANGUAGE: &str = "parcad builds parts from a JavaScript DSL on an exact B-rep kernel, in \
+millimetres; primitives are centred on the origin, placed with .at(x, y, z); a script returns a \
+shape, or { base, lid } for several bodies, measured each and between.\n\n\
+Before modelling, write the request's numbers as checks: [...] beside the bodies (read_docs dsl, \
+Check): { size: { is: [80, 50, 6] } }, { holes: { diameter: 6, count: 4, through: true } }, \
+{ feature: { tag: \"notch\", center: [0, 21, 0] } }. Every reply opens with verdicts: those \
+checks, saying if it is what was asked, and print_check (loose pieces, thin walls, \
+cuts, overhang). A part is done when its checks pass and print_check is clean or each flag has \
+a reason.\n\n\
+Start from read_docs: `dsl` is the whole language; `gaps` and `gotchas` are what it refuses and \
+gets wrong. A name is a path like 'Mounts/bracket'.";
 
 const SCREEN: &str = "You share the parcad app's screen with the user: get_session reads it, \
 open_project and set_script change it. To show a part you built, save_project it under its own \
-name and open_project it. Edits are undoable; read before you write.";
+name and open_project it. Read before you write.";
 
 /// The rule the coin-holder session lacked: 241 KB of script resent to change
 /// a few lines at a time (docs/COIN_HOLDER_REVIEW.md, B1).
@@ -1395,19 +1396,17 @@ tool builds a saved part unsent.";
 
 const SELECTING: &str = "Select edges by intent, never by index: '>Z and >Y and |X', or a query: { curve: \"circle\", \
 role: \"hole\", adjacentTo: { faceNormal: \"+z\" } }; dihedral: \"convex\"|\"concave\"|\
-\"smooth\"; parallel: \"z\"; longerThan: 3; on: \"lip\" for one tagged feature's edges, at \
-measured within it; between: [\"arm\", \"hub\"] for the seam where two meet. A tag names a \
-node's faces and survives later ops. Each treatment in a reply has `edges`, its resolved \
-count: write it as .expect({ count }) so drift fails aloud. edge@N ids never appear in \
-scripts.\n\n\
-The kernel refuses rather than approximating; a refusal names the fix. Every report is \
+\"smooth\"; parallel: \"z\"; on: \"lip\" for one tagged feature's edges; between: [\"arm\", \
+\"hub\"] for the seam where two meet. A tag names a node's faces, through later ops. Each treatment in a reply has `edges`, its resolved \
+count: write it as .expect({ count }).\n\n\
+The kernel refuses rather than approximates, naming the fix. Every report is \
 measured, never requested: quote it, not the script.";
 
 /// Only where a view is a file the user can open.
 const PICTURES: &str = " The user may not see a tool's pictures: to show one, paste its \
 `markdown` line.";
 
-const WHERE: &str = "Which tag owns what a view shows: regions: true; what is inside: a section; where a tag is: \
+const WHERE: &str = "Which tag a view shows: regions: true; what is inside: a section; where a tag is: \
 tag_extents.";
 
 /// What a model is told before its first call, for the host it is talking to.
@@ -2127,7 +2126,8 @@ mod tests {
         assert!(instructions(true).contains("ParCAD web"));
         assert!(!instructions(true).contains("`markdown`"), "a tab has no file to point at");
         // docs/NEXT.md, item 1: the weakest layer, and one line.
-        assert!(instructions(false).contains("a part is done when print_check is clean or each flag has a reason"));
+        assert!(instructions(false).contains("A part is done when its checks pass and print_check is clean or each flag has a reason"));
+        assert!(instructions(false).contains("Before modelling, write the request's numbers as checks"));
     }
 
     #[test]

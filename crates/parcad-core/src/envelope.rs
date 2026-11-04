@@ -48,6 +48,7 @@ pub const FEATURES: &[&str] = &[
     "print-orientation",
     "part-brief",
     "query-not",
+    "request-checks",
 ];
 
 /// The version of parcad reading the graph.
@@ -200,6 +201,12 @@ pub fn check_checks(graph: &serde_json::Value) -> Result<(), String> {
                 unknown.join(", "),
                 KEYS.join(", "),
                 if_newer()
+            ));
+        }
+        if let Some(r) = object.get("holes").and_then(|h| h.get("radius")).and_then(serde_json::Value::as_f64) {
+            return Err(format!(
+                "{at}: holes reads a diameter, as a request writes Ø — write diameter: {} for a radius of {r}.",
+                2.0 * r
             ));
         }
         if let Err(error) = serde_json::from_value::<Check>(check.clone()) {
@@ -537,6 +544,8 @@ mod tests {
         assert!(message.starts_with("check 1 has no key \"thickness\" (write wall instead)"), "{message}");
         let message = refusal(graph(json!({ "clear": "top" })));
         assert!(message.starts_with("check 1 could not be read: "), "{message}");
+        let message = refusal(graph(json!({ "holes": { "radius": 3 } })));
+        assert_eq!(message, "check 1: holes reads a diameter, as a request writes Ø — write diameter: 6 for a radius of 3.");
         let message = refusal(json!({ "units": "mm", "root": 0, "checks": { "clear": [] }, "nodes": [{ "op": "sphere", "r": 1 }] }));
         assert!(message.starts_with("the graph's checks is an object"), "{message}");
         let doc = parse_doc(graph(json!({ "clear": ["top", "stacks"], "atLeast": 0.2, "why": "coins" }))).unwrap();

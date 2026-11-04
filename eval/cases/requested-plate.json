@@ -1,0 +1,55 @@
+{
+  "name": "requested-plate",
+  "script": "eval/scripts/requested-plate.js",
+  "why": "A request's numbers written as the part's own checks (docs/NEXT.md, Requirements first): the head-to-head's plate and notch briefs, whose misreads Haiku 4.5 shipped outside ParCAD. size is, four Ø6 through holes at their places, a Ø4 blind hole and the notch's box hold; the two misreads written as checks fail on what the kernel measured: four Ø6 holes and no Ø12, and the notch's faces centred at (0, 21, 0), not on the 50 mm edge at (36, 0, 0). The holes are found by their circular rims on the exact solid and each end tested past its outermost rim, so a hole that quietly stops going through, or a rim the hole finder stops seeing, goes red here. The volume is the closed form: 23,239.01 for the plate and its four holes, less the 480 mm³ notch and the 37.70 mm³ blind hole.",
+  "brep": {
+    "size": [
+      80.0,
+      50.0,
+      6.0
+    ],
+    "volume_mm3": 22721.31,
+    "area_mm2": 9691.221,
+    "triangles": 1360,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 3793.333,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 20,
+    "edges": 102,
+    "curves": 46,
+    "requires": [
+      "part-checks",
+      "request-checks"
+    ],
+    "named_bodies": {
+      "plate": {
+        "size": [
+          80.0,
+          50.0,
+          6.0
+        ],
+        "volume_mm3": 22721.31,
+        "faces": 20,
+        "edges": 102,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "checks": {
+      "passed": 4,
+      "failed": [
+        {
+          "check": "holes Ø12 ×1 along z",
+          "mismatch": "0 Ø12 holes along z, not 1"
+        },
+        {
+          "check": "feature notch center (36, 0, 0)",
+          "mismatch": "center is (0, 21, 0), not (36, 0, 0)"
+        }
+      ]
+    }
+  }
+}

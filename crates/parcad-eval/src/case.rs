@@ -704,6 +704,10 @@ pub struct FailedCheckExpect {
     pub measured_mm: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub measured_mm3: Option<f64>,
+    /// What differs from the request, word for word: a `size: { is }`,
+    /// `holes` or `feature` check's measurement is in its numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mismatch: Option<String>,
 }
 
 impl From<&parcad_evaluation::ChecksReport> for ChecksExpect {
@@ -713,7 +717,12 @@ impl From<&parcad_evaluation::ChecksReport> for ChecksExpect {
             failed: report
                 .failed
                 .iter()
-                .map(|f| FailedCheckExpect { check: f.check.clone(), measured_mm: f.measured_mm, measured_mm3: f.measured_mm3 })
+                .map(|f| FailedCheckExpect {
+                    check: f.check.clone(),
+                    measured_mm: f.measured_mm,
+                    measured_mm3: f.measured_mm3,
+                    mismatch: f.mismatch.clone(),
+                })
                 .collect(),
         }
     }
@@ -1202,6 +1211,9 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
                             (None, None) => {}
                             (w, g) => out.push(Mismatch { field: format!("{at}.measured_mm3"), detail: format!("expected {w:?}, got {g:?}") }),
                         }
+                        if w.mismatch != g.mismatch {
+                            out.push(Mismatch { field: format!("{at}.mismatch"), detail: format!("expected {:?}, got {:?}", w.mismatch, g.mismatch) });
+                        }
                     }
                 }
             }
@@ -1446,6 +1458,7 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
                 check: f.check.clone(),
                 measured_mm: f.measured_mm.map(round3),
                 measured_mm3: f.measured_mm3.map(round3),
+                mismatch: f.mismatch.clone(),
             })
             .collect(),
     });

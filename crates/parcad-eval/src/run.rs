@@ -213,7 +213,13 @@ fn judge_checks(doc: &Doc, s: &parcad_occt::Success, timeout: std::time::Duratio
             .thickness
             .ok_or_else(|| "the kernel measured no thickness for the wall check".to_string())
     };
-    let report = parcad_evaluation::checks::judge(doc, &evaluated.snapshot, &mut sweep)?;
+    let mut holes = || {
+        let spec = parcad_occt::Perceive { holes: true, ..Default::default() };
+        let opts = parcad_occt::Options { timeout, ..Default::default() };
+        Ok(parcad_occt::perceive(doc, &spec, &opts).map_err(|e| e.to_string())?.holes)
+    };
+    let measures = parcad_evaluation::checks::Measures { wall: &mut sweep, holes: &mut holes };
+    let report = parcad_evaluation::checks::judge(doc, &evaluated.snapshot, measures)?;
     Ok(Some(ChecksExpect::from(&report)))
 }
 
@@ -265,6 +271,7 @@ pub fn perceive(
             max_samples: t.max_samples.unwrap_or(6000),
             threshold_mm: t.threshold_mm,
         }),
+        holes: false,
     };
     let opts = parcad_occt::Options { timeout, ..Default::default() };
     parcad_occt::perceive(doc, &spec, &opts).map_err(|e| e.to_string())

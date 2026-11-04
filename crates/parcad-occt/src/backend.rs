@@ -2390,6 +2390,19 @@ fn is_hole_rim(edge: &SelectableEdge) -> bool {
     })
 }
 
+/// Every closed hole rim of `shape` — the edges `role: "hole"` selects — as
+/// its centre, its axis and its radius.
+pub(crate) fn hole_rims(shape: &Shape) -> Result<Vec<(DVec3, DVec3, f64)>> {
+    Ok(selectable_edges(shape)?
+        .iter()
+        .filter(|edge| is_hole_rim(edge))
+        .filter_map(|edge| {
+            let circle = edge.circle.as_ref()?;
+            Some((circle.centre, circle.normal, (edge.ends[0] - circle.centre).length()))
+        })
+        .collect())
+}
+
 fn select_edges(
     shape: &Shape,
     selector: &EdgeSelector,

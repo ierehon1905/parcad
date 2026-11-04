@@ -904,6 +904,7 @@ mod tests {
                 measured_mm3: None,
                 measured_mm2: None,
                 measured: None,
+                mismatch: None,
                 at: None,
                 surface_of: None,
                 opposite_surface_of: None,

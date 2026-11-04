@@ -761,6 +761,10 @@ mod tests {
                 "query-not",
                 "return box(10, 10, 10).fillet(1, { dihedral: \"convex\", not: { parallel: \"z\" } });".to_owned(),
             ),
+            (
+                "request-checks",
+                "return { plate: box(80, 50, 6), checks: [{ holes: { diameter: 6, count: 4 } }] };".to_owned(),
+            ),
         ];
         let stamped: Vec<&str> = cases.iter().map(|(id, _)| *id).collect();
         assert_eq!(stamped, parcad_core::envelope::FEATURES, "the host's feature list and this table differ");

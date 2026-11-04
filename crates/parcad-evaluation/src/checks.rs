@@ -1,15 +1,16 @@
 //! Judging a part's own checks against what its build measured.
 //!
 //! Every check reads a number the snapshot already carries — `between_bodies`,
-//! `size`, `stands_on`, `bodies`, `watertight` — except `wall`, which runs the
-//! thickness sweep the caller hands in, on the same build. The verdict goes
+//! `size`, `tag_extents`, `stands_on`, `bodies`, `watertight` — except `wall`
+//! and `holes`, which ask the worker that made the build: the thickness sweep
+//! and the holes, through the measures the caller hands in. The verdict goes
 //! first in the reply, and a failure carries the measurement and where it was
 //! taken: what the author asked and what the kernel found, in one place.
 
 use crate::{round_mm, round_point, BodyFit, EvaluationSnapshot};
-use parcad_core::checks::{Check, CheckKind};
+use parcad_core::checks::{Check, CheckAxis, CheckKind, MATCH_MM};
 use parcad_core::graph::Doc;
-use parcad_occt::protocol::{ThicknessResult, ThicknessSample, ThinKind};
+use parcad_occt::protocol::{HoleMeasure, ThicknessResult, ThicknessSample, ThinKind};
 use serde::Serialize;
 
 /// Every check the part carries, judged: `passed` when nothing failed —
@@ -37,6 +38,10 @@ impl ChecksReport {
 pub struct FailedCheck {
     /// The check as the script wrote it: `clear top↔stacks atLeast 0.2`.
     pub check: String,
+    /// For a check about the request — `size: { is }`, `holes`, `feature` —
+    /// what differs from it, in words: `2 Ø6 holes along z, not 4`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mismatch: Option<String>,
     /// What was measured, for a check about a distance: the clearance found,
     /// the thinnest wall, in mm.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -72,6 +77,7 @@ impl FailedCheck {
             measured_mm3: None,
             measured_mm2: None,
             measured: None,
+            mismatch: None,
             at: None,
             surface_of: None,
             opposite_surface_of: None,
@@ -81,7 +87,9 @@ impl FailedCheck {
 
     /// The failure in one sentence, for a refusal.
     pub fn sentence(&self) -> String {
-        let measured = if let Some(mm) = self.measured_mm {
+        let measured = if let Some(mismatch) = &self.mismatch {
+            format!("measured {mismatch}")
+        } else if let Some(mm) = self.measured_mm {
             format!("measured {mm} mm")
         } else if let Some(mm3) = self.measured_mm3 {
             format!("measured {mm3} mm³")
@@ -99,29 +107,33 @@ impl FailedCheck {
     }
 }
 
-/// Judge every check in `doc` against `snapshot`. `wall` runs the thickness
-/// sweep with the given threshold and returns what it found; it is called
-/// once per `wall` check and never otherwise.
-pub fn judge(
-    doc: &Doc,
-    snapshot: &EvaluationSnapshot,
-    wall: &mut dyn FnMut(f64) -> Result<ThicknessResult, String>,
-) -> Result<ChecksReport, String> {
+/// What a check asks the worker that made the build, and only when one asks.
+pub struct Measures<'a> {
+    /// The thickness sweep at a threshold: once per `wall` check.
+    pub wall: &'a mut dyn FnMut(f64) -> Result<ThicknessResult, String>,
+    /// Every round hole: once, for any number of `holes` checks.
+    pub holes: &'a mut dyn FnMut() -> Result<Vec<HoleMeasure>, String>,
+}
+
+/// Judge every check in `doc` against `snapshot`, asking `measure` for what
+/// the snapshot does not carry.
+pub fn judge(doc: &Doc, snapshot: &EvaluationSnapshot, measure: Measures) -> Result<ChecksReport, String> {
+    let Measures { wall, holes } = measure;
+    let mut found_holes: Option<Vec<HoleMeasure>> = None;
     let mut failed = Vec::new();
     for check in &doc.checks {
         let kind = check.kind().map_err(|why| format!("check {}: {why}", check.sentence()))?;
         let failure = match kind {
             CheckKind::Clear | CheckKind::Interferes | CheckKind::Touching => judge_pair(check, kind, snapshot),
             CheckKind::Wall => judge_wall(check, wall)?,
-            CheckKind::Size => {
-                let max = check.size.as_ref().expect("size").max;
-                let over = snapshot.size.iter().zip(max).any(|(got, limit)| *got > limit + 1e-6);
-                over.then(|| {
-                    let mut f = FailedCheck::of(check);
-                    f.measured = Some(serde_json::json!(snapshot.size));
-                    f
-                })
+            CheckKind::Size => judge_size(check, snapshot),
+            CheckKind::Holes => {
+                if found_holes.is_none() {
+                    found_holes = Some(holes()?);
+                }
+                judge_holes(check, found_holes.as_deref().unwrap_or_default())
             }
+            CheckKind::Feature => judge_feature(check, snapshot),
             CheckKind::StandsOn => {
                 let least = check.stands_on.as_ref().expect("standsOn").at_least;
                 let fraction = snapshot.stands_on.as_ref().map(|s| s.footprint_fraction);
@@ -157,6 +169,145 @@ pub fn judge(
         verdict: if failed.is_empty() { "passed" } else { "failed" },
         passed: doc.checks.len() - failed.len(),
         failed,
+    })
+}
+
+const AXES: [&str; 3] = ["x", "y", "z"];
+
+/// `is` to the request's rounding plus the mesh's resolution, which the
+/// snapshot's size is measured on; `max` as a box the part must fit in.
+fn judge_size(check: &Check, snapshot: &EvaluationSnapshot) -> Option<FailedCheck> {
+    let size = check.size.as_ref().expect("size");
+    let mut wrong = Vec::new();
+    for (i, got) in snapshot.size.iter().enumerate() {
+        if let Some(want) = size.is.map(|is| is[i]).filter(|want| (got - want).abs() > MATCH_MM + snapshot.resolution_mm) {
+            wrong.push(format!("{} is {got}, not {want}", AXES[i]));
+        }
+        if let Some(limit) = size.max.map(|max| max[i]).filter(|limit| *got > limit + 1e-6) {
+            wrong.push(format!("{} is {got}, over {limit}", AXES[i]));
+        }
+    }
+    (!wrong.is_empty()).then(|| {
+        let mut f = FailedCheck::of(check);
+        f.measured = Some(serde_json::json!(snapshot.size));
+        f.mismatch = Some(wrong.join("; "));
+        f
+    })
+}
+
+/// The holes of the check's diameter along its axis: how many, whether each
+/// goes through, and whether one stands at every place it names. A failure
+/// lists every hole the part has, so a Ø12 read for a Ø6 is in front of the
+/// reader rather than a count of zero.
+fn judge_holes(check: &Check, found: &[HoleMeasure]) -> Option<FailedCheck> {
+    let want = check.holes.as_ref().expect("holes");
+    let axis = want.axis();
+    let unit = axis.unit();
+    let along = |h: &HoleMeasure| h.axis.iter().zip(unit).map(|(a, b)| a * b).sum::<f64>().abs() >= 1.0 - 1e-6;
+    let place = |h: &HoleMeasure| axis.across(h.center).map(crate::round_mm);
+    let matching: Vec<&HoleMeasure> =
+        found.iter().filter(|h| along(h) && (h.diameter_mm - want.diameter).abs() <= MATCH_MM).collect();
+    let named = format!("Ø{} hole{} along {}", want.diameter, if matching.len() == 1 { "" } else { "s" }, axis.name());
+    let mut wrong = Vec::new();
+    match want.wanted() {
+        Some(n) if matching.len() != n => wrong.push(format!("{} {named}, not {n}", matching.len())),
+        None if matching.is_empty() => wrong.push(format!("no Ø{} hole along {}", want.diameter, axis.name())),
+        _ => {}
+    }
+    if let Some(through) = want.through {
+        for h in matching.iter().filter(|h| h.through != Some(through)) {
+            let [a, b] = place(h);
+            wrong.push(format!(
+                "the one at ({a}, {b}) {}",
+                match h.through {
+                    Some(true) => "goes through",
+                    Some(false) => "is blind",
+                    None => "has one circular rim, its other end on a slanted or curved face, so through is not measured",
+                }
+            ));
+        }
+    }
+    for [a, b] in &want.at {
+        let here = |h: &&&HoleMeasure| {
+            let [x, y] = axis.across(h.center);
+            (x - a).hypot(y - b) <= MATCH_MM
+        };
+        if !matching.iter().any(|h| here(&h)) {
+            wrong.push(format!("none at ({a}, {b})"));
+        }
+    }
+    if wrong.is_empty() {
+        return None;
+    }
+    let mut f = FailedCheck::of(check);
+    f.measured = Some(serde_json::Value::Array(found.iter().take(MAX_HOLES_LISTED).map(described).collect()));
+    if found.is_empty() {
+        f.measured = Some(serde_json::json!("no round hole: none of the part's circular edges is the rim of one"));
+    }
+    f.mismatch = Some(wrong.join("; "));
+    Some(f)
+}
+
+/// A failure lists at most this many holes; a plate of 200 is not a reply.
+const MAX_HOLES_LISTED: usize = 16;
+
+/// One hole as a failure lists it: where it stands across its axis
+/// when it runs along a cardinal axis, its centre and direction otherwise.
+fn described(h: &HoleMeasure) -> serde_json::Value {
+    let cardinal = [CheckAxis::X, CheckAxis::Y, CheckAxis::Z]
+        .into_iter()
+        .find(|a| h.axis.iter().zip(a.unit()).map(|(p, q)| p * q).sum::<f64>().abs() >= 1.0 - 1e-6);
+    let mut out = serde_json::json!({ "diameter": crate::round_mm(h.diameter_mm) });
+    match cardinal {
+        Some(axis) => {
+            out["along"] = serde_json::json!(axis.name());
+            out["at"] = serde_json::json!(axis.across(h.center).map(crate::round_mm));
+        }
+        None => {
+            out["along"] = serde_json::json!(crate::round_dir(h.axis));
+            out["center"] = serde_json::json!(crate::round_point(h.center));
+        }
+    }
+    out["through"] = serde_json::json!(h.through);
+    out["length_mm"] = serde_json::json!(crate::round_mm(h.length_mm));
+    if let Some(body) = &h.body {
+        out["body"] = serde_json::json!(body);
+    }
+    out
+}
+
+/// The tag's own box in the finished part against the size and centre asked.
+fn judge_feature(check: &Check, snapshot: &EvaluationSnapshot) -> Option<FailedCheck> {
+    let want = check.feature.as_ref().expect("feature");
+    let Some(extent) = snapshot.tag_extents.iter().find(|e| e.tag == want.tag) else {
+        let mut f = FailedCheck::of(check);
+        f.measured = Some(serde_json::json!(format!(
+            "no face of the finished part carries {}: what it made was cut away, or was itself a cut that removed nothing",
+            want.tag
+        )));
+        f.mismatch = Some(format!("{} is not in the part", want.tag));
+        return Some(f);
+    };
+    let off = |got: [f64; 3], asked: [f64; 3]| got.iter().zip(asked).any(|(g, a)| (g - a).abs() > MATCH_MM);
+    let mut wrong = Vec::new();
+    if let Some(size) = want.size.filter(|size| off(extent.size, *size)) {
+        let [x, y, z] = extent.size;
+        wrong.push(format!("size is {x}×{y}×{z}, not {}×{}×{}", size[0], size[1], size[2]));
+    }
+    if let Some(center) = want.center.filter(|center| off(extent.center, *center)) {
+        let [x, y, z] = extent.center;
+        wrong.push(format!("center is ({x}, {y}, {z}), not ({}, {}, {})", center[0], center[1], center[2]));
+    }
+    (!wrong.is_empty()).then(|| {
+        let mut f = FailedCheck::of(check);
+        f.measured = Some(serde_json::json!({
+            "size": extent.size,
+            "center": extent.center,
+            "bounds_min": extent.bounds_min,
+            "bounds_max": extent.bounds_max,
+        }));
+        f.mismatch = Some(wrong.join("; "));
+        f
     })
 }
 
@@ -328,6 +479,15 @@ pub(crate) mod tests {
         panic!("no wall check here")
     }
 
+    /// Judged with a wall sweep and no holes to find.
+    fn judged(
+        doc: &Doc,
+        snapshot: &EvaluationSnapshot,
+        wall: &mut dyn FnMut(f64) -> Result<ThicknessResult, String>,
+    ) -> Result<ChecksReport, String> {
+        judge(doc, snapshot, Measures { wall, holes: &mut || panic!("no holes check here") })
+    }
+
     /// The B2 failure: a clearance of 0.13 against an atLeast of 0.2 is named
     /// with its measurement, its points and the author's reason, and every
     /// other check passes.
@@ -353,7 +513,7 @@ pub(crate) mod tests {
             contact_patches: None,
             contact_center_mm: None,
         }]);
-        let report = judge(&doc, &snapshot, &mut no_wall).unwrap();
+        let report = judged(&doc, &snapshot, &mut no_wall).unwrap();
         assert_eq!(report.verdict, "failed");
         assert_eq!(report.passed, 4);
         assert_eq!(report.failed.len(), 1);
@@ -389,7 +549,7 @@ pub(crate) mod tests {
             contact_patches: None,
             contact_center_mm: None,
         }]);
-        let report = judge(&doc, &bite, &mut no_wall).unwrap();
+        let report = judged(&doc, &bite, &mut no_wall).unwrap();
         assert_eq!(report.verdict, "failed");
         assert_eq!(report.passed, 1);
         assert_eq!(report.failed[0].check, "touching stacks↔top");
@@ -420,13 +580,13 @@ pub(crate) mod tests {
         let catch = doc(serde_json::json!([
             { "interferes": ["coin", "arm"], "deeperThan": 0.3, "why": "the arm must block the coin" }
         ]));
-        let report = judge(&catch, &graze, &mut no_wall).unwrap();
+        let report = judged(&catch, &graze, &mut no_wall).unwrap();
         assert_eq!(report.verdict, "failed");
         assert_eq!(report.failed[0].measured_mm, Some(0.002));
         assert!(report.failed[0].sentence().contains("measured 0.002 mm ("), "{}", report.failed[0].sentence());
         // The same pair passes the check that only asks for an overlap.
         let any = doc(serde_json::json!([{ "interferes": ["coin", "arm"] }]));
-        assert_eq!(judge(&any, &graze, &mut no_wall).unwrap().verdict, "passed");
+        assert_eq!(judged(&any, &graze, &mut no_wall).unwrap().verdict, "passed");
 
         let corner = snapshot(vec![BodyFit {
             a: "coin".into(),
@@ -442,10 +602,100 @@ pub(crate) mod tests {
             contact_center_mm: Some([45.0, 0.0, 12.32]),
         }]);
         let seat = doc(serde_json::json!([{ "touching": ["coin", "arm"], "contactAtLeast": 500 }]));
-        let report = judge(&seat, &corner, &mut no_wall).unwrap();
+        let report = judged(&seat, &corner, &mut no_wall).unwrap();
         assert_eq!(report.verdict, "failed");
         assert_eq!(report.failed[0].measured_mm2, Some(0.0));
         assert_eq!(report.failed[0].measured, Some(serde_json::json!("touching over 0 mm² in 0 patch(es)")));
+    }
+
+    /// The bench's plate, misread: one Ø12 hole where four Ø6 were asked, and
+    /// a notch on the 50 mm edge. Each check says what differs in words and
+    /// lists what the part has; the size, which the misread kept, holds.
+    #[test]
+    fn a_request_written_as_checks_fails_on_the_misread_and_says_what_is_there() {
+        let doc = parcad_core::envelope::parse_doc(serde_json::json!({ "units": "mm", "root": 0, "nodes": [
+            { "op": "cuboid", "size": { "x": 80, "y": 50, "z": 6 }, "tag": "notch" }
+        ], "checks": [
+            { "size": { "is": [40, 40, 25] } },
+            { "size": { "is": [80, 50, 6] } },
+            { "holes": { "diameter": 6, "through": true, "at": [[-30, -15], [30, -15], [-30, 15], [30, 15]] } },
+            { "holes": { "diameter": 12 } },
+            { "feature": { "tag": "notch", "size": [10, 8, 6], "center": [0, 21, 0] } }
+        ] }))
+        .unwrap();
+        let mut snap = snapshot(Vec::new());
+        snap.tag_extents.push(crate::TagExtent {
+            tag: "notch".into(),
+            bounds_min: [32.0, -5.0, -3.0],
+            bounds_max: [40.0, 5.0, 3.0],
+            size: [8.0, 10.0, 6.0],
+            center: [36.0, 0.0, 0.0],
+            faces: 3,
+            nodes: 1,
+        });
+        let twelve = HoleMeasure {
+            diameter_mm: 12.0,
+            axis: [0.0, 0.0, 1.0],
+            center: [0.0, 0.0, 0.0],
+            length_mm: 6.0,
+            through: Some(true),
+            body: None,
+        };
+        let mut asked = 0;
+        let mut holes = || {
+            asked += 1;
+            Ok(vec![twelve.clone()])
+        };
+        let report = judge(&doc, &snap, Measures { wall: &mut no_wall, holes: &mut holes }).unwrap();
+        assert_eq!(asked, 1, "two holes checks, one measurement");
+        let failed: Vec<(&str, Option<&str>)> =
+            report.failed.iter().map(|f| (f.check.as_str(), f.mismatch.as_deref())).collect();
+        assert_eq!(
+            failed,
+            [
+                ("size is 80×50×6", Some("x is 40, not 80; y is 40, not 50; z is 25, not 6")),
+                (
+                    "holes Ø6 ×4 through along z at (-30, -15) (30, -15) (-30, 15) (30, 15)",
+                    Some("0 Ø6 holes along z, not 4; none at (-30, -15); none at (30, -15); none at (-30, 15); none at (30, 15)")
+                ),
+                ("feature notch size 10×8×6 center (0, 21, 0)", Some("size is 8×10×6, not 10×8×6; center is (36, 0, 0), not (0, 21, 0)")),
+            ]
+        );
+        assert_eq!(report.passed, 2);
+        assert_eq!(
+            report.failed[1].measured,
+            Some(serde_json::json!([{ "diameter": 12.0, "along": "z", "at": [0.0, 0.0], "through": true, "length_mm": 6.0 }]))
+        );
+        assert_eq!(
+            report.failed[1].sentence(),
+            "holes Ø6 ×4 through along z at (-30, -15) (30, -15) (-30, 15) (30, 15) measured 0 Ø6 holes along z, not 4; \
+             none at (-30, -15); none at (30, -15); none at (-30, 15); none at (30, 15)"
+        );
+    }
+
+    /// A hole of the right size in the right place that stops short fails on
+    /// through alone, and one along another axis is not counted along z.
+    #[test]
+    fn a_blind_hole_fails_a_through_check_and_an_axis_is_its_own() {
+        let doc = parcad_core::envelope::parse_doc(serde_json::json!({ "units": "mm", "root": 0, "nodes": [
+            { "op": "cuboid", "size": { "x": 80, "y": 50, "z": 6 } }
+        ], "checks": [
+            { "holes": { "diameter": 6, "count": 1, "through": true } },
+            { "holes": { "diameter": 6, "count": 1, "axis": "x", "at": [[0, 0]] } }
+        ] }))
+        .unwrap();
+        let hole = |axis: [f64; 3], through| HoleMeasure {
+            diameter_mm: 6.0,
+            axis,
+            center: [10.0, 5.0, 1.5],
+            length_mm: 3.0,
+            through: Some(through),
+            body: None,
+        };
+        let mut holes = || Ok(vec![hole([0.0, 0.0, 1.0], false), hole([1.0, 0.0, 0.0], true)]);
+        let report = judge(&doc, &snapshot(Vec::new()), Measures { wall: &mut no_wall, holes: &mut holes }).unwrap();
+        let mismatches: Vec<Option<&str>> = report.failed.iter().map(|f| f.mismatch.as_deref()).collect();
+        assert_eq!(mismatches, [Some("the one at (10, 5) is blind"), Some("none at (0, 0)")]);
     }
 
     /// A wall check reads the sweep at its own threshold, leaves edges out
@@ -498,7 +748,7 @@ pub(crate) mod tests {
                 surfaces_skipped: Vec::new(),
             })
         };
-        let report = judge(&doc, &snapshot(Vec::new()), &mut sweep).unwrap();
+        let report = judged(&doc, &snapshot(Vec::new()), &mut sweep).unwrap();
         assert_eq!(thresholds, [1.0; 4]);
         let measured: Vec<Option<f64>> = report.failed.iter().map(|f| f.measured_mm).collect();
         // Plain: the feather at 0. Ignoring feathers: the 0.5 wall. On cups:
