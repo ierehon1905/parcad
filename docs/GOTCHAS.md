@@ -2012,6 +2012,28 @@ left the main checkout's `parcad-host` compiling against the worktree's
 crates afterwards, or give the worktree its own target directory and reuse only
 OpenCASCADE through `PARCAD_OCCT_PREBUILT`.
 
+## `checks: [...]` on its own line is a label, and built a part with no checks
+
+A Haiku 5.5 field run, the night "requirements first" shipped, wrote the
+request's checks as a statement before `return part;`. JavaScript reads
+`checks: [...]` as a labelled expression statement: legal, evaluated, and
+discarded. The host built the part, reported no checks, and said nothing.
+
+Every runner — the sandbox, the editor, `tools/run.ts`, `importPart` — now
+refuses it through `__parcadLabelledPartKeys` in `dsl.ts`, which asks the
+engine rather than reading the text: a label may not repeat inside the
+statement it labels, so the script wrapped in `checks: { … }` compiles unless
+it has a `checks:` label of its own, and renaming every other `checks` in turn
+says which occurrence it is. Strings, comments, templates, regex literals and
+object keys never trip it, because the parser that will run the script is the
+one asked; a label inside a nested function is not found, by the same rule. It
+costs two compiles of the source on a script without one — 15 µs on
+JavaScriptCore and 75 µs in the QuickJS sandbox for the 55-line bracket, paid
+once per source since the sandbox keeps results by it — and the editor
+underlines the word through the same call. The list of keys is `PART_KEYS`; `brief` is a call, not a key, so
+`brief: { … }` as a statement is the same trap and not yet caught.
+`eval/cases/refuse-checks-as-a-label.json` holds the refusal.
+
 ## The editor does not check the length of an array
 
 `app/src/intellisense/analyzer.ts` drops any diagnostic whose cause bottoms out
