@@ -111,6 +111,15 @@ runs **one process with tenants inside it**, which is what landed:
   real cross-tenant read the audit found). Symlinks inside a hosted root that
   point outside it are refused; the desktop keeps following them, since users
   symlink their parts folders.
+- What an account writes, it fetches back by URL, since the file is on the
+  server. `export_part`'s reply and every render in an `evaluate_part` reply
+  carry `url`: `https://<public-host>/api/exports/<name>`, `renders/<name>`
+  for a view, which the same bearer `GET`s for the bytes under the file's
+  media type; a `markdown` line names that URL, the only form a remote client
+  can show. A name is one plain file name, or one under `renders/`, held to
+  the rule a project path's segments obey (`projects::not_a_name`), and
+  another account's name is a 404 saying `export_part` writes one. Local
+  replies are unchanged: `path` is the file, and there is no `url`.
 - Limits per tenant, defaults being today's for `local`: the kernel timeout a
   call may ask for, the script backstop, concurrent builds (two per tenant and
   one global cap of the box's cores, `--builds N`, since the pool itself caps

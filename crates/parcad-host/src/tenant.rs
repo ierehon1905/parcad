@@ -175,6 +175,10 @@ pub struct Tenant {
     pub exports: PathBuf,
     pub mode: Mode,
     pub limits: Limits,
+    /// The name a hosted server is reached by behind its TLS front, which a
+    /// reply builds `https://<public_host>/...` on; a local user has the files
+    /// and needs no URL.
+    pub public_host: Option<String>,
     /// This account's builds in flight, capped by `limits.concurrent_builds`.
     pub builds: Gate,
 }
@@ -198,26 +202,35 @@ impl Tenant {
                 .map_or_else(|| std::env::temp_dir().join("parcad-exports"), PathBuf::from),
             Mode::Local,
             Limits::local(),
+            None,
         )
     }
 
-    /// One account on a server, rooted in its own folder under `tenants`. The
-    /// folder is created and seeded by `projects::seed` the first time the
-    /// account is resolved; exports go in `.exports` under it, dotted so the
-    /// parts picker walks past them.
-    pub fn hosted(id: TenantId, tenants: &Path) -> Tenant {
+    /// One account on a server reached as `public_host`, rooted in its own
+    /// folder under `tenants`. The folder is created and seeded by
+    /// `projects::seed` the first time the account is resolved; exports go in
+    /// `.exports` under it, dotted so the parts picker walks past them.
+    pub fn hosted(id: TenantId, tenants: &Path, public_host: &str) -> Tenant {
         let root = tenants.join(id.as_str());
         let exports = root.join(".exports");
-        Tenant::new(id, root, exports, Mode::Hosted, Limits::hosted())
+        Tenant::new(id, root, exports, Mode::Hosted, Limits::hosted(), Some(public_host.to_string()))
     }
 
-    pub(crate) fn new(id: TenantId, root: PathBuf, exports: PathBuf, mode: Mode, limits: Limits) -> Tenant {
+    pub(crate) fn new(
+        id: TenantId,
+        root: PathBuf,
+        exports: PathBuf,
+        mode: Mode,
+        limits: Limits,
+        public_host: Option<String>,
+    ) -> Tenant {
         Tenant {
             id,
             root,
             exports,
             mode,
             limits,
+            public_host,
             builds: Gate::new(limits.concurrent_builds),
         }
     }
@@ -357,11 +370,13 @@ pub fn issue(tenant: TenantId, tokens: &Path) -> Result<String, String> {
     Ok(token)
 }
 
-/// The accounts a hosted parcad serves: every token's line, and the folder
-/// each account's root is under. Read once, when the host starts.
+/// The accounts a hosted parcad serves: every token's line, the folder each
+/// account's root is under, and the name they reach the server by. Read once,
+/// when the host starts.
 #[derive(Debug)]
 pub struct Accounts {
     tenants: PathBuf,
+    public_host: String,
     tokens: Vec<TokenLine>,
     /// Each account's tenant, made and seeded on its first request, so its
     /// `Arc<Tenant>` and its folder exist once.
@@ -371,8 +386,9 @@ pub struct Accounts {
 impl Accounts {
     /// Read the tokens file: one `<tenant-id> <sha256 hex>` per line, blank
     /// lines and `#` comments allowed. A line that is neither refuses the
-    /// whole file, with its number.
-    pub fn read(tokens: &Path, tenants: &Path) -> Result<Accounts, String> {
+    /// whole file, with its number. `public_host` is the name clients reach
+    /// the server by, behind whatever terminates TLS.
+    pub fn read(tokens: &Path, tenants: &Path, public_host: &str) -> Result<Accounts, String> {
         let text = std::fs::read_to_string(tokens).map_err(|e| {
             format!(
                 "reading the tokens file {}: {e}. Create it with `parcad token new <tenant-id> \
@@ -393,6 +409,7 @@ impl Accounts {
         }
         Ok(Accounts {
             tenants: tenants.to_path_buf(),
+            public_host: public_host.to_string(),
             tokens: lines,
             resolved: Mutex::new(HashMap::new()),
         })
@@ -400,6 +417,10 @@ impl Accounts {
 
     pub fn tokens(&self) -> usize {
         self.tokens.len()
+    }
+
+    pub fn public_host(&self) -> &str {
+        &self.public_host
     }
 
     /// The account an `Authorization` header opens. The presented token is
@@ -425,7 +446,7 @@ impl Accounts {
         if let Some(tenant) = resolved.get(id) {
             return Ok(tenant.clone());
         }
-        let tenant = Arc::new(Tenant::hosted(id.clone(), &self.tenants));
+        let tenant = Arc::new(Tenant::hosted(id.clone(), &self.tenants, &self.public_host));
         scope(tenant.clone(), crate::projects::seed).map_err(|e| {
             Refused::Unready(format!(
                 "preparing the folder for account {id}: {e}. The server's operator has to make \
@@ -551,16 +572,19 @@ pub(crate) mod tests {
         root
     }
 
+    /// The name every hosted test tenant is reached by.
+    pub(crate) const PUBLIC_HOST: &str = "cad.example.test";
+
     /// A local-mode tenant of its own on `root`: its own session and caches,
     /// so tests sharing a process never see each other's.
     pub(crate) fn local_at(root: &Path) -> Arc<Tenant> {
         let id = TenantId::new(&format!("test-{}", NTH.fetch_add(1, Ordering::Relaxed))).expect("a test id");
-        Arc::new(Tenant::new(id, root.to_path_buf(), root.join(".exports"), Mode::Local, Limits::local()))
+        Arc::new(Tenant::new(id, root.to_path_buf(), root.join(".exports"), Mode::Local, Limits::local(), None))
     }
 
     /// A hosted tenant under `tenants`, its folder created as a resolve would.
     pub(crate) fn hosted_at(id: &str, tenants: &Path) -> Arc<Tenant> {
-        let tenant = Tenant::hosted(TenantId::new(id).expect("a test id"), tenants);
+        let tenant = Tenant::hosted(TenantId::new(id).expect("a test id"), tenants, PUBLIC_HOST);
         std::fs::create_dir_all(&tenant.root).expect("the tenant's folder");
         Arc::new(tenant)
     }
@@ -592,14 +616,16 @@ pub(crate) mod tests {
             None => std::env::temp_dir().join("parcad-exports"),
         };
         assert_eq!(tenant.exports, expected_exports);
+        assert_eq!(tenant.public_host, None, "a local user's files need no URL");
     }
 
     #[test]
     fn a_hosted_tenant_lives_in_its_own_folder_under_the_tenants_dir() {
-        let tenant = Tenant::hosted(TenantId::new("acme").unwrap(), Path::new("/srv/parcad/tenants"));
+        let tenant = Tenant::hosted(TenantId::new("acme").unwrap(), Path::new("/srv/parcad/tenants"), "cad.example.com");
         assert_eq!(tenant.root, Path::new("/srv/parcad/tenants/acme"));
         assert_eq!(tenant.exports, Path::new("/srv/parcad/tenants/acme/.exports"));
         assert_eq!(tenant.mode, Mode::Hosted);
+        assert_eq!(tenant.public_host.as_deref(), Some("cad.example.com"));
     }
 
     /// The blocking pool reuses threads, so a scope that leaked its tenant
@@ -668,12 +694,14 @@ pub(crate) mod tests {
             assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
         }
 
-        let accounts = Accounts::read(&file, &tenants).unwrap();
+        let accounts = Accounts::read(&file, &tenants, PUBLIC_HOST).unwrap();
         assert_eq!(accounts.tokens(), 2);
+        assert_eq!(accounts.public_host(), PUBLIC_HOST);
         let tenant = accounts.resolve(Some(&format!("Bearer {acme}"))).unwrap();
         assert_eq!(tenant.id.as_str(), "acme");
         assert_eq!(tenant.root, tenants.join("acme"));
         assert_eq!(tenant.mode, Mode::Hosted);
+        assert_eq!(tenant.public_host.as_deref(), Some(PUBLIC_HOST));
         assert!(tenant.root.is_dir(), "the first request makes the folder");
         assert!(!tenant.root.join("jsconfig.json").exists(), "and seeds no editor declarations");
         let again = accounts.resolve(Some(&format!("bearer  {acme} "))).unwrap();
@@ -687,7 +715,7 @@ pub(crate) mod tests {
         let dir = fresh_root("tokens");
         let file = dir.join("tokens");
         let acme = issue(TenantId::new("acme").unwrap(), &file).unwrap();
-        let accounts = Accounts::read(&file, &dir.join("tenants")).unwrap();
+        let accounts = Accounts::read(&file, &dir.join("tenants"), PUBLIC_HOST).unwrap();
 
         assert_eq!(accounts.resolve(None).map(|t| t.id.clone()), Err(Refused::NoToken));
         let message = Refused::NoToken.message();
@@ -712,17 +740,17 @@ pub(crate) mod tests {
         assert_eq!(TokenLine::parse(&line.to_string()).unwrap(), line, "a line round-trips");
 
         std::fs::write(&file, format!("# ops\n\n{line}\n")).unwrap();
-        assert_eq!(Accounts::read(&file, &dir).unwrap().tokens(), 1);
+        assert_eq!(Accounts::read(&file, &dir, PUBLIC_HOST).unwrap().tokens(), 1);
 
         std::fs::write(&file, format!("# ops\n\nacme not-a-hash\n{line}\n")).unwrap();
-        let refused = Accounts::read(&file, &dir).unwrap_err();
+        let refused = Accounts::read(&file, &dir, PUBLIC_HOST).unwrap_err();
         assert!(refused.contains("tokens:3:"), "the line is numbered: {refused}");
         assert!(refused.contains("64 hex digits"), "{refused}");
 
         std::fs::write(&file, "Acme 00\n").unwrap();
-        assert!(Accounts::read(&file, &dir).unwrap_err().contains("not a tenant id"));
+        assert!(Accounts::read(&file, &dir, PUBLIC_HOST).unwrap_err().contains("not a tenant id"));
 
-        let missing = Accounts::read(&dir.join("nowhere"), &dir).unwrap_err();
+        let missing = Accounts::read(&dir.join("nowhere"), &dir, PUBLIC_HOST).unwrap_err();
         assert!(missing.contains("parcad token new"), "the refusal names the command: {missing}");
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -17,7 +17,9 @@
 //!   `/api` route sit behind [`authenticate`], which resolves a bearer token to
 //!   one account's [`tenant::Tenant`] or answers 401 naming the fix. Only
 //!   `/api/health` stays open, and no frontend is served at all — a browser
-//!   cannot send a bearer.
+//!   cannot send a bearer. What an account wrote it fetches back from
+//!   `/api/exports/<name>` with the same bearer, which is the one way a file on
+//!   the server reaches a client.
 //! - **No CORS headers.** Their absence is the access control. A page on another
 //!   origin can still *send* a JSON POST, but the preflight it requires will
 //!   fail and it can never read a reply. Adding a permissive layer here would
@@ -60,15 +62,6 @@ pub fn loopback(port: u16) -> SocketAddr {
     SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
 }
 
-/// What makes a host one server for many accounts rather than one person's.
-pub struct Hosted {
-    pub accounts: tenant::Accounts,
-    /// The name clients reach the server by, behind whatever terminates TLS:
-    /// rmcp answers a `Host` header only from a list it was given, and it is
-    /// the `url` the MCP status reports.
-    pub public_host: String,
-}
-
 #[derive(Deserialize)]
 struct EvaluateRequest {
     graph: serde_json::Value,
@@ -86,23 +79,23 @@ struct StepRequest {
 }
 
 /// Host the application on `address` until the listener stops, saying on
-/// stderr where it is. `hosted` makes it a server for many accounts; the one
-/// caller that binds anything but loopback, `parcad serve`, refuses to without it.
+/// stderr where it is. `accounts` makes it a server for many accounts; the one
+/// caller that binds anything but loopback, `parcad serve`, refuses to without them.
 ///
 /// A failure to bind comes back as the error rather than a log line, because
 /// the two callers disagree about how bad it is: the desktop window works
 /// regardless, while `parcad serve` has nothing else to do. The usual cause is
 /// a second instance already holding the port, which the message names.
-pub async fn serve(address: SocketAddr, assets: Arc<dyn Assets>, hosted: Option<Hosted>) -> Result<(), String> {
-    let announcement = match &hosted {
+pub async fn serve(address: SocketAddr, assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Result<(), String> {
+    let announcement = match &accounts {
         None => format!("parcad: UI and API hosted on http://{address}, MCP at /mcp"),
-        Some(hosted) => format!(
+        Some(accounts) => format!(
             "parcad: hosted on http://{address} as https://{}/mcp for {} tokens; /mcp and /api need a bearer",
-            hosted.public_host,
-            hosted.accounts.tokens()
+            accounts.public_host(),
+            accounts.tokens()
         ),
     };
-    let router = router(assets, hosted);
+    let router = router(assets, accounts);
     let listener = tokio::net::TcpListener::bind(address).await.map_err(|e| {
         format!(
             "could not host on {address}: {e}\n\
@@ -116,8 +109,8 @@ pub async fn serve(address: SocketAddr, assets: Arc<dyn Assets>, hosted: Option<
         .map_err(|e| format!("the HTTP host stopped: {e}"))
 }
 
-fn router(assets: Arc<dyn Assets>, hosted: Option<Hosted>) -> Router {
-    let Some(hosted) = hosted else {
+fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router {
+    let Some(accounts) = accounts else {
         return Router::new()
             .route("/api/health", get(health))
             .merge(api())
@@ -133,8 +126,8 @@ fn router(assets: Arc<dyn Assets>, hosted: Option<Hosted>) -> Router {
     // Every `/api` route too, not `/mcp` alone: an agent service builds and
     // exports a part over them. No frontend, which could carry no bearer.
     let guarded = api()
-        .nest_service("/mcp", mcp::service(assets, Some(&hosted.public_host)))
-        .layer(axum::middleware::from_fn_with_state(Arc::new(hosted.accounts), authenticate));
+        .nest_service("/mcp", mcp::service(assets, Some(accounts.public_host())))
+        .layer(axum::middleware::from_fn_with_state(Arc::new(accounts), authenticate));
     Router::new().route("/api/health", get(health)).merge(guarded)
 }
 
@@ -158,6 +151,9 @@ fn api<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route("/api/export/stl", post(export_stl))
         .route("/api/export/3mf", post(export_3mf))
         .route("/api/export/step", post(export_step))
+        // What export_part and a reply's `markdown` wrote, back as a download:
+        // the only way a file in a hosted account's folder reaches its client.
+        .route("/api/exports/{*name}", get(export_file))
         // Projects are files on disk shared with the desktop window and with
         // MCP. The frontend reads them from here rather than from a build-time
         // glob, so a part an agent saves shows up in the picker.
@@ -327,31 +323,51 @@ async fn inspect_edge_target(Json(request): Json<InspectRequest>) -> Result<Resp
 async fn export_stl(Json(request): Json<EvaluateRequest>) -> Result<Response, Failed> {
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
     let export = blocking(move || service::export_stl(&doc, None)).await?;
-    Ok(download(export))
+    Ok(download(export.filename, export.content_type, export.bytes))
 }
 
 async fn export_3mf(Json(request): Json<EvaluateRequest>) -> Result<Response, Failed> {
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
     let export = blocking(move || service::export_3mf(&doc, None, "part")).await?;
-    Ok(download(export))
+    Ok(download(export.filename, export.content_type, export.bytes))
 }
 
 async fn export_step(Json(request): Json<StepRequest>) -> Result<Response, Failed> {
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
     let export = blocking(move || service::export_step(&doc)).await?;
-    Ok(download(export))
+    Ok(download(export.filename, export.content_type, export.bytes))
 }
 
-fn download(export: service::Export) -> Response {
+async fn export_file(Path(name): Path<String>) -> Response {
+    match service::export_file(&name) {
+        Ok(file) => download(&file.filename, file.content_type, file.bytes),
+        Err(refused) => refused.into_response(),
+    }
+}
+
+impl IntoResponse for service::ExportRefused {
+    fn into_response(self) -> Response {
+        let status = match &self {
+            service::ExportRefused::NotAName { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+            service::ExportRefused::Missing { .. } => StatusCode::NOT_FOUND,
+            service::ExportRefused::Unreadable { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        let mut response = Failed(self.message()).into_response();
+        *response.status_mut() = status;
+        response
+    }
+}
+
+fn download(filename: &str, content_type: &str, bytes: Vec<u8>) -> Response {
     (
         [
-            (header::CONTENT_TYPE, export.content_type.to_string()),
+            (header::CONTENT_TYPE, content_type.to_string()),
             (
                 header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", export.filename),
+                format!("attachment; filename=\"{filename}\""),
             ),
         ],
-        export.bytes,
+        bytes,
     )
         .into_response()
 }
@@ -451,6 +467,7 @@ impl IntoResponse for Failed {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tenant::tests::PUBLIC_HOST;
     use crate::tenant::TenantId;
     use std::io::{Read, Write};
 
@@ -465,9 +482,9 @@ mod tests {
         }
     }
 
-    /// A hosted router on a spare loopback port, served on a thread of its
-    /// own for as long as the test process runs.
-    fn hosted_on_a_spare_port(hosted: Hosted) -> u16 {
+    /// A router on a spare loopback port, served on a thread of its own for
+    /// as long as the test process runs.
+    fn on_a_spare_port(accounts: Option<tenant::Accounts>) -> u16 {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a spare port");
         let port = listener.local_addr().expect("the port").port();
         listener.set_nonblocking(true).expect("non-blocking");
@@ -478,7 +495,7 @@ mod tests {
                 .expect("a runtime");
             runtime.block_on(async {
                 let listener = tokio::net::TcpListener::from_std(listener).expect("the listener");
-                axum::serve(listener, router(Arc::new(NoAssets), Some(hosted)))
+                axum::serve(listener, router(Arc::new(NoAssets), accounts))
                     .await
                     .expect("the host runs");
             });
@@ -492,17 +509,15 @@ mod tests {
         let file = dir.join("tokens");
         let acme = tenant::issue(TenantId::new("acme").unwrap(), &file).unwrap();
         let bolt = tenant::issue(TenantId::new("bolt").unwrap(), &file).unwrap();
-        let accounts = tenant::Accounts::read(&file, &dir.join("tenants")).unwrap();
-        let port = hosted_on_a_spare_port(Hosted {
-            accounts,
-            public_host: "cad.example.test".into(),
-        });
+        let accounts = tenant::Accounts::read(&file, &dir.join("tenants"), PUBLIC_HOST).unwrap();
+        let port = on_a_spare_port(Some(accounts));
         (dir, acme, bolt, port)
     }
 
     struct Reply {
         status: u16,
         head: String,
+        bytes: Vec<u8>,
         body: String,
     }
 
@@ -530,26 +545,31 @@ mod tests {
         stream.write_all(request.as_bytes()).expect("the request is sent");
         let mut raw = Vec::new();
         stream.read_to_end(&mut raw).expect("the reply is read");
-        let raw = String::from_utf8_lossy(&raw).into_owned();
-        let (head, body) = raw.split_once("\r\n\r\n").expect("a response head");
+        let split = raw.windows(4).position(|w| w == b"\r\n\r\n").expect("a response head");
+        let head = String::from_utf8_lossy(&raw[..split]).into_owned();
+        let body = &raw[split + 4..];
         let status = head.split_whitespace().nth(1).and_then(|code| code.parse().ok()).expect("a status");
         let chunked = head.to_ascii_lowercase().contains("transfer-encoding: chunked");
+        let bytes = if chunked { dechunk(body) } else { body.to_vec() };
         Reply {
             status,
-            head: head.to_string(),
-            body: if chunked { dechunk(body) } else { body.to_string() },
+            head,
+            body: String::from_utf8_lossy(&bytes).into_owned(),
+            bytes,
         }
     }
 
-    fn dechunk(mut body: &str) -> String {
-        let mut out = String::new();
+    fn dechunk(mut body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
         loop {
-            let (size, rest) = body.split_once("\r\n").expect("a chunk size");
+            let line_end = body.windows(2).position(|w| w == b"\r\n").expect("a chunk size");
+            let size = std::str::from_utf8(&body[..line_end]).expect("a chunk size in ASCII");
             let size = usize::from_str_radix(size.trim(), 16).expect("a hex chunk size");
+            let rest = &body[line_end + 2..];
             if size == 0 {
                 return out;
             }
-            out.push_str(&rest[..size]);
+            out.extend_from_slice(&rest[..size]);
             body = &rest[size + 2..];
         }
     }
@@ -653,6 +673,114 @@ mod tests {
         let on_bolt = over_mcp(&bolt, "cad.example.test");
         assert!(on_bolt.body.contains("\"lid\""), "{}", on_bolt.body);
         assert_eq!(over_mcp(&bolt, "elsewhere.example").status, 403, "rmcp answers only the names it was given");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One MCP `tools/call` over the socket, as a client past its handshake sends it.
+    fn call_tool(port: u16, token: &str, tool: &str, arguments: serde_json::Value) -> Reply {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {
+                "name": tool, "arguments": arguments,
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                },
+            },
+        })
+        .to_string();
+        exchange(
+            port,
+            "POST",
+            "/mcp",
+            &[
+                ("Content-Type", "application/json"),
+                ("Accept", "application/json, text/event-stream"),
+                ("MCP-Protocol-Version", "2026-07-28"),
+                ("Mcp-Method", "tools/call"),
+                ("Mcp-Name", tool),
+                ("Host", PUBLIC_HOST),
+                ("Authorization", &bearer(token)),
+            ],
+            &body,
+        )
+    }
+
+    /// What an account wrote comes back to that account's bearer alone, as
+    /// the file it is; another account has no such export, and a name that
+    /// is not one is refused naming the rule.
+    #[test]
+    fn an_account_fetches_its_own_exports_and_nobody_elses() {
+        let (dir, acme, bolt, port) = two_accounts();
+        let fetch = |token: &str, name: &str| {
+            exchange(port, "GET", &format!("/api/exports/{name}"), &[("Authorization", &bearer(token))], "")
+        };
+        assert_eq!(exchange(port, "GET", "/api/projects", &[("Authorization", &bearer(&acme))], "").status, 200, "the account's folder exists");
+        let exports = dir.join("tenants/acme/.exports");
+        std::fs::create_dir_all(exports.join("renders")).unwrap();
+        let model = b"3MF bytes \xff\x00 not text".to_vec();
+        std::fs::write(exports.join("x.3mf"), &model).unwrap();
+        std::fs::write(exports.join("my part.stl"), b"stl").unwrap();
+        std::fs::write(exports.join("renders/abc-iso.png"), b"png").unwrap();
+
+        let fetched = fetch(&acme, "x.3mf");
+        assert_eq!(fetched.status, 200, "{}", fetched.body);
+        assert_eq!(fetched.bytes, model, "the bytes as written");
+        assert_eq!(fetched.header("content-type"), Some("model/3mf"));
+        assert_eq!(fetched.header("content-disposition"), Some("attachment; filename=\"x.3mf\""));
+        let render = fetch(&acme, "renders/abc-iso.png");
+        assert_eq!(render.status, 200, "{}", render.body);
+        assert_eq!(render.header("content-type"), Some("image/png"));
+        assert_eq!(render.bytes, b"png");
+        let spaced = fetch(&acme, "my%20part.stl");
+        assert_eq!((spaced.status, spaced.header("content-type")), (200, Some("model/stl")), "{}", spaced.body);
+
+        let error = |reply: &Reply| serde_json::from_str::<serde_json::Value>(&reply.body).expect("a JSON error")["error"].as_str().expect("a message").to_string();
+        let missing = fetch(&bolt, "x.3mf");
+        assert_eq!(missing.status, 404, "{}", missing.body);
+        assert!(error(&missing).starts_with("no export named \"x.3mf\" exists for this account"), "{}", missing.body);
+        assert!(error(&missing).contains("export_part writes one"), "the fix is named: {}", missing.body);
+        assert_eq!(fetch(&acme, "renders/none.png").status, 404);
+        assert_eq!(fetch(&acme, "renders").status, 404, "a folder is no export");
+
+        for name in ["..", "%2Fetc%2Fpasswd", "renders/../x.3mf", ".hidden.3mf", "a/b/x.3mf", "exports/x.3mf", "x%3A.3mf"] {
+            let refused = fetch(&acme, name);
+            assert_eq!(refused.status, 422, "{name}: {}", refused.body);
+            let message = error(&refused);
+            assert!(message.contains("is not the name of an export"), "{name}: {message}");
+            assert!(message.contains("one plain file name"), "the rule is named: {name}: {message}");
+        }
+        assert_eq!(fetch(&acme, "x.3mf/").status, 422, "an empty segment");
+        assert_eq!(exchange(port, "GET", "/api/exports/x.3mf", &[], "").status, 401, "no bearer, no file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The whole loop a hosted client runs: export_part over `/mcp`, then
+    /// the reply's `url` fetched with the same bearer gives the file written.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn an_export_over_mcp_is_fetched_by_the_url_its_reply_carries() {
+        let (dir, acme, bolt, port) = two_accounts();
+        let exported = call_tool(
+            port,
+            &acme,
+            "export_part",
+            serde_json::json!({ "script": "return box(10, 20, 30);", "format": "3mf", "filename": "x.3mf" }),
+        );
+        assert_eq!(exported.status, 200, "{}", exported.body);
+        let reply: serde_json::Value = serde_json::from_str(&exported.body).unwrap();
+        let written = &reply["result"]["structuredContent"];
+        assert_eq!(written["path"], ".exports/x.3mf", "{written}");
+        let url = written["url"].as_str().expect("a hosted reply carries the url");
+        assert_eq!(url, "https://cad.example.test/api/exports/x.3mf");
+
+        let route = url.strip_prefix("https://cad.example.test").unwrap();
+        let fetched = exchange(port, "GET", route, &[("Authorization", &bearer(&acme))], "");
+        assert_eq!(fetched.status, 200, "{}", fetched.body);
+        assert_eq!(fetched.header("content-type"), Some("model/3mf"));
+        assert_eq!(fetched.bytes, std::fs::read(dir.join("tenants/acme/.exports/x.3mf")).unwrap());
+        assert_eq!(fetched.bytes.len(), written["bytes"].as_u64().unwrap() as usize);
+        assert_eq!(exchange(port, "GET", route, &[("Authorization", &bearer(&bolt))], "").status, 404);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

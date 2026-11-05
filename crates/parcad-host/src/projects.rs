@@ -793,26 +793,36 @@ fn safe(path: &str) -> Result<PathBuf, String> {
     }
     let mut resolved = dir();
     for part in path.split('/') {
-        if part.is_empty() {
-            return bad("it has an empty segment");
-        }
-        if part.starts_with('.') {
-            return bad("a segment starts with a dot");
+        if let Some(why) = not_a_name(part) {
+            return bad(why);
         }
         if part.ends_with(".js") || part.ends_with(&format!(".{BUNDLE}")) {
             return bad("it carries a file extension; names here do not");
         }
-        if part.contains('\\') || part.chars().any(|c| c.is_control() || c == ':') {
-            return bad("a segment contains a character that is not part of a name");
-        }
-        // Belt and braces over the checks above: whatever the platform thinks a
-        // path component is, one name must be exactly one of them.
-        if Path::new(part).components().count() != 1 {
-            return bad("a segment is not a single name");
-        }
         resolved.push(part);
     }
     confined(resolved)
+}
+
+/// Why `segment` is not one plain name under a folder, or `None` when it is.
+/// Every name a caller gives — each segment of a project path, an export's
+/// file name — passes this; the extension rules differ and stay with the caller.
+pub(crate) fn not_a_name(segment: &str) -> Option<&'static str> {
+    if segment.is_empty() {
+        return Some("it has an empty segment");
+    }
+    if segment.starts_with('.') {
+        return Some("a segment starts with a dot");
+    }
+    if segment.contains(['/', '\\']) || segment.chars().any(|c| c.is_control() || c == ':') {
+        return Some("a segment contains a character that is not part of a name");
+    }
+    // Belt and braces over the checks above: whatever the platform thinks a
+    // path component is, one name must be exactly one of them.
+    if Path::new(segment).components().count() != 1 {
+        return Some("a segment is not a single name");
+    }
+    None
 }
 
 /// On a hosted root, refuse a path a link carries outside it: that root is one

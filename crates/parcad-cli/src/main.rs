@@ -342,7 +342,7 @@ fn serve(args: impl Iterator<Item = String>) -> Result<()> {
     let Some(flags) = options.hosted else {
         return host(options.address.port());
     };
-    let accounts = parcad_host::tenant::Accounts::read(&flags.tokens, &flags.tenants)
+    let accounts = parcad_host::tenant::Accounts::read(&flags.tokens, &flags.tenants, &flags.public_host)
         .map_err(anyhow::Error::msg)?;
     std::fs::create_dir_all(&flags.tenants)
         .with_context(|| format!("creating the tenants folder {}", flags.tenants.display()))?;
@@ -354,13 +354,7 @@ fn serve(args: impl Iterator<Item = String>) -> Result<()> {
         options.builds
     );
     parcad_host::tenant::require();
-    listen(
-        options.address,
-        Some(parcad_host::http::Hosted {
-            accounts,
-            public_host: flags.public_host,
-        }),
-    )
+    listen(options.address, Some(accounts))
 }
 
 /// Seed the project folder and host the application on `port` until the
@@ -391,7 +385,7 @@ fn host(port: u16) -> Result<()> {
     listen(parcad_host::http::loopback(port), None)
 }
 
-fn listen(address: std::net::SocketAddr, hosted: Option<parcad_host::http::Hosted>) -> Result<()> {
+fn listen(address: std::net::SocketAddr, accounts: Option<parcad_host::tenant::Accounts>) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -400,7 +394,7 @@ fn listen(address: std::net::SocketAddr, hosted: Option<parcad_host::http::Hoste
         .block_on(parcad_host::http::serve(
             address,
             std::sync::Arc::new(ui::Embedded),
-            hosted,
+            accounts,
         ))
         .map_err(anyhow::Error::msg)
 }

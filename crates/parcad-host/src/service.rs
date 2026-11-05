@@ -390,6 +390,7 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                     scale_mm: scale.as_ref().map(|bar| round_mm(bar.mm)),
                     scale_px: scale.as_ref().map(|bar| bar.px),
                     path: None,
+                    url: None,
                     markdown: None,
                 },
                 image,
@@ -879,6 +880,172 @@ pub struct Export {
     pub measured: ExportMeasured,
 }
 
+impl Export {
+    fn named(filename: &'static str, bytes: Vec<u8>, measured: ExportMeasured) -> Export {
+        Export {
+            bytes,
+            filename,
+            content_type: media_type(filename),
+            measured,
+        }
+    }
+}
+
+/// The media type a file's extension names, which a client saves it by.
+fn media_type(filename: &str) -> &'static str {
+    match filename.rsplit_once('.').map(|(_, extension)| extension) {
+        Some("3mf") => "model/3mf",
+        Some("stl") => "model/stl",
+        Some("step") => "application/step",
+        Some("png") => "image/png",
+        _ => "application/octet-stream",
+    }
+}
+
+// ------------------------------------------------------------ the export folder
+//
+// `export_part` and the kept renders land in one folder per account, and a
+// name in it is the one handle a caller has: a local user opens the file by its
+// path, and a hosted account, whose files are on the server, fetches it back by
+// URL with the bearer that wrote it. Both go through here, so no caller chooses
+// a location and no account's name reaches another's folder.
+
+/// A file kept in the account's export folder, as a reply names it.
+pub struct Kept {
+    /// Where it is on this machine.
+    pub file: PathBuf,
+    /// The path as the account sees it: relative to its root on a hosted
+    /// server, the path itself for a local user.
+    pub path: String,
+    /// On a hosted server, where the same bearer fetches the file:
+    /// `https://<public host>/api/exports/<name>`. A local user has the file.
+    pub url: Option<String>,
+}
+
+impl Kept {
+    /// What a client can reach from where it is: the URL on a server, the
+    /// path at this machine.
+    pub fn reference(&self) -> &str {
+        self.url.as_deref().unwrap_or(&self.path)
+    }
+}
+
+/// Write `bytes` as `name` in the account's export folder. `name` is a plain
+/// file name, or one under `renders/`, where the views a reply draws are kept.
+pub fn keep_export(name: &str, bytes: &[u8]) -> Result<Kept, String> {
+    let file = export_path(name).map_err(|refused| refused.message())?;
+    let dir = file.parent().ok_or_else(|| format!("{name:?} is under no folder"))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("creating the export folder {}: {e}", tenant::shown(dir)))?;
+    std::fs::write(&file, bytes).map_err(|e| format!("writing {}: {e}", tenant::shown(&file)))?;
+    let tenant = tenant::current();
+    let url = tenant
+        .public_host
+        .as_ref()
+        .map(|host| format!("https://{host}/api/exports/{}", percent_encoded(name)));
+    Ok(Kept {
+        path: tenant::shown(&file),
+        url,
+        file,
+    })
+}
+
+/// A file read back from the account's export folder.
+#[derive(Debug)]
+pub struct ExportFile {
+    pub bytes: Vec<u8>,
+    pub filename: String,
+    pub content_type: &'static str,
+}
+
+/// Why an export could not be read back. Each message names the fix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExportRefused {
+    /// The name is not one `export_part` writes under, for the reason given.
+    NotAName { name: String, why: &'static str },
+    /// The name is fine and this account has no file of it.
+    Missing { name: String },
+    /// The file is there and could not be read.
+    Unreadable { name: String, error: String },
+}
+
+impl ExportRefused {
+    pub fn message(&self) -> String {
+        match self {
+            ExportRefused::NotAName { name, why } => format!(
+                "{name:?} is not the name of an export ({why}). A name is one plain file name as \
+                 export_part wrote it, such as \"part.3mf\", or a render's under \"renders/\"."
+            ),
+            ExportRefused::Missing { name } => format!(
+                "no export named {name:?} exists for this account; export_part writes one, and its \
+                 reply says where to fetch it"
+            ),
+            ExportRefused::Unreadable { name, error } => format!("reading the export {name:?}: {error}"),
+        }
+    }
+}
+
+/// Read `name` back from the account's export folder, as `export_part` or a
+/// reply's `markdown` named it.
+pub fn export_file(name: &str) -> Result<ExportFile, ExportRefused> {
+    let file = export_path(name)?;
+    let bytes = match std::fs::read(&file) {
+        Ok(bytes) => bytes,
+        Err(_) if !file.is_file() => return Err(ExportRefused::Missing { name: name.to_string() }),
+        Err(e) => {
+            return Err(ExportRefused::Unreadable {
+                name: name.to_string(),
+                error: e.to_string(),
+            })
+        }
+    };
+    let filename = name.rsplit('/').next().unwrap_or(name).to_string();
+    Ok(ExportFile {
+        bytes,
+        content_type: media_type(&filename),
+        filename,
+    })
+}
+
+/// Where `name` lives in the account's export folder: one plain name, or one
+/// under exactly `renders/`, each segment held to the rule a project path's
+/// segments obey. On a hosted root a link out of the folder is refused too.
+fn export_path(name: &str) -> Result<PathBuf, ExportRefused> {
+    let refused = |why| ExportRefused::NotAName {
+        name: name.to_string(),
+        why,
+    };
+    let (folder, file) = match name.split_once('/') {
+        None => (None, name),
+        Some(("renders", file)) => (Some("renders"), file),
+        Some(_) => return Err(refused("a folder other than renders/, or more than one")),
+    };
+    if let Some(why) = crate::projects::not_a_name(file) {
+        return Err(refused(why));
+    }
+    let tenant = tenant::current();
+    let mut path = tenant.exports.clone();
+    path.extend(folder);
+    path.push(file);
+    if tenant.mode == Mode::Hosted {
+        tenant.confine(&path).map_err(|_| refused("it leaves this account's folder"))?;
+    }
+    Ok(path)
+}
+
+/// `name` as a URL path: every byte outside the unreserved set escaped, the
+/// `/` before a render's name kept.
+fn percent_encoded(name: &str) -> String {
+    use std::fmt::Write;
+    let mut encoded = String::with_capacity(name.len());
+    for byte in name.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => encoded.push(byte as char),
+            _ => write!(encoded, "%{byte:02X}").expect("writing to a String"),
+        }
+    }
+    encoded
+}
+
 /// Evaluate an intent graph into displayable geometry, with the kernel's time
 /// budget chosen by the caller or, when `None`, by `PARCAD_OCCT_TIMEOUT`.
 ///
@@ -1208,12 +1375,7 @@ pub fn inspect_edge_target(doc: &Doc, node: usize) -> Result<parcad_occt::Target
 pub fn export_stl(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Export, String> {
     let built = build_exact(doc, budget, false)?;
     let (bytes, measured) = parcad_evaluation::stl(doc, &built.success, built.reused)?;
-    Ok(Export {
-        bytes,
-        filename: "part.stl",
-        content_type: "model/stl",
-        measured,
-    })
+    Ok(Export::named("part.stl", bytes, measured))
 }
 
 /// Produce the current part as 3MF: the same triangles as [`export_stl`], each
@@ -1221,12 +1383,7 @@ pub fn export_stl(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Expo
 pub fn export_3mf(doc: &Doc, budget: Option<std::time::Duration>, name: &str) -> Result<Export, String> {
     let built = build_exact(doc, budget, false)?;
     let (bytes, measured) = parcad_evaluation::three_mf(doc, &built.success, built.reused, name)?;
-    Ok(Export {
-        bytes,
-        filename: "part.3mf",
-        content_type: "model/3mf",
-        measured,
-    })
+    Ok(Export::named("part.3mf", bytes, measured))
 }
 
 /// Produce the current part as STEP, the exact surfaces.
@@ -1242,12 +1399,11 @@ pub fn export_step_within(doc: &Doc, budget: Option<std::time::Duration>) -> Res
     }
     let (report, _) = measure_brep(doc, &built.success)?;
 
-    Ok(Export {
+    Ok(Export::named(
+        "part.step",
         bytes,
-        filename: "part.step",
-        content_type: "application/step",
-        measured: ExportMeasured::of(&report, &built.success, body_reports(&built.success), None, built.reused),
-    })
+        ExportMeasured::of(&report, &built.success, body_reports(&built.success), None, built.reused),
+    ))
 }
 
 /// Run a path-writing export into a scratch file and return its bytes.
@@ -1924,6 +2080,62 @@ pub fn read_docs(
 mod tests {
     use super::*;
 
+    /// A name is one plain file name, or one under `renders/`; a file kept
+    /// under it reads back by that name with the type its extension says, and
+    /// a hosted account's reply carries the URL the same bearer fetches it by.
+    #[test]
+    fn an_export_is_kept_by_a_plain_name_and_read_back_by_it() {
+        let tenants = crate::tenant::tests::fresh_root("exports");
+        let account = crate::tenant::tests::hosted_at("a", &tenants);
+        crate::tenant::scope(account.clone(), || {
+            let kept = keep_export("x.3mf", b"model").unwrap();
+            assert_eq!(kept.file, account.exports.join("x.3mf"));
+            assert_eq!(kept.path, ".exports/x.3mf");
+            assert_eq!(kept.url.as_deref(), Some("https://cad.example.test/api/exports/x.3mf"));
+            assert_eq!(kept.reference(), "https://cad.example.test/api/exports/x.3mf");
+            let render = keep_export("renders/abc-iso.png", b"png").unwrap();
+            assert_eq!(render.path, ".exports/renders/abc-iso.png");
+            assert_eq!(render.url.as_deref(), Some("https://cad.example.test/api/exports/renders/abc-iso.png"));
+            let spaced = keep_export("my part (v2).stl", b"stl").unwrap();
+            assert_eq!(spaced.url.as_deref(), Some("https://cad.example.test/api/exports/my%20part%20%28v2%29.stl"));
+
+            let read = export_file("x.3mf").unwrap();
+            assert_eq!((read.bytes.as_slice(), read.filename.as_str(), read.content_type), (&b"model"[..], "x.3mf", "model/3mf"));
+            let read = export_file("renders/abc-iso.png").unwrap();
+            assert_eq!((read.filename.as_str(), read.content_type), ("abc-iso.png", "image/png"));
+            assert_eq!(export_file("my part (v2).stl").unwrap().content_type, "model/stl");
+            assert_eq!(export_file("x.step").unwrap_err(), ExportRefused::Missing { name: "x.step".into() });
+            assert_eq!(export_file("renders").unwrap_err(), ExportRefused::Missing { name: "renders".into() }, "a folder is no export");
+            assert!(ExportRefused::Missing { name: "x.step".into() }.message().contains("export_part writes one"));
+
+            for (name, why) in [
+                ("..", "a segment starts with a dot"),
+                ("/etc/passwd", "a folder other than renders/, or more than one"),
+                ("renders/../x.3mf", "a segment starts with a dot"),
+                (".hidden.3mf", "a segment starts with a dot"),
+                ("a/b/x.3mf", "a folder other than renders/, or more than one"),
+                ("exports/x.3mf", "a folder other than renders/, or more than one"),
+                ("renders/", "it has an empty segment"),
+                ("", "it has an empty segment"),
+                ("x:y.3mf", "a segment contains a character that is not part of a name"),
+                ("x\\y.3mf", "a segment contains a character that is not part of a name"),
+            ] {
+                let refused = export_file(name).unwrap_err();
+                assert_eq!(refused, ExportRefused::NotAName { name: name.into(), why }, "{name:?}");
+                assert!(refused.message().contains("one plain file name"), "the rule is named: {}", refused.message());
+                assert!(keep_export(name, b"x").is_err(), "{name:?} cannot be written either");
+            }
+        });
+        let local = crate::tenant::tests::local_at(&tenants.join("local"));
+        crate::tenant::scope(local.clone(), || {
+            let kept = keep_export("x.3mf", b"model").unwrap();
+            assert_eq!(kept.path, local.exports.join("x.3mf").to_string_lossy(), "a local user's path is the file");
+            assert_eq!(kept.url, None, "and needs no URL");
+            assert_eq!(kept.reference(), kept.path);
+        });
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
     /// The door refuses naming every failing check with its measurement and
     /// the argument that opens it; a reason opens it and is handed back; an
     /// empty reason is no reason.
@@ -2061,6 +2273,7 @@ mod tests {
                 kernel_timeout_max: patience,
                 ..crate::tenant::Limits::hosted()
             },
+            Some(crate::tenant::tests::PUBLIC_HOST.to_string()),
         ));
         let started = Arc::new(Barrier::new(3));
         let release = Arc::new(Barrier::new(3));

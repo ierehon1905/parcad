@@ -28,7 +28,6 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    path::PathBuf,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
@@ -158,8 +157,6 @@ pub fn transport(assets: Arc<dyn Assets>, public_host: Option<&str>) -> Transpor
     config.json_response = true;
     if let Some(host) = public_host {
         config.allowed_hosts.push(host.to_string());
-        // One public name per process; a test that builds two routers keeps the first.
-        let _ = PUBLIC_ENDPOINT.set(format!("https://{host}/mcp"));
     }
 
     Transport::new(
@@ -695,7 +692,13 @@ pub struct Exported {
     /// The reason the file was written over a failing verdict, as given.
     #[serde(skip_serializing_if = "Option::is_none")]
     allow_failing: Option<String>,
+    /// The file as this account sees it: a path on this machine, or on a
+    /// hosted parcad a path relative to the account's folder.
     path: String,
+    /// On a hosted parcad, where the same bearer fetches the file. Absent on
+    /// a machine of your own, where `path` is the file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
     bytes: usize,
     format: String,
     /// The part in the file, measured off the build that wrote it: size,
@@ -1068,7 +1071,7 @@ impl Parcad {
     #[tool(
         name = "export_part",
         annotations(title = "Export a part to a file", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part whose `print_check` fails — material under 0.3 mm, where nothing prints — or that carries its own `checks` and fails one is refused, with the finding or the check and its measurement named, and nothing is written: fix the part, or, when the user has decided the failure is acceptable, pass `allow_failing` with their reason, which the reply keeps. The reply opens with `print_check` and `checks`, the verdicts the file was written under; a `flagged` print_check writes the file and lists what to read."
+        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. On a hosted parcad the reply also carries `url`, where the same bearer fetches the file, and `path` is then relative to the account's folder. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part whose `print_check` fails — material under 0.3 mm, where nothing prints — or that carries its own `checks` and fails one is refused, with the finding or the check and its measurement named, and nothing is written: fix the part, or, when the user has decided the failure is acceptable, pass `allow_failing` with their reason, which the reply keeps. The reply opens with `print_check` and `checks`, the verdicts the file was written under; a `flagged` print_check writes the file and lists what to read."
     )]
     async fn export_part(
         &self,
@@ -1086,9 +1089,9 @@ impl Parcad {
             Some(name) => {
                 // A path is a write primitive, and this caller is a model. Take
                 // a name, never a location.
-                if name.contains('/') || name.contains('\\') || name.contains("..") {
+                if let Some(why) = projects::not_a_name(&name) {
                     return Err(invalid(format!(
-                        "{name:?} must be a bare file name with no directory part; \
+                        "{name:?} must be a bare file name with no directory part ({why}); \
                          exports always go to the parcad export directory"
                     )));
                 }
@@ -1119,15 +1122,8 @@ impl Parcad {
             }
             .map_err(|e| built.locate(e))?;
 
-            let dir = export_dir();
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| format!("creating the export directory {}: {e}", tenant::shown(&dir)))?;
-            let file = dir.join(&filename);
-            std::fs::write(&file, &export.bytes)
-                .map_err(|e| format!("writing {}: {e}", tenant::shown(&file)))?;
-
-            let path = tenant::shown(&file);
-            let file = file.to_string_lossy();
+            let kept = service::keep_export(&filename, &export.bytes)?;
+            let file = kept.file.to_string_lossy();
             // A tab has no application to open a file in; it hands every
             // export to the browser, which is the user's copy.
             let downloaded = crate::page::active().then(|| crate::page::offer_download(&file));
@@ -1143,7 +1139,8 @@ impl Parcad {
                     opened: (request.open && downloaded.is_none()).then_some(open_error.is_none()),
                     open_error,
                     downloaded,
-                    path,
+                    path: kept.path,
+                    url: kept.url,
                     verdicts: door.verdicts,
                     allow_failing,
                 },
@@ -1615,17 +1612,14 @@ pub fn status() -> Status {
     }
 }
 
-/// The URL a hosted server is reached by, set with its transport.
-static PUBLIC_ENDPOINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-
 /// Where a client connects: the loopback port, the link a tab was given, or a
 /// hosted server's public name.
 fn endpoint() -> String {
     if let Some(link) = crate::page::link() {
         return link;
     }
-    if let Some(public) = PUBLIC_ENDPOINT.get() {
-        return public.clone();
+    if let Some(host) = &tenant::current().public_host {
+        return format!("https://{host}/mcp");
     }
     #[cfg(not(target_os = "emscripten"))]
     return format!("http://127.0.0.1:{}/mcp", crate::http::port());
@@ -1890,14 +1884,13 @@ fn measure(
         .views
         .into_iter()
         .map(|mut render| {
-            render.summary.path = keep_render(&stem, &render.summary.view, &render.image);
-            // A tag-region map is for the caller to read, not a picture of the part.
-            if !look.regions {
-                render.summary.markdown = render
-                    .summary
-                    .path
-                    .as_deref()
-                    .map(|path| markdown_image(&render.summary.view, path));
+            if let Some(kept) = keep_render(&stem, &render.summary.view, &render.image) {
+                // A tag-region map is for the caller to read, not a picture of the part.
+                if !look.regions {
+                    render.summary.markdown = Some(markdown_image(&render.summary.view, kept.reference()));
+                }
+                render.summary.path = Some(kept.path);
+                render.summary.url = kept.url;
             }
             let view = render.summary.view.clone();
             let picture = render
@@ -1931,11 +1924,6 @@ fn pictured(measured: serde_json::Value, pictures: Vec<Vec<u8>>) -> rmcp::model:
     result
 }
 
-/// Where renders are kept: beside exports, so one variable moves both.
-fn render_dir() -> PathBuf {
-    export_dir().join("renders")
-}
-
 /// A name for one script's renders that is stable across calls, so asking
 /// again replaces the file rather than filling the folder.
 fn render_stem(script: &str, size: u32, regions: bool, materials: bool, section: bool) -> String {
@@ -1951,18 +1939,15 @@ fn render_stem(script: &str, size: u32, regions: bool, materials: bool, section:
     )
 }
 
-/// Write one rendered view where a person can open it, and say where. A
-/// render that cannot be written still rides inline, so this never fails the call.
-fn keep_render(stem: &str, view: &str, image: &parcad_core::render::Rgb) -> Option<String> {
+/// Keep one rendered view under `renders/` in the export folder, where a
+/// person can open it, and say where. A render that cannot be written still
+/// rides inline, so this never fails the call.
+fn keep_render(stem: &str, view: &str, image: &parcad_core::render::Rgb) -> Option<service::Kept> {
     // A tab's files are its own; no client could open one by this path.
     if crate::page::active() {
         return None;
     }
-    let dir = render_dir();
-    std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join(format!("{stem}-{view}.png"));
-    std::fs::write(&path, image.to_png().ok()?).ok()?;
-    Some(tenant::shown(&path))
+    service::keep_export(&format!("renders/{stem}-{view}.png"), &image.to_png().ok()?).ok()
 }
 
 /// A kept render as a Markdown image. A destination with a space or a
@@ -2009,12 +1994,6 @@ fn identified(session: session::Session, viewers: Vec<session::Viewer>, with_scr
         script: with_script.then_some(session.script),
         viewers,
     }
-}
-
-/// Where exports land: one directory per tenant, so no call can choose a
-/// location and no account's file lands where another's did.
-fn export_dir() -> PathBuf {
-    tenant::current().exports.clone()
 }
 
 /// An evaluation packed for the viewer: the mesh as Draco, and the rest of the
@@ -2733,8 +2712,10 @@ mod tests {
             run(Parcad::new().evaluate_part(Parameters(request))).expect("built").structured_content.unwrap()
         }
         let tenants = tenant::tests::fresh_root("tenants");
-        let a = tenant::tests::hosted_at("a", &tenants);
-        let b = tenant::tests::hosted_at("b", &tenants);
+        // Ids of this test's own: the cache is keyed by id and script, and
+        // another test exporting this script as "b" would be the reuse here.
+        let a = tenant::tests::hosted_at("reuse-a", &tenants);
+        let b = tenant::tests::hosted_at("reuse-b", &tenants);
         assert_ne!(tenant::scope(a.clone(), evaluate)["reused_build"], true);
         assert_eq!(tenant::scope(a, evaluate)["reused_build"], true, "the account's own build is reused");
         let other = tenant::scope(b, evaluate);
@@ -2763,7 +2744,11 @@ mod tests {
         assert_eq!(on_b.path, ".exports/part.stl");
         assert!(a.root.join(&on_a.path).is_file());
         assert!(b.root.join(&on_b.path).is_file());
-        assert_eq!(tenant::scope(a, render_dir), tenants.join("a/.exports/renders"));
+        assert_eq!(
+            on_a.url.as_deref(),
+            Some("https://cad.example.test/api/exports/part.stl"),
+            "the public host and the route, which the same bearer fetches"
+        );
         let _ = std::fs::remove_dir_all(&tenants);
     }
 
@@ -2912,7 +2897,8 @@ mod tests {
                 let exported = export(Some("printing a test piece")).expect("exported over the failing check").0;
                 assert_eq!(exported.measured.allow_failing.as_deref(), Some("printing a test piece"));
                 assert_eq!(exported.measured.verdicts.checks.as_ref().unwrap().verdict, "failed");
-                assert!(std::path::Path::new(&exported.measured.path).exists());
+                assert!(std::path::Path::new(&exported.measured.path).exists(), "a local reply's path is the file itself");
+                assert_eq!(exported.measured.url, None, "and a local reply carries no url");
 
                 // An edit that keeps the check failing is refused before the
                 // write; one with a reason lands; one that fixes the part needs none.
