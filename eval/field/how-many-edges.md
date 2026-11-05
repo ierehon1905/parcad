@@ -1,18 +1,22 @@
 ---
 tool: list_entities
 reach: list_entities
-verdict: SELECTABLE EDGES\s*[=:]\s*122
-trap: SELECTABLE EDGES\s*[=:]\s*(246|60)\b
-quote: \b122\b
+verdict: SELECTABLE EDGES\s*[=:]\s*146
+trap: SELECTABLE EDGES\s*[=:]\s*(294|60)\b
+quote: \b146\b
 why: |
-  list_entities *samples* — it returns 60 edges of 122 and reports the total
+  list_entities *samples* — it returns 60 edges of 146 and reports the total
   beside them, in `total_edges`. A model that counts the array it was handed
-  answers 60. A model that reaches for evaluate_part instead answers 246, which
+  answers 60. A model that reaches for evaluate_part instead answers 294, which
   is `topological_edges` and is twice the truth: it counts each edge once per
-  adjacent face, so a plain cube reads 24. Both wrong numbers are more
+  adjacent face, so a plain cube reads 24 (and the core hole's seam, which no
+  selector names, twice in its one face). Both wrong numbers are more
   plausible than the right one and neither tool says the other exists. This
   case is here because that disagreement is invisible from inside either tool
   and only a caller asked to commit to one number ever runs into it.
+
+  It was 122 until 7f99760f drew the webs a real profile has; the STEP export
+  then has 147 EDGE_CURVEs, one of them the core hole's seam, so 146.
 ---
 Use the parcad MCP tools. The part is extrusion-2020.js in the parcad project folder.
 
