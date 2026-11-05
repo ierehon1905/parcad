@@ -791,21 +791,11 @@ mod tests {
     }
 
     /// A client learns what this host can do from `/api/health` and from the
-    /// `initialize` reply, not from a version number a branch build does not move.
+    /// `initialize` reply, not from a version number a branch build does not
+    /// move; and a hosted account's instructions name no screen, since it has none.
     #[test]
     fn health_and_initialize_say_whether_the_host_is_hosted_and_what_it_carries() {
         let features = serde_json::json!(["tenants", "bearer-auth", "export-download", "limits"]);
-        let local = on_a_spare_port(None);
-        let health: serde_json::Value = serde_json::from_str(&exchange(local, "GET", "/api/health", &[], "").body).unwrap();
-        assert_eq!(health["hosted"], false, "{health}");
-        assert_eq!(health["features"], features, "{health}");
-        assert_eq!(health["transport"], "http");
-
-        let (dir, acme, _, port) = two_accounts();
-        let health: serde_json::Value = serde_json::from_str(&exchange(port, "GET", "/api/health", &[], "").body).unwrap();
-        assert_eq!(health["hosted"], true, "{health}");
-        assert_eq!(health["features"], features, "{health}");
-
         let initialize = serde_json::json!({
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {
@@ -815,24 +805,39 @@ mod tests {
             },
         })
         .to_string();
-        let reply = exchange(
-            port,
-            "POST",
-            "/mcp",
-            &[
-                ("Content-Type", "application/json"),
-                ("Accept", "application/json, text/event-stream"),
-                ("Host", PUBLIC_HOST),
-                ("Authorization", &bearer(&acme)),
-            ],
-            &initialize,
-        );
-        assert_eq!(reply.status, 200, "{}", reply.body);
-        let reply: serde_json::Value = serde_json::from_str(&reply.body).unwrap();
+        let handshake = |port: u16, headers: &[(&str, &str)]| -> serde_json::Value {
+            let mut all = vec![("Content-Type", "application/json"), ("Accept", "application/json, text/event-stream")];
+            all.extend_from_slice(headers);
+            let reply = exchange(port, "POST", "/mcp", &all, &initialize);
+            assert_eq!(reply.status, 200, "{}", reply.body);
+            serde_json::from_str(&reply.body).unwrap()
+        };
+
+        let local = on_a_spare_port(None);
+        let health: serde_json::Value = serde_json::from_str(&exchange(local, "GET", "/api/health", &[], "").body).unwrap();
+        assert_eq!(health["hosted"], false, "{health}");
+        assert_eq!(health["features"], features, "{health}");
+        assert_eq!(health["transport"], "http");
+        let reply = handshake(local, &[]);
+        assert_eq!(reply["result"]["capabilities"]["experimental"]["parcad"]["hosted"], false, "{reply}");
+        let instructions = reply["result"]["instructions"].as_str().expect("instructions");
+        assert!(instructions.contains("You share the parcad app's screen"), "{instructions}");
+
+        let (dir, acme, _, port) = two_accounts();
+        let health: serde_json::Value = serde_json::from_str(&exchange(port, "GET", "/api/health", &[], "").body).unwrap();
+        assert_eq!(health["hosted"], true, "{health}");
+        assert_eq!(health["features"], features, "{health}");
+        let reply = handshake(port, &[("Host", PUBLIC_HOST), ("Authorization", &bearer(&acme))]);
         let parcad = &reply["result"]["capabilities"]["experimental"]["parcad"];
         assert_eq!(parcad["hosted"], true, "{reply}");
         assert_eq!(parcad["features"], features, "{reply}");
         assert_eq!(reply["result"]["serverInfo"]["name"], "parcad");
+        let instructions = reply["result"]["instructions"].as_str().expect("instructions");
+        assert!(instructions.contains("shares no screen with the user"), "{instructions}");
+        assert!(instructions.contains("export_part's `url`"), "{instructions}");
+        for screen_tool in ["share the parcad app's screen", "open_project", "set_script"] {
+            assert!(!instructions.contains(screen_tool), "{screen_tool:?} reached a hosted client: {instructions}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

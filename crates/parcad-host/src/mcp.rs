@@ -1402,6 +1402,12 @@ const SCREEN: &str = "You share the parcad app's screen with the user: get_sessi
 open_project and set_script change it. To show a part you built, save_project it under its own \
 name and open_project it. Edits are undoable; read before you write.";
 
+/// In place of [`SCREEN`] on a hosted account, which has no window: the client
+/// shows a part by fetching a URL.
+const HOSTED: &str = "This parcad is hosted and shares no screen with the user: to show a part, \
+paste a view's `markdown` line from evaluate_part or give export_part's `url`; both are fetched \
+with the bearer you call with.";
+
 /// The rule the coin-holder session lacked: 241 KB of script resent to change
 /// a few lines at a time (docs/COIN_HOLDER_REVIEW.md, B1).
 const ONCE: &str = "Send a script once. Every change after the first is an edit_part ({ project, \
@@ -1425,14 +1431,38 @@ const PICTURES: &str = " The user may not see a tool's pictures: to show one, pa
 const WHERE: &str = "Which tag owns what a view shows: regions: true; what is inside: a section; where a tag is: \
 tag_extents.";
 
+/// Where the user sees what a model builds, which is what the instructions
+/// differ on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Screen {
+    /// The app's window, or the browser on a local `parcad serve`.
+    App,
+    /// A ParCAD web tab.
+    Tab,
+    /// A hosted account has none: a client shows a view or an export by URL.
+    None,
+}
+
+impl Screen {
+    fn of(capability: service::Capability) -> Screen {
+        if capability.hosted {
+            Screen::None
+        } else if crate::page::active() {
+            Screen::Tab
+        } else {
+            Screen::App
+        }
+    }
+}
+
 /// What a model is told before its first call, for the host it is talking to.
 /// Claude Code keeps the first 2048 characters, so what differs by host comes
-/// early and both versions fit.
-fn instructions(in_tab: bool) -> String {
-    if in_tab {
-        format!("{LANGUAGE}\n\n{}\n\n{ONCE}\n\n{SELECTING}\n\n{WHERE}", crate::page::INSTRUCTIONS)
-    } else {
-        format!("{LANGUAGE}\n\n{SCREEN}\n\n{ONCE}\n\n{SELECTING}{PICTURES}\n\n{WHERE}")
+/// early and every version fits.
+fn instructions(screen: Screen) -> String {
+    match screen {
+        Screen::App => format!("{LANGUAGE}\n\n{SCREEN}\n\n{ONCE}\n\n{SELECTING}{PICTURES}\n\n{WHERE}"),
+        Screen::Tab => format!("{LANGUAGE}\n\n{}\n\n{ONCE}\n\n{SELECTING}\n\n{WHERE}", crate::page::INSTRUCTIONS),
+        Screen::None => format!("{LANGUAGE}\n\n{HOSTED}\n\n{ONCE}\n\n{SELECTING}\n\n{WHERE}"),
     }
 }
 
@@ -1543,7 +1573,7 @@ impl ServerHandler for Parcad {
         // work out from the schemas: the unit rule, where the origin is,
         // and that a refusal is information rather than a wall to route
         // around.
-        info.instructions = Some(instructions(crate::page::active()));
+        info.instructions = Some(instructions(Screen::of(self.capability)));
         info
     }
 }
@@ -2176,16 +2206,43 @@ mod tests {
     fn the_instructions_fit_the_client_window() {
         // Claude Code truncates server instructions at 2048 characters and
         // says so only in its debug log.
-        for in_tab in [false, true] {
-            let text = instructions(in_tab);
-            assert!(text.chars().count() <= 2048, "{} chars in_tab={in_tab}", text.chars().count());
+        for screen in [Screen::App, Screen::Tab, Screen::None] {
+            let text = instructions(screen);
+            assert!(text.chars().count() <= 2048, "{} chars for {screen:?}", text.chars().count());
             assert!(text.contains("between: [\"arm\", \"hub\"]"));
-            assert!(text.contains("open_project"), "both say how to show the user a part");
         }
-        assert!(instructions(true).contains("ParCAD web"));
-        assert!(!instructions(true).contains("`markdown`"), "a tab has no file to point at");
+        for screen in [Screen::App, Screen::Tab] {
+            let text = instructions(screen);
+            assert!(text.contains("open_project"), "a host with a screen says how to show the user a part");
+            assert!(!text.contains(HOSTED), "{screen:?} is not hosted");
+        }
+        assert!(instructions(Screen::App).contains(SCREEN));
+        assert!(instructions(Screen::App).contains(PICTURES));
+        assert!(instructions(Screen::Tab).contains(crate::page::INSTRUCTIONS));
+        assert!(instructions(Screen::Tab).contains("ParCAD web"));
+        assert!(!instructions(Screen::Tab).contains("`markdown`"), "a tab has no file to point at");
         // docs/NEXT.md, item 1: the weakest layer, and one line.
-        assert!(instructions(false).contains("a part is done when print_check is clean or each flag has a reason"));
+        assert!(instructions(Screen::App).contains("a part is done when print_check is clean or each flag has a reason"));
+    }
+
+    /// A hosted account has no window, so its instructions name no screen
+    /// tool and say how a part reaches the user instead: by URL, with the
+    /// bearer. `initialize` picks the text off the capability the transport
+    /// built the handler with.
+    #[test]
+    fn a_hosted_client_is_told_to_show_a_part_by_url_and_not_on_a_screen() {
+        let text = instructions(Screen::None);
+        assert!(text.contains(HOSTED));
+        for screen_tool in ["share the parcad app's screen", "open_project", "set_script"] {
+            assert!(!text.contains(screen_tool), "{screen_tool:?} is in the hosted text");
+        }
+        assert!(text.contains("`markdown` line from evaluate_part") && text.contains("export_part's `url`"));
+        assert!(text.contains("bearer"));
+
+        let hosted = Parcad::new().with_capability(service::capability(true)).get_info();
+        assert_eq!(hosted.instructions.as_deref(), Some(text.as_str()));
+        let local = Parcad::new().with_capability(service::capability(false)).get_info();
+        assert_eq!(local.instructions.as_deref(), Some(instructions(Screen::App).as_str()));
     }
 
     #[test]
@@ -2664,7 +2721,7 @@ mod tests {
     /// than back to a whole script.
     #[test]
     fn every_change_after_the_first_is_an_edit() {
-        assert!(instructions(false).contains("Every change after the first is an edit_part"));
+        assert!(instructions(Screen::App).contains("Every change after the first is an edit_part"));
         let tools = Parcad::new().tool_router.list_all();
         let description = |name: &str| tools.iter().find(|t| t.name == name).unwrap().description.clone().unwrap_or_default();
         assert!(description("set_script").contains("edit_part with project \"@session\""));

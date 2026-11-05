@@ -119,7 +119,11 @@ runs **one process with tenants inside it**, which is what landed:
   can show. A name is one plain file name, or one under `renders/`, held to
   the rule a project path's segments obey (`projects::not_a_name`), and
   another account's name is a 404 saying `export_part` writes one. Local
-  replies are unchanged: `path` is the file, and there is no `url`.
+  replies are unchanged: `path` is the file, and there is no `url`. The MCP
+  instructions a hosted client reads say the same in place of the desktop's
+  screen paragraph, which would send a model to `open_project` on a host with
+  no window; whether a model reads the hosted text is unmeasured, since
+  `field/run-case.sh` writes a client config with no bearer.
 - Limits per tenant, defaults being today's for `local`: the kernel timeout a
   call may ask for, the script backstop, concurrent builds (two per tenant and
   one global cap of the box's cores, `--builds N`, since the pool itself caps
