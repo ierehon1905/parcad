@@ -378,6 +378,8 @@ jobs:
             seed parts and the licence texts; keep the worker beside `parcad`.
             `parcad-mcp-*.mcpb` is the same host as an MCP bundle, for Claude
             Desktop and the MCP Registry. `SHA256SUMS.txt` checksums all of it.
+            The Linux archive as one server for many accounts is
+            `ghcr.io/ierehon1905/parcad:<version>` (docs/HOSTING.md).
 
             Contains LGPL-2.1 and MPL-2.0 components — see NOTICE.md. You may
             replace the OpenCASCADE inside this program with your own build;

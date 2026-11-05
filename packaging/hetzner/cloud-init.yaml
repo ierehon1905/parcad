@@ -1,0 +1,21 @@
+#cloud-config
+# One Hetzner box as the hosted parcad, from its first boot. Filled in by
+# user-data.py (the three values below are its placeholders) and pasted into
+# the server's "Cloud config" field; docs/HOSTING.md, "Deploying", has the
+# steps around it. Everything it does is install.sh, fetched from the release
+# tag it names, so the kit a box runs is the kit the release was tested with.
+package_update: true
+write_files:
+  - path: /etc/parcad/install.env
+    permissions: "0600"
+    content: |
+      PARCAD_PUBLIC_HOST=__PUBLIC_HOST__
+      PARCAD_VERSION=__VERSION__
+      PARCAD_KIT_REF=__KIT_REF__
+      TUNNEL_TOKEN=__TUNNEL_TOKEN__
+runcmd:
+  - set -a; . /etc/parcad/install.env; set +a;
+    curl -fsSL "https://raw.githubusercontent.com/ierehon1905/parcad/$PARCAD_KIT_REF/packaging/hetzner/install.sh"
+      -o /usr/local/sbin/parcad-install && chmod 0755 /usr/local/sbin/parcad-install
+      && /usr/local/sbin/parcad-install > /var/log/parcad-install.log 2>&1
+      || echo "parcad-install failed; read /var/log/parcad-install.log" >&2

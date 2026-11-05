@@ -13,6 +13,7 @@ one costs something every release.
 | Claude Code / Codex plugin | `plugin/` | the repository itself; see `plugin/README.md` | none |
 | Claude Desktop extension | `mcpb/manifest.json` | `release.yml` packs it per platform | none |
 | the desktop app's updater | `updater-manifest.py` | `release.yml`'s draft job signs each bundle and attaches `latest.json` | `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` |
+| the hosted server's image, `ghcr.io/ierehon1905/parcad` | `docker/` | `publish.yml` builds it from the release's Linux archive and pushes the version and `latest` | none: the workflow's own token; the package is made public once, by hand |
 
 ## Templates
 
@@ -89,9 +90,9 @@ account's parts live under `<tenants-dir>/<id>`, seeded on its first request;
 terminates TLS, and without it rmcp answers every request there with 403.
 `--builds N` caps builds in flight across every account, the machine's cores
 by default. `docker/` builds a container from the archive and its README says
-how it is run; docs/HOSTING.md says where, and why one process rather than one
-per account. The first release after 0.0.13 is the first that carries
-`--hosted`.
+how it is run; `hetzner/` puts it on one box behind a Cloudflare Tunnel;
+docs/HOSTING.md says where, why one process rather than one per account, and
+the steps. 0.0.14 is the first release that carries `--hosted`.
 
 ## On each release
 

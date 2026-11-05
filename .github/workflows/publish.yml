@@ -138,3 +138,56 @@ jobs:
           if [ "$PUSH" != true ]; then echo "validated; not publishing a manual dry run"; exit 0; fi
           ../../mcp-publisher login github-oidc
           ../../mcp-publisher publish
+
+  # The hosted server's image (packaging/docker): the release's own Linux
+  # archive, checksum-verified by the Dockerfile, under the release's version
+  # and `latest` on GitHub's registry. Pushed with the workflow's own token, so
+  # no secret; the package has to be made public once, by hand, for a box to
+  # pull it without a login (packaging/README.md). A manual dry run builds the
+  # image and puts an account through it without pushing.
+  container:
+    needs: render
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+          sparse-checkout: packaging/docker
+
+      - name: Build the image from the release's Linux archive
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+          docker build --build-arg "PARCAD_VERSION=$version" \
+            -t "$image:$version" -t "$image:latest" packaging/docker
+          docker run --rm --entrypoint parcad "$image:$version" --version | grep -F "$version"
+
+      # Every hosted path once, on the image that will be pushed: a token
+      # minted by the image's own parcad, the host up, a build, an export and
+      # its signed url fetched back with no bearer.
+      - name: Put an account through it
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          # Minted as root inside the image, then handed to the image's own user,
+          # who reads the file when the host starts.
+          mkdir -p smoke
+          token=$(docker run --rm --user 0 -v "$PWD/smoke:/work" --entrypoint bash "$IMAGE:$version" \
+                    -c 'parcad token new ci --tokens /work/tokens 2>/dev/null && chown 10001 /work/tokens')
+          docker run -d --name parcad -p 127.0.0.1:4242:4242 -e PARCAD_PUBLIC_HOST=http://127.0.0.1:4242 \
+            -v "$PWD/smoke/tokens:/etc/parcad/tokens:ro" "$IMAGE:$version"
+          for _ in $(seq 30); do curl -fs http://127.0.0.1:4242/api/health >/dev/null && break; sleep 1; done
+          packaging/docker/smoke.sh http://127.0.0.1:4242 "$token" || { docker logs parcad; exit 1; }
+          docker rm -f parcad >/dev/null
+
+      - name: Push it
+        if: env.PUSH == 'true'
+        run: |
+          set -euo pipefail
+          echo "${{ github.token }}" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          docker push --all-tags "$IMAGE"

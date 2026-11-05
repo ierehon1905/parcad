@@ -1,9 +1,17 @@
 # ParCAD's host without a window, from a published Linux x86_64 release, as one
 # server for many accounts. Building, running and every variable: README.md
 # beside this file.
+#
+# PARCAD_SOURCE picks where the binaries come from: `release` (the default)
+# downloads the release named by PARCAD_VERSION and checks it against that
+# release's SHA256SUMS.txt; `local` copies an unpacked
+# parcad-cli-x86_64-unknown-linux-gnu archive handed in as the build context
+# named `archive`, which is how a build is tried before its release exists.
 
-FROM debian:bookworm-slim AS fetch
-ARG PARCAD_VERSION=0.0.13
+ARG PARCAD_SOURCE=release
+
+FROM debian:bookworm-slim AS release
+ARG PARCAD_VERSION=0.0.14
 ARG PARCAD_REPO=ierehon1905/parcad
 RUN apt-get update \
  && apt-get install -y --no-install-recommends curl ca-certificates \
@@ -21,8 +29,16 @@ RUN set -eu; \
     tar -xzf "$asset"; \
     mv parcad-cli-x86_64-unknown-linux-gnu /opt/parcad
 
+# `docker build --build-arg PARCAD_SOURCE=local --build-context archive=<dir>`,
+# the directory being the unpacked archive: parcad, parcad-occt-worker,
+# examples/ and licenses/ at its top.
+FROM scratch AS local
+COPY --from=archive / /opt/parcad
+
+FROM ${PARCAD_SOURCE} AS parcad
+
 FROM debian:bookworm-slim
-ARG PARCAD_VERSION=0.0.13
+ARG PARCAD_VERSION=0.0.14
 LABEL org.opencontainers.image.title="parcad" \
       org.opencontainers.image.version="${PARCAD_VERSION}" \
       org.opencontainers.image.source="https://github.com/ierehon1905/parcad" \
@@ -37,10 +53,11 @@ RUN apt-get update \
  && mkdir -p /data/tenants /etc/parcad \
  && chown -R parcad:parcad /data
 
-COPY --from=fetch /opt/parcad /opt/parcad
+COPY --from=parcad /opt/parcad /opt/parcad
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/parcad-entrypoint
 RUN ln -s /opt/parcad/parcad /usr/local/bin/parcad \
- && mkdir /opt/parcad/no-seed
+ && mkdir /opt/parcad/no-seed \
+ && test -x /opt/parcad/parcad -a -x /opt/parcad/parcad-occt-worker -a -d /opt/parcad/examples
 
 # The seed folder is named because a CLI looks for its examples in
 # ../Resources, a bundle's layout. Each account is seeded from it on its first
