@@ -294,17 +294,30 @@ Added for docs/VALIDITY_CHECKS.md, all in `include/wrapper.hxx`, declared in
 `src/lib.rs`; `TKBO`, `TKTopAlgo` and `TKBRep` were already linked.
 
 - `Shape_self_interference_report(shape, fuzzy, located)` —
-  `BOPAlgo_CheckerSI` on the shape, as `BRepAlgoAPI_Check` runs it. `""` when
+  `BOPAlgo_CheckerSI` on the shape, as `BRepAlgoAPI_Check` runs it, with each
+  face judged against itself by `ParcadFaceSelfIntersection` below. `""` when
   nothing meets; else `"<pairs> <aborted>"`, then `"<kind> <kind> x y z"` for
   the first `located` pairs, the point from `BRepExtrema_DistShapeShape`, or
-  `"face itself x y z"` from the face's own `IntTools_FaceFace` when a face
-  meets itself.
+  `"face itself x y z"` at the first walked point that is a crossing when a
+  face meets itself.
 - `Shape_self_interference_since(after, before, fuzzy, located)` — the same
   over the faces of `after` that are not faces of `before` and every face
   whose box meets one of theirs. A `BOPAlgo_CheckerSI` subclass keeps only the
   candidate pairs with a changed face, or a sub-shape of one, on a side (a
   `BOPDS_IteratorSI` subclass filters its lists after `Intersect`), and
   intersects only the changed faces with themselves. Runs parallel.
+- `ParcadFaceSelfIntersection` — `IntTools_FaceFace` of a face with itself,
+  the verdict read off the walked lines of its `IntPatch_Intersection` rather
+  than their count: a crossing is a walked point with both preimages inside
+  the face (`IntTools_Context::IsPointInOnFace`) and not both within tolerance
+  of a seam edge of the face (`BRep_Tool::IsClosed(edge, face)`; the point
+  against its projection on the seam's pcurve, compared in 3D). The kernel's
+  one-surface walk is seeded by a polyhedron that excludes only triangle pairs
+  sharing a node, so a face closed by a seam seeds it from the seam's two
+  sides, and the lines walked from there run along the seam or outside the
+  face; stock `BOPAlgo_CheckerSI::CheckFaceSelfIntersection` reports them
+  (docs/GOTCHAS.md, "A closed fillet ring was reported as crossing itself at
+  its seam"). A face the stock check passes still passes.
 - `Shape_orientation_report(shape)` / `Shape_turned_outward(shape)` — per
   solid, per shell: a point outside the solid's box classified
   (`BRepClass3d_SolidClassifier`) against each shell on its own must be

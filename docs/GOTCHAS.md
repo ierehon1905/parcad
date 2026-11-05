@@ -656,6 +656,49 @@ while `.expect` counts 16, and pasting the reply's number failed the build.
 It is now the selector's own logical count
 (`eval/cases/fillet-counts-a-split-rim-once.json`).
 
+### A closed fillet ring was reported as crossing itself at its seam
+
+The v0.0.14 release corpus failed on Windows alone:
+`fillet-counts-a-split-rim-once`, the sixteen beads with every rim rounded by
+0.2 mm, refused as "its surface runs into itself near (7.449, 2.859, 0.808) (a
+face crosses itself)", with 0.1 mm measured to fail as well and 0.09 to build.
+macOS built it — and the same macOS build refuses the same part at 0.1 mm (near
+(6.022, 5.279, 0.613)) and at 0.15 mm (near (7.432, 2.840, 0.854)), while
+building it at 0.05–0.09, 0.11–0.14 and 0.16–0.5. A round that cannot fit at
+0.15 and fits at 0.14 and 0.16 is not a round that does not fit.
+
+Each round is one rational B-spline face all the way round a bead (degree 2
+across the section, 10 along it, 3 × 47–62 poles), closed by a seam edge where
+its spine starts. The surface closes to 1e-9 mm there, and a 0.002 mm mesh of a
+flagged ring has no two triangles crossing. The point named is on the 22.5° or
+45° bead's ring, 9–19 µm from its seam, where that bead's own seam meets its
+rim. `IntTools_FaceFace` of a face with itself runs
+`IntPatch_PrmPrmIntersection`'s one-surface walk, seeded by the
+self-interference of a polyhedron over the surface, which excludes triangle
+pairs sharing a node and nothing else. The triangles on the two sides of the
+seam share no node — the closure is topology the polyhedron never sees — so at
+some radii they seed a walk, and every point walked from them has either both
+preimages on the seam (v₁ = v_max, v₂ = v_min, u₁ = u₂: one point of the face)
+or one preimage outside the face, 2–17 µm past v_max or u_max, where the
+B-spline extended beyond its end lands on its own start. Stock
+`BOPAlgo_CheckerSI` reports the same face, so this is OpenCASCADE's check and
+not the fresh-face subclass; the closed analytic surfaces it skips by type —
+cylinder, cone, sphere, the ring torus — would meet themselves at their seams
+the same way. Which radius trips it is the last bits of the seeds and steps,
+which differ between arm64 clang and x86_64 MSVC: the 0.15 of one is the 0.2
+of the other.
+
+`ParcadFaceSelfIntersection` (vendor/opencascade-sys `wrapper.hxx`) now reads
+the verdict off the walked lines: a face crosses itself where some walked
+point has both preimages inside the face (`IntTools_Context::IsPointInOnFace`)
+and not both within tolerance of one of its seam edges — the checker's own
+rule, an interference other than through a shared sub-shape, applied to the
+one sub-shape the polyhedron cannot see. A face the stock check passes still
+passes; the folded corner of `refuse-folded-blend-corner` is still refused,
+its crossing being interior. `eval/cases/fillet-ring-closes-on-itself.json`
+holds the 0.15 mm part, and `a_fillet_ring_closed_by_a_seam_does_not_cross_itself`
+all three radii.
+
 ### Delabella, OCCT's other triangulator, meshes an extruded spline open
 
 `IMeshTools_Parameters::MeshAlgo`, or the `CSF_MeshAlgo=delabella` environment

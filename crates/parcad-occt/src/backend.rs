@@ -7071,6 +7071,33 @@ mod tests {
         assert!(err.contains("a face crosses itself"), "{err}");
     }
 
+    /// Sixteen beads on a sphere, every rim rounded: each round is one
+    /// B-spline face closed by a seam, and the kernel's check of a face
+    /// against itself read that seam as a crossing at some radii — 0.1 and
+    /// 0.15 on arm64, 0.2 on x86_64 Windows (docs/GOTCHAS.md, "A closed fillet
+    /// ring was reported as crossing itself at its seam"). The volumes are the
+    /// bare union's 2152.326 mm³ plus what sixteen concave rounds fill.
+    #[test]
+    fn a_fillet_ring_closed_by_a_seam_does_not_cross_itself() {
+        for (radius, volume) in [(0.1, 2152.350), (0.15, 2152.375), (0.2, 2152.408)] {
+            let mut nodes = vec![serde_json::json!({"op": "sphere", "r": 8}), serde_json::json!({"op": "sphere", "r": 1})];
+            for i in 0..16 {
+                let angle = f64::from(i) * std::f64::consts::TAU / 16.0;
+                nodes.push(serde_json::json!({"op": "translate", "child": 1,
+                    "by": {"x": 7.4 * angle.cos(), "y": 7.4 * angle.sin(), "z": 0}}));
+            }
+            nodes.push(serde_json::json!({"op": "union", "children": (2..18).collect::<Vec<_>>(), "blend": 0}));
+            nodes.push(serde_json::json!({"op": "union", "children": [0, 18], "blend": 0}));
+            nodes.push(serde_json::json!({"op": "fillet", "child": 19, "radius": radius,
+                "selector": {"dihedral": "concave"}, "expect": {"count": 16}}));
+            let doc: Doc = serde_json::from_value(serde_json::json!({"units": "mm", "root": 20, "nodes": nodes})).unwrap();
+            let part = build_part(&doc).unwrap_or_else(|e| panic!("fillet {radius}: {e:#}"));
+            assert!(part.shape.self_interference(0.0, 1).is_none(), "fillet {radius}: the whole-shape check");
+            let measured = part.shape.signed_volume();
+            assert!((measured - volume).abs() < 2e-3, "fillet {radius}: {measured} mm³");
+        }
+    }
+
     #[test]
     fn a_treatment_attempt_leaves_the_shape_it_was_given_as_it_was() {
         // Two cylinders crossing: blends of their seam that build and fail

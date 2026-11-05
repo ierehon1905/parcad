@@ -1,0 +1,42 @@
+{
+  "name": "fillet-ring-closes-on-itself",
+  "script": "eval/scripts/fillet-ring-closes-on-itself.js",
+  "why": "A fillet all the way round a bead's rim is one B-spline face closed by a seam, and OpenCASCADE's check of a face against itself (BOPAlgo_CheckerSI, one-surface IntPatch walk) seeded a walk from the triangles on either side of that seam, which share no node, and reported the seam as the face crossing itself: 0.1 and 0.15 mm here on arm64, 0.2 mm on x86_64 Windows (the v0.0.14 release corpus), the other radii clear; the rings' surfaces close to 1e-9 mm and a 0.002 mm mesh of the flagged ring has no two triangles crossing. The wrapper now judges the walked points: both preimages inside the face and not both on a seam (docs/GOTCHAS.md, \"A closed fillet ring was reported as crossing itself at its seam\"). Volume is the bare union's 2152.326 plus what sixteen concave rounds fill.",
+  "brep": {
+    "size": [
+      16.792,
+      16.792,
+      16.0
+    ],
+    "volume_mm3": 2152.374,
+    "area_mm2": 813.387,
+    "triangles": 14118,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 0.0,
+    "stands_on_patches": 0,
+    "watertight": true,
+    "faces": 34,
+    "edges": 108,
+    "curves": 34,
+    "treatments": [
+      {
+        "op": "fillet",
+        "edges": 16
+      }
+    ],
+    "overhang": {
+      "part": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 114.028,
+        "bed_mm2": 0.0,
+        "faces": 19,
+        "bridges": 0
+      }
+    }
+  }
+}

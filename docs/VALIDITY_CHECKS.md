@@ -38,6 +38,20 @@ is a 0.4 mm blend whose corner patch folds over near its degenerate corner
 (its normal, sampled from its own poles, turns over on 224 of 40,401 points),
 no two faces cross, the mesh closes, and nothing else sees it.
 
+A face is judged against itself on the walked lines, not on their count. The
+one-surface walk the kernel runs for `IntTools_FaceFace(F, F)` is seeded from a
+polyhedron that excludes only triangle pairs sharing a node, so on a face
+closed by a seam — a fillet all the way round a rim — the seam's two sides seed
+it, and every point of the lines walked from there is either on the seam in
+both preimages or outside the face in one. `ParcadFaceSelfIntersection`
+(vendor/opencascade-sys PARCAD-CHANGES.md) counts a crossing where some walked
+point has both preimages inside the face and not both on a seam. Stock
+`BOPAlgo_CheckerSI` reported the sixteen beads' rounds as crossing themselves
+at 0.1 and 0.15 mm on arm64 and at 0.2 mm on x86_64 Windows, the other radii
+clear (docs/GOTCHAS.md, "A closed fillet ring was reported as crossing itself
+at its seam"). The whole-shape check, `self_interference` without `since`,
+goes through the same subclass.
+
 A treatment builds on a topology copy of its input (vendor/opencascade
 PARCAD-CHANGES.md), so "not a face of the input" is the copy's faces, and so a
 refused attempt cannot leave widened tolerances on shapes something else holds.

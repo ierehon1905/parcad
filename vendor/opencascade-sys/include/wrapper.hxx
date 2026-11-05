@@ -43,6 +43,10 @@
 #include <BOPDS_IteratorSI.hxx>
 #include <IntTools_Context.hxx>
 #include <IntTools_FaceFace.hxx>
+#include <IntPatch_Line.hxx>
+#include <IntPatch_WLine.hxx>
+#include <IntSurf_PntOn2S.hxx>
+#include <Geom2dAPI_ProjectPointOnCurve.hxx>
 #include <BOPAlgo_Alerts.hxx>
 #include <OSD_Parallel.hxx>
 #include <Standard_ErrorHandler.hxx>
@@ -2953,22 +2957,107 @@ private:
   const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> *fresh_;
 };
 
+// A face asked whether it crosses itself, as BOPAlgo_CheckerSI asks it, with
+// the verdict read off the walked lines rather than their count. The kernel's
+// one-surface walk is seeded from a polyhedron that excludes only triangle
+// pairs sharing a node. On a face closed by a seam edge — a fillet all the way
+// round a rim — the two sides of the seam are one point of the face, but the
+// triangles on either side share no node, and the lines walked from them run
+// along the seam (both preimages on it) or outside the face (the B-spline
+// extended past its end lands on its start). A face crosses itself where some
+// walked point has both preimages inside the face and not both on a seam.
+class ParcadFaceSelfIntersection : public IntTools_FaceFace {
+public:
+  // True when `face` crosses itself; `where` receives a point where it does.
+  bool CrossesItself(const TopoDS_Face &face, gp_Pnt *where) {
+    Perform(face, face, false);
+    if (!IsDone() || (Lines().Length() == 0 && Points().Length() == 0)) {
+      return false;
+    }
+    struct Seam {
+      Handle(Geom2d_Curve) pcurve;
+      double first, last, tolerance;
+    };
+    std::vector<Seam> seams;
+    NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> seen;
+    const double faceTolerance = BRep_Tool::Tolerance(face);
+    for (TopExp_Explorer it(face, TopAbs_EDGE); it.More(); it.Next()) {
+      const TopoDS_Edge &edge = TopoDS::Edge(it.Current());
+      if (!BRep_Tool::IsClosed(edge, face) || !seen.Add(edge)) {
+        continue;
+      }
+      for (TopAbs_Orientation side : {TopAbs_FORWARD, TopAbs_REVERSED}) {
+        Seam seam;
+        seam.pcurve = BRep_Tool::CurveOnSurface(TopoDS::Edge(edge.Oriented(side)), face, seam.first, seam.last);
+        seam.tolerance = BRep_Tool::Tolerance(edge) + faceTolerance + myTol;
+        if (!seam.pcurve.IsNull()) {
+          seams.push_back(seam);
+        }
+      }
+    }
+    const Handle(Geom_Surface) surface = BRep_Tool::Surface(face);
+    // Whether the surface at (u, v) is within tolerance of a seam edge: the
+    // point against its projection on the seam's pcurve, compared in 3D.
+    auto onSeam = [&](double u, double v) {
+      const gp_Pnt point = surface->Value(u, v);
+      for (const Seam &seam : seams) {
+        Geom2dAPI_ProjectPointOnCurve projection(gp_Pnt2d(u, v), seam.pcurve, seam.first, seam.last);
+        for (int k = 1; k <= projection.NbPoints(); ++k) {
+          const gp_Pnt2d q = projection.Point(k);
+          if (point.Distance(surface->Value(q.X(), q.Y())) <= seam.tolerance) return true;
+        }
+        for (double t : {seam.first, seam.last}) {
+          const gp_Pnt2d q = seam.pcurve->Value(t);
+          if (point.Distance(surface->Value(q.X(), q.Y())) <= seam.tolerance) return true;
+        }
+      }
+      return false;
+    };
+    auto genuine = [&](const IntSurf_PntOn2S &point) {
+      double u1, v1, u2, v2;
+      point.Parameters(u1, v1, u2, v2);
+      if (!myContext->IsPointInOnFace(face, gp_Pnt2d(u1, v1)) || !myContext->IsPointInOnFace(face, gp_Pnt2d(u2, v2))) {
+        return false;
+      }
+      return !(onSeam(u1, v1) && onSeam(u2, v2));
+    };
+    for (int i = 1; i <= myIntersector.NbLines(); ++i) {
+      const Handle(IntPatch_Line) &line = myIntersector.Line(i);
+      if (line->ArcType() != IntPatch_Walking) {
+        return true;
+      }
+      const Handle(IntPatch_WLine) walked = Handle(IntPatch_WLine)::DownCast(line);
+      for (int k = 1; k <= walked->NbPnts(); ++k) {
+        if (genuine(walked->Point(k))) {
+          if (where != nullptr) *where = walked->Point(k).Value();
+          return true;
+        }
+      }
+    }
+    for (int i = 1; i <= myIntersector.NbPnts(); ++i) {
+      const IntSurf_PntOn2S &point = myIntersector.Point(i).PntOn2S();
+      if (genuine(point)) {
+        if (where != nullptr) *where = point.Value();
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
 class ParcadCheckerSI : public BOPAlgo_CheckerSI {
 public:
   explicit ParcadCheckerSI(const NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> *fresh) : fresh_(fresh) {}
 
-  // BOPAlgo_CheckerSI::Perform, with each surface intersected with itself
-  // only where its face is fresh: that pass is most of the cost on a fillet.
+  // BOPAlgo_CheckerSI::Perform, with each face intersected with itself by
+  // ParcadFaceSelfIntersection, and only where its face is fresh when the
+  // caller named what changed: that pass is most of the cost on a fillet.
   void Perform(const Message_ProgressRange &range = Message_ProgressRange()) override {
-    if (fresh_ == nullptr) {
-      BOPAlgo_CheckerSI::Perform(range);
-      return;
-    }
     try {
       OCC_CATCH_SIGNALS
       BOPAlgo_PaveFiller::Perform(range);
       ((NCollection_Map<BOPDS_Pair> &)myDS->Interferences()).Clear();
-      CheckFreshFacesOnThemselves();
+      CheckFacesOnThemselves();
       if (!HasErrors()) PerformVZ(Message_ProgressRange());
       if (!HasErrors()) PerformEZ(Message_ProgressRange());
       if (!HasErrors()) PerformFZ(Message_ProgressRange());
@@ -2987,18 +3076,17 @@ private:
     std::vector<TopoDS_Face> *faces;
     std::vector<char> *crossed;
     void operator()(int i) const {
-      IntTools_FaceFace intersection;
-      intersection.Perform((*faces)[i], (*faces)[i], false);
-      (*crossed)[i] = intersection.IsDone() && (intersection.Lines().Length() > 0 || intersection.Points().Length() > 0);
+      ParcadFaceSelfIntersection check;
+      (*crossed)[i] = check.CrossesItself((*faces)[i], nullptr);
     }
   };
 
-  void CheckFreshFacesOnThemselves() {
+  void CheckFacesOnThemselves() {
     std::vector<TopoDS_Face> faces;
     std::vector<int> indices;
     for (int i = 0; i < myDS->NbSourceShapes(); ++i) {
       const BOPDS_ShapeInfo &info = myDS->ShapeInfo(i);
-      if (info.ShapeType() != TopAbs_FACE || !fresh_->Contains(info.Shape())) {
+      if (info.ShapeType() != TopAbs_FACE || (fresh_ != nullptr && !fresh_->Contains(info.Shape()))) {
         continue;
       }
       const TopoDS_Face &face = TopoDS::Face(info.Shape());
@@ -3086,17 +3174,10 @@ inline rust::String parcad_self_interference(const TopoDS_Shape &shape, double f
       };
       if (n1 == n2 && a.ShapeType() == TopAbs_FACE) {
         // A face that meets itself: where, from its own intersection.
-        IntTools_FaceFace itself;
-        itself.Perform(TopoDS::Face(a), TopoDS::Face(a), false);
+        ParcadFaceSelfIntersection itself;
+        gp_Pnt p;
         lines << kind(a) << " itself";
-        if (itself.IsDone() && itself.Lines().Length() > 0) {
-          const Handle(Geom_Curve) &curve = itself.Lines().First().Curve();
-          if (!curve.IsNull()) {
-            const gp_Pnt p = curve->Value(0.5 * (curve->FirstParameter() + curve->LastParameter()));
-            lines << " " << p.X() << " " << p.Y() << " " << p.Z();
-          }
-        } else if (itself.IsDone() && itself.Points().Length() > 0) {
-          const gp_Pnt p = itself.Points().First().P1().Pnt();
+        if (itself.CrossesItself(TopoDS::Face(a), &p)) {
           lines << " " << p.X() << " " << p.Y() << " " << p.Z();
         }
       } else {
