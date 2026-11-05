@@ -354,6 +354,9 @@ pub mod ffi {
 
         pub fn IsNull(self: &TopoDS_Shape) -> bool;
         pub fn IsEqual(self: &TopoDS_Shape, other: &TopoDS_Shape) -> bool;
+        // Same TShape at the same location, orientation aside: the identity a
+        // history is keyed on. Added for parcad, see PARCAD-CHANGES.md.
+        pub fn IsSame(self: &TopoDS_Shape, other: &TopoDS_Shape) -> bool;
         pub fn ShapeType(self: &TopoDS_Shape) -> TopAbs_ShapeEnum;
 
         type TopAbs_Orientation;
@@ -944,6 +947,10 @@ pub mod ffi {
         // BRepClass3d_SolidClassifier — added for parcad, see PARCAD-CHANGES.md.
         pub fn BRepClass3d_classify(shape: &TopoDS_Shape, x: f64, y: f64, z: f64, tolerance: f64) -> i32;
         pub fn BRepClass3d_classify_points(shape: &TopoDS_Shape, points: &[f64], tolerance: f64) -> Vec<i32>;
+
+        // std::hash<TopoDS_Shape>, the hash IsSame agrees with — added for
+        // parcad, see PARCAD-CHANGES.md.
+        pub fn Shape_identity_hash(shape: &TopoDS_Shape) -> usize;
 
         // BRepBndLib::AddOptimal — added for parcad, see PARCAD-CHANGES.md.
         pub fn Shape_bounds_optimal(

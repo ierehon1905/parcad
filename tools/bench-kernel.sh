@@ -17,7 +17,9 @@ trap 'rm -rf "$OUT"' EXIT
 
 # Report what the kernel was compiled with, so a number is never quoted without
 # knowing whether the thing producing it was optimised.
-flags=$(find target/release/build/occt-sys-*/out/build -name flags.make -path "*TKBO*" 2>/dev/null | head -1)
+# A PARCAD_OCCT_PREBUILT install keeps its flags under its own build tree.
+flag_root="${PARCAD_OCCT_PREBUILT:+$PARCAD_OCCT_PREBUILT/build}"
+flags=$(find ${flag_root:-target/release/build/occt-sys-*/out/build} -name flags.make -path "*TKBO*" 2>/dev/null | head -1 || true)
 if [ -n "$flags" ]; then
   opt=$(grep -o -- '-O[0123sz]' <<<"$(grep '^CXX_FLAGS =' "$flags")" | tail -1)
   echo "opencascade built with: ${opt:--O0 (UNOPTIMISED)}"

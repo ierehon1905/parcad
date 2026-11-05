@@ -481,6 +481,11 @@ inline rust::Vec<int32_t> BRepClass3d_classify_points(const TopoDS_Shape &shape,
   return out;
 }
 
+// The hash `TopTools_ShapeMapHasher` keys a shape map on: the TShape and its
+// location, never the orientation, so two shapes `IsSame` hash alike. Added
+// for parcad, see PARCAD-CHANGES.md.
+inline size_t Shape_identity_hash(const TopoDS_Shape &shape) { return std::hash<TopoDS_Shape>{}(shape); }
+
 // Tight bounds of a shape from its exact geometry — added for parcad, see
 // PARCAD-CHANGES.md. `BRepBndLib::AddOptimal` without triangulation and
 // without tolerance enlargement. False for a shape with no extent.
