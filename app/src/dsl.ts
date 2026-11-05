@@ -1174,21 +1174,24 @@ export class Shape {
   }
 
   /**
-   * Which way this body prints: the axis that points up on the printer,
-   * for a body drawn in its assembled position. Call it last, on the shape
-   * the returned object names, the way `.reference()` is.
+   * Which way a body drawn in its assembled position prints, when printed on
+   * its own: the axis that points up on the printer. Call it last, on the
+   * shape the returned object names, like `.reference()`.
    *
    * - `"+z"` is as drawn, the default; `"-z"` prints it upside down; `"x"`,
    *   `"-x"`, `"y"`, `"-y"` stand it on a side; `[x, y, z]` is any direction.
-   * - `print_check` measures the body's overhang and bed contact in this
-   *   orientation. It changes what is measured, never what is exported: a
-   *   slicer orients and arranges for its own bed.
-   * - A reference body has no print orientation.
+   * - `print_check` measures overhang and bed contact this way up; the
+   *   export is as drawn.
+   * - Bodies printed together — a print-in-place hinge, a drawer in its
+   *   frame — share one orientation and take none of this: draw them as they
+   *   print and let a `turns` or `slides` check move them ({@link TurnCheck}).
+   * - A reference body has none.
    *
    * @example
-   *     const lid = box(40, 40, 3).at(0, 0, 21.5).printedUp("-z");
-   *     const base = box(40, 40, 20).at(0, 0, 10);
-   *     return { base, lid };
+   *     // a pin drawn lying in its bracket, printed standing on its end
+   *     const bracket = box(30, 12, 12).at(0, 0, 6).cut(cylinder(2.1, 14).rotate("y", 90).at(0, 0, 8));
+   *     const pin = cylinder(2, 36).rotate("y", 90).at(0, 0, 8).printedUp("x");
+   *     return { bracket, pin };
    */
   printedUp(up: PrintAxis | [number, number, number]): Shape {
     const axes: Record<PrintAxis, [number, number, number]> = {
@@ -4373,6 +4376,13 @@ const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean; doc?:
     doc: (doc) => (doc.checks ?? []).some((c) => c.holes !== undefined || c.feature !== undefined || c.size?.is !== undefined),
   },
   {
+    feature: "motion-checks",
+    after: "0.0.13",
+    what: "checks over a motion (turns, slides)",
+    uses: () => false,
+    doc: (doc) => (doc.checks ?? []).some((c) => c.turns !== undefined || c.slides !== undefined),
+  },
+  {
     feature: "query-not",
     after: "0.0.9",
     what: "not in an edge query ({ dihedral: \"convex\", not: { parallel: \"z\" } })",
@@ -4488,13 +4498,13 @@ export type Part = Shape | Record<string, Shape | Check[]>;
  * bodies. Judged on every build and reported first: a verdict, then each
  * failure with what differs, what was measured and where.
  *
- * - Before modelling, write the request's numbers as checks — its size, its
- *   holes, where its features sit — so the verdict says the part is what was
- *   asked, not only that it prints.
+ * - Before modelling, write the request's numbers as checks — size, holes,
+ *   where features sit — so the verdict says the part is what was asked, not
+ *   just that it prints.
  * - One head key per check: `size`, `holes`, `feature`, `clear`,
- *   `interferes`, `touching`, `wall`, `standsOn`, `bodies` or `watertight`;
- *   the rest qualify it. Numbers match to 0.01 mm.
- * - evaluate_part reports a failure; export_part and save_project refuse it
+ *   `interferes`, `touching`, `turns`, `slides`, `wall`, `standsOn`,
+ *   `bodies`, `watertight`; the rest qualify it. Held to 0.01 mm.
+ * - evaluate_part reports a failure; export_part and save_project refuse
  *   without `allow_failing: "<reason>"`.
  *
  * @example
@@ -4503,14 +4513,11 @@ export type Part = Shape | Record<string, Shape | Check[]>;
  *     const notch = box(10, 10, 10).at(0, 22, 0).tag("notch");
  *     let plate = box(80, 50, 6).cut(notch);
  *     for (const [x, y] of at) plate = plate.cut(cylinder(3, 10).at(x, y, 0));
- *     return {
- *       plate,
- *       checks: [
- *         { size: { is: [80, 50, 6] } },
- *         { holes: { diameter: 6, through: true, at } },
- *         { feature: { tag: "notch", size: [10, 8, 6], center: [0, 21, 0] } },
- *       ],
- *     };
+ *     return { plate, checks: [
+ *       { size: { is: [80, 50, 6] } },
+ *       { holes: { diameter: 6, through: true, at } },
+ *       { feature: { tag: "notch", size: [10, 8, 6], center: [0, 21, 0] } },
+ *     ] };
  *
  * @remarks
  * A request's numbers are the commonest thing a model gets wrong while every
@@ -4537,44 +4544,129 @@ export type Part = Shape | Record<string, Shape | Check[]>;
  * in the part: a check in a throwaway script is one that stops being re-run.
  */
 export interface Check {
-  /** The two bodies never touch, by at least `atLeast` mm. */
+  /** The two never touch, by `atLeast` mm. */
   clear?: [string, string];
-  /** The two bodies overlap: a catch that has to catch. */
+  /** The two overlap: a catch that has to catch. */
   interferes?: [string, string];
-  /** The two bodies are flush: neither gap nor overlap. */
+  /** The two are flush: neither gap nor overlap. */
   touching?: [string, string];
-  /** Nothing in the part is thinner than `min` mm. */
+  turns?: TurnCheck;
+  slides?: SlideCheck;
+  /** For a motion: bodies to stay clear of; default all others. */
+  clearOf?: string | string[];
+  /** For a motion: the body to bite into. */
+  catches?: string;
+  /** Nothing is thinner than `min` mm. */
   wall?: { min: number };
-  /** The part is `is` [x, y, z] mm, or fits in `max`, as drawn. */
+  /** The part is `is` [x, y, z] mm, or fits in `max`. */
   size?: { is?: number[]; max?: number[] };
-  /** Round holes of `diameter` (a Ø) along `axis` (default z): `count`, `through` or not, one at each `at`, [x, y] across z. */
+  /** Round holes of Ø`diameter` along `axis` (default z): `count`, `through`, one per `at` [x, y]. */
   holes?: { diameter: number; count?: number; through?: boolean; at?: number[][]; axis?: "x" | "y" | "z" };
-  /** The faces tagged `tag` span `size` [x, y, z] centred at `center`; tag the cutter. */
+  /** The faces tagged `tag` span `size` centred at `center`; tag the cutter. */
   feature?: { tag: string; size?: number[]; center?: number[] };
-  /** At least this fraction of the footprint reaches the bed, 0 to 1. */
+  /** This fraction of the footprint reaches the bed, 0 to 1. */
   standsOn?: { atLeast: number };
-  /** The part is exactly this many free-standing pieces. */
+  /** Exactly this many free-standing pieces. */
   bodies?: number;
-  /** The mesh closes. `true` is the only value. */
+  /** The mesh closes; `true` only. */
   watertight?: true;
-  /** For `clear` the least gap, mm; for `interferes` the least shared volume, mm³. */
+  /** For `clear` the least gap, mm; for `interferes` the least shared mm³. */
   atLeast?: number;
-  /** For `interferes`: how far the two must reach into each other, mm. */
+  /** For `interferes`, `catches`: how deep the two must overlap, mm. */
   deeperThan?: number;
-  /** For `touching`: the least shared surface, mm²; a corner graze is 0. */
+  /** For `touching`: the least shared surface, mm²; a graze is 0. */
   contactAtLeast?: number;
-  /** For `wall`: tags left out, and `"feather"` or `"edge"` to leave out that kind of reading. */
+  /** For `wall`: tags left out, or `"feather"`/`"edge"` for that reading. */
   ignore?: string[];
-  /** For `wall`: only material on these tags' surfaces counts. */
+  /** For `wall`: only material on these tags counts. */
   on?: string[];
-  /** Free text, echoed back when the check fails. */
+  /** Free text, echoed when the check fails. */
   why?: string;
 }
 
+/**
+ * A body turned about an axis, for a `turns` check: a print-in-place hinge
+ * proven clear at every angle of its swing on the exact solids.
+ *
+ * - `about` is the axis, `at` a point on it (the pin); right-handed, the
+ *   sign `.rotate("x", d)` gives, 0° as drawn, at most one revolution.
+ * - Draw the hinge open and flat, the pin of one body through the other's
+ *   knuckles with a 0.4 mm gap, and let the check fold it; never draw the
+ *   lid shut and `.printedUp()` it.
+ * - A lid is two checks: `clearOf` up to where the latch bites, `catches`
+ *   with `deeperThan` over the last degrees.
+ * - The reply's `checks.motions` has the least clearance and its pose, or
+ *   where the bodies first meet.
+ *
+ * @example
+ *     // a box with a lid on a print-in-place hinge, drawn open and flat
+ *     const AY = -28, AZ = 10.2;                   // the hinge axis
+ *     const base = box(60, 40, 10).at(0, 0, 5).cut(box(56, 36, 9).at(0, 0, 6))
+ *       .union(cylinder(4, 20).rotate("y", 90).at(0, AY, AZ).cut(cylinder(1.9, 22).rotate("y", 90).at(0, AY, AZ)));
+ *     const lid = box(60, 40, 10).at(0, -56, 5).cut(box(56, 36, 9).at(0, -56, 6))
+ *       .union(cylinder(4, 18).rotate("y", 90).at(-19.5, AY, AZ), cylinder(4, 18).rotate("y", 90).at(19.5, AY, AZ))
+ *       .union(cylinder(1.5, 58).rotate("y", 90).at(0, AY, AZ));
+ *     return { base, lid, checks: [
+ *       { turns: { body: "lid", about: "x", at: [0, AY, AZ], degrees: [0, -180] }, clearOf: ["base"], atLeast: 0.3 },
+ *     ] };
+ */
+export interface TurnCheck {
+  /** The named body that turns. */
+  body: string;
+  /** The axis: `"x"`, `"-y"`, `"+z"` or a direction `[x, y, z]`. */
+  about: PrintAxis | [number, number, number];
+  /** A point the axis passes through, mm. */
+  at: [number, number, number];
+  /** From and to, degrees, in the order the motion runs; 0 is as drawn. */
+  degrees: [number, number];
+}
+
+/**
+ * A body slid along a direction, for a `slides` check: a drawer in its
+ * frame, a phone into its sleeve, checked over the whole travel.
+ *
+ * - `along` is the direction, `mm` the travel from the body as drawn (0).
+ * - A `.reference()` body may be the one that slides: "does the phone go
+ *   in" is `slides: { body: "phone", ... }, clearOf: ["sleeve"]`.
+ * - The reply's `checks.motions` carries the least clearance and where it
+ *   is, or where the bodies first meet.
+ *
+ * @example
+ *     const frame = box(60, 80, 40).at(0, 0, 20).cut(box(50, 82, 30).at(0, 0, 20));
+ *     const drawer = box(49.4, 70, 29.4).at(0, 0, 20).cut(box(45, 66, 26).at(0, 0, 22));
+ *     return { frame, drawer, checks: [
+ *       { slides: { body: "drawer", along: "y", mm: [0, 60] }, clearOf: ["frame"], atLeast: 0.25 },
+ *     ] };
+ */
+export interface SlideCheck {
+  /** The named body that slides. */
+  body: string;
+  /** The direction: `"x"`, `"-y"`, `"+z"` or `[x, y, z]`. */
+  along: PrintAxis | [number, number, number];
+  /** From and to, mm along `along`, in the order the motion runs; 0 is as drawn. */
+  mm: [number, number];
+}
+
 /** The keys a check may carry, and the key an author might write for one. */
-const CHECK_KEYS = ["clear", "interferes", "touching", "wall", "size", "holes", "feature", "standsOn", "bodies", "watertight", "atLeast", "deeperThan", "contactAtLeast", "ignore", "on", "why"];
-const CHECK_HEADS = CHECK_KEYS.slice(0, 10);
+const CHECK_KEYS = ["clear", "interferes", "touching", "turns", "slides", "wall", "size", "holes", "feature", "standsOn", "bodies", "watertight", "clearOf", "catches", "atLeast", "deeperThan", "contactAtLeast", "ignore", "on", "why"];
+const CHECK_HEADS = CHECK_KEYS.slice(0, 12);
 const CHECK_SYNONYMS: Record<string, string> = {
+  turn: "turns",
+  rotate: "turns",
+  rotates: "turns",
+  swing: "turns",
+  swings: "turns",
+  hinge: "turns",
+  hinges: "turns",
+  slide: "slides",
+  translate: "slides",
+  translates: "slides",
+  clears: "clearOf",
+  avoids: "clearOf",
+  against: "clearOf",
+  latches: "catches",
+  holds: "catches",
+  snaps: "catches",
   depth: "deeperThan",
   depthmm: "deeperThan",
   deeper: "deeperThan",
@@ -4641,7 +4733,57 @@ function checkShapeError(check: unknown, index: number): string | undefined {
       return `${at}: ${key} is a pair of body names, e.g. ${key}: ["top", "stacks"], not ${render(pair)}.`;
     }
   }
+  const motion = motionShapeError(check, at);
+  if (motion !== undefined) return motion;
   return undefined;
+}
+
+/** Why a `turns` or `slides` check cannot be read, naming the shape to write. */
+function motionShapeError(check: Record<string, unknown>, at: string): string | undefined {
+  const turnForm = 'turns: { body: "lid", about: "x", at: [0, -28, 16.2], degrees: [0, -170] }';
+  const slideForm = 'slides: { body: "drawer", along: "y", mm: [0, 60] }';
+  const isNumbers = (v: unknown, n: number) => Array.isArray(v) && v.length === n && v.every((x) => typeof x === "number" && Number.isFinite(x));
+  const isDirection = (v: unknown) => (typeof v === "string" && v.length > 0) || isNumbers(v, 3);
+  for (const [key, form, direction, range, unit] of [
+    ["turns", turnForm, "about", "degrees", "degrees"],
+    ["slides", slideForm, "along", "mm", "mm"],
+  ] as const) {
+    const motion = check[key];
+    if (motion === undefined) continue;
+    if (!isObject(motion)) return `${at}: ${key} is an object naming the body and its motion — ${form} — not ${render(motion)}.`;
+    const keys = key === "turns" ? ["body", "about", "at", "degrees"] : ["body", "along", "mm"];
+    const unknown = Object.keys(motion).filter((k) => !keys.includes(k));
+    if (unknown.length > 0) return `${at}: ${key} has no key ${list(unknown.map((k) => `"${k}"`))}; its keys are ${list(keys)} — ${form}.`;
+    if (typeof motion.body !== "string" || !motion.body.trim()) return `${at}: ${key}.body is the name of the body that moves, as the returned object names it — ${form}.`;
+    if (!isDirection(motion[direction])) return `${at}: ${key}.${direction} is an axis — "x", "-y", "+z" — or a direction [x, y, z], not ${render(motion[direction])}.`;
+    if (key === "turns" && !isNumbers(motion.at, 3)) return `${at}: turns.at is a point on the axis, [x, y, z] in mm — where the pin is — not ${render(motion.at)}.`;
+    if (!isNumbers(motion[range], 2)) return `${at}: ${key}.${range} is [from, to] in ${unit}, from the body as drawn at 0, not ${render(motion[range])}.`;
+  }
+  const clearOf = check.clearOf;
+  if (clearOf !== undefined && typeof clearOf !== "string" && !(Array.isArray(clearOf) && clearOf.every((n) => typeof n === "string"))) {
+    return `${at}: clearOf is a body name or a list of them, e.g. clearOf: ["base"], not ${render(clearOf)}.`;
+  }
+  if (check.catches !== undefined && typeof check.catches !== "string") {
+    return `${at}: catches is the name of the one body the moving one must bite into, e.g. catches: "base", not ${render(check.catches)}.`;
+  }
+  return undefined;
+}
+
+/** Every body name a check refers to, for `build` to hold against the bodies returned. */
+function bodiesNamedBy(check: Record<string, unknown>): string[] {
+  const names: string[] = [];
+  for (const key of ["clear", "interferes", "touching"]) {
+    const pair = check[key];
+    if (Array.isArray(pair)) names.push(...(pair as string[]));
+  }
+  for (const key of ["turns", "slides"]) {
+    const motion = check[key];
+    if (isObject(motion) && typeof motion.body === "string") names.push(motion.body);
+  }
+  if (typeof check.clearOf === "string") names.push(check.clearOf);
+  if (Array.isArray(check.clearOf)) names.push(...(check.clearOf as string[]));
+  if (typeof check.catches === "string") names.push(check.catches);
+  return names;
 }
 
 // The runners (engine.ts, tools/run.ts, script.rs) say the same thing when a
@@ -4754,15 +4896,11 @@ export function build(
   if (checks !== undefined) {
     const names = bodies.map((body) => body.name);
     checks.forEach((check, index) => {
-      for (const key of ["clear", "interferes", "touching"]) {
-        const pair = (check as Record<string, unknown>)[key];
-        if (!Array.isArray(pair)) continue;
-        for (const name of pair) {
-          if (!names.includes(name as string)) {
-            throw new Error(
-              `check ${index + 1} names a body "${name}" the returned object does not have; its bodies are ${list(names.map((n) => `"${n}"`))}`,
-            );
-          }
+      for (const name of bodiesNamedBy(check as Record<string, unknown>)) {
+        if (!names.includes(name)) {
+          throw new Error(
+            `check ${index + 1} names a body "${name}" the returned object does not have; its bodies are ${list(names.map((n) => `"${n}"`))}`,
+          );
         }
       }
     });

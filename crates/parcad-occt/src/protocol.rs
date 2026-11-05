@@ -64,6 +64,150 @@ pub struct Perceive {
     /// Find every round hole: what a `holes` check reads.
     #[serde(default)]
     pub holes: bool,
+    /// Move a body through a range and measure its clearance to the others
+    /// at every pose, or how deep it reaches into one: what a `turns` or
+    /// `slides` check reads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub motions: Vec<MotionSpec>,
+}
+
+/// One body's motion, and what to measure along it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MotionSpec {
+    /// The named body that moves.
+    pub body: String,
+    pub motion: Motion,
+    /// The bodies it is measured against, by name.
+    pub against: Vec<String>,
+    pub reading: MotionReading,
+}
+
+/// A rigid motion with one parameter: the angle of a turn in degrees, or the
+/// distance of a slide in mm. Parameter 0 is the body as drawn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Motion {
+    /// Right-handed about the unit `axis` through `at`.
+    Turn { axis: [f64; 3], at: [f64; 3], degrees: [f64; 2] },
+    /// Along the unit `direction`.
+    Slide { direction: [f64; 3], mm: [f64; 2] },
+}
+
+/// What a motion is measured for.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MotionReading {
+    /// The body stays at least this far from every body in `against`, at
+    /// every pose of the range.
+    Clear { at_least_mm: f64 },
+    /// The body reaches at least this far into the one body in `against`,
+    /// somewhere in the range.
+    Catches { deeper_than_mm: f64 },
+}
+
+impl Motion {
+    /// From and to, in the motion's own unit.
+    pub fn range(&self) -> [f64; 2] {
+        match self {
+            Motion::Turn { degrees, .. } => *degrees,
+            Motion::Slide { mm, .. } => *mm,
+        }
+    }
+
+    /// `°` or ` mm`, as a sentence writes the parameter.
+    pub fn unit(&self) -> &'static str {
+        match self {
+            Motion::Turn { .. } => "°",
+            Motion::Slide { .. } => " mm",
+        }
+    }
+
+    /// The rigid transform at parameter `t`, row-major 4×4, taking a point of
+    /// the body as drawn to where the motion puts it.
+    pub fn transform(&self, t: f64) -> [f64; 16] {
+        match self {
+            Motion::Turn { axis: [ux, uy, uz], at: [px, py, pz], .. } => {
+                let (s, c) = t.to_radians().sin_cos();
+                let k = 1.0 - c;
+                let r = [
+                    [c + ux * ux * k, ux * uy * k - uz * s, ux * uz * k + uy * s],
+                    [uy * ux * k + uz * s, c + uy * uy * k, uy * uz * k - ux * s],
+                    [uz * ux * k - uy * s, uz * uy * k + ux * s, c + uz * uz * k],
+                ];
+                // A turn about a line through `p` is a turn about the origin
+                // followed by the shift that puts `p` back where it was.
+                let shift = |row: [f64; 3], p: f64| p - (row[0] * px + row[1] * py + row[2] * pz);
+                [
+                    r[0][0], r[0][1], r[0][2], shift(r[0], *px),
+                    r[1][0], r[1][1], r[1][2], shift(r[1], *py),
+                    r[2][0], r[2][1], r[2][2], shift(r[2], *pz),
+                    0.0, 0.0, 0.0, 1.0,
+                ]
+            }
+            Motion::Slide { direction: [dx, dy, dz], .. } => [
+                1.0, 0.0, 0.0, dx * t,
+                0.0, 1.0, 0.0, dy * t,
+                0.0, 0.0, 1.0, dz * t,
+                0.0, 0.0, 0.0, 1.0,
+            ],
+        }
+    }
+}
+
+/// What a motion measured, pass or fail: enough for a reader to judge it and
+/// for a viewer to draw it, with every number taken at a pose the kernel
+/// actually posed the body in.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MotionMeasure {
+    pub body: String,
+    pub motion: Motion,
+    /// The least clearance measured at any pose, with the pose and the pair
+    /// of closest points; absent when the body interferes at every pose
+    /// measured, or when nothing was measured against.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub least: Option<MotionClearance>,
+    /// A clearance proven at every pose of the whole range, from the sweep's
+    /// bounds; absent when the sweep did not finish or a pose interferes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certified_above_mm: Option<f64>,
+    /// The deepest the body was measured reaching into another, with the
+    /// pose and the point; absent when no measured pose interferes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deepest: Option<MotionInterference>,
+    /// For a `catches` reading that never reached its depth: a depth proven
+    /// not exceeded at any pose of the range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certified_below_mm: Option<f64>,
+    /// Why the sweep could not finish within its budget, when it could not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncertified: Option<String>,
+    /// How many exact measurements the sweep took.
+    pub measurements: usize,
+}
+
+/// A clearance at one pose of a motion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MotionClearance {
+    pub clearance_mm: f64,
+    /// The pose, in the motion's unit.
+    pub at: f64,
+    pub against: String,
+    /// A point on the moving body at that pose, then one on `against`.
+    pub closest_mm: [[f64; 3]; 2],
+}
+
+/// An interference at one pose of a motion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MotionInterference {
+    pub depth_mm: f64,
+    /// The pose, in the motion's unit.
+    pub at: f64,
+    pub against: String,
+    pub deepest_mm: [f64; 3],
+    /// The pose at which the two first meet, coming from the range's start;
+    /// absent for a `catches` reading, which asks where the bite is deepest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub touches_from: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -97,6 +241,9 @@ pub struct Perceived {
     /// Every round hole, when asked for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub holes: Vec<HoleMeasure>,
+    /// One answer per motion asked, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub motions: Vec<MotionMeasure>,
 }
 
 /// One round hole of the finished part, found by its circular rims: the

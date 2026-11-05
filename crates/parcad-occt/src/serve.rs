@@ -283,7 +283,14 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
             }
         }
         breadcrumb("measuring the solid");
-        return match perceive::perceive(&perceive::bodies_of(&part), spec) {
+        let answer = perceive::perceive(&perceive::bodies_of(&part), spec).and_then(|mut answer| {
+            if !spec.motions.is_empty() {
+                breadcrumb("moving a body through its range");
+                answer.motions = crate::motion::measure(&part, &spec.motions)?;
+            }
+            Ok(answer)
+        });
+        return match answer {
             Ok(answer) => Response::Perceived(Box::new(answer)),
             Err(e) => Response::Error {
                 stage: "measuring the solid".into(),

@@ -583,6 +583,7 @@ pub fn probe(
             .collect(),
         thickness: None,
         holes: false,
+        motions: Vec::new(),
     };
     let answer = perceive(doc, &spec, budget)?;
 
@@ -1103,7 +1104,11 @@ pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evalua
             let spec = parcad_occt::Perceive { holes: true, ..Default::default() };
             Ok(perceive(doc, &spec, budget)?.holes)
         };
-        let measures = parcad_evaluation::checks::Measures { wall: &mut at_default, holes: &mut holes };
+        let mut motions = |specs: &[parcad_occt::protocol::MotionSpec]| {
+            let spec = parcad_occt::Perceive { motions: specs.to_vec(), ..Default::default() };
+            Ok(perceive(doc, &spec, budget)?.motions)
+        };
+        let measures = parcad_evaluation::checks::Measures { wall: &mut at_default, holes: &mut holes, motions: &mut motions };
         evaluated.snapshot.verdicts.checks = Some(parcad_evaluation::checks::judge(doc, &evaluated.snapshot, measures)?);
     }
     // The brief is in every solid reply whether the script carries one or
@@ -2247,6 +2252,7 @@ mod tests {
                 opposite_surface_of: None,
                 why: Some("coins must not bind on the plate".into()),
             }],
+            motions: Vec::new(),
         };
         let door = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(failed.clone()), brief: None, print_check: None } };
         let refusal = door.pass(None, "export_part").unwrap_err();
@@ -2258,7 +2264,7 @@ mod tests {
         );
         assert!(door.pass(Some("  "), "save_project").unwrap_err().starts_with("save_project refused"));
         assert_eq!(door.pass(Some("the user accepts the binding"), "save_project").unwrap(), Some("the user accepts the binding".into()));
-        let passed = parcad_evaluation::ChecksReport { verdict: "passed", passed: 5, failed: Vec::new() };
+        let passed = parcad_evaluation::ChecksReport { verdict: "passed", passed: 5, failed: Vec::new(), motions: Vec::new() };
         let open = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(passed.clone()), brief: None, print_check: None } };
         assert_eq!(open.pass(None, "export_part").unwrap(), None);
         assert_eq!(open.pass(Some("unneeded"), "export_part").unwrap(), None, "a reason nothing needs is not echoed");

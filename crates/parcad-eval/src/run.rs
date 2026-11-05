@@ -218,7 +218,12 @@ fn judge_checks(doc: &Doc, s: &parcad_occt::Success, timeout: std::time::Duratio
         let opts = parcad_occt::Options { timeout, ..Default::default() };
         Ok(parcad_occt::perceive(doc, &spec, &opts).map_err(|e| e.to_string())?.holes)
     };
-    let measures = parcad_evaluation::checks::Measures { wall: &mut sweep, holes: &mut holes };
+    let mut motions = |specs: &[parcad_occt::protocol::MotionSpec]| {
+        let spec = parcad_occt::Perceive { motions: specs.to_vec(), ..Default::default() };
+        let opts = parcad_occt::Options { timeout, ..Default::default() };
+        Ok(parcad_occt::perceive(doc, &spec, &opts).map_err(|e| e.to_string())?.motions)
+    };
+    let measures = parcad_evaluation::checks::Measures { wall: &mut sweep, holes: &mut holes, motions: &mut motions };
     let report = parcad_evaluation::checks::judge(doc, &evaluated.snapshot, measures)?;
     Ok(Some(ChecksExpect::from(&report)))
 }
@@ -272,6 +277,7 @@ pub fn perceive(
             threshold_mm: t.threshold_mm,
         }),
         holes: false,
+        motions: Vec::new(),
     };
     let opts = parcad_occt::Options { timeout, ..Default::default() };
     parcad_occt::perceive(doc, &spec, &opts).map_err(|e| e.to_string())

@@ -59,9 +59,38 @@ export interface PrintFinding {
   pieces?: { size: [number, number, number]; bounds_min: [number, number, number]; bounds_max: [number, number, number]; volume_mm3: number; above_bed_mm: number }[];
 }
 
+/** One motion check as the reply carries it: the motion resolved, and the pose it came nearest at. */
+export interface MotionReport {
+  check: string;
+  verdict: "passed" | "failed" | "uncertified";
+  body: string;
+  turn?: { axis: [number, number, number]; at: [number, number, number]; degrees: [number, number] };
+  slide?: { direction: [number, number, number]; mm: [number, number] };
+  least_clearance_mm?: number;
+  against?: string;
+  at_degrees?: number;
+  at_mm?: number;
+  closest_mm?: [[number, number, number], [number, number, number]];
+  certified_above_mm?: number;
+  deepest_mm?: number;
+  deepest_at_mm?: [number, number, number];
+  touches_from_degrees?: number;
+  touches_from_mm?: number;
+  /** Row-major 4×4 taking the body as drawn to the pose reported. */
+  worst_pose?: number[];
+  uncertified?: string;
+  measurements: number;
+}
+
 export interface EvaluationSnapshot {
   /** The part's own checks, judged on this build; absent when the script carries none. */
-  checks?: { verdict: "passed" | "failed"; passed: number; failed?: { check: string; measured_mm?: number; measured_mm3?: number; why?: string }[] };
+  checks?: {
+    verdict: "passed" | "failed";
+    passed: number;
+    failed?: { check: string; mismatch?: string; measured_mm?: number; measured_mm3?: number; why?: string }[];
+    /** Every `turns` and `slides` check, swept: what a viewer needs to show the motion. */
+    motions?: MotionReport[];
+  };
   /** What the part is for, judged on every build; the verdict is `meets`,
    *  `over: ...`, or the one line that says there is no brief to judge it by. */
   brief?: {

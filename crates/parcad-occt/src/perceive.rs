@@ -369,6 +369,7 @@ pub fn perceive(bodies: &[Body], spec: &Perceive) -> Result<Perceived> {
         rays,
         thickness,
         holes: if spec.holes { find_holes(bodies)? } else { Vec::new() },
+        motions: Vec::new(),
     })
 }
 

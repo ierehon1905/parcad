@@ -1697,6 +1697,100 @@ feature's *orientation* — the bench's reversed car cabin would still pass a
 still translates "10 mm in from both edges" to `(±30, ±15)` itself, and a
 wrong translation written as a check fails nothing.
 
+## 24. Motion — a body's clearance over its whole travel
+
+Nothing here could say whether a lid clears its base on the way shut. A
+request for a rugged case with a print-in-place hinge went 8 times each to
+Haiku 5.5 and Sonnet 5.5 over MCP (2026-11-05); each lid was then posed by
+hand at 2–120° with `.at().rotate("x", d).at()` and read through
+`between_bodies`. Sonnet's hinges cleared and its latches bit in 8 of 8,
+Haiku's in 3 of 8, and nothing in a reply could have said either. 7 of 8
+Haiku lids copied `printedUp`'s example — a lid beside an assembled base —
+and told the user to print the lid flipped while claiming print-in-place.
+
+Since 2026-11-05 two check kinds carry a motion (`checks.rs` in
+`parcad-core`, swept in `parcad-occt`'s `motion.rs`, judged in
+`parcad-evaluation`):
+
+- **`{ turns: { body, about, at, degrees }, clearOf, atLeast }`** and
+  **`{ slides: { body, along, mm }, clearOf, atLeast }`**: the body is
+  posed — transformed, never rebuilt — and its clearance to each body in
+  `clearOf` is *certified* at every pose of the range, not read at a few.
+- **`catches: "base", deeperThan: 0.2`** in place of `clearOf`: somewhere in
+  the range the body reaches that deep into the other — what "holds shut"
+  means for a latch.
+- Every such check comes back in **`checks.motions`** whether it held or
+  not: the axis and range resolved, the least clearance with its pose and
+  closest points (or where the bodies first meet and how deep), a bound
+  proven everywhere, and `worst_pose`, the 4×4 a viewer applies to the body
+  as drawn to show that pose. A viewer never reads the script to animate it.
+
+**How it is certified.** Between two poses no point of a piece moves further
+than its reach times the step — its greatest distance from the axis per
+degree, 1 mm per mm for a slide — so a clearance measured at one pose, less
+that, holds across the step; the range is bisected until every step holds,
+a pose is found nearer than allowed, or a budget runs out, which *fails* the
+check as `uncertified` with the interval it could not close. The bound alone
+is hopeless for a hinge: a pin 0.4 mm inside its bore, held to 0.3 with a
+plate 55 mm out, wants a pose every 0.1° for 170°. Two things make it cost
+hundreds of milliseconds instead of minutes. The sweep runs per *piece* — a
+planar face cut along its own triangulation into exact sub-triangles no
+longer than 8 mm, a curved face whole — so a knuckle's piece beside the axis
+keeps its own slow reach; and every piece has a *footprint* the motion
+cannot change (its span along the axis and its band of radii; its projection
+across a slide), and two pieces whose footprints are already far enough
+apart are proven for the whole range without being posed once — the pin in
+its bore, knuckle beside knuckle. Planar pairs are measured in closed form
+in Rust; a pair with a curved face goes to the kernel. The pose the sweep
+lands on is then measured once more on the two whole solids, so every
+number reported is OpenCASCADE's, exact, at a pose the body was put in.
+
+**What it cost, and what it found** (the reference hinged case,
+`eval/cases/hinged-box`): the fold to −170° clear of the base passes in
+0.27 s with the pin's 0.4 mm proven at every angle; the latch over the last
+ten degrees catches, the bead riding 0.44 mm over the groove wall at −179.3°
+before it snaps in; and the same fold clear of the *object* in the base
+fails — the lid's rim clips the object's far top edge from −164.9°, 0.65 mm
+deep at −165.9° — which the hand measurements at the shut pose (clear by
+1.0) had missed. A tab added to the base's far wall (`hinged-box-hits`) is
+hit from −164.2°; a drawer pulled 60 mm out (`drawer-slide`) is proven clear
+in two measurements, and pushed 5 mm up touches its frame at 0.3 mm. A
+check within the mesher's 0.01 mm of the true clearance cannot be certified
+and says so (0.39 asked against 0.4 true), which is the one place the
+pieces' triangulation shows.
+
+**Measured, 2026-11-05**, Haiku 5.5 (`claude-haiku-5-5`), 4 trials per arm,
+the base commit's release host against this branch's, `--strict-mcp-config`.
+`eval/field/does-the-lid-open` hands over the hinged case without its checks
+and asks whether the lid opens to 90° without touching the base and by how
+little; SOUND is a `turns` check on the lid in the script sent, and 0.4 mm.
+
+| arm | before: sound | after: sound | MCP calls before → after | script bytes sent per trial |
+|---|---|---|---|---|
+| thinking off | 0/4 (4 LUCKY) | 4/4 | 3–17 → 1–3 | 6,718 → 1,031 |
+| thinking 8k | 0/4 (3 LUCKY, 1 VOID) | 3/4 (1 LUCKY) | 2–15 → 1–2 | 4,558 → 1,019 |
+
+Every trial on both hosts answered 0.4 mm. What moved is how. Before, every
+trial posed copies: ten to forty-six lids rotated by hand in 2–10° steps and
+unioned or returned as bodies for `between_bodies`, or ten `check_fit` calls
+one angle each; three of the many-body replies ran to 55 KB and were hidden
+by the client, one of them leaving a trial with nothing to read (the VOID).
+After, every trial wrote the `turns` check into the script unprompted — the
+prompt never names it — seven with `atLeast: 0` to read the true least,
+and answered from `checks.motions` in one or two calls, with one read of the
+`Check` or `TurnCheck` entry in five of eight. The one LUCKY after-trial
+also wrote the check and read 0.4 off the reply; the grader marked it for
+"the script's comment says negative angles close the lid, but I measured…",
+which its citation rule reads as reasoning from the source. Nothing was
+saved by any trial.
+
+**What is not here.** Sonnet is unmeasured on this case, and so is a model
+that has to *write* the hinge rather than check one handed to it — the
+original failure, 3 of 8 Haiku lids working, is the case to run next with
+the recipe under `TurnCheck` in front of it. The window does not yet scrub
+the motion, and `evaluate_part`'s views do not draw the worst pose; the
+reply's `worst_pose` is what both will read.
+
 ## Suggested order
 
 Done, and what each cost is in its own section: point and ray probes and

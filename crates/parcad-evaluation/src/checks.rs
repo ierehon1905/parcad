@@ -8,10 +8,12 @@
 //! taken: what the author asked and what the kernel found, in one place.
 
 use crate::{round_mm, round_point, BodyFit, EvaluationSnapshot};
-use parcad_core::checks::{dimensions, Check, CheckKind, MATCH_MM};
-use parcad_core::view::Axis;
+use parcad_core::checks::{dimensions, Check, CheckKind, Motion as CheckMotion, MATCH_MM};
 use parcad_core::graph::Doc;
-use parcad_occt::protocol::{HoleMeasure, ThicknessResult, ThicknessSample, ThinKind};
+use parcad_core::view::Axis;
+use parcad_occt::protocol::{
+    HoleMeasure, Motion, MotionMeasure, MotionReading, MotionSpec, ThicknessResult, ThicknessSample, ThinKind,
+};
 use serde::Serialize;
 
 /// Every check the part carries, judged: `passed` when nothing failed —
@@ -26,6 +28,81 @@ pub struct ChecksReport {
     /// The ones that do not, worst first in the script's order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub failed: Vec<FailedCheck>,
+    /// Every `turns` and `slides` check, measured, whether it held or not:
+    /// the motion and the pose it came nearest at, which is what a viewer
+    /// needs to show it moving.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub motions: Vec<MotionReport>,
+}
+
+/// One motion check as measured over its whole range. Every number is the
+/// kernel's at a pose the body was put in; `worst_pose` is the transform a
+/// viewer applies to the body as drawn to show that pose.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct MotionReport {
+    /// The check as the script wrote it.
+    pub check: String,
+    /// `passed`, `failed`, or `uncertified` — the range could not be proven
+    /// within the sweep's budget, which fails the check.
+    pub verdict: &'static str,
+    /// The body that moves.
+    pub body: String,
+    #[serde(flatten)]
+    pub path: MotionPath,
+    /// The least clearance measured at any pose of the range, mm, and the
+    /// body it is to; absent when the body interferes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub least_clearance_mm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub against: Option<String>,
+    /// The pose that clearance, or the deepest interference, was measured at.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at_degrees: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at_mm: Option<f64>,
+    /// A point on the moving body at that pose, then one on `against`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closest_mm: Option<[[f64; 3]; 2]>,
+    /// A clearance proven at every pose of the range, mm.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certified_above_mm: Option<f64>,
+    /// How deep the body reaches into `against` at the pose above, mm, and
+    /// where; present when it interferes somewhere in the range.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deepest_mm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deepest_at_mm: Option<[f64; 3]>,
+    /// The pose the two first meet at, coming from the start of the range.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub touches_from_degrees: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub touches_from_mm: Option<f64>,
+    /// Row-major 4×4, taking the body as drawn to the pose reported.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worst_pose: Option<[f64; 16]>,
+    /// Why the sweep could not finish, when it could not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uncertified: Option<String>,
+    /// How many exact measurements the sweep took.
+    pub measurements: usize,
+}
+
+/// The motion itself, as the check resolved it: a unit axis or direction and
+/// the range, so a viewer never reads the script to animate it.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MotionPath {
+    Turn { axis: [f64; 3], at: [f64; 3], degrees: [f64; 2] },
+    Slide { direction: [f64; 3], mm: [f64; 2] },
+}
+
+impl From<&Motion> for MotionPath {
+    fn from(motion: &Motion) -> Self {
+        match motion {
+            Motion::Turn { axis, at, degrees } => MotionPath::Turn { axis: crate::round_dir(*axis), at: round_point(*at), degrees: *degrees },
+            Motion::Slide { direction, mm } => MotionPath::Slide { direction: crate::round_dir(*direction), mm: *mm },
+        }
+    }
 }
 
 impl ChecksReport {
@@ -114,18 +191,33 @@ pub struct Measures<'a> {
     pub wall: &'a mut dyn FnMut(f64) -> Result<ThicknessResult, String>,
     /// Every round hole: once, for any number of `holes` checks.
     pub holes: &'a mut dyn FnMut() -> Result<Vec<HoleMeasure>, String>,
+    /// Every motion swept: once, for any number of `turns` and `slides`
+    /// checks, one answer per spec in order.
+    pub motions: &'a mut dyn FnMut(&[MotionSpec]) -> Result<Vec<MotionMeasure>, String>,
 }
 
 /// Judge every check in `doc` against `snapshot`, asking `measure` for what
 /// the snapshot does not carry.
 pub fn judge(doc: &Doc, snapshot: &EvaluationSnapshot, measure: Measures) -> Result<ChecksReport, String> {
-    let Measures { wall, holes } = measure;
+    let Measures { wall, holes, motions } = measure;
     let found_holes = if doc.checks.iter().any(|check| check.holes.is_some()) { holes()? } else { Vec::new() };
+    let body_names: Vec<&str> = doc.bodies().map(|bodies| bodies.iter().map(|b| b.name.as_str()).collect()).unwrap_or_default();
+    let specs: Vec<MotionSpec> = doc.checks.iter().filter_map(|check| motion_spec(check, &body_names)).collect();
+    let mut measured_motions = if specs.is_empty() { Vec::new() } else { motions(&specs)? }.into_iter();
+    let mut reports = Vec::new();
     let mut failed = Vec::new();
     for check in &doc.checks {
         let kind = check.kind().map_err(|why| format!("check {}: {why}", check.sentence()))?;
         let failure = match kind {
             CheckKind::Clear | CheckKind::Interferes | CheckKind::Touching => judge_pair(check, kind, snapshot),
+            CheckKind::Turns | CheckKind::Slides => {
+                let measured = measured_motions
+                    .next()
+                    .ok_or_else(|| format!("the kernel answered fewer motions than were asked; none for {}", check.sentence()))?;
+                let (report, failure) = judge_motion(check, &measured);
+                reports.push(report);
+                failure
+            }
             CheckKind::Wall => judge_wall(check, wall)?,
             CheckKind::Size => judge_size(check, snapshot),
             CheckKind::Holes => judge_holes(check, &found_holes),
@@ -165,7 +257,124 @@ pub fn judge(doc: &Doc, snapshot: &EvaluationSnapshot, measure: Measures) -> Res
         verdict: if failed.is_empty() { "passed" } else { "failed" },
         passed: doc.checks.len() - failed.len(),
         failed,
+        motions: reports,
     })
+}
+
+/// What the kernel is asked to sweep for a motion check: the motion with
+/// its axis resolved to a unit vector, the bodies it is read against, and
+/// which reading. `None` for every other kind of check.
+fn motion_spec(check: &Check, bodies: &[&str]) -> Option<MotionSpec> {
+    let motion = check.motion()?;
+    // Validated by the envelope before the build; an unreadable axis here
+    // is a motion the kernel is not asked about, and the judge says so.
+    let unit = motion.direction().unit().ok()?;
+    let path = match motion {
+        CheckMotion::Turn(t) => Motion::Turn { axis: unit, at: t.at, degrees: t.degrees },
+        CheckMotion::Slide(s) => Motion::Slide { direction: unit, mm: s.mm },
+    };
+    let reading = match check.catches {
+        Some(_) => MotionReading::Catches { deeper_than_mm: check.deeper_than.unwrap_or(0.0) },
+        None => MotionReading::Clear { at_least_mm: check.at_least.unwrap_or(0.0) },
+    };
+    Some(MotionSpec {
+        body: motion.body().to_owned(),
+        motion: path,
+        against: check.against(bodies).into_iter().map(str::to_owned).collect(),
+        reading,
+    })
+}
+
+/// A motion check against what its sweep measured: the report every reply
+/// carries, and the failure when it did not hold.
+fn judge_motion(check: &Check, measured: &MotionMeasure) -> (MotionReport, Option<FailedCheck>) {
+    let motion = check.motion().expect("a motion check describes a motion");
+    let unit = motion.unit();
+    let turning = matches!(measured.motion, Motion::Turn { .. });
+    let pose = |t: f64| -> (Option<f64>, Option<f64>) { if turning { (Some(round_mm(t)), None) } else { (None, Some(round_mm(t))) } };
+    let mut report = MotionReport {
+        check: check.sentence(),
+        verdict: "passed",
+        body: measured.body.clone(),
+        path: MotionPath::from(&measured.motion),
+        least_clearance_mm: None,
+        against: None,
+        at_degrees: None,
+        at_mm: None,
+        closest_mm: None,
+        certified_above_mm: measured.certified_above_mm.filter(|c| c.is_finite()).map(round_mm),
+        deepest_mm: None,
+        deepest_at_mm: None,
+        touches_from_degrees: None,
+        touches_from_mm: None,
+        worst_pose: None,
+        uncertified: measured.uncertified.clone(),
+        measurements: measured.measurements,
+    };
+    let mut failure = FailedCheck::of(check);
+    // The pose a viewer should show: where it bites, else where it is nearest.
+    let shown = measured.deepest.as_ref().map(|d| d.at).or(measured.least.as_ref().map(|l| l.at));
+    if let Some(t) = shown {
+        (report.at_degrees, report.at_mm) = pose(t);
+        report.worst_pose = Some(measured.motion.transform(t));
+    }
+    if let Some(least) = &measured.least {
+        report.least_clearance_mm = Some(round_mm(least.clearance_mm));
+        report.against = Some(least.against.clone());
+        report.closest_mm = Some([round_point(least.closest_mm[0]), round_point(least.closest_mm[1])]);
+    }
+    if let Some(deep) = &measured.deepest {
+        report.deepest_mm = Some(round_mm(deep.depth_mm));
+        report.deepest_at_mm = Some(round_point(deep.deepest_mm));
+        report.against = Some(deep.against.clone());
+        if let Some(from) = deep.touches_from {
+            (report.touches_from_degrees, report.touches_from_mm) = pose(from);
+        }
+    }
+    let at = |t: f64| format!("{}{unit}", round_mm(t));
+    let mismatch = match (check.catches.as_deref(), check.deeper_than, check.at_least.unwrap_or(0.0)) {
+        (Some(caught), Some(deeper_than), _) => match &measured.deepest {
+            Some(deep) if deep.depth_mm >= deeper_than => None,
+            _ if measured.uncertified.is_some() => measured.uncertified.clone(),
+            Some(deep) => Some(format!(
+                "never reaches {deeper_than} mm into {caught}; at most {} mm deep, at {}",
+                round_mm(deep.depth_mm),
+                at(deep.at)
+            )),
+            None => Some(format!(
+                "never touches {caught}{}",
+                measured.certified_below_mm.filter(|b| *b > 0.0).map(|b| format!(" by more than {} mm", round_mm(b))).unwrap_or_default()
+            )),
+        },
+        (_, _, at_least) => match (&measured.deepest, &measured.least) {
+            (Some(deep), _) => Some(format!(
+                "interferes with {}{}, {} mm deep at {}",
+                deep.against,
+                deep.touches_from.map(|from| format!(" from {}", at(from))).unwrap_or_default(),
+                round_mm(deep.depth_mm),
+                at(deep.at)
+            )),
+            _ if measured.uncertified.is_some() => measured.uncertified.clone(),
+            (None, Some(least)) if least.clearance_mm < at_least => Some(format!(
+                "{} mm from {} at {}, under {at_least}",
+                round_mm(least.clearance_mm),
+                least.against,
+                at(least.at)
+            )),
+            (None, _) if measured.certified_above_mm.is_none() => {
+                Some("the sweep reported no bound for the range, so nothing is proven".to_string())
+            }
+            _ => None,
+        },
+    };
+    let Some(mismatch) = mismatch else {
+        return (report, None);
+    };
+    report.verdict = if measured.uncertified.is_some() { "uncertified" } else { "failed" };
+    failure.mismatch = Some(mismatch);
+    failure.measured_mm = report.deepest_mm.or(report.least_clearance_mm);
+    failure.at = report.closest_mm.or(report.deepest_at_mm.map(|p| [p, p]));
+    (report, Some(failure))
 }
 
 /// `is` to the request's rounding plus the mesh's resolution, which the
@@ -481,7 +690,7 @@ pub(crate) mod tests {
         snapshot: &EvaluationSnapshot,
         wall: &mut dyn FnMut(f64) -> Result<ThicknessResult, String>,
     ) -> Result<ChecksReport, String> {
-        judge(doc, snapshot, Measures { wall, holes: &mut || panic!("no holes check here") })
+        judge(doc, snapshot, Measures { wall, holes: &mut || panic!("no holes check here"), motions: &mut |_| panic!("no motion check here") })
     }
 
     /// The B2 failure: a clearance of 0.13 against an atLeast of 0.2 is named
@@ -551,7 +760,7 @@ pub(crate) mod tests {
         assert_eq!(report.failed[0].check, "touching stacks↔top");
         assert_eq!(report.failed[0].measured, Some(serde_json::json!("interfering")));
         assert_eq!(report.failed[0].measured_mm3, Some(1.23));
-        let text = serde_json::to_string(&ChecksReport { verdict: "passed", passed: 5, failed: Vec::new() }).unwrap();
+        let text = serde_json::to_string(&ChecksReport { verdict: "passed", passed: 5, failed: Vec::new(), motions: Vec::new() }).unwrap();
         assert_eq!(text, "{\"verdict\":\"passed\",\"passed\":5}");
     }
 
@@ -642,7 +851,7 @@ pub(crate) mod tests {
             asked += 1;
             Ok(vec![twelve.clone()])
         };
-        let report = judge(&doc, &snap, Measures { wall: &mut no_wall, holes: &mut holes }).unwrap();
+        let report = judge(&doc, &snap, Measures { wall: &mut no_wall, holes: &mut holes, motions: &mut |_| panic!("no motion check here") }).unwrap();
         assert_eq!(asked, 1, "two holes checks, one measurement");
         let failed: Vec<(&str, Option<&str>)> =
             report.failed.iter().map(|f| (f.check.as_str(), f.mismatch.as_deref())).collect();
@@ -689,7 +898,7 @@ pub(crate) mod tests {
             body: None,
         };
         let mut holes = || Ok(vec![hole([0.0, 0.0, 1.0], false), hole([1.0, 0.0, 0.0], true)]);
-        let report = judge(&doc, &snapshot(Vec::new()), Measures { wall: &mut no_wall, holes: &mut holes }).unwrap();
+        let report = judge(&doc, &snapshot(Vec::new()), Measures { wall: &mut no_wall, holes: &mut holes, motions: &mut |_| panic!("no motion check here") }).unwrap();
         let mismatches: Vec<Option<&str>> = report.failed.iter().map(|f| f.mismatch.as_deref()).collect();
         assert_eq!(mismatches, [Some("the one at (10, 5) is blind"), Some("none at (0, 0)")]);
     }

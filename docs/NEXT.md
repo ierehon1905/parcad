@@ -163,7 +163,8 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      graph is refused there. Still open: `{ at, cut }`, `MATERIALS`,
      `OBJECTS` with profiles, `fit()`, and a listed `styles` topic;
    - then `compare_variants`, snapshot summaries, and last the mechanics
-     witness: `check_motion`, `check_flex`.
+     witness: ~~`check_motion`~~ (done 2026-11-05, `turns`/`slides`),
+     `check_flex`.
 
    **`{ at, cut }`, scoped (2026-09-22).** Ship the equal-distance form only:
    `{ at: [20, 10], cut: 5 }`, the corner replaced by a straight diagonal 5 mm
@@ -266,7 +267,7 @@ and in the next two sections.
 |---|---|---|---|---|---|
 | 1 | the tag that makes the saucer crawl — **done 2026-11-05** | 8 | ★★★ | L | Fable, high |
 | 2 | `allow_failing` is taken on the model's own word | 7 | ★★★ | S | Opus |
-| 3 | `check_motion` | 7 | ★★★ | L | Fable, high |
+| 3 | `check_motion` — **done 2026-11-05**, as `turns` and `slides` checks | 7 | ★★★ | L | Fable, high |
 | 4 | `edit_part` refuses with an empty reason | 6 | ★★ | S | Opus |
 | 5 | a list argument sent as a JSON string is refused | 6 | ★★ | S | Opus |
 | 6 | field runs measure Haiku 4.5, not the current Haiku | 6 | ★★ | S | Opus |
@@ -423,9 +424,13 @@ described where it lives:
    bookkeeping, as guessed: a tag's face list doubled at every boolean layer
    that split a face on the same domain (GOTCHAS, "A tag's face list doubled
    at every boolean layer"). Below under the planter saucer.
-2. **`check_motion`** (queue item 5's mechanics witness): clearance certified
-   over a swing on the exact solids. Limo, QymCAD and STEVE Studio all check
-   motion; it is the feature gap the bench shows.
+2. **`check_motion`** (queue item 5's mechanics witness) — **done
+   2026-11-05** as the `turns` and `slides` check kinds: a body's clearance
+   certified at every pose of a turn or a slide on the exact solids, a latch's
+   bite with `catches`, the reply carrying the axis, the range and the
+   transform at the worst pose (`checks.motions`). docs/PERCEPTION.md §24.
+   Limo, QymCAD and STEVE Studio all check motion; it was the feature gap the
+   bench showed. Left: a screw (turn and slide at once), the window's scrub.
 3. **The G2 blend** behind `.smooth()` / `.squircle()` — built 2026-10-14,
    below under the planter saucer; what is left is the three-edge corner.
 

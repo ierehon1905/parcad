@@ -14,9 +14,9 @@ use crate::view::Axis;
 use serde::{Deserialize, Serialize};
 
 /// One check. Exactly one of the head keys — `clear`, `interferes`,
-/// `touching`, `wall`, `size`, `standsOn`, `bodies`, `watertight` — names
-/// what it reads; the rest qualify it. Read by name from JSON, so a key this
-/// host does not know is refused rather than dropped.
+/// `touching`, `turns`, `slides`, `wall`, `size`, `standsOn`, `bodies`,
+/// `watertight` — names what it reads; the rest qualify it. Read by name
+/// from JSON, so a key this host does not know is refused rather than dropped.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Check {
@@ -31,6 +31,23 @@ pub struct Check {
     /// `contactAtLeast` mm² of shared surface.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub touching: Option<[String; 2]>,
+    /// A body turns about an axis through a range of angles, staying
+    /// `atLeast` mm from the bodies in `clearOf` at every angle, or reaching
+    /// `deeperThan` mm into the body it `catches` somewhere in the range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns: Option<TurnCheck>,
+    /// A body slides along a direction through a range of distances, with
+    /// the same two readings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slides: Option<SlideCheck>,
+    /// For `turns` and `slides`: the bodies the moving one must stay clear
+    /// of. Absent: every other body.
+    #[serde(default, rename = "clearOf", skip_serializing_if = "Option::is_none", deserialize_with = "one_or_many")]
+    pub clear_of: Option<Vec<String>>,
+    /// For `turns` and `slides`: the one body the moving one must interfere
+    /// with somewhere in its range, by `deeperThan` mm — a latch that holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catches: Option<String>,
     /// Nothing in the part is thinner than `min` mm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wall: Option<WallCheck>,
@@ -53,13 +70,15 @@ pub struct Check {
     /// The part's mesh closes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub watertight: Option<bool>,
-    /// For `clear`: the least clearance, mm. For `interferes`: the least
-    /// shared volume, mm³. Absent: any clearance, any overlap.
+    /// For `clear`, and a motion with `clearOf`: the least clearance, mm.
+    /// For `interferes`: the least shared volume, mm³. Absent: any
+    /// clearance, any overlap.
     #[serde(default, rename = "atLeast", skip_serializing_if = "Option::is_none")]
     pub at_least: Option<f64>,
-    /// For `interferes`: the least the two must reach into each other, mm.
-    /// This is the number a catch is designed to, and the one a volume
-    /// cannot stand in for — 0.002 mm³ along a coin's rim is two microns.
+    /// For `interferes`, and a motion with `catches`: the least the two must
+    /// reach into each other, mm. This is the number a catch is designed to,
+    /// and the one a volume cannot stand in for — 0.002 mm³ along a coin's
+    /// rim is two microns.
     #[serde(default, rename = "deeperThan", skip_serializing_if = "Option::is_none")]
     pub deeper_than: Option<f64>,
     /// For `touching`: the least surface the two must share, mm². A seat is
@@ -82,6 +101,86 @@ pub struct Check {
 #[serde(deny_unknown_fields)]
 pub struct WallCheck {
     pub min: f64,
+}
+
+/// A body turned about an axis: the line along `about` through `at`,
+/// right-handed, so `degrees: [0, -180]` about `x` is the sign
+/// `.rotate("x", d)` gives. 0° is the body as drawn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TurnCheck {
+    pub body: String,
+    pub about: Direction,
+    /// A point the axis passes through, mm: where the pin is.
+    pub at: [f64; 3],
+    /// From and to, degrees, in the order the motion runs.
+    pub degrees: [f64; 2],
+}
+
+/// A body slid along a direction. 0 mm is the body as drawn.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SlideCheck {
+    pub body: String,
+    pub along: Direction,
+    /// From and to, mm along `along`, in the order the motion runs.
+    pub mm: [f64; 2],
+}
+
+/// An axis or direction as a script spells it: a model axis by name, with
+/// an optional sign — `"x"`, `"-y"`, `"+z"` — or a vector `[x, y, z]`. The
+/// same words `.printedUp()` takes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Direction {
+    Named(String),
+    Vector([f64; 3]),
+}
+
+impl Direction {
+    /// The unit vector, or why there is none.
+    pub fn unit(&self) -> Result<[f64; 3], String> {
+        let v = match self {
+            Direction::Named(name) => {
+                let (sign, axis) = match name.strip_prefix('-') {
+                    Some(rest) => (-1.0, rest),
+                    None => (1.0, name.strip_prefix('+').unwrap_or(name)),
+                };
+                let unit = Axis::parse(axis)
+                    .ok_or_else(|| format!("\"{name}\" is not an axis; write \"x\", \"-y\", \"+z\" or a direction [x, y, z]"))?
+                    .unit();
+                [sign * unit.x, sign * unit.y, sign * unit.z]
+            }
+            Direction::Vector(v) => *v,
+        };
+        let length = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if !length.is_finite() || length == 0.0 {
+            return Err("a direction needs some length; [0, 0, 0] points nowhere".to_string());
+        }
+        Ok([v[0] / length, v[1] / length, v[2] / length])
+    }
+
+    /// `x`, `-y`, or `(0.6, 0, 0.8)`, for a sentence.
+    pub fn name(&self) -> String {
+        match self {
+            Direction::Named(name) => name.clone(),
+            Direction::Vector([x, y, z]) => format!("({x}, {y}, {z})"),
+        }
+    }
+}
+
+/// `clearOf: "base"` and `clearOf: ["base", "lid"]` both read as a list.
+fn one_or_many<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<String>>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum OneOrMany {
+        One(String),
+        Many(Vec<String>),
+    }
+    Ok(Option::<OneOrMany>::deserialize(deserializer)?.map(|v| match v {
+        OneOrMany::One(one) => vec![one],
+        OneOrMany::Many(many) => many,
+    }))
 }
 
 /// How far a measurement may sit from a requested number and still be it:
@@ -148,6 +247,8 @@ pub enum CheckKind {
     Clear,
     Interferes,
     Touching,
+    Turns,
+    Slides,
     Wall,
     Size,
     Holes,
@@ -163,6 +264,8 @@ impl CheckKind {
             Self::Clear => "clear",
             Self::Interferes => "interferes",
             Self::Touching => "touching",
+            Self::Turns => "turns",
+            Self::Slides => "slides",
             Self::Wall => "wall",
             Self::Size => "size",
             Self::Holes => "holes",
@@ -175,14 +278,12 @@ impl CheckKind {
 }
 
 /// The head keys, in the order a reply names them.
-pub const HEAD_KEYS: [&str; 10] =
-    ["clear", "interferes", "touching", "wall", "size", "holes", "feature", "standsOn", "bodies", "watertight"];
-
-/// Every key a check may carry: what the envelope names when one is unknown.
-pub const KEYS: [&str; 16] = [
+pub const HEAD_KEYS: [&str; 12] = [
     "clear",
     "interferes",
     "touching",
+    "turns",
+    "slides",
     "wall",
     "size",
     "holes",
@@ -190,6 +291,24 @@ pub const KEYS: [&str; 16] = [
     "standsOn",
     "bodies",
     "watertight",
+];
+
+/// Every key a check may carry: what the envelope names when one is unknown.
+pub const KEYS: [&str; 20] = [
+    "clear",
+    "interferes",
+    "touching",
+    "turns",
+    "slides",
+    "wall",
+    "size",
+    "holes",
+    "feature",
+    "standsOn",
+    "bodies",
+    "watertight",
+    "clearOf",
+    "catches",
     "atLeast",
     "deeperThan",
     "contactAtLeast",
@@ -200,7 +319,23 @@ pub const KEYS: [&str; 16] = [
 
 /// A key an author might write for one of [`KEYS`], and the key they meant.
 /// `app/src/dsl.ts` carries the same table for the editor's own refusal.
-pub const SYNONYMS: [(&str, &str); 36] = [
+pub const SYNONYMS: [(&str, &str); 52] = [
+    ("turn", "turns"),
+    ("rotate", "turns"),
+    ("rotates", "turns"),
+    ("swing", "turns"),
+    ("swings", "turns"),
+    ("hinge", "turns"),
+    ("hinges", "turns"),
+    ("slide", "slides"),
+    ("translate", "slides"),
+    ("translates", "slides"),
+    ("clears", "clearOf"),
+    ("avoids", "clearOf"),
+    ("against", "clearOf"),
+    ("latches", "catches"),
+    ("holds", "catches"),
+    ("snaps", "catches"),
     ("depth", "deeperThan"),
     ("depthmm", "deeperThan"),
     ("deeper", "deeperThan"),
@@ -246,6 +381,8 @@ impl Check {
             (self.clear.is_some(), CheckKind::Clear),
             (self.interferes.is_some(), CheckKind::Interferes),
             (self.touching.is_some(), CheckKind::Touching),
+            (self.turns.is_some(), CheckKind::Turns),
+            (self.slides.is_some(), CheckKind::Slides),
             (self.wall.is_some(), CheckKind::Wall),
             (self.size.is_some(), CheckKind::Size),
             (self.holes.is_some(), CheckKind::Holes),
@@ -275,6 +412,28 @@ impl Check {
         self.clear.as_ref().or(self.interferes.as_ref()).or(self.touching.as_ref())
     }
 
+    /// The motion a `turns` or `slides` check describes.
+    pub fn motion(&self) -> Option<Motion<'_>> {
+        if let Some(turn) = &self.turns {
+            return Some(Motion::Turn(turn));
+        }
+        self.slides.as_ref().map(Motion::Slide)
+    }
+
+    /// The bodies a motion check reads the moving body against: `clearOf`
+    /// as written, every other body when it is absent, or the one it
+    /// `catches`. `bodies` are the part's, in order.
+    pub fn against<'a>(&'a self, bodies: &[&'a str]) -> Vec<&'a str> {
+        if let Some(caught) = &self.catches {
+            return vec![caught.as_str()];
+        }
+        match (&self.clear_of, self.motion()) {
+            (Some(named), _) => named.iter().map(String::as_str).collect(),
+            (None, Some(motion)) => bodies.iter().copied().filter(|b| *b != motion.body()).collect(),
+            (None, None) => Vec::new(),
+        }
+    }
+
     /// The check as one phrase, the way a reply names it: `clear top↔stacks
     /// atLeast 0.2`, `wall min 1 ignore feather`, `size max 115×65×15`.
     pub fn sentence(&self) -> String {
@@ -293,6 +452,22 @@ impl Check {
                 }
                 if let Some(contact) = self.contact_at_least {
                     s.push_str(&format!(" contactAtLeast {contact}"));
+                }
+                s
+            }
+            CheckKind::Turns | CheckKind::Slides => {
+                let motion = self.motion().expect("a motion check describes a motion");
+                let mut s = motion.sentence();
+                if let Some(caught) = &self.catches {
+                    s.push_str(&format!(" catches {caught}"));
+                } else if let Some(named) = &self.clear_of {
+                    s.push_str(&format!(" clearOf {}", named.join(",")));
+                }
+                if let Some(least) = self.at_least {
+                    s.push_str(&format!(" atLeast {least}"));
+                }
+                if let Some(deep) = self.deeper_than {
+                    s.push_str(&format!(" deeperThan {deep}"));
                 }
                 s
             }
@@ -335,7 +510,6 @@ impl Check {
     pub fn validate(&self, index: usize, bodies: &[&str], tags: &[&str]) -> Result<(), String> {
         let at = format!("check {index}");
         let kind = self.kind().map_err(|why| format!("{at} {why}"))?;
-        let pair_kind = matches!(kind, CheckKind::Clear | CheckKind::Interferes | CheckKind::Touching);
         if let Some([a, b]) = self.pair() {
             if bodies.is_empty() {
                 return Err(format!(
@@ -357,10 +531,54 @@ impl Check {
                 return Err(format!("{at} ({}) names the same body twice", self.sentence()));
             }
         }
-        if let Some(least) = self.at_least {
-            if !pair_kind || kind == CheckKind::Touching {
+        let motion_kind = matches!(kind, CheckKind::Turns | CheckKind::Slides);
+        if let Some(motion) = self.motion() {
+            motion.validate(&at, &self.sentence(), bodies)?;
+            let body = motion.body();
+            if self.clear_of.is_some() && self.catches.is_some() {
                 return Err(format!(
-                    "{at} ({}) has atLeast, which only clear and interferes read",
+                    "{at} ({}) has both clearOf and catches; a motion check reads one: the bodies it stays clear \
+                     of, or the one body it catches",
+                    self.sentence()
+                ));
+            }
+            for name in self.against(bodies) {
+                if !bodies.contains(&name) {
+                    return Err(format!(
+                        "{at} ({}) names a body \"{name}\" the part does not return; its bodies are {}",
+                        self.sentence(),
+                        bodies.iter().map(|b| format!("\"{b}\"")).collect::<Vec<_>>().join(", ")
+                    ));
+                }
+                if name == body {
+                    return Err(format!("{at} ({}) reads \"{body}\" against itself", self.sentence()));
+                }
+            }
+            if self.against(bodies).is_empty() {
+                return Err(format!(
+                    "{at} ({}) has no body to read \"{body}\" against; the part returns no other body",
+                    self.sentence()
+                ));
+            }
+            if self.catches.is_some() && self.deeper_than.is_none() {
+                return Err(format!(
+                    "{at} ({}): catches needs deeperThan, how far the two must reach into each other somewhere \
+                     in the range, in mm — deeperThan: 0.3",
+                    self.sentence()
+                ));
+            }
+        } else if self.clear_of.is_some() || self.catches.is_some() {
+            return Err(format!(
+                "{at} ({}) has {}, which only turns and slides read",
+                self.sentence(),
+                if self.catches.is_some() { "catches" } else { "clearOf" }
+            ));
+        }
+        if let Some(least) = self.at_least {
+            let reads_it = matches!(kind, CheckKind::Clear | CheckKind::Interferes) || (motion_kind && self.catches.is_none());
+            if !reads_it {
+                return Err(format!(
+                    "{at} ({}) has atLeast, which only clear, interferes and a motion with clearOf read",
                     self.sentence()
                 ));
             }
@@ -369,9 +587,11 @@ impl Check {
             }
         }
         if let Some(deep) = self.deeper_than {
-            if kind != CheckKind::Interferes {
+            let reads_it = kind == CheckKind::Interferes || (motion_kind && self.catches.is_some());
+            if !reads_it {
                 return Err(format!(
-                    "{at} ({}) has deeperThan, which only interferes reads; a gap is measured by clear atLeast",
+                    "{at} ({}) has deeperThan, which only interferes and a motion with catches read; a gap is \
+                     measured by clear atLeast",
                     self.sentence()
                 ));
             }
@@ -513,6 +733,111 @@ impl Check {
     }
 }
 
+/// The motion a check describes, by reference into it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Motion<'a> {
+    Turn(&'a TurnCheck),
+    Slide(&'a SlideCheck),
+}
+
+/// The most a body may turn in one check: a screw is a turn and a slide at
+/// once, which this check does not do.
+pub const MAX_TURN_DEGREES: f64 = 360.0;
+
+impl Motion<'_> {
+    pub fn body(&self) -> &str {
+        match self {
+            Motion::Turn(t) => &t.body,
+            Motion::Slide(s) => &s.body,
+        }
+    }
+
+    /// The axis or direction as written.
+    pub fn direction(&self) -> &Direction {
+        match self {
+            Motion::Turn(t) => &t.about,
+            Motion::Slide(s) => &s.along,
+        }
+    }
+
+    /// From and to, in the check's own unit: degrees for a turn, mm for a slide.
+    pub fn range(&self) -> [f64; 2] {
+        match self {
+            Motion::Turn(t) => t.degrees,
+            Motion::Slide(s) => s.mm,
+        }
+    }
+
+    /// `°` or ` mm`, as a sentence writes the parameter.
+    pub fn unit(&self) -> &'static str {
+        match self {
+            Motion::Turn(_) => "°",
+            Motion::Slide(_) => " mm",
+        }
+    }
+
+    /// `turns lid about x at (0, -28, 16.2) 0° to -170°`.
+    pub fn sentence(&self) -> String {
+        let [from, to] = self.range();
+        let unit = self.unit();
+        match self {
+            Motion::Turn(t) => {
+                let [x, y, z] = t.at;
+                format!("turns {} about {} at ({x}, {y}, {z}) {from}{unit} to {to}{unit}", t.body, t.about.name())
+            }
+            Motion::Slide(s) => format!("slides {} along {} {from}{unit} to {to}{unit}", s.body, s.along.name()),
+        }
+    }
+
+    fn validate(&self, at: &str, sentence: &str, bodies: &[&str]) -> Result<(), String> {
+        let body = self.body();
+        if bodies.is_empty() {
+            return Err(format!(
+                "{at} ({sentence}) moves a body, but the part returns one shape; return an object of named \
+                 bodies — return {{ base, lid, checks }} — for a check that moves one against another"
+            ));
+        }
+        if !bodies.contains(&body) {
+            return Err(format!(
+                "{at} ({sentence}) moves a body \"{body}\" the part does not return; its bodies are {}",
+                bodies.iter().map(|b| format!("\"{b}\"")).collect::<Vec<_>>().join(", ")
+            ));
+        }
+        let key = match self {
+            Motion::Turn(_) => "turns.about",
+            Motion::Slide(_) => "slides.along",
+        };
+        self.direction().unit().map_err(|why| format!("{at} ({sentence}): {key} {why}"))?;
+        if let Motion::Turn(t) = self {
+            if t.at.iter().any(|v| !v.is_finite()) {
+                return Err(format!("{at} ({sentence}): turns.at is a point on the axis, [x, y, z] in mm"));
+            }
+        }
+        let [from, to] = self.range();
+        let (key, unit) = match self {
+            Motion::Turn(_) => ("turns.degrees", "degrees"),
+            Motion::Slide(_) => ("slides.mm", "mm"),
+        };
+        if !from.is_finite() || !to.is_finite() {
+            return Err(format!("{at} ({sentence}): {key} is [from, to] in {unit}, both finite"));
+        }
+        if from == to {
+            return Err(format!(
+                "{at} ({sentence}): {key} is [from, to] with some travel between them; {from} to {to} is one pose, \
+                 which a clear or interferes check reads"
+            ));
+        }
+        if matches!(self, Motion::Turn(_)) && (to - from).abs() > MAX_TURN_DEGREES {
+            return Err(format!(
+                "{at} ({sentence}): a turn of {} degrees is more than one revolution; a screw is a turn and a slide at once, \
+                 which this check does not do — check one turn of at most {MAX_TURN_DEGREES}",
+                (to - from).abs()
+            ));
+        }
+        Ok(())
+    }
+}
+
 impl HolesCheck {
     pub fn axis(&self) -> Axis {
         self.axis.unwrap_or(Axis::Z)
@@ -608,7 +933,7 @@ mod tests {
         let seat = read(serde_json::json!({ "touching": ["coin", "arm"], "contactAtLeast": 20 }));
         seat.validate(1, &bodies, &[]).unwrap();
         let wrong = read(serde_json::json!({ "clear": ["coin", "arm"], "deeperThan": 0.3 }));
-        assert!(wrong.validate(1, &bodies, &[]).unwrap_err().contains("only interferes reads"));
+        assert!(wrong.validate(1, &bodies, &[]).unwrap_err().contains("only interferes and a motion with catches read"));
         let also = read(serde_json::json!({ "interferes": ["coin", "arm"], "contactAtLeast": 1 }));
         assert!(also.validate(1, &bodies, &[]).unwrap_err().contains("only touching reads"));
         assert_eq!(meant("depth"), Some("deeperThan"));
@@ -648,6 +973,78 @@ mod tests {
         assert!(empty.validate(1, &[], &["notch"]).unwrap_err().contains("its size: [x, y, z], its center"));
     }
 
+    /// A hinge and a drawer, written as checks: what each says back, the
+    /// bodies it reads against when none are named, and the mistakes refused.
+    #[test]
+    fn a_motion_names_its_body_its_axis_and_what_it_moves_against() {
+        let bodies = ["base", "lid", "object"];
+        let fold = read(serde_json::json!({
+            "turns": { "body": "lid", "about": "x", "at": [0, -28, 16.2], "degrees": [0, -170] },
+            "clearOf": ["base", "object"], "atLeast": 0.3
+        }));
+        fold.validate(1, &bodies, &[]).unwrap();
+        assert_eq!(fold.kind(), Ok(CheckKind::Turns));
+        assert_eq!(fold.sentence(), "turns lid about x at (0, -28, 16.2) 0° to -170° clearOf base,object atLeast 0.3");
+        assert_eq!(fold.against(&bodies), vec!["base", "object"]);
+        assert_eq!(fold.turns.as_ref().unwrap().about.unit().unwrap(), [1.0, 0.0, 0.0]);
+
+        let latch = read(serde_json::json!({
+            "turns": { "body": "lid", "about": "-x", "at": [0, -28, 16.2], "degrees": [-170, -180] },
+            "catches": "base", "deeperThan": 0.2
+        }));
+        latch.validate(2, &bodies, &[]).unwrap();
+        assert_eq!(latch.sentence(), "turns lid about -x at (0, -28, 16.2) -170° to -180° catches base deeperThan 0.2");
+        assert_eq!(latch.against(&bodies), vec!["base"]);
+        assert_eq!(latch.turns.as_ref().unwrap().about.unit().unwrap(), [-1.0, 0.0, 0.0]);
+
+        let drawer = read(serde_json::json!({ "slides": { "body": "lid", "along": [0, 2, 0], "mm": [0, 60] }, "clearOf": "base" }));
+        drawer.validate(3, &bodies, &[]).unwrap();
+        assert_eq!(drawer.kind(), Ok(CheckKind::Slides));
+        assert_eq!(drawer.sentence(), "slides lid along (0, 2, 0) 0 mm to 60 mm clearOf base");
+        assert_eq!(drawer.slides.as_ref().unwrap().along.unit().unwrap(), [0.0, 1.0, 0.0]);
+
+        let unnamed = read(serde_json::json!({ "slides": { "body": "lid", "along": "y", "mm": [0, 60] }, "atLeast": 0.5 }));
+        unnamed.validate(4, &bodies, &[]).unwrap();
+        assert_eq!(unnamed.against(&bodies), vec!["base", "object"]);
+        assert_eq!(unnamed.sentence(), "slides lid along y 0 mm to 60 mm atLeast 0.5");
+
+        let err = |json: serde_json::Value| read(json).validate(5, &bodies, &[]).unwrap_err();
+        let turn = |extra: serde_json::Value| {
+            let mut check = serde_json::json!({ "turns": { "body": "lid", "about": "x", "at": [0, -28, 16.2], "degrees": [0, -170] } });
+            for (k, v) in extra.as_object().unwrap() {
+                check[k] = v.clone();
+            }
+            check
+        };
+        assert!(err(turn(serde_json::json!({ "clearOf": ["base"], "catches": "base" }))).contains("both clearOf and catches"));
+        assert!(err(turn(serde_json::json!({ "catches": "base" }))).contains("catches needs deeperThan"));
+        assert!(err(turn(serde_json::json!({ "clearOf": ["lid"] }))).contains("against itself"));
+        assert!(err(turn(serde_json::json!({ "clearOf": ["hinge"] }))).contains("names a body \"hinge\""));
+        assert!(err(turn(serde_json::json!({ "catches": "base", "deeperThan": 0.2, "atLeast": 0.3 }))).contains("has atLeast"));
+        assert!(err(turn(serde_json::json!({ "clearOf": ["base"], "deeperThan": 0.2 }))).contains("has deeperThan"));
+        let screw = err(serde_json::json!({ "turns": { "body": "lid", "about": "x", "at": [0, 0, 0], "degrees": [0, 720] } }));
+        assert!(screw.contains("more than one revolution"), "{screw}");
+        let still = err(serde_json::json!({ "slides": { "body": "lid", "along": "y", "mm": [5, 5] } }));
+        assert!(still.contains("is one pose"), "{still}");
+        let nowhere = err(serde_json::json!({ "slides": { "body": "lid", "along": [0, 0, 0], "mm": [0, 5] } }));
+        assert!(nowhere.contains("points nowhere"), "{nowhere}");
+        let diagonal = err(serde_json::json!({ "turns": { "body": "lid", "about": "xy", "at": [0, 0, 0], "degrees": [0, 90] } }));
+        assert!(diagonal.contains("\"xy\" is not an axis"), "{diagonal}");
+        let missing = err(serde_json::json!({ "turns": { "body": "pin", "about": "x", "at": [0, 0, 0], "degrees": [0, 90] } }));
+        assert!(missing.contains("moves a body \"pin\" the part does not return"), "{missing}");
+        let alone = read(serde_json::json!({ "turns": { "body": "lid", "about": "x", "at": [0, 0, 0], "degrees": [0, 90] } }));
+        assert!(alone.validate(1, &[], &[]).unwrap_err().contains("the part returns one shape"));
+        let only = read(serde_json::json!({ "turns": { "body": "lid", "about": "x", "at": [0, 0, 0], "degrees": [0, 90] } }));
+        assert!(only.validate(1, &["lid"], &[]).unwrap_err().contains("no body to read \"lid\" against"));
+        let stray = err(serde_json::json!({ "clear": ["base", "lid"], "clearOf": ["object"] }));
+        assert!(stray.contains("has clearOf, which only turns and slides read"), "{stray}");
+        assert_eq!(meant("rotates"), Some("turns"));
+        assert_eq!(meant("latches"), Some("catches"));
+        assert_eq!(meant("clear_of"), Some("clearOf"));
+        let flat = serde_json::from_value::<Check>(serde_json::json!({ "turns": "lid", "about": "x" })).unwrap_err().to_string();
+        assert!(flat.contains("unknown field `about`") || flat.contains("invalid type"), "{flat}");
+    }
+
     #[test]
     fn validation_names_the_body_and_the_tag_it_cannot_find() {
         let bodies = ["top", "stacks"];
@@ -665,7 +1062,7 @@ mod tests {
         let one = read(serde_json::json!({ "clear": ["top", "stacks"] }));
         assert!(one.validate(1, &[], &[]).unwrap_err().contains("the part returns one shape"));
         let least = read(serde_json::json!({ "touching": ["top", "stacks"], "atLeast": 1 }));
-        assert!(least.validate(1, &bodies, &[]).unwrap_err().contains("only clear and interferes read"));
+        assert!(least.validate(1, &bodies, &[]).unwrap_err().contains("only clear, interferes and a motion with clearOf read"));
         let open = read(serde_json::json!({ "watertight": false }));
         assert!(open.validate(1, &[], &[]).unwrap_err().contains("watertight: true is the only value"));
     }

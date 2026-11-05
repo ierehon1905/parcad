@@ -37,6 +37,10 @@ required-features = ["kernel"]
 name = "volume_survey"
 required-features = ["kernel"]
 
+[[example]]
+name = "pose_cost"
+required-features = ["kernel"]
+
 [dependencies]
 parcad-core = { path = "../parcad-core" }
 anyhow.workspace = true

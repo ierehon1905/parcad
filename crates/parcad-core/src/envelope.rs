@@ -49,6 +49,7 @@ pub const FEATURES: &[&str] = &[
     "part-brief",
     "query-not",
     "request-checks",
+    "motion-checks",
 ];
 
 /// The version of parcad reading the graph.

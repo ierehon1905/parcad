@@ -84,8 +84,14 @@ impossible, check the layer that would implement it, not the layer above.
   `examples/lidded-box.js` is the seeded one; `split-halves` in the corpus is
   the two printable halves §9 asked for, held to the closed form of the kerf.
   Not here, by decision: joints, mates, constraints, assembly hierarchy,
-  instancing across parts, motion — a body sits where its script put it, and
-  the fit between two is measured, not solved. Nothing selects across bodies:
+  instancing across parts — a body sits where its script put it, and the
+  fit between two is measured, not solved. Motion is a *check*, not a
+  placement: `{ turns: { body, about, at, degrees }, clearOf, atLeast }` and
+  `{ slides: { body, along, mm }, ... }` certify a body's clearance over its
+  whole travel on the exact solids, and `catches` with `deeperThan` says a
+  latch bites; the part is still drawn as it prints, and nothing in the
+  graph moves (`Check` in `read_docs dsl`, with the hinged-box recipe under
+  `TurnCheck`). Nothing selects across bodies:
   a tag lives in the
   body that made it, and a treatment cannot take the group as its child.
 - **one part inside another** — `importPart(name, params)` runs a saved

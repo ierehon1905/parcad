@@ -2230,3 +2230,17 @@ face it was rolled on are measured along every rail, and the build is refused
 above 0.05° or 1 % of 1/R; the number is the reply's `curvature_jump_per_mm`.
 A G2 corner patch, an n-sided patch with curvature constraints, is the open
 item in docs/NEXT.md.
+
+## `Shape_faces_json` describes the first solid only
+
+The vendored `Shape_faces_json` walks the faces of the *first solid* in a
+shape, by design — concatenating a second would renumber the faces — so for a
+body that is a compound of several solids (a union whose operands never met,
+a boss floating over an open cavity) `perceive::describe_faces` returns fewer
+summaries than `shape.faces()` yields, and indexing the one by the other reads
+the wrong surface. The motion sweep learned this the hard way: a base whose
+boss did not touch it came back with no `plane` kinds past face 6, every face
+was treated as curved, and the sweep spent its whole budget in the kernel. It
+now reads planarity off each face's own triangulation and never consults the
+summaries. Anything else that pairs `describe_faces` with a face index should
+check the body is one solid first.

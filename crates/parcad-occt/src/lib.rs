@@ -22,6 +22,8 @@ pub mod backend;
 pub mod bodies;
 pub mod drawing;
 pub mod host;
+#[cfg(feature = "kernel")]
+pub mod motion;
 pub mod packet;
 #[cfg(feature = "kernel")]
 pub mod perceive;

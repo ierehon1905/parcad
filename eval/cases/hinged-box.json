@@ -1,0 +1,179 @@
+{
+  "name": "hinged-box",
+  "script": "eval/scripts/hinged-box.js",
+  "why": "The first motion check (docs/NEXT.md, check_motion): a print-in-place hinged case drawn open and flat, its lid folded about +x through (0, -28, 16.2), certified over the whole swing on the exact solids rather than read at posed copies. Three motion checks: the fold to -170 clear of the base passes at the pin's 0.4 mm in its bore, proven at every angle; the latch over the last ten degrees catches, the bead riding 0.44 mm over the groove wall at -179.3 before it snaps in (clear 0.2 shut); and the same fold clear of the object fails — the lid's rim clips the object's far top edge from -164.9, 0.65 mm deep at -165.9, which hand measurements at the shut pose (clear 1.0) had missed. The static pair checks hold as before. Recorded so a sweep that stops finding the bead, or starts passing the rim, goes red here.",
+  "brep": {
+    "size": [
+      107.0,
+      105.5,
+      23.5
+    ],
+    "volume_mm3": 58784.365,
+    "area_mm2": 43784.357,
+    "triangles": 1868,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 10995.5,
+    "stands_on_patches": 2,
+    "watertight": true,
+    "faces": 72,
+    "edges": 372,
+    "curves": 180,
+    "requires": [
+      "part-checks",
+      "motion-checks",
+      "part-brief",
+      "reference-bodies"
+    ],
+    "named_bodies": {
+      "base": {
+        "size": [
+          107.0,
+          55.5,
+          20.195
+        ],
+        "volume_mm3": 29993.628,
+        "faces": 33,
+        "edges": 174,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "lid": {
+        "size": [
+          107.0,
+          58.0,
+          23.5
+        ],
+        "volume_mm3": 28790.736,
+        "faces": 39,
+        "edges": 198,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "object": {
+        "reference": true,
+        "size": [
+          100.0,
+          40.0,
+          26.0
+        ],
+        "volume_mm3": 104000.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "object2": {
+        "reference": true,
+        "size": [
+          100.0,
+          40.0,
+          26.0
+        ],
+        "volume_mm3": 104000.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "base/lid": {
+        "verdict": "clear",
+        "clearance_mm": 0.4,
+        "interference_mm3": 0.0
+      },
+      "base/object": {
+        "verdict": "clear",
+        "clearance_mm": 1.0,
+        "interference_mm3": 0.0
+      },
+      "base/object2": {
+        "verdict": "clear",
+        "clearance_mm": 4.0,
+        "interference_mm3": 0.0
+      },
+      "lid/object": {
+        "verdict": "clear",
+        "clearance_mm": 4.0,
+        "interference_mm3": 0.0
+      },
+      "lid/object2": {
+        "verdict": "clear",
+        "clearance_mm": 1.0,
+        "interference_mm3": 0.0
+      },
+      "object/object2": {
+        "verdict": "clear",
+        "clearance_mm": 16.0,
+        "interference_mm3": 0.0
+      }
+    },
+    "checks": {
+      "passed": 5,
+      "failed": [
+        {
+          "check": "turns lid about x at (0, -28, 16.2) 0° to -170° clearOf object atLeast 0.3",
+          "measured_mm": 0.651,
+          "mismatch": "interferes with object from -164.854°, 0.651 mm deep at -165.85°"
+        }
+      ],
+      "motions": [
+        {
+          "check": "turns lid about x at (0, -28, 16.2) 0° to -170° clearOf base atLeast 0.3",
+          "verdict": "passed",
+          "least_clearance_mm": 0.4,
+          "against": "base",
+          "at": -170.0,
+          "certified_above_mm": 0.312
+        },
+        {
+          "check": "turns lid about x at (0, -28, 16.2) -170° to -180° catches base deeperThan 0.2",
+          "verdict": "passed",
+          "against": "base",
+          "at": -179.258,
+          "deepest_mm": 0.438
+        },
+        {
+          "check": "turns lid about x at (0, -28, 16.2) 0° to -170° clearOf object atLeast 0.3",
+          "verdict": "failed",
+          "against": "object",
+          "at": -165.85,
+          "deepest_mm": 0.651,
+          "touches_from": -164.854
+        }
+      ]
+    },
+    "brief": {
+      "verdict": "meets"
+    },
+    "overhang": {
+      "base": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 220.943,
+        "bed_mm2": 5564.5,
+        "faces": 4,
+        "bridges": 1
+      },
+      "lid": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 170.496,
+        "bed_mm2": 5431.0,
+        "faces": 4,
+        "bridges": 0
+      }
+    }
+  }
+}

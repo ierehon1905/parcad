@@ -23,7 +23,7 @@ describe("checks in the returned object", () => {
 
   test("an unknown key is refused with the key that was meant", () => {
     expect(() => part([{ clear: ["top", "stack"], clearance: 0.2 }])).toThrow(
-      'check 1 has no key "clearance" (write atLeast instead). A check\'s keys are clear, interferes, touching, wall, size, holes, feature, standsOn, bodies, watertight, atLeast, deeperThan, contactAtLeast, ignore, on and why.',
+      'check 1 has no key "clearance" (write atLeast instead). A check\'s keys are clear, interferes, touching, turns, slides, wall, size, holes, feature, standsOn, bodies, watertight, clearOf, catches, atLeast, deeperThan, contactAtLeast, ignore, on and why.',
     );
     expect(() => part([{ thickness: { min: 1 } }])).toThrow('check 1 has no key "thickness" (write wall instead)');
     expect(() => part([{ clear: ["top", "stack"] }, { why: "nothing" }])).toThrow("check 2 names nothing to check");
@@ -34,6 +34,40 @@ describe("checks in the returned object", () => {
   test("a check names a body the object returns", () => {
     expect(() => part([{ interferes: ["top", "stacks"] }])).toThrow(
       'check 1 names a body "stacks" the returned object does not have; its bodies are "top" and "stack"',
+    );
+  });
+
+  test("a motion check names its body, its axis and its range, and is stamped as a feature", () => {
+    const fold = { turns: { body: "stack", about: "x", at: [0, 0, 3], degrees: [0, -90] }, clearOf: ["top"], atLeast: 0.3 };
+    const doc = part([fold]);
+    expect(doc.checks).toEqual([fold]);
+    expect(doc.requires?.map((r) => r.feature)).toEqual(["part-checks", "motion-checks"]);
+    const pull = { slides: { body: "stack", along: [0, 0, 1], mm: [0, 20] }, catches: "top", deeperThan: 0.2 };
+    expect(part([pull]).checks).toEqual([pull]);
+    expect(() => part([{ rotates: { body: "stack" } }])).toThrow('check 1 has no key "rotates" (write turns instead)');
+    expect(() => part([{ turns: "stack", about: "x" }])).toThrow(
+      'check 1 has no key "about". A check\'s keys are',
+    );
+    expect(() => part([{ turns: { body: "stack", axis: "x", at: [0, 0, 3], degrees: [0, -90] } }])).toThrow(
+      'check 1: turns has no key "axis"; its keys are body, about, at and degrees',
+    );
+    expect(() => part([{ turns: { body: "stack", about: "x", at: [0, 0], degrees: [0, -90] } }])).toThrow(
+      "check 1: turns.at is a point on the axis, [x, y, z] in mm",
+    );
+    expect(() => part([{ turns: { body: "stack", about: "x", at: [0, 0, 3], degrees: 90 } }])).toThrow(
+      "check 1: turns.degrees is [from, to] in degrees, from the body as drawn at 0, not 90.",
+    );
+    expect(() => part([{ slides: { body: "stack", along: "y", mm: [0, 20] }, clearOf: 3 }])).toThrow(
+      'check 1: clearOf is a body name or a list of them, e.g. clearOf: ["base"], not 3.',
+    );
+    expect(() => part([{ slides: { body: "stack", along: "y", mm: [0, 20] }, catches: ["top"] }])).toThrow(
+      "check 1: catches is the name of the one body the moving one must bite into",
+    );
+    expect(() => part([{ turns: { body: "lid", about: "x", at: [0, 0, 3], degrees: [0, -90] } }])).toThrow(
+      'check 1 names a body "lid" the returned object does not have; its bodies are "top" and "stack"',
+    );
+    expect(() => part([{ turns: { body: "stack", about: "x", at: [0, 0, 3], degrees: [0, -90] }, clearOf: "base" }])).toThrow(
+      'check 1 names a body "base" the returned object does not have',
     );
   });
 

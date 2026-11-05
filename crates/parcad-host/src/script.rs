@@ -768,6 +768,11 @@ mod tests {
                 "request-checks",
                 "return { plate: box(80, 50, 6), checks: [{ holes: { diameter: 6, count: 4 } }] };".to_owned(),
             ),
+            (
+                "motion-checks",
+                "return { base: box(40, 40, 5), lid: box(40, 40, 3).at(0, -42, 1.5), checks: [{ turns: { body: \"lid\", about: \"x\", at: [0, -21, 3], degrees: [0, 180] }, clearOf: [\"base\"], atLeast: 0.5 }] };"
+                    .to_owned(),
+            ),
         ];
         let stamped: Vec<&str> = cases.iter().map(|(id, _)| *id).collect();
         assert_eq!(stamped, parcad_core::envelope::FEATURES, "the host's feature list and this table differ");

@@ -1,0 +1,106 @@
+{
+  "name": "hinged-box-hits",
+  "script": "eval/scripts/hinged-box-hits.js",
+  "why": "A lid that hits its base mid-swing, refused with the angle: the hinged box with a tall tab on the base's far wall, which the lid clears shut and open and sweeps through on the way. The fold check fails naming where the two first meet and how deep they overlap at the end of the range; a sweep that passes this has stopped posing the lid.",
+  "brep": {
+    "size": [
+      107.0,
+      103.0,
+      36.0
+    ],
+    "volume_mm3": 58600.765,
+    "area_mm2": 44123.957,
+    "triangles": 1828,
+    "bodies": 2,
+    "voids": 0,
+    "stands_on_mm2": 10950.5,
+    "stands_on_patches": 2,
+    "watertight": true,
+    "faces": 60,
+    "edges": 312,
+    "curves": 150,
+    "requires": [
+      "part-checks",
+      "motion-checks"
+    ],
+    "named_bodies": {
+      "base": {
+        "size": [
+          107.0,
+          55.5,
+          36.0
+        ],
+        "volume_mm3": 30825.628,
+        "faces": 32,
+        "edges": 174,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "lid": {
+        "size": [
+          107.0,
+          55.5,
+          20.195
+        ],
+        "volume_mm3": 27775.136,
+        "faces": 28,
+        "edges": 138,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "base/lid": {
+        "verdict": "clear",
+        "clearance_mm": 0.4,
+        "interference_mm3": 0.0
+      }
+    },
+    "checks": {
+      "passed": 0,
+      "failed": [
+        {
+          "check": "turns lid about x at (0, -28, 16.2) 0° to -170° clearOf base atLeast 0.3",
+          "measured_mm": 1.096,
+          "mismatch": "interferes with base from -164.21°, 1.096 mm deep at -170°"
+        }
+      ],
+      "motions": [
+        {
+          "check": "turns lid about x at (0, -28, 16.2) 0° to -170° clearOf base atLeast 0.3",
+          "verdict": "failed",
+          "against": "base",
+          "at": -170.0,
+          "deepest_mm": 1.096,
+          "touches_from": -164.21
+        }
+      ]
+    },
+    "overhang": {
+      "base": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 204.943,
+        "bed_mm2": 5564.5,
+        "faces": 3,
+        "bridges": 0
+      },
+      "lid": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 154.496,
+        "bed_mm2": 5386.0,
+        "faces": 3,
+        "bridges": 0
+      }
+    }
+  }
+}

@@ -25,6 +25,16 @@ pub struct Tolerance {
     /// mesher happened to lay near the bed, and that moves between compilers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stands_on_pct: Option<f64>,
+    /// Absolute, in a motion's own unit (degrees or mm), for the poses a
+    /// sweep reports: where a clearance is least, where two bodies first
+    /// meet. A clearance constant over the range — a pin in its bore — is
+    /// least everywhere, and the pose named for it is the sweep's choice.
+    #[serde(default = "default_pose_tolerance")]
+    pub pose: f64,
+}
+
+fn default_pose_tolerance() -> f64 {
+    0.5
 }
 
 impl Tolerance {
@@ -34,6 +44,7 @@ impl Tolerance {
             volume_pct: 0.05,
             triangles_pct: 5.0,
             stands_on_pct: None,
+            pose: default_pose_tolerance(),
         }
     }
 }
@@ -693,6 +704,48 @@ pub struct ChecksExpect {
     pub passed: usize,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed: Vec<FailedCheckExpect>,
+    /// Each motion check's sweep, pass or fail: what it came nearest to,
+    /// where, and what was proven. Lengths held to `size_mm`; a pose to
+    /// `pose`, the sweep's own resolution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub motions: Vec<MotionExpect>,
+}
+
+/// One motion check as the corpus pins it.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MotionExpect {
+    pub check: String,
+    /// `passed`, `failed` or `uncertified`.
+    pub verdict: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub least_clearance_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub against: Option<String>,
+    /// The pose of the least clearance or the deepest bite, in the motion's
+    /// own unit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub at: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certified_above_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deepest_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub touches_from: Option<f64>,
+}
+
+impl From<&parcad_evaluation::checks::MotionReport> for MotionExpect {
+    fn from(m: &parcad_evaluation::checks::MotionReport) -> Self {
+        Self {
+            check: m.check.clone(),
+            verdict: m.verdict.to_string(),
+            least_clearance_mm: m.least_clearance_mm,
+            against: m.against.clone(),
+            at: m.at_degrees.or(m.at_mm),
+            certified_above_mm: m.certified_above_mm,
+            deepest_mm: m.deepest_mm,
+            touches_from: m.touches_from_degrees.or(m.touches_from_mm),
+        }
+    }
 }
 
 /// One failing check: its sentence and its measurement, held to `size_mm`
@@ -724,6 +777,7 @@ impl From<&parcad_evaluation::ChecksReport> for ChecksExpect {
                     mismatch: f.mismatch.clone(),
                 })
                 .collect(),
+            motions: report.motions.iter().map(MotionExpect::from).collect(),
         }
     }
 }
@@ -1216,6 +1270,33 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
                         }
                     }
                 }
+                let checks = |c: &ChecksExpect| c.motions.iter().map(|m| m.check.clone()).collect::<Vec<_>>();
+                if checks(want) != checks(got) {
+                    out.push(Mismatch { field: "checks.motions".into(), detail: format!("expected motions {:?}, got {:?}", checks(want), checks(got)) });
+                } else {
+                    for (w, g) in want.motions.iter().zip(&got.motions) {
+                        let at = format!("checks.motions[{}]", w.check);
+                        if w.verdict != g.verdict {
+                            out.push(Mismatch { field: format!("{at}.verdict"), detail: format!("expected {}, got {}", w.verdict, g.verdict) });
+                        }
+                        if w.against != g.against {
+                            out.push(Mismatch { field: format!("{at}.against"), detail: format!("expected {:?}, got {:?}", w.against, g.against) });
+                        }
+                        for (name, w, g, tolerance) in [
+                            ("least_clearance_mm", w.least_clearance_mm, g.least_clearance_mm, tol.size_mm),
+                            ("certified_above_mm", w.certified_above_mm, g.certified_above_mm, tol.size_mm),
+                            ("deepest_mm", w.deepest_mm, g.deepest_mm, tol.size_mm),
+                            ("at", w.at, g.at, tol.pose),
+                            ("touches_from", w.touches_from, g.touches_from, tol.pose),
+                        ] {
+                            match (w, g) {
+                                (Some(w), Some(g)) => abs_check(&mut out, &format!("{at}.{name}"), w, g, tolerance),
+                                (None, None) => {}
+                                (w, g) => out.push(Mismatch { field: format!("{at}.{name}"), detail: format!("expected {w:?}, got {g:?}") }),
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1459,6 +1540,18 @@ pub fn record(expect: &mut Expect, observed: &Observed) {
                 measured_mm: f.measured_mm.map(round3),
                 measured_mm3: f.measured_mm3.map(round3),
                 mismatch: f.mismatch.clone(),
+            })
+            .collect(),
+        motions: c
+            .motions
+            .iter()
+            .map(|m| MotionExpect {
+                least_clearance_mm: m.least_clearance_mm.map(round3),
+                certified_above_mm: m.certified_above_mm.map(round3),
+                deepest_mm: m.deepest_mm.map(round3),
+                at: m.at.map(round3),
+                touches_from: m.touches_from.map(round3),
+                ..m.clone()
             })
             .collect(),
     });
