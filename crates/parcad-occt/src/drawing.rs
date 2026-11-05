@@ -14,6 +14,9 @@ pub struct TriangleOwners {
     pub faces: Vec<u32>,
     /// The body's position in [`Success::bodies`]. Empty for a one-solid part.
     pub bodies: Vec<u32>,
+    /// Which of those positions hold a reference body, which the renderer
+    /// draws behind the part. Empty for a one-solid part.
+    pub reference_bodies: Vec<bool>,
 }
 
 impl TriangleOwners {
@@ -37,7 +40,8 @@ impl TriangleOwners {
                 bodies[start..end].fill(i as u32);
             }
         }
-        Self { faces, bodies }
+        let reference_bodies = s.bodies.iter().map(|span| span.reference).collect();
+        Self { faces, bodies, reference_bodies }
     }
 }
 

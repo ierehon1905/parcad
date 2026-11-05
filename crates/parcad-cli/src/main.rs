@@ -416,16 +416,9 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
     let s = parcad_occt::evaluate(doc, &opts).map_err(|e| anyhow::anyhow!("{e}"))?;
     let kernel_ms = started.elapsed().as_millis();
 
-    let vertices: Vec<[f32; 3]> = s
-        .positions
-        .chunks_exact(3)
-        .map(|c| [c[0], c[1], c[2]])
-        .collect();
-    let triangles: Vec<[usize; 3]> = s
-        .indices
-        .chunks_exact(3)
-        .map(|c| [c[0] as usize, c[1] as usize, c[2] as usize])
-        .collect();
+    // The part's own triangles: a reference body is drawn below, and is in
+    // no measurement, no file and no frame.
+    let (vertices, triangles) = s.part_mesh();
 
     // Weld before measuring: OCCT triangulates face by face, so every shared
     // edge arrives as two coincident copies and the raw index graph looks full
@@ -456,6 +449,7 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         indices: &s.indices,
         faces: &owners.faces,
         bodies: &owners.bodies,
+        reference_bodies: &owners.reference_bodies,
     };
     let opts = render::RenderOptions {
         size: args.size,

@@ -75,10 +75,6 @@ pub fn evaluated(
         };
         snapshot.centroid = round_point(c);
     }
-    // Framed on everything drawn, reference bodies included; the snapshot's
-    // bounds are the part's alone.
-    let drawn: Vec<[f32; 3]> = s.positions.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
-    let bounds = parcad_core::measure::Aabb::from_points(&drawn).unwrap_or(report.bounds);
     snapshot.reused_build = reused;
     snapshot.deviation_mm = s.deviation_mm.map(round_mm);
     if let Some(bound) = doc.stated_curve_bound() {
@@ -94,7 +90,7 @@ pub fn evaluated(
     // An error bound rounds up: a step of 1e-15 must not read as none.
     snapshot.curvature_jump_per_mm = s.curvature_jump_per_mm.map(|d| (d * 1e6).ceil() / 1e6);
     Ok(Evaluated {
-        bounds,
+        bounds: report.bounds,
         reference_bodies: s.reference_bodies().iter().map(|b| b.to_string()).collect(),
         snapshot,
         positions: s.positions.clone(),
@@ -104,6 +100,7 @@ pub fn evaluated(
         faces: s.faces.clone(),
         edges: s.edges.clone(),
         triangle_bodies: parcad_occt::drawing::TriangleOwners::of(s).bodies,
+        body_names: s.bodies.iter().map(|body| body.name.clone()).collect(),
     })
 }
 
@@ -185,7 +182,9 @@ pub struct Evaluated {
     pub faces: Vec<parcad_occt::protocol::FaceSummary>,
     /// What the part is — the one artifact every transport serialises.
     pub snapshot: EvaluationSnapshot,
-    /// The measured bounds, unrounded, for the renderer to frame with.
+    /// The measured bounds, unrounded, for the renderer to frame with: the
+    /// part's own, a reference body left out, so a 300 mm wall drawn beside
+    /// a 36 mm bracket cannot shrink the bracket to a few pixels.
     ///
     /// Not serialised: [`EvaluationSnapshot`] already states the bounds for
     /// anyone reading the reply, to the micron every other length is reported
@@ -194,10 +193,15 @@ pub struct Evaluated {
     /// measurement.
     #[serde(skip)]
     pub bounds: parcad_core::measure::Aabb,
-    /// Which named body each triangle belongs to; empty for one solid. A
-    /// section decides what is material body by body.
+    /// Which named body each triangle belongs to, numbered as `body_names`
+    /// lists them; empty for one solid. A section decides what is material
+    /// body by body.
     #[serde(skip)]
     pub triangle_bodies: Vec<u32>,
+    /// The named bodies in the order `triangle_bodies` numbers them — the
+    /// script's. Empty for one solid.
+    #[serde(skip)]
+    pub body_names: Vec<String>,
     /// The reference bodies' names: drawn in the reference colour whether or
     /// not a view asked for materials.
     #[serde(skip)]
@@ -904,6 +908,23 @@ pub struct RenderedView {
     pub scale_mm: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scale_px: Option<u32>,
+    /// The bodies this view is fitted to: every body of the part, never a
+    /// reference, so the frame, the ruler and a section's default plane are
+    /// the part's however large the wall it mounts on is drawn beside it.
+    /// Present only when the part has reference bodies.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub framed_on: Option<Vec<String>>,
+    /// Reference bodies with no pixel in this view: outside the frame, or
+    /// hidden behind the part or another reference. Measured off the
+    /// picture; present with `framed_on`, and empty when every reference
+    /// shows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub references_out_of_view: Option<Vec<String>>,
+    /// How a reference body is drawn ([`REFERENCE_FRAMING`]), said in every
+    /// view that has one, so a reader of the picture knows the blue is a
+    /// backdrop the frame cuts off and not the part.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub framing: Option<String>,
     /// The same image as a PNG file, for a person to open or a caller to
     /// attach. Set by the transport that kept it; the pixels ride inline too.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -913,6 +934,11 @@ pub struct RenderedView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub markdown: Option<String>,
 }
+
+/// What a view with reference bodies says about its frame: the rule, once,
+/// beside the measured `framed_on` and `references_out_of_view`.
+pub const REFERENCE_FRAMING: &str = "fitted to the part alone, ruler included; a reference body is drawn in blue \
+                                     behind the part and cut off at the frame's edge";
 
 /// Where the camera for one view was, said in the part's own axes.
 ///
@@ -1512,8 +1538,9 @@ mod tests {
         assert_eq!(flags, [("near", false), ("far", true)]);
         assert_eq!(snapshot.named_bodies[1].volume_mm3, Some(1.0), "a reference is still measured");
         assert_eq!(evaluated.reference_bodies, ["far"]);
-        // The renderer frames everything drawn; the snapshot reports the part.
-        assert_eq!((evaluated.bounds.max.x, snapshot.bounds_max[0]), (6.0, 1.0));
+        // A view is framed on the part: the reference five units out is
+        // drawn where it falls inside that frame, and never widens it.
+        assert_eq!((evaluated.bounds.max.x, snapshot.bounds_max[0]), (1.0, 1.0));
         let (bytes, measured) = stl(&doc, &success, false).unwrap();
         assert_eq!(bytes.len(), 84 + 12 * 50, "twelve triangles: the reference is not in the file");
         assert_eq!((measured.bodies, measured.volume_mm3), (1, Some(1.0)));

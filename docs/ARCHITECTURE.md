@@ -241,10 +241,24 @@ part_indices` (so `measure_brep`, STL, 3MF and the corpus read the same
 triangles), `Assembled`'s topology and kinds (so `faces`, `edges` and `kind`),
 `describe`'s volume, watertightness and centroid, and `perceive::bodies_of`
 (so a probe or a thickness sweep never reads material inside a coin). What
-keeps it: `named_bodies` (with `reference: true`), `between_bodies`, the
-window's mesh, and `Evaluated::bounds`, which frames everything drawn. The
+keeps it: `named_bodies` (with `reference: true`), `between_bodies` and the
+window's mesh. The
 corpus case `reference-stack` pins `bodies: 1` and the tray's volume beside
 a `clear` check against the stack that passes.
+
+A rendered view is framed on the part alone — `Evaluated::bounds` is the
+snapshot's, so the frame, the ruler and a section's default plane never
+widen to a reference — and the rasteriser draws a reference *behind* the
+part whatever the depth order says (`Surface::reference_bodies`, with
+`TriangleOwners` saying which bodies those are for the host, the CLI and the
+corpus alike). Both came from one picture: a 300 mm wall returned beside the
+36 mm bracket that mounts on it framed every view, and sat between the iso
+camera and the bracket, so the render was a blue square under a 100 mm rule.
+Each such view says what it did — `framed_on`, `references_out_of_view`
+(measured off the pixels, so a reference the frame cut off entirely is named
+rather than inferred missing) and `framing` — and a part with no reference
+gets none of the three. The window, which frames on the snapshot's bounds and
+draws a reference as translucent blue, needed neither.
 
 **`note()` is the one channel out of the sandbox, and it says what it is.**
 A script computes real engineering — mouth widths, tilt angles, pin
