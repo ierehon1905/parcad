@@ -4,7 +4,7 @@
  * same words; `crates/parcad-core/src/checks.rs` carries the synonym table.
  */
 import { describe, expect, test } from "bun:test";
-import { box, build, cylinder } from "./dsl";
+import { box, build, cylinder, type Check } from "./dsl";
 
 function part(checks: unknown) {
   const top = box(60, 40, 3).tag("top");
@@ -38,11 +38,11 @@ describe("checks in the returned object", () => {
   });
 
   test("a motion check names its body, its axis and its range, and is stamped as a feature", () => {
-    const fold = { turns: { body: "stack", about: "x", at: [0, 0, 3], degrees: [0, -90] }, clearOf: ["top"], atLeast: 0.3 };
+    const fold: Check = { turns: { body: "stack", about: "x", at: [0, 0, 3], degrees: [0, -90] }, clearOf: ["top"], atLeast: 0.3 };
     const doc = part([fold]);
     expect(doc.checks).toEqual([fold]);
     expect(doc.requires?.map((r) => r.feature)).toEqual(["part-checks", "motion-checks"]);
-    const pull = { slides: { body: "stack", along: [0, 0, 1], mm: [0, 20] }, catches: "top", deeperThan: 0.2 };
+    const pull: Check = { slides: { body: "stack", along: [0, 0, 1], mm: [0, 20] }, catches: "top", deeperThan: 0.2 };
     expect(part([pull]).checks).toEqual([pull]);
     expect(() => part([{ rotates: { body: "stack" } }])).toThrow('check 1 has no key "rotates" (write turns instead)');
     expect(() => part([{ turns: "stack", about: "x" }])).toThrow(

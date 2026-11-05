@@ -68,8 +68,8 @@ if [ "$fast" = 1 ]; then
   step "cargo test -p parcad-core -p parcad-occt -p parcad-cli"
   cargo test --locked -p parcad-core -p parcad-occt -p parcad-cli
 
-  step "bun test"
-  (cd app && bun test src)
+  step "app: tsc, bun test"
+  (cd app && bun x tsc --noEmit && bun test src)
 
   step "field/selftest.py"
   field/selftest.py
@@ -97,8 +97,8 @@ step "cargo test"
 # five minutes for a crate with no tests. See docs/GOTCHAS.md.
 cargo test --release --workspace --exclude occt-sys
 
-step "bun test"
-(cd app && bun test src)
+step "app: tsc, bun test"
+(cd app && bun x tsc --noEmit && bun test src)
 
 step "field/selftest.py"
 field/selftest.py
