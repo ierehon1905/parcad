@@ -42,7 +42,7 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    by the first user rather than by us. In order of what it buys:
    - **Before the tap sees it**: `brew style` and `brew audit --strict --formula`
      on the rendered file, in the same `publish.yml` job that renders it.
-   - **After the push, install it for real**: a job on `macos-14` (arm64) and
+   - **After the push, install it for real**: a job on `macos-15` (arm64) and
      `ubuntu-latest` that taps, `brew install parcad`, runs `parcad --version`,
      starts `parcad serve`, and calls `parcad tools` against it — the end-to-end
      check that the archive carries its worker and the host comes up. This is

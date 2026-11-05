@@ -33,7 +33,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14
+          - runner: macos-15
             triple: aarch64-apple-darwin
             # --bundles app, not the default "all". The .dmg step drives Finder
             # over AppleScript to lay out the disk image window, which has no
