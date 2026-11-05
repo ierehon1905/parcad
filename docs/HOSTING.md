@@ -124,8 +124,8 @@ runs **one process with tenants inside it**, which is what landed:
   and there is no `url`. The MCP instructions a hosted client reads say the
   same in place of the desktop's screen paragraph, which would send a model to
   `open_project` on a host with no window; whether a model reads the hosted
-  text is unmeasured, since `field/run-case.sh` writes a client config with no
-  bearer.
+  text is unmeasured — the harness takes the token as `FIELD_MCP_BEARER`
+  (field/README.md), and nobody has pointed it at a hosted host yet.
 - Limits per tenant, defaults being today's for `local`: the kernel timeout a
   call may ask for, the script backstop, concurrent builds (two per tenant and
   one global cap of the box's cores, `--builds N`, since the pool itself caps
@@ -237,32 +237,139 @@ one long `evaluate_part` before relying on it.
 Nothing is rented until Leon says so: a server costs money and has a public
 address.
 
-## Deploying the image
+## Deploying
 
-`packaging/docker/README.md` is the image: how it is built from a release's
-Linux archive, the `/data` volume, every variable, and what was measured
-(56 MB compressed; healthy in a few seconds; 16 MiB idle, about 90 MiB with
-a worker up). On the box:
+Three things, in this order: a release whose image is on GitHub's registry,
+one tunnel in Cloudflare, one box at Hetzner that pulls the image and runs
+the tunnel. Everything that is a file is under `packaging/`; what has to be
+clicked is listed here, with where each secret goes, because none of it can
+be done from this repository.
 
-1. `docker run -d --restart unless-stopped --name parcad -p 127.0.0.1:4242:4242
-   -e PARCAD_PUBLIC_HOST=<the tunnel's hostname> -v parcad-data:/data
-   -v /srv/parcad/tokens:/etc/parcad/tokens:ro parcad:<version>`; the
-   entrypoint adds the hosted flags. The version has to be the first release
-   after 0.0.13, which is the first that carries `--hosted`; an image built
-   from 0.0.13 refuses to start and says so.
-2. `cloudflared tunnel` from the public hostname to `http://127.0.0.1:4242`;
-   the port is never published beyond loopback.
-3. One long `evaluate_part` through the tunnel, to confirm the stream survives
-   the proxy's timeouts before a connector is pointed at it.
+### The release and its image
 
-A client does not read the version to learn whether a host is hosted: a
-binary built from this branch still says 0.0.13. It reads `/api/health`,
-which carries `"hosted": true|false` and `"features": ["tenants",
-"bearer-auth", "export-download", "signed-links", "limits"]`, or the MCP
-`initialize` reply,
-which carries the same block under `capabilities.experimental.parcad`; the
-list is `service::FEATURES`, named once for both transports, and `hosted`
-says whether this process runs as one server for many accounts.
+`publish.yml` runs when a release is published and builds
+`ghcr.io/ierehon1905/parcad:<version>` (and `latest`) from that release's
+Linux archive, checksum-verified by `packaging/docker/Dockerfile`, puts one
+account through it with `packaging/docker/smoke.sh` — token, handshake, build,
+export, the signed url fetched back — and pushes it with the workflow's own
+token. 0.0.14 is the first release that carries `--hosted`; an image built
+from 0.0.13 refuses to start and says so.
 
-Upgrading is building the image for the next release and restarting the
-container; the parts live on the volume.
+**Click, once:** the first push makes a *private* package. Make it public at
+github.com/users/ierehon1905/packages/container/parcad/settings, *Change
+visibility*, or the box's `docker compose pull` is refused. (The alternative,
+a token on the box with `read:packages`, is one more secret for no gain on a
+public project.)
+
+### The tunnel
+
+In the Cloudflare dashboard, Zero Trust, *Networks*, *Tunnels*, *Create a
+tunnel*, *Cloudflared*, name it `parcad`. The next screen shows an install
+command; the long `eyJ…` word in it is the **tunnel token** — copy it, it is
+the one secret the box is given. Then *Public hostname*: the subdomain and
+domain clients will use (`cad.example.com`), type *HTTP*, URL
+`localhost:4242`. Nothing else: the token names the tunnel, and the hostname
+and origin live in Cloudflare, so a box can be replaced without touching them.
+
+### The box
+
+Render the cloud-init for it, with the hostname, the token and the release:
+
+```bash
+packaging/hetzner/user-data.py --host cad.example.com --tunnel-token "$TUNNEL_TOKEN" --version 0.0.14 | pbcopy
+```
+
+Hetzner Cloud console, *Add server*: a European location, Ubuntu 24.04, type
+**CX23** (shared x86, 2 vCPU, 4 GB; CPX22 if the CX line is sold out), your
+SSH key, and the rendered text pasted into *Cloud config*. Create. Optionally
+*Backups* on the server (a snapshot a day, 20 % of its price) — the kit's own
+nightly backup is on the same disk and is a convenience, not a backup.
+
+First boot runs `packaging/hetzner/install.sh` from the release tag (two to
+three minutes; `/var/log/parcad-install.log` on the box): Docker and
+cloudflared from their repositories, a 2 GB swapfile, ufw with ssh only,
+`/srv/parcad` with the release's `compose.yaml` and an empty tokens file, the
+tunnel as a systemd service with its token in a root-only file, the nightly
+backup timer, then `docker compose up`. The host is up, behind the tunnel,
+with no account.
+
+**Click, once per account**, over ssh as root:
+
+```
+parcad-token <account-id>
+```
+
+prints the account's bearer token once and restarts the host to read it. The
+token goes into the client and nowhere else: a phone app's agent service
+keeps it in that service's secret store; Claude Code takes it as
+`claude mcp add --transport http parcad https://cad.example.com/mcp --header
+"Authorization: Bearer <token>"`. The claude.ai connector directory cannot
+carry a static bearer; that is phase 2 of "Auth". The file on the box holds
+only the hash.
+
+Check it from anywhere:
+
+```bash
+packaging/docker/smoke.sh https://cad.example.com "$TOKEN"
+```
+
+### Where every secret is
+
+| secret | made where | lives where | shown to |
+|---|---|---|---|
+| tunnel token | Cloudflare, at tunnel creation | Hetzner's *Cloud config* (the server's metadata), then `/etc/cloudflared/tunnel.env`, root only | you, once, in the dashboard |
+| account token | `parcad-token` on the box | its hash in `/srv/parcad/tokens`; the token in the client's own secret store | you, once, on stdout |
+| link secret | the host, first start | `/data/link-secret` on the volume | nobody |
+| GitHub | — | none: `publish.yml` pushes with the workflow's token | — |
+
+Rotating: a new tunnel token is a new `tunnel.env` and `systemctl restart
+cloudflared`; a revoked account is its line deleted from the tokens file and
+`docker compose restart`; the link secret deleted invalidates every link
+handed out so far.
+
+### What was measured through a tunnel
+
+2026-11-05, on this Mac: the release-shaped amd64 image (built from this
+branch's Linux binaries, `PARCAD_SOURCE=local`) under Docker Desktop,
+emulated, behind a `cloudflared tunnel --url` quick tunnel, with the tunnel's
+hostname as `PARCAD_PUBLIC_HOST`; `packaging/docker/smoke.sh` direct and
+through the tunnel. The transcript is in the session's hand-over notes.
+
+| | direct | through the tunnel |
+|---|---|---|
+| container healthy after start | 0.5 s | — |
+| the quick tunnel's name resolving and answering | — | 74–75 s after creation (a named tunnel has a DNS record already) |
+| `initialize` | 0.09–0.11 s | 0.07–0.12 s |
+| `evaluate_part`, the bracket, first build | 1.14–1.33 s (`kernel_ms` 956–1083, emulated) | 0.09–0.11 s on the cached build |
+| `export_part` 3mf, 68,406 bytes | 0.04–0.07 s | 0.10–0.16 s |
+| the signed `url`, no bearer | 200 `model/3mf` | 200 `model/3mf`; altered signature 403 |
+| a reply held 50 s by its script | — | 200 after 50.2 s |
+| a reply held 110 s | — | 200 after 110.2 s |
+| a reply held 130 s, and one held 150 s | — | **524 after 125.1 s**, both; the host finished the build regardless |
+| container memory after all of it | 108 MiB of the 3 GiB limit | |
+
+So the wall is **125 s of silence**, the tunnel's read timeout, not the 100 s
+origin-response limit Cloudflare documents for proxied sites. Hosted replies
+are plain JSON (`json_response` in `mcp.rs`), sent whole when the tool
+returns, so nothing streams and no heartbeat is involved, and a call whose
+kernel and script together run past 125 s reaches the client as a 524 while
+the host completes it. The per-account limits (60 s kernel, 120 s script) keep
+the common case far inside that: the corpus's p99 kernel time is 14 s on an
+M4 Pro, about 35 s on a cloud vCPU. The fix, if the wall is hit in practice,
+is SSE replies for hosted hosts (rmcp's `json_response = false` with its 15 s
+`sse_keep_alive`), which every MCP client reads; whether the tunnel buffers an
+event stream would then be the thing to measure.
+
+### Upgrading
+
+Edit `PARCAD_VERSION` in `/srv/parcad/.env`, then in that folder `docker
+compose pull && docker compose up -d`. The parts and the link secret stay on
+the volume; the backup from 03:30 UTC is in `/srv/parcad/backups`, and
+`rsync -a root@<box>:/srv/parcad/backups/ ./` pulls them off the box.
+
+A client does not read the version to learn whether a host is hosted. It
+reads `/api/health`, which carries `"hosted": true|false` and `"features":
+["tenants", "bearer-auth", "export-download", "signed-links", "limits"]`, or
+the MCP `initialize` reply, which carries the same block under
+`capabilities.experimental.parcad`; the list is `service::FEATURES`, named
+once for both transports.
