@@ -187,7 +187,8 @@ field/score.py --verdict 'OPEN' <trial>.jsonl     # ad hoc, when there is no rub
 
 Transcripts are kept. They are the artefact — the tables are an index into them.
 
-Environment knobs: `MODELS`, `ARMS`, `CASES`, `THINK`, `MODEL`, `RUN`.
+Environment knobs: `MODELS`, `ARMS`, `CASES`, `THINK`, `MODEL`, `RUN`, and
+`FIELD_MCP_BEARER` for a server that wants a token (below).
 
 ```bash
 CASES="how-many-edges what-is-hidden" MODELS=haiku field/run-suite.sh 3
@@ -225,6 +226,22 @@ list: when those were two here they drifted, and a tool on one and not the other
 would have had its first call graded a stray and voided. A tool missing from
 `tools` does not fail loudly — it is invisible to the model, and its case reads
 as a model that chose not to call it.
+
+**A server behind a bearer token.** Put the token in `FIELD_MCP_BEARER`, or
+in a variable of your own named by `bearer_env = "MY_TOKEN"`; `field.toml`
+names the variable and never holds the token. The client config the runner
+writes beside the transcripts says `"Authorization": "Bearer
+${FIELD_MCP_BEARER}"` literally, and `claude` expands it when it connects, so
+the token reaches no file the run keeps and no line it prints. A server that
+answers `401` with the variable unset stops the run before a trial is paid
+for. A CLI that ever stopped expanding `${…}` there would show as every trial
+VOID with the server `failed` in the transcript's first line, which is the
+uniformity tell below.
+
+```bash
+export FIELD_MCP_BEARER=$(cat ~/secrets/staging-token)
+field/run-case.sh cases/one.md 2
+```
 
 Optional `[[reads]]` rules define what "the model quoted something a tool
 measured" looks like in your domain, for cases carrying no explicit `quote`. A

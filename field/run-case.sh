@@ -36,12 +36,25 @@ if ! curl -s -m 2 -o /dev/null "$FIELD_HEALTH"; then
   exit 1
 fi
 
+# A bearer is read from the variable field.toml's `bearer_env` names, and only
+# `${NAME}` is written below; the CLI expands it on connect, so no kept file has it.
+BEARER_ENV=$FIELD_BEARER_ENV
+HEADERS=""
+if [ -n "${!BEARER_ENV:-}" ]; then
+  export "${BEARER_ENV?}"
+  HEADERS=", \"headers\": { \"Authorization\": \"Bearer \${$BEARER_ENV}\" }"
+elif [ "$(curl -s -m 2 -o /dev/null -w '%{http_code}' "$FIELD_URL")" = 401 ]; then
+  echo "$FIELD_URL answers 401 and wants a bearer token: export $BEARER_ENV=<token>," >&2
+  echo "or name the variable that holds it with bearer_env in field.toml." >&2
+  exit 1
+fi
+
 RUN=${RUN:-$(mktemp -d "${TMPDIR:-/tmp}/$FIELD_SERVER-field-XXXXXX")}
 mkdir -p "$RUN"   # RUN may name a directory that does not exist yet
 RUN=$(cd "$RUN" && pwd)
 BODY=$(prompt_body "$PROMPT")
 cat > "$RUN/mcp.json" <<EOF
-{ "mcpServers": { "$FIELD_SERVER": { "type": "http", "url": "$FIELD_URL" } } }
+{ "mcpServers": { "$FIELD_SERVER": { "type": "http", "url": "$FIELD_URL"$HEADERS } } }
 EOF
 # So a run stays scoreable after the case file has moved on.
 cp "$PROMPT" "$RUN/case.md"
@@ -73,7 +86,7 @@ run_one() {
     --output-format stream-json --verbose < /dev/null > "$RUN/trial$1.jsonl" 2>&1 || true
 }
 
-echo "$(basename "$PROMPT" .md): $TRIALS trials, model $MODEL, thinking $THINK${EFFORT:+, effort $EFFORT}, at $FIELD_URL"
+echo "$(basename "$PROMPT" .md): $TRIALS trials, model $MODEL, thinking $THINK${EFFORT:+, effort $EFFORT}, at $FIELD_URL${HEADERS:+ with a bearer from \$$BEARER_ENV}"
 for i in $(seq 1 "$TRIALS"); do run_one "$i" & done
 wait
 

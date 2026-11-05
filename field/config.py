@@ -20,6 +20,7 @@ DEFAULT = pathlib.Path(__file__).resolve().parent / "field.toml"
 REQUIRED = ("server", "url", "cases", "tools")
 
 VAR = re.compile(r"\$\{(\w+)(?::-([^}]*))?\}")
+NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def expand(s):
@@ -47,6 +48,12 @@ def load(path=None):
     cfg["hint"] = cfg.get("hint", "").strip("\n")
     cfg.setdefault("reads", [])
     cfg.setdefault("bulky_args", [])
+    # The name of the variable holding a bearer token, never the token itself.
+    cfg.setdefault("bearer_env", "FIELD_MCP_BEARER")
+    if not NAME.fullmatch(cfg["bearer_env"]):
+        raise SystemExit(f"{path}: bearer_env names an environment variable, "
+                         f"like FIELD_MCP_BEARER; got {cfg['bearer_env']!r}. "
+                         f"Put the token in that variable, never in the file.")
     return cfg
 
 
@@ -56,7 +63,7 @@ def main():
         print(json.dumps(cfg, indent=2))
         return
     import shlex
-    for key in ("server", "url", "health", "cases", "allow", "hint"):
+    for key in ("server", "url", "health", "cases", "allow", "hint", "bearer_env"):
         print(f"FIELD_{key.upper()}={shlex.quote(str(cfg[key]))}")
 
 

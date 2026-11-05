@@ -9,6 +9,9 @@ server = "parcad"
 
 url = "http://127.0.0.1:${PARCAD_HTTP_PORT:-4242}/mcp"
 
+# The variable holding a bearer for `parcad serve --hosted`; unset for a local host.
+bearer_env = "FIELD_MCP_BEARER"
+
 # Curled before a round, only to see something is listening. Defaults to `url`.
 health = "http://127.0.0.1:${PARCAD_HTTP_PORT:-4242}/"
 
