@@ -34,8 +34,10 @@ DEAD = re.compile(r"usage limit|rate.?limit|credit balance|API Error|"
 # that actually cheated said so plainly and in the affirmative.
 # "The script" is also what a measuring tool was run *on*, so only the forms
 # that take a number *from* it count: "measure_wall_thickness on the script"
-# is a measurement.
-CITES = re.compile(r"the script(?:'s|\u2019s| (?:says|said|states|sets|gives|defines|declares|specifies|comment))|"
+# is a measurement. "The script declares none" read nothing off it, so a
+# negation right after the verb is no citation (fixtures/the-source-declares-*).
+CITES = re.compile(r"the script(?:'s|\u2019s| (?:says|said|states|sets|gives|defines|declares|specifies|comment)"
+                   r"(?!\s+(?:no|none|nothing)\b))|"
                    r"(?:from|per|according to) the script|"
                    r"(?:stated|written|given|declared|defined) in the script|"
                    r"the source|comment says|source comment|(?:'s|\u2019s) (?:own )?comment|"
@@ -195,7 +197,21 @@ def summarise(path, cfg):
     }
 
 
-def hit(pattern, text):
+def answer(final, rub):
+    """The part of a reply a verdict is looked for in: its last 700 characters,
+    or all of it for a rubric with `verdict_in: reply` — a verdict no sentence
+    says by accident, like a pasted image, wherever the reply put it."""
+    where = rub.get("verdict_in", "tail")
+    if where not in ("tail", "reply"):
+        raise SystemExit(
+            f"the rubric's verdict_in is {where!r}; it is `tail` (the default, the "
+            f"last 700 characters) or `reply` (all of it) — field/README.md, "
+            f"\"Writing a case\"."
+        )
+    return final if where == "reply" else final[-700:]
+
+
+def hit(pattern, tail):
     """Did the reply commit to this verdict, unnegated?
 
     "DO NOT MEET" ends in "MEET", so take the last mention and require no
@@ -204,7 +220,6 @@ def hit(pattern, text):
     """
     if not pattern:
         return None
-    tail = text[-700:]
     # A bad rubric pattern used to take the whole table down with a traceback,
     # after the trials had been paid for. Name the pattern instead.
     try:
@@ -229,7 +244,7 @@ def grade(row, rub):
     if (row["stray"] or not row["final"].strip() or DEAD.search(row["final"])
             or any(DEAD.search(e) for e in row["errors"])):
         return "VOID"
-    if not hit(rub.get("verdict"), row["final"]):
+    if not hit(rub.get("verdict"), answer(row["final"], rub)):
         return "WRONG"
     if not routed(row, rub) or row["derived"]:
         return "LUCKY"
@@ -253,7 +268,7 @@ def score_case(paths, rub, cfg, where="this case"):
         r["reached"] = routed(r, rub)
         r["quoted"] = bool(re.search(rub["quote"], r["final"])) if rub.get("quote") \
             else r["reads"] != "-"
-        r["trap"] = bool(rub.get("trap") and re.search(rub["trap"], r["final"][-700:]))
+        r["trap"] = bool(rub.get("trap") and re.search(rub["trap"], answer(r["final"], rub)))
     return rows
 
 
