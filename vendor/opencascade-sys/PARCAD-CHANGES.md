@@ -398,6 +398,16 @@ is pruned by its triangles anyway, and `AddOptimal` on 546 offset B-spline
 faces was most of the cost of building one. A face with no mesh keeps the
 tight box.
 
+## Added: `IsSame` and `Shape_identity_hash`
+
+`TopoDS_Shape::IsSame` — the same `TShape` at the same location, whatever
+the orientation, which is the relation every OCCT history and shape map is
+keyed on; upstream bound only `IsEqual`, which also compares orientation —
+and `Shape_identity_hash(shape)`, `std::hash<TopoDS_Shape>` (what
+`TopTools_ShapeMapHasher` uses), which agrees with `IsSame`. Together they
+let a Rust `HashSet` hold sub-shapes by identity, so a lineage that is handed
+the same face twice by two histories can keep it once.
+
 ## `near` and `far` are not names on Windows
 
 `<windows.h>`, which OCCT pulls in under MSVC, defines both as empty macros,

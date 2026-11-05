@@ -264,6 +264,18 @@ and what any input face or edge became. `Face: Clone` and `Edge::from_shape`
 are the small pieces that let parcad carry named faces through a transform.
 This is what lets a tag mean "these faces" after every later operation.
 
+## `Identity`: a face or edge as a set member
+
+`Face::identity()` / `Edge::identity()` return an `Identity<'_>` that is `Eq`
+by `TopoDS_Shape::IsSame` and `Hash` by `std::hash<TopoDS_Shape>` (the sys
+crate's new `IsSame` and `Shape_identity_hash`), so a `HashSet` can hold
+sub-shapes by what OCCT's own maps key on: the same `TShape` at the same
+location, whatever the orientation. Written for parcad's lineage, which is
+handed the same result face by two histories at once — a boolean's `Modified`
+returns both pieces of a face it split on the same domain, and the unify pass
+then merges the pieces back into one face — and listed it twice, then four
+times, then 2^k times after k booleans.
+
 ## `Shape::into_unified` and `Unification`
 
 `clean()` — the same-domain unify pass after every boolean — now has a form

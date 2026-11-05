@@ -989,6 +989,38 @@ pub enum Crossing {
     Tangent,
 }
 
+/// A sub-shape by identity — `TopoDS_Shape::IsSame`: the same `TShape` at the
+/// same location, orientation aside — hashing as OCCT's own shape maps do, so
+/// a `HashSet<Identity>` holds each face or edge once however many times a
+/// history handed it back. Added for parcad; see PARCAD-CHANGES.md.
+pub struct Identity<'a>(&'a ffi::TopoDS_Shape);
+
+impl PartialEq for Identity<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.IsSame(other.0)
+    }
+}
+
+impl Eq for Identity<'_> {}
+
+impl std::hash::Hash for Identity<'_> {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_usize(ffi::Shape_identity_hash(self.0));
+    }
+}
+
+impl Face {
+    pub fn identity(&self) -> Identity<'_> {
+        Identity(ffi::cast_face_to_shape(&self.inner))
+    }
+}
+
+impl Edge {
+    pub fn identity(&self) -> Identity<'_> {
+        Identity(ffi::cast_edge_to_shape(&self.inner))
+    }
+}
+
 /// A shape's faces by traversal number. Added for parcad.
 pub struct FaceMap {
     inner: UniquePtr<ffi::IndexedMapOfShape>,
