@@ -195,7 +195,21 @@ def summarise(path, cfg):
     }
 
 
-def hit(pattern, text):
+def answer(final, rub):
+    """The part of a reply a verdict is looked for in: its last 700 characters,
+    or all of it for a rubric with `verdict_in: reply` — a verdict no sentence
+    says by accident, like a pasted image, wherever the reply put it."""
+    where = rub.get("verdict_in", "tail")
+    if where not in ("tail", "reply"):
+        raise SystemExit(
+            f"the rubric's verdict_in is {where!r}; it is `tail` (the default, the "
+            f"last 700 characters) or `reply` (all of it) — field/README.md, "
+            f"\"Writing a case\"."
+        )
+    return final if where == "reply" else final[-700:]
+
+
+def hit(pattern, tail):
     """Did the reply commit to this verdict, unnegated?
 
     "DO NOT MEET" ends in "MEET", so take the last mention and require no
@@ -204,7 +218,6 @@ def hit(pattern, text):
     """
     if not pattern:
         return None
-    tail = text[-700:]
     # A bad rubric pattern used to take the whole table down with a traceback,
     # after the trials had been paid for. Name the pattern instead.
     try:
@@ -229,7 +242,7 @@ def grade(row, rub):
     if (row["stray"] or not row["final"].strip() or DEAD.search(row["final"])
             or any(DEAD.search(e) for e in row["errors"])):
         return "VOID"
-    if not hit(rub.get("verdict"), row["final"]):
+    if not hit(rub.get("verdict"), answer(row["final"], rub)):
         return "WRONG"
     if not routed(row, rub) or row["derived"]:
         return "LUCKY"
@@ -253,7 +266,7 @@ def score_case(paths, rub, cfg, where="this case"):
         r["reached"] = routed(r, rub)
         r["quoted"] = bool(re.search(rub["quote"], r["final"])) if rub.get("quote") \
             else r["reads"] != "-"
-        r["trap"] = bool(rub.get("trap") and re.search(rub["trap"], r["final"][-700:]))
+        r["trap"] = bool(rub.get("trap") and re.search(rub["trap"], answer(r["final"], rub)))
     return rows
 
 
