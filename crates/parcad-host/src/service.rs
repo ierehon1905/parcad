@@ -1298,11 +1298,22 @@ struct Build {
 /// the 20 s budget. Keyed by the tenant and the whole serialised graph, so a
 /// hit is the same part of the same account and never a similar one; failures
 /// are not kept, because a timeout is a fact about the machine at the time.
-static BUILDS: std::sync::LazyLock<std::sync::Mutex<std::collections::VecDeque<Build>>> =
-    std::sync::LazyLock::new(Default::default);
+static BUILDS: std::sync::LazyLock<Builds> = std::sync::LazyLock::new(Default::default);
+
+type Builds = std::sync::Mutex<std::collections::VecDeque<Build>>;
 
 /// Builds kept: a handful of graphs, a few megabytes of mesh each.
 const BUILDS_KEPT: usize = 8;
+
+/// `work` on the cache the current tenant's builds are kept in: the process's,
+/// or the one a test took for its tenants (`tests::own_build_cache`).
+fn with_builds<T>(work: impl FnOnce(&mut std::collections::VecDeque<Build>) -> T) -> T {
+    #[cfg(test)]
+    if let Some(own) = tests::own_builds() {
+        return work(&mut own.lock().unwrap_or_else(|e| e.into_inner()));
+    }
+    work(&mut BUILDS.lock().unwrap_or_else(|e| e.into_inner()))
+}
 
 struct Built {
     key: String,
@@ -1314,15 +1325,15 @@ struct Built {
 
 /// The print check kept with a build, if it has been judged.
 fn cached_print_check(key: &str) -> Option<Option<parcad_evaluation::PrintCheck>> {
-    let builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
-    builds.iter().find(|b| b.key == key).and_then(|b| b.print_check.clone())
+    with_builds(|builds| builds.iter().find(|b| b.key == key).and_then(|b| b.print_check.clone()))
 }
 
 fn keep_print_check(key: &str, print_check: &Option<parcad_evaluation::PrintCheck>) {
-    let mut builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(build) = builds.iter_mut().find(|b| b.key == key) {
-        build.print_check = Some(print_check.clone());
-    }
+    with_builds(|builds| {
+        if let Some(build) = builds.iter_mut().find(|b| b.key == key) {
+            build.print_check = Some(print_check.clone());
+        }
+    })
 }
 
 fn build_exact(
@@ -1332,23 +1343,23 @@ fn build_exact(
 ) -> Result<Built, String> {
     let graph = serde_json::to_string(doc).map_err(|e| format!("encoding the graph: {e}"))?;
     let key = crate::tenant::key(&graph);
-    {
-        let mut builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(i) = builds
+    let hit = with_builds(|builds| {
+        let i = builds
             .iter()
-            .position(|b| b.key == key && (b.step.is_some() || !want_step))
-        {
-            let hit = builds.remove(i).expect("the index was just found");
-            let built = Built {
-                key: key.clone(),
-                success: hit.success.clone(),
-                step: hit.step.clone(),
-                wall_ms: hit.wall_ms,
-                reused: true,
-            };
-            builds.push_front(hit);
-            return Ok(built);
-        }
+            .position(|b| b.key == key && (b.step.is_some() || !want_step))?;
+        let hit = builds.remove(i).expect("the index was just found");
+        let built = Built {
+            key: key.clone(),
+            success: hit.success.clone(),
+            step: hit.step.clone(),
+            wall_ms: hit.wall_ms,
+            reused: true,
+        };
+        builds.push_front(hit);
+        Some(built)
+    });
+    if let Some(built) = hit {
+        return Ok(built);
     }
 
     let t0 = std::time::Instant::now();
@@ -1372,16 +1383,17 @@ fn build_exact(
     let wall_ms = crate::page::kernel_took().unwrap_or_else(|| t0.elapsed()).as_millis() as u64;
 
     let success = std::sync::Arc::new(success);
-    let mut builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
-    builds.retain(|b| b.key != key);
-    builds.push_front(Build {
-        key: key.clone(),
-        success: success.clone(),
-        print_check: None,
-        step: step.clone(),
-        wall_ms,
+    with_builds(|builds| {
+        builds.retain(|b| b.key != key);
+        builds.push_front(Build {
+            key: key.clone(),
+            success: success.clone(),
+            print_check: None,
+            step: step.clone(),
+            wall_ms,
+        });
+        builds.truncate(BUILDS_KEPT);
     });
-    builds.truncate(BUILDS_KEPT);
     Ok(Built {
         key,
         success,
@@ -2140,8 +2152,54 @@ pub fn read_docs(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    /// The build caches tests have taken for tenants of their own, by id.
+    static OWN_BUILDS: std::sync::LazyLock<
+        std::sync::Mutex<std::collections::HashMap<tenant::TenantId, std::sync::Arc<Builds>>>,
+    > = std::sync::LazyLock::new(Default::default);
+
+    /// The cache the current tenant's builds go to, when a test took one.
+    pub(super) fn own_builds() -> Option<std::sync::Arc<Builds>> {
+        OWN_BUILDS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&tenant::current().id)
+            .cloned()
+    }
+
+    /// A build cache shared by `tenants` and nothing else, for as long as the
+    /// guard lives. The process-wide cache keeps eight builds across every
+    /// test running beside this one, so a test that asserts a build is reused
+    /// asserts it in a cache of its own. The ids must be the test's alone.
+    pub(crate) fn own_build_cache(tenants: &[&std::sync::Arc<tenant::Tenant>]) -> OwnBuilds {
+        let cache = std::sync::Arc::new(Builds::default());
+        let mut own = OWN_BUILDS.lock().unwrap_or_else(|e| e.into_inner());
+        for tenant in tenants {
+            assert!(
+                !own.contains_key(&tenant.id),
+                "{} already has a build cache of its own: another test's tenant has this id",
+                tenant.id
+            );
+        }
+        for tenant in tenants {
+            own.insert(tenant.id.clone(), cache.clone());
+        }
+        OwnBuilds(tenants.iter().map(|tenant| tenant.id.clone()).collect())
+    }
+
+    /// Hands the tenants it was taken for back to the process-wide cache.
+    pub(crate) struct OwnBuilds(Vec<tenant::TenantId>);
+
+    impl Drop for OwnBuilds {
+        fn drop(&mut self) {
+            let mut own = OWN_BUILDS.lock().unwrap_or_else(|e| e.into_inner());
+            for id in &self.0 {
+                own.remove(id);
+            }
+        }
+    }
 
     /// A name is one plain file name, or one under `renders/`; a file kept
     /// under it reads back by that name with the type its extension says, and

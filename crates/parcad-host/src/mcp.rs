@@ -2748,6 +2748,7 @@ mod tests {
     fn a_project_build_reuses_the_cache_a_save_filled() {
         projects::tests::scoped(|_| {
             session::tests::scoped(|| {
+                let _cache = service::tests::own_build_cache(&[&tenant::current()]);
                 let script = "return box(10, 20, 30).tag(\"block\");";
                 let saved = run(Parcad::new().save_project(Parameters(Args(SaveRequest {
                     name: "block".into(),
@@ -2788,10 +2789,11 @@ mod tests {
             run(Parcad::new().evaluate_part(Parameters(request))).expect("built").structured_content.unwrap()
         }
         let tenants = tenant::tests::fresh_root("tenants");
-        // Ids of this test's own: the cache is keyed by id and script, and
-        // another test exporting this script as "b" would be the reuse here.
+        // Ids of this test's own: the cache is handed out by id, and the one
+        // shared by both accounts is what proves the key tells them apart.
         let a = tenant::tests::hosted_at("reuse-a", &tenants);
         let b = tenant::tests::hosted_at("reuse-b", &tenants);
+        let _cache = service::tests::own_build_cache(&[&a, &b]);
         assert_ne!(tenant::scope(a.clone(), evaluate)["reused_build"], true);
         assert_eq!(tenant::scope(a, evaluate)["reused_build"], true, "the account's own build is reused");
         let other = tenant::scope(b, evaluate);
