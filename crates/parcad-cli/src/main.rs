@@ -6,6 +6,8 @@
 //! And the application itself, without a window, plus its tools from the shell:
 //!
 //!     parcad serve [--port N]
+//!     parcad serve --hosted --bind ADDR --tokens FILE --tenants-dir DIR --public-host NAME
+//!     parcad token new <tenant-id> --tokens FILE
 //!     parcad mcp [--port N]
 //!     parcad tools
 //!     parcad call <tool> [JSON] [--set key=value]...
@@ -130,6 +132,8 @@ fn parse_args() -> Result<Args> {
             "-h" | "--help" => {
                 eprintln!(
                     "usage: parcad serve [--port N]              # host the UI and MCP, no window\n\
+                     \x20      parcad serve --hosted ...           # one server for many accounts; parcad serve --help\n\
+                     \x20      parcad token new <tenant-id> --tokens FILE\n\
                      \x20      parcad mcp [--port N]                # MCP over stdio, for a client to launch\n\
                      \x20      parcad tools                        # what the running host offers\n\
                      \x20      parcad call <tool> [JSON] [--set key=value | key=@file | key:=json]\n\
@@ -230,28 +234,118 @@ fn load_doc(path: &std::path::Path) -> Result<Doc> {
         .map_err(|e| anyhow::anyhow!("reading {} as an intent graph: {e}", path.display()))
 }
 
+const SERVE_USAGE: &str = "usage: parcad serve [--port N] [--bind ADDR]\n\
+       parcad serve --hosted --tokens FILE --tenants-dir DIR --public-host NAME [--bind ADDR] [--port N]\n\
+\n\
+  --port N           the port, 4242 or PARCAD_HTTP_PORT\n\
+  --bind ADDR        the address, 127.0.0.1; anything else needs --hosted\n\
+  --hosted           one server for many accounts, each behind a bearer token: no UI, no editor\n\
+  --tokens FILE      the tokens file; `parcad token new <tenant-id> --tokens FILE` adds a line\n\
+  --tenants-dir DIR  where each account's parts live, DIR/<tenant-id>\n\
+  --public-host NAME the name clients reach the server by, behind whatever terminates TLS";
+
+/// What `parcad serve` was asked for, checked whole before anything binds.
+struct Serve {
+    address: std::net::SocketAddr,
+    hosted: Option<HostedFlags>,
+}
+
+struct HostedFlags {
+    tokens: PathBuf,
+    tenants: PathBuf,
+    public_host: String,
+}
+
+fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
+    let mut port = parcad_host::http::port();
+    let mut bind = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+    let mut hosted = false;
+    let mut tokens = None;
+    let mut tenants = None;
+    let mut public_host = None;
+    let mut args = args;
+    while let Some(arg) = args.next() {
+        let mut value = |what: &str| args.next().with_context(|| format!("{arg} needs {what}"));
+        match arg.as_str() {
+            "--port" => port = value("a number")?.parse().context("--port must be a port number")?,
+            "--bind" => bind = value("an address")?.parse().context("--bind must be an IP address")?,
+            "--hosted" => hosted = true,
+            "--tokens" => tokens = Some(PathBuf::from(value("a file")?)),
+            "--tenants-dir" => tenants = Some(PathBuf::from(value("a folder")?)),
+            "--public-host" => public_host = Some(value("a host name")?),
+            "-h" | "--help" => {
+                eprintln!("{SERVE_USAGE}");
+                std::process::exit(0);
+            }
+            other => anyhow::bail!("unknown argument {other:?}\n{SERVE_USAGE}"),
+        }
+    }
+    let address = std::net::SocketAddr::new(bind, port);
+    if !hosted {
+        if !bind.is_loopback() {
+            anyhow::bail!(
+                "parcad would evaluate anyone's scripts on a routable address ({address}); \
+                 add --hosted with --tokens FILE and --tenants-dir DIR, or leave --bind at 127.0.0.1"
+            );
+        }
+        if tokens.is_some() || tenants.is_some() || public_host.is_some() {
+            anyhow::bail!("--tokens, --tenants-dir and --public-host are read only with --hosted");
+        }
+        return Ok(Serve { address, hosted: None });
+    }
+    match (tokens, tenants, public_host) {
+        (Some(tokens), Some(tenants), Some(public_host)) => Ok(Serve {
+            address,
+            hosted: Some(HostedFlags {
+                tokens,
+                tenants,
+                public_host,
+            }),
+        }),
+        (tokens, tenants, public_host) => {
+            let missing: Vec<&str> = [
+                tokens.is_none().then_some("--tokens FILE"),
+                tenants.is_none().then_some("--tenants-dir DIR"),
+                public_host.is_none().then_some("--public-host NAME"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            anyhow::bail!("--hosted needs {}", missing.join(", "))
+        }
+    }
+}
+
 /// The application without its window: seed the project folder, host the UI,
 /// the API and MCP on the port, and stay up until stopped.
 ///
 /// This is what `brew services start parcad` runs. It is the same router and
 /// the same `service` the desktop app uses — a browser on the port is the whole
-/// application, and a model on `/mcp` sees the same parts.
+/// application, and a model on `/mcp` sees the same parts. With `--hosted` it
+/// is one server for many accounts instead: no UI, every request a bearer's.
 fn serve(args: impl Iterator<Item = String>) -> Result<()> {
-    let mut port = parcad_host::http::port();
-    let mut args = args;
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--port" => {
-                port = args
-                    .next()
-                    .context("--port needs a number")?
-                    .parse()
-                    .context("--port must be a port number")?
-            }
-            other => anyhow::bail!("unknown argument {other:?}; usage: parcad serve [--port N]"),
-        }
-    }
-    host(port)
+    let options = serve_options(args)?;
+    let Some(flags) = options.hosted else {
+        return host(options.address.port());
+    };
+    let accounts = parcad_host::tenant::Accounts::read(&flags.tokens, &flags.tenants)
+        .map_err(anyhow::Error::msg)?;
+    std::fs::create_dir_all(&flags.tenants)
+        .with_context(|| format!("creating the tenants folder {}", flags.tenants.display()))?;
+    eprintln!(
+        "parcad: {} tokens from {}; accounts under {}",
+        accounts.tokens(),
+        flags.tokens.display(),
+        flags.tenants.display()
+    );
+    parcad_host::tenant::require();
+    listen(
+        options.address,
+        Some(parcad_host::http::Hosted {
+            accounts,
+            public_host: flags.public_host,
+        }),
+    )
 }
 
 /// Seed the project folder and host the application on `port` until the
@@ -279,23 +373,59 @@ fn host(port: u16) -> Result<()> {
              cargo build --release -p parcad-cli"
         );
     }
+    listen(parcad_host::http::loopback(port), None)
+}
 
+fn listen(address: std::net::SocketAddr, hosted: Option<parcad_host::http::Hosted>) -> Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("starting the async runtime")?;
     runtime
         .block_on(parcad_host::http::serve(
-            port,
+            address,
             std::sync::Arc::new(ui::Embedded),
+            hosted,
         ))
         .map_err(anyhow::Error::msg)
+}
+
+/// `parcad token new <tenant-id> --tokens FILE`: a token for one account,
+/// printed once on stdout; the file gets its hash.
+fn token(args: impl Iterator<Item = String>) -> Result<()> {
+    const USAGE: &str = "usage: parcad token new <tenant-id> --tokens FILE";
+    let mut args = args;
+    if args.next().as_deref() != Some("new") {
+        anyhow::bail!("{USAGE}");
+    }
+    let mut id = None;
+    let mut tokens = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--tokens" => tokens = Some(PathBuf::from(args.next().context("--tokens needs a file")?)),
+            other if other.starts_with('-') => anyhow::bail!("unknown argument {other:?}\n{USAGE}"),
+            other => id = Some(other.to_string()),
+        }
+    }
+    let (Some(id), Some(tokens)) = (id, tokens) else {
+        anyhow::bail!("{USAGE}");
+    };
+    let tenant = parcad_host::tenant::TenantId::new(&id).map_err(anyhow::Error::msg)?;
+    let token = parcad_host::tenant::issue(tenant, &tokens).map_err(anyhow::Error::msg)?;
+    println!("{token}");
+    eprintln!(
+        "parcad: a token for {id} is on stdout, shown once; {} holds its hash. \
+         A running `parcad serve --hosted` reads the file at start: restart it to take the token.",
+        tokens.display()
+    );
+    Ok(())
 }
 
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("serve") => return serve(args),
+        Some("token") => return token(args),
         Some("mcp") => return stdio::run(args),
         Some("tools") => return call::tools(args),
         Some("call") => return call::call(args),
@@ -660,4 +790,40 @@ fn run_brep(args: &Args, doc: &Doc) -> Result<()> {
         println!("  regions  {}", p.display());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn options(args: &[&str]) -> Result<Serve> {
+        serve_options(args.iter().map(|arg| arg.to_string()))
+    }
+
+    /// A kernel that evaluates anyone's script never sits on a routable
+    /// address without an account on every request.
+    #[test]
+    fn a_routable_address_needs_hosted_mode_and_hosted_mode_needs_its_three_flags() {
+        let refused = options(&["--bind", "0.0.0.0", "--port", "4242"]).err().expect("refused").to_string();
+        assert!(refused.contains("anyone's scripts"), "{refused}");
+        assert!(refused.contains("add --hosted with --tokens FILE and --tenants-dir DIR"), "{refused}");
+        assert!(options(&["--bind", "::1", "--port", "4242"]).is_ok(), "loopback of either family is local");
+
+        let missing = options(&["--hosted", "--bind", "0.0.0.0", "--tokens", "t"]).err().expect("refused").to_string();
+        assert!(missing.contains("--tenants-dir DIR") && missing.contains("--public-host NAME"), "{missing}");
+        assert!(!missing.contains("--tokens FILE"), "only what is missing is named: {missing}");
+        let stray = options(&["--tokens", "t", "--port", "4242"]).err().expect("refused").to_string();
+        assert!(stray.contains("only with --hosted"), "{stray}");
+
+        let hosted = options(&[
+            "--hosted", "--bind", "0.0.0.0", "--port", "4242", "--tokens", "/etc/parcad/tokens",
+            "--tenants-dir", "/data/tenants", "--public-host", "cad.example.test",
+        ])
+        .unwrap();
+        assert_eq!(hosted.address.to_string(), "0.0.0.0:4242");
+        let flags = hosted.hosted.expect("hosted");
+        assert_eq!(flags.tokens, PathBuf::from("/etc/parcad/tokens"));
+        assert_eq!(flags.tenants, PathBuf::from("/data/tenants"));
+        assert_eq!(flags.public_host, "cad.example.test");
+    }
 }

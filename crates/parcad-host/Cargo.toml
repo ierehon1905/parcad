@@ -35,8 +35,14 @@ base64 = "0.22"
 # A thumbnail carries the script it was drawn from as a `tEXt` chunk.
 png = "0.18"
 # open_project and set_script identify the script on screen by its digest
-# instead of echoing it.
+# instead of echoing it; the tokens file holds a token's digest, never the token.
 sha2 = "0.10"
+# A presented token is compared against every line of the tokens file in
+# constant time. Already in the lock through rustls.
+subtle = "2"
+# A new token is 32 bytes from the operating system. Already in the lock
+# through rmcp.
+getrandom = "0.4"
 zstd = "0.13"
 draco-core = "2.1"
 

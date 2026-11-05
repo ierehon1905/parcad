@@ -1,25 +1,23 @@
 #!/bin/bash
-# The host binds 127.0.0.1 only, so a published port cannot reach it: socat
-# listens on every address and forwards to it. Whichever process exits first
-# takes the container down with it.
-set -u
+# One `parcad serve --hosted` on every address of the container, which is what
+# a published port reaches; every request past /api/health needs a bearer from
+# the tokens file. Nothing else runs here.
+set -eu
 
-public_port=4242
-host_port="${PARCAD_HTTP_PORT:-4243}"
-if [ "$host_port" = "$public_port" ]; then
-    echo "parcad-entrypoint: PARCAD_HTTP_PORT is $public_port, the forwarder's port; set it to any other port" >&2
+tokens=/etc/parcad/tokens
+
+if ! parcad serve --help 2>&1 | grep -q -- '--hosted'; then
+    echo "parcad-entrypoint: $(parcad --version) has no 'parcad serve --hosted'; hosted mode arrived after 0.0.13. Build the image from a release that carries it: docker build --build-arg PARCAD_VERSION=<version> packaging/docker" >&2
+    exit 64
+fi
+if [ -z "${PARCAD_PUBLIC_HOST:-}" ]; then
+    echo "parcad-entrypoint: PARCAD_PUBLIC_HOST is unset. Set it to the name clients reach this server by (-e PARCAD_PUBLIC_HOST=cad.example.com); without it every request through the proxy is a 403" >&2
+    exit 64
+fi
+if [ ! -r "$tokens" ]; then
+    echo "parcad-entrypoint: no tokens file at $tokens. Mount one read-only (-v /srv/parcad/tokens:$tokens:ro), written by 'parcad token new <tenant-id> --tokens <file>'" >&2
     exit 64
 fi
 
-parcad serve --port "$host_port" &
-host=$!
-socat "TCP-LISTEN:${public_port},fork,reuseaddr" "TCP:127.0.0.1:${host_port}" &
-forwarder=$!
-
-trap 'kill -TERM "$host" "$forwarder" 2>/dev/null' TERM INT
-
-wait -n "$host" "$forwarder"
-status=$?
-kill -TERM "$host" "$forwarder" 2>/dev/null
-wait
-exit "$status"
+exec parcad serve --hosted --bind 0.0.0.0 --port 4242 \
+    --tokens "$tokens" --tenants-dir /data/tenants --public-host "$PARCAD_PUBLIC_HOST"

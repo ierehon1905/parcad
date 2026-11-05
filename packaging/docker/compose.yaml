@@ -6,10 +6,13 @@ services:
         PARCAD_VERSION: "0.0.13"
     image: parcad:0.0.13
     platform: linux/amd64
+    environment:
+      PARCAD_PUBLIC_HOST: ${PARCAD_PUBLIC_HOST:?the name clients reach the server by, e.g. cad.example.com}
     ports:
       - "127.0.0.1:4242:4242"
     volumes:
       - parcad-data:/data
+      - ${PARCAD_TOKENS:-./tokens}:/etc/parcad/tokens:ro
     restart: unless-stopped
 
 volumes:

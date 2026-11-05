@@ -290,7 +290,7 @@ async fn install_update<R: tauri::Runtime>(
 async fn serve_http<R: tauri::Runtime>(assets: std::sync::Arc<TauriAssets<R>>) {
     let mut attempts = 0;
     loop {
-        match http::serve(http::port(), assets.clone()).await {
+        match http::serve(http::loopback(http::port()), assets.clone(), None).await {
             Err(e) if attempts < 10 && e.contains("could not host") => {
                 attempts += 1;
                 tokio::time::sleep(std::time::Duration::from_millis(300)).await;

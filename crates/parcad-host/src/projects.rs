@@ -159,7 +159,7 @@ fn walk(at: &Path, prefix: &str, depth: usize) -> Result<Vec<Entry>, String> {
         return Ok(Vec::new());
     }
     let entries = std::fs::read_dir(at)
-        .map_err(|e| format!("reading the project folder {}: {e}", at.display()))?;
+        .map_err(|e| format!("reading the project folder {}: {e}", tenant::shown(at)))?;
 
     let mut folders = Vec::new();
     let mut parts = Vec::new();
@@ -369,7 +369,7 @@ pub fn read(path: &str) -> Result<String, String> {
         format!(
             "reading {} ({e}). The project is there but its source is not; \
              a project folder must contain {SOURCE}.",
-            located.source.display()
+            tenant::shown(&located.source)
         )
     })
 }
@@ -394,7 +394,7 @@ pub fn write(path: &str, script: &str) -> Result<String, String> {
         create_dir(parent)?;
     }
     write_file(&source, script)?;
-    Ok(source.to_string_lossy().to_string())
+    Ok(tenant::shown(&source))
 }
 
 /// Create a project, refusing to overwrite one.
@@ -441,8 +441,8 @@ pub fn write_preview(path: &str, png: &[u8], source: &str, look: u32) -> Result<
     let keyed = crate::png_text::with_text(png, &[(SOURCE_KEY, source), (LOOK_KEY, &look.to_string())])?;
     // Renamed into place, so the picker never reads half an image.
     let partial = file.with_extension("png.partial");
-    std::fs::write(&partial, keyed).map_err(|e| format!("writing {}: {e}", partial.display()))?;
-    std::fs::rename(&partial, &file).map_err(|e| format!("writing {}: {e}", file.display()))
+    std::fs::write(&partial, keyed).map_err(|e| format!("writing {}: {e}", tenant::shown(&partial)))?;
+    std::fs::rename(&partial, &file).map_err(|e| format!("writing {}: {e}", tenant::shown(&file)))
 }
 
 /// The same, from what a canvas hands the frontend.
@@ -517,7 +517,7 @@ pub fn keep(path: &str, script: &str) -> Result<String, String> {
     let dir = history_dir(path)?;
     let kept = snapshots(path)?;
     if let Some(newest) = kept.first() {
-        if std::fs::read_to_string(&newest.path).is_ok_and(|text| text == script) {
+        if std::fs::read_to_string(snapshot_file(&dir, newest)).is_ok_and(|text| text == script) {
             return Ok(newest.path.clone());
         }
     }
@@ -533,9 +533,14 @@ pub fn keep(path: &str, script: &str) -> Result<String, String> {
     let file = dir.join(format!("{}.js", now.max(newest + 1)));
     write_file(&file, script)?;
     for old in kept.iter().skip(HISTORY_KEPT - 1) {
-        let _ = std::fs::remove_file(&old.path);
+        let _ = std::fs::remove_file(snapshot_file(&dir, old));
     }
-    Ok(file.to_string_lossy().to_string())
+    Ok(tenant::shown(&file))
+}
+
+/// Where a kept version is on disk; its `path` is the shown one.
+fn snapshot_file(history: &Path, snapshot: &Snapshot) -> PathBuf {
+    history.join(format!("{}.js", snapshot.id))
 }
 
 /// Every kept version of a project, newest first.
@@ -555,7 +560,7 @@ pub fn snapshots(path: &str) -> Result<Vec<Snapshot>, String> {
                 order,
                 Snapshot {
                     id,
-                    path: file.to_string_lossy().to_string(),
+                    path: tenant::shown(&file),
                     bytes: text.len() as u64,
                     first_line: text.lines().next().unwrap_or("").chars().take(120).collect(),
                 },
@@ -574,7 +579,8 @@ pub fn read_snapshot(path: &str, id: &str) -> Result<String, String> {
         .ok_or_else(|| {
             format!("{path:?} has no snapshot {id:?}; list_snapshots gives the ids that exist")
         })?;
-    std::fs::read_to_string(&found.path).map_err(|e| format!("reading {}: {e}", found.path))
+    std::fs::read_to_string(snapshot_file(&history_dir(path)?, &found))
+        .map_err(|e| format!("reading {}: {e}", found.path))
 }
 
 pub fn preview(path: &str) -> Result<Vec<u8>, String> {
@@ -582,7 +588,7 @@ pub fn preview(path: &str) -> Result<Vec<u8>, String> {
         .in_bundle(PREVIEW)
         .filter(|file| file.is_file())
         .ok_or_else(|| format!("{path:?} has no preview image"))?;
-    std::fs::read(&file).map_err(|e| format!("reading {}: {e}", file.display()))
+    std::fs::read(&file).map_err(|e| format!("reading {}: {e}", tenant::shown(&file)))
 }
 
 /// Retitle a part without moving it.
@@ -614,7 +620,7 @@ pub fn create_folder(path: &str) -> Result<String, String> {
         return Err(format!("{path:?} already exists."));
     }
     create_dir(&target)?;
-    Ok(target.to_string_lossy().to_string())
+    Ok(tenant::shown(&target))
 }
 
 /// Move or rename a part or a folder.
@@ -651,11 +657,11 @@ pub fn rename(from: &str, to: &str) -> Result<String, String> {
     std::fs::rename(&source, &target).map_err(|e| {
         format!(
             "moving {} to {}: {e}",
-            source.display(),
-            target.display()
+            tenant::shown(&source),
+            tenant::shown(&target)
         )
     })?;
-    Ok(target.to_string_lossy().to_string())
+    Ok(tenant::shown(&target))
 }
 
 /// Move a part or folder to `.trash`, where a person can get it back.
@@ -696,8 +702,8 @@ pub fn remove(path: &str) -> Result<String, String> {
         nth += 1;
     }
     std::fs::rename(&source, &target)
-        .map_err(|e| format!("moving {} to the trash: {e}", source.display()))?;
-    Ok(target.to_string_lossy().to_string())
+        .map_err(|e| format!("moving {} to the trash: {e}", tenant::shown(&source)))?;
+    Ok(tenant::shown(&target))
 }
 
 /// Turn a loose `.js` into a project folder, keeping the script byte for byte.
@@ -707,7 +713,7 @@ pub fn convert(path: &str) -> Result<String, String> {
         return Err(format!("{path:?} is already a project folder."));
     }
     let script = std::fs::read_to_string(&located.source)
-        .map_err(|e| format!("reading {}: {e}", located.source.display()))?;
+        .map_err(|e| format!("reading {}: {e}", tenant::shown(&located.source)))?;
 
     let base = safe(path)?;
     let bundle = suffixed(&base, BUNDLE);
@@ -717,8 +723,8 @@ pub fn convert(path: &str) -> Result<String, String> {
     write_file(&bundle.join(README), &seed_readme(base_name(&base), &script))?;
     // Only now: a failed write above must leave the original where it was.
     std::fs::remove_file(&located.source)
-        .map_err(|e| format!("removing {}: {e}", located.source.display()))?;
-    Ok(bundle.to_string_lossy().to_string())
+        .map_err(|e| format!("removing {}: {e}", tenant::shown(&located.source)))?;
+    Ok(tenant::shown(&bundle))
 }
 
 fn base_name(base: &Path) -> &str {
@@ -759,11 +765,11 @@ fn seed_readme(stem: &str, script: &str) -> String {
 }
 
 fn create_dir(path: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(path).map_err(|e| format!("creating {}: {e}", path.display()))
+    std::fs::create_dir_all(path).map_err(|e| format!("creating {}: {e}", tenant::shown(path)))
 }
 
 fn write_file(path: &Path, contents: &str) -> Result<(), String> {
-    std::fs::write(path, contents).map_err(|e| format!("writing {}: {e}", path.display()))
+    std::fs::write(path, contents).map_err(|e| format!("writing {}: {e}", tenant::shown(path)))
 }
 
 /// Resolve a project path to a location on disk, refusing anything that is not

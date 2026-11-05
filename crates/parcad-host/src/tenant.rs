@@ -4,7 +4,9 @@
 //! and a browser tab have one, `local`: the parts folder and the export folder
 //! as they have always been. A hosted `parcad serve` has one per account,
 //! rooted at `<tenants dir>/<id>`, and a request's tenant is the one the host
-//! that authenticated it attached to the request.
+//! that authenticated it attached to the request: [`Accounts`] turns the
+//! request's bearer token into it, from a file of token hashes, and makes the
+//! account's folder on its first request.
 //!
 //! The tenant is ambient. [`current`] answers from the request's task, or from
 //! the thread a `blocking()` helper re-entered it on, and nothing in `service`,
@@ -21,10 +23,11 @@
 //! operator's own folder.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 /// An account's name on disk and in every key: one to 63 characters of
 /// `a-z`, `0-9` and `-`, starting with a letter or digit.
@@ -133,12 +136,203 @@ impl Tenant {
             return Ok(());
         }
         Err(format!(
-            "{} is a link to {}, outside this account's folder, and a hosted parcad does not \
-             follow one: ask the server's operator to replace the link with the files",
-            nearest.display(),
-            real.display()
+            "{} is a link to a place outside this account's folder, and a hosted parcad does \
+             not follow one: ask the server's operator to replace the link with the files",
+            shown(nearest)
         ))
     }
+}
+
+// ----------------------------------------------------------------- accounts
+
+/// Why a hosted request was turned away before it reached the service. Each
+/// message names the fix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refused {
+    /// The request carried no `Authorization` header.
+    NoToken,
+    /// It carried one, and the token matches no line of the tokens file.
+    Unknown,
+    /// The token is good, and the account's folder could not be made ready.
+    Unready(String),
+}
+
+impl Refused {
+    pub fn message(&self) -> String {
+        match self {
+            Refused::NoToken => "this parcad is hosted, and every request needs \
+                 `Authorization: Bearer <token>`. Ask the server's operator for a token, or run \
+                 parcad on your own machine (brew install parcad), which needs none."
+                .to_string(),
+            Refused::Unknown => "the token was not recognised; it may have been revoked — ask \
+                 the server's operator for a new one"
+                .to_string(),
+            Refused::Unready(why) => why.clone(),
+        }
+    }
+}
+
+/// One line of the tokens file: the account a token opens, and the SHA-256 of
+/// the token, because the file is readable by whoever can read the server.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct TokenLine {
+    tenant: TenantId,
+    hash: [u8; 32],
+}
+
+impl TokenLine {
+    fn of(tenant: TenantId, token: &str) -> TokenLine {
+        TokenLine {
+            tenant,
+            hash: hash_token(token),
+        }
+    }
+
+    fn parse(line: &str) -> Result<TokenLine, String> {
+        let (id, hex) = line
+            .split_once(char::is_whitespace)
+            .ok_or_else(|| format!("{line:?} is not `<tenant-id> <sha256 hex>`"))?;
+        let tenant = TenantId::new(id)?;
+        let hex = hex.trim();
+        let digits = hex.as_bytes();
+        if digits.len() != 64 || !digits.iter().all(u8::is_ascii_hexdigit) {
+            return Err(format!(
+                "{hex:?} after {id} is not a SHA-256 in hex: 64 hex digits, as `parcad token new` writes"
+            ));
+        }
+        let mut hash = [0u8; 32];
+        for (byte, pair) in hash.iter_mut().zip(digits.chunks(2)) {
+            let pair = std::str::from_utf8(pair).map_err(|e| format!("{hex:?}: {e}"))?;
+            *byte = u8::from_str_radix(pair, 16).map_err(|e| format!("{hex:?}: {e}"))?;
+        }
+        Ok(TokenLine { tenant, hash })
+    }
+}
+
+impl std::fmt::Display for TokenLine {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} ", self.tenant)?;
+        for byte in self.hash {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+/// A token is 256 random bits; its SHA-256 is what the file keeps and what a
+/// presented token is reduced to before any comparison.
+fn hash_token(token: &str) -> [u8; 32] {
+    use sha2::Digest;
+    sha2::Sha256::digest(token.as_bytes()).into()
+}
+
+/// Issue a token for `tenant`: 32 bytes from the operating system, as
+/// base64url, appended to `tokens` as its hash. The file is created readable
+/// by its owner only. The token is returned once and kept nowhere.
+pub fn issue(tenant: TenantId, tokens: &Path) -> Result<String, String> {
+    use std::io::Write;
+
+    let mut secret = [0u8; 32];
+    getrandom::fill(&mut secret).map_err(|e| format!("the system gave no random bytes: {e}"))?;
+    let token = base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, secret);
+    let line = TokenLine::of(tenant, &token);
+
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options
+        .open(tokens)
+        .map_err(|e| format!("opening the tokens file {}: {e}", tokens.display()))?;
+    writeln!(file, "{line}").map_err(|e| format!("writing the tokens file {}: {e}", tokens.display()))?;
+    Ok(token)
+}
+
+/// The accounts a hosted parcad serves: every token's line, and the folder
+/// each account's root is under. Read once, when the host starts.
+#[derive(Debug)]
+pub struct Accounts {
+    tenants: PathBuf,
+    tokens: Vec<TokenLine>,
+    /// Each account's tenant, made and seeded on its first request, so its
+    /// `Arc<Tenant>` and its folder exist once.
+    resolved: Mutex<HashMap<TenantId, Arc<Tenant>>>,
+}
+
+impl Accounts {
+    /// Read the tokens file: one `<tenant-id> <sha256 hex>` per line, blank
+    /// lines and `#` comments allowed. A line that is neither refuses the
+    /// whole file, with its number.
+    pub fn read(tokens: &Path, tenants: &Path) -> Result<Accounts, String> {
+        let text = std::fs::read_to_string(tokens).map_err(|e| {
+            format!(
+                "reading the tokens file {}: {e}. Create it with `parcad token new <tenant-id> \
+                 --tokens {}`",
+                tokens.display(),
+                tokens.display()
+            )
+        })?;
+        let mut lines = Vec::new();
+        for (index, line) in text.lines().enumerate() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            let parsed = TokenLine::parse(line)
+                .map_err(|e| format!("{}:{}: {e}", tokens.display(), index + 1))?;
+            lines.push(parsed);
+        }
+        Ok(Accounts {
+            tenants: tenants.to_path_buf(),
+            tokens: lines,
+            resolved: Mutex::new(HashMap::new()),
+        })
+    }
+
+    pub fn tokens(&self) -> usize {
+        self.tokens.len()
+    }
+
+    /// The account an `Authorization` header opens. The presented token is
+    /// hashed and compared against every line, each in constant time and none
+    /// skipped, so neither the time taken nor the line order says anything
+    /// about the file. The first request of an account makes and seeds its
+    /// folder.
+    pub fn resolve(&self, authorization: Option<&str>) -> Result<Arc<Tenant>, Refused> {
+        let Some(authorization) = authorization else {
+            return Err(Refused::NoToken);
+        };
+        let token = bearer(authorization).ok_or(Refused::Unknown)?;
+        let hash = hash_token(token);
+        let mut matched = None;
+        for line in &self.tokens {
+            if bool::from(subtle::ConstantTimeEq::ct_eq(&line.hash[..], &hash[..])) {
+                matched = Some(&line.tenant);
+            }
+        }
+        let id = matched.ok_or(Refused::Unknown)?;
+
+        let mut resolved = self.resolved.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(tenant) = resolved.get(id) {
+            return Ok(tenant.clone());
+        }
+        let tenant = Arc::new(Tenant::hosted(id.clone(), &self.tenants));
+        scope(tenant.clone(), crate::projects::seed).map_err(|e| {
+            Refused::Unready(format!(
+                "preparing the folder for account {id}: {e}. The server's operator has to make \
+                 the tenants folder writable by parcad"
+            ))
+        })?;
+        resolved.insert(id.clone(), tenant.clone());
+        Ok(tenant)
+    }
+}
+
+/// The token of a `Bearer` header, whatever the scheme's case.
+fn bearer(authorization: &str) -> Option<&str> {
+    let (scheme, token) = authorization.trim().split_once(char::is_whitespace)?;
+    let token = token.trim();
+    (scheme.eq_ignore_ascii_case("bearer") && !token.is_empty()).then_some(token)
 }
 
 tokio::task_local! {
@@ -187,6 +381,24 @@ pub fn carried(extensions: &http::Extensions) -> Arc<Tenant> {
 /// that part its own account holds.
 pub fn key(of: &str) -> String {
     format!("{}\n{of}", current().id)
+}
+
+/// `path` as a reply or a refusal shows it: relative to the account's root on
+/// a hosted server, whose layout is the operator's and not the account's to
+/// see, and the path itself for a local user, who can open it. The root is
+/// `.`, and a path under no root shows its name alone.
+pub fn shown(path: &Path) -> String {
+    let tenant = current();
+    match tenant.mode {
+        Mode::Local => path.to_string_lossy().into_owned(),
+        Mode::Hosted => match path.strip_prefix(&tenant.root) {
+            Ok(relative) if relative.as_os_str().is_empty() => ".".to_string(),
+            Ok(relative) => relative.to_string_lossy().into_owned(),
+            Err(_) => path
+                .file_name()
+                .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
+        },
+    }
 }
 
 /// Run `work` as `tenant` on this thread. For the inside of a `spawn_blocking`,
@@ -329,6 +541,104 @@ pub(crate) mod tests {
             assert_eq!(entered, tenant.id);
         }));
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// A token opens one account: the file keeps its hash, a request carries
+    /// it as a bearer, and the account's first request makes its folder.
+    #[test]
+    fn a_token_resolves_to_its_account_and_makes_its_folder_once() {
+        let dir = fresh_root("tokens");
+        let tenants = dir.join("tenants");
+        let file = dir.join("tokens");
+        let acme = issue(TenantId::new("acme").unwrap(), &file).unwrap();
+        let bolt = issue(TenantId::new("bolt").unwrap(), &file).unwrap();
+        assert_eq!(acme.len(), 43, "32 bytes as base64url without padding: {acme}");
+        assert_ne!(acme, bolt);
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert_eq!(text.lines().count(), 2, "{text}");
+        assert!(text.starts_with("acme "), "{text}");
+        assert!(!text.contains(&acme), "the file holds the hash, never the token: {text}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+
+        let accounts = Accounts::read(&file, &tenants).unwrap();
+        assert_eq!(accounts.tokens(), 2);
+        let tenant = accounts.resolve(Some(&format!("Bearer {acme}"))).unwrap();
+        assert_eq!(tenant.id.as_str(), "acme");
+        assert_eq!(tenant.root, tenants.join("acme"));
+        assert_eq!(tenant.mode, Mode::Hosted);
+        assert!(tenant.root.is_dir(), "the first request makes the folder");
+        assert!(!tenant.root.join("jsconfig.json").exists(), "and seeds no editor declarations");
+        let again = accounts.resolve(Some(&format!("bearer  {acme} "))).unwrap();
+        assert!(Arc::ptr_eq(&tenant, &again), "one Arc per account, whatever the scheme's case");
+        assert_eq!(accounts.resolve(Some(&format!("Bearer {bolt}"))).unwrap().id.as_str(), "bolt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_request_without_a_token_or_with_a_wrong_one_is_refused_naming_the_fix() {
+        let dir = fresh_root("tokens");
+        let file = dir.join("tokens");
+        let acme = issue(TenantId::new("acme").unwrap(), &file).unwrap();
+        let accounts = Accounts::read(&file, &dir.join("tenants")).unwrap();
+
+        assert_eq!(accounts.resolve(None).map(|t| t.id.clone()), Err(Refused::NoToken));
+        let message = Refused::NoToken.message();
+        assert!(message.contains("Authorization: Bearer <token>"), "{message}");
+        assert!(message.contains("brew install parcad"), "the local way out is named: {message}");
+
+        let mut off_by_one = acme.clone();
+        off_by_one.replace_range(0..1, if acme.starts_with('A') { "B" } else { "A" });
+        for header in ["Bearer nope", &format!("Basic {acme}"), "Bearer", "", &acme, &format!("Bearer {off_by_one}")] {
+            assert_eq!(accounts.resolve(Some(header)).map(|t| t.id.clone()), Err(Refused::Unknown), "{header:?}");
+        }
+        assert!(Refused::Unknown.message().contains("revoked"));
+        assert!(!dir.join("tenants").exists(), "a refused request makes no folder");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_tokens_file_allows_comments_and_refuses_a_malformed_line_by_number() {
+        let dir = fresh_root("tokens");
+        let file = dir.join("tokens");
+        let line = TokenLine::of(TenantId::new("acme").unwrap(), "secret");
+        assert_eq!(TokenLine::parse(&line.to_string()).unwrap(), line, "a line round-trips");
+
+        std::fs::write(&file, format!("# ops\n\n{line}\n")).unwrap();
+        assert_eq!(Accounts::read(&file, &dir).unwrap().tokens(), 1);
+
+        std::fs::write(&file, format!("# ops\n\nacme not-a-hash\n{line}\n")).unwrap();
+        let refused = Accounts::read(&file, &dir).unwrap_err();
+        assert!(refused.contains("tokens:3:"), "the line is numbered: {refused}");
+        assert!(refused.contains("64 hex digits"), "{refused}");
+
+        std::fs::write(&file, "Acme 00\n").unwrap();
+        assert!(Accounts::read(&file, &dir).unwrap_err().contains("not a tenant id"));
+
+        let missing = Accounts::read(&dir.join("nowhere"), &dir).unwrap_err();
+        assert!(missing.contains("parcad token new"), "the refusal names the command: {missing}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A hosted reply shows a path relative to the account's root and
+    /// nothing of the server's layout; a local one shows the path itself.
+    #[test]
+    fn shown_strips_exactly_the_root_on_a_hosted_account() {
+        let tenants = fresh_root("tenants");
+        let a = hosted_at("a", &tenants);
+        scope(a.clone(), || {
+            assert_eq!(shown(&a.root), ".");
+            assert_eq!(shown(&a.root.join("Mounts/bracket.parcad/part.js")), "Mounts/bracket.parcad/part.js");
+            assert_eq!(shown(&a.exports.join("part.stl")), ".exports/part.stl");
+            assert_eq!(shown(&tenants.join("ab/part.js")), "part.js", "a sibling's folder is a prefix of the string, not of the path");
+        });
+        let local = local_at(&tenants.join("a"));
+        let file = local.root.join("x.js");
+        scope(local, || assert_eq!(shown(&file), file.to_string_lossy()));
+        let _ = std::fs::remove_dir_all(&tenants);
     }
 
     /// In a hosted process the fall-through to `local` is a bug and says so.

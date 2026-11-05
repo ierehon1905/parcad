@@ -143,16 +143,24 @@ pub type Transport = rmcp::transport::streamable_http_server::StreamableHttpServ
 >;
 
 /// The MCP endpoint as a tower service, before a host mounts it: on a socket
-/// by [`service`], or in a browser tab by `page.rs`.
+/// by [`service`], or in a browser tab by `page.rs`. `public_host` is the name
+/// a hosted server is reached by behind its TLS front, which rmcp must be told
+/// or it answers every request there with 403 (docs/GOTCHAS.md, "rmcp's HTTP
+/// service answers only a loopback `Host`").
 ///
 /// Stateless: each request builds its own handler. There is no session to keep
 /// because there is no document to keep — a script carries its whole part, so
 /// two calls cannot disagree about what is on screen.
-pub fn transport(assets: Arc<dyn Assets>) -> Transport {
+pub fn transport(assets: Arc<dyn Assets>, public_host: Option<&str>) -> Transport {
     let mut config = rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default();
     // A tool call answers once; there is nothing to stream, and a plain JSON
     // reply is far easier to drive from a shell when something is wrong.
     config.json_response = true;
+    if let Some(host) = public_host {
+        config.allowed_hosts.push(host.to_string());
+        // One public name per process; a test that builds two routers keeps the first.
+        let _ = PUBLIC_ENDPOINT.set(format!("https://{host}/mcp"));
+    }
 
     Transport::new(
         move || Ok(Parcad::new().with_assets(assets.clone())),
@@ -163,8 +171,8 @@ pub fn transport(assets: Arc<dyn Assets>) -> Transport {
 
 /// The MCP endpoint, as a router to mount on the app's host.
 #[cfg(not(target_os = "emscripten"))]
-pub fn service(assets: Arc<dyn Assets>) -> axum::Router {
-    let transport = transport(assets);
+pub fn service(assets: Arc<dyn Assets>, public_host: Option<&str>) -> axum::Router {
+    let transport = transport(assets, public_host);
 
     // Wrapped so every request passes `record`, which is the only place that
     // knows an agent is there at all. The tool functions cannot report it: they
@@ -1113,18 +1121,19 @@ impl Parcad {
 
             let dir = export_dir();
             std::fs::create_dir_all(&dir)
-                .map_err(|e| format!("creating the export directory {}: {e}", dir.display()))?;
-            let path = dir.join(&filename);
-            std::fs::write(&path, &export.bytes)
-                .map_err(|e| format!("writing {}: {e}", path.display()))?;
+                .map_err(|e| format!("creating the export directory {}: {e}", tenant::shown(&dir)))?;
+            let file = dir.join(&filename);
+            std::fs::write(&file, &export.bytes)
+                .map_err(|e| format!("writing {}: {e}", tenant::shown(&file)))?;
 
-            let path = path.to_string_lossy().to_string();
+            let path = tenant::shown(&file);
+            let file = file.to_string_lossy();
             // A tab has no application to open a file in; it hands every
             // export to the browser, which is the user's copy.
-            let downloaded = crate::page::active().then(|| crate::page::offer_download(&path));
+            let downloaded = crate::page::active().then(|| crate::page::offer_download(&file));
             let open_error = match downloaded {
                 Some(_) => None,
-                None => request.open.then(|| service::open_in_default_app(&path).err()).flatten(),
+                None => request.open.then(|| service::open_in_default_app(&file).err()).flatten(),
             };
             Ok(Sourced::of(
                 Exported {
@@ -1217,7 +1226,7 @@ impl Parcad {
         let projects = projects::list().map_err(invalid)?;
         Ok(rmcp::handler::server::wrapper::Json(ProjectList {
             projects,
-            directory: projects::dir().to_string_lossy().to_string(),
+            directory: tenant::shown(&projects::dir()),
         }))
     }
 
@@ -1606,10 +1615,17 @@ pub fn status() -> Status {
     }
 }
 
-/// Where a client connects: the loopback port, or the link a tab was given.
+/// The URL a hosted server is reached by, set with its transport.
+static PUBLIC_ENDPOINT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Where a client connects: the loopback port, the link a tab was given, or a
+/// hosted server's public name.
 fn endpoint() -> String {
     if let Some(link) = crate::page::link() {
         return link;
+    }
+    if let Some(public) = PUBLIC_ENDPOINT.get() {
+        return public.clone();
     }
     #[cfg(not(target_os = "emscripten"))]
     return format!("http://127.0.0.1:{}/mcp", crate::http::port());
@@ -1955,7 +1971,7 @@ fn keep_render(stem: &str, view: &str, image: &parcad_core::render::Rgb) -> Opti
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join(format!("{stem}-{view}.png"));
     std::fs::write(&path, image.to_png().ok()?).ok()?;
-    Some(path.to_string_lossy().to_string())
+    Some(tenant::shown(&path))
 }
 
 /// A kept render as a Markdown image. A destination with a space or a
@@ -2752,11 +2768,10 @@ mod tests {
         let b = tenant::tests::hosted_at("b", &tenants);
         let on_a = tenant::scope(a.clone(), export);
         let on_b = tenant::scope(b.clone(), export);
-        assert_eq!(std::path::Path::new(&on_a.path), tenants.join("a/.exports/part.stl"));
-        assert_eq!(std::path::Path::new(&on_b.path), tenants.join("b/.exports/part.stl"));
-        assert!(std::path::Path::new(&on_a.path).is_file());
-        assert!(std::path::Path::new(&on_b.path).is_file());
-        assert!(!std::path::Path::new(&on_a.path).starts_with(&b.root));
+        assert_eq!(on_a.path, ".exports/part.stl", "shown relative to the account's root");
+        assert_eq!(on_b.path, ".exports/part.stl");
+        assert!(a.root.join(&on_a.path).is_file());
+        assert!(b.root.join(&on_b.path).is_file());
         assert_eq!(tenant::scope(a, render_dir), tenants.join("a/.exports/renders"));
         let _ = std::fs::remove_dir_all(&tenants);
     }
@@ -2790,7 +2805,7 @@ mod tests {
             .body(axum::body::Body::from("{}"))
             .unwrap();
         request.extensions_mut().insert(b);
-        let mut router = service(Arc::new(NoAssets));
+        let mut router = service(Arc::new(NoAssets), None);
         let response = run(tower_service::Service::call(&mut router, request)).expect("the router answers");
         assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
         let body = run(axum::body::to_bytes(response.into_body(), 4096)).unwrap();

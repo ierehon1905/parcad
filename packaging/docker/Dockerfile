@@ -1,5 +1,6 @@
-# ParCAD's host without a window, from a published Linux x86_64 release.
-# Building, running and every variable: README.md beside this file.
+# ParCAD's host without a window, from a published Linux x86_64 release, as one
+# server for many accounts. Building, running and every variable: README.md
+# beside this file.
 
 FROM debian:bookworm-slim AS fetch
 ARG PARCAD_VERSION=0.0.13
@@ -30,10 +31,10 @@ LABEL org.opencontainers.image.title="parcad" \
 # What ldd names for the two binaries beyond libc and libm: libgcc_s for both,
 # libstdc++ for the worker.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends libstdc++6 libgcc-s1 socat ca-certificates \
+ && apt-get install -y --no-install-recommends libstdc++6 libgcc-s1 ca-certificates \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 --create-home --home-dir /home/parcad parcad \
- && mkdir -p /data/parts /data/export \
+ && mkdir -p /data/tenants /etc/parcad \
  && chown -R parcad:parcad /data
 
 COPY --from=fetch /opt/parcad /opt/parcad
@@ -41,13 +42,10 @@ COPY --chmod=0755 entrypoint.sh /usr/local/bin/parcad-entrypoint
 RUN ln -s /opt/parcad/parcad /usr/local/bin/parcad \
  && mkdir /opt/parcad/no-seed
 
-# The host's own port, behind the forwarder on 4242; `docker exec … parcad
-# call` reads the same variable, so it finds the host. The seed folder is named
-# because a CLI looks for its examples in ../Resources, a bundle's layout.
-ENV PARCAD_HTTP_PORT=4243 \
-    PARCAD_PROJECTS_DIR=/data/parts \
-    PARCAD_EXPORT_DIR=/data/export \
-    PARCAD_SEED_DIR=/opt/parcad/examples
+# The seed folder is named because a CLI looks for its examples in
+# ../Resources, a bundle's layout. Each account is seeded from it on its first
+# request.
+ENV PARCAD_SEED_DIR=/opt/parcad/examples
 
 USER parcad
 WORKDIR /home/parcad
