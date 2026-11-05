@@ -312,10 +312,18 @@ pub struct GeometryBuffer {
     /// kernel's own face number, or [`NO_FACE`] where nothing is or the pixel
     /// is cut face. Empty when the surface carried no face numbers.
     pub face: Vec<u32>,
+    /// One entry per pixel: which body is drawn there, by the number
+    /// [`Surface::bodies`] uses, or [`NO_BODY`] where nothing is. Kept only
+    /// when the surface has reference bodies, which is when the renderer has
+    /// to know whose pixel it is overwriting; empty otherwise.
+    pub body: Vec<u32>,
 }
 
 /// The face number of a pixel that shows no face.
 pub const NO_FACE: u32 = u32::MAX;
+
+/// The body number of a pixel that shows no body.
+pub const NO_BODY: u32 = u32::MAX;
 
 impl GeometryBuffer {
     /// Which face is under this pixel, when the surface said.
@@ -324,6 +332,28 @@ impl GeometryBuffer {
             .get((y * self.size + x) as usize)
             .copied()
             .filter(|f| *f != NO_FACE)
+    }
+
+    /// Which body is under this pixel, when the buffer kept it (see `body`).
+    pub fn body_at(&self, x: u32, y: u32) -> Option<u32> {
+        self.body
+            .get((y * self.size + x) as usize)
+            .copied()
+            .filter(|b| *b != NO_BODY)
+    }
+
+    /// Every body with at least one pixel in this view, by number, ascending.
+    /// Empty when the buffer kept no bodies.
+    pub fn bodies_drawn(&self) -> Vec<u32> {
+        let mut seen: Vec<bool> = Vec::new();
+        for b in self.body.iter().copied().filter(|b| *b != NO_BODY) {
+            let b = b as usize;
+            if seen.len() <= b {
+                seen.resize(b + 1, false);
+            }
+            seen[b] = true;
+        }
+        (0..seen.len() as u32).filter(|b| seen[*b as usize]).collect()
     }
 
     /// The point on the part under this pixel, if the pixel hit anything.
@@ -421,6 +451,13 @@ pub struct Surface<'a> {
     /// Which body each triangle belongs to, in triangle order, numbered from
     /// zero. Empty for one body. A section decides "inside" per body.
     pub bodies: &'a [u32],
+    /// Which of those bodies, by number, are reference bodies: real objects
+    /// the part is checked against, never the part. Empty when there are
+    /// none. A reference is drawn behind the part whatever the depth says —
+    /// its fragment never covers the part's, and the part's always covers
+    /// its — so a wall the part mounts on, between the camera and the part,
+    /// is a backdrop rather than the whole picture.
+    pub reference_bodies: &'a [bool],
 }
 
 impl Surface<'_> {
@@ -517,6 +554,9 @@ pub fn raster(
 
     let mut image = DepthImage::new(size, depth_samples);
     let mut face = vec![NO_FACE; if surface.faces.is_empty() { 0 } else { (size * size) as usize }];
+    let reference_of = |b: u32| surface.reference_bodies.get(b as usize).copied().unwrap_or(false);
+    let track_bodies = surface.reference_bodies.iter().any(|r| *r);
+    let mut body = vec![NO_BODY; if track_bodies { (size * size) as usize } else { 0 }];
     let project = |p: [f32; 3]| {
         let q = model_to_screen.transform_point(&nalgebra::Point3::new(p[0], p[1], p[2]));
         [q.x, q.y, q.z]
@@ -614,15 +654,30 @@ pub fn raster(
                 // Depth 0 means "no surface here", so a hit is never allowed to
                 // round down into it.
                 let depth = (exact.round() as i64).clamp(1, depth_samples as i64) as u32;
+                let i = (y * size + x) as usize;
                 let pixel = &mut image[(y as usize, x as usize)];
-                // Larger depth is nearer the viewer.
-                if depth <= pixel.depth {
+                let this_body = surface.bodies.get(t).copied().unwrap_or(0);
+                // Larger depth is nearer the viewer. A reference body sits
+                // behind the part whatever its depth (see `Surface::reference_bodies`).
+                let in_front = if track_bodies {
+                    match (reference_of(this_body), body[i] != NO_BODY && reference_of(body[i])) {
+                        (true, false) => pixel.depth == 0,
+                        (false, true) => true,
+                        _ => depth > pixel.depth,
+                    }
+                } else {
+                    depth > pixel.depth
+                };
+                if !in_front {
                     continue;
                 }
                 let n = [0, 1, 2].map(|k| w[0] * normals[0][k] + w[1] * normals[1][k] + w[2] * normals[2][k]);
                 *pixel = GeometryPixel { normal: n, depth };
-                if let Some(slot) = face.get_mut((y * size + x) as usize) {
+                if let Some(slot) = face.get_mut(i) {
                     *slot = surface.faces.get(t).copied().unwrap_or(NO_FACE);
+                }
+                if let Some(slot) = body.get_mut(i) {
+                    *slot = this_body;
                 }
             }
         }
@@ -665,15 +720,30 @@ pub fn raster(
                     // Everything that survived the clip is at or behind the
                     // plane, so the cap wins — and wins ties, which is what puts
                     // it in front of a face lying exactly on the section.
-                    if d >= pixel.depth {
-                        *pixel = GeometryPixel {
-                            normal: [normal.x, normal.y, normal.z],
-                            depth: d,
-                        };
-                        cut[i] = true;
-                        if let Some(slot) = face.get_mut(i) {
-                            *slot = NO_FACE;
+                    if d < pixel.depth {
+                        continue;
+                    }
+                    if track_bodies {
+                        // The cap is the part's where the plane passes through
+                        // any body of the part here; through reference material
+                        // alone, it is a reference and stays behind the part.
+                        let inside = |b: usize| (crossings[i * words + b / 64] >> (b % 64)) & 1 == 1;
+                        let through_part = (0..body_count).find(|b| inside(*b) && !reference_of(*b as u32));
+                        let pixel_is_part = body[i] != NO_BODY && !reference_of(body[i]);
+                        if through_part.is_none() && pixel_is_part {
+                            continue;
                         }
+                        body[i] = through_part
+                            .or_else(|| (0..body_count).find(|b| inside(*b)))
+                            .map_or(NO_BODY, |b| b as u32);
+                    }
+                    *pixel = GeometryPixel {
+                        normal: [normal.x, normal.y, normal.z],
+                        depth: d,
+                    };
+                    cut[i] = true;
+                    if let Some(slot) = face.get_mut(i) {
+                        *slot = NO_FACE;
                     }
                 }
             }
@@ -688,6 +758,7 @@ pub fn raster(
         cut_plane,
         cut,
         face,
+        body,
     })
 }
 
@@ -1162,6 +1233,7 @@ mod tests {
                 indices: &[],
                 faces: &[],
                 bodies: &[],
+                reference_bodies: &[],
             }
         }
     }
@@ -1325,6 +1397,50 @@ mod tests {
 
         let (as_one, _, _) = cut_area(&[]);
         assert!((as_one - 500.0).abs() < 500.0 * 0.03, "read as one shell, the overlap is uncapped: {as_one:.1} mm²");
+    }
+
+    /// A reference body is drawn behind the part, and a section cap of
+    /// reference material alone stays behind it too.
+    ///
+    /// A 10 mm cube and the 100 mm wall it mounts on, the wall between the
+    /// front camera and the cube at y = -8..-7, inside the frame's depth.
+    /// Framed on the cube, the wall is the whole picture when both are the
+    /// part. Marked a reference it is the backdrop: the centre pixel is the
+    /// cube's near face at y = -5 and the corner is the wall. Cut on Y
+    /// through the wall alone, the wall's cap covers the corner and never
+    /// the cube.
+    #[test]
+    fn a_reference_body_is_drawn_behind_the_part() {
+        let mut mesh = Mesh::default();
+        mesh.cuboid([0.0; 3], [10.0; 3]);
+        let cube = mesh.positions.len() / 9;
+        mesh.cuboid([0.0, -7.5, 0.0], [100.0, 1.0, 100.0]);
+        let wall = mesh.positions.len() / 9 - cube;
+        let bodies: Vec<u32> = std::iter::repeat_n(0, cube).chain(std::iter::repeat_n(1, wall)).collect();
+        let bounds = bounds([0.0; 3], [10.0; 3]);
+        let (centre, corner) = (64, 2);
+        let draw = |reference_bodies: &[bool], section| {
+            let surface = Surface { bodies: &bodies, reference_bodies, ..mesh.surface() };
+            raster(&surface, bounds, View::Front, &small(section)).expect("raster")
+        };
+
+        let as_part = draw(&[], None);
+        let p = as_part.model_point(centre, centre).expect("drawn");
+        assert!((p[1] + 8.0).abs() < 0.5, "as a body of the part, the wall's near face covers the cube: {p:?}");
+        assert!(as_part.body.is_empty(), "no body is kept when none is a reference");
+
+        let behind = draw(&[false, true], None);
+        let p = behind.model_point(centre, centre).expect("drawn");
+        assert!((p[1] + 5.0).abs() < 0.5, "the cube's near face is at y = -5, not {p:?}");
+        assert_eq!((behind.body_at(centre, centre), behind.body_at(corner, corner)), (Some(0), Some(1)));
+        assert_eq!(behind.bodies_drawn(), [0, 1]);
+
+        let through_the_wall = Section { axis: Axis::Y, at_mm: Some(-7.5), keep: Some(Keep::Above) };
+        let cut = draw(&[false, true], Some(through_the_wall));
+        assert!(cut.is_cut(corner, corner), "the wall's cap is drawn where the cube is not");
+        assert_eq!(cut.body_at(corner, corner), Some(1));
+        assert!(!cut.is_cut(centre, centre), "and never over the cube");
+        assert_eq!(cut.body_at(centre, centre), Some(0));
     }
 
     /// A crossing on an edge the view sees along the sample grid is counted

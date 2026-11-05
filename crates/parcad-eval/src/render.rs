@@ -17,8 +17,10 @@ pub fn check(doc: &Doc, renders: &[RenderExpect]) -> Vec<Mismatch> {
             return out;
         }
     };
-    let points: Vec<[f32; 3]> = s.positions.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
-    let Some(bounds) = parcad_core::measure::Aabb::from_points(&points) else {
+    // Framed on the part's own triangles, as the app frames a view: a
+    // reference body is drawn where it falls inside that frame.
+    let (part_vertices, _) = s.part_mesh();
+    let Some(bounds) = parcad_core::measure::Aabb::from_points(&part_vertices) else {
         out.push(Mismatch { field: "renders".into(), detail: "the kernel returned no vertices".into() });
         return out;
     };
@@ -29,6 +31,7 @@ pub fn check(doc: &Doc, renders: &[RenderExpect]) -> Vec<Mismatch> {
         indices: &s.indices,
         faces: &owners.faces,
         bodies: &owners.bodies,
+        reference_bodies: &owners.reference_bodies,
     };
     let names = tag_names(doc);
     let owner = owner_of_face(&s.faces, &names);

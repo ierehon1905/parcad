@@ -1527,6 +1527,12 @@ carries `scale_mm` over `scale_px` so a model quotes the number rather than
 estimating off pixels. Not on a region map, which is an instrument read by
 colour and would gain a white region that is not one.
 
+Both are the part's. A `.reference()` body never widens the frame or the
+ruler — a 300 mm wall returned beside a 36 mm bracket had made the bracket a
+few pixels under a 100 mm rule — and is drawn in blue behind the part, cut
+off at the frame's edge; the view's `framed_on` says which bodies the frame
+fits and `references_out_of_view` which references have no pixel in it.
+
 Pinned by `eval/cases/briefed-tray` (the session's own v5 and its own brief:
 over by exactly 15 mm along x, and on no other axis) and
 `eval/cases/upright-caddy` (`meets`, and a volume of 13.389 cm³ where the two

@@ -286,14 +286,21 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
             }
         }
     }
+    let is_reference_body = |name: &String| evaluated.reference_bodies.contains(name);
+    let reference_of_body: Vec<bool> = evaluated.body_names.iter().map(is_reference_body).collect();
     let surface = parcad_core::render::Surface {
         positions: &evaluated.positions,
         normals: &evaluated.normals,
         indices: &evaluated.indices,
         faces: if evaluated.face_runs.is_empty() { &[] } else { &triangle_faces },
         bodies: &evaluated.triangle_bodies,
+        reference_bodies: &reference_of_body,
     };
     let bounds = evaluated.bounds;
+    // Only a part with reference bodies has anything to say about its frame;
+    // every other reply stays as it was.
+    let has_references = !evaluated.reference_bodies.is_empty();
+    let framed_on: Vec<String> = evaluated.body_names.iter().filter(|name| !is_reference_body(name)).cloned().collect();
 
     let opts = parcad_core::render::RenderOptions {
         size,
@@ -370,6 +377,16 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
             // size it is read at, and only on a shaded view.
             let mut image = image;
             let scale = (!regions).then(|| parcad_core::render::draw_scale(&mut image, bounds));
+            let references_out_of_view = has_references.then(|| {
+                let drawn = buffer.bodies_drawn();
+                evaluated
+                    .body_names
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, name)| is_reference_body(name) && !drawn.contains(&(*i as u32)))
+                    .map(|(_, name)| name.clone())
+                    .collect::<Vec<_>>()
+            });
 
             Ok(Render {
                 summary: RenderedView {
@@ -387,6 +404,9 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                     }),
                     scale_mm: scale.as_ref().map(|bar| round_mm(bar.mm)),
                     scale_px: scale.as_ref().map(|bar| bar.px),
+                    framed_on: has_references.then(|| framed_on.clone()),
+                    references_out_of_view,
+                    framing: has_references.then(|| parcad_evaluation::REFERENCE_FRAMING.to_string()),
                     path: None,
                     markdown: None,
                 },
@@ -2033,6 +2053,73 @@ mod tests {
             keys,
             ["edges", "face_runs", "faces", "indices", "normals", "positions", "snapshot"]
         );
+    }
+
+    /// A view is framed on the part, and says so when there is anything else
+    /// in the picture.
+    ///
+    /// A 10 mm cube, the 100 mm wall it mounts on 20 mm in front of it, and
+    /// a second cube 500 mm away, both references. The frame and the ruler
+    /// are the cube's — 5 mm, where the wall's frame carried a 50 mm rule
+    /// and the cube a few pixels — the wall is drawn where it falls inside
+    /// that frame, and the far cube is reported out of view rather than
+    /// left to be inferred missing from the picture.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn a_view_is_framed_on_the_part_and_names_what_it_left_out() {
+        let doc = doc(serde_json::json!({
+            "root": 5,
+            "nodes": [
+                { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+                { "op": "cuboid", "size": { "x": 100, "y": 2, "z": 100 } },
+                { "op": "translate", "child": 1, "by": { "x": 0, "y": -20, "z": 0 } },
+                { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+                { "op": "translate", "child": 3, "by": { "x": 500, "y": 0, "z": 0 } },
+                { "op": "bodies", "bodies": [
+                    { "name": "part", "child": 0 },
+                    { "name": "wall", "child": 2, "reference": true },
+                    { "name": "far", "child": 4, "reference": true },
+                ] },
+            ],
+        }));
+        let evaluated = brep(&doc);
+        assert_eq!(evaluated.snapshot.size, [10.0, 10.0, 10.0]);
+        let renders = render(
+            &evaluated,
+            &doc,
+            &RenderSpec {
+                views: &[parcad_core::view::View::Iso, parcad_core::view::View::Front],
+                size: 128,
+                regions: false,
+                materials: false,
+                section: None,
+            },
+        )
+        .expect("the part should render");
+        for render in &renders.views {
+            let view = &render.summary;
+            assert_eq!(view.scale_mm, Some(5.0), "{}: the ruler is the cube's", view.view);
+            assert_eq!(view.framed_on.as_deref(), Some(&["part".to_string()][..]), "{}", view.view);
+            assert_eq!(view.references_out_of_view.as_deref(), Some(&["far".to_string()][..]), "{}", view.view);
+            assert_eq!(view.framing.as_deref(), Some(parcad_evaluation::REFERENCE_FRAMING));
+        }
+
+        // A part with no reference says nothing about its frame.
+        let plain = brep(&plate_with_a_hole());
+        let renders = render(
+            &plain,
+            &plate_with_a_hole(),
+            &RenderSpec {
+                views: &[parcad_core::view::View::Iso],
+                size: 128,
+                regions: false,
+                materials: false,
+                section: None,
+            },
+        )
+        .expect("the plate should render");
+        let view = &renders.views[0].summary;
+        assert!(view.framed_on.is_none() && view.references_out_of_view.is_none() && view.framing.is_none());
     }
 
     /// A shape the root never reaches is a line the author meant to use.
