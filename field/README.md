@@ -268,6 +268,7 @@ reach:   list_entities          # every tool that must be called, or the answer 
 arg:     section                # arguments that must be non-empty on some call
 input:   \.mirror\(             # a regex some call's arguments must match
 verdict: SELECTABLE EDGES\s*[=:]\s*122    # matched against the tail of the reply only
+verdict_in: reply               # optional: the whole reply, for a verdict no sentence says by accident
 trap:    SELECTABLE EDGES\s*[=:]\s*(246|60)\b   # the specific wrong answer worth naming
 quote:   \b122\b                # a value from the tool that must survive into the answer
 writes:  Field tests/spacer     # a note to the reader: this case writes, and where
@@ -309,7 +310,9 @@ Every one of these rules was learned by writing a bad case:
   verdict that is an ordinary English word will be found in ordinary English: a
   trial that answered FLAT FLOOR once scored a clean OPEN off the sentence "the
   port cavities don't open directly into the gallery". The scorer searches only
-  the tail for that reason.
+  the tail for that reason. A case whose answer is an artefact rather than a
+  line — a pasted image, which a reply puts first — says `verdict_in: reply`;
+  that is for a pattern no sentence matches by accident, never for a word.
 - **A case without `verdict` is refused, not scored.** It is the one field the
   scorer cannot do without: absent, every trial would grade WRONG before the
   reply was read, and a column of WRONG looks like a finding.

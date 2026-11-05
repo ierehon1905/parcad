@@ -136,6 +136,15 @@ derived = false
 stray = []
 hidden = []
 
+[the-picture-comes-first]
+grade = "SOUND"
+reached = true
+quoted = true
+trap = false
+derived = false
+stray = []
+hidden = []
+
 [the-route-is-an-argument]
 grade = "SOUND"
 reached = true
