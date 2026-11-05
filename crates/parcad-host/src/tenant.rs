@@ -27,7 +27,8 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::Duration;
 
 /// An account's name on disk and in every key: one to 63 characters of
 /// `a-z`, `0-9` and `-`, starting with a letter or digit.
@@ -67,6 +68,104 @@ pub enum Mode {
     Hosted,
 }
 
+/// What one account may ask of the host per call, and how many calls at
+/// once. `service::budget` and `service::kernel` apply them; `mcp::record`
+/// the body. Sized from docs/HOSTING.md: a median build is 53 ms, the p90
+/// 1.5 s and the longest part in the corpus 36 s, so an account that needs
+/// more than a minute of kernel is asking for something no part needs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// The most kernel time a call's `timeout_s` may ask for.
+    pub kernel_timeout_max: Duration,
+    /// The most a call may raise the script sandbox's clock backstop to.
+    pub script_backstop_max: Duration,
+    /// Builds in flight at once for this account; `None` is no cap.
+    pub concurrent_builds: Option<usize>,
+    /// The largest request body `/mcp` reads.
+    pub body_bytes: usize,
+}
+
+impl Limits {
+    /// Today's values for the machine's own user, which no limit of these
+    /// has ever bounded in practice.
+    pub fn local() -> Limits {
+        Limits {
+            kernel_timeout_max: Duration::from_secs(600),
+            script_backstop_max: Duration::from_secs(600),
+            concurrent_builds: None,
+            body_bytes: 32 * 1024 * 1024,
+        }
+    }
+
+    /// One account among many on a server whose pool caps nothing.
+    pub fn hosted() -> Limits {
+        Limits {
+            kernel_timeout_max: Duration::from_secs(60),
+            script_backstop_max: Duration::from_secs(120),
+            concurrent_builds: Some(2),
+            body_bytes: 4 * 1024 * 1024,
+        }
+    }
+}
+
+/// So many at once: a counting gate for threads, since the kernel is called
+/// from blocking ones. `take` waits up to `patience` for a slot and says
+/// when none came.
+#[derive(Debug)]
+pub struct Gate {
+    slots: Mutex<Slots>,
+    freed: Condvar,
+}
+
+#[derive(Debug)]
+struct Slots {
+    cap: Option<usize>,
+    taken: usize,
+}
+
+impl Gate {
+    pub fn new(cap: Option<usize>) -> Gate {
+        Gate {
+            slots: Mutex::new(Slots { cap, taken: 0 }),
+            freed: Condvar::new(),
+        }
+    }
+
+    pub fn cap(&self) -> Option<usize> {
+        self.slots.lock().unwrap_or_else(|e| e.into_inner()).cap
+    }
+
+    pub fn take(&self, patience: Duration) -> Option<Pass<'_>> {
+        let deadline = std::time::Instant::now() + patience;
+        let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
+        loop {
+            if slots.cap.is_none_or(|cap| slots.taken < cap) {
+                slots.taken += 1;
+                return Some(Pass(self));
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return None;
+            }
+            slots = self
+                .freed
+                .wait_timeout(slots, remaining)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+    }
+}
+
+/// A slot taken, given back when dropped.
+pub struct Pass<'a>(&'a Gate);
+
+impl Drop for Pass<'_> {
+    fn drop(&mut self) {
+        self.0.slots.lock().unwrap_or_else(|e| e.into_inner()).taken -= 1;
+        self.0.freed.notify_one();
+    }
+}
+
 #[derive(Debug)]
 pub struct Tenant {
     pub id: TenantId,
@@ -75,6 +174,9 @@ pub struct Tenant {
     /// Where `export_part` and the renders land.
     pub exports: PathBuf,
     pub mode: Mode,
+    pub limits: Limits,
+    /// This account's builds in flight, capped by `limits.concurrent_builds`.
+    pub builds: Gate,
 }
 
 impl Tenant {
@@ -82,9 +184,9 @@ impl Tenant {
     /// override the two folders, which is also how a scratch host gets folders
     /// of its own; nothing else reads either variable.
     pub fn local() -> Tenant {
-        Tenant {
-            id: TenantId("local".to_string()),
-            root: std::env::var_os("PARCAD_PROJECTS_DIR").map_or_else(
+        Tenant::new(
+            TenantId("local".to_string()),
+            std::env::var_os("PARCAD_PROJECTS_DIR").map_or_else(
                 // The platform's application-data folder rather than Documents:
                 // macOS guards Documents per app, so an editor the user never
                 // granted it could not open a part there. docs/GOTCHAS.md,
@@ -92,10 +194,11 @@ impl Tenant {
                 || dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("parcad"),
                 PathBuf::from,
             ),
-            exports: std::env::var_os("PARCAD_EXPORT_DIR")
+            std::env::var_os("PARCAD_EXPORT_DIR")
                 .map_or_else(|| std::env::temp_dir().join("parcad-exports"), PathBuf::from),
-            mode: Mode::Local,
-        }
+            Mode::Local,
+            Limits::local(),
+        )
     }
 
     /// One account on a server, rooted in its own folder under `tenants`. The
@@ -105,11 +208,17 @@ impl Tenant {
     pub fn hosted(id: TenantId, tenants: &Path) -> Tenant {
         let root = tenants.join(id.as_str());
         let exports = root.join(".exports");
+        Tenant::new(id, root, exports, Mode::Hosted, Limits::hosted())
+    }
+
+    pub(crate) fn new(id: TenantId, root: PathBuf, exports: PathBuf, mode: Mode, limits: Limits) -> Tenant {
         Tenant {
             id,
             root,
             exports,
-            mode: Mode::Hosted,
+            mode,
+            limits,
+            builds: Gate::new(limits.concurrent_builds),
         }
     }
 
@@ -446,12 +555,7 @@ pub(crate) mod tests {
     /// so tests sharing a process never see each other's.
     pub(crate) fn local_at(root: &Path) -> Arc<Tenant> {
         let id = TenantId::new(&format!("test-{}", NTH.fetch_add(1, Ordering::Relaxed))).expect("a test id");
-        Arc::new(Tenant {
-            id,
-            root: root.to_path_buf(),
-            exports: root.join(".exports"),
-            mode: Mode::Local,
-        })
+        Arc::new(Tenant::new(id, root.to_path_buf(), root.join(".exports"), Mode::Local, Limits::local()))
     }
 
     /// A hosted tenant under `tenants`, its folder created as a resolve would.

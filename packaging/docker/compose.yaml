@@ -13,6 +13,9 @@ services:
     volumes:
       - parcad-data:/data
       - ${PARCAD_TOKENS:-./tokens}:/etc/parcad/tokens:ro
+    # The host caps builds in flight, not a worker's memory: this does, for all
+    # of them together. docs/HOSTING.md, "Sizing".
+    mem_limit: 3g
     restart: unless-stopped
 
 volumes:

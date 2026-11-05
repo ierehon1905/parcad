@@ -242,11 +242,14 @@ const SERVE_USAGE: &str = "usage: parcad serve [--port N] [--bind ADDR]\n\
   --hosted           one server for many accounts, each behind a bearer token: no UI, no editor\n\
   --tokens FILE      the tokens file; `parcad token new <tenant-id> --tokens FILE` adds a line\n\
   --tenants-dir DIR  where each account's parts live, DIR/<tenant-id>\n\
-  --public-host NAME the name clients reach the server by, behind whatever terminates TLS";
+  --public-host NAME the name clients reach the server by, behind whatever terminates TLS\n\
+  --builds N         builds in flight at once across every account, the machine's cores by default";
 
 /// What `parcad serve` was asked for, checked whole before anything binds.
 struct Serve {
     address: std::net::SocketAddr,
+    /// The host's cap on builds in flight: the worker pool caps nothing.
+    builds: usize,
     hosted: Option<HostedFlags>,
 }
 
@@ -259,6 +262,7 @@ struct HostedFlags {
 fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
     let mut port = parcad_host::http::port();
     let mut bind = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+    let mut builds = std::thread::available_parallelism().map_or(1, |cores| cores.get());
     let mut hosted = false;
     let mut tokens = None;
     let mut tenants = None;
@@ -269,6 +273,7 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
         match arg.as_str() {
             "--port" => port = value("a number")?.parse().context("--port must be a port number")?,
             "--bind" => bind = value("an address")?.parse().context("--bind must be an IP address")?,
+            "--builds" => builds = value("a count")?.parse().context("--builds must be a count of builds")?,
             "--hosted" => hosted = true,
             "--tokens" => tokens = Some(PathBuf::from(value("a file")?)),
             "--tenants-dir" => tenants = Some(PathBuf::from(value("a folder")?)),
@@ -281,6 +286,9 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
         }
     }
     let address = std::net::SocketAddr::new(bind, port);
+    if builds == 0 {
+        anyhow::bail!("--builds must be at least 1, or no part would ever build");
+    }
     if !hosted {
         if !bind.is_loopback() {
             anyhow::bail!(
@@ -291,11 +299,16 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
         if tokens.is_some() || tenants.is_some() || public_host.is_some() {
             anyhow::bail!("--tokens, --tenants-dir and --public-host are read only with --hosted");
         }
-        return Ok(Serve { address, hosted: None });
+        return Ok(Serve {
+            address,
+            builds,
+            hosted: None,
+        });
     }
     match (tokens, tenants, public_host) {
         (Some(tokens), Some(tenants), Some(public_host)) => Ok(Serve {
             address,
+            builds,
             hosted: Some(HostedFlags {
                 tokens,
                 tenants,
@@ -325,6 +338,7 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
 /// is one server for many accounts instead: no UI, every request a bearer's.
 fn serve(args: impl Iterator<Item = String>) -> Result<()> {
     let options = serve_options(args)?;
+    parcad_host::service::cap_builds(options.builds).map_err(anyhow::Error::msg)?;
     let Some(flags) = options.hosted else {
         return host(options.address.port());
     };
@@ -333,10 +347,11 @@ fn serve(args: impl Iterator<Item = String>) -> Result<()> {
     std::fs::create_dir_all(&flags.tenants)
         .with_context(|| format!("creating the tenants folder {}", flags.tenants.display()))?;
     eprintln!(
-        "parcad: {} tokens from {}; accounts under {}",
+        "parcad: {} tokens from {}; accounts under {}; {} builds at once",
         accounts.tokens(),
         flags.tokens.display(),
-        flags.tenants.display()
+        flags.tenants.display(),
+        options.builds
     );
     parcad_host::tenant::require();
     listen(
@@ -821,9 +836,14 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(hosted.address.to_string(), "0.0.0.0:4242");
+        assert!(hosted.builds >= 1, "the machine's cores by default");
         let flags = hosted.hosted.expect("hosted");
         assert_eq!(flags.tokens, PathBuf::from("/etc/parcad/tokens"));
         assert_eq!(flags.tenants, PathBuf::from("/data/tenants"));
         assert_eq!(flags.public_host, "cad.example.test");
+
+        assert_eq!(options(&["--builds", "3", "--port", "4242"]).unwrap().builds, 3);
+        let none = options(&["--builds", "0", "--port", "4242"]).err().expect("refused").to_string();
+        assert!(none.contains("at least 1"), "{none}");
     }
 }

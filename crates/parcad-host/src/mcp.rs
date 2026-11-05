@@ -909,12 +909,12 @@ impl Parcad {
         &self,
         Parameters(Args(request)): Parameters<Args<ViewRequest>>,
     ) -> Result<rmcp::model::CallToolResult, ErrorData> {
-        let budget = budget(request.timeout_s);
         let viewed = blocking(move || {
+            let budget = service::budget(request.timeout_s);
             let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &[], None)?;
-            let built = script::build_within(&source.script, script_budget(request.timeout_s))?;
+            let built = script::build_within(&source.script, budget.script)?;
             let doc = service::parse_graph(built.graph.clone())?;
-            let evaluated = service::evaluate(&doc, budget).map_err(|e| built.locate(e))?;
+            let evaluated = service::evaluate(&doc, Some(budget.kernel)).map_err(|e| built.locate(e))?;
             let mut viewed = viewed(&evaluated)?;
             viewed["script_sha256"] = serde_json::json!(service::script_sha256(&source.script));
             Ok(viewed)
@@ -985,12 +985,12 @@ impl Parcad {
         &self,
         Parameters(Args(request)): Parameters<Args<ProbeRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<Sourced<service::ProbeReport>>, ErrorData> {
-        let budget = budget(request.timeout_s);
         let report = blocking(move || {
+            let budget = service::budget(request.timeout_s);
             let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &request.edits, None)?;
-            let built = script::build_within(&source.script, script_budget(request.timeout_s))?;
+            let built = script::build_within(&source.script, budget.script)?;
             let doc = service::parse_graph(built.graph.clone())?;
-            let report = service::probe(&doc, &request.points, &request.rays, budget).map_err(|e| built.locate(e))?;
+            let report = service::probe(&doc, &request.points, &request.rays, Some(budget.kernel)).map_err(|e| built.locate(e))?;
             Ok(Sourced::of(report, &source))
         })
         .await?;
@@ -1012,12 +1012,12 @@ impl Parcad {
         &self,
         Parameters(Args(request)): Parameters<Args<ThicknessRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<Sourced<service::ThicknessReport>>, ErrorData> {
-        let budget = budget(request.timeout_s);
         let report = blocking(move || {
+            let budget = service::budget(request.timeout_s);
             let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &request.edits, None)?;
-            let built = script::build_within(&source.script, script_budget(request.timeout_s))?;
+            let built = script::build_within(&source.script, budget.script)?;
             let doc = service::parse_graph(built.graph.clone())?;
-            let report = service::wall_thickness(&doc, request.threshold_mm, request.max_samples, budget)
+            let report = service::wall_thickness(&doc, request.threshold_mm, request.max_samples, Some(budget.kernel))
                 .map_err(|e| built.locate(e))?;
             Ok(Sourced::of(report, &source))
         })
@@ -1097,25 +1097,25 @@ impl Parcad {
             None => format!("part.{format}"),
         };
 
-        let budget = budget(request.timeout_s);
         let exported = blocking(move || {
+            let budget = service::budget(request.timeout_s);
             let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &request.edits, None)?;
-            let built = script::build_within(&source.script, script_budget(request.timeout_s))?;
+            let built = script::build_within(&source.script, budget.script)?;
             let mut doc = service::parse_graph(built.graph.clone())?;
             // The whole part's checks stand before the file, whichever body
             // is written: the build is the one the export reuses.
-            let door = service::Door::of(&service::evaluate(&doc, budget).map_err(|e| built.locate(e))?.snapshot);
+            let door = service::Door::of(&service::evaluate(&doc, Some(budget.kernel)).map_err(|e| built.locate(e))?.snapshot);
             let allow_failing = door.pass(request.allow_failing.as_deref(), "export_part")?;
             if let Some(body) = &request.body {
                 doc = service::body_doc(&doc, body)?;
             }
             let export = match format.as_str() {
-                "step" => service::export_step_within(&doc, budget),
+                "step" => service::export_step_within(&doc, Some(budget.kernel)),
                 "3mf" => {
                     let stem = filename.rsplit_once('.').map_or(filename.as_str(), |(stem, _)| stem);
-                    service::export_3mf(&doc, budget, request.body.as_deref().unwrap_or(stem))
+                    service::export_3mf(&doc, Some(budget.kernel), request.body.as_deref().unwrap_or(stem))
                 }
-                _ => service::export_stl(&doc, budget),
+                _ => service::export_stl(&doc, Some(budget.kernel)),
             }
             .map_err(|e| built.locate(e))?;
 
@@ -1723,8 +1723,8 @@ pub(crate) fn note_session(id: &str, client: Option<String>) {
 ///
 /// The body is buffered because the JSON-RPC method is *in* it — the HTTP verb
 /// and path are the same for a handshake and for a fillet. These are small
-/// JSON documents; the limit below is generous enough for a long script and
-/// still refuses to hold an unbounded upload in memory.
+/// JSON documents; the account's limit is generous enough for a long script
+/// and still refuses to hold an unbounded upload in memory.
 #[cfg(not(target_os = "emscripten"))]
 async fn record(
     request: axum::extract::Request,
@@ -1732,9 +1732,8 @@ async fn record(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    const BODY_LIMIT: usize = 32 * 1024 * 1024;
-
     let tenant = tenant::carried(request.extensions());
+    let body_limit = tenant.limits.body_bytes;
     let session_id = request
         .headers()
         .get("mcp-session-id")
@@ -1743,13 +1742,15 @@ async fn record(
     let closing = request.method() == axum::http::Method::DELETE;
 
     let (parts, body) = request.into_parts();
-    let bytes = match axum::body::to_bytes(body, BODY_LIMIT).await {
+    let bytes = match axum::body::to_bytes(body, body_limit).await {
         Ok(bytes) => bytes,
         Err(_) => {
             return (
                 axum::http::StatusCode::PAYLOAD_TOO_LARGE,
-                "the MCP request body is larger than 32 MB; send the script itself, \
-                 not a mesh",
+                format!(
+                    "the MCP request body is larger than {} MB; send the script itself, not a mesh",
+                    body_limit / (1024 * 1024)
+                ),
             )
                 .into_response()
         }
@@ -1792,17 +1793,6 @@ fn keep_screen(next: &str) {
             let _ = projects::keep(&name, &on_screen.script);
         }
     }
-}
-
-/// A caller's `timeout_s`, bounded; `None` keeps the host's default.
-fn budget(timeout_s: Option<f64>) -> Option<std::time::Duration> {
-    timeout_s.map(|s| std::time::Duration::from_secs_f64(s.clamp(1.0, 600.0)))
-}
-
-/// The same `timeout_s` as the script sandbox's clock backstop, never below
-/// its own. It raises no work budget: that is the script's `scriptBudget`.
-fn script_budget(timeout_s: Option<f64>) -> std::time::Duration {
-    budget(timeout_s).unwrap_or(script::BACKSTOP).max(script::BACKSTOP)
 }
 
 /// How evaluate_part and edit_part draw a part: their shared arguments, checked
@@ -1874,9 +1864,10 @@ fn measure(
     source: &service::Resolved,
     look: &Look,
 ) -> Result<(serde_json::Value, Vec<Vec<u8>>, service::Door), String> {
-    let built = script::build_within(&source.script, script_budget(look.timeout_s))?;
+    let budget = service::budget(look.timeout_s);
+    let built = script::build_within(&source.script, budget.script)?;
     let doc = service::parse_graph(built.graph.clone())?;
-    let mut evaluated = service::evaluate(&doc, budget(look.timeout_s)).map_err(|e| built.locate(e))?;
+    let mut evaluated = service::evaluate(&doc, Some(budget.kernel)).map_err(|e| built.locate(e))?;
     evaluated.snapshot.notes = built.notes.clone();
     let door = service::Door::of(&evaluated.snapshot);
 
@@ -2778,17 +2769,46 @@ mod tests {
 
     /// An `Mcp-Session-Id` minted under one account is no session under
     /// another, and the refusal comes from the middleware every request passes.
+    struct NoAssets;
+
+    impl Assets for NoAssets {
+        fn get(&self, _: &str) -> Option<crate::assets::Asset> {
+            None
+        }
+        fn how_to_embed(&self) -> String {
+            String::new()
+        }
+    }
+
+    /// The body `/mcp` reads is bounded by the account: 4 MB on a server, with
+    /// the limit in the refusal; a local user's 32 MB is untouched.
+    #[test]
+    fn a_body_past_the_accounts_limit_is_refused_naming_the_limit() {
+        let tenants = tenant::tests::fresh_root("tenants");
+        let five_mb = axum::body::Body::from("x".repeat(5 * 1024 * 1024));
+        let post = |tenant: Arc<tenant::Tenant>, body: axum::body::Body| {
+            let mut request = axum::http::Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("content-type", "application/json")
+                .body(body)
+                .unwrap();
+            request.extensions_mut().insert(tenant);
+            let mut router = service(Arc::new(NoAssets), None);
+            run(tower_service::Service::call(&mut router, request)).expect("the router answers")
+        };
+        let refused = post(tenant::tests::hosted_at("a", &tenants), five_mb);
+        assert_eq!(refused.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+        let text = String::from_utf8_lossy(&run(axum::body::to_bytes(refused.into_body(), 4096)).unwrap()).into_owned();
+        assert!(text.contains("larger than 4 MB"), "the refusal names the limit: {text}");
+
+        let local = post(tenant::tests::local_at(&tenants), axum::body::Body::from("x".repeat(5 * 1024 * 1024)));
+        assert_ne!(local.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE, "a local user's limit is still 32 MB");
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
     #[test]
     fn a_session_minted_for_one_account_is_refused_under_another() {
-        struct NoAssets;
-        impl Assets for NoAssets {
-            fn get(&self, _: &str) -> Option<crate::assets::Asset> {
-                None
-            }
-            fn how_to_embed(&self) -> String {
-                String::new()
-            }
-        }
         let tenants = tenant::tests::fresh_root("tenants");
         let a = tenant::tests::hosted_at("a", &tenants);
         let b = tenant::tests::hosted_at("b", &tenants);

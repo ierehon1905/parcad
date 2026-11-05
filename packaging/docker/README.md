@@ -65,7 +65,11 @@ parcad serve --hosted --bind 0.0.0.0 --port 4242 --tokens /etc/parcad/tokens \
 ```
 
 and refuses to start without `PARCAD_PUBLIC_HOST`, without a readable tokens
-file, or with a binary that has no `--hosted`. The host binds every address
+file, or with a binary that has no `--hosted`. Each account may have two
+builds in flight and ask for 60 s of kernel per call; the host as a whole runs
+as many at once as the container has cores (`--builds N` changes it). Nothing
+limits one worker's memory, so give the container a limit — `--memory 3g`, or
+`mem_limit` in `compose.yaml` — sized from docs/HOSTING.md. The host binds every address
 of the container, so a published port reaches it directly; publish it on
 `127.0.0.1` and put the TLS front (docs/HOSTING.md, Cloudflare Tunnel) in
 front of that. `PARCAD_PUBLIC_HOST` is the name clients use through that
