@@ -150,10 +150,10 @@ pub type Transport = rmcp::transport::streamable_http_server::StreamableHttpServ
 >;
 
 /// The MCP endpoint as a tower service, before a host mounts it: on a socket
-/// by [`service`], or in a browser tab by `page.rs`. `public_host` is the name
-/// a hosted server is reached by behind its TLS front, which rmcp must be told
-/// or it answers every request there with 403 (docs/GOTCHAS.md, "rmcp's HTTP
-/// service answers only a loopback `Host`").
+/// by [`service`], or in a browser tab by `page.rs`. `public_host` is the host
+/// and port a hosted server is reached by (`PublicHost::authority`), which rmcp
+/// must be told or it answers every request there with 403 (docs/GOTCHAS.md,
+/// "rmcp's HTTP service answers only a loopback `Host`").
 ///
 /// Stateless: each request builds its own handler. There is no session to keep
 /// because there is no document to keep — a script carries its whole part, so
@@ -1667,7 +1667,7 @@ fn endpoint() -> String {
         return link;
     }
     if let Some(host) = &tenant::current().public_host {
-        return format!("https://{host}/mcp");
+        return format!("{host}/mcp");
     }
     #[cfg(not(target_os = "emscripten"))]
     return format!("http://127.0.0.1:{}/mcp", crate::http::port());
@@ -2824,6 +2824,12 @@ mod tests {
             Some("https://cad.example.test/api/exports/part.stl"),
             "the public host and the route, which the same bearer fetches"
         );
+
+        let plain_http = tenant::PublicHost::parse("http://127.0.0.1:4398").unwrap();
+        let c = tenant::Tenant::hosted(tenant::TenantId::new("c").unwrap(), &tenants, &plain_http);
+        std::fs::create_dir_all(&c.root).unwrap();
+        let on_c = tenant::scope(Arc::new(c), export);
+        assert_eq!(on_c.url.as_deref(), Some("http://127.0.0.1:4398/api/exports/part.stl"), "a plain-HTTP host under test");
         let _ = std::fs::remove_dir_all(&tenants);
     }
 

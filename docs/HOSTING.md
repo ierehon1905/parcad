@@ -144,7 +144,11 @@ another. `parcad serve --hosted` requires `--tokens`, `--tenants-dir` and
 `--hosted`, because a kernel that evaluates anyone's script must never sit on
 a routable address unauthenticated. rmcp's host allow-list must name the
 public hostname, which is what `--public-host` does, or every request behind
-the tunnel is a 403 (docs/GOTCHAS.md).
+the tunnel is a 403 (docs/GOTCHAS.md). The flag takes the host with an
+optional port and an optional scheme, `https://` when none is written:
+`cad.example.com` behind a TLS front, `http://127.0.0.1:4398` for a host under
+test with none, and every `url` a reply carries starts with it; a path, a
+query or a trailing slash is refused naming the forms (`tenant::PublicHost`).
 
 Phase 2, for Claude's connector directory: `parcad serve` stays the resource
 server only. It validates an OAuth access token (a JWT against the issuer's

@@ -242,7 +242,8 @@ const SERVE_USAGE: &str = "usage: parcad serve [--port N] [--bind ADDR]\n\
   --hosted           one server for many accounts, each behind a bearer token: no UI, no editor\n\
   --tokens FILE      the tokens file; `parcad token new <tenant-id> --tokens FILE` adds a line\n\
   --tenants-dir DIR  where each account's parts live, DIR/<tenant-id>\n\
-  --public-host NAME the name clients reach the server by, behind whatever terminates TLS\n\
+  --public-host NAME where clients reach the server, behind whatever terminates TLS: cad.example.com\n\
+                     is https://cad.example.com; http://127.0.0.1:4398 for a plain-HTTP host under test\n\
   --builds N         builds in flight at once across every account, the machine's cores by default";
 
 /// What `parcad serve` was asked for, checked whole before anything binds.
@@ -256,7 +257,7 @@ struct Serve {
 struct HostedFlags {
     tokens: PathBuf,
     tenants: PathBuf,
-    public_host: String,
+    public_host: parcad_host::tenant::PublicHost,
 }
 
 fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
@@ -277,7 +278,9 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
             "--hosted" => hosted = true,
             "--tokens" => tokens = Some(PathBuf::from(value("a file")?)),
             "--tenants-dir" => tenants = Some(PathBuf::from(value("a folder")?)),
-            "--public-host" => public_host = Some(value("a host name")?),
+            "--public-host" => {
+                public_host = Some(parcad_host::tenant::PublicHost::parse(&value("a host name")?).map_err(anyhow::Error::msg)?)
+            }
             "-h" | "--help" => {
                 eprintln!("{SERVE_USAGE}");
                 std::process::exit(0);
@@ -342,7 +345,7 @@ fn serve(args: impl Iterator<Item = String>) -> Result<()> {
     let Some(flags) = options.hosted else {
         return host(options.address.port());
     };
-    let accounts = parcad_host::tenant::Accounts::read(&flags.tokens, &flags.tenants, &flags.public_host)
+    let accounts = parcad_host::tenant::Accounts::read(&flags.tokens, &flags.tenants, flags.public_host)
         .map_err(anyhow::Error::msg)?;
     std::fs::create_dir_all(&flags.tenants)
         .with_context(|| format!("creating the tenants folder {}", flags.tenants.display()))?;
@@ -834,7 +837,17 @@ mod tests {
         let flags = hosted.hosted.expect("hosted");
         assert_eq!(flags.tokens, PathBuf::from("/etc/parcad/tokens"));
         assert_eq!(flags.tenants, PathBuf::from("/data/tenants"));
-        assert_eq!(flags.public_host, "cad.example.test");
+        assert_eq!(flags.public_host.to_string(), "https://cad.example.test", "https unless written otherwise");
+        assert_eq!(flags.public_host.authority(), "cad.example.test");
+
+        let plain_http = options(&[
+            "--hosted", "--tokens", "t", "--tenants-dir", "d", "--public-host", "http://127.0.0.1:4398",
+        ])
+        .unwrap();
+        assert_eq!(plain_http.hosted.expect("hosted").public_host.to_string(), "http://127.0.0.1:4398");
+        let refused = options(&["--hosted", "--public-host", "https://cad.example.test/mcp"]).err().expect("refused").to_string();
+        assert!(refused.contains("it carries a path"), "{refused}");
+        assert!(refused.contains("http://127.0.0.1:4398"), "the refusal names the accepted forms: {refused}");
 
         assert_eq!(options(&["--builds", "3", "--port", "4242"]).unwrap().builds, 3);
         let none = options(&["--builds", "0", "--port", "4242"]).err().expect("refused").to_string();

@@ -941,7 +941,7 @@ pub fn keep_export(name: &str, bytes: &[u8]) -> Result<Kept, String> {
     let url = tenant
         .public_host
         .as_ref()
-        .map(|host| format!("https://{host}/api/exports/{}", percent_encoded(name)));
+        .map(|host| format!("{host}/api/exports/{}", percent_encoded(name)));
     Ok(Kept {
         path: tenant::shown(&file),
         url,
@@ -2123,6 +2123,11 @@ mod tests {
             assert_eq!(render.url.as_deref(), Some("https://cad.example.test/api/exports/renders/abc-iso.png"));
             let spaced = keep_export("my part (v2).stl", b"stl").unwrap();
             assert_eq!(spaced.url.as_deref(), Some("https://cad.example.test/api/exports/my%20part%20%28v2%29.stl"));
+            let plain_http = crate::tenant::PublicHost::parse("http://127.0.0.1:4398").unwrap();
+            let under_test = crate::tenant::Tenant::hosted(crate::tenant::TenantId::new("b").unwrap(), &tenants, &plain_http);
+            std::fs::create_dir_all(&under_test.root).unwrap();
+            let kept = crate::tenant::scope(std::sync::Arc::new(under_test), || keep_export("x.3mf", b"model").unwrap());
+            assert_eq!(kept.url.as_deref(), Some("http://127.0.0.1:4398/api/exports/x.3mf"), "the url carries the scheme given");
 
             let read = export_file("x.3mf").unwrap();
             assert_eq!((read.bytes.as_slice(), read.filename.as_str(), read.content_type), (&b"model"[..], "x.3mf", "model/3mf"));
@@ -2309,7 +2314,7 @@ mod tests {
                 kernel_timeout_max: patience,
                 ..crate::tenant::Limits::hosted()
             },
-            Some(crate::tenant::tests::PUBLIC_HOST.to_string()),
+            Some(crate::tenant::tests::public_host()),
         ));
         let started = Arc::new(Barrier::new(3));
         let release = Arc::new(Barrier::new(3));

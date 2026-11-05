@@ -166,6 +166,63 @@ impl Drop for Pass<'_> {
     }
 }
 
+/// Where a hosted server is reached from outside: `https://cad.example.com`
+/// behind a TLS front, or `http://127.0.0.1:4398` for a host under test. A
+/// reply's `url` starts with it; rmcp's host allow-list takes the authority alone.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicHost {
+    scheme: &'static str,
+    authority: http::uri::Authority,
+}
+
+impl PublicHost {
+    /// `--public-host`'s value: a host with an optional port, under `https://`
+    /// unless `http://` is written. Another scheme, a path, a query, a trailing
+    /// slash or a user name is refused naming the accepted forms.
+    pub fn parse(text: &str) -> Result<PublicHost, String> {
+        let (scheme, rest) = match text.split_once("://") {
+            None => ("https", text),
+            Some((scheme, rest)) => match scheme.to_ascii_lowercase().as_str() {
+                "https" => ("https", rest),
+                "http" => ("http", rest),
+                other => return Err(not_a_public_host(text, &format!("{other}:// is neither https:// nor http://"))),
+            },
+        };
+        let authority = match rest.parse::<http::uri::Authority>() {
+            Ok(authority) => authority,
+            Err(_) if rest.is_empty() => return Err(not_a_public_host(text, "it names no host")),
+            Err(_) if rest.ends_with('/') => return Err(not_a_public_host(text, "it ends in a slash")),
+            Err(_) if rest.contains('/') => return Err(not_a_public_host(text, "it carries a path")),
+            Err(_) if rest.contains('?') => return Err(not_a_public_host(text, "it carries a query")),
+            Err(e) => return Err(not_a_public_host(text, &e.to_string())),
+        };
+        let port = authority.port_u16().map_or_else(String::new, |port| format!(":{port}"));
+        if authority.port_u16() == Some(0) || format!("{}{port}", authority.host()) != authority.as_str() {
+            return Err(not_a_public_host(text, "only a host and a port from 1 to 65535 may follow the scheme"));
+        }
+        Ok(PublicHost { scheme, authority })
+    }
+
+    /// The host and port alone, as a `Host` header carries them.
+    pub fn authority(&self) -> &str {
+        self.authority.as_str()
+    }
+}
+
+impl std::fmt::Display for PublicHost {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}://{}", self.scheme, self.authority)
+    }
+}
+
+fn not_a_public_host(text: &str, why: &str) -> String {
+    format!(
+        "{text:?} is not a public host: {why}. Give the host clients reach the server by, with its port \
+         if it has one, under https:// unless http:// is written — cad.example.com, \
+         https://cad.example.com or http://127.0.0.1:4398 — with no path, query or trailing slash"
+    )
+}
+
 #[derive(Debug)]
 pub struct Tenant {
     pub id: TenantId,
@@ -175,10 +232,9 @@ pub struct Tenant {
     pub exports: PathBuf,
     pub mode: Mode,
     pub limits: Limits,
-    /// The name a hosted server is reached by behind its TLS front, which a
-    /// reply builds `https://<public_host>/...` on; a local user has the files
-    /// and needs no URL.
-    pub public_host: Option<String>,
+    /// Where a hosted server is reached from outside, which a reply's `url`
+    /// starts with; a local user has the files and needs no URL.
+    pub public_host: Option<PublicHost>,
     /// This account's builds in flight, capped by `limits.concurrent_builds`.
     pub builds: Gate,
 }
@@ -210,10 +266,10 @@ impl Tenant {
     /// folder under `tenants`. The folder is created and seeded by
     /// `projects::seed` the first time the account is resolved; exports go in
     /// `.exports` under it, dotted so the parts picker walks past them.
-    pub fn hosted(id: TenantId, tenants: &Path, public_host: &str) -> Tenant {
+    pub fn hosted(id: TenantId, tenants: &Path, public_host: &PublicHost) -> Tenant {
         let root = tenants.join(id.as_str());
         let exports = root.join(".exports");
-        Tenant::new(id, root, exports, Mode::Hosted, Limits::hosted(), Some(public_host.to_string()))
+        Tenant::new(id, root, exports, Mode::Hosted, Limits::hosted(), Some(public_host.clone()))
     }
 
     pub(crate) fn new(
@@ -222,7 +278,7 @@ impl Tenant {
         exports: PathBuf,
         mode: Mode,
         limits: Limits,
-        public_host: Option<String>,
+        public_host: Option<PublicHost>,
     ) -> Tenant {
         Tenant {
             id,
@@ -371,12 +427,12 @@ pub fn issue(tenant: TenantId, tokens: &Path) -> Result<String, String> {
 }
 
 /// The accounts a hosted parcad serves: every token's line, the folder each
-/// account's root is under, and the name they reach the server by. Read once,
-/// when the host starts.
+/// account's root is under, and where they reach the server. Read once, when
+/// the host starts.
 #[derive(Debug)]
 pub struct Accounts {
     tenants: PathBuf,
-    public_host: String,
+    public_host: PublicHost,
     tokens: Vec<TokenLine>,
     /// Each account's tenant, made and seeded on its first request, so its
     /// `Arc<Tenant>` and its folder exist once.
@@ -386,9 +442,9 @@ pub struct Accounts {
 impl Accounts {
     /// Read the tokens file: one `<tenant-id> <sha256 hex>` per line, blank
     /// lines and `#` comments allowed. A line that is neither refuses the
-    /// whole file, with its number. `public_host` is the name clients reach
-    /// the server by, behind whatever terminates TLS.
-    pub fn read(tokens: &Path, tenants: &Path, public_host: &str) -> Result<Accounts, String> {
+    /// whole file, with its number. `public_host` is where clients reach the
+    /// server, behind whatever terminates TLS.
+    pub fn read(tokens: &Path, tenants: &Path, public_host: PublicHost) -> Result<Accounts, String> {
         let text = std::fs::read_to_string(tokens).map_err(|e| {
             format!(
                 "reading the tokens file {}: {e}. Create it with `parcad token new <tenant-id> \
@@ -409,7 +465,7 @@ impl Accounts {
         }
         Ok(Accounts {
             tenants: tenants.to_path_buf(),
-            public_host: public_host.to_string(),
+            public_host,
             tokens: lines,
             resolved: Mutex::new(HashMap::new()),
         })
@@ -419,7 +475,7 @@ impl Accounts {
         self.tokens.len()
     }
 
-    pub fn public_host(&self) -> &str {
+    pub fn public_host(&self) -> &PublicHost {
         &self.public_host
     }
 
@@ -572,8 +628,12 @@ pub(crate) mod tests {
         root
     }
 
-    /// The name every hosted test tenant is reached by.
+    /// The name every hosted test tenant is reached by, under the default scheme.
     pub(crate) const PUBLIC_HOST: &str = "cad.example.test";
+
+    pub(crate) fn public_host() -> PublicHost {
+        PublicHost::parse(PUBLIC_HOST).expect("the test host parses")
+    }
 
     /// A local-mode tenant of its own on `root`: its own session and caches,
     /// so tests sharing a process never see each other's.
@@ -584,7 +644,7 @@ pub(crate) mod tests {
 
     /// A hosted tenant under `tenants`, its folder created as a resolve would.
     pub(crate) fn hosted_at(id: &str, tenants: &Path) -> Arc<Tenant> {
-        let tenant = Tenant::hosted(TenantId::new(id).expect("a test id"), tenants, PUBLIC_HOST);
+        let tenant = Tenant::hosted(TenantId::new(id).expect("a test id"), tenants, &public_host());
         std::fs::create_dir_all(&tenant.root).expect("the tenant's folder");
         Arc::new(tenant)
     }
@@ -621,11 +681,54 @@ pub(crate) mod tests {
 
     #[test]
     fn a_hosted_tenant_lives_in_its_own_folder_under_the_tenants_dir() {
-        let tenant = Tenant::hosted(TenantId::new("acme").unwrap(), Path::new("/srv/parcad/tenants"), "cad.example.com");
+        let reached = PublicHost::parse("cad.example.com").unwrap();
+        let tenant = Tenant::hosted(TenantId::new("acme").unwrap(), Path::new("/srv/parcad/tenants"), &reached);
         assert_eq!(tenant.root, Path::new("/srv/parcad/tenants/acme"));
         assert_eq!(tenant.exports, Path::new("/srv/parcad/tenants/acme/.exports"));
         assert_eq!(tenant.mode, Mode::Hosted);
-        assert_eq!(tenant.public_host.as_deref(), Some("cad.example.com"));
+        assert_eq!(tenant.public_host, Some(reached));
+    }
+
+    /// `--public-host` is a host with an optional port, `https://` unless
+    /// `http://` is written; a reply's `url` starts with the whole and rmcp's
+    /// allow-list gets the host and port alone.
+    #[test]
+    fn a_public_host_is_https_unless_http_is_written_and_nothing_but_a_host_and_port() {
+        for (given, shown, authority) in [
+            ("cad.example.com", "https://cad.example.com", "cad.example.com"),
+            ("https://cad.example.com", "https://cad.example.com", "cad.example.com"),
+            ("HTTPS://cad.example.com:8443", "https://cad.example.com:8443", "cad.example.com:8443"),
+            ("http://127.0.0.1:4398", "http://127.0.0.1:4398", "127.0.0.1:4398"),
+            ("http://[::1]:4398", "http://[::1]:4398", "[::1]:4398"),
+        ] {
+            let host = PublicHost::parse(given).expect(given);
+            assert_eq!(host.to_string(), shown, "{given}");
+            assert_eq!(host.authority(), authority, "{given}");
+        }
+        for (given, why) in [
+            ("ftp://cad.example.com", "ftp:// is neither https:// nor http://"),
+            ("https://", "it names no host"),
+            ("", "it names no host"),
+            ("cad.example.com/", "it ends in a slash"),
+            ("https://cad.example.com/", "it ends in a slash"),
+            ("https://cad.example.com/mcp", "it carries a path"),
+            ("cad.example.com?x=1", "it carries a query"),
+            ("cad.example.com#mcp", "invalid uri character"),
+            ("cad example.com", "invalid uri character"),
+            ("ops@cad.example.com", "only a host and a port from 1 to 65535"),
+            ("cad.example.com:", "only a host and a port from 1 to 65535"),
+            ("cad.example.com:mcp", "only a host and a port from 1 to 65535"),
+            ("cad.example.com:70000", "only a host and a port from 1 to 65535"),
+            ("cad.example.com:0", "only a host and a port from 1 to 65535"),
+        ] {
+            let refused = PublicHost::parse(given).expect_err(given);
+            assert!(refused.contains(why), "{given:?}: {refused}");
+            assert!(refused.starts_with(&format!("{given:?} is not a public host")), "{refused}");
+            assert!(
+                refused.contains("cad.example.com, https://cad.example.com or http://127.0.0.1:4398"),
+                "the refusal names the accepted forms: {refused}"
+            );
+        }
     }
 
     /// The blocking pool reuses threads, so a scope that leaked its tenant
@@ -694,14 +797,14 @@ pub(crate) mod tests {
             assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
         }
 
-        let accounts = Accounts::read(&file, &tenants, PUBLIC_HOST).unwrap();
+        let accounts = Accounts::read(&file, &tenants, public_host()).unwrap();
         assert_eq!(accounts.tokens(), 2);
-        assert_eq!(accounts.public_host(), PUBLIC_HOST);
+        assert_eq!(accounts.public_host().authority(), PUBLIC_HOST);
         let tenant = accounts.resolve(Some(&format!("Bearer {acme}"))).unwrap();
         assert_eq!(tenant.id.as_str(), "acme");
         assert_eq!(tenant.root, tenants.join("acme"));
         assert_eq!(tenant.mode, Mode::Hosted);
-        assert_eq!(tenant.public_host.as_deref(), Some(PUBLIC_HOST));
+        assert_eq!(tenant.public_host, Some(public_host()));
         assert!(tenant.root.is_dir(), "the first request makes the folder");
         assert!(!tenant.root.join("jsconfig.json").exists(), "and seeds no editor declarations");
         let again = accounts.resolve(Some(&format!("bearer  {acme} "))).unwrap();
@@ -715,7 +818,7 @@ pub(crate) mod tests {
         let dir = fresh_root("tokens");
         let file = dir.join("tokens");
         let acme = issue(TenantId::new("acme").unwrap(), &file).unwrap();
-        let accounts = Accounts::read(&file, &dir.join("tenants"), PUBLIC_HOST).unwrap();
+        let accounts = Accounts::read(&file, &dir.join("tenants"), public_host()).unwrap();
 
         assert_eq!(accounts.resolve(None).map(|t| t.id.clone()), Err(Refused::NoToken));
         let message = Refused::NoToken.message();
@@ -740,17 +843,17 @@ pub(crate) mod tests {
         assert_eq!(TokenLine::parse(&line.to_string()).unwrap(), line, "a line round-trips");
 
         std::fs::write(&file, format!("# ops\n\n{line}\n")).unwrap();
-        assert_eq!(Accounts::read(&file, &dir, PUBLIC_HOST).unwrap().tokens(), 1);
+        assert_eq!(Accounts::read(&file, &dir, public_host()).unwrap().tokens(), 1);
 
         std::fs::write(&file, format!("# ops\n\nacme not-a-hash\n{line}\n")).unwrap();
-        let refused = Accounts::read(&file, &dir, PUBLIC_HOST).unwrap_err();
+        let refused = Accounts::read(&file, &dir, public_host()).unwrap_err();
         assert!(refused.contains("tokens:3:"), "the line is numbered: {refused}");
         assert!(refused.contains("64 hex digits"), "{refused}");
 
         std::fs::write(&file, "Acme 00\n").unwrap();
-        assert!(Accounts::read(&file, &dir, PUBLIC_HOST).unwrap_err().contains("not a tenant id"));
+        assert!(Accounts::read(&file, &dir, public_host()).unwrap_err().contains("not a tenant id"));
 
-        let missing = Accounts::read(&dir.join("nowhere"), &dir, PUBLIC_HOST).unwrap_err();
+        let missing = Accounts::read(&dir.join("nowhere"), &dir, public_host()).unwrap_err();
         assert!(missing.contains("parcad token new"), "the refusal names the command: {missing}");
         let _ = std::fs::remove_dir_all(&dir);
     }

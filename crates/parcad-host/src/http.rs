@@ -90,7 +90,7 @@ pub async fn serve(address: SocketAddr, assets: Arc<dyn Assets>, accounts: Optio
     let announcement = match &accounts {
         None => format!("parcad: UI and API hosted on http://{address}, MCP at /mcp"),
         Some(accounts) => format!(
-            "parcad: hosted on http://{address} as https://{}/mcp for {} tokens; /mcp and /api need a bearer",
+            "parcad: hosted on http://{address} as {}/mcp for {} tokens; /mcp and /api need a bearer",
             accounts.public_host(),
             accounts.tokens()
         ),
@@ -128,7 +128,7 @@ fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router
     // Every `/api` route too, not `/mcp` alone: an agent service builds and
     // exports a part over them. No frontend, which could carry no bearer.
     let guarded = api()
-        .nest_service("/mcp", mcp::service(assets, Some(accounts.public_host())))
+        .nest_service("/mcp", mcp::service(assets, Some(accounts.public_host().authority())))
         .layer(axum::middleware::from_fn_with_state(Arc::new(accounts), authenticate));
     Router::new().route("/api/health", get(health)).merge(guarded)
 }
@@ -473,7 +473,7 @@ impl IntoResponse for Failed {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tenant::tests::PUBLIC_HOST;
+    use crate::tenant::tests::{public_host, PUBLIC_HOST};
     use crate::tenant::TenantId;
     use std::io::{Read, Write};
 
@@ -515,7 +515,7 @@ mod tests {
         let file = dir.join("tokens");
         let acme = tenant::issue(TenantId::new("acme").unwrap(), &file).unwrap();
         let bolt = tenant::issue(TenantId::new("bolt").unwrap(), &file).unwrap();
-        let accounts = tenant::Accounts::read(&file, &dir.join("tenants"), PUBLIC_HOST).unwrap();
+        let accounts = tenant::Accounts::read(&file, &dir.join("tenants"), public_host()).unwrap();
         let port = on_a_spare_port(Some(accounts));
         (dir, acme, bolt, port)
     }
@@ -679,6 +679,51 @@ mod tests {
         let on_bolt = over_mcp(&bolt, "cad.example.test");
         assert!(on_bolt.body.contains("\"lid\""), "{}", on_bolt.body);
         assert_eq!(over_mcp(&bolt, "elsewhere.example").status, 403, "rmcp answers only the names it was given");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A public host written with a scheme and a port feeds rmcp's allow-list
+    /// its host and port alone, so the `Host` a plain-HTTP front sends is
+    /// answered and the bare name is not.
+    #[test]
+    fn a_public_host_with_a_port_is_allowed_by_its_host_and_port() {
+        let dir = crate::tenant::tests::fresh_root("hosted");
+        let file = dir.join("tokens");
+        let acme = tenant::issue(TenantId::new("acme").unwrap(), &file).unwrap();
+        let reached = tenant::PublicHost::parse("http://cad.example.test:8080").unwrap();
+        let accounts = tenant::Accounts::read(&file, &dir.join("tenants"), reached).unwrap();
+        let port = on_a_spare_port(Some(accounts));
+        let list_projects = |host: &str| {
+            let body = serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {
+                    "name": "list_projects", "arguments": {},
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                    },
+                },
+            })
+            .to_string();
+            exchange(
+                port,
+                "POST",
+                "/mcp",
+                &[
+                    ("Content-Type", "application/json"),
+                    ("Accept", "application/json, text/event-stream"),
+                    ("MCP-Protocol-Version", "2026-07-28"),
+                    ("Mcp-Method", "tools/call"),
+                    ("Mcp-Name", "list_projects"),
+                    ("Host", host),
+                    ("Authorization", &bearer(&acme)),
+                ],
+                &body,
+            )
+        };
+        let with_port = list_projects("cad.example.test:8080");
+        assert_eq!(with_port.status, 200, "{}", with_port.body);
+        assert_eq!(list_projects("cad.example.test").status, 403, "the port is part of what was allowed");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

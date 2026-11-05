@@ -74,7 +74,9 @@ of the container, so a published port reaches it directly; publish it on
 `127.0.0.1` and put the TLS front (docs/HOSTING.md, Cloudflare Tunnel) in
 front of that. `PARCAD_PUBLIC_HOST` is the name clients use through that
 front: rmcp answers a `Host` header only from the names it was given, so
-without it every request through the proxy is a 403 (docs/GOTCHAS.md).
+without it every request through the proxy is a 403 (docs/GOTCHAS.md). Every
+`url` a reply carries starts with `https://` and that name; a container tried
+over plain HTTP says so as `http://127.0.0.1:4242`.
 
 MCP is at `/mcp` and the agent routes at `/api/*`, every one of them needing
 `Authorization: Bearer <token>`; a request without one is a 401 whose body
@@ -107,7 +109,7 @@ deletes stays deleted across restarts and upgrades. To seed nothing, run with
 
 | variable | image default | what |
 |---|---|---|
-| `PARCAD_PUBLIC_HOST` | unset, required | the name clients reach the server by; `--public-host` |
+| `PARCAD_PUBLIC_HOST` | unset, required | where clients reach the server: a host, `https://` unless `http://host:port` is written; `--public-host` |
 | `PARCAD_SEED_DIR` | `/opt/parcad/examples` | parts to seed into each new account; the CLI's own lookup is a macOS bundle's `../Resources/examples`, so the image names it |
 | `PARCAD_OCCT_WORKER` | unset | the worker binary; unset, it is the one beside `parcad` |
 | `PARCAD_OCCT_TIMEOUT` | unset (20 s) | seconds a kernel request may run before the worker is stopped, when a call asks for no `timeout_s`; raise it when emulated |
