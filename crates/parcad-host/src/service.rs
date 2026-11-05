@@ -907,8 +907,10 @@ fn media_type(filename: &str) -> &'static str {
 // `export_part` and the kept renders land in one folder per account, and a
 // name in it is the one handle a caller has: a local user opens the file by its
 // path, and a hosted account, whose files are on the server, fetches it back by
-// URL with the bearer that wrote it. Both go through here, so no caller chooses
-// a location and no account's name reaches another's folder.
+// URL — with the bearer that wrote it, or by the signed link the reply carries,
+// which a chat client showing a `markdown` line fetches with no token. Both go
+// through here, so no caller chooses a location and no account's name reaches
+// another's folder.
 
 /// A file kept in the account's export folder, as a reply names it.
 pub struct Kept {
@@ -917,8 +919,9 @@ pub struct Kept {
     /// The path as the account sees it: relative to its root on a hosted
     /// server, the path itself for a local user.
     pub path: String,
-    /// On a hosted server, where the same bearer fetches the file:
-    /// `https://<public host>/api/exports/<name>`. A local user has the file.
+    /// On a hosted server, a signed link that fetches the file without a
+    /// bearer until it expires: `https://<public host>/api/exports/<name>?t=…
+    /// &exp=…&sig=…` (`signing.rs`). A local user has the file.
     pub url: Option<String>,
 }
 
@@ -938,10 +941,13 @@ pub fn keep_export(name: &str, bytes: &[u8]) -> Result<Kept, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("creating the export folder {}: {e}", tenant::shown(dir)))?;
     std::fs::write(&file, bytes).map_err(|e| format!("writing {}: {e}", tenant::shown(&file)))?;
     let tenant = tenant::current();
-    let url = tenant
-        .public_host
-        .as_ref()
-        .map(|host| format!("{host}/api/exports/{}", percent_encoded(name)));
+    let url = tenant.links.as_ref().map(|links| {
+        links.signed(
+            &tenant.id,
+            &format!("/api/exports/{}", percent_encoded(name)),
+            crate::signing::unix_now(),
+        )
+    });
     Ok(Kept {
         path: tenant::shown(&file),
         url,
@@ -1901,9 +1907,10 @@ pub struct Capability {
 
 /// What hosting added, named once for every transport: accounts rooted in
 /// folders of their own, bearer tokens in front of `/mcp` and `/api`, exports
-/// fetched back from `/api/exports/<name>`, and per-account limits on kernel
-/// time, builds in flight and request size.
-pub const FEATURES: &[&str] = &["tenants", "bearer-auth", "export-download", "limits"];
+/// fetched back from `/api/exports/<name>`, every `url` a reply carries signed
+/// so it fetches without the bearer until it expires, and per-account limits
+/// on kernel time, builds in flight and request size.
+pub const FEATURES: &[&str] = &["tenants", "bearer-auth", "export-download", "signed-links", "limits"];
 
 pub fn capability(hosted: bool) -> Capability {
     Capability {
@@ -2107,27 +2114,44 @@ mod tests {
 
     /// A name is one plain file name, or one under `renders/`; a file kept
     /// under it reads back by that name with the type its extension says, and
-    /// a hosted account's reply carries the URL the same bearer fetches it by.
+    /// a hosted account's reply carries a URL signed for that account and
+    /// that path, which `markdown` points at.
     #[test]
     fn an_export_is_kept_by_a_plain_name_and_read_back_by_it() {
+        use crate::signing::tests::verified;
         let tenants = crate::tenant::tests::fresh_root("exports");
         let account = crate::tenant::tests::hosted_at("a", &tenants);
+        let links = crate::tenant::tests::links();
+        let a = Some(account.id.clone());
         crate::tenant::scope(account.clone(), || {
             let kept = keep_export("x.3mf", b"model").unwrap();
             assert_eq!(kept.file, account.exports.join("x.3mf"));
             assert_eq!(kept.path, ".exports/x.3mf");
-            assert_eq!(kept.url.as_deref(), Some("https://cad.example.test/api/exports/x.3mf"));
-            assert_eq!(kept.reference(), "https://cad.example.test/api/exports/x.3mf");
+            let url = kept.url.as_deref().expect("a hosted reply carries a url");
+            assert_eq!(verified(&links, url), ("https://cad.example.test/api/exports/x.3mf".to_string(), a.clone()));
+            assert_eq!(kept.reference(), url);
             let render = keep_export("renders/abc-iso.png", b"png").unwrap();
             assert_eq!(render.path, ".exports/renders/abc-iso.png");
-            assert_eq!(render.url.as_deref(), Some("https://cad.example.test/api/exports/renders/abc-iso.png"));
+            assert_eq!(
+                verified(&links, render.url.as_deref().unwrap()),
+                ("https://cad.example.test/api/exports/renders/abc-iso.png".to_string(), a.clone())
+            );
             let spaced = keep_export("my part (v2).stl", b"stl").unwrap();
-            assert_eq!(spaced.url.as_deref(), Some("https://cad.example.test/api/exports/my%20part%20%28v2%29.stl"));
+            assert_eq!(
+                verified(&links, spaced.url.as_deref().unwrap()),
+                ("https://cad.example.test/api/exports/my%20part%20%28v2%29.stl".to_string(), a.clone()),
+                "signed over the path as encoded"
+            );
             let plain_http = crate::tenant::PublicHost::parse("http://127.0.0.1:4398").unwrap();
-            let under_test = crate::tenant::Tenant::hosted(crate::tenant::TenantId::new("b").unwrap(), &tenants, &plain_http);
+            let plain_links = std::sync::Arc::new(crate::signing::tests::links(plain_http));
+            let under_test = crate::tenant::Tenant::hosted(crate::tenant::TenantId::new("b").unwrap(), &tenants, &plain_links);
             std::fs::create_dir_all(&under_test.root).unwrap();
             let kept = crate::tenant::scope(std::sync::Arc::new(under_test), || keep_export("x.3mf", b"model").unwrap());
-            assert_eq!(kept.url.as_deref(), Some("http://127.0.0.1:4398/api/exports/x.3mf"), "the url carries the scheme given");
+            assert_eq!(
+                verified(&plain_links, kept.url.as_deref().unwrap()),
+                ("http://127.0.0.1:4398/api/exports/x.3mf".to_string(), Some(crate::tenant::TenantId::new("b").unwrap())),
+                "the url carries the scheme given"
+            );
 
             let read = export_file("x.3mf").unwrap();
             assert_eq!((read.bytes.as_slice(), read.filename.as_str(), read.content_type), (&b"model"[..], "x.3mf", "model/3mf"));
@@ -2173,7 +2197,7 @@ mod tests {
         assert!(capability(true).hosted);
         assert_eq!(
             serde_json::to_value(capability(true)).unwrap(),
-            serde_json::json!({ "hosted": true, "features": ["tenants", "bearer-auth", "export-download", "limits"] })
+            serde_json::json!({ "hosted": true, "features": ["tenants", "bearer-auth", "export-download", "signed-links", "limits"] })
         );
     }
 
@@ -2314,7 +2338,7 @@ mod tests {
                 kernel_timeout_max: patience,
                 ..crate::tenant::Limits::hosted()
             },
-            Some(crate::tenant::tests::public_host()),
+            Some(Arc::new(crate::tenant::tests::links())),
         ));
         let started = Arc::new(Barrier::new(3));
         let release = Arc::new(Barrier::new(3));

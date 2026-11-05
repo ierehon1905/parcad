@@ -113,17 +113,20 @@ runs **one process with tenants inside it**, which is what landed:
   symlink their parts folders.
 - What an account writes, it fetches back by URL, since the file is on the
   server. `export_part`'s reply and every render in an `evaluate_part` reply
-  carry `url`: `https://<public-host>/api/exports/<name>`, `renders/<name>`
-  for a view, which the same bearer `GET`s for the bytes under the file's
-  media type; a `markdown` line names that URL, the only form a remote client
-  can show. A name is one plain file name, or one under `renders/`, held to
-  the rule a project path's segments obey (`projects::not_a_name`), and
-  another account's name is a 404 saying `export_part` writes one. Local
-  replies are unchanged: `path` is the file, and there is no `url`. The MCP
-  instructions a hosted client reads say the same in place of the desktop's
-  screen paragraph, which would send a model to `open_project` on a host with
-  no window; whether a model reads the hosted text is unmeasured, since
-  `field/run-case.sh` writes a client config with no bearer.
+  carry `url`: `https://<public-host>/api/exports/<name>?t=<tenant
+  id>&exp=<unix seconds>&sig=<signature>`, `renders/<name>` for a view, which
+  `GET`s the bytes under the file's media type with no bearer at all until
+  `exp`; a `markdown` line names that URL, the only form a remote client can
+  show. The bare path, `/api/exports/<name>` with no query, still answers the
+  bearer that wrote the file. A name is one plain file name, or one under
+  `renders/`, held to the rule a project path's segments obey
+  (`projects::not_a_name`), and another account's name is a 404 saying
+  `export_part` writes one. Local replies are unchanged: `path` is the file,
+  and there is no `url`. The MCP instructions a hosted client reads say the
+  same in place of the desktop's screen paragraph, which would send a model to
+  `open_project` on a host with no window; whether a model reads the hosted
+  text is unmeasured, since `field/run-case.sh` writes a client config with no
+  bearer.
 - Limits per tenant, defaults being today's for `local`: the kernel timeout a
   call may ask for, the script backstop, concurrent builds (two per tenant and
   one global cap of the box's cores, `--builds N`, since the pool itself caps
@@ -149,6 +152,43 @@ optional port and an optional scheme, `https://` when none is written:
 `cad.example.com` behind a TLS front, `http://127.0.0.1:4398` for a host under
 test with none, and every `url` a reply carries starts with it; a path, a
 query or a trailing slash is refused naming the forms (`tenant::PublicHost`).
+
+**Signed links.** A hosted field run found what a bearer-only export route
+does to the user: the model pastes `![iso view](https://host/api/exports/
+renders/….png)`, the chat client fetches that image with no token, and the
+user sees a broken picture. So every `url` a hosted reply carries is signed
+and expires (`signing.rs`): its query is `t=<tenant id>&exp=<unix
+seconds>&sig=<base64url of HMAC-SHA256(secret, "<tenant id>\n<path>\n<exp>")>`,
+the path being the request path exactly as the route sees it, percent-encoded.
+The middleware takes a request to `/api/exports/` that carries `sig` as a
+link: it checks the signature in constant time, the expiry beside it, that the
+account is one some token still opens, and attaches that account the way a
+bearer would, folder made and seeded on first use. Anything wrong with the
+link — expired, altered, moved to another path or another account, a field
+missing — is one 403 saying the link is no longer valid and to export again,
+or evaluate with views, for a fresh one. A signed query on any other route is
+a request with no bearer, 401. The bare path still answers the bearer, which
+is how the phone app's agent fetches.
+
+What a link reveals: whoever holds it fetches that one file until `exp`, and
+nothing else — not another export, not the account's parts. The tenant id is
+in the link, since the signature is over it; an id is a folder name, not a
+secret, but a user who pastes a link into a public place has named their
+account. Links hold for 24 hours unless `--link-lifetime <seconds>` on
+`parcad serve` says otherwise; the lifetime is in the refusal, so a model that
+hits a stale link knows how long a fresh one lasts.
+
+The secret is 32 bytes from the operating system, made on the first hosted
+start, readable by its owner only, and read on every later start; it is
+never logged or echoed. It lives beside the tokens file as `<tokens
+file>.secret` unless `--link-secret FILE` names another place — the container
+puts it on the data volume, since the tokens mount is read-only
+(`packaging/docker/README.md`). Rotating or deleting it invalidates every
+link handed out so far, at once: a fresh reply hands out fresh links, and
+nothing else needs to change. Revoking an account's tokens ends its links
+too, on the next restart, as every link is checked against the tokens file.
+`/api/health` and the `initialize` reply list `signed-links` among the
+features, so a client knows it may show a `url` to the user as it is.
 
 Phase 2, for Claude's connector directory: `parcad serve` stays the resource
 server only. It validates an OAuth access token (a JWT against the issuer's
@@ -219,7 +259,8 @@ a worker up). On the box:
 A client does not read the version to learn whether a host is hosted: a
 binary built from this branch still says 0.0.13. It reads `/api/health`,
 which carries `"hosted": true|false` and `"features": ["tenants",
-"bearer-auth", "export-download", "limits"]`, or the MCP `initialize` reply,
+"bearer-auth", "export-download", "signed-links", "limits"]`, or the MCP
+`initialize` reply,
 which carries the same block under `capabilities.experimental.parcad`; the
 list is `service::FEATURES`, named once for both transports, and `hosted`
 says whether this process runs as one server for many accounts.

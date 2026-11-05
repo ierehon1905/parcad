@@ -244,6 +244,9 @@ const SERVE_USAGE: &str = "usage: parcad serve [--port N] [--bind ADDR]\n\
   --tenants-dir DIR  where each account's parts live, DIR/<tenant-id>\n\
   --public-host NAME where clients reach the server, behind whatever terminates TLS: cad.example.com\n\
                      is https://cad.example.com; http://127.0.0.1:4398 for a plain-HTTP host under test\n\
+  --link-lifetime N  seconds a reply's url fetches its file with no bearer, 86400 (24 h)\n\
+  --link-secret FILE what signs those urls: 32 random bytes, made on the first start; the tokens\n\
+                     file's name plus .secret unless given. A new secret ends every link handed out\n\
   --builds N         builds in flight at once across every account, the machine's cores by default";
 
 /// What `parcad serve` was asked for, checked whole before anything binds.
@@ -258,6 +261,8 @@ struct HostedFlags {
     tokens: PathBuf,
     tenants: PathBuf,
     public_host: parcad_host::tenant::PublicHost,
+    link_secret: PathBuf,
+    link_lifetime: std::time::Duration,
 }
 
 fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
@@ -268,6 +273,8 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
     let mut tokens = None;
     let mut tenants = None;
     let mut public_host = None;
+    let mut link_secret = None;
+    let mut link_lifetime = None;
     let mut args = args;
     while let Some(arg) = args.next() {
         let mut value = |what: &str| args.next().with_context(|| format!("{arg} needs {what}"));
@@ -280,6 +287,14 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
             "--tenants-dir" => tenants = Some(PathBuf::from(value("a folder")?)),
             "--public-host" => {
                 public_host = Some(parcad_host::tenant::PublicHost::parse(&value("a host name")?).map_err(anyhow::Error::msg)?)
+            }
+            "--link-secret" => link_secret = Some(PathBuf::from(value("a file")?)),
+            "--link-lifetime" => {
+                let seconds: u64 = value("a count of seconds")?.parse().context("--link-lifetime must be a count of seconds")?;
+                if seconds == 0 {
+                    anyhow::bail!("--link-lifetime must be at least 1 second, or every link would be expired as it is handed out");
+                }
+                link_lifetime = Some(std::time::Duration::from_secs(seconds));
             }
             "-h" | "--help" => {
                 eprintln!("{SERVE_USAGE}");
@@ -299,8 +314,8 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
                  add --hosted with --tokens FILE and --tenants-dir DIR, or leave --bind at 127.0.0.1"
             );
         }
-        if tokens.is_some() || tenants.is_some() || public_host.is_some() {
-            anyhow::bail!("--tokens, --tenants-dir and --public-host are read only with --hosted");
+        if tokens.is_some() || tenants.is_some() || public_host.is_some() || link_secret.is_some() || link_lifetime.is_some() {
+            anyhow::bail!("--tokens, --tenants-dir, --public-host, --link-secret and --link-lifetime are read only with --hosted");
         }
         return Ok(Serve {
             address,
@@ -313,6 +328,8 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
             address,
             builds,
             hosted: Some(HostedFlags {
+                link_secret: link_secret.unwrap_or_else(|| secret_beside(&tokens)),
+                link_lifetime: link_lifetime.unwrap_or(parcad_host::signing::Links::DEFAULT_LIFETIME),
                 tokens,
                 tenants,
                 public_host,
@@ -332,6 +349,14 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
     }
 }
 
+/// Where the link secret lives unless `--link-secret` says: the tokens file's
+/// whole name plus `.secret`, so `tokens.txt` gets `tokens.txt.secret`.
+fn secret_beside(tokens: &std::path::Path) -> PathBuf {
+    let mut name = tokens.as_os_str().to_owned();
+    name.push(".secret");
+    PathBuf::from(name)
+}
+
 /// The application without its window: seed the project folder, host the UI,
 /// the API and MCP on the port, and stay up until stopped.
 ///
@@ -345,16 +370,18 @@ fn serve(args: impl Iterator<Item = String>) -> Result<()> {
     let Some(flags) = options.hosted else {
         return host(options.address.port());
     };
-    let accounts = parcad_host::tenant::Accounts::read(&flags.tokens, &flags.tenants, flags.public_host)
-        .map_err(anyhow::Error::msg)?;
+    let secret = parcad_host::signing::Secret::load_or_create(&flags.link_secret).map_err(anyhow::Error::msg)?;
+    let links = parcad_host::signing::Links::new(flags.public_host, secret, flags.link_lifetime);
+    let accounts = parcad_host::tenant::Accounts::read(&flags.tokens, &flags.tenants, links).map_err(anyhow::Error::msg)?;
     std::fs::create_dir_all(&flags.tenants)
         .with_context(|| format!("creating the tenants folder {}", flags.tenants.display()))?;
     eprintln!(
-        "parcad: {} tokens from {}; accounts under {}; {} builds at once",
+        "parcad: {} tokens from {}; accounts under {}; {} builds at once; links signed with {}",
         accounts.tokens(),
         flags.tokens.display(),
         flags.tenants.display(),
-        options.builds
+        options.builds,
+        flags.link_secret.display()
     );
     parcad_host::tenant::require();
     listen(options.address, Some(accounts))
@@ -826,6 +853,8 @@ mod tests {
         assert!(!missing.contains("--tokens FILE"), "only what is missing is named: {missing}");
         let stray = options(&["--tokens", "t", "--port", "4242"]).err().expect("refused").to_string();
         assert!(stray.contains("only with --hosted"), "{stray}");
+        let stray = options(&["--link-lifetime", "60", "--port", "4242"]).err().expect("refused").to_string();
+        assert!(stray.contains("only with --hosted"), "{stray}");
 
         let hosted = options(&[
             "--hosted", "--bind", "0.0.0.0", "--port", "4242", "--tokens", "/etc/parcad/tokens",
@@ -839,12 +868,24 @@ mod tests {
         assert_eq!(flags.tenants, PathBuf::from("/data/tenants"));
         assert_eq!(flags.public_host.to_string(), "https://cad.example.test", "https unless written otherwise");
         assert_eq!(flags.public_host.authority(), "cad.example.test");
+        assert_eq!(flags.link_secret, PathBuf::from("/etc/parcad/tokens.secret"), "beside the tokens file");
+        assert_eq!(flags.link_lifetime, std::time::Duration::from_secs(86_400), "a day");
 
         let plain_http = options(&[
             "--hosted", "--tokens", "t", "--tenants-dir", "d", "--public-host", "http://127.0.0.1:4398",
+            "--link-secret", "/data/link-secret", "--link-lifetime", "3600",
         ])
-        .unwrap();
-        assert_eq!(plain_http.hosted.expect("hosted").public_host.to_string(), "http://127.0.0.1:4398");
+        .unwrap()
+        .hosted
+        .expect("hosted");
+        assert_eq!(plain_http.public_host.to_string(), "http://127.0.0.1:4398");
+        assert_eq!(plain_http.link_secret, PathBuf::from("/data/link-secret"));
+        assert_eq!(plain_http.link_lifetime, std::time::Duration::from_secs(3600));
+        let never = options(&["--hosted", "--tokens", "t", "--tenants-dir", "d", "--public-host", "h", "--link-lifetime", "0"])
+            .err()
+            .expect("refused")
+            .to_string();
+        assert!(never.contains("at least 1 second"), "{never}");
         let refused = options(&["--hosted", "--public-host", "https://cad.example.test/mcp"]).err().expect("refused").to_string();
         assert!(refused.contains("it carries a path"), "{refused}");
         assert!(refused.contains("http://127.0.0.1:4398"), "the refusal names the accepted forms: {refused}");

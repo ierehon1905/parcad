@@ -908,8 +908,9 @@ pub struct RenderedView {
     /// attach. Set by the transport that kept it; the pixels ride inline too.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    /// On a hosted parcad, where the account fetches that PNG with its bearer;
-    /// `markdown` then points here. Absent on a machine of your own.
+    /// On a hosted parcad, a signed link that fetches that PNG with no token
+    /// until it expires; `markdown` then points here. Absent on a machine of
+    /// your own.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     /// The file as a Markdown image, to paste into a reply: `url` where there

@@ -5,7 +5,8 @@
 //! as they have always been. A hosted `parcad serve` has one per account,
 //! rooted at `<tenants dir>/<id>`, and a request's tenant is the one the host
 //! that authenticated it attached to the request: [`Accounts`] turns the
-//! request's bearer token into it, from a file of token hashes, and makes the
+//! request's bearer token into it, from a file of token hashes — or, on the
+//! export route alone, a signed link's query (`signing.rs`) — and makes the
 //! account's folder on its first request.
 //!
 //! The tenant is ambient. [`current`] answers from the request's task, or from
@@ -22,6 +23,7 @@
 //! falling through to `local`, which would put one account's files in the
 //! operator's own folder.
 
+use crate::signing::{LinkQuery, Links};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::future::Future;
@@ -232,9 +234,9 @@ pub struct Tenant {
     pub exports: PathBuf,
     pub mode: Mode,
     pub limits: Limits,
-    /// Where a hosted server is reached from outside, which a reply's `url`
-    /// starts with; a local user has the files and needs no URL.
-    pub public_host: Option<PublicHost>,
+    /// On a hosted server, where it is reached from outside and how a reply's
+    /// `url` is signed; a local user has the files and needs no URL.
+    pub links: Option<Arc<Links>>,
     /// This account's builds in flight, capped by `limits.concurrent_builds`.
     pub builds: Gate,
 }
@@ -262,14 +264,15 @@ impl Tenant {
         )
     }
 
-    /// One account on a server reached as `public_host`, rooted in its own
-    /// folder under `tenants`. The folder is created and seeded by
-    /// `projects::seed` the first time the account is resolved; exports go in
-    /// `.exports` under it, dotted so the parts picker walks past them.
-    pub fn hosted(id: TenantId, tenants: &Path, public_host: &PublicHost) -> Tenant {
+    /// One account on a server whose replies link out through `links`,
+    /// rooted in its own folder under `tenants`. The folder is created and
+    /// seeded by `projects::seed` the first time the account is resolved;
+    /// exports go in `.exports` under it, dotted so the parts picker walks
+    /// past them.
+    pub fn hosted(id: TenantId, tenants: &Path, links: &Arc<Links>) -> Tenant {
         let root = tenants.join(id.as_str());
         let exports = root.join(".exports");
-        Tenant::new(id, root, exports, Mode::Hosted, Limits::hosted(), Some(public_host.clone()))
+        Tenant::new(id, root, exports, Mode::Hosted, Limits::hosted(), Some(links.clone()))
     }
 
     pub(crate) fn new(
@@ -278,7 +281,7 @@ impl Tenant {
         exports: PathBuf,
         mode: Mode,
         limits: Limits,
-        public_host: Option<PublicHost>,
+        links: Option<Arc<Links>>,
     ) -> Tenant {
         Tenant {
             id,
@@ -286,7 +289,7 @@ impl Tenant {
             exports,
             mode,
             limits,
-            public_host,
+            links,
             builds: Gate::new(limits.concurrent_builds),
         }
     }
@@ -331,6 +334,9 @@ pub enum Refused {
     NoToken,
     /// It carried one, and the token matches no line of the tokens file.
     Unknown,
+    /// It carried a signed link whose signature, expiry, path or account is
+    /// not what this host signed; `good_for` is how long a fresh one holds.
+    StaleLink { good_for: Duration },
     /// The token is good, and the account's folder could not be made ready.
     Unready(String),
 }
@@ -345,6 +351,13 @@ impl Refused {
             Refused::Unknown => "the token was not recognised; it may have been revoked — ask \
                  the server's operator for a new one"
                 .to_string(),
+            Refused::StaleLink { good_for } => format!(
+                "this link is no longer valid: a link fetches one file for {} from the reply that \
+                 carried it, and this one has expired or was altered. Export the part again, or \
+                 evaluate it with views, for a fresh link; the bearer that wrote the file still \
+                 fetches it at the bare path.",
+                crate::signing::shown(*good_for)
+            ),
             Refused::Unready(why) => why.clone(),
         }
     }
@@ -427,12 +440,12 @@ pub fn issue(tenant: TenantId, tokens: &Path) -> Result<String, String> {
 }
 
 /// The accounts a hosted parcad serves: every token's line, the folder each
-/// account's root is under, and where they reach the server. Read once, when
-/// the host starts.
+/// account's root is under, and how the links their replies carry are made.
+/// Read once, when the host starts.
 #[derive(Debug)]
 pub struct Accounts {
     tenants: PathBuf,
-    public_host: PublicHost,
+    links: Arc<Links>,
     tokens: Vec<TokenLine>,
     /// Each account's tenant, made and seeded on its first request, so its
     /// `Arc<Tenant>` and its folder exist once.
@@ -442,9 +455,9 @@ pub struct Accounts {
 impl Accounts {
     /// Read the tokens file: one `<tenant-id> <sha256 hex>` per line, blank
     /// lines and `#` comments allowed. A line that is neither refuses the
-    /// whole file, with its number. `public_host` is where clients reach the
-    /// server, behind whatever terminates TLS.
-    pub fn read(tokens: &Path, tenants: &Path, public_host: PublicHost) -> Result<Accounts, String> {
+    /// whole file, with its number. `links` is where clients reach the server,
+    /// behind whatever terminates TLS, and what signs the URLs replies carry.
+    pub fn read(tokens: &Path, tenants: &Path, links: Links) -> Result<Accounts, String> {
         let text = std::fs::read_to_string(tokens).map_err(|e| {
             format!(
                 "reading the tokens file {}: {e}. Create it with `parcad token new <tenant-id> \
@@ -465,7 +478,7 @@ impl Accounts {
         }
         Ok(Accounts {
             tenants: tenants.to_path_buf(),
-            public_host,
+            links: Arc::new(links),
             tokens: lines,
             resolved: Mutex::new(HashMap::new()),
         })
@@ -475,8 +488,8 @@ impl Accounts {
         self.tokens.len()
     }
 
-    pub fn public_host(&self) -> &PublicHost {
-        &self.public_host
+    pub fn links(&self) -> &Links {
+        &self.links
     }
 
     /// The account an `Authorization` header opens. The presented token is
@@ -496,13 +509,34 @@ impl Accounts {
                 matched = Some(&line.tenant);
             }
         }
-        let id = matched.ok_or(Refused::Unknown)?;
+        self.open(matched.ok_or(Refused::Unknown)?)
+    }
 
+    /// The account a signed link opens: one this host signed for exactly
+    /// `path`, not yet expired at `now`, naming an account some token still
+    /// opens — so revoking an account's tokens ends its links too. Any other
+    /// link is one refusal, naming the fix.
+    pub fn resolve_link(&self, path: &str, query: &LinkQuery<'_>, now: u64) -> Result<Arc<Tenant>, Refused> {
+        let stale = || Refused::StaleLink {
+            good_for: self.links.lifetime(),
+        };
+        let named = self.links.verify(path, query, now).ok_or_else(stale)?;
+        let id = self
+            .tokens
+            .iter()
+            .map(|line| &line.tenant)
+            .find(|tenant| **tenant == named)
+            .ok_or_else(stale)?;
+        self.open(id)
+    }
+
+    /// The account's tenant, made and seeded on its first request.
+    fn open(&self, id: &TenantId) -> Result<Arc<Tenant>, Refused> {
         let mut resolved = self.resolved.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(tenant) = resolved.get(id) {
             return Ok(tenant.clone());
         }
-        let tenant = Arc::new(Tenant::hosted(id.clone(), &self.tenants, &self.public_host));
+        let tenant = Arc::new(Tenant::hosted(id.clone(), &self.tenants, &self.links));
         scope(tenant.clone(), crate::projects::seed).map_err(|e| {
             Refused::Unready(format!(
                 "preparing the folder for account {id}: {e}. The server's operator has to make \
@@ -635,6 +669,11 @@ pub(crate) mod tests {
         PublicHost::parse(PUBLIC_HOST).expect("the test host parses")
     }
 
+    /// That host, signing with the one test secret for the default day.
+    pub(crate) fn links() -> Links {
+        crate::signing::tests::links(public_host())
+    }
+
     /// A local-mode tenant of its own on `root`: its own session and caches,
     /// so tests sharing a process never see each other's.
     pub(crate) fn local_at(root: &Path) -> Arc<Tenant> {
@@ -644,7 +683,7 @@ pub(crate) mod tests {
 
     /// A hosted tenant under `tenants`, its folder created as a resolve would.
     pub(crate) fn hosted_at(id: &str, tenants: &Path) -> Arc<Tenant> {
-        let tenant = Tenant::hosted(TenantId::new(id).expect("a test id"), tenants, &public_host());
+        let tenant = Tenant::hosted(TenantId::new(id).expect("a test id"), tenants, &Arc::new(links()));
         std::fs::create_dir_all(&tenant.root).expect("the tenant's folder");
         Arc::new(tenant)
     }
@@ -676,17 +715,18 @@ pub(crate) mod tests {
             None => std::env::temp_dir().join("parcad-exports"),
         };
         assert_eq!(tenant.exports, expected_exports);
-        assert_eq!(tenant.public_host, None, "a local user's files need no URL");
+        assert!(tenant.links.is_none(), "a local user's files need no URL");
     }
 
     #[test]
     fn a_hosted_tenant_lives_in_its_own_folder_under_the_tenants_dir() {
         let reached = PublicHost::parse("cad.example.com").unwrap();
-        let tenant = Tenant::hosted(TenantId::new("acme").unwrap(), Path::new("/srv/parcad/tenants"), &reached);
+        let links = Arc::new(crate::signing::tests::links(reached.clone()));
+        let tenant = Tenant::hosted(TenantId::new("acme").unwrap(), Path::new("/srv/parcad/tenants"), &links);
         assert_eq!(tenant.root, Path::new("/srv/parcad/tenants/acme"));
         assert_eq!(tenant.exports, Path::new("/srv/parcad/tenants/acme/.exports"));
         assert_eq!(tenant.mode, Mode::Hosted);
-        assert_eq!(tenant.public_host, Some(reached));
+        assert_eq!(tenant.links.as_ref().map(|links| links.host()), Some(&reached));
     }
 
     /// `--public-host` is a host with an optional port, `https://` unless
@@ -797,14 +837,14 @@ pub(crate) mod tests {
             assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
         }
 
-        let accounts = Accounts::read(&file, &tenants, public_host()).unwrap();
+        let accounts = Accounts::read(&file, &tenants, links()).unwrap();
         assert_eq!(accounts.tokens(), 2);
-        assert_eq!(accounts.public_host().authority(), PUBLIC_HOST);
+        assert_eq!(accounts.links().host().authority(), PUBLIC_HOST);
         let tenant = accounts.resolve(Some(&format!("Bearer {acme}"))).unwrap();
         assert_eq!(tenant.id.as_str(), "acme");
         assert_eq!(tenant.root, tenants.join("acme"));
         assert_eq!(tenant.mode, Mode::Hosted);
-        assert_eq!(tenant.public_host, Some(public_host()));
+        assert_eq!(tenant.links.as_ref().map(|links| links.host()), Some(&public_host()));
         assert!(tenant.root.is_dir(), "the first request makes the folder");
         assert!(!tenant.root.join("jsconfig.json").exists(), "and seeds no editor declarations");
         let again = accounts.resolve(Some(&format!("bearer  {acme} "))).unwrap();
@@ -818,7 +858,7 @@ pub(crate) mod tests {
         let dir = fresh_root("tokens");
         let file = dir.join("tokens");
         let acme = issue(TenantId::new("acme").unwrap(), &file).unwrap();
-        let accounts = Accounts::read(&file, &dir.join("tenants"), public_host()).unwrap();
+        let accounts = Accounts::read(&file, &dir.join("tenants"), links()).unwrap();
 
         assert_eq!(accounts.resolve(None).map(|t| t.id.clone()), Err(Refused::NoToken));
         let message = Refused::NoToken.message();
@@ -835,6 +875,62 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A link this host signed opens its account the way its bearer does,
+    /// folder and all; a link for an account no token opens, or one altered
+    /// in any field, is stale, and the refusal names the fix.
+    #[test]
+    fn a_signed_link_opens_its_account_and_a_link_for_a_revoked_one_is_stale() {
+        let dir = fresh_root("links");
+        let file = dir.join("tokens");
+        let tenants = dir.join("tenants");
+        let acme = issue(TenantId::new("acme").unwrap(), &file).unwrap();
+        let accounts = Accounts::read(&file, &tenants, links()).unwrap();
+        let path = "/api/exports/renders/x.png";
+        let now = 1_700_000_000;
+        let fields = |url: &str| -> Vec<(String, String)> {
+            url.split_once('?')
+                .expect("a query")
+                .1
+                .split('&')
+                .map(|pair| pair.split_once('=').map(|(k, v)| (k.to_string(), v.to_string())).expect("a pair"))
+                .collect()
+        };
+        let signed = fields(&links().signed(&TenantId::new("acme").unwrap(), path, now));
+        let query = LinkQuery {
+            tenant: Some(&signed[0].1),
+            exp: Some(&signed[1].1),
+            sig: Some(&signed[2].1),
+        };
+
+        let tenant = accounts.resolve_link(path, &query, now).unwrap();
+        assert_eq!(tenant.id.as_str(), "acme");
+        assert!(tenant.root.is_dir(), "the first request by link makes the folder too");
+        let by_bearer = accounts.resolve(Some(&format!("Bearer {acme}"))).unwrap();
+        assert!(Arc::ptr_eq(&tenant, &by_bearer), "one Arc per account, however it is reached");
+
+        let stale = Refused::StaleLink {
+            good_for: Links::DEFAULT_LIFETIME,
+        };
+        let refused = |path: &str, query: LinkQuery<'_>, now: u64| accounts.resolve_link(path, &query, now).map(|t| t.id.clone());
+        assert_eq!(refused(path, query, now + 86_401), Err(stale.clone()), "expired");
+        assert_eq!(refused("/api/exports/renders/y.png", query, now), Err(stale.clone()), "another path");
+        assert_eq!(refused(path, LinkQuery { sig: Some("AAAA"), ..query }, now), Err(stale.clone()), "altered");
+        assert_eq!(refused(path, LinkQuery { tenant: None, ..query }, now), Err(stale.clone()), "no account");
+        let bolt = fields(&links().signed(&TenantId::new("bolt").unwrap(), path, now));
+        let no_token = LinkQuery {
+            tenant: Some(&bolt[0].1),
+            exp: Some(&bolt[1].1),
+            sig: Some(&bolt[2].1),
+        };
+        assert_eq!(refused(path, no_token, now), Err(stale.clone()), "signed for an account no token opens");
+        assert!(!tenants.join("bolt").exists(), "and no folder is made for it");
+        let message = stale.message();
+        assert!(message.starts_with("this link is no longer valid"), "{message}");
+        assert!(message.contains("for 24 h"), "{message}");
+        assert!(message.contains("Export the part again, or evaluate it with views"), "the fix is named: {message}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn the_tokens_file_allows_comments_and_refuses_a_malformed_line_by_number() {
         let dir = fresh_root("tokens");
@@ -843,17 +939,17 @@ pub(crate) mod tests {
         assert_eq!(TokenLine::parse(&line.to_string()).unwrap(), line, "a line round-trips");
 
         std::fs::write(&file, format!("# ops\n\n{line}\n")).unwrap();
-        assert_eq!(Accounts::read(&file, &dir, public_host()).unwrap().tokens(), 1);
+        assert_eq!(Accounts::read(&file, &dir, links()).unwrap().tokens(), 1);
 
         std::fs::write(&file, format!("# ops\n\nacme not-a-hash\n{line}\n")).unwrap();
-        let refused = Accounts::read(&file, &dir, public_host()).unwrap_err();
+        let refused = Accounts::read(&file, &dir, links()).unwrap_err();
         assert!(refused.contains("tokens:3:"), "the line is numbered: {refused}");
         assert!(refused.contains("64 hex digits"), "{refused}");
 
         std::fs::write(&file, "Acme 00\n").unwrap();
-        assert!(Accounts::read(&file, &dir, public_host()).unwrap_err().contains("not a tenant id"));
+        assert!(Accounts::read(&file, &dir, links()).unwrap_err().contains("not a tenant id"));
 
-        let missing = Accounts::read(&dir.join("nowhere"), &dir, public_host()).unwrap_err();
+        let missing = Accounts::read(&dir.join("nowhere"), &dir, links()).unwrap_err();
         assert!(missing.contains("parcad token new"), "the refusal names the command: {missing}");
         let _ = std::fs::remove_dir_all(&dir);
     }

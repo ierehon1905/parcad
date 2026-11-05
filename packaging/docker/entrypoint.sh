@@ -19,5 +19,8 @@ if [ ! -r "$tokens" ]; then
     exit 64
 fi
 
+# The link secret goes on the volume: the tokens mount is read-only, and a
+# secret that survives a restart is what keeps yesterday's links working.
 exec parcad serve --hosted --bind 0.0.0.0 --port 4242 \
-    --tokens "$tokens" --tenants-dir /data/tenants --public-host "$PARCAD_PUBLIC_HOST"
+    --tokens "$tokens" --tenants-dir /data/tenants --public-host "$PARCAD_PUBLIC_HOST" \
+    --link-secret /data/link-secret --link-lifetime "${PARCAD_LINK_LIFETIME:-86400}"

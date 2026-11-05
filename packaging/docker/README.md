@@ -61,7 +61,8 @@ The entrypoint runs
 
 ```
 parcad serve --hosted --bind 0.0.0.0 --port 4242 --tokens /etc/parcad/tokens \
-  --tenants-dir /data/tenants --public-host "$PARCAD_PUBLIC_HOST"
+  --tenants-dir /data/tenants --public-host "$PARCAD_PUBLIC_HOST" \
+  --link-secret /data/link-secret --link-lifetime "${PARCAD_LINK_LIFETIME:-86400}"
 ```
 
 and refuses to start without `PARCAD_PUBLIC_HOST`, without a readable tokens
@@ -78,9 +79,20 @@ without it every request through the proxy is a 403 (docs/GOTCHAS.md). Every
 `url` a reply carries starts with `https://` and that name; a container tried
 over plain HTTP says so as `http://127.0.0.1:4242`.
 
+Every such `url` is signed and expires (docs/HOSTING.md, "Signed links"):
+whoever holds it fetches that one file with no token for `PARCAD_LINK_LIFETIME`
+seconds, a day by default, which is how a picture a model pastes reaches the
+user's chat client. The secret that signs them is made on the first start at
+`/data/link-secret`, on the volume rather than beside the read-only tokens
+mount, and read on every later one; it is never printed. Delete it, or start
+with an empty volume, and every link handed out so far stops working at once
+— the next reply hands out new ones. Revoking an account's token ends its
+links too, from the next restart.
+
 MCP is at `/mcp` and the agent routes at `/api/*`, every one of them needing
 `Authorization: Bearer <token>`; a request without one is a 401 whose body
-says how to get a token or how to run parcad locally instead. `/api/health`
+says how to get a token or how to run parcad locally instead, and a stale or
+altered link is a 403 saying to export again for a fresh one. `/api/health`
 is open and is what the `HEALTHCHECK` asks. There is no UI: a browser cannot
 send a bearer, and the window has nothing to show a caller that is a service.
 `parcad call` carries no token, so it cannot reach a hosted host from inside
@@ -96,6 +108,7 @@ user (uid 10001):
 |---|---|
 | `/data/tenants/<id>` | one account's parts, one `.parcad` folder each; `part.js` inside is the only authoritative file |
 | `/data/tenants/<id>/.exports` | where that account's `export_part` and renders land; a reply shows the path relative to the account's folder |
+| `/data/link-secret` | 32 bytes that sign every `url` a reply carries, made on the first start, owner-readable only; deleting it ends every link handed out so far |
 
 A bind mount works if uid 10001 can write it (`--user` changes the uid).
 
@@ -110,13 +123,15 @@ deletes stays deleted across restarts and upgrades. To seed nothing, run with
 | variable | image default | what |
 |---|---|---|
 | `PARCAD_PUBLIC_HOST` | unset, required | where clients reach the server: a host, `https://` unless `http://host:port` is written; `--public-host` |
+| `PARCAD_LINK_LIFETIME` | `86400` | seconds a reply's `url` fetches its file with no bearer; `--link-lifetime` |
 | `PARCAD_SEED_DIR` | `/opt/parcad/examples` | parts to seed into each new account; the CLI's own lookup is a macOS bundle's `../Resources/examples`, so the image names it |
 | `PARCAD_OCCT_WORKER` | unset | the worker binary; unset, it is the one beside `parcad` |
 | `PARCAD_OCCT_TIMEOUT` | unset (20 s) | seconds a kernel request may run before the worker is stopped, when a call asks for no `timeout_s`; raise it when emulated |
 
-The tokens file is `/etc/parcad/tokens` and the accounts live under
-`/data/tenants`; both are fixed by the entrypoint rather than variables, so
-the volume and the mount mean the same thing in every container.
+The tokens file is `/etc/parcad/tokens`, the accounts live under
+`/data/tenants` and the link secret at `/data/link-secret`; all three are
+fixed by the entrypoint rather than variables, so the volume and the mount
+mean the same thing in every container.
 
 ## Measured
 

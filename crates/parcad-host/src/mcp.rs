@@ -704,8 +704,9 @@ pub struct Exported {
     /// The file as this account sees it: a path on this machine, or on a
     /// hosted parcad a path relative to the account's folder.
     path: String,
-    /// On a hosted parcad, where the same bearer fetches the file. Absent on
-    /// a machine of your own, where `path` is the file.
+    /// On a hosted parcad, a signed link that fetches the file with no token
+    /// until it expires; the bearer fetches the bare path. Absent on a machine
+    /// of your own, where `path` is the file.
     #[serde(skip_serializing_if = "Option::is_none")]
     url: Option<String>,
     bytes: usize,
@@ -1080,7 +1081,7 @@ impl Parcad {
     #[tool(
         name = "export_part",
         annotations(title = "Export a part to a file", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. On a hosted parcad the reply also carries `url`, where the same bearer fetches the file, and `path` is then relative to the account's folder. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part whose `print_check` fails — material under 0.3 mm, where nothing prints — or that carries its own `checks` and fails one is refused, with the finding or the check and its measurement named, and nothing is written: fix the part, or, when the user has decided the failure is acceptable, pass `allow_failing` with their reason, which the reply keeps. The reply opens with `print_check` and `checks`, the verdicts the file was written under; a `flagged` print_check writes the file and lists what to read."
+        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. On a hosted parcad the reply also carries `url`, a signed link that fetches the file with no token until it expires, and `path` is then relative to the account's folder. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part whose `print_check` fails — material under 0.3 mm, where nothing prints — or that carries its own `checks` and fails one is refused, with the finding or the check and its measurement named, and nothing is written: fix the part, or, when the user has decided the failure is acceptable, pass `allow_failing` with their reason, which the reply keeps. The reply opens with `print_check` and `checks`, the verdicts the file was written under; a `flagged` print_check writes the file and lists what to read."
     )]
     async fn export_part(
         &self,
@@ -1405,8 +1406,8 @@ name and open_project it. Edits are undoable; read before you write.";
 /// In place of [`SCREEN`] on a hosted account, which has no window: the client
 /// shows a part by fetching a URL.
 const HOSTED: &str = "This parcad is hosted and shares no screen with the user: to show a part, \
-paste a view's `markdown` line from evaluate_part or give export_part's `url`; both are fetched \
-with the bearer you call with.";
+paste a view's `markdown` line from evaluate_part or give export_part's `url`; each is a signed \
+link that fetches the file with no token until it expires.";
 
 /// The rule the coin-holder session lacked: 241 KB of script resent to change
 /// a few lines at a time (docs/COIN_HOLDER_REVIEW.md, B1).
@@ -1666,8 +1667,8 @@ fn endpoint() -> String {
     if let Some(link) = crate::page::link() {
         return link;
     }
-    if let Some(host) = &tenant::current().public_host {
-        return format!("{host}/mcp");
+    if let Some(links) = &tenant::current().links {
+        return format!("{}/mcp", links.host());
     }
     #[cfg(not(target_os = "emscripten"))]
     return format!("http://127.0.0.1:{}/mcp", crate::http::port());
@@ -2226,9 +2227,9 @@ mod tests {
     }
 
     /// A hosted account has no window, so its instructions name no screen
-    /// tool and say how a part reaches the user instead: by URL, with the
-    /// bearer. `initialize` picks the text off the capability the transport
-    /// built the handler with.
+    /// tool and say how a part reaches the user instead: by a signed URL that
+    /// needs no bearer. `initialize` picks the text off the capability the
+    /// transport built the handler with.
     #[test]
     fn a_hosted_client_is_told_to_show_a_part_by_url_and_not_on_a_screen() {
         let text = instructions(Screen::None);
@@ -2237,7 +2238,7 @@ mod tests {
             assert!(!text.contains(screen_tool), "{screen_tool:?} is in the hosted text");
         }
         assert!(text.contains("`markdown` line from evaluate_part") && text.contains("export_part's `url`"));
-        assert!(text.contains("bearer"));
+        assert!(text.contains("with no token until it expires"), "a pasted link needs no bearer: {text}");
 
         let hosted = Parcad::new().with_capability(service::capability(true)).get_info();
         assert_eq!(hosted.instructions.as_deref(), Some(text.as_str()));
@@ -2820,16 +2821,21 @@ mod tests {
         assert!(a.root.join(&on_a.path).is_file());
         assert!(b.root.join(&on_b.path).is_file());
         assert_eq!(
-            on_a.url.as_deref(),
-            Some("https://cad.example.test/api/exports/part.stl"),
-            "the public host and the route, which the same bearer fetches"
+            crate::signing::tests::verified(&tenant::tests::links(), on_a.url.as_deref().unwrap()),
+            ("https://cad.example.test/api/exports/part.stl".to_string(), Some(a.id.clone())),
+            "the public host and the route, signed for the account that wrote it"
         );
 
         let plain_http = tenant::PublicHost::parse("http://127.0.0.1:4398").unwrap();
-        let c = tenant::Tenant::hosted(tenant::TenantId::new("c").unwrap(), &tenants, &plain_http);
+        let plain_links = Arc::new(crate::signing::tests::links(plain_http));
+        let c = tenant::Tenant::hosted(tenant::TenantId::new("c").unwrap(), &tenants, &plain_links);
         std::fs::create_dir_all(&c.root).unwrap();
         let on_c = tenant::scope(Arc::new(c), export);
-        assert_eq!(on_c.url.as_deref(), Some("http://127.0.0.1:4398/api/exports/part.stl"), "a plain-HTTP host under test");
+        assert_eq!(
+            crate::signing::tests::verified(&plain_links, on_c.url.as_deref().unwrap()),
+            ("http://127.0.0.1:4398/api/exports/part.stl".to_string(), Some(tenant::TenantId::new("c").unwrap())),
+            "a plain-HTTP host under test"
+        );
         let _ = std::fs::remove_dir_all(&tenants);
     }
 
