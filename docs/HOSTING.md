@@ -38,8 +38,22 @@ work after the kernel (perception, the print check, meshing) adds a median
 **The pool caps nothing.** `parcad_occt::host` keeps two idle workers warm
 (`MAX_IDLE`) and otherwise spawns one worker per concurrent request: sixteen
 parallel requests are sixteen workers. The only knobs are `PARCAD_OCCT_TIMEOUT`
-(20 s) and `PARCAD_OCCT_WORKER`. A pooled worker's build cache only grows; the
-sweep's worker reached 1.97 GB.
+(20 s) and `PARCAD_OCCT_WORKER`.
+
+**What a worker keeps is the allocator's, not the cache's.** The sweep's
+`peak_worker_kb` is a running maximum: 1.97 GB is the peak *during*
+`walled-twisted-pleats` (1.73 GB with the build cache bypassed, so the cache
+adds 7 %), and `BuildCache` ages its entries out after two builds, leaving
+under 10 MB live after `pleated-shade`'s 1.4 GB peak. What stays resident is
+freed pages the C++ allocator has not returned: on glibc permanently, so a
+Linux worker sat at 665–1,872 MB through a sequence of ten heavy parts. Since
+`40de153c` the worker measures its own footprint after each reply
+(`crates/parcad-occt/src/resident.rs`), asks the allocator to return freed
+pages when it holds over 128 MB, and reports the number to the host, which
+retires a worker holding over 512 MB instead of pooling it. The same Linux
+sequence now reads 213, 214, 41, 65, 45, 246, 72, 94, 114, 119 MB, and the
+desktop editing loop's rebuild median is unchanged (70.5 → 70 ms on Linux,
+81 → 80 ms on macOS).
 
 **Concurrency, bracket (about 100 ms of kernel):** 1 request at a time gives
 5.5 builds/s at 180 ms; 4 give 15–20/s; 16 give 31–33/s at 400–500 ms with
@@ -56,8 +70,9 @@ than an M4 Pro core, so the median build is about 0.3–0.4 s, the p90 3–4 s a
 the p99 over 30 s. Two builds run at once; a third queues. Host plus two
 active workers is 0.3–0.8 GB in the common case, and one p99 part alone can
 fill 4 GB. So a hosted host must cap in-flight builds at two or three (the
-pool will not), keep the 20 s default timeout, give workers a memory limit
-near 1.5 GB, and recycle a worker whose RSS passes about 500 MB. With that,
+pool will not: `--builds`), keep the 20 s default timeout, and give the
+container a memory limit near 3 GB so one p99 build cannot take the box with
+it (workers past 512 MB are retired on their own). With that,
 one such box carries roughly 10–20 concurrently active agent users, each
 building a part every 10–30 s; without the cap, five or six simultaneous
 heavy builds swap or kill it.
