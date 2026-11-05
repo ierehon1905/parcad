@@ -208,5 +208,13 @@ a worker up). On the box:
 3. One long `evaluate_part` through the tunnel, to confirm the stream survives
    the proxy's timeouts before a connector is pointed at it.
 
+A client does not read the version to learn whether a host is hosted: a
+binary built from this branch still says 0.0.13. It reads `/api/health`,
+which carries `"hosted": true|false` and `"features": ["tenants",
+"bearer-auth", "export-download", "limits"]`, or the MCP `initialize` reply,
+which carries the same block under `capabilities.experimental.parcad`; the
+list is `service::FEATURES`, named once for both transports, and `hosted`
+says whether this process runs as one server for many accounts.
+
 Upgrading is building the image for the next release and restarting the
 container; the parts live on the volume.

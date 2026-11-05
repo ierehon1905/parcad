@@ -110,6 +110,8 @@ pub async fn serve(address: SocketAddr, assets: Arc<dyn Assets>, accounts: Optio
 }
 
 fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router {
+    let capability = service::capability(accounts.is_some());
+    let health = move || std::future::ready(health(capability));
     let Some(accounts) = accounts else {
         return Router::new()
             .route("/api/health", get(health))
@@ -216,13 +218,17 @@ impl IntoResponse for tenant::Refused {
     }
 }
 
-async fn health() -> impl IntoResponse {
+fn health(capability: service::Capability) -> Json<serde_json::Value> {
     Json(json!({
         "app": "parcad",
         "version": env!("CARGO_PKG_VERSION"),
         // The frontend reads this to confirm it is talking to a real host
         // before it decides it has a backend at all.
         "transport": "http",
+        // What a client switches on, since a binary built from a branch
+        // carries the last release's version.
+        "hosted": capability.hosted,
+        "features": capability.features,
     }))
 }
 
@@ -781,6 +787,52 @@ mod tests {
         assert_eq!(fetched.bytes, std::fs::read(dir.join("tenants/acme/.exports/x.3mf")).unwrap());
         assert_eq!(fetched.bytes.len(), written["bytes"].as_u64().unwrap() as usize);
         assert_eq!(exchange(port, "GET", route, &[("Authorization", &bearer(&bolt))], "").status, 404);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A client learns what this host can do from `/api/health` and from the
+    /// `initialize` reply, not from a version number a branch build does not move.
+    #[test]
+    fn health_and_initialize_say_whether_the_host_is_hosted_and_what_it_carries() {
+        let features = serde_json::json!(["tenants", "bearer-auth", "export-download", "limits"]);
+        let local = on_a_spare_port(None);
+        let health: serde_json::Value = serde_json::from_str(&exchange(local, "GET", "/api/health", &[], "").body).unwrap();
+        assert_eq!(health["hosted"], false, "{health}");
+        assert_eq!(health["features"], features, "{health}");
+        assert_eq!(health["transport"], "http");
+
+        let (dir, acme, _, port) = two_accounts();
+        let health: serde_json::Value = serde_json::from_str(&exchange(port, "GET", "/api/health", &[], "").body).unwrap();
+        assert_eq!(health["hosted"], true, "{health}");
+        assert_eq!(health["features"], features, "{health}");
+
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2026-07-28",
+                "capabilities": {},
+                "clientInfo": { "name": "phone-agent", "version": "0" },
+            },
+        })
+        .to_string();
+        let reply = exchange(
+            port,
+            "POST",
+            "/mcp",
+            &[
+                ("Content-Type", "application/json"),
+                ("Accept", "application/json, text/event-stream"),
+                ("Host", PUBLIC_HOST),
+                ("Authorization", &bearer(&acme)),
+            ],
+            &initialize,
+        );
+        assert_eq!(reply.status, 200, "{}", reply.body);
+        let reply: serde_json::Value = serde_json::from_str(&reply.body).unwrap();
+        let parcad = &reply["result"]["capabilities"]["experimental"]["parcad"];
+        assert_eq!(parcad["hosted"], true, "{reply}");
+        assert_eq!(parcad["features"], features, "{reply}");
+        assert_eq!(reply["result"]["serverInfo"]["name"], "parcad");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -39,6 +39,8 @@ pub struct Parcad {
     tool_router: ToolRouter<Self>,
     /// The frontend build, which carries the in-chat viewer's page.
     assets: Option<Arc<dyn Assets>>,
+    /// What this host can do beyond its version, told at `initialize`.
+    capability: service::Capability,
 }
 
 impl Parcad {
@@ -46,11 +48,17 @@ impl Parcad {
         Self {
             tool_router: surface(),
             assets: None,
+            capability: service::capability(false),
         }
     }
 
     pub fn with_assets(mut self, assets: Arc<dyn Assets>) -> Self {
         self.assets = Some(assets);
+        self
+    }
+
+    pub fn with_capability(mut self, capability: service::Capability) -> Self {
+        self.capability = capability;
         self
     }
 }
@@ -158,9 +166,10 @@ pub fn transport(assets: Arc<dyn Assets>, public_host: Option<&str>) -> Transpor
     if let Some(host) = public_host {
         config.allowed_hosts.push(host.to_string());
     }
+    let capability = service::capability(public_host.is_some());
 
     Transport::new(
-        move || Ok(Parcad::new().with_assets(assets.clone())),
+        move || Ok(Parcad::new().with_assets(assets.clone()).with_capability(capability)),
         Default::default(),
         config,
     )
@@ -1517,9 +1526,18 @@ impl ServerHandler for Parcad {
         server_info.name = "parcad".into();
         server_info.version = env!("CARGO_PKG_VERSION").into();
 
+        // What this host can do beyond its version, under the name a client
+        // switches on: `capabilities.experimental.parcad`.
+        let serde_json::Value::Object(capability) = serde_json::to_value(self.capability).unwrap_or_default() else {
+            unreachable!("a struct serialises as an object")
+        };
         let mut info = ServerInfo::default();
         info.protocol_version = ProtocolVersion::default();
-        info.capabilities = ServerCapabilities::builder().enable_tools().enable_resources().build();
+        info.capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()
+            .enable_experimental_with(std::collections::BTreeMap::from([("parcad".to_string(), capability)]))
+            .build();
         info.server_info = server_info;
         // What a model needs to know before its first call, and cannot
         // work out from the schemas: the unit rule, where the origin is,

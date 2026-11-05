@@ -1887,6 +1887,31 @@ pub fn mcp_status() -> crate::mcp::Status {
     crate::mcp::status()
 }
 
+/// What this host can do that its version number does not say, for a client
+/// to switch on: a binary built from a branch still carries the last release's
+/// number. `/api/health` and the MCP `initialize` reply both carry it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Capability {
+    /// Whether this process is one server for many accounts, each behind a
+    /// bearer, rather than one person's.
+    pub hosted: bool,
+    /// What this build carries, hosted or not: [`FEATURES`].
+    pub features: &'static [&'static str],
+}
+
+/// What hosting added, named once for every transport: accounts rooted in
+/// folders of their own, bearer tokens in front of `/mcp` and `/api`, exports
+/// fetched back from `/api/exports/<name>`, and per-account limits on kernel
+/// time, builds in flight and request size.
+pub const FEATURES: &[&str] = &["tenants", "bearer-auth", "export-download", "limits"];
+
+pub fn capability(hosted: bool) -> Capability {
+    Capability {
+        hosted,
+        features: FEATURES,
+    }
+}
+
 /// Lay a reference body against a part and measure the fit: both are scripts,
 /// so the reference is usually one line, `return box(355.7, 248.1, 16.8)
 /// .at(...)`. Refuses when either script does not build, with that script's
@@ -2134,6 +2159,17 @@ mod tests {
             assert_eq!(kept.reference(), kept.path);
         });
         let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    #[test]
+    fn the_capability_names_what_this_build_carries_once() {
+        assert_eq!(capability(false).features, FEATURES);
+        assert!(!capability(false).hosted);
+        assert!(capability(true).hosted);
+        assert_eq!(
+            serde_json::to_value(capability(true)).unwrap(),
+            serde_json::json!({ "hosted": true, "features": ["tenants", "bearer-auth", "export-download", "limits"] })
+        );
     }
 
     /// The door refuses naming every failing check with its measurement and
