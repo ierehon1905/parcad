@@ -7,7 +7,7 @@ set -eu
 tokens=/etc/parcad/tokens
 
 if ! parcad serve --help 2>&1 | grep -q -- '--hosted'; then
-    echo "parcad-entrypoint: $(parcad --version) has no 'parcad serve --hosted'; hosted mode arrived after 0.0.13. Build the image from a release that carries it: docker build --build-arg PARCAD_VERSION=<version> packaging/docker" >&2
+    echo "parcad-entrypoint: $(parcad --version) has no 'parcad serve --hosted'; hosted mode arrived in 0.0.14. Build the image from a release that carries it: docker build --build-arg PARCAD_VERSION=<version> packaging/docker" >&2
     exit 64
 fi
 if [ -z "${PARCAD_PUBLIC_HOST:-}" ]; then
@@ -21,6 +21,10 @@ fi
 
 # The link secret goes on the volume: the tokens mount is read-only, and a
 # secret that survives a restart is what keeps yesterday's links working.
+# PARCAD_BUILDS caps builds in flight across every account; unset, the host
+# takes the container's cores, which on a small box is more than its memory
+# carries (docs/HOSTING.md, "Sizing").
 exec parcad serve --hosted --bind 0.0.0.0 --port 4242 \
     --tokens "$tokens" --tenants-dir /data/tenants --public-host "$PARCAD_PUBLIC_HOST" \
-    --link-secret /data/link-secret --link-lifetime "${PARCAD_LINK_LIFETIME:-86400}"
+    --link-secret /data/link-secret --link-lifetime "${PARCAD_LINK_LIFETIME:-86400}" \
+    ${PARCAD_BUILDS:+--builds "$PARCAD_BUILDS"}

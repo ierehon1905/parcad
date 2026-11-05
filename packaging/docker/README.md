@@ -10,19 +10,31 @@ how the image is run.
 
 ## Build
 
+The published image is `ghcr.io/ierehon1905/parcad:<version>`, built by
+`publish.yml` when a release is published, from that release's archive. To
+build the same thing here:
+
 ```bash
 docker build --platform linux/amd64 -t parcad:0.0.14 --build-arg PARCAD_VERSION=0.0.14 packaging/docker
 ```
 
-`PARCAD_VERSION` is the release without its `v`. **Hosted mode arrived after
-0.0.13**, so the default build argument fetches a binary without it: the
-entrypoint then refuses to start, naming the release to build from, rather
-than running an unauthenticated host. Building the image from this checkout's
-own Linux binaries instead would mean a cold OpenCASCADE build inside an
-emulated container, which is not cheap, so the image stays on the published
-archive. Only `x86_64` is published for Linux; on Apple Silicon the image runs
-emulated, correct but about seven times slower in the kernel (the bracket:
-~1 s against 146 ms native).
+`PARCAD_VERSION` is the release without its `v`. **Hosted mode arrived in
+0.0.14**; an image built from an earlier release refuses to start, naming the
+release to build from, rather than running an unauthenticated host. Building
+the image from this checkout's own Linux binaries would mean a cold
+OpenCASCADE build inside an emulated container, so the image stays on the
+published archive — except to try a build before its release exists, which
+hands the Dockerfile an unpacked archive as a second build context:
+
+```bash
+docker build --platform linux/amd64 --build-arg PARCAD_SOURCE=local --build-arg PARCAD_VERSION=0.0.14 \
+  --build-context archive=/path/to/parcad-cli-x86_64-unknown-linux-gnu -t parcad:0.0.14 packaging/docker
+```
+
+The directory is laid out as `release.yml` stages it: `parcad`,
+`parcad-occt-worker`, `examples/`, `licenses/`. Only `x86_64` is published
+for Linux; on Apple Silicon the image runs emulated, correct but about seven
+times slower in the kernel (the bracket: ~1 s against 146 ms native).
 
 ## Tokens
 
@@ -54,8 +66,13 @@ the host reads the file once, at start. An id is one to 63 characters of
 docker run -d --name parcad -p 127.0.0.1:4242:4242 \
   -e PARCAD_PUBLIC_HOST=cad.example.com \
   -v parcad-data:/data -v /srv/parcad/tokens:/etc/parcad/tokens:ro \
-  parcad:0.0.14
+  ghcr.io/ierehon1905/parcad:0.0.14
 ```
+
+or, as a box runs it, `compose.yaml` beside this file: the same container
+with a 3 GB memory limit, two builds in flight, rotated logs and `restart:
+unless-stopped`, from `PARCAD_PUBLIC_HOST`, `PARCAD_VERSION` and
+`PARCAD_TOKENS` in the environment or a `.env` beside it.
 
 The entrypoint runs
 
@@ -68,7 +85,7 @@ parcad serve --hosted --bind 0.0.0.0 --port 4242 --tokens /etc/parcad/tokens \
 and refuses to start without `PARCAD_PUBLIC_HOST`, without a readable tokens
 file, or with a binary that has no `--hosted`. Each account may have two
 builds in flight and ask for 60 s of kernel per call; the host as a whole runs
-as many at once as the container has cores (`--builds N` changes it). Nothing
+as many at once as the container has cores, or `PARCAD_BUILDS`. Nothing
 limits one worker's memory, so give the container a limit — `--memory 3g`, or
 `mem_limit` in `compose.yaml` — sized from docs/HOSTING.md. The host binds every address
 of the container, so a published port reaches it directly; publish it on
@@ -96,8 +113,12 @@ altered link is a 403 saying to export again for a fresh one. `/api/health`
 is open and is what the `HEALTHCHECK` asks. There is no UI: a browser cannot
 send a bearer, and the window has nothing to show a caller that is a service.
 `parcad call` carries no token, so it cannot reach a hosted host from inside
-the container either; `curl -H "Authorization: Bearer $TOKEN"
-http://127.0.0.1:4242/mcp` with an MCP body is the shell's way in.
+the container either. `smoke.sh <base url> <token>` beside this file is the
+shell's way in: the health block, the MCP handshake, a build of the bracket,
+an export, and its signed url fetched back with no bearer, each step with its
+status and time — the check `publish.yml` runs on every image and the one to
+run against a box; `--hold N` adds a build that takes N seconds, which is how
+a proxy's response timeout is measured.
 
 ## Data
 
@@ -124,6 +145,7 @@ deletes stays deleted across restarts and upgrades. To seed nothing, run with
 |---|---|---|
 | `PARCAD_PUBLIC_HOST` | unset, required | where clients reach the server: a host, `https://` unless `http://host:port` is written; `--public-host` |
 | `PARCAD_LINK_LIFETIME` | `86400` | seconds a reply's `url` fetches its file with no bearer; `--link-lifetime` |
+| `PARCAD_BUILDS` | unset (the container's cores) | builds in flight across every account; `--builds`. 2 on a 2 vCPU / 4 GB box |
 | `PARCAD_SEED_DIR` | `/opt/parcad/examples` | parts to seed into each new account; the CLI's own lookup is a macOS bundle's `../Resources/examples`, so the image names it |
 | `PARCAD_OCCT_WORKER` | unset | the worker binary; unset, it is the one beside `parcad` |
 | `PARCAD_OCCT_TIMEOUT` | unset (20 s) | seconds a kernel request may run before the worker is stopped, when a call asks for no `timeout_s`; raise it when emulated |
@@ -135,17 +157,20 @@ mean the same thing in every container.
 
 ## Measured
 
-v0.0.13, Docker Desktop 28.0.4 on Apple Silicon, emulated amd64, before
-hosted mode existed, so with the then-current `parcad serve` behind a `socat`
-forwarder:
+2026-11-05, this branch's Linux x86_64 binaries at 0.0.14 in the image
+(`PARCAD_SOURCE=local`), Docker Desktop 28.0.4 on Apple Silicon, emulated
+amd64, hosted mode, `smoke.sh` on loopback:
 
 | | |
 |---|---|
-| image | 56 MB compressed, 217 MB on disk |
-| start to healthy | 5.4–7.0 s |
-| idle memory | 16 MiB before the first build; 90 MiB once the worker is up |
-| bracket, `kernel_ms` | 2953–3975 on the first build in a new container, 993–1130 after a restart, 146 native (same release, macOS arm64) |
+| image | 214 MB on disk (debian bookworm-slim 74 MB, the two binaries 63 MB, the seed parts) |
+| start to healthy | 0.5 s |
+| idle memory | 12 MiB before the first build; 85–108 MiB with a worker up and a part built |
+| bracket, `kernel_ms` | 956–1083 on the first build in a new container, 146 native (macOS arm64) |
+| `export_part` 3mf, 68,406 bytes, and its signed url fetched with no bearer | 0.04–0.07 s each |
 
-The bracket is CI's check of the archive: 22 faces, 55074.791 mm³. The hosted
-image has not been run: the release that carries `--hosted` is not published
-yet, and the entrypoint's refusal is the only path the current archive takes.
+The bracket is CI's check of the archive: 22 faces, 55072.58 mm³. Through a
+Cloudflare quick tunnel the same steps, and replies held 50 and 110 s, are in
+docs/HOSTING.md, "What was measured through a tunnel". The v0.0.13 figures
+this replaces (56 MB compressed, healthy in 5.4–7.0 s behind a `socat`
+forwarder) were of a host before hosted mode existed.

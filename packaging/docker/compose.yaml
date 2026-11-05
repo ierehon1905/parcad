@@ -1,22 +1,40 @@
+# The hosted server as it runs on a box: the published image, the parts on a
+# named volume, the tokens file beside this file, the port on loopback only
+# (the TLS front, cloudflared, is on the host). docs/HOSTING.md, "Deploying".
+#
+#   PARCAD_PUBLIC_HOST=cad.example.com docker compose up -d
+#
+# PARCAD_VERSION picks the image; PARCAD_TOKENS the tokens file (./tokens);
+# PARCAD_BUILDS the builds in flight across every account (2, for a 2 vCPU /
+# 4 GB box). To run a build of this checkout instead, build the image with
+# `docker build` as packaging/docker/README.md says and set PARCAD_IMAGE to it.
+name: parcad
+
 services:
   parcad:
-    build:
-      context: .
-      args:
-        PARCAD_VERSION: "0.0.13"
-    image: parcad:0.0.13
+    image: ${PARCAD_IMAGE:-ghcr.io/ierehon1905/parcad:${PARCAD_VERSION:-0.0.14}}
+    container_name: parcad
     platform: linux/amd64
     environment:
       PARCAD_PUBLIC_HOST: ${PARCAD_PUBLIC_HOST:?the name clients reach the server by, e.g. cad.example.com}
+      PARCAD_BUILDS: ${PARCAD_BUILDS:-2}
+      PARCAD_LINK_LIFETIME: ${PARCAD_LINK_LIFETIME:-86400}
     ports:
       - "127.0.0.1:4242:4242"
     volumes:
       - parcad-data:/data
       - ${PARCAD_TOKENS:-./tokens}:/etc/parcad/tokens:ro
     # The host caps builds in flight, not a worker's memory: this does, for all
-    # of them together. docs/HOSTING.md, "Sizing".
+    # of them together, and leaves the box 1 GB for itself and cloudflared.
+    # docs/HOSTING.md, "Sizing".
     mem_limit: 3g
+    memswap_limit: 3g
     restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
 
 volumes:
   parcad-data:
