@@ -1991,6 +1991,15 @@ defaults to loopback, and answers anything else with 403 "Host header is not
 allowed". The tab has no host name of its own, so `page.rs` builds every request
 as `http://localhost/mcp` with `Host: localhost`, whatever the relay received.
 
+Behind a tunnel or a reverse proxy the same check bites the other way: the
+`Host` the host sees is the public name, so every request through the proxy is
+that 403 while `curl` on the box works. `parcad serve --hosted` therefore
+requires `--public-host NAME` and adds it to the list — loopback stays on it,
+so the container's health check and a shell inside it still get through — and
+the same name is the `url` the MCP status reports. The end-to-end test in
+`http.rs` sends one request with a `Host` the list was not told and expects
+the 403, so a change to the list's defaults fails there rather than on a server.
+
 ### New page script against an old host module reads nonsense
 
 Under `vite --mode web`, rebuilding the host module while a page is open
@@ -2011,6 +2020,29 @@ left the main checkout's `parcad-host` compiling against the worktree's
 `parcad-occt` ("no `packet` in the root"). `cargo clean -p` the workspace
 crates afterwards, or give the worktree its own target directory and reuse only
 OpenCASCADE through `PARCAD_OCCT_PREBUILT`.
+
+## A hosted host: many accounts in one process
+
+### A task-local does not cross `spawn_blocking`, and rmcp spawns every handler
+
+The request's tenant is a tokio task-local that the auth middleware in
+`http.rs` sets around `next.run(request)`. Two things lose it. `spawn_blocking`
+runs on a thread with no task context, so a `blocking()` helper must capture
+`tenant::current()` first and re-enter it inside with `tenant::scope`, which
+both helpers do. rmcp serves every `/mcp` request on a task it spawns, so no
+task-local set by any middleware reaches a tool body: the tenant also rides on
+the request's extensions, and `Parcad::call_tool` reads it off the HTTP parts
+rmcp hands each handler and enters it itself. A new `spawn_blocking`, or a new
+`ServerHandler` method that reaches `service` without going through
+`call_tool`, is where this comes back.
+
+The symptom differs by mode, which is the trap. In a local process a request
+outside every scope falls through to `local` and nothing is wrong. In a hosted
+one (`tenant::require()`) `tenant::current()` panics: "a hosted request reached
+the service outside tenant::scoped/scope: wrap the spawn_blocking". That panic
+is deliberate — the alternative is one account's files in the operator's own
+folder — and because `require()` is process-wide, the test for it runs its
+panicking half in a child process.
 
 ## The editor does not check the length of an array
 

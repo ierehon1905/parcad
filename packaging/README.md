@@ -72,6 +72,27 @@ stops it once Claude Desktop has unpacked it has not been checked.
 `tools/release-mac.sh` builds the app and a DMG from source instead, notarises
 the DMG and staples both.
 
+## A hosted server
+
+Not a channel: the published Linux CLI archive, run as one host for many
+accounts.
+
+```bash
+parcad token new acme --tokens /srv/parcad/tokens      # prints the token once
+parcad serve --hosted --bind 0.0.0.0 --tokens /srv/parcad/tokens \
+  --tenants-dir /srv/parcad/tenants --public-host cad.example.com
+```
+
+Every request past `/api/health` needs `Authorization: Bearer <token>`; an
+account's parts live under `<tenants-dir>/<id>`, seeded on its first request;
+`--public-host` is the name clients reach the server by through whatever
+terminates TLS, and without it rmcp answers every request there with 403.
+`--builds N` caps builds in flight across every account, the machine's cores
+by default. `docker/` builds a container from the archive and its README says
+how it is run; docs/HOSTING.md says where, and why one process rather than one
+per account. The first release after 0.0.13 is the first that carries
+`--hosted`.
+
 ## On each release
 
 1. Bump the version everywhere; `packaging_manifests_carry_the_crate_version`
