@@ -376,16 +376,21 @@ pub fn start(setup: Setup) -> Result<(), String> {
     // One thread, and nothing else reads the environment while this runs.
     std::env::set_var("PARCAD_PROJECTS_DIR", &setup.projects_dir);
     std::env::set_var("PARCAD_EXPORT_DIR", &setup.export_dir);
-    match &setup.seed_dir {
-        Some(dir) => std::env::set_var("PARCAD_SEED_DIR", dir),
-        None => std::env::remove_var("PARCAD_SEED_DIR"),
-    }
+    host(setup.seed_dir.as_deref().map(std::path::Path::new), setup.preferred)
+}
+
+/// [`start`], in the folders the process already has.
+fn host(seed_dir: Option<&std::path::Path>, preferred: Option<String>) -> Result<(), String> {
     ACTIVE.with(|active| active.set(true));
-    PREFERRED.with(|preferred| *preferred.borrow_mut() = setup.preferred);
-    crate::projects::seed().map_err(|e| format!("seeding the parts into this browser: {e}"))?;
+    PREFERRED.with(|current| *current.borrow_mut() = preferred);
+    match seed_dir {
+        Some(dir) => crate::projects::seed_from(dir),
+        None => crate::projects::seed(),
+    }
+    .map_err(|e| format!("seeding the parts into this browser: {e}"))?;
     SESSIONS.with(|sessions| *sessions.borrow_mut() = Some(session::subscribe()));
     TRANSPORT
-        .with(|transport| *transport.borrow_mut() = Some(mcp::transport(Arc::new(PageAssets))));
+        .with(|transport| *transport.borrow_mut() = Some(mcp::transport(Arc::new(PageAssets), None)));
     Ok(())
 }
 
@@ -544,7 +549,16 @@ fn respond(id: u64, request: HttpIn, fresh: bool) -> Reply {
         .unwrap_or(true);
     if !noted {
         let closing = request.method.eq_ignore_ascii_case("DELETE");
-        let client = mcp::note_request(session_id.as_deref(), closing, request.body.as_bytes());
+        let client = match mcp::note_request(session_id.as_deref(), closing, request.body.as_bytes()) {
+            Ok(client) => client,
+            Err(refusal) => {
+                return Reply::Http(HttpOut {
+                    status: 404,
+                    headers: BTreeMap::new(),
+                    body: refusal,
+                })
+            }
+        };
         EVENTS.with(|events| events.borrow_mut().push(Event::Mcp));
         CALLS.with(|calls| {
             if let Some(call) = calls.borrow_mut().get_mut(&id) {
@@ -812,25 +826,16 @@ mod tests {
     use super::*;
     use parcad_occt::protocol::FaceRun;
 
-    /// A tab's host on this test thread, in a project folder of its own. The
-    /// folder and the session are process-wide, so this holds both their locks.
+    /// A tab's host on this test thread, as a tenant of its own in a project
+    /// folder of its own, with nothing to seed.
     fn in_tab<T>(work: impl FnOnce(&std::path::Path) -> T) -> T {
         crate::projects::tests::scoped(|root| {
             crate::session::tests::scoped(|| {
-                let exports = root.join(".exports");
                 let seeds = root.join(".no-seeds");
                 std::fs::create_dir_all(&seeds).unwrap();
-                start(Setup {
-                    projects_dir: root.to_string_lossy().into_owned(),
-                    seed_dir: Some(seeds.to_string_lossy().into_owned()),
-                    export_dir: exports.to_string_lossy().into_owned(),
-                    preferred: Some("bracket".into()),
-                })
-                .expect("the host starts");
+                host(Some(&seeds), Some("bracket".into())).expect("the host starts");
                 let out = work(root);
                 ACTIVE.with(|active| active.set(false));
-                std::env::remove_var("PARCAD_EXPORT_DIR");
-                std::env::remove_var("PARCAD_SEED_DIR");
                 out
             })
         })

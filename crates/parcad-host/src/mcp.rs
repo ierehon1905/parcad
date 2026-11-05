@@ -19,7 +19,7 @@
 //! Scripts arrive from a model and run in `script`'s sandbox, never in the
 //! webview. That is the precondition this server was blocked on.
 
-use crate::{arguments::Args, assets::Assets, projects, script, service, session};
+use crate::{arguments::Args, assets::Assets, projects, script, service, session, tenant};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
@@ -28,7 +28,6 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    path::PathBuf,
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
@@ -40,6 +39,8 @@ pub struct Parcad {
     tool_router: ToolRouter<Self>,
     /// The frontend build, which carries the in-chat viewer's page.
     assets: Option<Arc<dyn Assets>>,
+    /// What this host can do beyond its version, told at `initialize`.
+    capability: service::Capability,
 }
 
 impl Parcad {
@@ -47,11 +48,17 @@ impl Parcad {
         Self {
             tool_router: surface(),
             assets: None,
+            capability: service::capability(false),
         }
     }
 
     pub fn with_assets(mut self, assets: Arc<dyn Assets>) -> Self {
         self.assets = Some(assets);
+        self
+    }
+
+    pub fn with_capability(mut self, capability: service::Capability) -> Self {
+        self.capability = capability;
         self
     }
 }
@@ -143,19 +150,26 @@ pub type Transport = rmcp::transport::streamable_http_server::StreamableHttpServ
 >;
 
 /// The MCP endpoint as a tower service, before a host mounts it: on a socket
-/// by [`service`], or in a browser tab by `page.rs`.
+/// by [`service`], or in a browser tab by `page.rs`. `public_host` is the host
+/// and port a hosted server is reached by (`PublicHost::authority`), which rmcp
+/// must be told or it answers every request there with 403 (docs/GOTCHAS.md,
+/// "rmcp's HTTP service answers only a loopback `Host`").
 ///
 /// Stateless: each request builds its own handler. There is no session to keep
 /// because there is no document to keep — a script carries its whole part, so
 /// two calls cannot disagree about what is on screen.
-pub fn transport(assets: Arc<dyn Assets>) -> Transport {
+pub fn transport(assets: Arc<dyn Assets>, public_host: Option<&str>) -> Transport {
     let mut config = rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default();
     // A tool call answers once; there is nothing to stream, and a plain JSON
     // reply is far easier to drive from a shell when something is wrong.
     config.json_response = true;
+    if let Some(host) = public_host {
+        config.allowed_hosts.push(host.to_string());
+    }
+    let capability = service::capability(public_host.is_some());
 
     Transport::new(
-        move || Ok(Parcad::new().with_assets(assets.clone())),
+        move || Ok(Parcad::new().with_assets(assets.clone()).with_capability(capability)),
         Default::default(),
         config,
     )
@@ -163,8 +177,8 @@ pub fn transport(assets: Arc<dyn Assets>) -> Transport {
 
 /// The MCP endpoint, as a router to mount on the app's host.
 #[cfg(not(target_os = "emscripten"))]
-pub fn service(assets: Arc<dyn Assets>) -> axum::Router {
-    let transport = transport(assets);
+pub fn service(assets: Arc<dyn Assets>, public_host: Option<&str>) -> axum::Router {
+    let transport = transport(assets, public_host);
 
     // Wrapped so every request passes `record`, which is the only place that
     // knows an agent is there at all. The tool functions cannot report it: they
@@ -687,7 +701,14 @@ pub struct Exported {
     /// The reason the file was written over a failing verdict, as given.
     #[serde(skip_serializing_if = "Option::is_none")]
     allow_failing: Option<String>,
+    /// The file as this account sees it: a path on this machine, or on a
+    /// hosted parcad a path relative to the account's folder.
     path: String,
+    /// On a hosted parcad, a signed link that fetches the file with no token
+    /// until it expires; the bearer fetches the bare path. Absent on a machine
+    /// of your own, where `path` is the file.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
     bytes: usize,
     format: String,
     /// The part in the file, measured off the build that wrote it: size,
@@ -901,12 +922,12 @@ impl Parcad {
         &self,
         Parameters(Args(request)): Parameters<Args<ViewRequest>>,
     ) -> Result<rmcp::model::CallToolResult, ErrorData> {
-        let budget = budget(request.timeout_s);
         let viewed = blocking(move || {
+            let budget = service::budget(request.timeout_s);
             let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &[], None)?;
-            let built = script::build_within(&source.script, script_budget(request.timeout_s))?;
+            let built = script::build_within(&source.script, budget.script)?;
             let doc = service::parse_graph(built.graph.clone())?;
-            let evaluated = service::evaluate(&doc, budget).map_err(|e| built.locate(e))?;
+            let evaluated = service::evaluate(&doc, Some(budget.kernel)).map_err(|e| built.locate(e))?;
             let mut viewed = viewed(&evaluated)?;
             viewed["script_sha256"] = serde_json::json!(service::script_sha256(&source.script));
             Ok(viewed)
@@ -977,12 +998,12 @@ impl Parcad {
         &self,
         Parameters(Args(request)): Parameters<Args<ProbeRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<Sourced<service::ProbeReport>>, ErrorData> {
-        let budget = budget(request.timeout_s);
         let report = blocking(move || {
+            let budget = service::budget(request.timeout_s);
             let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &request.edits, None)?;
-            let built = script::build_within(&source.script, script_budget(request.timeout_s))?;
+            let built = script::build_within(&source.script, budget.script)?;
             let doc = service::parse_graph(built.graph.clone())?;
-            let report = service::probe(&doc, &request.points, &request.rays, budget).map_err(|e| built.locate(e))?;
+            let report = service::probe(&doc, &request.points, &request.rays, Some(budget.kernel)).map_err(|e| built.locate(e))?;
             Ok(Sourced::of(report, &source))
         })
         .await?;
@@ -1004,12 +1025,12 @@ impl Parcad {
         &self,
         Parameters(Args(request)): Parameters<Args<ThicknessRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<Sourced<service::ThicknessReport>>, ErrorData> {
-        let budget = budget(request.timeout_s);
         let report = blocking(move || {
+            let budget = service::budget(request.timeout_s);
             let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &request.edits, None)?;
-            let built = script::build_within(&source.script, script_budget(request.timeout_s))?;
+            let built = script::build_within(&source.script, budget.script)?;
             let doc = service::parse_graph(built.graph.clone())?;
-            let report = service::wall_thickness(&doc, request.threshold_mm, request.max_samples, budget)
+            let report = service::wall_thickness(&doc, request.threshold_mm, request.max_samples, Some(budget.kernel))
                 .map_err(|e| built.locate(e))?;
             Ok(Sourced::of(report, &source))
         })
@@ -1060,7 +1081,7 @@ impl Parcad {
     #[tool(
         name = "export_part",
         annotations(title = "Export a part to a file", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part whose `print_check` fails — material under 0.3 mm, where nothing prints — or that carries its own `checks` and fails one is refused, with the finding or the check and its measurement named, and nothing is written: fix the part, or, when the user has decided the failure is acceptable, pass `allow_failing` with their reason, which the reply keeps. The reply opens with `print_check` and `checks`, the verdicts the file was written under; a `flagged` print_check writes the file and lists what to read."
+        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. On a hosted parcad the reply also carries `url`, a signed link that fetches the file with no token until it expires, and `path` is then relative to the account's folder. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part whose `print_check` fails — material under 0.3 mm, where nothing prints — or that carries its own `checks` and fails one is refused, with the finding or the check and its measurement named, and nothing is written: fix the part, or, when the user has decided the failure is acceptable, pass `allow_failing` with their reason, which the reply keeps. The reply opens with `print_check` and `checks`, the verdicts the file was written under; a `flagged` print_check writes the file and lists what to read."
     )]
     async fn export_part(
         &self,
@@ -1078,9 +1099,9 @@ impl Parcad {
             Some(name) => {
                 // A path is a write primitive, and this caller is a model. Take
                 // a name, never a location.
-                if name.contains('/') || name.contains('\\') || name.contains("..") {
+                if let Some(why) = projects::not_a_name(&name) {
                     return Err(invalid(format!(
-                        "{name:?} must be a bare file name with no directory part; \
+                        "{name:?} must be a bare file name with no directory part ({why}); \
                          exports always go to the parcad export directory"
                     )));
                 }
@@ -1089,42 +1110,36 @@ impl Parcad {
             None => format!("part.{format}"),
         };
 
-        let budget = budget(request.timeout_s);
         let exported = blocking(move || {
+            let budget = service::budget(request.timeout_s);
             let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &request.edits, None)?;
-            let built = script::build_within(&source.script, script_budget(request.timeout_s))?;
+            let built = script::build_within(&source.script, budget.script)?;
             let mut doc = service::parse_graph(built.graph.clone())?;
             // The whole part's checks stand before the file, whichever body
             // is written: the build is the one the export reuses.
-            let door = service::Door::of(&service::evaluate(&doc, budget).map_err(|e| built.locate(e))?.snapshot);
+            let door = service::Door::of(&service::evaluate(&doc, Some(budget.kernel)).map_err(|e| built.locate(e))?.snapshot);
             let allow_failing = door.pass(request.allow_failing.as_deref(), "export_part")?;
             if let Some(body) = &request.body {
                 doc = service::body_doc(&doc, body)?;
             }
             let export = match format.as_str() {
-                "step" => service::export_step_within(&doc, budget),
+                "step" => service::export_step_within(&doc, Some(budget.kernel)),
                 "3mf" => {
                     let stem = filename.rsplit_once('.').map_or(filename.as_str(), |(stem, _)| stem);
-                    service::export_3mf(&doc, budget, request.body.as_deref().unwrap_or(stem))
+                    service::export_3mf(&doc, Some(budget.kernel), request.body.as_deref().unwrap_or(stem))
                 }
-                _ => service::export_stl(&doc, budget),
+                _ => service::export_stl(&doc, Some(budget.kernel)),
             }
             .map_err(|e| built.locate(e))?;
 
-            let dir = export_dir();
-            std::fs::create_dir_all(&dir)
-                .map_err(|e| format!("creating the export directory {}: {e}", dir.display()))?;
-            let path = dir.join(&filename);
-            std::fs::write(&path, &export.bytes)
-                .map_err(|e| format!("writing {}: {e}", path.display()))?;
-
-            let path = path.to_string_lossy().to_string();
+            let kept = service::keep_export(&filename, &export.bytes)?;
+            let file = kept.file.to_string_lossy();
             // A tab has no application to open a file in; it hands every
             // export to the browser, which is the user's copy.
-            let downloaded = crate::page::active().then(|| crate::page::offer_download(&path));
+            let downloaded = crate::page::active().then(|| crate::page::offer_download(&file));
             let open_error = match downloaded {
                 Some(_) => None,
-                None => request.open.then(|| service::open_in_default_app(&path).err()).flatten(),
+                None => request.open.then(|| service::open_in_default_app(&file).err()).flatten(),
             };
             Ok(Sourced::of(
                 Exported {
@@ -1134,7 +1149,8 @@ impl Parcad {
                     opened: (request.open && downloaded.is_none()).then_some(open_error.is_none()),
                     open_error,
                     downloaded,
-                    path,
+                    path: kept.path,
+                    url: kept.url,
                     verdicts: door.verdicts,
                     allow_failing,
                 },
@@ -1217,7 +1233,7 @@ impl Parcad {
         let projects = projects::list().map_err(invalid)?;
         Ok(rmcp::handler::server::wrapper::Json(ProjectList {
             projects,
-            directory: projects::dir().to_string_lossy().to_string(),
+            directory: tenant::shown(&projects::dir()),
         }))
     }
 
@@ -1388,6 +1404,12 @@ const SCREEN: &str = "You share the parcad app's screen with the user: get_sessi
 open_project and set_script change it. To show a part you built, save_project it under its own \
 name and open_project it. Read before you write.";
 
+/// In place of [`SCREEN`] on a hosted account, which has no window: the client
+/// shows a part by fetching a URL.
+const HOSTED: &str = "This parcad is hosted and shares no screen with the user: to show a part, \
+paste a view's `markdown` line from evaluate_part or give export_part's `url`; each is a signed \
+link that fetches the file with no token until it expires.";
+
 /// The rule the coin-holder session lacked: 241 KB of script resent to change
 /// a few lines at a time (docs/COIN_HOLDER_REVIEW.md, B1).
 const ONCE: &str = "Send a script once. Every change after the first is an edit_part ({ project, \
@@ -1409,19 +1431,60 @@ const PICTURES: &str = " The user may not see a tool's pictures: to show one, pa
 const WHERE: &str = "Which tag a view shows: regions: true; what is inside: a section; where a tag is: \
 tag_extents.";
 
+/// Where the user sees what a model builds, which is what the instructions
+/// differ on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Screen {
+    /// The app's window, or the browser on a local `parcad serve`.
+    App,
+    /// A ParCAD web tab.
+    Tab,
+    /// A hosted account has none: a client shows a view or an export by URL.
+    None,
+}
+
+impl Screen {
+    fn of(capability: service::Capability) -> Screen {
+        if capability.hosted {
+            Screen::None
+        } else if crate::page::active() {
+            Screen::Tab
+        } else {
+            Screen::App
+        }
+    }
+}
+
 /// What a model is told before its first call, for the host it is talking to.
 /// Claude Code keeps the first 2048 characters, so what differs by host comes
-/// early and both versions fit.
-fn instructions(in_tab: bool) -> String {
-    if in_tab {
-        format!("{LANGUAGE}\n\n{}\n\n{ONCE}\n\n{SELECTING}\n\n{WHERE}", crate::page::INSTRUCTIONS)
-    } else {
-        format!("{LANGUAGE}\n\n{SCREEN}\n\n{ONCE}\n\n{SELECTING}{PICTURES}\n\n{WHERE}")
+/// early and every version fits.
+fn instructions(screen: Screen) -> String {
+    match screen {
+        Screen::App => format!("{LANGUAGE}\n\n{SCREEN}\n\n{ONCE}\n\n{SELECTING}{PICTURES}\n\n{WHERE}"),
+        Screen::Tab => format!("{LANGUAGE}\n\n{}\n\n{ONCE}\n\n{SELECTING}\n\n{WHERE}", crate::page::INSTRUCTIONS),
+        Screen::None => format!("{LANGUAGE}\n\n{HOSTED}\n\n{ONCE}\n\n{SELECTING}\n\n{WHERE}"),
     }
 }
 
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for Parcad {
+    /// The generated `call_tool`, run as the request's tenant. rmcp serves a
+    /// request on a task of its own, which no middleware's task-local reaches,
+    /// so the tenant rides on the request: in the HTTP parts rmcp hands every
+    /// handler, where the host that authenticated the request put it.
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, ErrorData> {
+        let tenant = context
+            .extensions
+            .get::<http::request::Parts>()
+            .map_or_else(tenant::current, |parts| tenant::carried(&parts.extensions));
+        let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        tenant::scoped(tenant, self.tool_router.call(call)).await
+    }
+
     /// The generated `list_tools` sends no `ttlMs` and no `cacheScope`, and
     /// Claude Code's MCP runtime (2.1.268, protocol 2026-07-28) rejects a
     /// tools/list reply without both — quietly:
@@ -1493,15 +1556,24 @@ impl ServerHandler for Parcad {
         server_info.name = "parcad".into();
         server_info.version = env!("CARGO_PKG_VERSION").into();
 
+        // What this host can do beyond its version, under the name a client
+        // switches on: `capabilities.experimental.parcad`.
+        let serde_json::Value::Object(capability) = serde_json::to_value(self.capability).unwrap_or_default() else {
+            unreachable!("a struct serialises as an object")
+        };
         let mut info = ServerInfo::default();
         info.protocol_version = ProtocolVersion::default();
-        info.capabilities = ServerCapabilities::builder().enable_tools().enable_resources().build();
+        info.capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_resources()
+            .enable_experimental_with(std::collections::BTreeMap::from([("parcad".to_string(), capability)]))
+            .build();
         info.server_info = server_info;
         // What a model needs to know before its first call, and cannot
         // work out from the schemas: the unit rule, where the origin is,
         // and that a refusal is information rather than a wall to route
         // around.
-        info.instructions = Some(instructions(crate::page::active()));
+        info.instructions = Some(instructions(Screen::of(self.capability)));
         info
     }
 }
@@ -1519,20 +1591,29 @@ impl ServerHandler for Parcad {
 
 /// A client that completed `initialize` and has not closed its session.
 struct Session {
+    /// The account the session was minted for. An id presented under another
+    /// is no session at all.
+    tenant: tenant::TenantId,
     /// Name and version as the client announced itself, if it did.
     client: Option<String>,
     last_seen: Instant,
 }
 
+/// What one account's clients have done.
 #[derive(Default)]
-struct Activity {
-    sessions: HashMap<String, Session>,
+struct Calls {
     /// The most recent client to handshake, kept after it goes so the UI can
     /// still say who was here.
     client: Option<String>,
     tool_calls: u64,
     last_tool: Option<String>,
     last_seen: Option<Instant>,
+}
+
+#[derive(Default)]
+struct Activity {
+    sessions: HashMap<String, Session>,
+    calls: HashMap<tenant::TenantId, Calls>,
 }
 
 static ACTIVITY: LazyLock<Mutex<Activity>> = LazyLock::new(Default::default);
@@ -1562,25 +1643,31 @@ pub struct Status {
 }
 
 pub fn status() -> Status {
+    let me = tenant::current().id.clone();
     let mut activity = ACTIVITY.lock().unwrap_or_else(|e| e.into_inner());
     activity
         .sessions
         .retain(|_, session| session.last_seen.elapsed() < SESSION_IDLE_LIMIT);
+    let calls = activity.calls.get(&me);
 
     Status {
-        clients: activity.sessions.len(),
-        client: activity.client.clone(),
-        tool_calls: activity.tool_calls,
-        last_tool: activity.last_tool.clone(),
-        idle_secs: activity.last_seen.map(|at| at.elapsed().as_secs()),
+        clients: activity.sessions.values().filter(|session| session.tenant == me).count(),
+        client: calls.and_then(|calls| calls.client.clone()),
+        tool_calls: calls.map_or(0, |calls| calls.tool_calls),
+        last_tool: calls.and_then(|calls| calls.last_tool.clone()),
+        idle_secs: calls.and_then(|calls| calls.last_seen).map(|at| at.elapsed().as_secs()),
         url: endpoint(),
     }
 }
 
-/// Where a client connects: the loopback port, or the link a tab was given.
+/// Where a client connects: the loopback port, the link a tab was given, or a
+/// hosted server's public name.
 fn endpoint() -> String {
     if let Some(link) = crate::page::link() {
         return link;
+    }
+    if let Some(links) = &tenant::current().links {
+        return format!("{}/mcp", links.host());
     }
     #[cfg(not(target_os = "emscripten"))]
     return format!("http://127.0.0.1:{}/mcp", crate::http::port());
@@ -1590,8 +1677,14 @@ fn endpoint() -> String {
 
 /// Note a request on its way in: who is calling, and which tool. Returns the
 /// client's own name when the request announces one, which only a handshake
-/// does, for [`note_session`] to pin to the session its reply mints.
-pub(crate) fn note_request(session_id: Option<&str>, closing: bool, body: &[u8]) -> Option<String> {
+/// does, for [`note_session`] to pin to the session its reply mints. A
+/// session minted for another account is refused, with the message to answer.
+pub(crate) fn note_request(
+    session_id: Option<&str>,
+    closing: bool,
+    body: &[u8],
+) -> Result<Option<String>, String> {
+    let me = tenant::current().id.clone();
     let call: Option<serde_json::Value> = serde_json::from_slice(body).ok();
     let rpc_method = call
         .as_ref()
@@ -1609,13 +1702,22 @@ pub(crate) fn note_request(session_id: Option<&str>, closing: bool, body: &[u8])
         });
 
     let mut activity = ACTIVITY.lock().unwrap_or_else(|e| e.into_inner());
-    activity.last_seen = Some(Instant::now());
+    if let Some(id) = session_id {
+        if activity.sessions.get(id).is_some_and(|session| session.tenant != me) {
+            return Err(format!(
+                "no such session {id:?}. An Mcp-Session-Id is the client's own: \
+                 initialize again and use the id that reply carries."
+            ));
+        }
+    }
+    let calls = activity.calls.entry(me.clone()).or_default();
+    calls.last_seen = Some(Instant::now());
     if let Some(name) = client.clone() {
-        activity.client = Some(name);
+        calls.client = Some(name);
     }
     if rpc_method.as_deref() == Some("tools/call") {
-        activity.tool_calls += 1;
-        activity.last_tool = call
+        calls.tool_calls += 1;
+        calls.last_tool = call
             .as_ref()
             .and_then(|call| call.pointer("/params/name"))
             .and_then(|name| name.as_str())
@@ -1629,6 +1731,7 @@ pub(crate) fn note_request(session_id: Option<&str>, closing: bool, body: &[u8])
         }
         Some(id) => {
             let entry = activity.sessions.entry(id.to_string()).or_insert(Session {
+                tenant: me,
                 client: client.clone(),
                 last_seen: Instant::now(),
             });
@@ -1639,7 +1742,7 @@ pub(crate) fn note_request(session_id: Option<&str>, closing: bool, body: &[u8])
         }
         None => {}
     }
-    client
+    Ok(client)
 }
 
 /// Note the session a reply named. The id is minted in the reply to
@@ -1651,6 +1754,7 @@ pub(crate) fn note_session(id: &str, client: Option<String>) {
         .sessions
         .entry(id.to_string())
         .or_insert(Session {
+            tenant: tenant::current().id.clone(),
             client,
             last_seen: Instant::now(),
         })
@@ -1661,8 +1765,8 @@ pub(crate) fn note_session(id: &str, client: Option<String>) {
 ///
 /// The body is buffered because the JSON-RPC method is *in* it — the HTTP verb
 /// and path are the same for a handshake and for a fillet. These are small
-/// JSON documents; the limit below is generous enough for a long script and
-/// still refuses to hold an unbounded upload in memory.
+/// JSON documents; the account's limit is generous enough for a long script
+/// and still refuses to hold an unbounded upload in memory.
 #[cfg(not(target_os = "emscripten"))]
 async fn record(
     request: axum::extract::Request,
@@ -1670,8 +1774,8 @@ async fn record(
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
 
-    const BODY_LIMIT: usize = 32 * 1024 * 1024;
-
+    let tenant = tenant::carried(request.extensions());
+    let body_limit = tenant.limits.body_bytes;
     let session_id = request
         .headers()
         .get("mcp-session-id")
@@ -1680,36 +1784,44 @@ async fn record(
     let closing = request.method() == axum::http::Method::DELETE;
 
     let (parts, body) = request.into_parts();
-    let bytes = match axum::body::to_bytes(body, BODY_LIMIT).await {
+    let bytes = match axum::body::to_bytes(body, body_limit).await {
         Ok(bytes) => bytes,
         Err(_) => {
             return (
                 axum::http::StatusCode::PAYLOAD_TOO_LARGE,
-                "the MCP request body is larger than 32 MB; send the script itself, \
-                 not a mesh",
+                format!(
+                    "the MCP request body is larger than {} MB; send the script itself, not a mesh",
+                    body_limit / (1024 * 1024)
+                ),
             )
                 .into_response()
         }
     };
 
-    let client = note_request(session_id.as_deref(), closing, &bytes);
+    tenant::scoped(tenant, async move {
+        let client = match note_request(session_id.as_deref(), closing, &bytes) {
+            Ok(client) => client,
+            Err(refusal) => return (axum::http::StatusCode::NOT_FOUND, refusal).into_response(),
+        };
 
-    let response = next
-        .run(axum::extract::Request::from_parts(
-            parts,
-            axum::body::Body::from(bytes),
-        ))
-        .await;
+        let response = next
+            .run(axum::extract::Request::from_parts(
+                parts,
+                axum::body::Body::from(bytes),
+            ))
+            .await;
 
-    if let Some(id) = response
-        .headers()
-        .get("mcp-session-id")
-        .and_then(|value| value.to_str().ok())
-    {
-        note_session(id, client);
-    }
+        if let Some(id) = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|value| value.to_str().ok())
+        {
+            note_session(id, client);
+        }
 
-    response
+        response
+    })
+    .await
 }
 
 // ------------------------------------------------------------------ helpers
@@ -1723,17 +1835,6 @@ fn keep_screen(next: &str) {
             let _ = projects::keep(&name, &on_screen.script);
         }
     }
-}
-
-/// A caller's `timeout_s`, bounded; `None` keeps the host's default.
-fn budget(timeout_s: Option<f64>) -> Option<std::time::Duration> {
-    timeout_s.map(|s| std::time::Duration::from_secs_f64(s.clamp(1.0, 600.0)))
-}
-
-/// The same `timeout_s` as the script sandbox's clock backstop, never below
-/// its own. It raises no work budget: that is the script's `scriptBudget`.
-fn script_budget(timeout_s: Option<f64>) -> std::time::Duration {
-    budget(timeout_s).unwrap_or(script::BACKSTOP).max(script::BACKSTOP)
 }
 
 /// How evaluate_part and edit_part draw a part: their shared arguments, checked
@@ -1805,9 +1906,10 @@ fn measure(
     source: &service::Resolved,
     look: &Look,
 ) -> Result<(serde_json::Value, Vec<Vec<u8>>, service::Door), String> {
-    let built = script::build_within(&source.script, script_budget(look.timeout_s))?;
+    let budget = service::budget(look.timeout_s);
+    let built = script::build_within(&source.script, budget.script)?;
     let doc = service::parse_graph(built.graph.clone())?;
-    let mut evaluated = service::evaluate(&doc, budget(look.timeout_s)).map_err(|e| built.locate(e))?;
+    let mut evaluated = service::evaluate(&doc, Some(budget.kernel)).map_err(|e| built.locate(e))?;
     evaluated.snapshot.notes = built.notes.clone();
     let door = service::Door::of(&evaluated.snapshot);
 
@@ -1830,14 +1932,13 @@ fn measure(
         .views
         .into_iter()
         .map(|mut render| {
-            render.summary.path = keep_render(&stem, &render.summary.view, &render.image);
-            // A tag-region map is for the caller to read, not a picture of the part.
-            if !look.regions {
-                render.summary.markdown = render
-                    .summary
-                    .path
-                    .as_deref()
-                    .map(|path| markdown_image(&render.summary.view, path));
+            if let Some(kept) = keep_render(&stem, &render.summary.view, &render.image) {
+                // A tag-region map is for the caller to read, not a picture of the part.
+                if !look.regions {
+                    render.summary.markdown = Some(markdown_image(&render.summary.view, kept.reference()));
+                }
+                render.summary.path = Some(kept.path);
+                render.summary.url = kept.url;
             }
             let view = render.summary.view.clone();
             let picture = render
@@ -1871,11 +1972,6 @@ fn pictured(measured: serde_json::Value, pictures: Vec<Vec<u8>>) -> rmcp::model:
     result
 }
 
-/// Where renders are kept: beside exports, so one variable moves both.
-fn render_dir() -> PathBuf {
-    export_dir().join("renders")
-}
-
 /// A name for one script's renders that is stable across calls, so asking
 /// again replaces the file rather than filling the folder.
 fn render_stem(script: &str, size: u32, regions: bool, materials: bool, section: bool) -> String {
@@ -1891,18 +1987,15 @@ fn render_stem(script: &str, size: u32, regions: bool, materials: bool, section:
     )
 }
 
-/// Write one rendered view where a person can open it, and say where. A
-/// render that cannot be written still rides inline, so this never fails the call.
-fn keep_render(stem: &str, view: &str, image: &parcad_core::render::Rgb) -> Option<String> {
+/// Keep one rendered view under `renders/` in the export folder, where a
+/// person can open it, and say where. A render that cannot be written still
+/// rides inline, so this never fails the call.
+fn keep_render(stem: &str, view: &str, image: &parcad_core::render::Rgb) -> Option<service::Kept> {
     // A tab's files are its own; no client could open one by this path.
     if crate::page::active() {
         return None;
     }
-    let dir = render_dir();
-    std::fs::create_dir_all(&dir).ok()?;
-    let path = dir.join(format!("{stem}-{view}.png"));
-    std::fs::write(&path, image.to_png().ok()?).ok()?;
-    Some(path.to_string_lossy().to_string())
+    service::keep_export(&format!("renders/{stem}-{view}.png"), &image.to_png().ok()?).ok()
 }
 
 /// A kept render as a Markdown image. A destination with a space or a
@@ -1949,13 +2042,6 @@ fn identified(session: session::Session, viewers: Vec<session::Viewer>, with_scr
         script: with_script.then_some(session.script),
         viewers,
     }
-}
-
-/// Where exports land. One directory, so no call can choose a location.
-fn export_dir() -> PathBuf {
-    std::env::var_os("PARCAD_EXPORT_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| std::env::temp_dir().join("parcad-exports"))
 }
 
 /// An evaluation packed for the viewer: the mesh as Draco, and the rest of the
@@ -2049,6 +2135,8 @@ struct ViewedHeader<'a, E: Serialize, F: Serialize, S: Serialize> {
 ///
 /// In a browser tab there is no other thread, and the kernel is reached
 /// through the page, so the work runs here and may pause for it (`page.rs`).
+/// Elsewhere the request's tenant is a task-local, which no blocking thread
+/// sees until it is re-entered there (`tenant.rs`).
 async fn blocking<T, F>(work: F) -> Result<T, ErrorData>
 where
     T: Send + 'static,
@@ -2057,7 +2145,8 @@ where
     if crate::page::active() {
         return crate::page::inline(work).map_err(invalid);
     }
-    match tokio::task::spawn_blocking(work).await {
+    let tenant = tenant::current();
+    match tokio::task::spawn_blocking(move || tenant::scope(tenant, work)).await {
         Ok(result) => result.map_err(invalid),
         Err(e) => Err(ErrorData::internal_error(
             format!("the evaluation task did not finish: {e}"),
@@ -2117,17 +2206,44 @@ mod tests {
     fn the_instructions_fit_the_client_window() {
         // Claude Code truncates server instructions at 2048 characters and
         // says so only in its debug log.
-        for in_tab in [false, true] {
-            let text = instructions(in_tab);
-            assert!(text.chars().count() <= 2048, "{} chars in_tab={in_tab}", text.chars().count());
+        for screen in [Screen::App, Screen::Tab, Screen::None] {
+            let text = instructions(screen);
+            assert!(text.chars().count() <= 2048, "{} chars for {screen:?}", text.chars().count());
             assert!(text.contains("between: [\"arm\", \"hub\"]"));
-            assert!(text.contains("open_project"), "both say how to show the user a part");
         }
-        assert!(instructions(true).contains("ParCAD web"));
-        assert!(!instructions(true).contains("`markdown`"), "a tab has no file to point at");
+        for screen in [Screen::App, Screen::Tab] {
+            let text = instructions(screen);
+            assert!(text.contains("open_project"), "a host with a screen says how to show the user a part");
+            assert!(!text.contains(HOSTED), "{screen:?} is not hosted");
+        }
+        assert!(instructions(Screen::App).contains(SCREEN));
+        assert!(instructions(Screen::App).contains(PICTURES));
+        assert!(instructions(Screen::Tab).contains(crate::page::INSTRUCTIONS));
+        assert!(instructions(Screen::Tab).contains("ParCAD web"));
+        assert!(!instructions(Screen::Tab).contains("`markdown`"), "a tab has no file to point at");
         // docs/NEXT.md, item 1: the weakest layer, and one line.
-        assert!(instructions(false).contains("A part is done when its checks pass and print_check is clean or each flag has a reason"));
-        assert!(instructions(false).contains("Before modelling, write the request's numbers as checks"));
+        assert!(instructions(Screen::App).contains("A part is done when its checks pass and print_check is clean or each flag has a reason"));
+        assert!(instructions(Screen::App).contains("Before modelling, write the request's numbers as checks"));
+    }
+
+    /// A hosted account has no window, so its instructions name no screen
+    /// tool and say how a part reaches the user instead: by a signed URL that
+    /// needs no bearer. `initialize` picks the text off the capability the
+    /// transport built the handler with.
+    #[test]
+    fn a_hosted_client_is_told_to_show_a_part_by_url_and_not_on_a_screen() {
+        let text = instructions(Screen::None);
+        assert!(text.contains(HOSTED));
+        for screen_tool in ["share the parcad app's screen", "open_project", "set_script"] {
+            assert!(!text.contains(screen_tool), "{screen_tool:?} is in the hosted text");
+        }
+        assert!(text.contains("`markdown` line from evaluate_part") && text.contains("export_part's `url`"));
+        assert!(text.contains("with no token until it expires"), "a pasted link needs no bearer: {text}");
+
+        let hosted = Parcad::new().with_capability(service::capability(true)).get_info();
+        assert_eq!(hosted.instructions.as_deref(), Some(text.as_str()));
+        let local = Parcad::new().with_capability(service::capability(false)).get_info();
+        assert_eq!(local.instructions.as_deref(), Some(instructions(Screen::App).as_str()));
     }
 
     #[test]
@@ -2606,7 +2722,7 @@ mod tests {
     /// than back to a whole script.
     #[test]
     fn every_change_after_the_first_is_an_edit() {
-        assert!(instructions(false).contains("Every change after the first is an edit_part"));
+        assert!(instructions(Screen::App).contains("Every change after the first is an edit_part"));
         let tools = Parcad::new().tool_router.list_all();
         let description = |name: &str| tools.iter().find(|t| t.name == name).unwrap().description.clone().unwrap_or_default();
         assert!(description("set_script").contains("edit_part with project \"@session\""));
@@ -2659,6 +2775,136 @@ mod tests {
                 assert_eq!(projects::read("block").unwrap(), script, "a what-if writes nothing");
             })
         })
+    }
+
+    /// The same graph under two accounts is two builds: `reused_build` never
+    /// reports another account's.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn a_build_is_reused_within_an_account_and_never_across() {
+        fn evaluate() -> serde_json::Value {
+            let request: Args<EvaluateRequest> =
+                serde_json::from_value(serde_json::json!({ "script": "return box(10, 20, 30);" })).unwrap();
+            run(Parcad::new().evaluate_part(Parameters(request))).expect("built").structured_content.unwrap()
+        }
+        let tenants = tenant::tests::fresh_root("tenants");
+        // Ids of this test's own: the cache is keyed by id and script, and
+        // another test exporting this script as "b" would be the reuse here.
+        let a = tenant::tests::hosted_at("reuse-a", &tenants);
+        let b = tenant::tests::hosted_at("reuse-b", &tenants);
+        assert_ne!(tenant::scope(a.clone(), evaluate)["reused_build"], true);
+        assert_eq!(tenant::scope(a, evaluate)["reused_build"], true, "the account's own build is reused");
+        let other = tenant::scope(b, evaluate);
+        assert_ne!(other["reused_build"], true, "another account's build is not");
+        assert_eq!(other["volume_mm3"], 6000.0);
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    /// Two accounts export `part.stl`: two files, each under its own root.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn each_account_exports_into_its_own_folder() {
+        fn export() -> Exported {
+            let request: Args<ExportRequest> = serde_json::from_value(serde_json::json!({
+                "script": "return box(10, 20, 30);", "format": "stl",
+            }))
+            .unwrap();
+            run(Parcad::new().export_part(Parameters(request))).expect("exported").0.measured
+        }
+        let tenants = tenant::tests::fresh_root("tenants");
+        let a = tenant::tests::hosted_at("a", &tenants);
+        let b = tenant::tests::hosted_at("b", &tenants);
+        let on_a = tenant::scope(a.clone(), export);
+        let on_b = tenant::scope(b.clone(), export);
+        assert_eq!(on_a.path, ".exports/part.stl", "shown relative to the account's root");
+        assert_eq!(on_b.path, ".exports/part.stl");
+        assert!(a.root.join(&on_a.path).is_file());
+        assert!(b.root.join(&on_b.path).is_file());
+        assert_eq!(
+            crate::signing::tests::verified(&tenant::tests::links(), on_a.url.as_deref().unwrap()),
+            ("https://cad.example.test/api/exports/part.stl".to_string(), Some(a.id.clone())),
+            "the public host and the route, signed for the account that wrote it"
+        );
+
+        let plain_http = tenant::PublicHost::parse("http://127.0.0.1:4398").unwrap();
+        let plain_links = Arc::new(crate::signing::tests::links(plain_http));
+        let c = tenant::Tenant::hosted(tenant::TenantId::new("c").unwrap(), &tenants, &plain_links);
+        std::fs::create_dir_all(&c.root).unwrap();
+        let on_c = tenant::scope(Arc::new(c), export);
+        assert_eq!(
+            crate::signing::tests::verified(&plain_links, on_c.url.as_deref().unwrap()),
+            ("http://127.0.0.1:4398/api/exports/part.stl".to_string(), Some(tenant::TenantId::new("c").unwrap())),
+            "a plain-HTTP host under test"
+        );
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    /// An `Mcp-Session-Id` minted under one account is no session under
+    /// another, and the refusal comes from the middleware every request passes.
+    struct NoAssets;
+
+    impl Assets for NoAssets {
+        fn get(&self, _: &str) -> Option<crate::assets::Asset> {
+            None
+        }
+        fn how_to_embed(&self) -> String {
+            String::new()
+        }
+    }
+
+    /// The body `/mcp` reads is bounded by the account: 4 MB on a server, with
+    /// the limit in the refusal; a local user's 32 MB is untouched.
+    #[test]
+    fn a_body_past_the_accounts_limit_is_refused_naming_the_limit() {
+        let tenants = tenant::tests::fresh_root("tenants");
+        let five_mb = axum::body::Body::from("x".repeat(5 * 1024 * 1024));
+        let post = |tenant: Arc<tenant::Tenant>, body: axum::body::Body| {
+            let mut request = axum::http::Request::builder()
+                .method("POST")
+                .uri("/mcp")
+                .header("content-type", "application/json")
+                .body(body)
+                .unwrap();
+            request.extensions_mut().insert(tenant);
+            let mut router = service(Arc::new(NoAssets), None);
+            run(tower_service::Service::call(&mut router, request)).expect("the router answers")
+        };
+        let refused = post(tenant::tests::hosted_at("a", &tenants), five_mb);
+        assert_eq!(refused.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
+        let text = String::from_utf8_lossy(&run(axum::body::to_bytes(refused.into_body(), 4096)).unwrap()).into_owned();
+        assert!(text.contains("larger than 4 MB"), "the refusal names the limit: {text}");
+
+        let local = post(tenant::tests::local_at(&tenants), axum::body::Body::from("x".repeat(5 * 1024 * 1024)));
+        assert_ne!(local.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE, "a local user's limit is still 32 MB");
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    #[test]
+    fn a_session_minted_for_one_account_is_refused_under_another() {
+        let tenants = tenant::tests::fresh_root("tenants");
+        let a = tenant::tests::hosted_at("a", &tenants);
+        let b = tenant::tests::hosted_at("b", &tenants);
+        tenant::scope(a.clone(), || note_session("s-1", Some("claude 1.0".into())));
+        assert_eq!(tenant::scope(a.clone(), || note_request(Some("s-1"), false, b"{}")), Ok(None));
+        assert_eq!(tenant::scope(a, status).clients, 1);
+        assert_eq!(tenant::scope(b.clone(), status).clients, 0, "the session is not counted for the other account");
+
+        let mut request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/mcp")
+            .header("mcp-session-id", "s-1")
+            .header("content-type", "application/json")
+            .body(axum::body::Body::from("{}"))
+            .unwrap();
+        request.extensions_mut().insert(b);
+        let mut router = service(Arc::new(NoAssets), None);
+        let response = run(tower_service::Service::call(&mut router, request)).expect("the router answers");
+        assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
+        let body = run(axum::body::to_bytes(response.into_body(), 4096)).unwrap();
+        let text = String::from_utf8_lossy(&body);
+        assert!(text.contains("no such session \"s-1\""), "{text}");
+        assert!(text.contains("initialize again"), "the refusal names the fix: {text}");
+        let _ = std::fs::remove_dir_all(&tenants);
     }
 
     /// An edit is built, measured and then written: the file holds the new
@@ -2738,7 +2984,8 @@ mod tests {
                 let exported = export(Some("printing a test piece")).expect("exported over the failing check").0;
                 assert_eq!(exported.measured.allow_failing.as_deref(), Some("printing a test piece"));
                 assert_eq!(exported.measured.verdicts.checks.as_ref().unwrap().verdict, "failed");
-                assert!(std::path::Path::new(&exported.measured.path).exists());
+                assert!(std::path::Path::new(&exported.measured.path).exists(), "a local reply's path is the file itself");
+                assert_eq!(exported.measured.url, None, "and a local reply carries no url");
 
                 // An edit that keeps the check failing is refused before the
                 // write; one with a reason lands; one that fixes the part needs none.

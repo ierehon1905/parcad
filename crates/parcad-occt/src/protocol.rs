@@ -1205,6 +1205,11 @@ impl BuildId {
 /// stdout is OCCT's.
 pub const REPLY: &str = "@reply ";
 
+/// What a serving worker prints to stderr before each `@reply`, followed by
+/// the kilobytes it still holds now the request is answered (`resident`), so
+/// the host can decide whether to keep it without a syscall of its own.
+pub const RESIDENT: &str = "@resident ";
+
 /// Marker the worker prints to stderr before each risky step.
 ///
 /// When OCCT takes the process down there is no error value to return, so the

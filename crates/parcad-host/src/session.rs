@@ -28,8 +28,10 @@
 //! explained; undo does not.
 
 use crate::projects;
+use crate::tenant::{self, TenantId};
 use serde::Serialize;
-use std::sync::{LazyLock, Mutex};
+use std::collections::HashMap;
+use std::sync::{Arc, LazyLock, Mutex};
 use tokio::sync::broadcast;
 
 /// What is on screen, as every caller sees it — the state and the event are the
@@ -56,29 +58,58 @@ pub struct Session {
 /// change is applied by every viewer — which is the point of the feature.
 pub const AGENT_ORIGIN: &str = "agent";
 
-static STATE: LazyLock<Mutex<Session>> = LazyLock::new(|| {
-    Mutex::new(Session {
-        name: None,
-        script: String::new(),
-        revision: 0,
-        origin: String::new(),
-    })
-});
+/// One tenant's screen: what is on it, who is told when it changes, and what
+/// each window says it is showing. The desktop has one; a hosted server has
+/// one per account, and an account with no window has an empty `viewers`, so
+/// nothing there ever waits for a window to report.
+struct Screen {
+    state: Mutex<Session>,
+    /// Sized for a burst of keystrokes across several viewers, not for
+    /// history: a lagged receiver is told it lagged and can re-ask for the
+    /// state.
+    channel: broadcast::Sender<Session>,
+    viewers: Mutex<Vec<(Shown, std::time::Instant)>>,
+    shown: tokio::sync::Notify,
+}
 
-/// Sized for a burst of keystrokes across several viewers, not for history: a
-/// lagged receiver is told it lagged and can re-ask for the state.
-static CHANNEL: LazyLock<broadcast::Sender<Session>> =
-    LazyLock::new(|| broadcast::channel(64).0);
+impl Screen {
+    fn new() -> Screen {
+        Screen {
+            state: Mutex::new(Session {
+                name: None,
+                script: String::new(),
+                revision: 0,
+                origin: String::new(),
+            }),
+            channel: broadcast::channel(64).0,
+            viewers: Mutex::new(Vec::new()),
+            shown: tokio::sync::Notify::new(),
+        }
+    }
+}
+
+static SCREENS: LazyLock<Mutex<HashMap<TenantId, Arc<Screen>>>> = LazyLock::new(Default::default);
+
+/// The current tenant's screen, made the first time it is asked for.
+fn screen() -> Arc<Screen> {
+    let tenant = tenant::current();
+    SCREENS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entry(tenant.id.clone())
+        .or_insert_with(|| Arc::new(Screen::new()))
+        .clone()
+}
 
 /// What is on screen right now.
 pub fn get() -> Session {
-    STATE.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    screen().state.lock().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
 /// Events from now on. Every real change to the session arrives on this
 /// channel, whichever transport carries it onward.
 pub fn subscribe() -> broadcast::Receiver<Session> {
-    CHANNEL.subscribe()
+    screen().channel.subscribe()
 }
 
 /// Record a change and tell every viewer, or do nothing if nothing changed.
@@ -93,24 +124,31 @@ pub fn subscribe() -> broadcast::Receiver<Session> {
 /// viewer's own id, which that viewer ignores. A push based on a revision some
 /// other origin has since replaced is refused, and the current state returned.
 pub fn push(name: Option<String>, script: String, origin: String, base: Option<u64>) -> Session {
-    let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    let screen = screen();
+    let mut state = screen.state.lock().unwrap_or_else(|e| e.into_inner());
     if state.name == name && state.script == script {
         return state.clone();
     }
     if base.is_some_and(|base| base < state.revision) && state.origin != origin {
         return state.clone();
     }
-    commit(&mut state, name, script, origin)
+    commit(&screen, &mut state, name, script, origin)
 }
 
-fn commit(state: &mut Session, name: Option<String>, script: String, origin: String) -> Session {
+fn commit(
+    screen: &Screen,
+    state: &mut Session,
+    name: Option<String>,
+    script: String,
+    origin: String,
+) -> Session {
     state.name = name;
     state.script = script;
     state.revision += 1;
     state.origin = origin;
     // Nobody listening is fine — the desktop forwarder subscribes at startup,
     // but a headless test has no viewers and a push is still a push.
-    let _ = CHANNEL.send(state.clone());
+    let _ = screen.channel.send(state.clone());
     state.clone()
 }
 
@@ -120,8 +158,9 @@ fn commit(state: &mut Session, name: Option<String>, script: String, origin: Str
 /// for a missing part names the fix.
 pub fn open(name: &str, origin: &str) -> Result<Session, String> {
     let script = projects::read(name)?;
-    let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
-    Ok(commit(&mut state, Some(name.to_string()), script, origin.to_string()))
+    let screen = screen();
+    let mut state = screen.state.lock().unwrap_or_else(|e| e.into_inner());
+    Ok(commit(&screen, &mut state, Some(name.to_string()), script, origin.to_string()))
 }
 
 /// Replace the open document's script — an ordinary edit, from a caller that
@@ -133,7 +172,8 @@ pub fn open(name: &str, origin: &str) -> Result<Session, String> {
 /// Refused while nothing is open: a script with no project under it would be
 /// on screen with nowhere to save, and the refusal says what to call instead.
 pub fn set_script(script: String, origin: &str) -> Result<Session, String> {
-    let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
+    let screen = screen();
+    let mut state = screen.state.lock().unwrap_or_else(|e| e.into_inner());
     let Some(name) = state.name.clone() else {
         return Err(
             "no project is open in the session yet. Call open_project with a name from \
@@ -141,7 +181,7 @@ pub fn set_script(script: String, origin: &str) -> Result<Session, String> {
                 .to_string(),
         );
     };
-    Ok(commit(&mut state, Some(name), script, origin.to_string()))
+    Ok(commit(&screen, &mut state, Some(name), script, origin.to_string()))
 }
 
 // ------------------------------------------------------------------ viewers
@@ -201,40 +241,39 @@ pub struct Shown {
     pub volume_mm3: Option<f64>,
 }
 
-static VIEWERS: LazyLock<Mutex<Vec<(Shown, std::time::Instant)>>> =
-    LazyLock::new(|| Mutex::new(Vec::new()));
-static SHOWN: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::new);
-
 /// Record what a window put on screen.
 pub fn report_shown(shown: Shown) {
     report_shown_at(shown, std::time::Instant::now());
 }
 
 fn report_shown_at(shown: Shown, at: std::time::Instant) {
-    let mut viewers = VIEWERS.lock().unwrap_or_else(|e| e.into_inner());
+    let screen = screen();
+    let mut viewers = screen.viewers.lock().unwrap_or_else(|e| e.into_inner());
     viewers.retain(|(v, _)| v.id != shown.id);
     viewers.push((shown, at));
     drop(viewers);
-    SHOWN.notify_waiters();
+    screen.shown.notify_waiters();
 }
 
 /// Forget a window that has gone: a closed tab's SSE stream ending.
 pub fn forget_viewer(id: &str) {
-    VIEWERS
+    let screen = screen();
+    screen
+        .viewers
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .retain(|(v, _)| v.id != id);
-    SHOWN.notify_waiters();
+    screen.shown.notify_waiters();
 }
 
 /// Every window heard from within [`FORGOTTEN`], newest first; the ones
 /// silent past [`STALE`] say so.
 pub fn viewers() -> Vec<Viewer> {
-    viewers_at(std::time::Instant::now())
+    viewers_at(&screen(), std::time::Instant::now())
 }
 
-fn viewers_at(now: std::time::Instant) -> Vec<Viewer> {
-    let mut viewers = VIEWERS.lock().unwrap_or_else(|e| e.into_inner());
+fn viewers_at(screen: &Screen, now: std::time::Instant) -> Vec<Viewer> {
+    let mut viewers = screen.viewers.lock().unwrap_or_else(|e| e.into_inner());
     viewers.retain(|(_, at)| now.duration_since(*at) < FORGOTTEN);
     let mut out: Vec<Viewer> = viewers
         .iter()
@@ -261,16 +300,17 @@ fn viewers_at(now: std::time::Instant) -> Vec<Viewer> {
 /// window is not waited for: it may never report again, and a caller that
 /// waited the whole budget on it would learn only that.
 pub async fn wait_until_shown(revision: u64, budget: std::time::Duration) -> Vec<Viewer> {
+    let screen = screen();
     let deadline = tokio::time::Instant::now() + budget;
     loop {
-        let notified = SHOWN.notified();
-        let now = viewers();
+        let notified = screen.shown.notified();
+        let now = viewers_at(&screen, std::time::Instant::now());
         let live: Vec<&Viewer> = now.iter().filter(|v| !v.stale).collect();
         if live.is_empty() || live.iter().any(|v| v.revision >= revision) {
             return now;
         }
         if tokio::time::timeout_at(deadline, notified).await.is_err() {
-            return viewers();
+            return viewers_at(&screen, std::time::Instant::now());
         }
     }
 }
@@ -301,22 +341,33 @@ pub fn live() -> Live {
 pub(crate) mod tests {
     use super::*;
 
-    /// The session is one process-wide value, so tests that write it must not
-    /// interleave. Same arrangement as `projects::tests::scoped`.
+    /// Each test runs as a tenant of its own, on the folder it already has, so
+    /// it has a screen of its own: nothing to lock and nothing to put back.
     pub(crate) fn scoped<T>(work: impl FnOnce() -> T) -> T {
-        static LOCK: Mutex<()> = Mutex::new(());
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let out = work();
-        // Leave the state empty for the next test.
-        let mut state = STATE.lock().unwrap_or_else(|e| e.into_inner());
-        *state = Session {
-            name: None,
-            script: String::new(),
-            revision: 0,
-            origin: String::new(),
-        };
-        VIEWERS.lock().unwrap_or_else(|e| e.into_inner()).clear();
-        out
+        let root = tenant::current().root.clone();
+        tenant::scope(tenant::tests::local_at(&root), work)
+    }
+
+    /// Two accounts on one server: what one puts on its screen is not on the
+    /// other's, and the other's "@session" names nothing.
+    #[test]
+    fn an_account_sees_only_its_own_screen() {
+        let tenants = tenant::tests::fresh_root("tenants");
+        let a = tenant::tests::hosted_at("a", &tenants);
+        let b = tenant::tests::hosted_at("b", &tenants);
+        let mut heard_by_b = tenant::scope(b.clone(), subscribe);
+        tenant::scope(a.clone(), || {
+            push(Some("bracket".into()), "return box(1,1,1);".into(), "tab-a".into(), None)
+        });
+
+        tenant::scope(b.clone(), || {
+            assert_eq!(get().name, None, "nothing is open on the other account's screen");
+            assert!(heard_by_b.try_recv().is_err(), "another account's change is not broadcast here");
+            let error = set_script("return box(2,2,2);".into(), AGENT_ORIGIN).expect_err("nothing is open");
+            assert!(error.contains("open_project"), "{error}");
+        });
+        assert_eq!(tenant::scope(a, || get().name), Some("bracket".to_string()));
+        let _ = std::fs::remove_dir_all(&tenants);
     }
 
     #[test]
@@ -415,11 +466,12 @@ pub(crate) mod tests {
             report_shown_at(shown("fresh", 3), now);
             report_shown_at(shown("napping", 2), now - STALE - std::time::Duration::from_secs(1));
             report_shown_at(shown("gone", 1), now - FORGOTTEN);
-            let seen = viewers_at(now);
+            let screen = screen();
+            let seen = viewers_at(&screen, now);
             let by_id: Vec<(&str, bool, u64)> = seen.iter().map(|v| (v.id.as_str(), v.stale, v.seconds_ago)).collect();
             assert_eq!(by_id, [("fresh", false, 0), ("napping", true, 31)]);
             // Forgotten for good, not just left out of one reply.
-            assert_eq!(VIEWERS.lock().unwrap().len(), 2);
+            assert_eq!(screen.viewers.lock().unwrap().len(), 2);
         })
     }
 

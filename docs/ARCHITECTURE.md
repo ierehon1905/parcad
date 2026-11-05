@@ -1016,11 +1016,68 @@ The DSL those scripts run against is `app/src/dsl.ts`, bundled into the binary b
 checked in does not fail when its source changes under it, and a stale one here
 would tell an agent that an operation exists which the kernel no longer has.
 
+### A fourth caller: a hosted server
+
+`parcad serve --hosted` is the same host, bound where it is told, serving many
+accounts at once: a phone app's agent service calling `/mcp` and `/api` with a
+bearer token per user, and remote MCP connectors reaching it by URL.
+docs/HOSTING.md holds what was measured and decided; this is the shape of the
+code.
+
+**A tenant is an id and a root** (`tenant.rs`), and it is ambient. The service,
+`projects`, `session` and the caches take no tenant argument: `projects::dir()`
+answers `tenant::current().root`, and because every path in `projects.rs` is
+joined onto that one call, bundles, `.history`, `.trash`, `.seeded` and
+`.exports` are per account by construction. The live session, the build and
+script caches and the MCP activity record key on the id. The desktop, the CLI,
+`parcad mcp` and the tab set nothing and run as `local`, which reads
+`PARCAD_PROJECTS_DIR` and `PARCAD_EXPORT_DIR` exactly as before.
+
+**Where the tenant enters.** One middleware in `http.rs`, `authenticate`,
+resolves the request's `Authorization: Bearer` through `tenant::Accounts` — a
+file of `<id> <sha256>` lines, every line compared in constant time — and then
+does two things, because the two kinds of handler behind it run on different
+tasks. The `/api` handlers run inside the middleware's own future, so it wraps
+`next.run(request)` in `tenant::scoped`, a tokio task-local. rmcp serves every
+`/mcp` request on a task it spawns, which no task-local reaches, so the tenant
+also rides on the request's extensions, and a hand-written `call_tool` reads it
+off the `http::request::Parts` rmcp hands each handler and enters it around the
+tool body. The design had the task-local alone; it did not survive contact with
+rmcp.
+
+**The one rule.** A task-local does not cross `spawn_blocking`. Both
+`blocking()` helpers capture `tenant::current()` before spawning and re-enter it
+inside with `tenant::scope`, an RAII scope that puts the thread's previous
+tenant back, panic included, because the pool reuses threads. In a hosted
+process (`tenant::require()`) a request that reaches the service outside every
+scope panics naming that rule rather than falling through to `local`, which
+would put one account's files in the operator's folder. GOTCHAS.md has the
+entry.
+
+**What is shared on purpose.** The worker pool and each worker's own build
+cache: a worker reads only the scratch paths the host chose, a hit under one
+account of another's subtree is the same deterministic solid, and a process per
+tenant would have needed a worker broker to cap total kernel concurrency at
+all (HOSTING.md measured both shapes). What is bounded instead is
+`tenant::Limits`: `service::budget` clamps a call's `timeout_s` to the
+account's kernel and script limits, `service::kernel` takes the account's gate
+and the host's (`--builds N`) around every kernel entry point, and
+`mcp::record` reads the body limit off the carried tenant. Nothing here limits
+a worker's memory; the container's limit does.
+
+**What hosted mode refuses**, each at the capability in `service.rs` and
+naming the fix: opening a part in an editor, opening an export in a slicer,
+revealing a file, `probe_step_export` of a path on the server's own disk, and
+a symlink inside an account's root that points outside it. Replies show paths
+relative to the account's root through `tenant::shown`, so an account never
+sees the server's layout. There is no UI: a browser cannot send a bearer.
+
 ### Projects are files, not fixtures
 
 `projects.rs` owns one directory — `~/Library/Application Support/parcad` (the platform's
 data folder; docs/GOTCHAS.md says why not Documents), or `PARCAD_PROJECTS_DIR`
-— shared by all three callers. The parts that ship are *seeded* into it on first
+— shared by all three local callers; a hosted account has one of its own
+under the tenants folder, as the previous section says. The parts that ship are *seeded* into it on first
 run and are then ordinary projects: editable, renamable, deletable. Seeding only
 ever adds what is missing, so a part the user deletes stays deleted.
 

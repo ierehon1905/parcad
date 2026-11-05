@@ -13,9 +13,11 @@
 //! beside it for the window and the perception tools; docs/ARCHITECTURE.md
 //! records why it went.
 
+use crate::tenant::{self, Mode};
 use parcad_core::graph::Doc;
 use serde::Serialize;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 // What an evaluation *is* lives in its own crate, so ParCAD web
 // compiles the same definition; every path a transport names stays `service::`.
@@ -408,6 +410,7 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                     references_out_of_view,
                     framing: has_references.then(|| parcad_evaluation::REFERENCE_FRAMING.to_string()),
                     path: None,
+                    url: None,
                     markdown: None,
                 },
                 image,
@@ -599,7 +602,7 @@ fn perceive(
     if let Some(budget) = budget {
         opts.timeout = budget;
     }
-    parcad_occt::perceive(doc, spec, &opts).map_err(|e| format!("{e}"))
+    kernel(|| parcad_occt::perceive(doc, spec, &opts).map_err(|e| format!("{e}")))
 }
 
 fn medium(inside: bool) -> Medium {
@@ -898,6 +901,178 @@ pub struct Export {
     pub measured: ExportMeasured,
 }
 
+impl Export {
+    fn named(filename: &'static str, bytes: Vec<u8>, measured: ExportMeasured) -> Export {
+        Export {
+            bytes,
+            filename,
+            content_type: media_type(filename),
+            measured,
+        }
+    }
+}
+
+/// The media type a file's extension names, which a client saves it by.
+fn media_type(filename: &str) -> &'static str {
+    match filename.rsplit_once('.').map(|(_, extension)| extension) {
+        Some("3mf") => "model/3mf",
+        Some("stl") => "model/stl",
+        Some("step") => "application/step",
+        Some("png") => "image/png",
+        _ => "application/octet-stream",
+    }
+}
+
+// ------------------------------------------------------------ the export folder
+//
+// `export_part` and the kept renders land in one folder per account, and a
+// name in it is the one handle a caller has: a local user opens the file by its
+// path, and a hosted account, whose files are on the server, fetches it back by
+// URL — with the bearer that wrote it, or by the signed link the reply carries,
+// which a chat client showing a `markdown` line fetches with no token. Both go
+// through here, so no caller chooses a location and no account's name reaches
+// another's folder.
+
+/// A file kept in the account's export folder, as a reply names it.
+pub struct Kept {
+    /// Where it is on this machine.
+    pub file: PathBuf,
+    /// The path as the account sees it: relative to its root on a hosted
+    /// server, the path itself for a local user.
+    pub path: String,
+    /// On a hosted server, a signed link that fetches the file without a
+    /// bearer until it expires: `https://<public host>/api/exports/<name>?t=…
+    /// &exp=…&sig=…` (`signing.rs`). A local user has the file.
+    pub url: Option<String>,
+}
+
+impl Kept {
+    /// What a client can reach from where it is: the URL on a server, the
+    /// path at this machine.
+    pub fn reference(&self) -> &str {
+        self.url.as_deref().unwrap_or(&self.path)
+    }
+}
+
+/// Write `bytes` as `name` in the account's export folder. `name` is a plain
+/// file name, or one under `renders/`, where the views a reply draws are kept.
+pub fn keep_export(name: &str, bytes: &[u8]) -> Result<Kept, String> {
+    let file = export_path(name).map_err(|refused| refused.message())?;
+    let dir = file.parent().ok_or_else(|| format!("{name:?} is under no folder"))?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("creating the export folder {}: {e}", tenant::shown(dir)))?;
+    std::fs::write(&file, bytes).map_err(|e| format!("writing {}: {e}", tenant::shown(&file)))?;
+    let tenant = tenant::current();
+    let url = tenant.links.as_ref().map(|links| {
+        links.signed(
+            &tenant.id,
+            &format!("/api/exports/{}", percent_encoded(name)),
+            crate::signing::unix_now(),
+        )
+    });
+    Ok(Kept {
+        path: tenant::shown(&file),
+        url,
+        file,
+    })
+}
+
+/// A file read back from the account's export folder.
+#[derive(Debug)]
+pub struct ExportFile {
+    pub bytes: Vec<u8>,
+    pub filename: String,
+    pub content_type: &'static str,
+}
+
+/// Why an export could not be read back. Each message names the fix.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExportRefused {
+    /// The name is not one `export_part` writes under, for the reason given.
+    NotAName { name: String, why: &'static str },
+    /// The name is fine and this account has no file of it.
+    Missing { name: String },
+    /// The file is there and could not be read.
+    Unreadable { name: String, error: String },
+}
+
+impl ExportRefused {
+    pub fn message(&self) -> String {
+        match self {
+            ExportRefused::NotAName { name, why } => format!(
+                "{name:?} is not the name of an export ({why}). A name is one plain file name as \
+                 export_part wrote it, such as \"part.3mf\", or a render's under \"renders/\"."
+            ),
+            ExportRefused::Missing { name } => format!(
+                "no export named {name:?} exists for this account; export_part writes one, and its \
+                 reply says where to fetch it"
+            ),
+            ExportRefused::Unreadable { name, error } => format!("reading the export {name:?}: {error}"),
+        }
+    }
+}
+
+/// Read `name` back from the account's export folder, as `export_part` or a
+/// reply's `markdown` named it.
+pub fn export_file(name: &str) -> Result<ExportFile, ExportRefused> {
+    let file = export_path(name)?;
+    let bytes = match std::fs::read(&file) {
+        Ok(bytes) => bytes,
+        Err(_) if !file.is_file() => return Err(ExportRefused::Missing { name: name.to_string() }),
+        Err(e) => {
+            return Err(ExportRefused::Unreadable {
+                name: name.to_string(),
+                error: e.to_string(),
+            })
+        }
+    };
+    let filename = name.rsplit('/').next().unwrap_or(name).to_string();
+    Ok(ExportFile {
+        bytes,
+        content_type: media_type(&filename),
+        filename,
+    })
+}
+
+/// Where `name` lives in the account's export folder: one plain name, or one
+/// under exactly `renders/`, each segment held to the rule a project path's
+/// segments obey. On a hosted root a link out of the folder is refused too.
+fn export_path(name: &str) -> Result<PathBuf, ExportRefused> {
+    let refused = |why| ExportRefused::NotAName {
+        name: name.to_string(),
+        why,
+    };
+    let (folder, file) = match name.split_once('/') {
+        None => (None, name),
+        Some(("renders", file)) => (Some("renders"), file),
+        Some(_) => return Err(refused("a folder other than renders/, or more than one")),
+    };
+    if let Some(why) = crate::projects::not_a_name(file) {
+        return Err(refused(why));
+    }
+    let tenant = tenant::current();
+    let mut path = tenant.exports.clone();
+    path.extend(folder);
+    path.push(file);
+    if tenant.mode == Mode::Hosted {
+        tenant.confine(&path).map_err(|_| refused("it leaves this account's folder"))?;
+    }
+    Ok(path)
+}
+
+/// `name` as a URL path: every byte outside the unreserved set escaped, the
+/// `/` before a render's name kept.
+fn percent_encoded(name: &str) -> String {
+    use std::fmt::Write;
+    let mut encoded = String::with_capacity(name.len());
+    for byte in name.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' => encoded.push(byte as char),
+            _ => write!(encoded, "%{byte:02X}").expect("writing to a String"),
+        }
+    }
+    encoded
+}
+
 /// Evaluate an intent graph into displayable geometry, with the kernel's time
 /// budget chosen by the caller or, when `None`, by `PARCAD_OCCT_TIMEOUT`.
 ///
@@ -975,9 +1150,67 @@ pub fn evaluate_in_background(doc: &Doc) -> Result<Evaluated, String> {
         uncached: true,
         ..Default::default()
     };
-    let success = parcad_occt::evaluate(doc, &opts).map_err(|e| format!("{e}"))?;
+    let success = kernel(|| parcad_occt::evaluate(doc, &opts).map_err(|e| format!("{e}")))?;
     let wall_ms = crate::page::kernel_took().unwrap_or_else(|| t0.elapsed()).as_millis() as u64;
     parcad_evaluation::evaluated(doc, &success, wall_ms, false)
+}
+
+// --------------------------------------------------------------- the limits
+
+/// The kernel time a call gets and how long its script may run: what the
+/// caller asked for, within what its account allows (`tenant::Limits`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Budget {
+    pub kernel: Duration,
+    pub script: Duration,
+}
+
+/// A caller's `timeout_s` as a [`Budget`]. Absent, the kernel gets the host's
+/// default; the script backstop is never below its own and never raises the
+/// work budget, which is the script's `scriptBudget`.
+pub fn budget(timeout_s: Option<f64>) -> Budget {
+    let limits = tenant::current().limits;
+    let asked = timeout_s.map_or_else(parcad_occt::default_timeout, |s| Duration::from_secs_f64(s.max(1.0)));
+    let kernel = asked.min(limits.kernel_timeout_max);
+    Budget {
+        kernel,
+        script: kernel.max(crate::script::BACKSTOP).min(limits.script_backstop_max),
+    }
+}
+
+/// The host's cap on builds in flight, `--builds N` on `parcad serve`. The
+/// worker pool caps nothing: N concurrent requests are N workers.
+static BUILDS_IN_FLIGHT: std::sync::OnceLock<tenant::Gate> = std::sync::OnceLock::new();
+
+pub fn cap_builds(at_once: usize) -> Result<(), String> {
+    BUILDS_IN_FLIGHT
+        .set(tenant::Gate::new(Some(at_once)))
+        .map_err(|_| "the host's cap on builds was already set".to_string())
+}
+
+/// Run `work`, which calls the kernel, inside the account's cap and the
+/// host's on builds in flight. A slot that does not come within the account's
+/// own kernel limit is a refusal naming the fix, not a wait whose end the
+/// caller cannot see.
+fn kernel<T>(work: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    let tenant = tenant::current();
+    let patience = tenant.limits.kernel_timeout_max;
+    let Some(_own) = tenant.builds.take(patience) else {
+        return Err(format!(
+            "{} builds are already running for this account; wait for one to finish, or lower timeout_s",
+            tenant.limits.concurrent_builds.unwrap_or(0)
+        ));
+    };
+    let Some(host) = BUILDS_IN_FLIGHT.get() else {
+        return work();
+    };
+    let Some(_shared) = host.take(patience) else {
+        return Err(format!(
+            "the server is at its cap of {} builds at once; wait for one to finish, or lower timeout_s",
+            host.cap().unwrap_or(0)
+        ));
+    };
+    work()
 }
 
 // ------------------------------------------------------------------ the door
@@ -1057,9 +1290,9 @@ struct Build {
 /// Recent builds, newest first. A model's turn is evaluate, then render or
 /// export or set_script, and the window then evaluates the same graph again:
 /// every one of those was a fresh worker, and on a figurine each was most of
-/// the 20 s budget. Keyed by the whole serialised graph, so a hit is the same
-/// part and never a similar one; failures are not kept, because a timeout is a
-/// fact about the machine at the time.
+/// the 20 s budget. Keyed by the tenant and the whole serialised graph, so a
+/// hit is the same part of the same account and never a similar one; failures
+/// are not kept, because a timeout is a fact about the machine at the time.
 static BUILDS: std::sync::LazyLock<std::sync::Mutex<std::collections::VecDeque<Build>>> =
     std::sync::LazyLock::new(Default::default);
 
@@ -1092,7 +1325,8 @@ fn build_exact(
     budget: Option<std::time::Duration>,
     want_step: bool,
 ) -> Result<Built, String> {
-    let key = serde_json::to_string(doc).map_err(|e| format!("encoding the graph: {e}"))?;
+    let graph = serde_json::to_string(doc).map_err(|e| format!("encoding the graph: {e}"))?;
+    let key = crate::tenant::key(&graph);
     {
         let mut builds = BUILDS.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(i) = builds
@@ -1117,17 +1351,19 @@ fn build_exact(
     if let Some(budget) = budget {
         opts.timeout = budget;
     }
-    let (success, step) = if want_step {
-        let mut success = None;
-        let bytes = with_scratch_file("step", |path| {
-            opts.step_path = Some(path.to_path_buf());
-            success = Some(parcad_occt::evaluate(doc, &opts).map_err(|e| format!("{e}"))?);
-            Ok(())
-        })?;
-        (success.expect("the export ran"), Some(std::sync::Arc::new(bytes)))
-    } else {
-        (parcad_occt::evaluate(doc, &opts).map_err(|e| format!("{e}"))?, None)
-    };
+    let (success, step) = kernel(|| {
+        if want_step {
+            let mut success = None;
+            let bytes = with_scratch_file("step", |path| {
+                opts.step_path = Some(path.to_path_buf());
+                success = Some(parcad_occt::evaluate(doc, &opts).map_err(|e| format!("{e}"))?);
+                Ok(())
+            })?;
+            Ok((success.expect("the export ran"), Some(std::sync::Arc::new(bytes))))
+        } else {
+            Ok((parcad_occt::evaluate(doc, &opts).map_err(|e| format!("{e}"))?, None))
+        }
+    })?;
     let wall_ms = crate::page::kernel_took().unwrap_or_else(|| t0.elapsed()).as_millis() as u64;
 
     let success = std::sync::Arc::new(success);
@@ -1156,8 +1392,10 @@ fn build_exact(
 /// worker request so normal live modelling does not pay for previews nobody is
 /// looking at.
 pub fn inspect_edge_target(doc: &Doc, node: usize) -> Result<parcad_occt::TargetPreview, String> {
-    parcad_occt::inspect_edge_target(doc, node, &parcad_occt::Options::default())
-        .map_err(|e| format!("{e}"))
+    kernel(|| {
+        parcad_occt::inspect_edge_target(doc, node, &parcad_occt::Options::default())
+            .map_err(|e| format!("{e}"))
+    })
 }
 
 /// Produce the current part as STL: the triangles the viewport shows, welded,
@@ -1169,12 +1407,7 @@ pub fn inspect_edge_target(doc: &Doc, node: usize) -> Result<parcad_occt::Target
 pub fn export_stl(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Export, String> {
     let built = build_exact(doc, budget, false)?;
     let (bytes, measured) = parcad_evaluation::stl(doc, &built.success, built.reused)?;
-    Ok(Export {
-        bytes,
-        filename: "part.stl",
-        content_type: "model/stl",
-        measured,
-    })
+    Ok(Export::named("part.stl", bytes, measured))
 }
 
 /// Produce the current part as 3MF: the same triangles as [`export_stl`], each
@@ -1182,12 +1415,7 @@ pub fn export_stl(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Expo
 pub fn export_3mf(doc: &Doc, budget: Option<std::time::Duration>, name: &str) -> Result<Export, String> {
     let built = build_exact(doc, budget, false)?;
     let (bytes, measured) = parcad_evaluation::three_mf(doc, &built.success, built.reused, name)?;
-    Ok(Export {
-        bytes,
-        filename: "part.3mf",
-        content_type: "model/3mf",
-        measured,
-    })
+    Ok(Export::named("part.3mf", bytes, measured))
 }
 
 /// Produce the current part as STEP, the exact surfaces.
@@ -1203,12 +1431,11 @@ pub fn export_step_within(doc: &Doc, budget: Option<std::time::Duration>) -> Res
     }
     let (report, _) = measure_brep(doc, &built.success)?;
 
-    Ok(Export {
+    Ok(Export::named(
+        "part.step",
         bytes,
-        filename: "part.step",
-        content_type: "application/step",
-        measured: ExportMeasured::of(&report, &built.success, body_reports(&built.success), None, built.reused),
-    })
+        ExportMeasured::of(&report, &built.success, body_reports(&built.success), None, built.reused),
+    ))
 }
 
 /// Run a path-writing export into a scratch file and return its bytes.
@@ -1243,6 +1470,14 @@ fn with_scratch_file(
     Ok(bytes)
 }
 
+/// Whether this request is one account's on a server: a machine with no
+/// screen, no editor and no slicer, whose disk is not the account's to read.
+/// Every capability hosted mode refuses asks this, and refuses naming what to
+/// do instead.
+fn hosted() -> bool {
+    crate::tenant::current().mode == Mode::Hosted
+}
+
 /// Write an export where the desktop asked for it.
 pub fn write_export(export: &Export, path: &str) -> Result<String, String> {
     std::fs::write(path, &export.bytes).map_err(|e| format!("writing {path}: {e}"))?;
@@ -1268,6 +1503,12 @@ pub fn write_export(export: &Export, path: &str) -> Result<String, String> {
 /// either way. Failing to reveal never fails the export; the file is written
 /// and its path has already been reported.
 pub fn reveal(path: &str) -> Result<(), String> {
+    if hosted() {
+        return Err(
+            "a hosted parcad has no file manager to show the file in; the reply carries its path"
+                .to_string(),
+        );
+    }
     let file = Path::new(path);
     if !file.exists() {
         return Err(format!("nothing at {path} to show"));
@@ -1353,7 +1594,7 @@ pub struct Editor {
 /// Which editor would take a part's source, without opening anything. None
 /// where parts are not files, so there is nothing to open.
 pub fn editor() -> Option<Editor> {
-    if cfg!(target_os = "emscripten") {
+    if cfg!(target_os = "emscripten") || hosted() {
         return None;
     }
     let (name, bundle) = match choose_editor() {
@@ -1395,6 +1636,13 @@ pub fn open_in_editor(path: &str) -> Result<String, String> {
              nothing for an editor to open. The app on your machine keeps every part as a \
              file you can edit anywhere."
         ));
+    }
+    if hosted() {
+        return Err(
+            "this part is on a hosted parcad, which has no editor to open it in: read_project \
+             returns its text, and the parcad app on your own machine opens a part in yours"
+                .to_string(),
+        );
     }
 
     let file = Path::new(path);
@@ -1569,6 +1817,13 @@ fn app_icon(bundle: &Path) -> Option<String> {
 /// Windows' `start` reports nothing either way, and asks the user for an
 /// application when none is registered.
 pub fn open_in_default_app(path: &str) -> Result<(), String> {
+    if hosted() {
+        return Err(format!(
+            "a hosted parcad has no application to open the file in; it is written at {path} on \
+             the server. Fetch it from there, or export from parcad on your own machine, where \
+             `open: true` hands it to the slicer"
+        ));
+    }
     let file = Path::new(path);
     if !file.exists() {
         return Err(format!("nothing at {path} to open"));
@@ -1618,6 +1873,14 @@ pub fn open_in_default_app(path: &str) -> Result<(), String> {
 /// summary — volume, area, bounding box, face-type tally — which is the right
 /// first look at an unfamiliar file.
 pub fn probe_step(path: &str, keep_faces: bool) -> Result<parcad_occt::StepProbe, String> {
+    if hosted() {
+        return Err(
+            "a hosted parcad reads no file from its own disk, so there is nothing here for \
+             probe_step_export to open: measure a parcad part with evaluate_part, or run parcad \
+             on your own machine (brew install parcad) to probe a STEP file there"
+                .to_string(),
+        );
+    }
     let p = std::path::Path::new(path);
     if !p.is_absolute() {
         let example = if cfg!(windows) {
@@ -1637,7 +1900,7 @@ pub fn probe_step(path: &str, keep_faces: bool) -> Result<parcad_occt::StepProbe
         ));
     }
     let mut probe =
-        parcad_occt::probe_step(p, &parcad_occt::Options::default()).map_err(|e| format!("{e}"))?;
+        kernel(|| parcad_occt::probe_step(p, &parcad_occt::Options::default()).map_err(|e| format!("{e}")))?;
     if !keep_faces {
         for solid in &mut probe.solids {
             solid.faces.clear();
@@ -1656,6 +1919,32 @@ pub fn mcp_status() -> crate::mcp::Status {
     crate::mcp::status()
 }
 
+/// What this host can do that its version number does not say, for a client
+/// to switch on: a binary built from a branch still carries the last release's
+/// number. `/api/health` and the MCP `initialize` reply both carry it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Capability {
+    /// Whether this process is one server for many accounts, each behind a
+    /// bearer, rather than one person's.
+    pub hosted: bool,
+    /// What this build carries, hosted or not: [`FEATURES`].
+    pub features: &'static [&'static str],
+}
+
+/// What hosting added, named once for every transport: accounts rooted in
+/// folders of their own, bearer tokens in front of `/mcp` and `/api`, exports
+/// fetched back from `/api/exports/<name>`, every `url` a reply carries signed
+/// so it fetches without the bearer until it expires, and per-account limits
+/// on kernel time, builds in flight and request size.
+pub const FEATURES: &[&str] = &["tenants", "bearer-auth", "export-download", "signed-links", "limits"];
+
+pub fn capability(hosted: bool) -> Capability {
+    Capability {
+        hosted,
+        features: FEATURES,
+    }
+}
+
 /// Lay a reference body against a part and measure the fit: both are scripts,
 /// so the reference is usually one line, `return box(355.7, 248.1, 16.8)
 /// .at(...)`. Refuses when either script does not build, with that script's
@@ -1666,8 +1955,10 @@ pub fn check_fit(part: &str, reference: &str) -> Result<parcad_occt::FitReport, 
         crate::script::build_graph(reference)
             .map_err(|e| format!("the reference script: {e}"))?,
     )?;
-    parcad_occt::check_fit(&part, &other, &parcad_occt::Options::default())
-        .map_err(|e| format!("{e}"))
+    kernel(|| {
+        parcad_occt::check_fit(&part, &other, &parcad_occt::Options::default())
+            .map_err(|e| format!("{e}"))
+    })
 }
 
 // ------------------------------------------------------------ script sources
@@ -1847,6 +2138,95 @@ pub fn read_docs(
 mod tests {
     use super::*;
 
+    /// A name is one plain file name, or one under `renders/`; a file kept
+    /// under it reads back by that name with the type its extension says, and
+    /// a hosted account's reply carries a URL signed for that account and
+    /// that path, which `markdown` points at.
+    #[test]
+    fn an_export_is_kept_by_a_plain_name_and_read_back_by_it() {
+        use crate::signing::tests::verified;
+        let tenants = crate::tenant::tests::fresh_root("exports");
+        let account = crate::tenant::tests::hosted_at("a", &tenants);
+        let links = crate::tenant::tests::links();
+        let a = Some(account.id.clone());
+        crate::tenant::scope(account.clone(), || {
+            let kept = keep_export("x.3mf", b"model").unwrap();
+            assert_eq!(kept.file, account.exports.join("x.3mf"));
+            assert_eq!(kept.path, ".exports/x.3mf");
+            let url = kept.url.as_deref().expect("a hosted reply carries a url");
+            assert_eq!(verified(&links, url), ("https://cad.example.test/api/exports/x.3mf".to_string(), a.clone()));
+            assert_eq!(kept.reference(), url);
+            let render = keep_export("renders/abc-iso.png", b"png").unwrap();
+            assert_eq!(render.path, ".exports/renders/abc-iso.png");
+            assert_eq!(
+                verified(&links, render.url.as_deref().unwrap()),
+                ("https://cad.example.test/api/exports/renders/abc-iso.png".to_string(), a.clone())
+            );
+            let spaced = keep_export("my part (v2).stl", b"stl").unwrap();
+            assert_eq!(
+                verified(&links, spaced.url.as_deref().unwrap()),
+                ("https://cad.example.test/api/exports/my%20part%20%28v2%29.stl".to_string(), a.clone()),
+                "signed over the path as encoded"
+            );
+            let plain_http = crate::tenant::PublicHost::parse("http://127.0.0.1:4398").unwrap();
+            let plain_links = std::sync::Arc::new(crate::signing::tests::links(plain_http));
+            let under_test = crate::tenant::Tenant::hosted(crate::tenant::TenantId::new("b").unwrap(), &tenants, &plain_links);
+            std::fs::create_dir_all(&under_test.root).unwrap();
+            let kept = crate::tenant::scope(std::sync::Arc::new(under_test), || keep_export("x.3mf", b"model").unwrap());
+            assert_eq!(
+                verified(&plain_links, kept.url.as_deref().unwrap()),
+                ("http://127.0.0.1:4398/api/exports/x.3mf".to_string(), Some(crate::tenant::TenantId::new("b").unwrap())),
+                "the url carries the scheme given"
+            );
+
+            let read = export_file("x.3mf").unwrap();
+            assert_eq!((read.bytes.as_slice(), read.filename.as_str(), read.content_type), (&b"model"[..], "x.3mf", "model/3mf"));
+            let read = export_file("renders/abc-iso.png").unwrap();
+            assert_eq!((read.filename.as_str(), read.content_type), ("abc-iso.png", "image/png"));
+            assert_eq!(export_file("my part (v2).stl").unwrap().content_type, "model/stl");
+            assert_eq!(export_file("x.step").unwrap_err(), ExportRefused::Missing { name: "x.step".into() });
+            assert_eq!(export_file("renders").unwrap_err(), ExportRefused::Missing { name: "renders".into() }, "a folder is no export");
+            assert!(ExportRefused::Missing { name: "x.step".into() }.message().contains("export_part writes one"));
+
+            for (name, why) in [
+                ("..", "a segment starts with a dot"),
+                ("/etc/passwd", "a folder other than renders/, or more than one"),
+                ("renders/../x.3mf", "a segment starts with a dot"),
+                (".hidden.3mf", "a segment starts with a dot"),
+                ("a/b/x.3mf", "a folder other than renders/, or more than one"),
+                ("exports/x.3mf", "a folder other than renders/, or more than one"),
+                ("renders/", "it has an empty segment"),
+                ("", "it has an empty segment"),
+                ("x:y.3mf", "a segment contains a character that is not part of a name"),
+                ("x\\y.3mf", "a segment contains a character that is not part of a name"),
+            ] {
+                let refused = export_file(name).unwrap_err();
+                assert_eq!(refused, ExportRefused::NotAName { name: name.into(), why }, "{name:?}");
+                assert!(refused.message().contains("one plain file name"), "the rule is named: {}", refused.message());
+                assert!(keep_export(name, b"x").is_err(), "{name:?} cannot be written either");
+            }
+        });
+        let local = crate::tenant::tests::local_at(&tenants.join("local"));
+        crate::tenant::scope(local.clone(), || {
+            let kept = keep_export("x.3mf", b"model").unwrap();
+            assert_eq!(kept.path, local.exports.join("x.3mf").to_string_lossy(), "a local user's path is the file");
+            assert_eq!(kept.url, None, "and needs no URL");
+            assert_eq!(kept.reference(), kept.path);
+        });
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    #[test]
+    fn the_capability_names_what_this_build_carries_once() {
+        assert_eq!(capability(false).features, FEATURES);
+        assert!(!capability(false).hosted);
+        assert!(capability(true).hosted);
+        assert_eq!(
+            serde_json::to_value(capability(true)).unwrap(),
+            serde_json::json!({ "hosted": true, "features": ["tenants", "bearer-auth", "export-download", "signed-links", "limits"] })
+        );
+    }
+
     /// The door refuses naming every failing check with its measurement and
     /// the argument that opens it; a reason opens it and is handed back; an
     /// empty reason is no reason.
@@ -1944,11 +2324,153 @@ mod tests {
     /// The probe's own refusals, which fire before any worker is spawned.
     /// Both callers of this capability are agents, so the message has to name
     /// the fix, not just the failure.
+    /// What a call asks for is bounded by its account: 600 s of kernel is 60
+    /// on a server and 600 for a local user, whose limits are today's.
+    #[test]
+    fn a_budget_is_what_was_asked_within_what_the_account_allows() {
+        let tenants = crate::tenant::tests::fresh_root("tenants");
+        let on_server = crate::tenant::scope(crate::tenant::tests::hosted_at("a", &tenants), || {
+            (budget(Some(600.0)), budget(None))
+        });
+        assert_eq!(on_server.0.kernel, Duration::from_secs(60));
+        assert_eq!(on_server.0.script, Duration::from_secs(120));
+        assert_eq!(on_server.1.kernel, parcad_occt::default_timeout().min(Duration::from_secs(60)));
+
+        let local = crate::tenant::tests::local_at(&tenants);
+        let asked = crate::tenant::scope(local.clone(), || budget(Some(600.0)));
+        assert_eq!(asked.kernel, Duration::from_secs(600));
+        assert_eq!(asked.script, Duration::from_secs(600));
+        let unasked = crate::tenant::scope(local.clone(), || budget(None));
+        assert_eq!(unasked.kernel, parcad_occt::default_timeout(), "absent, the host's default");
+        assert_eq!(unasked.script, crate::script::BACKSTOP);
+        let tiny = crate::tenant::scope(local, || budget(Some(0.1)));
+        assert_eq!(tiny.kernel, Duration::from_secs(1), "a second is the floor");
+        assert_eq!(tiny.script, crate::script::BACKSTOP, "the backstop is never below its own");
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    /// A third build for one account waits its kernel limit for a slot, then
+    /// is refused naming the fix; a local user has no such cap.
+    #[test]
+    fn a_third_concurrent_build_waits_then_is_refused_naming_the_fix() {
+        use std::sync::{Arc, Barrier};
+        let tenants = crate::tenant::tests::fresh_root("tenants");
+        let patience = Duration::from_millis(300);
+        let account = Arc::new(crate::tenant::Tenant::new(
+            crate::tenant::TenantId::new("a").unwrap(),
+            tenants.join("a"),
+            tenants.join("a/.exports"),
+            Mode::Hosted,
+            crate::tenant::Limits {
+                kernel_timeout_max: patience,
+                ..crate::tenant::Limits::hosted()
+            },
+            Some(Arc::new(crate::tenant::tests::links())),
+        ));
+        let started = Arc::new(Barrier::new(3));
+        let release = Arc::new(Barrier::new(3));
+        let builders: Vec<_> = (0..2)
+            .map(|_| {
+                let account = account.clone();
+                let started = started.clone();
+                let release = release.clone();
+                std::thread::spawn(move || {
+                    crate::tenant::scope(account, || {
+                        kernel(|| {
+                            started.wait();
+                            release.wait();
+                            Ok(())
+                        })
+                    })
+                })
+            })
+            .collect();
+        started.wait();
+        let t0 = std::time::Instant::now();
+        let refused = crate::tenant::scope(account.clone(), || kernel(|| Ok(()))).unwrap_err();
+        assert!(t0.elapsed() >= patience, "it waited for a slot first: {:?}", t0.elapsed());
+        assert!(refused.contains("2 builds are already running for this account"), "{refused}");
+        assert!(refused.contains("lower timeout_s"), "the refusal names the fix: {refused}");
+        release.wait();
+        for builder in builders {
+            builder.join().unwrap().unwrap();
+        }
+        assert_eq!(crate::tenant::scope(account, || kernel(|| Ok(7))), Ok(7), "a freed slot is taken again");
+
+        let local = crate::tenant::tests::local_at(&tenants);
+        let inside = Arc::new(Barrier::new(4));
+        let builders: Vec<_> = (0..3)
+            .map(|_| {
+                let local = local.clone();
+                let inside = inside.clone();
+                std::thread::spawn(move || {
+                    crate::tenant::scope(local, || {
+                        kernel(|| {
+                            inside.wait();
+                            Ok(())
+                        })
+                    })
+                })
+            })
+            .collect();
+        inside.wait();
+        for builder in builders {
+            builder.join().unwrap().unwrap();
+        }
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
     #[test]
     fn probe_step_refuses_a_relative_path_and_names_the_fix() {
         let error = probe_step("exports/part.step", true).unwrap_err();
         assert!(error.contains("not an absolute path"), "{error}");
         assert!(error.contains("full path"), "{error}");
+    }
+
+    /// A hosted account has no screen, editor or slicer, and the server's disk
+    /// is not its to read: each refusal names what to do instead, and a local
+    /// user is unchanged.
+    #[test]
+    fn hosted_mode_refuses_what_only_a_machine_of_your_own_can_do() {
+        let tenants = crate::tenant::tests::fresh_root("tenants");
+        crate::tenant::scope(crate::tenant::tests::hosted_at("a", &tenants), || {
+            assert!(editor().is_none(), "no pencil to show");
+            let error = open_in_editor("/nowhere/part.js").unwrap_err();
+            assert!(error.contains("read_project returns its text"), "{error}");
+            let error = open_in_default_app("/nowhere/part.stl").unwrap_err();
+            assert!(error.contains("written at /nowhere/part.stl on the server"), "{error}");
+            assert!(error.contains("your own machine"), "{error}");
+            let error = reveal("/nowhere/part.stl").unwrap_err();
+            assert!(error.contains("no file manager"), "{error}");
+            // A file that exists and is not the account's: refused before it is looked at.
+            let error = probe_step("/etc/passwd", true).unwrap_err();
+            assert!(error.contains("reads no file from its own disk"), "{error}");
+            assert!(error.contains("evaluate_part"), "{error}");
+        });
+
+        assert!(editor().is_some(), "a local user is offered an editor");
+        assert!(open_in_editor("/nowhere/part.js").unwrap_err().contains("nothing at"));
+        assert!(open_in_default_app("/nowhere/part.stl").unwrap_err().contains("nothing at"));
+        assert!(reveal("/nowhere/part.stl").unwrap_err().contains("nothing at"));
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    /// "@session" is the script on *this* account's screen: another account's
+    /// open part is not it.
+    #[test]
+    fn the_session_script_belongs_to_the_account_that_opened_it() {
+        let tenants = crate::tenant::tests::fresh_root("tenants");
+        let a = crate::tenant::tests::hosted_at("a", &tenants);
+        let b = crate::tenant::tests::hosted_at("b", &tenants);
+        crate::tenant::scope(a.clone(), || {
+            crate::projects::write("bracket", "return box(1,1,1);").unwrap();
+            crate::session::open("bracket", "tab-a").unwrap();
+        });
+        let on_a = crate::tenant::scope(a, || resolve_script(None, Some(SESSION), &[], None)).unwrap();
+        assert_eq!(on_a.script, "return box(1,1,1);");
+        let on_b = crate::tenant::scope(b, || resolve_script(None, Some(SESSION), &[], None)).unwrap_err();
+        assert!(on_b.contains("open_project"), "the refusal names the fix: {on_b}");
+        let _ = std::fs::remove_dir_all(&tenants);
     }
 
     #[test]

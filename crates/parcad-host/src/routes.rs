@@ -54,7 +54,7 @@ pub fn list_projects() -> Result<Value, String> {
         // wants names can use; the tree is the same parts with their folders.
         "projects": projects::list()?,
         "tree": projects::tree()?,
-        "directory": projects::dir().to_string_lossy(),
+        "directory": crate::tenant::shown(&projects::dir()),
     }))
 }
 

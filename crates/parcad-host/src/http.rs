@@ -10,9 +10,18 @@
 //!
 //! Three deliberate constraints:
 //!
-//! - **Loopback only.** This endpoint evaluates arbitrary intent graphs, which
-//!   means spawning the OCCT worker. That is a local tool, not a service; it is
-//!   never bound to a routable address.
+//! - **Loopback, unless every request is somebody's.** This endpoint evaluates
+//!   arbitrary intent graphs, which means spawning the OCCT worker, so a local
+//!   tool never binds a routable address. The one exception is hosted mode:
+//!   `parcad serve --hosted` binds where it is told, and then `/mcp` and every
+//!   `/api` route sit behind [`authenticate`], which resolves a bearer token to
+//!   one account's [`tenant::Tenant`] or answers 401 naming the fix. Only
+//!   `/api/health` stays open, and no frontend is served at all — a browser
+//!   cannot send a bearer. What an account wrote it fetches back from
+//!   `/api/exports/<name>` with the same bearer, or by the signed, expiring
+//!   link the reply carried (`signing.rs`), which is how a picture a model
+//!   pastes reaches the user's chat client; that is the one way a file on the
+//!   server reaches a client.
 //! - **No CORS headers.** Their absence is the access control. A page on another
 //!   origin can still *send* a JSON POST, but the preflight it requires will
 //!   fail and it can never read a reply. Adding a permissive layer here would
@@ -26,15 +35,18 @@ use crate::projects;
 use crate::routes::{self, ProjectOp, SaveRequest, SessionPush};
 use crate::service;
 use crate::session;
+use crate::tenant;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Request, State},
     http::{header, StatusCode, Uri},
+    middleware::Next,
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
 use serde_json::json;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 
 pub use crate::assets::{Asset, Assets};
@@ -45,6 +57,11 @@ pub fn port() -> u16 {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(4242)
+}
+
+/// Where a local host listens: this machine only.
+pub fn loopback(port: u16) -> SocketAddr {
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
 }
 
 #[derive(Deserialize)]
@@ -63,33 +80,68 @@ struct StepRequest {
     graph: serde_json::Value,
 }
 
-/// Host the application on `port` until the listener stops, saying on stderr
-/// where it is.
+/// Host the application on `address` until the listener stops, saying on
+/// stderr where it is. `accounts` makes it a server for many accounts; the one
+/// caller that binds anything but loopback, `parcad serve`, refuses to without them.
 ///
 /// A failure to bind comes back as the error rather than a log line, because
 /// the two callers disagree about how bad it is: the desktop window works
 /// regardless, while `parcad serve` has nothing else to do. The usual cause is
 /// a second instance already holding the port, which the message names.
-pub async fn serve(port: u16, assets: Arc<dyn Assets>) -> Result<(), String> {
-    let router = router(assets);
-    let address = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+pub async fn serve(address: SocketAddr, assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Result<(), String> {
+    let announcement = match &accounts {
+        None => format!("parcad: UI and API hosted on http://{address}, MCP at /mcp"),
+        Some(accounts) => format!(
+            "parcad: hosted on http://{address} as {}/mcp for {} tokens; /mcp and /api need a bearer; \
+             a reply's links hold for {}",
+            accounts.links().host(),
+            accounts.tokens(),
+            crate::signing::shown(accounts.links().lifetime())
+        ),
+    };
+    let router = router(assets, accounts);
     let listener = tokio::net::TcpListener::bind(address).await.map_err(|e| {
         format!(
-            "could not host on 127.0.0.1:{port}: {e}\n\
+            "could not host on {address}: {e}\n\
              If another parcad is already running, use that one, or start this \
              instance with PARCAD_HTTP_PORT=<other port>."
         )
     })?;
-    eprintln!("parcad: UI and API hosted on http://127.0.0.1:{port}, MCP at /mcp");
+    eprintln!("{announcement}");
     axum::serve(listener, router)
         .await
         .map_err(|e| format!("the HTTP host stopped: {e}"))
 }
 
-fn router(assets: Arc<dyn Assets>) -> Router {
+fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router {
+    let capability = service::capability(accounts.is_some());
+    let health = move || std::future::ready(health(capability));
+    let Some(accounts) = accounts else {
+        return Router::new()
+            .route("/api/health", get(health))
+            .merge(api())
+            // The same application again, for a model rather than a person. It
+            // reaches `service` through the same functions, and the scripts it
+            // sends run in `script`'s sandbox rather than the webview.
+            .nest_service("/mcp", mcp::service(assets.clone(), None))
+            // Everything else is the frontend. Registered last and as a fallback so
+            // no asset name can ever shadow an API route.
+            .fallback(asset)
+            .with_state(assets);
+    };
+    // Every `/api` route too, not `/mcp` alone: an agent service builds and
+    // exports a part over them. No frontend, which could carry no bearer.
+    let guarded = api()
+        .nest_service("/mcp", mcp::service(assets, Some(accounts.links().host().authority())))
+        .layer(axum::middleware::from_fn_with_state(Arc::new(accounts), authenticate));
+    Router::new().route("/api/health", get(health)).merge(guarded)
+}
+
+/// The routes behind the window and, hosted, behind a bearer. Generic in the
+/// state because none of them reads any; the local router adds the frontend's.
+fn api<S: Clone + Send + Sync + 'static>() -> Router<S> {
     Router::new()
-        .route("/api/health", get(health))
-        // Whether a model is connected to the MCP endpoint below. Read by both
+        // Whether a model is connected to the MCP endpoint. Read by both
         // windows; the desktop one gets it over IPC instead.
         .route("/api/mcp", get(mcp_status))
         // The live session: what is on screen, pushed by viewers on the
@@ -105,6 +157,9 @@ fn router(assets: Arc<dyn Assets>) -> Router {
         .route("/api/export/stl", post(export_stl))
         .route("/api/export/3mf", post(export_3mf))
         .route("/api/export/step", post(export_step))
+        // What export_part and a reply's `markdown` wrote, back as a download:
+        // the only way a file in a hosted account's folder reaches its client.
+        .route("/api/exports/{*name}", get(export_file))
         // Projects are files on disk shared with the desktop window and with
         // MCP. The frontend reads them from here rather than from a build-time
         // glob, so a part an agent saves shows up in the picker.
@@ -124,23 +179,87 @@ fn router(assets: Arc<dyn Assets>) -> Router {
             "/api/preview/{*name}",
             get(project_preview).put(save_project_preview),
         )
-        // The same application again, for a model rather than a person. It
-        // reaches `service` through the same functions, and the scripts it
-        // sends run in `script`'s sandbox rather than the webview.
-        .nest_service("/mcp", mcp::service(assets.clone()))
-        // Everything else is the frontend. Registered last and as a fallback so
-        // no asset name can ever shadow an API route.
-        .fallback(asset)
-        .with_state(assets)
 }
 
-async fn health() -> impl IntoResponse {
+/// Resolve the request's bearer to its account, or answer for it. On the
+/// export route alone a request carrying `sig` is a signed link instead, and
+/// the link decides: it is how a chat client fetches the picture a reply's
+/// `markdown` names, with no bearer to send. The tenant is put on the request
+/// for rmcp, which serves each `/mcp` request on a task of its own, and
+/// entered around `next` for the `/api` handlers, which run right here.
+async fn authenticate(
+    State(accounts): State<Arc<tenant::Accounts>>,
+    mut request: Request,
+    next: Next,
+) -> Response {
+    let resolved = match signed_link(&request) {
+        Some(link) => accounts.resolve_link(request.uri().path(), &link, crate::signing::unix_now()),
+        None => {
+            let authorization = request
+                .headers()
+                .get(header::AUTHORIZATION)
+                .map(|value| value.to_str().unwrap_or(""));
+            accounts.resolve(authorization)
+        }
+    };
+    let tenant = match resolved {
+        Ok(tenant) => tenant,
+        Err(refused) => return refused.into_response(),
+    };
+    request.extensions_mut().insert(tenant.clone());
+    tenant::scoped(tenant, next.run(request)).await
+}
+
+/// The link's fields, when the request is for an export and carries `sig`.
+fn signed_link(request: &Request) -> Option<crate::signing::LinkQuery<'_>> {
+    if !request.uri().path().starts_with("/api/exports/") {
+        return None;
+    }
+    let query = request.uri().query()?;
+    let value = |key: &str| {
+        query
+            .split('&')
+            .find_map(|pair| pair.split_once('=').filter(|(k, _)| *k == key).map(|(_, v)| v))
+    };
+    Some(crate::signing::LinkQuery {
+        tenant: value("t"),
+        exp: value("exp"),
+        sig: Some(value("sig")?),
+    })
+}
+
+impl IntoResponse for tenant::Refused {
+    fn into_response(self) -> Response {
+        let (status, challenge) = match &self {
+            tenant::Refused::NoToken => (StatusCode::UNAUTHORIZED, Some("Bearer realm=\"parcad\"")),
+            tenant::Refused::Unknown => (
+                StatusCode::UNAUTHORIZED,
+                Some("Bearer realm=\"parcad\", error=\"invalid_token\""),
+            ),
+            tenant::Refused::StaleLink { .. } => (StatusCode::FORBIDDEN, None),
+            tenant::Refused::Unready(_) => (StatusCode::INTERNAL_SERVER_ERROR, None),
+        };
+        let mut response = (status, self.message()).into_response();
+        if let Some(challenge) = challenge {
+            response
+                .headers_mut()
+                .insert(header::WWW_AUTHENTICATE, header::HeaderValue::from_static(challenge));
+        }
+        response
+    }
+}
+
+fn health(capability: service::Capability) -> Json<serde_json::Value> {
     Json(json!({
         "app": "parcad",
         "version": env!("CARGO_PKG_VERSION"),
         // The frontend reads this to confirm it is talking to a real host
         // before it decides it has a backend at all.
         "transport": "http",
+        // What a client switches on, since a binary built from a branch
+        // carries the last release's version.
+        "hosted": capability.hosted,
+        "features": capability.features,
     }))
 }
 
@@ -206,13 +325,16 @@ async fn session_events(uri: Uri) -> impl IntoResponse {
 /// Geometry work is blocking and slow — the OCCT path is a whole subprocess.
 ///
 /// Running it on the async runtime's threads would let one fillet stall every
-/// other request, including the asset requests that load the page.
+/// other request, including the asset requests that load the page. The
+/// request's tenant is a task-local, which no blocking thread sees until it
+/// is re-entered there (`tenant.rs`).
 async fn blocking<T, F>(work: F) -> Result<T, Failed>
 where
     T: Send + 'static,
     F: FnOnce() -> Result<T, String> + Send + 'static,
 {
-    match tokio::task::spawn_blocking(work).await {
+    let tenant = tenant::current();
+    match tokio::task::spawn_blocking(move || tenant::scope(tenant, work)).await {
         Ok(result) => result.map_err(Failed),
         Err(e) => Err(Failed(format!("the evaluation task did not finish: {e}"))),
     }
@@ -238,31 +360,51 @@ async fn inspect_edge_target(Json(request): Json<InspectRequest>) -> Result<Resp
 async fn export_stl(Json(request): Json<EvaluateRequest>) -> Result<Response, Failed> {
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
     let export = blocking(move || service::export_stl(&doc, None)).await?;
-    Ok(download(export))
+    Ok(download(export.filename, export.content_type, export.bytes))
 }
 
 async fn export_3mf(Json(request): Json<EvaluateRequest>) -> Result<Response, Failed> {
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
     let export = blocking(move || service::export_3mf(&doc, None, "part")).await?;
-    Ok(download(export))
+    Ok(download(export.filename, export.content_type, export.bytes))
 }
 
 async fn export_step(Json(request): Json<StepRequest>) -> Result<Response, Failed> {
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
     let export = blocking(move || service::export_step(&doc)).await?;
-    Ok(download(export))
+    Ok(download(export.filename, export.content_type, export.bytes))
 }
 
-fn download(export: service::Export) -> Response {
+async fn export_file(Path(name): Path<String>) -> Response {
+    match service::export_file(&name) {
+        Ok(file) => download(&file.filename, file.content_type, file.bytes),
+        Err(refused) => refused.into_response(),
+    }
+}
+
+impl IntoResponse for service::ExportRefused {
+    fn into_response(self) -> Response {
+        let status = match &self {
+            service::ExportRefused::NotAName { .. } => StatusCode::UNPROCESSABLE_ENTITY,
+            service::ExportRefused::Missing { .. } => StatusCode::NOT_FOUND,
+            service::ExportRefused::Unreadable { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        let mut response = Failed(self.message()).into_response();
+        *response.status_mut() = status;
+        response
+    }
+}
+
+fn download(filename: &str, content_type: &str, bytes: Vec<u8>) -> Response {
     (
         [
-            (header::CONTENT_TYPE, export.content_type.to_string()),
+            (header::CONTENT_TYPE, content_type.to_string()),
             (
                 header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{}\"", export.filename),
+                format!("attachment; filename=\"{filename}\""),
             ),
         ],
-        export.bytes,
+        bytes,
     )
         .into_response()
 }
@@ -356,5 +498,482 @@ impl IntoResponse for Failed {
             Json(json!({ "error": self.0 })),
         )
             .into_response()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tenant::tests::{links, PUBLIC_HOST};
+    use crate::tenant::TenantId;
+    use std::io::{Read, Write};
+
+    struct NoAssets;
+
+    impl Assets for NoAssets {
+        fn get(&self, _: &str) -> Option<Asset> {
+            None
+        }
+        fn how_to_embed(&self) -> String {
+            String::new()
+        }
+    }
+
+    /// A router on a spare loopback port, served on a thread of its own for
+    /// as long as the test process runs.
+    fn on_a_spare_port(accounts: Option<tenant::Accounts>) -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a spare port");
+        let port = listener.local_addr().expect("the port").port();
+        listener.set_nonblocking(true).expect("non-blocking");
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("a runtime");
+            runtime.block_on(async {
+                let listener = tokio::net::TcpListener::from_std(listener).expect("the listener");
+                axum::serve(listener, router(Arc::new(NoAssets), accounts))
+                    .await
+                    .expect("the host runs");
+            });
+        });
+        port
+    }
+
+    /// Two accounts in one tokens file, their tokens, and the host serving them.
+    fn two_accounts() -> (std::path::PathBuf, String, String, u16) {
+        let dir = crate::tenant::tests::fresh_root("hosted");
+        let file = dir.join("tokens");
+        let acme = tenant::issue(TenantId::new("acme").unwrap(), &file).unwrap();
+        let bolt = tenant::issue(TenantId::new("bolt").unwrap(), &file).unwrap();
+        let accounts = tenant::Accounts::read(&file, &dir.join("tenants"), links()).unwrap();
+        let port = on_a_spare_port(Some(accounts));
+        (dir, acme, bolt, port)
+    }
+
+    /// A reply's url as a request line: the route and query, the host dropped.
+    fn route_of(url: &str) -> &str {
+        url.strip_prefix(&format!("https://{PUBLIC_HOST}")).expect("the public host")
+    }
+
+    struct Reply {
+        status: u16,
+        head: String,
+        bytes: Vec<u8>,
+        body: String,
+    }
+
+    impl Reply {
+        fn header(&self, name: &str) -> Option<&str> {
+            self.head.lines().find_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                key.eq_ignore_ascii_case(name).then(|| value.trim())
+            })
+        }
+    }
+
+    /// One HTTP/1.1 request over a socket of its own, read whole.
+    fn exchange(port: u16, verb: &str, path: &str, headers: &[(&str, &str)], body: &str) -> Reply {
+        let mut stream = std::net::TcpStream::connect(("127.0.0.1", port)).expect("the host listens");
+        let mut request = format!("{verb} {path} HTTP/1.1\r\nConnection: close\r\nContent-Length: {}\r\n", body.len());
+        if !headers.iter().any(|(name, _)| name.eq_ignore_ascii_case("host")) {
+            request.push_str(&format!("Host: 127.0.0.1:{port}\r\n"));
+        }
+        for (name, value) in headers {
+            request.push_str(&format!("{name}: {value}\r\n"));
+        }
+        request.push_str("\r\n");
+        request.push_str(body);
+        stream.write_all(request.as_bytes()).expect("the request is sent");
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).expect("the reply is read");
+        let split = raw.windows(4).position(|w| w == b"\r\n\r\n").expect("a response head");
+        let head = String::from_utf8_lossy(&raw[..split]).into_owned();
+        let body = &raw[split + 4..];
+        let status = head.split_whitespace().nth(1).and_then(|code| code.parse().ok()).expect("a status");
+        let chunked = head.to_ascii_lowercase().contains("transfer-encoding: chunked");
+        let bytes = if chunked { dechunk(body) } else { body.to_vec() };
+        Reply {
+            status,
+            head,
+            body: String::from_utf8_lossy(&bytes).into_owned(),
+            bytes,
+        }
+    }
+
+    fn dechunk(mut body: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        loop {
+            let line_end = body.windows(2).position(|w| w == b"\r\n").expect("a chunk size");
+            let size = std::str::from_utf8(&body[..line_end]).expect("a chunk size in ASCII");
+            let size = usize::from_str_radix(size.trim(), 16).expect("a hex chunk size");
+            let rest = &body[line_end + 2..];
+            if size == 0 {
+                return out;
+            }
+            out.extend_from_slice(&rest[..size]);
+            body = &rest[size + 2..];
+        }
+    }
+
+    fn bearer(token: &str) -> String {
+        format!("Bearer {token}")
+    }
+
+    /// Everything but `/api/health` is behind a bearer, and each refusal
+    /// says what to do. No frontend is served.
+    #[test]
+    fn a_hosted_host_refuses_a_request_without_its_account_naming_the_fix() {
+        let (dir, acme, _, port) = two_accounts();
+
+        assert_eq!(exchange(port, "GET", "/api/health", &[], "").status, 200, "the health check needs no token");
+
+        let missing = exchange(port, "GET", "/api/projects", &[], "");
+        assert_eq!(missing.status, 401, "{}", missing.body);
+        assert_eq!(missing.header("www-authenticate"), Some("Bearer realm=\"parcad\""));
+        assert!(missing.body.contains("Authorization: Bearer <token>"), "{}", missing.body);
+        assert!(missing.body.contains("brew install parcad"), "the local way out is named: {}", missing.body);
+
+        let wrong = exchange(port, "GET", "/api/projects", &[("Authorization", "Bearer nope")], "");
+        assert_eq!(wrong.status, 401);
+        assert!(wrong.header("www-authenticate").is_some_and(|c| c.contains("invalid_token")), "{}", wrong.head);
+        assert!(wrong.body.contains("not recognised"), "{}", wrong.body);
+
+        let mcp = exchange(port, "POST", "/mcp", &[("Content-Type", "application/json")], "{}");
+        assert_eq!(mcp.status, 401, "/mcp is behind the same door: {}", mcp.body);
+
+        let page = exchange(port, "GET", "/", &[("Authorization", &bearer(&acme))], "");
+        assert_eq!(page.status, 404, "no frontend is served, token or not");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Two accounts save `bracket` and each lists only its own — over `/api`,
+    /// whose handlers run inside the middleware's task, and over `/mcp`, which
+    /// rmcp serves on a task of its own and reads the tenant off the request.
+    #[test]
+    fn two_accounts_on_one_host_see_only_their_own_parts() {
+        let (dir, acme, bolt, port) = two_accounts();
+        let json = ("Content-Type", "application/json");
+        let save = |token: &str, name: &str, script: &str| {
+            exchange(
+                port,
+                "PUT",
+                &format!("/api/projects/{name}"),
+                &[json, ("Authorization", &bearer(token))],
+                &serde_json::json!({ "script": script }).to_string(),
+            )
+        };
+        let saved = save(&acme, "bracket", "return box(1, 1, 1);");
+        assert_eq!(saved.status, 200, "{}", saved.body);
+        let saved: serde_json::Value = serde_json::from_str(&saved.body).unwrap();
+        assert_eq!(saved["path"], "bracket.parcad/part.js", "shown relative to the account's root");
+        assert_eq!(save(&bolt, "bracket", "return box(2, 2, 2);").status, 200);
+        assert_eq!(save(&bolt, "lid", "return box(3, 3, 3);").status, 200);
+
+        let listed = exchange(port, "GET", "/api/projects", &[("Authorization", &bearer(&acme))], "");
+        let listed: serde_json::Value = serde_json::from_str(&listed.body).unwrap();
+        let names = listed["projects"].as_array().expect("a list");
+        assert!(names.contains(&serde_json::json!("bracket")), "{names:?}");
+        assert!(!names.contains(&serde_json::json!("lid")), "the other account's part: {names:?}");
+        assert_eq!(listed["directory"], ".", "the server's layout is not the account's to see");
+        let tenants = dir.join("tenants");
+        assert_eq!(std::fs::read_to_string(tenants.join("acme/bracket.parcad/part.js")).unwrap(), "return box(1, 1, 1);");
+        assert_eq!(std::fs::read_to_string(tenants.join("bolt/bracket.parcad/part.js")).unwrap(), "return box(2, 2, 2);");
+
+        let list_projects = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {
+                "name": "list_projects", "arguments": {},
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                },
+            },
+        })
+        .to_string();
+        let over_mcp = |token: &str, host: &str| {
+            exchange(
+                port,
+                "POST",
+                "/mcp",
+                &[
+                    json,
+                    ("Accept", "application/json, text/event-stream"),
+                    ("MCP-Protocol-Version", "2026-07-28"),
+                    ("Mcp-Method", "tools/call"),
+                    ("Mcp-Name", "list_projects"),
+                    ("Host", host),
+                    ("Authorization", &bearer(token)),
+                ],
+                &list_projects,
+            )
+        };
+        let on_acme = over_mcp(&acme, "cad.example.test");
+        assert_eq!(on_acme.status, 200, "{}", on_acme.body);
+        assert!(on_acme.body.contains("\"bracket\"") && !on_acme.body.contains("\"lid\""), "{}", on_acme.body);
+        assert!(on_acme.body.contains("\"directory\":\".\""), "{}", on_acme.body);
+        let on_bolt = over_mcp(&bolt, "cad.example.test");
+        assert!(on_bolt.body.contains("\"lid\""), "{}", on_bolt.body);
+        assert_eq!(over_mcp(&bolt, "elsewhere.example").status, 403, "rmcp answers only the names it was given");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A public host written with a scheme and a port feeds rmcp's allow-list
+    /// its host and port alone, so the `Host` a plain-HTTP front sends is
+    /// answered and the bare name is not.
+    #[test]
+    fn a_public_host_with_a_port_is_allowed_by_its_host_and_port() {
+        let dir = crate::tenant::tests::fresh_root("hosted");
+        let file = dir.join("tokens");
+        let acme = tenant::issue(TenantId::new("acme").unwrap(), &file).unwrap();
+        let reached = tenant::PublicHost::parse("http://cad.example.test:8080").unwrap();
+        let accounts = tenant::Accounts::read(&file, &dir.join("tenants"), crate::signing::tests::links(reached)).unwrap();
+        let port = on_a_spare_port(Some(accounts));
+        let list_projects = |host: &str| {
+            let body = serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {
+                    "name": "list_projects", "arguments": {},
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                    },
+                },
+            })
+            .to_string();
+            exchange(
+                port,
+                "POST",
+                "/mcp",
+                &[
+                    ("Content-Type", "application/json"),
+                    ("Accept", "application/json, text/event-stream"),
+                    ("MCP-Protocol-Version", "2026-07-28"),
+                    ("Mcp-Method", "tools/call"),
+                    ("Mcp-Name", "list_projects"),
+                    ("Host", host),
+                    ("Authorization", &bearer(&acme)),
+                ],
+                &body,
+            )
+        };
+        let with_port = list_projects("cad.example.test:8080");
+        assert_eq!(with_port.status, 200, "{}", with_port.body);
+        assert_eq!(list_projects("cad.example.test").status, 403, "the port is part of what was allowed");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// One MCP `tools/call` over the socket, as a client past its handshake sends it.
+    fn call_tool(port: u16, token: &str, tool: &str, arguments: serde_json::Value) -> Reply {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {
+                "name": tool, "arguments": arguments,
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                },
+            },
+        })
+        .to_string();
+        exchange(
+            port,
+            "POST",
+            "/mcp",
+            &[
+                ("Content-Type", "application/json"),
+                ("Accept", "application/json, text/event-stream"),
+                ("MCP-Protocol-Version", "2026-07-28"),
+                ("Mcp-Method", "tools/call"),
+                ("Mcp-Name", tool),
+                ("Host", PUBLIC_HOST),
+                ("Authorization", &bearer(token)),
+            ],
+            &body,
+        )
+    }
+
+    /// What an account wrote comes back to that account's bearer alone, as
+    /// the file it is; another account has no such export, and a name that
+    /// is not one is refused naming the rule.
+    #[test]
+    fn an_account_fetches_its_own_exports_and_nobody_elses() {
+        let (dir, acme, bolt, port) = two_accounts();
+        let fetch = |token: &str, name: &str| {
+            exchange(port, "GET", &format!("/api/exports/{name}"), &[("Authorization", &bearer(token))], "")
+        };
+        assert_eq!(exchange(port, "GET", "/api/projects", &[("Authorization", &bearer(&acme))], "").status, 200, "the account's folder exists");
+        let exports = dir.join("tenants/acme/.exports");
+        std::fs::create_dir_all(exports.join("renders")).unwrap();
+        let model = b"3MF bytes \xff\x00 not text".to_vec();
+        std::fs::write(exports.join("x.3mf"), &model).unwrap();
+        std::fs::write(exports.join("my part.stl"), b"stl").unwrap();
+        std::fs::write(exports.join("renders/abc-iso.png"), b"png").unwrap();
+
+        let fetched = fetch(&acme, "x.3mf");
+        assert_eq!(fetched.status, 200, "{}", fetched.body);
+        assert_eq!(fetched.bytes, model, "the bytes as written");
+        assert_eq!(fetched.header("content-type"), Some("model/3mf"));
+        assert_eq!(fetched.header("content-disposition"), Some("attachment; filename=\"x.3mf\""));
+        let render = fetch(&acme, "renders/abc-iso.png");
+        assert_eq!(render.status, 200, "{}", render.body);
+        assert_eq!(render.header("content-type"), Some("image/png"));
+        assert_eq!(render.bytes, b"png");
+        let spaced = fetch(&acme, "my%20part.stl");
+        assert_eq!((spaced.status, spaced.header("content-type")), (200, Some("model/stl")), "{}", spaced.body);
+
+        let error = |reply: &Reply| serde_json::from_str::<serde_json::Value>(&reply.body).expect("a JSON error")["error"].as_str().expect("a message").to_string();
+        let missing = fetch(&bolt, "x.3mf");
+        assert_eq!(missing.status, 404, "{}", missing.body);
+        assert!(error(&missing).starts_with("no export named \"x.3mf\" exists for this account"), "{}", missing.body);
+        assert!(error(&missing).contains("export_part writes one"), "the fix is named: {}", missing.body);
+        assert_eq!(fetch(&acme, "renders/none.png").status, 404);
+        assert_eq!(fetch(&acme, "renders").status, 404, "a folder is no export");
+
+        for name in ["..", "%2Fetc%2Fpasswd", "renders/../x.3mf", ".hidden.3mf", "a/b/x.3mf", "exports/x.3mf", "x%3A.3mf"] {
+            let refused = fetch(&acme, name);
+            assert_eq!(refused.status, 422, "{name}: {}", refused.body);
+            let message = error(&refused);
+            assert!(message.contains("is not the name of an export"), "{name}: {message}");
+            assert!(message.contains("one plain file name"), "the rule is named: {name}: {message}");
+        }
+        assert_eq!(fetch(&acme, "x.3mf/").status, 422, "an empty segment");
+        assert_eq!(exchange(port, "GET", "/api/exports/x.3mf", &[], "").status, 401, "no bearer, no file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The link a reply carries fetches its one file with no bearer at all,
+    /// which is how a chat client shows a pasted `markdown` line; expired,
+    /// altered, moved to another path or account, or short a field, it is a
+    /// 403 naming the fix; and a link opens nothing but the export route.
+    #[test]
+    fn a_signed_link_fetches_its_file_without_a_bearer_and_nothing_else() {
+        let (dir, acme, _, port) = two_accounts();
+        assert_eq!(exchange(port, "GET", "/api/projects", &[("Authorization", &bearer(&acme))], "").status, 200);
+        let exports = dir.join("tenants/acme/.exports");
+        std::fs::create_dir_all(exports.join("renders")).unwrap();
+        std::fs::write(exports.join("renders/abc-iso.png"), b"png").unwrap();
+        std::fs::write(exports.join("x.3mf"), b"model").unwrap();
+        let links = links();
+        let id = TenantId::new("acme").unwrap();
+        let now = crate::signing::unix_now();
+        let signed = |path: &str, now: u64| links.signed(&id, path, now);
+
+        let url = signed("/api/exports/renders/abc-iso.png", now);
+        let fetched = exchange(port, "GET", route_of(&url), &[], "");
+        assert_eq!(fetched.status, 200, "{}", fetched.body);
+        assert_eq!(fetched.bytes, b"png");
+        assert_eq!(fetched.header("content-type"), Some("image/png"));
+
+        let route = route_of(&url);
+        let (path, query) = route.split_once('?').unwrap();
+        let sig = query.rsplit_once("sig=").unwrap().1;
+        let stale = |route: &str| {
+            let reply = exchange(port, "GET", route, &[], "");
+            assert_eq!(reply.status, 403, "{route}: {}", reply.body);
+            let message = &reply.body;
+            assert!(message.starts_with("this link is no longer valid"), "{route}: {message}");
+            assert!(message.contains("Export the part again, or evaluate it with views"), "the fix is named: {message}");
+            assert!(message.contains("bare path"), "and the bearer's way: {message}");
+        };
+        stale(route_of(&signed("/api/exports/renders/abc-iso.png", now - 86_401)));
+        stale(&format!("{path}?{}", query.replace(sig, &format!("{}{}", if sig.starts_with('A') { "B" } else { "A" }, &sig[1..]))));
+        stale(&format!("/api/exports/x.3mf?{query}"));
+        stale(&format!("{path}?{}", query.replace("t=acme", "t=bolt")));
+        stale(&format!("{path}?{}", query.replace("t=acme&", "")));
+        stale(&format!("{path}?sig={sig}"));
+        let without_file = exchange(port, "GET", route_of(&signed("/api/exports/none.3mf", now)), &[], "");
+        assert_eq!(without_file.status, 404, "a good link to no file is the route's own answer: {}", without_file.body);
+
+        let elsewhere = exchange(port, "GET", &format!("/api/projects?{query}"), &[], "");
+        assert_eq!(elsewhere.status, 401, "a link opens the export route alone: {}", elsewhere.body);
+        assert_eq!(exchange(port, "GET", "/api/exports/x.3mf", &[("Authorization", &bearer(&acme))], "").status, 200, "the bearer still fetches the bare path");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The whole loop a hosted client runs: export_part over `/mcp`, then
+    /// the reply's `url` fetched with no bearer gives the file written, as it
+    /// does with the bearer that wrote it.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn an_export_over_mcp_is_fetched_by_the_url_its_reply_carries() {
+        let (dir, acme, bolt, port) = two_accounts();
+        let exported = call_tool(
+            port,
+            &acme,
+            "export_part",
+            serde_json::json!({ "script": "return box(10, 20, 30);", "format": "3mf", "filename": "x.3mf" }),
+        );
+        assert_eq!(exported.status, 200, "{}", exported.body);
+        let reply: serde_json::Value = serde_json::from_str(&exported.body).unwrap();
+        let written = &reply["result"]["structuredContent"];
+        assert_eq!(written["path"], ".exports/x.3mf", "{written}");
+        let url = written["url"].as_str().expect("a hosted reply carries the url");
+        assert_eq!(
+            crate::signing::tests::verified(&links(), url),
+            ("https://cad.example.test/api/exports/x.3mf".to_string(), Some(TenantId::new("acme").unwrap()))
+        );
+
+        let route = route_of(url);
+        let fetched = exchange(port, "GET", route, &[], "");
+        assert_eq!(fetched.status, 200, "no bearer needed: {}", fetched.body);
+        assert_eq!(fetched.header("content-type"), Some("model/3mf"));
+        assert_eq!(fetched.bytes, std::fs::read(dir.join("tenants/acme/.exports/x.3mf")).unwrap());
+        assert_eq!(fetched.bytes.len(), written["bytes"].as_u64().unwrap() as usize);
+        let bare = route.split_once('?').unwrap().0;
+        assert_eq!(exchange(port, "GET", bare, &[("Authorization", &bearer(&acme))], "").bytes, fetched.bytes);
+        assert_eq!(exchange(port, "GET", bare, &[("Authorization", &bearer(&bolt))], "").status, 404);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A client learns what this host can do from `/api/health` and from the
+    /// `initialize` reply, not from a version number a branch build does not
+    /// move; and a hosted account's instructions name no screen, since it has none.
+    #[test]
+    fn health_and_initialize_say_whether_the_host_is_hosted_and_what_it_carries() {
+        let features = serde_json::json!(["tenants", "bearer-auth", "export-download", "signed-links", "limits"]);
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2026-07-28",
+                "capabilities": {},
+                "clientInfo": { "name": "phone-agent", "version": "0" },
+            },
+        })
+        .to_string();
+        let handshake = |port: u16, headers: &[(&str, &str)]| -> serde_json::Value {
+            let mut all = vec![("Content-Type", "application/json"), ("Accept", "application/json, text/event-stream")];
+            all.extend_from_slice(headers);
+            let reply = exchange(port, "POST", "/mcp", &all, &initialize);
+            assert_eq!(reply.status, 200, "{}", reply.body);
+            serde_json::from_str(&reply.body).unwrap()
+        };
+
+        let local = on_a_spare_port(None);
+        let health: serde_json::Value = serde_json::from_str(&exchange(local, "GET", "/api/health", &[], "").body).unwrap();
+        assert_eq!(health["hosted"], false, "{health}");
+        assert_eq!(health["features"], features, "{health}");
+        assert_eq!(health["transport"], "http");
+        let reply = handshake(local, &[]);
+        assert_eq!(reply["result"]["capabilities"]["experimental"]["parcad"]["hosted"], false, "{reply}");
+        let instructions = reply["result"]["instructions"].as_str().expect("instructions");
+        assert!(instructions.contains("You share the parcad app's screen"), "{instructions}");
+
+        let (dir, acme, _, port) = two_accounts();
+        let health: serde_json::Value = serde_json::from_str(&exchange(port, "GET", "/api/health", &[], "").body).unwrap();
+        assert_eq!(health["hosted"], true, "{health}");
+        assert_eq!(health["features"], features, "{health}");
+        let reply = handshake(port, &[("Host", PUBLIC_HOST), ("Authorization", &bearer(&acme))]);
+        let parcad = &reply["result"]["capabilities"]["experimental"]["parcad"];
+        assert_eq!(parcad["hosted"], true, "{reply}");
+        assert_eq!(parcad["features"], features, "{reply}");
+        assert_eq!(reply["result"]["serverInfo"]["name"], "parcad");
+        let instructions = reply["result"]["instructions"].as_str().expect("instructions");
+        assert!(instructions.contains("shares no screen with the user"), "{instructions}");
+        assert!(instructions.contains("export_part's `url`"), "{instructions}");
+        for screen_tool in ["share the parcad app's screen", "open_project", "set_script"] {
+            assert!(!instructions.contains(screen_tool), "{screen_tool:?} reached a hosted client: {instructions}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

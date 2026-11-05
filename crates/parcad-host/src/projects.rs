@@ -45,6 +45,7 @@
 //! The folder is plain files on purpose. Nothing here owns a database, a lock,
 //! or a binary format — `ls`, `grep`, an editor and git all work.
 
+use crate::tenant::{self, Mode};
 use std::path::{Path, PathBuf};
 
 /// The part, inside a bundle. The name is fixed so a reader never has to guess
@@ -75,16 +76,11 @@ const SEEDED: &str = ".seeded";
 /// nobody nests parts eight deep on purpose.
 const MAX_DEPTH: usize = 8;
 
-/// Where projects live. `PARCAD_PROJECTS_DIR` overrides it, which is also how
-/// a test gets a directory of its own.
+/// Where the current tenant's projects live: the one path everything below
+/// is joined onto. `tenant::Tenant::local` says where that is for this
+/// machine's own user, and how `PARCAD_PROJECTS_DIR` moves it.
 pub fn dir() -> PathBuf {
-    if let Some(dir) = std::env::var_os("PARCAD_PROJECTS_DIR") {
-        return PathBuf::from(dir);
-    }
-    // The platform's application-data folder rather than Documents: macOS
-    // guards Documents per app, so an editor the user never granted it could
-    // not open a part there. docs/GOTCHAS.md, "Parts are not in Documents".
-    dirs::data_dir().unwrap_or_else(std::env::temp_dir).join("parcad")
+    tenant::current().root.clone()
 }
 
 // ------------------------------------------------------------------ the tree
@@ -163,7 +159,7 @@ fn walk(at: &Path, prefix: &str, depth: usize) -> Result<Vec<Entry>, String> {
         return Ok(Vec::new());
     }
     let entries = std::fs::read_dir(at)
-        .map_err(|e| format!("reading the project folder {}: {e}", at.display()))?;
+        .map_err(|e| format!("reading the project folder {}: {e}", tenant::shown(at)))?;
 
     let mut folders = Vec::new();
     let mut parts = Vec::new();
@@ -183,12 +179,15 @@ fn walk(at: &Path, prefix: &str, depth: usize) -> Result<Vec<Entry>, String> {
             format!("{prefix}/{file}")
         };
 
+        // An entry no project path can name — a hosted root's link outside
+        // it — is not a part of this folder, and one such entry must not cost
+        // the listing of every other.
         let suffix = format!(".{BUNDLE}");
         if path.is_dir() {
             match file.strip_suffix(&suffix) {
                 Some(stem) => {
                     let at = child.strip_suffix(&suffix).unwrap_or(&child).to_string();
-                    parts.push(Entry::Part(describe(stem, &at)?));
+                    parts.extend(describe(stem, &at).map(Entry::Part));
                 }
                 None => folders.push(Entry::Folder {
                     name: file,
@@ -198,7 +197,7 @@ fn walk(at: &Path, prefix: &str, depth: usize) -> Result<Vec<Entry>, String> {
             }
         } else if let Some(stem) = file.strip_suffix(".js") {
             let at = child.strip_suffix(".js").unwrap_or(&child).to_string();
-            parts.push(Entry::Part(describe(stem, &at)?));
+            parts.extend(describe(stem, &at).map(Entry::Part));
         }
     }
 
@@ -298,6 +297,7 @@ fn locate(path: &str) -> Result<Located, String> {
     let base = safe(path)?;
     let bundle = suffixed(&base, BUNDLE);
     if bundle.is_dir() {
+        let bundle = confined(bundle)?;
         return Ok(Located {
             source: bundle.join(SOURCE),
             bundle: Some(bundle),
@@ -306,7 +306,7 @@ fn locate(path: &str) -> Result<Located, String> {
     let loose = suffixed(&base, "js");
     if loose.is_file() {
         return Ok(Located {
-            source: loose,
+            source: confined(loose)?,
             bundle: None,
         });
     }
@@ -369,7 +369,7 @@ pub fn read(path: &str) -> Result<String, String> {
         format!(
             "reading {} ({e}). The project is there but its source is not; \
              a project folder must contain {SOURCE}.",
-            located.source.display()
+            tenant::shown(&located.source)
         )
     })
 }
@@ -394,7 +394,7 @@ pub fn write(path: &str, script: &str) -> Result<String, String> {
         create_dir(parent)?;
     }
     write_file(&source, script)?;
-    Ok(source.to_string_lossy().to_string())
+    Ok(tenant::shown(&source))
 }
 
 /// Create a project, refusing to overwrite one.
@@ -441,8 +441,8 @@ pub fn write_preview(path: &str, png: &[u8], source: &str, look: u32) -> Result<
     let keyed = crate::png_text::with_text(png, &[(SOURCE_KEY, source), (LOOK_KEY, &look.to_string())])?;
     // Renamed into place, so the picker never reads half an image.
     let partial = file.with_extension("png.partial");
-    std::fs::write(&partial, keyed).map_err(|e| format!("writing {}: {e}", partial.display()))?;
-    std::fs::rename(&partial, &file).map_err(|e| format!("writing {}: {e}", file.display()))
+    std::fs::write(&partial, keyed).map_err(|e| format!("writing {}: {e}", tenant::shown(&partial)))?;
+    std::fs::rename(&partial, &file).map_err(|e| format!("writing {}: {e}", tenant::shown(&file)))
 }
 
 /// The same, from what a canvas hands the frontend.
@@ -517,7 +517,7 @@ pub fn keep(path: &str, script: &str) -> Result<String, String> {
     let dir = history_dir(path)?;
     let kept = snapshots(path)?;
     if let Some(newest) = kept.first() {
-        if std::fs::read_to_string(&newest.path).is_ok_and(|text| text == script) {
+        if std::fs::read_to_string(snapshot_file(&dir, newest)).is_ok_and(|text| text == script) {
             return Ok(newest.path.clone());
         }
     }
@@ -533,9 +533,14 @@ pub fn keep(path: &str, script: &str) -> Result<String, String> {
     let file = dir.join(format!("{}.js", now.max(newest + 1)));
     write_file(&file, script)?;
     for old in kept.iter().skip(HISTORY_KEPT - 1) {
-        let _ = std::fs::remove_file(&old.path);
+        let _ = std::fs::remove_file(snapshot_file(&dir, old));
     }
-    Ok(file.to_string_lossy().to_string())
+    Ok(tenant::shown(&file))
+}
+
+/// Where a kept version is on disk; its `path` is the shown one.
+fn snapshot_file(history: &Path, snapshot: &Snapshot) -> PathBuf {
+    history.join(format!("{}.js", snapshot.id))
 }
 
 /// Every kept version of a project, newest first.
@@ -555,7 +560,7 @@ pub fn snapshots(path: &str) -> Result<Vec<Snapshot>, String> {
                 order,
                 Snapshot {
                     id,
-                    path: file.to_string_lossy().to_string(),
+                    path: tenant::shown(&file),
                     bytes: text.len() as u64,
                     first_line: text.lines().next().unwrap_or("").chars().take(120).collect(),
                 },
@@ -574,7 +579,8 @@ pub fn read_snapshot(path: &str, id: &str) -> Result<String, String> {
         .ok_or_else(|| {
             format!("{path:?} has no snapshot {id:?}; list_snapshots gives the ids that exist")
         })?;
-    std::fs::read_to_string(&found.path).map_err(|e| format!("reading {}: {e}", found.path))
+    std::fs::read_to_string(snapshot_file(&history_dir(path)?, &found))
+        .map_err(|e| format!("reading {}: {e}", found.path))
 }
 
 pub fn preview(path: &str) -> Result<Vec<u8>, String> {
@@ -582,7 +588,7 @@ pub fn preview(path: &str) -> Result<Vec<u8>, String> {
         .in_bundle(PREVIEW)
         .filter(|file| file.is_file())
         .ok_or_else(|| format!("{path:?} has no preview image"))?;
-    std::fs::read(&file).map_err(|e| format!("reading {}: {e}", file.display()))
+    std::fs::read(&file).map_err(|e| format!("reading {}: {e}", tenant::shown(&file)))
 }
 
 /// Retitle a part without moving it.
@@ -614,7 +620,7 @@ pub fn create_folder(path: &str) -> Result<String, String> {
         return Err(format!("{path:?} already exists."));
     }
     create_dir(&target)?;
-    Ok(target.to_string_lossy().to_string())
+    Ok(tenant::shown(&target))
 }
 
 /// Move or rename a part or a folder.
@@ -651,11 +657,11 @@ pub fn rename(from: &str, to: &str) -> Result<String, String> {
     std::fs::rename(&source, &target).map_err(|e| {
         format!(
             "moving {} to {}: {e}",
-            source.display(),
-            target.display()
+            tenant::shown(&source),
+            tenant::shown(&target)
         )
     })?;
-    Ok(target.to_string_lossy().to_string())
+    Ok(tenant::shown(&target))
 }
 
 /// Move a part or folder to `.trash`, where a person can get it back.
@@ -696,8 +702,8 @@ pub fn remove(path: &str) -> Result<String, String> {
         nth += 1;
     }
     std::fs::rename(&source, &target)
-        .map_err(|e| format!("moving {} to the trash: {e}", source.display()))?;
-    Ok(target.to_string_lossy().to_string())
+        .map_err(|e| format!("moving {} to the trash: {e}", tenant::shown(&source)))?;
+    Ok(tenant::shown(&target))
 }
 
 /// Turn a loose `.js` into a project folder, keeping the script byte for byte.
@@ -707,7 +713,7 @@ pub fn convert(path: &str) -> Result<String, String> {
         return Err(format!("{path:?} is already a project folder."));
     }
     let script = std::fs::read_to_string(&located.source)
-        .map_err(|e| format!("reading {}: {e}", located.source.display()))?;
+        .map_err(|e| format!("reading {}: {e}", tenant::shown(&located.source)))?;
 
     let base = safe(path)?;
     let bundle = suffixed(&base, BUNDLE);
@@ -717,8 +723,8 @@ pub fn convert(path: &str) -> Result<String, String> {
     write_file(&bundle.join(README), &seed_readme(base_name(&base), &script))?;
     // Only now: a failed write above must leave the original where it was.
     std::fs::remove_file(&located.source)
-        .map_err(|e| format!("removing {}: {e}", located.source.display()))?;
-    Ok(bundle.to_string_lossy().to_string())
+        .map_err(|e| format!("removing {}: {e}", tenant::shown(&located.source)))?;
+    Ok(tenant::shown(&bundle))
 }
 
 fn base_name(base: &Path) -> &str {
@@ -759,11 +765,11 @@ fn seed_readme(stem: &str, script: &str) -> String {
 }
 
 fn create_dir(path: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(path).map_err(|e| format!("creating {}: {e}", path.display()))
+    std::fs::create_dir_all(path).map_err(|e| format!("creating {}: {e}", tenant::shown(path)))
 }
 
 fn write_file(path: &Path, contents: &str) -> Result<(), String> {
-    std::fs::write(path, contents).map_err(|e| format!("writing {}: {e}", path.display()))
+    std::fs::write(path, contents).map_err(|e| format!("writing {}: {e}", tenant::shown(path)))
 }
 
 /// Resolve a project path to a location on disk, refusing anything that is not
@@ -787,26 +793,49 @@ fn safe(path: &str) -> Result<PathBuf, String> {
     }
     let mut resolved = dir();
     for part in path.split('/') {
-        if part.is_empty() {
-            return bad("it has an empty segment");
-        }
-        if part.starts_with('.') {
-            return bad("a segment starts with a dot");
+        if let Some(why) = not_a_name(part) {
+            return bad(why);
         }
         if part.ends_with(".js") || part.ends_with(&format!(".{BUNDLE}")) {
             return bad("it carries a file extension; names here do not");
         }
-        if part.contains('\\') || part.chars().any(|c| c.is_control() || c == ':') {
-            return bad("a segment contains a character that is not part of a name");
-        }
-        // Belt and braces over the checks above: whatever the platform thinks a
-        // path component is, one name must be exactly one of them.
-        if Path::new(part).components().count() != 1 {
-            return bad("a segment is not a single name");
-        }
         resolved.push(part);
     }
-    Ok(resolved)
+    confined(resolved)
+}
+
+/// Why `segment` is not one plain name under a folder, or `None` when it is.
+/// Every name a caller gives — each segment of a project path, an export's
+/// file name — passes this; the extension rules differ and stay with the caller.
+pub(crate) fn not_a_name(segment: &str) -> Option<&'static str> {
+    if segment.is_empty() {
+        return Some("it has an empty segment");
+    }
+    if segment.starts_with('.') {
+        return Some("a segment starts with a dot");
+    }
+    if segment.contains(['/', '\\']) || segment.chars().any(|c| c.is_control() || c == ':') {
+        return Some("a segment contains a character that is not part of a name");
+    }
+    // Belt and braces over the checks above: whatever the platform thinks a
+    // path component is, one name must be exactly one of them.
+    if Path::new(segment).components().count() != 1 {
+        return Some("a segment is not a single name");
+    }
+    None
+}
+
+/// On a hosted root, refuse a path a link carries outside it: that root is one
+/// account's folder among many, and a link is the one way a plain name could
+/// reach another's. A local user's links are their own — people symlink their
+/// parts folders. Applied to every name resolved and to the file or bundle
+/// found under it, since the name alone never carries the suffix.
+fn confined(path: PathBuf) -> Result<PathBuf, String> {
+    let tenant = tenant::current();
+    if tenant.mode == Mode::Hosted {
+        tenant.confine(&path)?;
+    }
+    Ok(path)
 }
 
 // ------------------------------------------------------------------ seeding
@@ -828,27 +857,10 @@ pub fn seed() -> std::io::Result<()> {
 /// seed parts are `examples` inside that folder, which is somewhere else on
 /// each platform.
 pub fn seed_bundled(resources: Option<PathBuf>) -> std::io::Result<()> {
-    let dir = dir();
-    std::fs::create_dir_all(&dir)?;
-
-    // The declarations somebody else's editor reads, beside the parts it will
-    // open. Not fatal: a folder without them holds parts that still open, just
-    // without a signature under the pointer.
-    #[cfg(not(target_arch = "wasm32"))]
-    if let Err(e) = crate::editor_types::ensure(&dir) {
-        eprintln!("parcad: {e}");
-    }
-
-    let record = dir.join(SEEDED);
-    let mut seeded: Vec<String> = std::fs::read_to_string(&record)
-        .unwrap_or_default()
-        .lines()
-        .map(str::to_string)
-        .collect();
-
     let Some(source) = seed_dir(resources) else {
         // Not fatal. An install with no seed parts is an empty folder, which is
         // a usable state; failing to launch over it would not be.
+        let dir = prepare()?;
         eprintln!(
             "parcad: no seed parts found; {} starts empty. \
              Set PARCAD_SEED_DIR to a folder of .js parts to change that.",
@@ -856,8 +868,21 @@ pub fn seed_bundled(resources: Option<PathBuf>) -> std::io::Result<()> {
         );
         return Ok(());
     };
+    seed_from(&source)
+}
 
-    for (name, path) in seed_parts(&source)? {
+/// [`seed`] from one folder of `.js` parts, named rather than looked for: a
+/// browser tab's, which the page wrote where only it knows.
+pub fn seed_from(source: &Path) -> std::io::Result<()> {
+    let dir = prepare()?;
+    let record = dir.join(SEEDED);
+    let mut seeded: Vec<String> = std::fs::read_to_string(&record)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+
+    for (name, path) in seed_parts(source)? {
         if seeded.contains(&name) {
             continue;
         }
@@ -886,6 +911,24 @@ pub fn seed_bundled(resources: Option<PathBuf>) -> std::io::Result<()> {
     // would lose them permanently.
     std::fs::write(&record, seeded.join("\n"))?;
     Ok(())
+}
+
+/// The project folder, created, with what belongs beside the parts.
+fn prepare() -> std::io::Result<PathBuf> {
+    let tenant = tenant::current();
+    std::fs::create_dir_all(&tenant.root)?;
+
+    // The declarations somebody else's editor reads, beside the parts it will
+    // open; nobody opens an editor on a server. Not fatal: a folder without
+    // them holds parts that still open, just without a signature under the
+    // pointer.
+    #[cfg(not(target_arch = "wasm32"))]
+    if tenant.mode == Mode::Local {
+        if let Err(e) = crate::editor_types::ensure(&tenant.root) {
+            eprintln!("parcad: {e}");
+        }
+    }
+    Ok(tenant.root.clone())
 }
 
 /// Every `.js` part under the seed folder, as `(name, path)` where `name` is the
@@ -966,27 +1009,119 @@ fn seed_dir(resources: Option<PathBuf>) -> Option<PathBuf> {
 pub(crate) mod tests {
     use super::*;
 
-    /// Every test here works in a directory of its own, and they share a
-    /// process — so the env var they all read has to be set under one lock.
+    /// Every test here works in a folder of its own, as a tenant of its own:
+    /// nothing is shared across the process, so nothing is locked.
     pub(crate) fn scoped<T>(work: impl FnOnce(&Path) -> T) -> T {
-        use std::sync::atomic::{AtomicUsize, Ordering};
-        use std::sync::Mutex;
-        static LOCK: Mutex<()> = Mutex::new(());
-        static NTH: AtomicUsize = AtomicUsize::new(0);
-        let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
-
-        let root = std::env::temp_dir().join(format!(
-            "parcad-projects-test-{}-{}",
-            std::process::id(),
-            NTH.fetch_add(1, Ordering::Relaxed)
-        ));
-        let _ = std::fs::remove_dir_all(&root);
-        std::fs::create_dir_all(&root).expect("a test directory");
-        // SAFETY-adjacent: single-threaded within the lock above.
-        unsafe { std::env::set_var("PARCAD_PROJECTS_DIR", &root) };
-        let out = work(&root);
+        let root = tenant::tests::fresh_root("projects");
+        let out = tenant::scope(tenant::tests::local_at(&root), || work(&root));
         let _ = std::fs::remove_dir_all(&root);
         out
+    }
+
+    /// A folder of seed parts, laid out as a packager's `<resources>/examples`
+    /// and kept beside `root` so the seed parts are not listed as projects.
+    fn seed_folder(root: &Path, parts: &[(&str, &str)]) -> PathBuf {
+        let examples = root
+            .with_file_name(format!("{}-resources", root.file_name().unwrap().to_string_lossy()))
+            .join("examples");
+        for (name, script) in parts {
+            let file = examples.join(format!("{name}.js"));
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, script).unwrap();
+        }
+        examples
+    }
+
+    /// The whole point of the seam: one name, two accounts, two files.
+    #[test]
+    fn two_tenants_keep_the_same_name_in_two_roots() {
+        let tenants = tenant::tests::fresh_root("tenants");
+        let a = tenant::tests::hosted_at("a", &tenants);
+        let b = tenant::tests::hosted_at("b", &tenants);
+        tenant::scope(a.clone(), || write("bracket", "return box(1,1,1);")).unwrap();
+        tenant::scope(b.clone(), || write("bracket", "return box(2,2,2);")).unwrap();
+
+        assert_eq!(tenant::scope(a.clone(), || read("bracket")).unwrap(), "return box(1,1,1);");
+        assert_eq!(tenant::scope(b.clone(), || read("bracket")).unwrap(), "return box(2,2,2);");
+        assert!(tenants.join("a/bracket.parcad/part.js").is_file());
+        assert!(tenants.join("b/bracket.parcad/part.js").is_file());
+        assert_eq!(tenant::scope(a, list).unwrap(), vec!["bracket"]);
+        assert_eq!(tenant::scope(b, dir), tenants.join("b"));
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    /// A link inside a hosted root that points outside it is refused with the
+    /// link named, and not listed; the same folder read as a local user's
+    /// follows it, since people symlink their parts folders.
+    #[cfg(unix)]
+    #[test]
+    fn a_link_out_of_a_hosted_root_is_refused_and_a_local_one_followed() {
+        let tenants = tenant::tests::fresh_root("tenants");
+        let a = tenant::tests::hosted_at("a", &tenants);
+        let b = tenant::tests::hosted_at("b", &tenants);
+        tenant::scope(b, || write("bracket", "return box(2,2,2);")).unwrap();
+        std::os::unix::fs::symlink("../b/bracket.parcad", tenants.join("a/leak.parcad")).unwrap();
+        std::os::unix::fs::symlink("../b", tenants.join("a/Mounts")).unwrap();
+
+        let refused = tenant::scope(a.clone(), || read("leak")).unwrap_err();
+        assert!(refused.contains("leak.parcad is a link to"), "{refused}");
+        assert!(refused.contains("outside this account's folder"), "{refused}");
+        assert!(refused.contains("operator"), "the refusal names the fix: {refused}");
+        assert!(tenant::scope(a.clone(), list).unwrap().is_empty(), "nor is the link listed");
+        let refused = tenant::scope(a, || write("Mounts/plate", "return box(1,1,1);")).unwrap_err();
+        assert!(refused.contains("Mounts is a link to"), "a folder about to be written into is judged too: {refused}");
+        assert!(!tenants.join("b/plate.parcad").exists(), "nothing landed in the other account");
+
+        let local = tenant::tests::local_at(&tenants.join("a"));
+        assert_eq!(tenant::scope(local.clone(), || read("leak")).unwrap(), "return box(2,2,2);");
+        assert_eq!(tenant::scope(local, list).unwrap(), vec!["Mounts/bracket", "leak"]);
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    /// Nobody opens an editor on a server: a hosted root is seeded without
+    /// the declarations a local one gets beside its parts.
+    #[test]
+    fn a_hosted_root_is_seeded_without_editor_declarations() {
+        let tenants = tenant::tests::fresh_root("tenants");
+        let a = tenant::tests::hosted_at("a", &tenants);
+        let examples = seed_folder(&a.root, &[("bracket", "return box(1,1,1);")]);
+        tenant::scope(a, || {
+            seed_from(&examples).expect("the seed");
+            assert_eq!(list().unwrap(), vec!["bracket"]);
+        });
+        assert!(!tenants.join("a/jsconfig.json").exists());
+        assert!(!tenants.join("a/.types").exists());
+
+        scoped(|root| {
+            seed_from(&examples).expect("the seed");
+            assert!(root.join("jsconfig.json").is_file(), "a local folder gets them");
+        });
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    /// Versions and removed parts are kept under the account's own root, so
+    /// another account lists neither.
+    #[test]
+    fn history_and_trash_stay_with_their_account() {
+        let tenants = tenant::tests::fresh_root("tenants");
+        let a = tenant::tests::hosted_at("a", &tenants);
+        let b = tenant::tests::hosted_at("b", &tenants);
+        tenant::scope(a, || {
+            write("bracket", "return box(1,1,1);").unwrap();
+            snapshot("bracket").unwrap().expect("a version to keep");
+            write("bracket", "return box(2,2,2);").unwrap();
+            assert_eq!(snapshots("bracket").unwrap().len(), 1);
+            remove("bracket").unwrap();
+        });
+        tenant::scope(b, || {
+            assert!(snapshots("bracket").unwrap().is_empty(), "another account's versions");
+            assert!(list().unwrap().is_empty());
+        });
+        assert!(tenants.join("a/.history/bracket").is_dir());
+        assert!(tenants.join("a/.trash/bracket.parcad/part.js").is_file());
+        assert!(!tenants.join("b/.history").exists());
+        assert!(!tenants.join("b/.trash").exists());
+        let _ = std::fs::remove_dir_all(&tenants);
     }
 
     /// The bug this replaced: the desktop wrote to the relative path
@@ -1136,36 +1271,27 @@ pub(crate) mod tests {
     #[test]
     fn seeding_does_not_restore_a_part_the_user_moved_or_deleted() {
         scoped(|root| {
-            // Outside the project folder, or the seed parts would be listed as
-            // projects in their own right.
-            let examples = root.with_file_name(format!(
-                "{}-seed",
-                root.file_name().unwrap().to_string_lossy()
-            ));
-            std::fs::create_dir_all(&examples).unwrap();
-            std::fs::write(examples.join("bracket.js"), "// A bracket.\nreturn box(1,1,1);")
-                .unwrap();
-            std::fs::write(examples.join("flange.js"), "return box(1,1,1);").unwrap();
-            unsafe { std::env::set_var("PARCAD_SEED_DIR", &examples) };
-
-            seed().expect("the first seed");
+            let examples = seed_folder(
+                root,
+                &[("bracket", "// A bracket.\nreturn box(1,1,1);"), ("flange", "return box(1,1,1);")],
+            );
+            seed_from(&examples).expect("the first seed");
             assert_eq!(list().unwrap(), vec!["bracket", "flange"]);
 
             create_folder("Mounts").unwrap();
             rename("bracket", "Mounts/bracket").unwrap();
             remove("flange").unwrap();
 
-            seed().expect("the second seed");
+            seed_from(&examples).expect("the second seed");
             // And once more, to cover a folder that predates the record: the
             // first run adopts what is already there rather than reseeding it.
-            seed().expect("the third seed");
+            seed_from(&examples).expect("the third seed");
             assert_eq!(
                 list().unwrap(),
                 vec!["Mounts/bracket"],
                 "a moved part must not be restored, and a deleted one must stay gone"
             );
-            unsafe { std::env::remove_var("PARCAD_SEED_DIR") };
-            let _ = std::fs::remove_dir_all(&examples);
+            let _ = std::fs::remove_dir_all(examples.parent().unwrap());
         })
     }
 
@@ -1174,15 +1300,8 @@ pub(crate) mod tests {
     #[test]
     fn an_app_seeds_from_the_resource_folder_its_packager_names() {
         scoped(|root| {
-            let resources = root.with_file_name(format!(
-                "{}-resources",
-                root.file_name().unwrap().to_string_lossy()
-            ));
-            std::fs::create_dir_all(resources.join("examples")).unwrap();
-            std::fs::write(resources.join("examples").join("bracket.js"), "return box(1,1,1);")
-                .unwrap();
-            unsafe { std::env::remove_var("PARCAD_SEED_DIR") };
-
+            let examples = seed_folder(root, &[("bracket", "return box(1,1,1);")]);
+            let resources = examples.parent().unwrap().to_path_buf();
             seed_bundled(Some(resources.clone())).expect("the seed");
             assert_eq!(list().unwrap(), vec!["bracket"]);
             let _ = std::fs::remove_dir_all(&resources);
@@ -1196,27 +1315,17 @@ pub(crate) mod tests {
     #[test]
     fn seeding_keeps_the_seed_folders_structure() {
         scoped(|root| {
-            let examples = root.with_file_name(format!(
-                "{}-seed",
-                root.file_name().unwrap().to_string_lossy()
-            ));
-            std::fs::create_dir_all(examples.join("fusion360")).unwrap();
-            std::fs::write(examples.join("bracket.js"), "return box(1,1,1);").unwrap();
-            std::fs::write(
-                examples.join("fusion360").join("retainer.js"),
-                "// Retainer.\nreturn box(2,2,2);",
-            )
-            .unwrap();
-            // Same leaf as a top-level part, to prove the record is keyed on the
-            // whole path and not the stem.
-            std::fs::write(
-                examples.join("fusion360").join("bracket.js"),
-                "return box(3,3,3);",
-            )
-            .unwrap();
-            unsafe { std::env::set_var("PARCAD_SEED_DIR", &examples) };
-
-            seed().expect("the first seed");
+            // The same leaf as a top-level part, to prove the record is keyed
+            // on the whole path and not the stem.
+            let examples = seed_folder(
+                root,
+                &[
+                    ("bracket", "return box(1,1,1);"),
+                    ("fusion360/retainer", "// Retainer.\nreturn box(2,2,2);"),
+                    ("fusion360/bracket", "return box(3,3,3);"),
+                ],
+            );
+            seed_from(&examples).expect("the first seed");
             assert_eq!(
                 list().unwrap(),
                 vec!["bracket", "fusion360/bracket", "fusion360/retainer"],
@@ -1226,15 +1335,13 @@ pub(crate) mod tests {
             // The guarantee that motivated `.seeded` has to hold one level down
             // too: a target the user deletes must stay deleted.
             remove("fusion360/retainer").unwrap();
-            seed().expect("the second seed");
+            seed_from(&examples).expect("the second seed");
             assert_eq!(
                 list().unwrap(),
                 vec!["bracket", "fusion360/bracket"],
                 "a deleted part inside a seeded folder must not come back"
             );
-
-            unsafe { std::env::remove_var("PARCAD_SEED_DIR") };
-            let _ = std::fs::remove_dir_all(&examples);
+            let _ = std::fs::remove_dir_all(examples.parent().unwrap());
         })
     }
 
