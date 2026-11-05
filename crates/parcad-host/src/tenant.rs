@@ -606,19 +606,31 @@ pub fn key(of: &str) -> String {
 /// `path` as a reply or a refusal shows it: relative to the account's root on
 /// a hosted server, whose layout is the operator's and not the account's to
 /// see, and the path itself for a local user, who can open it. The root is
-/// `.`, and a path under no root shows its name alone.
+/// `.`, and a path under no root shows its name alone. A relative path is a
+/// name the client quotes back and a URL carries, so it is joined by `/` on
+/// every platform; a local path is the file as the machine names it.
 pub fn shown(path: &Path) -> String {
     let tenant = current();
     match tenant.mode {
         Mode::Local => path.to_string_lossy().into_owned(),
         Mode::Hosted => match path.strip_prefix(&tenant.root) {
             Ok(relative) if relative.as_os_str().is_empty() => ".".to_string(),
-            Ok(relative) => relative.to_string_lossy().into_owned(),
+            Ok(relative) => slash_joined(relative),
             Err(_) => path
                 .file_name()
                 .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
         },
     }
+}
+
+/// `relative`'s components joined by `/`, whatever the platform joined them
+/// with: `Path` displays itself with `\` on Windows, and a name does not.
+fn slash_joined(relative: &Path) -> String {
+    relative
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Run `work` as `tenant` on this thread. For the inside of a `spawn_blocking`,
@@ -955,14 +967,20 @@ pub(crate) mod tests {
     }
 
     /// A hosted reply shows a path relative to the account's root and
-    /// nothing of the server's layout; a local one shows the path itself.
+    /// nothing of the server's layout, joined by `/` whatever `join` wrote
+    /// between the components; a local one shows the path itself. Only
+    /// Windows writes anything but `/`, so the separator half bites there.
     #[test]
     fn shown_strips_exactly_the_root_on_a_hosted_account() {
         let tenants = fresh_root("tenants");
         let a = hosted_at("a", &tenants);
         scope(a.clone(), || {
             assert_eq!(shown(&a.root), ".");
-            assert_eq!(shown(&a.root.join("Mounts/bracket.parcad/part.js")), "Mounts/bracket.parcad/part.js");
+            assert_eq!(
+                shown(&a.root.join("Mounts").join("bracket.parcad").join("part.js")),
+                "Mounts/bracket.parcad/part.js",
+                "joined a component at a time, as a project path is resolved"
+            );
             assert_eq!(shown(&a.exports.join("part.stl")), ".exports/part.stl");
             assert_eq!(shown(&tenants.join("ab/part.js")), "part.js", "a sibling's folder is a prefix of the string, not of the path");
         });
