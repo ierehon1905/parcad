@@ -145,6 +145,24 @@ derived = false
 stray = []
 hidden = []
 
+[the-source-declares-a-number]
+grade = "LUCKY"
+reached = true
+quoted = true
+trap = false
+derived = true
+stray = []
+hidden = []
+
+[the-source-declares-nothing]
+grade = "SOUND"
+reached = true
+quoted = true
+trap = false
+derived = false
+stray = []
+hidden = []
+
 [the-verdict-is-only-the-tail]
 grade = "WRONG"
 reached = true
