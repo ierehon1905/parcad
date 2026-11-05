@@ -34,7 +34,11 @@ turns about the x axis through the hinge pin at (0, -28, 16.2); negative
 angles close it.
 
 ```js
-const W = 107, D = 47, AY = -28, AZ = 16.2, LY = -56;
+const W = 107;
+const D = 47;
+const AY = -28;
+const AZ = 16.2;
+const LY = -56;
 const wallCut = box(102, 42, 15);
 let base = box(W, D, 16).at(0, 0, 8).cut(wallCut.at(0, 0, 9.5));
 base = base.cut(box(20, 1.3, 2).at(0, 23.35, 10.5).tag("groove"));

@@ -4600,7 +4600,8 @@ export interface Check {
  *
  * @example
  *     // a box with a lid on a print-in-place hinge, drawn open and flat
- *     const AY = -28, AZ = 10.2;                   // the hinge axis
+ *     const AY = -28;                              // the hinge axis
+ *     const AZ = 10.2;
  *     const base = box(60, 40, 10).at(0, 0, 5).cut(box(56, 36, 9).at(0, 0, 6))
  *       .union(cylinder(4, 20).rotate("y", 90).at(0, AY, AZ).cut(cylinder(1.9, 22).rotate("y", 90).at(0, AY, AZ)));
  *     const lid = box(60, 40, 10).at(0, -56, 5).cut(box(56, 36, 9).at(0, -56, 6))
