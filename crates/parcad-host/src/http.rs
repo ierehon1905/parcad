@@ -937,7 +937,7 @@ mod tests {
             "params": {
                 "protocolVersion": "2026-07-28",
                 "capabilities": {},
-                "clientInfo": { "name": "phone-agent", "version": "0" },
+                "clientInfo": { "name": "agent-service", "version": "0" },
             },
         })
         .to_string();

@@ -4,9 +4,8 @@
 "One application, two windows"). Hosted on a machine with a public address it
 serves two kinds of client that cannot carry a kernel of their own:
 
-- a phone app, whose agent service calls `/mcp` on the user's behalf — a phone
-  suspends background tabs and caps WebAssembly memory near 300 MB, so ParCAD
-  web is not an option there;
+- an app whose own agent service calls `/mcp` on the user's behalf, from a
+  device too small to carry the kernel;
 - Claude's remote MCP connectors, which reach a server by URL from Anthropic's
   cloud and need a stable HTTPS address, and for a directory listing OAuth 2.1.
 
@@ -168,7 +167,7 @@ link — expired, altered, moved to another path or another account, a field
 missing — is one 403 saying the link is no longer valid and to export again,
 or evaluate with views, for a fresh one. A signed query on any other route is
 a request with no bearer, 401. The bare path still answers the bearer, which
-is how the phone app's agent fetches.
+is how an agent service holding the token fetches.
 
 What a link reveals: whoever holds it fetches that one file until `exp`, and
 nothing else — not another export, not the account's parts. The tenant id is
@@ -195,8 +194,8 @@ server only. It validates an OAuth access token (a JWT against the issuer's
 keys) and maps its subject to a tenant, through the same resolution the static
 tokens use, and serves `/.well-known/oauth-protected-resource`. The
 authorization server (RFC 8414 metadata, dynamic client registration, PKCE,
-Claude's callback URLs, refresh) belongs where the users are: the agent
-service for the phone app, the relay Worker for the public URL, as
+Claude's callback URLs, refresh) belongs where the users are: an app's
+agent service, the relay Worker for the public URL, as
 docs/GROWTH.md proposed. The host never sees a password and keeps no user
 table.
 

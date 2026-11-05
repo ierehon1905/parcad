@@ -1019,7 +1019,7 @@ would tell an agent that an operation exists which the kernel no longer has.
 ### A fourth caller: a hosted server
 
 `parcad serve --hosted` is the same host, bound where it is told, serving many
-accounts at once: a phone app's agent service calling `/mcp` and `/api` with a
+accounts at once: an app's agent service calling `/mcp` and `/api` with a
 bearer token per user, and remote MCP connectors reaching it by URL.
 docs/HOSTING.md holds what was measured and decided; this is the shape of the
 code.
