@@ -54,6 +54,11 @@ try {
   console.error(`${file} did not parse: ${why}`);
   process.exit(1);
 }
+const [label] = dsl.__parcadLabelledPartKeys(source);
+if (label) {
+  console.error(`${file}: ${label.message}`);
+  process.exit(1);
+}
 
 const result = fn(...names.map((n) => (dsl as Record<string, unknown>)[n]));
 if (!(result instanceof Shape) && (typeof result !== "object" || result === null)) {

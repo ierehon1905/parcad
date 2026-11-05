@@ -27,6 +27,7 @@ import * as engine from "../engine";
 import { intellisense } from "../intellisense/extensions";
 import { cardTheme } from "../intellisense/theme";
 import * as languageService from "../intellisense/service";
+import { labelLinter } from "../label-lint";
 import { numberDial } from "../number-dial";
 import { selectorLinter } from "../selector-lint";
 import * as S from "../state";
@@ -106,6 +107,9 @@ export function Editor() {
         // selector resolves, and to how many edges — waits for the evaluation,
         // because only the kernel knows.
         selectorLinter,
+        // A `checks:` written as a statement is a label that drops the
+        // checks; marked on the word, as the build refuses it.
+        labelLinter,
         // Click a number to dial it with the arrow keys. Above the default
         // keymap, and engaged by the pointer only, so keyboard navigation
         // keeps Up and Down.

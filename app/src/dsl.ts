@@ -549,6 +549,8 @@ export function importPart(name: string, params: Record<string, unknown> = {}): 
     const why = shadowed.length ? __parcadShadowedBuiltinMessage(shadowed, names) : messageOf(e);
     throw new Error(`${name} did not parse: ${why}`);
   }
+  const [label] = __parcadLabelledPartKeys(source);
+  if (label) throw new Error(`${name}: ${label.message}`);
 
   const frame: ImportFrame = { name, given: params, declared: false };
   const outerBrief = declaredBrief;
@@ -619,24 +621,25 @@ function partLine(stack: string | undefined, name: string, source: string): numb
 
 /** @internal Which of parcad's names a script redeclares, found by compiling it with each as a parameter. */
 export function __parcadShadowedBuiltins(source: string, names: string[]): string[] {
-  const compiles = (parameters: string[]) => {
-    try {
-      new Function(...parameters, source);
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  if (compiles(names) || !compiles([])) return [];
+  if (compiles(source, names) || !compiles(source)) return [];
   // Add the names back one at a time; each one that breaks the compile is a
   // name the script declares.
   const kept: string[] = [];
   const shadowed: string[] = [];
   for (const name of names) {
-    if (compiles([...kept, name])) kept.push(name);
+    if (compiles(source, [...kept, name])) kept.push(name);
     else shadowed.push(name);
   }
   return shadowed;
+}
+
+function compiles(body: string, parameters: string[] = []): boolean {
+  try {
+    new Function(...parameters, body);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** @internal The refusal for a script that declares parcad's own names, written for whoever wrote it. */
@@ -651,6 +654,48 @@ export function __parcadShadowedBuiltinMessage(shadowed: string[], names: string
     `or a name saying what it holds — or use parcad's own \`${example}\` instead of declaring one. ` +
     `read_docs (topic dsl, entry \`${example}\`) says what parcad's does.`
   );
+}
+
+/** The keys of a returned object that are not bodies ({@link Part}); written as a statement, each is a label that does nothing. */
+const PART_KEYS = ["checks"];
+
+/** @internal A `checks:` the script wrote as a statement of its own, and the refusal naming the fix. */
+export interface PartKeyLabel {
+  from: number;
+  to: number;
+  message: string;
+}
+
+/**
+ * @internal Every `checks:` written as a statement of the script's own, which
+ * JavaScript reads as a label and runs as nothing. Proved by the engine, never
+ * read off the text: a label may not repeat inside a statement it labels, so
+ * the script wrapped in a block labelled `checks` compiles unless it has one of
+ * its own; renaming every other `checks` says which. A script that does not
+ * compile reports its own fault instead.
+ */
+export function __parcadLabelledPartKeys(source: string): PartKeyLabel[] {
+  if (!compiles(source)) return [];
+  const found: PartKeyLabel[] = [];
+  for (const key of PART_KEYS) {
+    const labelled = (body: string) => compiles(`${key}: {${body}\n}`);
+    if (labelled(source)) continue;
+    const occurrences = Array.from(source.matchAll(new RegExp(`\\b${key}\\b`, "g")), (m) => m.index);
+    const allBut = (kept: number) =>
+      occurrences.reduce((body, at) => (at === kept ? body : body.slice(0, at) + "_".repeat(key.length) + body.slice(at + key.length)), source);
+    for (const at of occurrences) {
+      if (labelled(allBut(at))) continue;
+      const line = source.slice(0, at).split("\n").length;
+      found.push({
+        from: at,
+        to: at + key.length,
+        message:
+          `\`${key}:\` at line ${line} is a JavaScript label, so the list after it is built and thrown away and the part has no ${key}. ` +
+          `Put it in the returned object: return { part, ${key}: [...] }`,
+      });
+    }
+  }
+  return found;
 }
 
 function treatmentSource(method: SourceLocation["method"]): SourceLocation | undefined {

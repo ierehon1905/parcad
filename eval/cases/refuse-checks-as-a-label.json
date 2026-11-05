@@ -1,0 +1,15 @@
+{
+  "name": "refuse-checks-as-a-label",
+  "script": "eval/scripts/refuse-checks-as-a-label.js",
+  "why": "`checks: [...]` as a statement of its own is a JavaScript label: legal, evaluated, discarded. A Haiku 5.5 field run wrote the request's checks that way before `return plate;` and the host built the plate with no checks and said nothing. Every runner now asks the engine whether the script carries such a label — the script wrapped in a block labelled `checks` compiles unless it does — and refuses it naming the line and the fix.",
+  "brep": {
+    "refuses": {
+      "kind": "error",
+      "message_contains": [
+        "`checks:` at line 8 is a JavaScript label",
+        "the part has no checks",
+        "return { part, checks: [...] }"
+      ]
+    }
+  }
+}

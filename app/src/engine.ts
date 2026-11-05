@@ -245,6 +245,8 @@ function buildGraph(source: string): BuiltGraph {
     }
     throw atLine("the script did not parse", e, source);
   }
+  const [label] = dsl.__parcadLabelledPartKeys(source);
+  if (label) throw new Error(label.message);
 
   dsl.__parcadTakeNotes();
   let result: unknown;

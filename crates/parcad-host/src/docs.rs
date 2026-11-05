@@ -780,12 +780,14 @@ mod tests {
     /// is the point — the alternative is an export quietly missing from the one
     /// document that claims to list all of them.
     // The `__parcad` exports are the compilers' own helpers — the editor's
-    // treatment locator, the proof of which builtin a script redeclared —
-    // named so that no part would reach for them.
-    const NOT_IN_THE_LANGUAGE: [&str; 5] = [
+    // treatment locator, the proof of which builtin a script redeclared or
+    // which `checks:` it wrote as a label — named so that no part would reach
+    // for them.
+    const NOT_IN_THE_LANGUAGE: [&str; 6] = [
         "__parcadTreatmentSource",
         "__parcadShadowedBuiltins",
         "__parcadShadowedBuiltinMessage",
+        "__parcadLabelledPartKeys",
         "__parcadTakeNotes",
         "__parcadReadPartsWith",
     ];

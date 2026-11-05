@@ -117,6 +117,8 @@ const RUNNER: &str = r#"
     }
     return failed("the script did not parse", e);
   }
+  const [label] = dsl.__parcadLabelledPartKeys(source);
+  if (label) return JSON.stringify({ error: label.message });
 
   // Notes from a run that threw before this one must not be read as this one's.
   dsl.__parcadTakeNotes();
@@ -1071,6 +1073,24 @@ return box(1, 1, 1);
         assert!(error.contains("names parcad puts in every script, so a script cannot declare it again. Rename the local — `clearanceMm`, `myClearance`,"), "{error}");
         assert!(error.contains("\n  2 | const clearance = 0.6;"), "{error}");
         assert!(!error.contains("invalid redefinition"), "{error}");
+    }
+
+    /// `checks: [...]` as a statement is a label: the list is built and
+    /// dropped, and the part used to build with no checks and no word of it.
+    /// A Haiku 5.5 field run wrote it that way before `return part;`.
+    #[test]
+    fn checks_written_as_a_label_is_refused_with_the_fix() {
+        let error = build("const part = box(10, 10, 10);\nchecks: [{ size: { is: [10, 10, 10] } }];\nreturn part;")
+            .err()
+            .expect("the label drops the checks");
+        assert!(error.starts_with("`checks:` at line 2 is a JavaScript label"), "{error}");
+        assert!(error.contains("return { part, checks: [...] }"), "{error}");
+
+        let kept = build(
+            "// checks: [1] in a comment, \"checks:\" in a string\nconst s = \"checks: [1]\";\nreturn {\n  part: box(10, 10, 10),\n  checks: [\n    { size: { is: [10, 10, 10] } },\n  ],\n};",
+        )
+        .expect("the key of the returned object is not a label");
+        assert_eq!(kept.graph["checks"], serde_json::json!([{ "size": { "is": [10, 10, 10] } }]));
     }
 
     /// An error is read at the moment of need; the selector refusal names
