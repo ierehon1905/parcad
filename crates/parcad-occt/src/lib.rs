@@ -27,6 +27,8 @@ pub mod packet;
 pub mod perceive;
 pub mod protocol;
 #[cfg(feature = "kernel")]
+pub mod resident;
+#[cfg(feature = "kernel")]
 pub mod serve;
 #[cfg(feature = "kernel")]
 pub mod overhang;

@@ -14,7 +14,8 @@
 //! What a request does is `parcad_occt::serve`; this file is only the transport.
 
 use parcad_occt::backend::BuildCache;
-use parcad_occt::protocol::{BuildId, Request, Response, REPLY};
+use parcad_occt::protocol::{BuildId, Request, Response, REPLY, RESIDENT};
+use parcad_occt::resident;
 use parcad_occt::serve::run;
 use std::io::{BufRead, Read};
 
@@ -47,42 +48,48 @@ fn main() {
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let Ok(line) = line else { break };
-        if line.trim().is_empty() {
-            continue;
+        let Some(reply) = answer(line, &mut cache) else { continue };
+        // Measured once the frame, the request and the reply are gone: what
+        // is left is the worker's to keep.
+        if let Some(kb) = resident::held_kb() {
+            eprintln!("{RESIDENT}{kb}");
         }
-        let value: serde_json::Value = match serde_json::from_str(&line) {
-            Ok(value) => value,
-            Err(e) => {
-                eprintln!("a frame this worker could not read ({e}); dropping it");
-                continue;
-            }
-        };
-        let Some(reply) = value.get("reply").and_then(|r| r.as_str()).map(str::to_owned) else {
-            eprintln!("a frame with no reply path; dropping it");
-            continue;
-        };
-        // Answered rather than dropped: a dropped frame reads to the host as
-        // a crash, and a request this build cannot read is a version mismatch.
-        let request = check_host(&value).and_then(|()| {
-            value
-                .get("request")
-                .cloned()
-                .ok_or_else(|| "the frame carries no request".to_owned())
-                .and_then(read_request)
-        });
-        let request = match request {
-            Ok(request) => request,
-            Err(message) => {
-                let response = Response::Error { stage: "reading the request".into(), message };
-                write_reply(&reply, &response);
-                eprintln!("{REPLY}{reply}");
-                continue;
-            }
-        };
-        let response = run(request, &mut cache);
-        write_reply(&reply, &response);
         eprintln!("{REPLY}{reply}");
     }
+}
+
+/// Answer one frame where it asked to be answered and return that path, or
+/// `None` for a frame that said nowhere.
+fn answer(line: String, cache: &mut BuildCache) -> Option<String> {
+    if line.trim().is_empty() {
+        return None;
+    }
+    let value: serde_json::Value = match serde_json::from_str(&line) {
+        Ok(value) => value,
+        Err(e) => {
+            eprintln!("a frame this worker could not read ({e}); dropping it");
+            return None;
+        }
+    };
+    let Some(reply) = value.get("reply").and_then(|r| r.as_str()).map(str::to_owned) else {
+        eprintln!("a frame with no reply path; dropping it");
+        return None;
+    };
+    // Answered rather than dropped: a dropped frame reads to the host as
+    // a crash, and a request this build cannot read is a version mismatch.
+    let request = check_host(&value).and_then(|()| {
+        value
+            .get("request")
+            .cloned()
+            .ok_or_else(|| "the frame carries no request".to_owned())
+            .and_then(read_request)
+    });
+    let response = match request {
+        Ok(request) => run(request, cache),
+        Err(message) => Response::Error { stage: "reading the request".into(), message },
+    };
+    write_reply(&reply, &response);
+    Some(reply)
 }
 
 /// Whether the host that sent `frame` is this worker's own build. The

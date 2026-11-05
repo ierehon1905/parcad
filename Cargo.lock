@@ -2976,6 +2976,7 @@ version = "0.0.13"
 dependencies = [
  "anyhow",
  "glam 0.23.0",
+ "libc",
  "opencascade",
  "parcad-core",
  "serde",

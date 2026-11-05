@@ -21,7 +21,7 @@
 // A tab has no processes to start: the pool below is the native host's alone.
 #![cfg_attr(target_os = "emscripten", allow(dead_code, unused_imports))]
 
-use crate::protocol::{BuildId, Frame, Request, Response, Success, TargetPreview, BREADCRUMB, REPLY};
+use crate::protocol::{BuildId, Frame, Request, Response, Success, TargetPreview, BREADCRUMB, REPLY, RESIDENT};
 use parcad_core::graph::Doc;
 use std::cell::RefCell;
 use std::io::{BufRead, BufReader, Write};
@@ -451,17 +451,28 @@ static REPLY_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::n
 /// process it would then throw away.
 const MAX_IDLE: usize = 2;
 
+/// The most a worker may still hold, after it has answered and given its
+/// allocator's freed pages back (`resident.rs`), and be kept warm; past this
+/// it is retired and the next request starts fresh. Measured on the heaviest
+/// parts in the corpus, a worker holds under 10 MB of cache after a build,
+/// up to 128 MB of freed pages not worth a trim, and after the heaviest parts
+/// up to 230 MB the trim did not reach, which the next request does; so the
+/// limit is far above the editing loop, and the bound on what a hosted
+/// server's two idle workers can keep from the parts before them.
+const KEEP_UNDER_KB: u64 = 512 * 1024;
+
 static IDLE: Mutex<Vec<Worker>> = Mutex::new(Vec::new());
 
 /// What the stderr reader hands the caller. Breadcrumbs update a shared slot
 /// instead, so a timeout can read the last one while the worker is wedged.
 enum Event {
+    Resident(u64),
     Reply(String),
     Eof,
 }
 
-/// A serving worker process: its stdin, the reader of its stderr, and the
-/// last breadcrumb it printed.
+/// A serving worker process: its stdin, the reader of its stderr, the last
+/// breadcrumb it printed and the memory it last reported holding.
 struct Worker {
     path: PathBuf,
     child: std::process::Child,
@@ -469,6 +480,7 @@ struct Worker {
     events: mpsc::Receiver<Event>,
     latest: Arc<Mutex<String>>,
     noise: Arc<Mutex<Vec<String>>>,
+    held_kb: Option<u64>,
 }
 
 impl Worker {
@@ -514,6 +526,10 @@ impl Worker {
                     if events.send(Event::Reply(reply.to_string())).is_err() {
                         break;
                     }
+                } else if let Some(kb) = line.strip_prefix(RESIDENT).and_then(|kb| kb.trim().parse().ok()) {
+                    if events.send(Event::Resident(kb)).is_err() {
+                        break;
+                    }
                 } else if !line.trim().is_empty() {
                     if echo {
                         // Whatever the kernel printed for itself. Deliberately
@@ -537,6 +553,7 @@ impl Worker {
             events: receiver,
             latest,
             noise,
+            held_kb: None,
         })
     }
 
@@ -553,8 +570,11 @@ impl Worker {
     }
 
     /// Back to the pool for the next request, or dropped when the pool is
-    /// full — dropping kills it.
+    /// full or this worker holds more than the pool keeps — dropping kills it.
     fn release(self) {
+        if self.held_kb.is_some_and(|kb| kb > KEEP_UNDER_KB) {
+            return;
+        }
         let mut idle = IDLE.lock().unwrap_or_else(|e| e.into_inner());
         if idle.len() < MAX_IDLE {
             idle.push(self);
@@ -586,6 +606,7 @@ impl Worker {
         loop {
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             match self.events.recv_timeout(remaining) {
+                Ok(Event::Resident(kb)) => self.held_kb = Some(kb),
                 Ok(Event::Reply(path)) => {
                     if std::path::Path::new(&path) != reply_path {
                         // A reply to an earlier, abandoned request. Nothing
@@ -761,20 +782,52 @@ mod tests {
     }
 
     /// A serving shim: answers every frame on stdin with a refusal naming its
-    /// own pid, so a caller can tell one process from another.
-    fn serving_shim(name: &str, requests_before_exit: Option<usize>) -> PathBuf {
+    /// own pid, so a caller can tell one process from another, reporting
+    /// `holding_kb` before each reply when given one.
+    fn serving_shim(name: &str, requests_before_exit: Option<usize>, holding_kb: Option<u64>) -> PathBuf {
         let limit = requests_before_exit
             .map(|n| format!("[ \"$served\" -ge {n} ] && exit 0\n"))
             .unwrap_or_default();
+        let holding = holding_kb.map(|kb| format!("echo '{RESIDENT}{kb}' >&2\n")).unwrap_or_default();
         shim(
             name,
             &format!(
                 "echo '{BREADCRUMB}serving' >&2\nserved=0\nwhile IFS= read -r line; do\n\
                  reply=$(printf '%s' \"$line\" | sed -E 's/^\\{{\"reply\":\"([^\"]+)\".*/\\1/')\n\
                  printf '{{\"status\":\"error\",\"stage\":\"shim\",\"message\":\"served by pid %s\"}}' $$ > \"$reply\"\n\
-                 echo '{REPLY}'\"$reply\" >&2\nserved=$((served + 1))\n{limit}done\n"
+                 {holding}echo '{REPLY}'\"$reply\" >&2\nserved=$((served + 1))\n{limit}done\n"
             ),
         )
+    }
+
+    /// Two requests to a shim reporting `holding_kb`: the pids that served them.
+    fn pids_serving_a_worker_holding(name: &str, holding_kb: u64) -> (String, String) {
+        let _env = WORKER_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let shim = serving_shim(name, None, Some(holding_kb));
+        std::env::set_var("PARCAD_OCCT_WORKER", &shim);
+        let first = pid_that_served(evaluate(&unit_cube(), &Options::default()));
+        let second = pid_that_served(evaluate(&unit_cube(), &Options::default()));
+        std::env::remove_var("PARCAD_OCCT_WORKER");
+        IDLE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        let _ = std::fs::remove_file(&shim);
+        (first, second)
+    }
+
+    /// A worker that reports holding more than the pool keeps is retired on
+    /// the spot: the next request is answered by a fresh process, and what
+    /// the old one held went with it.
+    #[test]
+    fn a_worker_holding_more_than_the_pool_keeps_is_retired() {
+        let (first, second) = pids_serving_a_worker_holding("retire", KEEP_UNDER_KB + 1);
+        assert_ne!(first, second, "a worker over the limit was kept and handed the next request");
+    }
+
+    /// Under the limit the same worker answers again, so the report is read
+    /// as a number and not as a reason to retire.
+    #[test]
+    fn a_worker_holding_what_the_pool_keeps_stays_warm() {
+        let (first, second) = pids_serving_a_worker_holding("keep", KEEP_UNDER_KB);
+        assert_eq!(first, second, "a worker under the limit was retired");
     }
 
     fn pid_that_served(outcome: Result<Success, OcctError>) -> String {
@@ -792,7 +845,7 @@ mod tests {
     #[test]
     fn a_worker_answers_the_next_request_without_being_started_again() {
         let _env = WORKER_ENV.lock().unwrap_or_else(|e| e.into_inner());
-        let shim = serving_shim("reuse", None);
+        let shim = serving_shim("reuse", None, None);
         std::env::set_var("PARCAD_OCCT_WORKER", &shim);
         let first = pid_that_served(evaluate(&unit_cube(), &Options::default()));
         let second = pid_that_served(evaluate(&unit_cube(), &Options::default()));
@@ -807,7 +860,7 @@ mod tests {
     #[test]
     fn a_worker_that_died_while_idle_is_replaced() {
         let _env = WORKER_ENV.lock().unwrap_or_else(|e| e.into_inner());
-        let shim = serving_shim("replace", Some(1));
+        let shim = serving_shim("replace", Some(1), None);
         std::env::set_var("PARCAD_OCCT_WORKER", &shim);
         let first = pid_that_served(evaluate(&unit_cube(), &Options::default()));
         // The shim exits after its first reply; give it a moment to be gone.

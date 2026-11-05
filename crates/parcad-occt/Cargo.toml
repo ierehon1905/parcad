@@ -10,7 +10,7 @@ description = "B-rep backend for parcad, isolated from OCCT's failure modes"
 # crate without paying for a multi-minute C++ build.
 [features]
 default = []
-kernel = ["dep:opencascade", "dep:glam"]
+kernel = ["dep:opencascade", "dep:glam", "dep:libc"]
 
 [[bin]]
 name = "parcad-occt-worker"
@@ -44,3 +44,6 @@ serde.workspace = true
 serde_json.workspace = true
 opencascade = { path = "../../vendor/opencascade", optional = true }
 glam = { version = "0.23", optional = true }
+# The worker's own footprint and its allocator's trim; the host half asks the
+# worker instead of the operating system.
+libc = { version = "0.2", optional = true }
