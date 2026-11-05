@@ -1425,6 +1425,35 @@ Two ways face provenance died before it worked, both measured on the V holder:
   later operation asks. The mirrored cup is what found this: the unmirrored
   one kept its name and the mirrored one lost it at the same union.
 
+### A tag's face list doubled at every boolean layer *(fixed 2026-11-05)*
+
+The planter saucer — a dish fused with 37 revolved bumps — built in 1.3 s
+untagged and never finished with `.tag("saucer")` on the union. Nothing in
+the boolean: a `sample` of the worker put all of it in `EdgeLineage`'s
+`modified_face` loops, allocating and freeing face handles. The lineage kept
+each name's faces as a `Vec`, and two entries can be asked about one face:
+when a fuse splits a face on the same domain (the dish's bottom plane and a
+bump's coplanar bottom disk), OCCT's `Modified` returns *both* pieces, and the
+unify pass after it merges the pieces back into one face. One face, two
+entries; the tag then appends every result face on top. At the next boolean
+each entry is asked about again, so the list doubled per step — 2^37 for the
+saucer, bumps fused one at a time as they were then. A plate with n posts
+stacked at one spot, every post its own boolean layer, measured the law at
+HEAD: 17 / 97 / 1479 / 5028 / 20652 ms tagged for n = 8 / 16 / 20 / 22 / 24
+against ~40 ms untagged. `boolean_in_layers` had hidden the saucer by fusing
+non-overlapping tools in one layer; it never hid overlapping ones.
+
+A tag names a *set*. `EdgeLineage::unique` now keeps each name's faces and
+edges once each, by sub-shape identity (`Identity`, `IsSame` — the same
+`TShape` at the same location — in the vendored crate), after every history
+it is carried through and after every tag written; `boolean_in_layers`' seam
+edges the same. Nothing a reader asked changed: `face_tags`, the extents, and
+`equivalent_sources` already wrote each tag once per face, so a duplicated
+entry meant one face everywhere. The corpus's tag extents and face counts are
+unchanged; `eval/cases/tagged-stack.json` holds the 26-post stack under the
+20 s budget it used to miss by a factor of four. Not `tag_extents`, the first
+suspect: `AddOptimal` over all 44 saucer faces is 16 ms.
+
 ### `generatedBy` names the cut, not the tool
 
 Lineage records the boolean node's tag, so `blank.cut(grooves, shaftBore, grub)`

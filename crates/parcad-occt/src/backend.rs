@@ -15,7 +15,7 @@ use glam::{DMat3, DVec3};
 use opencascade::{
     adhoc::AdHocShape,
     angle::Angle,
-    primitives::{BooleanShape, Edge, Face, PointState, Shape, Solid, Wire},
+    primitives::{BooleanShape, Edge, Face, Identity, PointState, Shape, Solid, Wire},
     curve::LoftProfile,
     sweep::{Helix as SweptHelix, HelixByTurn, SweepFrame},
 };
@@ -1258,6 +1258,24 @@ fn kernel_edges(shape: &Shape) -> Vec<Edge> {
         .collect()
 }
 
+/// `items` with every repeat of an earlier one dropped, by sub-shape identity
+/// (`IsSame`: the same `TShape` at the same location, orientation aside).
+fn unique_by_identity<T>(items: Vec<T>, identity: impl Fn(&T) -> Identity<'_>) -> Vec<T> {
+    let keep: Vec<bool> = {
+        let mut seen = HashSet::new();
+        items.iter().map(|item| seen.insert(identity(item))).collect()
+    };
+    items.into_iter().zip(keep).filter_map(|(item, keep)| keep.then_some(item)).collect()
+}
+
+fn unique_faces(faces: Vec<Face>) -> Vec<Face> {
+    unique_by_identity(faces, Face::identity)
+}
+
+fn unique_edges(edges: Vec<Edge>) -> Vec<Edge> {
+    unique_by_identity(edges, Edge::identity)
+}
+
 /// Group the endpoints of the current logical edges into selectable vertices.
 ///
 /// The wrapper exposes reliable endpoint coordinates but not a vertex explorer.
@@ -1393,6 +1411,7 @@ impl EdgeLineage {
             faces_by_source,
             solids_by_source,
         }
+        .unique()
     }
 
     /// Carry every name through a fillet or chamfer. Faces and edges the
@@ -1492,6 +1511,7 @@ impl EdgeLineage {
             faces_by_source,
             solids_by_source,
         }
+        .unique()
     }
 
     /// Carry every name through the same-domain merge after a boolean.
@@ -1536,6 +1556,7 @@ impl EdgeLineage {
             faces_by_source,
             solids_by_source,
         }
+        .unique()
     }
 
     /// Carry every name through a rigid motion or a uniform scale: move each
@@ -1590,6 +1611,26 @@ impl EdgeLineage {
                 .map(|(source, solid)| (source, transform(solid)))
                 .collect(),
         }
+        .unique()
+    }
+
+    /// Each name's faces once and edges once, in the order first seen.
+    ///
+    /// A history answers for the sub-shape it is asked about, and two
+    /// entries can be asked about one face: a boolean's `Modified` returns
+    /// both pieces of a face it split on the same domain, and the unify pass
+    /// after it merges those pieces back into one face. Kept as a list, that
+    /// one face was two entries, then four, then 2^k after k boolean layers,
+    /// each a history call — the saucer that found it never finished
+    /// (docs/GOTCHAS.md, "A tag's face list doubled at every boolean layer").
+    fn unique(mut self) -> Self {
+        for faces in self.faces_by_source.values_mut() {
+            *faces = unique_faces(std::mem::take(faces));
+        }
+        for edges in self.by_source.values_mut() {
+            *edges = unique_edges(std::mem::take(edges));
+        }
+        self
     }
 
     /// Which tags each live face carries, keyed the way an adjacent-face
@@ -3344,6 +3385,7 @@ impl BuiltShape {
                 .or_default()
                 .extend(self.shape.faces());
             self.lineage.solids_by_source.insert(tag.to_owned(), self.shape.clone());
+            self.lineage = std::mem::take(&mut self.lineage).unique();
         }
         self
     }
@@ -4057,6 +4099,7 @@ fn boolean_in_layers(base: BuiltShape, tools: Vec<BuiltShape>, cut: bool, tag: O
         }
         seam = evolve_edges(seam, &result);
         seam.extend(result.new_edges().cloned());
+        seam = unique_edges(seam);
         let mut lineages = Vec::with_capacity(members.len());
         for member in members {
             features.extend(member.features);

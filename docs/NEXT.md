@@ -264,7 +264,7 @@ and in the next two sections.
 
 | # | item | score | impact | effort | model |
 |---|---|---|---|---|---|
-| 1 | the tag that makes the saucer crawl | 8 | ★★★ | L | Fable, high |
+| 1 | the tag that makes the saucer crawl — **done 2026-11-05** | 8 | ★★★ | L | Fable, high |
 | 2 | `allow_failing` is taken on the model's own word | 7 | ★★★ | S | Opus |
 | 3 | `check_motion` | 7 | ★★★ | L | Fable, high |
 | 4 | `edit_part` refuses with an empty reason | 6 | ★★ | S | Opus |
@@ -419,9 +419,10 @@ point). Counted by trial, most-hit first:
 Ranked by what the bench and the competitors make urgent; each is already
 described where it lives:
 
-1. **The tag that makes the saucer crawl** (1.3 s → over 120 s, lineage
-   bookkeeping), below under the planter saucer. A user hits it by adding one
-   `.tag()`.
+1. **The tag that makes the saucer crawl** — **done 2026-11-05**. Lineage
+   bookkeeping, as guessed: a tag's face list doubled at every boolean layer
+   that split a face on the same domain (GOTCHAS, "A tag's face list doubled
+   at every boolean layer"). Below under the planter saucer.
 2. **`check_motion`** (queue item 5's mechanics witness): clearance certified
    over a swing on the exact solids. Limo, QymCAD and STEVE Studio all check
    motion; it is the feature gap the bench shows.
@@ -474,11 +475,18 @@ are worth. Leon's read is in brackets.
 - **Delabella meshes faster and does not close.** Measured and reverted; the
   repro, the numbers and what it does not break are in GOTCHAS, "Delabella,
   OCCT's other triangulator". Worth a minimal C++ report upstream one day.
-- **A tag on a union of many curved solids makes it crawl.** The same saucer
-  (a dish unioned with 37 revolved B-spline bumps, 39 nodes) builds in 1.3 s
-  untagged and runs past 120 s with `.tag("saucer")` on the union — the graphs
-  differ only by that tag, so it is the lineage bookkeeping, not the boolean.
-  The example drops the tag; the body is named by `return { saucer }` anyway.
+- **A tag on a union of many curved solids makes it crawl** — **fixed
+  2026-11-05**. The same saucer (a dish unioned with 37 revolved B-spline
+  bumps, 39 nodes) built in 1.3 s untagged and ran past 120 s with
+  `.tag("saucer")` on the union. It was the lineage bookkeeping: each fuse
+  split the shared bottom face on the same domain, the unify pass merged the
+  pieces back, and the tag's face list — a `Vec`, never a set — doubled per
+  fuse, 2^37 entries. `EdgeLineage` now keeps each name's faces and edges
+  unique by sub-shape identity; the saucer builds tagged in its untagged time,
+  and a tagged union of 24 overlapping tools went from 20.7 s to 47 ms
+  (`eval/cases/tagged-stack.json`, GOTCHAS "A tag's face list doubled at
+  every boolean layer", docs/notes/tag-lineage-doubling.md for the
+  measurements).
 - **`.smooth()` / `.squircle()` build, measured G2 (2026-10-14).** A fourth
   fillet section inside OpenCASCADE's own machinery
   (`vendor/occt-sys/patches/0006`): the rolling ball's rails with a quintic

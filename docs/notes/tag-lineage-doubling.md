@@ -85,14 +85,29 @@ history, and the untagged saucer built in 1.4 s against the 1.3 s recorded).
 | saucer, B-spline bumps as of 9662c4b5 | 567 | 574 |
 | planter + saucer as of 9662c4b5 | 3167 | 3156 |
 
-## The fix
+## The fix, and what it measured
 
-A tag names a *set* of faces and a set of edges. Keep each list unique by
-sub-shape identity (`TopoDS_Shape::IsSame`: same `TShape`, same location —
-what `Shape::face_map`'s `TopTools_IndexedMapOfShape` already keys on), at
-the two places a boolean or a unify hands back images and at the `extend`
-that writes the tag. Then k layers cost k × faces, and the saucer's rule —
-every tag owns exactly the faces it owned before — is unchanged, because a
-face listed twice already meant one face everywhere a reader asks
-(`face_tags` writes each tag once per face index). Prove it on the stack
-above as an `eval/cases/` entry with a time budget, and on the corpus.
+A tag names a *set* of faces and a set of edges. `EdgeLineage::unique` keeps
+each name's list unique by sub-shape identity (`Identity` in the vendored
+crate: `TopoDS_Shape::IsSame`, same `TShape` at the same location, hashed as
+OCCT's own shape maps hash) after every history it is carried through and
+after every tag written; `boolean_in_layers`' seam edges the same. A face
+listed twice already meant one face everywhere a reader asked (`face_tags`
+writes each tag once per face index), so no tag's ownership moves.
+
+Release profile, `tools/bench-kernel.sh` (median of 3, build ms), before
+and after:
+
+| part | before | after |
+|---|---|---|
+| tagged stack, 26 posts (`eval/cases/tagged-stack`) | refused at the 20 s budget | 53–127 |
+| tagged stack, 24 posts | refused at 20 s (20652 under a 300 s timeout) | 69 |
+| untagged stack, 24 posts | 46 | 56 |
+
+The ordinary parts were read under a load average of 16–27 from other
+sessions, so they were paired: the pre-fix and fixed release CLIs
+alternated run by run on the same graph, five runs each, medians (build ms,
+A pre-fix / B fixed): bracket 66 / 66, timing-pulley 212 / 212, plate-stand
+1053 / 1084, twisted-planter 2670 / 2672, untagged stack 46 / 45. Corpus:
+221 passed, 0 failed, the new case included, every recorded tag extent and
+face count unchanged.

@@ -1,0 +1,42 @@
+{
+  "name": "tagged-stack",
+  "script": "eval/scripts/tagged-stack.js",
+  "why": "A tagged union of 26 overlapping tools, one boolean layer each. Every fuse splits the shared bottom face on the same domain, and until 2026-11-05 each split doubled the tag's face list (2^26 entries here; the saucer that found it fused 37 bumps one at a time and never finished). With the lineage kept unique it builds in the untagged time, under the 20 s budget this case states; before, 24 posts took 20.7 s and 26 did not finish. The posts nest — each is wider and taller than the one before — so the result is the plate and the last post: 8 faces, the shared bottom merged into one. The tag extents hold what each name owns, `plate` the 60 x 60 x 2 plate and `stack` the whole part; a face carried twice would not have moved them, a face lost would.",
+  "brep": {
+    "size": [
+      60.0,
+      60.0,
+      28.0
+    ],
+    "volume_mm3": 10651.04,
+    "area_mm2": 8741.858,
+    "triangles": 336,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 3600.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 8,
+    "edges": 30,
+    "curves": 14,
+    "tags": {
+      "plate": [
+        -30.0,
+        -30.0,
+        0.0,
+        30.0,
+        30.0,
+        2.0
+      ],
+      "stack": [
+        -30.0,
+        -30.0,
+        0.0,
+        30.0,
+        30.0,
+        28.0
+      ]
+    },
+    "timeout_s": 20.0
+  }
+}
