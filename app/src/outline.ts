@@ -23,6 +23,7 @@
 
 import * as THREE from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 
@@ -156,7 +157,12 @@ export class OutlineRenderer {
     // A stencil buffer, because the section cap is drawn with one and the
     // composer's target is what the scene actually renders into. Without it the
     // stencil test silently passes everywhere and the cap covers the screen.
-    const beauty = new THREE.WebGLRenderTarget(w, h, { samples: 4, stencilBuffer: true });
+    //
+    // Half-float, and an OutputPass last: three tone-maps and sRGB-encodes
+    // only what is drawn straight to the canvas, so without them the canvas
+    // showed linear values — every colour darker and greyer than asked for
+    // (docs/GOTCHAS.md, "The viewport showed linear colour").
+    const beauty = new THREE.WebGLRenderTarget(w, h, { samples: 4, stencilBuffer: true, type: THREE.HalfFloatType });
     this.composer = new EffectComposer(renderer, beauty);
     this.composer.addPass(new RenderPass(scene, camera));
 
@@ -164,6 +170,7 @@ export class OutlineRenderer {
     this.outlinePass.uniforms.tNormal.value = this.normalTarget.texture;
     this.outlinePass.uniforms.tDepth.value = this.normalTarget.depthTexture;
     this.composer.addPass(this.outlinePass);
+    this.composer.addPass(new OutputPass());
 
     this.setSize(size.x, size.y);
   }
@@ -177,6 +184,14 @@ export class OutlineRenderer {
    */
   setClippingPlanes(planes: THREE.Plane[]) {
     this.normalMaterial.clippingPlanes = planes.length > 0 ? planes : null;
+  }
+
+  /**
+   * The silhouette's colour. It stays one device pixel wide: it is found in a
+   * pass with no antialiasing, so widening it stair-steps every outline.
+   */
+  setColor(color: string) {
+    this.outlinePass.uniforms.edgeColor.value.set(color);
   }
 
   /** Draw creases, or leave them to real edge curves supplied by the backend. */

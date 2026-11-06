@@ -2366,3 +2366,22 @@ The ext-apps `App` reports the page's height with a `ResizeObserver` on
 frame's and never change when content grows inside them. The viewer measured
 428 px before its panel rendered and stayed there. `viewer.html` sets `h-auto`
 on both, so the client is told the height the page needs.
+
+## The viewport showed linear colour *(fixed 2026-11-06)*
+
+The outline pass made the viewport an `EffectComposer`: the scene rendered into
+an 8-bit target and the outline `ShaderPass` drew it to the canvas. three
+tone-maps and sRGB-encodes only what is drawn straight to the canvas, and the
+outline shader did neither, so the canvas showed linear values: every colour
+darker and greyer than asked for. The sky asked for `#e8ecf1` and showed
+`#cbd1dd` (linear-shown-raw predicts `#ced6e0`); the parts' `#aeb8c6` showed
+near `#6c7a90`. That was most of the "overcast" a phone saw in the chat viewer.
+
+The beauty target is now half-float and an `OutputPass` comes last. The
+workbench's colours had been tuned against the bug, so they moved with it: its
+sky is now the colours it used to show, and Neutral tone mapping replaced ACES,
+which desaturates. The backdrop goes through tone mapping with the rest of the
+scene, and Neutral's toe sinks a dark grey to black, so `backdrop()` in
+`viewport.ts` fills it with the inverse of the curve: it shows the colour the
+look names. The silhouette pass is not antialiased; widening it stair-steps
+every outline, so a look widens the kernel's edges (`LineMaterial`) instead.

@@ -8,6 +8,8 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { Line2 } from "three/examples/jsm/lines/Line2.js";
 import { LineGeometry } from "three/examples/jsm/lines/LineGeometry.js";
 import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
+import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
+import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { beginDrag } from "./drag";
 import { verticesFromEdges, type VertexPoint } from "./entities";
@@ -33,7 +35,61 @@ export interface BodySpan {
   /** First triangle, and how many. */
   start: number;
   count: number;
+  /** What its faces wear where they carry no material of their own; the look's `part` otherwise. */
+  color?: string;
 }
+
+type Vec3 = [number, number, number];
+
+/** A light in a look: fixed in the world (and casting the shadow), riding with the camera, or everywhere. */
+export type SceneLight =
+  | { kind: "sun"; color: string; intensity: number; from: Vec3 }
+  | { kind: "camera"; color: string; intensity: number; from: Vec3; toward: Vec3 }
+  | { kind: "ambient"; color: string; intensity: number };
+
+/**
+ * How the scene around a part is lit and dressed: the window's workbench, or
+ * the chat viewer's own. Scene colours, not chrome; see `gold()`.
+ */
+export interface SceneLook {
+  /** The backdrop: one colour, or top and bottom. */
+  sky: string | [string, string];
+  toneMapping: "neutral" | "none";
+  exposure: number;
+  /** How strongly the room environment lights and reflects; 0 for none. */
+  environment: number;
+  lights: SceneLight[];
+  /** What a face wears where nothing else is given. */
+  surface: { kind: "standard"; roughness: number; metalness: number } | { kind: "phong"; shininess: number; specular: string };
+  part: string;
+  /** The kernel's edges and the silhouette; `width` in CSS px draws them as screen-space lines. */
+  edges: { color: string; opacity: number; width?: number };
+  /** The ground grid's centre lines and the rest; no grid when absent. */
+  grid?: [string, string];
+  /** How dark the part's shadow lies on the ground; no shadow when absent or without a sun. */
+  shadow?: number;
+  shadowMap: number;
+}
+
+/** Fusion-style light canvas: dark chrome, bright work area. */
+export const WORKBENCH: SceneLook = {
+  sky: ["#ced6e0", "#8b9aaf"],
+  toneMapping: "neutral",
+  exposure: 1,
+  environment: 0.5,
+  lights: [
+    // Fixed rather than camera-attached: a shadow that swings as you orbit reads as the part moving.
+    { kind: "sun", color: "#ffffff", intensity: 2.2, from: [-0.5, -0.9, 1.4] },
+    // A weak fill riding with the camera, so faces away from the sun stay readable.
+    { kind: "camera", color: "#c9d6ee", intensity: 0.4, from: [0, 0, 1], toward: [0, 0, -1] },
+  ],
+  surface: { kind: "standard", roughness: 0.46, metalness: 0.1 },
+  part: "#8a96a8",
+  edges: { color: "#2b3440", opacity: 0.85 },
+  grid: ["#6f7a8b", "#9ba6b5"],
+  shadow: 0.22,
+  shadowMap: 2048,
+};
 
 /** A face's appearance, as `.material()` wrote it. */
 export interface FaceMaterial {
@@ -144,10 +200,6 @@ const CORE_PX = 1.4;
  *  driver, so it drew one hairline pixel however wide it asked to be. */
 const TARGET_PX = 2.6;
 
-/** Fusion-style light canvas: dark chrome, bright work area. */
-const BG_TOP = "#e8ecf1";
-const BG_BOTTOM = "#c3ccd8";
-
 /** Diagnostic modes, via `?debug=` in the URL: `normals`, `flat`, `noedge`. */
 const DEBUG = new URLSearchParams(location.search).get("debug") ?? "";
 
@@ -171,7 +223,8 @@ export class Viewport {
   private readonly camera: THREE.PerspectiveCamera;
   private readonly controls: OrbitControls;
   private readonly partGroup = new THREE.Group();
-  private readonly sun: THREE.DirectionalLight;
+  /** The look's first sun, which casts the ground shadow and is aimed at the part; none in a shadowless look. */
+  private sun?: { light: THREE.DirectionalLight; from: THREE.Vector3 };
   private outline!: OutlineRenderer;
   private grid?: THREE.GridHelper;
   private ground?: THREE.Mesh;
@@ -184,6 +237,8 @@ export class Viewport {
   private targetPreview?: THREE.Group;
   /** Their fat lines, which carry a screen-space width a resize invalidates. */
   private targetLines: Line2[] = [];
+  /** A look's edges drawn wide, one set of screen-space lines per body, sized like the target's. */
+  private wideEdges: LineSegments2[] = [];
   private hoveredEdge?: THREE.LineSegments;
   private selectedEdge?: THREE.LineSegments;
   /**
@@ -228,22 +283,26 @@ export class Viewport {
     private readonly edgeCallbacks: EdgeCallbacks = {},
     /** False for a viewport nobody looks at: no render loop, a frame only when `snapshot` asks. */
     live = true,
+    private readonly sceneLook: SceneLook = WORKBENCH,
   ) {
     // `stencil` defaults to false since three r163, and the cap's stencil test
     // does not fail safe without a buffer: it passes over the whole viewport.
     this.renderer = new THREE.WebGLRenderer({ antialias: true, stencil: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.enabled = sceneLook.lights.some((light) => light.kind === "sun");
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     // Without it, near-white clips flat and the shape reads as a hole.
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.0;
+    this.renderer.toneMapping = TONE_MAPPINGS[sceneLook.toneMapping];
+    this.renderer.toneMappingExposure = sceneLook.exposure;
     // Per-material, not renderer-wide: a global plane would clip the cap that
     // lies *on* it.
     this.renderer.localClippingEnabled = true;
     container.appendChild(this.renderer.domElement);
 
-    this.scene.background = gradientTexture();
+    this.scene.background =
+      typeof sceneLook.sky === "string"
+        ? new THREE.Color(backdrop(sceneLook.sky, sceneLook))
+        : gradientTexture([backdrop(sceneLook.sky[0], sceneLook), backdrop(sceneLook.sky[1], sceneLook)]);
 
     this.camera = new THREE.PerspectiveCamera(38, 1, 0.1, 100000);
     // Z is up, as everywhere else in this project.
@@ -295,28 +354,32 @@ export class Viewport {
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     pmrem.compileEquirectangularShader();
     this.scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    this.scene.environmentIntensity = 0.62;
+    this.scene.environmentIntensity = sceneLook.environment;
 
-    // Fixed rather than camera-attached: a shadow that swings as you orbit reads
-    // as the part moving.
-    this.sun = new THREE.DirectionalLight(0xffffff, 1.9);
-    this.sun.position.set(-0.5, -0.9, 1.4);
-    this.sun.castShadow = true;
-    this.sun.shadow.mapSize.set(2048, 2048);
-    this.sun.shadow.bias = -0.0012;
-    this.scene.add(this.sun);
-    this.scene.add(this.sun.target);
-
-    // A weak fill riding with the camera, so faces away from the sun stay readable.
-    const fill = new THREE.DirectionalLight(0xc9d6ee, 0.45);
-    fill.position.set(0, 0, 1);
-    this.camera.add(fill);
-    // A DirectionalLight aims at its *target*, which defaults to the world
-    // origin — parent only the light and it goes on lighting the scene centre.
-    fill.target.position.set(0, 0, -1);
-    this.camera.add(fill.target);
+    for (const light of sceneLook.lights) {
+      if (light.kind === "ambient") {
+        this.scene.add(new THREE.AmbientLight(light.color, light.intensity));
+      } else if (light.kind === "sun") {
+        const sun = new THREE.DirectionalLight(light.color, light.intensity);
+        sun.castShadow = true;
+        sun.shadow.mapSize.set(sceneLook.shadowMap, sceneLook.shadowMap);
+        sun.shadow.bias = -0.0012;
+        this.scene.add(sun);
+        this.scene.add(sun.target);
+        this.sun ??= { light: sun, from: new THREE.Vector3(...light.from).normalize() };
+      } else {
+        const lamp = new THREE.DirectionalLight(light.color, light.intensity);
+        lamp.position.set(...light.from);
+        this.camera.add(lamp);
+        // A DirectionalLight aims at its *target*, which defaults to the world
+        // origin — parent only the light and it goes on lighting the scene centre.
+        lamp.target.position.set(...light.toward);
+        this.camera.add(lamp.target);
+      }
+    }
 
     this.outline = new OutlineRenderer(this.renderer, this.scene, this.camera);
+    this.outline.setColor(sceneLook.edges.color);
 
     const highlight = (color: number, width: number, order: number, opacity = 1) => {
       const line = new Line2(
@@ -382,6 +445,7 @@ export class Viewport {
       material.linewidth = width * ratio;
     }
     for (const line of this.targetLines) this.fitFatLine(line.material, TARGET_PX);
+    for (const line of this.wideEdges) this.fitFatLine(line.material, this.sceneLook.edges.width!);
   }
 
   /**
@@ -650,8 +714,8 @@ export class Viewport {
   private paintEdge(line?: THREE.LineSegments) {
     if (!line) return;
     const material = line.material as THREE.LineBasicMaterial;
-    material.color.setHex(line === this.selectedEdge ? goldHex() : 0x2b3440);
-    material.opacity = line === this.selectedEdge ? 1 : 0.85;
+    material.color.set(line === this.selectedEdge ? goldHex() : this.sceneLook.edges.color);
+    material.opacity = line === this.selectedEdge ? 1 : this.sceneLook.edges.opacity;
   }
 
   /** Lay the three layers over the hovered edge. Rebuilt per hover, not kept per edge. */
@@ -723,7 +787,7 @@ export class Viewport {
     }
     g.computeBoundingSphere();
     const material =
-      DEBUG === "normals" ? new THREE.MeshNormalMaterial() : dressFaces(g, geo, this.scene.environment);
+      DEBUG === "normals" ? new THREE.MeshNormalMaterial() : dressFaces(g, geo, this.sceneLook, this.scene.environment);
     const triangles = (geo.indices.length || geo.positions.length / 3) / 3;
     const spans = geo.bodies?.length ? geo.bodies : [{ name: "", start: 0, count: triangles }];
     this.partBounds = bounds;
@@ -741,7 +805,12 @@ export class Viewport {
         own.boundingBox = spanBox(geo, span);
         own.boundingSphere = own.boundingBox.getBoundingSphere(new THREE.Sphere());
       }
-      const mesh = new THREE.Mesh(own, material);
+      // A body's own colour is its default slot; what a face wears itself stays.
+      const dressed =
+        !("color" in span && span.color) || DEBUG === "normals" ? material
+        : Array.isArray(material) ? [solidMaterial(this.sceneLook, span.color), ...material.slice(1)]
+        : solidMaterial(this.sceneLook, span.color);
+      const mesh = new THREE.Mesh(own, dressed);
       mesh.castShadow = true;
       // Cast onto the ground, never onto itself: a hard shadow of a fin across
       // its own base plate reads as a step that is not there. Fusion does likewise.
@@ -756,9 +825,13 @@ export class Viewport {
       // smooth solid — a sphere, a torus — has none a person would count, and
       // draws as the silhouette alone.
       const edges = (geo.edges ?? []).filter((edge) => spans.length === 1 || edge.body === span.name);
-      const renderedEdges = edgeLines(edges);
+      const renderedEdges = edgeLines(edges, this.sceneLook.edges);
       group.add(renderedEdges.group);
       this.edgeLines.push(...renderedEdges.lines);
+      if (renderedEdges.wide) {
+        this.fitFatLine(renderedEdges.wide.material, this.sceneLook.edges.width!);
+        this.wideEdges.push(renderedEdges.wide);
+      }
       const renderedVertices = vertexMarkers(verticesFromEdges(edges));
       group.add(renderedVertices.group);
       this.vertexMarkers.push(...renderedVertices.markers);
@@ -786,7 +859,12 @@ export class Viewport {
     };
     this.placeGround(bounds, size);
     this.aimSun(bounds, size);
-    this.groundCorners = boxCorners(new THREE.Box3().setFromObject(this.grid!));
+    // The ground's span, grid or not: three times the part, as `placeGround` lays it.
+    const reach = Math.max(size.x, size.y, size.z) * 1.5;
+    const middle = new THREE.Vector3((bounds.min.x + bounds.max.x) / 2, (bounds.min.y + bounds.max.y) / 2, bounds.min.z);
+    this.groundCorners = boxCorners(
+      new THREE.Box3(middle.clone().add(new THREE.Vector3(-reach, -reach, 0)), middle.clone().add(new THREE.Vector3(reach, reach, 0))),
+    );
     this.fitPosedBox();
 
     // A new part keeps the plane the last one was cut on: the reason the
@@ -1280,6 +1358,7 @@ export class Viewport {
     this.hoveredVertex = undefined;
     this.selectedVertex = undefined;
     this.edgeLines.length = 0;
+    this.wideEdges.length = 0;
     this.vertexMarkers.length = 0;
     this.faceRuns = [];
     this.hoveredFace = undefined;
@@ -1311,29 +1390,31 @@ export class Viewport {
     if (this.grid) {
       this.scene.remove(this.grid);
       this.grid.dispose();
+      this.grid = undefined;
     }
-    this.grid = new THREE.GridHelper(
-      span,
-      Math.max(2, Math.round(span / step)),
-      0x8b96a6,
-      0xb4bdc9,
-    );
-    // GridHelper lies in XZ; stand it up so it is the XY ground plane.
-    this.grid.rotateX(Math.PI / 2);
-    this.grid.position.z = z;
-    this.scene.add(this.grid);
+    const grid = this.sceneLook.grid;
+    if (grid) {
+      this.grid = new THREE.GridHelper(span, Math.max(2, Math.round(span / step)), grid[0], grid[1]);
+      // GridHelper lies in XZ; stand it up so it is the XY ground plane.
+      this.grid.rotateX(Math.PI / 2);
+      this.grid.position.z = z;
+      this.scene.add(this.grid);
+    }
 
     if (this.ground) {
       this.scene.remove(this.ground);
       this.ground.geometry.dispose();
+      this.ground = undefined;
     }
-    this.ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(span, span),
-      new THREE.ShadowMaterial({ opacity: 0.22 }),
-    );
-    this.ground.position.z = z - 0.01;
-    this.ground.receiveShadow = true;
-    this.scene.add(this.ground);
+    if (this.sun && this.sceneLook.shadow !== undefined) {
+      this.ground = new THREE.Mesh(
+        new THREE.PlaneGeometry(span, span),
+        new THREE.ShadowMaterial({ opacity: this.sceneLook.shadow }),
+      );
+      this.ground.position.z = z - 0.01;
+      this.ground.receiveShadow = true;
+      this.scene.add(this.ground);
+    }
   }
 
   /** Point the sun at the part and tighten its shadow frustum around it. */
@@ -1345,13 +1426,14 @@ export class Viewport {
       (bounds.min.z + bounds.max.z) / 2,
     );
 
-    const dir = new THREE.Vector3(-0.5, -0.9, 1.4).normalize();
-    this.sun.position.copy(center).addScaledVector(dir, radius * 4);
-    this.sun.target.position.copy(center);
-    this.sun.target.updateMatrixWorld();
+    if (!this.sun) return;
+    const sun = this.sun.light;
+    sun.position.copy(center).addScaledVector(this.sun.from, radius * 4);
+    sun.target.position.copy(center);
+    sun.target.updateMatrixWorld();
 
     // A shadow camera much larger than the part spends its resolution on empty space.
-    const cam = this.sun.shadow.camera;
+    const cam = sun.shadow.camera;
     cam.left = -radius * 1.6;
     cam.right = radius * 1.6;
     cam.top = radius * 1.6;
@@ -1459,22 +1541,35 @@ function shown(object: THREE.Object3D): boolean {
   return true;
 }
 
-/** Turn logical edges into independently pickable drawables — one primitive each, at these counts. */
-function edgeLines(edges: EdgeCurve[]): { group: THREE.Group; lines: THREE.LineSegments[] } {
-  const color = 0x2b3440;
-  const opacity = 0.85;
+/**
+ * Turn logical edges into independently pickable drawables — one primitive
+ * each, at these counts. A look that gives edges a width draws them as one set
+ * of screen-space lines instead, the thin ones kept unseen for picking: a GL
+ * line is one device pixel, half a CSS pixel on a phone.
+ */
+function edgeLines(
+  edges: EdgeCurve[],
+  look: SceneLook["edges"],
+): { group: THREE.Group; lines: THREE.LineSegments[]; wide?: LineSegments2 } {
   const group = new THREE.Group();
   const lines: THREE.LineSegments[] = [];
+  const all: number[] = [];
   for (const edge of edges) {
     const pts: number[] = [];
     for (let i = 0; i + 1 < edge.points.length; i++) {
       pts.push(...edge.points[i], ...edge.points[i + 1]);
     }
+    all.push(...pts);
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
     const line = new THREE.LineSegments(
       geometry,
-      new THREE.LineBasicMaterial({ color, transparent: true, opacity }),
+      new THREE.LineBasicMaterial({
+        color: look.color,
+        transparent: true,
+        opacity: look.opacity,
+        visible: look.width === undefined,
+      }),
     );
     line.userData.edge = edge;
     line.castShadow = false;
@@ -1483,7 +1578,18 @@ function edgeLines(edges: EdgeCurve[]): { group: THREE.Group; lines: THREE.LineS
     group.add(line);
     lines.push(line);
   }
-  return { group, lines };
+  if (look.width === undefined || all.length === 0) return { group, lines };
+  const geometry = new LineSegmentsGeometry();
+  geometry.setPositions(all);
+  const wide = new LineSegments2(
+    geometry,
+    new LineMaterial({ color: look.color, transparent: look.opacity < 1, opacity: look.opacity }),
+  );
+  wide.raycast = () => {};
+  wide.castShadow = false;
+  wide.renderOrder = 1;
+  group.add(wide);
+  return { group, lines, wide };
 }
 
 /** The corner sprite: white disc, ink ring, white glow — a shape a plain `PointsMaterial` cannot be. */
@@ -1590,8 +1696,34 @@ const shared = {
   polygonOffsetUnits: 1,
 };
 
-function solidMaterial(): THREE.MeshStandardMaterial {
-  return new THREE.MeshStandardMaterial({ color: 0xaeb8c6, roughness: 0.46, metalness: 0.1, ...shared });
+function solidMaterial(look: SceneLook, color = look.part): THREE.Material {
+  const surface = look.surface;
+  return surface.kind === "phong"
+    ? new THREE.MeshPhongMaterial({ color, shininess: surface.shininess, specular: surface.specular, ...shared })
+    : new THREE.MeshStandardMaterial({ color, roughness: surface.roughness, metalness: surface.metalness, ...shared });
+}
+
+const TONE_MAPPINGS: Record<SceneLook["toneMapping"], THREE.ToneMapping> = {
+  neutral: THREE.NeutralToneMapping,
+  none: THREE.NoToneMapping,
+};
+
+/**
+ * The colour to fill the backdrop with so it shows as `hex` after the look's
+ * tone mapping, which the backdrop goes through with everything else. Khronos
+ * PBR Neutral's toe pulls a dark grey nearly to black and its shoulder dims a
+ * light one; this is its inverse, exact for a grey.
+ */
+function backdrop(hex: string, look: SceneLook): string {
+  if (look.toneMapping === "none") return hex;
+  const start = 0.76;
+  const knee = 1 - start;
+  const shown = new THREE.Color(hex);
+  const unrolled = [shown.r, shown.g, shown.b].map((y) => (y < start ? y : (knee * knee) / (1 - Math.min(y, 0.999)) - knee + start));
+  const low = Math.min(...unrolled);
+  const offset = low < 0.04 ? 0.4 * Math.sqrt(low) - low : 0.04;
+  const [r, g, b] = unrolled.map((u) => (u + offset) / look.exposure);
+  return `#${new THREE.Color().setRGB(r, g, b).getHexString()}`;
 }
 
 /**
@@ -1626,13 +1758,14 @@ function authoredMaterial(look: FaceMaterial, environment: THREE.Texture | null)
 function dressFaces(
   g: THREE.BufferGeometry,
   geo: Geometry,
+  look: SceneLook,
   environment: THREE.Texture | null,
 ): THREE.Material | THREE.Material[] {
   const looks = geo.faceMaterials ?? [];
   const runs = [...(geo.faceRuns ?? [])].sort((a, b) => a.start - b.start);
-  if (!looks.some(Boolean) || runs.length === 0 || geo.indices.length === 0) return solidMaterial();
+  if (!looks.some(Boolean) || runs.length === 0 || geo.indices.length === 0) return solidMaterial(look);
 
-  const materials: THREE.Material[] = [solidMaterial()];
+  const materials: THREE.Material[] = [solidMaterial(look)];
   const slotOf = new Map<string, number>();
   const slot = (look?: FaceMaterial) => {
     if (!look) return 0;
@@ -1697,14 +1830,14 @@ function niceStep(v: number): number {
 
 
 /** Vertical gradient used as the canvas backdrop. */
-function gradientTexture(): THREE.Texture {
+function gradientTexture([top, bottom]: [string, string]): THREE.Texture {
   const c = document.createElement("canvas");
   c.width = 2;
   c.height = 256;
   const ctx = c.getContext("2d")!;
   const g = ctx.createLinearGradient(0, 0, 0, 256);
-  g.addColorStop(0, BG_TOP);
-  g.addColorStop(1, BG_BOTTOM);
+  g.addColorStop(0, top);
+  g.addColorStop(1, bottom);
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 2, 256);
 
@@ -1714,7 +1847,7 @@ function gradientTexture(): THREE.Texture {
 }
 
 /** Bump when the thumbnail's camera or scene changes, and every card redraws. */
-export const THUMBNAIL_LOOK = 1;
+export const THUMBNAIL_LOOK = 2;
 
 let still: Viewport | undefined;
 
