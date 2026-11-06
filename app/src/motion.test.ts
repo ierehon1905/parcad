@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { bodyPoses, mechanismOf, motionsOf, poseAt, travelPoses, valueAt, type Mechanism } from "./motion";
+import { bodyPoses, mechanismOf, motionsOf, poseAt, slidersOf, travelPoses, valueAt, type Mechanism } from "./motion";
 import type { MotionReport } from "./state";
 
 /** The lid's three checks as eval/scripts/hinged-box.js's build reports them. */
@@ -195,5 +195,55 @@ describe("travelPoses", () => {
     const travel = travelPoses([lid, drawer]);
     expect(travel.get("lever")!.length).toBe(1 + 1 + 2);
     expect(travel.get("drawer")!.map((pose) => pose[3])).toEqual([0, 0, 60]);
+  });
+});
+
+describe("slidersOf", () => {
+  // Leon's key holder: a lever on a pin pushes a slider up, and each also carries a check of its own.
+  const PIN: [number, number, number] = [-13, 0, 5];
+  const lever = (degrees: [number, number], verdict: "passed" | "failed" = "passed", at?: number): MotionReport => ({
+    check: "",
+    verdict,
+    body: "lever",
+    turn: { axis: [0, 1, 0], at: PIN, degrees },
+    ...(at !== undefined && { at_degrees: at }),
+    measurements: 1,
+  });
+  const keyHolder = (motions: MotionReport[], leverKnots: [number, number][] = [[0, 1.23], [1, -46.4]]) => ({
+    mechanism: {
+      drive: [0, 1] as [number, number],
+      joints: [
+        { body: "lever", kind: "turn" as const, axis: [0, 1, 0] as [number, number, number], at: PIN, knots: leverKnots },
+        { body: "slider", kind: "slide" as const, axis: [0, 0, 1] as [number, number, number], knots: [[0, -1.52], [0.5, 12], [1, 25.4]] as [number, number][] },
+      ],
+    },
+    checks: { verdict: "passed" as const, passed: 3, motions },
+  });
+  const slide: MotionReport = { check: "", verdict: "passed", body: "slider", slide: { direction: [0, 0, 1], mm: [-1.71, 25.79] }, measurements: 1 };
+
+  test("plays a mechanism and the checks on its bodies on one row, so nothing is posed twice", () => {
+    const rows = slidersOf(keyHolder([lever([0, -47.4]), slide, lever([0, 1.93])]));
+    expect(rows.length).toBe(1);
+    const pose = bodyPoses(rows, [1]).get("lever")!;
+    poseAt(rows[0].moves[0], -46.4).forEach((v, i) => expect(pose[i]).toBeCloseTo(v, 12));
+  });
+
+  test("marks the row where its joint reaches a failing check's worst pose, once", () => {
+    // The axis either way round is the same pin: -y turned +20.0 is y turned -20.0.
+    const flipped: MotionReport = { ...lever([0, 47.4], "failed", 20), turn: { axis: [0, -1, 0], at: [-13, 30, 5], degrees: [0, 47.4] } };
+    const [row] = slidersOf(keyHolder([lever([0, -47.4], "failed", -20), flipped]));
+    expect(row.failsAt.length).toBe(2);
+    for (const at of row.failsAt) expect(at).toBeCloseTo(21.23 / 47.63, 12);
+  });
+
+  test("leaves a failure unmarked past the joint's travel, or where its law passes the pose twice", () => {
+    expect(slidersOf(keyHolder([lever([0, -47.4], "failed", -47)]))[0].failsAt).toEqual([]);
+    const thereAndBack: [number, number][] = [[0, 0], [0.5, -40], [1, 0]];
+    expect(slidersOf(keyHolder([lever([0, -47.4], "failed", -20)], thereAndBack))[0].failsAt).toEqual([]);
+  });
+
+  test("keeps a row for a body the mechanism does not move", () => {
+    const lid: MotionReport = { ...lever([0, -170]), body: "lid" };
+    expect(slidersOf(keyHolder([lever([0, -47.4]), lid])).map((row) => row.label)).toEqual(["lever", "lid"]);
   });
 });

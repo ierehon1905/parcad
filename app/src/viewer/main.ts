@@ -13,7 +13,7 @@ import { App } from "@modelcontextprotocol/ext-apps/app-with-deps";
 import { decompress } from "fzstd";
 
 import "../style.css";
-import { mechanismOf, motionsOf, travelPoses } from "../motion";
+import { slidersOf, travelPoses } from "../motion";
 import type { EvaluationSnapshot } from "../state";
 import type { BodySpan, EdgeCurve, FaceMaterial, FaceRun } from "../viewport";
 import { VIEWS, Viewport } from "../viewport";
@@ -182,8 +182,7 @@ async function show(source: Source) {
   if (key !== shown) return;
   const v = ([x, y, z]: [number, number, number]) => ({ x, y, z });
   const bounds = { min: v(snapshot.bounds_min), max: v(snapshot.bounds_max) };
-  const mechanism = mechanismOf(snapshot);
-  const motions = [...(mechanism ? [mechanism] : []), ...motionsOf(snapshot.checks?.motions ?? [])];
+  const motions = slidersOf(snapshot);
   let own = 0;
   const shownBodies = named.map((body) => {
     const reference = body.reference === true;

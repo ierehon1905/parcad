@@ -122,6 +122,62 @@ export function mechanismOf(snapshot: Pick<EvaluationSnapshot, "mechanism" | "ch
   };
 }
 
+/**
+ * Every slider a part plays: its mechanism first, then one per single-body
+ * motion its checks declare on a body the mechanism does not move. A body the
+ * mechanism moves is posed by its row alone, so a `turns` or `slides` check on
+ * it adds no row: where it fails at a pose the joint reaches at exactly one
+ * drive value, the mechanism's row is marked there.
+ */
+export function slidersOf(snapshot: Pick<EvaluationSnapshot, "mechanism" | "checks">): Mechanism[] {
+  const reports = snapshot.checks?.motions ?? [];
+  const mechanism = mechanismOf(snapshot);
+  if (!mechanism) return motionsOf(reports);
+  const moved = new Set(mechanism.moves.map((move) => move.body));
+  const marks: number[] = [];
+  for (const report of reports) {
+    if (!moved.has(report.body) || report.verdict === "passed") continue;
+    const drive = driveOf(mechanism, report);
+    if (drive !== undefined) marks.push(drive);
+  }
+  return [
+    { ...mechanism, failsAt: [...mechanism.failsAt, ...marks] },
+    ...motionsOf(reports.filter((report) => !moved.has(report.body))),
+  ];
+}
+
+/**
+ * The one drive value at which the mechanism puts `report`'s body in the pose
+ * the report is worst at: through the body's own joint, the same pin or
+ * direction either way round, and only where the knots pass that value once.
+ */
+function driveOf(mechanism: Mechanism, report: MotionReport): number | undefined {
+  const move = mechanism.moves.find((m) => m.body === report.body);
+  const worst = report.at_degrees ?? report.at_mm;
+  if (!move || move.parent !== undefined || worst === undefined) return undefined;
+  const axis = report.turn?.axis ?? report.slide?.direction;
+  if (!axis || move.kind !== (report.turn ? "turn" : "slide")) return undefined;
+  if (report.turn && !onAxis(move, report.turn.at)) return undefined;
+  const flipped: Vec3 = [-axis[0], -axis[1], -axis[2]];
+  const value = near(move.axis, axis) ? worst : near(move.axis, flipped) ? -worst : undefined;
+  if (value === undefined) return undefined;
+  const found: number[] = [];
+  const knots = move.knots;
+  for (let i = 1; i < knots.length; i++) {
+    const [d0, v0] = knots[i - 1];
+    const [d1, v1] = knots[i];
+    if (v0 === v1) {
+      if (v0 === value) return undefined;
+      continue;
+    }
+    const t = (value - v0) / (v1 - v0);
+    if (t < 0 || t > 1) continue;
+    const drive = d0 + t * (d1 - d0);
+    if (!found.some((d) => Math.abs(d - drive) <= SAME)) found.push(drive);
+  }
+  return found.length === 1 ? found[0] : undefined;
+}
+
 /** The move's degrees or mm at drive value `d`, held at the ends; 0 for a ride. */
 export function valueAt(move: Move, d: number): number {
   const knots = move.knots;
