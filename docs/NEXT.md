@@ -430,7 +430,14 @@ described where it lives:
    bite with `catches`, the reply carrying the axis, the range and the
    transform at the worst pose (`checks.motions`). docs/PERCEPTION.md §24.
    Limo, QymCAD and STEVE Studio all check motion; it was the feature gap the
-   bench showed. Left: a screw (turn and slide at once), the window's scrub.
+   bench showed. **Mechanisms — done 2026-11-06:** `mechanism: {...}` beside
+   the bodies drives several on one input (a joint and a law per body, `on`
+   to ride another), and `moves` and `pushes` checks are certified over the
+   coupled travel (`checks.mechanism`).
+   `eval/field/does-the-lever-keep-pushing` went from 0/8 SOUND to 6/8
+   on Haiku 5.5 (its `why` has the rest). Left: gears (a range is a ratio, so
+   a pair can be driven, but no case measures a mesh yet), a screw (turn and
+   slide at once), the window's scrub.
 3. **The G2 blend** behind `.smooth()` / `.squircle()` — built 2026-10-14,
    below under the planter saucer; what is left is the three-edge corner.
 

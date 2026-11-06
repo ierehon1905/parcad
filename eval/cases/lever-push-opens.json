@@ -1,0 +1,95 @@
+{
+  "name": "lever-push-opens",
+  "script": "eval/scripts/lever-push-opens.js",
+  "why": "The pushes check refusing a law that does not keep contact: the slider follows 30·sin a, missing the corner's own drop, so the gap opens to 0.1 + 3(1 − cos 18°) = 0.247 mm at drive 1, past within 0.15. The failure names the pair and the drive value; a pushes check that passes this has stopped measuring the gap.",
+  "brep": {
+    "size": [
+      90.0,
+      30.0,
+      40.0
+    ],
+    "volume_mm3": 14200.0,
+    "area_mm2": 8320.0,
+    "triangles": 36,
+    "bodies": 3,
+    "voids": 0,
+    "stands_on_mm2": 2700.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 18,
+    "edges": 72,
+    "curves": 36,
+    "requires": [
+      "part-checks",
+      "mechanism"
+    ],
+    "named_bodies": {
+      "base": {
+        "size": [
+          90.0,
+          30.0,
+          4.0
+        ],
+        "volume_mm3": 10800.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "lever": {
+        "size": [
+          6.0,
+          10.0,
+          30.0
+        ],
+        "volume_mm3": 1800.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "slider": {
+        "size": [
+          20.0,
+          10.0,
+          8.0
+        ],
+        "volume_mm3": 1600.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "base/lever": {
+        "verdict": "clear",
+        "clearance_mm": 6.0,
+        "interference_mm3": 0.0
+      },
+      "base/slider": {
+        "verdict": "clear",
+        "clearance_mm": 6.0,
+        "interference_mm3": 0.0
+      },
+      "lever/slider": {
+        "verdict": "clear",
+        "clearance_mm": 0.1,
+        "interference_mm3": 0.0
+      }
+    },
+    "checks": {
+      "passed": 1,
+      "failed": [
+        {
+          "check": "pushes lever↔slider within 0.15",
+          "measured_mm": 0.247,
+          "mismatch": "lever and slider open 0.247 mm apart at drive 1, past 0.15"
+        }
+      ]
+    }
+  }
+}

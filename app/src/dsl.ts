@@ -657,7 +657,7 @@ export function __parcadShadowedBuiltinMessage(shadowed: string[], names: string
 }
 
 /** The keys of a returned object that are not bodies ({@link Part}); written as a statement, each is a label that does nothing. */
-const PART_KEYS = ["checks"];
+const PART_KEYS = ["checks", "mechanism"];
 
 /** @internal A `checks:` the script wrote as a statement of its own, and the refusal naming the fix. */
 export interface PartKeyLabel {
@@ -4315,6 +4315,8 @@ export interface Doc {
   requires?: Requirement[];
   /** The part's own checks, judged on every build; see {@link Check}. */
   checks?: Check[];
+  /** Bodies that move together on one drive, every law sampled into knots; see {@link Mechanism}. */
+  mechanism?: GraphMechanism;
   /** What the part is for, judged on every build; see {@link brief}. */
   brief?: Brief;
 }
@@ -4381,6 +4383,13 @@ const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean; doc?:
     what: "checks over a motion (turns, slides)",
     uses: () => false,
     doc: (doc) => (doc.checks ?? []).some((c) => c.turns !== undefined || c.slides !== undefined),
+  },
+  {
+    feature: "mechanism",
+    after: "0.0.14",
+    what: "a mechanism: bodies that move together on one drive, and the moves and pushes checks over it",
+    uses: () => false,
+    doc: (doc) => doc.mechanism !== undefined || (doc.checks ?? []).some((c) => c.moves !== undefined || c.pushes !== undefined),
   },
   {
     feature: "query-not",
@@ -4488,10 +4497,11 @@ export type PrintAxis = "+x" | "x" | "-x" | "+y" | "y" | "-y" | "+z" | "z" | "-z
 
 /**
  * What a script may return: one shape, or an object naming each body of a
- * part that stays in several — `return { base, lid }` — where one key,
- * `checks`, may be a list of {@link Check}s instead of a body.
+ * part that stays in several — `return { base, lid }` — where two keys are
+ * not bodies: `checks`, a list of {@link Check}s, and `mechanism`, a
+ * {@link Mechanism}.
  */
-export type Part = Shape | Record<string, Shape | Check[]>;
+export type Part = Shape | Record<string, Shape | Check[] | Mechanism>;
 
 /**
  * One rule the built part must hold, written as `checks: [...]` beside the
@@ -4499,11 +4509,10 @@ export type Part = Shape | Record<string, Shape | Check[]>;
  * failure with what differs, what was measured and where.
  *
  * - Before modelling, write the request's numbers as checks — size, holes,
- *   where features sit — so the verdict says the part is what was asked, not
- *   just that it prints.
+ *   where features sit — so the verdict says the part is what was asked.
  * - One head key per check: `size`, `holes`, `feature`, `clear`,
- *   `interferes`, `touching`, `turns`, `slides`, `wall`, `standsOn`,
- *   `bodies`, `watertight`; the rest qualify it. Held to 0.01 mm.
+ *   `interferes`, `touching`, `turns`, `slides`, `moves`, `pushes`, `wall`,
+ *   `standsOn`, `bodies`, `watertight`; the rest qualify it. Held to 0.01 mm.
  * - evaluate_part reports a failure; export_part and save_project refuse
  *   without `allow_failing: "<reason>"`.
  *
@@ -4520,9 +4529,10 @@ export type Part = Shape | Record<string, Shape | Check[]>;
  *     ] };
  *
  * @remarks
- * A request's numbers are the commonest thing a model gets wrong while every
- * other verdict passes: a Ø6 read as a radius, a notch on the short edge
- * (research_notes/hands-on/h2h). A hole is found by its circular rims —
+ * A check makes the verdict say the part is what was asked, not just that it
+ * prints. A request's numbers are the commonest thing a model gets wrong
+ * while every other verdict passes: a Ø6 read as a radius, a notch on the
+ * short edge (research_notes/hands-on/h2h). A hole is found by its circular rims —
  * the closed circles `role: "hole"` selects — so rims of one diameter on one
  * axis line are one hole, and a hole whose ends both leave through slanted
  * or curved faces has no rim to find. `through` tests just past each
@@ -4556,6 +4566,12 @@ export interface Check {
   clearOf?: string | string[];
   /** For a motion: the body to bite into. */
   catches?: string;
+  /** Over the {@link Mechanism}, these bodies or "all" stay `atLeast` mm clear. */
+  moves?: "all" | string[];
+  /** Over the {@link Mechanism}, the two stay `within` mm of contact. */
+  pushes?: [string, string];
+  /** For `pushes`, mm of gap or overlap. */
+  within?: number;
   /** Nothing is thinner than `min` mm. */
   wall?: { min: number };
   /** The part is `is` [x, y, z] mm, or fits in `max`. */
@@ -4648,9 +4664,241 @@ export interface SlideCheck {
   mm: [number, number];
 }
 
+/**
+ * Bodies that move together on one drive, as `mechanism: {...}` beside the
+ * bodies: a lever pushing a slider, a rack and its pinion. One slider plays it
+ * in the chat.
+ *
+ * - `drive: [from, to]` is the one input, default [0, 1].
+ * - Each other key is a moving body: `turns: { about, at, degrees }` or
+ *   `slides: { along, mm }`, as in a turns/slides check without `body`.
+ * - A law is `[from, to]`, straight in the drive, or a function `t => value`.
+ * - `on: "b"` beside a joint moves the body on b; `{ on: "b" }` alone rides b.
+ *   0 is the body as drawn.
+ * - Check it with `{ moves: "all", atLeast }` and `{ pushes: [a, b], within }`.
+ *
+ * @example
+ *     // a lever on a pin pushes a slider along x as it drops 18°
+ *     const PIN = [0, 0, 40];
+ *     const base = box(90, 30, 4).at(0, 0, 2);
+ *     const lever = box(6, 10, 30).at(0, 0, 25);
+ *     const slider = box(20, 10, 8).at(13.1, 0, 14);
+ *     // how far the lever's lower corner, 3 mm right of the pin and 30 below, has moved in x
+ *     const push = (t) => {
+ *       const a = (18 * t * Math.PI) / 180;
+ *       return 30 * Math.sin(a) + 3 * (Math.cos(a) - 1);
+ *     };
+ *     return { base, lever, slider,
+ *       mechanism: {
+ *         lever: { turns: { about: "y", at: PIN, degrees: [0, -18] } },
+ *         slider: { slides: { along: "x", mm: push } },
+ *       },
+ *       checks: [{ moves: "all", atLeast: 0.3 }, { pushes: ["lever", "slider"], within: 0.15 }] };
+ *
+ * @remarks
+ * No mate solver: a part is drawn as it prints, and a mechanism says how its
+ * bodies move from there, as `turns` and `slides` checks do for one body. A
+ * range is a ratio, which is what a gear pair or a rack is. A function is
+ * sampled into straight pieces within 0.005 of it, in the script, so the
+ * kernel certifies the motion it is given rather than one it guesses; the
+ * reply says how many knots each law became. Clearance says nothing about
+ * jamming.
+ */
+export interface Mechanism {
+  /** The drive's range, which every law reads; default [0, 1]. */
+  drive?: [number, number];
+  [body: string]: Joint | [number, number] | undefined;
+}
+
+/** How one body of a {@link Mechanism} moves with the drive. */
+export interface Joint {
+  /** A turn about an axis through `at`, `degrees` from as drawn. */
+  turns?: { about: PrintAxis | [number, number, number]; at: [number, number, number]; degrees: Law };
+  /** A slide along a direction, `mm` from as drawn. */
+  slides?: { along: PrintAxis | [number, number, number]; mm: Law };
+  /** The body this one is carried by: its joint moves with that body's. */
+  on?: string;
+}
+
+/** A joint's value against the drive: from and to, straight, or a function of the drive. */
+export type Law = [number, number] | ((t: number) => number);
+
+/** @internal A {@link Mechanism} as the graph carries it: every law as knots. */
+export interface GraphMechanism {
+  drive: [number, number];
+  joints: GraphJoint[];
+}
+
+/** @internal One joint, its law as `[t, value]` knots, straight between them. */
+export interface GraphJoint {
+  body: string;
+  turns?: { about: PrintAxis | [number, number, number]; at: [number, number, number] };
+  slides?: { along: PrintAxis | [number, number, number] };
+  on?: string;
+  knots?: [number, number][];
+}
+
+const JOINT_KEYS = ["turns", "slides", "on"];
+const JOINT_SYNONYMS: Record<string, string> = {
+  turn: "turns",
+  rotate: "turns",
+  rotates: "turns",
+  hinge: "turns",
+  swings: "turns",
+  slide: "slides",
+  translate: "slides",
+  translates: "slides",
+  moves: "slides",
+  parent: "on",
+  rides: "on",
+  follows: "on",
+  with: "on",
+  attached: "on",
+};
+const DRIVE_SYNONYMS = ["input", "range", "t", "travel"];
+
+/** How close a sampled law stays to its function, in degrees or mm. */
+const LAW_TOLERANCE = 0.005;
+/** The most straight pieces one law becomes. */
+const LAW_PIECES = 1024;
+
+/** The `mechanism` of a returned object, validated and sampled, or `undefined` when there is none. */
+function mechanismOf(root: Record<string, unknown>, bodies: string[]): GraphMechanism | undefined {
+  if (!("mechanism" in root)) return undefined;
+  const declared = root.mechanism;
+  const form = 'mechanism: { lever: { turns: { about: "y", at: [0, 0, 40], degrees: [0, -18] } } }';
+  if (declared instanceof Shape) {
+    throw new Error('a body cannot be named "mechanism": that key says how the bodies move (read_docs dsl, Mechanism); rename the body');
+  }
+  if (!isObject(declared)) throw new Error(`mechanism is ${describe(declared)}, not an object naming each moving body: ${form}`);
+  let drive: [number, number] = [0, 1];
+  const joints: GraphJoint[] = [];
+  for (const [key, value] of Object.entries(declared)) {
+    if (key === "drive") {
+      if (!Array.isArray(value) || value.length !== 2 || !value.every((v) => typeof v === "number" && Number.isFinite(v)) || !(value[0] < value[1])) {
+        throw new Error(`mechanism.drive is the drive's range, low to high, such as [0, 1] or [0, 28], not ${render(value)}`);
+      }
+      drive = value as [number, number];
+      continue;
+    }
+    if (DRIVE_SYNONYMS.includes(normalize(key))) throw new Error(`mechanism has no key "${key}"; the drive's range is drive: ${render(value)}`);
+    if (!bodies.includes(key)) {
+      throw new Error(`mechanism names a body "${key}" the returned object does not have; its bodies are ${list(bodies.map((n) => `"${n}"`))}`);
+    }
+    joints.push(jointOf(key, value, bodies));
+  }
+  if (joints.length === 0) throw new Error(`mechanism moves no body; name each one that moves and how: ${form}`);
+  return { drive, joints: joints.map((joint) => sampled(joint, declared[joint.body] as Record<string, unknown>, drive)) };
+}
+
+/** One body's joint, its keys and shape checked; laws still as written until {@link sampled}. */
+function jointOf(body: string, value: unknown, bodies: string[]): GraphJoint {
+  const at = `mechanism.${body}`;
+  const turnForm = 'turns: { about: "y", at: [0, 0, 40], degrees: [0, -18] }';
+  const slideForm = 'slides: { along: "x", mm: [0, 12] }';
+  if (!isObject(value) || value instanceof Shape) {
+    throw new Error(`${at} is ${describe(value)}, not a joint such as { ${turnForm} } or { on: "lift" }`);
+  }
+  const named = unknownKeys(value, JOINT_KEYS, (key, v) => {
+    const synonym = JOINT_SYNONYMS[normalize(key)];
+    return synonym === undefined ? undefined : spelled(synonym, v);
+  });
+  if (named) throw new Error(`${at} ${named}; a joint's keys are ${list(JOINT_KEYS)}`);
+  if (value.turns !== undefined && value.slides !== undefined) {
+    throw new Error(`${at} both turns and slides; a joint is one of them — carry a second motion on another body with on`);
+  }
+  if (value.on !== undefined && (typeof value.on !== "string" || !bodies.includes(value.on) || value.on === body)) {
+    throw new Error(`${at}.on names the body that carries this one, another of ${list(bodies.filter((n) => n !== body).map((n) => `"${n}"`))}, not ${render(value.on)}`);
+  }
+  if (value.turns === undefined && value.slides === undefined && value.on === undefined) {
+    throw new Error(`${at} says nothing about how it moves; give it ${turnForm}, ${slideForm}, or on: "<the body that carries it>"`);
+  }
+  const isNumbers = (v: unknown, n: number) => Array.isArray(v) && v.length === n && v.every((x) => typeof x === "number" && Number.isFinite(x));
+  const isDirection = (v: unknown) => (typeof v === "string" && v.length > 0) || isNumbers(v, 3);
+  const isLaw = (v: unknown) => typeof v === "function" || isNumbers(v, 2);
+  const joint: GraphJoint = { body, ...(typeof value.on === "string" && { on: value.on }) };
+  if (value.turns !== undefined) {
+    const turn = value.turns;
+    if (!isObject(turn) || !isDirection(turn.about) || !isNumbers(turn.at, 3) || !isLaw(turn.degrees)) {
+      throw new Error(`${at}.turns is ${turnForm}: an axis, a point on it, and degrees as [from, to] or a function of the drive, not ${render(turn)}`);
+    }
+    joint.turns = { about: turn.about as PrintAxis, at: turn.at as [number, number, number] };
+  }
+  if (value.slides !== undefined) {
+    const slide = value.slides;
+    if (!isObject(slide) || !isDirection(slide.along) || !isLaw(slide.mm)) {
+      throw new Error(`${at}.slides is ${slideForm}: a direction, and mm as [from, to] or a function of the drive, not ${render(slide)}`);
+    }
+    joint.slides = { along: slide.along as PrintAxis };
+  }
+  return joint;
+}
+
+/** A joint with its law as knots: a range is two, a function as many as stay within {@link LAW_TOLERANCE} of it. */
+function sampled(joint: GraphJoint, written: Record<string, unknown>, drive: [number, number]): GraphJoint {
+  const motion = (written.turns ?? written.slides) as Record<string, unknown> | undefined;
+  if (motion === undefined) return joint;
+  const law = (motion.degrees ?? motion.mm) as Law;
+  const unit = written.turns !== undefined ? "degrees" : "mm";
+  const knots = knotsOf(law, drive, `mechanism.${joint.body}.${written.turns !== undefined ? "turns.degrees" : "slides.mm"}`, unit);
+  if (knots.every(([, v]) => v === knots[0][1])) {
+    throw new Error(
+      `mechanism.${joint.body} never moves: its law is ${knots[0][1]} ${unit} all along the drive; ` +
+        `a body that only rides another is { on: "<that body>" }, and one that stays still is left out of the mechanism`,
+    );
+  }
+  return { ...joint, knots };
+}
+
+/** A law as `[t, value]` knots over the drive, straight between them. */
+function knotsOf(law: Law, drive: [number, number], at: string, unit = "mm"): [number, number][] {
+  if (typeof law !== "function") return [[drive[0], law[0]], [drive[1], law[1]]];
+  const value = (t: number) => {
+    const v = law(t);
+    if (typeof v !== "number" || !Number.isFinite(v)) {
+      throw new Error(`${at} gave ${typeof v === "number" ? String(v) : render(v)} at drive ${t}; a law is a function of the drive that returns ${unit}, a finite number`);
+    }
+    return v;
+  };
+  const knots: [number, number][] = [];
+  const straight = (t0: number, v0: number, t1: number, v1: number, depth: number) => {
+    // Three points inside each piece, so a bump between two knots is not missed.
+    const inside = [0.25, 0.5, 0.75].map((f) => {
+      const t = t0 + (t1 - t0) * f;
+      return { t, off: Math.abs(value(t) - (v0 + (v1 - v0) * f)) };
+    });
+    if (depth < 20 && inside.some(({ off }) => off > LAW_TOLERANCE)) {
+      const tm = (t0 + t1) / 2;
+      const vm = value(tm);
+      straight(t0, v0, tm, vm, depth + 1);
+      straight(tm, vm, t1, v1, depth + 1);
+      return;
+    }
+    if (knots.length > LAW_PIECES) {
+      throw new Error(
+        `${at} needs more than ${LAW_PIECES} straight pieces to stay within ${LAW_TOLERANCE} ${unit} of the function; ` +
+          "smooth the law, or write it as [from, to] if it is a ratio",
+      );
+    }
+    knots.push([t1, v1]);
+  };
+  const start = 16;
+  let t0 = drive[0];
+  let v0 = value(t0);
+  knots.push([t0, v0]);
+  for (let i = 1; i <= start; i++) {
+    const t1 = drive[0] + ((drive[1] - drive[0]) * i) / start;
+    const v1 = value(t1);
+    straight(t0, v0, t1, v1, 0);
+    t0 = t1;
+    v0 = v1;
+  }
+  return knots;
+}
+
 /** The keys a check may carry, and the key an author might write for one. */
-const CHECK_KEYS = ["clear", "interferes", "touching", "turns", "slides", "wall", "size", "holes", "feature", "standsOn", "bodies", "watertight", "clearOf", "catches", "atLeast", "deeperThan", "contactAtLeast", "ignore", "on", "why"];
-const CHECK_HEADS = CHECK_KEYS.slice(0, 12);
+const CHECK_KEYS = ["clear", "interferes", "touching", "turns", "slides", "moves", "pushes", "wall", "size", "holes", "feature", "standsOn", "bodies", "watertight", "clearOf", "catches", "atLeast", "deeperThan", "contactAtLeast", "within", "ignore", "on", "why"];
+const CHECK_HEADS = CHECK_KEYS.slice(0, 14);
 const CHECK_SYNONYMS: Record<string, string> = {
   turn: "turns",
   rotate: "turns",
@@ -4662,6 +4910,14 @@ const CHECK_SYNONYMS: Record<string, string> = {
   slide: "slides",
   translate: "slides",
   translates: "slides",
+  moving: "moves",
+  during: "moves",
+  motion: "moves",
+  push: "pushes",
+  pushing: "pushes",
+  drives: "pushes",
+  contacts: "pushes",
+  tolerance: "within",
   clears: "clearOf",
   avoids: "clearOf",
   against: "clearOf",
@@ -4736,6 +4992,18 @@ function checkShapeError(check: unknown, index: number): string | undefined {
   }
   const motion = motionShapeError(check, at);
   if (motion !== undefined) return motion;
+  if (check.moves !== undefined && check.moves !== "all" && !(Array.isArray(check.moves) && check.moves.length > 0 && check.moves.every((name) => typeof name === "string"))) {
+    return `${at}: moves is "all" or a list of the bodies to watch, e.g. moves: ["lever"], not ${render(check.moves)}.`;
+  }
+  if (check.pushes !== undefined) {
+    const pair = check.pushes;
+    if (!Array.isArray(pair) || pair.length !== 2 || !pair.every((name) => typeof name === "string")) {
+      return `${at}: pushes is the pair of bodies in contact, the one that pushes first, e.g. pushes: ["lever", "slider"], not ${render(pair)}.`;
+    }
+    if (typeof check.within !== "number" || !(check.within >= 0)) {
+      return `${at}: a pushes check says how far the two may open apart or overlap: within: 0.15 (mm).`;
+    }
+  }
   return undefined;
 }
 
@@ -4784,6 +5052,8 @@ function bodiesNamedBy(check: Record<string, unknown>): string[] {
   if (typeof check.clearOf === "string") names.push(check.clearOf);
   if (Array.isArray(check.clearOf)) names.push(...(check.clearOf as string[]));
   if (typeof check.catches === "string") names.push(check.catches);
+  if (Array.isArray(check.pushes)) names.push(...(check.pushes as string[]));
+  if (Array.isArray(check.moves)) names.push(...(check.moves as string[]));
   return names;
 }
 
@@ -4858,7 +5128,7 @@ export function build(
     );
   }
   if (typeof root !== "object" || root === null) throw new Error(RETURN_HINT);
-  const entries = Object.entries(root).filter(([name]) => name !== "checks");
+  const entries = Object.entries(root).filter(([name]) => !PART_KEYS.includes(name));
   const checks = checksOf(root);
   if (entries.length === 0) {
     throw new Error(
@@ -4906,7 +5176,15 @@ export function build(
       }
     });
   }
-  return stamped({ units: "mm", root: rootId, nodes, ...(checks && { checks }) });
+  const mechanism = mechanismOf(root, bodies.map((body) => body.name));
+  const overMechanism = (checks ?? []).findIndex((check) => check.moves !== undefined || check.pushes !== undefined);
+  if (overMechanism >= 0 && mechanism === undefined) {
+    throw new Error(
+      `check ${overMechanism + 1} holds over a mechanism and the part has none; say how the bodies move beside them: ` +
+        'mechanism: { lever: { turns: { about: "y", at: [0, 0, 40], degrees: [0, -18] } } } (read_docs dsl, Mechanism)',
+    );
+  }
+  return stamped({ units: "mm", root: rootId, nodes, ...(checks && { checks }), ...(mechanism && { mechanism }) });
 }
 
 /** The `checks` list of a returned object, validated, or `undefined` when there is none. */

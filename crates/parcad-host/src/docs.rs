@@ -987,9 +987,9 @@ mod tests {
     #[test]
     fn every_entry_leads_with_what_a_caller_needs() {
         // Code (signatures, an interface's fields, examples) is the entry; prose
-        // around it is what grows. `SectionEntry`, the curve vocabulary, is the largest.
+        // around it is what grows. `Check`, every check kind's fields, is the largest.
         const PROSE: usize = 700;
-        const WHOLE: usize = 3_000;
+        const WHOLE: usize = 3_300;
         let long: Vec<String> = Document::from_dsl(DSL_SOURCE, false)
             .chapters
             .iter()
