@@ -498,6 +498,12 @@ pub struct EvaluationSnapshot {
     /// the exact kernel measured at least two bodies.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub between_bodies: Vec<BodyFit>,
+    /// How the bodies move together on one drive, when the script declares a
+    /// `mechanism`: each joint's axis, parent and knots, resolved, for a
+    /// viewer to play whether or not a check reads it. Drawn, not certified,
+    /// until a `moves` or `pushes` check under `checks.mechanism` says so.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mechanism: Option<checks::MechanismPath>,
     /// What the part stands on: the surface in its lowest plane and the number
     /// of separate patches it is in. A printed part rests on that face, and
     /// eighteen small patches where one slab was meant is the underside defect
@@ -1119,6 +1125,7 @@ pub fn describe(
         voids: report.mesh.voids,
         named_bodies,
         between_bodies,
+        mechanism: doc.mechanism.as_ref().and_then(|m| m.resolve().ok()).map(|linkage| checks::MechanismPath::from(&linkage)),
         stands_on: if kind == "solid" { report.stands_on.as_ref().map(StandsOn::from) } else { None },
         prints_on: if kind == "solid" {
             parcad_core::measure::fits_beds(report.size)

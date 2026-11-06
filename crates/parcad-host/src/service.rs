@@ -584,6 +584,7 @@ pub fn probe(
         thickness: None,
         holes: false,
         motions: Vec::new(),
+        mechanism: None,
     };
     let answer = perceive(doc, &spec, budget)?;
 
@@ -1108,7 +1109,16 @@ pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evalua
             let spec = parcad_occt::Perceive { motions: specs.to_vec(), ..Default::default() };
             Ok(perceive(doc, &spec, budget)?.motions)
         };
-        let measures = parcad_evaluation::checks::Measures { wall: &mut at_default, holes: &mut holes, motions: &mut motions };
+        let mut mechanism = |spec: &parcad_occt::protocol::MechanismSpec| {
+            let spec = parcad_occt::Perceive { mechanism: Some(spec.clone()), ..Default::default() };
+            Ok(perceive(doc, &spec, budget)?.mechanism)
+        };
+        let measures = parcad_evaluation::checks::Measures {
+            wall: &mut at_default,
+            holes: &mut holes,
+            motions: &mut motions,
+            mechanism: &mut mechanism,
+        };
         evaluated.snapshot.verdicts.checks = Some(parcad_evaluation::checks::judge(doc, &evaluated.snapshot, measures)?);
     }
     // The brief is in every solid reply whether the script carries one or
@@ -2311,6 +2321,7 @@ pub(crate) mod tests {
                 why: Some("coins must not bind on the plate".into()),
             }],
             motions: Vec::new(),
+            mechanism: Vec::new(),
         };
         let door = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(failed.clone()), brief: None, print_check: None } };
         let refusal = door.pass(None, "export_part").unwrap_err();
@@ -2322,7 +2333,7 @@ pub(crate) mod tests {
         );
         assert!(door.pass(Some("  "), "save_project").unwrap_err().starts_with("save_project refused"));
         assert_eq!(door.pass(Some("the user accepts the binding"), "save_project").unwrap(), Some("the user accepts the binding".into()));
-        let passed = parcad_evaluation::ChecksReport { verdict: "passed", passed: 5, failed: Vec::new(), motions: Vec::new() };
+        let passed = parcad_evaluation::ChecksReport { verdict: "passed", passed: 5, failed: Vec::new(), motions: Vec::new(), mechanism: Vec::new() };
         let open = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(passed.clone()), brief: None, print_check: None } };
         assert_eq!(open.pass(None, "export_part").unwrap(), None);
         assert_eq!(open.pass(Some("unneeded"), "export_part").unwrap(), None, "a reason nothing needs is not echoed");
@@ -2735,6 +2746,115 @@ pub(crate) mod tests {
                 { "op": "difference", "base": 0, "tools": [2], "blend": 0 },
             ],
         }))
+    }
+
+    /// A lever on a pin pushing a slider, in boxes: the `lever` turns -18°
+    /// about +z through (-30, 0, 0); the `pusher` under its tip slides along
+    /// y by the law that keeps its +y face 0.05 mm below the lever's -y face
+    /// at x = 12, sampled into knots as dsl.ts would; a `stop` stands in the
+    /// lever's path 0.52 mm clear of it at the end of the swing. The reply
+    /// carries the resolved mechanism for a viewer, and every mechanism check
+    /// judged on the coupled sweep: the two that hold and the one that asks
+    /// for more clearance than the stop leaves.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn a_mechanism_is_judged_over_its_drive_and_the_reply_carries_it() {
+        let lever_face_y = |x: f64, degrees: f64| {
+            let (s, c) = degrees.to_radians().sin_cos();
+            ((x + 30.0 - 4.0 * s) / c) * s - 4.0 * c
+        };
+        let law: Vec<[f64; 2]> = (0..=32).map(|i| i as f64 / 32.0).map(|t| [t, lever_face_y(12.0, -18.0 * t) + 4.0]).collect();
+        let doc = doc(serde_json::json!({
+            "root": 8,
+            "nodes": [
+                { "op": "cuboid", "size": { "x": 80, "y": 50, "z": 5 } },
+                { "op": "translate", "child": 0, "by": { "x": 0, "y": -15, "z": -3.5 } },
+                { "op": "cuboid", "size": { "x": 60, "y": 8, "z": 6 } },
+                { "op": "translate", "child": 2, "by": { "x": 0, "y": 0, "z": 3 } },
+                { "op": "cuboid", "size": { "x": 7, "y": 9.95, "z": 6 } },
+                { "op": "translate", "child": 4, "by": { "x": 8.5, "y": -9.025, "z": 3 } },
+                { "op": "cuboid", "size": { "x": 6, "y": 10, "z": 6 } },
+                { "op": "translate", "child": 6, "by": { "x": 17, "y": -26, "z": 3 } },
+                { "op": "bodies", "bodies": [
+                    { "name": "base", "child": 1 },
+                    { "name": "lever", "child": 3 },
+                    { "name": "pusher", "child": 5 },
+                    { "name": "stop", "child": 7 }
+                ] }
+            ],
+            "mechanism": { "drive": [0, 1], "joints": [
+                { "body": "lever", "turns": { "about": "z", "at": [-30, 0, 0] }, "knots": [[0, 0], [1, -18]] },
+                { "body": "pusher", "slides": { "along": "y" }, "knots": law }
+            ] },
+            "checks": [
+                { "moves": "all", "atLeast": 0.3 },
+                { "pushes": ["lever", "pusher"], "within": 0.15, "why": "the lever must drive the pusher" },
+                { "moves": ["stop"], "atLeast": 0.8 }
+            ]
+        }));
+        let evaluated = brep(&doc);
+        let reply = serde_json::to_value(&evaluated.snapshot).expect("the snapshot serialises");
+        println!("mechanism: {}", serde_json::to_string_pretty(&reply["mechanism"]).unwrap());
+        println!("checks: {}", serde_json::to_string_pretty(&reply["checks"]).unwrap());
+        let joints = reply["mechanism"]["joints"].as_array().expect("the resolved mechanism rides with the reply");
+        assert_eq!(joints.len(), 2);
+        assert_eq!((joints[0]["body"].as_str(), joints[0]["kind"].as_str(), joints[0]["axis"][2].as_f64()), (Some("lever"), Some("turn"), Some(1.0)));
+        assert_eq!((joints[1]["kind"].as_str(), joints[1]["knots"].as_array().map(Vec::len)), (Some("slide"), Some(33)));
+        let checks = &reply["checks"];
+        assert_eq!(checks["verdict"], "failed");
+        assert_eq!(checks["passed"], 2);
+        let verdicts: Vec<&str> = checks["mechanism"].as_array().unwrap().iter().map(|m| m["verdict"].as_str().unwrap()).collect();
+        assert_eq!(verdicts, ["passed", "passed", "failed"]);
+        let all = &checks["mechanism"][0];
+        assert_eq!((all["a"].as_str(), all["b"].as_str(), all["at_drive"].as_f64()), (Some("lever"), Some("stop"), Some(1.0)));
+        assert_eq!(all["least_clearance_mm"], 0.521);
+        assert!(all["certified_above_mm"].as_f64().is_some_and(|c| c >= 0.3));
+        assert_eq!(all["poses"].as_object().unwrap().keys().collect::<Vec<_>>(), ["lever", "pusher"]);
+        let pushed = &checks["mechanism"][1];
+        assert_eq!(pushed["kind"], "pushes");
+        assert!(pushed["widest_gap_mm"].as_f64().is_some_and(|g| (g - 0.05).abs() < 0.002), "{pushed}");
+        assert!(pushed["certified_gap_below_mm"].as_f64().is_some_and(|g| g <= 0.15));
+        assert_eq!(checks["failed"][0]["check"], "moves stop atLeast 0.8");
+        assert_eq!(checks["failed"][0]["mismatch"], "lever and stop come within 0.521 mm at drive 1, under 0.8");
+    }
+
+    /// A one-joint mechanism is today's `turns` check: the hinged box's lid
+    /// against its base, swept as a mechanism pair with the object in the lid
+    /// riding along, measures the same least clearance at the same pose as
+    /// the single-body sweep, and bites the object on the base as deep and
+    /// at the same angle.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn a_one_joint_mechanism_measures_what_the_hinged_box_turns_check_does() {
+        let source = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../eval/scripts/hinged-box.js")).unwrap();
+        let mut graph = crate::script::build_graph(&source).unwrap();
+        let turns: Vec<serde_json::Value> = graph["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|c| c.get("turns").is_some() && c.get("clearOf").is_some())
+            .cloned()
+            .collect();
+        assert_eq!(turns.len(), 2, "the lid against the base, and against the object");
+        graph["checks"] = serde_json::json!([turns[0], turns[1], { "moves": ["lid"], "atLeast": 0.3 }]);
+        graph["mechanism"] = serde_json::json!({ "drive": [0, 1], "joints": [
+            { "body": "lid", "turns": { "about": "x", "at": [0, -28, 16.2] }, "knots": [[0, 0], [1, -170]] },
+            { "body": "object2", "on": "lid" }
+        ] });
+        let doc = parse_graph(graph).unwrap();
+        let evaluated = brep(&doc);
+        let checks = evaluated.snapshot.verdicts.checks.as_ref().unwrap();
+        let [against_base, against_object] = checks.motions.as_slice() else { panic!("two turns checks") };
+        let [mechanism] = checks.mechanism.as_slice() else { panic!("one moves check") };
+        println!("turns: {}\nmechanism: {}", serde_json::to_string(&checks.motions).unwrap(), serde_json::to_string(mechanism).unwrap());
+        assert_eq!(against_base.verdict, "passed");
+        assert_eq!(mechanism.verdict, "failed", "the lid bites the object as the turns check finds");
+        assert_eq!(mechanism.least_clearance_mm, against_base.least_clearance_mm);
+        assert_eq!(mechanism.certified_above_mm, None, "a check one pair of which bites proves nothing, as the turns check does");
+        assert_eq!(mechanism.deepest_mm, against_object.deepest_mm);
+        assert_eq!((mechanism.a.as_deref(), mechanism.b.as_deref()), (Some("lid"), Some("object")));
+        let bite_at = against_object.at_degrees.unwrap() / -170.0;
+        assert!((mechanism.at_drive.unwrap() - bite_at).abs() < 1e-3, "{} vs {bite_at}", mechanism.at_drive.unwrap());
     }
 
     #[test]

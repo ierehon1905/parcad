@@ -10,11 +10,14 @@
 use crate::{round_mm, round_point, BodyFit, EvaluationSnapshot};
 use parcad_core::checks::{dimensions, Check, CheckKind, Motion as CheckMotion, MATCH_MM};
 use parcad_core::graph::Doc;
+use parcad_core::mechanism::{JointKind, Linkage};
 use parcad_core::view::Axis;
 use parcad_occt::protocol::{
-    HoleMeasure, Motion, MotionMeasure, MotionReading, MotionSpec, ThicknessResult, ThicknessSample, ThinKind,
+    HoleMeasure, MechanismCheck, MechanismMeasure, MechanismSpec, Motion, MotionMeasure, MotionReading, MotionSpec,
+    ThicknessResult, ThicknessSample, ThinKind,
 };
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 /// Every check the part carries, judged: `passed` when nothing failed —
 /// four words when there is nothing to say — or `failed` with each failure
@@ -33,6 +36,115 @@ pub struct ChecksReport {
     /// needs to show it moving.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub motions: Vec<MotionReport>,
+    /// Every `moves` and `pushes` check, measured over the whole drive
+    /// whether it held or not: the pair and drive value it is worst at, and
+    /// every moving body's pose there, which is what a viewer jumps to.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub mechanism: Vec<MechanismReport>,
+}
+
+/// One mechanism check as measured along the drive. Every number is the
+/// kernel's at a pose the bodies were put in; `poses` are the transforms a
+/// viewer applies to each moving body as drawn to show that pose.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct MechanismReport {
+    /// The check as the script wrote it.
+    pub check: String,
+    /// `passed`, `failed`, or `uncertified` — the drive could not be proven
+    /// within the sweep's budget, which fails the check.
+    pub verdict: &'static str,
+    /// `moves` or `pushes`.
+    pub kind: &'static str,
+    /// The pair the numbers below are about: the worst of a `moves` check's
+    /// pairs, or the pair `pushes` names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub b: Option<String>,
+    /// For `moves`: the least clearance of any pair at any drive value, mm.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub least_clearance_mm: Option<f64>,
+    /// For `pushes`: the widest the two stood apart at any drive value, mm.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub widest_gap_mm: Option<f64>,
+    /// How deep one reaches into the other at the pose reported, mm; present
+    /// when they interfere somewhere in the drive.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deepest_mm: Option<f64>,
+    /// The drive value the numbers above were measured at.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at_drive: Option<f64>,
+    /// A point on `a` at that pose, then one on `b`; or where the bite is
+    /// deepest, twice.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub closest_mm: Option<[[f64; 3]; 2]>,
+    /// Every moving body's pose at `at_drive`, row-major 4×4.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub poses: BTreeMap<String, [f64; 16]>,
+    /// For `moves`: a clearance proven for every pair at every drive value.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certified_above_mm: Option<f64>,
+    /// For `pushes`: a gap, and a depth, proven never exceeded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certified_gap_below_mm: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub certified_depth_below_mm: Option<f64>,
+    /// Why the sweep could not finish, when it could not.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uncertified: Option<String>,
+    /// How many exact measurements the sweep took.
+    pub measurements: usize,
+}
+
+/// The part's mechanism as the reply carries it: every joint resolved to a
+/// unit axis, its parent and its knots, so a viewer plays it without reading
+/// the script, checked or not.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct MechanismPath {
+    pub drive: [f64; 2],
+    pub joints: Vec<JointPath>,
+}
+
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct JointPath {
+    pub body: String,
+    /// The body this one is carried by.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// `turn`, `slide` or `rides`.
+    pub kind: &'static str,
+    /// Unit: a turn's axis or a slide's direction. Absent for a ride.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub axis: Option<[f64; 3]>,
+    /// A point on a turn's axis.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub at: Option<[f64; 3]>,
+    /// `[t, value]` pairs, the value in degrees or mm, straight between them.
+    pub knots: Vec<[f64; 2]>,
+}
+
+impl From<&Linkage> for MechanismPath {
+    fn from(linkage: &Linkage) -> Self {
+        Self {
+            drive: linkage.drive,
+            joints: linkage
+                .joints
+                .iter()
+                .map(|j| JointPath {
+                    body: j.body.clone(),
+                    parent: j.parent.clone(),
+                    kind: match j.kind {
+                        JointKind::Turn => "turn",
+                        JointKind::Slide => "slide",
+                        JointKind::Rides => "rides",
+                    },
+                    axis: j.axis.map(crate::round_dir),
+                    at: j.at.map(round_point),
+                    knots: j.knots.clone(),
+                })
+                .collect(),
+        }
+    }
 }
 
 /// One motion check as measured over its whole range. Every number is the
@@ -194,17 +306,33 @@ pub struct Measures<'a> {
     /// Every motion swept: once, for any number of `turns` and `slides`
     /// checks, one answer per spec in order.
     pub motions: &'a mut dyn FnMut(&[MotionSpec]) -> Result<Vec<MotionMeasure>, String>,
+    /// The mechanism driven through its range: once, for any number of
+    /// `moves` and `pushes` checks, one answer per check in order.
+    pub mechanism: &'a mut dyn FnMut(&MechanismSpec) -> Result<Vec<MechanismMeasure>, String>,
 }
 
 /// Judge every check in `doc` against `snapshot`, asking `measure` for what
 /// the snapshot does not carry.
 pub fn judge(doc: &Doc, snapshot: &EvaluationSnapshot, measure: Measures) -> Result<ChecksReport, String> {
-    let Measures { wall, holes, motions } = measure;
+    let Measures { wall, holes, motions, mechanism } = measure;
     let found_holes = if doc.checks.iter().any(|check| check.holes.is_some()) { holes()? } else { Vec::new() };
     let body_names: Vec<&str> = doc.bodies().map(|bodies| bodies.iter().map(|b| b.name.as_str()).collect()).unwrap_or_default();
     let specs: Vec<MotionSpec> = doc.checks.iter().filter_map(|check| motion_spec(check, &body_names)).collect();
     let mut measured_motions = if specs.is_empty() { Vec::new() } else { motions(&specs)? }.into_iter();
+    let linkage = match (&doc.mechanism, doc.checks.iter().any(|c| c.moves.is_some() || c.pushes.is_some())) {
+        (Some(declared), true) => Some(declared.resolve()?),
+        _ => None,
+    };
+    let mut measured_mechanism = match &linkage {
+        Some(linkage) => {
+            let checks = doc.checks.iter().filter_map(|check| mechanism_check(check, linkage, &body_names, &doc.checks)).collect();
+            mechanism(&MechanismSpec { linkage: linkage.clone(), checks })?
+        }
+        None => Vec::new(),
+    }
+    .into_iter();
     let mut reports = Vec::new();
+    let mut mechanism_reports = Vec::new();
     let mut failed = Vec::new();
     for check in &doc.checks {
         let kind = check.kind().map_err(|why| format!("check {}: {why}", check.sentence()))?;
@@ -216,6 +344,15 @@ pub fn judge(doc: &Doc, snapshot: &EvaluationSnapshot, measure: Measures) -> Res
                     .ok_or_else(|| format!("the kernel answered fewer motions than were asked; none for {}", check.sentence()))?;
                 let (report, failure) = judge_motion(check, &measured);
                 reports.push(report);
+                failure
+            }
+            CheckKind::Moves | CheckKind::Pushes => {
+                let measured = measured_mechanism
+                    .next()
+                    .ok_or_else(|| format!("the kernel answered fewer mechanism checks than were asked; none for {}", check.sentence()))?;
+                let linkage = linkage.as_ref().ok_or_else(|| format!("{} needs a mechanism, and the part declares none", check.sentence()))?;
+                let (report, failure) = judge_mechanism(check, linkage, &measured);
+                mechanism_reports.push(report);
                 failure
             }
             CheckKind::Wall => judge_wall(check, wall)?,
@@ -258,8 +395,118 @@ pub fn judge(doc: &Doc, snapshot: &EvaluationSnapshot, measure: Measures) -> Res
         passed: doc.checks.len() - failed.len(),
         failed,
         motions: reports,
+        mechanism: mechanism_reports,
     })
 }
+
+/// What the kernel is asked to sweep for a mechanism check: the pairs a
+/// `moves` check reads once the pushed pairs are out, or the pair `pushes`
+/// names, each with its limit. `None` for every other kind of check.
+fn mechanism_check(check: &Check, linkage: &Linkage, bodies: &[&str], checks: &[Check]) -> Option<MechanismCheck> {
+    if check.moves.is_some() {
+        let pairs = check.moving_pairs(linkage, bodies, checks).into_iter().map(|[a, b]| [a.to_owned(), b.to_owned()]).collect();
+        return Some(MechanismCheck::Moves { pairs, at_least_mm: check.at_least.unwrap_or(0.0) });
+    }
+    let pair = check.pushes.clone()?;
+    Some(MechanismCheck::Pushes { pair, within_mm: check.within.unwrap_or(0.0) })
+}
+
+
+/// The pose a mechanism check is worst at, and what it measured there.
+enum Worst<'a> {
+    Bite(&'a parcad_occt::protocol::PairInterference),
+    Gap(&'a parcad_occt::protocol::PairClearance),
+}
+
+/// A mechanism check against what its sweep measured: the report every
+/// reply carries, and the failure when it did not hold.
+fn judge_mechanism(check: &Check, linkage: &Linkage, measured: &MechanismMeasure) -> (MechanismReport, Option<FailedCheck>) {
+    let pushing = check.pushes.is_some();
+    let at_least = check.at_least.unwrap_or(0.0);
+    let within = check.within.unwrap_or(0.0);
+    let at = |t: f64| format!("drive {}", round_mm(t));
+    // The pose a viewer should show and the sentence that fails the check:
+    // a bite past the limit, a gap past it, a clearance under it; else the
+    // nearest pose measured, which a passing check still reports.
+    let bite = measured.deepest.as_ref().filter(|deep| !pushing || deep.depth_mm > within);
+    let gap = measured.widest_gap.as_ref().filter(|gap| gap.clearance_mm > within);
+    let near = measured.least.as_ref().filter(|least| least.clearance_mm < at_least);
+    let (worst, mismatch) = match (bite, gap, near) {
+        (Some(deep), _, _) => {
+            let past = if pushing { format!(", past {within}") } else { String::new() };
+            (Some(Worst::Bite(deep)), Some(format!("{} bites {} mm into {} at {}{past}", deep.a, round_mm(deep.depth_mm), deep.b, at(deep.at_drive))))
+        }
+        (None, Some(gap), _) => (
+            Some(Worst::Gap(gap)),
+            Some(format!("{} and {} open {} mm apart at {}, past {within}", gap.a, gap.b, round_mm(gap.clearance_mm), at(gap.at_drive))),
+        ),
+        (None, None, Some(least)) => (
+            Some(Worst::Gap(least)),
+            Some(format!("{} and {} come within {} mm at {}, under {at_least}", least.a, least.b, round_mm(least.clearance_mm), at(least.at_drive))),
+        ),
+        (None, None, None) => {
+            let shown = measured.least.as_ref().or(measured.widest_gap.as_ref()).map(Worst::Gap).or(measured.deepest.as_ref().map(Worst::Bite));
+            let proven = match pushing {
+                true => measured.certified_gap_below_mm.is_some() && measured.certified_depth_below_mm.is_some(),
+                false => measured.certified_above_mm.is_some(),
+            };
+            let unproven = measured
+                .uncertified
+                .clone()
+                .or_else(|| (!proven).then(|| "the sweep reported no bound for the drive, so nothing is proven".to_string()));
+            (shown, unproven)
+        }
+    };
+    let mut report = MechanismReport {
+        check: check.sentence(),
+        verdict: "passed",
+        kind: if pushing { "pushes" } else { "moves" },
+        a: None,
+        b: None,
+        least_clearance_mm: measured.least.as_ref().map(|l| round_mm(l.clearance_mm)),
+        widest_gap_mm: measured.widest_gap.as_ref().map(|g| round_mm(g.clearance_mm)),
+        deepest_mm: measured.deepest.as_ref().map(|d| round_mm(d.depth_mm)),
+        at_drive: None,
+        closest_mm: None,
+        poses: BTreeMap::new(),
+        certified_above_mm: measured.certified_above_mm.filter(|c| c.is_finite()).map(round_mm),
+        certified_gap_below_mm: measured.certified_gap_below_mm.map(round_mm),
+        certified_depth_below_mm: measured.certified_depth_below_mm.map(round_mm),
+        uncertified: measured.uncertified.clone(),
+        measurements: measured.measurements,
+    };
+    let measured_mm = match &worst {
+        Some(Worst::Bite(deep)) => {
+            report.a = Some(deep.a.clone());
+            report.b = Some(deep.b.clone());
+            report.at_drive = Some(round_mm(deep.at_drive));
+            report.closest_mm = Some([round_point(deep.deepest_mm); 2]);
+            Some(round_mm(deep.depth_mm))
+        }
+        Some(Worst::Gap(gap)) => {
+            report.a = Some(gap.a.clone());
+            report.b = Some(gap.b.clone());
+            report.at_drive = Some(round_mm(gap.at_drive));
+            report.closest_mm = Some([round_point(gap.closest_mm[0]), round_point(gap.closest_mm[1])]);
+            Some(round_mm(gap.clearance_mm))
+        }
+        None => None,
+    };
+    if let Some(t) = report.at_drive {
+        report.poses = linkage.poses(t).into_iter().collect();
+    }
+    let Some(mismatch) = mismatch else {
+        return (report, None);
+    };
+    let budget_ran_out = bite.is_none() && gap.is_none() && near.is_none() && measured.uncertified.is_some();
+    report.verdict = if budget_ran_out { "uncertified" } else { "failed" };
+    let mut failure = FailedCheck::of(check);
+    failure.mismatch = Some(mismatch);
+    failure.measured_mm = measured_mm;
+    failure.at = report.closest_mm;
+    (report, Some(failure))
+}
+
 
 /// What the kernel is asked to sweep for a motion check: the motion with
 /// its axis resolved to a unit vector, the bodies it is read against, and
@@ -654,6 +901,7 @@ pub(crate) mod tests {
             voids: 0,
             named_bodies: Vec::<BodyReport>::new(),
             between_bodies: between,
+            mechanism: None,
             stands_on: Some(StandsOn { z_mm: 0.0, area_mm2: 1600.0, patches: 1, footprint_fraction: 1.0, tolerance_mm: 0.01 }),
             prints_on: Vec::new(),
             tags: Vec::new(),
@@ -690,7 +938,7 @@ pub(crate) mod tests {
         snapshot: &EvaluationSnapshot,
         wall: &mut dyn FnMut(f64) -> Result<ThicknessResult, String>,
     ) -> Result<ChecksReport, String> {
-        judge(doc, snapshot, Measures { wall, holes: &mut || panic!("no holes check here"), motions: &mut |_| panic!("no motion check here") })
+        judge(doc, snapshot, Measures { wall, holes: &mut || panic!("no holes check here"), motions: &mut |_| panic!("no motion check here"), mechanism: &mut |_| panic!("no mechanism check here") })
     }
 
     /// The B2 failure: a clearance of 0.13 against an atLeast of 0.2 is named
@@ -760,7 +1008,7 @@ pub(crate) mod tests {
         assert_eq!(report.failed[0].check, "touching stacks↔top");
         assert_eq!(report.failed[0].measured, Some(serde_json::json!("interfering")));
         assert_eq!(report.failed[0].measured_mm3, Some(1.23));
-        let text = serde_json::to_string(&ChecksReport { verdict: "passed", passed: 5, failed: Vec::new(), motions: Vec::new() }).unwrap();
+        let text = serde_json::to_string(&ChecksReport { verdict: "passed", passed: 5, failed: Vec::new(), motions: Vec::new(), mechanism: Vec::new() }).unwrap();
         assert_eq!(text, "{\"verdict\":\"passed\",\"passed\":5}");
     }
 
@@ -851,7 +1099,7 @@ pub(crate) mod tests {
             asked += 1;
             Ok(vec![twelve.clone()])
         };
-        let report = judge(&doc, &snap, Measures { wall: &mut no_wall, holes: &mut holes, motions: &mut |_| panic!("no motion check here") }).unwrap();
+        let report = judge(&doc, &snap, Measures { wall: &mut no_wall, holes: &mut holes, motions: &mut |_| panic!("no motion check here"), mechanism: &mut |_| panic!("no mechanism check here") }).unwrap();
         assert_eq!(asked, 1, "two holes checks, one measurement");
         let failed: Vec<(&str, Option<&str>)> =
             report.failed.iter().map(|f| (f.check.as_str(), f.mismatch.as_deref())).collect();
@@ -898,9 +1146,119 @@ pub(crate) mod tests {
             body: None,
         };
         let mut holes = || Ok(vec![hole([0.0, 0.0, 1.0], false), hole([1.0, 0.0, 0.0], true)]);
-        let report = judge(&doc, &snapshot(Vec::new()), Measures { wall: &mut no_wall, holes: &mut holes, motions: &mut |_| panic!("no motion check here") }).unwrap();
+        let report = judge(&doc, &snapshot(Vec::new()), Measures { wall: &mut no_wall, holes: &mut holes, motions: &mut |_| panic!("no motion check here"), mechanism: &mut |_| panic!("no mechanism check here") }).unwrap();
         let mismatches: Vec<Option<&str>> = report.failed.iter().map(|f| f.mismatch.as_deref()).collect();
         assert_eq!(mismatches, [Some("the one at (10, 5) is blind"), Some("none at (0, 0)")]);
+    }
+
+    /// The key-hook mechanism's checks against what a sweep measured: the
+    /// pairs the kernel is asked for, the sentences a failure is written in,
+    /// the poses a viewer jumps to, and a budget that ran out judged
+    /// uncertified rather than passed.
+    #[test]
+    fn a_mechanism_check_is_judged_on_its_worst_pair_at_its_drive_value() {
+        use parcad_occt::protocol::{PairClearance, PairInterference};
+        let doc = parcad_core::envelope::parse_doc(serde_json::json!({ "units": "mm", "root": 3, "nodes": [
+            { "op": "cuboid", "size": { "x": 10, "y": 10, "z": 10 } },
+            { "op": "cuboid", "size": { "x": 5, "y": 5, "z": 5 } },
+            { "op": "cuboid", "size": { "x": 2, "y": 2, "z": 2 } },
+            { "op": "bodies", "bodies": [{ "name": "box", "child": 0 }, { "name": "lever", "child": 1 }, { "name": "pusher", "child": 2 }] }
+        ], "mechanism": { "joints": [
+            { "body": "lever", "turns": { "about": "y", "at": [-30, 0, 42] }, "knots": [[0, 0], [1, -18]] },
+            { "body": "pusher", "slides": { "along": "x" }, "knots": [[0, 0], [1, 12]] }
+        ] }, "checks": [
+            { "moves": "all", "atLeast": 0.3 },
+            { "pushes": ["lever", "pusher"], "within": 0.15, "why": "the lever must drive the pusher" },
+            { "moves": ["lever"], "atLeast": 1 },
+            { "moves": ["pusher"], "atLeast": 0.3 },
+            { "pushes": ["lever", "pusher"], "within": 0.5 }
+        ] }))
+        .unwrap();
+        let pair = |a: &str, b: &str, clearance_mm: f64, at_drive: f64| PairClearance {
+            a: a.into(),
+            b: b.into(),
+            clearance_mm,
+            at_drive,
+            closest_mm: [[1.0, 2.0, 3.0], [1.0, 2.0, 3.5]],
+        };
+        let mut asked = Vec::new();
+        let mut mechanism = |spec: &MechanismSpec| {
+            asked = spec.checks.clone();
+            Ok(vec![
+                MechanismMeasure { least: Some(pair("box", "lever", 0.5214, 1.0)), certified_above_mm: Some(0.48), measurements: 812, ..Default::default() },
+                MechanismMeasure { widest_gap: Some(pair("lever", "pusher", 0.4, 0.62)), measurements: 40, ..Default::default() },
+                MechanismMeasure { least: Some(pair("box", "lever", 0.5214, 1.0)), certified_above_mm: Some(0.48), measurements: 812, ..Default::default() },
+                MechanismMeasure {
+                    least: Some(pair("box", "pusher", 0.31, 0.5)),
+                    uncertified: Some("between drive 0.5 and drive 0.75 pusher is 0.31 mm from box at the middle and may come nearer in between".into()),
+                    measurements: 400_000,
+                    ..Default::default()
+                },
+                MechanismMeasure {
+                    deepest: Some(PairInterference { a: "lever".into(), b: "pusher".into(), depth_mm: 0.62, at_drive: 0.4, deepest_mm: [3.0, 0.0, 1.0] }),
+                    measurements: 90,
+                    ..Default::default()
+                },
+            ])
+        };
+        let report = judge(
+            &doc,
+            &snapshot(Vec::new()),
+            Measures { wall: &mut no_wall, holes: &mut || panic!("no holes check here"), motions: &mut |_| panic!("no motion check here"), mechanism: &mut mechanism },
+        )
+        .unwrap();
+        assert_eq!(asked.len(), 5);
+        assert_eq!(asked[0], MechanismCheck::Moves { pairs: vec![["box".into(), "lever".into()], ["box".into(), "pusher".into()]], at_least_mm: 0.3 });
+        assert_eq!(asked[1], MechanismCheck::Pushes { pair: ["lever".into(), "pusher".into()], within_mm: 0.15 });
+        assert_eq!(asked[2], MechanismCheck::Moves { pairs: vec![["box".into(), "lever".into()]], at_least_mm: 1.0 });
+        assert_eq!(report.verdict, "failed");
+        assert_eq!(report.passed, 1);
+        let verdicts: Vec<(&str, &str)> = report.mechanism.iter().map(|m| (m.kind, m.verdict)).collect();
+        assert_eq!(verdicts, [("moves", "passed"), ("pushes", "failed"), ("moves", "failed"), ("moves", "uncertified"), ("pushes", "failed")]);
+        let mismatches: Vec<Option<&str>> = report.failed.iter().map(|f| f.mismatch.as_deref()).collect();
+        assert_eq!(
+            mismatches,
+            [
+                Some("lever and pusher open 0.4 mm apart at drive 0.62, past 0.15"),
+                Some("box and lever come within 0.521 mm at drive 1, under 1"),
+                Some("between drive 0.5 and drive 0.75 pusher is 0.31 mm from box at the middle and may come nearer in between"),
+                Some("lever bites 0.62 mm into pusher at drive 0.4, past 0.5"),
+            ]
+        );
+        assert_eq!(
+            report.failed[0].sentence(),
+            "pushes lever↔pusher within 0.15 measured lever and pusher open 0.4 mm apart at drive 0.62, past 0.15 (the lever must drive the pusher)"
+        );
+        assert_eq!(report.failed[0].measured_mm, Some(0.4));
+        assert_eq!(report.failed[3].measured_mm, Some(0.62));
+        assert_eq!(report.failed[3].at, Some([[3.0, 0.0, 1.0]; 2]));
+        let passed = &report.mechanism[0];
+        assert_eq!(passed.check, "moves all atLeast 0.3");
+        assert_eq!((passed.a.as_deref(), passed.b.as_deref(), passed.at_drive), (Some("box"), Some("lever"), Some(1.0)));
+        assert_eq!(passed.least_clearance_mm, Some(0.521));
+        assert_eq!(passed.certified_above_mm, Some(0.48));
+        // Every moving body's pose at that drive value, the lever's a turn of
+        // -18° about y through its pin, the pusher's 12 mm along x.
+        assert_eq!(passed.poses.keys().collect::<Vec<_>>(), ["lever", "pusher"]);
+        let pusher = passed.poses["pusher"];
+        assert_eq!(pusher[3], 12.0);
+        let lever = passed.poses["lever"];
+        assert!((lever[0] - 18f64.to_radians().cos()).abs() < 1e-12 && (lever[2] - (-18f64).to_radians().sin()).abs() < 1e-12, "{lever:?}");
+        let uncertified = &report.mechanism[3];
+        assert_eq!(uncertified.verdict, "uncertified");
+        assert_eq!(uncertified.at_drive, Some(0.5));
+        assert!(uncertified.uncertified.is_some() && uncertified.certified_above_mm.is_none());
+        let text = serde_json::to_string(&report.mechanism[1]).unwrap();
+        assert!(text.starts_with("{\"check\":\"pushes lever↔pusher within 0.15\",\"verdict\":\"failed\",\"kind\":\"pushes\",\"a\":\"lever\",\"b\":\"pusher\",\"widest_gap_mm\":0.4,\"at_drive\":0.62,"), "{text}");
+
+        // The resolved mechanism a viewer plays, checked or not.
+        let path = MechanismPath::from(&doc.mechanism.as_ref().unwrap().resolve().unwrap());
+        let text = serde_json::to_string(&path).unwrap();
+        assert_eq!(
+            text,
+            "{\"drive\":[0.0,1.0],\"joints\":[{\"body\":\"lever\",\"kind\":\"turn\",\"axis\":[0.0,1.0,0.0],\"at\":[-30.0,0.0,42.0],\"knots\":[[0.0,0.0],[1.0,-18.0]]},\
+             {\"body\":\"pusher\",\"kind\":\"slide\",\"axis\":[1.0,0.0,0.0],\"knots\":[[0.0,0.0],[1.0,12.0]]}]}"
+        );
     }
 
     /// A wall check reads the sweep at its own threshold, leaves edges out

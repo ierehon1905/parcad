@@ -894,7 +894,7 @@ mod tests {
     /// fails. When both fail, both are at the top, the author's first.
     #[test]
     fn print_check_is_first_when_it_alone_fails() {
-        let passed = ChecksReport { verdict: "passed", passed: 2, failed: Vec::new(), motions: Vec::new() };
+        let passed = ChecksReport { verdict: "passed", passed: 2, failed: Vec::new(), motions: Vec::new(), mechanism: Vec::new() };
         let failing = ChecksReport {
             verdict: "failed",
             passed: 1,
@@ -911,6 +911,7 @@ mod tests {
                 why: None,
             }],
             motions: Vec::new(),
+            mechanism: Vec::new(),
         };
         let print = |verdict: &'static str| PrintCheck {
             verdict,

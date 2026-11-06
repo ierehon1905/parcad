@@ -223,7 +223,12 @@ fn judge_checks(doc: &Doc, s: &parcad_occt::Success, timeout: std::time::Duratio
         let opts = parcad_occt::Options { timeout, ..Default::default() };
         Ok(parcad_occt::perceive(doc, &spec, &opts).map_err(|e| e.to_string())?.motions)
     };
-    let measures = parcad_evaluation::checks::Measures { wall: &mut sweep, holes: &mut holes, motions: &mut motions };
+    let mut mechanism = |spec: &parcad_occt::protocol::MechanismSpec| {
+        let spec = parcad_occt::Perceive { mechanism: Some(spec.clone()), ..Default::default() };
+        let opts = parcad_occt::Options { timeout, ..Default::default() };
+        Ok(parcad_occt::perceive(doc, &spec, &opts).map_err(|e| e.to_string())?.mechanism)
+    };
+    let measures = parcad_evaluation::checks::Measures { wall: &mut sweep, holes: &mut holes, motions: &mut motions, mechanism: &mut mechanism };
     let report = parcad_evaluation::checks::judge(doc, &evaluated.snapshot, measures)?;
     Ok(Some(ChecksExpect::from(&report)))
 }
@@ -278,6 +283,7 @@ pub fn perceive(
         }),
         holes: false,
         motions: Vec::new(),
+        mechanism: None,
     };
     let opts = parcad_occt::Options { timeout, ..Default::default() };
     parcad_occt::perceive(doc, &spec, &opts).map_err(|e| e.to_string())
@@ -313,6 +319,7 @@ pub fn brep_available() -> std::result::Result<(), String> {
         requires: Vec::new(),
         brief: None,
         checks: Vec::new(),
+        mechanism: None,
     };
 
     match parcad_occt::evaluate(&doc, &parcad_occt::Options::default()) {

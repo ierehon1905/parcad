@@ -773,6 +773,13 @@ mod tests {
                 "return { base: box(40, 40, 5), lid: box(40, 40, 3).at(0, -42, 1.5), checks: [{ turns: { body: \"lid\", about: \"x\", at: [0, -21, 3], degrees: [0, 180] }, clearOf: [\"base\"], atLeast: 0.5 }] };"
                     .to_owned(),
             ),
+            (
+                "mechanism",
+                "return { base: box(40, 40, 5), lever: box(30, 6, 4).at(15, 0, 10), slider: box(6, 6, 6).at(34, 0, 3), \
+                 mechanism: { lever: { turns: { about: \"y\", at: [0, 0, 10], degrees: [0, -18] } }, slider: { slides: { along: \"x\", mm: [0, 5] } } }, \
+                 checks: [{ moves: \"all\", atLeast: 0.3 }] };"
+                    .to_owned(),
+            ),
         ];
         let stamped: Vec<&str> = cases.iter().map(|(id, _)| *id).collect();
         assert_eq!(stamped, parcad_core::envelope::FEATURES, "the host's feature list and this table differ");
