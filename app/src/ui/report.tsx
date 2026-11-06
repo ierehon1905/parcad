@@ -12,17 +12,23 @@
  * an empty viewport reads as a part that failed to draw. No placeholder either:
  * the error beside it already says why there is no part.
  *
- * Three lines, and the rest only when it is wrong. A green "watertight" on every
- * part is furniture you stop reading, which is what makes the red one easy to
- * miss on the part where it appears; same for the source links. Area and the tag
- * list went because the script beside the viewport already says both.
+ * Two lines, and the rest only when it is wrong. Always shown: the size, and
+ * every red line — a failing check, a part that won't print or prints
+ * nothing, an open shell, an envelope or budget overrun, a part standing on
+ * stubs, separate or broken bodies, interfering pairs, unused nodes, missing
+ * treatment curves. Everything else sits behind one chevron, closed by
+ * default, whose summary says how many bodies and whether print_check found
+ * anything: volume and topology, the tessellation, what it stands on, the
+ * bodies and pairs, an envelope it fits, print flags, the script's notes. A
+ * key holder showed seventeen lines over the part, and nobody reads furniture;
+ * a green line on every part is what makes the red one easy to miss.
  *
  * The z range sits on the size line because a size alone hides where the part
  * is: a stand whose pegs were placed on the wrong face measured a plausible
  * 45 mm tall and stood 5.5 mm below its own base, and nothing on screen said so.
- * The fourth line is the other half of that lesson — what the part stands on —
- * and turns red when that surface is under a tenth of the footprint, which is
- * what eighteen stubs look like and a slab never does.
+ * What it stands on is the other half of that lesson, and turns red when that
+ * surface is under a tenth of the footprint, which is what eighteen stubs look
+ * like and a slab never does.
  */
 
 import { signal } from "@preact/signals";
@@ -31,6 +37,32 @@ import { fmt } from "../engine";
 import * as S from "../state";
 import { Glass } from "./components/Glass";
 
+type Snapshot = NonNullable<typeof S.snapshot.value>;
+type Body = NonNullable<Snapshot["named_bodies"]>[number];
+type Pair = NonNullable<Snapshot["between_bodies"]>[number];
+
+const OPEN_KEY = "parcad.report.open";
+
+/** Whether the details are listed; remembered, so a panel someone opened stays open. */
+const detailsOpen = signal(remembered());
+
+function remembered(): boolean {
+  try {
+    return localStorage.getItem(OPEN_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function setOpen(open: boolean) {
+  detailsOpen.value = open;
+  try {
+    localStorage.setItem(OPEN_KEY, open ? "1" : "0");
+  } catch {
+    // Blocked storage: the panel still opens, it is only not remembered.
+  }
+}
+
 export function Report() {
   const snapshot = S.snapshot.value;
   if (!snapshot) return null;
@@ -38,8 +70,7 @@ export function Report() {
   const [sx, sy, sz] = snapshot.size;
   const [, , zLow] = snapshot.bounds_min;
   const [, , zHigh] = snapshot.bounds_max;
-  const dead = snapshot.unused_nodes ?? 0;
-  const linked = S.linkedEdgeCount.value;
+  const open = detailsOpen.value;
 
   return (
     <Glass
@@ -53,6 +84,117 @@ export function Report() {
         </Strong>{" "}
         mm · z <Strong>{fmt(zLow)}</Strong> to <Strong>{fmt(zHigh)}</Strong>
       </div>
+      <Wrong snapshot={snapshot} />
+      <button
+        type="button"
+        class="pointer-events-auto cursor-pointer text-left hover:text-ink"
+        onClick={() => setOpen(!open)}
+      >
+        {open ? "▾" : "▸"} <Summary snapshot={snapshot} />
+      </button>
+      {open && <Details snapshot={snapshot} />}
+    </Glass>
+  );
+}
+
+const brokenBody = (body: Body) => body.pieces > 1 || body.watertight === false;
+const interfering = (pair: Pair) => pair.verdict === "interfering";
+const onStubs = (snapshot: Snapshot) => (snapshot.stands_on?.footprint_fraction ?? 1) < 0.1;
+
+/** Every red line: shown whether the details are open or not. */
+function Wrong({ snapshot }: { snapshot: Snapshot }) {
+  const dead = snapshot.unused_nodes ?? 0;
+  const linked = S.linkedEdgeCount.value;
+  const envelope = snapshot.brief?.envelope;
+  const budget = snapshot.brief?.budget_cm3;
+
+  return (
+    <>
+      {snapshot.checks?.failed?.map((f) => (
+        <div class="text-bad" key={f.check}>
+          check fails: <Strong>{f.check}</Strong>
+          {f.measured_mm !== undefined && ` measured ${fmt(f.measured_mm)} mm`}
+          {f.measured_mm3 !== undefined && ` measured ${fmt(f.measured_mm3)} mm³`}
+        </div>
+      ))}
+      {snapshot.print_check?.failed?.map((f) => (
+        <div class="text-bad" key={f.what}>
+          {f.kind === "thin" ? "nothing prints" : "won't print"}: <Strong>{f.what}</Strong>
+        </div>
+      ))}
+      {snapshot.watertight === false && (
+        <div class="text-bad">NOT watertight — {snapshot.non_manifold_edges} bad edges</div>
+      )}
+      {envelope && !envelope.fits && (
+        <div class="text-bad">
+          {envelope.given.map((d) => fmt(d)).join(" × ")} envelope — over by{" "}
+          <Strong>{fmt(envelope.over_mm ?? 0)}</Strong> mm along {envelope.on}
+        </div>
+      )}
+      {budget && !budget.fits && (
+        <div class="text-bad">
+          <Strong>{fmt(budget.measured)}</Strong> cm³ against a {fmt(budget.given)} cm³ budget
+        </div>
+      )}
+      {onStubs(snapshot) && (
+        <div class="text-bad">
+          <StandsOn snapshot={snapshot} />
+        </div>
+      )}
+      {snapshot.bodies > (snapshot.named_bodies?.length ?? 1) && (
+        <div class="text-bad">
+          <Strong>{snapshot.bodies}</Strong> separate bodies
+          {snapshot.named_bodies && ` for ${snapshot.named_bodies.length} named`}
+        </div>
+      )}
+      {snapshot.named_bodies?.filter(brokenBody).map((body) => (
+        <BodyLine key={body.name} body={body} />
+      ))}
+      {snapshot.between_bodies?.filter(interfering).map((pair) => (
+        <PairLine key={`${pair.a}/${pair.b}`} pair={pair} />
+      ))}
+      {!linked && S.lastTreatments.value.length > 0 && (
+        <div class="text-bad">no final treatment curves are available</div>
+      )}
+      {dead > 0 && <div class="text-bad">{dead} unused nodes</div>}
+    </>
+  );
+}
+
+/** The chevron's line: how many bodies, and whether print_check found anything. */
+function Summary({ snapshot }: { snapshot: Snapshot }) {
+  const bodies = snapshot.named_bodies?.length ?? 0;
+  const print = snapshot.print_check;
+  const failed = print?.failed?.length ?? 0;
+  const flagged = print?.flagged?.length ?? 0;
+  return (
+    <>
+      {bodies > 1 ? (
+        <>
+          <Strong>{bodies}</Strong> bodies
+        </>
+      ) : (
+        "details"
+      )}
+      {print &&
+        (failed > 0 ? (
+          <span class="text-bad"> · print fails</span>
+        ) : flagged > 0 ? (
+          <>
+            {" · prints, "}
+            <Strong>{flagged}</Strong> flagged
+          </>
+        ) : (
+          " · prints clean"
+        ))}
+    </>
+  );
+}
+
+/** Behind the chevron: what is measured and right. */
+function Details({ snapshot }: { snapshot: Snapshot }) {
+  return (
+    <>
       <div>
         {snapshot.volume_mm3 !== undefined ? (
           <>
@@ -66,8 +208,7 @@ export function Report() {
         {snapshot.faces !== undefined && (
           <>
             {" · "}
-            <Strong>{snapshot.faces}</Strong> faces · <Strong>{snapshot.topological_edges}</Strong>{" "}
-            edges
+            <Strong>{snapshot.faces}</Strong> faces · <Strong>{snapshot.topological_edges}</Strong> edges
           </>
         )}
       </div>
@@ -101,158 +242,96 @@ export function Report() {
           mm, measured
         </div>
       )}
-      {snapshot.stands_on && (
-        <div class={snapshot.stands_on.footprint_fraction < 0.1 ? "text-bad" : undefined}>
-          stands on <Strong>{fmt(snapshot.stands_on.area_mm2)}</Strong> mm² in{" "}
-          <Strong>{snapshot.stands_on.patches}</Strong>{" "}
-          {snapshot.stands_on.patches === 1 ? "patch" : "patches"}
+      {snapshot.stands_on && !onStubs(snapshot) && (
+        <div>
+          <StandsOn snapshot={snapshot} />
         </div>
       )}
-      {snapshot.bodies > (snapshot.named_bodies?.length ?? 1) && (
-        <div class="text-bad">
-          <Strong>{snapshot.bodies}</Strong> separate bodies
-          {snapshot.named_bodies && ` for ${snapshot.named_bodies.length} named`}
-        </div>
-      )}
-      {snapshot.named_bodies && <Bodies snapshot={snapshot} />}
-      {snapshot.watertight === false && (
-        <div class="text-bad">
-          NOT watertight — {snapshot.non_manifold_edges} bad edges
-        </div>
-      )}
-      {!linked && S.lastTreatments.value.length > 0 && (
-        <div class="text-bad">no final treatment curves are available</div>
-      )}
-      {dead > 0 && <div class="text-bad">{dead} unused nodes</div>}
-      {snapshot.brief?.envelope && (
-        <div class={snapshot.brief.envelope.fits ? undefined : "text-bad"}>
-          {snapshot.brief.envelope.given.map((d) => fmt(d)).join(" × ")} envelope
-          {snapshot.brief.envelope.fits ? (
-            " — fits"
-          ) : (
-            <>
-              {" — over by "}
-              <Strong>{fmt(snapshot.brief.envelope.over_mm ?? 0)}</Strong> mm along{" "}
-              {snapshot.brief.envelope.on}
-            </>
-          )}
-        </div>
-      )}
-      {snapshot.brief?.budget_cm3 && !snapshot.brief.budget_cm3.fits && (
-        <div class="text-bad">
-          <Strong>{fmt(snapshot.brief.budget_cm3.measured)}</Strong> cm³ against a{" "}
-          {fmt(snapshot.brief.budget_cm3.given)} cm³ budget
-        </div>
-      )}
-      {snapshot.checks?.failed?.map((f) => (
-        <div class="text-bad" key={f.check}>
-          check fails: <Strong>{f.check}</Strong>
-          {f.measured_mm !== undefined && ` measured ${fmt(f.measured_mm)} mm`}
-          {f.measured_mm3 !== undefined && ` measured ${fmt(f.measured_mm3)} mm³`}
-        </div>
+      {snapshot.named_bodies?.filter((body) => !brokenBody(body)).map((body) => (
+        <BodyLine key={body.name} body={body} />
       ))}
-      {snapshot.print_check?.failed?.map((f) => (
-        <div class="text-bad" key={f.what}>
-          {f.kind === "thin" ? "nothing prints" : "won't print"}: <Strong>{f.what}</Strong>
-        </div>
+      {snapshot.between_bodies?.filter((pair) => !interfering(pair)).map((pair) => (
+        <PairLine key={`${pair.a}/${pair.b}`} pair={pair} />
       ))}
+      {snapshot.brief?.envelope?.fits && (
+        <div>{snapshot.brief.envelope.given.map((d) => fmt(d)).join(" × ")} envelope — fits</div>
+      )}
       {snapshot.print_check?.flagged?.map((f) => (
         <div key={f.what}>print: {f.what}</div>
       ))}
       {snapshot.notes && (
         <div>
           {snapshot.notes.source}:{" "}
-          {snapshot.notes.values.map((n) => `${n.label} ${Array.isArray(n.value) ? n.value.join(", ") : n.value}`).join(" · ")}
+          {snapshot.notes.values.map((n) => `${n.label} ${noteValue(n.value)}`).join(" · ")}
           {snapshot.notes.dropped ? ` · ${snapshot.notes.dropped} more dropped` : ""}
         </div>
       )}
-    </Glass>
+    </>
   );
 }
 
-/** Whether every body and pair is listed, or only the wrong ones. */
-const bodiesOpen = signal(false);
+function noteValue(value: number | string | number[]): string {
+  if (typeof value === "number") return fmt(value);
+  return Array.isArray(value) ? value.map(fmt).join(", ") : value;
+}
 
-type Snapshot = NonNullable<typeof S.snapshot.value>;
-
-/**
- * The pairs grow as n², so seven bodies were twenty-eight lines over the part.
- * Collapsed, one line counts them and only a broken body or an interfering pair
- * is listed; the chevron lists the rest.
- */
-function Bodies({ snapshot }: { snapshot: Snapshot }) {
-  const bodies = snapshot.named_bodies ?? [];
-  const pairs = snapshot.between_bodies ?? [];
-  const brokenBody = (body: (typeof bodies)[number]) => body.pieces > 1 || body.watertight === false;
-  const open = bodiesOpen.value;
-  // A reference body is listed whenever the list is open, never as broken.
-  const shownBodies = open ? bodies : bodies.filter((body) => !body.reference && brokenBody(body));
-  const shownPairs = open ? pairs : pairs.filter((pair) => pair.verdict === "interfering");
-  const interfering = pairs.filter((pair) => pair.verdict === "interfering").length;
-
+function StandsOn({ snapshot }: { snapshot: Snapshot }) {
+  const stands = snapshot.stands_on!;
   return (
     <>
-      <button
-        type="button"
-        class="pointer-events-auto cursor-pointer text-left hover:text-ink"
-        onClick={() => (bodiesOpen.value = !open)}
-      >
-        {open ? "▾" : "▸"} <Strong>{bodies.length}</Strong> bodies ·{" "}
-        {interfering > 0 ? (
-          <span class="text-bad">
-            <Strong>{interfering}</Strong> of {pairs.length} pairs interfering
-          </span>
-        ) : (
-          <>
-            <Strong>{pairs.length}</Strong> {pairs.length === 1 ? "pair" : "pairs"}, none interfering
-          </>
-        )}
-      </button>
-      {shownBodies.map((body) => (
-        <div key={body.name} class={brokenBody(body) ? "text-bad" : undefined}>
-          {body.name}
-          {body.reference && " (reference)"}:{" "}
-          {body.volume_mm3 !== undefined ? (
-            <>
-              <Strong>{fmt(body.volume_mm3)}</Strong> mm³
-            </>
-          ) : (
-            "a surface"
-          )}
-          {body.pieces > 1 && ` in ${body.pieces} pieces`}
-        </div>
-      ))}
-      {shownPairs.map((pair) => (
-        <div key={`${pair.a}/${pair.b}`} class={pair.verdict === "interfering" ? "text-bad" : undefined}>
-          {pair.a} · {pair.b}: {pair.verdict}
-          {pair.verdict !== "touching" && pair.clearance_mm !== undefined && (
-            <>
-              {" by "}
-              <Strong>{fmt(pair.clearance_mm)}</Strong> mm
-            </>
-          )}
-          {pair.verdict === "interfering" && (
+      stands on <Strong>{fmt(stands.area_mm2)}</Strong> mm² in <Strong>{stands.patches}</Strong>{" "}
+      {stands.patches === 1 ? "patch" : "patches"}
+    </>
+  );
+}
+
+function BodyLine({ body }: { body: Body }) {
+  return (
+    <div class={brokenBody(body) ? "text-bad" : undefined}>
+      {body.name}
+      {body.reference && " (reference)"}:{" "}
+      {body.volume_mm3 !== undefined ? (
+        <>
+          <Strong>{fmt(body.volume_mm3)}</Strong> mm³
+        </>
+      ) : (
+        "a surface"
+      )}
+      {body.pieces > 1 && ` in ${body.pieces} pieces`}
+    </div>
+  );
+}
+
+function PairLine({ pair }: { pair: Pair }) {
+  return (
+    <div class={interfering(pair) ? "text-bad" : undefined}>
+      {pair.a} · {pair.b}: {pair.verdict}
+      {pair.verdict !== "touching" && pair.clearance_mm !== undefined && (
+        <>
+          {" by "}
+          <Strong>{fmt(pair.clearance_mm)}</Strong> mm
+        </>
+      )}
+      {interfering(pair) && (
+        <>
+          {", "}
+          <Strong>{fmt(pair.interference_mm3)}</Strong> mm³ shared
+          {pair.depth_mm !== undefined && (
             <>
               {", "}
-              <Strong>{fmt(pair.interference_mm3)}</Strong> mm³ shared
-              {pair.depth_mm !== undefined && (
-                <>
-                  {", "}
-                  <Strong>{fmt(pair.depth_mm)}</Strong> mm deep
-                </>
-              )}
+              <Strong>{fmt(pair.depth_mm)}</Strong> mm deep
             </>
           )}
-          {pair.verdict === "touching" && pair.contact_mm2 !== undefined && (
-            <>
-              {" over "}
-              <Strong>{fmt(pair.contact_mm2)}</Strong> mm²
-              {` in ${pair.contact_patches ?? 0} ${pair.contact_patches === 1 ? "patch" : "patches"}`}
-            </>
-          )}
-        </div>
-      ))}
-    </>
+        </>
+      )}
+      {pair.verdict === "touching" && pair.contact_mm2 !== undefined && (
+        <>
+          {" over "}
+          <Strong>{fmt(pair.contact_mm2)}</Strong> mm²
+          {` in ${pair.contact_patches ?? 0} ${pair.contact_patches === 1 ? "patch" : "patches"}`}
+        </>
+      )}
+    </div>
   );
 }
 
