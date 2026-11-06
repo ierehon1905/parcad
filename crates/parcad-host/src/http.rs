@@ -945,6 +945,54 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A pasted image link is a "Load image" placeholder in the Claude apps,
+    /// which draw the part in 3D themselves: a view offers `markdown` only to
+    /// a client that does not declare the viewer's media type.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn a_view_offers_an_image_line_only_to_a_chat_that_cannot_draw_the_part() {
+        let (dir, acme, _, port) = two_accounts();
+        let iso = |capabilities: serde_json::Value| {
+            let call = serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {
+                    "name": "evaluate_part",
+                    "arguments": { "script": "return box(10, 20, 30);", "views": ["iso"] },
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": capabilities,
+                    },
+                },
+            });
+            let reply = exchange(
+                port,
+                "POST",
+                "/mcp",
+                &[
+                    ("Content-Type", "application/json"),
+                    ("Accept", "application/json, text/event-stream"),
+                    ("MCP-Protocol-Version", "2026-07-28"),
+                    ("Mcp-Method", "tools/call"),
+                    ("Mcp-Name", "evaluate_part"),
+                    ("Host", PUBLIC_HOST),
+                    ("Authorization", &bearer(&acme)),
+                ],
+                &call.to_string(),
+            );
+            assert_eq!(reply.status, 200, "{}", reply.body);
+            let message: serde_json::Value = serde_json::from_str(&reply.body).expect("a JSON reply");
+            message["result"]["structuredContent"]["views"][0].clone()
+        };
+
+        let plain = iso(serde_json::json!({}));
+        assert!(plain["markdown"].as_str().is_some_and(|line| line.starts_with("![iso view](https://")), "{plain}");
+        let apps = serde_json::json!({ "extensions": { "io.modelcontextprotocol/ui": { "mimeTypes": ["text/html;profile=mcp-app"] } } });
+        let drawing = iso(apps);
+        assert!(drawing.get("markdown").is_none(), "{drawing}");
+        assert!(drawing["url"].as_str().is_some(), "the picture is still there to link: {drawing}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_session_streams_each_reply_with_no_empty_event_before_it() {
         let port = on_a_spare_port(None);

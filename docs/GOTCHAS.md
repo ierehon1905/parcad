@@ -2103,6 +2103,18 @@ unknown tool stays a protocol error.
 `a_refusal_reaches_the_model_as_a_tool_result_naming_the_fix` in `http.rs`
 holds it.
 
+### A pasted image is a placeholder in the Claude apps
+
+claude.ai and the Claude phone app do not load an image a reply links to from
+another host: each `![view](https://…)` a model pastes is a black "Load image"
+box the user has to tap, and on 2026-11-06 the tap opened a download sheet,
+because renders were served as `attachment` (they are `inline` now). Those
+clients draw open_project's part in 3D themselves, so a view carries
+`markdown` only for a client that does not declare the viewer's media type;
+`DRAWS_THE_PART` in `mcp.rs` carries that per call. Codex and Claude Code,
+which declare nothing, still get the line, and `show-me-the-part` still
+measures that they paste it.
+
 ### New page script against an old host module reads nonsense
 
 Under `vite --mode web`, rebuilding the host module while a page is open
