@@ -2072,6 +2072,21 @@ the same name is the `url` the MCP status reports. The end-to-end test in
 `http.rs` sends one request with a `Host` the list was not told and expects
 the 403, so a change to the list's defaults fails there rather than on a server.
 
+### rmcp opens every SSE reply with an empty event
+
+rmcp 3.1's `StreamableHttpServerConfig::default()` keeps sessions and sets
+`sse_retry`, so every SSE reply on a session begins with a priming event,
+`data: ` with nothing after it, for a client to resume from. The MCP Python SDK
+before 1.25 parses each event as JSON-RPC and fails the handshake on it ("Error
+parsing SSE message"), while 1.25 and later skip it. Measured 2026-11-06 against
+the hosted server: 1.22 failed, 1.25 and 2.3 connected. Nothing here resumes a
+stream, so `mcp::transport` sets both settings that send it to `None`: the
+service config's `sse_retry`, which primes the handshake, and the session
+manager's `session_config.sse_retry`, which primes every reply after it. The
+session stays, because the window's count of connected agents is kept per
+session. `a_session_streams_each_reply_with_no_empty_event_before_it` in
+`http.rs` holds it.
+
 ### New page script against an old host module reads nonsense
 
 Under `vite --mode web`, rebuilding the host module while a page is open

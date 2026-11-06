@@ -134,7 +134,18 @@ fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router
     let guarded = api()
         .nest_service("/mcp", mcp::service(assets, Some(accounts.links().host().authority())))
         .layer(axum::middleware::from_fn_with_state(Arc::new(accounts), authenticate));
-    Router::new().route("/api/health", get(health)).merge(guarded)
+    // Unguarded, so a client looking for OAuth metadata hears that there is
+    // none rather than a challenge it takes to mean "sign in".
+    Router::new().route("/api/health", get(health)).merge(guarded).fallback(no_route)
+}
+
+async fn no_route() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        "no such route on a hosted parcad. MCP is at /mcp and signs in with \
+         `Authorization: Bearer <token>`, not OAuth: ask the server's operator for a token.",
+    )
+        .into_response()
 }
 
 /// The routes behind the window and, hosted, behind a bearer. Generic in the
@@ -923,6 +934,50 @@ mod tests {
         let bare = route.split_once('?').unwrap().0;
         assert_eq!(exchange(port, "GET", bare, &[("Authorization", &bearer(&acme))], "").bytes, fetched.bytes);
         assert_eq!(exchange(port, "GET", bare, &[("Authorization", &bearer(&bolt))], "").status, 404);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_session_streams_each_reply_with_no_empty_event_before_it() {
+        let port = on_a_spare_port(None);
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": { "name": "mcp-python-1.22", "version": "0" },
+            },
+        })
+        .to_string();
+        let headers = [("Content-Type", "application/json"), ("Accept", "application/json, text/event-stream")];
+        let only_event = |reply: &Reply| -> serde_json::Value {
+            assert_eq!(reply.status, 200, "{}", reply.body);
+            let data: Vec<&str> = reply.body.lines().filter_map(|line| line.strip_prefix("data:")).map(str::trim).collect();
+            assert_eq!(data.len(), 1, "one event, the reply, and no priming event before it: {:?}", reply.body);
+            serde_json::from_str(data[0]).expect("the event is the JSON-RPC reply")
+        };
+
+        let handshake = exchange(port, "POST", "/mcp", &headers, &initialize);
+        let session = handshake.header("mcp-session-id").expect("a 2025-11-25 client still gets a session").to_string();
+        assert_eq!(only_event(&handshake)["result"]["serverInfo"]["name"], "parcad");
+
+        let in_session = [headers[0], headers[1], ("Mcp-Session-Id", session.as_str()), ("Mcp-Protocol-Version", "2025-11-25")];
+        let initialized = exchange(port, "POST", "/mcp", &in_session, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+        assert_eq!(initialized.status, 202, "{}", initialized.body);
+        let listed = exchange(port, "POST", "/mcp", &in_session, r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        assert!(only_event(&listed)["result"]["tools"].as_array().is_some_and(|tools| !tools.is_empty()));
+    }
+
+    #[test]
+    fn a_hosted_host_says_it_has_no_oauth_without_asking_for_a_token() {
+        let (dir, _, _, port) = two_accounts();
+        for path in ["/.well-known/oauth-protected-resource", "/.well-known/oauth-protected-resource/mcp", "/.well-known/oauth-authorization-server"] {
+            let reply = exchange(port, "GET", path, &[], "");
+            assert_eq!(reply.status, 404, "{path}: {}", reply.body);
+            assert_eq!(reply.header("www-authenticate"), None, "{path} is not a sign-in prompt");
+            assert!(reply.body.contains("not OAuth"), "{path}: {}", reply.body);
+        }
+        assert_eq!(exchange(port, "GET", "/api/projects", &[], "").status, 401, "a real route still wants its bearer");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

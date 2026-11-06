@@ -163,6 +163,12 @@ pub fn transport(assets: Arc<dyn Assets>, public_host: Option<&str>) -> Transpor
     // A tool call answers once; there is nothing to stream, and a plain JSON
     // reply is far easier to drive from a shell when something is wrong.
     config.json_response = true;
+    // An empty `data:` priming event opens every SSE reply otherwise, and an
+    // MCP Python SDK before 1.25 fails parsing it (docs/GOTCHAS.md). The
+    // handshake reads the first setting, every later call the session's.
+    config.sse_retry = None;
+    let mut sessions = rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default();
+    sessions.session_config.sse_retry = None;
     if let Some(host) = public_host {
         config.allowed_hosts.push(host.to_string());
     }
@@ -170,7 +176,7 @@ pub fn transport(assets: Arc<dyn Assets>, public_host: Option<&str>) -> Transpor
 
     Transport::new(
         move || Ok(Parcad::new().with_assets(assets.clone()).with_capability(capability)),
-        Default::default(),
+        Arc::new(sessions),
         config,
     )
 }
