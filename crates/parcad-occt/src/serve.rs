@@ -288,6 +288,10 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
                 breadcrumb("moving a body through its range");
                 answer.motions = crate::motion::measure(&part, &spec.motions)?;
             }
+            if let Some(mechanism) = &spec.mechanism {
+                breadcrumb("driving the mechanism through its range");
+                answer.mechanism = crate::motion::measure_mechanism(&part, mechanism)?;
+            }
             Ok(answer)
         });
         return match answer {

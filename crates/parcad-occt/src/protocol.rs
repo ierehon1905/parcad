@@ -6,6 +6,7 @@
 
 use parcad_core::graph::Doc;
 use parcad_core::measure::MassProperties;
+use parcad_core::mechanism::Linkage;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -69,6 +70,85 @@ pub struct Perceive {
     /// `slides` check reads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub motions: Vec<MotionSpec>,
+    /// Move every body of a mechanism along its drive at once and measure
+    /// what its `moves` and `pushes` checks read, pair by pair over the
+    /// whole drive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mechanism: Option<MechanismSpec>,
+}
+
+/// A mechanism and the checks to measure over it: the linkage already
+/// resolved, the pairs already chosen, so the kernel decides nothing about
+/// what a check means.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MechanismSpec {
+    pub linkage: Linkage,
+    pub checks: Vec<MechanismCheck>,
+}
+
+/// One check over the drive.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum MechanismCheck {
+    /// Every pair keeps at least this far apart at every drive value.
+    Moves { pairs: Vec<[String; 2]>, at_least_mm: f64 },
+    /// The pair never opens wider than this, nor bites deeper, at any
+    /// drive value.
+    Pushes { pair: [String; 2], within_mm: f64 },
+}
+
+/// What one mechanism check measured, pass or fail: the worst pair and the
+/// drive value it is worst at, every number taken at a pose the kernel put
+/// the bodies in.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct MechanismMeasure {
+    /// For `moves`: the least clearance of any pair at any drive value;
+    /// absent when a pair interferes or nothing was measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub least: Option<PairClearance>,
+    /// For `moves`: a clearance proven for every pair at every drive value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certified_above_mm: Option<f64>,
+    /// The deepest any measured pose has one body reaching into the other:
+    /// for `moves` the pair that hit, for `pushes` the deepest bite.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deepest: Option<PairInterference>,
+    /// For `pushes`: the widest the gap was measured at any drive value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widest_gap: Option<PairClearance>,
+    /// For `pushes`: a gap proven never exceeded, and a depth proven never
+    /// exceeded, over the whole drive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certified_gap_below_mm: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub certified_depth_below_mm: Option<f64>,
+    /// Why the sweep could not finish within its budget, when it could not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uncertified: Option<String>,
+    /// How many exact measurements the sweep took.
+    pub measurements: usize,
+}
+
+/// A clearance between two bodies at one drive value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairClearance {
+    pub a: String,
+    pub b: String,
+    pub clearance_mm: f64,
+    pub at_drive: f64,
+    /// A point on `a` at that pose, then one on `b`, in the part's frame.
+    pub closest_mm: [[f64; 3]; 2],
+}
+
+/// An interference between two bodies at one drive value.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairInterference {
+    pub a: String,
+    pub b: String,
+    pub depth_mm: f64,
+    pub at_drive: f64,
+    /// Where the bite is deepest, in the part's frame at that pose.
+    pub deepest_mm: [f64; 3],
 }
 
 /// One body's motion, and what to measure along it.
@@ -244,6 +324,9 @@ pub struct Perceived {
     /// One answer per motion asked, in order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub motions: Vec<MotionMeasure>,
+    /// One answer per mechanism check asked, in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mechanism: Vec<MechanismMeasure>,
 }
 
 /// One round hole of the finished part, found by its circular rims: the
