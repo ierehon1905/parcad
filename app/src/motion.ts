@@ -1,26 +1,37 @@
 /**
- * A part's declared motions as something to scrub: one per distinct hinge or
- * slide a `turns` or `slides` check describes, and the transform it puts its
- * body in at any value of its range. Arithmetic on the reply's own resolved
- * axis, point and range — `MotionReport` — never on the script.
+ * A part's declared motions as something to scrub: mechanisms, each one drive
+ * that moves one or more bodies by a turn or a slide, possibly carried by
+ * another, and the transform each body is in at any drive value. Arithmetic
+ * on the reply's own resolved axes, points and knots — `MotionReport` and the
+ * snapshot's `mechanism` — never on the script.
  */
 
-import type { MotionReport } from "./state";
+import type { EvaluationSnapshot, MechanismReport, MotionReport } from "./state";
 
 type Vec3 = [number, number, number];
 
-/** One way a body moves, merged from every check that describes it. */
-export interface Motion {
+/** One body's share of a mechanism: a turn or a slide by an amount the drive sets, or a ride on another body. */
+export interface Move {
   body: string;
-  kind: "turn" | "slide";
+  kind: "turn" | "slide" | "rides";
   /** A unit axis for a turn, a unit direction for a slide. */
   axis: Vec3;
   /** A point the turn's axis passes through; the origin for a slide. */
   at: Vec3;
-  /** The drawn pose's end of the range first, in degrees or mm: what a slider runs from and to. */
-  from: number;
-  to: number;
-  /** Where a check on this motion failed: the pose its report names. */
+  /** The body this one is carried by: its pose is that body's, then its own joint. */
+  parent?: string;
+  /** `[drive, value]` in degrees or mm, the drive increasing; straight between. */
+  knots: [number, number][];
+}
+
+/** Bodies that move as one, on one drive: one slider's worth. */
+export interface Mechanism {
+  /** What the slider says it moves. */
+  label: string;
+  /** The drive's range, low to high. */
+  drive: [number, number];
+  moves: Move[];
+  /** Drive values where a check over it fails. */
   failsAt: number[];
 }
 
@@ -28,36 +39,46 @@ export interface Motion {
 const SAME = 1e-6;
 
 /**
- * The motions a part declares, one per body, kind, axis and point, in the
- * order the checks first name them. Every check over the same hinge widens
- * one range rather than adding a second slider for the same pin.
+ * The single-body motions a part's checks declare, one mechanism per body,
+ * kind, axis and point, in the order the checks first name them. Every check
+ * over the same hinge widens one range rather than adding a second slider for
+ * the same pin, and the drive starts at the drawn pose.
  */
-export function motionsOf(reports: MotionReport[]): Motion[] {
-  const motions: (Motion & { lo: number; hi: number })[] = [];
+export function motionsOf(reports: MotionReport[]): Mechanism[] {
+  const found: { move: Move; lo: number; hi: number; fails: number[] }[] = [];
   for (const report of reports) {
     const kind = report.turn ? "turn" : "slide";
     const axis = report.turn?.axis ?? report.slide?.direction;
     const range = report.turn?.degrees ?? report.slide?.mm;
     if (!axis || !range) continue;
     const at: Vec3 = report.turn?.at ?? [0, 0, 0];
-    let motion = motions.find(
-      (m) => m.body === report.body && m.kind === kind && near(m.axis, axis) && (kind === "slide" || onAxis(m, at)),
+    let entry = found.find(
+      ({ move }) =>
+        move.body === report.body && move.kind === kind && near(move.axis, axis) && (kind === "slide" || onAxis(move, at)),
     );
-    if (!motion) {
-      motion = { body: report.body, kind, axis, at, from: 0, to: 0, lo: 0, hi: 0, failsAt: [] };
-      motions.push(motion);
+    if (!entry) {
+      entry = { move: { body: report.body, kind, axis, at, knots: [] }, lo: 0, hi: 0, fails: [] };
+      found.push(entry);
     }
-    motion.lo = Math.min(motion.lo, ...range);
-    motion.hi = Math.max(motion.hi, ...range);
+    entry.lo = Math.min(entry.lo, ...range);
+    entry.hi = Math.max(entry.hi, ...range);
     const worst = report.at_degrees ?? report.at_mm;
-    if (report.verdict !== "passed" && worst !== undefined) motion.failsAt.push(worst);
+    if (report.verdict !== "passed" && worst !== undefined) entry.fails.push(worst);
   }
-  return motions.map(({ lo, hi, ...motion }) => {
-    // The drawn pose is 0, and the slider starts there: a hinge drawn open
-    // that closes over [0, -180] runs from 0 to -180, not the other way.
-    const fromTop = hi === 0 && lo < 0;
-    return { ...motion, from: fromTop ? hi : lo, to: fromTop ? lo : hi };
-  });
+  return found
+    .filter(({ lo, hi }) => lo !== hi)
+    .map(({ move, lo, hi, fails }) => {
+      // The drawn pose is 0, and the drive starts there: a hinge drawn open
+      // that closes over [0, -180] runs from 0 to -180, not the other way.
+      const [from, to] = hi === 0 && lo < 0 ? [hi, lo] : [lo, hi];
+      const ways = found.filter((other) => other.move.body === move.body).length;
+      return {
+        label: ways === 1 ? move.body : `${move.body} ${axisName(move.axis)}`,
+        drive: [0, 1] as [number, number],
+        moves: [{ ...move, knots: [[0, from], [1, to]] as [number, number][] }],
+        failsAt: fails.map((value) => (value - from) / (to - from)),
+      };
+    });
 }
 
 function near(a: Vec3, b: Vec3): boolean {
@@ -65,20 +86,66 @@ function near(a: Vec3, b: Vec3): boolean {
 }
 
 /** Whether `p` lies on `m`'s axis: two checks may name different points of one pin. */
-function onAxis(m: Motion, p: Vec3): boolean {
+function onAxis(m: Move, p: Vec3): boolean {
   const d: Vec3 = [p[0] - m.at[0], p[1] - m.at[1], p[2] - m.at[2]];
   const along = d[0] * m.axis[0] + d[1] * m.axis[1] + d[2] * m.axis[2];
   return Math.hypot(d[0] - along * m.axis[0], d[1] - along * m.axis[1], d[2] - along * m.axis[2]) <= 1e-3;
 }
 
+/** `x`, `-y` and so on for a principal axis; nothing for any other. */
+function axisName(axis: Vec3): string {
+  const principal = axis.findIndex((v) => Math.abs(Math.abs(v) - 1) < SAME);
+  return principal < 0 ? "" : `${axis[principal] < 0 ? "−" : ""}${"xyz"[principal]}`;
+}
+
 /**
- * Row-major 4×4 taking the body as drawn to `value` along `motion` — the same
+ * The part's mechanism as the snapshot resolves it, one slider for all of it,
+ * named for the first body that moves; `undefined` when it declares none.
+ */
+export function mechanismOf(snapshot: Pick<EvaluationSnapshot, "mechanism" | "checks">): Mechanism | undefined {
+  const declared = snapshot.mechanism;
+  if (!declared || declared.joints.length === 0) return undefined;
+  const moves: Move[] = declared.joints.map((joint) => ({
+    body: joint.body,
+    kind: joint.kind,
+    axis: joint.axis ?? [0, 0, 1],
+    at: joint.at ?? [0, 0, 0],
+    ...(joint.parent !== undefined && { parent: joint.parent }),
+    knots: joint.knots ?? [],
+  }));
+  const failing = (report: MechanismReport) => report.verdict !== "passed" && report.at_drive !== undefined;
+  return {
+    label: (moves.find((move) => move.kind !== "rides") ?? moves[0]).body,
+    drive: declared.drive,
+    moves,
+    failsAt: (snapshot.checks?.mechanism ?? []).filter(failing).map((report) => report.at_drive!),
+  };
+}
+
+/** The move's degrees or mm at drive value `d`, held at the ends; 0 for a ride. */
+export function valueAt(move: Move, d: number): number {
+  const knots = move.knots;
+  if (move.kind === "rides" || knots.length === 0) return 0;
+  if (d <= knots[0][0]) return knots[0][1];
+  for (let i = 1; i < knots.length; i++) {
+    const [d1, v1] = knots[i];
+    if (d <= d1) {
+      const [d0, v0] = knots[i - 1];
+      return v0 + ((v1 - v0) * (d - d0)) / (d1 - d0);
+    }
+  }
+  return knots[knots.length - 1][1];
+}
+
+/**
+ * Row-major 4×4 taking the body as drawn to `value` along `move` — the same
  * matrix a report's `worst_pose` is, at its own pose: a right-handed turn about
  * the axis through `at`, or a move along the direction.
  */
-export function poseAt(motion: Motion, value: number): number[] {
-  const [x, y, z] = motion.axis;
-  if (motion.kind === "slide") {
+export function poseAt(move: Move, value: number): number[] {
+  const [x, y, z] = move.axis;
+  if (move.kind === "rides") return IDENTITY;
+  if (move.kind === "slide") {
     return [1, 0, 0, x * value, 0, 1, 0, y * value, 0, 0, 1, z * value, 0, 0, 0, 1];
   }
   const angle = (value * Math.PI) / 180;
@@ -90,21 +157,39 @@ export function poseAt(motion: Motion, value: number): number[] {
     [t * x * y + s * z, t * y * y + c, t * y * z - s * x],
     [t * x * z - s * y, t * y * z + s * x, t * z * z + c],
   ];
-  const [px, py, pz] = motion.at;
-  const shift = r.map((row, i) => motion.at[i] - (row[0] * px + row[1] * py + row[2] * pz));
+  const [px, py, pz] = move.at;
+  const shift = r.map((row, i) => move.at[i] - (row[0] * px + row[1] * py + row[2] * pz));
   return [...r[0], shift[0], ...r[1], shift[1], ...r[2], shift[2], 0, 0, 0, 1];
 }
 
+const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
 /**
- * Each moving body's pose with every motion at its value, applied in the
- * order the checks declared them. Bodies that do not move are absent.
+ * Each moving body's pose with every mechanism at its drive value: a body's
+ * own joint first, then everything the body carrying it does; a body moved by
+ * more than one mechanism takes them in order. Bodies that do not move are
+ * absent.
  */
-export function bodyPoses(motions: Motion[], values: number[]): Map<string, number[]> {
+export function bodyPoses(mechanisms: Mechanism[], drives: number[]): Map<string, number[]> {
   const poses = new Map<string, number[]>();
-  motions.forEach((motion, i) => {
-    const pose = poseAt(motion, values[i] ?? 0);
-    const before = poses.get(motion.body);
-    poses.set(motion.body, before ? multiply(pose, before) : pose);
+  mechanisms.forEach((mechanism, i) => {
+    const drive = drives[i] ?? mechanism.drive[0];
+    const within = new Map<string, number[]>();
+    const poseOf = (body: string, seen: Set<string>): number[] => {
+      const known = within.get(body);
+      if (known) return known;
+      const move = mechanism.moves.find((m) => m.body === body);
+      if (!move || seen.has(body)) return IDENTITY;
+      const own = poseAt(move, valueAt(move, drive));
+      const carried = move.parent === undefined ? own : multiply(poseOf(move.parent, new Set(seen).add(body)), own);
+      within.set(body, carried);
+      return carried;
+    };
+    for (const move of mechanism.moves) {
+      const pose = poseOf(move.body, new Set());
+      const before = poses.get(move.body);
+      poses.set(move.body, before ? multiply(pose, before) : pose);
+    }
   });
   return poses;
 }

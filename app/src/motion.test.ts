@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { bodyPoses, motionsOf, poseAt } from "./motion";
+import { bodyPoses, mechanismOf, motionsOf, poseAt, valueAt } from "./motion";
 import type { MotionReport } from "./state";
 
 /** The lid's three checks as eval/scripts/hinged-box.js's build reports them. */
@@ -41,7 +41,9 @@ describe("motionsOf", () => {
   test("checks on one pin are one motion over every range they name, from the drawn pose", () => {
     const [motion, ...rest] = motionsOf(lid);
     expect(rest).toEqual([]);
-    expect(motion).toMatchObject({ body: "lid", kind: "turn", from: 0, to: -180, failsAt: [-165.85] });
+    expect(motion.label).toBe("lid");
+    expect(motion.moves).toMatchObject([{ body: "lid", kind: "turn", knots: [[0, 0], [1, -180]] }]);
+    expect(motion.failsAt[0]).toBeCloseTo(165.85 / 180, 12);
   });
 
   test("another point on the same pin is the same motion", () => {
@@ -58,31 +60,31 @@ describe("motionsOf", () => {
       measurements: 1,
     });
     const motions = motionsOf([slide([0, 1, 0], [0, 60]), slide([0, 0, 1], [2, 5]), slide([0, 1, 0], [-10, 0])]);
-    expect(motions.map((m) => [m.axis, m.from, m.to])).toEqual([
-      [[0, 1, 0], -10, 60],
-      [[0, 0, 1], 0, 5],
+    expect(motions.map((m) => [m.label, m.moves[0].axis, m.moves[0].knots])).toEqual([
+      ["drawer y", [0, 1, 0], [[0, -10], [1, 60]]],
+      ["drawer z", [0, 0, 1], [[0, 0], [1, 5]]],
     ]);
   });
 });
 
 describe("poseAt", () => {
   test("is the kernel's own transform at the pose it measured", () => {
-    const [motion] = motionsOf(lid);
-    const pose = poseAt(motion, -170);
+    const [move] = motionsOf(lid)[0].moves;
+    const pose = poseAt(move, valueAt(move, 170 / 180));
     lid[0].worst_pose!.forEach((value, i) => expect(pose[i]).toBeCloseTo(value, 12));
   });
 
   test("leaves the pin where it is", () => {
-    const [motion] = motionsOf(lid);
-    const pose = poseAt(motion, -97);
+    const [move] = motionsOf(lid)[0].moves;
+    const pose = poseAt(move, -97);
     const [x, y, z] = hinge.at;
     const moved = [0, 1, 2].map((row) => pose[row * 4] * x + pose[row * 4 + 1] * y + pose[row * 4 + 2] * z + pose[row * 4 + 3]);
     moved.forEach((value, i) => expect(value).toBeCloseTo(hinge.at[i], 12));
   });
 
   test("slides along the direction by the value", () => {
-    const [motion] = motionsOf([{ check: "", verdict: "passed", body: "drawer", slide: { direction: [0, 1, 0], mm: [0, 60] }, measurements: 1 }]);
-    expect(poseAt(motion, 35)).toEqual([1, 0, 0, 0, 0, 1, 0, 35, 0, 0, 1, 0, 0, 0, 0, 1]);
+    const [move] = motionsOf([{ check: "", verdict: "passed", body: "drawer", slide: { direction: [0, 1, 0], mm: [0, 60] }, measurements: 1 }])[0].moves;
+    expect(poseAt(move, 35)).toEqual([1, 0, 0, 0, 0, 1, 0, 35, 0, 0, 1, 0, 0, 0, 0, 1]);
   });
 });
 
@@ -95,8 +97,62 @@ describe("bodyPoses", () => {
       slide: { direction, mm: [0, 60] },
       measurements: 1,
     });
-    const poses = bodyPoses(motionsOf([slide([0, 1, 0]), slide([0, 0, 1])]), [30, 4]);
+    const poses = bodyPoses(motionsOf([slide([0, 1, 0]), slide([0, 0, 1])]), [0.5, 4 / 60]);
     expect(poses.get("drawer")).toEqual([1, 0, 0, 0, 0, 1, 0, 30, 0, 0, 1, 4, 0, 0, 0, 1]);
     expect(poses.has("frame")).toBe(false);
+  });
+});
+
+describe("a mechanism", () => {
+  const axisZ: [number, number, number] = [0, 0, 1];
+  const mesh = mechanismOf({
+    mechanism: {
+      drive: [0, 28],
+      joints: [
+        { body: "pinion", kind: "turn", axis: axisZ, at: [0, 0, 0], knots: [[0, 0], [28, 360]] },
+        { body: "wheel", kind: "turn", axis: axisZ, at: [50, 0, 0], knots: [[0, 0], [28, -240]] },
+        { body: "cap", kind: "rides", parent: "wheel" },
+      ],
+    },
+    checks: {
+      verdict: "failed",
+      passed: 0,
+      mechanism: [{ check: "", verdict: "failed", kind: "moves", at_drive: 7, measurements: 3 }],
+    },
+  })!;
+
+  test("is one slider over its own drive, named for the first body that moves, marked where a check fails", () => {
+    expect(mesh.label).toBe("pinion");
+    expect(mesh.drive).toEqual([0, 28]);
+    expect(mesh.failsAt).toEqual([7]);
+    expect(mesh.moves.map((move) => valueAt(move, 7))).toEqual([90, -60, 0]);
+  });
+
+  test("moves every body it names on one drive, a rider with the body that carries it", () => {
+    const poses = bodyPoses([mesh], [7]);
+    expect(poses.get("pinion")![1]).toBeCloseTo(-1, 12);
+    expect(poses.get("wheel")![1]).toBeCloseTo(Math.sin(Math.PI / 3), 12);
+    poses.get("cap")!.forEach((v, i) => expect(v).toBeCloseTo(poses.get("wheel")![i], 12));
+  });
+
+  test("reads its knots straight between, and holds at the ends", () => {
+    const lift = { ...mesh.moves[1], knots: [[0, 0], [10, 2], [20, 10]] as [number, number][] };
+    expect([5, 10, 15, -3, 25].map((d) => valueAt(lift, d))).toEqual([1, 2, 6, 0, 10]);
+  });
+
+  test("a body carried by a turning one turns with it about the parent's pin, then its own", () => {
+    const arm = {
+      label: "arm",
+      drive: [0, 1] as [number, number],
+      moves: [
+        { body: "arm", kind: "turn" as const, axis: axisZ, at: [0, 0, 0] as [number, number, number], knots: [[0, 0], [1, 90]] as [number, number][] },
+        { body: "hand", kind: "slide" as const, axis: [1, 0, 0] as [number, number, number], at: [0, 0, 0] as [number, number, number], parent: "arm", knots: [[0, 0], [1, 10]] as [number, number][] },
+      ],
+      failsAt: [],
+    };
+    // At the end the hand has slid 10 along x and the arm has turned it a quarter: it sits at +y.
+    const hand = bodyPoses([arm], [1]).get("hand")!;
+    expect(hand[3]).toBeCloseTo(0, 12);
+    expect(hand[7]).toBeCloseTo(10, 12);
   });
 });

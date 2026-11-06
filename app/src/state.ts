@@ -82,6 +82,24 @@ export interface MotionReport {
   measurements: number;
 }
 
+/** One `moves` or `pushes` check over the mechanism: the pair and the drive value where it is worst. */
+export interface MechanismReport {
+  check: string;
+  verdict: "passed" | "failed" | "uncertified";
+  kind: "moves" | "pushes";
+  a?: string;
+  b?: string;
+  least_clearance_mm?: number;
+  widest_gap_mm?: number;
+  deepest_mm?: number;
+  at_drive?: number;
+  /** Every moving body's row-major 4×4 at that drive value. */
+  poses?: Record<string, number[]>;
+  certified_above_mm?: number;
+  uncertified?: string;
+  measurements: number;
+}
+
 export interface EvaluationSnapshot {
   /** The part's own checks, judged on this build; absent when the script carries none. */
   checks?: {
@@ -90,6 +108,8 @@ export interface EvaluationSnapshot {
     failed?: { check: string; mismatch?: string; measured_mm?: number; measured_mm3?: number; why?: string }[];
     /** Every `turns` and `slides` check, swept: what a viewer needs to show the motion. */
     motions?: MotionReport[];
+    /** Every `moves` and `pushes` check, swept over the whole mechanism: where it is worst. */
+    mechanism?: MechanismReport[];
   };
   /** What the part is for, judged on every build; the verdict is `meets`,
    *  `over: ...`, or the one line that says there is no brief to judge it by. */
@@ -161,6 +181,20 @@ export interface EvaluationSnapshot {
   bodies: number;
   /** Closed surfaces inside another: a shell's cavity. */
   voids: number;
+  /** The part's mechanism, resolved: what a viewer plays, checked or not. */
+  mechanism?: {
+    drive: [number, number];
+    joints: {
+      body: string;
+      parent?: string;
+      kind: "turn" | "slide" | "rides";
+      /** A unit axis or direction; absent for a body that rides. */
+      axis?: [number, number, number];
+      at?: [number, number, number];
+      /** `[drive, value]`, degrees or mm, straight between. */
+      knots?: [number, number][];
+    }[];
+  };
   /** Each named body of a part that returns several, measured alone.
    *  Absent for a one-solid part. */
   named_bodies?: {

@@ -433,8 +433,8 @@ described where it lives:
    bench showed. **Mechanisms — done 2026-11-06:** `mechanism: {...}` beside
    the bodies drives several on one input (a joint and a law per body, `on`
    to ride another), and `moves` and `pushes` checks are certified over the
-   coupled travel (`checks.mechanism`).
-   `eval/field/does-the-lever-keep-pushing` went from 0/8 SOUND to 6/8
+   coupled travel (`checks.mechanism`); the chat viewer plays the whole
+   mechanism on one slider. `eval/field/does-the-lever-keep-pushing` went from 0/8 SOUND to 6/8
    on Haiku 5.5 (its `why` has the rest). Left: gears (a range is a ratio, so
    a pair can be driven, but no case measures a mesh yet), a screw (turn and
    slide at once), the window's scrub.

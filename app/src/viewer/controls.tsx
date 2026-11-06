@@ -12,7 +12,7 @@ import { effect, signal } from "@preact/signals";
 import { render } from "preact";
 
 import { holdTouches } from "../hold-touches";
-import { bodyPoses, type Motion } from "../motion";
+import { bodyPoses, valueAt, type Mechanism, type Move } from "../motion";
 import { Icon } from "../ui/icons";
 import { Slider } from "../ui/components/Slider";
 import { TOUCH_TROUGH, Toggle } from "../ui/components/Toggle";
@@ -28,17 +28,17 @@ export interface ShownBody {
 type View = keyof typeof VIEWS;
 
 const bodies = signal<ShownBody[]>([]);
-const motions = signal<Motion[]>([]);
-/** Each motion's value, in its own unit: degrees or mm from the drawn pose. */
-const values = signal<number[]>([]);
+const mechanisms = signal<Mechanism[]>([]);
+/** Each mechanism's drive, 0 to 1. */
+const drives = signal<number[]>([]);
 const hidden = signal<ReadonlySet<string>>(new Set());
 const xray = signal(false);
 /** The preset last flown to, until a hand turns the view. */
 const view = signal<View | undefined>("threeQuarter");
-/** The motion sweeping on its own, if one is. */
+/** The mechanism sweeping on its own, if one is. */
 const playing = signal<number | undefined>(undefined);
 
-/** One sweep across a motion's whole range, in seconds. */
+/** One sweep across a mechanism's whole drive, in seconds. */
 const SWEEP_S = 2.2;
 
 const PRESETS: { view: View; label: string }[] = [
@@ -55,8 +55,8 @@ export function mountControls(viewport: Viewport, onView: HTMLElement, under: HT
     for (const body of bodies.value) viewport.setBodyHidden(body.name, hidden.value.has(body.name));
   });
   effect(() => {
-    const poses = bodyPoses(motions.value, values.value);
-    for (const motion of motions.value) viewport.setBodyPose(motion.body, poses.get(motion.body));
+    const poses = bodyPoses(mechanisms.value, drives.value);
+    for (const { moves } of mechanisms.value) for (const { body } of moves) viewport.setBodyPose(body, poses.get(body));
   });
   const stage = onView.parentElement!;
   const onPart = (target: EventTarget | null) => target instanceof HTMLCanvasElement;
@@ -70,13 +70,13 @@ export function mountControls(viewport: Viewport, onView: HTMLElement, under: HT
   render(<Panel />, under);
 }
 
-/** A new part: every body shown, every motion at the pose it was drawn in. */
-export function showPart(partBodies: ShownBody[], partMotions: Motion[]) {
+/** A new part: every body shown, every mechanism at the pose it was drawn in. */
+export function showPart(partBodies: ShownBody[], partMechanisms: Mechanism[]) {
   playing.value = undefined;
   hidden.value = new Set();
   bodies.value = partBodies;
-  motions.value = partMotions;
-  values.value = partMotions.map(() => 0);
+  mechanisms.value = partMechanisms;
+  drives.value = partMechanisms.map(drawnDrive);
   view.value = "threeQuarter";
 }
 
@@ -112,7 +112,7 @@ function OnView({ viewport }: { viewport: Viewport }) {
 
 function Panel() {
   const many = bodies.value.length > 1;
-  if (!many && motions.value.length === 0) return null;
+  if (!many && mechanisms.value.length === 0) return null;
   return (
     <div class="flex flex-col gap-1.5 border-t border-line bg-panel px-3 py-2">
       {many && (
@@ -122,8 +122,8 @@ function Panel() {
           ))}
         </div>
       )}
-      {motions.value.map((motion, i) => (
-        <MotionRow key={i} motion={motion} index={i} />
+      {mechanisms.value.map((mechanism, i) => (
+        <MotionRow key={i} mechanism={mechanism} index={i} />
       ))}
     </div>
   );
@@ -164,11 +164,14 @@ function BodyChip({ body }: { body: ShownBody }) {
   );
 }
 
-function MotionRow({ motion, index }: { motion: Motion; index: number }) {
-  const value = values.value[index] ?? 0;
-  const span = motion.to - motion.from;
-  const along = (v: number) => (span === 0 ? 0 : (v - motion.from) / span);
-  const label = motionLabel(motion);
+function MotionRow({ mechanism, index }: { mechanism: Mechanism; index: number }) {
+  const [low, high] = mechanism.drive;
+  const drive = drives.value[index] ?? low;
+  const along = (d: number) => (d - low) / (high - low);
+  const { label } = mechanism;
+  // The slider reads in the first moving body's own unit: a lever's degrees, a drawer's mm.
+  const lead = mechanism.moves.find((move) => move.kind !== "rides") ?? mechanism.moves[0];
+  const value = format(lead, valueAt(lead, drive));
   return (
     <div class="flex items-center gap-2.5">
       <Toggle
@@ -181,55 +184,57 @@ function MotionRow({ motion, index }: { motion: Motion; index: number }) {
       </Toggle>
       <span class="max-w-20 shrink-0 truncate text-small text-ink-dim">{label}</span>
       <Slider
-        at={along(value)}
-        marks={motion.failsAt.map(along)}
+        at={along(drive)}
+        marks={mechanism.failsAt.map(along)}
         label={label}
-        text={format(motion, value)}
+        text={value}
         onMove={(at) => {
           playing.value = undefined;
-          setValue(index, motion.from + at * span);
+          setDrive(index, low + at * (high - low));
         }}
       />
-      <span class="min-w-[6.5ch] shrink-0 text-right font-mono text-small text-ink">{format(motion, value)}</span>
+      <span class="min-w-[6.5ch] shrink-0 text-right font-mono text-small text-ink">{value}</span>
     </div>
   );
 }
 
-/** The body's name, and the axis when the body moves more than one way. */
-function motionLabel(motion: Motion): string {
-  const ways = motions.value.filter((m) => m.body === motion.body).length;
-  if (ways === 1) return motion.body;
-  const principal = motion.axis.findIndex((v) => Math.abs(Math.abs(v) - 1) < 1e-6);
-  return principal < 0 ? motion.body : `${motion.body} ${motion.axis[principal] < 0 ? "−" : ""}${"xyz"[principal]}`;
+/**
+ * The drive value that leaves every body as drawn: where a lone motion's range
+ * crosses 0, or a mechanism's start, which is drawn as it prints.
+ */
+function drawnDrive({ drive, moves }: Mechanism): number {
+  const knots = moves[0].knots;
+  if (moves.length !== 1 || knots.length !== 2) return drive[0];
+  const [[d0, v0], [d1, v1]] = knots;
+  return Math.min(drive[1], Math.max(drive[0], d0 + ((d1 - d0) * -v0) / (v1 - v0)));
 }
 
-function format(motion: Motion, value: number): string {
-  const text = motion.kind === "turn" ? `${Math.round(value)}°` : `${value.toFixed(1)} mm`;
+function format(move: Move, value: number): string {
+  const text = move.kind === "turn" ? `${Math.round(value)}°` : `${value.toFixed(1)} mm`;
   return text.replace("-", "−").replace(/^−(0(\.0)?)(°| mm)$/, "$1$3");
 }
 
-function setValue(index: number, value: number) {
-  const next = [...values.value];
-  next[index] = value;
-  values.value = next;
+function setDrive(index: number, drive: number) {
+  const next = [...drives.value];
+  next[index] = drive;
+  drives.value = next;
 }
 
-/** Sweep a motion end to end and back until stopped, from wherever it is now. */
+/** Sweep a mechanism end to end and back until stopped, from wherever it is now. */
 function play(index: number) {
   if (playing.value === index) {
     playing.value = undefined;
     return;
   }
   playing.value = index;
-  const motion = motions.value[index];
-  const span = motion.to - motion.from;
-  let heading = (values.value[index] - motion.from) / span >= 1 ? -1 : 1;
+  const [low, high] = mechanisms.value[index].drive;
+  let heading = drives.value[index] >= high ? -1 : 1;
   let last = performance.now();
   const step = (now: number) => {
     if (playing.value !== index) return;
     const seconds = (now - last) / 1000;
     last = now;
-    let at = (values.value[index] - motion.from) / span + (heading * seconds) / SWEEP_S;
+    let at = (drives.value[index] - low) / (high - low) + (heading * seconds) / SWEEP_S;
     if (at >= 1) {
       at = 1;
       heading = -1;
@@ -237,7 +242,7 @@ function play(index: number) {
       at = 0;
       heading = 1;
     }
-    setValue(index, motion.from + at * span);
+    setDrive(index, low + at * (high - low));
     requestAnimationFrame(step);
   };
   requestAnimationFrame(step);
