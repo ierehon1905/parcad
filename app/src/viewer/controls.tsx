@@ -12,7 +12,7 @@ import { effect, signal } from "@preact/signals";
 import { render } from "preact";
 
 import { holdTouches } from "../hold-touches";
-import { bodyPoses, valueAt, type Mechanism, type Move } from "../motion";
+import { bodyPoses, drawnDrive, valueAt, type Mechanism, type Move } from "../motion";
 import { Icon } from "../ui/icons";
 import { Slider } from "../ui/components/Slider";
 import { TOUCH_TROUGH, Toggle } from "../ui/components/Toggle";
@@ -196,17 +196,6 @@ function MotionRow({ mechanism, index }: { mechanism: Mechanism; index: number }
       <span class="min-w-[6.5ch] shrink-0 text-right font-mono text-small text-ink">{value}</span>
     </div>
   );
-}
-
-/**
- * The drive value that leaves every body as drawn: where a lone motion's range
- * crosses 0, or a mechanism's start, which is drawn as it prints.
- */
-function drawnDrive({ drive, moves }: Mechanism): number {
-  const knots = moves[0].knots;
-  if (moves.length !== 1 || knots.length !== 2) return drive[0];
-  const [[d0, v0], [d1, v1]] = knots;
-  return Math.min(drive[1], Math.max(drive[0], d0 + ((d1 - d0) * -v0) / (v1 - v0)));
 }
 
 function format(move: Move, value: number): string {

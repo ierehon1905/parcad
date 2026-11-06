@@ -13,7 +13,7 @@ import { App } from "@modelcontextprotocol/ext-apps/app-with-deps";
 import { decompress } from "fzstd";
 
 import "../style.css";
-import { mechanismOf, motionsOf } from "../motion";
+import { mechanismOf, motionsOf, travelPoses } from "../motion";
 import type { EvaluationSnapshot } from "../state";
 import type { BodySpan, EdgeCurve, FaceMaterial, FaceRun } from "../viewport";
 import { VIEWS, Viewport } from "../viewport";
@@ -203,6 +203,7 @@ async function show(source: Source) {
     },
     bounds,
   );
+  viewport.setTravel(travelPoses(motions));
   viewport.look(VIEWS.threeQuarter, false);
   showPart(shownBodies, motions);
   const size = snapshot.bounds_max.map((hi, i) => (hi - snapshot.bounds_min[i]).toFixed(1)).join(" × ");

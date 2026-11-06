@@ -2385,3 +2385,16 @@ scene, and Neutral's toe sinks a dark grey to black, so `backdrop()` in
 `viewport.ts` fills it with the inverse of the curve: it shows the colour the
 look names. The silhouette pass is not antialiased; widening it stair-steps
 every outline, so a look widens the kernel's edges (`LineMaterial`) instead.
+
+## A swinging body's shadow fell on an invisible floor *(fixed 2026-11-06)*
+
+The ground — grid and shadow catcher — lay at the part's lowest point as
+drawn. A mechanism can carry a body below that: a key holder's lever swung
+its hook 9.3 mm under the frame's bed, so the transparent shadow plane cut
+across the lever and the hook's shadow fell on nothing. The chat viewer now
+hands `Viewport.setTravel` every pose each body passes through
+(`travelPoses` in `motion.ts`: every knot, turns stepped at most 2°), and the
+ground goes under the lowest vertex any pose reaches. It stays put while the
+mechanism plays, so at rest a part may stand above its shadow by that drop;
+a floor that followed the pose would read as the part moving. The sun's
+shadow covers the same swept box, or the swung body's shadow is clipped.

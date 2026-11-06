@@ -165,6 +165,68 @@ export function poseAt(move: Move, value: number): number[] {
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
 /**
+ * The drive value that leaves every body as drawn: where a lone motion's range
+ * crosses 0, or a mechanism's start, which is drawn as it prints.
+ */
+export function drawnDrive({ drive, moves }: Mechanism): number {
+  const knots = moves[0].knots;
+  if (moves.length !== 1 || knots.length !== 2) return drive[0];
+  const [[d0, v0], [d1, v1]] = knots;
+  return Math.min(drive[1], Math.max(drive[0], d0 + ((d1 - d0) * -v0) / (v1 - v0)));
+}
+
+/** The widest a turn steps between two sampled poses of a sweep: fine enough that an arc's lowest point is not missed. */
+const SWEEP_STEP_DEGREES = 2;
+
+/**
+ * Every pose each moving body passes through, each mechanism swept over its
+ * whole drive with the others where they start: what the ground has to lie
+ * under. Every knot is a sample, and a turn is stepped at most
+ * `SWEEP_STEP_DEGREES` between them, so an arc that dips between two knots
+ * still counts.
+ */
+export function travelPoses(mechanisms: Mechanism[]): Map<string, number[][]> {
+  const start = mechanisms.map(drawnDrive);
+  const travel = new Map<string, number[][]>();
+  const add = (poses: Map<string, number[]>, only?: Set<string>) => {
+    for (const [body, pose] of poses) {
+      if (only && !only.has(body)) continue;
+      const seen = travel.get(body);
+      if (seen) seen.push(pose);
+      else travel.set(body, [pose]);
+    }
+  };
+  add(bodyPoses(mechanisms, start));
+  mechanisms.forEach((mechanism, i) => {
+    const moved = new Set(mechanism.moves.map((move) => move.body));
+    for (const drive of sweptDrives(mechanism)) {
+      const drives = [...start];
+      drives[i] = drive;
+      add(bodyPoses(mechanisms, drives), moved);
+    }
+  });
+  return travel;
+}
+
+/** The drive values a sweep samples: the ends, every knot between, and enough steps between those for every turn. */
+function sweptDrives({ drive: [low, high], moves }: Mechanism): number[] {
+  const breaks = new Set([low, high]);
+  for (const move of moves) for (const [d] of move.knots) if (d > low && d < high) breaks.add(d);
+  const sorted = [...breaks].sort((a, b) => a - b);
+  const turns = moves.filter((move) => move.kind === "turn");
+  const drives = [sorted[0]];
+  for (let i = 1; i < sorted.length; i++) {
+    const d0 = sorted[i - 1];
+    const d1 = sorted[i];
+    // Every move is straight between two breaks, so equal steps in the drive are equal steps in each angle.
+    const widest = Math.max(0, ...turns.map((move) => Math.abs(valueAt(move, d1) - valueAt(move, d0))));
+    const steps = Math.max(1, Math.ceil(widest / SWEEP_STEP_DEGREES));
+    for (let k = 1; k <= steps; k++) drives.push(d0 + ((d1 - d0) * k) / steps);
+  }
+  return drives;
+}
+
+/**
  * Each moving body's pose with every mechanism at its drive value: a body's
  * own joint first, then everything the body carrying it does; a body moved by
  * more than one mechanism takes them in order. Bodies that do not move are

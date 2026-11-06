@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { bodyPoses, mechanismOf, motionsOf, poseAt, valueAt } from "./motion";
+import { bodyPoses, mechanismOf, motionsOf, poseAt, travelPoses, valueAt, type Mechanism } from "./motion";
 import type { MotionReport } from "./state";
 
 /** The lid's three checks as eval/scripts/hinged-box.js's build reports them. */
@@ -154,5 +154,46 @@ describe("a mechanism", () => {
     const hand = bodyPoses([arm], [1]).get("hand")!;
     expect(hand[3]).toBeCloseTo(0, 12);
     expect(hand[7]).toBeCloseTo(10, 12);
+  });
+});
+
+describe("travelPoses", () => {
+  const turn = (knots: [number, number][]): Mechanism => ({
+    label: "lever",
+    drive: [0, 1],
+    moves: [{ body: "lever", kind: "turn", axis: [0, 1, 0], at: [0, 0, 0], knots }],
+    failsAt: [],
+  });
+  const zOf = (pose: number[], [x, y, z]: [number, number, number]) => pose[8] * x + pose[9] * y + pose[10] * z + pose[11];
+
+  test("finds the bottom of an arc that dips between two knots", () => {
+    const poses = travelPoses([turn([[0, -60], [1, 60]])]).get("lever")!;
+    // A point hanging 10 below the pin is lowest at 0°, which neither knot is.
+    expect(Math.min(...poses.map((pose) => zOf(pose, [0, 0, -10])))).toBeCloseTo(-10, 9);
+    expect(Math.max(...poses.map((pose) => zOf(pose, [0, 0, -10])))).toBeCloseTo(-5, 9);
+  });
+
+  test("steps a turn no wider than 2°, and a slide only at its knots", () => {
+    expect(travelPoses([turn([[0, 0], [1, -90]])]).get("lever")!.length).toBe(1 + 1 + 45);
+    const drawer: Mechanism = {
+      label: "drawer",
+      drive: [0, 1],
+      moves: [{ body: "drawer", kind: "slide", axis: [1, 0, 0], at: [0, 0, 0], knots: [[0, 0], [0.5, 40], [1, 60]] }],
+      failsAt: [],
+    };
+    expect(travelPoses([drawer]).get("drawer")!.map((pose) => pose[3])).toEqual([0, 0, 40, 60]);
+  });
+
+  test("sweeps each mechanism with the others where they start", () => {
+    const lid = turn([[0, 0], [1, -4]]);
+    const drawer: Mechanism = {
+      label: "drawer",
+      drive: [0, 1],
+      moves: [{ body: "drawer", kind: "slide", axis: [1, 0, 0], at: [0, 0, 0], knots: [[0, 0], [1, 60]] }],
+      failsAt: [],
+    };
+    const travel = travelPoses([lid, drawer]);
+    expect(travel.get("lever")!.length).toBe(1 + 1 + 2);
+    expect(travel.get("drawer")!.map((pose) => pose[3])).toEqual([0, 0, 60]);
   });
 });

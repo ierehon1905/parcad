@@ -265,6 +265,8 @@ export class Viewport {
   /** The part, one entry per named body; a one-solid part is one body with no name. */
   private bodies: DrawnBody[] = [];
   private partBounds?: Bounds;
+  /** Where the bodies reach over every pose `setTravel` was given; none for a part that does not move. */
+  private travelBox?: THREE.Box3;
   /** Corners of the part's box as posed and the ground's, which the depth range must enclose. */
   private depthPoints: THREE.Vector3[] = [];
   private partCorners: THREE.Vector3[] = [];
@@ -852,19 +854,7 @@ export class Viewport {
     // the pass stays on: it is a property of the view, so no kernel supplies it.
     this.outline.setCreases(false);
 
-    const size = {
-      x: bounds.max.x - bounds.min.x,
-      y: bounds.max.y - bounds.min.y,
-      z: bounds.max.z - bounds.min.z,
-    };
-    this.placeGround(bounds, size);
-    this.aimSun(bounds, size);
-    // The ground's span, grid or not: three times the part, as `placeGround` lays it.
-    const reach = Math.max(size.x, size.y, size.z) * 1.5;
-    const middle = new THREE.Vector3((bounds.min.x + bounds.max.x) / 2, (bounds.min.y + bounds.max.y) / 2, bounds.min.z);
-    this.groundCorners = boxCorners(
-      new THREE.Box3(middle.clone().add(new THREE.Vector3(-reach, -reach, 0)), middle.clone().add(new THREE.Vector3(reach, reach, 0))),
-    );
+    this.layGround();
     this.fitPosedBox();
 
     // A new part keeps the plane the last one was cut on: the reason the
@@ -913,6 +903,33 @@ export class Viewport {
     this.setHoveredEdge();
     this.setHoveredVertex();
     this.bodiesChanged();
+  }
+
+  /**
+   * Every pose each body passes through as the part's motions play, row-major
+   * 4×4s as `setBodyPose` takes them. The ground goes under the lowest point
+   * any body reaches in any of them and the sun's shadow covers all of them,
+   * so neither moves while a mechanism plays. Measured on the mesh's own
+   * vertices; a body with no poses counts as drawn.
+   */
+  setTravel(travel: ReadonlyMap<string, readonly number[][]>) {
+    const box = new THREE.Box3();
+    const matrix = new THREE.Matrix4();
+    for (const body of this.bodies) {
+      const poses = travel.get(body.name);
+      if (!poses?.length) continue;
+      let points: Float32Array | undefined;
+      for (const pose of poses) {
+        matrix.fromArray(pose).transpose();
+        // A pose that only carries the body along carries its box: no vertex reaches past it.
+        const reach = isTranslation(matrix) ? body.box.clone().applyMatrix4(matrix) : reachOf((points ??= bodyPoints(body)), matrix);
+        box.union(reach);
+      }
+    }
+    this.travelBox = box.isEmpty() ? undefined : box;
+    if (!this.partBounds) return;
+    this.layGround();
+    this.fitPosedBox();
   }
 
   /** Hide a named body, or show it again. Hidden is hidden from picking and the section too. */
@@ -1027,8 +1044,9 @@ export class Viewport {
     if (box.isEmpty()) return;
     this.partCorners = boxCorners(box);
     this.depthPoints = [...this.partCorners, ...this.groundCorners];
-    const size = box.getSize(new THREE.Vector3());
-    this.aimSun({ min: box.min, max: box.max }, size);
+    // Over the whole travel too: a sun re-aimed at every pose shifts the shadow map's texels as a mechanism plays.
+    const lit = this.travelBox ? box.clone().union(this.travelBox) : box;
+    this.aimSun({ min: lit.min, max: lit.max }, lit.getSize(new THREE.Vector3()));
   }
 
   /**
@@ -1351,6 +1369,7 @@ export class Viewport {
       this.sectionGroup = undefined;
     }
     this.bodies = [];
+    this.travelBox = undefined;
     this.flight = undefined;
     this.buildNearCut();
     this.hoveredEdge = undefined;
@@ -1378,6 +1397,21 @@ export class Viewport {
         releaseMaterial(drawable.material);
       });
     }
+  }
+
+  /** The ground under the part as drawn and everywhere its travel takes it, and the corners the depth range keeps. */
+  private layGround() {
+    const { min, max } = this.partBounds!;
+    const box = new THREE.Box3(new THREE.Vector3(min.x, min.y, min.z), new THREE.Vector3(max.x, max.y, max.z));
+    if (this.travelBox) box.union(this.travelBox);
+    const size = box.getSize(new THREE.Vector3());
+    this.placeGround(box, size);
+    // The ground's span, grid or not: three times the part, as `placeGround` lays it.
+    const reach = Math.max(size.x, size.y, size.z) * 1.5;
+    const middle = new THREE.Vector3((box.min.x + box.max.x) / 2, (box.min.y + box.max.y) / 2, box.min.z);
+    this.groundCorners = boxCorners(
+      new THREE.Box3(middle.clone().add(new THREE.Vector3(-reach, -reach, 0)), middle.clone().add(new THREE.Vector3(reach, reach, 0))),
+    );
   }
 
   /** Grid and shadow-catcher at the bottom of the part: the contact shadow is what says where it sits. */
@@ -1533,6 +1567,47 @@ function spanBox(geo: Geometry, span: { start: number; count: number }): THREE.B
     box.expandByPoint(point.fromArray(geo.positions, (indexed ? geo.indices[corner] : corner) * 3));
   }
   return box;
+}
+
+/** Each vertex a body's triangles use, once, as x, y, z runs. */
+function bodyPoints(body: DrawnBody): Float32Array {
+  const geometry = body.mesh.geometry;
+  const positions = geometry.getAttribute("position").array;
+  const index = geometry.getIndex()?.array;
+  const seen = new Uint8Array(positions.length / 3);
+  const points: number[] = [];
+  for (let corner = body.start * 3; corner < (body.start + body.count) * 3; corner++) {
+    const vertex = index ? index[corner] : corner;
+    if (seen[vertex]) continue;
+    seen[vertex] = 1;
+    points.push(positions[vertex * 3], positions[vertex * 3 + 1], positions[vertex * 3 + 2]);
+  }
+  return Float32Array.from(points);
+}
+
+function isTranslation(matrix: THREE.Matrix4): boolean {
+  const m = matrix.elements;
+  const diagonal = m[0] === 1 && m[5] === 1 && m[10] === 1;
+  return diagonal && m[1] === 0 && m[2] === 0 && m[4] === 0 && m[6] === 0 && m[8] === 0 && m[9] === 0;
+}
+
+/** The box `points` fill once `matrix` has moved them. */
+function reachOf(points: Float32Array, matrix: THREE.Matrix4): THREE.Box3 {
+  const m = matrix.elements;
+  const lo = [Infinity, Infinity, Infinity];
+  const hi = [-Infinity, -Infinity, -Infinity];
+  for (let i = 0; i < points.length; i += 3) {
+    const x = points[i];
+    const y = points[i + 1];
+    const z = points[i + 2];
+    // Column-major, as three keeps it.
+    for (let axis = 0; axis < 3; axis++) {
+      const v = m[axis] * x + m[axis + 4] * y + m[axis + 8] * z + m[axis + 12];
+      if (v < lo[axis]) lo[axis] = v;
+      if (v > hi[axis]) hi[axis] = v;
+    }
+  }
+  return new THREE.Box3(new THREE.Vector3(...lo), new THREE.Vector3(...hi));
 }
 
 /** Whether an object and everything above it is drawn. */
