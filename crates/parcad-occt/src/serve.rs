@@ -425,6 +425,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         faces,
         mut edges,
         topology,
+        numbered_faces: _,
         bodies,
         kinds,
         surfaces,
@@ -737,10 +738,10 @@ fn measure(
 }
 
 /// The reply's buffers, one body appended after another. Face numbers,
-/// triangle starts and face adjacency all shift by what came before, so
-/// every index in the reply reads against the whole part; appending a single
-/// unnamed body changes nothing, which is what keeps a one-solid reply as it
-/// was.
+/// triangle starts and face adjacency all shift by every body before,
+/// references included, so every index in the reply reads against the whole
+/// part; appending a single unnamed body changes nothing, which is what keeps
+/// a one-solid reply as it was.
 #[derive(Default)]
 struct Assembled {
     positions: Vec<f32>,
@@ -752,6 +753,11 @@ struct Assembled {
     /// The part's own faces and edges; a reference body's are drawn but
     /// not counted.
     topology: Topology,
+    /// Face numbers given out so far, every body's: the next body's first.
+    /// The shape's own count rather than `faces.len()`, which runs short on
+    /// a compound (docs/GOTCHAS.md, "`Shape_faces_json` describes the first
+    /// solid only") and would let that body's last faces collide with the next.
+    numbered_faces: usize,
     bodies: Vec<BodySpan>,
     /// The part's own bodies' kinds, which decide the part's.
     kinds: Vec<BodyKind>,
@@ -777,7 +783,7 @@ impl Assembled {
         }
         self.surfaces.extend(surface);
         let vertex_offset = (self.positions.len() / 3) as u32;
-        let face_offset = self.topology.faces as u32;
+        let face_offset = self.numbered_faces as u32;
         let triangle_offset = (self.indices.len() / 3) as u32;
 
         self.positions.extend(
@@ -820,6 +826,7 @@ impl Assembled {
                 mass,
             });
         }
+        self.numbered_faces += topology.faces;
         if !reference {
             self.topology.faces += topology.faces;
             self.topology.edges += topology.edges;
@@ -840,6 +847,81 @@ mod tests {
         match run(request, &mut backend::BuildCache::default()) {
             Response::Ok(success) => *success,
             other => panic!("{other:?}"),
+        }
+    }
+
+    /// A body of `count` one-triangle faces, each described and bordering
+    /// the next, as [`measure`] returns one: the kernel's own numbering
+    /// inside the body, which [`Assembled::append`] has to shift.
+    fn measured(count: usize) -> Measured {
+        use crate::protocol::SurfacePlacement;
+        use opencascade::mesh::{FaceRun as MeshRun, Mesh};
+        let corners = 3 * count;
+        let mesh = Mesh {
+            vertices: (0..corners).map(|i| glam::DVec3::new(i as f64, 0.0, 0.0)).collect(),
+            uvs: Vec::new(),
+            face_uvs: Vec::new(),
+            normals: vec![glam::DVec3::Z; corners],
+            indices: (0..corners).collect(),
+            faces: (0..count).map(|face| MeshRun { face, start: face, count: 1 }).collect(),
+        };
+        let faces = (0..count)
+            .map(|face| FaceSummary {
+                area_mm2: 1.0,
+                centroid: [0.0; 3],
+                adjacent: vec![((face + 1) % count) as u32],
+                surface: SurfacePlacement { kind: "plane".into(), direction: None, radius: None },
+                body: None,
+                tags: Vec::new(),
+                material: None,
+            })
+            .collect();
+        Measured {
+            mesh,
+            faces,
+            edges: Vec::new(),
+            topology: Topology { faces: count, edges: 0 },
+            kind: BodyKind::Solid,
+            surface: None,
+            mass: None,
+        }
+    }
+
+    /// Face numbers are one numbering across every body appended, references
+    /// included, so `faces[run.face]` is the face whose triangles the run
+    /// covers and an `adjacent` entry stays on its own body. Offset by the
+    /// part's own count instead, every body after a reference body reused
+    /// that body's numbers: `object2` drew as part of `object`, and a part
+    /// body following a reference drew as the reference.
+    #[test]
+    fn face_numbers_run_on_through_reference_bodies() {
+        let bodies = [("base", false, 8), ("object", true, 6), ("object2", true, 6), ("lid", false, 7)];
+        let mut whole = Assembled::default();
+        for (name, reference, count) in bodies {
+            whole.append(Some(name), reference, measured(count));
+        }
+        assert_eq!(whole.topology.faces, 15, "the part's own faces leave references out");
+        assert_eq!(whole.faces.len(), 27, "every body's faces are described");
+
+        let numbers: std::collections::BTreeSet<u32> = whole.face_runs.iter().map(|run| run.face).collect();
+        assert_eq!(numbers.len(), whole.face_runs.len(), "two runs name one face: {:?}", whole.face_runs);
+        assert_eq!(numbers.last(), Some(&26), "the numbering ends with the last body's last face");
+
+        let mut first = 0;
+        for (span, (name, _, count)) in whole.bodies.iter().zip(bodies) {
+            let triangles = span.triangle_start..span.triangle_start + span.triangle_count;
+            let runs: Vec<&FaceRun> =
+                whole.face_runs.iter().filter(|run| triangles.contains(&(run.start as usize))).collect();
+            assert_eq!(runs.len(), count, "`{name}` has a run per face");
+            for run in runs {
+                let local = run.face as usize - first;
+                assert!(local < count, "face {} of `{name}` is outside {first}..{}", run.face, first + count);
+                let face = &whole.faces[run.face as usize];
+                assert_eq!(face.body.as_deref(), Some(name), "face {} draws `{name}`'s triangles", run.face);
+                let next = (first + (local + 1) % count) as u32;
+                assert_eq!(face.adjacent, [next], "face {} borders the next face of `{name}`", run.face);
+            }
+            first += span.faces;
         }
     }
 

@@ -2330,3 +2330,15 @@ was treated as curved, and the sweep spent its whole budget in the kernel. It
 now reads planarity off each face's own triangulation and never consults the
 summaries. Anything else that pairs `describe_faces` with a face index should
 check the body is one solid first.
+
+## A body after a reference body drew as the reference *(fixed 2026-11-06)*
+
+`serve::Assembled::append` offset each body's face numbers by the part's own
+face count, which leaves references out, so the body appended after a
+`.reference()` body reused its numbers: in `hinged-box`, `object2`'s six faces
+came back as 72–77, `object`'s, and `faces[78..83]` were never referenced.
+Everything that reads a face by its number — window picking, regions and
+materials, `face@N`, the chat viewer's per-body grouping — credited `object2`'s
+triangles to `object`. Face numbers now run through every body, references
+included (`BodySpan::faces` says so); the part's own counts still leave
+references out. Two numbers, two jobs: don't fold them back into one.

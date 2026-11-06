@@ -766,8 +766,8 @@ pub struct Success {
     pub positions: Vec<f32>,
     pub normals: Vec<f32>,
     pub indices: Vec<u32>,
-    /// Where each face's triangles sit in `indices`. Shorter than
-    /// `topology.faces` when a face carried no triangulation.
+    /// Where each face's triangles sit in `indices`, body by body with
+    /// references included; a face that carried no triangulation has no run.
     #[serde(default)]
     pub face_runs: Vec<FaceRun>,
     /// What each face is, indexed by the same face number `face_runs` uses.
@@ -885,6 +885,8 @@ pub struct BodySpan {
     /// of the part. Left out of every whole-part number and every file.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reference: bool,
+    /// Face numbers run body by body in [`Success::bodies`] order, references
+    /// included: this body's first face is the sum of the `faces` before it.
     pub faces: usize,
     pub edges: usize,
     /// First triangle of this body in `indices`, counted in triangles.
