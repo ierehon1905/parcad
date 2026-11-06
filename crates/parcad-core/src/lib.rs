@@ -16,6 +16,7 @@ pub mod font;
 pub mod graph;
 pub mod loft_walls;
 pub mod measure;
+pub mod mechanism;
 pub mod mesh;
 mod occlusion;
 pub mod par;

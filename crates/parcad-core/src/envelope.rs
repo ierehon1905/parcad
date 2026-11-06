@@ -50,6 +50,7 @@ pub const FEATURES: &[&str] = &[
     "query-not",
     "request-checks",
     "motion-checks",
+    "mechanism",
 ];
 
 /// The version of parcad reading the graph.
@@ -217,6 +218,43 @@ pub fn check_checks(graph: &serde_json::Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Refuse a mechanism this host cannot read, naming the joint and the key.
+/// Shape only — whether it names bodies the part has, and whether its knots
+/// span the drive, is `Doc::topo_order`'s.
+pub fn check_mechanism(graph: &serde_json::Value) -> Result<(), String> {
+    use crate::mechanism::Mechanism;
+    let Some(mechanism) = graph.get("mechanism") else {
+        return Ok(());
+    };
+    let form = "{ drive: [0, 1], joints: [{ body: \"lever\", turns: { about: \"y\", at: [0, 0, 40] }, knots: [[0, 0], [1, -18]] }] }";
+    let Some(object) = mechanism.as_object() else {
+        return Err(format!("the graph's mechanism is {}, where this host reads an object such as {form}", kind_of(mechanism)));
+    };
+    if let Some(joints) = object.get("joints").and_then(|j| j.as_array()) {
+        for (index, joint) in joints.iter().enumerate() {
+            let at = match joint.get("body").and_then(|b| b.as_str()) {
+                Some(body) => format!("mechanism.{body}"),
+                None => format!("mechanism joint {}", index + 1),
+            };
+            let Some(object) = joint.as_object() else {
+                return Err(format!("{at} is {}, not a joint such as {{ body, turns, knots }} or {{ body, on }}", kind_of(joint)));
+            };
+            let unknown: Vec<String> =
+                object.keys().filter(|key| !JOINT_KEYS.contains(&key.as_str())).map(|key| format!("\"{key}\"")).collect();
+            if !unknown.is_empty() {
+                return Err(format!("{at} has no key {}. A joint's keys are {}. {}", unknown.join(", "), JOINT_KEYS.join(", "), if_newer()));
+            }
+        }
+    }
+    if let Err(error) = serde_json::from_value::<Mechanism>(mechanism.clone()) {
+        return Err(format!("the mechanism could not be read: {error}; this host reads {form}."));
+    }
+    Ok(())
+}
+
+/// Every key a joint of a graph's mechanism may carry.
+const JOINT_KEYS: [&str; 5] = ["body", "on", "turns", "slides", "knots"];
+
 /// Refuse a brief this host cannot read, naming the key and the key that was
 /// meant. Shape only — whether its numbers are usable is `Doc::topo_order`'s.
 pub fn check_brief(graph: &serde_json::Value) -> Result<(), String> {
@@ -264,6 +302,7 @@ pub fn parse_doc(graph: serde_json::Value) -> Result<Doc, String> {
     };
     check_requires(&graph)?;
     check_checks(&graph)?;
+    check_mechanism(&graph)?;
     check_brief(&graph)?;
     if let Some(units) = object.get("units") {
         if units.as_str() != Some("mm") {
@@ -274,10 +313,10 @@ pub fn parse_doc(graph: serde_json::Value) -> Result<Doc, String> {
         }
     }
     for key in object.keys() {
-        if !["units", "root", "nodes", "requires", "checks", "brief"].contains(&key.as_str()) {
+        if !["units", "root", "nodes", "requires", "checks", "mechanism", "brief"].contains(&key.as_str()) {
             return Err(format!(
                 "the graph has a top-level field \"{key}\" this host does not read, alongside \
-                 units, root, nodes, requires, checks and brief. {}",
+                 units, root, nodes, requires, checks, mechanism and brief. {}",
                 if_newer()
             ));
         }

@@ -10,13 +10,15 @@
 //! several bodies", and docs/COIN_HOLDER_REVIEW.md, B2, for why: a check
 //! that lives in a throwaway script is a check that stops being re-run.
 
+use crate::mechanism::Linkage;
 use crate::view::Axis;
 use serde::{Deserialize, Serialize};
 
 /// One check. Exactly one of the head keys — `clear`, `interferes`,
-/// `touching`, `turns`, `slides`, `wall`, `size`, `standsOn`, `bodies`,
-/// `watertight` — names what it reads; the rest qualify it. Read by name
-/// from JSON, so a key this host does not know is refused rather than dropped.
+/// `touching`, `turns`, `slides`, `moves`, `pushes`, `wall`, `size`,
+/// `standsOn`, `bodies`, `watertight` — names what it reads; the rest qualify
+/// it. Read by name from JSON, so a key this host does not know is refused
+/// rather than dropped.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
 pub struct Check {
@@ -48,6 +50,19 @@ pub struct Check {
     /// with somewhere in its range, by `deeperThan` mm — a latch that holds.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub catches: Option<String>,
+    /// Over the part's whole `mechanism`, every pair of bodies whose relative
+    /// pose changes keeps `atLeast` mm apart: `"all"`, or the pairs involving
+    /// these bodies. Pairs a `pushes` check names are left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub moves: Option<Moves>,
+    /// Over the mechanism, the two stay in contact `within` mm: their gap
+    /// never opens past it and they never bite deeper. How a push is proven
+    /// to transmit; it says nothing about jamming.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pushes: Option<[String; 2]>,
+    /// For `pushes`: how far the two may open apart or overlap, mm.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub within: Option<f64>,
     /// Nothing in the part is thinner than `min` mm.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wall: Option<WallCheck>,
@@ -125,6 +140,32 @@ pub struct SlideCheck {
     pub along: Direction,
     /// From and to, mm along `along`, in the order the motion runs.
     pub mm: [f64; 2],
+}
+
+/// Which pairs a `moves` check reads: `"all"`, or those involving the bodies
+/// listed.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Moves {
+    Word(String),
+    Bodies(Vec<String>),
+}
+
+impl Moves {
+    /// The bodies it limits the pairs to, or `None` for every pair.
+    pub fn bodies(&self) -> Option<&[String]> {
+        match self {
+            Moves::Word(_) => None,
+            Moves::Bodies(bodies) => Some(bodies),
+        }
+    }
+
+    fn name(&self) -> String {
+        match self {
+            Moves::Word(word) => word.clone(),
+            Moves::Bodies(bodies) => bodies.join(","),
+        }
+    }
 }
 
 /// An axis or direction as a script spells it: a model axis by name, with
@@ -249,6 +290,8 @@ pub enum CheckKind {
     Touching,
     Turns,
     Slides,
+    Moves,
+    Pushes,
     Wall,
     Size,
     Holes,
@@ -266,6 +309,8 @@ impl CheckKind {
             Self::Touching => "touching",
             Self::Turns => "turns",
             Self::Slides => "slides",
+            Self::Moves => "moves",
+            Self::Pushes => "pushes",
             Self::Wall => "wall",
             Self::Size => "size",
             Self::Holes => "holes",
@@ -278,12 +323,14 @@ impl CheckKind {
 }
 
 /// The head keys, in the order a reply names them.
-pub const HEAD_KEYS: [&str; 12] = [
+pub const HEAD_KEYS: [&str; 14] = [
     "clear",
     "interferes",
     "touching",
     "turns",
     "slides",
+    "moves",
+    "pushes",
     "wall",
     "size",
     "holes",
@@ -294,12 +341,14 @@ pub const HEAD_KEYS: [&str; 12] = [
 ];
 
 /// Every key a check may carry: what the envelope names when one is unknown.
-pub const KEYS: [&str; 20] = [
+pub const KEYS: [&str; 23] = [
     "clear",
     "interferes",
     "touching",
     "turns",
     "slides",
+    "moves",
+    "pushes",
     "wall",
     "size",
     "holes",
@@ -312,6 +361,7 @@ pub const KEYS: [&str; 20] = [
     "atLeast",
     "deeperThan",
     "contactAtLeast",
+    "within",
     "ignore",
     "on",
     "why",
@@ -319,7 +369,14 @@ pub const KEYS: [&str; 20] = [
 
 /// A key an author might write for one of [`KEYS`], and the key they meant.
 /// `app/src/dsl.ts` carries the same table for the editor's own refusal.
-pub const SYNONYMS: [(&str, &str); 52] = [
+pub const SYNONYMS: [(&str, &str); 59] = [
+    ("moving", "moves"),
+    ("during", "moves"),
+    ("motion", "moves"),
+    ("push", "pushes"),
+    ("drives", "pushes"),
+    ("contacts", "pushes"),
+    ("tolerance", "within"),
     ("turn", "turns"),
     ("rotate", "turns"),
     ("rotates", "turns"),
@@ -383,6 +440,8 @@ impl Check {
             (self.touching.is_some(), CheckKind::Touching),
             (self.turns.is_some(), CheckKind::Turns),
             (self.slides.is_some(), CheckKind::Slides),
+            (self.moves.is_some(), CheckKind::Moves),
+            (self.pushes.is_some(), CheckKind::Pushes),
             (self.wall.is_some(), CheckKind::Wall),
             (self.size.is_some(), CheckKind::Size),
             (self.holes.is_some(), CheckKind::Holes),
@@ -418,6 +477,23 @@ impl Check {
             return Some(Motion::Turn(turn));
         }
         self.slides.as_ref().map(Motion::Slide)
+    }
+
+    /// The pairs a `moves` check reads over `linkage`: every pair of `bodies`
+    /// whose relative pose changes, involving a body it names when it names
+    /// some, less every pair a `pushes` check in `checks` names. Empty for
+    /// any other kind of check.
+    pub fn moving_pairs<'a>(&self, linkage: &Linkage, bodies: &[&'a str], checks: &[Check]) -> Vec<[&'a str; 2]> {
+        let Some(moves) = &self.moves else {
+            return Vec::new();
+        };
+        let pushed: Vec<&[String; 2]> = checks.iter().filter_map(|c| c.pushes.as_ref()).collect();
+        linkage
+            .moving_pairs(bodies)
+            .into_iter()
+            .filter(|[a, b]| moves.bodies().is_none_or(|named| named.iter().any(|n| n == a || n == b)))
+            .filter(|[a, b]| !pushed.iter().any(|[p, q]| (p == a && q == b) || (p == b && q == a)))
+            .collect()
     }
 
     /// The bodies a motion check reads the moving body against: `clearOf`
@@ -471,6 +547,21 @@ impl Check {
                 }
                 s
             }
+            CheckKind::Moves => {
+                let mut s = format!("moves {}", self.moves.as_ref().expect("moves").name());
+                if let Some(least) = self.at_least {
+                    s.push_str(&format!(" atLeast {least}"));
+                }
+                s
+            }
+            CheckKind::Pushes => {
+                let [a, b] = self.pushes.as_ref().expect("pushes");
+                let mut s = format!("pushes {a}↔{b}");
+                if let Some(within) = self.within {
+                    s.push_str(&format!(" within {within}"));
+                }
+                s
+            }
             CheckKind::Wall => format!("wall min {}", self.wall.as_ref().expect("wall").min),
             CheckKind::Size => {
                 let size = self.size.as_ref().expect("size");
@@ -506,10 +597,79 @@ impl Check {
     /// Whether this check reads as written: its numbers are positive where
     /// they must be, its qualifiers belong to its kind, and the bodies and
     /// tags it names exist. `bodies` are the part's named bodies, `tags`
-    /// every tag the graph writes; `index` is 1-based, for the message.
-    pub fn validate(&self, index: usize, bodies: &[&str], tags: &[&str]) -> Result<(), String> {
+    /// every tag the graph writes, `linkage` the part's mechanism when it
+    /// declares one; `index` is 1-based, for the message.
+    pub fn validate(&self, index: usize, bodies: &[&str], tags: &[&str], linkage: Option<&Linkage>) -> Result<(), String> {
         let at = format!("check {index}");
         let kind = self.kind().map_err(|why| format!("{at} {why}"))?;
+        if matches!(kind, CheckKind::Moves | CheckKind::Pushes) {
+            let Some(linkage) = linkage else {
+                return Err(format!(
+                    "{at} ({}) reads the part's mechanism, and it declares none; say how the bodies move beside them — \
+                     mechanism: {{ lever: {{ turns: {{ about: \"y\", at: [0, 0, 40], degrees: [0, -18] }} }} }}",
+                    self.sentence()
+                ));
+            };
+            let names = |named: &[String]| -> Result<(), String> {
+                for name in named {
+                    if !bodies.contains(&name.as_str()) {
+                        return Err(format!(
+                            "{at} ({}) names a body \"{name}\" the part does not return; its bodies are {}",
+                            self.sentence(),
+                            bodies.iter().map(|b| format!("\"{b}\"")).collect::<Vec<_>>().join(", ")
+                        ));
+                    }
+                }
+                Ok(())
+            };
+            match &self.moves {
+                Some(Moves::Word(word)) if word != "all" => {
+                    return Err(format!(
+                        "{at} ({}): moves is \"all\" or a list of bodies; for the pairs involving one body write moves: [\"{word}\"]",
+                        self.sentence()
+                    ));
+                }
+                Some(Moves::Bodies(named)) => {
+                    if named.is_empty() {
+                        return Err(format!("{at} ({}) names no body; write moves: \"all\" for every moving pair", self.sentence()));
+                    }
+                    names(named)?;
+                }
+                _ => {}
+            }
+            if let Some([a, b]) = &self.pushes {
+                names(std::slice::from_ref(a))?;
+                names(std::slice::from_ref(b))?;
+                if a == b {
+                    return Err(format!("{at} ({}) names the same body twice", self.sentence()));
+                }
+                if !linkage.moves_relative(a, b) {
+                    return Err(format!(
+                        "{at} ({}): \"{a}\" and \"{b}\" never move relative to each other, so there is no push to prove; a touching \
+                         check reads a pair that stays put",
+                        self.sentence()
+                    ));
+                }
+                match self.within {
+                    None => {
+                        return Err(format!(
+                            "{at} ({}): pushes needs within, how far the two may open apart or overlap and still be pushing, in \
+                             mm — within: 0.15",
+                            self.sentence()
+                        ));
+                    }
+                    Some(within) if !(within > 0.0) || !within.is_finite() => {
+                        return Err(format!(
+                            "{at} ({}): within is a length in mm above 0, not {within}; the two must stay that close over the whole drive",
+                            self.sentence()
+                        ));
+                    }
+                    Some(_) => {}
+                }
+            }
+        } else if self.within.is_some() {
+            return Err(format!("{at} ({}) has within, which only pushes reads; a gap is measured by clear or moves atLeast", self.sentence()));
+        }
         if let Some([a, b]) = self.pair() {
             if bodies.is_empty() {
                 return Err(format!(
@@ -575,10 +735,11 @@ impl Check {
             ));
         }
         if let Some(least) = self.at_least {
-            let reads_it = matches!(kind, CheckKind::Clear | CheckKind::Interferes) || (motion_kind && self.catches.is_none());
+            let reads_it =
+                matches!(kind, CheckKind::Clear | CheckKind::Interferes | CheckKind::Moves) || (motion_kind && self.catches.is_none());
             if !reads_it {
                 return Err(format!(
-                    "{at} ({}) has atLeast, which only clear, interferes and a motion with clearOf read",
+                    "{at} ({}) has atLeast, which only clear, interferes, moves and a motion with clearOf read",
                     self.sentence()
                 ));
             }
@@ -928,14 +1089,14 @@ mod tests {
     fn a_depth_and_a_contact_belong_to_the_kinds_that_measure_them() {
         let bodies = ["coin", "arm"];
         let catch = read(serde_json::json!({ "interferes": ["coin", "arm"], "deeperThan": 0.3 }));
-        catch.validate(1, &bodies, &[]).unwrap();
+        catch.validate(1, &bodies, &[], None).unwrap();
         assert_eq!(catch.sentence(), "interferes coin↔arm deeperThan 0.3");
         let seat = read(serde_json::json!({ "touching": ["coin", "arm"], "contactAtLeast": 20 }));
-        seat.validate(1, &bodies, &[]).unwrap();
+        seat.validate(1, &bodies, &[], None).unwrap();
         let wrong = read(serde_json::json!({ "clear": ["coin", "arm"], "deeperThan": 0.3 }));
-        assert!(wrong.validate(1, &bodies, &[]).unwrap_err().contains("only interferes and a motion with catches read"));
+        assert!(wrong.validate(1, &bodies, &[], None).unwrap_err().contains("only interferes and a motion with catches read"));
         let also = read(serde_json::json!({ "interferes": ["coin", "arm"], "contactAtLeast": 1 }));
-        assert!(also.validate(1, &bodies, &[]).unwrap_err().contains("only touching reads"));
+        assert!(also.validate(1, &bodies, &[], None).unwrap_err().contains("only touching reads"));
         assert_eq!(meant("depth"), Some("deeperThan"));
         assert_eq!(meant("contact_mm2"), Some("contactAtLeast"));
     }
@@ -945,32 +1106,32 @@ mod tests {
     #[test]
     fn a_request_reads_as_size_holes_and_a_feature() {
         let size = read(serde_json::json!({ "size": { "is": [80, 50, 6] } }));
-        size.validate(1, &[], &[]).unwrap();
+        size.validate(1, &[], &[], None).unwrap();
         assert_eq!(size.sentence(), "size is 80×50×6");
         let both = read(serde_json::json!({ "size": { "is": [80, 50, 6], "max": [100, 60, 10] } }));
         assert_eq!(both.sentence(), "size is 80×50×6 max 100×60×10");
         let neither = read(serde_json::json!({ "size": {} }));
-        assert!(neither.validate(1, &[], &[]).unwrap_err().contains("size: { is: [80, 50, 6] }"));
+        assert!(neither.validate(1, &[], &[], None).unwrap_err().contains("size: { is: [80, 50, 6] }"));
 
         let holes = read(serde_json::json!({ "holes": { "diameter": 6, "through": true, "at": [[-30, -15], [30, 15]] } }));
-        holes.validate(1, &[], &[]).unwrap();
+        holes.validate(1, &[], &[], None).unwrap();
         assert_eq!(holes.kind(), Ok(CheckKind::Holes));
         assert_eq!(holes.sentence(), "holes Ø6 ×2 through along z at (-30, -15) (30, 15)");
         let counted = read(serde_json::json!({ "holes": { "diameter": 3.4, "count": 4, "axis": "x" } }));
         assert_eq!(counted.sentence(), "holes Ø3.4 ×4 along x");
         let disagree = read(serde_json::json!({ "holes": { "diameter": 6, "count": 4, "at": [[0, 0]] } }));
-        assert!(disagree.validate(1, &[], &[]).unwrap_err().contains("count is 4 but at lists 1 places"));
+        assert!(disagree.validate(1, &[], &[], None).unwrap_err().contains("count is 4 but at lists 1 places"));
         let radius = serde_json::from_value::<Check>(serde_json::json!({ "holes": { "radius": 3 } })).unwrap_err();
         assert!(radius.to_string().contains("unknown field `radius`"), "{radius}");
         assert_eq!(meant("hole"), Some("holes"));
 
         let notch = read(serde_json::json!({ "feature": { "tag": "notch", "size": [10, 8, 6], "center": [0, 21, 0] } }));
-        notch.validate(1, &[], &["notch"]).unwrap();
+        notch.validate(1, &[], &["notch"], None).unwrap();
         assert_eq!(notch.sentence(), "feature notch size 10×8×6 center (0, 21, 0)");
-        let untagged = notch.validate(1, &[], &["plate"]).unwrap_err();
+        let untagged = notch.validate(1, &[], &["plate"], None).unwrap_err();
         assert!(untagged.contains("names a tag \"notch\" nothing in the part writes"), "{untagged}");
         let empty = read(serde_json::json!({ "feature": { "tag": "notch" } }));
-        assert!(empty.validate(1, &[], &["notch"]).unwrap_err().contains("its size: [x, y, z], its center"));
+        assert!(empty.validate(1, &[], &["notch"], None).unwrap_err().contains("its size: [x, y, z], its center"));
     }
 
     /// A hinge and a drawer, written as checks: what each says back, the
@@ -982,7 +1143,7 @@ mod tests {
             "turns": { "body": "lid", "about": "x", "at": [0, -28, 16.2], "degrees": [0, -170] },
             "clearOf": ["base", "object"], "atLeast": 0.3
         }));
-        fold.validate(1, &bodies, &[]).unwrap();
+        fold.validate(1, &bodies, &[], None).unwrap();
         assert_eq!(fold.kind(), Ok(CheckKind::Turns));
         assert_eq!(fold.sentence(), "turns lid about x at (0, -28, 16.2) 0° to -170° clearOf base,object atLeast 0.3");
         assert_eq!(fold.against(&bodies), vec!["base", "object"]);
@@ -992,23 +1153,23 @@ mod tests {
             "turns": { "body": "lid", "about": "-x", "at": [0, -28, 16.2], "degrees": [-170, -180] },
             "catches": "base", "deeperThan": 0.2
         }));
-        latch.validate(2, &bodies, &[]).unwrap();
+        latch.validate(2, &bodies, &[], None).unwrap();
         assert_eq!(latch.sentence(), "turns lid about -x at (0, -28, 16.2) -170° to -180° catches base deeperThan 0.2");
         assert_eq!(latch.against(&bodies), vec!["base"]);
         assert_eq!(latch.turns.as_ref().unwrap().about.unit().unwrap(), [-1.0, 0.0, 0.0]);
 
         let drawer = read(serde_json::json!({ "slides": { "body": "lid", "along": [0, 2, 0], "mm": [0, 60] }, "clearOf": "base" }));
-        drawer.validate(3, &bodies, &[]).unwrap();
+        drawer.validate(3, &bodies, &[], None).unwrap();
         assert_eq!(drawer.kind(), Ok(CheckKind::Slides));
         assert_eq!(drawer.sentence(), "slides lid along (0, 2, 0) 0 mm to 60 mm clearOf base");
         assert_eq!(drawer.slides.as_ref().unwrap().along.unit().unwrap(), [0.0, 1.0, 0.0]);
 
         let unnamed = read(serde_json::json!({ "slides": { "body": "lid", "along": "y", "mm": [0, 60] }, "atLeast": 0.5 }));
-        unnamed.validate(4, &bodies, &[]).unwrap();
+        unnamed.validate(4, &bodies, &[], None).unwrap();
         assert_eq!(unnamed.against(&bodies), vec!["base", "object"]);
         assert_eq!(unnamed.sentence(), "slides lid along y 0 mm to 60 mm atLeast 0.5");
 
-        let err = |json: serde_json::Value| read(json).validate(5, &bodies, &[]).unwrap_err();
+        let err = |json: serde_json::Value| read(json).validate(5, &bodies, &[], None).unwrap_err();
         let turn = |extra: serde_json::Value| {
             let mut check = serde_json::json!({ "turns": { "body": "lid", "about": "x", "at": [0, -28, 16.2], "degrees": [0, -170] } });
             for (k, v) in extra.as_object().unwrap() {
@@ -1033,9 +1194,9 @@ mod tests {
         let missing = err(serde_json::json!({ "turns": { "body": "pin", "about": "x", "at": [0, 0, 0], "degrees": [0, 90] } }));
         assert!(missing.contains("moves a body \"pin\" the part does not return"), "{missing}");
         let alone = read(serde_json::json!({ "turns": { "body": "lid", "about": "x", "at": [0, 0, 0], "degrees": [0, 90] } }));
-        assert!(alone.validate(1, &[], &[]).unwrap_err().contains("the part returns one shape"));
+        assert!(alone.validate(1, &[], &[], None).unwrap_err().contains("the part returns one shape"));
         let only = read(serde_json::json!({ "turns": { "body": "lid", "about": "x", "at": [0, 0, 0], "degrees": [0, 90] } }));
-        assert!(only.validate(1, &["lid"], &[]).unwrap_err().contains("no body to read \"lid\" against"));
+        assert!(only.validate(1, &["lid"], &[], None).unwrap_err().contains("no body to read \"lid\" against"));
         let stray = err(serde_json::json!({ "clear": ["base", "lid"], "clearOf": ["object"] }));
         assert!(stray.contains("has clearOf, which only turns and slides read"), "{stray}");
         assert_eq!(meant("rotates"), Some("turns"));
@@ -1049,21 +1210,74 @@ mod tests {
     fn validation_names_the_body_and_the_tag_it_cannot_find() {
         let bodies = ["top", "stacks"];
         let check = read(serde_json::json!({ "clear": ["top", "stack"] }));
-        let err = check.validate(1, &bodies, &[]).unwrap_err();
+        let err = check.validate(1, &bodies, &[], None).unwrap_err();
         assert_eq!(
             err,
             "check 1 (clear top↔stack) names a body \"stack\" the part does not return; its bodies are \"top\", \"stacks\""
         );
         let wall = read(serde_json::json!({ "wall": { "min": 1 }, "on": ["cups"] }));
-        let err = wall.validate(2, &bodies, &["lip"]).unwrap_err();
+        let err = wall.validate(2, &bodies, &["lip"], None).unwrap_err();
         assert!(err.starts_with("check 2 (wall min 1 on cups) scopes the wall to a tag \"cups\" nothing in the part writes; its tags are \"lip\""), "{err}");
         let feather = read(serde_json::json!({ "wall": { "min": 1 }, "ignore": ["feather"] }));
-        feather.validate(3, &bodies, &[]).unwrap();
+        feather.validate(3, &bodies, &[], None).unwrap();
         let one = read(serde_json::json!({ "clear": ["top", "stacks"] }));
-        assert!(one.validate(1, &[], &[]).unwrap_err().contains("the part returns one shape"));
+        assert!(one.validate(1, &[], &[], None).unwrap_err().contains("the part returns one shape"));
         let least = read(serde_json::json!({ "touching": ["top", "stacks"], "atLeast": 1 }));
-        assert!(least.validate(1, &bodies, &[]).unwrap_err().contains("only clear, interferes and a motion with clearOf read"));
+        assert!(least.validate(1, &bodies, &[], None).unwrap_err().contains("only clear, interferes, moves and a motion with clearOf read"));
         let open = read(serde_json::json!({ "watertight": false }));
-        assert!(open.validate(1, &[], &[]).unwrap_err().contains("watertight: true is the only value"));
+        assert!(open.validate(1, &[], &[], None).unwrap_err().contains("watertight: true is the only value"));
+    }
+
+    /// The key-hook mechanism's checks: what each says back, which pairs a
+    /// moves check reads once the pushes pairs are taken out, and the
+    /// mistakes refused with the fix.
+    #[test]
+    fn a_mechanism_check_reads_its_pairs_and_refuses_what_it_cannot_prove() {
+        let bodies = ["box", "lever", "pusher", "lift", "glasses"];
+        let linkage = serde_json::from_value::<crate::mechanism::Mechanism>(serde_json::json!({ "joints": [
+            { "body": "lever", "turns": { "about": "y", "at": [-30, 0, 42] }, "knots": [[0, 0], [1, -18]] },
+            { "body": "pusher", "slides": { "along": "x" }, "knots": [[0, 0], [1, 12]] },
+            { "body": "lift", "slides": { "along": "z" }, "knots": [[0, 0], [1, 7]] },
+            { "body": "glasses", "on": "lift" }
+        ] }))
+        .unwrap()
+        .resolve()
+        .unwrap();
+        let all = read(serde_json::json!({ "moves": "all", "atLeast": 0.3 }));
+        all.validate(1, &bodies, &[], Some(&linkage)).unwrap();
+        assert_eq!(all.kind(), Ok(CheckKind::Moves));
+        assert_eq!(all.sentence(), "moves all atLeast 0.3");
+        let push = read(serde_json::json!({ "pushes": ["lever", "pusher"], "within": 0.15 }));
+        push.validate(2, &bodies, &[], Some(&linkage)).unwrap();
+        assert_eq!(push.kind(), Ok(CheckKind::Pushes));
+        assert_eq!(push.sentence(), "pushes lever↔pusher within 0.15");
+        let checks = [all.clone(), push.clone()];
+        let pairs = all.moving_pairs(&linkage, &bodies, &checks);
+        assert!(!pairs.contains(&["lever", "pusher"]), "a pushed pair is meant to touch");
+        assert!(!pairs.contains(&["lift", "glasses"]), "riding together");
+        assert!(pairs.contains(&["box", "lever"]) && pairs.contains(&["pusher", "glasses"]));
+        assert_eq!(pairs.len(), 8);
+        let some = read(serde_json::json!({ "moves": ["glasses"], "atLeast": 0.3 }));
+        some.validate(3, &bodies, &[], Some(&linkage)).unwrap();
+        assert_eq!(some.sentence(), "moves glasses atLeast 0.3");
+        assert_eq!(some.moving_pairs(&linkage, &bodies, &checks), [["box", "glasses"], ["lever", "glasses"], ["pusher", "glasses"]]);
+
+        let err = |json: serde_json::Value| read(json).validate(4, &bodies, &[], Some(&linkage)).unwrap_err();
+        assert!(all.validate(1, &bodies, &[], None).unwrap_err().contains("declares none"));
+        assert!(err(serde_json::json!({ "moves": "lever" })).contains("write moves: [\"lever\"]"));
+        assert!(err(serde_json::json!({ "moves": [] })).contains("names no body"));
+        assert!(err(serde_json::json!({ "moves": ["pin"] })).contains("names a body \"pin\""));
+        assert!(err(serde_json::json!({ "pushes": ["lever", "lever"], "within": 0.1 })).contains("same body twice"));
+        let rigid = err(serde_json::json!({ "pushes": ["lift", "glasses"], "within": 0.1 }));
+        assert!(rigid.contains("never move relative to each other"), "{rigid}");
+        assert!(err(serde_json::json!({ "pushes": ["lever", "pusher"] })).contains("pushes needs within"));
+        assert!(err(serde_json::json!({ "pushes": ["lever", "pusher"], "within": 0 })).contains("above 0, not 0"));
+        assert!(err(serde_json::json!({ "clear": ["lever", "pusher"], "within": 0.1 })).contains("has within, which only pushes reads"));
+        assert!(err(serde_json::json!({ "moves": "all", "deeperThan": 0.1 })).contains("has deeperThan"));
+        assert_eq!(meant("during"), Some("moves"));
+        assert_eq!(meant("moving"), Some("moves"));
+        assert_eq!(meant("drives"), Some("pushes"));
+        assert_eq!(meant("contacts"), Some("pushes"));
+        assert_eq!(meant("tolerance"), Some("within"));
     }
 }

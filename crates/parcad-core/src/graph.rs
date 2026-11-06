@@ -2525,6 +2525,12 @@ pub struct Doc {
     /// changes the geometry.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<crate::checks::Check>,
+    /// How the bodies move together on one drive (`mechanism: { ... }` on
+    /// the returned object), every law sampled into knots by the script;
+    /// see [`crate::mechanism`]. Data, not a body: the part is drawn as it
+    /// prints, and `moves` and `pushes` checks are judged over it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mechanism: Option<crate::mechanism::Mechanism>,
     /// What the part is for, written by the author at the top of the script
     /// (`brief({ envelope, budgetCm3, ... })`) and reported against on every
     /// build; see [`crate::brief`]. Data, not a body, and never a door: a
@@ -2725,14 +2731,33 @@ impl Doc {
     /// backend goes through [`Doc::topo_order`] first, so a check that names
     /// a body the part lacks is refused before anything is built.
     fn validate_checks(&self) -> anyhow::Result<()> {
-        if self.checks.is_empty() {
+        if self.checks.is_empty() && self.mechanism.is_none() {
             return Ok(());
         }
         let bodies: Vec<&str> = self.bodies().map(|b| b.iter().map(|b| b.name.as_str()).collect()).unwrap_or_default();
+        let linkage = match &self.mechanism {
+            Some(mechanism) => {
+                mechanism.validate(&bodies).map_err(|e| anyhow::anyhow!("{e}"))?;
+                Some(mechanism.resolve().map_err(|e| anyhow::anyhow!("{e}"))?)
+            }
+            None => None,
+        };
         let mut tags: Vec<&str> = self.tags().into_iter().map(|(_, tag)| tag).collect();
         tags.dedup();
         for (index, check) in self.checks.iter().enumerate() {
-            check.validate(index + 1, &bodies, &tags).map_err(|e| anyhow::anyhow!("{e}"))?;
+            check.validate(index + 1, &bodies, &tags, linkage.as_ref()).map_err(|e| anyhow::anyhow!("{e}"))?;
+            if let (Some(linkage), Some(_)) = (&linkage, &check.moves) {
+                // A pushes check takes its pair out of every moves check;
+                // one left with nothing to read is a check that cannot fail.
+                if check.moving_pairs(linkage, &bodies, &self.checks).is_empty() {
+                    anyhow::bail!(
+                        "check {} ({}) reads no pair: every pair the mechanism moves is named by a pushes check, so drop \
+                         this check or name the bodies it is about",
+                        index + 1,
+                        check.sentence()
+                    );
+                }
+            }
         }
         Ok(())
     }
