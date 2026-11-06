@@ -217,6 +217,9 @@ const CUT_WALL_OPACITY = 0.55;
 /** How far the pointer may travel between down and up and still be a click. */
 const DRAG_SLOP_PX = 4;
 
+/** How long a change keeps the loop drawing after it: past a hover's settle, a slider's last move, a resize. */
+const AWAKE_MS = 300;
+
 export class Viewport {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene = new THREE.Scene();
@@ -228,7 +231,13 @@ export class Viewport {
   private outline!: OutlineRenderer;
   private grid?: THREE.GridHelper;
   private ground?: THREE.Mesh;
+  /** The frame requested, or 0 while nothing is drawing: the loop runs only while something changes. */
   private frame = 0;
+  /** Until when the loop draws without anything moving the camera; see `wake`. */
+  private awakeUntil = 0;
+  /** Whether any of the canvas is on screen: a chat scrolled past a viewer pays nothing for it. */
+  private onScreen = true;
+  private readonly observers: { disconnect(): void }[] = [];
   private readonly edgeRaycaster = new THREE.Raycaster();
   private readonly edgeLines: THREE.LineSegments[] = [];
   private readonly vertexRaycaster = new THREE.Raycaster();
@@ -284,7 +293,7 @@ export class Viewport {
     private readonly container: HTMLElement,
     private readonly edgeCallbacks: EdgeCallbacks = {},
     /** False for a viewport nobody looks at: no render loop, a frame only when `snapshot` asks. */
-    live = true,
+    private live = true,
     private readonly sceneLook: SceneLook = WORKBENCH,
   ) {
     // `stencil` defaults to false since three r163, and the cap's stencil test
@@ -316,6 +325,10 @@ export class Viewport {
     this.controls.dampingFactor = 0.12;
     // A hand on the part outranks a preset on its way.
     this.controls.addEventListener("start", () => (this.flight = undefined));
+    this.controls.addEventListener("change", this.wake);
+    for (const type of ["pointerdown", "pointermove", "pointerup", "pointerleave", "wheel"]) {
+      this.renderer.domElement.addEventListener(type, this.wake, { passive: true });
+    }
 
     this.renderer.domElement.addEventListener("pointermove", this.pickEntity);
     // WKWebView's WebDriver hover emits mouse events, not pointer ones.
@@ -412,11 +425,35 @@ export class Viewport {
     // until the next frame, which is the flash while dragging the splitter.
     const ro = new ResizeObserver(() => {
       this.pendingResize = true;
+      this.wake();
     });
     ro.observe(container);
+    const seen = new IntersectionObserver(([entry]) => {
+      this.onScreen = entry.isIntersecting;
+      this.wake();
+    });
+    seen.observe(container);
+    this.observers.push(ro, seen);
+    document.addEventListener("visibilitychange", this.wake);
     this.resize();
+    this.wake();
+  }
 
-    if (live) this.tick();
+  /**
+   * Something drawn changed: draw for the next `AWAKE_MS`, then stop until
+   * something changes again. Every mutator calls it, as does every pointer,
+   * wheel and camera change on the canvas.
+   */
+  private wake = () => {
+    this.awakeUntil = performance.now() + AWAKE_MS;
+    this.schedule();
+  };
+
+  /** Ask for the next frame, unless one is asked for or nobody would see it. */
+  private schedule() {
+    if (this.live && this.frame === 0 && this.onScreen && !document.hidden) {
+      this.frame = requestAnimationFrame(this.tick);
+    }
   }
 
   private resize() {
@@ -462,10 +499,11 @@ export class Viewport {
   }
 
   private tick = () => {
-    this.frame = requestAnimationFrame(this.tick);
+    this.frame = 0;
     if (this.pendingResize) this.resize();
     if (this.flight) this.fly(this.flight);
-    this.controls.update();
+    // True while a drag's damping is still carrying the camera, so the loop runs until it settles.
+    const moving = this.controls.update();
     this.fitDepthRange();
     if (DEBUG === "noedge" || DEBUG === "normals") {
       this.renderer.render(this.scene, this.camera);
@@ -473,6 +511,7 @@ export class Viewport {
       // Only the part gets edges; the grid is scenery, not geometry.
       this.outline.render([this.partGroup]);
     }
+    if (moving || this.flight || performance.now() < this.awakeUntil) this.schedule();
   };
 
   /**
@@ -505,6 +544,7 @@ export class Viewport {
         this.camera.aspect = was.aspect;
         this.camera.updateProjectionMatrix();
         this.pendingResize = true;
+        this.wake();
       };
     }
     this.tickOnce();
@@ -536,6 +576,9 @@ export class Viewport {
 
   dispose() {
     cancelAnimationFrame(this.frame);
+    this.live = false;
+    for (const observer of this.observers) observer.disconnect();
+    document.removeEventListener("visibilitychange", this.wake);
     this.renderer.domElement.removeEventListener("pointermove", this.pickEntity);
     this.renderer.domElement.removeEventListener("mousemove", this.pickEntity);
     this.outline.dispose();
@@ -625,6 +668,7 @@ export class Viewport {
     if (next?.face === this.hoveredFace?.face) return;
     this.hoveredFace = next;
     this.showFaceHighlight(next);
+    this.wake();
     this.edgeCallbacks.onFaceHover?.(next);
   }
 
@@ -700,6 +744,7 @@ export class Viewport {
     this.paintEdge(previous);
     this.paintEdge(next);
     this.showEdgeHighlight(next);
+    this.wake();
     this.edgeCallbacks.onHover?.(next?.userData.edge as EdgeCurve | undefined);
   }
 
@@ -709,6 +754,7 @@ export class Viewport {
     this.selectedEdge = next;
     this.paintEdge(previous);
     this.paintEdge(next);
+    this.wake();
     this.edgeCallbacks.onSelect?.(next?.userData.edge as EdgeCurve | undefined);
   }
 
@@ -748,6 +794,7 @@ export class Viewport {
     this.hoveredVertex = next;
     this.paintVertex(previous);
     this.paintVertex(next);
+    this.wake();
     this.edgeCallbacks.onVertexHover?.(next?.userData.vertex as VertexPoint | undefined);
   }
 
@@ -757,6 +804,7 @@ export class Viewport {
     this.selectedVertex = next;
     this.paintVertex(previous);
     this.paintVertex(next);
+    this.wake();
     this.edgeCallbacks.onVertexSelect?.(next?.userData.vertex as VertexPoint | undefined);
   }
 
@@ -862,6 +910,7 @@ export class Viewport {
     this.applyClipping();
     this.buildCap(this.section);
     this.buildNearCut();
+    this.wake();
   }
 
   /** The plane currently cut, if any — `setSection`'s argument, remembered. */
@@ -887,6 +936,7 @@ export class Viewport {
     this.buildCap(section);
     this.buildNearCut();
     this.outline.setClippingPlanes(this.clipPlanes);
+    this.wake();
   }
 
   /**
@@ -930,6 +980,7 @@ export class Viewport {
     if (!this.partBounds) return;
     this.layGround();
     this.fitPosedBox();
+    this.wake();
   }
 
   /** Hide a named body, or show it again. Hidden is hidden from picking and the section too. */
@@ -948,6 +999,7 @@ export class Viewport {
     if (on === this.xray) return;
     this.xray = on;
     this.dressXray();
+    this.wake();
   }
 
   /**
@@ -968,6 +1020,7 @@ export class Viewport {
       this.fly(this.flight);
       this.controls.update();
     }
+    this.wake();
   }
 
   /**
@@ -1036,6 +1089,7 @@ export class Viewport {
       });
     }
     this.fitPosedBox();
+    this.wake();
   }
 
   /** The depth range and the sun, around the part as it now stands. */
@@ -1348,6 +1402,7 @@ export class Viewport {
     if (vertices.length > 0) group.add(targetVertexMarkers(vertices));
     this.targetPreview = group;
     this.partGroup.add(group);
+    this.wake();
   }
 
   private clearTargetPreview() {
@@ -1358,6 +1413,7 @@ export class Viewport {
     this.partGroup.remove(this.targetPreview);
     disposeTree(this.targetPreview);
     this.targetPreview = undefined;
+    this.wake();
   }
 
   /** Show nothing, without disturbing the camera. */
@@ -1397,6 +1453,7 @@ export class Viewport {
         releaseMaterial(drawable.material);
       });
     }
+    this.wake();
   }
 
   /** The ground under the part as drawn and everywhere its travel takes it, and the corners the depth range keeps. */
@@ -1488,6 +1545,7 @@ export class Viewport {
     this.camera.position.copy(position);
     this.controls.target.copy(target);
     this.controls.update();
+    this.wake();
   }
 
   /** Where the camera stands to fill the view with `box`, looking from `from`. */
