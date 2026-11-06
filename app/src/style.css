@@ -45,6 +45,18 @@
      viewer's chip for one. The kernel paints the body itself the same colour,
      REFERENCE_COLOR in parcad-core's graph.rs. */
   --color-reference: #5b8fd6;
+  /* The chat viewer's stage, and the colour each body that is not a reference
+     wears there, in the order the part names them: saturated, at least 27
+     ΔE apart, light enough for dark edges to read on (research-look.md). */
+  --color-stage: #1c1d21;
+  --color-body-1: #e8dcc0;
+  --color-body-2: #6cc04a;
+  --color-body-3: #5ab4e6;
+  --color-body-4: #f29b38;
+  --color-body-5: #e8675a;
+  --color-body-6: #a88be0;
+  --color-body-7: #f2d04b;
+  --color-body-8: #9aa6b4;
   /* Advisory, not a warning: a part that is a loose .js rather than a folder.
      Duller than gold on purpose — gold means "the one you are pointing at". */
   --color-note: #d8a657;

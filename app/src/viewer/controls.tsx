@@ -21,6 +21,8 @@ import { VIEWS, type Viewport } from "../viewport";
 export interface ShownBody {
   name: string;
   reference: boolean;
+  /** Which of the look's body colours it is drawn in, counting from 0; absent for a reference. */
+  tone?: number;
 }
 
 type View = keyof typeof VIEWS;
@@ -127,6 +129,9 @@ function Panel() {
   );
 }
 
+/** The dot a chip wears in its body's colour: written out, so Tailwind emits every `--color-body-N` the scene reads. */
+const BODY_DOTS = ["bg-body-1", "bg-body-2", "bg-body-3", "bg-body-4", "bg-body-5", "bg-body-6", "bg-body-7", "bg-body-8"];
+
 const CHIP = "flex min-w-0 max-w-40 items-center gap-1.5 h-10 pl-2.5 pr-3.5 rounded-full border cursor-pointer text-small";
 
 const CHIP_COLOURS = {
@@ -153,6 +158,7 @@ function BodyChip({ body }: { body: ShownBody }) {
       }}
     >
       <Icon name={shown ? "eye" : "hidden"} class="size-[18px] shrink-0" />
+      {body.tone !== undefined && shown && <span class={`size-2.5 shrink-0 rounded-full ${BODY_DOTS[body.tone % BODY_DOTS.length]}`} />}
       <span class="truncate">{body.name}</span>
     </button>
   );

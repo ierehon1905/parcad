@@ -18,6 +18,7 @@ import type { EvaluationSnapshot } from "../state";
 import type { BodySpan, EdgeCurve, FaceMaterial, FaceRun } from "../viewport";
 import { VIEWS, Viewport } from "../viewport";
 import { mountControls, showPart } from "./controls";
+import { bodyColors, studio } from "./look";
 
 /** Defined by the Draco decoder script vite.viewer.config.ts loads ahead of this one. */
 declare const DracoDecoderModule: (options: object) => Promise<Draco>;
@@ -58,7 +59,8 @@ const status = document.getElementById("status")!;
 const loading = document.getElementById("loading")!;
 const loadingText = document.getElementById("loading-text")!;
 const spinner = document.getElementById("spinner")!;
-const viewport = new Viewport(document.getElementById("viewport")!);
+const viewport = new Viewport(document.getElementById("viewport")!, {}, true, studio());
+const palette = bodyColors();
 mountControls(viewport, document.getElementById("on-view")!, document.getElementById("controls")!);
 const draco = DracoDecoderModule({});
 /** What `view_part` builds from: the project opened, or a script when the reply carried one. */
@@ -180,18 +182,28 @@ async function show(source: Source) {
   if (key !== shown) return;
   const v = ([x, y, z]: [number, number, number]) => ({ x, y, z });
   const bounds = { min: v(snapshot.bounds_min), max: v(snapshot.bounds_max) };
+  let own = 0;
+  const shownBodies = named.map((body) => {
+    const reference = body.reference === true;
+    return { name: body.name, reference, tone: reference ? undefined : own++ };
+  });
+  const toneOf = new Map(shownBodies.map((body) => [body.name, body.tone]));
+  const colorOf = (name: string) => {
+    const tone = toneOf.get(name);
+    return tone === undefined ? undefined : palette[tone % palette.length];
+  };
   viewport.setGeometry(
     {
       ...mesh,
       edges: header.edges,
       faceMaterials: header.faces?.map((face) => face.material),
-      bodies: bodySpans(mesh.faceRuns, bodyOfFace, named),
+      bodies: bodySpans(mesh.faceRuns, bodyOfFace, named).map((span) => ({ ...span, color: colorOf(span.name) })),
     },
     bounds,
   );
   viewport.look(VIEWS.threeQuarter, false);
   showPart(
-    named.map((body) => ({ name: body.name, reference: body.reference === true })),
+    shownBodies,
     motionsOf(snapshot.checks?.motions ?? []).filter((motion) => motion.from !== motion.to),
   );
   const size = snapshot.bounds_max.map((hi, i) => (hi - snapshot.bounds_min[i]).toFixed(1)).join(" × ");
