@@ -2087,6 +2087,22 @@ session stays, because the window's count of connected agents is kept per
 session. `a_session_streams_each_reply_with_no_empty_event_before_it` in
 `http.rs` holds it.
 
+### claude.ai hides a JSON-RPC error from the model
+
+A tool that refused by returning `Err(ErrorData)` reached the wire as a
+JSON-RPC error. Claude Code puts its message in front of the model, so every
+field round read the refusal and fixed the script. claude.ai and the Claude
+phone app do not: the model sees "Error: the tool failed (unavailable)" and
+nothing else. On 2026-11-06 a cut that missed its material came back that way,
+and Opus told the user "ParCAD не отвечает" while the server was up and had
+named the fix. `Parcad::call_tool` now turns every tool's refusal into a result
+with `isError: true` and the message as its text, the form the spec gives tool
+errors, and keeps the `kind`/`line`/`node`/`stage` under `_meta`, not in
+`structuredContent`, which a client checks against the output schema. Only an
+unknown tool stays a protocol error.
+`a_refusal_reaches_the_model_as_a_tool_result_naming_the_fix` in `http.rs`
+holds it.
+
 ### New page script against an old host module reads nonsense
 
 Under `vite --mode web`, rebuilding the host module while a page is open

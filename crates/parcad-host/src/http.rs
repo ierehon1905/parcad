@@ -406,13 +406,16 @@ impl IntoResponse for service::ExportRefused {
     }
 }
 
+/// A file to save, or a picture to look at: a render linked from a chat opens
+/// in the browser, where `attachment` made iOS offer to save a PNG instead.
 fn download(filename: &str, content_type: &str, bytes: Vec<u8>) -> Response {
+    let disposition = if content_type.starts_with("image/") { "inline" } else { "attachment" };
     (
         [
             (header::CONTENT_TYPE, content_type.to_string()),
             (
                 header::CONTENT_DISPOSITION,
-                format!("attachment; filename=\"{filename}\""),
+                format!("{disposition}; filename=\"{filename}\""),
             ),
         ],
         bytes,
@@ -875,6 +878,11 @@ mod tests {
         assert_eq!(fetched.status, 200, "{}", fetched.body);
         assert_eq!(fetched.bytes, b"png");
         assert_eq!(fetched.header("content-type"), Some("image/png"));
+        assert_eq!(
+            fetched.header("content-disposition"),
+            Some("inline; filename=\"abc-iso.png\""),
+            "a phone shows a picture it is linked to rather than offering to save it"
+        );
 
         let route = route_of(&url);
         let (path, query) = route.split_once('?').unwrap();
@@ -981,6 +989,104 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// claude.ai declares the MCP Apps media type in every request's `_meta`
+    /// and then draws open_project's part beside the reply; a client that
+    /// does not declare it is told nothing was drawn.
+    #[test]
+    fn open_project_says_it_was_shown_in_the_chat_only_to_a_client_that_draws_it() {
+        let (dir, acme, _, port) = two_accounts();
+        let project = dir.join("tenants/acme/bracket.parcad");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("part.js"), "return box(1, 1, 1);").unwrap();
+        let open = |capabilities: serde_json::Value| {
+            let call = serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {
+                    "name": "open_project", "arguments": { "name": "bracket", "wait_s": 0 },
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": capabilities,
+                    },
+                },
+            });
+            let reply = exchange(
+                port,
+                "POST",
+                "/mcp",
+                &[
+                    ("Content-Type", "application/json"),
+                    ("Accept", "application/json, text/event-stream"),
+                    ("MCP-Protocol-Version", "2026-07-28"),
+                    ("Mcp-Method", "tools/call"),
+                    ("Mcp-Name", "open_project"),
+                    ("Host", PUBLIC_HOST),
+                    ("Authorization", &bearer(&acme)),
+                ],
+                &call.to_string(),
+            );
+            assert_eq!(reply.status, 200, "{}", reply.body);
+            let message: serde_json::Value = serde_json::from_str(&reply.body).expect("a JSON reply");
+            message["result"]["structuredContent"].clone()
+        };
+
+        let apps = serde_json::json!({ "extensions": { "io.modelcontextprotocol/ui": { "mimeTypes": ["text/html;profile=mcp-app"] } } });
+        let drawn = open(apps);
+        assert_eq!(drawn["name"], "bracket", "{drawn}");
+        assert_eq!(drawn["shown_in_chat"], true, "{drawn}");
+        let not_drawn = open(serde_json::json!({}));
+        assert_eq!(not_drawn["name"], "bracket", "{not_drawn}");
+        assert!(not_drawn.get("shown_in_chat").is_none(), "a client that draws nothing is not told it did: {not_drawn}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// claude.ai shows a model a JSON-RPC error as "the tool failed
+    /// (unavailable)" and nothing else; a refusal must come back as a result.
+    #[test]
+    fn a_refusal_reaches_the_model_as_a_tool_result_naming_the_fix() {
+        let (dir, acme, _, port) = two_accounts();
+        let call = |name: &str, arguments: serde_json::Value| {
+            let call = serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {
+                    "name": name, "arguments": arguments,
+                    "_meta": {
+                        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                        "io.modelcontextprotocol/clientCapabilities": {},
+                    },
+                },
+            });
+            let reply = exchange(
+                port,
+                "POST",
+                "/mcp",
+                &[
+                    ("Content-Type", "application/json"),
+                    ("Accept", "application/json, text/event-stream"),
+                    ("MCP-Protocol-Version", "2026-07-28"),
+                    ("Mcp-Method", "tools/call"),
+                    ("Mcp-Name", name),
+                    ("Host", PUBLIC_HOST),
+                    ("Authorization", &bearer(&acme)),
+                ],
+                &call.to_string(),
+            );
+            (reply.status, serde_json::from_str::<serde_json::Value>(&reply.body).expect("a JSON reply"))
+        };
+
+        let (status, refused) = call("evaluate_part", serde_json::json!({ "script": "nope();" }));
+        assert_eq!(status, 200, "{refused}");
+        assert!(refused.get("error").is_none(), "a refusal is not a protocol error: {refused}");
+        assert_eq!(refused["result"]["isError"], true, "{refused}");
+        let text = refused["result"]["content"][0]["text"].as_str().expect("the refusal as text");
+        assert!(text.contains("nope is not defined"), "{text}");
+        assert_eq!(refused["result"]["_meta"]["parcad/refusal"]["kind"], "script", "{refused}");
+        assert!(refused["result"].get("structuredContent").is_none(), "{refused}");
+
+        let (_, unknown) = call("no_such_tool", serde_json::json!({}));
+        assert!(unknown["error"]["message"].as_str().is_some_and(|m| m.contains("tools/list")), "an unknown tool stays a protocol error naming the fix: {unknown}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// A client learns what this host can do from `/api/health` and from the
     /// `initialize` reply, not from a version number a branch build does not
     /// move; and a hosted account's instructions name no screen, since it has none.
@@ -1026,7 +1132,7 @@ mod tests {
         let instructions = reply["result"]["instructions"].as_str().expect("instructions");
         assert!(instructions.contains("shares no screen with the user"), "{instructions}");
         assert!(instructions.contains("export_part's `url`"), "{instructions}");
-        for screen_tool in ["share the parcad app's screen", "open_project", "set_script"] {
+        for screen_tool in ["share the parcad app's screen", "set_script"] {
             assert!(!instructions.contains(screen_tool), "{screen_tool:?} reached a hosted client: {instructions}");
         }
         let _ = std::fs::remove_dir_all(&dir);

@@ -572,6 +572,10 @@ pub struct OnScreen {
     pub script: Option<String>,
     /// What each open window is drawing, as in get_session.
     pub viewers: Vec<session::Viewer>,
+    /// The client declared it renders MCP Apps, so it draws this part in 3D
+    /// beside the reply. Only open_project carries the viewer.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shown_in_chat: bool,
 }
 
 /// edit_part's arguments: which text, which changes, and then evaluate_part's
@@ -1313,16 +1317,18 @@ impl Parcad {
     /// Put a project on the user's screen.
     #[tool(
         name = "open_project",
-        annotations(title = "Show a part on the user's screen", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Show the user a part: open a project on the screen they are watching — the parcad app, or the ParCAD web page in their browser — loaded from disk, exactly as if they had picked it, in every open window. To show a part you have built, save it with save_project under a name of its own and open that; the part that was open is left as it was. Takes a path from list_projects. Returns the session without the loaded script: `script_chars` and `script_sha256` identify the text every window took, `script: true` asks for it, and read_project has it anyway. Use this before set_script when the part you want to change is not the one on screen — get_session tells you which that is. Like set_script, the reply waits for a window to report evaluating it and carries `viewers`: tell the user the part is on screen only when one reports it built. A viewer over 30 seconds old is marked `stale` and is not evidence the user is looking at anything; one silent for 300 seconds is left out, and is not waited for."
+        annotations(title = "Show a part to the user in 3D", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        description = "Show the user a part: open a project on the screen they are watching — the parcad app, or the ParCAD web page in their browser — loaded from disk, exactly as if they had picked it, in every open window. To show a part you have built, save it with save_project under a name of its own and open that; the part that was open is left as it was. A chat that renders MCP Apps, such as claude.ai and the Claude apps, also draws the part in 3D beside your reply for the user to turn, and then the reply says `shown_in_chat: true`. On a hosted parcad, which has no window, that is how to show a part in 3D. Takes a path from list_projects. Returns the session without the loaded script: `script_chars` and `script_sha256` identify the text every window took, `script: true` asks for it, and read_project has it anyway. Use this before set_script when the part you want to change is not the one on screen — get_session tells you which that is. Like set_script, the reply waits for a window to report evaluating it and carries `viewers`: tell the user the part is in a window only when one reports it built, and in the chat only when `shown_in_chat` says so. A viewer over 30 seconds old is marked `stale` and is not evidence the user is looking at anything; one silent for 300 seconds is left out, and is not waited for."
     )]
     async fn open_project(
         &self,
         Parameters(Args(request)): Parameters<Args<OpenRequest>>,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
     ) -> Result<rmcp::handler::server::wrapper::Json<OnScreen>, ErrorData> {
         let opened = session::open(&request.name, session::AGENT_ORIGIN).map_err(invalid)?;
+        let shown = on_screen(opened, request.wait_s, request.script).await;
         Ok(rmcp::handler::server::wrapper::Json(
-            on_screen(opened, request.wait_s, request.script).await,
+            OnScreen { shown_in_chat: renders_the_viewer(&context), ..shown },
         ))
     }
 
@@ -1410,11 +1416,12 @@ const SCREEN: &str = "You share the parcad app's screen with the user: get_sessi
 open_project and set_script change it. To show a part you built, save_project it under its own \
 name and open_project it. Read before you write.";
 
-/// In place of [`SCREEN`] on a hosted account, which has no window: the client
-/// shows a part by fetching a URL.
-const HOSTED: &str = "This parcad is hosted and shares no screen with the user: to show a part, \
-paste a view's `markdown` line from evaluate_part or give export_part's `url`; each is a signed \
-link that fetches the file with no token until it expires.";
+/// In place of [`SCREEN`] on a hosted account, which has no window: a chat that
+/// renders MCP Apps draws open_project's part, and any other client fetches a URL.
+const HOSTED: &str = "This parcad is hosted and shares no screen with the user. To show a part \
+in 3D, save_project it and open_project it: a chat that renders MCP Apps draws it beside your \
+reply. Or paste a view's `markdown` line from evaluate_part or give \
+export_part's `url`; each is a signed link that fetches the file with no token until it expires.";
 
 /// The rule the coin-holder session lacked: 241 KB of script resent to change
 /// a few lines at a time (docs/COIN_HOLDER_REVIEW.md, B1).
@@ -1487,8 +1494,14 @@ impl ServerHandler for Parcad {
             .extensions
             .get::<http::request::Parts>()
             .map_or_else(tenant::current, |parts| tenant::carried(&parts.extensions));
+        if !self.tool_router.has_route(&request.name) {
+            return Err(ErrorData::invalid_params(
+                format!("no tool {:?}; tools/list names every tool this parcad has", request.name),
+                None,
+            ));
+        }
         let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        tenant::scoped(tenant, self.tool_router.call(call)).await
+        tenant::scoped(tenant, self.tool_router.call(call)).await.or_else(refused_in_the_result)
     }
 
     /// The generated `list_tools` sends no `ttlMs` and no `cacheScope`, and
@@ -2047,7 +2060,21 @@ fn identified(session: session::Session, viewers: Vec<session::Viewer>, with_scr
         script_sha256: service::script_sha256(&session.script),
         script: with_script.then_some(session.script),
         viewers,
+        shown_in_chat: false,
     }
+}
+
+/// Whether the client declared it renders the viewer's media type, in this
+/// request's `_meta` or, on a session, in its handshake.
+fn renders_the_viewer(context: &rmcp::service::RequestContext<rmcp::RoleServer>) -> bool {
+    let Some(extensions) = context.client_capabilities().and_then(|capabilities| capabilities.extensions) else {
+        return false;
+    };
+    extensions
+        .get("io.modelcontextprotocol/ui")
+        .and_then(|ui| ui.get("mimeTypes"))
+        .and_then(|types| types.as_array())
+        .is_some_and(|types| types.iter().any(|kind| kind.as_str() == Some(VIEWER_MIME)))
 }
 
 /// An evaluation packed for the viewer: the mesh as Draco, and the rest of the
@@ -2163,6 +2190,19 @@ where
 
 /// The service layer's refusals are already written for whoever caused them.
 /// Pass them through whole, with what a program can read out of them as `data`.
+/// A tool that refuses answers with a result marked `isError`: claude.ai shows
+/// a model a JSON-RPC error only as "the tool failed (unavailable)", so the
+/// refusal naming the fix never reached it (docs/GOTCHAS.md). The refusal's
+/// `kind`, `line`, `node` and `stage` ride in `_meta`, since a client checks
+/// `structuredContent` against the tool's output schema.
+fn refused_in_the_result(error: ErrorData) -> Result<rmcp::model::CallToolResponse, ErrorData> {
+    let mut result = rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(error.message)]);
+    result.meta = error
+        .data
+        .map(|data| rmcp::model::MetaObject(meta(serde_json::json!({ "parcad/refusal": data }))));
+    Ok(result.into())
+}
+
 fn invalid(message: impl Into<String>) -> ErrorData {
     let message = message.into();
     let data = error_data(&message);
@@ -2232,17 +2272,18 @@ mod tests {
         assert!(instructions(Screen::App).contains("Before modelling, write the request's numbers as checks"));
     }
 
-    /// A hosted account has no window, so its instructions name no screen
-    /// tool and say how a part reaches the user instead: by a signed URL that
-    /// needs no bearer. `initialize` picks the text off the capability the
-    /// transport built the handler with.
+    /// A hosted account has no window, so its instructions name no screen to
+    /// edit and say how a part reaches the user instead: in 3D in a chat that
+    /// renders MCP Apps, or by a signed URL that needs no bearer. `initialize`
+    /// picks the text off the capability the transport built the handler with.
     #[test]
-    fn a_hosted_client_is_told_to_show_a_part_by_url_and_not_on_a_screen() {
+    fn a_hosted_client_is_told_to_show_a_part_in_the_chat_or_by_url() {
         let text = instructions(Screen::None);
         assert!(text.contains(HOSTED));
-        for screen_tool in ["share the parcad app's screen", "open_project", "set_script"] {
+        for screen_tool in ["share the parcad app's screen", "set_script"] {
             assert!(!text.contains(screen_tool), "{screen_tool:?} is in the hosted text");
         }
+        assert!(text.contains("save_project it and open_project it") && text.contains("renders MCP Apps"), "{text}");
         assert!(text.contains("`markdown` line from evaluate_part") && text.contains("export_part's `url`"));
         assert!(text.contains("with no token until it expires"), "a pasted link needs no bearer: {text}");
 
