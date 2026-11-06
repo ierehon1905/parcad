@@ -504,6 +504,29 @@ const DRAWINGS = {
   ),
   chevron: <Line d="M6.6 9.3 12 14.7l5.4-5.4" />,
   plus: <Line d="M12 4.8v14.4M4.8 12h14.4" />,
+  // A body shown, and one put out of sight.
+  eye: (
+    <>
+      <Line d="M2.4 12s3.4-6.4 9.6-6.4 9.6 6.4 9.6 6.4-3.4 6.4-9.6 6.4S2.4 12 2.4 12Z" />
+      <Line d="M14.8 12a2.8 2.8 0 1 1-5.6 0 2.8 2.8 0 0 1 5.6 0Z" />
+    </>
+  ),
+  hidden: (
+    <>
+      <Line d="M2.4 12s3.4-6.4 9.6-6.4 9.6 6.4 9.6 6.4-3.4 6.4-9.6 6.4S2.4 12 2.4 12Z" o=".45" />
+      <Line d="M4.2 4.2 19.8 19.8" />
+    </>
+  ),
+  // The cube with the edges it hides drawn in: seeing through the part.
+  xray: (
+    <>
+      <Line d="M12 2.8 20.4 7.6v8.8L12 21.2 3.6 16.4V7.6Z" />
+      <Line d="M3.6 7.6 12 12.4l8.4-4.8M12 12.4v8.8" o=".85" />
+      <Ghost d="M3.6 16.4 12 11.6l8.4 4.8M12 2.8v8.8" />
+    </>
+  ),
+  play: <path d="M8.2 5.4v13.2a.8.8 0 0 0 1.2.7l10.4-6.6a.8.8 0 0 0 0-1.4L9.4 4.7a.8.8 0 0 0-1.2.7Z" fill="currentColor" />,
+  pause: <path d="M6.6 5h3.6v14H6.6ZM13.8 5h3.6v14h-3.6Z" fill="currentColor" />,
   // The one mark in the set that is not geometry, because it is the only one
   // about the other author rather than the part.
   agent: (

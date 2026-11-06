@@ -2342,3 +2342,27 @@ materials, `face@N`, the chat viewer's per-body grouping — credited `object2`'
 triangles to `object`. Face numbers now run through every body, references
 included (`BodySpan::faces` says so); the part's own counts still leave
 references out. Two numbers, two jobs: don't fold them back into one.
+
+## A drag on the chat viewer scrolled the chat on an iPhone
+
+`touch-action: none`, which three.js's OrbitControls already sets on the
+canvas, is advice to WebKit's own scrolling only. A host that holds the MCP
+App's web view in a native scroll view — what the Claude iOS app behaved like
+— lets that scroll view take every vertical drag that starts on the part: the
+model turned *and* the chat moved. A touch the page cancels (`touchstart`/`touchmove`, non-passive,
+`preventDefault`) is the only signal that reaches it: `app/src/hold-touches.ts`,
+on the canvas and on the motion sliders. That is also why `Slider` reads
+pointer events itself rather than wrapping a native range input, whose own
+touch handling cancelling would switch off. Measured in a native harness on
+the simulator: the same drag moved the chat 155 pt before, 0 after; a drag
+that starts on the body chips still scrolls it, as it should. A touch that
+lands while the chat is still coasting after a fling belongs to the scroll
+view whatever the page does, so test drags from rest.
+
+## The chat viewer's frame stopped growing
+
+The ext-apps `App` reports the page's height with a `ResizeObserver` on
+`<html>` and `<body>`; `style.css` gives both `h-full`, so their boxes are the
+frame's and never change when content grows inside them. The viewer measured
+428 px before its panel rendered and stayed there. `viewer.html` sets `h-auto`
+on both, so the client is told the height the page needs.

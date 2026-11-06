@@ -13,9 +13,11 @@ import { App } from "@modelcontextprotocol/ext-apps/app-with-deps";
 import { decompress } from "fzstd";
 
 import "../style.css";
+import { motionsOf } from "../motion";
 import type { EvaluationSnapshot } from "../state";
-import type { EdgeCurve, FaceMaterial, FaceRun } from "../viewport";
-import { Viewport } from "../viewport";
+import type { BodySpan, EdgeCurve, FaceMaterial, FaceRun } from "../viewport";
+import { VIEWS, Viewport } from "../viewport";
+import { mountControls, showPart } from "./controls";
 
 /** Defined by the Draco decoder script vite.viewer.config.ts loads ahead of this one. */
 declare const DracoDecoderModule: (options: object) => Promise<Draco>;
@@ -47,7 +49,8 @@ interface DracoDecoder {
 /** What `view_part` packs beside the mesh: the window's reply, less its arrays. */
 interface ViewedHeader {
   edges: EdgeCurve[];
-  faces?: { material?: FaceMaterial }[];
+  /** By kernel face number; `body` names the face's body in a part of several. */
+  faces?: { material?: FaceMaterial; body?: string }[];
   snapshot: EvaluationSnapshot;
 }
 
@@ -56,10 +59,13 @@ const loading = document.getElementById("loading")!;
 const loadingText = document.getElementById("loading-text")!;
 const spinner = document.getElementById("spinner")!;
 const viewport = new Viewport(document.getElementById("viewport")!);
+mountControls(viewport, document.getElementById("on-view")!, document.getElementById("controls")!);
 const draco = DracoDecoderModule({});
 /** What `view_part` builds from: the project opened, or a script when the reply carried one. */
 type Source = { project: string } | { script: string };
 let shown: string | undefined;
+/** The project `open_project` was called with, for a result that arrives without its structured half. */
+let requested: string | undefined;
 
 function bytesOf(base64: string): Uint8Array {
   return Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
@@ -69,9 +75,10 @@ function bytesOf(base64: string): Uint8Array {
  * The mesh `view_part` encoded: positions, normals, and each vertex's kernel
  * face number, which Draco carries while it reorders the triangles. The
  * triangles are put back in runs by face, which is what the viewport picks and
- * colours by.
+ * colours by, and the faces in runs by `rank` — their body — so each body's
+ * triangles are one span.
  */
-async function decodeMesh(bytes: Uint8Array) {
+async function decodeMesh(bytes: Uint8Array, rank: (face: number) => number) {
   const d = await draco;
   const buffer = new d.DecoderBuffer();
   const decoder = new d.Decoder();
@@ -101,9 +108,11 @@ async function decodeMesh(bytes: Uint8Array) {
     const faceOf = attribute(d.GENERIC, d.DT_UINT32, () => d.HEAPU32, 1) as Uint32Array;
     const decodedIndices = copy(() => d.HEAPU32, triangles * 3, (p, n) => decoder.GetTrianglesUInt32Array(mesh, n, p));
 
-    const order = Array.from({ length: triangles }, (_, t) => t).sort(
-      (a, b) => faceOf[decodedIndices[a * 3]] - faceOf[decodedIndices[b * 3]],
-    );
+    const order = Array.from({ length: triangles }, (_, t) => t).sort((a, b) => {
+      const faceA = faceOf[decodedIndices[a * 3]];
+      const faceB = faceOf[decodedIndices[b * 3]];
+      return rank(faceA) - rank(faceB) || faceA - faceB;
+    });
     const indices = new Uint32Array(triangles * 3);
     const faceRuns: FaceRun[] = [];
     order.forEach((t, at) => {
@@ -164,9 +173,11 @@ async function show(source: Source) {
   // Decoding does not yield, so give the message a frame to paint first.
   await new Promise((resolve) => requestAnimationFrame(resolve));
   const header = JSON.parse(new TextDecoder().decode(decompress(bytesOf(reply.header)))) as ViewedHeader;
-  const mesh = await decodeMesh(bytesOf(reply.draco));
-  if (key !== shown) return;
   const snapshot = header.snapshot;
+  const named = snapshot.named_bodies ?? [];
+  const bodyOfFace = (header.faces ?? []).map((face) => named.findIndex((body) => body.name === face.body));
+  const mesh = await decodeMesh(bytesOf(reply.draco), (face) => bodyOfFace[face] ?? -1);
+  if (key !== shown) return;
   const v = ([x, y, z]: [number, number, number]) => ({ x, y, z });
   const bounds = { min: v(snapshot.bounds_min), max: v(snapshot.bounds_max) };
   viewport.setGeometry(
@@ -174,29 +185,57 @@ async function show(source: Source) {
       ...mesh,
       edges: header.edges,
       faceMaterials: header.faces?.map((face) => face.material),
+      bodies: bodySpans(mesh.faceRuns, bodyOfFace, named),
     },
     bounds,
   );
-  viewport.frameAll(bounds);
+  viewport.look(VIEWS.threeQuarter, false);
+  showPart(
+    named.map((body) => ({ name: body.name, reference: body.reference === true })),
+    motionsOf(snapshot.checks?.motions ?? []).filter((motion) => motion.from !== motion.to),
+  );
   const size = snapshot.bounds_max.map((hi, i) => (hi - snapshot.bounds_min[i]).toFixed(1)).join(" × ");
   const volume = snapshot.volume_mm3 == null ? "" : ` · ${snapshot.volume_mm3.toFixed(1)} mm³`;
   loading.hidden = true;
-  say(`${size} mm${volume} · drag to turn, scroll to zoom`);
+  say(`${size} mm${volume}`);
+}
+
+/** Each named body's triangles, from the face runs once they are in body order. */
+function bodySpans(runs: FaceRun[], bodyOfFace: number[], named: { name: string }[]): BodySpan[] {
+  const spans: BodySpan[] = [];
+  let current: BodySpan | undefined;
+  for (const run of runs) {
+    const body = named[bodyOfFace[run.face] ?? -1];
+    if (!body) continue;
+    if (current?.name !== body.name) {
+      current = { name: body.name, start: run.start, count: 0 };
+      spans.push(current);
+    }
+    current.count = run.start + run.count - current.start;
+  }
+  return spans;
 }
 
 const app = new App({ name: "ParCAD viewer", version: __PARCAD_VERSION__ });
+app.addEventListener("toolinput", (input) => {
+  const name = input.arguments?.name;
+  if (typeof name === "string") requested = name;
+});
 app.addEventListener("toolresult", (result) => {
   if (result.isError) {
     const text = result.content?.find((block) => block.type === "text");
     fail(text && "text" in text ? text.text : "The part did not open.");
     return;
   }
-  const reply = result.structuredContent as { name?: unknown; script?: unknown } | undefined;
+  const reply = (result.structuredContent ?? replyText(result.content)) as { name?: unknown; script?: unknown } | undefined;
   // A reply carries the script only when asked (`script: true`); the project
-  // it names is what the server builds from otherwise.
+  // it names is what the server builds from otherwise. A chat reloaded from
+  // history may deliver the result without either (claude-ai-mcp #1158); the
+  // project the call asked for is then what to build.
   const source: Source | undefined =
     typeof reply?.script === "string" ? { script: reply.script }
     : typeof reply?.name === "string" ? { project: reply.name }
+    : requested !== undefined ? { project: requested }
     : undefined;
   if (!source) {
     fail("The server sent neither a project name nor a script with the part; update ParCAD.");
@@ -204,5 +243,18 @@ app.addEventListener("toolresult", (result) => {
   }
   show(source).catch((e: unknown) => fail(e instanceof Error ? e.message : String(e)));
 });
+
+/** The reply's JSON from its text block, which a client keeps when it drops `structuredContent`. */
+function replyText(content: { type: string; text?: string }[] | undefined): unknown {
+  for (const block of content ?? []) {
+    if (block.type !== "text" || !block.text?.trimStart().startsWith("{")) continue;
+    try {
+      return JSON.parse(block.text);
+    } catch {
+      // Not the reply; try the next block.
+    }
+  }
+  return undefined;
+}
 progress("Waiting for the part…");
 app.connect().catch((e: unknown) => fail(`Could not reach the chat client: ${e}`));

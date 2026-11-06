@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { zstdCompressSync, constants } from "node:zlib";
 import { defineConfig, type Plugin } from "vite";
+import preact from "@preact/preset-vite";
 import tailwindcss from "@tailwindcss/vite";
 import { viteSingleFile } from "vite-plugin-singlefile";
 import pkg from "./package.json" with { type: "json" };
@@ -11,7 +12,7 @@ import pkg from "./package.json" with { type: "json" };
 // is inlined. Built after the app into the same dist/, which is what the host
 // already serves and embeds.
 export default defineConfig({
-  plugins: [tailwindcss(), viteSingleFile(), packScripts()],
+  plugins: [preact(), tailwindcss(), viteSingleFile(), packScripts()],
   define: { __PARCAD_VERSION__: JSON.stringify(pkg.version) },
   build: {
     target: "es2022",

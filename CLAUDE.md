@@ -264,7 +264,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | one part inside another | `importPart` and `partParams` in `app/src/dsl.ts`; each runner installs its reader with `__parcadReadPartsWith` — `script.rs` (`readPart`, and the cache that checks imported sources), `engine.ts` (`buildWithParts`), `tools/run.ts` (`--parts`) |
 | lines, offsets, intersections and convex outlines in the plane | `line2d`, `Line2d`, `hull` in `app/src/dsl.ts` — arithmetic on numbers the script has; nothing reads the built part |
 | what the app can do at all | `crates/parcad-host/src/service.rs` — never a transport file |
-| the part in 3D inside a chat client (MCP Apps) | `app/src/viewer/main.ts`, built by `app/vite.viewer.config.ts`; `view_part` and the `ui://parcad/viewer` resource in `mcp.rs` |
+| the part in 3D inside a chat client (MCP Apps) | `app/src/viewer/main.ts`, built by `app/vite.viewer.config.ts`; `view_part` and the `ui://parcad/viewer` resource in `mcp.rs`; its controls — bodies, x-ray, presets, a slider per motion — in `app/src/viewer/controls.tsx`, the poses in `app/src/motion.ts` |
 | the HTTP and MCP hosts | `crates/parcad-host/src/http.rs`, `mcp.rs` — no Tauri in the crate; the app and `parcad serve` both embed it |
 | what the window's project and session routes do, for every host | `crates/parcad-host/src/routes.rs` |
 | the host inside a browser tab (ParCAD web) | `crates/parcad-host/src/page.rs`, compiled by `crates/parcad-wasm-host`; `app/src/page/host.ts` and `host-worker.ts` load it — a kernel request pauses the call, which runs again once the page has the answer (docs/ARCHITECTURE.md, "A third host") |
