@@ -25,5 +25,26 @@
       "fileSha256": "{{sha256:parcad-mcp-x86_64-pc-windows-msvc.mcpb}}",
       "transport": { "type": "stdio" }
     }
+  ],
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://mcp.parcad.dev/mcp",
+      "headers": [
+        {
+          "name": "Authorization",
+          "description": "The bearer token for your account on ParCAD's hosted server",
+          "value": "Bearer {token}",
+          "isRequired": true,
+          "variables": {
+            "token": {
+              "description": "Your account's token; the server's operator hands them out",
+              "isRequired": true,
+              "isSecret": true
+            }
+          }
+        }
+      ]
+    }
   ]
 }
