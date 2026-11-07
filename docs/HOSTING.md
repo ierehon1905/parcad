@@ -268,8 +268,30 @@ tunnel*, *Cloudflared*, name it `parcad`. The next screen shows an install
 command; the long `eyJ…` word in it is the **tunnel token** — copy it, it is
 the one secret the box is given. Then *Public hostname*: the subdomain and
 domain clients will use (`cad.example.com`), type *HTTP*, URL
-`localhost:4242`. Nothing else: the token names the tunnel, and the hostname
-and origin live in Cloudflare, so a box can be replaced without touching them.
+`localhost:4242`, and a second one for the bare domain (`example.com`) to
+the same URL, for the connector's icon below. Nothing else: the token names
+the tunnel, and the hostnames and origin live in Cloudflare, so a box can be
+replaced without touching them.
+
+### The connector's icon
+
+claude.ai draws a custom connector's mark from the favicon of the connector
+URL's registrable domain, through Google's favicon service
+(`google.com/s2/favicons?domain=<domain>`), and ignores `serverInfo.icons`,
+`logo_uri` and whatever the MCP origin itself serves — several operators
+measured it in anthropics/claude-ai-mcp#152 through 2026-07. So a
+`*.trycloudflare.com` connector wears Cloudflare's mark, a platform subdomain
+a globe, and only a domain of our own can wear ParCAD's. A hosted host answers
+`/` with a front page linking the bundle's icons, and serves `/favicon.ico`
+and those icons, all with no bearer; the bare domain routed to the same
+tunnel is what Google then reads. Google keeps what it found, and claude.ai
+keeps what it drew per connector, so check before adding one:
+
+```bash
+curl -sL -o /dev/null -w '%{http_code} %{size_download}\n' 'https://www.google.com/s2/favicons?domain=example.com&sz=32'
+```
+
+A 404 of 726 bytes is the globe. Not yet seen on a domain of ours.
 
 ### The box
 

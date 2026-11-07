@@ -16,7 +16,8 @@
 //!   `parcad serve --hosted` binds where it is told, and then `/mcp` and every
 //!   `/api` route sit behind [`authenticate`], which resolves a bearer token to
 //!   one account's [`tenant::Tenant`] or answers 401 naming the fix. Only
-//!   `/api/health` stays open, and no frontend is served at all — a browser
+//!   `/api/health`, a front page saying where an agent connects, and that
+//!   page's icons stay open, and no frontend is served at all — a browser
 //!   cannot send a bearer. What an account wrote it fetches back from
 //!   `/api/exports/<name>` with the same bearer, or by the signed, expiring
 //!   link the reply carried (`signing.rs`), which is how a picture a model
@@ -40,7 +41,7 @@ use axum::{
     extract::{Path, Request, State},
     http::{header, StatusCode, Uri},
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -131,12 +132,71 @@ fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router
     };
     // Every `/api` route too, not `/mcp` alone: an agent service builds and
     // exports a part over them. No frontend, which could carry no bearer.
+    let page = front_page(accounts.links().host());
+    let front = move || std::future::ready(Html(page.clone()));
     let guarded = api()
-        .nest_service("/mcp", mcp::service(assets, Some(accounts.links().host().authority())))
+        .nest_service("/mcp", mcp::service(assets.clone(), Some(accounts.links().host().authority())))
         .layer(axum::middleware::from_fn_with_state(Arc::new(accounts), authenticate));
     // Unguarded, so a client looking for OAuth metadata hears that there is
     // none rather than a challenge it takes to mean "sign in".
-    Router::new().route("/api/health", get(health)).merge(guarded).fallback(no_route)
+    Router::new()
+        .route("/api/health", get(health))
+        .route("/", get(front))
+        .route("/favicon.ico", get(icon))
+        .route("/favicon.svg", get(icon))
+        .route("/favicon-32.png", get(icon))
+        .route("/apple-touch-icon.png", get(icon))
+        .with_state(assets)
+        .merge(guarded)
+        .fallback(no_route)
+}
+
+/// What a hosted host is and where an agent connects, for whoever opens its
+/// address. Its icon links are load-bearing: docs/HOSTING.md, "The connector's icon".
+fn front_page(public: &tenant::PublicHost) -> String {
+    format!(
+        r#"<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>ParCAD</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<style>body{{font:16px/1.5 system-ui,sans-serif;max-width:40em;margin:4em auto;padding:0 16px}}</style>
+</head>
+<body>
+<h1>ParCAD</h1>
+<p>A hosted ParCAD server. Agents connect to <code>{public}/mcp</code> with
+<code>Authorization: Bearer &lt;token&gt;</code>; this server's operator hands out the tokens.</p>
+<p>ParCAD also runs on your own machine, with no token:
+<a href="https://github.com/ierehon1905/parcad">github.com/ierehon1905/parcad</a>.</p>
+</body>
+</html>
+"#
+    )
+}
+
+/// The front page's icons, open to anyone: a chat client draws a connector's
+/// mark from them through a favicon service, which carries no bearer.
+async fn icon(State(assets): State<Arc<dyn Assets>>, uri: Uri) -> Response {
+    let name = match uri.path() {
+        "/favicon.ico" => "favicon-32.png",
+        other => other.trim_start_matches('/'),
+    };
+    match assets.get(name) {
+        Some(icon) => (
+            [
+                (header::CONTENT_TYPE, icon.mime_type),
+                (header::CACHE_CONTROL, "public, max-age=86400".to_string()),
+            ],
+            icon.bytes,
+        )
+            .into_response(),
+        None => no_route().await,
+    }
 }
 
 async fn no_route() -> Response {
@@ -536,6 +596,10 @@ mod tests {
     /// A router on a spare loopback port, served on a thread of its own for
     /// as long as the test process runs.
     fn on_a_spare_port(accounts: Option<tenant::Accounts>) -> u16 {
+        serving(Arc::new(NoAssets), accounts)
+    }
+
+    fn serving(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> u16 {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("a spare port");
         let port = listener.local_addr().expect("the port").port();
         listener.set_nonblocking(true).expect("non-blocking");
@@ -546,7 +610,7 @@ mod tests {
                 .expect("a runtime");
             runtime.block_on(async {
                 let listener = tokio::net::TcpListener::from_std(listener).expect("the listener");
-                axum::serve(listener, router(Arc::new(NoAssets), accounts))
+                axum::serve(listener, router(assets, accounts))
                     .await
                     .expect("the host runs");
             });
@@ -656,8 +720,51 @@ mod tests {
         let mcp = exchange(port, "POST", "/mcp", &[("Content-Type", "application/json")], "{}");
         assert_eq!(mcp.status, 401, "/mcp is behind the same door: {}", mcp.body);
 
-        let page = exchange(port, "GET", "/", &[("Authorization", &bearer(&acme))], "");
-        assert_eq!(page.status, 404, "no frontend is served, token or not");
+        let app = exchange(port, "GET", "/index.html", &[("Authorization", &bearer(&acme))], "");
+        assert_eq!(app.status, 404, "no frontend is served, token or not");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The bundle's icons and nothing else of it.
+    struct IconOnly;
+
+    impl Assets for IconOnly {
+        fn get(&self, path: &str) -> Option<Asset> {
+            (path == "favicon-32.png").then(|| Asset {
+                mime_type: "image/png".into(),
+                bytes: b"\x89PNG icon".to_vec(),
+            })
+        }
+        fn how_to_embed(&self) -> String {
+            String::new()
+        }
+    }
+
+    /// A favicon service fetching a connector's mark carries no bearer, so the
+    /// front page and its icons answer anyone; the bundle's other files do not.
+    #[test]
+    fn a_hosted_host_shows_anyone_its_front_page_and_its_icon() {
+        let dir = crate::tenant::tests::fresh_root("front-page");
+        let file = dir.join("tokens");
+        tenant::issue(TenantId::new("acme").unwrap(), &file).unwrap();
+        let accounts = tenant::Accounts::read(&file, &dir.join("tenants"), links()).unwrap();
+        let port = serving(Arc::new(IconOnly), Some(accounts));
+
+        let page = exchange(port, "GET", "/", &[], "");
+        assert_eq!(page.status, 200, "{}", page.body);
+        assert!(page.header("content-type").is_some_and(|t| t.starts_with("text/html")), "{}", page.head);
+        assert!(page.body.contains(&format!("https://{PUBLIC_HOST}/mcp")), "{}", page.body);
+        assert!(page.body.contains(r#"<link rel="icon" href="/favicon-32.png""#), "{}", page.body);
+
+        for path in ["/favicon.ico", "/favicon-32.png"] {
+            let icon = exchange(port, "GET", path, &[], "");
+            assert_eq!(icon.status, 200, "{path}: {}", icon.body);
+            assert_eq!(icon.header("content-type"), Some("image/png"), "{path}");
+            assert_eq!(icon.bytes, b"\x89PNG icon", "{path}");
+        }
+        let missing = exchange(port, "GET", "/favicon.svg", &[], "");
+        assert_eq!(missing.status, 404, "an icon the bundle lacks is a missing route: {}", missing.body);
+        assert_eq!(exchange(port, "GET", "/index.html", &[], "").status, 404, "the app is still not served");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
