@@ -322,8 +322,7 @@ parcad-token <account-id>
 ```
 
 prints the account's bearer token once and restarts the host to read it. The
-token goes into the client and nowhere else: a phone app's agent service
-keeps it in that service's secret store; Claude Code takes it as
+token goes into the client and nowhere else. Claude Code takes it as
 `claude mcp add --transport http parcad https://cad.example.com/mcp --header
 "Authorization: Bearer <token>"`. In claude.ai, Customize → Connectors → Add
 custom connector takes the URL, then **No sign-in** and a request header
