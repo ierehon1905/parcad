@@ -284,14 +284,21 @@ measured it in anthropics/claude-ai-mcp#152 through 2026-07. So a
 a globe, and only a domain of our own can wear ParCAD's. A hosted host answers
 `/` with a front page linking the bundle's icons, and serves `/favicon.ico`
 and those icons, all with no bearer; the bare domain routed to the same
-tunnel is what Google then reads. Google keeps what it found, and claude.ai
-keeps what it drew per connector, so check before adding one:
+tunnel is what Google then reads. Google keeps what it found, so check it:
 
 ```bash
 curl -sL -o /dev/null -w '%{http_code} %{size_download}\n' 'https://www.google.com/s2/favicons?domain=example.com&sz=32'
 ```
 
-A 404 of 726 bytes is the globe. Not yet seen on a domain of ours.
+A 404 of 726 bytes is the globe. For parcad.dev it turned into ours on
+2026-11-08, about eight hours after the domain was verified in Google Search
+Console (a TXT record) and its front page sent for indexing.
+
+The mark is not stored with the connector. The connectors page loads
+`s2/favicons?domain=<domain>&sz=64` in the viewer's browser each time it draws,
+so a browser that fetched the globe earlier keeps showing it from its HTTP
+cache after Google has changed its answer. A hard reload of the page
+(⌘⇧R) fetches it again; the connector need not be removed and added back.
 
 ### The box
 
