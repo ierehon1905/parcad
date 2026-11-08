@@ -234,9 +234,10 @@ impl Shape {
         ffi::Shape_geometry_json(&self.inner)
     }
 
-    /// What each face of the first solid *is*, as JSON: kind, exact area,
-    /// centroid, placement direction and radius, and the faces it shares an
-    /// edge with.
+    /// What each face *is*, as JSON: kind, exact area, centroid, placement
+    /// direction and radius, and the faces it shares an edge with. Every face
+    /// of the shape, in the order [`Self::faces`] and `Mesh::faces` number
+    /// them.
     ///
     /// The compact companion to [`Self::geometry_json`], for a caller that
     /// wants to describe a part rather than recreate one. It writes no boundary
@@ -848,8 +849,8 @@ impl Shape {
 
     /// The area of every face in this shape, mm², and their area-weighted
     /// centre — `BRepGProp` on the exact surfaces, never a tessellation.
-    /// Reads a compound of loose faces, which `faces_json` (solids only)
-    /// does not. Added for parcad; see PARCAD-CHANGES.md.
+    /// One integral over the whole shape, where `faces_json` measures face
+    /// by face. Added for parcad; see PARCAD-CHANGES.md.
     pub fn surface_properties(&self) -> (f64, DVec3) {
         let mut props = ffi::GProp_GProps_ctor();
         // Adaptive, for the reason `volume_properties` is. 1e-5 is a bound;

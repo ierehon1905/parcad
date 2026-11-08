@@ -1,7 +1,7 @@
 {
   "name": "chamfer-through-a-tray-wall",
   "script": "eval/scripts/chamfer-through-a-tray-wall.js",
-  "why": "A tray chamfered deeper than its walls, written cut-then-chamfer. OpenCASCADE's chamfer on the cut tray returns a closed solid whose faces run through the pocket, which the self-intersection check refuses (held by a_chamfer_through_the_wall_behind_it_is_refused in backend.rs, on the kernel directly). The chamfer's reach meets the pocket, so the part is built chamfer-then-cut and the pocket breaks out through the chamfer faces: a thin-walled tray with its bottom corners cut open, which print_check is there to judge.",
+  "why": "A tray chamfered deeper than its walls, written cut-then-chamfer. OpenCASCADE's chamfer on the cut tray returns a closed solid whose faces run through the pocket, which the self-intersection check refuses (held by a_chamfer_through_the_wall_behind_it_is_refused in backend.rs, on the kernel directly). The chamfer's reach meets the pocket, so the part is built chamfer-then-cut and the pocket breaks out through the chamfer faces: a thin-walled tray with its bottom corners cut open, which print_check is there to judge. It prints as two pieces, the floor and the wall ring over it, and the support under the eight chamfer faces is 1999.176 mm³ in closed form: four 45° wedges of 532.58 mm³ less the 131.15 under the pocket, where the pocket took the chamfer face away. Until the ring's faces were described (docs/GOTCHAS.md, \"`Shape_faces_json` described the first solid only\") its faces did not count as planar and no support was reported.",
   "brep": {
     "size": [
       40.0,
@@ -29,7 +29,8 @@
         "unsupported_mm2": 970.467,
         "bed_mm2": 851.472,
         "faces": 8,
-        "bridges": 0
+        "bridges": 0,
+        "support_mm3": 1999.176
       }
     }
   }

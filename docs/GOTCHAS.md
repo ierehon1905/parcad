@@ -2343,19 +2343,30 @@ above 0.05° or 1 % of 1/R; the number is the reply's `curvature_jump_per_mm`.
 A G2 corner patch, an n-sided patch with curvature constraints, is the open
 item in docs/NEXT.md.
 
-## `Shape_faces_json` describes the first solid only
+## `Shape_faces_json` described the first solid only *(fixed 2026-11-09)*
 
-The vendored `Shape_faces_json` walks the faces of the *first solid* in a
-shape, by design — concatenating a second would renumber the faces — so for a
+The vendored `Shape_faces_json` walked the faces of the *first solid* in a
+shape, while the mesher and `shape.faces()` number every face of it, so for a
 body that is a compound of several solids (a union whose operands never met,
-a boss floating over an open cavity) `perceive::describe_faces` returns fewer
-summaries than `shape.faces()` yields, and indexing the one by the other reads
-the wrong surface. The motion sweep learned this the hard way: a base whose
-boss did not touch it came back with no `plane` kinds past face 6, every face
-was treated as curved, and the sweep spent its whole budget in the kernel. It
-now reads planarity off each face's own triangulation and never consults the
-summaries. Anything else that pairs `describe_faces` with a face index should
-check the body is one solid first.
+a boss floating over an open cavity) or a surface, `perceive::describe_faces`
+returned fewer summaries than there are face numbers, and indexing the one by
+the other read the wrong surface. The motion sweep learned this first: a base
+whose boss did not touch it came back with no `plane` kinds past face 6, every
+face was treated as curved, and the sweep spent its whole budget in the kernel;
+it reads planarity off each face's own triangulation since.
+
+In a part of several bodies the short list shifted every later body.
+`Assembled::append` numbers faces by the shape's own count, and appends the
+descriptions it was given, so after a body of four screws in one union each
+face read the description 9 places on. In `plant-shelves-v4` three such bodies
+put 27 between them: the chat viewer drew the eight cones last in the list with
+no faces at all, since their numbers ran past the end of `faces`, and hiding
+`pot4` hid the top of `soil`. The writer now walks the whole shape in the
+mesher's traversal, with neighbours numbered the same way;
+`every_meshed_face_is_described_in_its_own_body` in `serve.rs` holds it. One
+measurement moved with it: overhang counts an undescribed face as not planar
+and then builds no support, so `chamfer-through-a-tray-wall`, a floor and a
+wall ring, reports its 1999.176 mm³ of support only now.
 
 ## A body after a reference body drew as the reference *(fixed 2026-11-06)*
 

@@ -6828,11 +6828,10 @@ mod tests {
     /// This is the join the whole face story rests on: a raycast gives a
     /// triangle, `FaceRun` turns that into a face number, and everything that
     /// then *describes* that face — surface kind, area, neighbours — is looked
-    /// up by it. The two walks are not the same code. The mesher explores the
-    /// whole shape for faces; the geometry writer explores each solid. They
-    /// coincide while a part is one solid, which is all the graph can currently
-    /// produce, and this fails the day that stops being true rather than
-    /// letting the window describe a face the pointer is not on.
+    /// up by it. The two walks are not the same code, and once were not the
+    /// same walk: the writer stopped at the first solid, so a body of two
+    /// pieces described the second's faces as whatever came next. Two drilled
+    /// plates that never meet are that body.
     ///
     /// Checked by geometry rather than by index, because two lists agreeing in
     /// length proves nothing: every triangle of run *i* has to actually lie on
@@ -6841,15 +6840,20 @@ mod tests {
     fn a_meshed_faces_triangles_lie_on_the_surface_the_report_describes() {
         use crate::protocol::FaceSummary;
 
-        let body = AdHocShape::make_box_point_point(
-            DVec3::new(-20.0, -20.0, -4.0),
-            DVec3::new(20.0, 20.0, 4.0),
-        )
-        .0;
-        let cutter = AdHocShape::make_cylinder(DVec3::new(0.0, 0.0, -8.0), 3.0, 16.0).0;
-        let shape = body.subtract(&cutter).shape;
+        let plate = |x: f64| {
+            let body = AdHocShape::make_box_point_point(
+                DVec3::new(x - 20.0, -20.0, -4.0),
+                DVec3::new(x + 20.0, 20.0, 4.0),
+            )
+            .0;
+            let cutter = AdHocShape::make_cylinder(DVec3::new(x, 0.0, -8.0), 3.0, 16.0).0;
+            body.subtract(&cutter).shape
+        };
+        let shape = plate(0.0).union(&plate(100.0)).shape;
+        assert!(shape.single_solid().is_none(), "the plates never meet");
 
         let described: Vec<FaceSummary> = serde_json::from_str(&shape.faces_json()).unwrap();
+        assert_eq!(described.len(), shape.faces().count(), "both plates' faces are described");
         let mesh = shape.mesh();
 
         for run in &mesh.faces {

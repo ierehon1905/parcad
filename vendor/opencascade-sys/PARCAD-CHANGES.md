@@ -106,9 +106,9 @@ later release of it exists, so there is no version to bump to.
   on what it borders.
 
 - `Shape_faces_json(shape)` in `wrapper.hxx` — the same per-face measurements
-  for the first solid, without the boundary wires and without descending into a
-  B-spline's poles, plus a compact `write_surface_placement` that reports only
-  kind, direction and radius.
+  for every face of the shape, without the boundary wires and without
+  descending into a B-spline's poles, plus a compact `write_surface_placement`
+  that reports only kind, direction and radius.
 
   It exists because the full report travels on every rebuild otherwise, behind
   a 120 ms editor debounce. Measured, best of 25 in-process: a drilled plate of
@@ -118,9 +118,15 @@ later release of it exists, so there is no version to bump to.
   rather than one writer with a flag, because the cost is in the writing — a
   filter would still have built the pole grid before dropping it.
 
-  The face indices it reports are `TopExp_Explorer` order over the solid, which
-  is the order `Mesh::faces` numbers by, so a triangle picked in a viewport and
-  a face described here are the same face. That agreement is checked from Rust
+  The face indices it reports are `TopExp_Explorer` order over the whole
+  shape, which is the order `Mesh::faces` numbers by, so a triangle picked in a
+  viewport and a face described here are the same face — in every solid of a
+  compound, and on a shell or a loose face. It once walked the first solid
+  only, and a body in two pieces described its second piece's faces as the
+  next body's (parcad's docs/GOTCHAS.md, "`Shape_faces_json` described the
+  first solid only"). A face two solids share is visited once for each, and
+  listed at both numbers; `adjacent` names a neighbour by its first. That
+  agreement is checked from Rust
   (`a_meshed_faces_triangles_lie_on_the_surface_the_report_describes`) rather
   than assumed, because it is a property of OCCT rather than of this code.
 

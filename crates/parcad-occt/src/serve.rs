@@ -758,9 +758,9 @@ struct Assembled {
     /// not counted.
     topology: Topology,
     /// Face numbers given out so far, every body's: the next body's first.
-    /// The shape's own count rather than `faces.len()`, which runs short on
-    /// a compound (docs/GOTCHAS.md, "`Shape_faces_json` describes the first
-    /// solid only") and would let that body's last faces collide with the next.
+    /// The shape's own count rather than `faces.len()`, which is empty when a
+    /// description does not parse (`perceive::describe_faces`) and would let
+    /// that body's faces collide with the next.
     numbered_faces: usize,
     bodies: Vec<BodySpan>,
     /// The part's own bodies' kinds, which decide the part's.
@@ -927,6 +927,101 @@ mod tests {
             }
             first += span.faces;
         }
+    }
+
+    /// Every face a run of triangles carries is described at that number, as
+    /// a face of the body those triangles are and as the surface they lie on.
+    /// A body of two solids, a surface and a cone after them are the cases:
+    /// the description once stopped at a body's first solid, and every later
+    /// face read a description further on — in `plant-shelves-v4` the chat
+    /// viewer drew eight cones without faces, and a box's top as a pot.
+    #[test]
+    fn every_meshed_face_is_described_in_its_own_body() {
+        let whole = served(serde_json::json!({"units":"mm","root":10,"nodes":[
+            {"op":"cuboid","size":{"x":10,"y":10,"z":10}},
+            {"op":"cylinder","r":2,"h":10},
+            {"op":"translate","child":1,"by":{"x":20,"y":0,"z":0}},
+            {"op":"translate","child":1,"by":{"x":30,"y":0,"z":0}},
+            {"op":"union","children":[2,3],"blend":0},
+            {"op":"surface_extrude","curve":[[40,0],{"spline":[[45,4],[50,-3]]},[55,0]],"height":10},
+            {"op":"revolve","profile":[[0,-4],[5,-4],[3,4],[0,4]]},
+            {"op":"translate","child":6,"by":{"x":70,"y":0,"z":0}},
+            {"op":"cuboid","size":{"x":10,"y":10,"z":10}},
+            {"op":"translate","child":8,"by":{"x":90,"y":0,"z":0}},
+            {"op":"bodies","bodies":[
+                {"name":"block","child":0},
+                {"name":"screws","child":4,"reference":true},
+                {"name":"sheet","child":5},
+                {"name":"pot","child":7},
+                {"name":"soil","child":9}]}
+        ]}));
+        let names: Vec<&str> = whole.bodies.iter().map(|b| b.name.as_str()).collect();
+        assert_eq!(names, ["block", "screws", "sheet", "pot", "soil"]);
+        let numbered: usize = whole.bodies.iter().map(|b| b.faces).sum();
+        assert_eq!(whole.faces.len(), numbered, "a description per face number, every body's");
+
+        let mut first = 0;
+        for span in &whole.bodies {
+            let own = first as u32..(first + span.faces) as u32;
+            let triangles = span.triangle_start..span.triangle_start + span.triangle_count;
+            let runs: Vec<&FaceRun> =
+                whole.face_runs.iter().filter(|run| triangles.contains(&(run.start as usize))).collect();
+            assert_eq!(runs.len(), span.faces, "`{}` has a run per face", span.name);
+            for run in runs {
+                let face = &whole.faces[run.face as usize];
+                assert!(own.contains(&run.face), "face {} of `{}` is outside {own:?}", run.face, span.name);
+                assert_eq!(face.body.as_deref(), Some(span.name.as_str()), "face {}", run.face);
+                for neighbour in &face.adjacent {
+                    assert!(own.contains(neighbour), "face {} borders {neighbour}, off `{}`", run.face, span.name);
+                    assert!(whole.faces[*neighbour as usize].adjacent.contains(&run.face), "face {}", run.face);
+                }
+                // The triangles are the face described: they cover its exact
+                // area, and the box around them holds its centroid — a plane's
+                // lies on it, a cone's on the axis the face goes round.
+                let corner = |t: u32, k: u32| {
+                    let v = whole.indices[(t * 3 + k) as usize] as usize * 3;
+                    let [x, y, z] = [0, 1, 2].map(|axis| whole.positions[v + axis] as f64);
+                    glam::DVec3::new(x, y, z)
+                };
+                let mut low = glam::DVec3::splat(f64::INFINITY);
+                let mut high = glam::DVec3::splat(f64::NEG_INFINITY);
+                let mut area = 0.0;
+                for t in run.start..run.start + run.count {
+                    let [a, b, c] = [corner(t, 0), corner(t, 1), corner(t, 2)];
+                    area += (b - a).cross(c - a).length() / 2.0;
+                    low = low.min(a.min(b).min(c));
+                    high = high.max(a.max(b).max(c));
+                }
+                let centroid = glam::DVec3::from_array(face.centroid);
+                assert!(
+                    centroid.cmpge(low - 1e-3).all() && centroid.cmple(high + 1e-3).all(),
+                    "face {} of `{}` is described at {centroid}, its triangles lie in {low}..{high}",
+                    run.face,
+                    span.name
+                );
+                assert!(
+                    (area - face.area_mm2).abs() < 0.01 * face.area_mm2,
+                    "face {} of `{}`: triangles cover {area} mm², described {} mm²",
+                    run.face,
+                    span.name,
+                    face.area_mm2
+                );
+            }
+            first += span.faces;
+        }
+        let kinds = |body: &str| -> Vec<&str> {
+            let mut kinds: Vec<&str> = whole
+                .faces
+                .iter()
+                .filter(|f| f.body.as_deref() == Some(body))
+                .map(|f| f.surface.kind.as_str())
+                .collect();
+            kinds.sort_unstable();
+            kinds
+        };
+        assert_eq!(kinds("screws"), ["cylinder", "cylinder", "plane", "plane", "plane", "plane"]);
+        assert_eq!(kinds("pot"), ["cone", "plane", "plane"]);
+        assert_eq!(kinds("soil"), ["plane"; 6]);
     }
 
     /// The figures a reply reports are the B-rep's wherever its integrals

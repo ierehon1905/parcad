@@ -85,7 +85,7 @@ out. Everything below could otherwise have lived in our own crate.
   exact mass properties, faces with their surface data down to B-spline pole
   grids, wires as ordered edge loops.
 
-- `Shape::faces_json()` — what each face of the first solid *is*, over the sys
+- `Shape::faces_json()` — what each face of the shape *is*, over the sys
   crate's new `Shape_faces_json`: kind, exact area, centroid, placement
   direction and radius, and the faces it shares an edge with. The compact
   companion to `geometry_json`, for describing a part rather than recreating
@@ -215,8 +215,7 @@ this shape. See opencascade-sys's PARCAD-CHANGES.md.
 rather than one face. The crate already bound it for `Face::center_of_mass`
 and threw the mass away. parcad measures the contact between two touching
 bodies with it: the common of their two skins is a compound of loose faces,
-which `Shape_faces_json` (solids only) reads as empty, and the area has to be
-exact on a curved seat rather than a tessellation's.
+and the area has to be exact on a curved seat rather than a tessellation's.
 
 ## Removed: `Shape::oriented_outward`
 

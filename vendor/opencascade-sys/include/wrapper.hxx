@@ -2518,11 +2518,13 @@ inline void write_edge(std::ostringstream &out, const TopoDS_Edge &edge) {
   out << "]}";
 }
 
-// Faces sharing an edge with this one, as indices into the solid's face order.
-// `edge_faces` is built once per solid rather than per face.
+// Faces sharing an edge with this one, as indices into `faces`, or into the
+// positions `numbered` gives each of its entries. `edge_faces` is built once
+// per shape rather than per face.
 inline void write_neighbours(std::ostringstream &out, const TopoDS_Face &face,
                              const IndexedMapOfShape &faces,
-                             const IndexedDataMapOfShapeListOfShape &edge_faces) {
+                             const IndexedDataMapOfShapeListOfShape &edge_faces,
+                             const std::vector<int> *numbered = nullptr) {
   // A pair meeting along several edges is named once, not once per edge.
   std::set<int> neighbours;
   const int self = faces.FindIndex(face);
@@ -2535,7 +2537,7 @@ inline void write_neighbours(std::ostringstream &out, const TopoDS_Face &face,
       const int index = faces.FindIndex(neighbour);
       // A seam edge lists its own face twice; a face is not its own neighbour.
       if (index > 0 && index != self) {
-        neighbours.insert(index - 1);
+        neighbours.insert(numbered != nullptr ? (*numbered)[index - 1] : index - 1);
       }
     }
   }
@@ -2659,9 +2661,6 @@ inline void write_solid(std::ostringstream &out, const TopoDS_Shape &solid) {
 
 } // namespace parcad_geometry_json
 
-// What each face of the first solid *is*, without its boundary or pole grid.
-// Why this exists rather than a flag on the full writer, with the measurements:
-// docs/GOTCHAS.md, "Two writers for measured geometry".
 // Whether any face of `shape`, in every solid and shell of it, lies on a surface
 // other than a plane, cylinder, cone, sphere, torus or B-spline: an offset, a
 // linear extrusion or revolution of a curve, a Bezier patch. BRepGProp's
@@ -2685,33 +2684,43 @@ inline bool Shape_has_derived_surfaces(const TopoDS_Shape &shape) {
   return false;
 }
 
+// What each face of `shape` *is*, without its boundary or pole grid, listed in
+// the traversal the mesher numbers faces by: every solid of a compound, and a
+// shell's or a loose face's too, so position in the list is the face number a
+// triangle carries. Why this exists rather than a flag on the full writer, with
+// the measurements: docs/GOTCHAS.md, "Two writers for measured geometry".
 inline rust::String Shape_faces_json(const TopoDS_Shape &shape) {
   using namespace parcad_geometry_json;
+  IndexedMapOfShape faces;
+  TopExp::MapShapes(shape, TopAbs_FACE, faces);
+  IndexedDataMapOfShapeListOfShape edge_faces;
+  TopExp::MapShapesAndAncestors(shape, TopAbs_EDGE, TopAbs_FACE, edge_faces);
+  // The traversal visits a face two solids share once for each, the map once,
+  // so a neighbour is named by the position of its first visit.
+  std::vector<int> numbered(faces.Extent(), -1);
+  int position = 0;
+  for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next(), ++position) {
+    int &first = numbered[faces.FindIndex(f.Current()) - 1];
+    if (first < 0) {
+      first = position;
+    }
+  }
+
   std::ostringstream out;
   out.precision(15);
   out << "[";
-  int written = 0;
-  for (TopExp_Explorer s(shape, TopAbs_SOLID); s.More(); s.Next()) {
-    // First solid only: concatenating a second would renumber the faces.
-    const TopoDS_Shape &solid = s.Current();
-    IndexedMapOfShape faces;
-    TopExp::MapShapes(solid, TopAbs_FACE, faces);
-    IndexedDataMapOfShapeListOfShape edge_faces;
-    TopExp::MapShapesAndAncestors(solid, TopAbs_EDGE, TopAbs_FACE, edge_faces);
-
-    for (TopExp_Explorer f(solid, TopAbs_FACE); f.More(); f.Next(), ++written) {
-      const TopoDS_Face &face = TopoDS::Face(f.Current());
-      GProp_GProps props;
-      BRepGProp::SurfaceProperties(face, props);
-      out << (written > 0 ? "," : "") << "{\"area_mm2\":" << props.Mass() << ",\"centroid\":";
-      write_pnt(out, props.CentreOfMass());
-      out << ",\"adjacent\":";
-      write_neighbours(out, face, faces, edge_faces);
-      out << ",\"surface\":";
-      write_surface_placement(out, face);
-      out << "}";
-    }
-    break;
+  position = 0;
+  for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next(), ++position) {
+    const TopoDS_Face &face = TopoDS::Face(f.Current());
+    GProp_GProps props;
+    BRepGProp::SurfaceProperties(face, props);
+    out << (position > 0 ? "," : "") << "{\"area_mm2\":" << props.Mass() << ",\"centroid\":";
+    write_pnt(out, props.CentreOfMass());
+    out << ",\"adjacent\":";
+    write_neighbours(out, face, faces, edge_faces, &numbered);
+    out << ",\"surface\":";
+    write_surface_placement(out, face);
+    out << "}";
   }
   out << "]";
   return rust::String(out.str());
