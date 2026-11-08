@@ -16,7 +16,7 @@ export default defineConfig(({ mode }) => {
     // model that has never seen this repository already knows, at a tenth of the
     // weight. `@preact/signals` carries the state the whole window shares — see
     // src/state.ts for why that is signals and not component state.
-    plugins: [preact(), tailwindcss(), ...(web ? [kernel()] : [])],
+    plugins: [preact(), tailwindcss(), ...(web ? [kernel(), shareCard()] : [])],
     // ParCAD web is served at https://parcad.dev/app/; the landing page (site/) has the root.
     base: web ? (process.env.PARCAD_WEB_BASE ?? "/app/") : "/",
     // Tauri drives the dev server on a fixed port and fails loudly rather than
@@ -47,6 +47,42 @@ export default defineConfig(({ mode }) => {
     },
   };
 });
+
+/**
+ * What a link to ParCAD web shows where it is pasted — a chat, a search result:
+ * the landing page's card, by absolute URL, because a crawler fetches it with no
+ * page around it. The web build only; the desktop window is never shared.
+ */
+function shareCard(): Plugin {
+  const site = "https://parcad.dev/";
+  const title = "ParCAD web — parametric CAD in a browser tab";
+  const description =
+    "Write a part as code and build it with an exact OpenCASCADE kernel, in your browser, with nothing installed. Connect your AI gives an agent the same tools over MCP.";
+  const meta = (key: "name" | "property", value: string, content: string) => ({
+    tag: "meta",
+    attrs: { [key]: value, content },
+    injectTo: "head" as const,
+  });
+  return {
+    name: "parcad-share-card",
+    transformIndexHtml: (html) => ({
+      html: html.replace("<title>ParCAD</title>", `<title>${title}</title>`),
+      tags: [
+        meta("name", "description", description),
+        { tag: "link", attrs: { rel: "canonical", href: `${site}app/` }, injectTo: "head" },
+        meta("property", "og:type", "website"),
+        meta("property", "og:site_name", "ParCAD"),
+        meta("property", "og:url", `${site}app/`),
+        meta("property", "og:title", title),
+        meta("property", "og:description", description),
+        meta("property", "og:image", `${site}og.png`),
+        meta("property", "og:image:width", "1200"),
+        meta("property", "og:image:height", "630"),
+        meta("name", "twitter:card", "summary_large_image"),
+      ],
+    }),
+  };
+}
 
 /**
  * The two WebAssembly modules — the kernel and the host — as files the page
