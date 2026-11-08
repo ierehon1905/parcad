@@ -3,7 +3,7 @@
   "name": "io.github.ierehon1905/parcad",
   "title": "ParCAD",
   "description": "Parametric CAD as code: model 3D-printable parts on an exact B-rep kernel, measured.",
-  "websiteUrl": "https://github.com/ierehon1905/parcad",
+  "websiteUrl": "https://parcad.dev",
   "repository": { "url": "https://github.com/ierehon1905/parcad", "source": "github" },
   "version": "{{version}}",
   "packages": [

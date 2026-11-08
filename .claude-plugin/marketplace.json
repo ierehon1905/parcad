@@ -8,7 +8,7 @@
       "source": "./packaging/plugin",
       "displayName": "ParCAD",
       "description": "Model 3D-printable parts in a JavaScript DSL on an exact B-rep kernel, over MCP.",
-      "homepage": "https://github.com/ierehon1905/parcad",
+      "homepage": "https://parcad.dev",
       "license": "AGPL-3.0-or-later",
       "category": "design"
     }

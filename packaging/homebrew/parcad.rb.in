@@ -11,7 +11,7 @@
 # source — a cold OpenCASCADE compile is not something to ask of an install.
 class Parcad < Formula
   desc "Parametric CAD you write as code, with an MCP server for agents"
-  homepage "https://github.com/ierehon1905/parcad"
+  homepage "https://parcad.dev"
   # The Rust crates are AGPL-3.0-or-later; the statically linked OpenCASCADE
   # inside the worker is LGPL-2.1 with its exception. The texts are installed
   # beside the binaries, and NOTICE.md says how to relink your own OCCT.
