@@ -1456,14 +1456,19 @@ export class Viewport {
     this.wake();
   }
 
-  /** The ground under the part as drawn and everywhere its travel takes it, and the corners the depth range keeps. */
+  /**
+   * The ground under everything drawn — the part, its references, and
+   * everywhere its travel takes it — and the corners the depth range keeps.
+   */
   private layGround() {
     const { min, max } = this.partBounds!;
     const box = new THREE.Box3(new THREE.Vector3(min.x, min.y, min.z), new THREE.Vector3(max.x, max.y, max.z));
+    // A reference is often what the part stands among: walls that reach the floor below a shelf.
+    for (const body of this.bodies) box.union(body.box);
     if (this.travelBox) box.union(this.travelBox);
     const size = box.getSize(new THREE.Vector3());
     this.placeGround(box, size);
-    // The ground's span, grid or not: three times the part, as `placeGround` lays it.
+    // The ground's span, grid or not: three times what it lies under, as `placeGround` lays it.
     const reach = Math.max(size.x, size.y, size.z) * 1.5;
     const middle = new THREE.Vector3((box.min.x + box.max.x) / 2, (box.min.y + box.max.y) / 2, box.min.z);
     this.groundCorners = boxCorners(
@@ -1471,7 +1476,7 @@ export class Viewport {
     );
   }
 
-  /** Grid and shadow-catcher at the bottom of the part: the contact shadow is what says where it sits. */
+  /** Grid and shadow-catcher at the bottom of what is drawn: the contact shadow is what says where it sits. */
   private placeGround(bounds: Bounds, size: { x: number; y: number; z: number }) {
     const extent = Math.max(size.x, size.y, size.z);
     const step = niceStep(extent / 10);

@@ -2398,3 +2398,14 @@ ground goes under the lowest vertex any pose reaches. It stays put while the
 mechanism plays, so at rest a part may stand above its shadow by that drop;
 a floor that followed the pose would read as the part moving. The sun's
 shadow covers the same swept box, or the swung body's shadow is clipped.
+
+## Reference walls went down through the ground *(fixed 2026-11-08)*
+
+The ground was laid from the snapshot's bounds, and those leave references
+out, as framing should. A set of plant shelves drawn with its room — walls, a
+door casing, a floor, all `.reference()` — got its ground under the lowest
+shelf, 537 mm up, with the walls passing down through it. The model in that
+chat worked around it by making the floor a real body, which put a 1.5 m slab
+into the part's volume, checks and exports. `layGround` now unions every
+drawn body's box, references included. The camera still frames the part
+alone.
