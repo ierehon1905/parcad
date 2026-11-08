@@ -52,9 +52,9 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
      substitute.
    - Dry-run it locally first (`act`, or the same shell steps by hand against a
      published tag): a blind CI round on a release path costs a release.
-3. **ParCAD web: agents through a relay** — live since 2026-09-17 at
-   <https://ierehon1905.github.io/parcad/> (the app moves to `/parcad/app/` with
-   the landing page, on the first deploy from `web.yml`), relay deployed.
+3. **ParCAD web: agents through a relay** — live since 2026-09-17, at
+   <https://parcad.dev/app/> beside the landing page since 2026-11 (GitHub Pages
+   before that), relay deployed.
    The playground became ParCAD web, the app in a tab: `parcad-host` compiled to
    WebAssembly (`crates/parcad-wasm-host`, `page.rs`) beside the kernel, the
    same routes and MCP server, and a Cloudflare Worker (`relay/`) an AI client
@@ -221,16 +221,14 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
 
 ### Waiting on a decision
 
-- **How ParCAD web is published.** Pages served the `gh-pages` branch, pushed
-  by hand as "ParCAD web from main <sha>" with the pre-push hook off. `web.yml`
-  now builds the whole Pages artifact instead — the corpus against the
-  WebAssembly worker, ParCAD web at `/parcad/app/`, the landing page (`site/`)
-  at `/parcad/`, laid out by `site/pages.sh` — and deploys it with
-  `actions/deploy-pages`, on a manual dispatch. Waiting on: Settings → Pages →
-  Source: GitHub Actions, then a dispatch, then `wrangler deploy` for the
-  relay's new `PAGE_URL`. The hand recipe also ran `web/prebuild.sh`, which needs
-  the native kernel; the workflow does not, so the first visit waits out the
-  kernel's download until it does.
+- **How ParCAD web is published.** `web.yml` builds the whole site — the corpus
+  against the WebAssembly worker, ParCAD web at `/app/`, the landing page
+  (`site/`) at the root, laid out by `site/layout.sh` — and deploys it to
+  parcad.dev as a Cloudflare Worker of static files, on a manual dispatch; GitHub
+  Pages keeps a page that forwards the old `github.io/parcad/` addresses. The
+  hand recipe also ran `web/prebuild.sh`, which needs the native kernel; the
+  workflow does not, so the first visit waits out the kernel's download until it
+  does.
 - **A tag inside a tagged copy.** A tag on a move or mirror now outranks the tags
   inside what it copied (`perceive::face_tags`). The session also let the copy's name beat a
   *feature* tag inside the copy — a mirrored part's bore walls read the copy's

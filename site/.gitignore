@@ -2,3 +2,5 @@ node_modules/
 build/
 .react-router/
 .vite/
+dist/
+.wrangler/

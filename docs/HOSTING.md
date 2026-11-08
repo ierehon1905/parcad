@@ -292,7 +292,10 @@ curl -sL -o /dev/null -w '%{http_code} %{size_download}\n' 'https://www.google.c
 
 A 404 of 726 bytes is the globe. For parcad.dev it turned into ours on
 2026-11-08, about eight hours after the domain was verified in Google Search
-Console (a TXT record) and its front page sent for indexing.
+Console (a TXT record) and its front page sent for indexing. parcad.dev itself
+now serves the landing page, which links the same icons at the same paths and a
+`/favicon.ico` (site/README.md, "Deploying"); the front page above is what a
+self-hosted bare domain shows.
 
 The mark is not stored with the connector. The connectors page loads
 `s2/favicons?domain=<domain>&sz=64` in the viewer's browser each time it draws,

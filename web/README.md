@@ -60,9 +60,9 @@ whatever tree `OCCT_SOURCE` names.
 web/prebuild.sh                 # record the first part (optional, and worth it)
 cd app && bun install --frozen-lockfile
 export VITE_PARCAD_RELAY=https://parcad-relay.ierehon1905.workers.dev   # relay/README.md
-bun x vite build --mode web     # app/dist-web, for https://<owner>.github.io/parcad/app/
+bun x vite build --mode web     # app/dist-web, for https://parcad.dev/app/
 bun x vite build --config vite.viewer.config.ts --outDir dist-web   # the in-chat viewer
-bun x vite preview --mode web   # or any static server, with the files under /parcad/app/
+bun x vite preview --mode web   # or any static server, with the files under /app/
 bun x vite --mode web           # the same, live, while editing the frontend
 ```
 
@@ -101,8 +101,9 @@ deploy never pairs one build's JavaScript with another's module, and ships
 `licenses/` (NOTICE.md says why).
 `.github/workflows/web.yml` does all of this on a manual dispatch — the
 corpus against the WebAssembly worker first — builds the landing page in
-`site/` beside it, and deploys both with `actions/deploy-pages`: the landing page
-at `/parcad/`, this app at `/parcad/app/` (`site/pages.sh` lays them out).
+`site/` beside it, and deploys both to parcad.dev: the landing page at the root,
+this app at `/app/` (`site/layout.sh` lays them out, `site/wrangler.toml` deploys
+them).
 
 What a visitor gets: 25 MB of files, of which the page itself is 1.2 MB of
 JavaScript (361 KB gzipped) and paints before the kernel starts downloading. The

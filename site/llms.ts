@@ -1,6 +1,7 @@
 // The site for a model to read: llms.txt (llmstxt.org), the page as Markdown,
 // every read_docs topic as a page of its own, all of it in llms-full.txt, and a
-// sitemap. Run after `react-router build`; writes beside the built page.
+// sitemap with the robots.txt that names it. Run after `react-router build`;
+// writes beside the built page, which is the root of parcad.dev.
 //
 //     bun llms.ts [build/client]
 //
@@ -114,7 +115,8 @@ writeFileSync(join(out, "llms.txt"), llms + "\n");
 writeFileSync(join(out, "index.html.md"), page + "\n");
 writeFileSync(join(out, "llms-full.txt"), full + "\n");
 writeFileSync(join(out, "sitemap.xml"), sitemap);
-console.log(`llms.txt, index.html.md, llms-full.txt (${Math.round(full.length / 1024)} KB), sitemap.xml and ${topics.length} topics in ${out}`);
+writeFileSync(join(out, "robots.txt"), `User-agent: *\nAllow: /\n\nSitemap: ${SITE}sitemap.xml\n`);
+console.log(`llms.txt, index.html.md, llms-full.txt (${Math.round(full.length / 1024)} KB), sitemap.xml, robots.txt and ${topics.length} topics in ${out}`);
 
 /** Every read_docs topic, written to `dir` by the Rust that serves the tool. */
 function readDocsTopics(dir: string) {

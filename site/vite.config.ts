@@ -3,7 +3,7 @@ import tailwindcss from "@tailwindcss/vite";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  // Pages serves the site from https://<owner>.github.io/parcad/; the workflow sets this.
+  // parcad.dev serves the site at its root; set this to lay it out anywhere else.
   base: process.env.PARCAD_SITE_BASE ?? "/",
   plugins: [tailwindcss(), reactRouter()],
   // three is imported lazily; pre-bundling it up front stops the dev server

@@ -1,0 +1,13 @@
+# parcad.dev: the landing page and ParCAD web as static files on Cloudflare.
+# web.yml lays them out in dist/ and deploys them; README.md, "Deploying".
+name = "parcad-site"
+compatibility_date = "2026-09-01"
+# One address for the site: no *.workers.dev copy and no preview URLs.
+workers_dev = false
+preview_urls = false
+# A route, not a custom domain: parcad.dev's DNS record is OpenTofu's, and a
+# route takes the hostname over without touching it.
+routes = [{ pattern = "parcad.dev/*", zone_name = "parcad.dev" }]
+
+[assets]
+directory = "dist"

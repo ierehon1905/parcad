@@ -2,7 +2,7 @@
 
 ## Try it
 
-Open [ParCAD web](https://ierehon1905.github.io/parcad/app/). It runs in your
+Open [ParCAD web](https://parcad.dev/app/). It runs in your
 tab, no install, no account. Code on the left, a twisted planter on the right.
 Change a number and the part rebuilds.
 

@@ -21,6 +21,7 @@ cd "$(dirname "$0")/.."
 SVG=app/src-tauri/icons/icon.svg
 ICONS=app/src-tauri/icons
 PUBLIC=app/public
+SITE=site/public
 
 for tool in rsvg-convert iconutil python3; do
   command -v "$tool" >/dev/null || {
@@ -57,21 +58,28 @@ render 1024 "$SET/icon_512x512@2x.png"
 iconutil -c icns "$SET" -o "$ICONS/icon.icns"
 
 # The browser half of the application is the same application, so it gets the
-# same mark. The SVG is the favicon itself — one file, sharp at every size —
-# with a PNG for the browsers that still want one.
-mkdir -p "$PUBLIC"
-cp "$SVG" "$PUBLIC/favicon.svg"
-render 32 "$PUBLIC/favicon-32.png"
-render 180 "$PUBLIC/apple-touch-icon.png"
+# same mark, and so does the landing page. The SVG is the favicon itself — one
+# file, sharp at every size — with a PNG for the browsers that still want one.
+for dir in "$PUBLIC" "$SITE"; do
+  mkdir -p "$dir"
+  cp "$SVG" "$dir/favicon.svg"
+  render 32 "$dir/favicon-32.png"
+  render 180 "$dir/apple-touch-icon.png"
+done
+render 48 "$SET/favicon_48.png"
 
-python3 - "$ICONS" "$SET" <<'PY'
+python3 - "$ICONS" "$SET" "$SITE" <<'PY'
 import sys
 from PIL import Image
-icons, iconset = sys.argv[1], sys.argv[2]
+icons, iconset, site = sys.argv[1], sys.argv[2], sys.argv[3]
 Image.open(f"{iconset}/icon_512x512@2x.png").convert("RGBA").save(
     f"{icons}/icon.ico",
     sizes=[(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)],
 )
+# parcad.dev/favicon.ico, from the vector at each size: a favicon service reads
+# it, and claude.ai draws the hosted connector's mark from that (docs/HOSTING.md).
+small = [Image.open(f"{iconset}/{name}").convert("RGBA") for name in ("icon_16x16.png", "icon_32x32.png", "favicon_48.png")]
+small[-1].save(f"{site}/favicon.ico", sizes=[im.size for im in small], append_images=small[:-1])
 
 # The proof sheet. The 16 px row sits on a light background because that is
 # where a favicon lives, and a mark that only works on our own dark chrome
@@ -93,5 +101,5 @@ sheet.paste(strip, (0, 280))
 sheet.save("/tmp/parcad-icon-proof.png")
 PY
 
-echo "icons written to $ICONS and $PUBLIC"
+echo "icons written to $ICONS, $PUBLIC and $SITE"
 echo "proof sheet: /tmp/parcad-icon-proof.png  — check the 16 px column, not the 256"

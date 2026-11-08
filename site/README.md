@@ -20,21 +20,32 @@ bun run typecheck
 `read_docs` topic as `docs/<topic>.md`, all of it in `llms-full.txt`, and
 `sitemap.xml`. The page's words come from `app/content.ts` and the topics from
 `cargo run -p parcad-host --example docs_pages`, the same Rust that serves the
-tool, so the build needs the Rust toolchain. There is no `robots.txt`: a
-crawler reads it only at the host's root, which on Pages is not this repository.
+tool, so the build needs the Rust toolchain. It also writes `robots.txt`, which
+names the sitemap; parcad.dev's root is this page, so crawlers find both.
 
 ## Deploying
 
-`.github/workflows/web.yml` publishes this page and ParCAD web as one Pages
-artifact: the page built with `PARCAD_SITE_BASE=/parcad/` at the root, the app
-built with `PARCAD_WEB_BASE=/parcad/app/` under `app/`. `pages.sh` lays them
-out; to check a layout by hand:
+`.github/workflows/web.yml` publishes this page at <https://parcad.dev/> and
+ParCAD web at <https://parcad.dev/app/>, together, as one Cloudflare Worker of
+static files: `layout.sh` lays them out in `dist/`, and `wrangler.toml` deploys
+that and routes `parcad.dev/*` to it. To check a layout by hand:
 
 ```bash
-PARCAD_SITE_BASE=/parcad/ bun run build
-./pages.sh parcad build/client ../app/dist-web /tmp/pages/parcad
-python3 -m http.server -d /tmp/pages 8000   # http://localhost:8000/parcad/
+bun run build                       # and ParCAD web: web/README.md, "The site"
+./layout.sh build/client ../app/dist-web dist
+bun x wrangler dev                  # http://localhost:8787, served as parcad.dev serves it
 ```
+
+parcad.dev's DNS record and the hosted server's tunnel are OpenTofu in a private
+repository; the record exists only so that the route has a proxied hostname to
+match. The favicons at the root are load-bearing: claude.ai draws the hosted
+connector's mark from Google's favicon service for parcad.dev
+(docs/HOSTING.md, "The connector's icon"), so they stay at these paths.
+`tools/make-icons.sh` writes them.
+
+The site was on GitHub Pages at `ierehon1905.github.io/parcad/` until 2026-11.
+The workflow's last job keeps `moved.html` there as every page, which sends
+each old address to the same path here.
 
 ## Where every picture and number came from
 

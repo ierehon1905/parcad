@@ -4,7 +4,7 @@
 export const GH = "https://github.com/ierehon1905/parcad";
 export const BLOB = `${GH}/blob/main`;
 export const RELEASES = `${GH}/releases`;
-export const SITE = "https://ierehon1905.github.io/parcad/";
+export const SITE = "https://parcad.dev/";
 export const WEB = `${SITE}app/`;
 
 export const LICENCE = "AGPL-3.0";

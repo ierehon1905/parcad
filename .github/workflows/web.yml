@@ -1,7 +1,7 @@
-# Build ParCAD web and the landing page and publish both to GitHub Pages: the
-# landing page (site/) at https://<owner>.github.io/parcad/, and the app with its
-# host and the exact kernel compiled to WebAssembly at .../parcad/app/. Pages
-# serves one artifact per repository, so a change to either deploys both.
+# Build ParCAD web and the landing page and publish both at https://parcad.dev:
+# the landing page (site/) at the root, and the app with its host and the exact
+# kernel compiled to WebAssembly at /app/. They deploy together, as one
+# Cloudflare Worker of static files (site/wrangler.toml).
 #
 # The corpus runs first, against the same WebAssembly build of the worker the
 # site's module is linked from, and the site is only built if it passes. Clang
@@ -9,10 +9,14 @@
 # and a page that measures parts wrong in front of visitors is worse than no
 # page. web/README.md has the recipe this follows and what it measured.
 #
-# Manual only: Pages has to be switched to Settings → Pages → Source: GitHub
-# Actions (it served the gh-pages branch until then) before the deploy job can
-# succeed, and deploying on every push to main is a decision to make then — add
-# `push: branches: [main]`.
+# The site lived on GitHub Pages at <owner>.github.io/parcad/ until 2026-11; the
+# last job keeps a page there that sends every old address to the same path on
+# parcad.dev.
+#
+# Manual only: deploying on every push to main is a decision to make then — add
+# `push: branches: [main]`. Needs the secrets CLOUDFLARE_API_TOKEN (Workers
+# Scripts edit on the account, Workers Routes edit and Zone read on parcad.dev)
+# and CLOUDFLARE_ACCOUNT_ID.
 name: web
 
 on:
@@ -110,7 +114,6 @@ jobs:
       # (relay/README.md); without it the site builds with no way to connect an agent.
       - name: Build ParCAD web
         env:
-          PARCAD_WEB_BASE: /${{ github.event.repository.name }}/app/
           VITE_PARCAD_RELAY: ${{ vars.PARCAD_RELAY }}
         run: |
           cd app && bun x vite build --mode web
@@ -118,19 +121,39 @@ jobs:
           du -sh dist-web
 
       - name: Build the landing page
-        env:
-          PARCAD_SITE_BASE: /${{ github.event.repository.name }}/
         run: cd site && bun install --frozen-lockfile && bun run build
 
-      - name: Lay out Pages
-        run: site/pages.sh "${{ github.event.repository.name }}" site/build/client app/dist-web _site
+      - name: Lay out parcad.dev
+        run: site/layout.sh site/build/client app/dist-web site/dist
 
-      - uses: actions/upload-pages-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
-          path: _site
+          name: parcad.dev
+          path: site/dist
+          if-no-files-found: error
 
   deploy:
     needs: build
+    runs-on: ubuntu-24.04
+    environment:
+      name: parcad.dev
+      url: https://parcad.dev/
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - uses: actions/download-artifact@v4
+        with:
+          name: parcad.dev
+          path: site/dist
+
+      - name: Deploy to Cloudflare
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: cd site && bun install --frozen-lockfile && bun x wrangler deploy
+
+  moved:
+    needs: deploy
     runs-on: ubuntu-24.04
     permissions:
       pages: write
@@ -139,5 +162,17 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/checkout@v4
+
+      # The landing page, the app and every other old path on Pages, 404.html included.
+      - name: Lay out the forwarding page
+        run: |
+          mkdir -p _moved/app
+          for page in index.html app/index.html 404.html; do cp site/moved.html "_moved/$page"; done
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _moved
+
       - id: deployment
         uses: actions/deploy-pages@v4
