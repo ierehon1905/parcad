@@ -338,6 +338,13 @@ built, checked and exported a part through it. Claude syncs the connector to its
 phone app, but nobody has tried it there yet. A listing in the connector directory still needs OAuth,
 phase 2 of "Auth". The file on the box holds only the hash.
 
+Don't keep the hosted connector and the local ParCAD extension switched on
+together in Claude Desktop. Both were named ParCAD on 2026-11-08. The chat's
+tool calls reached the hosted server, but the in-chat viewer read its page and
+called `view_part` on the local extension. That part did not exist locally, so
+the viewer said "Not connected". Turning the extension off fixed it. Whether
+Desktop matched the two by name or by `ui://parcad/viewer` was not tested.
+
 Check it from anywhere:
 
 ```bash
