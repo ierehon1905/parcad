@@ -385,6 +385,12 @@ pub struct Accounts {
     links: Arc<Links>,
     tokens: Vec<TokenLine>,
     policy: Policy,
+    /// The edge whose passes open accounts no token names; none on a server
+    /// reached directly.
+    edge: Option<crate::edge::Edge>,
+    /// Accounts refused however they arrive, links included: what ends an
+    /// edge account's links before they expire.
+    revoked: Vec<TenantId>,
     /// Each account's tenant, made on its first request, so its
     /// `Arc<Tenant>`, its folder and its slots exist once.
     resolved: Mutex<HashMap<TenantId, Arc<Tenant>>>,
@@ -419,8 +425,35 @@ impl Accounts {
             links: Arc::new(links),
             tokens: lines,
             policy: Policy::hosted(),
+            edge: None,
+            revoked: Vec::new(),
             resolved: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Open the account a pass from `edge` names, besides those the tokens
+    /// file does (parcad-infra's ACCOUNTS.md, "Phase 2, settled").
+    pub fn trusting(mut self, edge: crate::edge::Edge) -> Accounts {
+        self.edge = Some(edge);
+        self
+    }
+
+    /// Refuse these accounts, by token, pass or link.
+    pub fn revoking(mut self, revoked: Vec<TenantId>) -> Accounts {
+        self.revoked = revoked;
+        self
+    }
+
+    /// The `Host` names rmcp answers: the public host's, and the origin's an
+    /// edge forwards to.
+    pub fn hosts(&self) -> Vec<String> {
+        let mut hosts = vec![self.links.host().authority().to_string()];
+        hosts.extend(self.edge.as_ref().map(|edge| edge.origin().authority().to_string()));
+        hosts
+    }
+
+    pub fn edge(&self) -> Option<&crate::edge::Edge> {
+        self.edge.as_ref()
     }
 
     /// Hold every account to `policy` rather than [`Policy::hosted`]. Set
@@ -456,6 +489,16 @@ impl Accounts {
             return Err(Refused::NoToken);
         };
         let token = bearer(authorization).ok_or(Refused::Unknown)?;
+        if let Some(edge) = self.edge.as_ref().filter(|_| token.contains('.')) {
+            let id = edge.verify(token, crate::limits::unix_now()).map_err(|why| {
+                eprintln!("parcad: refused a pass from the edge: {why}");
+                Refused::Unknown
+            })?;
+            if self.revoked.contains(&id) {
+                return Err(Refused::Unknown);
+            }
+            return self.open(&id);
+        }
         let hash = hash_token(token);
         let mut matched = None;
         for line in &self.tokens {
@@ -468,20 +511,20 @@ impl Accounts {
 
     /// The account a signed link opens: one this host signed for exactly
     /// `path`, not yet expired at `now`, naming an account some token still
-    /// opens — so revoking an account's tokens ends its links too. Any other
-    /// link is one refusal, naming the fix.
+    /// opens — so revoking an account's tokens ends its links too — or, behind
+    /// an edge, an account whose folder a pass has already made, unless it is
+    /// revoked. Any other link is one refusal, naming the fix.
     pub fn resolve_link(&self, path: &str, query: &LinkQuery<'_>, now: u64) -> Result<Arc<Tenant>, Refused> {
         let stale = || Refused::StaleLink {
             good_for: self.links.lifetime(),
         };
         let named = self.links.verify(path, query, now).ok_or_else(stale)?;
-        let id = self
-            .tokens
-            .iter()
-            .map(|line| &line.tenant)
-            .find(|tenant| **tenant == named)
-            .ok_or_else(stale)?;
-        self.open(id)
+        let by_token = self.tokens.iter().any(|line| line.tenant == named);
+        let by_edge = self.edge.is_some() && self.tenants.join(named.as_str()).is_dir();
+        if self.revoked.contains(&named) || !(by_token || by_edge) {
+            return Err(stale());
+        }
+        self.open(&named)
     }
 
     /// The account's tenant, made on its first request.
@@ -1023,5 +1066,67 @@ pub(crate) mod tests {
             "the panic names the rule: {stderr}"
         );
         assert!(!stderr.contains("unreachable"), "{stderr}");
+    }
+
+    /// Behind an edge, a pass opens the account it names with no token, and
+    /// makes its folder; a link for that account then opens it too. A static
+    /// token still works beside it, a pass is nothing to a server with no edge,
+    /// and a revoked account is refused by pass and by link.
+    #[test]
+    fn a_pass_from_the_edge_opens_its_account_and_then_its_links() {
+        let dir = fresh_root("edge");
+        let file = dir.join("tokens");
+        let tenants = dir.join("tenants");
+        let acme = issue(TenantId::new("acme").unwrap(), &file).unwrap();
+        let (pair, edge) = crate::edge::tests::edge();
+        let accounts = Accounts::read(&file, &tenants, links()).unwrap().trusting(edge.clone());
+        let now = crate::limits::unix_now();
+        let path = "/api/exports/renders/x.png";
+        let link_for = |id: &str| -> Vec<String> {
+            links()
+                .signed(&TenantId::new(id).unwrap(), path, now)
+                .split_once('?')
+                .unwrap()
+                .1
+                .split('&')
+                .map(|pair| pair.split_once('=').unwrap().1.to_string())
+                .collect()
+        };
+        fn query(fields: &[String]) -> LinkQuery<'_> {
+            LinkQuery {
+                tenant: Some(&fields[0]),
+                exp: Some(&fields[1]),
+                sig: Some(&fields[2]),
+            }
+        }
+
+        let fresh = link_for("u-k3x9q2mf7a");
+        assert!(accounts.resolve_link(path, &query(&fresh), now).is_err(), "no pass has made this account yet");
+        let bearer = format!("Bearer {}", crate::edge::tests::pass(&pair, "u-k3x9q2mf7a", now));
+        let tenant = accounts.resolve(Some(&bearer)).unwrap();
+        assert_eq!(tenant.id.as_str(), "u-k3x9q2mf7a");
+        assert!(tenant.root.is_dir(), "the pass made the folder");
+        assert!(Arc::ptr_eq(&tenant, &accounts.resolve_link(path, &query(&fresh), now).unwrap()), "and now its link opens it");
+        assert_eq!(accounts.resolve(Some(&format!("Bearer {acme}"))).unwrap().id.as_str(), "acme", "a static token still works");
+        assert_eq!(accounts.hosts(), vec!["cad.example.test".to_string(), "origin.example.test".to_string()]);
+
+        let (stranger, _) = crate::edge::tests::edge();
+        let forged = format!("Bearer {}", crate::edge::tests::pass(&stranger, "u-forged", now));
+        assert_eq!(accounts.resolve(Some(&forged)).map(|t| t.id.clone()), Err(Refused::Unknown));
+        assert!(!tenants.join("u-forged").exists(), "a refused pass makes no folder");
+
+        let direct = Accounts::read(&file, &tenants, links()).unwrap();
+        assert_eq!(direct.resolve(Some(&bearer)).map(|t| t.id.clone()), Err(Refused::Unknown), "no edge, no pass");
+        assert!(direct.resolve_link(path, &query(&fresh), now).is_err(), "nor its links");
+        assert_eq!(direct.hosts(), vec!["cad.example.test".to_string()]);
+
+        let revoked = Accounts::read(&file, &tenants, links())
+            .unwrap()
+            .trusting(edge)
+            .revoking(vec![TenantId::new("u-k3x9q2mf7a").unwrap(), TenantId::new("acme").unwrap()]);
+        assert_eq!(revoked.resolve(Some(&bearer)).map(|t| t.id.clone()), Err(Refused::Unknown));
+        assert!(revoked.resolve_link(path, &query(&fresh), now).is_err(), "a revoked account's links end at once");
+        assert!(revoked.resolve_link(path, &query(&link_for("acme")), now).is_err(), "a token account's too");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

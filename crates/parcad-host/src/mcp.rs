@@ -162,7 +162,7 @@ pub type Transport = rmcp::transport::streamable_http_server::StreamableHttpServ
 /// none, and each request builds its own handler (docs/GOTCHAS.md). Neither
 /// keeps a document: a script carries its whole part, and the screen is
 /// `session.rs`'s, so two calls cannot disagree about what is on it.
-pub fn transport(assets: Arc<dyn Assets>, public_host: Option<&str>) -> Transport {
+pub fn transport(assets: Arc<dyn Assets>, hosts: &[String]) -> Transport {
     let mut config = rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default();
     // A tool call answers once; there is nothing to stream, and a plain JSON
     // reply is far easier to drive from a shell when something is wrong.
@@ -173,10 +173,8 @@ pub fn transport(assets: Arc<dyn Assets>, public_host: Option<&str>) -> Transpor
     config.sse_retry = None;
     let mut sessions = rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default();
     sessions.session_config.sse_retry = None;
-    if let Some(host) = public_host {
-        config.allowed_hosts.push(host.to_string());
-    }
-    let capability = service::capability(public_host.is_some());
+    config.allowed_hosts.extend(hosts.iter().cloned());
+    let capability = service::capability(!hosts.is_empty());
 
     Transport::new(
         move || Ok(Parcad::new().with_assets(assets.clone()).with_capability(capability)),
@@ -187,8 +185,8 @@ pub fn transport(assets: Arc<dyn Assets>, public_host: Option<&str>) -> Transpor
 
 /// The MCP endpoint, as a router to mount on the app's host.
 #[cfg(not(target_os = "emscripten"))]
-pub fn service(assets: Arc<dyn Assets>, public_host: Option<&str>) -> axum::Router {
-    let transport = transport(assets, public_host);
+pub fn service(assets: Arc<dyn Assets>, hosts: &[String]) -> axum::Router {
+    let transport = transport(assets, hosts);
 
     // Wrapped so every request passes `record`, which is the only place that
     // knows an agent is there at all. The tool functions cannot report it: they
@@ -3017,7 +3015,7 @@ mod tests {
                 .body(body)
                 .unwrap();
             request.extensions_mut().insert(tenant);
-            let mut router = service(Arc::new(NoAssets), None);
+            let mut router = service(Arc::new(NoAssets), &[]);
             run(tower_service::Service::call(&mut router, request)).expect("the router answers")
         };
         let refused = post(tenant::tests::hosted_at("a", &tenants), five_mb);
@@ -3048,7 +3046,7 @@ mod tests {
             .body(axum::body::Body::from("{}"))
             .unwrap();
         request.extensions_mut().insert(b);
-        let mut router = service(Arc::new(NoAssets), None);
+        let mut router = service(Arc::new(NoAssets), &[]);
         let response = run(tower_service::Service::call(&mut router, request)).expect("the router answers");
         assert_eq!(response.status(), axum::http::StatusCode::NOT_FOUND);
         let body = run(axum::body::to_bytes(response.into_body(), 4096)).unwrap();

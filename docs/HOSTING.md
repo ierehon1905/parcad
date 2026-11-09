@@ -311,15 +311,31 @@ too, on the next restart, as every link is checked against the tokens file.
 `/api/health` and the `initialize` reply list `signed-links` among the
 features, so a client knows it may show a `url` to the user as it is.
 
-Phase 2, for Claude's connector directory: `parcad serve` stays the resource
-server only. It validates an OAuth access token (a JWT against the issuer's
-keys) and maps its subject to a tenant, through the same resolution the static
-tokens use, and serves `/.well-known/oauth-protected-resource`. The
-authorization server (RFC 8414 metadata, dynamic client registration, PKCE,
-Claude's callback URLs, refresh) belongs where the users are: an app's
-agent service, the relay Worker for the public URL, as
-docs/GROWTH.md proposed. The host never sees a password and keeps no user
-table.
+Phase 2, for sign-in and Claude's connector directory, puts an edge in front
+of the host. The edge is a Worker that holds the OAuth grants and the user
+table, and serves the discovery documents and `/.well-known/oauth-protected-resource`.
+The host stays a resource server and keeps a public key.
+
+For each request it forwards, the edge signs a pass (`edge.rs`):
+- a compact JWS, `alg` `EdDSA`, `typ` `parcad-edge+jwt`;
+- `iss` the public host, `aud` the origin the edge forwards to, `sub` the
+  account id;
+- `iat` and `exp` at most 120 s apart, with 30 s of clock skew allowed.
+
+What the host does with it:
+- `parcad serve --hosted --edge-key FILE --edge-origin NAME` verifies the
+  pass against the Ed25519 public key in FILE and opens the account it names,
+  through the same resolution static tokens use. The account's folder is made
+  on its first pass.
+- A bearer with dots is a pass; a static token has none, and keeps working
+  beside it.
+- rmcp answers the origin's `Host` as well as the public one.
+- A signed link opens an account a token names, or, behind an edge, one whose
+  folder a pass has made.
+- `--revoked FILE` lists account ids refused by token, pass and link alike.
+- A refused pass is a 401 to the client, and its reason goes to the log.
+
+The edge itself is not built yet. Its design is in the operator's own notes.
 
 ## Where to run it
 

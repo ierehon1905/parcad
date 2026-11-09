@@ -3000,6 +3000,7 @@ dependencies = [
  "parcad-evaluation",
  "parcad-occt",
  "png 0.18.1",
+ "ring",
  "rmcp",
  "rquickjs",
  "schemars 1.2.2",

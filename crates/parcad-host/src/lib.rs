@@ -19,6 +19,7 @@ pub mod docs;
 /// Not in a browser tab: there is no editor there to hand declarations to, and
 /// the page's filesystem is the page's own.
 #[cfg(not(target_arch = "wasm32"))]
+pub mod edge;
 pub mod editor_types;
 pub mod generative;
 pub mod limits;

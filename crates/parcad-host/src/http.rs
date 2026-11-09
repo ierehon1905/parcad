@@ -127,7 +127,7 @@ fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router
             // The same application again, for a model rather than a person. It
             // reaches `service` through the same functions, and the scripts it
             // sends run in `script`'s sandbox rather than the webview.
-            .nest_service("/mcp", mcp::service(assets.clone(), None))
+            .nest_service("/mcp", mcp::service(assets.clone(), &[]))
             // Everything else is the frontend. Registered last and as a fallback so
             // no asset name can ever shadow an API route.
             .fallback(asset)
@@ -141,7 +141,7 @@ fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router
     // tool, inside `Parcad::call_tool`, where a limit is a tool result.
     let guarded = api()
         .route_layer(axum::middleware::from_fn(admitted))
-        .nest_service("/mcp", mcp::service(assets.clone(), Some(accounts.links().host().authority())))
+        .nest_service("/mcp", mcp::service(assets.clone(), &accounts.hosts()))
         .layer(axum::middleware::from_fn_with_state(Arc::new(accounts), authenticate));
     // Unguarded, so a client looking for OAuth metadata hears that there is
     // none rather than a challenge it takes to mean "sign in".

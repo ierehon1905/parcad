@@ -251,6 +251,10 @@ const SERVE_USAGE: &str = "usage: parcad serve [--port N] [--bind ADDR]\n\
   --limit NAME=N     move one per-account limit (N, or off); PARCAD_LIMIT_<NAME> in the environment\n\
                      too, which a flag overrides. Each, with its hosted default:\n\
 {limits}\n\
+  --edge-key FILE     the Ed25519 public key of an edge in front of the server (an OAuth front):\n\
+                     a pass it signs opens the account it names, with no token here\n\
+  --edge-origin NAME the host the edge forwards to, which its passes are addressed to\n\
+  --revoked FILE     account ids to refuse however they arrive, one a line; ends their links too\n\
   --worker-memory-mb N  the memory each kernel worker may allocate (Linux enforces it), or off;\n\
                      PARCAD_WORKER_MEMORY_MB. By default the container's memory, less 1 GB for the\n\
                      host, shared among --builds";
@@ -273,6 +277,10 @@ struct HostedFlags {
     public_host: parcad_host::tenant::PublicHost,
     link_secret: PathBuf,
     link_lifetime: std::time::Duration,
+    /// The edge whose passes open accounts, and the file its key came from.
+    edge: Option<(parcad_host::edge::Edge, PathBuf)>,
+    /// Accounts refused however they arrive.
+    revoked: Vec<parcad_host::tenant::TenantId>,
     limits: parcad_host::limits::Limits,
     /// Bytes each worker may allocate; `None` is no cap.
     worker_memory: Option<u64>,
@@ -288,6 +296,9 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
     let mut public_host = None;
     let mut link_secret = None;
     let mut link_lifetime = None;
+    let mut edge_key = None;
+    let mut edge_origin = None;
+    let mut revoked_file = None;
     let mut limit_flags: Vec<String> = Vec::new();
     let mut worker_memory: Option<String> = std::env::var("PARCAD_WORKER_MEMORY_MB").ok();
     let mut args = args;
@@ -311,6 +322,11 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
                 }
                 link_lifetime = Some(std::time::Duration::from_secs(seconds));
             }
+            "--edge-key" => edge_key = Some(PathBuf::from(value("a file")?)),
+            "--edge-origin" => {
+                edge_origin = Some(parcad_host::tenant::PublicHost::parse(&value("a host name")?).map_err(anyhow::Error::msg)?)
+            }
+            "--revoked" => revoked_file = Some(PathBuf::from(value("a file")?)),
             "--limit" => limit_flags.push(value("NAME=VALUE")?),
             "--worker-memory-mb" => worker_memory = Some(value("a count of MB, or off")?),
             "-h" | "--help" => {
@@ -334,6 +350,9 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
         if tokens.is_some() || tenants.is_some() || public_host.is_some() || link_secret.is_some() || link_lifetime.is_some() {
             anyhow::bail!("--tokens, --tenants-dir, --public-host, --link-secret and --link-lifetime are read only with --hosted");
         }
+        if edge_key.is_some() || edge_origin.is_some() || revoked_file.is_some() {
+            anyhow::bail!("--edge-key, --edge-origin and --revoked are read only with --hosted");
+        }
         if !limit_flags.is_empty() {
             anyhow::bail!("--limit bounds the accounts of a hosted server, and is read only with --hosted");
         }
@@ -355,6 +374,7 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
             Some(mb << 20)
         }
     };
+    let revoked = revoked_file.as_deref().map(read_revoked).transpose()?.unwrap_or_default();
     match (tokens, tenants, public_host) {
         (Some(tokens), Some(tenants), Some(public_host)) => Ok(Serve {
             address,
@@ -362,6 +382,24 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
             hosted: Some(HostedFlags {
                 link_secret: link_secret.unwrap_or_else(|| secret_beside(&tokens)),
                 link_lifetime: link_lifetime.unwrap_or(parcad_host::signing::Links::DEFAULT_LIFETIME),
+                edge: match (edge_key, edge_origin) {
+                    (None, None) => None,
+                    (Some(key), Some(origin)) => {
+                        let text = std::fs::read_to_string(&key)
+                            .with_context(|| format!("reading the edge key {}", key.display()))?;
+                        let edge = parcad_host::edge::Edge::new(&text, &public_host, origin)
+                            .map_err(|e| anyhow::anyhow!("{}: {e}", key.display()))?;
+                        Some((edge, key))
+                    }
+                    (Some(_), None) => anyhow::bail!(
+                        "--edge-key needs --edge-origin, the host the edge forwards to (origin.example.com), \
+                         which is what its passes are addressed to"
+                    ),
+                    (None, Some(_)) => anyhow::bail!(
+                        "--edge-origin needs --edge-key, the file holding the edge's Ed25519 public key"
+                    ),
+                },
+                revoked,
                 tokens,
                 tenants,
                 public_host,
@@ -381,6 +419,20 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
             anyhow::bail!("--hosted needs {}", missing.join(", "))
         }
     }
+}
+
+/// The accounts `--revoked` names: one id a line, blank lines and `#`
+/// comments allowed, as in the tokens file.
+fn read_revoked(path: &std::path::Path) -> Result<Vec<parcad_host::tenant::TenantId>> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("reading the revoked accounts {}", path.display()))?;
+    text.lines()
+        .enumerate()
+        .map(|(at, line)| (at, line.trim()))
+        .filter(|(_, line)| !line.is_empty() && !line.starts_with('#'))
+        .map(|(at, line)| {
+            parcad_host::tenant::TenantId::new(line).map_err(|e| anyhow::anyhow!("{}:{}: {e}", path.display(), at + 1))
+        })
+        .collect()
 }
 
 /// Where the link secret lives unless `--link-secret` says: the tokens file's
@@ -411,9 +463,18 @@ fn serve(args: impl Iterator<Item = String>) -> Result<()> {
         server: std::sync::Arc::new(parcad_host::limits::Gate::new(Some(options.builds))),
         shipped: parcad_host::projects::shipped_dir(),
     };
-    let accounts = parcad_host::tenant::Accounts::read(&flags.tokens, &flags.tenants, links)
+    let mut accounts = parcad_host::tenant::Accounts::read(&flags.tokens, &flags.tenants, links)
         .map_err(anyhow::Error::msg)?
-        .governed(policy);
+        .governed(policy)
+        .revoking(flags.revoked.clone());
+    if let Some((edge, key)) = &flags.edge {
+        accounts = accounts.trusting(edge.clone());
+        eprintln!(
+            "parcad: passes from an edge open accounts too: addressed to {}, signed with the key in {}",
+            edge.origin(),
+            key.display()
+        );
+    }
     std::fs::create_dir_all(&flags.tenants)
         .with_context(|| format!("creating the tenants folder {}", flags.tenants.display()))?;
     parcad_occt::confine_workers(parcad_occt::WorkerLimits {
@@ -967,5 +1028,37 @@ mod tests {
         let usage = serve_usage();
         assert!(usage.contains("calls-per-minute=60") && usage.contains("--worker-memory-mb"), "{usage}");
         assert!(!usage.contains("{limits}"), "{usage}");
+    }
+
+    /// An edge is its key and its origin together, read with --hosted only;
+    /// a revoked list is account ids, refused line by line.
+    #[test]
+    fn an_edge_needs_its_key_and_its_origin_and_only_hosted() {
+        let dir = std::env::temp_dir().join(format!("parcad-edge-flags-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key = dir.join("edge.pub");
+        std::fs::write(&key, "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc\n").unwrap();
+        let revoked = dir.join("revoked");
+        std::fs::write(&revoked, "# gone\nu-k3x9q2mf7a\n\nacme\n").unwrap();
+        let key = key.to_str().unwrap();
+        let revoked = revoked.to_str().unwrap();
+        let hosted = ["--hosted", "--tokens", "t", "--tenants-dir", "d", "--public-host", "mcp.example.test"];
+        let with = |extra: &[&str]| options(&[&hosted[..], extra].concat());
+
+        let serve = with(&["--edge-key", key, "--edge-origin", "origin.example.test", "--revoked", revoked]).unwrap();
+        let flags = serve.hosted.expect("hosted");
+        assert_eq!(flags.edge.expect("an edge").0.origin().to_string(), "https://origin.example.test");
+        assert_eq!(flags.revoked.iter().map(|id| id.as_str()).collect::<Vec<_>>(), ["u-k3x9q2mf7a", "acme"]);
+
+        let alone = with(&["--edge-key", key]).err().expect("refused").to_string();
+        assert!(alone.contains("--edge-origin"), "{alone}");
+        let origin_alone = with(&["--edge-origin", "origin.example.test"]).err().expect("refused").to_string();
+        assert!(origin_alone.contains("--edge-key"), "{origin_alone}");
+        let local = options(&["--edge-key", key, "--edge-origin", "origin.example.test"]).err().expect("refused").to_string();
+        assert!(local.contains("only with --hosted"), "{local}");
+        std::fs::write(dir.join("bad"), "Not An Id\n").unwrap();
+        let bad = with(&["--revoked", dir.join("bad").to_str().unwrap()]).err().expect("refused").to_string();
+        assert!(bad.contains(":1:") && bad.contains("not a tenant id"), "{bad}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
