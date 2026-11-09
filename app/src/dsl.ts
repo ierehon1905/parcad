@@ -1694,9 +1694,21 @@ function split(args: (Shape | BoolOptions)[]): {
 } {
   const shapes: Shape[] = [];
   let opts: BoolOptions = {};
-  for (const a of args) {
+  for (const a of args as unknown[]) {
     if (a instanceof Shape) shapes.push(a);
-    else opts = { ...opts, ...a };
+    else if (a instanceof EdgeSelection || a instanceof VertexSelection) {
+      const what = a instanceof EdgeSelection ? "an edge selection" : "a corner selection";
+      const treat = a instanceof EdgeSelection ? ".edges(…).fillet(r) or .chamfer(d)" : ".vertices(…).fillet(r) or .chamfer(d)";
+      throw new Error(
+        `union, cut and intersect take shapes and an optional { blend: r }; this argument is ${what}, ` +
+          `not a shape. To round or bevel those edges, treat the selection itself: ${treat}. ` +
+          `To combine the part, pass the shape (base), not its selection (base.edges(…)).`,
+      );
+    } else if (typeof a !== "object" || a === null || Array.isArray(a)) {
+      throw new Error(
+        `union, cut and intersect take shapes and an optional { blend: r }; one argument is ${describeArgument(a)}.`,
+      );
+    } else opts = { ...opts, ...(a as BoolOptions) };
   }
   return { shapes, opts };
 }

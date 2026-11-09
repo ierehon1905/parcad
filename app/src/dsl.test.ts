@@ -1035,3 +1035,14 @@ describe("importPart", () => {
     expect(() => run("partParams({ a: 1 });\npartParams({ b: 2 });\nreturn box(1, 1, 1);", {})).toThrow("once per part");
   });
 });
+
+describe("a boolean's arguments", () => {
+  test("a selection passed to union names what union takes, and how to treat the edges", () => {
+    const base = box(20, 20, 4);
+    // @ts-expect-error a selection is not a shape, which is the mistake under test
+    expect(() => base.union(base.edges(">Z"))).toThrow(/take shapes .* an edge selection, not a shape.*\.edges\(…\)\.fillet\(r\)/);
+    // @ts-expect-error likewise for a number
+    expect(() => base.cut(3)).toThrow("one argument is 3");
+    expect(() => base.union(box(5, 5, 10), { blend: 1 })).not.toThrow();
+  });
+});

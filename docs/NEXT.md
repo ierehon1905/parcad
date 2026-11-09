@@ -279,7 +279,7 @@ and in the next two sections.
 | 14 | tool schemas carry non-standard `uint` formats — **done 2026-11-09** | 3 | ★ | S | Opus |
 | 15 | `fillet(selector, radius)` order | 2 | ★ | S | Opus |
 | 16 | `wait_s` on one script tool only | 2 | ★ | S | Opus |
-| 17 | `.union()` given an edge selection says "not a function" | 2 | ★ | S | Opus |
+| 17 | `.union()` given an edge selection says "not a function" — **done 2026-11-09** | 2 | ★ | S | Opus |
 | 18 | a vertex treatment's `edges` is not what its `.expect` counts | 2 | ★ | S | Opus |
 | 19 | the editor never shows `mixed_corners` | 2 | ★ | S | Opus |
 | 20 | the area integral costs a fitted ring 0.76 s | 2 | ★ | M | Opus |
@@ -339,7 +339,10 @@ and in the next two sections.
   already writes `minimum: 0` on an unsigned count.
 - **`.union()` given an edge selection says "not a function".** Haiku 4.5, plate
   stand: `.union(base.edges(…))` threw a bare "not a function" at that line.
-  Name what `union` takes when an argument is a selection.
+  Name what `union` takes when an argument is a selection. *Done 2026-11-09:*
+  `split` refuses an edge or corner selection, and anything that is neither a
+  shape nor an options object. The message says what the booleans take, how
+  to treat the edges instead, and to pass `base` rather than `base.edges(…)`.
 - **A face's listed area misreads spline faces.** Found while making the
   part's volume and area the B-rep's (2026-10-13): `Shape_faces_json` in the
   vendored wrapper reads each face with `BRepGProp`'s fixed-order rule, which
