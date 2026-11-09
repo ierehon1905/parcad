@@ -873,9 +873,8 @@ pub struct Treatment {
     /// wrote. For an `.edges(...)` selection it is counted the way `.expect`
     /// counts: paste it into `.expect({ count })` so the next edit fails
     /// aloud instead of treating something else. For a `.vertices(...)`
-    /// selection it is the edges meeting at those corners, while `.expect`
-    /// counts the corners (docs/NEXT.md). Absent only when the kernel that
-    /// built the part did not report it.
+    /// selection it counts the corners, as `.expect` there does. Absent only
+    /// when the kernel that built the part did not report it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub edges: Option<usize>,
     /// Present when the selector caught inside and outside corners together,

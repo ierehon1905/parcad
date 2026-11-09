@@ -622,11 +622,11 @@ pub struct Bridge {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TreatmentEdges {
     pub node: usize,
-    /// The edges a person counts, which is what `.expect({ count })` checks;
-    /// for a vertex target, the edges meeting at the selected corners.
+    /// What `.expect({ count })` checks: the edges a person counts, or for a
+    /// vertex target the selected corners.
     pub edges: usize,
-    /// Of `edges`, how many are outside corners and how many inside. Zero
-    /// for a vertex target, whose edges are not classified.
+    /// How many of the treated edges are outside corners and how many inside;
+    /// for a vertex target, of the edges meeting at the selected corners.
     #[serde(default)]
     pub convex: usize,
     #[serde(default)]

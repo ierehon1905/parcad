@@ -1,0 +1,22 @@
+{
+  "name": "fillet-a-corner-counts-the-corner",
+  "script": "eval/scripts/fillet-a-corner-counts-the-corner.js",
+  "why": "The count beside a treatment is what .expect({ count }) is pasted from, and for a .vertices(...) selection .expect counts corners. The reply used to say edges: 3, the edges meeting at the corner, so pasting it failed with \"matched 1\". One corner of a 20 mm cube rounded 2 mm: 8000 - 3 x 18 x (4 - pi) - (8 - 4/3 pi) = 7949.835 mm3, three quarter-round edges of 18 mm and an eighth of a sphere.",
+  "brep": {
+    "size": [
+      20.0,
+      20.0,
+      20.0
+    ],
+    "volume_mm3": 7949.835,
+    "bodies": 1,
+    "voids": 0,
+    "watertight": true,
+    "treatments": [
+      {
+        "op": "fillet",
+        "edges": 1
+      }
+    ]
+  }
+}

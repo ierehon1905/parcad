@@ -2912,6 +2912,8 @@ fn select_edge_target(
             if let Some(expectation) = expect {
                 check_vertex_expectation(*expectation, selected.len(), vertices, id, label)?;
             }
+            // What `.vertices(…).expect({ count })` counts, so the count can be pasted into it.
+            let corners = selected.len();
             let mut seen = HashSet::new();
             let vertices = selected.iter().map(|vertex| vertex.point).collect();
             let edges: Vec<Edge> = selected
@@ -2922,7 +2924,24 @@ fn select_edge_target(
                         .is_some_and(|described| seen.insert(described.key))
                 })
                 .collect();
-            let report = TreatmentEdges { node: id, edges: edges.len(), convex: 0, concave: 0, before_cuts: Vec::new() };
+            // Each incident edge's kind, off the logical edge it is a piece of, so a corner
+            // where a seam meets an outside edge carries `mixed_corners` as an edge selection does.
+            let logical = selectable_edges(shape)?;
+            let mut kinds: HashMap<Vec<[i64; 3]>, Option<Dihedral>> = HashMap::new();
+            for edge in &edges {
+                let Some(piece) = describe_edge(edge.clone()) else { continue };
+                if let Some(whole) = logical.iter().find(|whole| whole.piece_keys.contains(&piece.key)) {
+                    kinds.insert(whole.key.clone(), whole.dihedral);
+                }
+            }
+            let kind = |wanted| kinds.values().filter(|kind| **kind == Some(wanted)).count();
+            let report = TreatmentEdges {
+                node: id,
+                edges: corners,
+                convex: kind(Dihedral::Convex),
+                concave: kind(Dihedral::Concave),
+                before_cuts: Vec::new(),
+            };
             Ok(ResolvedEdgeTarget { edges, vertices, report })
         }
     }
@@ -6404,6 +6423,22 @@ mod tests {
             after.values().cloned().collect::<Vec<_>>(),
             [TreatmentEdges { node: 2, edges: 4, convex: 4, concave: 0, before_cuts: Vec::new() }],
             "the fillet is node 2 now",
+        );
+    }
+
+    /// A vertex treatment's count is its corners, which is what
+    /// `.vertices(…).expect({ count })` counts, so the reply's number can be
+    /// pasted into it; the three edges meeting there are classified.
+    #[test]
+    fn a_vertex_treatment_counts_its_corners_and_classifies_their_edges() {
+        let cube: Doc = serde_json::from_value(serde_json::json!({"units":"mm","root":1,"nodes":[
+            {"op":"cuboid","size":{"x":20,"y":20,"z":20}},
+            {"op":"fillet","child":0,"radius":2,"vertices":">X and >Y and >Z"}
+        ]}))
+        .unwrap();
+        assert_eq!(
+            build_part(&cube).unwrap().treatment_edges.values().cloned().collect::<Vec<_>>(),
+            [TreatmentEdges { node: 1, edges: 1, convex: 3, concave: 0, before_cuts: Vec::new() }],
         );
     }
 

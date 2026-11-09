@@ -280,7 +280,7 @@ and in the next two sections.
 | 15 | `fillet(selector, radius)` order — **done 2026-11-09** | 2 | ★ | S | Opus |
 | 16 | `wait_s` on one script tool only — **done 2026-11-09** | 2 | ★ | S | Opus |
 | 17 | `.union()` given an edge selection says "not a function" — **done 2026-11-09** | 2 | ★ | S | Opus |
-| 18 | a vertex treatment's `edges` is not what its `.expect` counts | 2 | ★ | S | Opus |
+| 18 | a vertex treatment's `edges` is not what its `.expect` counts — **done 2026-11-09** | 2 | ★ | S | Opus |
 | 19 | the editor never shows `mixed_corners` — **done 2026-11-09** | 2 | ★ | S | Opus |
 | 20 | the area integral costs a fitted ring 0.76 s | 2 | ★ | M | Opus |
 
@@ -395,7 +395,11 @@ and in the next two sections.
   `backend.rs`, through `TreatmentEdges` to `parcad_evaluation::Treatment` —
   and add a case beside `fillet-counts-a-split-rim-once`. The same arm reports
   no convex/concave split, so a corner where a seam meets an outside edge
-  never carries `mixed_corners`; classify the incident edges there too.
+  never carries `mixed_corners`; classify the incident edges there too. *Done 2026-11-09:*
+  a vertex target reports its corner count, and its incident edges are
+  classified off the logical edges they are pieces of, so `mixed_corners` can
+  fire there. Case `fillet-a-corner-counts-the-corner` holds `edges: 1` and
+  the closed-form 7949.835 mm³; the corpus is 233/233.
 - **The editor never shows `mixed_corners`.** The warning reaches agents in
   every reply and the window's snapshot carries it, but `app/src/state.ts`
   types a treatment without it and the treatment hover
