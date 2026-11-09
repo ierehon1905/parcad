@@ -19,6 +19,23 @@ if [ ! -r "$tokens" ]; then
     exit 64
 fi
 
+# An edge in front (edge/, docs/HOSTING.md "Auth"): its public key, which is
+# no secret, and the origin name its passes are addressed to, both or neither.
+edge=()
+if [ -n "${PARCAD_EDGE_KEY:-}" ] || [ -n "${PARCAD_EDGE_ORIGIN:-}" ]; then
+    if [ -z "${PARCAD_EDGE_KEY:-}" ] || [ -z "${PARCAD_EDGE_ORIGIN:-}" ]; then
+        echo "parcad-entrypoint: an edge needs both PARCAD_EDGE_KEY (its Ed25519 public key, base64) and PARCAD_EDGE_ORIGIN (the name it forwards to, e.g. origin.example.com); one is unset" >&2
+        exit 64
+    fi
+    printf '%s\n' "$PARCAD_EDGE_KEY" > /tmp/parcad-edge.pub
+    edge=(--edge-key /tmp/parcad-edge.pub --edge-origin "$PARCAD_EDGE_ORIGIN")
+fi
+# PARCAD_REVOKED: account ids refused however they arrive, separated by spaces or commas.
+if [ -n "${PARCAD_REVOKED:-}" ]; then
+    tr -s ', ' '\n' <<<"$PARCAD_REVOKED" > /tmp/parcad-revoked
+    edge+=(--revoked /tmp/parcad-revoked)
+fi
+
 # The link secret goes on the volume: the tokens mount is read-only, and a
 # secret that survives a restart is what keeps yesterday's links working.
 # PARCAD_BUILDS caps builds in flight across every account; unset, the host
@@ -27,4 +44,4 @@ fi
 exec parcad serve --hosted --bind 0.0.0.0 --port 4242 \
     --tokens "$tokens" --tenants-dir /data/tenants --public-host "$PARCAD_PUBLIC_HOST" \
     --link-secret /data/link-secret --link-lifetime "${PARCAD_LINK_LIFETIME:-86400}" \
-    ${PARCAD_BUILDS:+--builds "$PARCAD_BUILDS"}
+    ${PARCAD_BUILDS:+--builds "$PARCAD_BUILDS"} ${edge[@]+"${edge[@]}"}

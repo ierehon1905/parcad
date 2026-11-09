@@ -19,6 +19,10 @@ services:
       PARCAD_PUBLIC_HOST: ${PARCAD_PUBLIC_HOST:?the name clients reach the server by, e.g. cad.example.com}
       PARCAD_BUILDS: ${PARCAD_BUILDS:-2}
       PARCAD_LINK_LIFETIME: ${PARCAD_LINK_LIFETIME:-86400}
+      # Behind the sign-in edge (edge/README.md): its public key and the origin name.
+      PARCAD_EDGE_KEY: ${PARCAD_EDGE_KEY:-}
+      PARCAD_EDGE_ORIGIN: ${PARCAD_EDGE_ORIGIN:-}
+      PARCAD_REVOKED: ${PARCAD_REVOKED:-}
     ports:
       - "127.0.0.1:4242:4242"
     volumes:

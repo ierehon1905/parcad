@@ -157,6 +157,9 @@ workspace, and the front page says so.
 | `PARCAD_PUBLIC_HOST` | unset, required | where clients reach the server: a host, `https://` unless `http://host:port` is written; `--public-host` |
 | `PARCAD_LINK_LIFETIME` | `86400` | seconds a reply's `url` fetches its file with no bearer; `--link-lifetime` |
 | `PARCAD_BUILDS` | unset (the container's cores) | builds in flight across every account; `--builds`. 2 on a 2 vCPU / 4 GB box |
+| `PARCAD_EDGE_KEY` | unset | the sign-in edge's Ed25519 public key, base64 (edge/README.md); with `PARCAD_EDGE_ORIGIN`, a pass it signs opens its account. `--edge-key` |
+| `PARCAD_EDGE_ORIGIN` | unset | the name the edge forwards to, which its passes are addressed to: `origin.example.com`; `--edge-origin`. Set both or neither |
+| `PARCAD_REVOKED` | unset | account ids refused by token, pass and link alike, separated by spaces or commas; `--revoked` |
 | `PARCAD_SEED_DIR` | `/opt/parcad/examples` | the parts every account is shipped, read-only; the CLI's own lookup is a macOS bundle's `../Resources/examples`, so the image names it |
 | `PARCAD_LIMIT_<NAME>` | the hosted defaults | one per-account limit, `--limit name=value`: `PARCAD_LIMIT_CALLS_PER_MINUTE=30`, `PARCAD_LIMIT_STORAGE_MB=off`. docs/HOSTING.md, "Limits", has every name |
 | `PARCAD_WORKER_MEMORY_MB` | unset (the container's limit less 1 GB, shared among the builds) | the memory each kernel worker may allocate, or `off`; `--worker-memory-mb` |
