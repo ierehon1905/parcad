@@ -161,6 +161,24 @@ function Wrong({ snapshot }: { snapshot: Snapshot }) {
   );
 }
 
+/** What each kind of print finding is called on the chevron's line. */
+const FINDING_NAMES: Record<string, string> = {
+  thin: "thin wall",
+  overhang: "overhang",
+  pieces: "loose pieces",
+  floating: "off the bed",
+  collision: "cut into a feature",
+};
+
+/** The flagged findings by kind, so the line says what to read without opening it. */
+function flaggedKinds(findings: { kind: string }[]): string {
+  const counts = new Map<string, number>();
+  for (const f of findings) counts.set(f.kind, (counts.get(f.kind) ?? 0) + 1);
+  return [...counts]
+    .map(([kind, n]) => `${FINDING_NAMES[kind] ?? kind}${n > 1 ? ` ×${n}` : ""}`)
+    .join(", ");
+}
+
 /** The chevron's line: how many bodies, and whether print_check found anything. */
 function Summary({ snapshot }: { snapshot: Snapshot }) {
   const bodies = snapshot.named_bodies?.length ?? 0;
@@ -181,8 +199,8 @@ function Summary({ snapshot }: { snapshot: Snapshot }) {
           <span class="text-bad"> · print fails</span>
         ) : flagged > 0 ? (
           <>
-            {" · prints, "}
-            <Strong>{flagged}</Strong> flagged
+            {" · prints, flagged: "}
+            <Strong>{flaggedKinds(print!.flagged ?? [])}</Strong>
           </>
         ) : (
           " · prints clean"

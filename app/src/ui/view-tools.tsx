@@ -88,6 +88,7 @@ export function ViewTools() {
         })}
       >
         <Icon name="section" class="size-4 shrink-0" />
+        <span>section</span>
         <Segments
           value={S.sectionAxis.value}
           options={[

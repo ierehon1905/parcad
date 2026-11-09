@@ -11,7 +11,8 @@ type Size = "group" | "segment" | "touch" | "touch-segment";
 
 const SHAPE: Record<Size, string> = {
   group: "flex items-center gap-1.5 px-2 py-1 rounded-md border cursor-pointer",
-  segment: "flex items-center gap-1 px-1.5 py-0.5 rounded cursor-pointer",
+  /** At least 28 px across and 24 high: X, Y and Z are one letter each, and a target that size is hard to hit. */
+  segment: "flex items-center justify-center gap-1 min-w-7 min-h-6 px-1.5 rounded cursor-pointer",
   /** A finger's worth, floating on the view by itself: the chat viewer on a phone. */
   touch: "flex shrink-0 items-center justify-center size-11 rounded-full border cursor-pointer backdrop-blur-lg",
   /** The same height, one of a row in a `TOUCH_TROUGH`. */
@@ -19,7 +20,8 @@ const SHAPE: Record<Size, string> = {
 };
 
 const OFF: Record<Size, string> = {
-  group: "text-ink-dim border-transparent hover:text-ink hover:border-line",
+  /** Full ink: dimmed is how a disabled button reads, and these are live. */
+  group: "text-ink border-transparent hover:border-line",
   segment: "text-ink-dim hover:text-ink",
   touch: "text-ink border-line bg-glass/86",
   "touch-segment": "text-ink-dim",

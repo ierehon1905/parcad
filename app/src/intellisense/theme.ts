@@ -119,3 +119,18 @@ export const cardTheme = EditorView.theme({
     fontWeight: "bold",
   },
 });
+
+/**
+ * The editor's own surface in the window's palette rather than One Dark's, so
+ * the code sits on the same panel as everything beside it. One Dark's comment
+ * colour reads at 5.4:1 there, against 3.9:1 on its own grey.
+ */
+export const surfaceTheme = EditorView.theme(
+  {
+    "&.cm-editor": { backgroundColor: "var(--color-panel)" },
+    ".cm-gutters.cm-gutters": { backgroundColor: "var(--color-panel)", borderRight: "1px solid var(--color-line)" },
+    ".cm-activeLine.cm-activeLine": { backgroundColor: "rgb(255 255 255 / 0.03)" },
+    ".cm-activeLineGutter.cm-activeLineGutter": { backgroundColor: "rgb(255 255 255 / 0.05)" },
+  },
+  { dark: true },
+);

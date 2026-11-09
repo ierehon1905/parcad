@@ -25,7 +25,7 @@ import { useEffect, useRef } from "preact/hooks";
 import { insertFlashField, treatmentHoverField } from "../editor-marks";
 import * as engine from "../engine";
 import { intellisense } from "../intellisense/extensions";
-import { cardTheme } from "../intellisense/theme";
+import { cardTheme, surfaceTheme } from "../intellisense/theme";
 import * as languageService from "../intellisense/service";
 import { labelLinter } from "../label-lint";
 import { numberDial } from "../number-dial";
@@ -102,6 +102,7 @@ export function Editor() {
         // After One Dark on purpose: it styles the tooltips too, and the later
         // theme wins.
         cardTheme,
+        surfaceTheme,
         treatmentHoverField,
         insertFlashField,
         // Selector syntax is marked as you type. Everything else — whether the

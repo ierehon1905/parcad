@@ -87,7 +87,7 @@ function Save() {
       type="button"
       disabled={!changed}
       class="flex items-center gap-1.5 px-2 py-1 bg-panel-2 border border-line rounded-md
-             font-mono text-small cursor-pointer
+             text-small cursor-pointer
              disabled:opacity-55 disabled:cursor-default
              enabled:text-accent enabled:border-accent-deep enabled:hover:border-accent"
       {...tip({
@@ -151,7 +151,7 @@ function Export() {
       <button
         type="button"
         class="flex items-center gap-1.5 px-2 py-1 bg-panel-2 text-ink border border-line
-               rounded-md font-mono text-small cursor-pointer hover:border-accent"
+               rounded-md text-small cursor-pointer hover:border-accent"
         {...tip({
           title: "Export",
           key: "⌘E",
@@ -224,7 +224,7 @@ function ShowCode() {
       onClick={() => engine.showCode(!showing)}
     >
       <Icon name="code" class="size-4 shrink-0" />
-      <span class="font-mono text-small">code</span>
+      <span class="text-small">code</span>
     </Toggle>
   );
 }
@@ -253,8 +253,8 @@ function EditElsewhere() {
     <button
       type="button"
       disabled={!path}
-      class="flex p-1.5 rounded-md border border-transparent text-ink-dim cursor-pointer
-             hover:text-ink hover:border-line
+      class="flex items-center gap-1.5 px-2 py-1 rounded-md border border-transparent text-ink cursor-pointer
+             hover:border-line
              disabled:opacity-45 disabled:cursor-default disabled:hover:border-transparent"
       {...tip({
         title: name ? `Open part.js in ${name}` : "Open part.js in your editor",
@@ -268,6 +268,7 @@ function EditElsewhere() {
       ) : (
         <Icon name="pencil" class="size-4 shrink-0" />
       )}
+      <span class="text-small">{name ?? "editor"}</span>
     </button>
   );
 }
@@ -317,7 +318,7 @@ function Agent() {
   const chip = describe(mcp);
   return (
     <span
-      class={`flex items-center gap-1.5 font-mono text-small cursor-default ${chip.tone}`}
+      class={`flex items-center gap-1.5 text-small cursor-default ${chip.tone}`}
       {...tip({ title: "Agent connection", text: chip.detail })}
     >
       <Icon name="agent" class="size-3.5 shrink-0" />
@@ -335,13 +336,13 @@ function describe(mcp: McpStatus): { text: string; tone: string; detail: string 
   // where there is room to say what it means. A client that reconnects opens a
   // second session and the endpoint cannot tell that from a second client, so
   // "3 sessions" on the chip would read as three agents.
-  let text = "MCP";
+  let text = "no agent";
   let tone: string = TONE.idle;
   if (mcp.clients > 0) {
-    text = working ? "MCP connected · working" : `MCP connected · idle ${age(idle!)}`;
+    text = working ? "agent working" : `agent idle ${age(idle!)}`;
     tone = working ? TONE.busy : TONE.live;
   } else if (idle !== null) {
-    text = `MCP last call ${age(idle)} ago`;
+    text = `agent's last call ${age(idle)} ago`;
   }
 
   const lines = [
@@ -373,5 +374,5 @@ const STATUS_TONE = { "": "text-ink-dim", busy: "text-accent", failed: "text-bad
 
 function Status() {
   const { text, tone } = S.status.value;
-  return <span id="status" class={`font-mono text-small ${STATUS_TONE[tone]}`}>{text}</span>;
+  return <span id="status" class={`text-small ${STATUS_TONE[tone]}`}>{text}</span>;
 }

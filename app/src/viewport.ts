@@ -11,6 +11,7 @@ import { LineMaterial } from "three/examples/jsm/lines/LineMaterial.js";
 import { LineSegments2 } from "three/examples/jsm/lines/LineSegments2.js";
 import { LineSegmentsGeometry } from "three/examples/jsm/lines/LineSegmentsGeometry.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { AxisTriad } from "./axes";
 import { beginDrag } from "./drag";
 import { verticesFromEdges, type VertexPoint } from "./entities";
 import { OutlineRenderer } from "./outline";
@@ -229,6 +230,7 @@ export class Viewport {
   /** The look's first sun, which casts the ground shadow and is aimed at the part; none in a shadowless look. */
   private sun?: { light: THREE.DirectionalLight; from: THREE.Vector3 };
   private outline!: OutlineRenderer;
+  private readonly axes: AxisTriad;
   private grid?: THREE.GridHelper;
   private ground?: THREE.Mesh;
   /** The frame requested, or 0 while nothing is drawing: the loop runs only while something changes. */
@@ -309,6 +311,7 @@ export class Viewport {
     // lies *on* it.
     this.renderer.localClippingEnabled = true;
     container.appendChild(this.renderer.domElement);
+    this.axes = new AxisTriad(container);
 
     this.scene.background =
       typeof sceneLook.sky === "string"
@@ -504,6 +507,7 @@ export class Viewport {
     if (this.flight) this.fly(this.flight);
     // True while a drag's damping is still carrying the camera, so the loop runs until it settles.
     const moving = this.controls.update();
+    this.axes.update(this.camera);
     this.fitDepthRange();
     if (DEBUG === "noedge" || DEBUG === "normals") {
       this.renderer.render(this.scene, this.camera);

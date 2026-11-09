@@ -50,7 +50,7 @@ describe("bracket source-to-viewport links", () => {
     const error = await browser.$("#error");
     try {
       await browser.waitUntil(
-        async () => (await status.getText()).includes("tris"),
+        async () => (await status.getText()).includes("built in"),
         { timeout: 5_000 },
       );
     } catch {

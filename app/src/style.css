@@ -25,12 +25,12 @@
   /* Fusion-style chrome: a dark frame around a bright work area. Named for the
      role rather than the shade, so a lighter theme is a change of value here
      and nothing else anywhere. */
-  --color-bg: #101216;
-  --color-panel: #16181c;
-  --color-panel-2: #1b1e24;
-  --color-line: #272c34;
-  --color-ink: #d8dee9;
-  --color-ink-dim: #8b94a3;
+  --color-bg: #000;
+  --color-panel: #0a0b0d;
+  --color-panel-2: #121418;
+  --color-line: rgb(255 255 255 / 0.1);
+  --color-ink: #eef1f5;
+  --color-ink-dim: #9aa2af;
   --color-accent: #6ea8fe;
   --color-accent-deep: #23406e;
   --color-accent-edge: #3a5f9e;
@@ -63,14 +63,23 @@
   --color-note-edge: #4a3c1f;
   /* The frosted panels that float over the viewport. Used with an opacity
      modifier — `bg-glass/86` — so one colour covers every one of them. */
-  --color-glass: #121419;
+  --color-glass: #0a0b0d;
   /* The two backdrops: a well behind a thumbnail, and the error pane. */
-  --color-well: #0e1014;
+  --color-well: #050607;
   --color-bad-bg: #1e1416;
   --color-bad-ink: #ffb4b4;
 
-  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
-  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif;
+  /* Small and alike, as parcad.dev's are square: a radius that size reads as a
+     finished edge rather than a pill. */
+  --radius-xs: 2px;
+  --radius-sm: 3px;
+  --radius-md: 3px;
+  --radius-lg: 4px;
+  --radius-xl: 4px;
+  --radius-2xl: 6px;
+
+  --font-mono: "Geist Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-sans: "Geist Variable", -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
 
   /* The app is dense on purpose: it is a tool window, not a document. 13px is
      the body, 12 and 11.5 are the two steps down that the chrome uses. */

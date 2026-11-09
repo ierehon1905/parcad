@@ -66,7 +66,7 @@ describe("the window draws the part", () => {
     await card.click();
 
     const status = await browser.$("#status");
-    await browser.waitUntil(async () => (await status.getText()).includes("tris"), {
+    await browser.waitUntil(async () => (await status.getText()).includes("built in"), {
       timeout: 20_000,
       timeoutMsg: `the bracket never finished building (status: ${await status.getText()})`,
     });

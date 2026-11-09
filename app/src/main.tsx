@@ -9,6 +9,9 @@
 
 import { render } from "preact";
 
+// Bundled rather than fetched: the desktop app has to look the same offline.
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
 import "./style.css";
 import { App } from "./app";
 

@@ -134,6 +134,7 @@ export function ProjectBrowser() {
   const projects = S.projects.value;
   const matched = projects ? search(projects.tree, query.value) : [];
   const shown = flatten(folder.value ? within(matched, folder.value) : matched);
+  const total = projects ? flatten(projects.tree).length : 0;
   // Nothing inside a closed picker is drawn. Not for the render cost — for the
   // network: every card fetches its own thumbnail, and a folder of a hundred
   // parts would otherwise pull a hundred pictures nobody has asked to see.
@@ -189,11 +190,11 @@ export function ProjectBrowser() {
             in was two pixels narrower than the button, so the two overlapped. */}
         <Button
           variant="quiet"
-          layout="shrink-0 font-mono text-[11px]"
-          aria-label="Close"
+          layout="shrink-0"
+          {...tip({ title: "Close", text: "Esc does the same." })}
           onClick={() => (S.browserOpen.value = false)}
         >
-          esc
+          Close
         </Button>
       </header>
 
@@ -250,9 +251,12 @@ export function ProjectBrowser() {
         >
           {projects?.directory ?? ""}
         </span>
-        <span>
-          {shown.length} part{shown.length === 1 ? "" : "s"}
-        </span>
+        {/* Only while a search or a folder narrows the list: otherwise "All parts" already says it. */}
+        {shown.length !== total && (
+          <span>
+            {shown.length} of {total} shown
+          </span>
+        )}
       </footer>
 
       {menu.value && (

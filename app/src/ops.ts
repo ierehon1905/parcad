@@ -146,7 +146,7 @@ export const OP_GROUPS: OpGroup[] = [
   },
   {
     id: "combine",
-    label: "Combine",
+    label: "Boolean",
     icon: "union",
     blurb: "Booleans. Each takes any number of shapes, and an options object last.",
     ops: [
@@ -246,7 +246,7 @@ export const OP_GROUPS: OpGroup[] = [
   },
   {
     id: "place",
-    label: "Place",
+    label: "Placement",
     icon: "translate",
     blurb: "Where a primitive ends up, and what it is called afterwards.",
     ops: [

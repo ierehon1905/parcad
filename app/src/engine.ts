@@ -322,8 +322,8 @@ let showingShipped = false;
 
 const reportOf = (result: Evaluated) =>
   result.shipped
-    ? `${result.snapshot.triangles.toLocaleString()} tris · built before this page was served, rebuilding it here`
-    : `${result.snapshot.triangles.toLocaleString()} tris · ${result.snapshot.kernel_ms} ms`;
+    ? "built before this page was served, rebuilding it here"
+    : `built in ${result.snapshot.kernel_ms} ms`;
 
 function show(result: Evaluated) {
   showingShipped = result.shipped === true;
