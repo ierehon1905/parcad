@@ -2040,6 +2040,9 @@ pub struct Resolved {
     /// and what a write replaces.
     pub before: String,
     pub edits_applied: usize,
+    /// The edits, numbered from 1, whose `old` matched only once its spacing
+    /// and quotes were read loosely.
+    pub matched_loosely: Vec<usize>,
 }
 
 /// The first 12 hex digits of the SHA-256 of a script: how every reply
@@ -2109,44 +2112,64 @@ pub fn resolve_script(
             ));
         }
     }
-    let script = apply_edits(&before, edits, &what)?;
+    let (script, matched_loosely) = apply_edits(&before, edits, &what)?;
     crate::limits::script_fits(&script)?;
     Ok(Resolved {
         script,
         project,
         before,
         edits_applied: edits.len(),
+        matched_loosely,
     })
 }
 
-/// Every edit applied in order, each to the text as the previous one left it.
-/// An `old` found twice or never is refused with the count and where, and
-/// nothing is returned: a guess at which occurrence was meant is the kind of
-/// approximation this codebase refuses.
-pub fn apply_edits(text: &str, edits: &[Edit], what: &str) -> Result<String, String> {
+/// Every edit applied in order, each to the text as the previous one left it,
+/// and which of them matched only loosely. An `old` found twice or never is
+/// refused with the count and where, and nothing is returned: a guess at which
+/// occurrence was meant is the kind of approximation this codebase refuses.
+///
+/// An `old` found nowhere exactly is looked for once more with every run of
+/// whitespace read as any run and either quote as either, which is how a
+/// model's memory of the text differs from what an earlier edit left
+/// (docs/NEXT.md, bench item 9). It applies only where that finds it once.
+pub fn apply_edits(text: &str, edits: &[Edit], what: &str) -> Result<(String, Vec<usize>), String> {
     let mut current = text.to_string();
+    let mut loosely = Vec::new();
     for (index, edit) in edits.iter().enumerate() {
         let nth = index + 1;
         if edit.old.is_empty() {
             return Err(format!("edit {nth}'s `old` is empty; give the text to replace."));
         }
-        let found: Vec<usize> = current.match_indices(&edit.old).map(|(at, _)| at).collect();
+        let found: Vec<std::ops::Range<usize>> =
+            current.match_indices(&edit.old).map(|(at, _)| at..at + edit.old.len()).collect();
+        let found = if found.is_empty() {
+            let loose = loose_matches(&current, &edit.old);
+            if loose.len() == 1 {
+                loosely.push(nth);
+            }
+            loose
+        } else {
+            found
+        };
         match found.as_slice() {
-            [at] => {
-                current.replace_range(*at..*at + edit.old.len(), &edit.new);
+            [range] => {
+                current.replace_range(range.clone(), &edit.new);
             }
             [] => {
+                let nearest = nearest_line(&current, &edit.old)
+                    .map(|(line, text)| format!(" The nearest line is {line}: `{text}`."))
+                    .unwrap_or_default();
                 return Err(format!(
-                    "edit {nth}'s `old` appears nowhere in {what}, so nothing was changed. Copy \
-                     it exactly from the text as the earlier edits left it — spaces, quotes and \
-                     line breaks included — and check the earlier edits did not already remove it."
+                    "edit {nth}'s `old` appears nowhere in {what}, so nothing was changed.{nearest} Copy \
+                     it from the text as the earlier edits left it, and check the earlier edits \
+                     did not already remove it."
                 ));
             }
             many => {
                 let lines: Vec<usize> = many
                     .iter()
                     .take(2)
-                    .map(|at| 1 + current[..*at].matches('\n').count())
+                    .map(|range| 1 + current[..range.start].matches('\n').count())
                     .collect();
                 let first = if lines[0] == lines[1] {
                     format!("twice on line {}", lines[0])
@@ -2161,7 +2184,65 @@ pub fn apply_edits(text: &str, edits: &[Edit], what: &str) -> Result<String, Str
             }
         }
     }
-    Ok(current)
+    Ok((current, loosely))
+}
+
+/// `text` with every run of whitespace as one space and `'` as `"`, and the
+/// span of `text` each character of that came from.
+fn loosened(text: &str) -> (Vec<char>, Vec<std::ops::Range<usize>>) {
+    let mut chars = Vec::new();
+    let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
+    for (at, c) in text.char_indices() {
+        let end = at + c.len_utf8();
+        if c.is_whitespace() {
+            if chars.last() == Some(&' ') {
+                spans.last_mut().expect("a span per character").end = end;
+                continue;
+            }
+            chars.push(' ');
+        } else {
+            chars.push(if c == '\'' { '"' } else { c });
+        }
+        spans.push(at..end);
+    }
+    (chars, spans)
+}
+
+/// Where `old` occurs in `text` with spacing and quotes read loosely, as spans of `text`.
+fn loose_matches(text: &str, old: &str) -> Vec<std::ops::Range<usize>> {
+    let (haystack, spans) = loosened(text);
+    let (needle, _) = loosened(old);
+    if needle.is_empty() || needle.iter().all(|c| *c == ' ') || needle.len() > haystack.len() {
+        return Vec::new();
+    }
+    (0..=haystack.len() - needle.len())
+        .filter(|&at| haystack[at..at + needle.len()] == needle[..])
+        .map(|at| spans[at].start..spans[at + needle.len() - 1].end)
+        .collect()
+}
+
+/// The line of `text` sharing the most words with `old`'s longest line, when it
+/// shares at least half of them: what a refusal quotes so the next try is a copy.
+fn nearest_line(text: &str, old: &str) -> Option<(usize, String)> {
+    let words = |line: &str| -> Vec<String> {
+        line.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '.'))
+            .filter(|w| w.len() >= 2)
+            .map(str::to_string)
+            .collect()
+    };
+    let wanted = words(old.lines().max_by_key(|l| l.trim().len())?);
+    if wanted.is_empty() {
+        return None;
+    }
+    let (line, text, shared) = text
+        .lines()
+        .enumerate()
+        .map(|(at, line)| {
+            let have = words(line);
+            (at + 1, line.trim(), wanted.iter().filter(|w| have.contains(w)).count())
+        })
+        .max_by_key(|&(at, _, shared)| (shared, std::cmp::Reverse(at)))?;
+    (shared * 2 >= wanted.len() && shared > 0).then(|| (line, text.chars().take(160).collect()))
 }
 
 /// Read one of parcad's own documents: the language reference, or the prose the

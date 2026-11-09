@@ -271,7 +271,7 @@ and in the next two sections.
 | 6 | field runs measure Haiku 4.5, not the current Haiku — **done 2026-11-09** | 6 | ★★ | S | Opus |
 | 7 | a right part the model cannot verify goes out unvouched | 5 | ★★ | M | Opus |
 | 8 | a DSL name as a local is a parse error — **done 2026-11-09** | 5 | ★★ | S | Opus |
-| 9 | `edit_part`'s exact-text `old` misses | 5 | ★★ | M | Opus |
+| 9 | `edit_part`'s exact-text `old` misses — **done 2026-11-09**, unmeasured in the field | 5 | ★★ | M | Opus |
 | 10 | `read_docs` has no search — **done 2026-11-09** | 5 | ★★ | S | Opus |
 | 11 | the same signatures fetched every trial — **done 2026-11-09** | 4 | ★★ | S | Opus |
 | 12 | the G2 blend behind `.smooth()` — built 2026-10-14; a three-edge corner is still refused | 4 | ★★ | L | Fable, high |
@@ -432,7 +432,13 @@ point). Counted by trial, most-hit first:
   on a second edit after the first changed spacing or quotes. Candidates: match
   ignoring whitespace runs when that match is unique; quote the nearest line in
   the refusal. kernelCAD's `set_param` (edit a named parameter, no text to
-  match) is the other shape this could take for the common "make it 100 long".
+  match) is the other shape this could take for the common "make it 100 long". *Done 2026-11-09:*
+  an `old` found nowhere exactly is looked for again with every whitespace
+  run read as any run and `'` as `"`; found once, it is applied and the
+  reply's `matched_loosely` names the edit, found twice it is refused as
+  before. A miss now quotes the nearest line, the one sharing most of the
+  words of `old`'s longest line. Deterministic and unit-tested; no field case
+  provokes the miss on purpose, so no before/after number.
 - **A DSL name as a local is a parse error** — 2 trials (`const inset`).
   Parts run as `new Function(...names, source)`; wrapping the source in a block
   (`"{" + source + "\n}"`, same line numbers) lets a part's own `const` shadow a

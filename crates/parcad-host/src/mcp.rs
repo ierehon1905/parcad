@@ -682,6 +682,11 @@ pub struct Sourced<T> {
     #[serde(flatten)]
     pub measured: T,
     pub script_sha256: String,
+    /// The `edits`, numbered from 1, whose `old` was found only once its
+    /// spacing and quotes were read loosely. Absent when every one matched
+    /// exactly.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub matched_loosely: Vec<usize>,
 }
 
 impl<T> Sourced<T> {
@@ -689,6 +694,7 @@ impl<T> Sourced<T> {
         Self {
             measured,
             script_sha256: service::script_sha256(&source.script),
+            matched_loosely: source.matched_loosely.clone(),
         }
     }
 }
@@ -921,7 +927,7 @@ impl Parcad {
     #[tool(
         name = "edit_part",
         annotations(title = "Edit a part in place", read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
-        description = "Change part of a script without sending the whole thing: each edit replaces `old` with `new`, once, and the part is rebuilt and measured exactly as evaluate_part does — same reply, same views — then saved. `project` names the part to edit, or \"@session\" for the script on the user's screen. An `old` that appears twice, or not at all, is refused naming how many times it was found and where, and nothing is written: give more surrounding lines. The edited text is built before anything is written, so a change that does not build is refused and the part is left as it was. The previous text is kept as a snapshot (list_snapshots, restore_snapshot), so an edit is undoable, and an edit to the open part lands in the window's own undo history: the reply then carries `on_screen` with the revision and `viewers`, as set_script's does. A saved part that is also open on screen is put on screen too. Use it for every change after the first: a fillet radius, a dimension, one function — sending 10 KB of unchanged script to change two lines is the most common way a session runs out of room. To try a change without saving it, call evaluate_part with the same `project` and `edits`. The reply adds `edits_applied`, the new `script_sha256`, and for a saved part the `path` written and the `snapshot` kept; pass a reply's `script_sha256` back as `expect_sha256` to be refused if the text changed under you. An edit that writes part.js is refused when the edited text fails its `print_check` (material under 0.3 mm) or one of the part's own `checks`, naming the finding or the check and its measurement, unless `allow_failing` gives the user's reason; an edit to \"@session\" changes only the screen and is never refused for a verdict — the window shows it red."
+        description = "Change part of a script without sending the whole thing: each edit replaces `old` with `new`, once, and the part is rebuilt and measured exactly as evaluate_part does — same reply, same views — then saved. `project` names the part to edit, or \"@session\" for the script on the user's screen. An `old` that appears twice, or not at all, is refused naming how many times it was found and where, or the nearest line, and nothing is written: give more surrounding lines. An `old` found nowhere exactly but once with its spacing and quotes read loosely is applied, and the reply's `matched_loosely` names it. The edited text is built before anything is written, so a change that does not build is refused and the part is left as it was. The previous text is kept as a snapshot (list_snapshots, restore_snapshot), so an edit is undoable, and an edit to the open part lands in the window's own undo history: the reply then carries `on_screen` with the revision and `viewers`, as set_script's does. A saved part that is also open on screen is put on screen too. Use it for every change after the first: a fillet radius, a dimension, one function — sending 10 KB of unchanged script to change two lines is the most common way a session runs out of room. To try a change without saving it, call evaluate_part with the same `project` and `edits`. The reply adds `edits_applied`, the new `script_sha256`, and for a saved part the `path` written and the `snapshot` kept; pass a reply's `script_sha256` back as `expect_sha256` to be refused if the text changed under you. An edit that writes part.js is refused when the edited text fails its `print_check` (material under 0.3 mm) or one of the part's own `checks`, naming the finding or the check and its measurement, unless `allow_failing` gives the user's reason; an edit to \"@session\" changes only the screen and is never refused for a verdict — the window shows it red."
     )]
     async fn edit_part(
         &self,
@@ -2089,6 +2095,9 @@ fn measure(
     let mut measured = serde_json::to_value(evaluated.snapshot.with_views(summaries))
         .map_err(|e| format!("serialising the snapshot: {e}"))?;
     measured["script_sha256"] = serde_json::json!(service::script_sha256(&source.script));
+    if !source.matched_loosely.is_empty() {
+        measured["matched_loosely"] = serde_json::json!(source.matched_loosely);
+    }
     Ok((measured, pictures, door))
 }
 
@@ -2873,7 +2882,7 @@ mod tests {
             .err()
             .unwrap();
         assert_eq!(empty, "edit 1's `old` is empty; give the text to replace.");
-        let edited = service::apply_edits(
+        let (edited, loosely) = service::apply_edits(
             text,
             &[
                 service::Edit { old: "const wall = 2;".into(), new: "const wall = 3;".into() },
@@ -2883,6 +2892,32 @@ mod tests {
         )
         .unwrap();
         assert_eq!(edited, "const wall = 3;\nconst lid = box(1, 1, wall);\nreturn lid;");
+        assert!(loosely.is_empty());
+        assert!(never.contains("The nearest line is 1: `const wall = 3;`."), "{never}");
+    }
+
+    /// Haiku and Sonnet missed `old` in four bench trials, mostly on a second
+    /// edit after the first changed the spacing or the quotes. Read loosely,
+    /// an `old` found once is applied and named; found twice, it is refused.
+    #[test]
+    fn an_edit_whose_spacing_or_quotes_differ_applies_once_and_says_so() {
+        let text = "const plate = box(80,  40, 6);\nconst hole = holeFor('M5', 6)\n  .at(10, 10, 3);\nreturn plate.cut(hole);";
+        let (edited, loosely) = service::apply_edits(
+            text,
+            &[
+                service::Edit { old: "box(80, 40, 6)".into(), new: "box(90, 40, 6)".into() },
+                service::Edit { old: "holeFor(\"M5\", 6) .at(10, 10, 3)".into(), new: "holeFor(\"M6\", 6).at(10, 10, 3)".into() },
+            ],
+            "`plate`",
+        )
+        .unwrap();
+        assert_eq!(edited, "const plate = box(90, 40, 6);\nconst hole = holeFor(\"M6\", 6).at(10, 10, 3);\nreturn plate.cut(hole);");
+        assert_eq!(loosely, vec![1, 2]);
+
+        let twice = service::apply_edits("box(1,  1, 1);\nbox(1,\t1, 1);", &[service::Edit { old: "box(1, 1, 1)".into(), new: "x".into() }], "`p`")
+            .err()
+            .expect("two loose matches are refused, never guessed");
+        assert!(twice.starts_with("edit 1's `old` appears 2 times in `p`"), "{twice}");
     }
 
     /// An edit that does not build is refused before anything is written:
