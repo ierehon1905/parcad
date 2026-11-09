@@ -1,0 +1,26 @@
+{
+  "name": "inset-l-shape",
+  "script": "eval/scripts/inset-l-shape.js",
+  "why": "An L outline (100 x 100 less a 40 x 40 corner) inset by 10 and extruded 5. Intersection joins keep the re-entrant corner a corner, so the inset is (10,10) (90,10) (90,50) (50,50) (50,90) (10,90): 80*40 + 40*40 = 4800 mm2, 24000 mm3 exactly, eight planar faces. The corner at (50,50) lies 10*sqrt(2) from the outline's corner at (60,60); the guard on the inset reads that as the valley it is, not as 4.14 mm of slip, which is what refused every outline with a re-entrant corner before.",
+  "brep": {
+    "size": [
+      80.0,
+      80.0,
+      5.0
+    ],
+    "volume_mm3": 24000.0,
+    "area_mm2": 11200.0,
+    "triangles": 20,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 4800.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 8,
+    "edges": 36,
+    "curves": 18,
+    "requires": [
+      "inset-sections"
+    ]
+  }
+}

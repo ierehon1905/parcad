@@ -2640,10 +2640,12 @@ export function line2d(from: [number, number], toOrAngle: [number, number] | num
  *
  * - An arc stays an arc and a fitted curve one curve; never offset the
  *   points yourself.
- * - Where the outline turns tighter than `by`, the inset has a corner: the
- *   wall thickens into the valley.
- * - An inset that splits, vanishes or is not `by` inside is refused with the
- *   distance that fits. Inset once by the sum, never an inset of an inset.
+ * - Where the outline turns inward (an L, a notch, a step) the inset keeps
+ *   the corner, `by / cos(turn / 2)` from the outline's: the wall thickens
+ *   into the valley.
+ * - An inset that splits, vanishes or comes nearer than `by` is refused with
+ *   the distance that fits. Inset once by the sum, never an inset of an
+ *   inset.
  * - For a lofted wall use `loft`'s `wall`, not a loft of insets.
  *
  * @example
@@ -2655,7 +2657,12 @@ export function line2d(from: [number, number], toOrAngle: [number, number] | num
  * The kernel offsets the curve rather than a script offsetting points, which
  * folds in every valley narrower than the wall and hands the kernel an
  * outline that crosses itself. The loops the offset would make are removed.
- * The result is measured before it is used.
+ * The result is measured before it is used: every point of it against the
+ * outline, held to `by` except at an inward corner, where the two offsets
+ * meet on the bisector and the wall is thicker by exactly that much. A
+ * refusal says which way the kernel's answer failed and where, in the
+ * section's coordinates, and names a smaller distance only when one was
+ * measured to build.
  */
 export function inset(outline: SectionEntry[], by: number): SectionEntry[] {
   if (!(typeof by === "number" && Number.isFinite(by) && by > 0)) {

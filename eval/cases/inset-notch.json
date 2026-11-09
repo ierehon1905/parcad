@@ -1,0 +1,26 @@
+{
+  "name": "inset-notch",
+  "script": "eval/scripts/inset-notch.js",
+  "why": "A 100 x 60 rectangle with a 20 wide, 15 deep notch in its top edge, inset by 5 and extruded 5. The notch is wider than twice the inset and survives, 30 wide and 15 deep: 90*50 - 30*15 = 4050 mm2, 20250 mm3 exactly, ten planar faces. Two re-entrant corners, (65,40) and (35,40), each 5*sqrt(2) from the outline's corner, both read as valleys by the guard.",
+  "brep": {
+    "size": [
+      90.0,
+      50.0,
+      5.0
+    ],
+    "volume_mm3": 20250.0,
+    "area_mm2": 9650.0,
+    "triangles": 28,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 4050.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 10,
+    "edges": 48,
+    "curves": 24,
+    "requires": [
+      "inset-sections"
+    ]
+  }
+}

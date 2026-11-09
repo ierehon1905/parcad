@@ -18,7 +18,9 @@
 #include <BRepOffsetAPI_ThruSections.hxx>
 #include <BRepTools_WireExplorer.hxx>
 #include <BRep_Tool.hxx>
+#include <GCPnts_AbscissaPoint.hxx>
 #include <GeomAPI_ProjectPointOnCurve.hxx>
+#include <GeomAdaptor_Curve.hxx>
 #include <GeomAbs_JoinType.hxx>
 #include <GeomAbs_Shape.hxx>
 #include <GeomConvert.hxx>
@@ -36,13 +38,17 @@
 #include <TopoDS_Shape.hxx>
 #include <TopoDS_Vertex.hxx>
 #include <TopoDS_Wire.hxx>
+#include <gp_Dir.hxx>
 #include <gp_Pnt.hxx>
 #include <gp_Vec.hxx>
+#include <gp_XYZ.hxx>
 #include <math_Vector.hxx>
 
 #include "rust/cxx.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -432,6 +438,22 @@ inline void parcad_edge_start(const TopoDS_Edge& edge, gp_Pnt& at, gp_Vec& headi
   }
 }
 
+// Where an oriented edge ends, and which way it was heading when it got there.
+inline void parcad_edge_end(const TopoDS_Edge& edge, gp_Pnt& at, gp_Vec& heading) {
+  double first = 0.0;
+  double last = 0.0;
+  Handle(Geom_Curve) curve = BRep_Tool::Curve(edge, first, last);
+  if (curve.IsNull()) {
+    throw std::runtime_error("an edge of the outline carries no 3D curve");
+  }
+  if (edge.Orientation() == TopAbs_REVERSED) {
+    curve->D1(first, at, heading);
+    heading.Reverse();
+  } else {
+    curve->D1(last, at, heading);
+  }
+}
+
 // The inset's edges begun at the corner nearest where `outline` begins and
 // run the way the outline runs. A loft pairs sections by their first vertex
 // and direction, taken literally, so an offset that starts wherever the
@@ -539,14 +561,15 @@ inline TopoDS_Wire parcad_aligned_wire(const TopoDS_Wire& inset, const TopoDS_Wi
   return make_wire.Wire();
 }
 
-// The area a closed planar wire encloses, by Green's theorem over dense
-// samples of its edges in wire order. Not BRepGProp::SurfaceProperties: on a
-// planar face bounded by a wavy B-spline that integral read 8488 mm² where
-// the curve's own samples enclose 8835 (docs/GOTCHAS.md, "The volume integral
-// misreads a wavy B-spline wall"), and a guard built on it refused a good
-// inset for growing.
-inline double parcad_sampled_area(const TopoDS_Wire& wire) {
-  double twice = 0.0;
+// Twice the area a closed planar wire encloses, as the vector along the
+// normal its edges run anticlockwise about: Green's theorem over dense
+// samples of its edges in wire order, in whatever plane the wire lies. Not
+// BRepGProp::SurfaceProperties: on a planar face bounded by a wavy B-spline
+// that integral read 8488 mm² where the curve's own samples enclose 8835
+// (docs/GOTCHAS.md, "The volume integral misreads a wavy B-spline wall"), and
+// a guard built on it refused a good inset for growing.
+inline gp_Vec parcad_sampled_area_vector(const TopoDS_Wire& wire) {
+  gp_XYZ twice;
   bool have_first = false;
   gp_Pnt first_point;
   gp_Pnt previous;
@@ -567,26 +590,182 @@ inline double parcad_sampled_area(const TopoDS_Wire& wire) {
         first_point = at;
         have_first = true;
       } else {
-        twice += previous.X() * at.Y() - at.X() * previous.Y();
+        twice += previous.XYZ() ^ at.XYZ();
       }
       previous = at;
     }
   }
   if (have_first) {
-    twice += previous.X() * first_point.Y() - first_point.X() * previous.Y();
+    twice += previous.XYZ() ^ first_point.XYZ();
   }
-  return std::abs(twice) / 2.0;
+  return gp_Vec(twice);
 }
+
+inline double parcad_sampled_area(const TopoDS_Wire& wire) {
+  return parcad_sampled_area_vector(wire).Magnitude() / 2.0;
+}
+
+// Where one edge of a closed wire ends and the next begins, and how the wire
+// turns there: `turn` is the angle between the two tangents, `inward` says
+// it turns toward the inside — the valley an intersection join puts a corner
+// in — and `inside` are the unit normals of the two tangent lines pointing
+// into the wire, the arriving edge's first. `normal` is the one the wire
+// runs anticlockwise about.
+struct ParcadCorner {
+  gp_Pnt at;
+  double turn = 0.0;
+  bool inward = false;
+  gp_Vec inside[2];
+};
+
+inline std::vector<ParcadCorner> parcad_corners(const TopoDS_Wire& wire, const gp_Dir& normal) {
+  const std::vector<TopoDS_Edge> edges = parcad_ordered_edges(wire);
+  std::vector<ParcadCorner> corners;
+  for (size_t i = 0; i < edges.size(); ++i) {
+    gp_Pnt at;
+    gp_Pnt next_begins;
+    gp_Vec arriving;
+    gp_Vec leaving;
+    parcad_edge_end(edges[i], at, arriving);
+    parcad_edge_start(edges[(i + 1) % edges.size()], next_begins, leaving);
+    ParcadCorner corner;
+    corner.at = at;
+    corner.turn = std::atan2((arriving ^ leaving).Magnitude(), arriving.Dot(leaving));
+    corner.inward = (arriving ^ leaving).Dot(normal) < 0.0;
+    corner.inside[0] = gp_Vec(normal) ^ arriving.Normalized();
+    corner.inside[1] = gp_Vec(normal) ^ leaving.Normalized();
+    corners.push_back(corner);
+  }
+  return corners;
+}
+
+// A candidate inset of `outline` measured against it, point by point. Every
+// point of the inset should lie `distance` from the outline, within
+// `tolerance`, with one exception: where the outline turns inward by θ the
+// two offsets meet on the bisector, `distance / cos(θ/2)` from that corner
+// rather than `distance` — the wall thickens into the valley. A point is in
+// such a valley when it lies `distance` from the tangent line of one of the
+// corner's two edges, on the inside, and no further than that from the
+// corner. `short` is the most any point falls inside the distance (a fold, a
+// wall thinner than asked), `excess` the most any point lies beyond it with
+// no valley to explain it (a dropped stretch), `valley` the furthest a point
+// in a valley is from its corner, each with the point it was measured at. The
+// two areas say which way the inset went.
+class ParcadInsetMeasure {
+ public:
+  ParcadInsetMeasure() = default;
+
+  ParcadInsetMeasure(const TopoDS_Wire& outline, const TopoDS_Wire& inset, double distance, double tolerance) {
+    try {
+      const gp_Vec outline_area = parcad_sampled_area_vector(outline);
+      outline_area_ = outline_area.Magnitude() / 2.0;
+      if (outline_area_ <= 0.0) {
+        throw std::runtime_error("the outline encloses no area");
+      }
+      const std::vector<ParcadCorner> corners = parcad_corners(outline, gp_Dir(outline_area));
+      area_ = parcad_sampled_area(inset);
+
+      for (TopExp_Explorer it(inset, TopAbs_EDGE); it.More(); it.Next()) {
+        double first = 0.0;
+        double last = 0.0;
+        Handle(Geom_Curve) curve = BRep_Tool::Curve(TopoDS::Edge(it.Current()), first, last);
+        if (curve.IsNull()) {
+          throw std::runtime_error("an edge of the inset carries no 3D curve");
+        }
+        // A sample every millimetre, and the ends, which is where a valley's
+        // corner and a fold's crossing are: a dip in the distance narrower than
+        // the spacing is the only thing this cannot see.
+        const double length = GCPnts_AbscissaPoint::Length(GeomAdaptor_Curve(curve, first, last));
+        const int samples = std::min(2048, std::max(parcad_samples_along(curve), int(std::ceil(length))));
+        for (int s = 0; s <= samples; ++s) {
+          const gp_Pnt p = curve->Value(first + (last - first) * s / samples);
+          const double measured = parcad_distance_to_wire(p, outline);
+          if (measured < distance - short_) {
+            short_ = distance - measured;
+            short_at_ = p;
+            continue;
+          }
+          if (measured <= distance + tolerance) {
+            continue;
+          }
+          double from_corner = std::numeric_limits<double>::infinity();
+          for (const ParcadCorner& corner : corners) {
+            if (!corner.inward) {
+              continue;
+            }
+            const gp_Vec away(corner.at, p);
+            const bool on_an_offset_line = std::abs(away.Dot(corner.inside[0]) - distance) <= tolerance ||
+                                           std::abs(away.Dot(corner.inside[1]) - distance) <= tolerance;
+            if (on_an_offset_line && away.Magnitude() <= distance / std::cos(corner.turn / 2.0) + tolerance) {
+              from_corner = std::min(from_corner, away.Magnitude());
+            }
+          }
+          if (from_corner < std::numeric_limits<double>::infinity()) {
+            if (from_corner > valley_) {
+              valley_ = from_corner;
+              valley_at_ = p;
+            }
+          } else if (measured - distance > excess_) {
+            excess_ = measured - distance;
+            excess_at_ = p;
+          }
+        }
+      }
+      for (TopExp_Explorer it(inset, TopAbs_EDGE); it.More(); it.Next()) {
+        double first = 0.0;
+        double last = 0.0;
+        Handle(Geom_BSplineCurve) spline =
+            Handle(Geom_BSplineCurve)::DownCast(BRep_Tool::Curve(TopoDS::Edge(it.Current()), first, last));
+        if (!spline.IsNull()) {
+          poles_ += spline->NbPoles();
+        }
+      }
+    } catch (const Standard_Failure& raised) {
+      throw std::runtime_error(std::string("measuring the inset against its outline raised: ") + raised.what());
+    }
+  }
+
+  double short_mm() const { return short_; }
+  std::array<double, 3> short_at() const { return parcad_xyz(short_at_); }
+  double excess_mm() const { return excess_; }
+  std::array<double, 3> excess_at() const { return parcad_xyz(excess_at_); }
+  double valley_mm() const { return valley_; }
+  std::array<double, 3> valley_at() const { return parcad_xyz(valley_at_); }
+  int poles() const { return poles_; }
+  double area() const { return area_; }
+  double outline_area() const { return outline_area_; }
+
+ private:
+  static std::array<double, 3> parcad_xyz(const gp_Pnt& p) { return {p.X(), p.Y(), p.Z()}; }
+
+  double short_ = 0.0;
+  gp_Pnt short_at_;
+  double excess_ = 0.0;
+  gp_Pnt excess_at_;
+  double valley_ = 0.0;
+  gp_Pnt valley_at_;
+  double area_ = 0.0;
+  double outline_area_ = 0.0;
+  int poles_ = 0;
+};
+
+inline std::unique_ptr<ParcadInsetMeasure> parcad_measure_inset(const TopoDS_Wire& outline, const TopoDS_Wire& inset,
+                                                                double distance, double tolerance) {
+  return std::unique_ptr<ParcadInsetMeasure>(new ParcadInsetMeasure(outline, inset, distance, tolerance));
+}
+
+// How stepping an outline inward ended: built, or one of the three ways the
+// offset builder has of leaving nothing to measure.
+enum class ParcadInsetOutcome : int { Built = 0, NothingLeft = 1, Split = 2, NotBuilt = 3 };
 
 // A closed planar outline stepped inward by `distance` with
 // BRepOffsetAPI_MakeOffset (intersection joins, so a corner stays a corner
-// and the edge count of a polygon is kept), and measured: `slip` is the
-// furthest any point of the inset is from lying exactly `distance` inside
-// the outline, and the two areas say which way it went. Loops the offset
-// removed leave corners; loops it failed to remove show up as slip.
+// and the edge count of a polygon is kept), then measured against the
+// outline as `ParcadInsetMeasure` does. Loops the offset removed leave
+// corners; loops it failed to remove show up as short.
 class ParcadInset {
  public:
-  ParcadInset(const TopoDS_Wire& outline, double distance) {
+  ParcadInset(const TopoDS_Wire& outline, double distance, double tolerance) {
     try {
       int outline_edges = 0;
       for (TopExp_Explorer it(outline, TopAbs_EDGE); it.More(); it.Next()) {
@@ -618,24 +797,25 @@ class ParcadInset {
         throw std::runtime_error("the outline is not one closed planar loop");
       }
       const TopoDS_Face face = make_face.Face();
-      outline_area_ = parcad_sampled_area(spine);
 
       BRepOffsetAPI_MakeOffset offset(face, GeomAbs_Intersection, false);
       offset.Perform(-distance);
       if (!offset.IsDone()) {
-        throw std::runtime_error("the offset builder could not step this outline inward by " +
-                                 std::to_string(distance) + " mm");
+        outcome_ = ParcadInsetOutcome::NotBuilt;
+        return;
       }
       std::vector<TopoDS_Wire> wires;
       for (TopExp_Explorer it(offset.Shape(), TopAbs_WIRE); it.More(); it.Next()) {
         wires.push_back(TopoDS::Wire(it.Current()));
       }
+      loops_ = static_cast<int>(wires.size());
       if (wires.empty()) {
-        throw std::runtime_error("nothing is left " + std::to_string(distance) + " mm inside this outline");
+        outcome_ = ParcadInsetOutcome::NothingLeft;
+        return;
       }
       if (wires.size() > 1) {
-        throw std::runtime_error("stepping this outline inward by " + std::to_string(distance) +
-                                 " mm splits it into " + std::to_string(wires.size()) + " loops");
+        outcome_ = ParcadInsetOutcome::Split;
+        return;
       }
       TopoDS_Wire inset = outline_edges == 1 ? parcad_one_edge(wires.front(), outline)
                                              : parcad_aligned_wire(wires.front(), outline);
@@ -644,52 +824,28 @@ class ParcadInset {
       if (!inset_face.IsDone()) {
         throw std::runtime_error("the inset is not one closed planar loop");
       }
-      area_ = parcad_sampled_area(inset);
-
-      slip_ = 0.0;
-      const int samples = 64;
-      for (TopExp_Explorer it(inset, TopAbs_EDGE); it.More(); it.Next()) {
-        double first = 0.0;
-        double last = 0.0;
-        Handle(Geom_Curve) curve = BRep_Tool::Curve(TopoDS::Edge(it.Current()), first, last);
-        if (curve.IsNull()) {
-          throw std::runtime_error("an edge of the inset carries no 3D curve");
-        }
-        for (int s = 0; s <= samples; ++s) {
-          const gp_Pnt p = curve->Value(first + (last - first) * s / samples);
-          slip_ = std::max(slip_, std::abs(parcad_distance_to_wire(p, outline) - distance));
-        }
-      }
-      poles_ = 0;
-      for (TopExp_Explorer it(inset, TopAbs_EDGE); it.More(); it.Next()) {
-        double first = 0.0;
-        double last = 0.0;
-        Handle(Geom_BSplineCurve) spline =
-            Handle(Geom_BSplineCurve)::DownCast(BRep_Tool::Curve(TopoDS::Edge(it.Current()), first, last));
-        if (!spline.IsNull()) {
-          poles_ += spline->NbPoles();
-        }
-      }
+      measure_ = ParcadInsetMeasure(outline, inset, distance, tolerance);
       wire_ = inset;
+      outcome_ = ParcadInsetOutcome::Built;
     } catch (const Standard_Failure& raised) {
       throw std::runtime_error(std::string("stepping the outline inward raised: ") + raised.what());
     }
   }
 
+  int outcome() const { return static_cast<int>(outcome_); }
+  int loops() const { return loops_; }
   std::unique_ptr<TopoDS_Wire> wire() const { return std::unique_ptr<TopoDS_Wire>(new TopoDS_Wire(wire_)); }
-  double slip() const { return slip_; }
-  int poles() const { return poles_; }
-  double area() const { return area_; }
-  double outline_area() const { return outline_area_; }
+  std::unique_ptr<ParcadInsetMeasure> measure() const {
+    return std::unique_ptr<ParcadInsetMeasure>(new ParcadInsetMeasure(measure_));
+  }
 
  private:
+  ParcadInsetOutcome outcome_ = ParcadInsetOutcome::NotBuilt;
+  int loops_ = 0;
   TopoDS_Wire wire_;
-  double slip_ = 0.0;
-  double area_ = 0.0;
-  double outline_area_ = 0.0;
-  int poles_ = 0;
+  ParcadInsetMeasure measure_;
 };
 
-inline std::unique_ptr<ParcadInset> parcad_inset(const TopoDS_Wire& outline, double distance) {
-  return std::unique_ptr<ParcadInset>(new ParcadInset(outline, distance));
+inline std::unique_ptr<ParcadInset> parcad_inset(const TopoDS_Wire& outline, double distance, double tolerance) {
+  return std::unique_ptr<ParcadInset>(new ParcadInset(outline, distance, tolerance));
 }

@@ -435,19 +435,39 @@ made of arcs and splines.
   with parameters in millimetres it fitted nothing but the first sliver of
   the range and fell back to interpolation while reporting done, and driven
   correctly it still reports done on the interpolation fallback.
-- `Wire::inset(distance)` — a closed planar outline stepped inward with
-  `BRepOffsetAPI_MakeOffset` on the face the wire bounds, `GeomAbs_Intersection`
-  joins so a polygon keeps its edge count, `Perform(-distance)`. Measured, not
-  trusted: an `InsetReport` carries the largest distance any of 65 samples
-  per result edge is from lying exactly `distance` inside the outline (the
-  outline's curves projected, ends included), both areas, and the pole count;
-  the caller refuses on slip or on an area that did not shrink. Both areas
-  are Green's theorem over dense samples of the wires, not
-  `BRepGProp::SurfaceProperties`, which read a lamp section's face 4 % small
-  and had the guard refusing a good inset for growing (docs/GOTCHAS.md, "The
-  volume integral misreads a wavy B-spline wall"). `Err` when nothing is
-  left or the result is several loops. Three things the builder needed doing
-  for it: it returns nothing, at any distance, for an outline that is one
+- `Wire::inset(distance, tolerance)` — a closed planar outline stepped inward
+  with `BRepOffsetAPI_MakeOffset` on the face the wire bounds,
+  `GeomAbs_Intersection` joins so a polygon keeps its edge count,
+  `Perform(-distance)`. Measured, not trusted: an `InsetOutcome` is `Built`
+  with the wire and an `InsetReport`, or `NothingLeft`, `Split { loops }` or
+  `NotBuilt` for the three ways the builder leaves nothing to measure, so the
+  caller can tell a distance the outline is too narrow for from a kernel
+  that gave up. The report is `ParcadInsetMeasure`'s, the one rule every
+  inset is held to: a sample every millimetre of every result edge (64 at
+  least, the ends always) is projected onto the outline's curves, and must
+  lie `distance` from it within `tolerance`, except in a valley. Where the
+  outline turns inward by θ the two parallels meet on the bisector,
+  `distance / cos(θ/2)` from the corner — the wall thickens into the valley —
+  so a point lying `distance` from the tangent line of one of that corner's
+  edges, on the inside, and no further than that from the corner, is the
+  corner's. Everything else is named: `short_mm` is the most any point falls
+  inside the distance (a fold, a wall thinner than asked), `excess_mm` the
+  most any point lies beyond it with no valley to explain it (a dropped
+  stretch), `valley_mm` the furthest a valley point is from its corner, each
+  with the point it was measured at; both areas, and the pole count, come
+  too. Before this rule a single number, the worst departure from `distance`,
+  refused every outline with a re-entrant corner (an L inset 10 reads
+  10·√2 − 10 = 4.142 at its valley) and, bisected, named a distance that was
+  true of nothing. `Wire::measure_inset(candidate, distance, tolerance)`
+  applies the same rule to a wire drawn by hand, which is how the rule's
+  negatives are tested. Both areas are Green's theorem over dense samples of
+  the wires, as a vector along the plane's normal so the outline's sense is
+  known and no plane is assumed, not `BRepGProp::SurfaceProperties`, which
+  read a lamp section's face 4 % small and had the guard refusing a good
+  inset for growing (docs/GOTCHAS.md, "The volume integral misreads a wavy
+  B-spline wall"). Three things the builder needed doing for it (a fourth,
+  a curve meeting an edge at a re-entrant corner, is OCCT's own and patched:
+  `vendor/occt-sys/patches/0008-…`): it returns nothing, at any distance, for an outline that is one
   closed edge, so such an outline is split at its middle parameter before
   the offset and the result joined back into one edge with
   `GeomConvert_CompCurveToBSplineCurve` (exact for the B-spline and rational

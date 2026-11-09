@@ -181,7 +181,7 @@ fn section_wire_fitted(section: &Section, place: impl Fn([f64; 2]) -> DVec3, wha
         Wire::from_edges(&edges)
     };
     match section.inset {
-        Some(distance) => Ok((inset_wire(&wire, distance, what)?, fitted)),
+        Some(distance) => Ok((inset_wire(&wire, distance, what, &place)?, fitted)),
         None => Ok((wire, fitted)),
     }
 }
@@ -320,8 +320,24 @@ fn in_section_plane(points: &[DVec3], place: &impl Fn([f64; 2]) -> DVec3) -> Vec
         .collect()
 }
 
+/// Why an inset was refused, sorted by what a smaller distance would do
+/// about it: that decides whether the refusal may name one.
+enum InsetRefusal {
+    /// The outline is too narrow for the distance somewhere — nothing left,
+    /// several loops, a wall thinner than asked — so a smaller distance fits,
+    /// and the one measured to is worth naming.
+    TooNarrow(String),
+    /// The offset builder gave up. A smaller distance may build, and is
+    /// named when one does, but the outline's width is not the question.
+    NotBuilt,
+    /// The kernel's answer is wrong where the outline gives it no reason to
+    /// be. A smaller distance that happens to measure clean says nothing
+    /// about this outline, so none is looked for.
+    Defect(String),
+}
+
 /// An outline stepped inward by `distance`, refused unless the kernel's
-/// answer measures as one loop lying exactly that far inside it.
+/// answer measures as one loop lying that far inside it.
 ///
 /// `BRepOffsetAPI_MakeOffset` is trusted the way `offset_surface` is, which
 /// is not at all: `offset_slip` exists because that builder returns a valid
@@ -329,29 +345,87 @@ fn in_section_plane(points: &[DVec3], place: &impl Fn([f64; 2]) -> DVec3) -> Vec
 /// on quietly. So every inset is measured — the distance from points along
 /// it back to the outline, and that its area shrank — and a fold, a dropped
 /// stretch or a loop that ran the wrong way is a refusal rather than a wall
-/// that is wrong. When nothing is left at the asked distance, the refusal
-/// names the largest distance measured to build.
-fn inset_wire(outline: &Wire, distance: f64, what: &str) -> Result<Wire> {
+/// that is wrong. The one distance allowed to exceed the asked one is a
+/// valley's: where the outline turns inward the two offsets meet past it,
+/// which is the corner the wall thickens into, and `Wire::inset` holds that
+/// to `distance / cos(turn / 2)` from the corner. Where the outline is too
+/// narrow for the distance, the refusal names the largest distance measured
+/// to build; where the kernel is wrong, it says so and where.
+fn inset_wire(outline: &Wire, distance: f64, what: &str, place: &impl Fn([f64; 2]) -> DVec3) -> Result<Wire> {
+    use opencascade::curve::InsetOutcome;
     breadcrumb(&format!("stepping the {what} inward by {distance} mm"));
-    let attempt = |d: f64| -> Result<Wire, String> {
-        let (wire, report) = outline.inset(d)?;
+    let in_section = |p: DVec3| -> String {
+        let [x, y] = in_section_plane(&[p], place)[0];
+        format!("({x:.2}, {y:.2})")
+    };
+    let attempt = |d: f64| -> Result<Wire, InsetRefusal> {
+        let (wire, report) = match outline.inset(d, SLIP_TOLERANCE_MM).map_err(InsetRefusal::Defect)? {
+            InsetOutcome::Built(wire, report) => (wire, report),
+            InsetOutcome::NothingLeft => {
+                return Err(InsetRefusal::TooNarrow(format!("nothing is left {d} mm inside the outline")));
+            }
+            InsetOutcome::Split { loops } => {
+                return Err(InsetRefusal::TooNarrow(format!(
+                    "stepping inward by {d} mm splits the outline into {loops} loops"
+                )));
+            }
+            InsetOutcome::NotBuilt => return Err(InsetRefusal::NotBuilt),
+        };
         breadcrumb(&format!(
-            "inset of {d} mm: {} poles, {:.4} mm of slip, {:.2} of {:.2} mm²",
-            report.poles, report.slip_mm, report.area_mm2, report.outline_area_mm2
+            "inset of {d} mm: {} poles, {:.4} mm short at {}, {:.4} mm over at {}, valley to {:.3} mm at {}, {:.2} of {:.2} mm²",
+            report.poles,
+            report.short_mm,
+            in_section(report.short_at),
+            report.excess_mm,
+            in_section(report.excess_at),
+            report.valley_mm,
+            in_section(report.valley_at),
+            report.area_mm2,
+            report.outline_area_mm2
         ));
-        if report.slip_mm > SLIP_TOLERANCE_MM {
-            return Err(format!(
-                "the kernel's inset strays {:.3} mm from lying {d} mm inside the outline",
-                report.slip_mm
-            ));
+        if report.short_mm > SLIP_TOLERANCE_MM {
+            return Err(InsetRefusal::TooNarrow(format!(
+                "the inset comes within {:.3} mm of the outline at {}, where the wall was to be {d} mm",
+                d - report.short_mm,
+                in_section(report.short_at)
+            )));
+        }
+        if report.excess_mm > SLIP_TOLERANCE_MM {
+            return Err(InsetRefusal::Defect(format!(
+                "the kernel's inset lies {:.3} mm from the outline at {}, {:.3} mm beyond the {d} mm asked, and the outline has no inward corner there to explain it",
+                d + report.excess_mm,
+                in_section(report.excess_at),
+                report.excess_mm
+            )));
         }
         if report.area_mm2 >= report.outline_area_mm2 {
-            return Err(format!(
+            return Err(InsetRefusal::Defect(format!(
                 "the kernel's inset grew the outline from {:.2} to {:.2} mm² instead of shrinking it",
                 report.outline_area_mm2, report.area_mm2
-            ));
+            )));
         }
         Ok(wire)
+    };
+    // The largest distance measured to build, by bisection, so a refusal can
+    // name a number the author can write in rather than a fact about the
+    // kernel. Only a distance that built is ever named.
+    let builds_up_to = || -> Option<f64> {
+        let (mut lo, mut hi) = (0.0, distance);
+        for _ in 0..8 {
+            let mid = (lo + hi) / 2.0;
+            match attempt(mid) {
+                Ok(_) => lo = mid,
+                Err(InsetRefusal::TooNarrow(why) | InsetRefusal::Defect(why)) => {
+                    breadcrumb(&format!("inset of {mid:.4} mm refused: {why}"));
+                    hi = mid;
+                }
+                Err(InsetRefusal::NotBuilt) => {
+                    breadcrumb(&format!("inset of {mid:.4} mm refused: the offset builder could not step the outline inward"));
+                    hi = mid;
+                }
+            }
+        }
+        (lo > 0.0).then_some(lo)
     };
     match attempt(distance) {
         Ok(wire) => {
@@ -370,28 +444,30 @@ fn inset_wire(outline: &Wire, distance: f64, what: &str) -> Result<Wire> {
             breadcrumb(&format!("outline {}; inset {}", describe(outline), describe(&wire)));
             Ok(wire)
         }
-        Err(reason) => {
+        Err(InsetRefusal::TooNarrow(reason)) => {
             breadcrumb(&format!("inset of {distance} mm refused: {reason}"));
-            // Bisect for the distance that does build, so the refusal is a
-            // number the author can use rather than a fact about the kernel.
-            let (mut lo, mut hi) = (0.0, distance);
-            for _ in 0..8 {
-                let mid = (lo + hi) / 2.0;
-                match attempt(mid) {
-                    Ok(_) => lo = mid,
-                    Err(why) => {
-                        breadcrumb(&format!("inset of {mid:.4} mm refused: {why}"));
-                        hi = mid;
-                    }
-                }
-            }
-            let most = if lo > 0.0 {
-                format!("the most this outline takes is about {:.2} mm", lo)
-            } else {
-                "no smaller inset built either".to_string()
+            let most = match builds_up_to() {
+                Some(most) => format!("the most this outline takes is about {most:.2} mm"),
+                None => "no smaller inset built either".to_string(),
             };
             bail!(
                 "the {what} cannot be stepped inward by {distance} mm: {reason}; {most}. A wall thicker than the narrowest lobe or valley of the outline is half that lobe's width, so widen the outline there or thin the wall"
+            )
+        }
+        Err(InsetRefusal::NotBuilt) => {
+            breadcrumb(&format!("inset of {distance} mm refused: the offset builder could not step the outline inward"));
+            let smaller = match builds_up_to() {
+                Some(most) => format!("it builds up to about {most:.2} mm"),
+                None => "nor at any smaller distance".to_string(),
+            };
+            bail!(
+                "the {what} cannot be stepped inward by {distance} mm: the kernel's offset builder could not step this outline inward, {smaller}. This is a limit of the kernel on this outline rather than of the outline's width; simplifying the outline where its pieces meet (one curve in place of two that join tangent) is the one change known to help"
+            )
+        }
+        Err(InsetRefusal::Defect(reason)) => {
+            breadcrumb(&format!("inset of {distance} mm refused: {reason}"));
+            bail!(
+                "the {what} cannot be stepped inward by {distance} mm: {reason}. This is the kernel's inset being wrong rather than the outline being too narrow, so no smaller distance is offered; simplifying the outline near that point (one curve in place of two that join tangent) is the one change known to help"
             )
         }
     }
@@ -5794,6 +5870,119 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn polygon_wire(points: &[[f64; 2]]) -> Wire {
+        let edges: Vec<Edge> = points
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let b = points[(i + 1) % points.len()];
+                Edge::segment(DVec3::new(a[0], a[1], 0.0), DVec3::new(b[0], b[1], 0.0))
+            })
+            .collect();
+        Wire::from_edges(&edges)
+    }
+
+    /// The rule every inset is held to, on wires drawn by hand: a valley's
+    /// corner is allowed exactly as far as the two offsets meet, and every
+    /// other departure from the distance is named for what it is.
+    #[test]
+    fn an_inset_is_measured_point_by_point_with_only_a_valley_allowed_past_the_distance() {
+        let l = polygon_wire(&[[0.0, 0.0], [100.0, 0.0], [100.0, 60.0], [60.0, 60.0], [60.0, 100.0], [0.0, 100.0]]);
+        let right = polygon_wire(&[[10.0, 10.0], [90.0, 10.0], [90.0, 50.0], [50.0, 50.0], [50.0, 90.0], [10.0, 90.0]]);
+        let report = l.measure_inset(&right, 10.0, SLIP_TOLERANCE_MM).unwrap();
+        assert!(report.short_mm < 1e-6 && report.excess_mm < 1e-6, "{report:?}");
+        // The corner opposite (60,60) sits on the bisector 10·√2 from it.
+        assert!((report.valley_mm - 10.0 * 2f64.sqrt()).abs() < 1e-6, "{report:?}");
+        assert!(report.valley_at.distance(DVec3::new(50.0, 50.0, 0.0)) < 1e-6, "{report:?}");
+        assert!(report.area_mm2 < report.outline_area_mm2);
+
+        // Pulled past where the offsets meet, the same corner is excess with
+        // no valley to explain it, at the point it was measured.
+        let too_deep = polygon_wire(&[[10.0, 10.0], [90.0, 10.0], [90.0, 50.0], [45.0, 45.0], [50.0, 90.0], [10.0, 90.0]]);
+        let report = l.measure_inset(&too_deep, 10.0, SLIP_TOLERANCE_MM).unwrap();
+        assert!((report.excess_mm - (15.0 * 2f64.sqrt() - 10.0)).abs() < 1e-6, "{report:?}");
+        assert!(report.excess_at.distance(DVec3::new(45.0, 45.0, 0.0)) < 1e-6, "{report:?}");
+
+        // A fold or a wall thinner than asked is short, wherever a wrong offset
+        // leaves the rest.
+        let square = polygon_wire(&[[-10.0, -10.0], [10.0, -10.0], [10.0, 10.0], [-10.0, 10.0]]);
+        let shifted = polygon_wire(&[[-7.0, -8.0], [9.0, -8.0], [9.0, 8.0], [-7.0, 8.0]]);
+        let report = square.measure_inset(&shifted, 2.0, SLIP_TOLERANCE_MM).unwrap();
+        assert!((report.short_mm - 1.0).abs() < 1e-6, "{report:?}");
+        assert!((report.short_at.x - 9.0).abs() < 1e-6, "{report:?}");
+        assert!((report.excess_mm - 1.0).abs() < 1e-6, "{report:?}");
+        assert!((report.excess_at.x + 7.0).abs() < 1e-6, "{report:?}");
+
+        // A step shallower than the distance: the corner at (87,30) is nearer
+        // the right edge (13 mm) than the corner it belongs to (10·√2), and
+        // lies on the step edge's offset line, so it is the valley's.
+        let step = polygon_wire(&[[0.0, 0.0], [100.0, 0.0], [100.0, 40.0], [97.0, 40.0], [97.0, 60.0], [0.0, 60.0]]);
+        let kept = polygon_wire(&[[10.0, 10.0], [90.0, 10.0], [90.0, 30.0], [87.0, 30.0], [87.0, 50.0], [10.0, 50.0]]);
+        let report = step.measure_inset(&kept, 10.0, SLIP_TOLERANCE_MM).unwrap();
+        assert!(report.short_mm < 1e-6 && report.excess_mm < 1e-6, "{report:?}");
+        assert!((report.valley_mm - 10.0 * 2f64.sqrt()).abs() < 1e-6, "{report:?}");
+    }
+
+    /// A curve meeting an edge at a re-entrant corner offsets, and its corner
+    /// lands where two edges' would: on the bisector of the tangents,
+    /// `distance / cos(turn / 2)` from the corner. OCCT's offset builder
+    /// failed every such outline until
+    /// `vendor/occt-sys/patches/0008-offset-a-curve-past-a-re-entrant-corner.patch`.
+    #[test]
+    fn a_curve_meeting_an_edge_at_a_re_entrant_corner_insets_to_the_corner_two_edges_would() {
+        use opencascade::curve::InsetOutcome;
+        let p = |x: f64, y: f64| DVec3::new(x, y, 0.0);
+        // The Bezier arrives at (40,125) heading 9.46° below the edge that
+        // leaves it toward (0,125): a 9.46° turn toward the inside.
+        let bezier = Edge::bspline(&[p(200.0, 100.0), p(170.0, 140.0), p(100.0, 135.0), p(40.0, 125.0)], &[0.0, 1.0], &[4, 4], 3).unwrap();
+        let outline = Wire::from_edges(&[
+            Edge::segment(p(0.0, 0.0), p(200.0, 0.0)),
+            Edge::segment(p(200.0, 0.0), p(200.0, 100.0)),
+            bezier,
+            Edge::segment(p(40.0, 125.0), p(0.0, 125.0)),
+            Edge::segment(p(0.0, 125.0), p(0.0, 0.0)),
+        ]);
+        let InsetOutcome::Built(inset, report) = outline.inset(10.0, SLIP_TOLERANCE_MM).unwrap() else {
+            panic!("the offset builder gave up on a curve meeting an edge at a re-entrant corner");
+        };
+        let edges: Vec<Edge> = inset.to_shape().edges().collect();
+        assert_eq!(edges.len(), 5);
+        assert!(report.short_mm < SLIP_TOLERANCE_MM && report.excess_mm < SLIP_TOLERANCE_MM, "{report:?}");
+        // 10 / cos(4.73°) = 10.034 from (40,125), on the edge's offset y = 115:
+        // 0.034 past the distance, which is under the tolerance and so not
+        // a valley the report has to name, but exactly the corner two edges
+        // would make.
+        let turn = (10f64 / 60.0).atan();
+        let corner = p(40.0, 125.0) + DVec3::new((turn / 2.0).sin(), -(turn / 2.0).cos(), 0.0) * (10.0 / (turn / 2.0).cos());
+        assert!((corner.y - 115.0).abs() < 1e-9);
+        assert!(
+            edges.iter().any(|e| e.start_point().distance(corner) < 1e-3 || e.end_point().distance(corner) < 1e-3),
+            "no inset vertex at {corner:?}: {:?}",
+            edges.iter().map(|e| (e.start_point(), e.end_point())).collect::<Vec<_>>()
+        );
+    }
+
+    /// The first part refused for a curve at a re-entrant corner: a tray
+    /// round a ten-point spline that meets a straight edge at a 7° inward
+    /// turn, inset 18. The spline is cut at its curvature extrema into four
+    /// pieces on the way, each of whose parallels is extended too, and the
+    /// 13 mm edge past the corner has no parallel of its own at 18.
+    #[test]
+    fn a_spline_tray_insets_at_a_depth_its_short_edge_does_not_survive() {
+        use opencascade::curve::InsetOutcome;
+        let json = r#"[[0,0],[960,0],[960,180],{"spline":[[954.8387096774193,250],[929.0322580645161,320],[877.4193548387096,375],[805.1612903225806,405],[722.5806451612902,410],[619.3548387096774,385],[516.1290322580645,340],[392.258064516129,285],[258.06451612903226,245],[123.87096774193549,228]]},[13,215],[0,215]]"#;
+        let entries: Vec<parcad_core::section::SectionEntry> = serde_json::from_str(json).unwrap();
+        let section = parcad_core::section::resolve(&entries, "p").unwrap();
+        let (outline, _) = section_wire_fitted(&section, |[x, y]| DVec3::new(x, y, -9.0), "p").unwrap();
+        let InsetOutcome::Built(inset, report) = outline.inset(18.0, SLIP_TOLERANCE_MM).unwrap() else {
+            panic!("the offset builder gave up on the spline tray");
+        };
+        assert!(report.short_mm < SLIP_TOLERANCE_MM && report.excess_mm < SLIP_TOLERANCE_MM, "{report:?}");
+        assert!(report.area_mm2 < report.outline_area_mm2, "{report:?}");
+        let edges: Vec<Edge> = inset.to_shape().edges().collect();
+        assert_eq!(edges.len(), 7, "{:?}", edges.iter().map(|e| (e.start_point(), e.end_point())).collect::<Vec<_>>());
+    }
 
     #[test]
     fn a_curve_from_a_function_is_measured_against_it_and_refused_past_its_bound() {

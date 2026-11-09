@@ -1730,6 +1730,34 @@ A latent bug in an example: placing a lid at `h` instead of `h - wall` sealed th
 box in *both* backends, so nothing looked wrong. Geometry that is subtly wrong in
 the same way everywhere is the hardest kind to see.
 
+### Every outline with an inward corner was refused as an inset *(fixed 2026-11-09)*
+
+An L of 100 × 100 less a 40 × 40 corner, inset 10, was refused: "strays
+4.142 mm from lying 10 mm inside the outline; the most this outline takes is
+about 0.12 mm". Both numbers were the measurement's. The kernel's inset was
+right — intersection joins put the corner opposite (60,60) at (50,50), on the
+bisector 10·√2 from it, where two offset lines meet — but the guard held
+every sample to one distance, and 10·√2 − 10 is 4.142; bisecting then found
+the distance at which that same 0.414·d slipped under the tolerance, a number
+true of nothing. The measurement now knows a valley (`ParcadInsetMeasure`,
+`vendor/opencascade/include/curve.hxx`): a point `d` from the tangent line of
+one of an inward corner's edges, inside, and no further than
+`d / cos(turn / 2)` from the corner is that corner's; every other point is
+held to `d`, a fold (`short`) and a dropped stretch (`excess`) refused by
+name and place, and a smaller distance named only where a smaller distance
+is the answer. `eval/cases/inset-l-shape`, `inset-notch` and `inset-step`
+hold the closed forms; a unit test in `backend.rs` holds the negatives.
+
+The second refusal was OCCT's: a tray round a spline meeting a straight edge
+at a 7° inward turn "could not step inward" at any distance.
+`BRepOffsetAPI_MakeOffset` with intersection joins fails on any curve that
+meets its neighbour at a re-entrant corner — the medial axis's fallback
+bisector points out of the domain, and a curve's parallel stops where a
+line's runs to infinity, so the result never closes. Patch 0008 in
+`vendor/occt-sys/patches/` fixes both; its header and
+`vendor/occt-sys/PARCAD-CHANGES.md` carry the measurements. Polylines were
+never affected, which is why the corpus's insets never saw it.
+
 ## Rust/wrapper
 
 - `offset_surface` **consumes `self`**. The fork adds `impl Clone for Shape`

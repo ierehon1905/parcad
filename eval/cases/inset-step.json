@@ -1,0 +1,26 @@
+{
+  "name": "inset-step",
+  "script": "eval/scripts/inset-step.js",
+  "why": "A 100 x 60 rectangle whose right edge steps in by 3 at y = 40, inset by 10 - deeper than the step - and extruded 5. The 3 mm step edge has no offset of its own at 10 mm (the bisectors from its two ends meet 3 mm in), yet intersection joins keep the step in the inset: (10,10) (90,10) (90,30) (87,30) (87,50) (10,50), 80*40 - 3*20 = 3140 mm2, 15700 mm3 exactly, eight planar faces. The corner at (87,30) is 10*sqrt(2) from the outline's re-entrant corner at (97,40).",
+  "brep": {
+    "size": [
+      80.0,
+      40.0,
+      5.0
+    ],
+    "volume_mm3": 15700.0,
+    "area_mm2": 7480.0,
+    "triangles": 20,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 3140.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 8,
+    "edges": 36,
+    "curves": 18,
+    "requires": [
+      "inset-sections"
+    ]
+  }
+}
