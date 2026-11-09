@@ -615,8 +615,9 @@ In order.
    near-equilateral triangles, so the spacing a pleat tip needs is spent up the
    whole height too. An anisotropic layout needs an OCCT patch; it is what could
    bring the tab under 20 s.
-3. **The pleated shade floats.** It spans z = 0.40 to 199.60; a seeded example
-   stands on z = 0. Fix the example and make its case assert the z range.
+3. **The pleated shade floats** — **fixed 2026-11-09.** The bottom slab's
+   cut left it at z = 0.40; the example now lowers the part by that rim, and
+   the case holds the shade tag's bounds at z 0 to 199.2.
 4. **`thicken` refuses at 0.88 of the turn radius** (`FOLD_LIMIT`,
    `crates/parcad-occt/src/surfaces.rs`), set from four pleat depths on one
    shape, because OCCT's offset skin slows to under an eighth of the surface's

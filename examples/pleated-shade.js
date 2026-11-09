@@ -195,7 +195,8 @@ const sections = Array.from({ length: levels }, (_, k) => {
 
 const shade = surfaceLoft(sections, { closed: true, smooth: true }).tag("shade");
 // A thickened wall's rims lean with the surface; a slab off each end leaves
-// the flat ring a printer starts on and a clean top.
+// the flat ring a printer starts on and a clean top, and the part is lowered
+// by what the bottom slab took, so that ring is the bed at z = 0.
 const rim = 0.4;
 const slab = box(400, 400, 20);
-return shade.thicken(wall).cut(slab.at(0, 0, rim - 10), slab.at(0, 0, height - rim + 10));
+return shade.thicken(wall).cut(slab.at(0, 0, rim - 10), slab.at(0, 0, height - rim + 10)).at(0, 0, -rim);
