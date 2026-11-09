@@ -88,8 +88,21 @@ pub fn touch(part: &Path) {
     let _ = set_modified(part, SystemTime::now());
 }
 
+/// A file's or a folder's modification time. Unix sets it through any handle;
+/// Windows needs the right to write attributes, and opens a folder at all only
+/// with backup semantics.
 fn set_modified(path: &Path, when: SystemTime) -> std::io::Result<()> {
-    std::fs::File::open(path)?.set_modified(when)
+    let mut options = std::fs::OpenOptions::new();
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const FILE_WRITE_ATTRIBUTES: u32 = 0x0100;
+        const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        options.access_mode(FILE_WRITE_ATTRIBUTES).custom_flags(FILE_FLAG_BACKUP_SEMANTICS);
+    }
+    #[cfg(not(windows))]
+    options.read(true);
+    options.open(path)?.set_modified(when)
 }
 
 /// When a part of the current account is deleted, as `YYYY-MM-DD`: its last
