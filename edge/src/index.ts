@@ -43,9 +43,24 @@ function provider(env: Env): OAuthProvider<Env> {
   return built.provider;
 }
 
+/** A token the library refuses, with the fix in the challenge: Codex shows the header and drops the body. */
+function explained(response: Response): Response {
+  const challenge = response.headers.get("www-authenticate") ?? "";
+  if (response.status !== 401 || !challenge.includes('error="invalid_token"') || challenge.includes("error_description")) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  headers.set(
+    "www-authenticate",
+    `${challenge}, error_description="this server did not issue that token, or it has expired or been revoked: sign in again from your MCP client"`,
+  );
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 export default {
-  fetch(request, env, ctx) {
-    if (new URL(request.url).pathname === "/mcp" && isStaticToken(request)) return untouched(request, env);
-    return provider(env).fetch(request, env, ctx);
+  async fetch(request, env, ctx) {
+    if (new URL(request.url).pathname !== "/mcp") return provider(env).fetch(request, env, ctx);
+    if (isStaticToken(request)) return untouched(request, env);
+    return explained(await provider(env).fetch(request, env, ctx));
   },
 } satisfies ExportedHandler<Env>;

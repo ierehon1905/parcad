@@ -178,10 +178,15 @@ test("discovery names the edge as the authorization server, with registration an
   expect(server.scopes_supported).toContain("offline_access");
 });
 
-test("a request with no token is challenged towards the metadata", async () => {
+test("a request with no token is challenged towards the metadata, and one with a stale token told to sign in again", async () => {
   const refused = await initialize();
   expect(refused.status).toBe(401);
   expect(refused.headers.get("www-authenticate") ?? "").toContain("resource_metadata=");
+  const stale = await initialize("u-nobody:nogrant:notasecret");
+  expect(stale.status).toBe(401);
+  const challenge = stale.headers.get("www-authenticate") ?? "";
+  expect(challenge).toContain('error="invalid_token"');
+  expect(challenge).toContain('error_description="this server did not issue that token, or it has expired or been revoked: sign in again');
 });
 
 test("a listed address signs in, and its token reaches the host as a pass for a new account", async () => {
