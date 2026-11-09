@@ -100,7 +100,45 @@ of `lib`, `libd`, `libi` holds `TKernel`, for a fresh build and for
 
 ## Changes to OCCT itself
 
-Seven patches.
+Eight patches.
+
+`patches/0008-offset-a-curve-past-a-re-entrant-corner.patch`:
+`BRepOffsetAPI_MakeOffset` with `GeomAbs_Intersection` joins failed, at
+every distance, on any closed outline in which a B-spline met its neighbour
+at a re-entrant corner — a tray drawn round a spline rim, the first user part
+to want one — with the result wire not closed and `Perform` not done. Two
+causes. `Bisector_Bisec::Perform` falls back to a half-line when
+`Bisector_BisecCC` finds no equidistant polygon, which at a re-entrant
+corner between a curve and anything it never does (the equidistant points
+lie beyond the curve's end), and the fallback's direction, the negated sum
+of the two tangents, bisects the salient side: the half-line left the domain,
+no parallel met it, and the medial axis of a closed contour ran to infinity.
+It now turns round when the cross product of the tangents says the corner
+is re-entrant, which is the case the analytic bissectrice of two lines
+already handles. And `BRepFill_OffsetWire`'s `MakeOffset` extends a line's
+parallel to infinity and a circle's to a full turn under intersection
+joins, so two parallels meeting at a re-entrant corner reach their crossing,
+but left a curve's parallel at the curve's own range; it is now the parallel
+of the curve continued along its end tangent by a straight piece run at the
+curve's end speed (one C1 B-spline), long enough for a turn of 178.9°, at
+the ends that need it: `DivergingCorners` reads the spine once and marks
+each edge end where the offset turns away from the neighbour (re-entrant
+for an inward offset, salient for an outward one) or meets a cusp. Nowhere
+else is a parallel touched, to the pole — a first version extended every
+curve end and the 3D approximation of a parallel running onto the straight
+piece, where its speed jumps with the curvature, came back eight times its
+poles: `fitted-ring`'s 185-pole wall read 1480 and the volume integral ran
+out its 20 s budget. The two fixes agree exactly: the corner lands on the
+bisector of the tangents `distance / cos(turn / 2)` from the outline's
+corner, where two lines put it. Measured on a 200 × 125 outline closing on
+a cubic Bezier at a 9.46° re-entrant corner, inset 10: corner at
+(40.8276, 115), 10.034 from (40, 125), and the same outline with the corner
+salient unchanged at 13 poles; on the spline tray, inset 18, seven edges;
+on a closed 9-pole fit of a circle, the same ten pieces of 6 or 7 poles as
+before. Salient corners, tangent joins, `GeomAbs_Arc` joins and polylines
+never reach either path. parcad measures every inset against its outline
+afterwards (`vendor/opencascade/include/curve.hxx`, `ParcadInsetMeasure`),
+so a wrong corner is refused rather than built. Not yet offered upstream.
 
 `patches/0006-curvature-continuous-fillet-section.patch`: a fourth
 `ChFi3d_FilletShape`, `ChFi3d_CurvatureContinuous`, behind parcad's

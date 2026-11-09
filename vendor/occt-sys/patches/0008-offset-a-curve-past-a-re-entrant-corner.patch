@@ -1,0 +1,318 @@
+Offset a curve past a re-entrant corner the way a line is.
+
+What it fixes
+  BRepOffsetAPI_MakeOffset with GeomAbs_Intersection fails on any closed
+  outline in which a B-spline (or any curve that is not a line or a
+  circle) meets its neighbour at a re-entrant corner, at every distance:
+  the result wire does not close and Perform reports not done. Two
+  things conspire, one in the medial axis and one in the parallels.
+
+  Bisector_Bisec::Perform falls back to a half-line when
+  Bisector_BisecCC finds no equidistant polygon, which it never does at
+  a re-entrant corner between a curve and anything, because the points
+  equidistant from both lie beyond the curve's end. The fallback's
+  direction, -(first + second), bisects the salient side of the two
+  tangents; at a re-entrant corner that half-line leaves the domain, so
+  no parallel ever meets it and the medial axis runs to infinity from
+  a closed contour. The analytic bissectrice of two lines (BisecAna)
+  gets this case right, which is why a polyline with the same corner
+  offsets. The fallback now turns round when the corner is re-entrant,
+  read from the cross product of the tangents against the side asked.
+
+  BRepFill_OffsetWire's MakeOffset extends a line's parallel to
+  infinity and a circle's to a full turn under GeomAbs_Intersection, so
+  the parallels of two edges meeting at a re-entrant corner reach the
+  point where the join needs them to cross. A curve's parallel was
+  Geom2d_OffsetCurve over the curve's own range, ending where the curve
+  ends; with the bissectrice fixed it still missed the crossing by the
+  width of the corner. It is now the parallel of the curve continued
+  along its end tangent, a straight piece run at the curve's own end
+  speed so the whole is one C1 B-spline, long enough for a corner that
+  turns up to 2 atan(100) ~ 178.9 degrees — at the ends that need it.
+  DivergingCorners reads the spine once: an end is extended only where
+  the edge meets its neighbour at a corner the offset turns away from
+  (re-entrant for an inward offset, salient for an outward one) or at a
+  cusp. The straight extension and the straight fallback bissectrice
+  agree exactly: a corner between a curve and a line lands where the
+  same corner between two lines does, on the bisector of the tangents,
+  distance / cos(turn / 2) from the corner.
+
+What it does not change
+  Salient corners, tangent joins (the pieces a curve is cut into at its
+  curvature extrema, the seam of a closed curve), GeomAbs_Arc joins,
+  open results (IsOpenResult trims nothing at the two ends) and outlines
+  of lines and circles only, which never reach either path. Where
+  BisecCC does find a polygon the fallback is not used. A parallel that
+  is not extended is the object it was before, to the pole: extending
+  every curve end, as a first version did, left the 3D approximation of
+  a parallel that ran onto a straight piece eight times its poles (a
+  fitted ring of 185 poles came back as 1480), because the parallel's
+  speed jumps with the curvature at the join; only a parallel that
+  reaches past its curve's end carries that join now.
+
+Measured
+  A 200 x 125 outline whose top-left edge meets a cubic Bezier at a
+  re-entrant corner of 9.46 degrees offsets inward by 10 to a closed
+  wire with its corner at (40.8276, 115), 10.034 = 10 / cos(4.73
+  degrees) from the outline's corner at (40, 125); the same outline
+  with that corner made salient offset before and after, and its
+  Bezier's parallel keeps its 13 poles. A 960 x 215 outline with a
+  ten-point interpolated spline meeting a straight edge at a 7 degree
+  re-entrant corner, the first user part refused for this, offsets
+  inward by 18. A closed 9-pole fit of a circle split in two offsets by
+  2 to the same ten pieces of 6 or 7 poles as before. parcad measures
+  every inset against its outline afterwards
+  (vendor/opencascade/include/curve.hxx, ParcadInsetMeasure); that is
+  where the geometry is held, not here.
+
+diff -ruN a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_OffsetWire.cxx b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_OffsetWire.cxx
+--- a/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_OffsetWire.cxx	2026-11-08 23:46:45
++++ b/src/ModelingAlgorithms/TKBool/BRepFill/BRepFill_OffsetWire.cxx	2026-11-09 03:28:54
+@@ -47,6 +47,11 @@
+ #include <Geom2d_Curve.hxx>
+ #include <Geom2d_Line.hxx>
+ #include <Geom2d_OffsetCurve.hxx>
++#include <Geom2dConvert.hxx>
++#include <Geom2dConvert_CompCurveToBSplineCurve.hxx>
++#include <NCollection_Array1.hxx>
++#include <gp_Pnt2d.hxx>
++#include <utility>
+ #include <Geom2d_TrimmedCurve.hxx>
+ #include <Geom2dAdaptor_Curve.hxx>
+ #include <GeomLProp_CLProps.hxx>
+@@ -183,8 +188,18 @@
+   const occ::handle<Geom_Plane>&                                            RefPlane,
+   const bool                                                                IsOpenResult,
+   const GeomAbs_JoinType                                                    theJoinType,
+-  const TopoDS_Vertex*                                                      Ends);
++  const TopoDS_Vertex*                                                      Ends,
++  const bool                                                                theCornerAtFirst,
++  const bool                                                                theCornerAtLast);
+ 
++//! The ends of each edge of theSpine at which its parallel at theOffset
++//! and its neighbour's part company, as (at the first parameter, at the
++//! last): the corners the offset turns away from.
++static void DivergingCorners(
++  const TopoDS_Face&                                                                      theSpine,
++  const double                                                                            theOffset,
++  NCollection_DataMap<TopoDS_Shape, std::pair<bool, bool>, TopTools_ShapeMapHasher>& theCorners);
++
+ bool CheckSmallParamOnEdge(const TopoDS_Edge& anEdge);
+ 
+ //=================================================================================================
+@@ -768,6 +783,12 @@
+     return;
+   }
+ 
++  NCollection_DataMap<TopoDS_Shape, std::pair<bool, bool>, TopTools_ShapeMapHasher> aSpineCorners;
++  if (myJoinType == GeomAbs_Intersection)
++  {
++    DivergingCorners(myWorkSpine, myOffset, aSpineCorners);
++  }
++
+   for (int ic = 1; ic <= Locus.NumberOfContours(); ic++)
+   {
+     TopoDS_Shape  PEE = Link.GeneratingShape(Locus.BasicElt(ic, Locus.NumberOfElts(ic)));
+@@ -784,6 +805,7 @@
+       }
+       else
+       {
++        const std::pair<bool, bool>* aCorners = aSpineCorners.Seek(SE);
+         MakeOffset(TopoDS::Edge(SE),
+                    myWorkSpine,
+                    myOffset,
+@@ -791,7 +813,9 @@
+                    RefPlane,
+                    myIsOpenResult,
+                    myJoinType,
+-                   Ends);
++                   Ends,
++                   aCorners == nullptr || aCorners->first,
++                   aCorners == nullptr || aCorners->second);
+         PE = SE;
+       }
+     }
+@@ -2166,6 +2190,126 @@
+ 
+ //=================================================================================================
+ 
++//=======================================================================
++// function : ExtendedAlongTangents
++// purpose  : The curve with a straight piece of <theLength> continuing its
++//           end tangent at each end asked for, as one C1 B-spline.
++//=======================================================================
++static occ::handle<Geom2d_BoundedCurve> ExtendedAlongTangents(
++  const occ::handle<Geom2d_TrimmedCurve>& theCurve,
++  const double                            theLength,
++  const bool                              theAtStart,
++  const bool                              theAtEnd)
++{
++  occ::handle<Geom2d_BSplineCurve>      aSpline = Geom2dConvert::CurveToBSplineCurve(theCurve);
++  Geom2dConvert_CompCurveToBSplineCurve aJoined(aSpline);
++  constexpr double                      aTol = Precision::Confusion();
++  // A straight piece run at the curve's own end speed, so the join is C1 and
++  // the parallel of the whole is one continuous curve.
++  auto aPiece = [theLength](const gp_Pnt2d& theFrom, const gp_Vec2d& theAlong, const bool theForward) {
++    const gp_Dir2d               aDir(theAlong);
++    const gp_Pnt2d               aTo = theFrom.Translated((theForward ? theLength : -theLength) * gp_Vec2d(aDir));
++    NCollection_Array1<gp_Pnt2d> aPoles(1, 2);
++    aPoles(1) = theForward ? theFrom : aTo;
++    aPoles(2) = theForward ? aTo : theFrom;
++    NCollection_Array1<double>   aKnots(1, 2);
++    aKnots(1) = 0.;
++    aKnots(2) = theLength / theAlong.Magnitude();
++    NCollection_Array1<int>      aMults(1, 2);
++    aMults(1) = 2;
++    aMults(2) = 2;
++    return occ::handle<Geom2d_BoundedCurve>(new Geom2d_BSplineCurve(aPoles, aKnots, aMults, 1));
++  };
++  gp_Pnt2d aP;
++  gp_Vec2d aT;
++  if (theAtStart)
++  {
++    aSpline->D1(aSpline->FirstParameter(), aP, aT);
++    if (aT.Magnitude() > gp::Resolution())
++    {
++      aJoined.Add(aPiece(aP, aT, false), aTol, false);
++    }
++  }
++  if (theAtEnd)
++  {
++    aSpline->D1(aSpline->LastParameter(), aP, aT);
++    if (aT.Magnitude() > gp::Resolution())
++    {
++      aJoined.Add(aPiece(aP, aT, true), aTol, true);
++    }
++  }
++  return aJoined.BSplineCurve();
++}
++
++//=======================================================================
++// function : DivergingCorners
++// purpose  : Which ends of each spine edge meet the next edge at a corner
++//           their parallels at theOffset do not reach: a turn away from
++//           the offset side (re-entrant for an inward offset, salient for
++//           an outward one), or a cusp. Where two edges join tangent, or
++//           turn toward the offset side, the parallels cross on their own.
++//=======================================================================
++void DivergingCorners(
++  const TopoDS_Face&                                                                      theSpine,
++  const double                                                                            theOffset,
++  NCollection_DataMap<TopoDS_Shape, std::pair<bool, bool>, TopTools_ShapeMapHasher>& theCorners)
++{
++  constexpr double aTolAng = 1.e-7;
++  for (TopExp_Explorer aWires(theSpine, TopAbs_WIRE); aWires.More(); aWires.Next())
++  {
++    const TopoDS_Wire&                aWire = TopoDS::Wire(aWires.Current());
++    NCollection_Sequence<TopoDS_Edge> anEdges;
++    for (BRepTools_WireExplorer anExp(aWire, theSpine); anExp.More(); anExp.Next())
++    {
++      anEdges.Append(anExp.Current());
++      if (!theCorners.IsBound(anExp.Current()))
++      {
++        theCorners.Bind(anExp.Current(), std::make_pair(false, false));
++      }
++    }
++    const int aCount = anEdges.Length();
++    for (int i = 1; i <= aCount; ++i)
++    {
++      if (i == aCount && !aWire.Closed())
++      {
++        break;
++      }
++      const TopoDS_Edge& anE1 = anEdges(i);
++      const TopoDS_Edge& anE2 = anEdges(i % aCount + 1);
++      double             f1, l1, f2, l2;
++      occ::handle<Geom2d_Curve> aC1 = BRep_Tool::CurveOnSurface(anE1, theSpine, f1, l1);
++      occ::handle<Geom2d_Curve> aC2 = BRep_Tool::CurveOnSurface(anE2, theSpine, f2, l2);
++      if (aC1.IsNull() || aC2.IsNull())
++      {
++        continue;
++      }
++      // The tangent along the wire: at the end of E1, at the start of E2.
++      const bool aRev1 = anE1.Orientation() == TopAbs_REVERSED;
++      const bool aRev2 = anE2.Orientation() == TopAbs_REVERSED;
++      gp_Pnt2d   aP;
++      gp_Vec2d   aT1, aT2;
++      aC1->D1(aRev1 ? f1 : l1, aP, aT1);
++      aC2->D1(aRev2 ? l2 : f2, aP, aT2);
++      if (aRev1)
++      {
++        aT1.Reverse();
++      }
++      if (aRev2)
++      {
++        aT2.Reverse();
++      }
++      const double aNorm   = aT1.Magnitude() * aT2.Magnitude();
++      const bool   aCorner = aNorm <= gp::Resolution() || aT1.Crossed(aT2) * theOffset < -aTolAng * aNorm * std::abs(theOffset)
++                             || aT1.Dot(aT2) < 0.;
++      // E1 ends, in its own parameter, at its last parameter when forward.
++      std::pair<bool, bool>& aFlags1 = theCorners.ChangeFind(anE1);
++      (aRev1 ? aFlags1.first : aFlags1.second) = aCorner;
++      std::pair<bool, bool>& aFlags2 = theCorners.ChangeFind(anE2);
++      (aRev2 ? aFlags2.second : aFlags2.first) = aCorner;
++    }
++  }
++}
++
+ void MakeOffset(const TopoDS_Edge&                                                        E,
+                 const TopoDS_Face&                                                        F,
+                 const double                                                              Offset,
+@@ -2173,7 +2317,9 @@
+                 const occ::handle<Geom_Plane>&                                            RefPlane,
+                 const bool             IsOpenResult,
+                 const GeomAbs_JoinType theJoinType,
+-                const TopoDS_Vertex*   Ends)
++                const TopoDS_Vertex*   Ends,
++                const bool             theCornerAtFirst,
++                const bool             theCornerAtLast)
+ {
+   double f, l;
+   double anOffset = Offset;
+@@ -2286,9 +2432,24 @@
+   }
+   else
+   {
+-
+-    occ::handle<Geom2d_TrimmedCurve> G2dT = new Geom2d_TrimmedCurve(G2d, f, l);
+-    G2dOC                                 = new Geom2d_OffsetCurve(G2dT, anOffset);
++    occ::handle<Geom2d_TrimmedCurve> G2dT   = new Geom2d_TrimmedCurve(G2d, f, l);
++    occ::handle<Geom2d_BoundedCurve> aBasis = G2dT;
++    const bool anExtendFirst = ToExtendFirstPar && theJoinType == GeomAbs_Intersection && theCornerAtFirst;
++    const bool anExtendLast  = ToExtendLastPar && theJoinType == GeomAbs_Intersection && theCornerAtLast;
++    if (anExtendFirst || anExtendLast)
++    {
++      // A line's parallel runs to infinity above and a circle's all the way
++      // round, so where two edges meet at a re-entrant corner their parallels
++      // reach the point the join needs. A curve's parallel ended with the
++      // curve, and the trim that looks for that point found nothing there.
++      // Only an end whose parallel turns away from its neighbour's is
++      // extended: the approximation of a parallel that runs onto a straight
++      // piece takes many times the poles, and a tangent join or a corner the
++      // offset turns into needs none.
++      const double aLength = 100. * std::abs(anOffset) + G2dT->StartPoint().Distance(G2dT->EndPoint());
++      aBasis = ExtendedAlongTangents(G2dT, aLength, anExtendFirst, anExtendLast);
++    }
++    G2dOC = new Geom2d_OffsetCurve(aBasis, anOffset);
+   }
+ 
+   // Bind the edges in my Map.
+diff -ruN a/src/ModelingAlgorithms/TKTopAlgo/Bisector/Bisector_Bisec.cxx b/src/ModelingAlgorithms/TKTopAlgo/Bisector/Bisector_Bisec.cxx
+--- a/src/ModelingAlgorithms/TKTopAlgo/Bisector/Bisector_Bisec.cxx	2026-11-08 23:46:45
++++ b/src/ModelingAlgorithms/TKTopAlgo/Bisector/Bisector_Bisec.cxx	2026-11-08 23:47:22
+@@ -217,6 +217,14 @@
+             Nx = -afirstvector.Y();
+             Ny = afirstvector.X();
+           }
++          else if ((dir1 ^ dir2.Reversed()) * adirection < 0.)
++          {
++            // The sum above bisects a salient corner. At a re-entrant one the
++            // curves open on the other side, and the bissectrice must leave
++            // the point into the domain, as the analytic one does.
++            Nx = -Nx;
++            Ny = -Ny;
++          }
+         }
+         gp_Dir2d N(adirection * Nx, adirection * Ny);
+         //  modified by NIZHNY-EAP Mon Feb 21 12:00:19 2000 ___END___
