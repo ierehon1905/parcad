@@ -667,6 +667,10 @@ pub struct EditRequest {
     /// refused for it.
     #[serde(default)]
     pub allow_failing: Option<String>,
+    /// How long to wait for a window to show the edit, when the part is on
+    /// screen, as in `set_script`. 0 to 60; defaults to 20.
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
+    pub wait_s: Option<f64>,
 }
 
 /// A measurement with the text it was taken on identified: `script_sha256`
@@ -991,7 +995,7 @@ impl Parcad {
             }
         }
         if let Some(changed) = changed {
-            let shown = on_screen(changed, None, false).await;
+            let shown = on_screen(changed, request.wait_s, false).await;
             measured["on_screen"] = serde_json::to_value(shown)
                 .map_err(|e| ErrorData::internal_error(format!("serialising the session: {e}"), None))?;
         }
@@ -2457,6 +2461,21 @@ mod tests {
 
     /// OpenCode logged "unknown format uint ignored" for every count on each
     /// start; a stricter client could refuse the schema.
+    /// A field trial sent `wait_s` to edit_part, which lands on screen as
+    /// set_script does and was refused for a field it did not have.
+    #[test]
+    fn every_tool_that_lands_on_screen_waits_by_the_same_name() {
+        let edit: EditRequest = serde_json::from_value(serde_json::json!({
+            "project": "@session", "edits": [], "wait_s": 5,
+        }))
+        .expect("edit_part takes wait_s");
+        assert_eq!(edit.wait_s, Some(5.0));
+        for tool in ["set_script", "open_project", "restore_snapshot", "edit_part"] {
+            let schema = Parcad::new().tool_router.get(tool).expect(tool).input_schema.clone();
+            assert!(schema["properties"].get("wait_s").is_some(), "{tool} has no wait_s");
+        }
+    }
+
     #[test]
     fn no_advertised_number_carries_a_format() {
         fn formats(value: &serde_json::Value, path: &str, found: &mut Vec<String>) {

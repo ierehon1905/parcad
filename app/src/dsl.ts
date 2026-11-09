@@ -841,6 +841,11 @@ function assertEdgeSelector(selector: EdgeSelector, call: string, write: (select
 }
 
 /** `shape.fillet(2)` with no selector: the fix is a second argument, in the call as written. */
+/** A treatment's size and selector in either order: a number and a selector say which is which. */
+function sizeFirst(first: number | EdgeSelector, second: EdgeSelector | number): [number, EdgeSelector] {
+  return typeof first !== "number" && typeof second === "number" ? [second, first] : [first as number, second as EdgeSelector];
+}
+
 function assertTreatmentSelector(selector: EdgeSelector, method: "fillet" | "chamfer", size: unknown) {
   const args = typeof size === "number" ? String(size) : method === "fillet" ? "radius" : "distance";
   assertEdgeSelector(selector, `${method}(${args})`, (s) => `.${method}(${args}, ${s})`);
@@ -1556,14 +1561,17 @@ export class Shape {
     return new VertexSelection(this, selector);
   }
 
-  /** Round the edges matched by an authored selector. */
+  /** Round the edges matched by an authored selector. Either order: `.fillet(">Z", 2)` is `.fillet(2, ">Z")`. */
+  fillet(radius: number, selector: EdgeSelector, expectation?: EdgeExpectation, options?: FilletOptions, source?: SourceLocation): Shape;
+  fillet(selector: EdgeSelector, radius: number, expectation?: EdgeExpectation, options?: FilletOptions, source?: SourceLocation): Shape;
   fillet(
-    radius: number,
-    selector: EdgeSelector,
+    first: number | EdgeSelector,
+    second: EdgeSelector | number,
     expectation?: EdgeExpectation,
     options?: FilletOptions,
     source = treatmentSource("fillet"),
   ): Shape {
+    const [radius, selector] = sizeFirst(first, second);
     assertTreatmentSelector(selector, "fillet", radius);
     if (expectation) assertEdgeExpectation(expectation);
     assertFilletOptions(options);
@@ -1576,14 +1584,17 @@ export class Shape {
     );
   }
 
-  /** Bevel the edges matched by an authored selector. */
+  /** Bevel the edges matched by an authored selector. Either order: `.chamfer(">Z", 1)` is `.chamfer(1, ">Z")`. */
+  chamfer(distance: number, selector: EdgeSelector, expectation?: EdgeExpectation, options?: ChamferOptions, source?: SourceLocation): Shape;
+  chamfer(selector: EdgeSelector, distance: number, expectation?: EdgeExpectation, options?: ChamferOptions, source?: SourceLocation): Shape;
   chamfer(
-    distance: number,
-    selector: EdgeSelector,
+    first: number | EdgeSelector,
+    second: EdgeSelector | number,
     expectation?: EdgeExpectation,
     options?: ChamferOptions,
     source = treatmentSource("chamfer"),
   ): Shape {
+    const [distance, selector] = sizeFirst(first, second);
     assertTreatmentSelector(selector, "chamfer", distance);
     if (expectation) assertEdgeExpectation(expectation);
     assertChamferOptions(options);

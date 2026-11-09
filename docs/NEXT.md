@@ -277,8 +277,8 @@ and in the next two sections.
 | 12 | the G2 blend behind `.smooth()` — built 2026-10-14; a three-edge corner is still refused | 4 | ★★ | L | Fable, high |
 | 13 | a face's listed area misreads spline faces | 4 | ★★ | S | Opus |
 | 14 | tool schemas carry non-standard `uint` formats — **done 2026-11-09** | 3 | ★ | S | Opus |
-| 15 | `fillet(selector, radius)` order | 2 | ★ | S | Opus |
-| 16 | `wait_s` on one script tool only | 2 | ★ | S | Opus |
+| 15 | `fillet(selector, radius)` order — **done 2026-11-09** | 2 | ★ | S | Opus |
+| 16 | `wait_s` on one script tool only — **done 2026-11-09** | 2 | ★ | S | Opus |
 | 17 | `.union()` given an edge selection says "not a function" — **done 2026-11-09** | 2 | ★ | S | Opus |
 | 18 | a vertex treatment's `edges` is not what its `.expect` counts | 2 | ★ | S | Opus |
 | 19 | the editor never shows `mixed_corners` | 2 | ★ | S | Opus |
@@ -447,13 +447,17 @@ point). Counted by trial, most-hit first:
 - **`fillet(selector, radius)`** — 2 trials (Sonnet), and this bench's author
   wrote it too. The refusal names the fix; taking either order when one
   argument is a number and the other a selector would remove the round trip
-  without guessing.
+  without guessing. *Done 2026-11-09:* `Shape.fillet` and `Shape.chamfer` are
+  overloaded to take either order, and the reference shows both overloads and
+  not the implementation behind them.
 - **The same signatures fetched every trial** — `read_docs` sections `box`,
   `cylinder`, `Shape.fillet` 15–16 times each, `sphere` 8, after the `dsl`
   index 50 times. The ten most-used signatures in the index reply would save a
   call or two per trial.
 - **`wait_s` on one tool, not its sibling** — 1 trial sent it to `edit_part`.
-  Small; same parameter names across the script tools.
+  Small; same parameter names across the script tools. *Done 2026-11-09:* edit_part
+  takes `wait_s` like set_script, open_project and restore_snapshot, and a
+  test holds the four to the same name.
 
 ### Kernel work for a strong-model session (Fable or Opus, high effort)
 

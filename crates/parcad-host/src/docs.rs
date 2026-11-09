@@ -738,7 +738,15 @@ fn parse(source: &str) -> Vec<Item> {
             doc,
         });
     }
-    items
+    // Overloads are declared one after another and the last of them is the
+    // implementation, which TypeScript does not let a caller call.
+    let implementation: Vec<bool> = (0..items.len())
+        .map(|at| {
+            let same = |other: Option<&Item>| other.is_some_and(|o| o.name == items[at].name && o.kind == items[at].kind);
+            same(at.checked_sub(1).and_then(|p| items.get(p))) && !same(items.get(at + 1))
+        })
+        .collect();
+    items.into_iter().zip(implementation).filter(|(_, implementation)| !implementation).map(|(item, _)| item).collect()
 }
 
 /// `export function box(` and friends, at column zero.

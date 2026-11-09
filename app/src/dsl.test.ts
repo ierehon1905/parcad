@@ -1062,3 +1062,16 @@ describe("a boolean's arguments", () => {
     expect(() => base.union(box(5, 5, 10), { blend: 1 })).not.toThrow();
   });
 });
+
+/**
+ * Sonnet wrote `.fillet(">Z", 2)` in two trials of the competitor bench, and
+ * the bench's author once: a number and a selector say which is which, so the
+ * order costs no round trip.
+ */
+describe("a treatment given its selector first", () => {
+  test("is the same treatment as the size first", () => {
+    const plate = everything.box(20, 20, 4);
+    expect(everything.build(plate.fillet(">Z", 1))).toEqual(everything.build(plate.fillet(1, ">Z")));
+    expect(everything.build(plate.chamfer({ dihedral: "convex" }, 0.5))).toEqual(everything.build(plate.chamfer(0.5, { dihedral: "convex" })));
+  });
+});
