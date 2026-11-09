@@ -276,7 +276,7 @@ and in the next two sections.
 | 11 | the same signatures fetched every trial | 4 | ★★ | S | Opus |
 | 12 | the G2 blend behind `.smooth()` — built 2026-10-14; a three-edge corner is still refused | 4 | ★★ | L | Fable, high |
 | 13 | a face's listed area misreads spline faces | 4 | ★★ | S | Opus |
-| 14 | tool schemas carry non-standard `uint` formats | 3 | ★ | S | Opus |
+| 14 | tool schemas carry non-standard `uint` formats — **done 2026-11-09** | 3 | ★ | S | Opus |
 | 15 | `fillet(selector, radius)` order | 2 | ★ | S | Opus |
 | 16 | `wait_s` on one script tool only | 2 | ★ | S | Opus |
 | 17 | `.union()` given an edge selection says "not a function" | 2 | ★ | S | Opus |
@@ -333,7 +333,10 @@ and in the next two sections.
 - **Tool schemas carry non-standard `uint` formats.** schemars writes
   `"format": "uint"` / `"uint64"` on every count; OpenCode logs "unknown format
   uint ignored" for each on every start, and a stricter client could refuse the
-  schema. Map them to `integer` with `minimum: 0`.
+  schema. Map them to `integer` with `minimum: 0`. *Done 2026-11-09:*
+  `mcp::without_number_formats` drops every format on a number or an integer,
+  `double` included, from each tool's input and output schema. schemars
+  already writes `minimum: 0` on an unsigned count.
 - **`.union()` given an edge selection says "not a function".** Haiku 4.5, plate
   stand: `.union(base.edges(…))` threw a bare "not a function" at that line.
   Name what `union` takes when an argument is a selection.

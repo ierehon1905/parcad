@@ -86,6 +86,10 @@ fn surface() -> ToolRouter<Parcad> {
         if route.attr.output_schema.is_some() {
             route.attr.output_schema = Some(reply_schema(name));
         }
+        route.attr.input_schema = std::sync::Arc::new(without_number_formats(&route.attr.input_schema));
+        if let Some(output) = route.attr.output_schema.take() {
+            route.attr.output_schema = Some(std::sync::Arc::new(without_number_formats(&output)));
+        }
         // `ui/resourceUri` is the key hosts read before the extension was final.
         route.attr.meta = match name.as_ref() {
             "open_project" => Some(rmcp::model::MetaObject(meta(serde_json::json!({
@@ -99,6 +103,37 @@ fn surface() -> ToolRouter<Parcad> {
         };
     }
     router
+}
+
+/// A schema less the number formats schemars writes — `uint32`, `double`.
+/// JSON Schema defines none, so a client that checks `format` warns about
+/// every one on each start or refuses the schema; `minimum: 0` still says a
+/// count is unsigned.
+fn without_number_formats(schema: &rmcp::model::JsonObject) -> rmcp::model::JsonObject {
+    fn strip(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                let numeric = |kind: &serde_json::Value| kind == "integer" || kind == "number";
+                let is_number = match map.get("type") {
+                    Some(serde_json::Value::Array(kinds)) => kinds.iter().any(numeric),
+                    Some(kind) => numeric(kind),
+                    None => false,
+                };
+                if is_number {
+                    map.remove("format");
+                }
+                map.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    let mut value = serde_json::Value::Object(schema.clone());
+    strip(&mut value);
+    match value {
+        serde_json::Value::Object(object) => object,
+        _ => unreachable!("an object stays an object"),
+    }
 }
 
 fn meta(value: serde_json::Value) -> rmcp::model::JsonObject {
@@ -2404,6 +2439,40 @@ mod tests {
         assert_eq!(wire["ttlMs"], serde_json::json!(TOOL_LIST_TTL_MS));
         assert_eq!(wire["cacheScope"], serde_json::json!("public"));
         assert_eq!(wire["tools"].as_array().unwrap().len(), 20);
+    }
+
+    /// OpenCode logged "unknown format uint ignored" for every count on each
+    /// start; a stricter client could refuse the schema.
+    #[test]
+    fn no_advertised_number_carries_a_format() {
+        fn formats(value: &serde_json::Value, path: &str, found: &mut Vec<String>) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    let numeric = map.get("type").is_some_and(|kind| {
+                        kind == "integer" || kind == "number" || kind.as_array().is_some_and(|k| k.iter().any(|k| k == "integer" || k == "number"))
+                    });
+                    if numeric && map.contains_key("format") {
+                        found.push(format!("{path}: {}", map["format"]));
+                    }
+                    for (key, inner) in map {
+                        formats(inner, &format!("{path}.{key}"), found);
+                    }
+                }
+                serde_json::Value::Array(items) => items.iter().for_each(|inner| formats(inner, path, found)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        for tool in Parcad::new().tool_router.list_all() {
+            formats(&serde_json::to_value(&tool.input_schema).unwrap(), &format!("{}.input", tool.name), &mut found);
+            if let Some(output) = &tool.output_schema {
+                formats(&serde_json::to_value(output).unwrap(), &format!("{}.output", tool.name), &mut found);
+            }
+        }
+        assert!(found.is_empty(), "number formats JSON Schema does not define: {found:?}");
+        let evaluate = Parcad::new().tool_router.list_all().into_iter().find(|t| t.name == "evaluate_part").unwrap();
+        let size = &serde_json::to_value(&evaluate.input_schema).unwrap()["properties"]["image_size"];
+        assert_eq!(size["minimum"], 0, "a count still says it is unsigned: {size}");
     }
 
     #[test]
