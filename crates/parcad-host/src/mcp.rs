@@ -492,10 +492,11 @@ pub struct ExportRequest {
     /// the same script when there is one.
     #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
-    /// Write the file although one of the part's own `checks` fails, for
-    /// this reason — the user's decision, in their words. Without it a
-    /// failing check refuses the export, naming the check and what was
-    /// measured; with it the reason is kept in the reply.
+    /// Write the file although a check or the print check fails, for the
+    /// reason the user gave once you told them what fails — their decision,
+    /// in their words, never a reason of your own. Without it a failing
+    /// verdict refuses the export, naming it and what was measured; with it
+    /// the reason is kept in the reply.
     #[serde(default)]
     pub allow_failing: Option<String>,
 }
@@ -658,11 +659,12 @@ pub struct EditRequest {
     /// Seconds the kernel may take, 1 to 600, as evaluate_part's.
     #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
-    /// Write the part although one of its own `checks` fails, for this
-    /// reason — the user's decision, in their words. Without it a failing
-    /// check refuses an edit that writes part.js, naming the check and what
-    /// was measured; an edit to "@session" changes the screen only and is
-    /// never refused for it.
+    /// Write the part although a check or the print check fails, for the
+    /// reason the user gave once you told them what fails — their decision,
+    /// in their words, never a reason of your own. Without it a failing
+    /// verdict refuses an edit that writes part.js, naming it and what was
+    /// measured; an edit to "@session" changes the screen only and is never
+    /// refused for it.
     #[serde(default)]
     pub allow_failing: Option<String>,
 }
@@ -720,10 +722,11 @@ pub struct SaveRequest {
     pub name: String,
     /// The DSL source to save.
     pub script: String,
-    /// Save although one of the part's own `checks` fails, for this reason —
-    /// the user's decision, in their words. Without it a failing check
-    /// refuses the save, naming the check and what was measured; with it the
-    /// reason is kept in the reply.
+    /// Save although a check or the print check fails, for the reason the
+    /// user gave once you told them what fails — their decision, in their
+    /// words, never a reason of your own. Without it a failing verdict
+    /// refuses the save, naming it and what was measured; with it the reason
+    /// is kept in the reply.
     #[serde(default)]
     pub allow_failing: Option<String>,
 }

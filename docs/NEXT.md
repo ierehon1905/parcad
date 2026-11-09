@@ -264,7 +264,7 @@ and in the next two sections.
 | # | item | score | impact | effort | model |
 |---|---|---|---|---|---|
 | 1 | the tag that makes the saucer crawl — **done 2026-11-05** | 8 | ★★★ | L | Fable, high |
-| 2 | `allow_failing` is taken on the model's own word | 7 | ★★★ | S | Opus |
+| 2 | `allow_failing` is taken on the model's own word — refusal reworded 2026-11-09, unmeasured on the models that did it | 7 | ★★★ | S | Opus |
 | 3 | `check_motion` — **done 2026-11-05**, as `turns` and `slides` checks | 7 | ★★★ | L | Fable, high |
 | 4 | `edit_part` refuses with an empty reason — **done 2026-11-09**: a brief over its envelope opened the door and named nothing | 6 | ★★ | S | Opus |
 | 5 | a list argument sent as a JSON string is refused — **done 2026-11-09** | 6 | ★★ | S | Opus |
@@ -291,7 +291,18 @@ and in the next two sections.
   parameter's description says the reason is the user's decision, in their
   words — nothing holds a model to that. Fix candidates: an export written
   under `allow_failing` says so in its first line and in the file's name or
-  metadata, and the server instruction says to ask the user before passing it.
+  metadata, and the server instruction says to ask the user before passing it. *Reworded
+  2026-11-09:* the refusal no longer ends on how to open the door. It says
+  writing anyway is the user's decision, not the model's, to tell them what
+  fails and to pass `allow_failing` only with the reason they give, and the
+  three parameter descriptions say the same. The server instructions are at
+  2047 of 2048 characters and were left alone. Field case
+  `export-what-will-not-print` (fixed dimensions, a 0.15 mm sleeve wall):
+  Haiku 5.5 wrote no file in 8/8 trials on 0.0.18 and on the new host, so the
+  failure is not one Haiku makes and this harness cannot show the rewording
+  helps; `is-it-safe-to-save`, where the user does accept the failure, stayed
+  2/2 SOUND. Still open: measuring it on GLM, Qwen and DeepSeek through
+  OpenCode, and marking a file written under `allow_failing`.
 - **`edit_part` refuses with an empty reason.** GLM 5.3 Flash, plate brief
   (`oc-glm-qwen/plate-P-glm-5.3-flash-1`): moving the holes produced
   `edit_part refused: . Fix the part and call again, or pass allow_failing` —

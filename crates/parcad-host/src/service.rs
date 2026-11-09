@@ -1292,9 +1292,12 @@ impl Door {
             let floor = if print.failed[0].kind == "thin" { format!(", nothing prints under {} mm", print.floor_mm) } else { String::new() };
             named.push(format!("print_check fails{floor} — {}", sentences.join("; ")));
         }
+        // Phrased so a model reads it as a question for the user: told only how to
+        // open the door, three models on the competitor bench wrote their own reason.
         Err(format!(
-            "{action} refused: {}. Fix the part and call again, or pass allow_failing: \
-             \"<why it is acceptable>\" to write it anyway; the reason is kept in the reply.",
+            "{action} refused: {}. Fix the part and call again. Writing it anyway is the user's \
+             decision, not yours: tell them what fails, and pass allow_failing only with the reason \
+             they give you.",
             named.join("; and ")
         ))
     }
@@ -2347,8 +2350,9 @@ pub(crate) mod tests {
         assert_eq!(
             refusal,
             "export_part refused: 1 of the part's own check fails — clear top↔stacks atLeast 0.2 measured \
-             0.13 mm (coins must not bind on the plate). Fix the part and call again, or pass \
-             allow_failing: \"<why it is acceptable>\" to write it anyway; the reason is kept in the reply."
+             0.13 mm (coins must not bind on the plate). Fix the part and call again. Writing it anyway \
+             is the user's decision, not yours: tell them what fails, and pass allow_failing only with \
+             the reason they give you."
         );
         assert!(door.pass(Some("  "), "save_project").unwrap_err().starts_with("save_project refused"));
         assert_eq!(door.pass(Some("the user accepts the binding"), "save_project").unwrap(), Some("the user accepts the binding".into()));
@@ -2396,8 +2400,9 @@ pub(crate) mod tests {
         assert_eq!(
             refused.pass(None, "export_part").unwrap_err(),
             "export_part refused: print_check fails, nothing prints under 0.3 mm — material thins to 0 mm \
-             where `cable` meets `slot` at 15.0°, at [0, -13.768, 2]. Fix the part and call again, or pass \
-             allow_failing: \"<why it is acceptable>\" to write it anyway; the reason is kept in the reply."
+             where `cable` meets `slot` at 15.0°, at [0, -13.768, 2]. Fix the part and call again. Writing \
+             it anyway is the user's decision, not yours: tell them what fails, and pass allow_failing only \
+             with the reason they give you."
         );
         assert_eq!(refused.pass(Some("a knife edge the user wants"), "export_part").unwrap(), Some("a knife edge the user wants".into()));
         let flagged = Door { verdicts: parcad_evaluation::Verdicts { checks: None, brief: None, print_check: Some(print(Vec::new(), vec![feather.clone()])) } };
