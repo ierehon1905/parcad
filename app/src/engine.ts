@@ -948,6 +948,12 @@ export async function openSourceInEditor() {
  * believing the viewport it last saw. Telling it to measure on the frame after
  * it reappears is what stops the first click landing on the wrong line.
  */
+/** Show the parts sidebar and give its search the keys; asked again while shown, it only refocuses. */
+export function showParts() {
+  S.browserOpen.value = true;
+  S.browserAsked.value++;
+}
+
 export function showCode(visible: boolean) {
   S.codeVisible.value = visible;
   if (visible) requestAnimationFrame(() => S.editorRef.current?.requestMeasure());

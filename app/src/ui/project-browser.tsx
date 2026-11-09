@@ -1,6 +1,10 @@
 /**
- * The parts picker: a folder tree, a grid of parts, and the four things you do
- * to a project that are not editing it.
+ * The parts sidebar: a folder tree, the parts as a list, and the four things you
+ * do to a project that are not editing it.
+ *
+ * A panel beside the editor rather than a window over it (docs/notes/ui-audit-
+ * birman.md, "Окно «Parts»"): a popup covers the work it is about, and moving
+ * between parts is navigation, which belongs in a sidebar on the left.
  *
  * It replaced a `<select>`, which could say a part's name and nothing else. The
  * project folder is shared with the user's filesystem and with agents over MCP,
@@ -73,8 +77,7 @@ function keepThumbnail(path: string, entry: { key: string; url: string | null })
 
 
 export function ProjectBrowser() {
-  const dialog = useRef<HTMLDialogElement>(null);
-  /** The folder whose parts the grid shows; "" is everything. */
+  /** The folder whose parts the list shows; "" is everything. */
   const folder = useSignal("");
   const query = useSignal("");
   const menu = useSignal<{ part: ProjectPart; x: number; y: number } | undefined>(undefined);
@@ -85,21 +88,14 @@ export function ProjectBrowser() {
   const refresh = async () => {
     const projects = await engine.reloadProjects();
     // A folder that was deleted (by the user in Finder, or by an agent) must
-    // not leave the grid pinned to something that no longer exists.
+    // not leave the list pinned to something that no longer exists.
     if (folder.value && !folderPaths(projects.tree).includes(folder.value)) folder.value = "";
   };
 
+  // The panel stays open: going from one part to the next is the point of it.
   const choose = async (path: string) => {
     try {
       await engine.openProject(path);
-      // Closed here rather than by letting the effect below notice the signal.
-      // A modal `<dialog>` makes the rest of the page inert, so for as long as
-      // it is open the viewport takes no pointer events at all — and routing
-      // the close through render-then-effect leaves it open for a frame or two
-      // after the part is already loaded and drawn. `bracket.e2e.mjs` moves the
-      // mouse onto an edge in exactly that gap and hovers nothing.
-      dialog.current?.close();
-      S.browserOpen.value = false;
     } catch (e) {
       await failed(e);
     }
@@ -115,53 +111,42 @@ export function ProjectBrowser() {
     }
   };
 
-  // A `<dialog>` is opened by a method rather than an attribute, which is the
-  // one thing here that has to be driven imperatively.
+  const open = S.browserOpen.value;
+  // Each time it is shown or asked for again, the list is reread and the search box takes the keys.
   useEffect(() => {
-    const open = S.browserOpen.value;
-    const element = dialog.current;
-    if (!element) return;
-    if (open && !element.open) {
-      void refresh();
-      element.showModal();
-      query.value = "";
-      searchBox.current?.focus();
-    } else if (!open && element.open) {
-      element.close();
-    }
-  }, [S.browserOpen.value]);
+    if (!open) return;
+    void refresh();
+    searchBox.current?.focus();
+  }, [open, S.browserAsked.value]);
 
   const projects = S.projects.value;
   const matched = projects ? search(projects.tree, query.value) : [];
   const shown = flatten(folder.value ? within(matched, folder.value) : matched);
   const total = projects ? flatten(projects.tree).length : 0;
-  // Nothing inside a closed picker is drawn. Not for the render cost — for the
-  // network: every card fetches its own thumbnail, and a folder of a hundred
-  // parts would otherwise pull a hundred pictures nobody has asked to see.
-  const open = S.browserOpen.value;
+  // Nothing inside a hidden panel is drawn. Not for the render cost — for the
+  // network: every row fetches its own thumbnail.
+  if (!open) return null;
 
   return (
-    <dialog
-      ref={dialog}
-      // `m-auto` restores the centring a modal dialog gets from the browser: the
-      // preflight zeroes every margin, and the UA's `margin: auto` is what puts
-      // a dialog in the middle of the viewport.
-      class="m-auto w-[min(1040px,92vw)] h-[min(680px,88vh)] p-0 overflow-hidden
-             bg-panel text-ink border border-line rounded-2xl
-             backdrop:bg-[rgb(8_9_12/0.62)] backdrop:backdrop-blur-[3px]"
-      onClose={() => (S.browserOpen.value = false)}
-      // Clicking the backdrop closes it; clicking inside must not.
-      onClick={(e) => {
-        if (e.target === dialog.current) S.browserOpen.value = false;
-      }}
+    <aside
+      id="parts"
+      aria-label="Parts"
+      class="flex flex-col flex-none w-[272px] min-h-0 bg-panel border-r border-line"
     >
-      {open && (
-      <>
-      <header class="flex items-center gap-3 px-[18px] py-3.5 border-b border-line">
-        <h2 class="m-0 text-[15px] font-semibold">Parts</h2>
+      <header class="flex flex-col gap-2 px-3 pt-3 pb-2.5 border-b border-line">
+        <div class="flex items-center justify-between">
+          <h2 class="m-0 text-[15px] font-semibold">Parts</h2>
+          <Button
+            variant="quiet"
+            layout="shrink-0 px-2 py-0.5"
+            {...tip({ title: "Hide the parts", key: "⌘O", text: "The project button and ⌘O bring them back." })}
+            onClick={() => (S.browserOpen.value = false)}
+          >
+            Hide
+          </Button>
+        </div>
         <Field
           ref={searchBox}
-          layout="flex-1"
           type="search"
           placeholder="Search parts, folders, tags"
           value={query.value}
@@ -171,79 +156,67 @@ export function ProjectBrowser() {
             if (e.key === "Enter" && shown.length) void choose(shown[0].path);
           }}
         />
-        <Button
-          layout="shrink-0 flex items-center gap-1.5"
-          onClick={() => void newFolder(folder.value, ask, failed, refresh)}
-        >
-          <Icon name="folder" class="size-4 shrink-0" />
-          <span>New folder</span>
-        </Button>
-        <Button
-          variant="primary"
-          layout="shrink-0 flex items-center gap-1.5"
-          onClick={() => void newPart(folder.value, ask, failed, refresh, choose)}
-        >
-          <Icon name="plus" class="size-4 shrink-0" />
-          <span>New part</span>
-        </Button>
-        {/* In the row, not floated over it: the reserved padding it used to sit
-            in was two pixels narrower than the button, so the two overlapped. */}
-        <Button
-          variant="quiet"
-          layout="shrink-0"
-          {...tip({ title: "Close", text: "Esc does the same." })}
-          onClick={() => (S.browserOpen.value = false)}
-        >
-          Close
-        </Button>
+        <div class="flex gap-2">
+          <Button
+            variant="primary"
+            layout="flex-1 flex items-center justify-center gap-1.5"
+            onClick={() => void newPart(folder.value, ask, failed, refresh, choose)}
+          >
+            <Icon name="plus" class="size-4 shrink-0" />
+            <span>New part</span>
+          </Button>
+          <Button
+            layout="flex-1 flex items-center justify-center gap-1.5"
+            onClick={() => void newFolder(folder.value, ask, failed, refresh)}
+          >
+            <Icon name="folder" class="size-4 shrink-0" />
+            <span>New folder</span>
+          </Button>
+        </div>
       </header>
 
-      <div class="flex h-[calc(100%-108px)]">
-        <nav class="w-[220px] flex-none overflow-auto px-2 py-2.5 border-r border-line">
-          <FolderButton
-            path=""
-            name="All parts"
-            count={flatten(matched).length}
-            depth={0}
-            current={folder}
-            onDrop={move}
-          />
-          <Branch entries={matched} depth={1} current={folder} onDrop={move} />
-          {/* Without a query the tree is the whole folder, so it is also the
-              place to say the folder is empty. */}
-          {!query.value && !projects?.parts.length && (
-            <p class="mx-1 my-6 text-ink-dim">Nothing here yet.</p>
-          )}
-        </nav>
+      <nav class="flex-none max-h-[40%] overflow-auto px-2 py-2 border-b border-line">
+        <FolderButton
+          path=""
+          name="All parts"
+          count={flatten(matched).length}
+          depth={0}
+          current={folder}
+          onDrop={move}
+        />
+        <Branch entries={matched} depth={1} current={folder} onDrop={move} />
+      </nav>
 
-        <div class="flex-1 overflow-auto p-4">
-          <div class="grid gap-3.5 grid-cols-[repeat(auto-fill,minmax(168px,1fr))]">
-            {shown.map((part) => (
-              <Card
-                key={part.path}
-                part={part}
-                showFolder={!folder.value}
-                onOpen={() => void choose(part.path)}
-                onMenu={(x, y) => (menu.value = { part, x, y })}
-              />
-            ))}
-            {!shown.length && (
-              <p class="col-span-full mx-1 my-6 text-ink-dim">
-                {query.value
-                  ? `Nothing matches “${query.value}”.`
-                  : "This folder has no parts. New part puts one here."}
-              </p>
-            )}
-          </div>
-        </div>
+      <div class="flex-1 min-h-0 overflow-auto px-2 py-2">
+        {shown.map((part) => (
+          <Card
+            key={part.path}
+            part={part}
+            showFolder={!folder.value}
+            onOpen={() => void choose(part.path)}
+            onMenu={(x, y) => (menu.value = { part, x, y })}
+          />
+        ))}
+        {!shown.length && (
+          <p class="mx-1 my-6 text-ink-dim">
+            {query.value
+              ? `Nothing matches “${query.value}”.`
+              : projects?.parts.length
+                ? "This folder has no parts. New part puts one here."
+                : "Nothing here yet."}
+          </p>
+        )}
       </div>
 
-      <footer
-        class="flex items-center justify-between gap-3 h-10 px-[18px] border-t border-line
-               text-ink-dim font-mono text-[11px]"
-      >
+      <footer class="flex flex-col gap-0.5 px-3 py-2 border-t border-line text-ink-dim text-tiny">
+        {/* Only while a search or a folder narrows the list: otherwise "All parts" already says it. */}
+        {shown.length !== total && (
+          <span>
+            {shown.length} of {total} shown
+          </span>
+        )}
         <span
-          class="overflow-hidden text-ellipsis whitespace-nowrap"
+          class="overflow-hidden text-ellipsis whitespace-nowrap font-mono"
           {...tip({
             title: "Where the parts are",
             text: "The app and parcad serve keep every part as a file in one folder, which you and any agent on MCP read and write too. ParCAD web has no folder and no MCP: its parts stay in that browser.",
@@ -251,12 +224,6 @@ export function ProjectBrowser() {
         >
           {projects?.directory ?? ""}
         </span>
-        {/* Only while a search or a folder narrows the list: otherwise "All parts" already says it. */}
-        {shown.length !== total && (
-          <span>
-            {shown.length} of {total} shown
-          </span>
-        )}
       </footer>
 
       {menu.value && (
@@ -272,13 +239,9 @@ export function ProjectBrowser() {
         />
       )}
       <Dialogs asking={asking} telling={telling} />
-      </>
-      )}
-    </dialog>
+    </aside>
   );
 }
-
-// ---------------------------------------------------------------- the tree
 
 function Branch({
   entries,
@@ -380,7 +343,7 @@ function Card({
   onMenu: (x: number, y: number) => void;
 }) {
   const open = S.openPath.value === part.path;
-  // The folder is worth showing only when the grid is mixing folders.
+  // The folder is worth showing only when the list is mixing folders.
   const where = showFolder && parentOf(part.path) ? `${parentOf(part.path)} · ` : "";
 
   return (
@@ -388,53 +351,53 @@ function Card({
       draggable
       class={[
         // A query hook, not styling: `browser-card` is how the desktop
-        // end-to-end suite finds a part in the grid, and nothing in CSS matches
+        // end-to-end suite finds a part in the list, and nothing in CSS matches
         // it. Renaming it is a test change, not a refactor.
-        "browser-card group relative overflow-hidden rounded-xl bg-panel-2 border",
-        open ? "border-accent" : "border-line hover:border-[#38455c]",
+        "browser-card group relative mb-1 rounded-md border",
+        open ? "border-accent bg-panel-2" : "border-transparent hover:bg-panel-2",
       ].join(" ")}
       onDragStart={(e) => e.dataTransfer?.setData("text/parcad-part", part.path)}
     >
       <button
         type="button"
         aria-label={`Open ${part.title} (${part.path})`}
-        class="block w-full text-left cursor-pointer"
+        class="flex w-full items-center gap-2.5 p-1.5 pr-8 text-left cursor-pointer"
         onClick={onOpen}
       >
         <Thumbnail part={part} />
-        <span class="block px-2.5 pt-2 pb-0.5 overflow-hidden text-ellipsis whitespace-nowrap">
-          {part.title}
-        </span>
-        <span class="block px-2.5 pb-2.5 text-ink-dim font-mono text-[10.5px]">
-          {where}
-          {when(part.modified)}
-          {!part.bundle && (
-            <>
-              {" "}
-              <Chip
-                variant="note"
-                {...tip({
-                  title: "A loose script",
-                  text: "A .js file rather than a .parcad folder, so it has no title, description or thumbnail of its own. Convert it from the ··· menu.",
-                })}
-              >
-                .js
-              </Chip>
-            </>
-          )}
-          {part.tags.map((tag) => (
-            <Fragment key={tag}>
-              {" "}
-              <Chip>{tag}</Chip>
-            </Fragment>
-          ))}
+        <span class="flex min-w-0 flex-col">
+          <span class="overflow-hidden text-ellipsis whitespace-nowrap">{part.title}</span>
+          <span class="overflow-hidden text-ellipsis whitespace-nowrap text-ink-dim text-tiny">
+            {where}
+            {when(part.modified)}
+            {!part.bundle && (
+              <>
+                {" "}
+                <Chip
+                  variant="note"
+                  {...tip({
+                    title: "A loose script",
+                    text: "A .js file rather than a .parcad folder, so it has no title, description or thumbnail of its own. Convert it from the ··· menu.",
+                  })}
+                >
+                  .js
+                </Chip>
+              </>
+            )}
+            {part.tags.map((tag) => (
+              <Fragment key={tag}>
+                {" "}
+                <Chip>{tag}</Chip>
+              </Fragment>
+            ))}
+          </span>
         </span>
       </button>
       <button
         type="button"
         aria-label={`More actions for ${part.title}`}
-        class="absolute top-2 right-2 px-[7px] leading-5 rounded-md border border-line
-               bg-[rgb(16_18_22/0.78)] text-ink cursor-pointer
+        class="absolute top-1/2 -translate-y-1/2 right-1.5 px-[7px] leading-5 rounded-md border border-line
+               bg-panel text-ink cursor-pointer
                opacity-0 group-hover:opacity-100 focus:opacity-100"
         onClick={(e) => {
           e.stopPropagation();
@@ -484,11 +447,11 @@ function Thumbnail({ part }: { part: ProjectPart }) {
   }, [part.path, key]);
 
   return (
-    <span ref={box} class="flex h-[108px] items-center justify-center overflow-hidden bg-well border-b border-line">
+    <span ref={box} class="flex flex-none w-14 h-[42px] items-center justify-center overflow-hidden rounded-sm bg-well">
       {url.value ? (
         <img src={url.value} alt="" class="w-full h-full object-cover" />
       ) : (
-        <span class="text-ink-dim text-[22px] uppercase tracking-[0.06em] opacity-45">
+        <span class="text-ink-dim text-small uppercase tracking-[0.06em] opacity-45">
           {part.title.slice(0, 2)}
         </span>
       )}

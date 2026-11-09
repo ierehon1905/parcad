@@ -63,18 +63,17 @@ function OpenPart() {
       class="flex items-center gap-2 max-w-[260px] px-2.5 py-1 bg-panel-2 text-ink
              border border-line rounded-md cursor-pointer hover:border-accent"
       {...tip({
-        title: "Browse parts",
+        title: "Parts",
         key: "⌘O",
         code: path,
-        text: "Every part there is. Where they are kept, and who else reads them, is the line at the foot of the picker.",
+        text: "Shows the parts beside the editor. Where they are kept, and who else reads them, is the line at the foot of that list.",
       })}
-      onClick={() => (S.browserOpen.value = true)}
+      onClick={() => engine.showParts()}
     >
       <Icon name="folder" class="size-4 shrink-0 text-ink-dim" />
       <span class="overflow-hidden text-ellipsis whitespace-nowrap">
         {path ? engine.titleFor(path) : "no part"}
       </span>
-      <Icon name="chevron" class="size-4 shrink-0 text-ink-dim" />
     </button>
   );
 }

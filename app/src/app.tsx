@@ -34,6 +34,7 @@ export function App() {
       <Titlebar />
       <UpdateBar />
       <main class="flex flex-1 min-h-0">
+        <ProjectBrowser />
         {/* Hidden, never unmounted: CodeMirror owns the document and the
             evaluation cycle starts with it, so a window showing only the part
             is still building that part from the source it holds. */}
@@ -52,7 +53,6 @@ export function App() {
         {S.codeVisible.value && <Splitter />}
         <ViewportPane />
       </main>
-      <ProjectBrowser />
       <TooltipLayer />
     </div>
   );
@@ -121,7 +121,9 @@ function keys() {
     }
     if (key === "o") {
       e.preventDefault();
-      S.browserOpen.value = true;
+      // A second ⌘O with the search already taking keys hides the parts again.
+      if (S.browserOpen.peek() && document.activeElement?.closest("#parts")) S.browserOpen.value = false;
+      else engine.showParts();
       return;
     }
     if (key === "s") {

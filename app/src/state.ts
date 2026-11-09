@@ -490,6 +490,7 @@ export const viewportRef: { current: Viewport | undefined } = { current: undefin
 
 /** Only a hidden editor is written down; showing the code is the default. */
 const CODE_VISIBLE = "parcad.code.visible";
+const PARTS_VISIBLE = "parcad.parts.visible";
 
 /**
  * Whether the source is on screen at all.
@@ -504,8 +505,20 @@ export const codeVisible = signal(stored(CODE_VISIBLE) !== "0");
 
 codeVisible.subscribe((visible) => store(CODE_VISIBLE, visible ? null : "0"));
 
-/** Whether the parts picker is open. */
-export const browserOpen = signal(false);
+/**
+ * Whether the parts sidebar is shown, remembered per browser. Shown by default
+ * in a window wide enough to keep the editor and the view beside it.
+ */
+export const browserOpen = signal(
+  stored(PARTS_VISIBLE) === null
+    ? typeof window !== "undefined" && window.innerWidth >= 1200
+    : stored(PARTS_VISIBLE) === "1",
+);
+
+browserOpen.subscribe((visible) => store(PARTS_VISIBLE, visible ? "1" : "0"));
+
+/** Bumped each time the parts are asked for, so the sidebar's search takes the keys again. */
+export const browserAsked = signal(0);
 
 export function setStatus(text: string, tone: Tone = "") {
   status.value = { text, tone };
