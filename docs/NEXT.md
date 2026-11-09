@@ -267,7 +267,7 @@ and in the next two sections.
 | 2 | `allow_failing` is taken on the model's own word | 7 | ★★★ | S | Opus |
 | 3 | `check_motion` — **done 2026-11-05**, as `turns` and `slides` checks | 7 | ★★★ | L | Fable, high |
 | 4 | `edit_part` refuses with an empty reason — **done 2026-11-09**: a brief over its envelope opened the door and named nothing | 6 | ★★ | S | Opus |
-| 5 | a list argument sent as a JSON string is refused | 6 | ★★ | S | Opus |
+| 5 | a list argument sent as a JSON string is refused — **done 2026-11-09** | 6 | ★★ | S | Opus |
 | 6 | field runs measure Haiku 4.5, not the current Haiku | 6 | ★★ | S | Opus |
 | 7 | a right part the model cannot verify goes out unvouched | 5 | ★★ | M | Opus |
 | 8 | a DSL name as a local is a parse error | 5 | ★★ | S | Opus |
@@ -307,7 +307,10 @@ and in the next two sections.
   GLM sent `points[0]` as `"[[0"`; each is refused with a correct message and
   retried. When a list parameter arrives as a string that parses as that list,
   read it — `parcad call` already coerces `--set` by schema; the MCP door can
-  do the same.
+  do the same. *Done 2026-11-09:* `arguments::unstring` reads a list or an
+  object that arrives as its own JSON text, wherever the schema wants that and
+  no string. It runs only after serde refuses the arguments, so a well-formed
+  call costs nothing extra; `"[[0"` still gets the refusal that names it.
 - **Field runs measure Haiku 4.5, not the current Haiku.** `field/run-case.sh:19`
   and `field/run-suite.sh:35` pin `claude-haiku-4-5-20251001`; `haiku` now
   resolves to `claude-haiku-5-5`, which built 21/21 right parts on ParCAD where

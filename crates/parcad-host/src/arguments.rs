@@ -40,10 +40,18 @@ impl<P: JsonSchema> JsonSchema for Args<P> {
 impl<'de, P: DeserializeOwned + JsonSchema> Deserialize<'de> for Args<P> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let value = Value::deserialize(deserializer)?;
-        match serde_json::from_value::<P>(value.clone()) {
-            Ok(parsed) => Ok(Args(parsed)),
-            Err(error) => Err(D::Error::custom(explain::<P>(&value, &error.to_string()))),
+        let error = match serde_json::from_value::<P>(value.clone()) {
+            Ok(parsed) => return Ok(Args(parsed)),
+            Err(error) => error,
+        };
+        let root = schema_of::<P>();
+        let mut read = value.clone();
+        if unstring(&root, &root, &mut read) {
+            if let Ok(parsed) = serde_json::from_value::<P>(read) {
+                return Ok(Args(parsed));
+            }
         }
+        Err(D::Error::custom(explain(&root, &value, &error.to_string())))
     }
 }
 
@@ -75,17 +83,63 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("file", "filename"),
 ];
 
-/// serde's refusal, explained: which field of which argument, what was meant,
-/// and what the argument looks like. Falls back to serde's own words when the
-/// walk finds nothing, which is a shape the schema does not describe.
-fn explain<P: JsonSchema>(value: &Value, serde_error: &str) -> String {
-    let root = serde_json::to_value(
+/// The schema `tools/list` publishes for `P`.
+fn schema_of<P: JsonSchema>() -> Value {
+    serde_json::to_value(
         schemars::generate::SchemaSettings::draft2020_12()
             .into_generator()
             .into_root_schema_for::<P>(),
     )
-    .unwrap_or_default();
-    check("", &root, &root, value).unwrap_or_else(|| serde_error.to_string())
+    .unwrap_or_default()
+}
+
+/// serde's refusal, explained: which field of which argument, what was meant,
+/// and what the argument looks like. Falls back to serde's own words when the
+/// walk finds nothing, which is a shape the schema does not describe.
+fn explain(root: &Value, value: &Value, serde_error: &str) -> String {
+    check("", root, root, value).unwrap_or_else(|| serde_error.to_string())
+}
+
+/// Read a list or an object that arrived as its own JSON text — `views:
+/// "[\"iso\", \"top\"]"`, as some clients send one — as what it parses to,
+/// wherever the schema wants that and nothing else would read the string.
+/// Whether anything changed; a string that does not parse is left for the
+/// refusal to name.
+fn unstring(schema: &Value, root: &Value, value: &mut Value) -> bool {
+    let schema = resolve(schema, root);
+    if let Some(alternatives) = schema.get("anyOf").and_then(Value::as_array) {
+        let mut real = alternatives.iter().filter(|alt| !allows(alt, "null"));
+        return match (real.next(), real.next()) {
+            (Some(only), None) => unstring(only, root, value),
+            _ => false,
+        };
+    }
+    let wants_list = schema.get("items").is_some() || allows(&schema, "array");
+    let wants_object = schema.get("properties").is_some() || allows(&schema, "object");
+    let mut changed = false;
+    if let Value::String(text) = value {
+        if !allows(&schema, "string") {
+            let parsed = serde_json::from_str::<Value>(text.trim())
+                .ok()
+                .filter(|parsed| (parsed.is_array() && wants_list) || (parsed.is_object() && wants_object));
+            if let Some(parsed) = parsed {
+                *value = parsed;
+                changed = true;
+            }
+        }
+    }
+    if let (Some(properties), Some(given)) = (schema.get("properties").and_then(Value::as_object), value.as_object_mut()) {
+        for (key, inner) in given.iter_mut() {
+            if let Some(field) = properties.get(key) {
+                changed |= unstring(field, root, inner);
+            }
+        }
+    } else if let (Some(items), Some(given)) = (schema.get("items"), value.as_array_mut()) {
+        for inner in given.iter_mut() {
+            changed |= unstring(items, root, inner);
+        }
+    }
+    changed
 }
 
 /// Walk `value` against `schema`, and describe the first thing wrong with it.
@@ -447,6 +501,22 @@ mod tests {
 
     fn refusal(value: Value) -> String {
         serde_json::from_value::<Args<Request>>(value).err().expect("refused").to_string()
+    }
+
+    /// Some clients send a list as its own JSON text; it is read as the list,
+    /// in a nested object too. A string that does not parse as one is still
+    /// refused, and a field that reads a string keeps it.
+    #[test]
+    fn a_list_sent_as_its_json_text_is_read_as_the_list() {
+        let read = |value: Value| serde_json::from_value::<Args<Request>>(value).map(|Args(request)| request);
+        let request = read(serde_json::json!({ "script": "x", "views": "[\"iso\", \"top\"]" })).expect("read");
+        assert_eq!(request.views, Some(vec!["iso".to_string(), "top".to_string()]));
+        let request = read(serde_json::json!({ "script": "x", "section": "{\"axis\": \"z\", \"at_mm\": 4}" })).expect("read");
+        assert_eq!(request.section.map(|cut| (cut.axis, cut.at_mm)), Some(("z".to_string(), Some(4.0))));
+        let message = refusal(serde_json::json!({ "script": "x", "views": "[[0" }));
+        assert!(message.contains("`views` is"), "{message}");
+        let request = read(serde_json::json!({ "script": "[\"not\", \"a list\"]" })).expect("read");
+        assert_eq!(request.script, "[\"not\", \"a list\"]", "a string field keeps its string");
     }
 
     /// The failure this module exists for: the field is refused, and the one
