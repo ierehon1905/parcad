@@ -130,7 +130,8 @@ async function openSignIn(client: string) {
   const html = await page.text();
   expect(html).toContain("Edge test client");
   const handle = /name="handle" value="([^"]+)"/.exec(html)![1];
-  return { jar, handle, html };
+  const back = /name="back" value="([^"]+)"/.exec(html)![1].replaceAll("&amp;", "&");
+  return { jar, handle, back, html };
 }
 
 const form = (fields: Record<string, string>) => ({
@@ -229,8 +230,8 @@ test("INVITE_ONLY lets in listed addresses only, from the variable or the namesp
 
 test("a sign-in by email takes the code it sent, after a wrong one", async () => {
   const client = await register();
-  const { jar, handle } = await openSignIn(client);
-  const asked = await go(jar, `${EDGE}/authorize`, form({ handle, method: "email", email: ALLOWED }));
+  const { jar, handle, back } = await openSignIn(client);
+  const asked = await go(jar, `${EDGE}/authorize`, form({ handle, back, method: "email", email: ALLOWED }));
   expect(asked.status).toBe(200);
   const state = /name="state" value="([^"]+)"/.exec(await asked.text())![1];
   const deadline = Date.now() + 10_000;
@@ -243,10 +244,28 @@ test("a sign-in by email takes the code it sent, after a wrong one", async () =>
   const wrong = code === "000000" ? "111111" : "000000";
   const missed = await go(jar, `${EDGE}/callback/email?${new URLSearchParams({ state, code: wrong })}`);
   expect(missed.status).toBe(400);
-  expect(await missed.text()).toContain("That code is not right");
+  const again = await missed.text();
+  expect(again).toContain("That code is not right");
+  expect(again).toContain(ALLOWED);
+  expect(again).toContain("Use another address");
   const right = await go(jar, `${EDGE}/callback/email?${new URLSearchParams({ state, code: code! })}`);
   expect(right.status).toBe(302);
   expect((await tokenFor(client, right.headers.get("location")!)).access_token).toBeTruthy();
+});
+
+test("the code page leads back to a sign-in page for the same client, and nowhere else", async () => {
+  const client = await register();
+  const { jar, handle, back } = await openSignIn(client);
+  const asked = await go(jar, `${EDGE}/authorize`, form({ handle, back, method: "email", email: "back@example.test" }));
+  const link = /<a href="(\/authorize\?[^"]+)">Use another address</.exec(await asked.text())![1].replaceAll("&amp;", "&");
+  expect(link).toBe(back);
+  const reopened = await go(jar, `${EDGE}${link}`);
+  expect(reopened.status).toBe(200);
+  expect(await reopened.text()).toContain("Edge test client");
+
+  const elsewhere = await openSignIn(client);
+  const forged = await go(elsewhere.jar, `${EDGE}/authorize`, form({ handle: elsewhere.handle, back: "https://evil.test/", method: "email", email: "forged@example.test" }));
+  expect(await forged.text()).not.toContain("evil.test");
 });
 
 test("the host's health and front page pass through", async () => {

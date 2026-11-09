@@ -135,7 +135,7 @@ fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router
     };
     // Every `/api` route too, not `/mcp` alone: an agent service builds and
     // exports a part over them. No frontend, which could carry no bearer.
-    let page = front_page(accounts.links().host(), accounts.edge().is_some());
+    let page = front_page(accounts.links().host(), accounts.edge().is_some(), accounts.policy().limits.part_lifetime);
     let front = move || std::future::ready(Html(page.clone()));
     // Each `/api` request is admitted as a tool call is; `/mcp` admits per
     // tool, inside `Parcad::call_tool`, where a limit is a tool result.
@@ -159,18 +159,19 @@ fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router
 
 /// What a hosted host is and how to connect to it, for whoever opens its
 /// address: signing in, behind an edge, or a token otherwise. Its icon links
-/// are load-bearing: docs/HOSTING.md, "The connector's icon".
-fn front_page(public: &tenant::PublicHost, signs_in: bool) -> String {
+/// are load-bearing: docs/HOSTING.md, "The connector's icon". It wears the
+/// edge's sign-in pages' styles (`edge/src/pages.ts`), which are parcad.dev's.
+fn front_page(public: &tenant::PublicHost, signs_in: bool, part_lifetime: Option<std::time::Duration>) -> String {
     let connect = if signs_in {
-        format!(
-            "Add <code>{public}/mcp</code> to Claude, ChatGPT, Cursor or another MCP client, and sign in \
-             when it asks: with Google, GitHub or a code sent by email."
-        )
+        "Add this address to Claude, ChatGPT, Cursor or another MCP client, and sign in when it asks: \
+         with Google, GitHub or a code sent by email."
     } else {
-        format!(
-            "MCP clients connect to <code>{public}/mcp</code> with <code>Authorization: Bearer \
-             &lt;token&gt;</code>, a token from whoever runs this server."
-        )
+        "Add this address to an MCP client with the header <code>Authorization: Bearer &lt;token&gt;</code>, \
+         using a token from whoever runs this server."
+    };
+    let kept = match part_lifetime {
+        Some(lifetime) => format!("a part unused for {} days is deleted", lifetime.as_secs().div_ceil(86_400)),
+        None => "parts are kept until their account deletes them".to_string(),
     };
     format!(
         r#"<!doctype html>
@@ -183,17 +184,36 @@ fn front_page(public: &tenant::PublicHost, signs_in: bool) -> String {
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&display=swap">
-<style>body{{background:#000;color:#eef1f5;font:16px/1.55 "Geist",ui-sans-serif,system-ui,sans-serif;max-width:40em;margin:4em auto;padding:0 16px}}
-h1{{font-weight:500}}p{{color:#9aa2af}}code{{color:#eef1f5}}a{{color:#6ea8fe}}</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@400&display=swap">
+<style>
+:root{{--bg:#000;--panel:#0a0b0d;--field:#16181c;--line:rgb(255 255 255/.1);--line-strong:rgb(255 255 255/.18);--ink:#eef1f5;--dim:#9aa2af;--accent:#6ea8fe;
+--sans:"Geist",ui-sans-serif,system-ui,sans-serif;--mono:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}}
+*{{box-sizing:border-box}}
+body{{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans);-webkit-font-smoothing:antialiased;padding:16px}}
+main{{width:100%;max-width:420px;background:var(--panel);border:1px solid var(--line);padding:28px}}
+.brand{{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:500;letter-spacing:-.025em}}
+.brand img{{width:32px;height:32px}}
+h1{{font-size:19px;font-weight:500;margin:20px 0 6px}}
+p{{margin:0 0 16px;color:var(--dim)}}
+code{{font:13px var(--mono);color:var(--ink)}}
+.address{{display:flex;gap:8px;margin:0 0 20px}}
+.address input{{flex:1;min-width:0;height:36px;font:13px var(--mono);border:1px solid var(--line-strong);background:var(--field);color:var(--ink);padding:0 10px;box-shadow:inset 0 1px 3px rgb(0 0 0/.7)}}
+.address button{{height:36px;padding:0 14px;font:400 11.5px/1 var(--mono);letter-spacing:.05em;text-transform:uppercase;border:1px solid var(--accent);background:var(--accent);color:#000;cursor:pointer}}
+.address button:hover{{background:#8dbbff}}
+input:focus,button:focus-visible{{outline:1px solid var(--accent);outline-offset:1px}}
+.small{{font-size:13px;margin:0}}
+a{{color:var(--accent);text-underline-offset:3px}}
+</style>
 </head>
-<body>
-<h1>ParCAD</h1>
-<p>A hosted ParCAD server. {connect}</p>
-<p>Parts here are a workspace, not an archive — download what you want to keep. Nothing is backed
-up, a part left unused for a while is deleted, and every account has limits on builds and storage.</p>
-<p>ParCAD also runs on your own computer, free and with no account: <a href="https://parcad.dev">parcad.dev</a>.</p>
-</body>
+<body><main>
+<div class="brand"><img src="/favicon.svg" alt="">ParCAD</div>
+<h1>Hosted ParCAD</h1>
+<p>{connect}</p>
+<div class="address"><input id="address" value="{public}/mcp" readonly aria-label="MCP address" onclick="this.select()"><button type="button" onclick="const a=document.getElementById('address');a.select();const done=()=>{{this.textContent='Copied'}};navigator.clipboard.writeText(a.value).then(done,()=>{{if(document.execCommand('copy'))done()}})">Copy</button></div>
+<p>Download the parts you want to keep: nothing here is backed up, {kept}, and every account has limits on builds and storage.</p>
+<p class="small">ParCAD also runs on your own computer, free and with no account: <a href="https://parcad.dev">parcad.dev</a>.</p>
+</main></body>
 </html>
 "#
     )
@@ -883,6 +903,7 @@ mod tests {
         let page = exchange(port, "GET", "/", &[], "");
         assert_eq!(page.status, 200, "{}", page.body);
         assert!(page.body.contains("sign in") && page.body.contains("a code sent by email"), "{}", page.body);
+        assert!(page.body.contains("a part unused for 30 days is deleted"), "{}", page.body);
         assert!(!page.body.contains("Bearer"), "{}", page.body);
         let _ = std::fs::remove_dir_all(&dir);
     }

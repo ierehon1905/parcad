@@ -63,10 +63,19 @@ export async function sendRefusal(env: Env, email: string): Promise<string | nul
   return null;
 }
 
-/** Send a six-digit code for the sign-in waiting under `state`. */
-export async function sendCode(env: Env, email: string, state: string): Promise<void> {
+/** A code waiting under `state`: its hash, the tries spent, and what the page around it shows. */
+interface Pending {
+  hash: string;
+  tries: number;
+  email: string;
+  back: string;
+}
+
+/** Send a six-digit code for the sign-in waiting under `state`; `back` is its sign-in page. */
+export async function sendCode(env: Env, email: string, state: string, back: string): Promise<void> {
   const code = String(crypto.getRandomValues(new Uint32Array(1))[0] % 1_000_000).padStart(6, "0");
-  await env.ACCOUNTS.put(`code:${state}`, JSON.stringify({ hash: await sha256(code), tries: 0 }), { expirationTtl: CODE_TTL_S });
+  const pending: Pending = { hash: await sha256(code), tries: 0, email, back };
+  await env.ACCOUNTS.put(`code:${state}`, JSON.stringify(pending), { expirationTtl: CODE_TTL_S });
   await env.ACCOUNTS.put(`sent-minute:${email}`, "1", { expirationTtl: 60 });
   const sent = Number((await env.ACCOUNTS.get(`sent-hour:${email}`)) ?? "0");
   await env.ACCOUNTS.put(`sent-hour:${email}`, String(sent + 1), { expirationTtl: 3600 });
@@ -87,10 +96,16 @@ export async function sendCode(env: Env, email: string, state: string): Promise<
   if (!sentMail.ok) throw new Error(`the mail service answered ${sentMail.status}`);
 }
 
+/** The address and sign-in page of a code still waiting under `state`. */
+export async function pendingCode(env: Env, state: string): Promise<{ email: string; back: string } | null> {
+  const stored = await env.ACCOUNTS.get<Pending>(`code:${state}`, "json");
+  return stored && { email: stored.email, back: stored.back };
+}
+
 /** Whether `code` is the one sent for `state`: `ok` uses it up, five wrong tries end it. */
 export async function checkCode(env: Env, state: string, code: string): Promise<"ok" | "wrong" | "gone"> {
   const key = `code:${state}`;
-  const stored = await env.ACCOUNTS.get<{ hash: string; tries: number }>(key, "json");
+  const stored = await env.ACCOUNTS.get<Pending>(key, "json");
   if (!stored) return "gone";
   if (stored.hash === (await sha256(code.trim()))) {
     await env.ACCOUNTS.delete(key);

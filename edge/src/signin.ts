@@ -12,7 +12,7 @@
 
 import { AuthorizationError, CimdFetchError, type AuthRequest } from "@cloudflare/workers-oauth-provider";
 
-import { accountFor, allowed, checkCode, looksLikeEmail, normal, sendCode, sendRefusal } from "./accounts";
+import { accountFor, allowed, checkCode, looksLikeEmail, normal, pendingCode, sendCode, sendRefusal } from "./accounts";
 import { type Env, testSignIn } from "./env";
 import { untouched } from "./forward";
 import { enterCode, inviteOnly, problem, signIn } from "./pages";
@@ -20,11 +20,12 @@ import { authorizeUrl, configured, verifiedEmail } from "./providers";
 
 const HOST_PATHS = new Set(["/", "/api/health", "/favicon.ico", "/favicon.svg", "/favicon-32.png", "/apple-touch-icon.png"]);
 
+/** What a sign-in carries through its way in; `back` is the page it started on. */
 type Upstream =
-  | { way: "google"; verifier: string }
-  | { way: "github"; verifier: string }
-  | { way: "email"; email: string }
-  | { way: "test"; email: string };
+  | { way: "google"; verifier: string; back: string }
+  | { way: "github"; verifier: string; back: string }
+  | { way: "email"; email: string; back: string }
+  | { way: "test"; email: string; back: string };
 
 function html(body: string, status = 200, headers = new Headers()): Response {
   headers.set("content-type", "text/html; charset=utf-8");
@@ -52,8 +53,10 @@ async function showSignIn(request: Request, env: Env): Promise<Response> {
   // Described before the consent begins: a failed client lookup then leaves nothing in KV.
   const described = await env.OAUTH_PROVIDER.describeConsent(auth);
   const consent = await env.OAUTH_PROVIDER.beginConsent(auth);
+  const url = new URL(request.url);
   const page = signIn({
     handle: consent.handle,
+    back: url.pathname + url.search,
     client: described.clientName,
     domain: described.clientDomain,
     google: configured(env, "google"),
@@ -67,6 +70,7 @@ async function startSignIn(request: Request, env: Env): Promise<Response> {
   const form = await request.formData();
   const handle = String(form.get("handle") ?? "");
   const method = String(form.get("method") ?? "");
+  const back = String(form.get("back") ?? "");
   if (method === "deny") {
     const denied = await env.OAUTH_PROVIDER.denyConsent(request, handle);
     return new Response(null, { status: 302, headers: denied.headers });
@@ -88,15 +92,15 @@ async function startSignIn(request: Request, env: Env): Promise<Response> {
   const approved = await env.OAUTH_PROVIDER.approveConsent(request, handle);
   if (method === "google" || method === "github") {
     const verifier = crypto.randomUUID() + crypto.randomUUID();
-    const data: Upstream = method === "google" ? { way: "google", verifier } : { way: "github", verifier };
+    const data: Upstream = method === "google" ? { way: "google", verifier, back } : { way: "github", verifier, back };
     const upstream = await env.OAUTH_PROVIDER.beginUpstream(approved.request, { data, headers: approved.headers });
     return redirect(await authorizeUrl(env, method, upstream.state, verifier), upstream.headers);
   }
-  const data: Upstream = method === "email" ? { way: "email", email } : { way: "test", email };
+  const data: Upstream = method === "email" ? { way: "email", email, back } : { way: "test", email, back };
   const upstream = await env.OAUTH_PROVIDER.beginUpstream(approved.request, { data, headers: approved.headers });
   if (method === "test") return redirect(`/callback/test?state=${encodeURIComponent(upstream.state)}`, upstream.headers);
-  await sendCode(env, email, upstream.state);
-  return html(enterCode(upstream.state, email), 200, upstream.headers);
+  await sendCode(env, email, upstream.state, back);
+  return html(enterCode(upstream.state, email, back), 200, upstream.headers);
 }
 
 /** The last step of every way in: an address, then an account and a code for the client. */
@@ -106,8 +110,8 @@ async function finish(request: Request, env: Env, way: string): Promise<Response
     const state = url.searchParams.get("state") ?? "";
     const verdict = await checkCode(env, state, url.searchParams.get("code") ?? "");
     if (verdict === "wrong") {
-      const pending = await env.ACCOUNTS.get(`code:${state}`);
-      if (pending) return html(enterCode(state, "your address", "That code is not right. Check it and try again."), 400);
+      const pending = await pendingCode(env, state);
+      if (pending) return html(enterCode(state, pending.email, pending.back, "That code is not right. Check it and try again."), 400);
     }
     if (verdict !== "ok") return html(problem("That code has run out", "Ask for a new one by starting the sign-in again."), 400);
   }
@@ -127,7 +131,7 @@ async function finish(request: Request, env: Env, way: string): Promise<Response
   } else {
     email = data.email;
   }
-  if (!(await allowed(env, email))) return html(inviteOnly(email), 403, resumed.headers);
+  if (!(await allowed(env, email))) return html(inviteOnly(email, data.back), 403, resumed.headers);
   const account = await accountFor(env, email);
   const { redirectTo } = await env.OAUTH_PROVIDER.completeAuthorization({
     request: resumed.request,
