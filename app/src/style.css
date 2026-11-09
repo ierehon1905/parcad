@@ -28,7 +28,8 @@
   --color-bg: #000;
   --color-panel: #0a0b0d;
   --color-panel-2: #121418;
-  --color-line: rgb(255 255 255 / 0.1);
+  /* Opaque, unlike the landing's white at 10 %: two borders meeting at a corner would stack. */
+  --color-line: #222428;
   --color-ink: #eef1f5;
   --color-ink-dim: #9aa2af;
   --color-accent: #6ea8fe;
