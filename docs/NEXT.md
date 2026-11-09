@@ -281,7 +281,7 @@ and in the next two sections.
 | 16 | `wait_s` on one script tool only — **done 2026-11-09** | 2 | ★ | S | Opus |
 | 17 | `.union()` given an edge selection says "not a function" — **done 2026-11-09** | 2 | ★ | S | Opus |
 | 18 | a vertex treatment's `edges` is not what its `.expect` counts | 2 | ★ | S | Opus |
-| 19 | the editor never shows `mixed_corners` | 2 | ★ | S | Opus |
+| 19 | the editor never shows `mixed_corners` — **done 2026-11-09** | 2 | ★ | S | Opus |
 | 20 | the area integral costs a fitted ring 0.76 s | 2 | ★ | M | Opus |
 
 - **`allow_failing` is taken on the model's own word.** The 0 mm-wall boss
@@ -391,7 +391,10 @@ and in the next two sections.
   types a treatment without it and the treatment hover
   (`app/src/treatment-info.ts`) says nothing, so a person who writes the
   retainer's fillet by hand gets no sign it took the rim too. Show it in the
-  hover beside the edge count.
+  hover beside the edge count. *Done 2026-11-09:* the hover reads it from the last
+  evaluation, so it shows before the kernel's target arrives: a warn row,
+  "1 concave, 1 convex; dihedral: \"concave\" or \"convex\" keeps one
+  kind", under the edge count.
 - **The head-to-head, finished: 288 graded trials.** Haiku 4.5
   (`claude-haiku-4-5-20251001`, not the current Haiku), six briefs, four
   trials each: ParCAD 23/24 right and 1 wrong part reported done; text-to-cad

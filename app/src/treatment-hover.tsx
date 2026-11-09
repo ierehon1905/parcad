@@ -55,6 +55,11 @@ export interface TreatmentHoverSource {
    */
   resolve?(node: number): Promise<ResolvedTarget>;
   /**
+   * The last evaluation's sentence for a selector that caught inside and
+   * outside corners together, which agents read in every reply.
+   */
+  mixedCorners?(node: number): string | undefined;
+  /**
    * What TypeScript knows at this offset, and the span it knows it about.
    *
    * Optional for the same reason: the language service starts on demand, and
@@ -119,6 +124,7 @@ export function treatmentHover(source: TreatmentHoverSource): Extension {
                 method={treatment?.method}
                 target={target}
                 pending={pending}
+                mixedCorners={treatment && source.mixedCorners?.(treatment.node)}
                 view={view}
                 // Recomputed from the live document: the call may have moved
                 // since the tooltip opened, and an edit applied at a stale
@@ -183,6 +189,7 @@ function HoverCard({
   method,
   target,
   pending,
+  mixedCorners,
   view,
   range,
 }: {
@@ -191,6 +198,7 @@ function HoverCard({
   method?: string;
   target?: ResolvedTarget;
   pending: boolean;
+  mixedCorners?: string;
   view: EditorView;
   range?: { from: number; to: number };
 }) {
@@ -211,7 +219,7 @@ function HoverCard({
             <div class="text-accent mb-1">{treatmentTitle(node, method)}</div>
             {/* Short labels, long values: give the value column the slack. */}
             <dl class="grid m-0 gap-x-2.5 gap-y-px grid-cols-[max-content_1fr]">
-              {treatmentRows(node, target, pending).map((row) => (
+              {treatmentRows(node, target, pending, mixedCorners).map((row) => (
                 <Fragment key={row.label}>
                   <dt class="text-ink-dim">{row.label}</dt>
                   {/* The data says ok or warn; only this file decides the colour. */}

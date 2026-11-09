@@ -109,3 +109,16 @@ function applied(call: string, callFrom: number, edit: { from: number; to: numbe
     call.slice(0, edit.from - callFrom) + edit.insert + call.slice(edit.to - callFrom)
   );
 }
+
+test("warns when the selector caught inside and outside corners together", () => {
+  const sentence =
+    '2 concave, 1 convex: this selector caught inside and outside corners together. Unless both were meant, add dihedral: "concave" to treat only the inside seams, or dihedral: "convex" for only the outside edges';
+  expect(treatmentRows(FILLET, target(), false, sentence).at(-1)).toEqual({
+    label: "mixed",
+    value: '2 concave, 1 convex; dihedral: "concave" or "convex" keeps one kind',
+    tone: "warn",
+  });
+  // Shown before the kernel answers too: it comes from the last evaluation.
+  expect(rows(FILLET, undefined, true, sentence).at(-1)).toStartWith("mixed: 2 concave, 1 convex");
+  expect(rows(FILLET, target()).some((row) => row.startsWith("mixed"))).toBe(false);
+});

@@ -244,7 +244,14 @@ export interface EvaluationSnapshot {
     extent_mm: [number, number, number];
     body?: string;
   }[];
-  treatments: { node: number; op: string; amount_mm: number; continuity?: string }[];
+  treatments: {
+    node: number;
+    op: string;
+    amount_mm: number;
+    continuity?: string;
+    /** Present when the selector caught inside and outside corners together. */
+    mixed_corners?: string;
+  }[];
   /** Shapes the root never reaches. Absent when there are none. */
   unused_nodes?: number;
   /** What the script reported with `note()`: requested, never measured. */

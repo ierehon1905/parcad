@@ -79,6 +79,7 @@ const hoverSource: TreatmentHoverSource = {
   callRange: (node) =>
     engine.treatmentRange(S.lastTreatments.value.find((t) => t.node === node)),
   resolve: engine.resolveTarget,
+  mixedCorners: (node) => S.snapshot.value?.treatments.find((t) => t.node === node)?.mixed_corners,
   info: (pos) => languageService.quickInfo(pos),
 };
 

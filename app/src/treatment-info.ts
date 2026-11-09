@@ -90,6 +90,7 @@ export function treatmentRows(
   node: TreatmentNode,
   target?: ResolvedTarget,
   pending = false,
+  mixedCorners?: string,
 ): InfoRow[] {
   const rows: InfoRow[] = [];
   const size = node.op === "chamfer" ? node.distance : node.radius;
@@ -133,6 +134,13 @@ export function treatmentRows(
     // is what a reader sees as a jump.
     rows.push({ label: "resolves", value: "…" });
     if (node.expect) rows.push({ label: "expect", value: `${node.expect.count} — …` });
+  }
+
+  // From the last evaluation rather than the kernel's target: the count before
+  // its colon is the part that fits a row, and the advice is the same every time.
+  if (mixedCorners) {
+    const counts = mixedCorners.split(":")[0];
+    rows.push({ label: "mixed", value: `${counts}; dihedral: "concave" or "convex" keeps one kind`, tone: "warn" });
   }
 
   return rows;
