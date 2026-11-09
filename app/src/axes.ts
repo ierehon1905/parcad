@@ -23,7 +23,13 @@ const ARMS: { label: string; axis: THREE.Vector3; colour: string }[] = [
 const SVG = "http://www.w3.org/2000/svg";
 
 export class AxisTriad {
-  private readonly arms: { line: SVGLineElement; text: SVGTextElement; group: SVGGElement; axis: THREE.Vector3 }[];
+  private readonly arms: {
+    halo: SVGLineElement;
+    line: SVGLineElement;
+    text: SVGTextElement;
+    group: SVGGElement;
+    axis: THREE.Vector3;
+  }[];
   private readonly svg: SVGSVGElement;
   private readonly inverse = new THREE.Quaternion();
   private readonly turned = new THREE.Vector3();
@@ -35,16 +41,16 @@ export class AxisTriad {
     this.svg.setAttribute("height", String(SIZE));
     this.svg.setAttribute("aria-hidden", "true");
     Object.assign(this.svg.style, { position: "absolute", right: "14px", bottom: "14px", pointerEvents: "none" });
-    // On the same dark glass as the other panels over the view, which a light backdrop needs.
-    const backing = document.createElementNS(SVG, "rect");
-    backing.setAttribute("width", String(SIZE));
-    backing.setAttribute("height", String(SIZE));
-    backing.setAttribute("rx", "4");
-    // Through `style`: a custom property is CSS, and an SVG attribute is not read as CSS everywhere.
-    Object.assign(backing.style, { fill: "var(--color-glass, #0a0b0d)", fillOpacity: "0.86" });
-    this.svg.append(backing);
     this.arms = ARMS.map(({ label, axis, colour }) => {
       const group = document.createElementNS(SVG, "g");
+      // A dark halo under each arm and letter, in place of a plate behind them: it reads on the
+      // window's light backdrop and vanishes on the chat viewer's dark one (Birman, information garbage).
+      const halo = document.createElementNS(SVG, "line");
+      halo.setAttribute("x1", String(CENTRE));
+      halo.setAttribute("y1", String(CENTRE));
+      halo.setAttribute("stroke-width", "5");
+      halo.setAttribute("stroke-linecap", "round");
+      halo.style.stroke = "rgb(0 0 0 / 0.35)";
       const line = document.createElementNS(SVG, "line");
       line.setAttribute("x1", String(CENTRE));
       line.setAttribute("y1", String(CENTRE));
@@ -57,11 +63,12 @@ export class AxisTriad {
       text.setAttribute("font-size", "12");
       text.setAttribute("font-weight", "600");
       text.style.fontFamily = "var(--font-sans, system-ui, sans-serif)";
+      Object.assign(text.style, { stroke: "rgb(0 0 0 / 0.45)", strokeWidth: "3px", paintOrder: "stroke" });
       text.setAttribute("text-anchor", "middle");
       text.setAttribute("dominant-baseline", "central");
-      group.append(line, text);
+      group.append(halo, line, text);
       this.svg.append(group);
-      return { line, text, group, axis };
+      return { halo, line, text, group, axis };
     });
     container.append(this.svg);
   }
@@ -74,12 +81,13 @@ export class AxisTriad {
       const v = this.turned.copy(arm.axis).applyQuaternion(this.inverse);
       const x = CENTRE + v.x * REACH;
       const y = CENTRE - v.y * REACH;
-      arm.line.setAttribute("x2", x.toFixed(1));
-      arm.line.setAttribute("y2", y.toFixed(1));
+      for (const stroke of [arm.halo, arm.line]) {
+        stroke.setAttribute("x2", x.toFixed(1));
+        stroke.setAttribute("y2", y.toFixed(1));
+      }
       arm.text.setAttribute("x", (CENTRE + v.x * (REACH + 8)).toFixed(1));
       arm.text.setAttribute("y", (CENTRE - v.y * (REACH + 8)).toFixed(1));
-      // An arm pointing away from the viewer is drawn fainter, so the triad reads as 3D.
-      arm.group.setAttribute("opacity", v.z < -0.05 ? "0.55" : "1");
+      // Depth is the drawing order alone: a fainter far arm fell under the contrast a label needs.
       depth.push({ group: arm.group, z: v.z });
     }
     depth.sort((a, b) => a.z - b.z);
