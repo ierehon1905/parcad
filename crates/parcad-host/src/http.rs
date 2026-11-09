@@ -127,7 +127,7 @@ fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router
             // The same application again, for a model rather than a person. It
             // reaches `service` through the same functions, and the scripts it
             // sends run in `script`'s sandbox rather than the webview.
-            .nest_service("/mcp", mcp::service(assets.clone(), None))
+            .nest_service("/mcp", mcp::service(assets.clone(), &[]))
             // Everything else is the frontend. Registered last and as a fallback so
             // no asset name can ever shadow an API route.
             .fallback(asset)
@@ -135,13 +135,13 @@ fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router
     };
     // Every `/api` route too, not `/mcp` alone: an agent service builds and
     // exports a part over them. No frontend, which could carry no bearer.
-    let page = front_page(accounts.links().host());
+    let page = front_page(accounts.links().host(), accounts.edge().is_some(), accounts.policy().limits.part_lifetime);
     let front = move || std::future::ready(Html(page.clone()));
     // Each `/api` request is admitted as a tool call is; `/mcp` admits per
     // tool, inside `Parcad::call_tool`, where a limit is a tool result.
     let guarded = api()
         .route_layer(axum::middleware::from_fn(admitted))
-        .nest_service("/mcp", mcp::service(assets.clone(), Some(accounts.links().host().authority())))
+        .nest_service("/mcp", mcp::service(assets.clone(), &accounts.hosts()))
         .layer(axum::middleware::from_fn_with_state(Arc::new(accounts), authenticate));
     // Unguarded, so a client looking for OAuth metadata hears that there is
     // none rather than a challenge it takes to mean "sign in".
@@ -157,31 +157,63 @@ fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router
         .fallback(no_route)
 }
 
-/// What a hosted host is and where an agent connects, for whoever opens its
-/// address. Its icon links are load-bearing: docs/HOSTING.md, "The connector's icon".
-fn front_page(public: &tenant::PublicHost) -> String {
+/// What a hosted host is and how to connect to it, for whoever opens its
+/// address: signing in, behind an edge, or a token otherwise. Its icon links
+/// are load-bearing: docs/HOSTING.md, "The connector's icon". It wears the
+/// edge's sign-in pages' styles (`edge/src/pages.ts`), which are parcad.dev's.
+fn front_page(public: &tenant::PublicHost, signs_in: bool, part_lifetime: Option<std::time::Duration>) -> String {
+    let connect = if signs_in {
+        "Add this address to Claude, ChatGPT, Cursor or another MCP client, and sign in when it asks: \
+         with Google, GitHub or a code sent by email."
+    } else {
+        "Add this address to an MCP client with the header <code>Authorization: Bearer &lt;token&gt;</code>, \
+         using a token from whoever runs this server."
+    };
+    let kept = match part_lifetime {
+        Some(lifetime) => format!("a part unused for {} days is deleted", lifetime.as_secs().div_ceil(86_400)),
+        None => "parts are kept until their account deletes them".to_string(),
+    };
     format!(
         r#"<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light dark">
+<meta name="color-scheme" content="dark">
 <title>ParCAD</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<style>body{{font:16px/1.5 system-ui,sans-serif;max-width:40em;margin:4em auto;padding:0 16px}}</style>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@400&display=swap">
+<style>
+:root{{--bg:#000;--panel:#0a0b0d;--field:#16181c;--line:rgb(255 255 255/.1);--line-strong:rgb(255 255 255/.18);--ink:#eef1f5;--dim:#9aa2af;--accent:#6ea8fe;
+--sans:"Geist",ui-sans-serif,system-ui,sans-serif;--mono:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}}
+*{{box-sizing:border-box}}
+body{{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--ink);font:15px/1.55 var(--sans);-webkit-font-smoothing:antialiased;padding:16px}}
+main{{width:100%;max-width:420px;background:var(--panel);border:1px solid var(--line);padding:28px}}
+.brand{{display:flex;align-items:center;gap:10px;font-size:15px;font-weight:500;letter-spacing:-.025em}}
+.brand img{{width:32px;height:32px}}
+h1{{font-size:19px;font-weight:500;margin:20px 0 6px}}
+p{{margin:0 0 16px;color:var(--dim)}}
+code{{font:13px var(--mono);color:var(--ink)}}
+.address{{display:flex;gap:8px;margin:0 0 20px}}
+.address input{{flex:1;min-width:0;height:36px;font:13px var(--mono);border:1px solid var(--line-strong);background:var(--field);color:var(--ink);padding:0 10px;box-shadow:inset 0 1px 3px rgb(0 0 0/.7)}}
+.address button{{height:36px;padding:0 14px;font:400 11.5px/1 var(--mono);letter-spacing:.05em;text-transform:uppercase;border:1px solid var(--accent);background:var(--accent);color:#000;cursor:pointer}}
+.address button:hover{{background:#8dbbff}}
+input:focus,button:focus-visible{{outline:1px solid var(--accent);outline-offset:1px}}
+.small{{font-size:13px;margin:0}}
+a{{color:var(--accent);text-underline-offset:3px}}
+</style>
 </head>
-<body>
-<h1>ParCAD</h1>
-<p>A hosted ParCAD server. Agents connect to <code>{public}/mcp</code> with
-<code>Authorization: Bearer &lt;token&gt;</code>; this server's operator hands out the tokens.</p>
-<p>Parts here are a workspace, not an archive — download what you want to keep. Nothing is backed
-up, a part left unused for a while is deleted, and every account has limits on builds and storage.</p>
-<p>ParCAD also runs on your own machine, with no token:
-<a href="https://github.com/ierehon1905/parcad">github.com/ierehon1905/parcad</a>.</p>
-</body>
+<body><main>
+<div class="brand"><img src="/favicon.svg" alt="">ParCAD</div>
+<h1>Hosted ParCAD</h1>
+<p>{connect}</p>
+<div class="address"><input id="address" value="{public}/mcp" readonly aria-label="MCP address" onclick="this.select()"><button type="button" onclick="const a=document.getElementById('address');a.select();const done=()=>{{this.textContent='Copied'}};navigator.clipboard.writeText(a.value).then(done,()=>{{if(document.execCommand('copy'))done()}})">Copy</button></div>
+<p>Download the parts you want to keep: nothing here is backed up, {kept}, and every account has limits on builds and storage.</p>
+<p class="small">ParCAD also runs on your own computer, free and with no account: <a href="https://parcad.dev">parcad.dev</a>.</p>
+</main></body>
 </html>
 "#
     )
@@ -211,7 +243,7 @@ async fn no_route() -> Response {
     (
         StatusCode::NOT_FOUND,
         "no such route on a hosted parcad. MCP is at /mcp and signs in with \
-         `Authorization: Bearer <token>`, not OAuth: ask the server's operator for a token.",
+         `Authorization: Bearer <token>`, not OAuth: a token from whoever runs this server.",
     )
         .into_response()
 }
@@ -376,14 +408,30 @@ impl IntoResponse for tenant::Refused {
             tenant::Refused::StaleLink { .. } => (StatusCode::FORBIDDEN, None),
             tenant::Refused::Unready(_) => (StatusCode::INTERNAL_SERVER_ERROR, None),
         };
-        let mut response = (status, self.message()).into_response();
+        let message = self.message();
+        let challenge = challenge.map(|challenge| described(challenge, &message));
+        let mut response = (status, message).into_response();
         if let Some(challenge) = challenge {
-            response
-                .headers_mut()
-                .insert(header::WWW_AUTHENTICATE, header::HeaderValue::from_static(challenge));
+            response.headers_mut().insert(header::WWW_AUTHENTICATE, challenge);
         }
         response
     }
+}
+
+/// The challenge with the refusal's sentence as RFC 6750's `error_description`:
+/// an MCP client such as Codex reports the header and drops the body.
+fn described(challenge: &str, message: &str) -> header::HeaderValue {
+    // A quoted-string here is printable ASCII without `"` or `\`.
+    let description: String = message
+        .chars()
+        .map(|c| match c {
+            '"' | '\\' => '\'',
+            ' '..='~' => c,
+            _ => '-',
+        })
+        .collect();
+    header::HeaderValue::from_str(&format!("{challenge}, error_description=\"{description}\""))
+        .unwrap_or_else(|_| header::HeaderValue::from_static("Bearer realm=\"parcad\""))
 }
 
 fn health(capability: service::Capability) -> Json<serde_json::Value> {
@@ -796,13 +844,18 @@ mod tests {
 
         let missing = exchange(port, "GET", "/api/projects", &[], "");
         assert_eq!(missing.status, 401, "{}", missing.body);
-        assert_eq!(missing.header("www-authenticate"), Some("Bearer realm=\"parcad\""));
+        let challenge = missing.header("www-authenticate").unwrap_or_default();
+        assert!(challenge.starts_with("Bearer realm=\"parcad\", error_description=\""), "{}", missing.head);
+        assert!(challenge.contains("Authorization: Bearer <token>"), "a client that shows only the header sees the fix: {}", missing.head);
         assert!(missing.body.contains("Authorization: Bearer <token>"), "{}", missing.body);
         assert!(missing.body.contains("brew install parcad"), "the local way out is named: {}", missing.body);
 
         let wrong = exchange(port, "GET", "/api/projects", &[("Authorization", "Bearer nope")], "");
         assert_eq!(wrong.status, 401);
-        assert!(wrong.header("www-authenticate").is_some_and(|c| c.contains("invalid_token")), "{}", wrong.head);
+        let challenge = wrong.header("www-authenticate").unwrap_or_default();
+        assert!(challenge.contains("error=\"invalid_token\""), "{}", wrong.head);
+        assert!(challenge.contains("not recognised") && challenge.contains("for a new one"), "{}", wrong.head);
+        assert!(challenge.is_ascii() && challenge.ends_with("one\""), "the em dash and nothing else is replaced: {}", wrong.head);
         assert!(wrong.body.contains("not recognised"), "{}", wrong.body);
 
         let mcp = exchange(port, "POST", "/mcp", &[("Content-Type", "application/json")], "{}");
@@ -842,6 +895,8 @@ mod tests {
         assert_eq!(page.status, 200, "{}", page.body);
         assert!(page.header("content-type").is_some_and(|t| t.starts_with("text/html")), "{}", page.head);
         assert!(page.body.contains(&format!("https://{PUBLIC_HOST}/mcp")), "{}", page.body);
+        assert!(page.body.contains("a token from whoever runs this server"), "{}", page.body);
+        assert!(!page.body.contains("sign in"), "no edge, nothing to sign in to: {}", page.body);
         assert!(page.body.contains(r#"<link rel="icon" href="/favicon-32.png""#), "{}", page.body);
 
         for path in ["/favicon.ico", "/favicon-32.png"] {
@@ -853,6 +908,24 @@ mod tests {
         let missing = exchange(port, "GET", "/favicon.svg", &[], "");
         assert_eq!(missing.status, 404, "an icon the bundle lacks is a missing route: {}", missing.body);
         assert_eq!(exchange(port, "GET", "/index.html", &[], "").status, 404, "the app is still not served");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Behind an edge, the front page says to sign in from the client, and
+    /// names no token.
+    #[test]
+    fn a_host_behind_an_edge_says_to_sign_in() {
+        let dir = crate::tenant::tests::fresh_root("front-page-edge");
+        let file = dir.join("tokens");
+        tenant::issue(TenantId::new("acme").unwrap(), &file).unwrap();
+        let (_, edge) = crate::edge::tests::edge();
+        let accounts = tenant::Accounts::read(&file, &dir.join("tenants"), links()).unwrap().trusting(edge);
+        let port = serving(Arc::new(IconOnly), Some(accounts));
+        let page = exchange(port, "GET", "/", &[], "");
+        assert_eq!(page.status, 200, "{}", page.body);
+        assert!(page.body.contains("sign in") && page.body.contains("a code sent by email"), "{}", page.body);
+        assert!(page.body.contains("a part unused for 30 days is deleted"), "{}", page.body);
+        assert!(!page.body.contains("Bearer"), "{}", page.body);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

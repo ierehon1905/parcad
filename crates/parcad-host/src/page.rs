@@ -390,7 +390,7 @@ fn host(seed_dir: Option<&std::path::Path>, preferred: Option<String>) -> Result
     .map_err(|e| format!("seeding the parts into this browser: {e}"))?;
     SESSIONS.with(|sessions| *sessions.borrow_mut() = Some(session::subscribe()));
     TRANSPORT
-        .with(|transport| *transport.borrow_mut() = Some(mcp::transport(Arc::new(PageAssets), None)));
+        .with(|transport| *transport.borrow_mut() = Some(mcp::transport(Arc::new(PageAssets), &[])));
     Ok(())
 }
 

@@ -41,6 +41,8 @@ __pycache__/
 
 # Local state of `wrangler dev`.
 relay/.wrangler/
+edge/.wrangler/
+edge/.dev.vars
 
 # A tokens file for a local `docker compose up`; the box keeps its own under /srv/parcad.
 packaging/docker/tokens

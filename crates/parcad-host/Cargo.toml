@@ -60,3 +60,6 @@ tokio-stream = { version = "0.1", default-features = false, features = ["sync"] 
 # A hosted account's call and build rates, as a GCRA bucket each (`limits.rs`).
 # `std` alone: the monotonic clock, no jitter and no keyed maps.
 governor = { version = "0.10", default-features = false, features = ["std"] }
+# The Ed25519 signature on an edge's pass (`edge.rs`). Already in the lock
+# through rustls.
+ring = "0.17"

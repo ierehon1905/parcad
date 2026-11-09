@@ -1,0 +1,36 @@
+# The OAuth front of the hosted parcad: it signs people in, and forwards each
+# request to the host with a pass it signs (crates/parcad-host/src/edge.rs).
+name = "parcad-edge"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+[vars]
+# Where clients reach the edge, which the host's --public-host names too.
+PUBLIC_HOST = "https://mcp.parcad.dev"
+# Where the edge reaches the host, which the host's --edge-origin names.
+ORIGIN = "https://origin.parcad.dev"
+MAIL_FROM = "ParCAD <sign-in@parcad.dev>"
+
+# The library's grants, clients and tokens, stored as hashes.
+[[kv_namespaces]]
+binding = "OAUTH_KV"
+id = "set-at-deploy-oauth"
+
+# allow:<email> and email:<email> → account id; the code a sign-in by email waits on.
+[[kv_namespaces]]
+binding = "ACCOUNTS"
+id = "set-at-deploy-accounts"
+
+[observability]
+enabled = false
+
+# Deployed with --env production: Client ID Metadata Documents are fetched from
+# the client's own domain, and this keeps that fetch on the public internet.
+# Local runs leave it off so the edge can reach a host on 127.0.0.1.
+[env.production]
+compatibility_flags = ["global_fetch_strictly_public"]
+vars = { PUBLIC_HOST = "https://mcp.parcad.dev", ORIGIN = "https://origin.parcad.dev", MAIL_FROM = "ParCAD <sign-in@parcad.dev>" }
+kv_namespaces = [
+  { binding = "OAUTH_KV", id = "set-at-deploy-oauth" },
+  { binding = "ACCOUNTS", id = "set-at-deploy-accounts" },
+]

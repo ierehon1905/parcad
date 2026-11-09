@@ -3,7 +3,7 @@
 # Everything that has to be true before a change lands, in the one order that
 # works. Run it bare for the full pass, or `--fast` to skip the corpus.
 #
-#     tools/check.sh              # build, unit tests, the relay, worker, eval corpus
+#     tools/check.sh              # build, unit tests, the relay and the edge, worker, eval corpus
 #     tools/check.sh --fast       # everything but the corpus (~20 s)
 #
 # The order is not arbitrary:
@@ -42,12 +42,14 @@ need_frontend_deps() {
   }
 }
 
-# The relay runs under `wrangler dev`, so it needs its own install.
+# The relay and the edge run under `wrangler dev`, so each needs its own install.
 need_relay_deps() {
-  [ -d relay/node_modules ] || {
-    echo "relay/node_modules is missing. Run: (cd relay && bun install --frozen-lockfile)" >&2
-    exit 1
-  }
+  for worker in relay edge; do
+    [ -d "$worker/node_modules" ] || {
+      echo "$worker/node_modules is missing. Run: (cd $worker && bun install --frozen-lockfile)" >&2
+      exit 1
+    }
+  done
 }
 
 if [ "$fast" = 1 ]; then
@@ -114,6 +116,10 @@ field/selftest.py
 
 step "relay"
 (cd relay && bun x tsc --noEmit && bun test test)
+
+# In front of the release `parcad serve` just built, as `--hosted` with a pass.
+step "edge"
+(cd edge && bun x tsc --noEmit && PARCAD_BIN="$PWD/../target/release/parcad" bun test test)
 
 step "tools/build-worker.sh --release"
 tools/build-worker.sh --release
