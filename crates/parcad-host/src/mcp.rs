@@ -155,9 +155,13 @@ pub type Transport = rmcp::transport::streamable_http_server::StreamableHttpServ
 /// must be told or it answers every request there with 403 (docs/GOTCHAS.md,
 /// "rmcp's HTTP service answers only a loopback `Host`").
 ///
-/// Stateless: each request builds its own handler. There is no session to keep
-/// because there is no document to keep — a script carries its whole part, so
-/// two calls cannot disagree about what is on screen.
+/// The sessions are rmcp's and live in memory: a client on a protocol before
+/// 2026-07-28 is given one at `initialize`, which `LocalSessionManager` keeps
+/// with a handler of its own until the client hangs up or the process ends,
+/// and which `record` counts connected agents by; a client on 2026-07-28 gets
+/// none, and each request builds its own handler (docs/GOTCHAS.md). Neither
+/// keeps a document: a script carries its whole part, and the screen is
+/// `session.rs`'s, so two calls cannot disagree about what is on it.
 pub fn transport(assets: Arc<dyn Assets>, public_host: Option<&str>) -> Transport {
     let mut config = rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default();
     // A tool call answers once; there is nothing to stream, and a plain JSON
