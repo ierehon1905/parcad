@@ -1,0 +1,26 @@
+{
+  "name": "inset-lobe-vanishes",
+  "script": "eval/scripts/inset-lobe-vanishes.js",
+  "why": "A 20 x 5 bar with a 3 mm stem, inset by 2: the stem is narrower than twice the wall, so the offset removes the loop its sides fold into and what is left is the bar's inset, 16 x 1 by closed form, 80 mm3 at 5 tall. The vertex the removed loop leaves splits the 16 mm edge in two, hence 7 faces. A fold left behind would come nearer than 2 mm to the outline and be refused as short, with where.",
+  "brep": {
+    "size": [
+      16.0,
+      1.0,
+      5.0
+    ],
+    "volume_mm3": 80.0,
+    "area_mm2": 202.0,
+    "triangles": 16,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 16.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 7,
+    "edges": 30,
+    "curves": 12,
+    "requires": [
+      "inset-sections"
+    ]
+  }
+}

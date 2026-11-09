@@ -1,0 +1,26 @@
+{
+  "name": "revolved-inset",
+  "script": "eval/scripts/revolved-inset.js",
+  "why": "A 10 x 10 section standing 10 mm off the axis, inset by 2 and revolved: a ring of pi * (18^2 - 12^2) * 6 = 3392.920 mm3 by closed form. A revolve's section lies in XZ, so the inset's measure (its areas as a vector, its depths against the outline) must assume no plane; a guard that summed XY read 0 mm2 here and refused every revolve(inset(...)).",
+  "brep": {
+    "size": [
+      36.0,
+      35.99,
+      6.0
+    ],
+    "volume_mm3": 3392.92,
+    "area_mm2": 2261.947,
+    "triangles": 972,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 565.364,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 4,
+    "edges": 12,
+    "curves": 4,
+    "requires": [
+      "inset-sections"
+    ]
+  }
+}

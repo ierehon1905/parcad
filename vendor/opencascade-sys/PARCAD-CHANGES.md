@@ -434,6 +434,14 @@ so `const double far = ...` reads as `const double = ...`. The wrapper
 `#undef`s them after its includes, and the parcad additions that used them as
 local names were renamed as well. 0.0.7's first Windows build failed on this.
 
+## `MakeThickSolidByJoinSharp`
+
+`MakeThickSolidByJoin` with the join chosen (`include/wrapper.hxx`, declared
+in `src/lib.rs`): `sharp` passes `GeomAbs_Intersection`, extending offset faces
+until they meet, instead of the default `GeomAbs_Arc`. Every other argument is
+the default. Measured against `GeomAbs_Arc` over the corpus in docs/GOTCHAS.md,
+"A sharp shell builds three corpus parts a round one cannot, and loses nine".
+
 ## Not changed
 
 Everything else is upstream 0.2.0 verbatim. The OCCT it builds against is **not**

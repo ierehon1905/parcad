@@ -1,0 +1,33 @@
+{
+  "name": "revolved-wall",
+  "script": "eval/scripts/revolved-wall.js",
+  "why": "A turned cup, r 10, 20 tall, 1 mm wall with a floor, top open, by revolve's wall option: 461 pi = 1448.274 mm3 by closed form, and measure_wall_thickness reads the wall back as 1. `wall` draws the cavity's outline to radius -1 on the axis and 2 past the open top, so the script does not have to.",
+  "brep": {
+    "size": [
+      20.0,
+      20.0,
+      20.0
+    ],
+    "volume_mm3": 1448.274,
+    "area_mm2": 2959.38,
+    "triangles": 776,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 313.953,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 5,
+    "edges": 12,
+    "curves": 4,
+    "requires": [
+      "inset-past-axis",
+      "inset-sections"
+    ],
+    "perception": {
+      "thickness": {
+        "min_mm": 1.0,
+        "tolerance_mm": 0.02
+      }
+    }
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "name": "revolved-wall-spline",
+  "script": "eval/scripts/revolved-wall-spline.js",
+  "why": "A bell with a spline wall from a 20 mm base to a 5 mm neck, 45 tall, 1 mm wall open at both ends, by revolve's wall option: the inset of a revolved spline is its exact offset, measured by the kernel point by point as it is built, and measure_wall_thickness reads it back as 1 mm everywhere. The open ends come out open because the cavity runs 2 mm past each.",
+  "brep": {
+    "size": [
+      39.995,
+      39.998,
+      45.0
+    ],
+    "volume_mm3": 3571.46,
+    "area_mm2": 7291.763,
+    "triangles": 26060,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 122.504,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 7,
+    "edges": 24,
+    "curves": 6,
+    "requires": [
+      "inset-past-axis",
+      "section-curves",
+      "inset-sections"
+    ],
+    "overhang": {
+      "part": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 341.707,
+        "bed_mm2": 122.504,
+        "faces": 1,
+        "bridges": 0
+      }
+    },
+    "perception": {
+      "thickness": {
+        "min_mm": 1.0,
+        "tolerance_mm": 0.02
+      }
+    }
+  }
+}

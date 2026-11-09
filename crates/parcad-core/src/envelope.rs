@@ -51,6 +51,8 @@ pub const FEATURES: &[&str] = &[
     "request-checks",
     "motion-checks",
     "mechanism",
+    "shell-corners",
+    "inset-past-axis",
 ];
 
 /// The version of parcad reading the graph.

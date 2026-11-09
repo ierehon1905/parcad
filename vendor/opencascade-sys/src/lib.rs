@@ -692,6 +692,14 @@ pub mod ffi {
             offset: f64,
             tolerance: f64,
         );
+        pub fn MakeThickSolidByJoinSharp(
+            make_thick_solid: Pin<&mut BRepOffsetAPI_MakeThickSolid>,
+            shape: &TopoDS_Shape,
+            closing_faces: &ListOfShape,
+            offset: f64,
+            tolerance: f64,
+            sharp: bool,
+        );
         pub fn Shape(self: Pin<&mut BRepOffsetAPI_MakeThickSolid>) -> &TopoDS_Shape;
         pub fn Build(
             self: Pin<&mut BRepOffsetAPI_MakeThickSolid>,

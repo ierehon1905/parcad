@@ -1406,9 +1406,39 @@ export class Shape {
     return new Shape(([child]) => ({ op: "offset", child, distance }), [this]);
   }
 
-  /** Hollow this out, leaving a wall of `thickness` inside the current surface. */
-  shell(thickness: number): Shape {
-    return new Shape(([child]) => ({ op: "shell", child, thickness }), [this]);
+  /**
+   * Hollow this out, leaving a wall of `thickness` inside the current surface.
+   *
+   * - `corners` is what the cavity does at an inside corner of the part:
+   *   `"round"` (default) rounds it by `thickness`, so the wall is
+   *   `thickness` everywhere; `"sharp"` extends the walls until they meet,
+   *   so the wall thickens into the corner, as Fusion's Shell does.
+   * - A step or lobe narrower than the wall leaves a round no room; it
+   *   shells only with `corners: "sharp"`.
+   * - A turned part hollows exactly with `revolve`'s `wall`; a lofted one
+   *   with `loft`'s.
+   *
+   * @example extrude([[0, 0], [20, 0], [20, 5], [5, 5], [5, 20], [0, 20]], 10).shell(1, { corners: "sharp" })
+   *
+   * @remarks
+   * The cavity is the part's inward offset, subtracted. It is measured
+   * before the cut: samples over its faces must lie inside the part and no
+   * nearer its boundary than `thickness`, and with round corners no further
+   * either, so a fold or a dropped body is refused by name and place. Over
+   * every corpus and seed part shelled by 1 mm, sharp corners built three
+   * that round could not (two a fillet the round has no room on) and lost
+   * nine that round builds (docs/GOTCHAS.md, "A sharp shell"), which is why
+   * round is the default.
+   */
+  shell(thickness: number, options: { corners?: "round" | "sharp" } = {}): Shape {
+    const corners = options.corners ?? "round";
+    if (corners !== "round" && corners !== "sharp") {
+      throw new Error(`shell's corners is "round" or "sharp", got ${JSON.stringify(options.corners)}`);
+    }
+    return new Shape(
+      ([child]) => (corners === "round" ? { op: "shell", child, thickness } : { op: "shell", child, thickness, corners }),
+      [this],
+    );
   }
 
   /**
@@ -2271,20 +2301,181 @@ function checkSection(profile: SectionEntry[], what: string, example: string, op
  *
  * - Radius >= 0 everywhere on the boundary, control points included.
  * - A stepped (re-entrant) section is fine; a self-crossing one is not.
+ * - `wall: t` hollows it to a turned wall `t` thick, open at both ends: a
+ *   bell. `wall: { thickness, bottom: "closed" }` keeps a floor, `top:
+ *   "closed"` a lid. An end that opens is a straight edge from the axis.
  *
  * @example revolve([[0, 0], [10, 0], [10, 4], { at: [6, 4], round: 1 }, [6, 12], [0, 12]])
+ * @example revolve([[0, 0], [10, 0], [10, 20], [0, 20]], { wall: { thickness: 1, bottom: "closed" } })  // a cup
  *
  * @remarks
  * What a cone, countersink, stepped shaft, domed cap, O-ring gland or V-groove
  * ring is made of. The core enforces the rules, because a graph can arrive
  * from anywhere; a section crossing the axis would sweep through itself.
+ *
+ * A turned wall is the section minus `revolve(inset(cavity, t))`, where
+ * `cavity` is the section with its axis edge moved to radius `-t`, so the
+ * inset lands on the axis instead of leaving a rod there, and each open end
+ * moved `2t` out, so the inset's floor or lid falls outside the part. A
+ * revolved inset is the exact offset of the revolved section, because a
+ * surface of revolution's normal lies in its own meridian plane; nothing
+ * here approximates.
  */
-export function revolve(profile: SectionEntry[]): Shape {
+export function revolve(profile: SectionEntry[], options: { wall?: WallSpec } = {}): Shape {
   const drawn = checkSection(profile, "a revolve section", "revolve([[0, -5], [4, -5], [0, 5]])");
   if (drawn.some((entry) => Array.isArray(entry) && entry[0] < 0)) {
     throw new Error("revolve section radii must be >= 0; mirror the section onto +radius");
   }
-  return new Shape(() => ({ op: "revolve", profile: drawn }), []);
+  const turned = new Shape(() => ({ op: "revolve", profile: drawn }), []);
+  if (!options || typeof options !== "object") {
+    throw new Error(`revolve's options are { wall }; got ${JSON.stringify(options)}`);
+  }
+  const extra = Object.keys(options).filter((key) => key !== "wall");
+  if (extra.length > 0) {
+    throw new Error(`revolve's options are { wall }; ${extra.join(", ")} is not one of them`);
+  }
+  const wall = wallSpec(options.wall, "a turned wall");
+  if (!wall) return turned;
+  return turned.cut(revolve(inset(turnedCavity(drawn, wall), wall.thickness)));
+}
+
+/**
+ * The section a turned wall's cavity is the inset of: `drawn` with its axis
+ * edge moved to radius `-t`, so the inset's axis edge lands on the axis, and
+ * each open end moved `2t` out along its normal, so the inset's floor or lid
+ * lies outside the part and the end comes out open. A closed end that is a
+ * curve gets a `t` stub along its end, for the moved axis edge to meet.
+ */
+function turnedCavity(drawn: SectionEntry[], wall: { thickness: number; bottom: boolean; top: boolean }): SectionEntry[] {
+  const t = wall.thickness;
+  const n = drawn.length;
+  const wrap = (i: number) => ((i % n) + n) % n;
+  const cornerAt = (i: number): P2 | undefined => {
+    const entry = drawn[wrap(i)];
+    if (Array.isArray(entry)) return entry as P2;
+    if (entry && typeof entry === "object" && "at" in entry) return (entry as { at: P2 }).at;
+    return undefined;
+  };
+  const onAxis = (i: number) => {
+    const p = cornerAt(i);
+    return p !== undefined && Math.abs(p[0]) <= 1e-9;
+  };
+  const axis = [...Array(n).keys()].filter(onAxis);
+  if (axis.length === 0) {
+    throw new Error("a turned wall needs a section that reaches the axis, where its ends open; a section clear of the axis is a ring, and a hollowed ring is a sealed void");
+  }
+  if (axis.length === n) {
+    throw new Error("a turned wall needs a section with corners off the axis");
+  }
+  const runs: number[][] = [];
+  for (const i of axis) {
+    if (onAxis(i - 1)) continue;
+    const run = [i];
+    while (onAxis(run[run.length - 1] + 1)) run.push(wrap(run[run.length - 1] + 1));
+    runs.push(run);
+  }
+  if (runs.length > 1) {
+    throw new Error(`a turned wall needs a section that touches the axis along one stretch; this one touches it ${runs.length} times`);
+  }
+  const run = runs[0];
+  for (const i of run) {
+    if (!Array.isArray(drawn[i])) {
+      throw new Error(`a turned wall takes no round at the axis (entry ${i}); move that round off the axis`);
+    }
+  }
+  if (run.length === 1) {
+    if (wall.bottom || wall.top) {
+      throw new Error(`the section meets the axis at a point, [0, ${cornerAt(run[0])![1]}], not along it, so it has no end face to open; a wall on it is { thickness: ${t}, bottom: "closed", top: "closed" }`);
+    }
+    return drawn;
+  }
+
+  const corners = [...Array(n).keys()].map(cornerAt).filter((p): p is P2 => p !== undefined);
+  let twice = 0;
+  corners.forEach((a, k) => {
+    const b = corners[(k + 1) % corners.length];
+    twice += a[0] * b[1] - b[0] * a[1];
+  });
+  // Outward is right of travel round an anticlockwise section, and Line2d
+  // offsets to the left.
+  const outward = (line: Line2d) => line.offset(twice > 0 ? -2 * t : 2 * t);
+  const axisLine = new Line2d([-t, 0], [-t, 1]);
+
+  const replaced = new Map<number, SectionEntry[]>();
+  for (const i of run) replaced.set(i, [[-t, cornerAt(i)![1]]]);
+  const first = run[0];
+  const last = run[run.length - 1];
+  const ends = [
+    { at: first, step: -1 as const },
+    { at: last, step: 1 as const },
+  ].map((end) => ({ ...end, z: cornerAt(end.at)![1] }));
+  const [lower, upper] = ends[0].z <= ends[1].z ? ends : [ends[1], ends[0]];
+  for (const [end, open, name] of [
+    [lower, wall.bottom, "bottom"],
+    [upper, wall.top, "top"],
+  ] as const) {
+    const a = cornerAt(end.at)!;
+    const c = cornerAt(end.at + end.step);
+    if (c === undefined) {
+      if (open) {
+        throw new Error(`the section's ${name} end, from the axis at [0, ${a[1]}], is a curve, and only a straight end opens: draw it straight, or say ${name}: "closed"`);
+      }
+      const stub: P2 = [-t, a[1]];
+      replaced.set(end.at, end.step < 0 ? [a, stub] : [stub, a]);
+      continue;
+    }
+    // The end edge in the direction the section travels it, so that outward
+    // is one side of it.
+    const edge = end.step < 0 ? new Line2d(c, a) : new Line2d(a, c);
+    if (!open) {
+      replaced.set(end.at, [axisLine.meet(edge)]);
+      continue;
+    }
+    const pushed = outward(edge);
+    replaced.set(end.at, [axisLine.meet(pushed)]);
+    const d = cornerAt(end.at + 2 * end.step);
+    // The wall beyond the end's corner is straight, and meets the moved end
+    // where its line does; or it is a curve, and a straight stub along its
+    // tangent at the corner carries the wall out to the moved end.
+    const along = d !== undefined ? new Line2d(c, d) : new Line2d(c, wallTangent(drawn[wrap(end.at + 2 * end.step)], c, end.step, name));
+    let moved: P2;
+    try {
+      moved = pushed.meet(along);
+    } catch {
+      throw new Error(`the section's ${name} end runs straight through [${c.join(", ")}] into the wall; an end that opens needs a corner there`);
+    }
+    const entry = drawn[wrap(end.at + end.step)];
+    const corner = Array.isArray(entry) ? moved : { ...(entry as { at: P2; round: number }), at: moved };
+    replaced.set(wrap(end.at + end.step), d !== undefined ? [corner] : end.step < 0 ? [c, corner] : [corner, c]);
+  }
+  return drawn.flatMap((entry, i) => replaced.get(i) ?? [entry]);
+}
+
+/**
+ * A point past `corner` along the curve's tangent there, away from the
+ * curve, for the stub that carries a curved wall out to an open end: by a
+ * spline's declared direction, or a bezier's or B-spline's nearest pole.
+ * `step` says which end of the curve `corner` is: -1 its end, 1 its start.
+ */
+function wallTangent(curve: SectionEntry, corner: P2, step: -1 | 1, end: string): P2 {
+  const fix = `an end that opens needs the wall to reach its corner straight, or as a spline with its direction there (start or end), a bezier or a bspline; give the curve before [${corner.join(", ")}] one of those, or put a straight stretch between them`;
+  if (!curve || typeof curve !== "object" || Array.isArray(curve)) throw new Error(`the section's ${end} end: ${fix}`);
+  const entry = curve as { spline?: P2[]; start?: P2; end?: P2; bezier?: P2[]; bspline?: P2[] };
+  let toward: P2 | undefined;
+  if (entry.spline) {
+    // The curve's travel direction at the corner: arriving there at its end,
+    // leaving it at its start.
+    const given = step < 0 ? entry.end : entry.start;
+    if (given) toward = step < 0 ? given : [-given[0], -given[1]];
+  } else {
+    const poles = entry.bezier ?? entry.bspline;
+    if (poles && poles.length > 0) {
+      const pole = step < 0 ? poles[poles.length - 1] : poles[0];
+      toward = [corner[0] - pole[0], corner[1] - pole[1]];
+    }
+  }
+  if (!toward || Math.hypot(toward[0], toward[1]) < 1e-9) throw new Error(`the section's ${end} end: ${fix}`);
+  return [corner[0] + toward[0], corner[1] + toward[1]];
 }
 
 /**
@@ -2670,8 +2861,8 @@ export function line2d(from: [number, number], toOrAngle: [number, number] | num
 }
 
 /**
- * A section outline stepped inward by `by` mm, as a section: the inside of a
- * wall. `outline` is any section: corners, arcs, curves, one closed `{ fit }`.
+ * An outline stepped inward by `by` mm, as a section: the inside of a wall.
+ * Any section will do: corners, arcs, curves, one closed `{ fit }`.
  *
  * - An arc stays an arc and a fitted curve one curve; never offset the
  *   points yourself.
@@ -2681,7 +2872,8 @@ export function line2d(from: [number, number], toOrAngle: [number, number] | num
  * - An inset that splits, vanishes or comes nearer than `by` is refused with
  *   the distance that fits. Inset once by the sum, never an inset of an
  *   inset.
- * - For a lofted wall use `loft`'s `wall`, not a loft of insets.
+ * - A lofted wall is `loft`'s `wall` and a turned wall `revolve`'s, not a
+ *   loft or revolve of insets.
  *
  * @example
  *     // a 60 × 40 tray, 1.6 mm walls and a 2 mm floor
@@ -3462,7 +3654,7 @@ export function loft(
   sections: LoftSection[],
   options: {
     smooth?: boolean;
-    wall?: number | { thickness: number; bottom?: "open" | "closed"; top?: "open" | "closed" };
+    wall?: WallSpec;
   } = {},
 ): Shape {
   if (!Array.isArray(sections) || sections.length < 2) {
@@ -3508,26 +3700,38 @@ export function loft(
   }), []);
 }
 
-function loftWall(
-  wall: number | { thickness: number; bottom?: "open" | "closed"; top?: "open" | "closed" } | undefined,
-): { thickness: number; bottom?: "closed"; top?: "closed" } | undefined {
+function loftWall(wall: WallSpec | undefined): { thickness: number; bottom?: "closed"; top?: "closed" } | undefined {
+  const spec = wallSpec(wall, "a loft's wall");
+  if (!spec) return undefined;
+  return {
+    thickness: spec.thickness,
+    ...(spec.bottom ? {} : { bottom: "closed" as const }),
+    ...(spec.top ? {} : { top: "closed" as const }),
+  };
+}
+
+/** A wall for `loft` and `revolve`: a thickness, or one with each end open (the default) or closed. */
+export type WallSpec = number | { thickness: number; bottom?: "open" | "closed"; top?: "open" | "closed" };
+
+/** `wall` checked, with `bottom` and `top` true where that end is open. */
+function wallSpec(wall: WallSpec | undefined, whose: string): { thickness: number; bottom: boolean; top: boolean } | undefined {
   if (wall === undefined) return undefined;
   const spec = typeof wall === "number" ? { thickness: wall } : wall;
   if (!spec || typeof spec !== "object" || !(Number.isFinite(spec.thickness) && spec.thickness > 0)) {
-    throw new Error(`a loft's wall is a thickness in mm, or { thickness, bottom: "open" | "closed", top: "open" | "closed" }; got ${JSON.stringify(wall)}`);
+    throw new Error(`${whose} is a thickness in mm, or { thickness, bottom: "open" | "closed", top: "open" | "closed" }; got ${JSON.stringify(wall)}`);
   }
   const extra = Object.keys(spec).filter((key) => !["thickness", "bottom", "top"].includes(key));
   if (extra.length > 0) {
-    throw new Error(`a loft's wall takes thickness, bottom and top; ${extra.join(", ")} is not one of them`);
+    throw new Error(`${whose} takes thickness, bottom and top; ${extra.join(", ")} is not one of them`);
   }
-  const out: { thickness: number; bottom?: "closed"; top?: "closed" } = { thickness: spec.thickness };
+  const out = { thickness: spec.thickness, bottom: true, top: true };
   for (const end of ["bottom", "top"] as const) {
     const value = spec[end];
     if (value === undefined || value === "open") continue;
     if (value !== "closed") {
-      throw new Error(`a loft wall's ${end} is "open" (the default, a flat ring) or "closed" (a floor as thick as the wall); got ${JSON.stringify(value)}`);
+      throw new Error(`${whose}'s ${end} is "open" (the default) or "closed" (a floor or lid as thick as the wall); got ${JSON.stringify(value)}`);
     }
-    out[end] = "closed";
+    out[end] = false;
   }
   return out;
 }
@@ -4432,6 +4636,23 @@ const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean; doc?:
     what: "a mechanism: bodies that move together on one drive, and the moves and pushes checks over it",
     uses: () => false,
     doc: (doc) => doc.mechanism !== undefined || (doc.checks ?? []).some((c) => c.moves !== undefined || c.pushes !== undefined),
+  },
+  {
+    feature: "shell-corners",
+    after: "0.0.19",
+    what: "sharp shell corners (.shell(t, { corners: \"sharp\" }))",
+    uses: (n) => n.op === "shell" && n.corners !== undefined,
+  },
+  {
+    feature: "inset-past-axis",
+    after: "0.0.19",
+    what: "a revolved inset whose outline reaches past the axis (revolve(section, { wall }))",
+    uses: (n) => {
+      const profile = (n as { op: string; profile?: unknown }).profile;
+      if (n.op !== "revolve" || !Array.isArray(profile) || profile.length !== 1) return false;
+      const entry = profile[0] as { inset?: unknown };
+      return Array.isArray(entry?.inset) && entry.inset.some((e) => (Array.isArray(e) ? e[0] : (e as { at?: P2 })?.at?.[0] ?? 0) < 0);
+    },
   },
   {
     feature: "query-not",

@@ -831,6 +831,8 @@ pub enum Op {
     Shell {
         child: NodeId,
         thickness: f64,
+        #[serde(default, skip_serializing_if = "ShellCorners::is_round")]
+        corners: ShellCorners,
     },
 
     /// Round the B-rep edges matched by `selector`.
@@ -1035,6 +1037,24 @@ impl TrimKeep {
             Self::Back => "back",
             Self::Both => "both",
         }
+    }
+}
+
+/// What a shell's cavity does at an inside corner of the part, where the walls
+/// stepped in from its two faces part.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ShellCorners {
+    /// A round of the wall's radius: the wall is `thickness` everywhere.
+    #[default]
+    Round,
+    /// The walls extended until they meet: the wall thickens into the corner.
+    Sharp,
+}
+
+impl ShellCorners {
+    pub fn is_round(&self) -> bool {
+        *self == ShellCorners::Round
     }
 }
 
@@ -1609,10 +1629,19 @@ impl Op {
         }
         let section = Self::validate_section(profile, SectionKind::Revolve)?;
         let leftmost = section.leftmost();
-        if leftmost < -1e-9 {
-            anyhow::bail!(
+        match section.inset {
+            // The inset lies `by` inside its outline, so the outline may reach
+            // `by` past the axis; where the inset itself lands is the
+            // kernel's to measure, on the wire it built.
+            Some(by) if leftmost + by < -1e-9 => anyhow::bail!(
+                "revolve profile's inset outline reaches radius {leftmost:.4}, which an inset of {by} leaves at {:.4}, left of the axis. A profile that crosses the axis sweeps through itself; an outline for a turned wall may reach at most `by` past the axis, so that its inset lands on it",
+                leftmost + by
+            ),
+            Some(_) => {}
+            None if leftmost < -1e-9 => anyhow::bail!(
                 "revolve profile reaches radius {leftmost:.4}, left of the axis: an arc bulges past it or a curve's control point lies there. A profile that crosses the axis sweeps through itself; keep every arc and control point at radius >= 0"
-            );
+            ),
+            None => {}
         }
         Ok(section)
     }

@@ -15,13 +15,13 @@ use glam::{DMat3, DVec3};
 use opencascade::{
     adhoc::AdHocShape,
     angle::Angle,
-    primitives::{BooleanShape, Edge, Face, Identity, PointState, Shape, Solid, Wire},
+    primitives::{BooleanShape, Edge, Face, Identity, OffsetJoin, PointState, Shape, Solid, Wire},
     curve::LoftProfile,
     sweep::{Helix as SweptHelix, HelixByTurn, SweepFrame},
 };
 use parcad_core::{
     graph::{
-        loft_extent, ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, Hand, NodeId, Op,
+        loft_extent, ChamferCorner, Doc, EdgeTarget, FilletContinuity, FilletCorner, Hand, NodeId, Op, ShellCorners,
         tightest_bend, SpinePiece, SweepSection, SweepSpine, ThreadForm, V3,
     },
     section::{Section, Segment},
@@ -4981,14 +4981,21 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             // which is the plane the revolution sweeps out of.
             let (wire, fitted) = section_wire_fitted(&section, |[r, z]| DVec3::new(r, 0.0, z), "revolve profile")
                 .map_err(|e| anyhow::anyhow!("node {id} ({label}): {e}"))?;
-            // The graph checked a fit's points against the axis; the curve
-            // between them is the kernel's, so it is measured here.
-            if section.has_fit() {
+            // The graph checked a fit's points and an inset's outline against
+            // the axis; the curve between the points and the inset itself are
+            // the kernel's, so they are measured here.
+            if section.has_fit() || section.inset.is_some() {
                 if let Some((lo, _)) = wire.to_shape().bounds_optimal() {
                     if lo.x < -1e-6 {
                         bail!(
-                            "node {id} ({label}): the revolve profile's fitted curve reaches radius {:.4}, left of the axis, between the points it was fitted through. A profile that crosses the axis sweeps through itself; keep the points at radius >= 0 and, where they touch the axis, tighten the tolerance",
-                            lo.x
+                            "node {id} ({label}): the revolve profile's {} reaches radius {:.4}, left of the axis. A profile that crosses the axis sweeps through itself; {}",
+                            if section.inset.is_some() { "inset" } else { "fitted curve" },
+                            lo.x,
+                            if section.inset.is_some() {
+                                "draw the outline no further past the axis than the inset's distance"
+                            } else {
+                                "keep the points at radius >= 0 and, where they touch the axis, tighten the tolerance"
+                            }
                         );
                     }
                 }
@@ -5715,7 +5722,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             .named(node.tag.as_deref())
         }
 
-        Op::Shell { child, thickness } => {
+        Op::Shell { child, thickness, corners } => {
             if *thickness <= 0.0 {
                 bail!("node {id} ({label}) shells to {thickness} mm, which is not a wall");
             }
@@ -5737,7 +5744,11 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             let what = op_phrase(&doc.node(*child)?.op);
             // The kernel hands back the inward offset of a boolean result as a
             // bare shell, which a boolean reads as nothing.
-            let Some(cavity) = solid.shape.clone().offset_surface(-thickness).closed_solid() else {
+            let join = match corners {
+                ShellCorners::Round => OffsetJoin::Arc,
+                ShellCorners::Sharp => OffsetJoin::Intersection,
+            };
+            let Some(cavity) = solid.shape.clone().offset_surface_joined(-thickness, join).closed_solid() else {
                 bail!(
                     "node {id} ({label}) shells {what} by {thickness} mm, and the kernel's \
                      inward offset of it did not close into a cavity. That happens where the \
@@ -5754,11 +5765,18 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             // cavity itself, before it is subtracted and the evidence is gone.
             let slip = offset_slip(before, bbox(&cavity), -thickness);
             if slip > SLIP_TOLERANCE_MM {
+                let corner = match corners {
+                    ShellCorners::Round => {
+                        ", where the round a shell puts in an inside corner has no room (corners: \"sharp\" keeps the corner instead)"
+                    }
+                    ShellCorners::Sharp => "",
+                };
                 bail!(
-                    "node {id} ({label}) shells {what} by {thickness} mm, and the \
-                     cavity came back {slip:.2} mm from where it must be — OCCT \
-                     drops parts of a boolean when offsetting it. Shell the solid \
-                     before combining it with others"
+                    "node {id} ({label}) shells {what} by {thickness} mm, and the cavity's \
+                     extent is {slip:.2} mm off where a {thickness} mm shrink puts it: the \
+                     kernel dropped part of the shape. That happens at a step or lobe narrower \
+                     than the wall{corner}, and at a part combined from several solids: shell \
+                     the pieces before combining them"
                 );
             }
             if let Some(crossing) = self_crossing(&cavity, None) {
@@ -5770,17 +5788,67 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 );
             }
 
+            // What a shell is: the cavity lies `thickness` inside the part
+            // everywhere. Sampled over the cavity's faces: every sample inside
+            // the part and no nearer its boundary than `thickness` — a fold,
+            // or a cavity reaching the outside, reads here, with where — and
+            // with a round join no further either, since every point of that
+            // offset is exactly `thickness` away; a sharp join runs its faces
+            // past `thickness` into a corner, which is what it is for.
+            let reach = thickness + 2.0 * SLIP_TOLERANCE_MM;
+            let samples = cavity.face_grid(8);
+            let states = solid.shape.classify_points(&samples, 1e-7);
+            let mut nearest = solid.shape.nearest_boundary();
+            let mut thinnest: Option<(f64, DVec3)> = None;
+            let mut beyond: Option<DVec3> = None;
+            for (p, state) in samples.iter().zip(states) {
+                let depth = match state {
+                    PointState::Inside => nearest.nearest_within(*p, reach).map(|b| b.distance),
+                    _ => Some(0.0),
+                };
+                match depth {
+                    Some(d) if thinnest.is_none_or(|(t, _)| d < t) => thinnest = Some((d, *p)),
+                    None if beyond.is_none() => beyond = Some(*p),
+                    _ => {}
+                }
+            }
+            if let Some((d, at)) = thinnest.filter(|(d, _)| *d < thickness - SLIP_TOLERANCE_MM) {
+                bail!(
+                    "node {id} ({label}) shells {what} by {thickness} mm, and the wall measures \
+                     {d:.3} mm near ({:.1}, {:.1}, {:.1}), thinner than asked: the kernel's \
+                     cavity is not the part stepped {thickness} mm inward there. Thin the wall, \
+                     or thicken the part there",
+                    at.x,
+                    at.y,
+                    at.z
+                );
+            }
+            if let (ShellCorners::Round, Some(at)) = (corners, beyond) {
+                bail!(
+                    "node {id} ({label}) shells {what} by {thickness} mm, and the cavity lies more \
+                     than {reach:.2} mm inside the part near ({:.1}, {:.1}, {:.1}), where the wall \
+                     is {thickness} mm: the kernel's cavity is not the part stepped inward there. \
+                     Shell the pieces before combining them",
+                    at.x,
+                    at.y,
+                    at.z
+                );
+            }
+
             breadcrumb(&format!("hollow node {id} ({label})"));
             let hollow = solid.shape.subtract(&cavity).shape;
-            // The cavity lies inside the part, so the hollow part holds exactly
-            // the difference of the two volumes.
+            // The cavity lies inside the part, so the hollow part holds the
+            // difference of the two volumes, to the volume integral's own noise:
+            // 2e-6 of the part on a revolved B-spline wall (docs/GOTCHAS.md,
+            // "`shell` refused every revolved B-spline wall"). What is left to
+            // catch here is a cut that removed nothing or too much.
             let (outer, inner, left) = (solid.shape.signed_volume(), cavity.signed_volume(), hollow.signed_volume());
-            if !(inner > 0.0) || (left - (outer - inner)).abs() > 1e-6 * outer.abs() + 1e-6 {
+            if !(inner > 0.0) || (left - (outer - inner)).abs() > 1e-4 * outer.abs() + 1e-3 {
                 bail!(
                     "node {id} ({label}) shells {what} by {thickness} mm, and the result holds \
                      {left:.3} mm³ where the part's {outer:.3} mm³ less its {inner:.3} mm³ cavity \
-                     is {:.3} mm³: the cavity is not inside the part it was offset from. Thin the \
-                     wall, or shell the pieces before combining them",
+                     is {:.3} mm³: the cut did not take the cavity out of the part cleanly. Thin \
+                     the wall, or shell the pieces before combining them",
                     outer - inner
                 );
             }

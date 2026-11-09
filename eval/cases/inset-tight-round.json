@@ -1,0 +1,27 @@
+{
+  "name": "inset-tight-round",
+  "script": "eval/scripts/inset-tight-round.js",
+  "why": "A 20 mm square with one corner rounded 0.5, inset by 1: the round is tighter than the inset, its offset vanishes and the inset has a corner there, an 18 mm square by closed form, six faces, 1620 mm3 at 5 tall.",
+  "brep": {
+    "size": [
+      18.0,
+      18.0,
+      5.0
+    ],
+    "volume_mm3": 1620.0,
+    "area_mm2": 1008.0,
+    "triangles": 12,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 324.0,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 6,
+    "edges": 24,
+    "curves": 12,
+    "requires": [
+      "section-curves",
+      "inset-sections"
+    ]
+  }
+}

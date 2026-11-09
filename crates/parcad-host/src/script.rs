@@ -796,6 +796,8 @@ mod tests {
                  checks: [{ moves: \"all\", atLeast: 0.3 }] };"
                     .to_owned(),
             ),
+            ("shell-corners", "return box(10, 10, 10).shell(1, { corners: \"sharp\" });".to_owned()),
+            ("inset-past-axis", "return revolve([[0, 0], [10, 0], [10, 20], [0, 20]], { wall: 1 });".to_owned()),
         ];
         let stamped: Vec<&str> = cases.iter().map(|(id, _)| *id).collect();
         assert_eq!(stamped, parcad_core::envelope::FEATURES, "the host's feature list and this table differ");

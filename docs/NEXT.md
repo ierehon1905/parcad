@@ -594,6 +594,41 @@ are worth. Leon's read is in brackets.
   lift the refusal; SMLib's corners are only G1 too, so there is no prior art
   to copy. A strong-model kernel session, and the patch is the place.
 
+### Found recreating the Fusion steam top (2026-09-24, landed 2026-11-09)
+
+The part is a 1 mm turned bell blended to three bent tubes, open at every
+mouth: Fusion's Revolve, Sweep, Shell with faces picked. Written that way here
+it hit five refusals in a row, three of them naming a fix that did not exist.
+What it took landed from the `revolve-inset` branch on 2026-11-09: `revolve`'s
+`wall` (a turned wall, exact), an inset outline allowed `by` past the axis,
+`shell` measured against what a shell is instead of a 1e-6 volume identity, and
+`shell(t, { corners: "sharp" })` (GOTCHAS, "`shell` refused every revolved
+B-spline wall" and "A sharp shell"; DSL_GAPS, "hollowing a part with faces left
+open"). The inset half of that branch was already on main by then, measured
+point by point (GOTCHAS, "Every outline with an inward corner"). Left:
+
+- **`shell` with faces left open.** The Fusion route. OpenCASCADE's
+  `MakeThickSolid` takes the faces to remove, but its offset aborts on the
+  blended union with either join, so the switch is not the work; a cavity
+  built another way is. One measured route is the steam top's own: offset
+  each solid before the union and blend the cavity `t` larger, exact for the
+  turned wall (`revolve`'s `wall`) and for a `pipe`, measured at the seams.
+  Check prior art (FreeCAD's Thickness, CadQuery's `shell`, both on the same
+  OCCT call) before building.
+- **A face selector.** `open: [...]` needs one, and nothing selects faces
+  yet; tags name a node's faces, which is the base.
+- **The inner blend is 2.5 where theory says 3.** A 2 mm fillet on the
+  outside offset 1 mm inward is a 3 mm round; measured, the wall at the three
+  bores' seams read 0.85 mm at 3 and 1.00 at 2.5. The seams run into each
+  other in the neck, so the concentric relation may not hold there; unexplained.
+- **The faithful recreation is not in the repo.** It builds in the user's
+  parts folder (`fusion360/steam-top-4-holed-v1-v6`: 39 faces, 8967.9 mm³ by
+  its mesh on 2026-11-09, against Fusion's 8975.8; its header has the STEP
+  probe at 8971.2) from the export's own curves, with the cavity drawn as a
+  second revolve rather than through `wall`, while `eval/targets/fusion360/`
+  still throws naming Patch. Moving it up needs a corpus case with a budget:
+  the build alone takes 20 s, the corpus's default.
+
 ### Left from the bridge fix (2026-09-27)
 
 **A filleted ceiling is never a bridge.** `overhang::held_edges` asks for

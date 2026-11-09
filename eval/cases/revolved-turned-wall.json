@@ -1,0 +1,41 @@
+{
+  "name": "revolved-turned-wall",
+  "script": "eval/scripts/revolved-turned-wall.js",
+  "why": "A turned wall drawn by hand: the cavity's outline reaches radius -1 so its inset's axis edge lands on the axis, and 2 past the bottom so the inset's floor falls outside the part. pi * (100 - 81) * 20 + pi * 81 * 1 = 461 pi = 1448.274 mm3 by closed form, five faces. The graph allows an inset outline `by` past the axis, and the kernel measures the inset it built against the axis; a revolved inset is the exact offset of the revolved section.",
+  "brep": {
+    "size": [
+      20.0,
+      20.0,
+      20.0
+    ],
+    "volume_mm3": 1448.274,
+    "area_mm2": 2959.38,
+    "triangles": 776,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 59.669,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 5,
+    "edges": 12,
+    "curves": 4,
+    "requires": [
+      "inset-past-axis",
+      "inset-sections"
+    ],
+    "overhang": {
+      "part": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 254.284,
+        "bed_mm2": 59.669,
+        "faces": 1,
+        "bridges": 1,
+        "support_mm3": 4834.911
+      }
+    }
+  }
+}

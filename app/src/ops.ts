@@ -108,9 +108,9 @@ export const OP_GROUPS: OpGroup[] = [
       {
         name: "revolve",
         icon: "revolve",
-        signature: "revolve(section)",
+        signature: "revolve(section, { wall })",
         detail:
-          "A [radius, z] section of corners, arcs and splines spun a full turn about Z. Radii must be at or above zero.",
+          "A [radius, z] section of corners, arcs and splines spun a full turn about Z. Radii must be at or above zero; { wall: t } hollows it to a turned wall.",
         snippet: "revolve([[0, -5], [8, -5], [8, 5], [0, 5]])",
       },
       {
@@ -230,8 +230,8 @@ export const OP_GROUPS: OpGroup[] = [
       {
         name: "shell",
         icon: "shell",
-        signature: ".shell(thickness)",
-        detail: "Hollow this out, leaving a wall of that thickness inside the current surface.",
+        signature: ".shell(thickness, { corners })",
+        detail: "Hollow this out, leaving a wall of that thickness inside the current surface; corners: \"sharp\" keeps an inside corner square.",
         snippet: ".shell(2)",
       },
       {

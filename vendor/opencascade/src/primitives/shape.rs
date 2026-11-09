@@ -798,6 +798,25 @@ impl Shape {
         self.hollow(offset, faces_to_remove)
     }
 
+    /// [`Self::offset_surface`] with the join chosen: where two offset faces
+    /// part, `OffsetJoin::Arc` fills the gap with a pipe or a sphere of the
+    /// offset's radius and `OffsetJoin::Intersection` extends the faces until
+    /// they meet. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn offset_surface_joined(self, offset: f64, join: OffsetJoin) -> Self {
+        let faces = ffi::new_list_of_shape();
+        let mut solid_maker = ffi::BRepOffsetAPI_MakeThickSolid_ctor();
+        ffi::MakeThickSolidByJoinSharp(
+            solid_maker.pin_mut(),
+            &self.inner,
+            &faces,
+            offset,
+            0.001,
+            join == OffsetJoin::Intersection,
+        );
+        let inner = ffi::TopoDS_Shape_to_owned(solid_maker.pin_mut().Shape());
+        Self { inner }
+    }
+
     /// The one solid this shape is or bounds: a single solid as it is, or a
     /// single closed shell made into a solid facing outward; `None` for
     /// anything else. Added for parcad; see PARCAD-CHANGES.md.
@@ -969,6 +988,16 @@ impl Shape {
         )
         .then(|| (dvec3(x0, y0, z0), dvec3(x1, y1, z1)))
     }
+}
+
+/// How an offset fills the gap where two offset faces part; see
+/// [`Shape::offset_surface_joined`]. Added for parcad.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OffsetJoin {
+    /// A pipe or a sphere of the offset's radius: every point exactly the offset away.
+    Arc,
+    /// The faces extended until they meet: a sharp corner.
+    Intersection,
 }
 
 /// Where a point lies relative to a solid. Added for parcad.

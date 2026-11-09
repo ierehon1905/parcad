@@ -281,6 +281,16 @@ inline void MakeThickSolidByJoin(BRepOffsetAPI_MakeThickSolid &make_thick_solid,
   make_thick_solid.MakeThickSolidByJoin(shape, closing_faces, offset, tolerance);
 }
 
+// MakeThickSolidByJoin with the join chosen. Where offset faces part, `sharp`
+// extends them until they meet (GeomAbs_Intersection) instead of filling the
+// gap with a pipe or a sphere of the offset's radius (GeomAbs_Arc, the default).
+inline void MakeThickSolidByJoinSharp(BRepOffsetAPI_MakeThickSolid &make_thick_solid, const TopoDS_Shape &shape,
+                                      const ListOfShape &closing_faces, const double offset,
+                                      const double tolerance, const bool sharp) {
+  make_thick_solid.MakeThickSolidByJoin(shape, closing_faces, offset, tolerance, BRepOffset_Skin, false, false,
+                                        sharp ? GeomAbs_Intersection : GeomAbs_Arc);
+}
+
 // Geometric processing
 inline const gp_Ax1 &gp_OX() { return gp::OX(); }
 inline const gp_Ax1 &gp_OY() { return gp::OY(); }

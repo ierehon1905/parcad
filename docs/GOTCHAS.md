@@ -1788,6 +1788,56 @@ line's runs to infinity, so the result never closes. Patch 0008 in
 `vendor/occt-sys/PARCAD-CHANGES.md` carry the measurements. Polylines were
 never affected, which is why the corpus's insets never saw it.
 
+### `shell` refused every revolved B-spline wall at the volume identity *(fixed 2026-11-09)*
+
+`shell` subtracts the part's inward offset from the part, and then held
+`hollow = part - cavity` to 1e-6 of the part's volume as proof the cavity lay
+inside. On a turned cup with a spline wall the three integrals disagree by
+1.9e-6 (1645.289 against 1645.300 mm³, the same with round and sharp joins),
+so every such shell was refused as "the cavity is not inside the part": the
+volume integral's own noise on B-spline faces, not the geometry. What a shell
+is, is measured instead now: samples over the cavity's faces, each inside the
+part and no nearer its boundary than the wall, and for a round join no
+further either (`Op::Shell` in `backend.rs`); the identity stays at 1e-4 as
+the backstop for a cut that removed nothing. `eval/cases/shell-spline-wall.json`
+holds the cup. On the bell that motivated the branch, the same check read the
+round join's real failure on a 0.65 mm spigot step, narrower than the 1 mm
+round it wants to sit on, and named `corners: "sharp"`, which built it
+(2026-09-24; the bell is not in the repo).
+
+### A sharp shell builds three corpus parts a round one cannot, and loses nine
+
+`shell(t, { corners: "sharp" })` shrinks the part with `GeomAbs_Intersection`
+joins instead of `GeomAbs_Arc`, so an inside corner of the cavity stays square,
+as Fusion's Shell leaves it. Where it builds it is exact: the L block of
+`eval/cases/shell-sharp-corners.json` holds 958.000 mm³ to the digit, where the
+round default leaves 956.283, 0.18 % apart, which is more than the corpus
+tolerates, so a Fusion shell recreated here needs the sharp join to hit its
+volume. Measured over every corpus and seed part shelled by 1 mm on 2026-11-09
+(`crates/parcad-occt/examples/shell_corners.rs`, one process per part and
+join, after the wall check above replaced the volume identity): of 246
+scripts, 31 are several bodies and 45 do not build unshelled; of the 170 left,
+51 shell both ways, 9 only round (`fillet-spans-seam-and-rim`, `rounded-plate`,
+`smooth-uprights`, `stadium-extrude`, `tangent-blend`,
+`tangent-blend-retainer`, `thickness-under-a-fillet`, `pipe-tee`,
+`shaft-coupler`), 3 only sharp (`fillet-past-a-hole`, `smooth-bar-root`,
+`plate-stand`), 95 neither, and 12 abort the kernel with either join, the
+five shells of a shell among them (on those the offset builder throws
+`StdFail_NotDone` through the binding, which the worker's crash handling
+reports as a kernel crash; the same with either join).
+Where both build, sharp leaves up to 0.71 % more material, the square inside
+corners, and takes the same time (medians 135 against 159 ms). Where only one
+builds, the other's offset mostly fails to close: a round of the wall's radius
+has no room on a fillet or a step narrower than the wall, and an intersection
+join runs two faces past each other where a round would have turned. So round
+stays the default; a step or fillet narrower than the wall takes
+`corners: "sharp"`, a turned wall is `revolve`'s `wall`, and a bell blended to
+tubes is its outside minus a cavity built the same way (docs/DSL_GAPS.md,
+"hollowing a part with faces left open"). In September, over 144 parts, sharp
+built none that round could not and lost 5; two of today's three are parts the
+corpus gained in October, and `plate-stand`'s round offset aborts the kernel
+today.
+
 ## Rust/wrapper
 
 - `offset_surface` **consumes `self`**. The fork adds `impl Clone for Shape`

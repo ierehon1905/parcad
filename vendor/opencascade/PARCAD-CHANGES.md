@@ -652,3 +652,11 @@ shape. Three things came with it in `history.hxx`:
   section, twisted surface, the section not applicable here) instead of the
   empty string the caller used to turn into "raised nothing".
 - The treated edges are kept, since the history is queried by them.
+
+## `Shape::offset_surface_joined` and `OffsetJoin`
+
+`offset_surface` with the join chosen: `OffsetJoin::Arc` is what
+`offset_surface` already did; `OffsetJoin::Intersection` extends the offset
+faces until they meet, over `opencascade-sys`'s `MakeThickSolidByJoinSharp`.
+It is what `shell(t, { corners: "sharp" })` shrinks the part with. Measured
+against `Arc` over every corpus and seed part in docs/GOTCHAS.md, "A sharp shell builds three corpus parts a round one cannot, and loses nine".
