@@ -68,8 +68,9 @@ the fix.**
 - **The selector grammar is parsed twice on purpose**, in `selectors.rs` and
   `app/src/selectors.ts`. Neither is the specification; `eval/selectors.json` is,
   and both languages test against it.
-- **Every DSL export becomes a reserved word in a saved part.** Adding one is a
-  compatibility change.
+- **A part runs inside a block of its own** (`__parcadPartBody` in `dsl.ts`),
+  so its `const hole` shadows the DSL's and a new export breaks no saved part.
+  Every runner uses it.
 - **A DSL doc comment is what a model reads.** A sentence, the rules, one
   example that runs; reasons and history under `@remarks`. See
   docs/WRITING_FOR_MODELS.md.

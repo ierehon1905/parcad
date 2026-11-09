@@ -543,11 +543,9 @@ export function importPart(name: string, params: Record<string, unknown> = {}): 
 
   let fn: (...args: unknown[]) => unknown;
   try {
-    fn = new Function(...names, `${source}\n//# sourceURL=${PART_URL}${name}.js`) as typeof fn;
+    fn = new Function(...names, `${__parcadPartBody(source)}\n//# sourceURL=${PART_URL}${name}.js`) as typeof fn;
   } catch (e) {
-    const shadowed = __parcadShadowedBuiltins(source, names);
-    const why = shadowed.length ? __parcadShadowedBuiltinMessage(shadowed, names) : messageOf(e);
-    throw new Error(`${name} did not parse: ${why}`);
+    throw new Error(`${name} did not parse: ${messageOf(e)}`);
   }
   const [label] = __parcadLabelledPartKeys(source);
   if (label) throw new Error(`${name}: ${label.message}`);
@@ -566,7 +564,9 @@ export function importPart(name: string, params: Record<string, unknown> = {}): 
     if (e instanceof ImportRefusal) throw new Error(e.message);
     if (!(e instanceof Error)) throw e;
     const line = partLine(e.stack, name, source);
-    throw new Error(`${name} threw${line === undefined ? "" : ` at line ${line}`}: ${e.message}`);
+    const shadowed = e instanceof ReferenceError ? __parcadShadowedBuiltins(source, names) : [];
+    const why = shadowed.length ? __parcadShadowedBuiltinMessage(shadowed, e.message) : e.message;
+    throw new Error(`${name} threw${line === undefined ? "" : ` at line ${line}`}: ${why}`);
   } finally {
     importing.pop();
     declaredBrief = outerBrief;
@@ -607,7 +607,7 @@ function framedLine(stack: string | undefined, name: string): number | undefined
 function partLine(stack: string | undefined, name: string, source: string): number | undefined {
   if (partHeader === null) {
     try {
-      new Function(`throw new Error()\n//# sourceURL=${PART_URL}probe.js`)();
+      new Function(`${__parcadPartBody("throw new Error()")}\n//# sourceURL=${PART_URL}probe.js`)();
     } catch (e) {
       const at = framedLine(e instanceof Error ? e.stack : undefined, "probe");
       partHeader = at === undefined ? undefined : at - 1;
@@ -619,7 +619,16 @@ function partLine(stack: string | undefined, name: string, source: string): numb
   return line >= 1 && line <= source.split("\n").length ? line : undefined;
 }
 
-/** @internal Which of parcad's names a script redeclares, found by compiling it with each as a parameter. */
+/**
+ * @internal A part's source as the body `new Function` runs it in: inside a block of its
+ * own, so a part's `const clearance` shadows parcad's `clearance` instead of failing to
+ * parse. The block opens on a line of its own, which puts the part one line lower.
+ */
+export function __parcadPartBody(source: string): string {
+  return `{\n${source}\n}`;
+}
+
+/** @internal Which of parcad's names a script declares with const, let or class, found by compiling it with each as a parameter. */
 export function __parcadShadowedBuiltins(source: string, names: string[]): string[] {
   if (compiles(source, names) || !compiles(source)) return [];
   // Add the names back one at a time; each one that breaks the compile is a
@@ -642,17 +651,19 @@ function compiles(body: string, parameters: string[] = []): boolean {
   }
 }
 
-/** @internal The refusal for a script that declares parcad's own names, written for whoever wrote it. */
-export function __parcadShadowedBuiltinMessage(shadowed: string[], names: string[]): string {
+/**
+ * @internal What a ReferenceError means when the script declares one of parcad's names: the
+ * declaration hides parcad's for the whole script, above it too, so `const clearance =
+ * clearance("M5")` reads its own uninitialised self. The engines say nothing of why, and QuickJS gives no line.
+ */
+export function __parcadShadowedBuiltinMessage(shadowed: string[], message: string): string {
   const quoted = shadowed.map((name) => `\`${name}\``);
   const list = quoted.length === 1 ? quoted[0] : `${quoted.slice(0, -1).join(", ")} and ${quoted[quoted.length - 1]}`;
-  const verb = quoted.length === 1 ? "is one" : `are ${quoted.length}`;
   const example = shadowed[0];
   return (
-    `${list} ${verb} of the ${names.length} names parcad puts in every script, so a script cannot declare ` +
-    `${quoted.length === 1 ? "it" : "them"} again. Rename the local — \`${example}Mm\`, \`my${example[0].toUpperCase()}${example.slice(1)}\`, ` +
-    `or a name saying what it holds — or use parcad's own \`${example}\` instead of declaring one. ` +
-    `read_docs (topic dsl, entry \`${example}\`) says what parcad's does.`
+    `${message}. This script declares its own ${list}, which hides parcad's for the whole script, ` +
+    `above the declaration too, so a line that means parcad's \`${example}\` reads the script's before it is set. ` +
+    `Give the script's another name — \`${example}Mm\`, or one saying what it holds.`
   );
 }
 
@@ -706,7 +717,8 @@ function treatmentSource(method: SourceLocation["method"]): SourceLocation | und
     .map((frame) => frame.match(/parcad-editor\.js:(\d+):(\d+)/))
     .find((match): match is RegExpMatchArray => match !== null);
   if (!line) return undefined;
-  return { line: Number(line[1]) - 2, column: Number(line[2]), method };
+  // Two lines `new Function` puts above the body, and the one the part's block opens.
+  return { line: Number(line[1]) - 3, column: Number(line[2]), method };
 }
 
 function isQuery(value: unknown): value is object {
@@ -3213,9 +3225,9 @@ function checkTaper(taper: number, fn: string): number {
   return taper;
 }
 
-// Vector arithmetic for `pipe`. Deliberately not exported: every export becomes
-// a reserved word inside a part script, and `add`, `cross` and `unit` are names
-// a part would plausibly want for itself.
+// Vector arithmetic for `pipe`. Deliberately not exported: every export is a
+// name every part sees, and `add`, `cross` and `unit` are names a part would
+// plausibly want for itself.
 const sub = (a: PathPoint, b: PathPoint): PathPoint => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
 const dot = (a: PathPoint, b: PathPoint) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 const cross = (a: PathPoint, b: PathPoint): PathPoint => [
@@ -4379,7 +4391,7 @@ function entryHas(node: GraphNode, key: string): boolean {
  * by name, instead of failing on the field or silently dropping it. Adding a
  * graph feature means a row here and an id in `FEATURES` in
  * `crates/parcad-core/src/envelope.rs`; a host test holds the two together.
- * Not exported: every export is a reserved word in a script.
+ * Not exported: every export is a name every part sees.
  */
 const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean; doc?: (doc: Doc) => boolean })[] = [
   {
@@ -4563,9 +4575,9 @@ export type Part = Shape | Record<string, Shape | Check[] | Mechanism>;
  * `contactAtLeast` are the qualifiers to reach for there: `atLeast` on
  * `interferes` is a shared volume, which 0.002 mm³ along a coin's rim
  * satisfies at a bite of two microns (docs/COIN_HOLDER_REVIEW.md §2.3).
- * No new global: every export is a reserved word in a script (DSL_GAPS §7),
- * so `assert`, `check` and `clear` would each break saved parts, and
- * `clearance` is already taken. The one thing lost is a body named
+ * Checks are a key of the returned object rather than new globals, so
+ * `assert`, `check` and `clear` stay free for a part's own names. The one
+ * thing lost is a body named
  * `checks`, refused in a sentence. The kernel already measures every pair
  * and the snapshot already carries size, bed contact, piece count and
  * watertightness; only `wall` costs anything, the thickness sweep at the
@@ -5077,7 +5089,7 @@ function bodiesNamedBy(check: Record<string, unknown>): string[] {
 }
 
 // The runners (engine.ts, tools/run.ts, script.rs) say the same thing when a
-// script returns neither; not exported, because an export is a reserved word.
+// script returns neither; not exported, because every export is a name every part sees.
 const RETURN_HINT =
   "the script must return a shape, or an object of named shapes for a part in several bodies.\n" +
   "End it with something like:  return body.cut(hole)   or   return { base, lid }";

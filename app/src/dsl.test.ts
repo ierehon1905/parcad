@@ -30,6 +30,7 @@ import {
   union,
   vesaPattern,
   __parcadLabelledPartKeys,
+  __parcadPartBody,
   __parcadShadowedBuiltins,
   __parcadShadowedBuiltinMessage,
 } from "./dsl";
@@ -805,30 +806,45 @@ describe("selector arguments", () => {
 });
 
 /**
- * Every export is a parameter of every script, so a local called `clearance`
- * is a SyntaxError from an engine that names no identifier. The collision is
- * proved by compiling, never read off the text: docs/DSL_GAPS.md §7.
+ * A part runs inside a block of its own (`__parcadPartBody`), so its `const
+ * clearance` shadows parcad's instead of failing to parse. Reading parcad's
+ * above the part's own is a ReferenceError the engine words without a name,
+ * and the explanation names the declaration that hides it.
  */
 describe("a script that declares one of parcad's names", () => {
   const names = Object.keys(everything);
+  const run = (source: string) =>
+    new Function(...names, __parcadPartBody(source))(...names.map((n) => (everything as Record<string, unknown>)[n]));
 
-  test("is told which name, proved by compiling without it", () => {
-    expect(__parcadShadowedBuiltins("const clearance = 0.6;\nreturn box(1, 1, 1);", names)).toEqual(["clearance"]);
-    expect(__parcadShadowedBuiltins("let hull = 2, box = 3;\nreturn sphere(1);", names)).toEqual(["box", "hull"]);
-    expect(__parcadShadowedBuiltins("class Shape {}\nreturn sphere(1);", names)).toEqual(["Shape"]);
-    // A function declaration may shadow a parameter, so it is an override, not a fault.
+  test("builds, its own name hiding parcad's", () => {
+    expect(run("const clearance = 0.6;\nreturn clearance;")).toBe(0.6);
+    expect(run("let hull = 2, box = 3;\nreturn hull + box;")).toBe(5);
+    expect(run("class Shape {}\nreturn new Shape() instanceof Shape;")).toBe(true);
+    // The closing brace sits on a line of its own, so a last line that is a comment cannot swallow it.
+    expect(run("return 7; // a comment that ends the source")).toBe(7);
+  });
+
+  test("keeps its own line numbers: the block opens on a line of its own", () => {
+    expect(__parcadPartBody("return 1;").split("\n")).toEqual(["{", "return 1;", "}"]);
+  });
+
+  test("reading parcad's name above its own declaration names the declaration", () => {
+    let thrown: unknown;
+    try {
+      run('const clearance = clearance("M5");\nreturn clearance;');
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(ReferenceError);
+    expect(__parcadShadowedBuiltins('const clearance = clearance("M5");\nreturn clearance;', names)).toEqual(["clearance"]);
+    const message = __parcadShadowedBuiltinMessage(["clearance"], (thrown as Error).message);
+    expect(message).toContain("This script declares its own `clearance`, which hides parcad's for the whole script");
+    expect(__parcadShadowedBuiltinMessage(["box", "hull"], "x")).toContain("its own `box` and `hull`");
+  });
+
+  test("a function declaration or a name parcad does not have is not a shadow", () => {
     expect(__parcadShadowedBuiltins("function torus() {}\nreturn sphere(1);", names)).toEqual([]);
-  });
-
-  test("a script with a fault of its own names nothing", () => {
-    expect(__parcadShadowedBuiltins("return box(1, 1, 1;", names)).toEqual([]);
     expect(__parcadShadowedBuiltins("const closest = 0.6;\nreturn box(1, 1, 1);", names)).toEqual([]);
-  });
-
-  test("the refusal names the rename and the builtin", () => {
-    const message = __parcadShadowedBuiltinMessage(["clearance"], names);
-    expect(message).toStartWith(`\`clearance\` is one of the ${names.length} names parcad puts in every script, so a script cannot declare it again. Rename the local — \`clearanceMm\`, \`myClearance\`, or a name saying what it holds — or use parcad's own \`clearance\` instead of declaring one.`);
-    expect(__parcadShadowedBuiltinMessage(["box", "hull"], names)).toStartWith("`box` and `hull` are 2 of the");
   });
 });
 

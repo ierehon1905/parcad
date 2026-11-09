@@ -230,19 +230,10 @@ function buildGraph(source: string): BuiltGraph {
   let fn: (...args: unknown[]) => unknown;
   try {
     const executable = instrumentTreatmentCalls(S.editor().state, source);
-    fn = new Function(...names, `${executable}\n//# sourceURL=${SCRIPT_URL}`) as (
+    fn = new Function(...names, `${dsl.__parcadPartBody(executable)}\n//# sourceURL=${SCRIPT_URL}`) as (
       ...args: unknown[]
     ) => unknown;
   } catch (e) {
-    // The engine's own words name no identifier ("Cannot declare a const
-    // variable twice"); which of parcad's names the script declared is proved
-    // by compiling it without them.
-    const shadowed = dsl.__parcadShadowedBuiltins(source, names);
-    if (shadowed.length) {
-      const named = new Error(dsl.__parcadShadowedBuiltinMessage(shadowed, names));
-      named.stack = e instanceof Error ? e.stack : undefined;
-      throw atLine("the script did not parse", named, source);
-    }
     throw atLine("the script did not parse", e, source);
   }
   const [label] = dsl.__parcadLabelledPartKeys(source);
@@ -254,6 +245,13 @@ function buildGraph(source: string): BuiltGraph {
     result = fn(...names.map((n) => api[n]));
   } catch (e) {
     if (e instanceof PartNotLoaded) throw e;
+    // A part's own `const clearance` hides parcad's above it too, which the engine's words never say.
+    const shadowed = e instanceof ReferenceError ? dsl.__parcadShadowedBuiltins(source, names) : [];
+    if (shadowed.length) {
+      const named = new Error(dsl.__parcadShadowedBuiltinMessage(shadowed, (e as Error).message));
+      named.stack = (e as Error).stack;
+      throw atLine("the script threw", named, source);
+    }
     throw atLine("the script threw", e, source);
   }
   if (!(result instanceof Shape) && (typeof result !== "object" || result === null)) {
@@ -282,7 +280,7 @@ const SCRIPT_URL = "parcad-editor.js";
  */
 const HEADER_LINES = (() => {
   try {
-    new Function(`throw new Error()\n//# sourceURL=${SCRIPT_URL}`)();
+    new Function(`${dsl.__parcadPartBody("throw new Error()")}\n//# sourceURL=${SCRIPT_URL}`)();
   } catch (e) {
     const line = Number(new RegExp(`${SCRIPT_URL}:(\\d+)`).exec(String((e as Error).stack))?.[1]);
     return Number.isFinite(line) ? line - 1 : undefined;

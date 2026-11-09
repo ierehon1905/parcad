@@ -47,11 +47,9 @@ dsl.__parcadReadPartsWith(readPart, dsl as Record<string, unknown>);
 
 let fn: (...args: unknown[]) => unknown;
 try {
-  fn = new Function(...names, source) as (...args: unknown[]) => unknown;
+  fn = new Function(...names, dsl.__parcadPartBody(source)) as (...args: unknown[]) => unknown;
 } catch (e) {
-  const shadowed = dsl.__parcadShadowedBuiltins(source, names);
-  const why = shadowed.length ? dsl.__parcadShadowedBuiltinMessage(shadowed, names) : (e as Error).message;
-  console.error(`${file} did not parse: ${why}`);
+  console.error(`${file} did not parse: ${(e as Error).message}`);
   process.exit(1);
 }
 const [label] = dsl.__parcadLabelledPartKeys(source);
@@ -60,7 +58,15 @@ if (label) {
   process.exit(1);
 }
 
-const result = fn(...names.map((n) => (dsl as Record<string, unknown>)[n]));
+let result: unknown;
+try {
+  result = fn(...names.map((n) => (dsl as Record<string, unknown>)[n]));
+} catch (e) {
+  const shadowed = e instanceof ReferenceError ? dsl.__parcadShadowedBuiltins(source, names) : [];
+  if (!shadowed.length) throw e;
+  console.error(`${file} threw: ${dsl.__parcadShadowedBuiltinMessage(shadowed, (e as Error).message)}`);
+  process.exit(1);
+}
 if (!(result instanceof Shape) && (typeof result !== "object" || result === null)) {
   console.error(
     `${file} must return a shape, or an object of named shapes for a part in several bodies, ` +

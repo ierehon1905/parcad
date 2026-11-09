@@ -83,8 +83,9 @@ const RUNNER: &str = r#"
   const lines = source.split("\n");
 
   // QuickJS names the script `<input>` in a stack, counting the two lines
-  // `new Function` wraps it in; the first such frame is the script's own call.
-  const HEADER = 2;
+  // `new Function` wraps it in and the one the part's block opens
+  // (`__parcadPartBody`); the first such frame is the script's own call.
+  const HEADER = 3;
   const lineOf = (stack) => {
     const m = /<input>:(\d+):(\d+)/.exec(stack || "");
     const line = m ? Number(m[1]) - HEADER : 0;
@@ -103,18 +104,8 @@ const RUNNER: &str = r#"
 
   let fn;
   try {
-    fn = new Function(...names, source);
+    fn = new Function(...names, dsl.__parcadPartBody(source));
   } catch (e) {
-    // QuickJS says "invalid redefinition of parameter name" and names
-    // nothing; which of parcad's names the script declared is proved by
-    // compiling it without them.
-    const shadowed = dsl.__parcadShadowedBuiltins(source, names);
-    if (shadowed.length) {
-      return failed("the script did not parse", {
-        message: dsl.__parcadShadowedBuiltinMessage(shadowed, names),
-        stack: e && e.stack,
-      });
-    }
     return failed("the script did not parse", e);
   }
   const [label] = dsl.__parcadLabelledPartKeys(source);
@@ -127,6 +118,15 @@ const RUNNER: &str = r#"
   try {
     result = fn(...names.map((n) => dsl[n]));
   } catch (e) {
+    // QuickJS says "clearance is not initialized", with no line and no word of
+    // why: a part's own `const clearance` hides parcad's above it too.
+    const shadowed = e instanceof ReferenceError ? dsl.__parcadShadowedBuiltins(source, names) : [];
+    if (shadowed.length) {
+      return failed("the script threw", {
+        message: dsl.__parcadShadowedBuiltinMessage(shadowed, e.message),
+        stack: e.stack,
+      });
+    }
     return failed("the script threw", e);
   }
 
@@ -1090,18 +1090,24 @@ return box(1, 1, 1);
         );
     }
 
-    /// Every export is a parameter of every script, and the engine's own
-    /// refusal names no identifier. The coin-holder session hit this on its
-    /// first build and went to read_docs about an unrelated function.
+    /// A part runs inside a block of its own, so its `const clearance` shadows
+    /// parcad's instead of failing to parse; the coin-holder session lost a
+    /// build to that, and every new export used to break saved parts the same
+    /// way. Reading parcad's `clearance` above the part's own is a
+    /// ReferenceError QuickJS words as "clearance is not initialized", with no
+    /// line, so the refusal names the declaration that hides it.
     #[test]
-    fn a_redeclared_builtin_is_named_with_its_fix() {
-        let error = build("const coin = 23.25;\nconst clearance = 0.6;\nreturn box(coin + clearance, 10, 10);")
+    fn a_part_may_name_a_local_after_a_builtin() {
+        let built = build("const coin = 23.25;\nconst clearance = 0.6;\nreturn box(coin + clearance, 10, 10);")
+            .expect("a local may shadow a DSL name");
+        assert!(!built.graph.is_null());
+
+        let error = build("const coin = 23.25;\nconst clearance = clearance(\"M5\");\nreturn box(10, 10, clearance);")
             .err()
-            .expect("clearance is a builtin");
-        assert!(error.starts_with("the script did not parse at line 2:\n`clearance` is one of the "), "{error}");
-        assert!(error.contains("names parcad puts in every script, so a script cannot declare it again. Rename the local — `clearanceMm`, `myClearance`,"), "{error}");
-        assert!(error.contains("\n  2 | const clearance = 0.6;"), "{error}");
-        assert!(!error.contains("invalid redefinition"), "{error}");
+            .expect("clearance is read before the script's own is set");
+        // QuickJS puts no line on an uninitialised read, a plain variable's included.
+        assert!(error.starts_with("the script threw"), "{error}");
+        assert!(error.contains("This script declares its own `clearance`, which hides parcad's for the whole script"), "{error}");
     }
 
     /// `checks: [...]` as a statement is a label: the list is built and

@@ -270,7 +270,7 @@ and in the next two sections.
 | 5 | a list argument sent as a JSON string is refused — **done 2026-11-09** | 6 | ★★ | S | Opus |
 | 6 | field runs measure Haiku 4.5, not the current Haiku — **done 2026-11-09** | 6 | ★★ | S | Opus |
 | 7 | a right part the model cannot verify goes out unvouched | 5 | ★★ | M | Opus |
-| 8 | a DSL name as a local is a parse error | 5 | ★★ | S | Opus |
+| 8 | a DSL name as a local is a parse error — **done 2026-11-09** | 5 | ★★ | S | Opus |
 | 9 | `edit_part`'s exact-text `old` misses | 5 | ★★ | M | Opus |
 | 10 | `read_docs` has no search — **done 2026-11-09** | 5 | ★★ | S | Opus |
 | 11 | the same signatures fetched every trial | 4 | ★★ | S | Opus |
@@ -435,7 +435,15 @@ point). Counted by trial, most-hit first:
   (`"{" + source + "\n}"`, same line numbers) lets a part's own `const` shadow a
   DSL name. That would also retire the rule that every new export is a
   compatibility change. Check QuickJS, the editor's type service and
-  `editor_types.rs` agree before relying on it.
+  `editor_types.rs` agree before relying on it. *Done 2026-11-09:* every runner
+  (`engine.ts`, `importPart`, `tools/run.ts`, `script.rs`) compiles
+  `__parcadPartBody(source)`, the source in a block that opens on a line of
+  its own. The editor's type service already wraps a part in a function, so
+  it accepted the shadow all along; external editors run no diagnostics.
+  Reading the export above the part's own declaration is a ReferenceError,
+  which QuickJS words as "clearance is not initialized" with no line, so each
+  runner adds which declaration hides it. `which-name-is-taken`, the field
+  case for the old refusal, is retired with it.
 - **`fillet(selector, radius)`** — 2 trials (Sonnet), and this bench's author
   wrote it too. The refusal names the fix; taking either order when one
   argument is a number and the other a selector would remove the round trip

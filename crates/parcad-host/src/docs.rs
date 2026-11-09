@@ -330,9 +330,9 @@ impl Document {
         let mut preamble = String::from("# parcad DSL reference\n\n");
         preamble.push_str(shown(&module_doc(source), detail).trim_end());
         preamble.push_str(
-            "\n\nEvery name below is a reserved word in a script: a variable called `box` \
-             hides the primitive. What the language cannot do, and what to write instead, \
-             is the `gaps` topic.\n",
+            "\n\nA script may name its own variables after anything below; a `const box` \
+             hides the primitive for the whole script, above the declaration too. What the \
+             language cannot do, and what to write instead, is the `gaps` topic.\n",
         );
 
         let chapters = [
@@ -901,11 +901,12 @@ mod tests {
     /// is the point — the alternative is an export quietly missing from the one
     /// document that claims to list all of them.
     // The `__parcad` exports are the compilers' own helpers — the editor's
-    // treatment locator, the proof of which builtin a script redeclared or
-    // which `checks:` it wrote as a label — named so that no part would reach
-    // for them.
-    const NOT_IN_THE_LANGUAGE: [&str; 6] = [
+    // treatment locator, the block a part runs in, the proof of which builtin
+    // a script shadowed or which `checks:` it wrote as a label — named so that
+    // no part would reach for them.
+    const NOT_IN_THE_LANGUAGE: [&str; 7] = [
         "__parcadTreatmentSource",
+        "__parcadPartBody",
         "__parcadShadowedBuiltins",
         "__parcadShadowedBuiltinMessage",
         "__parcadLabelledPartKeys",
@@ -947,7 +948,7 @@ mod tests {
             assert!(
                 reference.contains(&format!("\n### {name}\n")),
                 "the DSL exports {name} and the reference does not document it. \
-                 Every export is a reserved word in a script, so a caller meets it \
+                 Every export is a name every script sees, so a caller meets it \
                  whether or not it is written down. Fix the parser in docs.rs, or add \
                  it to NOT_IN_THE_LANGUAGE and say why."
             );

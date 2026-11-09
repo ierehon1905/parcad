@@ -378,7 +378,10 @@ matched at all".
   pocket still oversizes by hand.
 - **`grid()` returns `[x, y]`, but placements are `[x, y, z]`.** Lifting a
   pattern onto another plane is `.map(([x, z]) => [x, 0, z + h])`.
-- **Every DSL export is a reserved word inside a script.** Scripts run as
+- **A DSL export was a reserved word inside a script — FIXED 2026-11-09.** A
+  part now runs inside a block of its own, so `const clearance = 0.6` shadows
+  the table; reading parcad's `clearance` above that line is a ReferenceError
+  the runners explain. What follows is how it was. Scripts ran as
   `new Function(...names, source)`, so `const hole = cylinder(3, 40)` collides
   with an export called `hole` and the script fails to parse. Adding `hole()` and
   `tapDrill()` broke four scripts in this repo at once, which is how the hazard

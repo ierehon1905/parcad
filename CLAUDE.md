@@ -127,10 +127,12 @@ when `dsl.ts` changes under it — it just quietly describes an older part. The 
 
 ## Conventions
 
-**Every DSL export becomes a reserved word in a script.** Parts run as
-`new Function(...names, source)`, so adding an export called `hole` breaks every
-saved part that wrote `const hole = ...`. Adding one is a compatibility change:
-prefer a name a part would not choose for a local, and check `examples/` builds.
+**A part runs inside a block of its own.** Every runner compiles
+`new Function(...names, __parcadPartBody(source))`, so a part's `const hole`
+shadows the DSL's `hole` instead of failing to parse, and a new export breaks no
+saved part. Reading the export above the part's own declaration is a
+ReferenceError each runner explains with `__parcadShadowedBuiltinMessage`. A new
+runner uses the same wrapper, or its line numbers are one off.
 
 **A DSL doc comment is written for a model writing a part.** `read_docs` serves
 it: one sentence, the rules as bullets, one self-contained `@example` that
