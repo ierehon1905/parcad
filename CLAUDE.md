@@ -73,7 +73,8 @@ git config core.hooksPath .githooks
 
 **`--fast` builds no worker and runs no geometry.** It is the kernel crates in
 the `test` profile — incremental, opt-level 2 — and it deliberately skips
-`parcad-host`'s tests (a 5 s sleep in the sandbox test), `parcad-app`, and
+`parcad-host`'s tests (a 5 s sleep in the sandbox test) except its `read_docs`
+size tests when a file `read_docs` serves has changed, `parcad-app`, and
 `tools/build-worker.sh` (relinking 26 MB of OpenCASCADE). Both belong to the full run. Release is
 compiled hard and slowly on purpose; the edit loop is the `iterate` profile
 (release's opt-level, no LTO, incremental): a one-line kernel edit relinks the

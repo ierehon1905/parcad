@@ -71,6 +71,15 @@ if [ "$fast" = 1 ]; then
   step "app: tsc, bun test"
   (cd app && bun x tsc --noEmit && bun test src)
 
+  # read_docs serves these files under a per-reply size cap, and a new heading
+  # in one grows every reply; on 2026-11-09 only pre-push caught it.
+  served="app/src/dsl.ts docs/DSL_GAPS.md docs/GOTCHAS.md docs/OP_ROADMAP.md docs/styles/field-instrument.md"
+  # shellcheck disable=SC2086
+  if [ -n "$(git status --porcelain -- $served)" ]; then
+    step "cargo test -p parcad-host --lib docs:: (a file read_docs serves changed)"
+    cargo test --locked -p parcad-host --lib docs::
+  fi
+
   step "field/selftest.py"
   field/selftest.py
 
