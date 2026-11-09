@@ -600,7 +600,7 @@ fn perceive(
     spec: &parcad_occt::Perceive,
     budget: Option<std::time::Duration>,
 ) -> Result<parcad_occt::Perceived, String> {
-    let mut opts = parcad_occt::Options::default();
+    let mut opts = kernel_options();
     if let Some(budget) = budget {
         opts.timeout = budget;
     }
@@ -960,6 +960,9 @@ impl Kept {
 /// file name, or one under `renders/`, where the views a reply draws are kept.
 pub fn keep_export(name: &str, bytes: &[u8]) -> Result<Kept, String> {
     let file = export_path(name).map_err(|refused| refused.message())?;
+    if !name.starts_with("renders/") {
+        crate::limits::exported(name, bytes.len())?;
+    }
     let dir = file.parent().ok_or_else(|| format!("{name:?} is under no folder"))?;
     std::fs::create_dir_all(dir).map_err(|e| format!("creating the export folder {}: {e}", tenant::shown(dir)))?;
     std::fs::write(&file, bytes).map_err(|e| format!("writing {}: {e}", tenant::shown(&file)))?;
@@ -1163,7 +1166,7 @@ pub fn evaluate_in_background(doc: &Doc) -> Result<Evaluated, String> {
     let t0 = std::time::Instant::now();
     let opts = parcad_occt::Options {
         uncached: true,
-        ..Default::default()
+        ..kernel_options()
     };
     let success = kernel(|| parcad_occt::evaluate(doc, &opts).map_err(|e| format!("{e}")))?;
     let wall_ms = crate::page::kernel_took().unwrap_or_else(|| t0.elapsed()).as_millis() as u64;
@@ -1193,33 +1196,41 @@ pub fn budget(timeout_s: Option<f64>) -> Budget {
     }
 }
 
-/// The host's cap on builds in flight, `--builds N` on `parcad serve`. The
-/// worker pool caps nothing: N concurrent requests are N workers.
-static BUILDS_IN_FLIGHT: std::sync::OnceLock<tenant::Gate> = std::sync::OnceLock::new();
-
+/// The host's cap on builds in flight, `--builds N` on a local `parcad
+/// serve`: the worker pool caps nothing, so N concurrent requests are N
+/// workers. A hosted server's cap is its accounts' `tenant::Policy`.
 pub fn cap_builds(at_once: usize) -> Result<(), String> {
-    BUILDS_IN_FLIGHT
-        .set(tenant::Gate::new(Some(at_once)))
-        .map_err(|_| "the host's cap on builds was already set".to_string())
+    crate::limits::cap_local_builds(at_once)
 }
 
-/// Run `work`, which calls the kernel, inside the account's cap and the
-/// host's on builds in flight. A slot that does not come within the account's
-/// own kernel limit is a refusal naming the fix, not a wait whose end the
-/// caller cannot see.
+/// The kernel options a call starts from: the host's default, within the
+/// kernel time the account may ask for.
+fn kernel_options() -> parcad_occt::Options {
+    let mut opts = parcad_occt::Options::default();
+    opts.timeout = opts.timeout.min(tenant::current().limits.kernel_timeout_max);
+    opts
+}
+
+/// Run `work`, which calls the kernel. On a hosted server the call it is part
+/// of already holds its build slots, from its script through its render
+/// (`limits.rs`), and a kernel call outside one is a route that skipped
+/// admission. A local host waits, in order, for its own cap if it has one.
 fn kernel<T>(work: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     let tenant = tenant::current();
-    let patience = tenant.limits.kernel_timeout_max;
-    let Some(_own) = tenant.builds.take(patience) else {
-        return Err(format!(
-            "{} builds are already running for this account; wait for one to finish, or lower timeout_s",
-            tenant.limits.concurrent_builds.unwrap_or(0)
-        ));
-    };
-    let Some(host) = BUILDS_IN_FLIGHT.get() else {
+    if tenant.mode == Mode::Hosted {
+        if !crate::limits::current().is_some_and(|call| call.builds()) {
+            return Err("this route reached the kernel without a build slot, which is a bug in parcad: \
+                        the route must be admitted as a build (limits::BUILD_TOOLS, http::admitted)"
+                .to_string());
+        }
+        crate::limits::kernel_ran();
+        return work();
+    }
+    let Some(host) = crate::limits::local_builds() else {
         return work();
     };
-    let Some(_shared) = host.take(patience) else {
+    let patience = tenant.limits.kernel_timeout_max;
+    let Some(_slot) = host.take_blocking(patience) else {
         return Err(format!(
             "the server is at its cap of {} builds at once; wait for one to finish, or lower timeout_s",
             host.cap().unwrap_or(0)
@@ -1369,11 +1380,12 @@ fn build_exact(
         Some(built)
     });
     if let Some(built) = hit {
+        crate::limits::build_reused();
         return Ok(built);
     }
 
     let t0 = std::time::Instant::now();
-    let mut opts = parcad_occt::Options::default();
+    let mut opts = kernel_options();
     if let Some(budget) = budget {
         opts.timeout = budget;
     }
@@ -1420,7 +1432,7 @@ fn build_exact(
 /// looking at.
 pub fn inspect_edge_target(doc: &Doc, node: usize) -> Result<parcad_occt::TargetPreview, String> {
     kernel(|| {
-        parcad_occt::inspect_edge_target(doc, node, &parcad_occt::Options::default())
+        parcad_occt::inspect_edge_target(doc, node, &kernel_options())
             .map_err(|e| format!("{e}"))
     })
 }
@@ -1927,7 +1939,7 @@ pub fn probe_step(path: &str, keep_faces: bool) -> Result<parcad_occt::StepProbe
         ));
     }
     let mut probe =
-        kernel(|| parcad_occt::probe_step(p, &parcad_occt::Options::default()).map_err(|e| format!("{e}")))?;
+        kernel(|| parcad_occt::probe_step(p, &kernel_options()).map_err(|e| format!("{e}")))?;
     if !keep_faces {
         for solid in &mut probe.solids {
             solid.faces.clear();
@@ -1962,7 +1974,8 @@ pub struct Capability {
 /// folders of their own, bearer tokens in front of `/mcp` and `/api`, exports
 /// fetched back from `/api/exports/<name>`, every `url` a reply carries signed
 /// so it fetches without the bearer until it expires, and per-account limits
-/// on kernel time, builds in flight and request size.
+/// on calls, builds, time, sizes and storage (`limits.rs`), each one a reply
+/// saying when to call again or to tell the user.
 pub const FEATURES: &[&str] = &["tenants", "bearer-auth", "export-download", "signed-links", "limits"];
 
 pub fn capability(hosted: bool) -> Capability {
@@ -1983,7 +1996,7 @@ pub fn check_fit(part: &str, reference: &str) -> Result<parcad_occt::FitReport, 
             .map_err(|e| format!("the reference script: {e}"))?,
     )?;
     kernel(|| {
-        parcad_occt::check_fit(&part, &other, &parcad_occt::Options::default())
+        parcad_occt::check_fit(&part, &other, &kernel_options())
             .map_err(|e| format!("{e}"))
     })
 }
@@ -2093,6 +2106,7 @@ pub fn resolve_script(
         }
     }
     let script = apply_edits(&before, edits, &what)?;
+    crate::limits::script_fits(&script)?;
     Ok(Resolved {
         script,
         project,
@@ -2243,7 +2257,7 @@ pub(crate) mod tests {
             );
             let plain_http = crate::tenant::PublicHost::parse("http://127.0.0.1:4398").unwrap();
             let plain_links = std::sync::Arc::new(crate::signing::tests::links(plain_http));
-            let under_test = crate::tenant::Tenant::hosted(crate::tenant::TenantId::new("b").unwrap(), &tenants, &plain_links);
+            let under_test = crate::tenant::Tenant::hosted(crate::tenant::TenantId::new("b").unwrap(), &tenants, &plain_links, &crate::tenant::Policy::hosted());
             std::fs::create_dir_all(&under_test.root).unwrap();
             let kept = crate::tenant::scope(std::sync::Arc::new(under_test), || keep_export("x.3mf", b"model").unwrap());
             assert_eq!(
@@ -2408,7 +2422,7 @@ pub(crate) mod tests {
             (budget(Some(600.0)), budget(None))
         });
         assert_eq!(on_server.0.kernel, Duration::from_secs(60));
-        assert_eq!(on_server.0.script, Duration::from_secs(120));
+        assert_eq!(on_server.0.script, Duration::from_secs(30), "a server's script stops at 30 s, however much kernel it asks for");
         assert_eq!(on_server.1.kernel, parcad_occt::default_timeout().min(Duration::from_secs(60)));
 
         let local = crate::tenant::tests::local_at(&tenants);
@@ -2424,53 +2438,26 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&tenants);
     }
 
-    /// A third build for one account waits its kernel limit for a slot, then
-    /// is refused naming the fix; a local user has no such cap.
+    /// A hosted kernel call runs only inside a call admitted as a build,
+    /// which holds the account's and the server's slots for all of it, and
+    /// is counted there; one outside is a route that skipped admission and
+    /// says so. A local host has no cap, or `--builds N`'s.
     #[test]
-    fn a_third_concurrent_build_waits_then_is_refused_naming_the_fix() {
+    fn a_hosted_kernel_call_needs_an_admitted_build_and_a_local_one_does_not() {
         use std::sync::{Arc, Barrier};
         let tenants = crate::tenant::tests::fresh_root("tenants");
-        let patience = Duration::from_millis(300);
-        let account = Arc::new(crate::tenant::Tenant::new(
-            crate::tenant::TenantId::new("a").unwrap(),
-            tenants.join("a"),
-            tenants.join("a/.exports"),
-            Mode::Hosted,
-            crate::tenant::Limits {
-                kernel_timeout_max: patience,
-                ..crate::tenant::Limits::hosted()
-            },
-            Some(Arc::new(crate::tenant::tests::links())),
-        ));
-        let started = Arc::new(Barrier::new(3));
-        let release = Arc::new(Barrier::new(3));
-        let builders: Vec<_> = (0..2)
-            .map(|_| {
-                let account = account.clone();
-                let started = started.clone();
-                let release = release.clone();
-                std::thread::spawn(move || {
-                    crate::tenant::scope(account, || {
-                        kernel(|| {
-                            started.wait();
-                            release.wait();
-                            Ok(())
-                        })
-                    })
-                })
-            })
-            .collect();
-        started.wait();
-        let t0 = std::time::Instant::now();
+        let account = crate::tenant::tests::hosted_at("a", &tenants);
         let refused = crate::tenant::scope(account.clone(), || kernel(|| Ok(()))).unwrap_err();
-        assert!(t0.elapsed() >= patience, "it waited for a slot first: {:?}", t0.elapsed());
-        assert!(refused.contains("2 builds are already running for this account"), "{refused}");
-        assert!(refused.contains("lower timeout_s"), "the refusal names the fix: {refused}");
-        release.wait();
-        for builder in builders {
-            builder.join().unwrap().unwrap();
-        }
-        assert_eq!(crate::tenant::scope(account, || kernel(|| Ok(7))), Ok(7), "a freed slot is taken again");
+        assert!(refused.contains("reached the kernel without a build slot, which is a bug in parcad"), "{refused}");
+
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_time().build().unwrap();
+        let ask = |tool, kind| crate::limits::Ask { tool, arguments: b"{}", kind, exports: false };
+        let light = runtime.block_on(crate::limits::admit(&account, &ask("read_docs", crate::limits::Kind::Light))).unwrap();
+        let inside_light = crate::tenant::scope(account.clone(), || crate::limits::enter(Some(light), || kernel(|| Ok(()))));
+        assert!(inside_light.is_err(), "a light call holds no build slot, and a kernel call in it is refused");
+        let build = runtime.block_on(crate::limits::admit(&account, &ask("evaluate_part", crate::limits::Kind::Build))).unwrap();
+        let ran = crate::tenant::scope(account.clone(), || crate::limits::enter(Some(build), || kernel(|| Ok(7))));
+        assert_eq!(ran, Ok(7));
 
         let local = crate::tenant::tests::local_at(&tenants);
         let inside = Arc::new(Barrier::new(4));

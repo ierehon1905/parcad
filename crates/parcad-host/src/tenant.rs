@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 /// An account's name on disk and in every key: one to 63 characters of
@@ -70,103 +70,7 @@ pub enum Mode {
     Hosted,
 }
 
-/// What one account may ask of the host per call, and how many calls at
-/// once. `service::budget` and `service::kernel` apply them; `mcp::record`
-/// the body. Sized from docs/HOSTING.md: a median build is 53 ms, the p90
-/// 1.5 s and the longest part in the corpus 36 s, so an account that needs
-/// more than a minute of kernel is asking for something no part needs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Limits {
-    /// The most kernel time a call's `timeout_s` may ask for.
-    pub kernel_timeout_max: Duration,
-    /// The most a call may raise the script sandbox's clock backstop to.
-    pub script_backstop_max: Duration,
-    /// Builds in flight at once for this account; `None` is no cap.
-    pub concurrent_builds: Option<usize>,
-    /// The largest request body `/mcp` reads.
-    pub body_bytes: usize,
-}
-
-impl Limits {
-    /// Today's values for the machine's own user, which no limit of these
-    /// has ever bounded in practice.
-    pub fn local() -> Limits {
-        Limits {
-            kernel_timeout_max: Duration::from_secs(600),
-            script_backstop_max: Duration::from_secs(600),
-            concurrent_builds: None,
-            body_bytes: 32 * 1024 * 1024,
-        }
-    }
-
-    /// One account among many on a server whose pool caps nothing.
-    pub fn hosted() -> Limits {
-        Limits {
-            kernel_timeout_max: Duration::from_secs(60),
-            script_backstop_max: Duration::from_secs(120),
-            concurrent_builds: Some(2),
-            body_bytes: 4 * 1024 * 1024,
-        }
-    }
-}
-
-/// So many at once: a counting gate for threads, since the kernel is called
-/// from blocking ones. `take` waits up to `patience` for a slot and says
-/// when none came.
-#[derive(Debug)]
-pub struct Gate {
-    slots: Mutex<Slots>,
-    freed: Condvar,
-}
-
-#[derive(Debug)]
-struct Slots {
-    cap: Option<usize>,
-    taken: usize,
-}
-
-impl Gate {
-    pub fn new(cap: Option<usize>) -> Gate {
-        Gate {
-            slots: Mutex::new(Slots { cap, taken: 0 }),
-            freed: Condvar::new(),
-        }
-    }
-
-    pub fn cap(&self) -> Option<usize> {
-        self.slots.lock().unwrap_or_else(|e| e.into_inner()).cap
-    }
-
-    pub fn take(&self, patience: Duration) -> Option<Pass<'_>> {
-        let deadline = std::time::Instant::now() + patience;
-        let mut slots = self.slots.lock().unwrap_or_else(|e| e.into_inner());
-        loop {
-            if slots.cap.is_none_or(|cap| slots.taken < cap) {
-                slots.taken += 1;
-                return Some(Pass(self));
-            }
-            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
-            if remaining.is_zero() {
-                return None;
-            }
-            slots = self
-                .freed
-                .wait_timeout(slots, remaining)
-                .unwrap_or_else(|e| e.into_inner())
-                .0;
-        }
-    }
-}
-
-/// A slot taken, given back when dropped.
-pub struct Pass<'a>(&'a Gate);
-
-impl Drop for Pass<'_> {
-    fn drop(&mut self) {
-        self.0.slots.lock().unwrap_or_else(|e| e.into_inner()).taken -= 1;
-        self.0.freed.notify_one();
-    }
-}
+pub use crate::limits::Limits;
 
 /// Where a hosted server is reached from outside: `https://cad.example.com`
 /// behind a TLS front, or `http://127.0.0.1:4398` for a host under test. A
@@ -237,8 +141,36 @@ pub struct Tenant {
     /// On a hosted server, where it is reached from outside and how a reply's
     /// `url` is signed; a local user has the files and needs no URL.
     pub links: Option<Arc<Links>>,
-    /// This account's builds in flight, capped by `limits.concurrent_builds`.
-    pub builds: Gate,
+    /// What this account has in progress and has spent (`limits.rs`).
+    pub account: crate::limits::Account,
+    /// The server's builds in flight, shared by every account on it.
+    pub server: Option<Arc<crate::limits::Gate>>,
+    /// The parts a hosted server ships, read-only and listed beside the
+    /// account's own instead of copied into its folder (`projects.rs`).
+    pub shipped: Option<PathBuf>,
+}
+
+/// What a hosted server holds every account to, set once when it starts.
+#[derive(Debug, Clone)]
+pub struct Policy {
+    pub limits: Limits,
+    /// The server's cap on builds in flight, `--builds N`.
+    pub server: Arc<crate::limits::Gate>,
+    /// The shipped parts, `PARCAD_SEED_DIR` or where the binary finds them.
+    pub shipped: Option<PathBuf>,
+}
+
+impl Policy {
+    /// The hosted defaults: [`Limits::hosted`], a build per core, the
+    /// examples where `projects::seed` would have copied them from.
+    pub fn hosted() -> Policy {
+        let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
+        Policy {
+            limits: Limits::hosted(),
+            server: Arc::new(crate::limits::Gate::new(Some(cores))),
+            shipped: crate::projects::shipped_dir(),
+        }
+    }
 }
 
 impl Tenant {
@@ -265,14 +197,17 @@ impl Tenant {
     }
 
     /// One account on a server whose replies link out through `links`,
-    /// rooted in its own folder under `tenants`. The folder is created and
-    /// seeded by `projects::seed` the first time the account is resolved;
-    /// exports go in `.exports` under it, dotted so the parts picker walks
-    /// past them.
-    pub fn hosted(id: TenantId, tenants: &Path, links: &Arc<Links>) -> Tenant {
+    /// rooted in its own folder under `tenants`, under the server's
+    /// `policy`. The folder is created the first time the account is
+    /// resolved; exports go in `.exports` under it, dotted so the parts
+    /// picker walks past them.
+    pub fn hosted(id: TenantId, tenants: &Path, links: &Arc<Links>, policy: &Policy) -> Tenant {
         let root = tenants.join(id.as_str());
         let exports = root.join(".exports");
-        Tenant::new(id, root, exports, Mode::Hosted, Limits::hosted(), Some(links.clone()))
+        let mut tenant = Tenant::new(id, root, exports, Mode::Hosted, policy.limits, Some(links.clone()));
+        tenant.server = Some(policy.server.clone());
+        tenant.shipped = policy.shipped.clone();
+        tenant
     }
 
     pub(crate) fn new(
@@ -290,7 +225,9 @@ impl Tenant {
             mode,
             limits,
             links,
-            builds: Gate::new(limits.concurrent_builds),
+            account: crate::limits::Account::new(&limits),
+            server: None,
+            shipped: None,
         }
     }
 
@@ -447,8 +384,9 @@ pub struct Accounts {
     tenants: PathBuf,
     links: Arc<Links>,
     tokens: Vec<TokenLine>,
-    /// Each account's tenant, made and seeded on its first request, so its
-    /// `Arc<Tenant>` and its folder exist once.
+    policy: Policy,
+    /// Each account's tenant, made on its first request, so its
+    /// `Arc<Tenant>`, its folder and its slots exist once.
     resolved: Mutex<HashMap<TenantId, Arc<Tenant>>>,
 }
 
@@ -480,8 +418,24 @@ impl Accounts {
             tenants: tenants.to_path_buf(),
             links: Arc::new(links),
             tokens: lines,
+            policy: Policy::hosted(),
             resolved: Mutex::new(HashMap::new()),
         })
+    }
+
+    /// Hold every account to `policy` rather than [`Policy::hosted`]. Set
+    /// before the first request: an account resolved earlier keeps its own.
+    pub fn governed(mut self, policy: Policy) -> Accounts {
+        self.policy = policy;
+        self
+    }
+
+    pub fn policy(&self) -> &Policy {
+        &self.policy
+    }
+
+    pub fn tenants(&self) -> &Path {
+        &self.tenants
     }
 
     pub fn tokens(&self) -> usize {
@@ -530,13 +484,13 @@ impl Accounts {
         self.open(id)
     }
 
-    /// The account's tenant, made and seeded on its first request.
+    /// The account's tenant, made on its first request.
     fn open(&self, id: &TenantId) -> Result<Arc<Tenant>, Refused> {
         let mut resolved = self.resolved.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(tenant) = resolved.get(id) {
             return Ok(tenant.clone());
         }
-        let tenant = Arc::new(Tenant::hosted(id.clone(), &self.tenants, &self.links));
+        let tenant = Arc::new(Tenant::hosted(id.clone(), &self.tenants, &self.links, &self.policy));
         scope(tenant.clone(), crate::projects::seed).map_err(|e| {
             Refused::Unready(format!(
                 "preparing the folder for account {id}: {e}. The server's operator has to make \
@@ -571,6 +525,27 @@ static REQUIRED: AtomicBool = AtomicBool::new(false);
 /// calls this before it listens.
 pub fn require() {
     REQUIRED.store(true, Ordering::Relaxed);
+}
+
+/// What a `spawn_blocking` must carry over: the tenant, and the call it is
+/// part of, whose slots the blocking work holds (`limits.rs`). Capture it on
+/// the request's task and [`Handoff::run`] the work inside.
+pub struct Handoff {
+    tenant: Arc<Tenant>,
+    call: Option<Arc<crate::limits::Call>>,
+}
+
+pub fn handoff() -> Handoff {
+    Handoff {
+        tenant: current(),
+        call: crate::limits::current(),
+    }
+}
+
+impl Handoff {
+    pub fn run<T>(self, work: impl FnOnce() -> T) -> T {
+        scope(self.tenant, || crate::limits::enter(self.call, work))
+    }
 }
 
 /// The tenant of the work in progress: the innermost [`scope`] on this
@@ -695,7 +670,36 @@ pub(crate) mod tests {
 
     /// A hosted tenant under `tenants`, its folder created as a resolve would.
     pub(crate) fn hosted_at(id: &str, tenants: &Path) -> Arc<Tenant> {
-        let tenant = Tenant::hosted(TenantId::new(id).expect("a test id"), tenants, &Arc::new(links()));
+        hosted_with(id, tenants, Limits::hosted(), None)
+    }
+
+    /// `work` as `tenant`, inside a build admitted for it: how a test calls a
+    /// hosted tool function directly, as `call_tool` would have let it in.
+    pub(crate) fn as_build<T>(tenant: Arc<Tenant>, work: impl FnOnce() -> T) -> T {
+        let call = crate::limits::build_call(&tenant);
+        scope(tenant, || crate::limits::enter(Some(call), work))
+    }
+
+    /// The same, held to `limits`, its builds counted against `server`, on
+    /// a server that ships no parts.
+    pub(crate) fn hosted_with(id: &str, tenants: &Path, limits: Limits, server: Option<Arc<crate::limits::Gate>>) -> Arc<Tenant> {
+        hosted_shipping(id, tenants, limits, server, None)
+    }
+
+    /// The same, on a server that ships the parts in `shipped`.
+    pub(crate) fn hosted_shipping(
+        id: &str,
+        tenants: &Path,
+        limits: Limits,
+        server: Option<Arc<crate::limits::Gate>>,
+        shipped: Option<PathBuf>,
+    ) -> Arc<Tenant> {
+        let policy = Policy {
+            limits,
+            server: server.unwrap_or_else(|| Arc::new(crate::limits::Gate::new(None))),
+            shipped,
+        };
+        let tenant = Tenant::hosted(TenantId::new(id).expect("a test id"), tenants, &Arc::new(links()), &policy);
         std::fs::create_dir_all(&tenant.root).expect("the tenant's folder");
         Arc::new(tenant)
     }
@@ -734,7 +738,7 @@ pub(crate) mod tests {
     fn a_hosted_tenant_lives_in_its_own_folder_under_the_tenants_dir() {
         let reached = PublicHost::parse("cad.example.com").unwrap();
         let links = Arc::new(crate::signing::tests::links(reached.clone()));
-        let tenant = Tenant::hosted(TenantId::new("acme").unwrap(), Path::new("/srv/parcad/tenants"), &links);
+        let tenant = Tenant::hosted(TenantId::new("acme").unwrap(), Path::new("/srv/parcad/tenants"), &links, &Policy::hosted());
         assert_eq!(tenant.root, Path::new("/srv/parcad/tenants/acme"));
         assert_eq!(tenant.exports, Path::new("/srv/parcad/tenants/acme/.exports"));
         assert_eq!(tenant.mode, Mode::Hosted);

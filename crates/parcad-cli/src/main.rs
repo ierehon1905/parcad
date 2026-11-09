@@ -247,7 +247,17 @@ const SERVE_USAGE: &str = "usage: parcad serve [--port N] [--bind ADDR]\n\
   --link-lifetime N  seconds a reply's url fetches its file with no bearer, 86400 (24 h)\n\
   --link-secret FILE what signs those urls: 32 random bytes, made on the first start; the tokens\n\
                      file's name plus .secret unless given. A new secret ends every link handed out\n\
-  --builds N         builds in flight at once across every account, the machine's cores by default";
+  --builds N         builds in flight at once across every account, the machine's cores by default\n\
+  --limit NAME=N     move one per-account limit (N, or off); PARCAD_LIMIT_<NAME> in the environment\n\
+                     too, which a flag overrides. Each, with its hosted default:\n\
+{limits}\n\
+  --worker-memory-mb N  the memory each kernel worker may allocate (Linux enforces it), or off;\n\
+                     PARCAD_WORKER_MEMORY_MB. By default the container's memory, less 1 GB for the\n\
+                     host, shared among --builds";
+
+fn serve_usage() -> String {
+    SERVE_USAGE.replace("{limits}", &parcad_host::limits::help(&parcad_host::limits::Limits::hosted()))
+}
 
 /// What `parcad serve` was asked for, checked whole before anything binds.
 struct Serve {
@@ -263,6 +273,9 @@ struct HostedFlags {
     public_host: parcad_host::tenant::PublicHost,
     link_secret: PathBuf,
     link_lifetime: std::time::Duration,
+    limits: parcad_host::limits::Limits,
+    /// Bytes each worker may allocate; `None` is no cap.
+    worker_memory: Option<u64>,
 }
 
 fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
@@ -275,6 +288,8 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
     let mut public_host = None;
     let mut link_secret = None;
     let mut link_lifetime = None;
+    let mut limit_flags: Vec<String> = Vec::new();
+    let mut worker_memory: Option<String> = std::env::var("PARCAD_WORKER_MEMORY_MB").ok();
     let mut args = args;
     while let Some(arg) = args.next() {
         let mut value = |what: &str| args.next().with_context(|| format!("{arg} needs {what}"));
@@ -296,11 +311,13 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
                 }
                 link_lifetime = Some(std::time::Duration::from_secs(seconds));
             }
+            "--limit" => limit_flags.push(value("NAME=VALUE")?),
+            "--worker-memory-mb" => worker_memory = Some(value("a count of MB, or off")?),
             "-h" | "--help" => {
-                eprintln!("{SERVE_USAGE}");
+                eprintln!("{}", serve_usage());
                 std::process::exit(0);
             }
-            other => anyhow::bail!("unknown argument {other:?}\n{SERVE_USAGE}"),
+            other => anyhow::bail!("unknown argument {other:?}\n{}", serve_usage()),
         }
     }
     let address = std::net::SocketAddr::new(bind, port);
@@ -317,12 +334,27 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
         if tokens.is_some() || tenants.is_some() || public_host.is_some() || link_secret.is_some() || link_lifetime.is_some() {
             anyhow::bail!("--tokens, --tenants-dir, --public-host, --link-secret and --link-lifetime are read only with --hosted");
         }
+        if !limit_flags.is_empty() {
+            anyhow::bail!("--limit bounds the accounts of a hosted server, and is read only with --hosted");
+        }
         return Ok(Serve {
             address,
             builds,
             hosted: None,
         });
     }
+    let limits = parcad_host::limits::Limits::configured(&limit_flags, |name| std::env::var(name).ok())
+        .map_err(anyhow::Error::msg)?;
+    let worker_memory = match worker_memory.as_deref().map(str::trim) {
+        None => parcad_occt::default_worker_memory(builds),
+        Some("off") => None,
+        Some(mb) => {
+            let mb: u64 = mb.parse().ok().filter(|mb| *mb > 0).with_context(|| {
+                format!("--worker-memory-mb must be a whole number of MB above 0, or off, not {mb:?}")
+            })?;
+            Some(mb << 20)
+        }
+    };
     match (tokens, tenants, public_host) {
         (Some(tokens), Some(tenants), Some(public_host)) => Ok(Serve {
             address,
@@ -333,6 +365,8 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
                 tokens,
                 tenants,
                 public_host,
+                limits,
+                worker_memory,
             }),
         }),
         (tokens, tenants, public_host) => {
@@ -366,21 +400,36 @@ fn secret_beside(tokens: &std::path::Path) -> PathBuf {
 /// is one server for many accounts instead: no UI, every request a bearer's.
 fn serve(args: impl Iterator<Item = String>) -> Result<()> {
     let options = serve_options(args)?;
-    parcad_host::service::cap_builds(options.builds).map_err(anyhow::Error::msg)?;
     let Some(flags) = options.hosted else {
+        parcad_host::service::cap_builds(options.builds).map_err(anyhow::Error::msg)?;
         return host(options.address.port());
     };
     let secret = parcad_host::signing::Secret::load_or_create(&flags.link_secret).map_err(anyhow::Error::msg)?;
     let links = parcad_host::signing::Links::new(flags.public_host, secret, flags.link_lifetime);
-    let accounts = parcad_host::tenant::Accounts::read(&flags.tokens, &flags.tenants, links).map_err(anyhow::Error::msg)?;
+    let policy = parcad_host::tenant::Policy {
+        limits: flags.limits,
+        server: std::sync::Arc::new(parcad_host::limits::Gate::new(Some(options.builds))),
+        shipped: parcad_host::projects::shipped_dir(),
+    };
+    let accounts = parcad_host::tenant::Accounts::read(&flags.tokens, &flags.tenants, links)
+        .map_err(anyhow::Error::msg)?
+        .governed(policy);
     std::fs::create_dir_all(&flags.tenants)
         .with_context(|| format!("creating the tenants folder {}", flags.tenants.display()))?;
+    parcad_occt::confine_workers(parcad_occt::WorkerLimits {
+        memory_bytes: flags.worker_memory,
+        oom_first: true,
+    });
     eprintln!(
-        "parcad: {} tokens from {}; accounts under {}; {} builds at once; links signed with {}",
+        "parcad: {} tokens from {}; accounts under {}; {} builds at once, {} per account; each worker {}; \
+         shipped parts from {}; links signed with {}",
         accounts.tokens(),
         flags.tokens.display(),
         flags.tenants.display(),
         options.builds,
+        flags.limits.builds_at_once.map_or("any".to_string(), |n| n.to_string()),
+        flags.worker_memory.map_or("uncapped".to_string(), |bytes| format!("capped at {} MB", bytes >> 20)),
+        accounts.policy().shipped.as_ref().map_or("nowhere".to_string(), |dir| dir.display().to_string()),
         flags.link_secret.display()
     );
     parcad_host::tenant::require();
@@ -887,5 +936,36 @@ mod tests {
         assert_eq!(options(&["--builds", "3", "--port", "4242"]).unwrap().builds, 3);
         let none = options(&["--builds", "0", "--port", "4242"]).err().expect("refused").to_string();
         assert!(none.contains("at least 1"), "{none}");
+    }
+
+    /// Every per-account limit moves with `--limit NAME=VALUE`, read only
+    /// with --hosted; the worker's memory cap with --worker-memory-mb, where
+    /// `off` is none.
+    #[test]
+    fn a_hosted_servers_limits_move_by_flag_and_need_hosted_mode() {
+        let hosted = |extra: &[&str]| {
+            let mut args = vec!["--hosted", "--tokens", "t", "--tenants-dir", "d", "--public-host", "h"];
+            args.extend_from_slice(extra);
+            options(&args)
+        };
+        let defaults = hosted(&[]).unwrap().hosted.expect("hosted");
+        assert_eq!(defaults.limits, parcad_host::limits::Limits::hosted());
+        let moved = hosted(&["--limit", "calls-per-minute=30", "--limit", "storage-mb=20", "--worker-memory-mb", "900"])
+            .unwrap()
+            .hosted
+            .expect("hosted");
+        assert_eq!(moved.limits.calls_per_minute, Some(30));
+        assert_eq!(moved.limits.storage_bytes, Some(20 << 20));
+        assert_eq!(moved.worker_memory, Some(900 << 20));
+        assert_eq!(hosted(&["--worker-memory-mb", "off"]).unwrap().hosted.unwrap().worker_memory, None);
+        let wrong = hosted(&["--limit", "calls=3"]).err().expect("refused").to_string();
+        assert!(wrong.contains("no limit is called \"calls\""), "{wrong}");
+        let zero = hosted(&["--worker-memory-mb", "0"]).err().expect("refused").to_string();
+        assert!(zero.contains("above 0, or off"), "{zero}");
+        let local = options(&["--limit", "calls-per-minute=30", "--port", "4242"]).err().expect("refused").to_string();
+        assert!(local.contains("read only with --hosted"), "{local}");
+        let usage = serve_usage();
+        assert!(usage.contains("calls-per-minute=60") && usage.contains("--worker-memory-mb"), "{usage}");
+        assert!(!usage.contains("{limits}"), "{usage}");
     }
 }

@@ -57,3 +57,6 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 tokio = { version = "1", default-features = false, features = ["net"] }
 # Adapts a broadcast receiver into the SSE stream browsers watch for session events.
 tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
+# A hosted account's call and build rates, as a GCRA bucket each (`limits.rs`).
+# `std` alone: the monotonic clock, no jitter and no keyed maps.
+governor = { version = "0.10", default-features = false, features = ["std"] }

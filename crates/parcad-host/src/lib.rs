@@ -21,6 +21,7 @@ pub mod docs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod editor_types;
 pub mod generative;
+pub mod limits;
 #[cfg(not(target_os = "emscripten"))]
 pub mod http;
 pub mod mcp;
@@ -32,4 +33,5 @@ pub mod script;
 pub mod service;
 pub mod session;
 pub mod signing;
+pub mod storage;
 pub mod tenant;

@@ -100,6 +100,9 @@ pub async fn serve(address: SocketAddr, assets: Arc<dyn Assets>, accounts: Optio
             crate::signing::shown(accounts.links().lifetime())
         ),
     };
+    if let Some(accounts) = &accounts {
+        crate::storage::sweep_every_hour(accounts.tenants().to_path_buf(), accounts.links().lifetime(), accounts.policy().limits);
+    }
     let router = router(assets, accounts);
     let listener = tokio::net::TcpListener::bind(address).await.map_err(|e| {
         format!(
@@ -134,7 +137,10 @@ fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router
     // exports a part over them. No frontend, which could carry no bearer.
     let page = front_page(accounts.links().host());
     let front = move || std::future::ready(Html(page.clone()));
+    // Each `/api` request is admitted as a tool call is; `/mcp` admits per
+    // tool, inside `Parcad::call_tool`, where a limit is a tool result.
     let guarded = api()
+        .route_layer(axum::middleware::from_fn(admitted))
         .nest_service("/mcp", mcp::service(assets.clone(), Some(accounts.links().host().authority())))
         .layer(axum::middleware::from_fn_with_state(Arc::new(accounts), authenticate));
     // Unguarded, so a client looking for OAuth metadata hears that there is
@@ -171,6 +177,8 @@ fn front_page(public: &tenant::PublicHost) -> String {
 <h1>ParCAD</h1>
 <p>A hosted ParCAD server. Agents connect to <code>{public}/mcp</code> with
 <code>Authorization: Bearer &lt;token&gt;</code>; this server's operator hands out the tokens.</p>
+<p>Parts here are a workspace, not an archive — download what you want to keep. Nothing is backed
+up, a part left unused for a while is deleted, and every account has limits on builds and storage.</p>
 <p>ParCAD also runs on your own machine, with no token:
 <a href="https://github.com/ierehon1905/parcad">github.com/ierehon1905/parcad</a>.</p>
 </body>
@@ -250,6 +258,64 @@ fn api<S: Clone + Send + Sync + 'static>() -> Router<S> {
             "/api/preview/{*name}",
             get(project_preview).put(save_project_preview),
         )
+}
+
+/// Admit an `/api` request for its account (`limits.rs`), or answer for it:
+/// 429 with `Retry-After` when waiting would let it in, 413 for a body or a
+/// script too large, 507 for a full account. A geometry route is a build; a
+/// signed link's download is a file read, which a chat client showing
+/// pictures makes many of, and is not counted.
+async fn admitted(request: Request, next: Next) -> Response {
+    let tenant = tenant::current();
+    let route = request.uri().path().to_string();
+    if tenant.mode != tenant::Mode::Hosted || route.starts_with("/api/exports/") {
+        return next.run(request).await;
+    }
+    let builds = ["/api/evaluate", "/api/built/", "/api/inspect-edge-target", "/api/export/"]
+        .iter()
+        .any(|prefix| route.starts_with(prefix));
+    let (parts, body) = request.into_parts();
+    let limit = tenant.limits.body_bytes;
+    let Ok(bytes) = axum::body::to_bytes(body, limit).await else {
+        return limited(&crate::limits::Limited {
+            refusal: crate::limits::Refusal::TooLarge,
+            sentence: format!("the request body is larger than {}, the most this server reads", crate::limits::size(limit as u64)),
+            retry_after: None,
+            name: "body_kb",
+            max: limit as u64 / 1024,
+        });
+    };
+    let tool = format!("{} {route}", parts.method);
+    let ask = crate::limits::Ask {
+        tool: &tool,
+        arguments: &bytes,
+        kind: if builds { crate::limits::Kind::Build } else { crate::limits::Kind::Light },
+        exports: route.starts_with("/api/export/"),
+    };
+    let call = match crate::limits::admit(&tenant, &ask).await {
+        Ok(call) => call,
+        Err(refused) => return limited(&refused),
+    };
+    let request = Request::from_parts(parts, axum::body::Body::from(bytes));
+    let response = crate::limits::within(call.clone(), next.run(request)).await;
+    match call.limited() {
+        Some(refused) if !response.status().is_success() => limited(&refused),
+        _ => response,
+    }
+}
+
+/// A limit as an `/api` answer: the sentence and the block, with the wait in
+/// `Retry-After` where waiting helps.
+fn limited(refused: &crate::limits::Limited) -> Response {
+    let status = StatusCode::from_u16(refused.refusal.status()).unwrap_or(StatusCode::TOO_MANY_REQUESTS);
+    let mut response = (status, Json(json!({ "error": refused.sentence, "limit": refused.block() }))).into_response();
+    if let Some(wait) = refused.retry_after {
+        let seconds = (wait.as_secs_f64().ceil() as u64).to_string();
+        if let Ok(value) = header::HeaderValue::from_str(&seconds) {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+    }
+    response
 }
 
 /// Resolve the request's bearer to its account, or answer for it. On the
@@ -404,8 +470,8 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T, String> + Send + 'static,
 {
-    let tenant = tenant::current();
-    match tokio::task::spawn_blocking(move || tenant::scope(tenant, work)).await {
+    let handoff = tenant::handoff();
+    match tokio::task::spawn_blocking(move || handoff.run(work)).await {
         Ok(result) => result.map_err(Failed),
         Err(e) => Err(Failed(format!("the evaluation task did not finish: {e}"))),
     }
@@ -430,20 +496,26 @@ async fn inspect_edge_target(Json(request): Json<InspectRequest>) -> Result<Resp
 
 async fn export_stl(Json(request): Json<EvaluateRequest>) -> Result<Response, Failed> {
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
-    let export = blocking(move || service::export_stl(&doc, None)).await?;
+    let export = blocking(move || counted(service::export_stl(&doc, None)?)).await?;
     Ok(download(export.filename, export.content_type, export.bytes))
 }
 
 async fn export_3mf(Json(request): Json<EvaluateRequest>) -> Result<Response, Failed> {
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
-    let export = blocking(move || service::export_3mf(&doc, None, "part")).await?;
+    let export = blocking(move || counted(service::export_3mf(&doc, None, "part")?)).await?;
     Ok(download(export.filename, export.content_type, export.bytes))
 }
 
 async fn export_step(Json(request): Json<StepRequest>) -> Result<Response, Failed> {
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
-    let export = blocking(move || service::export_step(&doc)).await?;
+    let export = blocking(move || counted(service::export_step(&doc)?)).await?;
     Ok(download(export.filename, export.content_type, export.bytes))
+}
+
+/// An export handed back whole, counted as one of the account's exports.
+fn counted(export: service::Export) -> Result<service::Export, String> {
+    crate::limits::exported(export.filename, export.bytes.len())?;
+    Ok(export)
 }
 
 async fn export_file(Path(name): Path<String>) -> Response {
@@ -627,6 +699,22 @@ mod tests {
         let accounts = tenant::Accounts::read(&file, &dir.join("tenants"), links()).unwrap();
         let port = on_a_spare_port(Some(accounts));
         (dir, acme, bolt, port)
+    }
+
+    /// Two accounts on a host whose accounts are held to `limits`, with
+    /// `server_builds` builds at once across both.
+    fn governed_accounts(limits: crate::limits::Limits, server_builds: usize) -> (std::path::PathBuf, String, String, u16) {
+        let dir = crate::tenant::tests::fresh_root("governed");
+        let file = dir.join("tokens");
+        let acme = tenant::issue(TenantId::new("acme").unwrap(), &file).unwrap();
+        let bolt = tenant::issue(TenantId::new("bolt").unwrap(), &file).unwrap();
+        let policy = tenant::Policy {
+            limits,
+            server: Arc::new(crate::limits::Gate::new(Some(server_builds))),
+            shipped: None,
+        };
+        let accounts = tenant::Accounts::read(&file, &dir.join("tenants"), links()).unwrap().governed(policy);
+        (dir, acme, bolt, on_a_spare_port(Some(accounts)))
     }
 
     /// A reply's url as a request line: the route and query, the host dropped.
@@ -912,6 +1000,122 @@ mod tests {
             ],
             &body,
         )
+    }
+
+    /// A limit reaches the model as a tool result, never a protocol error:
+    /// `isError`, the sentence saying when to call again, and the block a
+    /// program reads under `_meta["parcad/limit"]` — not in
+    /// `structuredContent`, which an SDK 1.x client checks against the
+    /// tool's output schema even on an error.
+    #[test]
+    fn a_limit_reaches_the_model_as_a_tool_result_saying_when_to_call_again() {
+        let mut limits = crate::limits::Limits::hosted();
+        limits.repeats = Some(2);
+        let (dir, acme, bolt, port) = governed_accounts(limits, 4);
+        let docs = || call_tool(port, &acme, "read_docs", serde_json::json!({ "topic": "gaps" }));
+        for _ in 0..2 {
+            let answered: serde_json::Value = serde_json::from_str(&docs().body).unwrap();
+            assert_ne!(answered["result"]["isError"], true, "{answered}");
+        }
+        let refused = docs();
+        assert_eq!(refused.status, 200, "a limit inside a tool call is no HTTP refusal: {}", refused.body);
+        let reply: serde_json::Value = serde_json::from_str(&refused.body).unwrap();
+        let result = &reply["result"];
+        assert_eq!(result["isError"], true, "{reply}");
+        let text = result["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("Not run: read_docs was called with exactly these arguments 2 times in the last 30 s"), "{text}");
+        assert!(text.contains("the same call is taken again in"), "{text}");
+        let block = &result["_meta"]["parcad/limit"];
+        assert_eq!(block["type"], "rate_limited", "{reply}");
+        assert_eq!(block["limit"], serde_json::json!({ "name": "same_call", "max": 2 }));
+        assert!(block["retry_after_seconds"].as_u64().is_some_and(|s| (1..=30).contains(&s)), "{block}");
+        assert!(result.get("structuredContent").is_none_or(|v| v.is_null()), "{reply}");
+        let other: serde_json::Value = serde_json::from_str(&call_tool(port, &bolt, "read_docs", serde_json::json!({ "topic": "gaps" })).body).unwrap();
+        assert_ne!(other["result"]["isError"], true, "another account's calls are its own: {other}");
+
+        let huge = format!("// {}\nreturn box(1, 1, 1);", "x".repeat(300 * 1024));
+        let large: serde_json::Value =
+            serde_json::from_str(&call_tool(port, &bolt, "evaluate_part", serde_json::json!({ "script": huge })).body).unwrap();
+        assert_eq!(large["result"]["isError"], true, "{large}");
+        assert!(large["result"]["content"][0]["text"].as_str().unwrap().starts_with("Not run: the script is 301 KB, over the 256 KB"));
+        assert_eq!(large["result"]["_meta"]["parcad/limit"], serde_json::json!({ "type": "too_large", "limit": { "name": "script_kb", "max": 256 } }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The gap this closed: the gate used to cover the kernel alone, so a
+    /// script spinning in the sandbox held no slot and another account's
+    /// build ran beside it on the same cores. Now a build holds the server's
+    /// slot from its script on; a second waits its `slot_wait`, then hears
+    /// the server is busy and when to call again.
+    #[test]
+    fn a_script_holds_the_servers_build_slot_and_the_next_build_hears_it_is_busy() {
+        let mut limits = crate::limits::Limits::hosted();
+        limits.slot_wait = std::time::Duration::from_millis(400);
+        let (dir, acme, bolt, port) = governed_accounts(limits, 1);
+        let spinning = std::thread::spawn(move || {
+            let script = "const t0 = Date.now(); while (Date.now() - t0 < 2000) {} throw new Error('spun');";
+            call_tool(port, &acme, "evaluate_part", serde_json::json!({ "script": script }))
+        });
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        let t0 = std::time::Instant::now();
+        let busy: serde_json::Value =
+            serde_json::from_str(&call_tool(port, &bolt, "evaluate_part", serde_json::json!({ "script": "return box(1, 1, 1);" })).body).unwrap();
+        assert!(t0.elapsed() >= std::time::Duration::from_millis(400), "it waited in line first: {:?}", t0.elapsed());
+        assert_eq!(busy["result"]["isError"], true, "{busy}");
+        let text = busy["result"]["content"][0]["text"].as_str().unwrap();
+        assert!(text.starts_with("Not run: the server is busy. It runs 1 builds at once for all its accounts"), "{text}");
+        assert_eq!(busy["result"]["_meta"]["parcad/limit"]["limit"]["name"], "server_builds_at_once");
+        assert_eq!(busy["result"]["_meta"]["parcad/limit"]["retry_after_seconds"], 30);
+        let docs: serde_json::Value =
+            serde_json::from_str(&call_tool(port, &bolt, "read_docs", serde_json::json!({})).body).unwrap();
+        assert_ne!(docs["result"]["isError"], true, "a light call holds no build slot: {docs}");
+        let spun: serde_json::Value = serde_json::from_str(&spinning.join().unwrap().body).unwrap();
+        assert!(spun["result"]["content"][0]["text"].as_str().unwrap().contains("spun"), "{spun}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An `/api` request is admitted as a tool call is, and a limit there is
+    /// 429 with `Retry-After` and the same block.
+    #[test]
+    fn an_api_request_over_a_limit_is_429_with_retry_after() {
+        let mut limits = crate::limits::Limits::hosted();
+        limits.repeats = Some(1);
+        let (dir, acme, _, port) = governed_accounts(limits, 4);
+        let list = || exchange(port, "GET", "/api/projects", &[("Authorization", &bearer(&acme))], "");
+        assert_eq!(list().status, 200);
+        let refused = list();
+        assert_eq!(refused.status, 429, "{}", refused.body);
+        let wait: u64 = refused.header("retry-after").expect("Retry-After").parse().unwrap();
+        assert!((1..=30).contains(&wait), "{wait}");
+        let body: serde_json::Value = serde_json::from_str(&refused.body).unwrap();
+        assert!(body["error"].as_str().unwrap().starts_with("Not run: GET /api/projects was called"), "{body}");
+        assert_eq!(body["limit"]["type"], "rate_limited");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A hosted listing says what is shipped, when each of the account's own
+    /// parts is deleted, and what its storage holds.
+    #[test]
+    fn a_hosted_listing_gives_each_parts_expiry_and_the_accounts_storage() {
+        let (dir, acme, _, port) = two_accounts();
+        let saved = exchange(
+            port,
+            "PUT",
+            "/api/projects/holder",
+            &[("Content-Type", "application/json"), ("Authorization", &bearer(&acme))],
+            &serde_json::json!({ "script": "return box(1, 1, 1);" }).to_string(),
+        );
+        assert_eq!(saved.status, 200, "{}", saved.body);
+        let reply: serde_json::Value = serde_json::from_str(&call_tool(port, &acme, "list_projects", serde_json::json!({})).body).unwrap();
+        let listed = &reply["result"]["structuredContent"];
+        assert_eq!(listed["expires"]["holder"], crate::limits::date_of(crate::limits::unix_now() + 30 * 86_400), "{listed}");
+        assert!(listed["shipped"].as_array().is_some_and(|names| names.iter().any(|n| n == "bracket")), "{listed}");
+        assert!(listed["expires"].get("bracket").is_none(), "a shipped part never expires: {listed}");
+        assert_eq!(listed["storage"]["max_mb"], 50.0);
+        assert_eq!(listed["storage"]["max_files"], 5000);
+        assert!(listed["storage"]["files"].as_u64().is_some_and(|n| n >= 2), "{listed}");
+        assert!(!dir.join("tenants/acme/bracket.parcad").exists(), "the shipped part was not copied in");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// What an account wrote comes back to that account's bearer alone, as

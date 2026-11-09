@@ -241,6 +241,8 @@ struct Meter {
     started: Instant,
     backstop_ms: AtomicU64,
     floor: Duration,
+    /// The account's cap on the backstop, which no `scriptBudget` raises.
+    ceiling: Duration,
     stopped: AtomicU8,
     /// The script read the clock or `Math.random`, so its result is not a
     /// function of its source and must not be cached.
@@ -261,14 +263,15 @@ fn read_part(name: &str) -> Result<String, String> {
 }
 
 impl Meter {
-    fn new(floor: Duration) -> Self {
+    fn new(floor: Duration, ceiling: Duration) -> Self {
         let meter = Meter {
             polls: AtomicU64::new(0),
             charged: AtomicU64::new(0),
             budget_steps: AtomicU64::new(0),
             started: Instant::now(),
             backstop_ms: AtomicU64::new(0),
-            floor,
+            floor: floor.min(ceiling),
+            ceiling,
             stopped: AtomicU8::new(RUNNING),
             impure: AtomicBool::new(false),
             finished: AtomicBool::new(false),
@@ -283,7 +286,7 @@ impl Meter {
     fn allow(&self, multiple: u32) {
         let multiple = multiple.clamp(1, MAX_WORK_MULTIPLE);
         self.budget_steps.fetch_max(WORK_STEPS * u64::from(multiple), Ordering::Relaxed);
-        let backstop = (BACKSTOP * multiple).max(self.floor).min(MAX_BACKSTOP);
+        let backstop = (BACKSTOP * multiple).max(self.floor).min(MAX_BACKSTOP).min(self.ceiling);
         self.backstop_ms.fetch_max(backstop.as_millis() as u64, Ordering::Relaxed);
     }
 
@@ -360,8 +363,17 @@ impl Meter {
             PAST_BACKSTOP => Some(format!(
                 "the script ran for more than {} s by the clock, inside its work budget, and was stopped; \
                  a single native call that long — joining, sorting or serialising millions of values — \
-                 is the usual cause. Build smaller arrays, or pass a larger timeout_s (up to 600)",
-                self.backstop_ms.load(Ordering::Relaxed) / 1000
+                 is the usual cause. Build smaller arrays, or {}",
+                self.backstop_ms.load(Ordering::Relaxed) / 1000,
+                if self.ceiling < MAX_BACKSTOP {
+                    format!(
+                        "build the part with parcad on your own machine (brew install parcad): this server \
+                         stops every script at {} s",
+                        self.ceiling.as_secs()
+                    )
+                } else {
+                    format!("pass a larger timeout_s (up to {})", MAX_BACKSTOP.as_secs())
+                }
             )),
             _ => None,
         }
@@ -378,11 +390,15 @@ const HOT_LOOPS: &str = "The loops generative parts spend their work in — a re
 /// the caller's to raise: it belongs to the source (`scriptBudget`), so every
 /// route that builds the part — MCP, the CLI, a thumbnail — agrees on it.
 pub fn build_within(source: &str, backstop: Duration) -> Result<Script, String> {
+    crate::limits::script_fits(source)?;
     let key = crate::tenant::key(source);
     if let Some(known) = CACHE.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+        crate::limits::build_reused();
         return known.map(|script| Script { reused: true, ..script });
     }
-    let meter = Arc::new(Meter::new(backstop.clamp(BACKSTOP, MAX_BACKSTOP)));
+    crate::limits::script_ran();
+    let ceiling = crate::tenant::current().limits.script_backstop_max.min(MAX_BACKSTOP);
+    let meter = Arc::new(Meter::new(backstop.clamp(BACKSTOP, MAX_BACKSTOP), ceiling));
     let outcome = run(source, &meter);
     if meter.cacheable() {
         let weight = source.len() + outcome.as_ref().map_or(0, |(_, json_len)| *json_len);
@@ -905,7 +921,7 @@ mod tests {
     #[test]
     fn work_is_counted_the_same_on_every_run() {
         let script = "let s = 0;\nfor (let i = 0; i < 2000000; i++) s += Math.sqrt(i);\nreturn box(1, 1, 1);";
-        let fresh = || run(script, &Arc::new(Meter::new(BACKSTOP))).expect("builds").0.work_steps;
+        let fresh = || run(script, &Arc::new(Meter::new(BACKSTOP, MAX_BACKSTOP))).expect("builds").0.work_steps;
         let first = fresh();
         assert!(first >= 2_000_000, "{first}");
         for _ in 0..3 {
@@ -928,7 +944,7 @@ mod tests {
 
         let refused = build_graph("scriptBudget(11);\nreturn box(1, 1, 1);").expect_err("past the most");
         assert!(refused.contains("from 1 to 10") && refused.contains("at line 1"), "{refused}");
-        let meter = Meter::new(BACKSTOP);
+        let meter = Meter::new(BACKSTOP, MAX_BACKSTOP);
         meter.allow(1000);
         assert_eq!(meter.multiple(), u64::from(MAX_WORK_MULTIPLE));
     }
@@ -1029,7 +1045,7 @@ return box(1, 1, 1);
 
     #[test]
     fn the_clock_backstop_names_itself() {
-        let meter = Meter::new(BACKSTOP);
+        let meter = Meter::new(BACKSTOP, MAX_BACKSTOP);
         assert!(!meter.poll());
         meter.backstop_ms.store(0, Ordering::Relaxed);
         std::thread::sleep(Duration::from_millis(2));

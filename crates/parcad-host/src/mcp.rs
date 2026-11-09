@@ -19,7 +19,7 @@
 //! Scripts arrive from a model and run in `script`'s sandbox, never in the
 //! webview. That is the precondition this server was blocked on.
 
-use crate::{arguments::Args, assets::Assets, projects, script, service, session, tenant};
+use crate::{arguments::Args, assets::Assets, limits, projects, script, service, session, tenant};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
@@ -744,10 +744,31 @@ pub struct Exported {
 pub struct ProjectList {
     /// Every project in the shared folder, as slash-separated paths — a part
     /// in a folder reads `Mounts/bracket`. Includes the parts parcad seeded on
-    /// first run, which have no special status.
+    /// first run, or on a hosted server the parts it ships.
     projects: Vec<String>,
     /// The folder itself, so a person can be pointed at it.
     directory: String,
+    /// On a hosted server: the projects it ships, read-only. Saving one under
+    /// its name makes a copy of your own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shipped: Option<Vec<String>>,
+    /// On a hosted server: each of your own projects and the day (UTC) it is
+    /// deleted unless something reads, builds or saves it first. Nothing is
+    /// backed up: export what the user wants to keep.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires: Option<std::collections::BTreeMap<String, String>>,
+    /// On a hosted server: what your projects, their history and the trash
+    /// take, of what the server keeps for the account.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    storage: Option<StorageUse>,
+}
+
+#[derive(Serialize, schemars::JsonSchema)]
+pub struct StorageUse {
+    used_mb: f64,
+    max_mb: Option<f64>,
+    files: u64,
+    max_files: Option<u64>,
 }
 
 #[derive(Serialize, schemars::JsonSchema)]
@@ -1243,9 +1264,20 @@ impl Parcad {
         &self,
     ) -> Result<rmcp::handler::server::wrapper::Json<ProjectList>, ErrorData> {
         let projects = projects::list().map_err(invalid)?;
+        let kept = projects::kept().map_err(invalid)?;
+        let limits = tenant::current().limits;
+        let megabytes = |bytes: u64| (bytes as f64 / (1024.0 * 1024.0) * 100.0).ceil() / 100.0;
         Ok(rmcp::handler::server::wrapper::Json(ProjectList {
             projects,
             directory: tenant::shown(&projects::dir()),
+            shipped: kept.as_ref().map(|kept| kept.shipped.clone()),
+            expires: kept.as_ref().map(|kept| kept.expires.iter().cloned().collect()),
+            storage: kept.map(|kept| StorageUse {
+                used_mb: megabytes(kept.usage.bytes),
+                max_mb: limits.storage_bytes.map(megabytes),
+                files: kept.usage.files,
+                max_files: limits.storage_files,
+            }),
         }))
     }
 
@@ -1419,10 +1451,10 @@ name and open_project it. Read before you write.";
 
 /// In place of [`SCREEN`] on a hosted account, which has no window: a chat that
 /// renders MCP Apps draws open_project's part, and any other client fetches a URL.
-const HOSTED: &str = "This parcad is hosted and shares no screen with the user. To show a part \
-in 3D, save_project it and open_project it: a chat that renders MCP Apps draws it beside your \
-reply. Or paste a view's `markdown` line from evaluate_part or give \
-export_part's `url`; each is a signed link that fetches the file with no token until it expires.";
+const HOSTED: &str = "This parcad is hosted and shares no screen with the user. To show a part in \
+3D, save_project and open_project it: a chat that renders MCP Apps draws it beside your reply. Or \
+paste a view's `markdown` from evaluate_part, or export_part's `url`: signed links needing no \
+token. Nothing is backed up: unused parts expire (list_projects).";
 
 /// The rule the coin-holder session lacked: 241 KB of script resent to change
 /// a few lines at a time (docs/COIN_HOLDER_REVIEW.md, B1).
@@ -1501,12 +1533,30 @@ impl ServerHandler for Parcad {
                 None,
             ));
         }
+        // Admitted before anything runs, and held until the reply is made:
+        // a hosted account's slots and rates, for the whole call (`limits.rs`).
+        let arguments = request.arguments.as_ref().map(|a| serde_json::to_vec(a).unwrap_or_default()).unwrap_or_default();
+        let ask = limits::Ask {
+            tool: &request.name,
+            arguments: &arguments,
+            kind: limits::kind(&request.name),
+            exports: request.name == "export_part",
+        };
+        let admitted = match limits::admit(&tenant, &ask).await {
+            Ok(admitted) => admitted,
+            Err(limited) => return Ok(limited_in_the_result(&limited)),
+        };
         let draws = renders_the_viewer(&context);
         let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
-        DRAWS_THE_PART
-            .scope(draws, tenant::scoped(tenant, self.tool_router.call(call)))
-            .await
-            .or_else(refused_in_the_result)
+        let replied = limits::within(
+            admitted.clone(),
+            DRAWS_THE_PART.scope(draws, tenant::scoped(tenant, self.tool_router.call(call))),
+        )
+        .await;
+        match (replied, admitted.limited()) {
+            (Err(_), Some(limited)) => Ok(limited_in_the_result(&limited)),
+            (replied, _) => replied.or_else(refused_in_the_result),
+        }
     }
 
     /// The generated `list_tools` sends no `ttlMs` and no `cacheScope`, and
@@ -1814,8 +1864,9 @@ async fn record(
             return (
                 axum::http::StatusCode::PAYLOAD_TOO_LARGE,
                 format!(
-                    "the MCP request body is larger than {} MB; send the script itself, not a mesh",
-                    body_limit / (1024 * 1024)
+                    "the MCP request body is larger than {}, the most this server reads; send the script \
+                     itself, not a mesh",
+                    limits::size(body_limit as u64)
                 ),
             )
                 .into_response()
@@ -2198,8 +2249,8 @@ where
     if crate::page::active() {
         return crate::page::inline(work).map_err(invalid);
     }
-    let tenant = tenant::current();
-    match tokio::task::spawn_blocking(move || tenant::scope(tenant, work)).await {
+    let handoff = tenant::handoff();
+    match tokio::task::spawn_blocking(move || handoff.run(work)).await {
         Ok(result) => result.map_err(invalid),
         Err(e) => Err(ErrorData::internal_error(
             format!("the evaluation task did not finish: {e}"),
@@ -2221,6 +2272,17 @@ fn refused_in_the_result(error: ErrorData) -> Result<rmcp::model::CallToolRespon
         .data
         .map(|data| rmcp::model::MetaObject(meta(serde_json::json!({ "parcad/refusal": data }))));
     Ok(result.into())
+}
+
+/// A limit, as a tool result a model can act on: the sentence, which says
+/// whether to call again or tell the user, and under `_meta["parcad/limit"]`
+/// what a program reads — `{ type, retry_after_seconds, limit }`. Not in
+/// `structuredContent`, which a client checks against the tool's output
+/// schema even on an error (docs/GOTCHAS.md).
+fn limited_in_the_result(limited: &limits::Limited) -> rmcp::model::CallToolResponse {
+    let mut result = rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(limited.sentence.clone())]);
+    result.meta = Some(rmcp::model::MetaObject(meta(serde_json::json!({ "parcad/limit": limited.block() }))));
+    result.into()
 }
 
 fn invalid(message: impl Into<String>) -> ErrorData {
@@ -2303,14 +2365,30 @@ mod tests {
         for screen_tool in ["share the parcad app's screen", "set_script"] {
             assert!(!text.contains(screen_tool), "{screen_tool:?} is in the hosted text");
         }
-        assert!(text.contains("save_project it and open_project it") && text.contains("renders MCP Apps"), "{text}");
-        assert!(text.contains("`markdown` line from evaluate_part") && text.contains("export_part's `url`"));
-        assert!(text.contains("with no token until it expires"), "a pasted link needs no bearer: {text}");
+        assert!(text.contains("save_project and open_project it") && text.contains("renders MCP Apps"), "{text}");
+        assert!(text.contains("`markdown` from evaluate_part") && text.contains("export_part's `url`"));
+        assert!(text.contains("signed links needing no token"), "a pasted link needs no bearer: {text}");
+        assert!(text.contains("Nothing is backed up: unused parts expire (list_projects)"), "no backups are promised: {text}");
 
         let hosted = Parcad::new().with_capability(service::capability(true)).get_info();
         assert_eq!(hosted.instructions.as_deref(), Some(text.as_str()));
         let local = Parcad::new().with_capability(service::capability(false)).get_info();
         assert_eq!(local.instructions.as_deref(), Some(instructions(Screen::App).as_str()));
+    }
+
+    /// Every tool is a build or a light call by name: a tool in neither list
+    /// would be admitted as a build, but its limits would be a guess.
+    #[test]
+    fn every_tool_is_classified_for_the_limits() {
+        let tools: Vec<String> = Parcad::new().tool_router.list_all().iter().map(|tool| tool.name.to_string()).collect();
+        for tool in &tools {
+            let builds = limits::BUILD_TOOLS.contains(&tool.as_str());
+            let light = limits::LIGHT_TOOLS.contains(&tool.as_str());
+            assert!(builds != light, "{tool} must be in exactly one of limits::BUILD_TOOLS and limits::LIGHT_TOOLS");
+        }
+        for listed in limits::BUILD_TOOLS.iter().chain(limits::LIGHT_TOOLS) {
+            assert!(tools.iter().any(|tool| tool == listed), "{listed} is classified but no tool has that name");
+        }
     }
 
     #[test]
@@ -2861,9 +2939,9 @@ mod tests {
         let a = tenant::tests::hosted_at("reuse-a", &tenants);
         let b = tenant::tests::hosted_at("reuse-b", &tenants);
         let _cache = service::tests::own_build_cache(&[&a, &b]);
-        assert_ne!(tenant::scope(a.clone(), evaluate)["reused_build"], true);
-        assert_eq!(tenant::scope(a, evaluate)["reused_build"], true, "the account's own build is reused");
-        let other = tenant::scope(b, evaluate);
+        assert_ne!(tenant::tests::as_build(a.clone(), evaluate)["reused_build"], true);
+        assert_eq!(tenant::tests::as_build(a, evaluate)["reused_build"], true, "the account's own build is reused");
+        let other = tenant::tests::as_build(b, evaluate);
         assert_ne!(other["reused_build"], true, "another account's build is not");
         assert_eq!(other["volume_mm3"], 6000.0);
         let _ = std::fs::remove_dir_all(&tenants);
@@ -2883,8 +2961,8 @@ mod tests {
         let tenants = tenant::tests::fresh_root("tenants");
         let a = tenant::tests::hosted_at("a", &tenants);
         let b = tenant::tests::hosted_at("b", &tenants);
-        let on_a = tenant::scope(a.clone(), export);
-        let on_b = tenant::scope(b.clone(), export);
+        let on_a = tenant::tests::as_build(a.clone(), export);
+        let on_b = tenant::tests::as_build(b.clone(), export);
         assert_eq!(on_a.path, ".exports/part.stl", "shown relative to the account's root");
         assert_eq!(on_b.path, ".exports/part.stl");
         assert!(a.root.join(&on_a.path).is_file());
@@ -2897,9 +2975,9 @@ mod tests {
 
         let plain_http = tenant::PublicHost::parse("http://127.0.0.1:4398").unwrap();
         let plain_links = Arc::new(crate::signing::tests::links(plain_http));
-        let c = tenant::Tenant::hosted(tenant::TenantId::new("c").unwrap(), &tenants, &plain_links);
+        let c = tenant::Tenant::hosted(tenant::TenantId::new("c").unwrap(), &tenants, &plain_links, &tenant::Policy::hosted());
         std::fs::create_dir_all(&c.root).unwrap();
-        let on_c = tenant::scope(Arc::new(c), export);
+        let on_c = tenant::tests::as_build(Arc::new(c), export);
         assert_eq!(
             crate::signing::tests::verified(&plain_links, on_c.url.as_deref().unwrap()),
             ("http://127.0.0.1:4398/api/exports/part.stl".to_string(), Some(tenant::TenantId::new("c").unwrap())),
@@ -2921,7 +2999,7 @@ mod tests {
         }
     }
 
-    /// The body `/mcp` reads is bounded by the account: 4 MB on a server, with
+    /// The body `/mcp` reads is bounded by the account: 1 MB on a server, with
     /// the limit in the refusal; a local user's 32 MB is untouched.
     #[test]
     fn a_body_past_the_accounts_limit_is_refused_naming_the_limit() {
@@ -2941,7 +3019,7 @@ mod tests {
         let refused = post(tenant::tests::hosted_at("a", &tenants), five_mb);
         assert_eq!(refused.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE);
         let text = String::from_utf8_lossy(&run(axum::body::to_bytes(refused.into_body(), 4096)).unwrap()).into_owned();
-        assert!(text.contains("larger than 4 MB"), "the refusal names the limit: {text}");
+        assert!(text.contains("larger than 1.0 MB, the most this server reads"), "the refusal names the limit: {text}");
 
         let local = post(tenant::tests::local_at(&tenants), axum::body::Body::from("x".repeat(5 * 1024 * 1024)));
         assert_ne!(local.status(), axum::http::StatusCode::PAYLOAD_TOO_LARGE, "a local user's limit is still 32 MB");

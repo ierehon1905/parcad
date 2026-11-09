@@ -12,6 +12,11 @@
 //! reachable only through whatever API was written for them, so an agent that
 //! writes a part has nowhere to put it that the user can then open.
 //!
+//! A hosted account is the exception: copying every example into every
+//! account would fill each one's quota with the same files, so the shipped
+//! parts are listed beside the account's own from the one folder on the
+//! server, read-only, and a save under one's name makes a copy of its own.
+//!
 //! ## A project is a `.parcad` folder
 //!
 //! ```text
@@ -121,6 +126,14 @@ pub struct Part {
     /// rather than written into the manifest: a recorded timestamp is a claim,
     /// and this one is a measurement that cannot go stale.
     pub modified: Option<u64>,
+    /// One of the parts a hosted server ships: read-only, and in no
+    /// account's storage. Saving under its name makes a copy of one's own.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub shipped: bool,
+    /// On a hosted account, the day this part is deleted unless something
+    /// reads, builds or saves it first (`storage.rs`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires: Option<String>,
 }
 
 /// What a thumbnail says it was drawn from. Both are `None` for a picture from
@@ -149,9 +162,63 @@ pub struct Manifest {
     pub tags: Vec<String>,
 }
 
-/// The whole tree, folders before parts and each alphabetical.
+/// The whole tree, folders before parts and each alphabetical: the account's
+/// own, and on a hosted server each shipped part it has no part of the same
+/// name for.
 pub fn tree() -> Result<Vec<Entry>, String> {
-    walk(&dir(), "", 0)
+    let mut entries = walk(&dir(), "", 0)?;
+    if let Some(shipped) = shipped() {
+        let mut own = Vec::new();
+        flatten(&entries, &mut own);
+        for (name, _) in seed_parts(&shipped).unwrap_or_default() {
+            if !own.contains(&name) && occupied(&name).is_ok_and(|occupied| !occupied) {
+                if let Ok(part) = describe(name.rsplit('/').next().unwrap_or(&name), &name) {
+                    insert(&mut entries, &name, part);
+                }
+            }
+        }
+    }
+    Ok(entries)
+}
+
+/// Put `part` at `path` in the tree, making the folders on the way, in the
+/// order [`walk`] keeps.
+fn insert(entries: &mut Vec<Entry>, path: &str, part: Part) {
+    match path.split_once('/') {
+        None => entries.push(Entry::Part(part)),
+        Some((folder, rest)) => {
+            let at = entries
+                .iter()
+                .position(|e| matches!(e, Entry::Folder { name, .. } if name == folder))
+                .unwrap_or_else(|| {
+                    let prefix = part.path[..part.path.len() - rest.len() - 1].to_string();
+                    entries.push(Entry::Folder { name: folder.to_string(), path: prefix, children: Vec::new() });
+                    entries.len() - 1
+                });
+            if let Entry::Folder { children, .. } = &mut entries[at] {
+                insert(children, rest, part);
+            }
+        }
+    }
+    let (mut folders, parts): (Vec<Entry>, Vec<Entry>) = entries.drain(..).partition(|e| matches!(e, Entry::Folder { .. }));
+    let mut parts = parts;
+    folders.sort_by_key(key);
+    parts.sort_by_key(key);
+    folders.extend(parts);
+    *entries = folders;
+}
+
+/// Where the parts a hosted server ships are, when the current tenant is
+/// on one that ships them.
+fn shipped() -> Option<PathBuf> {
+    let tenant = tenant::current();
+    tenant.shipped.clone().filter(|_| tenant.mode == Mode::Hosted)
+}
+
+/// The folder a hosted server serves its shipped parts from: the one a
+/// local install seeds from.
+pub fn shipped_dir() -> Option<PathBuf> {
+    seed_dir(None)
 }
 
 fn walk(at: &Path, prefix: &str, depth: usize) -> Result<Vec<Entry>, String> {
@@ -233,6 +300,8 @@ fn describe(stem: &str, path: &str) -> Result<Part, String> {
         thumbnail: located.in_bundle(PREVIEW).and_then(|p| drawn(&p)),
         tags: manifest.tags,
         modified,
+        shipped: located.shipped,
+        expires: (!located.shipped).then(|| crate::storage::expires_on(located.root())).flatten(),
     })
 }
 
@@ -240,6 +309,44 @@ fn describe(stem: &str, path: &str) -> Result<Part, String> {
 /// is what it is called.
 pub fn readable(stem: &str) -> String {
     stem.replace(['-', '_'], " ")
+}
+
+/// What a hosted account's listing says beside the names: which are shipped,
+/// when each of its own is deleted, and what its storage holds.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Kept {
+    pub shipped: Vec<String>,
+    pub expires: Vec<(String, String)>,
+    pub usage: crate::storage::Usage,
+}
+
+/// [`Kept`] for the current account, or `None` for a local user, whose parts
+/// are all their own and kept for good.
+pub fn kept() -> Result<Option<Kept>, String> {
+    if tenant::current().mode != Mode::Hosted {
+        return Ok(None);
+    }
+    let mut parts = Vec::new();
+    fn every<'a>(entries: &'a [Entry], into: &mut Vec<&'a Part>) {
+        for entry in entries {
+            match entry {
+                Entry::Folder { children, .. } => every(children, into),
+                Entry::Part(part) => into.push(part),
+            }
+        }
+    }
+    let tree = tree()?;
+    every(&tree, &mut parts);
+    let mut shipped: Vec<String> = parts.iter().filter(|p| p.shipped).map(|p| p.path.clone()).collect();
+    let mut expires: Vec<(String, String)> =
+        parts.iter().filter_map(|p| Some((p.path.clone(), p.expires.clone()?))).collect();
+    shipped.sort();
+    expires.sort();
+    Ok(Some(Kept {
+        shipped,
+        expires,
+        usage: crate::storage::usage(&dir()),
+    }))
 }
 
 /// Every project, by path, flattened and sorted. What MCP lists.
@@ -267,6 +374,8 @@ struct Located {
     source: PathBuf,
     /// The `.parcad` folder, when there is one.
     bundle: Option<PathBuf>,
+    /// A part the server ships, outside the account's folder and read-only.
+    shipped: bool,
 }
 
 impl Located {
@@ -292,7 +401,8 @@ impl Located {
     }
 }
 
-/// Find a project by path, in either form.
+/// Find a project by path, in either form: the account's own, else on a
+/// hosted server a part it ships under that name.
 fn locate(path: &str) -> Result<Located, String> {
     let base = safe(path)?;
     let bundle = suffixed(&base, BUNDLE);
@@ -301,6 +411,7 @@ fn locate(path: &str) -> Result<Located, String> {
         return Ok(Located {
             source: bundle.join(SOURCE),
             bundle: Some(bundle),
+            shipped: false,
         });
     }
     let loose = suffixed(&base, "js");
@@ -308,15 +419,54 @@ fn locate(path: &str) -> Result<Located, String> {
         return Ok(Located {
             source: confined(loose)?,
             bundle: None,
+            shipped: false,
         });
+    }
+    // The name was checked by `safe`, segment by segment, so it stays under
+    // the shipped folder, which is the server's own and read-only.
+    if let Some(shipped) = shipped() {
+        let source = path.split('/').fold(shipped, |at, segment| at.join(segment)).with_extension("js");
+        if source.is_file() {
+            return Ok(Located {
+                source,
+                bundle: None,
+                shipped: true,
+            });
+        }
     }
     Err(format!(
         "no project at {path:?}. Use the project list to see what exists."
     ))
 }
 
-/// Whether anything already occupies that path — either form, or a folder.
+/// Refuse to move, remove or restructure a shipped part, naming what does
+/// change it.
+fn own(path: &str, located: &Located) -> Result<(), String> {
+    if located.shipped {
+        return Err(format!(
+            "{path:?} is a part this server ships: it is read-only and in no account's storage. To change \
+             it, save_project or edit_part it, which saves a copy of your own under the same name."
+        ));
+    }
+    Ok(())
+}
+
+/// A shipped part's name, as this account's own: a copy, made on its first save.
+fn own_copy(base: &Path) -> Result<PathBuf, String> {
+    let bundle = suffixed(base, BUNDLE);
+    create_dir(&bundle)?;
+    write_file(&bundle.join(MANIFEST), &manifest_json(base_name(base))?)?;
+    Ok(bundle.join(SOURCE))
+}
+
+/// Whether anything already occupies that path — either form, a folder, or
+/// a part the server ships under that name.
 fn taken(path: &str) -> Result<bool, String> {
+    Ok(occupied(path)? || locate(path).is_ok())
+}
+
+/// Whether the account's own folder has anything at that path.
+fn occupied(path: &str) -> Result<bool, String> {
     let base = safe(path)?;
     Ok(suffixed(&base, BUNDLE).exists() || suffixed(&base, "js").exists() || base.is_dir())
 }
@@ -341,6 +491,7 @@ fn suffixed(base: &Path, extension: &str) -> PathBuf {
 /// is not `.js`, so an export beside the source is invisible to the picker.
 pub fn export_path(path: &str, extension: &str) -> Result<PathBuf, String> {
     let located = locate(path)?;
+    own(path, &located)?;
     let leaf = safe(path)?
         .file_name()
         .unwrap_or_default()
@@ -365,13 +516,17 @@ pub fn source_path(path: &str) -> Result<PathBuf, String> {
 
 pub fn read(path: &str) -> Result<String, String> {
     let located = locate(path)?;
-    std::fs::read_to_string(&located.source).map_err(|e| {
+    let script = std::fs::read_to_string(&located.source).map_err(|e| {
         format!(
             "reading {} ({e}). The project is there but its source is not; \
              a project folder must contain {SOURCE}.",
             tenant::shown(&located.source)
         )
-    })
+    })?;
+    if !located.shipped {
+        crate::storage::touch(located.root());
+    }
+    Ok(script)
 }
 
 /// Write a project's source, creating it if it is new.
@@ -381,19 +536,20 @@ pub fn read(path: &str) -> Result<String, String> {
 /// a bundle, because that is the form with somewhere to put a description.
 pub fn write(path: &str, script: &str) -> Result<String, String> {
     let base = safe(path)?;
-    let source = match locate(path) {
-        Ok(located) => located.source,
-        Err(_) => {
-            let bundle = suffixed(&base, BUNDLE);
-            create_dir(&bundle)?;
-            write_file(&bundle.join(MANIFEST), &manifest_json(base_name(&base))?)?;
-            bundle.join(SOURCE)
-        }
+    crate::limits::script_fits(script)?;
+    let located = locate(path).ok().filter(|located| !located.shipped);
+    // Judged before anything is made, so a refusal leaves no empty bundle.
+    let target = located.as_ref().map_or_else(|| suffixed(&base, BUNDLE).join(SOURCE), |l| l.source.clone());
+    crate::storage::room_for(&target, script.len() as u64)?;
+    let source = match &located {
+        Some(located) => located.source.clone(),
+        None => own_copy(&base)?,
     };
     if let Some(parent) = source.parent() {
         create_dir(parent)?;
     }
     write_file(&source, script)?;
+    crate::storage::touch(located.as_ref().map_or_else(|| suffixed(&base, BUNDLE), |l| l.root().to_path_buf()).as_path());
     Ok(tenant::shown(&source))
 }
 
@@ -432,6 +588,7 @@ pub fn write_preview(path: &str, png: &[u8], source: &str, look: u32) -> Result<
     let Some(file) = located.in_bundle(PREVIEW) else {
         return Ok(());
     };
+    crate::storage::room_for(&file, png.len() as u64)?;
     let now = crate::service::script_sha256(&std::fs::read_to_string(&located.source).unwrap_or_default());
     if now != source {
         return Err(format!(
@@ -598,6 +755,7 @@ pub fn preview(path: &str) -> Result<Vec<u8>, String> {
 /// is what every API here takes; the title is what a person reads.
 pub fn set_title(path: &str, title: &str) -> Result<(), String> {
     let located = locate(path)?;
+    own(path, &located)?;
     let Some(file) = located.in_bundle(MANIFEST) else {
         return Err(format!(
             "{path:?} is a loose .js file, which has nowhere to keep a title. \
@@ -629,7 +787,10 @@ pub fn create_folder(path: &str) -> Result<String, String> {
 /// picker that can rename but not drag into a folder is half a picker.
 pub fn rename(from: &str, to: &str) -> Result<String, String> {
     let source = match locate(from) {
-        Ok(located) => located.root().to_path_buf(),
+        Ok(located) => {
+            own(from, &located)?;
+            located.root().to_path_buf()
+        }
         // Not a part — a folder, then. `safe` has already refused anything that
         // is not a name, so this cannot reach outside the project directory.
         Err(_) => {
@@ -671,7 +832,10 @@ pub fn rename(from: &str, to: &str) -> Result<String, String> {
 /// learned to dismiss.
 pub fn remove(path: &str) -> Result<String, String> {
     let source = match locate(path) {
-        Ok(located) => located.root().to_path_buf(),
+        Ok(located) => {
+            own(path, &located)?;
+            located.root().to_path_buf()
+        }
         Err(_) => {
             let folder = safe(path)?;
             if !folder.is_dir() {
@@ -703,12 +867,15 @@ pub fn remove(path: &str) -> Result<String, String> {
     }
     std::fs::rename(&source, &target)
         .map_err(|e| format!("moving {} to the trash: {e}", tenant::shown(&source)))?;
+    // A hosted trash entry expires counting from now, not from the part's last use.
+    crate::storage::touch(&target);
     Ok(tenant::shown(&target))
 }
 
 /// Turn a loose `.js` into a project folder, keeping the script byte for byte.
 pub fn convert(path: &str) -> Result<String, String> {
     let located = locate(path)?;
+    own(path, &located)?;
     if located.bundle.is_some() {
         return Err(format!("{path:?} is already a project folder."));
     }
@@ -769,6 +936,7 @@ fn create_dir(path: &Path) -> Result<(), String> {
 }
 
 fn write_file(path: &Path, contents: &str) -> Result<(), String> {
+    crate::storage::room_for(path, contents.len() as u64)?;
     std::fs::write(path, contents).map_err(|e| format!("writing {}: {e}", tenant::shown(path)))
 }
 
@@ -857,6 +1025,9 @@ pub fn seed() -> std::io::Result<()> {
 /// seed parts are `examples` inside that folder, which is somewhere else on
 /// each platform.
 pub fn seed_bundled(resources: Option<PathBuf>) -> std::io::Result<()> {
+    if tenant::current().mode == Mode::Hosted {
+        return prepare().map(|_| ());
+    }
     let Some(source) = seed_dir(resources) else {
         // Not fatal. An install with no seed parts is an empty folder, which is
         // a usable state; failing to launch over it would not be.
@@ -872,9 +1043,14 @@ pub fn seed_bundled(resources: Option<PathBuf>) -> std::io::Result<()> {
 }
 
 /// [`seed`] from one folder of `.js` parts, named rather than looked for: a
-/// browser tab's, which the page wrote where only it knows.
+/// browser tab's, which the page wrote where only it knows. A hosted
+/// account gets its folder and no copies: the parts it ships are listed
+/// beside the account's own, read-only, from the one folder on the server.
 pub fn seed_from(source: &Path) -> std::io::Result<()> {
     let dir = prepare()?;
+    if tenant::current().mode == Mode::Hosted {
+        return Ok(());
+    }
     let record = dir.join(SEEDED);
     let mut seeded: Vec<String> = std::fs::read_to_string(&record)
         .unwrap_or_default()
@@ -1078,23 +1254,91 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&tenants);
     }
 
-    /// Nobody opens an editor on a server: a hosted root is seeded without
-    /// the declarations a local one gets beside its parts.
+    /// Nobody opens an editor on a server, and nothing is copied into a
+    /// hosted account: its folder is made with neither declarations nor
+    /// seeded parts, and the parts the server ships are listed from the one
+    /// folder they are in.
     #[test]
-    fn a_hosted_root_is_seeded_without_editor_declarations() {
+    fn a_hosted_root_gets_no_copies_and_no_editor_declarations() {
         let tenants = tenant::tests::fresh_root("tenants");
-        let a = tenant::tests::hosted_at("a", &tenants);
-        let examples = seed_folder(&a.root, &[("bracket", "return box(1,1,1);")]);
+        let examples = seed_folder(&tenants.join("shipped"), &[("bracket", "return box(1,1,1);")]);
+        let a = tenant::tests::hosted_shipping("a", &tenants, crate::limits::Limits::hosted(), None, Some(examples.clone()));
         tenant::scope(a, || {
             seed_from(&examples).expect("the seed");
-            assert_eq!(list().unwrap(), vec!["bracket"]);
+            assert_eq!(list().unwrap(), vec!["bracket"], "listed from the shipped folder");
         });
+        assert!(!tenants.join("a/bracket.parcad").exists(), "and not copied");
+        assert!(!tenants.join("a/.seeded").exists());
         assert!(!tenants.join("a/jsconfig.json").exists());
         assert!(!tenants.join("a/.types").exists());
 
         scoped(|root| {
             seed_from(&examples).expect("the seed");
             assert!(root.join("jsconfig.json").is_file(), "a local folder gets them");
+            assert!(root.join("bracket.parcad/part.js").is_file(), "and its own copy of each part");
+        });
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    /// A shipped part reads, builds and imports like the account's own, is
+    /// listed as shipped with no expiry, and cannot be moved or removed; a
+    /// save under its name makes the account a copy that is listed in its
+    /// place, expires, and leaves the shipped one as it was.
+    #[test]
+    fn a_shipped_part_is_read_only_until_a_save_makes_it_a_copy_of_ones_own() {
+        let tenants = tenant::tests::fresh_root("tenants");
+        let shipped = seed_folder(
+            &tenants.join("shipped"),
+            &[("bracket", "return box(1,1,1);"), ("templates/standoff", "return cylinder(3, 6);")],
+        );
+        let a = tenant::tests::hosted_shipping("a", &tenants, crate::limits::Limits::hosted(), None, Some(shipped.clone()));
+        tenant::scope(a.clone(), || {
+            assert_eq!(read("templates/standoff").unwrap(), "return cylinder(3, 6);");
+            assert_eq!(list().unwrap(), vec!["bracket", "templates/standoff"]);
+            let listed = kept().unwrap().expect("a hosted account");
+            assert_eq!(listed.shipped, vec!["bracket", "templates/standoff"]);
+            assert!(listed.expires.is_empty(), "a shipped part never expires");
+            for refused in [remove("bracket"), rename("bracket", "mine"), convert("bracket"), set_title("bracket", "x").map(|_| String::new())] {
+                let refused = refused.unwrap_err();
+                assert!(refused.contains("\"bracket\" is a part this server ships: it is read-only"), "{refused}");
+                assert!(refused.contains("save_project or edit_part it"), "the refusal names what changes it: {refused}");
+            }
+            assert!(create("bracket", "x").unwrap_err().contains("already exists"), "a new part may not shadow one by accident");
+
+            snapshot("bracket").unwrap().expect("the shipped text is kept as the first version");
+            write("bracket", "return box(2,2,2);").unwrap();
+            assert_eq!(read("bracket").unwrap(), "return box(2,2,2);");
+            let listed = kept().unwrap().unwrap();
+            assert_eq!(listed.shipped, vec!["templates/standoff"]);
+            assert_eq!(listed.expires.len(), 1);
+            assert_eq!(listed.expires[0].0, "bracket");
+            assert_eq!(listed.expires[0].1, crate::limits::date_of(crate::limits::unix_now() + 30 * 86_400));
+            assert_eq!(snapshots("bracket").unwrap().len(), 1);
+            remove("bracket").expect("one's own copy can go");
+            assert_eq!(read("bracket").unwrap(), "return box(1,1,1);", "and the shipped part shows through again");
+        });
+        assert_eq!(std::fs::read_to_string(shipped.join("bracket.js")).unwrap(), "return box(1,1,1);", "the shipped file is untouched");
+        let local = tenant::tests::local_at(&tenants.join("b"));
+        tenant::scope(local, || {
+            assert!(read("bracket").is_err(), "a local user is shipped nothing beside their folder");
+            assert_eq!(kept().unwrap(), None);
+        });
+        let _ = std::fs::remove_dir_all(&tenants);
+    }
+
+    /// A save the account has no room for is refused before anything is
+    /// written, naming the fix.
+    #[test]
+    fn a_save_over_the_quota_writes_nothing() {
+        let tenants = tenant::tests::fresh_root("tenants");
+        let mut limits = crate::limits::Limits::hosted();
+        limits.storage_bytes = Some(1024);
+        let a = tenant::tests::hosted_with("a", &tenants, limits, None);
+        tenant::scope(a.clone(), || {
+            write("small", "return box(1,1,1);").unwrap();
+            let refused = write("large", &"x".repeat(2048)).unwrap_err();
+            assert!(refused.starts_with("Not saved: this account's parts already hold"), "{refused}");
+            assert!(!a.root.join("large.parcad").exists(), "nothing was made for it");
         });
         let _ = std::fs::remove_dir_all(&tenants);
     }
