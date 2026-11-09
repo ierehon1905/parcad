@@ -4225,6 +4225,8 @@ fn require_inputs_kept(
             .zip(&states)
             .filter(|(_, state)| **state == PointState::Outside)
             .map(|(p, _)| *p)
+            // Its ray can lie inside the B-spline face a point is on; docs/GOTCHAS.md, "A point on a B-spline wall".
+            .filter(|p| result.distance_to_point(*p).is_none_or(|(gap, _)| gap > KEPT_TOLERANCE_MM))
             .collect();
         sampled += points.len();
         if let Some(p) = out.first() {

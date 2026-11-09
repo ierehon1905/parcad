@@ -1689,12 +1689,42 @@ with a 0.3 mm vertical step at the foot lost them too.
 So a union is checked on its result (`require_inputs_kept` in `backend.rs`):
 every point of an input's faces is inside or on the union of it with
 anything, and a 3 × 3 grid per input face is classified against the result at
-1e-3 mm. A point outside refuses the union, naming the inputs lost and any
-alert the kernel raised. With a blend the check reads the boolean before the
+1e-3 mm. A point outside, and more than that from the result (see the next
+entry), refuses the union, naming the inputs lost and any alert the kernel
+raised. With a blend the check reads the boolean before the
 blend, which may take material off a convex seam. It costs 150 ms of 2.1 s on
 the twisted planter's 38-input saucer and 20 ms on 48 spheres, paid once per
 build. `eval/cases/refuse-union-grazing-domes.json` holds it. Which OCCT step
 loses the input is not found yet.
+
+### A point on a B-spline wall read as outside the union that kept it *(fixed 2026-11-09)*
+
+A shelf base with a lip ring on top, the ring's inner wall `inset()` of the
+shelf's spline outline, was refused as a union that had lost the lip: 1 of 137
+points outside, in the middle of one of the inner wall's faces. The union was
+right. It measured 4759342.29 mm³, the sum of the two pieces, which touch only
+at z = 18, and `lip.union(base)` built the same solid.
+
+The guard's own classifier was what failed. `BRepClass3d_SolidClassifier`
+casts one ray from the point toward a point inside the first face it finds.
+With the base first, that face is the base's underside, so the ray points
+straight down, and a ray straight down from a point on a vertical wall lies
+inside the wall. On a plane, the face intersector reports the line as parallel
+and the classifier measures the distance instead. On a B-spline surface it
+reports a scatter of tangent points (18 here, none at the ray's start), the
+classifier skips tangent points, and the first real crossing, into the base at
+z = 18, made the point OUT. The same contour built with a hand-written offset
+passed by luck: the input order, the sample and the ray all decide it. Any
+union with a sample on a vertical B-spline wall above the first input's
+underside can trip it.
+
+A point the classifier puts outside now has its exact distance to the result
+measured, and counts as on the result within the guard's 0.001 mm. Only points
+already read as outside are measured, so a union that passes pays nothing. The
+grazing domes still refuse, because their lost dome's points lie millimetres
+from anything. `eval/cases/union-inset-lip-onto-a-shelf.json` holds the shelf.
+The classifier itself is unchanged. Its other callers probe points placed off
+the surface on purpose, so their rays never start on a face.
 
 ### `role: "hole"` does not match a conical opening
 

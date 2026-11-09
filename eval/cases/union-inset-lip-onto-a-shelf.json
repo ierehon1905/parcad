@@ -1,0 +1,27 @@
+{
+  "name": "union-inset-lip-onto-a-shelf",
+  "script": "eval/scripts/union-inset-lip-onto-a-shelf.js",
+  "why": "A shelf base unioned with a lip ring whose inner wall is inset() of the shelf's spline outline, base first. It was refused as a union that lost the lip: 1 of 137 points outside it, at [86.982, 203.582, 27.000], the middle of a B-spline inner-wall face. The union was right. BRepClass3d_SolidClassifier aimed its ray at the base's underside, straight down, so the ray lay inside the vertical wall the point is on; the intersector cannot find the hit at the ray's start on a line inside a B-spline surface, reports tangent points only, the classifier skips those, and the first real crossing, into the base at z = 18, made the point OUT. A point the classifier puts outside now has its exact distance to the result measured, and is on the result within the guard's 0.001 mm. Holds the sum of the pieces, 4317514.76 + 441827.53 = 4759342.29 mm3, and the z extent 0 to 36; refuse-union-grazing-domes holds the refusal that must survive.",
+  "brep": {
+    "size": [
+      945.0,
+      326.082,
+      36.0
+    ],
+    "volume_mm3": 4759342.286,
+    "area_mm2": 571584.31,
+    "triangles": 2204,
+    "bodies": 1,
+    "voids": 0,
+    "stands_on_mm2": 239860.853,
+    "stands_on_patches": 1,
+    "watertight": true,
+    "faces": 14,
+    "edges": 72,
+    "curves": 32,
+    "requires": [
+      "section-curves",
+      "inset-sections"
+    ]
+  }
+}
