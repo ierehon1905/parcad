@@ -967,8 +967,10 @@ mod tests {
         for topic in TOPICS {
             for reply in replies(topic.name) {
                 let sent = serde_json::to_value(&reply).unwrap().to_string().chars().count();
-                // The first reply also carries the topic list, about 1,500 characters.
-                let allowed = SECTION_BUDGET_CHARS + 2_000;
+                // Beside the text, every reply carries the topic's section list and
+                // the first the topic list: about 2,000 characters for gotchas,
+                // whose 32 chapters are each a name in the list.
+                let allowed = SECTION_BUDGET_CHARS + 2_500;
                 assert!(
                     sent <= allowed && allowed <= CLIENT_RESULT_LIMIT_CHARS,
                     "read_docs {} section {:?} is {sent} characters, over {allowed}. \
