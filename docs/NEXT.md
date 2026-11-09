@@ -336,7 +336,14 @@ and in the next two sections.
   spacing or the lean from what the replies give (Sonnet did the same once).
   The verdicts measure printability and fit; nothing answers "are there 18 of
   these, 28 mm apart, leaning 10° outward". The *requirements first* idea
-  (New capabilities, 2) is the fix.
+  (New capabilities, 2) is the fix. *Re-measured 2026-11-09* on main after
+  requirements first (Haiku 5.5, the bench's exact P-arm prompt, the seed held
+  out, graded by `grader/grade.py` on stock OCP): 1/3 right and vouched (it
+  wrote checks), 1 right and unvouched (no checks; it doubted the root blend
+  where the slots cut it, a specific doubt rather than the bench's "cannot
+  confirm the count"), 1 wrong (root blends refused at every radius it tried)
+  and reported as PROBLEM. No wrong part was claimed done. Open: the trial
+  that wrote no checks still could not vouch.
 - **`read_docs` has no search.** Haiku 5.5 called `read_docs({ query: … })` 8
   times in 2 trials (`haiku55/plate-P-haiku55-1`); the tool takes `topic`,
   `section`, `detail`. Either accept `query` as a search over section names and
