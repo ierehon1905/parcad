@@ -408,14 +408,30 @@ impl IntoResponse for tenant::Refused {
             tenant::Refused::StaleLink { .. } => (StatusCode::FORBIDDEN, None),
             tenant::Refused::Unready(_) => (StatusCode::INTERNAL_SERVER_ERROR, None),
         };
-        let mut response = (status, self.message()).into_response();
+        let message = self.message();
+        let challenge = challenge.map(|challenge| described(challenge, &message));
+        let mut response = (status, message).into_response();
         if let Some(challenge) = challenge {
-            response
-                .headers_mut()
-                .insert(header::WWW_AUTHENTICATE, header::HeaderValue::from_static(challenge));
+            response.headers_mut().insert(header::WWW_AUTHENTICATE, challenge);
         }
         response
     }
+}
+
+/// The challenge with the refusal's sentence as RFC 6750's `error_description`:
+/// an MCP client such as Codex reports the header and drops the body.
+fn described(challenge: &str, message: &str) -> header::HeaderValue {
+    // A quoted-string here is printable ASCII without `"` or `\`.
+    let description: String = message
+        .chars()
+        .map(|c| match c {
+            '"' | '\\' => '\'',
+            ' '..='~' => c,
+            _ => '-',
+        })
+        .collect();
+    header::HeaderValue::from_str(&format!("{challenge}, error_description=\"{description}\""))
+        .unwrap_or_else(|_| header::HeaderValue::from_static("Bearer realm=\"parcad\""))
 }
 
 fn health(capability: service::Capability) -> Json<serde_json::Value> {
@@ -828,13 +844,18 @@ mod tests {
 
         let missing = exchange(port, "GET", "/api/projects", &[], "");
         assert_eq!(missing.status, 401, "{}", missing.body);
-        assert_eq!(missing.header("www-authenticate"), Some("Bearer realm=\"parcad\""));
+        let challenge = missing.header("www-authenticate").unwrap_or_default();
+        assert!(challenge.starts_with("Bearer realm=\"parcad\", error_description=\""), "{}", missing.head);
+        assert!(challenge.contains("Authorization: Bearer <token>"), "a client that shows only the header sees the fix: {}", missing.head);
         assert!(missing.body.contains("Authorization: Bearer <token>"), "{}", missing.body);
         assert!(missing.body.contains("brew install parcad"), "the local way out is named: {}", missing.body);
 
         let wrong = exchange(port, "GET", "/api/projects", &[("Authorization", "Bearer nope")], "");
         assert_eq!(wrong.status, 401);
-        assert!(wrong.header("www-authenticate").is_some_and(|c| c.contains("invalid_token")), "{}", wrong.head);
+        let challenge = wrong.header("www-authenticate").unwrap_or_default();
+        assert!(challenge.contains("error=\"invalid_token\""), "{}", wrong.head);
+        assert!(challenge.contains("not recognised") && challenge.contains("for a new one"), "{}", wrong.head);
+        assert!(challenge.is_ascii() && challenge.ends_with("one\""), "the em dash and nothing else is replaced: {}", wrong.head);
         assert!(wrong.body.contains("not recognised"), "{}", wrong.body);
 
         let mcp = exchange(port, "POST", "/mcp", &[("Content-Type", "application/json")], "{}");
