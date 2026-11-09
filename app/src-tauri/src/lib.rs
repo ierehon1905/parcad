@@ -42,7 +42,7 @@ fn export_stl(graph: serde_json::Value, project: String) -> Result<String, Strin
 #[tauri::command]
 fn export_3mf(graph: serde_json::Value, project: String) -> Result<String, String> {
     let name = project.rsplit('/').next().unwrap_or(&project);
-    let export = service::export_3mf(&service::parse_graph(graph)?, None, name)?;
+    let export = service::export_3mf(&service::parse_graph(graph)?, None, name, None)?;
     write_and_reveal(&export, &project, "3mf")
 }
 

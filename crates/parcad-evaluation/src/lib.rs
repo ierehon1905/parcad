@@ -142,6 +142,7 @@ pub fn three_mf(
     s: &parcad_occt::Success,
     reused: bool,
     name: &str,
+    description: Option<&str>,
 ) -> Result<(Vec<u8>, ExportMeasured), String> {
     refuse_surfaces(s, "3MF")?;
     let (report, tess) = measure_brep(doc, s)?;
@@ -151,7 +152,7 @@ pub fn three_mf(
     } else {
         bodies.iter().map(|(name, mesh)| (name.as_str(), mesh)).collect()
     };
-    let bytes = parcad_core::threemf::write_3mf(&objects).map_err(|e| format!("writing 3MF: {e:#}"))?;
+    let bytes = parcad_core::threemf::write_3mf(&objects, description).map_err(|e| format!("writing 3MF: {e:#}"))?;
     let measured = ExportMeasured::of(&report, s, body_reports(s), Some(report.mesh.resolution_mm), reused);
     Ok((bytes, measured))
 }

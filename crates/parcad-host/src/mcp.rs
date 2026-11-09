@@ -1177,7 +1177,7 @@ impl Parcad {
     #[tool(
         name = "export_part",
         annotations(title = "Export a part to a file", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. On a hosted parcad the reply also carries `url`, a signed link that fetches the file with no token until it expires, and `path` is then relative to the account's folder. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part whose `print_check` fails — material under 0.3 mm, where nothing prints — or that carries its own `checks` and fails one is refused, with the finding or the check and its measurement named, and nothing is written: fix the part, or, when the user has decided the failure is acceptable, pass `allow_failing` with their reason, which the reply keeps. The reply opens with `print_check` and `checks`, the verdicts the file was written under; a `flagged` print_check writes the file and lists what to read."
+        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. On a hosted parcad the reply also carries `url`, a signed link that fetches the file with no token until it expires, and `path` is then relative to the account's folder. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part whose `print_check` fails — material under 0.3 mm, where nothing prints — or that carries its own `checks` and fails one is refused, with the finding or the check and its measurement named, and nothing is written: fix the part, or, when the user has decided the failure is acceptable, pass `allow_failing` with their reason, which the reply keeps and the file carries: in an STL's header, a STEP comment, or a 3MF's Description. The reply opens with `print_check` and `checks`, the verdicts the file was written under; a `flagged` print_check writes the file and lists what to read."
     )]
     async fn export_part(
         &self,
@@ -1215,18 +1215,25 @@ impl Parcad {
             // is written: the build is the one the export reuses.
             let door = service::Door::of(&service::evaluate(&doc, Some(budget.kernel)).map_err(|e| built.locate(e))?.snapshot);
             let allow_failing = door.pass(request.allow_failing.as_deref(), "export_part")?;
+            // A file written over a failing verdict says so itself, wherever it is opened later.
+            let note = allow_failing.as_deref().map(|reason| service::written_over(&door.failing(), reason));
             if let Some(body) = &request.body {
                 doc = service::body_doc(&doc, body)?;
             }
-            let export = match format.as_str() {
+            let mut export = match format.as_str() {
                 "step" => service::export_step_within(&doc, Some(budget.kernel)),
                 "3mf" => {
                     let stem = filename.rsplit_once('.').map_or(filename.as_str(), |(stem, _)| stem);
-                    service::export_3mf(&doc, Some(budget.kernel), request.body.as_deref().unwrap_or(stem))
+                    service::export_3mf(&doc, Some(budget.kernel), request.body.as_deref().unwrap_or(stem), note.as_deref())
                 }
                 _ => service::export_stl(&doc, Some(budget.kernel)),
             }
             .map_err(|e| built.locate(e))?;
+            match (note.as_deref(), format.as_str()) {
+                (Some(note), "stl") => service::mark_stl(&mut export.bytes, note),
+                (Some(note), "step") => service::mark_step(&mut export.bytes, note),
+                _ => {}
+            }
 
             let kept = service::keep_export(&filename, &export.bytes)?;
             let file = kept.file.to_string_lossy();

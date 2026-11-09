@@ -301,8 +301,11 @@ and in the next two sections.
   Haiku 5.5 wrote no file in 8/8 trials on 0.0.18 and on the new host, so the
   failure is not one Haiku makes and this harness cannot show the rewording
   helps; `is-it-safe-to-save`, where the user does accept the failure, stayed
-  2/2 SOUND. Still open: measuring it on GLM, Qwen and DeepSeek through
-  OpenCode, and marking a file written under `allow_failing`.
+  2/2 SOUND. *Marked the same day:* a file export_part writes under
+  `allow_failing` carries the failing verdicts and the user's reason itself:
+  an STL's 80-byte header, a comment after a STEP's `HEADER;`, a 3MF's
+  `Description`. Still open: measuring the rewording on GLM, Qwen and
+  DeepSeek through OpenCode.
 - **`edit_part` refuses with an empty reason.** GLM 5.3 Flash, plate brief
   (`oc-glm-qwen/plate-P-glm-5.3-flash-1`): moving the holes produced
   `edit_part refused: . Fix the part and call again, or pass allow_failing` —

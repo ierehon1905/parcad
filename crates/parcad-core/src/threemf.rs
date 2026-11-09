@@ -28,7 +28,9 @@ const RELATIONSHIPS: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
 /// bodies arrive where the script put them relative to each other. Every
 /// triangle must use three distinct vertices — the spec rejects anything else,
 /// which [`Tessellation::weld`] already guarantees.
-pub fn write_3mf(objects: &[(&str, &Tessellation)]) -> Result<Vec<u8>> {
+/// `description` becomes the model's `Description`, one of the metadata names
+/// the core specification defines, which a slicer may show.
+pub fn write_3mf(objects: &[(&str, &Tessellation)], description: Option<&str>) -> Result<Vec<u8>> {
     if objects.is_empty() {
         bail!("a 3MF needs at least one object, and the part has no bodies");
     }
@@ -37,8 +39,12 @@ pub fn write_3mf(objects: &[(&str, &Tessellation)]) -> Result<Vec<u8>> {
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
          <model unit=\"millimeter\" xml:lang=\"en-US\" \
          xmlns=\"http://schemas.microsoft.com/3dmanufacturing/core/2015/02\">\n\
-         <metadata name=\"Application\">ParCAD</metadata>\n<resources>\n",
+         <metadata name=\"Application\">ParCAD</metadata>\n",
     );
+    if let Some(description) = description {
+        writeln!(model, "<metadata name=\"Description\">{}</metadata>", escape(description))?;
+    }
+    model.push_str("<resources>\n");
     for (i, (name, tess)) in objects.iter().enumerate() {
         if tess.triangles.is_empty() {
             bail!("body {name:?} has no triangles, and a 3MF object must have at least one");
@@ -208,7 +214,7 @@ mod tests {
     #[test]
     fn two_bodies_read_back_as_two_named_objects_with_their_own_volume() {
         let (left, right) = (cube(10.0, -20.0), cube(4.0, 20.0));
-        let bytes = write_3mf(&[("base & <lid>", &left), ("lid", &right)]).unwrap();
+        let bytes = write_3mf(&[("base & <lid>", &left), ("lid", &right)], None).unwrap();
 
         let entries = unzip(&bytes);
         let names: Vec<_> = entries.iter().map(|(n, _)| n.as_str()).collect();
@@ -243,14 +249,16 @@ mod tests {
     #[test]
     fn the_same_meshes_write_the_same_bytes() {
         let a = cube(3.0, 0.0);
-        assert_eq!(write_3mf(&[("a", &a)]).unwrap(), write_3mf(&[("a", &a)]).unwrap());
+        assert_eq!(write_3mf(&[("a", &a)], None).unwrap(), write_3mf(&[("a", &a)], None).unwrap());
+        let described = write_3mf(&[("a", &a)], Some("written over <checks> & a reason")).unwrap();
+        assert_ne!(described, write_3mf(&[("a", &a)], None).unwrap(), "the description is in the package");
     }
 
     #[test]
     fn a_collapsed_triangle_is_refused_by_name() {
         let mut a = cube(3.0, 0.0);
         a.triangles[0] = [1, 1, 2];
-        let err = write_3mf(&[("peg", &a)]).unwrap_err().to_string();
+        let err = write_3mf(&[("peg", &a)], None).unwrap_err().to_string();
         assert!(err.contains("\"peg\"") && err.contains("weld"), "{err}");
     }
 }

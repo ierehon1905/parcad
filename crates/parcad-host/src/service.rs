@@ -1455,10 +1455,44 @@ pub fn export_stl(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Expo
 
 /// Produce the current part as 3MF: the same triangles as [`export_stl`], each
 /// named body its own object. `name` names the object of a one-solid part.
-pub fn export_3mf(doc: &Doc, budget: Option<std::time::Duration>, name: &str) -> Result<Export, String> {
+pub fn export_3mf(
+    doc: &Doc,
+    budget: Option<std::time::Duration>,
+    name: &str,
+    description: Option<&str>,
+) -> Result<Export, String> {
     let built = build_exact(doc, budget, false)?;
-    let (bytes, measured) = parcad_evaluation::three_mf(doc, &built.success, built.reused, name)?;
+    let (bytes, measured) = parcad_evaluation::three_mf(doc, &built.success, built.reused, name, description)?;
     Ok(Export::named("part.3mf", bytes, measured))
+}
+
+/// What a file written under `allow_failing` says about itself: which verdicts
+/// failed, and the user's reason for writing it anyway.
+pub fn written_over(failing: &[String], reason: &str) -> String {
+    format!("ParCAD wrote this over failing verdicts ({}), because: {reason}", failing.join("; "))
+}
+
+/// `note` in a binary STL's 80-byte header, which carries no geometry: ASCII,
+/// cut to fit, and never starting with `solid`, which reads as ASCII STL.
+pub fn mark_stl(bytes: &mut [u8], note: &str) {
+    if bytes.len() < 84 {
+        return;
+    }
+    let ascii: Vec<u8> = note.chars().map(|c| if c.is_ascii() && !c.is_ascii_control() { c as u8 } else { b'?' }).collect();
+    let header = &mut bytes[..80];
+    header.fill(b' ');
+    let take = ascii.len().min(80);
+    header[..take].copy_from_slice(&ascii[..take]);
+}
+
+/// `note` as a comment after a STEP file's `HEADER;`, where Part 21 allows one.
+pub fn mark_step(bytes: &mut Vec<u8>, note: &str) {
+    let Some(at) = bytes.windows(7).position(|w| w == b"HEADER;") else {
+        return;
+    };
+    let comment = format!("\n/* {} */", note.replace("*/", "* /"));
+    let after = at + 7;
+    bytes.splice(after..after, comment.into_bytes());
 }
 
 /// Produce the current part as STEP, the exact surfaces.
@@ -2267,6 +2301,25 @@ pub fn read_docs(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A file written over a failing verdict says so itself: three bench
+    /// models exported a part print_check refused with a reason they wrote.
+    #[test]
+    fn a_file_written_over_a_failing_verdict_says_so() {
+        let note = written_over(&["a 0.15 mm wall".into()], "the user prints a test piece");
+        assert_eq!(note, "ParCAD wrote this over failing verdicts (a 0.15 mm wall), because: the user prints a test piece");
+
+        let mut stl = vec![0u8; 84 + 50];
+        mark_stl(&mut stl, &format!("{note} — ünïcode and more than eighty characters of it"));
+        assert!(stl[..80].is_ascii() && stl.starts_with(b"ParCAD wrote this"), "{:?}", String::from_utf8_lossy(&stl[..80]));
+        assert!(!stl.starts_with(b"solid"));
+        assert_eq!(&stl[80..], &[0u8; 54][..], "the triangle count and the triangles are untouched");
+
+        let mut step = b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('x'),'2;1');\nENDSEC;".to_vec();
+        mark_step(&mut step, "a */ inside");
+        let text = String::from_utf8(step).unwrap();
+        assert_eq!(text, "ISO-10303-21;\nHEADER;\n/* a * / inside */\nFILE_DESCRIPTION(('x'),'2;1');\nENDSEC;");
+    }
 
     /// The build caches tests have taken for tenants of their own, by id.
     static OWN_BUILDS: std::sync::LazyLock<

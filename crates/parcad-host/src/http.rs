@@ -502,7 +502,7 @@ async fn export_stl(Json(request): Json<EvaluateRequest>) -> Result<Response, Fa
 
 async fn export_3mf(Json(request): Json<EvaluateRequest>) -> Result<Response, Failed> {
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
-    let export = blocking(move || counted(service::export_3mf(&doc, None, "part")?)).await?;
+    let export = blocking(move || counted(service::export_3mf(&doc, None, "part", None)?)).await?;
     Ok(download(export.filename, export.content_type, export.bytes))
 }
 

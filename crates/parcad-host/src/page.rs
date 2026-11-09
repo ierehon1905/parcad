@@ -727,7 +727,7 @@ fn route(method: &str, path: &str, body: Value) -> Reply {
             let doc = service::parse_graph(field(body, "graph")?)?;
             let export = match rest {
                 "stl" => service::export_stl(&doc, None),
-                "3mf" => service::export_3mf(&doc, None, "part"),
+                "3mf" => service::export_3mf(&doc, None, "part", None),
                 "step" => service::export_step(&doc),
                 other => {
                     return Err(format!(
