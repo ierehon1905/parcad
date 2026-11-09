@@ -16,7 +16,7 @@ eval "$(python3 "$here/config.py" --shell)"
 
 PROMPT=${1:?usage: field/run-case.sh <prompt-file> [trials]}
 TRIALS=${2:-4}
-MODEL=${MODEL:-claude-haiku-4-5-20251001}
+MODEL=${MODEL:-claude-haiku-5-5}
 THINK=${THINK:-8000}     # a thinking budget, or "default" to leave it to EFFORT
 EFFORT=${EFFORT:-}       # low, medium, high, xhigh or max: the CLI's --effort
 

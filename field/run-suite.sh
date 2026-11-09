@@ -32,9 +32,9 @@ mkdir -p "$RUN"
 
 model_id() {
   case "$1" in
-    haiku)  echo "claude-haiku-4-5-20251001" ;;
-    sonnet) echo "claude-sonnet-5" ;;
-    opus)   echo "claude-opus-5" ;;
+    haiku)  echo "claude-haiku-5-5" ;;
+    sonnet) echo "claude-sonnet-5-5" ;;
+    opus)   echo "claude-opus-5-5" ;;
     *)      echo "$1" ;;   # a full model id passes through untouched
   esac
 }

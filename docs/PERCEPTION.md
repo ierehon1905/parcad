@@ -107,9 +107,11 @@ PARCAD_HTTP_PORT=4344 field/run-suite.sh 3          # every case, both arms
 PARCAD_HTTP_PORT=4344 field/run-case.sh eval/field/does-the-port-meet.md 4
 ```
 
-Each trial is `claude -p` on Haiku 4.5 — a separate process, its own context,
+Each trial is `claude -p` on Haiku — a separate process, its own context,
 every local tool denied so it cannot open the file and read the answer — against
-the MCP server the running app hosts.
+the MCP server the running app hosts. The harness ran Haiku 4.5 until
+2026-11-09 and runs Haiku 5.5 (`claude-haiku-5-5`) since; every result below
+names the one it was measured on.
 
 **A trial is graded, not passed.** SOUND is the right answer reached by the
 route the case requires; LUCKY is the right answer without it. Adding the two is

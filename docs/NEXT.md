@@ -268,7 +268,7 @@ and in the next two sections.
 | 3 | `check_motion` — **done 2026-11-05**, as `turns` and `slides` checks | 7 | ★★★ | L | Fable, high |
 | 4 | `edit_part` refuses with an empty reason — **done 2026-11-09**: a brief over its envelope opened the door and named nothing | 6 | ★★ | S | Opus |
 | 5 | a list argument sent as a JSON string is refused — **done 2026-11-09** | 6 | ★★ | S | Opus |
-| 6 | field runs measure Haiku 4.5, not the current Haiku | 6 | ★★ | S | Opus |
+| 6 | field runs measure Haiku 4.5, not the current Haiku — **done 2026-11-09** | 6 | ★★ | S | Opus |
 | 7 | a right part the model cannot verify goes out unvouched | 5 | ★★ | M | Opus |
 | 8 | a DSL name as a local is a parse error | 5 | ★★ | S | Opus |
 | 9 | `edit_part`'s exact-text `old` misses | 5 | ★★ | M | Opus |
@@ -316,7 +316,9 @@ and in the next two sections.
   resolves to `claude-haiku-5-5`, which built 21/21 right parts on ParCAD where
   4.5 built 23/24 on the easier briefs and 0/2 on the plate stand. Every past
   "small model" number in PERCEPTION.md and the field cases is 4.5's. Default
-  to 5.5 and say which in each table.
+  to 5.5 and say which in each table. *Done 2026-11-09:* `haiku`, `sonnet`
+  and `opus` in the harness are the 5.5 models, and PERCEPTION.md says which
+  Haiku its results were measured on.
 - **A right part the model cannot verify goes out unvouched.** Haiku 5.5, plate
   stand: two of three ParCAD stands passed every requirement and the model
   still wrote STATUS: PROBLEM — it could not confirm the peg count, the rows'
