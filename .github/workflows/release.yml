@@ -343,9 +343,18 @@ jobs:
         with:
           draft: true
           files: dist/*
+          # The Mac paragraph says what CI built: ad-hoc. tools/sign-mac-release.sh
+          # rewrites what lies between the two markers once Apple has notarised it.
           body: |
-            The Mac app is signed with a Developer ID and notarised by Apple:
-            unzip it, drag it to Applications and open it.
+            <!-- mac -->
+            **macOS will refuse to open this the first time.** This Mac build is
+            not signed with an Apple Developer ID or notarised. Clear the
+            quarantine flag once and it opens normally:
+
+            ```
+            xattr -dr com.apple.quarantine /Applications/ParCAD.app
+            ```
+            <!-- /mac -->
 
             **Windows SmartScreen will warn the first time** — the installer is
             unsigned. Choose *More info*, then *Run anyway*.

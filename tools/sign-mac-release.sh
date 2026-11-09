@@ -85,3 +85,12 @@ ditto -x -k "$work/check/$zip" "$work/check"
 spctl -a -t exec "$work/check/ParCAD.app"
 echo "uploaded:         ${replaced[*]}"
 echo "                  $tag's $zip opens quarantined: accepted, notarised"
+
+# The draft's Mac paragraph, between release.yml's markers, still says ad-hoc.
+gh release view "$tag" --json body -q .body > "$work/notes.md"
+grep -q '<!-- mac -->' "$work/notes.md" \
+  || { echo "the draft's notes have no <!-- mac --> paragraph: say by hand that the Mac app is notarised" >&2; exit 1; }
+SIGNED='The Mac app is signed with a Developer ID and notarised by Apple: unzip it, drag it to Applications and open it.' \
+  perl -0pi -e 's{<!-- mac -->.*?<!-- /mac -->}{<!-- mac -->\n$ENV{SIGNED}\n<!-- /mac -->}s' "$work/notes.md"
+gh release edit "$tag" --notes-file "$work/notes.md"
+echo "notes:            the Mac paragraph now says notarised"
