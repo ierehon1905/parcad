@@ -282,11 +282,11 @@ impl Refused {
     pub fn message(&self) -> String {
         match self {
             Refused::NoToken => "this parcad is hosted, and every request needs \
-                 `Authorization: Bearer <token>`. Ask the server's operator for a token, or run \
+                 `Authorization: Bearer <token>`. Ask whoever runs this server for a token, or run \
                  parcad on your own machine (brew install parcad), which needs none."
                 .to_string(),
             Refused::Unknown => "the token was not recognised; it may have been revoked — ask \
-                 the server's operator for a new one"
+                 whoever runs this server for a new one"
                 .to_string(),
             Refused::StaleLink { good_for } => format!(
                 "this link is no longer valid: a link fetches one file for {} from the reply that \
