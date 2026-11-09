@@ -2,7 +2,8 @@
  * The edge under `wrangler dev` in front of a real `parcad serve --hosted`,
  * driven as an MCP client would: discovery, registration, sign-in, the code
  * for a token, and `/mcp` with it — plus the host's own static token, an
- * address nobody listed (sign-up is open), and a sign-in by emailed code.
+ * address nobody listed (sign-up is open), a sign-in by emailed code, and one
+ * through ChatGPT against a mock of OpenAI's sign-in.
  *
  * Needs a parcad built with the edge flags: PARCAD_BIN, or the repository's
  * target/debug/parcad (`cargo build -p parcad-cli`).
@@ -16,6 +17,9 @@ import { join, resolve } from "node:path";
 
 import { allowed } from "../src/accounts";
 import type { Env } from "../src/env";
+import { escape } from "../src/pages";
+import { configured } from "../src/providers";
+import { mockOpenAI } from "./openai-mock";
 
 const EDGE_PORT = 8800 + Math.floor(Math.random() * 100);
 const HOST_PORT = 4400 + Math.floor(Math.random() * 100);
@@ -24,12 +28,14 @@ const HOST = `http://127.0.0.1:${HOST_PORT}`;
 const ALLOWED = "allowed@example.test";
 const REDIRECT = "http://127.0.0.1:9/callback";
 const BIN = process.env.PARCAD_BIN ?? resolve(import.meta.dir, "../../target/debug/parcad");
+const CHATGPT_ID = "oaiapp_edge_test";
 
 const dir = mkdtempSync(join(tmpdir(), "parcad-edge-"));
 let host: Subprocess;
 let edge: Subprocess;
 let edgeLog = "";
 let staticToken = "";
+let openai: Awaited<ReturnType<typeof mockOpenAI>>;
 
 const b64 = (bytes: ArrayBuffer) => Buffer.from(bytes).toString("base64");
 
@@ -60,7 +66,11 @@ beforeAll(async () => {
   );
   await until(`${HOST}/api/health`, "parcad serve");
 
-  const vars = { PUBLIC_HOST: EDGE, ORIGIN: HOST, EDGE_KEY: pkcs8, TEST_SIGN_IN: "1" };
+  openai = await mockOpenAI(CHATGPT_ID, "edge-test-secret", () => `${EDGE}/callback/chatgpt`);
+  const vars = {
+    PUBLIC_HOST: EDGE, ORIGIN: HOST, EDGE_KEY: pkcs8, TEST_SIGN_IN: "1",
+    CHATGPT_CLIENT_ID: CHATGPT_ID, CHATGPT_CLIENT_SECRET: "edge-test-secret", TEST_CHATGPT_ISSUER: openai.issuer,
+  };
   edge = Bun.spawn(
     ["bun", "x", "wrangler", "dev", "--port", String(EDGE_PORT), "--ip", "127.0.0.1", "--persist-to", join(dir, "kv"),
       ...Object.entries(vars).flatMap(([k, v]) => ["--var", `${k}:${v}`])],
@@ -75,6 +85,7 @@ beforeAll(async () => {
 afterAll(() => {
   edge?.kill();
   host?.kill();
+  openai?.stop();
 });
 
 /** A browser's cookies across one sign-in. */
@@ -278,4 +289,56 @@ test("the host's health and front page pass through", async () => {
   expect(health.hosted).toBe(true);
   expect((await fetch(`${EDGE}/`)).status).toBe(200);
   expect((await fetch(`${EDGE}/somewhere-else`)).status).toBe(404);
+});
+
+/** A sign-in through ChatGPT, with OpenAI's part played by the mock: the claims its ID token carries, and the key it is signed with. */
+async function chatgptSignIn(claims: Record<string, unknown>, key?: CryptoKey) {
+  const client = await register();
+  const { jar, handle, back, html } = await openSignIn(client);
+  expect(html).toContain('value="chatgpt"');
+  const started = await go(jar, `${EDGE}/authorize`, form({ handle, back, method: "chatgpt" }));
+  expect(started.status).toBe(302);
+  const to = new URL(started.headers.get("location")!);
+  expect(to.origin + to.pathname).toBe(`${openai.issuer}/api/accounts/authorize`);
+  const asked = Object.fromEntries(to.searchParams);
+  expect(asked).toMatchObject({
+    client_id: CHATGPT_ID, response_type: "code", scope: "openid email", code_challenge_method: "S256",
+    redirect_uri: `${EDGE}/callback/chatgpt`,
+  });
+  expect(asked.nonce).toBeTruthy();
+  const code = crypto.randomUUID();
+  openai.codes.set(code, { challenge: asked.code_challenge, claims: { nonce: asked.nonce, ...claims }, key });
+  return { client, finished: await go(jar, `${EDGE}/callback/chatgpt?${new URLSearchParams({ code, state: asked.state })}`) };
+}
+
+test("a sign-in through ChatGPT reads the address from OpenAI's signed ID token and opens an account", async () => {
+  const { client, finished } = await chatgptSignIn({ email: "gpt@example.test", email_verified: true });
+  expect(finished.status).toBe(302);
+  const token = await tokenFor(client, finished.headers.get("location")!);
+  expect((await initialize(token.access_token)).status).toBe(200);
+});
+
+test("a sign-in through ChatGPT is refused when OpenAI's token does not prove the address", async () => {
+  const address = { email: "gpt@example.test", email_verified: true };
+  const past = Math.floor(Date.now() / 1000) - 7200;
+  const cases: [Record<string, unknown>, CryptoKey | undefined, string][] = [
+    [{ email: "gpt@example.test", email_verified: false }, undefined, "ChatGPT has not verified this account's address"],
+    [{ ...address, nonce: "from-another-sign-in" }, undefined, "belongs to another attempt"],
+    [{ ...address, aud: "oaiapp_someone_else" }, undefined, "was issued for another app"],
+    [{ ...address, iat: past, exp: past + 3600 }, undefined, "has run out"],
+    [address, openai.stranger, "does not carry OpenAI's signature"],
+  ];
+  for (const [claims, key, reason] of cases) {
+    const { finished } = await chatgptSignIn(claims, key);
+    expect(finished.status).toBe(400);
+    expect(await finished.text()).toContain(escape(reason));
+  }
+});
+
+test("a way in whose secrets are missing is not offered", () => {
+  const env = { GOOGLE_CLIENT_ID: "id", GITHUB_CLIENT_SECRET: "secret", CHATGPT_CLIENT_ID: "oaiapp_x" } as unknown as Env;
+  expect(configured(env, "google")).toBe(false);
+  expect(configured(env, "github")).toBe(false);
+  expect(configured(env, "chatgpt")).toBe(false);
+  expect(configured({ ...env, CHATGPT_CLIENT_SECRET: "s" } as Env, "chatgpt")).toBe(true);
 });

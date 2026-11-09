@@ -16,14 +16,13 @@ import { accountFor, allowed, checkCode, looksLikeEmail, normal, pendingCode, se
 import { type Env, testSignIn } from "./env";
 import { untouched } from "./forward";
 import { enterCode, inviteOnly, problem, signIn } from "./pages";
-import { authorizeUrl, configured, verifiedEmail } from "./providers";
+import { type Provider, authorizeUrl, configured, isProvider, verifiedEmail } from "./providers";
 
 const HOST_PATHS = new Set(["/", "/api/health", "/favicon.ico", "/favicon.svg", "/favicon-32.png", "/apple-touch-icon.png"]);
 
 /** What a sign-in carries through its way in; `back` is the page it started on. */
 type Upstream =
-  | { way: "google"; verifier: string; back: string }
-  | { way: "github"; verifier: string; back: string }
+  | { way: Provider; verifier: string; back: string }
   | { way: "email"; email: string; back: string }
   | { way: "test"; email: string; back: string };
 
@@ -61,6 +60,7 @@ async function showSignIn(request: Request, env: Env): Promise<Response> {
     domain: described.clientDomain,
     google: configured(env, "google"),
     github: configured(env, "github"),
+    chatgpt: configured(env, "chatgpt"),
     test: testSignIn(env),
   });
   return html(page, 200, consent.headers);
@@ -84,17 +84,21 @@ async function startSignIn(request: Request, env: Env): Promise<Response> {
     if (refusal) return html(problem("No code sent", refusal), 429);
   }
   if (method === "test" && !testSignIn(env)) return html(problem("Not available", "The test sign-in runs locally only."), 404);
-  if ((method === "google" || method === "github") && !configured(env, method)) {
+  if (isProvider(method) && !configured(env, method)) {
     return html(problem("Not available", `Sign-in with ${method} is not set up on this server.`), 404);
   }
-  if (!["google", "github", "email", "test"].includes(method)) return html(problem("Unknown way in", method), 400);
+  if (!isProvider(method) && !["email", "test"].includes(method)) return html(problem("Unknown way in", method), 400);
 
   const approved = await env.OAUTH_PROVIDER.approveConsent(request, handle);
-  if (method === "google" || method === "github") {
+  if (isProvider(method)) {
     const verifier = crypto.randomUUID() + crypto.randomUUID();
-    const data: Upstream = method === "google" ? { way: "google", verifier, back } : { way: "github", verifier, back };
+    const data: Upstream = { way: method, verifier, back };
     const upstream = await env.OAUTH_PROVIDER.beginUpstream(approved.request, { data, headers: approved.headers });
-    return redirect(await authorizeUrl(env, method, upstream.state, verifier), upstream.headers);
+    try {
+      return redirect(await authorizeUrl(env, method, upstream.state, verifier), upstream.headers);
+    } catch (error) {
+      return html(problem("Sign-in did not go through", (error as Error).message), 502, upstream.headers);
+    }
   }
   const data: Upstream = method === "email" ? { way: "email", email, back } : { way: "test", email, back };
   const upstream = await env.OAUTH_PROVIDER.beginUpstream(approved.request, { data, headers: approved.headers });
@@ -120,7 +124,7 @@ async function finish(request: Request, env: Env, way: string): Promise<Response
   if (data.way !== way) return html(problem("This sign-in cannot go on", "It came back by another way than it left."), 400);
 
   let email: string;
-  if (data.way === "google" || data.way === "github") {
+  if ("verifier" in data) {
     const code = url.searchParams.get("code");
     if (!code) return html(problem("Sign-in was cancelled", url.searchParams.get("error") ?? "No code came back."), 400, resumed.headers);
     try {
@@ -152,7 +156,7 @@ export async function pages(request: Request, env: Env): Promise<Response> {
   try {
     if (path === "/authorize" && request.method === "GET") return await showSignIn(request, env);
     if (path === "/authorize" && request.method === "POST") return await startSignIn(request, env);
-    const callback = /^\/callback\/(google|github|email|test)$/.exec(path);
+    const callback = /^\/callback\/(google|github|chatgpt|email|test)$/.exec(path);
     if (callback && request.method === "GET") return await finish(request, env, callback[1]);
   } catch (error) {
     return failed(error);

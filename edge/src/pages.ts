@@ -59,6 +59,7 @@ export interface SignInChoices {
   domain?: string;
   google: boolean;
   github: boolean;
+  chatgpt: boolean;
   test: boolean;
   error?: string;
 }
@@ -73,7 +74,11 @@ export function signIn(c: SignInChoices): string {
   const provider = (method: string, label: string) =>
     `<form method="post" action="/authorize">${hidden(method)}<button class="primary" type="submit">${label}</button></form>`;
   const who = c.domain ? `${escape(c.client)} (${escape(c.domain)})` : escape(c.client);
-  const providers = [c.google ? provider("google", "Google") : "", c.github ? provider("github", "GitHub") : ""].join("");
+  const providers = [
+    c.google ? provider("google", "Google") : "",
+    c.github ? provider("github", "GitHub") : "",
+    c.chatgpt ? provider("chatgpt", "ChatGPT") : "",
+  ].join("");
   return page(
     "Sign in to ParCAD",
     `<h1>Sign in</h1>

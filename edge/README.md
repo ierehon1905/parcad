@@ -7,10 +7,18 @@ and forwards their requests to `parcad serve --hosted` behind it.
   which provides discovery, client registration (DCR, and CIMD under
   `--env production`), PKCE, tokens and refresh. Access tokens last 7 days,
   refresh tokens 30.
-- **Sign-in.** One page offers Google, GitHub, or a six-digit code sent by
-  email. Each ends in a verified address, and sign-up is open: every
+- **Sign-in.** One page offers Google, GitHub, ChatGPT, or a six-digit code
+  sent by email. Each ends in a verified address, and sign-up is open: every
   verified address gets an account. The host's per-account limits are what
   hold the box.
+  - ChatGPT is OpenAI's "Sign in with ChatGPT": OIDC with PKCE, an RS256 ID
+    token checked against OpenAI's published keys, and the address taken only
+    when `email_verified` is true. Only that token is read, and nothing of
+    OpenAI's is kept.
+  - There is no Claude button. Anthropic does not permit a third party to
+    offer Claude.ai login
+    ([Legal and compliance](https://code.claude.com/docs/en/legal-and-compliance),
+    "Authentication and credential use").
 - **The invite switch.** `INVITE_ONLY=1` turns sign-up into a list, for a box
   under load or abuse. An address is then listed in `ALLOW_EMAILS` or as
   `allow:<address>` in the `ACCOUNTS` namespace, and any other address gets
@@ -38,7 +46,9 @@ The test starts `parcad serve --hosted` with a fresh key and `wrangler dev`
 with `TEST_SIGN_IN=1`. That variable adds a sign-in which trusts any address
 typed, and works only on a loopback `PUBLIC_HOST`. The test then plays an MCP
 client through discovery, registration, sign-in, the token exchange and
-`/mcp`. The invite switch is tested on its own, without a Worker.
+`/mcp`. ChatGPT's sign-in runs against `test/openai-mock.ts`, which
+`TEST_CHATGPT_ISSUER` points the edge at, also on a loopback `PUBLIC_HOST`
+only. The invite switch is tested on its own, without a Worker.
 
 ## To deploy
 
@@ -54,6 +64,15 @@ Each of these steps belongs to the operator:
      whose redirect URI is `https://mcp.parcad.dev/callback/google`;
    - `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`, from a GitHub OAuth App
      with callback `https://mcp.parcad.dev/callback/github`;
+   - `CHATGPT_CLIENT_ID` (`oaiapp_…`) and `CHATGPT_CLIENT_SECRET`, from OpenAI.
+     Sign in with ChatGPT is a limited trial for selected partners, so this
+     starts with
+     [the interest form](https://openai.com/form/sign-in-with-chatgpt-interest/).
+     Ask for a confidential client (`client_secret_basic`), scopes
+     `openid email`, and the callback `https://mcp.parcad.dev/callback/chatgpt`.
+     [OpenAI's terms](https://openai.com/policies/sign-in-with-chatgpt-terms/)
+     allow the "ChatGPT" name on the button only with OpenAI's permission, so
+     it stays hidden until OpenAI issues the client;
    - `RESEND_API_KEY`, with a sending domain verified for `MAIL_FROM`.
 
    A way in whose secrets are missing is simply not offered.

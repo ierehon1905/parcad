@@ -16,6 +16,11 @@ export interface Env {
   GOOGLE_CLIENT_SECRET?: string;
   GITHUB_CLIENT_ID?: string;
   GITHUB_CLIENT_SECRET?: string;
+  /** "Sign in with ChatGPT": a client id OpenAI issues, `oaiapp_…`, and its secret. */
+  CHATGPT_CLIENT_ID?: string;
+  CHATGPT_CLIENT_SECRET?: string;
+  /** Where the test's mock of OpenAI's sign-in runs; read on a loopback PUBLIC_HOST only. */
+  TEST_CHATGPT_ISSUER?: string;
   /** Sends the email codes; without it a local run prints them. */
   RESEND_API_KEY?: string;
   /** "1" offers a sign-in that takes any address, on a loopback PUBLIC_HOST only. */
@@ -25,7 +30,12 @@ export interface Env {
   OAUTH_PROVIDER: OAuthHelpers;
 }
 
+/** Whether the edge runs on this machine, where test switches are honoured. */
+export function loopbackHost(env: Env): boolean {
+  return /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(env.PUBLIC_HOST);
+}
+
 /** The test sign-in, which trusts any address typed, never runs on a public host. */
 export function testSignIn(env: Env): boolean {
-  return env.TEST_SIGN_IN === "1" && /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(env.PUBLIC_HOST);
+  return env.TEST_SIGN_IN === "1" && loopbackHost(env);
 }
