@@ -41,17 +41,19 @@ fi
 
 cargo build --locked -p parcad-occt --features kernel --profile "$profile" --bins
 
+# Where cargo put it: a CARGO_TARGET_DIR moves it out of this checkout's target/.
+target=${CARGO_TARGET_DIR:-target}
 triple=$(rustc -vV | awk '/^host: /{print $2}')
 exe=""
 case "$triple" in *windows*) exe=".exe" ;; esac
-worker="target/$profile/parcad-occt-worker$exe"
+worker="$target/$profile/parcad-occt-worker$exe"
 echo "worker built:     $worker ($(ls -la "$worker" | awk '{print $5" bytes"}'))"
 
 if [ "$profile" = iterate ]; then
   # Beside the dev-profile hosts too: `tauri dev`, `cargo run`, `cargo test`.
-  mkdir -p target/debug
-  cp "$worker" target/debug/
-  echo "worker installed: target/debug/parcad-occt-worker$exe"
+  mkdir -p "$target/debug"
+  cp "$worker" "$target/debug/"
+  echo "worker installed: $target/debug/parcad-occt-worker$exe"
 else
   # Where `tauri build` looks, which is not the same place or the same name. An
   # `externalBin` entry names the file without its target triple and the bundler
@@ -71,7 +73,7 @@ fi
 # A PARCAD_OCCT_PREBUILT install was compiled elsewhere; its flags live under
 # its own build tree, not this checkout's target/.
 flag_root="${PARCAD_OCCT_PREBUILT:+$PARCAD_OCCT_PREBUILT/build}"
-flags=$(find ${flag_root:-target/$profile/build/occt-sys-*/out/build} -name flags.make -path "*TKBO*" 2>/dev/null | head -1 || true)
+flags=$(find ${flag_root:-$target/$profile/build/occt-sys-*/out/build} -name flags.make -path "*TKBO*" 2>/dev/null | head -1 || true)
 if [ -z "$flags" ]; then
   # A Visual Studio build writes .vcxproj files, not flags.make.
   echo "opencascade:      optimisation not checked (no flags.make under the OCCT build)"
@@ -83,7 +85,7 @@ else
     echo "WARNING: OpenCASCADE was built WITHOUT optimisation." >&2
     echo "  Booleans and fillets will run several times slower than they should." >&2
     echo "  Cause: CXXFLAGS set in your environment overrides .cargo/config.toml." >&2
-    echo "  Fix:   unset CXXFLAGS CFLAGS && rm -rf target/*/build/occt-sys-* && $0" >&2
+    echo "  Fix:   unset CXXFLAGS CFLAGS && rm -rf $target/*/build/occt-sys-* && $0" >&2
     echo "  Flags: $(grep '^CXX_FLAGS =' "$flags")" >&2
   fi
 fi
