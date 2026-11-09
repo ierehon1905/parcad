@@ -2497,3 +2497,20 @@ shadow covers the same swept box, or the swung body's shadow is clipped.
 The same box left references out *(fixed 2026-11-08)*: shelves drawn among
 `.reference()` walls got their ground 537 mm up, with the walls through it.
 `layGround` now counts every drawn body; the camera still frames the part alone.
+
+## A translucent wide edge beaded along every curve *(fixed 2026-11-09)*
+
+A look that gives edges a width (the chat viewer's) draws them as
+`LineSegments2`: one screen-space quad per sampled segment, with round ends.
+Neighbouring quads overlap at every joint and three edges overlap at every
+corner, so at the old opacity of 0.85 those pixels were blended two or three
+times, and a curve came out as a row of dark beads on a grey line. Blending is
+in linear light, which is why the beads stood out: one coat of 0.85 near-black
+over a cream face lets about 40% of the face through once encoded to sRGB, two
+coats about 2%. On a ring 2.5 device px wide the darkest pixel per column read
+6–68 along the curve.
+
+Both looks now draw edges opaque, where overlap cannot show. If a look ever
+needs translucent wide edges again, give each one a stencil bit where it draws
+and skip pixels already marked (bit 7 sits above the section caps' crossing
+counts), so every pixel is blended once; that was measured to remove the beads.
