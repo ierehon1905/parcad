@@ -37,12 +37,14 @@ const xray = signal(false);
 const view = signal<View | undefined>("threeQuarter");
 /** The mechanism sweeping on its own, if one is. */
 const playing = signal<number | undefined>(undefined);
+/** Whether a part has arrived: a one-body part names no bodies and still gets its controls. */
+const partShown = signal(false);
 
 /** One sweep across a mechanism's whole drive, in seconds. */
 const SWEEP_S = 2.2;
 
 const PRESETS: { view: View; label: string }[] = [
-  { view: "threeQuarter", label: "3/4" },
+  { view: "threeQuarter", label: "Corner" },
   { view: "front", label: "Front" },
   { view: "side", label: "Side" },
   { view: "back", label: "Back" },
@@ -78,19 +80,15 @@ export function showPart(partBodies: ShownBody[], partMechanisms: Mechanism[]) {
   mechanisms.value = partMechanisms;
   drives.value = partMechanisms.map(drawnDrive);
   view.value = "threeQuarter";
+  partShown.value = true;
 }
 
+// Along the top, where an iso view leaves sky: at the bottom the strip covered the part's near corner.
 function OnView({ viewport }: { viewport: Viewport }) {
-  if (bodies.value.length === 0) return null;
+  if (!partShown.value) return null;
   return (
-    <>
-      <div class="absolute top-2 right-2">
-        <Toggle size="touch" pressed={xray.value} aria-label="See through" onClick={() => (xray.value = !xray.value)}>
-          <Icon name="xray" class="size-6" />
-        </Toggle>
-      </div>
-      <div class="pointer-events-none absolute inset-x-0 bottom-2 flex justify-center">
-        <div class={`${TOUCH_TROUGH} pointer-events-auto text-small`}>
+    <div class="pointer-events-none absolute inset-x-2 top-2 flex items-start justify-between gap-2">
+      <div class={`${TOUCH_TROUGH} pointer-events-auto text-small`}>
           {PRESETS.map((preset) => (
             <Toggle
               key={preset.view}
@@ -104,9 +102,14 @@ function OnView({ viewport }: { viewport: Viewport }) {
               {preset.label}
             </Toggle>
           ))}
-        </div>
       </div>
-    </>
+      <div class="pointer-events-auto text-small">
+        <Toggle size="touch-pill" pressed={xray.value} onClick={() => (xray.value = !xray.value)}>
+          <Icon name="xray" class="size-5" />
+          <span>See through</span>
+        </Toggle>
+      </div>
+    </div>
   );
 }
 
@@ -182,7 +185,11 @@ function MotionRow({ mechanism, index }: { mechanism: Mechanism; index: number }
       >
         <Icon name={playing.value === index ? "pause" : "play"} class="size-5" />
       </Toggle>
-      <span class="max-w-20 shrink-0 truncate text-small text-ink-dim">{label}</span>
+      {/* The value beside its name, where the eye goes after the label, not past the end of the track. */}
+      <span class="flex shrink-0 flex-col leading-tight">
+        <span class="max-w-20 truncate text-small text-ink-dim">{label}</span>
+        <span class="min-w-[6.5ch] font-mono text-small text-ink">{value}</span>
+      </span>
       <Slider
         at={along(drive)}
         marks={mechanism.failsAt.map(along)}
@@ -193,7 +200,6 @@ function MotionRow({ mechanism, index }: { mechanism: Mechanism; index: number }
           setDrive(index, low + at * (high - low));
         }}
       />
-      <span class="min-w-[6.5ch] shrink-0 text-right font-mono text-small text-ink">{value}</span>
     </div>
   );
 }
