@@ -86,7 +86,8 @@ export const WORKBENCH: SceneLook = {
   ],
   surface: { kind: "standard", roughness: 0.46, metalness: 0.1 },
   part: "#8a96a8",
-  edges: { color: "#2b3440", opacity: 0.85 },
+  // Opaque, as in the chat viewer: translucent edges stack darker wherever two meet.
+  edges: { color: "#2b3440", opacity: 1 },
   grid: ["#6f7a8b", "#9ba6b5"],
   shadow: 0.22,
   shadowMap: 2048,

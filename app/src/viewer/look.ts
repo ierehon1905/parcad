@@ -40,7 +40,8 @@ export function studio(): SceneLook {
     ],
     surface: { kind: "standard", roughness: 0.45, metalness: 0 },
     part: token("body-1"),
-    edges: { color: "#0e1014", opacity: 0.85, width: 1.25 },
+    // Opaque: at 0.85 two edges meeting at a corner stacked into a darker spot, and every edge read grey.
+    edges: { color: "#0e1014", opacity: 1, width: 1.25 },
     shadow: 0.45,
     shadowMap: 1024,
   };

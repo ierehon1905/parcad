@@ -9,10 +9,10 @@
 
 import * as THREE from "three";
 
-const SIZE = 76;
+const SIZE = 56;
 const CENTRE = SIZE / 2;
 /** Arm length in px, leaving room for a letter past the tip. */
-const REACH = 22;
+const REACH = 16;
 
 const ARMS: { label: string; axis: THREE.Vector3; colour: string }[] = [
   { label: "X", axis: new THREE.Vector3(1, 0, 0), colour: "var(--color-bad, #ff6b6b)" },
@@ -41,7 +41,7 @@ export class AxisTriad {
     this.svg.setAttribute("width", String(SIZE));
     this.svg.setAttribute("height", String(SIZE));
     this.svg.setAttribute("aria-hidden", "true");
-    Object.assign(this.svg.style, { position: "absolute", right: "14px", bottom: "14px", pointerEvents: "none" });
+    Object.assign(this.svg.style, { position: "absolute", right: "8px", bottom: "8px", pointerEvents: "none" });
     // A dark halo under the arms and letters, in place of a plate behind them: it reads on the
     // window's light backdrop and vanishes on the chat viewer's dark one (Birman, information
     // garbage). Opaque strokes in one group made translucent as a whole, so where two halos
@@ -51,7 +51,7 @@ export class AxisTriad {
     this.svg.append(halos);
     const letter = (text: SVGTextElement, label: string) => {
       text.textContent = label;
-      text.setAttribute("font-size", "12");
+      text.setAttribute("font-size", "11");
       text.setAttribute("font-weight", "600");
       text.setAttribute("text-anchor", "middle");
       text.setAttribute("dominant-baseline", "central");
@@ -93,8 +93,8 @@ export class AxisTriad {
       const v = this.turned.copy(arm.axis).applyQuaternion(this.inverse);
       const x = (CENTRE + v.x * REACH).toFixed(1);
       const y = (CENTRE - v.y * REACH).toFixed(1);
-      const tx = (CENTRE + v.x * (REACH + 8)).toFixed(1);
-      const ty = (CENTRE - v.y * (REACH + 8)).toFixed(1);
+      const tx = (CENTRE + v.x * (REACH + 7)).toFixed(1);
+      const ty = (CENTRE - v.y * (REACH + 7)).toFixed(1);
       for (const stroke of [arm.halo, arm.line]) {
         stroke.setAttribute("x2", x);
         stroke.setAttribute("y2", y);
