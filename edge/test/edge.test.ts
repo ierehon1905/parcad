@@ -10,7 +10,7 @@
 
 import { afterAll, beforeAll, expect, test } from "bun:test";
 import type { Subprocess } from "bun";
-import { mkdtempSync, writeFileSync, readdirSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -72,9 +72,11 @@ beforeAll(async () => {
   await until(`${EDGE}/api/health`, "wrangler dev");
 }, 90_000);
 
-afterAll(() => {
+afterAll(async () => {
   edge?.kill();
   host?.kill();
+  await Promise.all([edge?.exited, host?.exited]);
+  rmSync(dir, { recursive: true, force: true });
 });
 
 /** A browser's cookies across one sign-in. */
