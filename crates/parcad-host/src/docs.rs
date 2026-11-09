@@ -114,6 +114,22 @@ const SECTION_BUDGET_CHARS: usize = 12_000;
 /// The name under which a split topic's index is served.
 const CONTENTS: &str = "contents";
 
+/// The entries the competitor bench's models fetched one by one after reading
+/// the `dsl` contents, most first (96 trials, 2026-10-13): their signatures
+/// ride in the contents, which saves the call when a signature was all it was.
+const MOST_READ: [&str; 10] = [
+    "Shape.fillet",
+    "cylinder",
+    "box",
+    "sphere",
+    "Shape.edges",
+    "Shape.cut",
+    "Shape.union",
+    "EdgeSelection.fillet",
+    "union",
+    "EdgeSelection.expect",
+];
+
 /// Read one topic, or one section of it. No topic is the language reference,
 /// which is what a caller who has not asked for anything in particular needs
 /// first.
@@ -466,6 +482,20 @@ impl Document {
         sections
     }
 
+    /// Each named entry's signature lines, in `names` order: what a caller
+    /// reaches for most, without the entry around it.
+    fn signatures(&self, names: &[&str]) -> String {
+        let mut out = String::new();
+        for name in names {
+            for entry in self.chapters.iter().flat_map(|c| &c.entries).filter(|e| e.title == *name) {
+                if let Some(signature) = entry.text.lines().find(|l| l.starts_with('`')) {
+                    out.push_str(&format!("\n- {name}: {signature}"));
+                }
+            }
+        }
+        out
+    }
+
     fn contents(&self, topic: &str, sections: &[Section]) -> String {
         let entries: usize = self.chapters.iter().map(|c| c.entries.len()).sum();
         let mut out = self.preamble.clone();
@@ -476,6 +506,12 @@ impl Document {
              is the whole document.\n",
             sections.len()
         ));
+        if topic == "dsl" {
+            out.push_str(&format!(
+                "\n## Signatures read most\n\nThe rules and an example for each are in its entry.\n{}\n",
+                self.signatures(&MOST_READ)
+            ));
+        }
         for section in sections {
             let mut titles: Vec<&str> = self.chapters[section.chapter].entries
                 [section.entries.clone()]

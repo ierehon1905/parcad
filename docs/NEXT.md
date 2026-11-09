@@ -273,7 +273,7 @@ and in the next two sections.
 | 8 | a DSL name as a local is a parse error — **done 2026-11-09** | 5 | ★★ | S | Opus |
 | 9 | `edit_part`'s exact-text `old` misses | 5 | ★★ | M | Opus |
 | 10 | `read_docs` has no search — **done 2026-11-09** | 5 | ★★ | S | Opus |
-| 11 | the same signatures fetched every trial | 4 | ★★ | S | Opus |
+| 11 | the same signatures fetched every trial — **done 2026-11-09** | 4 | ★★ | S | Opus |
 | 12 | the G2 blend behind `.smooth()` — built 2026-10-14; a three-edge corner is still refused | 4 | ★★ | L | Fable, high |
 | 13 | a face's listed area misreads spline faces | 4 | ★★ | S | Opus |
 | 14 | tool schemas carry non-standard `uint` formats — **done 2026-11-09** | 3 | ★ | S | Opus |
@@ -456,7 +456,12 @@ point). Counted by trial, most-hit first:
 - **The same signatures fetched every trial** — `read_docs` sections `box`,
   `cylinder`, `Shape.fillet` 15–16 times each, `sphere` 8, after the `dsl`
   index 50 times. The ten most-used signatures in the index reply would save a
-  call or two per trial.
+  call or two per trial. *Done 2026-11-09:* the `dsl` contents carries the
+  signatures of the ten entries the bench's transcripts fetched most
+  (`MOST_READ` in docs.rs, counted over 96 trials). Field case
+  `four-holes-ten-in`, Haiku 5.5, 4 trials per host: section reads 10 → 6
+  and MCP calls 24 → 18, every volume right on both; a small sample, and
+  trials still open `box` or `cylinder` for the rules.
 - **`wait_s` on one tool, not its sibling** — 1 trial sent it to `edit_part`.
   Small; same parameter names across the script tools. *Done 2026-11-09:* edit_part
   takes `wait_s` like set_script, open_project and restore_snapshot, and a
