@@ -2,7 +2,7 @@
 
 Parametric CAD you write as code — for people, and for agents.
 
-**Status: 0.0.16, experimental.** Made by Maging Studio, and the DSL still moves. Every
+**Status: 0.0.17, experimental.** Made by Maging Studio, and the DSL still moves. Every
 operation is checked against measured geometry ([eval/cases/](eval/cases/)), but
 none of it has had the years of abuse that make a CAD kernel trustworthy.
 Measure a part before you machine it.
