@@ -335,7 +335,9 @@ What the host does with it:
 - `--revoked FILE` lists account ids refused by token, pass and link alike.
 - A refused pass is a 401 to the client, and its reason goes to the log.
 
-The edge itself is not built yet. Its design is in the operator's own notes.
+The edge is `edge/`, a Cloudflare Worker running `workers-oauth-provider`
+(edge/README.md). Its sign-up is open to every verified address, behind the
+host's per-account limits, and `INVITE_ONLY=1` narrows it to a list.
 
 ## Where to run it
 

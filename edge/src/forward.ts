@@ -1,0 +1,47 @@
+/**
+ * What the edge sends on to the host: the request as it came, at the origin,
+ * with the bearer replaced by a pass or kept when it is the host's own token.
+ */
+
+import type { Env } from "./env";
+import { sign } from "./pass";
+
+/** Hop-by-hop and edge-only headers that must not reach the host. */
+const DROPPED = ["host", "cf-connecting-ip", "x-forwarded-host", "cookie"];
+
+function toOrigin(request: Request, env: Env, authorization: string | null): Request {
+  const url = new URL(request.url);
+  const target = new URL(url.pathname + url.search, env.ORIGIN);
+  const headers = new Headers(request.headers);
+  for (const name of DROPPED) headers.delete(name);
+  if (authorization === null) headers.delete("authorization");
+  else headers.set("authorization", authorization);
+  return new Request(target, {
+    method: request.method,
+    headers,
+    body: request.body,
+    redirect: "manual",
+  });
+}
+
+/** A request whose account the edge has signed in: forwarded with a pass. */
+export async function asAccount(request: Request, env: Env, account: string): Promise<Response> {
+  const pass = await sign(env.EDGE_KEY, env.PUBLIC_HOST, env.ORIGIN, account);
+  return fetch(toOrigin(request, env, `Bearer ${pass}`));
+}
+
+/** A request the host checks itself: a static token, or a signed link with none. */
+export function untouched(request: Request, env: Env): Promise<Response> {
+  return fetch(toOrigin(request, env, request.headers.get("authorization")));
+}
+
+/**
+ * Whether a bearer is the host's own static token rather than one this edge
+ * issued: the library's tokens are `userId:grantId:secret`, a static token is
+ * base64url with no colon.
+ */
+export function isStaticToken(request: Request): boolean {
+  const header = request.headers.get("authorization") ?? "";
+  const match = /^bearer\s+(\S+)$/i.exec(header.trim());
+  return match !== null && /^[A-Za-z0-9_-]{20,}$/.test(match[1]);
+}
