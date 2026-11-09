@@ -266,7 +266,7 @@ and in the next two sections.
 | 1 | the tag that makes the saucer crawl — **done 2026-11-05** | 8 | ★★★ | L | Fable, high |
 | 2 | `allow_failing` is taken on the model's own word | 7 | ★★★ | S | Opus |
 | 3 | `check_motion` — **done 2026-11-05**, as `turns` and `slides` checks | 7 | ★★★ | L | Fable, high |
-| 4 | `edit_part` refuses with an empty reason | 6 | ★★ | S | Opus |
+| 4 | `edit_part` refuses with an empty reason — **done 2026-11-09**: a brief over its envelope opened the door and named nothing | 6 | ★★ | S | Opus |
 | 5 | a list argument sent as a JSON string is refused | 6 | ★★ | S | Opus |
 | 6 | field runs measure Haiku 4.5, not the current Haiku | 6 | ★★ | S | Opus |
 | 7 | a right part the model cannot verify goes out unvouched | 5 | ★★ | M | Opus |
@@ -297,7 +297,11 @@ and in the next two sections.
   `edit_part refused: . Fix the part and call again, or pass allow_failing` —
   the sentence that names what failed is empty. Find which check reaches the
   refusal with no text and give it its message; an error that names nothing
-  breaks the rule every refusal here keeps.
+  breaks the rule every refusal here keeps. *Done 2026-11-09:* it was the
+  brief. `Verdicts::failing` counts a brief that is over, and `Door::pass` let
+  that close the door, but named only checks and print findings. A brief
+  never refuses a save, as the DSL and the tool both say, so now only the
+  checks and the print check decide.
 - **A list argument sent as a JSON string is refused.** Qwen 3.8 Flash through
   OpenCode sent `views` as the string `"[\"iso\", \"top\"]"` in 8 calls, and
   GLM sent `points[0]` as `"[[0"`; each is refused with a correct message and

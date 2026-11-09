@@ -1272,7 +1272,8 @@ impl Door {
     /// every failing verdict with its measurement and the one argument that
     /// opens the door for both.
     pub fn pass(&self, allow_failing: Option<&str>, action: &str) -> Result<Option<String>, String> {
-        if self.failing().is_empty() {
+        // The brief is a verdict but never a door: a part over its envelope still saves.
+        if !self.verdicts.checks_failing() && !self.verdicts.print_failing() {
             return Ok(None);
         }
         if let Some(reason) = allow_failing.map(str::trim).filter(|r| !r.is_empty()) {
@@ -2352,6 +2353,11 @@ pub(crate) mod tests {
         assert_eq!(open.pass(None, "export_part").unwrap(), None);
         assert_eq!(open.pass(Some("unneeded"), "export_part").unwrap(), None, "a reason nothing needs is not echoed");
         assert_eq!(Door::default().pass(None, "export_part").unwrap(), None, "a part with no checks has no door");
+        let mut over = parcad_evaluation::BriefReport::none();
+        over.verdict = "over: 110 mm along x against a 95 mm envelope".into();
+        assert!(over.failing());
+        let briefed = Door { verdicts: parcad_evaluation::Verdicts { checks: Some(passed.clone()), brief: Some(over), print_check: None } };
+        assert_eq!(briefed.pass(None, "save_project").unwrap(), None, "a brief never refuses a save, nor refuses with nothing to name");
 
         // The second slot: a failing print_check refuses through the same
         // argument, a flagged one passes, and one reason opens both verdicts.
