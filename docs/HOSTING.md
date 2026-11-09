@@ -74,7 +74,9 @@ container a memory limit near 3 GB so one p99 build cannot take the box with
 it (workers past 512 MB are retired on their own). With that,
 one such box carries roughly 10–20 concurrently active agent users, each
 building a part every 10–30 s; without the cap, five or six simultaneous
-heavy builds swap or kill it.
+heavy builds swap or kill it. Each worker is now capped as well, at the
+container's memory less a gigabyte, shared among the builds ("Limits"), so a
+runaway part fails on its own instead.
 
 ## Tenancy
 
@@ -126,12 +128,132 @@ runs **one process with tenants inside it**, which is what landed:
   `open_project` on a host with no window; whether a model reads the hosted
   text is unmeasured — the harness takes the token as `FIELD_MCP_BEARER`
   (field/README.md), and nobody has pointed it at a hosted host yet.
-- Limits per tenant, defaults being today's for `local`: the kernel timeout a
-  call may ask for, the script backstop, concurrent builds (two per tenant and
-  one global cap of the box's cores, `--builds N`, since the pool itself caps
-  nothing), and the request body. Nothing in the host limits a worker's
-  memory; the container's memory limit is what bounds it, and
-  `packaging/docker/compose.yaml` sets one.
+- Limits per account, and storage kept as a cache: the next two sections. A
+  local tenant has none of them, and nothing of them is written in its folder.
+
+## Limits
+
+Every hosted call is admitted before it runs and holds what it was admitted
+to until its reply is made (`crates/parcad-host/src/limits.rs`). Only the host
+knows the account, the tool, the cost and the sizes, so this is where they are
+enforced; Cloudflare's WAF stays a flood guard for unauthenticated traffic,
+and keying anything by IP would be useless, since every claude.ai call comes
+from Anthropic's ranges. A self-hosted `parcad serve --hosted` gets the same
+limits. Every one moves with `--limit NAME=VALUE` or `PARCAD_LIMIT_<NAME>`,
+and `parcad serve --help` lists them with their defaults:
+
+| limit | default | name |
+|---|---|---|
+| tool calls per account | 60 a minute, 20 at once; a light call costs ¼ | `calls-per-minute`, `call-burst` |
+| builds per account | 20 a minute, 6 at once | `builds-per-minute`, `build-burst` |
+| calls in progress per account, whole call | 3 | `calls-at-once` |
+| builds in progress, per account / server | 2 / `--builds` (4 on the box) | `builds-at-once` |
+| wait for slots and rates | 20 s, then a reply saying when to call again | `slot-wait-s` |
+| kernel / script time per call | 60 s / 30 s | `kernel-s`, `script-s` |
+| build time per account (script, kernel and render; a call answered wholly from the caches is free) | 1,800 s a UTC day, 20,000 s a UTC month, kept across restarts | `build-seconds-per-day`, `-per-month` |
+| request body / script | 1 MB / 256 KB (the largest part shipped is 9 KB) | `body-kb`, `script-kb` |
+| exports | 50 MB each, 60 a UTC day; swept when their link expires | `export-mb`, `exports-per-day` |
+| storage | 50 MB and 5,000 files of parts, history and trash | `storage-mb`, `storage-files` |
+| an unused part | deleted after 30 days | `part-days` |
+| the same call | the same tool with the same arguments more than 10 times in 30 s is refused; not `view_part`, which every viewer in a chat calls with the same arguments as it loads | `repeats`, `repeats-within-s` |
+
+A build is a call that runs a script, the kernel or a render:
+`limits::BUILD_TOOLS`, and on `/api` the geometry routes. It holds one of the
+account's build slots and one of the server's from its script to its reply,
+and the blocking thread it runs on holds them too, so a client that hangs up
+cannot free a slot under a build still running. The gate used to cover the
+kernel alone, so one account could keep every core busy with scripts; a test
+now holds a script spinning in the sandbox against a second account's build
+(`a_script_holds_the_servers_build_slot_and_the_next_build_hears_it_is_busy`).
+A hosted kernel call outside an admitted build is refused as a bug rather
+than run. Slots are tokio semaphores, which serve waiters in the order they
+asked; the `Condvar` with `notify_one` they replaced did not.
+
+**Waits happen on the server**, because a model cannot sleep: a call waits up
+to 20 s in line for its slots, and a rate is paced there too — after a burst
+the account gets a call every second and a build every three, delayed rather
+than refused. Twenty seconds of wait, 30 of script and 60 of kernel are 110 s,
+inside the tunnel's 125 s ("What was measured through a tunnel"); the 120 s
+script backstop this replaced was not.
+
+**A limit is a tool result a model can act on.** Past the wait, or over a
+budget, the reply is `isError: true` with a sentence — what was not run, the
+limit, and either when to call again or to tell the user — and under
+`_meta["parcad/limit"]` the block a program reads:
+
+```json
+{ "type": "rate_limited", "retry_after_seconds": 30, "limit": { "name": "server_builds_at_once", "max": 4 } }
+```
+
+`type` is `rate_limited` when waiting lets the same call in, `too_large` when
+the call has to change, and `storage_full`. The block is not in
+`structuredContent`, as the plan first had it: the MCP TypeScript SDK 1.x
+(1.32.2, `Client.callTool`) checks `structuredContent` against the tool's
+output schema even on an error, and throws on a mismatch, which would turn
+the limit into the protocol error claude.ai shows as "unavailable"
+(docs/GOTCHAS.md). `/api` answers the same sentence and block with 429 and
+`Retry-After`, 413, or 507; HTTP 429 is kept for refusals made before any tool
+runs, because one client read a 429 on `tools/list` as a dead server, and
+`initialize` and `tools/list` are never limited.
+
+**What a small model does with one** was measured on 2026-11-09 with
+`field/` (eval/field/build-when-the-server-is-busy.md and
+build-when-todays-time-is-spent.md), Haiku 5.5 in both thinking arms, three
+trials each, one account per trial, against a `--builds 1` host whose slot
+other accounts kept busy:
+
+| server | slot held by | SOUND | `evaluate_part` calls per trial |
+|---|---|---|---|
+| 0.0.16, before | four loops building a 9 s part | 5/6 | 1 — built after waiting; no limit reply exists |
+| this change, 20 s wait | the same four loops | 5/6 | 1 — FIFO served it inside the 20 s |
+| this change, 20 s wait | three accounts spinning 25 s scripts | 5/6 | 1 — served inside the wait while the hogs were refused |
+| this change, today's build time spent | — | 6/6 | 1 — each named the 00:00 UTC reset |
+| this change, 5 s wait, "Call again in about 30 s" | the spinning scripts | 4/6, 2 VOID | 6–8: every trial called again at once, two reached for a sleep tool |
+| this change, 5 s wait, "Do not call again now … tell the user" | the spinning scripts | 5/6, 1 LUCKY | 1 — each told the user to retry in about 30 s |
+
+So the server-side wait does its job, and the wording of the busy reply
+decides whether a model loops: told when to call again, it called at once,
+because it cannot wait; told that calling at once only waits again, it told
+the user. The LUCKY trial reached `probe_part` instead of `evaluate_part`, got
+the same reply and did the same. Sonnet was not measured.
+
+**Each worker has a memory cap.** Four workers at the measured 1.97 GB peak
+are more than the box's 6 GB container, so a hosted server starts each one
+with `RLIMIT_DATA` at the container's memory less a gigabyte for the host,
+shared among `--builds` — 1.25 GB on the box — and its `oom_score_adj` at
+1000, so the kernel's OOM killer takes a worker before the host
+(`parcad_occt::WorkerLimits`). `--worker-memory-mb N|off` or
+`PARCAD_WORKER_MEMORY_MB` overrides it. A worker that runs out answers "ran
+out of the N MB of memory this server gives one build", naming the fix,
+rather than the crash text about dimensions. Linux enforces the cap; macOS
+neither takes nor enforces it.
+
+## Storage
+
+Parts stay on the server, so every tool and the in-chat viewer work as they
+do locally, but an account's folder is a cache with a quota, not a vault
+(`crates/parcad-host/src/storage.rs`):
+
+- a save that would take the account past 50 MB or 5,000 files is refused
+  before anything is written, naming the fix;
+- a part nobody has read, built or saved for 30 days is deleted with its
+  history, and `list_projects` gives each part's day under `expires`. The
+  clock is the part's own modification time, a bundle folder's, which a read
+  or a write sets; nothing extra is stored. A trash entry goes 30 days after
+  it was trashed, and a deleted part's history 30 days after its last version;
+- an export or a render goes when its signed link expires, 24 h after the
+  reply that last wrote it. Nothing deleted `.exports` before;
+- the parts the server ships are not copied into every account: they are
+  listed beside its own, read-only, from `PARCAD_SEED_DIR` in the image.
+  Reading, building and `importPart` treat one as a part; saving under its name
+  makes the account a copy of its own, which then expires like any other, and
+  removing that copy shows the shipped part again;
+- nothing is backed up. The front page and the server's instructions say so,
+  and `list_projects` carries `storage`, what the account holds of what it may.
+
+The sweep runs on start and then every hour, over every account folder under
+`--tenants-dir`, and logs what it removed. An account's folder is deleted on
+request by hand.
 
 ## Auth
 
@@ -394,8 +516,8 @@ origin-response limit Cloudflare documents for proxied sites. Hosted replies
 are plain JSON (`json_response` in `mcp.rs`), sent whole when the tool
 returns, so nothing streams and no heartbeat is involved, and a call whose
 kernel and script together run past 125 s reaches the client as a 524 while
-the host completes it. The per-account limits (60 s kernel, 120 s script) keep
-the common case far inside that: the corpus's p99 kernel time is 14 s on an
+the host completes it. The per-account limits (20 s wait, 30 s script, 60 s
+kernel) keep every call inside it, and the common case far inside: the corpus's p99 kernel time is 14 s on an
 M4 Pro, about 35 s on a cloud vCPU. The fix, if the wall is hit in practice,
 is SSE replies for hosted hosts (rmcp's `json_response = false` with its 15 s
 `sse_keep_alive`), which every MCP client reads; whether the tunnel buffers an

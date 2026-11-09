@@ -83,11 +83,18 @@ parcad serve --hosted --bind 0.0.0.0 --port 4242 --tokens /etc/parcad/tokens \
 ```
 
 and refuses to start without `PARCAD_PUBLIC_HOST`, without a readable tokens
-file, or with a binary that has no `--hosted`. Each account may have two
-builds in flight and ask for 60 s of kernel per call; the host as a whole runs
-as many at once as the container has cores, or `PARCAD_BUILDS`. Nothing
-limits one worker's memory, so give the container a limit — `--memory 3g`, or
-`mem_limit` in `compose.yaml` — sized from docs/HOSTING.md. The host binds every address
+file, or with a binary that has no `--hosted`. Every account is held to the
+limits in docs/HOSTING.md, "Limits" — 60 tool calls and 20 builds a minute,
+3 calls and 2 builds in progress, 20 s of waiting before a call is told when
+to come back, 1,800 s of build time a day, 50 MB of storage — each moved with
+`PARCAD_LIMIT_<NAME>` in the environment (`-e PARCAD_LIMIT_STORAGE_MB=20`,
+`off` for none); `docker run … parcad serve --help` lists them. The host as a
+whole runs as many builds at once as the container has cores, or
+`PARCAD_BUILDS`, and starts each kernel worker with a memory cap of the
+container's limit less 1 GB, shared among those builds, first in line for the
+OOM killer; `PARCAD_WORKER_MEMORY_MB` sets it instead. So give the container a
+limit — `--memory 3g`, or `mem_limit` in `compose.yaml` — sized from
+docs/HOSTING.md: the cap is read from it. The host binds every address
 of the container, so a published port reaches it directly; publish it on
 `127.0.0.1` and put the TLS front (docs/HOSTING.md, Cloudflare Tunnel) in
 front of that. `PARCAD_PUBLIC_HOST` is the name clients use through that
@@ -127,17 +134,21 @@ user (uid 10001):
 
 | path | what |
 |---|---|
-| `/data/tenants/<id>` | one account's parts, one `.parcad` folder each; `part.js` inside is the only authoritative file |
-| `/data/tenants/<id>/.exports` | where that account's `export_part` and renders land; a reply shows the path relative to the account's folder |
+| `/data/tenants/<id>` | one account's parts, one `.parcad` folder each; `part.js` inside is the only authoritative file. A part unused for 30 days is deleted |
+| `/data/tenants/<id>/.exports` | where that account's `export_part` and renders land; a reply shows the path relative to the account's folder. Each file is deleted when its link expires |
+| `/data/tenants/<id>/.usage.json` | the build time and exports the account has spent today and this month, so a restart does not forget them |
 | `/data/link-secret` | 32 bytes that sign every `url` a reply carries, made on the first start, owner-readable only; deleting it ends every link handed out so far |
 
 A bind mount works if uid 10001 can write it (`--user` changes the uid).
 
-An account's folder is made on its first request and seeded with the
-release's example parts, because a new folder should look like a fresh
-install; what was placed is recorded in `.seeded`, so an example the user
-deletes stays deleted across restarts and upgrades. To seed nothing, run with
+An account's folder is made empty on its first request. The release's example
+parts are served read-only from the image beside the account's own, rather
+than copied into every account: a save under an example's name makes the
+account a copy of its own. To ship none, run with
 `-e PARCAD_SEED_DIR=/opt/parcad/no-seed`, an empty folder the image carries.
+An account seeded by 0.0.16 or earlier keeps its copies, which expire like
+any part once unused for 30 days. Nothing here is backed up: the volume is a
+workspace, and the front page says so.
 
 ## Variables
 
@@ -146,7 +157,9 @@ deletes stays deleted across restarts and upgrades. To seed nothing, run with
 | `PARCAD_PUBLIC_HOST` | unset, required | where clients reach the server: a host, `https://` unless `http://host:port` is written; `--public-host` |
 | `PARCAD_LINK_LIFETIME` | `86400` | seconds a reply's `url` fetches its file with no bearer; `--link-lifetime` |
 | `PARCAD_BUILDS` | unset (the container's cores) | builds in flight across every account; `--builds`. 2 on a 2 vCPU / 4 GB box |
-| `PARCAD_SEED_DIR` | `/opt/parcad/examples` | parts to seed into each new account; the CLI's own lookup is a macOS bundle's `../Resources/examples`, so the image names it |
+| `PARCAD_SEED_DIR` | `/opt/parcad/examples` | the parts every account is shipped, read-only; the CLI's own lookup is a macOS bundle's `../Resources/examples`, so the image names it |
+| `PARCAD_LIMIT_<NAME>` | the hosted defaults | one per-account limit, `--limit name=value`: `PARCAD_LIMIT_CALLS_PER_MINUTE=30`, `PARCAD_LIMIT_STORAGE_MB=off`. docs/HOSTING.md, "Limits", has every name |
+| `PARCAD_WORKER_MEMORY_MB` | unset (the container's limit less 1 GB, shared among the builds) | the memory each kernel worker may allocate, or `off`; `--worker-memory-mb` |
 | `PARCAD_OCCT_WORKER` | unset | the worker binary; unset, it is the one beside `parcad` |
 | `PARCAD_OCCT_TIMEOUT` | unset (20 s) | seconds a kernel request may run before the worker is stopped, when a call asks for no `timeout_s`; raise it when emulated |
 

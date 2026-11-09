@@ -1058,12 +1058,16 @@ entry.
 cache: a worker reads only the scratch paths the host chose, a hit under one
 account of another's subtree is the same deterministic solid, and a process per
 tenant would have needed a worker broker to cap total kernel concurrency at
-all (HOSTING.md measured both shapes). What is bounded instead is
-`tenant::Limits`: `service::budget` clamps a call's `timeout_s` to the
-account's kernel and script limits, `service::kernel` takes the account's gate
-and the host's (`--builds N`) around every kernel entry point, and
-`mcp::record` reads the body limit off the carried tenant. Nothing here limits
-a worker's memory; the container's limit does.
+all (HOSTING.md measured both shapes). What is bounded instead is the
+account, in `limits.rs`: every call is admitted once, at the transport seam
+(`Parcad::call_tool`, `http::admitted`), and holds its call slot, its build
+slots and the server's (`--builds N`) from its script to its reply, the
+blocking thread included through `tenant::handoff()`; `service::budget` clamps
+`timeout_s` to the account's kernel and script limits; a refusal is a tool
+result naming when to call again or to tell the user. `service::kernel` only
+checks that a hosted call holds a build slot. Each worker is started under a
+memory cap and first for the OOM killer (`parcad_occt::WorkerLimits`).
+HOSTING.md, "Limits" and "Storage", has the numbers.
 
 **What hosted mode refuses**, each at the capability in `service.rs` and
 naming the fix: opening a part in an editor, opening an export in a slicer,
@@ -1079,7 +1083,10 @@ data folder; docs/GOTCHAS.md says why not Documents), or `PARCAD_PROJECTS_DIR`
 — shared by all three local callers; a hosted account has one of its own
 under the tenants folder, as the previous section says. The parts that ship are *seeded* into it on first
 run and are then ordinary projects: editable, renamable, deletable. Seeding only
-ever adds what is missing, so a part the user deletes stays deleted.
+ever adds what is missing, so a part the user deletes stays deleted. A hosted
+account is seeded with nothing: the shipped parts are listed beside its own,
+read-only, from the one folder on the server, and a save under one's name makes
+a copy of its own (`Tenant::shipped`, `projects::locate`).
 
 One project is a `.parcad` folder:
 

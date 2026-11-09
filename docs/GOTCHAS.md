@@ -2181,6 +2181,32 @@ is deliberate — the alternative is one account's files in the operator's own
 folder — and because `require()` is process-wide, the test for it runs its
 panicking half in a child process.
 
+### A hosted call holds its slots from its script to its reply
+
+The build gate used to sit in `service::kernel()`, so a script spinning in the
+sandbox, a render or a probe's perception held nothing, and one account could
+keep every core busy. Admission now happens once per call, in
+`Parcad::call_tool` and in `http::admitted` for `/api` (`limits.rs`), and the
+call's slots ride to the blocking thread on `tenant::handoff()`, beside the
+tenant, so they stay held until the work there ends even if the client hangs
+up. Two things follow. A new `spawn_blocking` must carry the handoff, not the
+tenant alone, or its kernel calls lose their slot. And a hosted kernel call
+outside an admitted build is refused as a bug ("reached the kernel without a
+build slot"): a new tool that builds belongs in `limits::BUILD_TOOLS`, which
+`every_tool_is_classified_for_the_limits` holds against the router.
+
+### An error with `structuredContent` fails an SDK 1.x client's schema check
+
+The MCP TypeScript SDK 1.x (1.32.2, `Client.callTool`) validates a result's
+`structuredContent` against the tool's output schema even when `isError` is
+true, and throws "Structured content does not match the tool's output
+schema" on a mismatch; 2.0 skips the check on an error. A limit's
+`{ type, retry_after_seconds, limit }` block in `structuredContent` would turn
+every limit reply on a schema'd tool into that protocol error, which claude.ai
+shows a model as "the tool failed (unavailable)". So the block rides in
+`_meta["parcad/limit"]`, as a refusal's details ride in
+`_meta["parcad/refusal"]`, and the sentence in the text is what a model reads.
+
 ## The editor does not check the length of an array
 
 `app/src/intellisense/analyzer.ts` drops any diagnostic whose cause bottoms out
