@@ -272,7 +272,7 @@ and in the next two sections.
 | 7 | a right part the model cannot verify goes out unvouched | 5 | ★★ | M | Opus |
 | 8 | a DSL name as a local is a parse error | 5 | ★★ | S | Opus |
 | 9 | `edit_part`'s exact-text `old` misses | 5 | ★★ | M | Opus |
-| 10 | `read_docs` has no search | 5 | ★★ | S | Opus |
+| 10 | `read_docs` has no search — **done 2026-11-09** | 5 | ★★ | S | Opus |
 | 11 | the same signatures fetched every trial | 4 | ★★ | S | Opus |
 | 12 | the G2 blend behind `.smooth()` — built 2026-10-14; a three-edge corner is still refused | 4 | ★★ | L | Fable, high |
 | 13 | a face's listed area misreads spline faces | 4 | ★★ | S | Opus |
@@ -329,7 +329,15 @@ and in the next two sections.
 - **`read_docs` has no search.** Haiku 5.5 called `read_docs({ query: … })` 8
   times in 2 trials (`haiku55/plate-P-haiku55-1`); the tool takes `topic`,
   `section`, `detail`. Either accept `query` as a search over section names and
-  text, or name `section` and the contents list in the refusal.
+  text, or name `section` and the contents list in the refusal. *Done 2026-11-09:*
+  `query` (or `search`) lists every section and entry whose name or text has
+  the words, in every topic or in `topic` alone, the most words matched first,
+  each with the `topic` and `section` that read it. Field case
+  `find-it-in-the-docs`, Haiku 5.5, 4 trials per host: on 0.0.18 no trial
+  tried `query`; on the new host 4/4 searched first, with no refusal. Every
+  trial on both hosts answered right and reached the section, and the rounds
+  did not drop: the model sends the search beside the two contents reads, not
+  instead of them.
 - **Tool schemas carry non-standard `uint` formats.** schemars writes
   `"format": "uint"` / `"uint64"` on every count; OpenCode logs "unknown format
   uint ignored" for each on every start, and a stricter client could refuse the

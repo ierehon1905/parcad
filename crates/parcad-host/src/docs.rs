@@ -171,6 +171,127 @@ pub fn read(topic: Option<&str>, section: Option<&str>, detail: bool) -> Result<
     })
 }
 
+/// The most hits one search reply lists.
+const SEARCH_HITS: usize = 12;
+
+/// Find `query`'s words in every topic, or in `topic` alone: each section or
+/// entry whose name or text has them, the most words matched first, with the
+/// `topic` and `section` that read it whole.
+pub fn search(topic: Option<&str>, query: &str) -> Result<Reference, String> {
+    let words: Vec<String> = query
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|w| w.chars().count() >= 2)
+        .map(str::to_lowercase)
+        .collect();
+    if words.is_empty() {
+        return Err("`query` has no word to look for. Pass a name or a few words, such as \
+             `countersink` or `blend union touching`, or leave it out and pass `topic`."
+            .to_string());
+    }
+    let topics: Vec<&Topic> = match topic.map(str::trim).filter(|t| !t.is_empty()) {
+        Some(wanted) => vec![TOPICS.iter().find(|t| t.name == wanted).ok_or_else(|| {
+            format!(
+                "no parcad document called {wanted:?}. Ask for one of: {}, or leave `topic` \
+                 out to search them all",
+                TOPICS.iter().map(|t| t.name).collect::<Vec<_>>().join(", ")
+            )
+        })?],
+        None => TOPICS.iter().collect(),
+    };
+
+    struct Hit {
+        topic: &'static str,
+        section: String,
+        matched: usize,
+        score: usize,
+        line: String,
+    }
+    let mut hits = Vec::new();
+    for topic in &topics {
+        let document = match topic.text {
+            Some(text) => Document::from_markdown(text),
+            None => Document::from_dsl(DSL_SOURCE, false),
+        };
+        let sections = document.sections();
+        let mut look = |section: String, title: &str, text: &str| {
+            let name = title.to_lowercase();
+            let body = text.to_lowercase();
+            let matched = words.iter().filter(|w| name.contains(w.as_str()) || body.contains(w.as_str())).count();
+            if matched == 0 {
+                return;
+            }
+            let score = words
+                .iter()
+                .map(|w| 6 * usize::from(name.contains(w.as_str())) + body.matches(w.as_str()).count().min(3))
+                .sum();
+            hits.push(Hit { topic: topic.name, section, matched, score, line: telling_line(text, &words) });
+        };
+        for (index, chapter) in document.chapters.iter().enumerate() {
+            if let Some(first) = sections.iter().find(|s| s.chapter == index) {
+                look(first.name.clone(), &chapter.heading, &chapter.lead);
+            }
+            for entry in &chapter.entries {
+                look(plain(&entry.title), &entry.title, &entry.text);
+            }
+        }
+    }
+    hits.sort_by(|a, b| (b.matched, b.score).cmp(&(a.matched, a.score)));
+    // An overload is one entry to read.
+    hits.dedup_by(|a, b| a.topic == b.topic && a.section == b.section);
+
+    let text = if hits.is_empty() {
+        format!(
+            "Nothing in parcad's documents mentions {query:?}. Try another word for it, or read \
+             the `dsl` topic's contents, which names every function and method."
+        )
+    } else {
+        let shown = if hits.len() > SEARCH_HITS {
+            format!("; the {SEARCH_HITS} that match most are below")
+        } else {
+            String::new()
+        };
+        let mut out = format!(
+            "{} sections and entries mention {query:?}{shown}. Read one whole with read_docs \
+             `topic` and `section` as given.\n",
+            hits.len()
+        );
+        for hit in hits.iter().take(SEARCH_HITS) {
+            out.push_str(&format!("\n- topic `{}`, section `{}`: {}", hit.topic, hit.section, hit.line));
+        }
+        out.push('\n');
+        out
+    };
+    Ok(Reference {
+        topic: topics.iter().map(|t| t.name).collect::<Vec<_>>().join(", "),
+        source: String::new(),
+        section: Some(format!("search: {query}")),
+        text,
+        sections: Vec::new(),
+        topics: Vec::new(),
+    })
+}
+
+/// The first line of `text` that has one of `words`, cut short, so a hit says
+/// why it matched without sending the entry.
+fn telling_line(text: &str, words: &[String]) -> String {
+    let lines: Vec<&str> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with("```") && !l.starts_with('#'))
+        .collect();
+    let line = lines
+        .iter()
+        .find(|l| words.iter().any(|w| l.to_lowercase().contains(w.as_str())))
+        .or(lines.first())
+        .copied()
+        .unwrap_or("");
+    if line.chars().count() <= 160 {
+        line.to_string()
+    } else {
+        format!("{}…", line.chars().take(160).collect::<String>())
+    }
+}
+
 // ------------------------------------------------- a document, in sections
 
 /// A topic cut where its own headings cut it: a chapter is a `##` heading or a
@@ -928,6 +1049,49 @@ mod tests {
             }
         }
         found
+    }
+
+    /// The `topic` and `section` of every hit a search lists.
+    fn hits(reply: &Reference) -> Vec<(String, String)> {
+        reply
+            .text
+            .lines()
+            .filter_map(|l| l.strip_prefix("- topic `"))
+            .filter_map(|l| l.split_once("`, section `"))
+            .filter_map(|(topic, rest)| rest.split_once("`:").map(|(section, _)| (topic.to_string(), section.to_string())))
+            .collect()
+    }
+
+    /// Haiku 5.5 called read_docs with `query` eight times in two trials of
+    /// the competitor bench, before the tool took one.
+    #[test]
+    fn a_query_finds_the_entry_and_every_hit_reads_back() {
+        let found = search(None, "countersink").unwrap();
+        let listed = hits(&found);
+        assert_eq!(listed.first().map(|(t, _)| t.as_str()), Some("dsl"), "{}", found.text);
+        assert!(listed[0].1.to_lowercase().contains("countersink"), "{}", found.text);
+
+        for query in ["countersink", "blend union touching", "mirror", "shell offset", "Shape.fillet radius"] {
+            let reply = search(None, query).unwrap();
+            let listed = hits(&reply);
+            assert!(!listed.is_empty() && listed.len() <= SEARCH_HITS, "{query}: {}", reply.text);
+            for (topic, section) in listed {
+                read(Some(&topic), Some(&section), false)
+                    .unwrap_or_else(|e| panic!("{query}: the hit {topic}/{section} does not read back: {e}"));
+            }
+            let sent = serde_json::to_value(&reply).unwrap().to_string().chars().count();
+            assert!(sent <= 4_000, "{query}: a search reply of {sent} characters");
+        }
+    }
+
+    #[test]
+    fn a_query_in_one_topic_stays_in_it_and_an_empty_one_names_the_fix() {
+        let gotchas = search(Some("gotchas"), "blend").unwrap();
+        assert!(hits(&gotchas).iter().all(|(t, _)| t == "gotchas"), "{}", gotchas.text);
+        assert!(search(None, " ? ").unwrap_err().contains("countersink"));
+        assert!(search(Some("nope"), "blend").unwrap_err().contains("gotchas"));
+        let none = search(None, "zzqxv").unwrap();
+        assert!(hits(&none).is_empty() && none.text.contains("Nothing"), "{}", none.text);
     }
 
     #[test]

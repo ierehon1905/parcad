@@ -2172,8 +2172,12 @@ pub fn read_docs(
     topic: Option<&str>,
     section: Option<&str>,
     detail: bool,
+    query: Option<&str>,
 ) -> Result<crate::docs::Reference, String> {
-    crate::docs::read(topic, section, detail)
+    match query {
+        Some(query) => crate::docs::search(topic, query),
+        None => crate::docs::read(topic, section, detail),
+    }
 }
 
 #[cfg(test)]
