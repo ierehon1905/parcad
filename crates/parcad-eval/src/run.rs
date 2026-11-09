@@ -58,7 +58,11 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
         Err(e) => {
             let kind = match &e {
                 parcad_occt::OcctError::Rejected { .. } => RefusalKind::Rejected,
-                parcad_occt::OcctError::Crashed { .. } => RefusalKind::Crashed,
+                // The corpus starts its workers with no memory cap, so this is
+                // a worker stopped by the system, which is what a crash records.
+                parcad_occt::OcctError::Crashed { .. } | parcad_occt::OcctError::OutOfMemory { .. } => {
+                    RefusalKind::Crashed
+                }
                 parcad_occt::OcctError::TimedOut { .. } => RefusalKind::TimedOut,
                 parcad_occt::OcctError::Host(_) => RefusalKind::Host,
             };

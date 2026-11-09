@@ -40,6 +40,10 @@ pub enum OcctError {
     Crashed { stage: String, detail: String },
     /// Still going after the deadline. Usually a pathological fillet.
     TimedOut { stage: String, seconds: u64 },
+    /// Stopped for memory, under the cap a hosted server starts each worker
+    /// with ([`confine_workers`]): its allocator failed, or the system's
+    /// out-of-memory killer, which picks a worker first, ended it.
+    OutOfMemory { stage: String, cap_mb: u64 },
     /// The worker could not be started, or said something unintelligible.
     Host(String),
 }
@@ -90,6 +94,13 @@ impl std::fmt::Display for OcctError {
                  This kernel is WebAssembly in a browser tab, two to three times slower \
                  than the installed app: over MCP pass timeout_s (up to 600) and call \
                  again, or build a part this heavy in the installed app"
+            ),
+            OcctError::OutOfMemory { stage, cap_mb } => write!(
+                f,
+                "the geometry kernel ran out of the {cap_mb} MB of memory this server gives one build, \
+                 while {stage}, and was stopped. Make the part lighter to build — fewer sections, samples \
+                 or bodies at once — or build it with parcad on your own machine (brew install parcad), \
+                 which has no such cap. The server's operator sets it with --worker-memory-mb."
             ),
             OcctError::Host(m) => write!(f, "{m}"),
         }
@@ -144,6 +155,106 @@ pub fn default_timeout() -> Duration {
 }
 
 const WORKER: &str = "parcad-occt-worker";
+
+/// How a hosted server starts each worker: under a cap on the memory it may
+/// allocate, and first in line for the system's out-of-memory killer, so a
+/// build that runs away takes its own worker down rather than the host and
+/// every account's work with it. A desktop or local host sets none of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct WorkerLimits {
+    /// `RLIMIT_DATA`: the private memory a worker may map, which Linux
+    /// counts on every allocation. Elsewhere it is not set: macOS refuses a
+    /// data limit below what a forked child already maps, and enforces none.
+    pub memory_bytes: Option<u64>,
+    /// Raise each worker's `oom_score_adj` to the most, on Linux.
+    pub oom_first: bool,
+}
+
+static CONFINED: Mutex<WorkerLimits> = Mutex::new(WorkerLimits { memory_bytes: None, oom_first: false });
+
+/// Start every worker from now on under `limits`; a worker already warm in
+/// the pool keeps what it was started with.
+pub fn confine_workers(limits: WorkerLimits) {
+    *CONFINED.lock().unwrap_or_else(|e| e.into_inner()) = limits;
+}
+
+fn confined() -> WorkerLimits {
+    *CONFINED.lock().unwrap_or_else(|e| e.into_inner())
+}
+
+/// The cap a hosted server gives each worker when the operator names none:
+/// the memory this process may use — its container's limit, or the machine's
+/// — less a gigabyte for the host itself, shared among `builds` at once.
+/// `None` where neither can be read, which is anywhere but Linux.
+pub fn default_worker_memory(builds: usize) -> Option<u64> {
+    let read = |path: &str| std::fs::read_to_string(path).ok();
+    let cgroup = read("/sys/fs/cgroup/memory.max")
+        .or_else(|| read("/sys/fs/cgroup/memory/memory.limit_in_bytes"))
+        .and_then(|text| text.trim().parse::<u64>().ok())
+        // cgroup v1 writes a page-rounded i64::MAX for "no limit".
+        .filter(|bytes| *bytes < 1 << 60);
+    let machine = read("/proc/meminfo").and_then(|text| {
+        let line = text.lines().find(|line| line.starts_with("MemTotal:"))?;
+        line.split_whitespace().nth(1)?.parse::<u64>().ok().map(|kb| kb * 1024)
+    });
+    let total = cgroup.or(machine)?;
+    let host = 1u64 << 30;
+    Some((total.saturating_sub(host) / builds.max(1) as u64).max(256 << 20))
+}
+
+/// Apply [`WorkerLimits`] to the worker about to be started.
+#[cfg(all(unix, not(target_os = "emscripten")))]
+fn confine(command: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    let limits = confined();
+    if limits == WorkerLimits::default() {
+        return;
+    }
+    // Between fork and exec only async-signal-safe calls may run: setrlimit,
+    // open, write and close, on data prepared before the fork.
+    let linux = cfg!(target_os = "linux");
+    let cap = limits.memory_bytes.filter(|_| linux).map(|bytes| bytes as libc::rlim_t);
+    let oom_first = limits.oom_first && linux;
+    unsafe {
+        command.pre_exec(move || {
+            if let Some(cap) = cap {
+                let limit = libc::rlimit { rlim_cur: cap, rlim_max: cap };
+                if libc::setrlimit(libc::RLIMIT_DATA, &limit) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            if oom_first {
+                let fd = libc::open(c"/proc/self/oom_score_adj".as_ptr(), libc::O_WRONLY);
+                if fd >= 0 {
+                    libc::write(fd, b"1000".as_ptr().cast(), 4);
+                    libc::close(fd);
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
+#[cfg(not(all(unix, not(target_os = "emscripten"))))]
+fn confine(_command: &mut Command) {}
+
+/// The kernel's refusal, unless it was the allocator failing under the cap:
+/// OCCT turns a failed allocation into a `Standard_OutOfMemory` it can catch.
+fn rejected(stage: String, message: String) -> OcctError {
+    out_of_memory(&stage, &message).unwrap_or(OcctError::Rejected { stage, message })
+}
+
+/// Whether a worker that failed this way ran out of its memory cap: the
+/// allocator's own words, or a kill nobody here sent while a cap was set.
+fn out_of_memory(stage: &str, said: &str) -> Option<OcctError> {
+    let cap = confined().memory_bytes?;
+    let words = ["memory allocation of", "bad_alloc", "Standard_OutOfMemory", "Cannot allocate memory", "out of memory"];
+    let killed = said.contains("signal 9") && stage != "starting up";
+    (killed || words.iter().any(|word| said.contains(word))).then(|| OcctError::OutOfMemory {
+        stage: stage.to_string(),
+        cap_mb: cap >> 20,
+    })
+}
 
 /// Where the worker binary lives.
 ///
@@ -225,7 +336,7 @@ pub fn evaluate(doc: &Doc, opts: &Options) -> Result<Success, OcctError> {
         opts,
     )? {
         Response::Ok(success) => Ok(*success),
-        Response::Error { stage, message } => Err(OcctError::Rejected { stage, message }),
+        Response::Error { stage, message } => Err(rejected(stage, message)),
         _ => Err(OcctError::Host(
             "the kernel returned the wrong reply kind for a full-model request".into(),
         )),
@@ -254,7 +365,7 @@ pub fn probe_step(path: &std::path::Path, opts: &Options) -> Result<crate::proto
         opts,
     )? {
         Response::StepProbe(probe) => Ok(*probe),
-        Response::Error { stage, message } => Err(OcctError::Rejected { stage, message }),
+        Response::Error { stage, message } => Err(rejected(stage, message)),
         _ => Err(OcctError::Host(
             "the kernel returned the wrong reply kind for a STEP probe request".into(),
         )),
@@ -284,7 +395,7 @@ pub fn check_fit(
         opts,
     )? {
         Response::Fit(report) => Ok(*report),
-        Response::Error { stage, message } => Err(OcctError::Rejected { stage, message }),
+        Response::Error { stage, message } => Err(rejected(stage, message)),
         _ => Err(OcctError::Host(
             "the kernel returned the wrong reply kind for a fit request".into(),
         )),
@@ -314,7 +425,7 @@ pub fn perceive(
         opts,
     )? {
         Response::Perceived(answer) => Ok(*answer),
-        Response::Error { stage, message } => Err(OcctError::Rejected { stage, message }),
+        Response::Error { stage, message } => Err(rejected(stage, message)),
         _ => Err(OcctError::Host(
             "the kernel returned the wrong reply kind for a perception request".into(),
         )),
@@ -342,7 +453,7 @@ pub fn inspect_edge_target(
         opts,
     )? {
         Response::TargetPreview(preview) => Ok(preview),
-        Response::Error { stage, message } => Err(OcctError::Rejected { stage, message }),
+        Response::Error { stage, message } => Err(rejected(stage, message)),
         _ => Err(OcctError::Host(
             "the kernel returned the wrong reply kind for a target-preview request".into(),
         )),
@@ -485,10 +596,10 @@ struct Worker {
 
 impl Worker {
     fn spawn(path: &std::path::Path) -> Result<Worker, OcctError> {
-        let mut child = Command::new(path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
+        let mut command = Command::new(path);
+        command.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped());
+        confine(&mut command);
+        let mut child = command
             .spawn()
             .map_err(|e| OcctError::Host(format!("cannot start the kernel worker: {e}")))?;
         let stdin = child
@@ -626,10 +737,12 @@ impl Worker {
                         OcctError::Host(format!("cannot collect the kernel's exit status: {e}"))
                     })?;
                     let noise = self.noise.lock().map(|n| n.clone()).unwrap_or_default();
-                    return Err(OcctError::Crashed {
+                    let detail = describe_exit(&status, &noise);
+                    let said = format!("{detail}\n{}", noise.join("\n"));
+                    return Err(out_of_memory(&self.stage(), &said).unwrap_or(OcctError::Crashed {
                         stage: self.stage(),
-                        detail: describe_exit(&status, &noise),
-                    });
+                        detail,
+                    }));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     // The worker is wedged: kill it, or a runaway OCCT loop
@@ -838,6 +951,86 @@ mod tests {
                 .to_string(),
             other => panic!("expected the shim's refusal, got: {other}"),
         }
+    }
+
+    /// What a worker shim reports about the limits it was started under:
+    /// `ulimit -d`, and on Linux its `oom_score_adj`.
+    fn limits_seen(limits: WorkerLimits) -> String {
+        let _env = WORKER_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let shim = shim(
+            "confined",
+            &format!(
+                "read -r line\nreply=$(printf '%s' \"$line\" | sed -E 's/^\\{{\"reply\":\"([^\"]+)\".*/\\1/')\n\
+                 oom=$(cat /proc/self/oom_score_adj 2>/dev/null || echo none)\n\
+                 printf '{{\"status\":\"error\",\"stage\":\"shim\",\"message\":\"data %s oom %s\"}}' \"$(ulimit -d)\" \"$oom\" > \"$reply\"\n\
+                 echo '{REPLY}'\"$reply\" >&2\n"
+            ),
+        );
+        std::env::set_var("PARCAD_OCCT_WORKER", &shim);
+        IDLE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        confine_workers(limits);
+        let outcome = evaluate(&unit_cube(), &Options::default());
+        confine_workers(WorkerLimits::default());
+        std::env::remove_var("PARCAD_OCCT_WORKER");
+        IDLE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        let _ = std::fs::remove_file(&shim);
+        match outcome.unwrap_err() {
+            OcctError::Rejected { message, .. } => message,
+            other => panic!("expected the shim's report, got: {other}"),
+        }
+    }
+
+    /// A hosted server starts each worker under its memory cap and first in
+    /// the out-of-memory killer's line; a local host starts it as it always
+    /// has.
+    #[test]
+    fn a_confined_worker_starts_under_its_memory_cap_and_first_for_the_oom_killer() {
+        let capped = limits_seen(WorkerLimits { memory_bytes: Some(512 << 20), oom_first: true });
+        let local = limits_seen(WorkerLimits::default());
+        assert!(!local.starts_with("data 524288 "), "an unconfined worker inherits the host's limit: {local}");
+        if cfg!(target_os = "linux") {
+            assert!(capped.starts_with("data 524288 "), "RLIMIT_DATA reaches the worker, in KB: {capped}");
+            assert!(capped.ends_with("oom 1000"), "{capped}");
+            assert!(!local.ends_with("oom 1000"), "{local}");
+        } else {
+            assert!(capped.starts_with("data "), "a capped worker still starts where no cap is set: {capped}");
+        }
+    }
+
+    /// A worker whose allocator fails under the cap dies with the
+    /// allocator's words on stderr; that is a memory refusal naming the cap
+    /// and the fix, not "a dimension the operation cannot satisfy".
+    #[test]
+    fn a_worker_out_of_its_memory_cap_is_a_memory_refusal_naming_the_fix() {
+        let _env = WORKER_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let shim = shim(
+            "oom",
+            &format!(
+                "echo '{BREADCRUMB}thickening the loft' >&2\nread -r line\n\
+                 echo 'memory allocation of 1073741824 bytes failed' >&2\nkill -ABRT $$\n"
+            ),
+        );
+        std::env::set_var("PARCAD_OCCT_WORKER", &shim);
+        let run = |limits| {
+            IDLE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            confine_workers(limits);
+            let outcome = evaluate(&unit_cube(), &Options::default());
+            confine_workers(WorkerLimits::default());
+            outcome.unwrap_err()
+        };
+        let capped = run(WorkerLimits { memory_bytes: Some(1280 << 20), oom_first: true });
+        let uncapped = run(WorkerLimits::default());
+        std::env::remove_var("PARCAD_OCCT_WORKER");
+        let _ = std::fs::remove_file(&shim);
+        match &capped {
+            OcctError::OutOfMemory { stage, cap_mb } => assert_eq!((stage.as_str(), *cap_mb), ("thickening the loft", 1280)),
+            other => panic!("expected OutOfMemory, got: {other}"),
+        }
+        let message = capped.to_string();
+        assert!(message.contains("ran out of the 1280 MB of memory this server gives one build"), "{message}");
+        assert!(message.contains("brew install parcad") && message.contains("--worker-memory-mb"), "the fix is named: {message}");
+        assert!(matches!(uncapped, OcctError::Crashed { .. }), "with no cap it is the crash it always was: {uncapped}");
+        assert!(matches!(rejected("meshing".into(), "Standard_OutOfMemory: malloc failed".into()), OcctError::Rejected { .. }), "no cap, no memory refusal");
     }
 
     /// Two requests, one process: the second is answered by the worker the
