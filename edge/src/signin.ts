@@ -61,6 +61,7 @@ async function showSignIn(request: Request, env: Env): Promise<Response> {
     google: configured(env, "google"),
     github: configured(env, "github"),
     chatgpt: configured(env, "chatgpt"),
+    email: Boolean(env.RESEND_API_KEY) || testSignIn(env),
     test: testSignIn(env),
   });
   return html(page, 200, consent.headers);

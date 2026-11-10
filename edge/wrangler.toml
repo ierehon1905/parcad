@@ -31,6 +31,11 @@ enabled = false
 compatibility_flags = ["global_fetch_strictly_public"]
 vars = { PUBLIC_HOST = "https://mcp.parcad.dev", ORIGIN = "https://origin.parcad.dev", MAIL_FROM = "ParCAD <sign-in@parcad.dev>" }
 kv_namespaces = [
-  { binding = "OAUTH_KV", id = "set-at-deploy-oauth" },
-  { binding = "ACCOUNTS", id = "set-at-deploy-accounts" },
+  { binding = "OAUTH_KV", id = "5d88b81ea33345afa711f9025ca93959" },
+  { binding = "ACCOUNTS", id = "37d929c6c31840fbb4f35883b7bd158b" },
 ]
+# The tunnel still names mcp.parcad.dev too (parcad-infra), so taking this route
+# away puts clients straight on the host again, with static tokens only.
+routes = [{ pattern = "mcp.parcad.dev/*", zone_name = "parcad.dev" }]
+# Only the route above reaches it: a workers.dev name would be a second issuer.
+workers_dev = false

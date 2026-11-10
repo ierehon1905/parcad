@@ -60,6 +60,8 @@ export interface SignInChoices {
   google: boolean;
   github: boolean;
   chatgpt: boolean;
+  /** A code by email: only when the server can send one. */
+  email: boolean;
   test: boolean;
   error?: string;
 }
@@ -84,11 +86,13 @@ export function signIn(c: SignInChoices): string {
     `<h1>Sign in</h1>
 <p>${who} wants to build parts in your ParCAD account.</p>
 ${c.error ? `<p class="bad">${escape(c.error)}</p>` : ""}
-${providers ? `<span class="lead">Continue with</span><div class="row">${providers}</div><div class="or">or by email</div>` : ""}
-<form method="post" action="/authorize">${hidden("email")}
+${providers ? `<span class="lead">Continue with</span><div class="row">${providers}</div>` : ""}
+${providers && c.email ? `<div class="or">or by email</div>` : ""}
+${c.email ? `<form method="post" action="/authorize">${hidden("email")}
 <label for="email">Email address</label>
 <input id="email" type="email" name="email" required autocomplete="email">
-<button type="submit">Email me a code</button></form>
+<button type="submit">Email me a code</button></form>` : ""}
+${providers || c.email || c.test ? "" : `<p class="bad">No way in is set up on this server yet. Ask its operator.</p>`}
 ${c.test ? `<div class="or">test sign-in, local only</div><form method="post" action="/authorize">${hidden("test")}<label for="test-email">Any address</label><input id="test-email" type="email" name="email" required><button type="submit">Sign in as this address</button></form>` : ""}
 <form method="post" action="/authorize">${hidden("deny")}<button class="quiet" type="submit">Cancel</button></form>`,
   );
