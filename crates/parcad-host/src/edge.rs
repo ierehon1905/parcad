@@ -24,6 +24,7 @@ const TYPE: &str = "parcad-edge+jwt";
 /// The edge's public key, and the two names a pass must carry.
 #[derive(Debug, Clone)]
 pub struct Edge {
+    #[cfg_attr(target_os = "emscripten", allow(dead_code))]
     key: Vec<u8>,
     issuer: String,
     origin: PublicHost,
