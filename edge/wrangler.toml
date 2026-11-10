@@ -3,6 +3,8 @@
 name = "parcad-edge"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
+# Geist, served from here so that no sign-in page sends its visitor to a font CDN.
+assets = { directory = "./public" }
 
 [vars]
 # Where clients reach the edge, which the host's --public-host names too.

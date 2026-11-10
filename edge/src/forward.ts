@@ -6,8 +6,8 @@
 import type { Env } from "./env";
 import { sign } from "./pass";
 
-/** Hop-by-hop and edge-only headers that must not reach the host. */
-const DROPPED = ["host", "cf-connecting-ip", "x-forwarded-host", "cookie"];
+/** Hop-by-hop and edge-only headers, and the visitor's address in every form: none of it reaches the host. */
+const DROPPED = ["host", "cookie", "x-forwarded-host", "cf-connecting-ip", "cf-connecting-ipv6", "true-client-ip", "x-forwarded-for", "x-real-ip", "cf-ipcountry"];
 
 function toOrigin(request: Request, env: Env, authorization: string | null): Request {
   const url = new URL(request.url);

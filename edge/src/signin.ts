@@ -15,7 +15,7 @@ import { AuthorizationError, CimdFetchError, type AuthRequest } from "@cloudflar
 import { accountFor, allowed, checkCode, looksLikeEmail, normal, pendingCode, sendCode, sendRefusal } from "./accounts";
 import { type Env, testSignIn } from "./env";
 import { untouched } from "./forward";
-import { enterCode, inviteOnly, problem, signIn } from "./pages";
+import { enterCode, inviteOnly, privacy, problem, signIn, terms } from "./pages";
 import { type Provider, authorizeUrl, configured, isProvider, verifiedEmail } from "./providers";
 
 const HOST_PATHS = new Set(["/", "/api/health", "/favicon.ico", "/favicon.svg", "/favicon-32.png", "/apple-touch-icon.png"]);
@@ -155,6 +155,8 @@ export async function pages(request: Request, env: Env): Promise<Response> {
     return untouched(request, env);
   }
   try {
+    if (path === "/privacy" && request.method === "GET") return html(privacy());
+    if (path === "/terms" && request.method === "GET") return html(terms());
     if (path === "/authorize" && request.method === "GET") return await showSignIn(request, env);
     if (path === "/authorize" && request.method === "POST") return await startSignIn(request, env);
     const callback = /^\/callback\/(google|github|chatgpt|email|test)$/.exec(path);

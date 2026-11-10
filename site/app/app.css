@@ -19,8 +19,8 @@
   --color-tag: #b79cff;
   --color-bad: #ff6b6b;
 
-  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-sans: "Geist Variable", "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", "Geist Mono", ui-monospace, "SF Mono", Menlo, monospace;
 
   --animate-tab-progress: tab-progress 9s linear forwards;
   @keyframes tab-progress {

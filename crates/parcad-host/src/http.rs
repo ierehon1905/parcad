@@ -152,6 +152,8 @@ fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router
         .route("/favicon.svg", get(icon))
         .route("/favicon-32.png", get(icon))
         .route("/apple-touch-icon.png", get(icon))
+        .route("/fonts/geist.woff2", get(icon))
+        .route("/fonts/geist-mono.woff2", get(icon))
         .with_state(assets)
         .merge(guarded)
         .fallback(no_route)
@@ -184,9 +186,9 @@ fn front_page(public: &tenant::PublicHost, signs_in: bool, part_lifetime: Option
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500&family=Geist+Mono:wght@400&display=swap">
 <style>
+@font-face{{font-family:"Geist";src:url(/fonts/geist.woff2) format("woff2");font-weight:100 900;font-display:swap}}
+@font-face{{font-family:"Geist Mono";src:url(/fonts/geist-mono.woff2) format("woff2");font-weight:100 900;font-display:swap}}
 :root{{--bg:#000;--panel:#0a0b0d;--field:#16181c;--line:rgb(255 255 255/.1);--line-strong:rgb(255 255 255/.18);--ink:#eef1f5;--dim:#9aa2af;--accent:#6ea8fe;
 --sans:"Geist",ui-sans-serif,system-ui,sans-serif;--mono:"Geist Mono",ui-monospace,"SF Mono",Menlo,monospace}}
 *{{box-sizing:border-box}}
@@ -219,8 +221,9 @@ a{{color:var(--accent);text-underline-offset:3px}}
     )
 }
 
-/// The front page's icons, open to anyone: a chat client draws a connector's
-/// mark from them through a favicon service, which carries no bearer.
+/// The front page's icons and fonts, open to anyone: a chat client draws a
+/// connector's mark through a favicon service, which carries no bearer, and the
+/// fonts are served here so that no page sends its visitor to a font CDN.
 async fn icon(State(assets): State<Arc<dyn Assets>>, uri: Uri) -> Response {
     let name = match uri.path() {
         "/favicon.ico" => "favicon-32.png",

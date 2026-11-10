@@ -1,7 +1,10 @@
 # Privacy
 
-ParCAD doesn't collect anything about you. There are no accounts, no analytics
-and no telemetry.
+ParCAD on your own computer collects nothing about you: no accounts, no
+analytics, no telemetry. This file covers that.
+
+**The hosted ParCAD** at `mcp.parcad.dev` is different: it has accounts, and
+its own notice says what it keeps, at <https://mcp.parcad.dev/privacy>.
 
 **On your machine.** The app, `parcad` and the Claude extension run locally.
 Your parts are files in `~/Library/Application Support/parcad` (or
@@ -12,8 +15,8 @@ Your parts are files in `~/Library/Application Support/parcad` (or
 sees that request the way it sees any download. `parcad` from Homebrew makes no
 network requests of its own.
 
-**ParCAD web.** GitHub Pages serves the page, and everything runs in your tab.
-Your parts stay in your browser's storage.
+**ParCAD web.** Cloudflare serves the page at `parcad.dev/app/`, and everything
+runs in your tab. Your parts stay in your browser's storage.
 
 **Connect your AI.** When you connect an AI client to ParCAD web, its messages
 go through a relay on Cloudflare Workers (`parcad-relay.ierehon1905.workers.dev`).

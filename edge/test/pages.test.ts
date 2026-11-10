@@ -1,7 +1,7 @@
 /** The sign-in page offers only the ways in this server can complete. */
 
 import { expect, test } from "bun:test";
-import { signIn } from "../src/pages";
+import { privacy, signIn, terms } from "../src/pages";
 
 const choices = { handle: "h", back: "/authorize?x=1", client: "a client", google: false, github: false, chatgpt: false, email: false, test: false };
 
@@ -23,4 +23,26 @@ test("a server with no way in says so rather than showing an empty form", () => 
   const page = signIn(choices);
   expect(page).toContain("No way in is set up on this server yet");
   expect(page).not.toContain("Email me a code");
+});
+
+test("the privacy page names what is kept and carries Google's Limited Use statement", () => {
+  const page = privacy();
+  expect(page).toContain("Your email address");
+  expect(page).toContain("Limited Use requirements");
+  expect(page).toContain('class="wide"');
+  expect(signIn({ ...choices, github: true })).toContain('href="/privacy"');
+});
+
+test("the terms keep the liability clause's exceptions and the sign-in page links both pages", () => {
+  const page = terms();
+  expect(page).toContain("Nothing here limits liability for intent or gross negligence");
+  expect(page).toContain("Spanish law applies");
+  expect(signIn({ ...choices, github: true })).toContain('href="/terms"');
+});
+
+test("no page sends its visitor to another site for a font", () => {
+  for (const page of [privacy(), terms(), signIn({ ...choices, github: true })]) {
+    expect(page).not.toContain("googleapis");
+    expect(page).toContain("url(/fonts/geist.woff2)");
+  }
 });

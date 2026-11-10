@@ -1522,7 +1522,7 @@ name and open_project it. Read before you write.";
 const HOSTED: &str = "This parcad is hosted and shares no screen with the user. To show a part in \
 3D, save_project and open_project it: a chat that renders MCP Apps draws it beside your reply. Or \
 paste a view's `markdown` from evaluate_part, or export_part's `url`: signed links needing no \
-token. Nothing is backed up: unused parts expire (list_projects).";
+token. Unused parts expire (list_projects): the user keeps a copy.";
 
 /// The rule the coin-holder session lacked: 241 KB of script resent to change
 /// a few lines at a time (docs/COIN_HOLDER_REVIEW.md, B1).
@@ -2439,7 +2439,7 @@ mod tests {
         assert!(text.contains("save_project and open_project it") && text.contains("renders MCP Apps"), "{text}");
         assert!(text.contains("`markdown` from evaluate_part") && text.contains("export_part's `url`"));
         assert!(text.contains("signed links needing no token"), "a pasted link needs no bearer: {text}");
-        assert!(text.contains("Nothing is backed up: unused parts expire (list_projects)"), "no backups are promised: {text}");
+        assert!(text.contains("Unused parts expire (list_projects): the user keeps a copy"), "no backups are promised: {text}");
 
         let hosted = Parcad::new().with_capability(service::capability(true)).get_info();
         assert_eq!(hosted.instructions.as_deref(), Some(text.as_str()));

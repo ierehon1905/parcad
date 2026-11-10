@@ -6,6 +6,9 @@ export const BLOB = `${GH}/blob/main`;
 export const RELEASES = `${GH}/releases`;
 export const SITE = "https://parcad.dev/";
 export const WEB = `${SITE}app/`;
+/** The hosted service's pages, served by its sign-in edge (edge/src/pages.ts). */
+export const PRIVACY = "https://mcp.parcad.dev/privacy";
+export const TERMS = "https://mcp.parcad.dev/terms";
 
 export const LICENCE = "AGPL-3.0";
 

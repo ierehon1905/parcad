@@ -248,8 +248,11 @@ do locally, but an account's folder is a cache with a quota, not a vault
   Reading, building and `importPart` treat one as a part; saving under its name
   makes the account a copy of its own, which then expires like any other, and
   removing that copy shows the shipped part again;
-- nothing is backed up. The front page and the server's instructions say so,
-  and `list_projects` carries `storage`, what the account holds of what it may.
+- the server keeps no copy of its own, and its instructions tell a model that
+  parts expire and the user keeps their own copy; `list_projects` carries
+  `storage`, what the account holds of what it may. An operator's backups are
+  the operator's: the Hetzner kit's `parcad-backup` tars every account nightly
+  and keeps 14, which a hosted privacy notice has to say (mcp.parcad.dev's does).
 
 The sweep runs on start and then every hour, over every account folder under
 `--tenants-dir`, and logs what it removed. An account's folder is deleted on

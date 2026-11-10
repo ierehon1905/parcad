@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AGENT_CARDS, BLOB, CASE, EXAMPLES, FAQS, GET_IT, GH, HUE, LICENCE, PLANS, REFUSAL, RELEASES, WEB, asset, type CaseItem, type Hue } from "../content";
+import { AGENT_CARDS, BLOB, CASE, EXAMPLES, FAQS, GET_IT, GH, HUE, LICENCE, PLANS, PRIVACY, REFUSAL, RELEASES, TERMS, WEB, asset, type CaseItem, type Hue } from "../content";
 import { Button, Rail, SectionHead, Square, cn } from "./frame";
 
 export function GetIt() {
@@ -438,6 +438,10 @@ export function Footer() {
         </nav>
         <div className="flex flex-wrap items-center justify-between gap-4 border-t border-line pt-6 font-mono text-[10.5px] tracking-wider text-ink-faint uppercase">
           <span>ParCAD · {LICENCE}</span>
+          <span className="flex gap-4">
+            <a href={PRIVACY} className="hover:text-ink">Privacy</a>
+            <a href={TERMS} className="hover:text-ink">Terms</a>
+          </span>
           <span>Uses Open CASCADE Technology</span>
         </div>
       </Rail>
