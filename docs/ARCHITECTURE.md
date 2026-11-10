@@ -234,8 +234,8 @@ feature id `reference-bodies`; a method rather than a list, for the reasons in
 its doc comment). The worker builds a reference like any body, measures it
 alone and against every other body, and its faces wear
 `Material::reference()`, a translucent blue the window draws as it draws any
-material and `service::render` paints whether or not a view asked for
-materials. Everything that says what the *part* is leaves it out:
+material and an agent's render draws at the same opacity whether or not a
+view asked for materials. Everything that says what the *part* is leaves it out:
 `BuiltPart::shape` (so STEP, `check_fit` and the compound), `Success::
 part_indices` (so `measure_brep`, STL, 3MF and the corpus read the same
 triangles), `Assembled`'s topology and kinds (so `faces`, `edges` and `kind`),
@@ -248,17 +248,28 @@ a `clear` check against the stack that passes.
 
 A rendered view is framed on the part alone — `Evaluated::bounds` is the
 snapshot's, so the frame, the ruler and a section's default plane never
-widen to a reference — and the rasteriser draws a reference *behind* the
-part whatever the depth order says (`Surface::reference_bodies`, with
-`TriangleOwners` saying which bodies those are for the host, the CLI and the
-corpus alike). Both came from one picture: a 300 mm wall returned beside the
-36 mm bracket that mounts on it framed every view, and sat between the iso
-camera and the bracket, so the render was a blue square under a 100 mm rule.
+widen to a reference. That came from one picture: a 300 mm wall returned
+beside the 36 mm bracket that mounts on it framed every view, and sat between
+the iso camera and the bracket, so the render was a blue square under a
+100 mm rule.
+
+The rasteriser depth-tests a reference against the part in a layer of its
+own (`Surface::reference_bodies`, `GeometryBuffer::front` and `behind`,
+with `TriangleOwners` saying which bodies those are for the host, the CLI and
+the corpus alike) and draws it as the window does, see-through blue at
+`Material::reference()`'s opacity: hidden where it is behind the part, laid
+over it where it is in front, and over the nearest other reference behind
+it, so a wall between the camera and the bracket still lets the bracket
+through and a plant in front of a wall does not take the wall's colour. The part's own pixel stays in `image` under a
+reference, so tag regions, `model_point` and the cut fraction read the part
+alone. Until 2026-11-10 a reference was drawn behind the part whatever the
+depth said, and pots standing on a shelf read as buried under it.
+
 Each such view says what it did — `framed_on`, `references_out_of_view`
 (measured off the pixels, so a reference the frame cut off entirely is named
 rather than inferred missing) and `framing` — and a part with no reference
 gets none of the three. The window, which frames on the snapshot's bounds and
-draws a reference as translucent blue, needed neither.
+draws a reference as translucent blue, needed none of this.
 
 **`note()` is the one channel out of the sandbox, and it says what it is.**
 A script computes real engineering — mouth widths, tilt angles, pin

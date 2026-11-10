@@ -11,11 +11,11 @@ why:     |
   view was framed on everything drawn, so the 300 mm wall filled the frame,
   the reply's `scale_mm` read 100, and the 36 mm bracket was a few pixels —
   hidden behind the wall's back face in the iso view at that. Now the frame
-  fits the part alone, the ruler is 20 mm, the wall is drawn behind the part
-  and cut off at the frame's edge, and the view carries `framed_on` saying
-  so. SOUND needs both answers read off the view in the reply; the trap is
-  the 100 mm rule the old frame carried, and no reading of the script gives
-  20, which is why the ruler is the quote.
+  fits the part alone, the ruler is 20 mm, the wall is see-through blue
+  over the bracket and cut off at the frame's edge, and the view carries
+  `framed_on` saying so. SOUND needs both answers read off the view in the
+  reply; the trap is the 100 mm rule the old frame carried, and no reading
+  of the script gives 20, which is why the ruler is the quote.
 ---
 Use the parcad MCP tools. Here is a part: a broom holder, returned beside the
 wall it screws to and the broom it holds, both drawn as references.

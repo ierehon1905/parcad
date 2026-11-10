@@ -15,7 +15,8 @@ pub struct TriangleOwners {
     /// The body's position in [`Success::bodies`]. Empty for a one-solid part.
     pub bodies: Vec<u32>,
     /// Which of those positions hold a reference body, which the renderer
-    /// draws behind the part. Empty for a one-solid part.
+    /// depth-tests against the part in a layer of its own. Empty for a
+    /// one-solid part.
     pub reference_bodies: Vec<bool>,
 }
 

@@ -314,9 +314,45 @@ pub struct GeometryBuffer {
     pub face: Vec<u32>,
     /// One entry per pixel: which body is drawn there, by the number
     /// [`Surface::bodies`] uses, or [`NO_BODY`] where nothing is. Kept only
-    /// when the surface has reference bodies, which is when the renderer has
-    /// to know whose pixel it is overwriting; empty otherwise.
+    /// when the surface has reference bodies, which is when a pixel can be a
+    /// reference's rather than the part's; empty otherwise.
     pub body: Vec<u32>,
+    /// One entry per pixel: the nearest reference body where it stands in
+    /// front of the part, depth 0 everywhere else. The part's own pixel stays
+    /// in `image` underneath, so everything that reads the part reads it
+    /// whatever stands in front of it. Empty when there is no reference.
+    pub front: Vec<ReferencePixel>,
+    /// One entry per pixel: the nearest surface of another reference behind
+    /// the nearest one drawn there (in `front`, or in `image` where nothing
+    /// of the part is behind it), where it too is in front of the part or
+    /// has nothing of the part behind it; depth 0 everywhere else. What a
+    /// see-through reference shows of another. Empty when there is no
+    /// reference.
+    pub behind: Vec<ReferencePixel>,
+    /// Which bodies, by number, are references ([`Surface::reference_bodies`]).
+    pub reference_bodies: Vec<bool>,
+}
+
+/// A reference body's nearest surface at one pixel.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReferencePixel {
+    /// Depth 0 where there is none.
+    pub surface: GeometryPixel,
+    pub body: u32,
+    pub face: u32,
+    /// True where this is the reference's own section cap.
+    pub cut: bool,
+}
+
+impl Default for ReferencePixel {
+    fn default() -> Self {
+        Self {
+            surface: GeometryPixel::default(),
+            body: NO_BODY,
+            face: NO_FACE,
+            cut: false,
+        }
+    }
 }
 
 /// The face number of a pixel that shows no face.
@@ -326,6 +362,59 @@ pub const NO_FACE: u32 = u32::MAX;
 pub const NO_BODY: u32 = u32::MAX;
 
 impl GeometryBuffer {
+    /// The reference standing in front of the part at this pixel, if one does.
+    pub fn front_at(&self, x: u32, y: u32) -> Option<ReferencePixel> {
+        self.front
+            .get((y * self.size + x) as usize)
+            .copied()
+            .filter(|r| r.surface.depth != 0)
+    }
+
+    /// The point on the reference in front of the part at this pixel.
+    pub fn front_point(&self, x: u32, y: u32) -> Option<[f32; 3]> {
+        let front = self.front_at(x, y)?;
+        let p = self.screen_to_model.transform_point(&nalgebra::Point3::new(
+            x as f32,
+            y as f32,
+            front.surface.depth as f32,
+        ));
+        Some([p.x, p.y, p.z])
+    }
+
+    /// The reference seen through the nearest one at this pixel, if one is.
+    pub fn behind_at(&self, x: u32, y: u32) -> Option<ReferencePixel> {
+        self.behind
+            .get((y * self.size + x) as usize)
+            .copied()
+            .filter(|r| r.surface.depth != 0)
+    }
+
+    fn is_reference(&self, body: u32) -> bool {
+        self.reference_bodies.get(body as usize).copied().unwrap_or(false)
+    }
+
+    /// The nearest reference surface at this pixel, in front of the part or
+    /// with no part behind it; depth 0 where there is none.
+    fn reference_surface(&self, x: u32, y: u32) -> GeometryPixel {
+        if let Some(front) = self.front_at(x, y) {
+            return front.surface;
+        }
+        match self.body_at(x, y) {
+            Some(b) if self.is_reference(b) => self.image[(y as usize, x as usize)],
+            _ => GeometryPixel::default(),
+        }
+    }
+
+    /// The reference surface behind the nearest one at this pixel, or the
+    /// nearest where there is none behind it, so a wall seen through a pot
+    /// and the same wall beside it are one surface to the outline test.
+    fn farther_reference_surface(&self, x: u32, y: u32) -> GeometryPixel {
+        match self.behind_at(x, y) {
+            Some(behind) => behind.surface,
+            None => self.reference_surface(x, y),
+        }
+    }
+
     /// Which face is under this pixel, when the surface said.
     pub fn face_at(&self, x: u32, y: u32) -> Option<u32> {
         self.face
@@ -346,7 +435,8 @@ impl GeometryBuffer {
     /// Empty when the buffer kept no bodies.
     pub fn bodies_drawn(&self) -> Vec<u32> {
         let mut seen: Vec<bool> = Vec::new();
-        for b in self.body.iter().copied().filter(|b| *b != NO_BODY) {
+        let references = self.front.iter().chain(&self.behind).map(|r| r.body);
+        for b in self.body.iter().copied().chain(references).filter(|b| *b != NO_BODY) {
             let b = b as usize;
             if seen.len() <= b {
                 seen.resize(b + 1, false);
@@ -433,7 +523,7 @@ pub fn render_surface_view(
     opts: &RenderOptions,
 ) -> Result<Rgb> {
     let buf = raster(surface, bounds, view, opts)?;
-    Ok(shade(&buf, opts).downsample(opts.ss()))
+    Ok(shade_view(&buf, opts, &[]).downsample(opts.ss()))
 }
 
 /// A triangle mesh, in the flat layout the exact kernel returns.
@@ -453,10 +543,12 @@ pub struct Surface<'a> {
     pub bodies: &'a [u32],
     /// Which of those bodies, by number, are reference bodies: real objects
     /// the part is checked against, never the part. Empty when there are
-    /// none. A reference is drawn behind the part whatever the depth says —
-    /// its fragment never covers the part's, and the part's always covers
-    /// its — so a wall the part mounts on, between the camera and the part,
-    /// is a backdrop rather than the whole picture.
+    /// none. A reference is depth-tested against the part, in layers of its
+    /// own ([`GeometryBuffer::front`], [`GeometryBuffer::behind`]): hidden
+    /// where it is behind the part, laid over it as see-through blue where it
+    /// is in front, and over another reference behind it, so a pot on a
+    /// shelf stands on the shelf and a wall between the camera and the part
+    /// still lets the part through.
     pub reference_bodies: &'a [bool],
 }
 
@@ -557,6 +649,13 @@ pub fn raster(
     let reference_of = |b: u32| surface.reference_bodies.get(b as usize).copied().unwrap_or(false);
     let track_bodies = surface.reference_bodies.iter().any(|r| *r);
     let mut body = vec![NO_BODY; if track_bodies { (size * size) as usize } else { 0 }];
+    // The nearest reference surface, and the nearest of any other reference
+    // behind it, kept apart from the part's until every triangle is in:
+    // whether each is in front of the part, alone, or hidden depends on the
+    // part's final depth, not on drawing order.
+    let references_size = if track_bodies { (size * size) as usize } else { 0 };
+    let mut nearest = vec![ReferencePixel::default(); references_size];
+    let mut next = vec![ReferencePixel::default(); references_size];
     let project = |p: [f32; 3]| {
         let q = model_to_screen.transform_point(&nalgebra::Point3::new(p[0], p[1], p[2]));
         [q.x, q.y, q.z]
@@ -655,24 +754,24 @@ pub fn raster(
                 // round down into it.
                 let depth = (exact.round() as i64).clamp(1, depth_samples as i64) as u32;
                 let i = (y * size + x) as usize;
-                let pixel = &mut image[(y as usize, x as usize)];
                 let this_body = surface.bodies.get(t).copied().unwrap_or(0);
-                // Larger depth is nearer the viewer. A reference body sits
-                // behind the part whatever its depth (see `Surface::reference_bodies`).
-                let in_front = if track_bodies {
-                    match (reference_of(this_body), body[i] != NO_BODY && reference_of(body[i])) {
-                        (true, false) => pixel.depth == 0,
-                        (false, true) => true,
-                        _ => depth > pixel.depth,
-                    }
-                } else {
-                    depth > pixel.depth
-                };
-                if !in_front {
+                let normal = || [0, 1, 2].map(|k| w[0] * normals[0][k] + w[1] * normals[1][k] + w[2] * normals[2][k]);
+                // Larger depth is nearer the viewer.
+                if track_bodies && reference_of(this_body) {
+                    let reference = ReferencePixel {
+                        surface: GeometryPixel { normal: normal(), depth },
+                        body: this_body,
+                        face: surface.faces.get(t).copied().unwrap_or(NO_FACE),
+                        cut: false,
+                    };
+                    keep_reference(&mut nearest[i], &mut next[i], reference, false);
                     continue;
                 }
-                let n = [0, 1, 2].map(|k| w[0] * normals[0][k] + w[1] * normals[1][k] + w[2] * normals[2][k]);
-                *pixel = GeometryPixel { normal: n, depth };
+                let pixel = &mut image[(y as usize, x as usize)];
+                if depth <= pixel.depth {
+                    continue;
+                }
+                *pixel = GeometryPixel { normal: normal(), depth };
                 if let Some(slot) = face.get_mut(i) {
                     *slot = surface.faces.get(t).copied().unwrap_or(NO_FACE);
                 }
@@ -715,6 +814,26 @@ pub fn raster(
                         continue;
                     }
                     let d = d as u32;
+                    let cap = GeometryPixel {
+                        normal: [normal.x, normal.y, normal.z],
+                        depth: d,
+                    };
+
+                    // The cap is the part's where the plane passes through any
+                    // body of the part here; through reference material alone,
+                    // it is that reference's surface and goes in its layer.
+                    let inside = |b: usize| (crossings[i * words + b / 64] >> (b % 64)) & 1 == 1;
+                    let through_part = (0..body_count).find(|b| inside(*b) && !reference_of(*b as u32));
+                    if track_bodies && through_part.is_none() {
+                        let reference = ReferencePixel {
+                            surface: cap,
+                            body: (0..body_count).find(|b| inside(*b)).map_or(NO_BODY, |b| b as u32),
+                            face: NO_FACE,
+                            cut: true,
+                        };
+                        keep_reference(&mut nearest[i], &mut next[i], reference, true);
+                        continue;
+                    }
 
                     let pixel = &mut image[(y as usize, x as usize)];
                     // Everything that survived the clip is at or behind the
@@ -723,24 +842,10 @@ pub fn raster(
                     if d < pixel.depth {
                         continue;
                     }
-                    if track_bodies {
-                        // The cap is the part's where the plane passes through
-                        // any body of the part here; through reference material
-                        // alone, it is a reference and stays behind the part.
-                        let inside = |b: usize| (crossings[i * words + b / 64] >> (b % 64)) & 1 == 1;
-                        let through_part = (0..body_count).find(|b| inside(*b) && !reference_of(*b as u32));
-                        let pixel_is_part = body[i] != NO_BODY && !reference_of(body[i]);
-                        if through_part.is_none() && pixel_is_part {
-                            continue;
-                        }
-                        body[i] = through_part
-                            .or_else(|| (0..body_count).find(|b| inside(*b)))
-                            .map_or(NO_BODY, |b| b as u32);
+                    if let (Some(slot), Some(b)) = (body.get_mut(i), through_part) {
+                        *slot = b as u32;
                     }
-                    *pixel = GeometryPixel {
-                        normal: [normal.x, normal.y, normal.z],
-                        depth: d,
-                    };
+                    *pixel = cap;
                     cut[i] = true;
                     if let Some(slot) = face.get_mut(i) {
                         *slot = NO_FACE;
@@ -748,6 +853,34 @@ pub fn raster(
                 }
             }
         }
+    }
+
+    // Each reference surface goes where the part's depth puts it. The
+    // nearest: with nothing of the part behind it, into the image like any
+    // surface; in front of the part, into `front` over it; behind it,
+    // nowhere. The one behind it stays in `next` where it is drawn too. A
+    // surface within a voxel of the part's is behind it, so two faces that
+    // touch are drawn as the part's and not as rounding noise.
+    for (i, (reference, behind)) in nearest.iter_mut().zip(next.iter_mut()).enumerate() {
+        let pixel = &mut image.pixels[i];
+        let part = pixel.depth;
+        let shows = |r: &ReferencePixel| r.surface.depth != 0 && (part == 0 || r.surface.depth > part + 1);
+        if !(shows(reference) && shows(behind)) {
+            *behind = ReferencePixel::default();
+        }
+        if part == 0 && reference.surface.depth != 0 {
+            *pixel = reference.surface;
+            body[i] = reference.body;
+            if let Some(slot) = face.get_mut(i) {
+                *slot = reference.face;
+            }
+            if let Some(slot) = cut.get_mut(i) {
+                *slot = reference.cut;
+            }
+        } else if shows(reference) {
+            continue;
+        }
+        *reference = ReferencePixel::default();
     }
 
     Ok(GeometryBuffer {
@@ -759,7 +892,27 @@ pub fn raster(
         cut,
         face,
         body,
+        front: nearest,
+        behind: next,
+        reference_bodies: if track_bodies { surface.reference_bodies.to_vec() } else { Vec::new() },
     })
+}
+
+/// Keep `r` if it is nearer than the nearest reference surface at a pixel,
+/// or than the nearest of any other body behind that one. `ties` lets a
+/// section cap win against a face lying exactly on its plane.
+fn keep_reference(nearest: &mut ReferencePixel, next: &mut ReferencePixel, r: ReferencePixel, ties: bool) {
+    let nearer = |than: &ReferencePixel| r.surface.depth > than.surface.depth || (ties && r.surface.depth == than.surface.depth);
+    if r.body == nearest.body {
+        if nearer(nearest) {
+            *nearest = r;
+        }
+    } else if nearer(nearest) {
+        *next = *nearest;
+        *nearest = r;
+    } else if nearer(next) {
+        *next = r;
+    }
 }
 
 /// Sub-pixel steps per pixel in the rasteriser's fixed-point corners.
@@ -795,12 +948,6 @@ pub fn shade(buf: &GeometryBuffer, opts: &RenderOptions) -> Rgb {
         .ssao
         .then(|| blur_ssao(&compute_ssao(&buf.image), size as usize, size as usize));
 
-    // Directions point from the surface toward each light, in view space:
-    // +X right, +Y up, +Z toward the viewer.
-    let key = normalize([-0.45, 0.65, 0.62]);
-    let fill = normalize([0.72, 0.10, 0.55]);
-    let rim = normalize([0.15, -0.70, -0.25]);
-
     let mut out = Rgb::new(size, size, BACKGROUND);
 
     for y in 0..size {
@@ -810,11 +957,7 @@ pub fn shade(buf: &GeometryBuffer, opts: &RenderOptions) -> Rgb {
                 continue;
             }
 
-            let n = normalize(px.normal);
-            let mut light = 0.10; // ambient
-            light += dot(n, key).max(0.0) * 0.62;
-            light += dot(n, fill).max(0.0) * 0.26;
-            light += dot(n, rim).max(0.0) * 0.16;
+            let mut light = direct_light(px.normal);
 
             if let Some(ao) = &ao {
                 let v = ao[(y * size + x) as usize];
@@ -823,10 +966,7 @@ pub fn shade(buf: &GeometryBuffer, opts: &RenderOptions) -> Rgb {
                 }
             }
 
-            // Nearer surfaces read slightly brighter, which gives depth ordering
-            // even on a silhouette with no shading cues.
-            let t = px.depth as f32 / buf.depth_samples.max(1) as f32;
-            light *= 0.86 + 0.14 * t;
+            light *= depth_cue(px.depth, buf.depth_samples);
 
             let edge = is_depth_edge(buf, x, y);
             let shade = if edge { light * 0.25 } else { light };
@@ -853,10 +993,90 @@ pub fn shade(buf: &GeometryBuffer, opts: &RenderOptions) -> Rgb {
     out
 }
 
+/// Ambient plus the three lights, for a view-space normal.
+fn direct_light(normal: [f32; 3]) -> f32 {
+    // Directions point from the surface toward each light, in view space:
+    // +X right, +Y up, +Z toward the viewer.
+    let key = normalize([-0.45, 0.65, 0.62]);
+    let fill = normalize([0.72, 0.10, 0.55]);
+    let rim = normalize([0.15, -0.70, -0.25]);
+
+    let n = normalize(normal);
+    let mut light = 0.10; // ambient
+    light += dot(n, key).max(0.0) * 0.62;
+    light += dot(n, fill).max(0.0) * 0.26;
+    light += dot(n, rim).max(0.0) * 0.16;
+    light
+}
+
+/// Nearer surfaces read slightly brighter, which gives depth ordering even
+/// on a silhouette with no shading cues.
+fn depth_cue(depth: u32, depth_samples: u32) -> f32 {
+    let t = depth as f32 / depth_samples.max(1) as f32;
+    0.86 + 0.14 * t
+}
+
+/// The picture of a view as it is shown: shaded, painted by each face's
+/// colour where `face_colors` gives one, and with every reference body laid
+/// over it.
+pub fn shade_view(buf: &GeometryBuffer, opts: &RenderOptions, face_colors: &[Option<[u8; 3]>]) -> Rgb {
+    let mut image = shade(buf, opts);
+    paint_faces(&mut image, buf, face_colors);
+    draw_references(&mut image, buf);
+    image
+}
+
+/// Draw every reference body as see-through blue over whatever is behind it
+/// — the part where it stands in front of the part, another reference, the
+/// background where nothing is — at the opacity the window draws a
+/// reference with, so the two show the same glass. One behind the part was
+/// hidden by [`raster`]. Its outline is opaque, so its shape reads over a
+/// busy part.
+fn draw_references(image: &mut Rgb, buf: &GeometryBuffer) {
+    if buf.reference_bodies.is_empty() {
+        return;
+    }
+    let opacity = crate::graph::Material::reference().opacity as f32;
+    let nearest_at = |x: u32, y: u32| buf.reference_surface(x, y);
+    let farther_at = |x: u32, y: u32| buf.farther_reference_surface(x, y);
+    let glass = |surface: GeometryPixel, cut: bool, edge: bool, under: [u8; 3]| {
+        let k = if edge { 0.25 } else { 1.0 };
+        let color = if cut {
+            CUT_FACE.map(|c| (c as f32 * k) as u8)
+        } else {
+            let light = direct_light(surface.normal) * depth_cue(surface.depth, buf.depth_samples);
+            let light = (light * k).clamp(0.0, 1.0);
+            crate::graph::REFERENCE_RGB.map(|c| (c as f32 * light) as u8)
+        };
+        let alpha = if edge { 1.0 } else { opacity };
+        [0, 1, 2].map(|c| (color[c] as f32 * alpha + under[c] as f32 * (1.0 - alpha)).round() as u8)
+    };
+    for y in 0..buf.size {
+        for x in 0..buf.size {
+            let (surface, cut, mut under) = match buf.front_at(x, y) {
+                Some(front) => (front.surface, front.cut, image.get(x, y)),
+                None => {
+                    let surface = buf.reference_surface(x, y);
+                    if surface.depth == 0 {
+                        continue;
+                    }
+                    (surface, buf.is_cut(x, y), BACKGROUND)
+                }
+            };
+            if let Some(behind) = buf.behind_at(x, y) {
+                let edge = is_edge_of(&farther_at, buf.size, buf.depth_samples, x, y);
+                under = glass(behind.surface, behind.cut, edge, under);
+            }
+            let edge = is_edge_of(&nearest_at, buf.size, buf.depth_samples, x, y);
+            image.set(x, y, glass(surface, cut, edge, under));
+        }
+    }
+}
+
 /// Recolour a shaded image by the material of the face under each pixel,
 /// keeping its light. Colour only: the rasteriser has no reflections for
 /// roughness or metalness to change. Cut faces keep the cut colour.
-pub fn paint_faces(image: &mut Rgb, buf: &GeometryBuffer, face_colors: &[Option<[u8; 3]>]) {
+fn paint_faces(image: &mut Rgb, buf: &GeometryBuffer, face_colors: &[Option<[u8; 3]>]) {
     if face_colors.iter().all(Option::is_none) {
         return;
     }
@@ -888,7 +1108,12 @@ pub fn paint_faces(image: &mut Rgb, buf: &GeometryBuffer, face_colors: &[Option<
 /// changes by `n.x / n.z` per pixel across, and anything near that is smooth
 /// surface rather than an edge.
 fn is_depth_edge(buf: &GeometryBuffer, x: u32, y: u32) -> bool {
-    let here = buf.image[(y as usize, x as usize)];
+    is_edge_of(|x, y| buf.image[(y as usize, x as usize)], buf.size, buf.depth_samples, x, y)
+}
+
+/// [`is_depth_edge`] over any one layer of surface, `at(x, y)`.
+fn is_edge_of(at: impl Fn(u32, u32) -> GeometryPixel, size: u32, depth_samples: u32, x: u32, y: u32) -> bool {
+    let here = at(x, y);
     if here.depth == 0 {
         return false;
     }
@@ -896,17 +1121,17 @@ fn is_depth_edge(buf: &GeometryBuffer, x: u32, y: u32) -> bool {
     let n = normalize(here.normal);
     // Depth and screen axes span the same world extent, so this converts a
     // per-pixel slope into voxels of depth.
-    let ratio = buf.depth_samples as f32 / buf.size.max(1) as f32;
-    let base = (buf.depth_samples as f32 / 256.0).max(2.0);
+    let ratio = depth_samples as f32 / size.max(1) as f32;
+    let base = (depth_samples as f32 / 256.0).max(2.0);
 
     for (dx, dy) in [(1i32, 0i32), (-1, 0), (0, 1), (0, -1)] {
         let nx = x as i32 + dx;
         let ny = y as i32 + dy;
-        if nx < 0 || ny < 0 || nx >= buf.size as i32 || ny >= buf.size as i32 {
+        if nx < 0 || ny < 0 || nx >= size as i32 || ny >= size as i32 {
             // The frame edge is not an edge of the part.
             continue;
         }
-        let other = buf.image[(ny as usize, nx as usize)];
+        let other = at(nx as u32, ny as u32);
 
         // Nothing behind this neighbour: a true silhouette.
         if other.depth == 0 {
@@ -1226,6 +1451,25 @@ mod tests {
             }
         }
 
+        /// A closed cone about Z standing on `base`: radius `r` there, its
+        /// point `h` above.
+        fn cone(&mut self, base: [f32; 3], r: f32, h: f32) {
+            let n = 64;
+            let apex = [base[0], base[1], base[2] + h];
+            for i in 0..n {
+                let (a0, a1) = (
+                    i as f32 / n as f32 * std::f32::consts::TAU,
+                    (i + 1) as f32 / n as f32 * std::f32::consts::TAU,
+                );
+                let p0 = [base[0] + r * a0.cos(), base[1] + r * a0.sin(), base[2]];
+                let p1 = [base[0] + r * a1.cos(), base[1] + r * a1.sin(), base[2]];
+                let mid = (a0 + a1) / 2.0;
+                let len = (h * h + r * r).sqrt();
+                self.triangle(p0, p1, apex, [h * mid.cos() / len, h * mid.sin() / len, r / len]);
+                self.triangle(base, p1, p0, [0.0, 0.0, -1.0]);
+            }
+        }
+
         fn surface(&self) -> Surface<'_> {
             Surface {
                 positions: &self.positions,
@@ -1399,48 +1643,146 @@ mod tests {
         assert!((as_one - 500.0).abs() < 500.0 * 0.03, "read as one shell, the overlap is uncapped: {as_one:.1} mm²");
     }
 
-    /// A reference body is drawn behind the part, and a section cap of
-    /// reference material alone stays behind it too.
+    /// A reference body is depth-tested against the part: laid over it where
+    /// it is in front, hidden where it is behind, and the part's own pixel
+    /// stays the part's either way.
     ///
-    /// A 10 mm cube and the 100 mm wall it mounts on, the wall between the
-    /// front camera and the cube at y = -8..-7, inside the frame's depth.
-    /// Framed on the cube, the wall is the whole picture when both are the
-    /// part. Marked a reference it is the backdrop: the centre pixel is the
-    /// cube's near face at y = -5 and the corner is the wall. Cut on Y
-    /// through the wall alone, the wall's cap covers the corner and never
-    /// the cube.
+    /// A 10 mm cube and the 100 mm wall it mounts on, at y = -8..-7 between
+    /// the front camera and the cube, or at y = 7..8 behind it. Framed on the
+    /// cube, the wall in front is the whole picture when both are the part.
+    /// Marked a reference, the centre pixel is the cube's near face at y = -5
+    /// with the wall in front of it, and the corner is the wall. Behind the
+    /// cube, the wall has no pixel over it. Cut on Y through the wall in
+    /// front, its cap lies over the cube and the cube stays uncut.
     #[test]
-    fn a_reference_body_is_drawn_behind_the_part() {
-        let mut mesh = Mesh::default();
-        mesh.cuboid([0.0; 3], [10.0; 3]);
-        let cube = mesh.positions.len() / 9;
-        mesh.cuboid([0.0, -7.5, 0.0], [100.0, 1.0, 100.0]);
-        let wall = mesh.positions.len() / 9 - cube;
-        let bodies: Vec<u32> = std::iter::repeat_n(0, cube).chain(std::iter::repeat_n(1, wall)).collect();
-        let bounds = bounds([0.0; 3], [10.0; 3]);
-        let (centre, corner) = (64, 2);
-        let draw = |reference_bodies: &[bool], section| {
+    fn a_reference_body_is_drawn_in_its_depth_order_over_the_part() {
+        let draw = |wall_y: f32, reference_bodies: &[bool], section| {
+            let mut mesh = Mesh::default();
+            mesh.cuboid([0.0; 3], [10.0; 3]);
+            let cube = mesh.positions.len() / 9;
+            mesh.cuboid([0.0, wall_y, 0.0], [100.0, 1.0, 100.0]);
+            let wall = mesh.positions.len() / 9 - cube;
+            let bodies: Vec<u32> = std::iter::repeat_n(0, cube).chain(std::iter::repeat_n(1, wall)).collect();
             let surface = Surface { bodies: &bodies, reference_bodies, ..mesh.surface() };
-            raster(&surface, bounds, View::Front, &small(section)).expect("raster")
+            raster(&surface, bounds([0.0; 3], [10.0; 3]), View::Front, &small(section)).expect("raster")
         };
+        let (centre, corner) = (64, 2);
 
-        let as_part = draw(&[], None);
+        let as_part = draw(-7.5, &[], None);
         let p = as_part.model_point(centre, centre).expect("drawn");
         assert!((p[1] + 8.0).abs() < 0.5, "as a body of the part, the wall's near face covers the cube: {p:?}");
-        assert!(as_part.body.is_empty(), "no body is kept when none is a reference");
+        assert!(as_part.body.is_empty() && as_part.front.is_empty(), "no body is kept when none is a reference");
 
-        let behind = draw(&[false, true], None);
-        let p = behind.model_point(centre, centre).expect("drawn");
-        assert!((p[1] + 5.0).abs() < 0.5, "the cube's near face is at y = -5, not {p:?}");
+        let in_front = draw(-7.5, &[false, true], None);
+        let p = in_front.model_point(centre, centre).expect("drawn");
+        assert!((p[1] + 5.0).abs() < 0.5, "the cube's near face is at y = -5 under the wall, not {p:?}");
+        let wall = in_front.front_point(centre, centre).expect("the wall is in front of the cube");
+        assert!((wall[1] + 8.0).abs() < 0.5, "the wall's near face is at y = -8, not {wall:?}");
+        assert_eq!(in_front.front_at(centre, centre).map(|r| r.body), Some(1));
+        assert_eq!((in_front.body_at(centre, centre), in_front.body_at(corner, corner)), (Some(0), Some(1)));
+        assert_eq!(in_front.front_at(corner, corner), None, "nothing of the part is behind the corner");
+        assert_eq!(in_front.bodies_drawn(), [0, 1]);
+
+        let behind = draw(7.5, &[false, true], None);
+        assert_eq!(behind.front_at(centre, centre), None, "a wall behind the cube is hidden by it");
         assert_eq!((behind.body_at(centre, centre), behind.body_at(corner, corner)), (Some(0), Some(1)));
-        assert_eq!(behind.bodies_drawn(), [0, 1]);
 
         let through_the_wall = Section { axis: Axis::Y, at_mm: Some(-7.5), keep: Some(Keep::Above) };
-        let cut = draw(&[false, true], Some(through_the_wall));
+        let cut = draw(-7.5, &[false, true], Some(through_the_wall));
         assert!(cut.is_cut(corner, corner), "the wall's cap is drawn where the cube is not");
         assert_eq!(cut.body_at(corner, corner), Some(1));
-        assert!(!cut.is_cut(centre, centre), "and never over the cube");
+        assert!(!cut.is_cut(centre, centre), "the cube is not cut");
         assert_eq!(cut.body_at(centre, centre), Some(0));
+        assert!(cut.front_at(centre, centre).is_some_and(|r| r.cut && r.body == 1), "the wall's cap lies over the cube");
+    }
+
+    /// A reference standing on the part is drawn standing on it.
+    ///
+    /// A 100 x 100 x 10 slab, top at z = 0, and a reference cone standing on
+    /// it: Ø40 base, 40 tall, framed on the slab alone. Seen iso, the point
+    /// halfway up the cone's near side is in front of the slab's top face;
+    /// drawn behind the part, as references once were, the slab covered it
+    /// and the cone read as buried in the slab. The picture there is the
+    /// reference's blue over the slab's grey.
+    #[test]
+    fn a_reference_standing_on_the_part_is_visible_above_it() {
+        let mut mesh = Mesh::default();
+        mesh.cuboid([0.0, 0.0, -5.0], [100.0, 100.0, 10.0]);
+        let slab = mesh.positions.len() / 9;
+        mesh.cone([0.0; 3], 20.0, 40.0);
+        let cone = mesh.positions.len() / 9 - slab;
+        let bodies: Vec<u32> = std::iter::repeat_n(0, slab).chain(std::iter::repeat_n(1, cone)).collect();
+        let surface = Surface { bodies: &bodies, reference_bodies: &[false, true], ..mesh.surface() };
+        let opts = small(None);
+        let buf = raster(&surface, bounds([0.0, 0.0, -5.0], [100.0, 100.0, 10.0]), View::Iso, &opts).expect("raster");
+
+        // Halfway up, where the cone's radius is 10, on the side toward the camera.
+        let (_, _, looking) = View::Iso.axes();
+        let toward = nalgebra::Vector2::new(-looking.x, -looking.y).normalize();
+        let side = nalgebra::Point3::new(10.0 * toward.x as f32, 10.0 * toward.y as f32, 20.0);
+        let screen = buf.screen_to_model.try_inverse().expect("invertible").transform_point(&side);
+        let (x, y) = (screen.x.round() as u32, screen.y.round() as u32);
+
+        let under = buf.model_point(x, y).expect("the slab is behind the cone there");
+        assert!(under[2].abs() < 0.5, "the part's pixel is the slab's top face at z = 0, not {under:?}");
+        let front = buf.front_at(x, y).expect("the cone is in front of the slab, not behind it");
+        assert_eq!(front.body, 1);
+        let p = buf.front_point(x, y).expect("drawn");
+        assert!((p[2] - 20.0).abs() < 1.5, "the cone's side is at z = 20 there, not {p:?}");
+
+        let picture = shade_view(&buf, &opts, &[]);
+        let [r, _, b] = picture.get(x, y);
+        assert!(b as i32 > r as i32 + 20, "the cone is drawn blue over the slab there, not {:?}", picture.get(x, y));
+    }
+
+    /// A reference in front of another shows it through itself, as it shows
+    /// the part.
+    ///
+    /// The slab and cone above, and a reference wall 200 x 1 x 200 behind
+    /// them at y = 60. Seen from the front, the cone's side at z = 20 has
+    /// nothing of the part behind it and the wall behind it: the cone is in
+    /// the image, the wall behind it, and the picture there changes when the
+    /// wall goes. Keeping only the nearest reference drew a plant in front of
+    /// a wall in the wall's own colour, 1.02:1 against it.
+    #[test]
+    fn a_reference_shows_the_reference_behind_it() {
+        let draw = |with_wall: bool| {
+            let mut mesh = Mesh::default();
+            mesh.cuboid([0.0, 0.0, -5.0], [100.0, 100.0, 10.0]);
+            let slab = mesh.positions.len() / 9;
+            mesh.cone([0.0; 3], 20.0, 40.0);
+            let cone = mesh.positions.len() / 9 - slab;
+            if with_wall {
+                mesh.cuboid([0.0, 60.5, 0.0], [200.0, 1.0, 200.0]);
+            }
+            let wall = mesh.positions.len() / 9 - slab - cone;
+            let bodies: Vec<u32> = std::iter::repeat_n(0, slab)
+                .chain(std::iter::repeat_n(1, cone))
+                .chain(std::iter::repeat_n(2, wall))
+                .collect();
+            let surface = Surface { bodies: &bodies, reference_bodies: &[false, true, true], ..mesh.surface() };
+            let opts = small(None);
+            let buf = raster(&surface, bounds([0.0, 0.0, -5.0], [100.0, 100.0, 10.0]), View::Front, &opts).expect("raster");
+            let picture = shade_view(&buf, &opts, &[]);
+            (buf, picture)
+        };
+        let (buf, picture) = draw(true);
+        let side = nalgebra::Point3::new(0.0f32, -10.0, 20.0);
+        let screen = buf.screen_to_model.try_inverse().expect("invertible").transform_point(&side);
+        let (x, y) = (screen.x.round() as u32, screen.y.round() as u32);
+
+        assert_eq!(buf.body_at(x, y), Some(1), "the cone, with nothing of the part behind it");
+        assert_eq!(buf.front_at(x, y), None);
+        let wall = buf.behind_at(x, y).expect("the wall is behind the cone");
+        assert_eq!(wall.body, 2);
+        let p = buf.screen_to_model.transform_point(&nalgebra::Point3::new(x as f32, y as f32, wall.surface.depth as f32));
+        assert!((p.y - 60.0).abs() < 1.5, "the wall's near face is at y = 60, not {p:?}");
+        assert_eq!(buf.bodies_drawn(), [0, 1, 2]);
+
+        let (_, without) = draw(false);
+        assert_ne!(picture.get(x, y), without.get(x, y), "the wall shows through the cone");
+        let below = buf.screen_to_model.try_inverse().expect("invertible").transform_point(&nalgebra::Point3::new(0.0, -50.0, -5.0));
+        assert_eq!(buf.behind_at(below.x.round() as u32, below.y.round() as u32), None, "the slab's face hides the wall");
     }
 
     /// A crossing on an edge the view sees along the sample grid is counted
