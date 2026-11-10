@@ -17,11 +17,16 @@
  * nothing, an open shell, an envelope or budget overrun, a part standing on
  * stubs, separate or broken bodies, interfering pairs, unused nodes, missing
  * treatment curves. Everything else sits behind one chevron, closed by
- * default, whose summary says how many bodies and whether print_check found
- * anything: volume and topology, the tessellation, what it stands on, the
- * bodies and pairs, an envelope it fits, print flags, the script's notes. A
- * key holder showed seventeen lines over the part, and nobody reads furniture;
- * a green line on every part is what makes the red one easy to miss.
+ * default. A key holder showed seventeen lines over the part, and nobody reads
+ * furniture; a green line on every part is what makes the red one easy to miss.
+ *
+ * The chevron's line is an indicator, not a count: it names what to read and
+ * in which body ("overhang: shelf1, shelf2"), because "prints, 1 flagged" made
+ * the reader open the panel to learn whether it mattered. A plant shelf of 20
+ * bodies listed 190 pairs here, "wall clear of pot by 1100 mm" among them, so
+ * a pair of two references is never shown, clear pairs collapse to the three
+ * tightest, and references to one line of names. The mesh's own numbers come
+ * last: they describe how the part is drawn, not the part.
  *
  * The z range sits on the size line because a size alone hides where the part
  * is: a stand whose pegs were placed on the wrong face measured a plausible
@@ -35,6 +40,7 @@ import { signal } from "@preact/signals";
 import type { ComponentChildren } from "preact";
 import { fmt } from "../engine";
 import * as S from "../state";
+import type { PrintFinding } from "../state";
 import { Glass } from "./components/Glass";
 
 type Snapshot = NonNullable<typeof S.snapshot.value>;
@@ -42,6 +48,13 @@ type Body = NonNullable<Snapshot["named_bodies"]>[number];
 type Pair = NonNullable<Snapshot["between_bodies"]>[number];
 
 const OPEN_KEY = "parcad.report.open";
+
+/** Interfering pairs listed above the chevron before the rest are counted. */
+const INTERFERING_LISTED = 4;
+/** Clear pairs listed behind it, tightest first. */
+const CLOSEST_LISTED = 3;
+/** Pairs, bodies or findings listed on one line before the rest are counted. */
+const NAMES_LISTED = 6;
 
 /** Whether the details are listed; remembered, so a panel someone opened stays open. */
 const detailsOpen = signal(remembered());
@@ -97,9 +110,19 @@ export function Report() {
   );
 }
 
-const brokenBody = (body: Body) => body.pieces > 1 || body.watertight === false;
 const interfering = (pair: Pair) => pair.verdict === "interfering";
 const onStubs = (snapshot: Snapshot) => (snapshot.stands_on?.footprint_fraction ?? 1) < 0.1;
+
+/** The bodies a part is measured against rather than made of. */
+function referenceNames(snapshot: Snapshot): Set<string> {
+  return new Set(snapshot.named_bodies?.filter((body) => body.reference).map((body) => body.name));
+}
+
+/** Every pair worth a line: two references say nothing about the part. */
+function pairsOfThePart(snapshot: Snapshot): Pair[] {
+  const references = referenceNames(snapshot);
+  return (snapshot.between_bodies ?? []).filter((pair) => !(references.has(pair.a) && references.has(pair.b)));
+}
 
 /** Every red line: shown whether the details are open or not. */
 function Wrong({ snapshot }: { snapshot: Snapshot }) {
@@ -107,6 +130,7 @@ function Wrong({ snapshot }: { snapshot: Snapshot }) {
   const linked = S.linkedEdgeCount.value;
   const envelope = snapshot.brief?.envelope;
   const budget = snapshot.brief?.budget_cm3;
+  const clashes = pairsOfThePart(snapshot).filter(interfering);
 
   return (
     <>
@@ -141,18 +165,26 @@ function Wrong({ snapshot }: { snapshot: Snapshot }) {
           <StandsOn snapshot={snapshot} />
         </div>
       )}
-      {snapshot.bodies > (snapshot.named_bodies?.length ?? 1) && (
+      {!snapshot.named_bodies && snapshot.bodies > 1 && (
         <div class="text-bad">
           <Strong>{snapshot.bodies}</Strong> separate bodies
-          {snapshot.named_bodies && ` for ${snapshot.named_bodies.length} named`}
         </div>
       )}
-      {snapshot.named_bodies?.filter(brokenBody).map((body) => (
-        <BodyLine key={body.name} body={body} />
-      ))}
-      {snapshot.between_bodies?.filter(interfering).map((pair) => (
+      {snapshot.named_bodies
+        ?.filter((body) => !body.reference && body.watertight === false)
+        .map((body) => (
+          <div class="text-bad" key={body.name}>
+            {body.name}: not watertight
+          </div>
+        ))}
+      {clashes.slice(0, INTERFERING_LISTED).map((pair) => (
         <PairLine key={`${pair.a}/${pair.b}`} pair={pair} />
       ))}
+      {clashes.length > INTERFERING_LISTED && (
+        <div class="text-bad">
+          and {clashes.length - INTERFERING_LISTED} more {clashes.length - INTERFERING_LISTED === 1 ? "pair interferes" : "pairs interfere"}
+        </div>
+      )}
       {!linked && S.lastTreatments.value.length > 0 && (
         <div class="text-bad">no final treatment curves are available</div>
       )}
@@ -161,47 +193,62 @@ function Wrong({ snapshot }: { snapshot: Snapshot }) {
   );
 }
 
-/** What each kind of print finding is called on the chevron's line. */
-const FINDING_NAMES: Record<string, string> = {
-  thin: "thin wall",
-  overhang: "overhang",
-  pieces: "loose pieces",
-  floating: "off the bed",
+/** What each kind of print finding is called, on the chevron's line and behind it. */
+const FINDING_NAMES: Record<PrintFinding["kind"], string> = {
   collision: "cut into a feature",
+  thin: "thin wall",
+  floating: "above the bed",
+  pieces: "in pieces",
+  overhang: "overhang",
 };
 
-/** The flagged findings by kind, so the line says what to read without opening it. */
-function flaggedKinds(findings: { kind: string }[]): string {
-  const counts = new Map<string, number>();
-  for (const f of findings) counts.set(f.kind, (counts.get(f.kind) ?? 0) + 1);
-  return [...counts]
-    .map(([kind, n]) => `${FINDING_NAMES[kind] ?? kind}${n > 1 ? ` ×${n}` : ""}`)
-    .join(", ");
+/** The flagged findings by kind, each with the bodies it is in, so the line says what to read and where. */
+function findingsByKind(findings: PrintFinding[], named: boolean): string {
+  const kinds = Object.keys(FINDING_NAMES) as PrintFinding["kind"][];
+  return kinds
+    .map((kind) => {
+      const of = findings.filter((f) => f.kind === kind);
+      if (of.length === 0) return "";
+      const bodies = named ? [...new Set(of.map((f) => f.body).filter((b): b is string => b !== undefined))] : [];
+      return bodies.length > 0 ? `${FINDING_NAMES[kind]}: ${names(bodies)}` : `${FINDING_NAMES[kind]}${of.length > 1 ? ` ×${of.length}` : ""}`;
+    })
+    .filter(Boolean)
+    .join(" · ");
 }
 
-/** The chevron's line: how many bodies, and whether print_check found anything. */
+/** A list of names, the first few written out and the rest counted. */
+function names(list: string[]): string {
+  const shown = list.slice(0, NAMES_LISTED).join(", ");
+  return list.length > NAMES_LISTED ? `${shown} +${list.length - NAMES_LISTED}` : shown;
+}
+
+/** The chevron's line: how many bodies make the part, whether its checks hold, and what the print check wants read. */
 function Summary({ snapshot }: { snapshot: Snapshot }) {
-  const bodies = snapshot.named_bodies?.length ?? 0;
+  const made = snapshot.named_bodies?.filter((body) => !body.reference).length ?? 0;
   const print = snapshot.print_check;
   const failed = print?.failed?.length ?? 0;
-  const flagged = print?.flagged?.length ?? 0;
+  const flagged = print?.flagged ?? [];
+  const checks = snapshot.checks;
   return (
     <>
-      {bodies > 1 ? (
+      {made > 1 ? (
         <>
-          <Strong>{bodies}</Strong> bodies
+          <Strong>{made}</Strong> bodies
         </>
       ) : (
         "details"
       )}
+      {checks?.verdict === "passed" && (
+        <>
+          {" · "}
+          <Strong>{checks.passed}</Strong> {checks.passed === 1 ? "check holds" : "checks hold"}
+        </>
+      )}
       {print &&
         (failed > 0 ? (
           <span class="text-bad"> · print fails</span>
-        ) : flagged > 0 ? (
-          <>
-            {" · prints, flagged: "}
-            <Strong>{flaggedKinds(print!.flagged ?? [])}</Strong>
-          </>
+        ) : flagged.length > 0 ? (
+          <span class="text-note"> · {findingsByKind(flagged, snapshot.named_bodies !== undefined)}</span>
         ) : (
           " · prints clean"
         ))}
@@ -209,10 +256,77 @@ function Summary({ snapshot }: { snapshot: Snapshot }) {
   );
 }
 
-/** Behind the chevron: what is measured and right. */
+/** One flagged finding in a line: its kind, where, and its own number. */
+function FindingLine({ finding: f, pieces, named }: { finding: PrintFinding; pieces?: number; named: boolean }) {
+  const where = named && f.body ? ` in ${f.body}` : "";
+  switch (f.kind) {
+    case "thin":
+      return (
+        <div class="text-note">
+          {f.thin_kind === "feather" ? "feather" : "thin wall"} <Strong>{fmt(f.thickness_mm ?? 0)}</Strong> mm
+          {f.between && ` between ${f.between[0]} and ${f.between[1]}`}
+          {where}
+        </div>
+      );
+    case "collision":
+      return (
+        <div class="text-note">
+          {f.between ? `${f.between[0]} cuts into ${f.between[1]}` : "a cut into a feature"}
+          {f.removed_mm3 !== undefined && (
+            <>
+              , <Strong>{fmt(f.removed_mm3)}</Strong> mm³ taken
+            </>
+          )}
+          {where}
+        </div>
+      );
+    case "overhang":
+      return (
+        <div class="text-note">
+          overhang{where}
+          {f.unsupported_mm2 !== undefined && (
+            <>
+              : <Strong>{fmt(f.unsupported_mm2)}</Strong> mm² faces down
+            </>
+          )}
+        </div>
+      );
+    case "pieces":
+      return (
+        <div class="text-note">
+          {(named && f.body) || "the part"} prints in <Strong>{pieces ?? f.pieces?.length ?? 0}</Strong> pieces
+        </div>
+      );
+    case "floating":
+      return <div class="text-note">a piece starts above the bed{where}</div>;
+  }
+}
+
+/** Behind the chevron: what to read first, then what is measured and right, then how it is drawn. */
 function Details({ snapshot }: { snapshot: Snapshot }) {
+  const references = referenceNames(snapshot);
+  const made = snapshot.named_bodies?.filter((body) => !body.reference) ?? [];
+  const pairs = pairsOfThePart(snapshot);
+  const touching = pairs.filter((pair) => pair.verdict === "touching");
+  const touchingWithin = touching.filter((pair) => !references.has(pair.a) && !references.has(pair.b));
+  const clear = pairs
+    .filter((pair) => pair.verdict === "clear" && pair.clearance_mm !== undefined)
+    .sort((p, q) => p.clearance_mm! - q.clearance_mm!);
+  const flagged = snapshot.print_check?.flagged ?? [];
+
   return (
     <>
+      {flagged.slice(0, NAMES_LISTED).map((f, i) => (
+        <FindingLine
+          key={`${f.kind}/${f.body ?? ""}/${i}`}
+          finding={f}
+          named={snapshot.named_bodies !== undefined}
+          pieces={snapshot.named_bodies?.find((body) => body.name === f.body)?.pieces}
+        />
+      ))}
+      {flagged.length > NAMES_LISTED && (
+        <div class="text-note">and {flagged.length - NAMES_LISTED} more to read</div>
+      )}
       <div>
         {snapshot.volume_mm3 !== undefined ? (
           <>
@@ -223,16 +337,9 @@ function Details({ snapshot }: { snapshot: Snapshot }) {
             surface of <Strong>{fmt(snapshot.area_mm2)}</Strong> mm²
           </>
         )}
-        {snapshot.faces !== undefined && (
-          <>
-            {" · "}
-            <Strong>{snapshot.faces}</Strong> faces · <Strong>{snapshot.topological_edges}</Strong> edges
-          </>
+        {snapshot.brief?.envelope?.fits && (
+          <> · fits the {snapshot.brief.envelope.given.map((d) => fmt(d)).join(" × ")} envelope</>
         )}
-      </div>
-      <div>
-        <Strong>{snapshot.triangles.toLocaleString()}</Strong> tris within{" "}
-        <Strong>{snapshot.resolution_mm.toFixed(3)}</Strong> mm
       </div>
       {snapshot.surface && (
         <div>
@@ -265,18 +372,31 @@ function Details({ snapshot }: { snapshot: Snapshot }) {
           <StandsOn snapshot={snapshot} />
         </div>
       )}
-      {snapshot.named_bodies?.filter((body) => !brokenBody(body)).map((body) => (
-        <BodyLine key={body.name} body={body} />
-      ))}
-      {snapshot.between_bodies?.filter((pair) => !interfering(pair)).map((pair) => (
-        <PairLine key={`${pair.a}/${pair.b}`} pair={pair} />
-      ))}
-      {snapshot.brief?.envelope?.fits && (
-        <div>{snapshot.brief.envelope.given.map((d) => fmt(d)).join(" × ")} envelope — fits</div>
+      {made.length <= 4 ? (
+        made.map((body) => <BodyLine key={body.name} body={body} />)
+      ) : (
+        <div>bodies: {names(made.map((body) => body.name))}</div>
       )}
-      {snapshot.print_check?.flagged?.map((f) => (
-        <div key={f.what}>print: {f.what}</div>
-      ))}
+      {references.size > 0 && <div>reference: {names([...references])}</div>}
+      {touchingWithin.length > 0 && (
+        <div>
+          touching: {names(touchingWithin.map((pair) => `${pair.a} · ${pair.b}`))}
+          {touching.length > touchingWithin.length && ` · ${touching.length - touchingWithin.length} more against references`}
+        </div>
+      )}
+      {clear.length > 0 && (
+        <div>
+          closest:{" "}
+          {clear.slice(0, CLOSEST_LISTED).map((pair, i) => (
+            <span key={`${pair.a}/${pair.b}`}>
+              {i > 0 && ", "}
+              {pair.a} · {pair.b} <Strong>{fmt(pair.clearance_mm!)}</Strong> mm
+            </span>
+          ))}
+          {clear.length > CLOSEST_LISTED &&
+            ` · ${clear.length - CLOSEST_LISTED} more ${clear.length - CLOSEST_LISTED === 1 ? "pair" : "pairs"} clear`}
+        </div>
+      )}
       {snapshot.notes && (
         <div>
           {snapshot.notes.source}:{" "}
@@ -284,6 +404,16 @@ function Details({ snapshot }: { snapshot: Snapshot }) {
           {snapshot.notes.dropped ? ` · ${snapshot.notes.dropped} more dropped` : ""}
         </div>
       )}
+      <div>
+        mesh: <Strong>{snapshot.triangles.toLocaleString()}</Strong> triangles within{" "}
+        <Strong>{snapshot.resolution_mm.toFixed(3)}</Strong> mm
+        {snapshot.faces !== undefined && (
+          <>
+            {" · "}
+            <Strong>{snapshot.faces}</Strong> faces · <Strong>{snapshot.topological_edges}</Strong> edges
+          </>
+        )}
+      </div>
     </>
   );
 }
@@ -305,9 +435,8 @@ function StandsOn({ snapshot }: { snapshot: Snapshot }) {
 
 function BodyLine({ body }: { body: Body }) {
   return (
-    <div class={brokenBody(body) ? "text-bad" : undefined}>
-      {body.name}
-      {body.reference && " (reference)"}:{" "}
+    <div>
+      {body.name}:{" "}
       {body.volume_mm3 !== undefined ? (
         <>
           <Strong>{fmt(body.volume_mm3)}</Strong> mm³
@@ -322,38 +451,24 @@ function BodyLine({ body }: { body: Body }) {
 
 function PairLine({ pair }: { pair: Pair }) {
   return (
-    <div class={interfering(pair) ? "text-bad" : undefined}>
-      {pair.a} · {pair.b}: {pair.verdict}
-      {pair.verdict !== "touching" && pair.clearance_mm !== undefined && (
-        <>
-          {" by "}
-          <Strong>{fmt(pair.clearance_mm)}</Strong> mm
-        </>
-      )}
-      {interfering(pair) && (
+    <div class="text-bad">
+      {pair.a} · {pair.b}: interfering, <Strong>{fmt(pair.interference_mm3)}</Strong> mm³ shared
+      {pair.depth_mm !== undefined && (
         <>
           {", "}
-          <Strong>{fmt(pair.interference_mm3)}</Strong> mm³ shared
-          {pair.depth_mm !== undefined && (
-            <>
-              {", "}
-              <Strong>{fmt(pair.depth_mm)}</Strong> mm deep
-            </>
-          )}
-        </>
-      )}
-      {pair.verdict === "touching" && pair.contact_mm2 !== undefined && (
-        <>
-          {" over "}
-          <Strong>{fmt(pair.contact_mm2)}</Strong> mm²
-          {` in ${pair.contact_patches ?? 0} ${pair.contact_patches === 1 ? "patch" : "patches"}`}
+          <Strong>{fmt(pair.depth_mm)}</Strong> mm deep
         </>
       )}
     </div>
   );
 }
 
-/** A measured number, picked out of the sentence around it. */
+/** A measured number, picked out of the sentence around it; long ones grouped by thousands so they can be read aloud. */
 const Strong = ({ children }: { children: ComponentChildren }) => (
-  <b class="text-ink font-medium">{children}</b>
+  <b class="text-ink font-medium">{typeof children === "string" ? grouped(children) : children}</b>
 );
+
+/** `55933456` as `55 933 456`, with a narrow no-break space; four digits and fewer stay as they are. */
+function grouped(text: string): string {
+  return text.replace(/\d{5,}/g, (digits) => digits.replace(/\B(?=(\d{3})+$)/g, "\u202f"));
+}
