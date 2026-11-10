@@ -3,7 +3,7 @@
 # Everything that has to be true before a change lands, in the one order that
 # works. Run it bare for the full pass, or `--fast` to skip the corpus.
 #
-#     tools/check.sh              # build, unit tests, the relay and the edge, worker, eval corpus
+#     tools/check.sh              # build, unit tests, the relay and the edge, the browser host, worker, eval corpus
 #     tools/check.sh --fast       # everything but the corpus (~20 s)
 #
 # The order is not arbitrary:
@@ -120,6 +120,21 @@ step "relay"
 # In front of the release `parcad serve` just built, as `--hosted` with a pass.
 step "edge"
 (cd edge && bun x tsc --noEmit && PARCAD_BIN="$PWD/../target/release/parcad" bun test test)
+
+# Nothing else here compiles the browser host, where a cfg can hide a module another still names.
+emsdk="${EMSDK:-$PWD/../emsdk}"
+if [ -f "$emsdk/emsdk_env.sh" ]; then
+  step "cargo check: the browser host, wasm32-unknown-emscripten"
+  (
+    set +u
+    source "$emsdk/emsdk_env.sh" >/dev/null 2>&1
+    BINDGEN_EXTRA_CLANG_ARGS_wasm32_unknown_emscripten="--sysroot=$emsdk/upstream/emscripten/cache/sysroot" \
+      CARGO_TARGET_DIR="$PWD/target/wasm-check" \
+      cargo check --locked --release --target wasm32-unknown-emscripten -p parcad-wasm-host --bin parcad-wasm-host
+  )
+else
+  step "the browser host: SKIPPED, no Emscripten SDK at \$EMSDK or ../emsdk"
+fi
 
 step "tools/build-worker.sh --release"
 tools/build-worker.sh --release
