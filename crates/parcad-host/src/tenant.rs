@@ -148,6 +148,8 @@ pub struct Tenant {
     /// The parts a hosted server ships, read-only and listed beside the
     /// account's own instead of copied into its folder (`projects.rs`).
     pub shipped: Option<PathBuf>,
+    /// The server's daily totals, shared by every account on it.
+    pub stats: Option<Arc<crate::stats::Stats>>,
 }
 
 /// What a hosted server holds every account to, set once when it starts.
@@ -158,6 +160,8 @@ pub struct Policy {
     pub server: Arc<crate::limits::Gate>,
     /// The shipped parts, `PARCAD_SEED_DIR` or where the binary finds them.
     pub shipped: Option<PathBuf>,
+    /// Where the daily totals go, `--stats-dir DIR`; none counted without it.
+    pub stats: Option<Arc<crate::stats::Stats>>,
 }
 
 impl Policy {
@@ -169,6 +173,7 @@ impl Policy {
             limits: Limits::hosted(),
             server: Arc::new(crate::limits::Gate::new(Some(cores))),
             shipped: crate::projects::shipped_dir(),
+            stats: None,
         }
     }
 }
@@ -207,6 +212,7 @@ impl Tenant {
         let mut tenant = Tenant::new(id, root, exports, Mode::Hosted, policy.limits, Some(links.clone()));
         tenant.server = Some(policy.server.clone());
         tenant.shipped = policy.shipped.clone();
+        tenant.stats = policy.stats.clone();
         tenant
     }
 
@@ -228,6 +234,7 @@ impl Tenant {
             account: crate::limits::Account::new(&limits),
             server: None,
             shipped: None,
+            stats: None,
         }
     }
 
@@ -534,12 +541,16 @@ impl Accounts {
             return Ok(tenant.clone());
         }
         let tenant = Arc::new(Tenant::hosted(id.clone(), &self.tenants, &self.links, &self.policy));
+        let new = !tenant.root.exists();
         scope(tenant.clone(), crate::projects::seed).map_err(|e| {
             Refused::Unready(format!(
                 "preparing the folder for account {id}: {e}. The server's operator has to make \
                  the tenants folder writable by parcad"
             ))
         })?;
+        if let Some(stats) = tenant.stats.as_ref().filter(|_| new) {
+            stats.new_account();
+        }
         resolved.insert(id.clone(), tenant.clone());
         Ok(tenant)
     }
@@ -741,6 +752,7 @@ pub(crate) mod tests {
             limits,
             server: server.unwrap_or_else(|| Arc::new(crate::limits::Gate::new(None))),
             shipped,
+            stats: None,
         };
         let tenant = Tenant::hosted(TenantId::new(id).expect("a test id"), tenants, &Arc::new(links()), &policy);
         std::fs::create_dir_all(&tenant.root).expect("the tenant's folder");

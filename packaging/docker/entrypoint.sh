@@ -36,6 +36,12 @@ if [ -n "${PARCAD_REVOKED:-}" ]; then
     edge+=(--revoked /tmp/parcad-revoked)
 fi
 
+# Daily totals on the volume, with no account id in them (crates/parcad-host/src/stats.rs).
+stats=(--stats-dir "${PARCAD_STATS_DIR:-/data/stats}")
+if [ "${PARCAD_STATS_DIR:-}" = off ]; then
+    stats=()
+fi
+
 # The link secret goes on the volume: the tokens mount is read-only, and a
 # secret that survives a restart is what keeps yesterday's links working.
 # PARCAD_BUILDS caps builds in flight across every account; unset, the host
@@ -44,4 +50,4 @@ fi
 exec parcad serve --hosted --bind 0.0.0.0 --port 4242 \
     --tokens "$tokens" --tenants-dir /data/tenants --public-host "$PARCAD_PUBLIC_HOST" \
     --link-secret /data/link-secret --link-lifetime "${PARCAD_LINK_LIFETIME:-86400}" \
-    ${PARCAD_BUILDS:+--builds "$PARCAD_BUILDS"} ${edge[@]+"${edge[@]}"}
+    ${PARCAD_BUILDS:+--builds "$PARCAD_BUILDS"} ${edge[@]+"${edge[@]}"} ${stats[@]+"${stats[@]}"}

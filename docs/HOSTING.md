@@ -258,6 +258,34 @@ The sweep runs on start and then every hour, over every account folder under
 `--tenants-dir`, and logs what it removed. An account's folder is deleted on
 request by hand.
 
+## Daily totals
+
+With `--stats-dir DIR` (the image passes `/data/stats`; `PARCAD_STATS_DIR=off`
+turns it off) the server counts, per UTC day, what tells an operator whether
+the service works and is used, and nothing that names anyone
+(`crates/parcad-host/src/stats.rs`):
+
+- calls by tool name, every `/api` request as one `/api`;
+- builds charged to an account, and their seconds;
+- failures by kind (`script`, `timeout`, `kernel_crashed`, `refused`,
+  `invalid_request`, `other`) and refusals by the limit's name;
+- accounts new that day, and accounts that made a call. An account is counted
+  active through a day number on its in-memory account, not a list of ids, so
+  a restart forgets it, and an account active on both sides of one counts
+  twice; `starts` says which days that can be.
+
+Integers and those closed sets of names only: no account id, token, address,
+part name or argument is written. A finished day is a line of `YYYY-MM.jsonl`;
+the day in progress is `today.json`, rewritten on each change, so a restart
+carries on with it. Read them on the box:
+
+```bash
+docker exec parcad parcad stats /data/stats --days 30
+```
+
+The privacy notice at mcp.parcad.dev/privacy names exactly these, under
+"Statistics"; counting anything more means changing it first.
+
 ## Auth
 
 Phase 1, which is what runs now: static bearer tokens. A tokens file holds one

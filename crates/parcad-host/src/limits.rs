@@ -23,7 +23,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -479,11 +479,14 @@ impl Drop for Call {
         }
         let now = unix_now();
         let tenant = self.tenant.clone();
+        let ms = charged.as_millis() as u64;
         tenant.account.ledger(&tenant.root, now, |ledger| {
-            let ms = charged.as_millis() as u64;
             ledger.day_ms += ms;
             ledger.month_ms += ms;
         });
+        if let Some(stats) = &tenant.stats {
+            stats.built(ms);
+        }
     }
 }
 
@@ -651,6 +654,9 @@ pub struct Account {
     recent: Mutex<VecDeque<(Instant, [u8; 32])>>,
     /// Read from `.usage.json` at the account's root on first use.
     usage: Mutex<Option<Ledger>>,
+    /// The UTC day of its last call, in days since 1970, in memory only: what
+    /// counts it active once a day without a list of who called (`stats.rs`).
+    last_call_day: AtomicU64,
 }
 
 impl std::fmt::Debug for Account {
@@ -668,7 +674,14 @@ impl Account {
             build_rate: limiter(limits.builds_per_minute, limits.build_burst, 1),
             recent: Mutex::new(VecDeque::new()),
             usage: Mutex::new(None),
+            last_call_day: AtomicU64::new(0),
         }
+    }
+
+    /// Whether a call at `now` is the account's first of its UTC day.
+    pub fn first_call_today(&self, now: u64) -> bool {
+        let day = now / 86_400;
+        self.last_call_day.swap(day, Ordering::Relaxed) != day
     }
 
     /// The call's fingerprint, unless the account made it too often already.

@@ -19,7 +19,7 @@
 //! Scripts arrive from a model and run in `script`'s sandbox, never in the
 //! webview. That is the precondition this server was blocked on.
 
-use crate::{arguments::Args, assets::Assets, limits, projects, script, service, session, tenant};
+use crate::{arguments::Args, assets::Assets, limits, projects, script, service, session, stats, tenant};
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo},
@@ -1612,19 +1612,28 @@ impl ServerHandler for Parcad {
         };
         let admitted = match limits::admit(&tenant, &ask).await {
             Ok(admitted) => admitted,
-            Err(limited) => return Ok(limited_in_the_result(&limited)),
+            Err(limited) => {
+                stats::record(&tenant, &request.name, stats::Outcome::Limited(limited.name));
+                return Ok(limited_in_the_result(&limited));
+            }
         };
+        let tool = request.name.clone();
         let draws = renders_the_viewer(&context);
         let call = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
         let replied = limits::within(
             admitted.clone(),
-            DRAWS_THE_PART.scope(draws, tenant::scoped(tenant, self.tool_router.call(call))),
+            DRAWS_THE_PART.scope(draws, tenant::scoped(tenant.clone(), self.tool_router.call(call))),
         )
         .await;
-        match (replied, admitted.limited()) {
-            (Err(_), Some(limited)) => Ok(limited_in_the_result(&limited)),
-            (replied, _) => replied.or_else(refused_in_the_result),
-        }
+        let (outcome, replied) = match (replied, admitted.limited()) {
+            (Err(_), Some(limited)) => (stats::Outcome::Limited(limited.name), Ok(limited_in_the_result(&limited))),
+            (replied, _) => {
+                let replied = replied.or_else(refused_in_the_result);
+                (outcome_of(&replied), replied)
+            }
+        };
+        stats::record(&tenant, &tool, outcome);
+        replied
     }
 
     /// The generated `list_tools` sends no `ttlMs` and no `cacheScope`, and
@@ -2354,6 +2363,31 @@ fn limited_in_the_result(limited: &limits::Limited) -> rmcp::model::CallToolResp
     let mut result = rmcp::model::CallToolResult::error(vec![rmcp::model::ContentBlock::text(limited.sentence.clone())]);
     result.meta = Some(rmcp::model::MetaObject(meta(serde_json::json!({ "parcad/limit": limited.block() }))));
     result.into()
+}
+
+/// How a reply ended, for the daily totals: an error by the kind
+/// [`error_data`] gave it, from that closed set only.
+fn outcome_of(replied: &Result<rmcp::model::CallToolResponse, ErrorData>) -> stats::Outcome {
+    let Ok(rmcp::model::CallToolResponse::Complete(result)) = replied else {
+        return stats::Outcome::Failed("other");
+    };
+    if result.is_error != Some(true) {
+        return stats::Outcome::Answered;
+    }
+    let kind = result
+        .meta
+        .as_ref()
+        .and_then(|meta| meta.0.get("parcad/refusal"))
+        .and_then(|refusal| refusal.get("kind"))
+        .and_then(|kind| kind.as_str());
+    stats::Outcome::Failed(match kind {
+        Some("script") => "script",
+        Some("timeout") => "timeout",
+        Some("kernel_crashed") => "kernel_crashed",
+        Some("refused") => "refused",
+        Some("invalid_request") => "invalid_request",
+        _ => "other",
+    })
 }
 
 fn invalid(message: impl Into<String>) -> ErrorData {

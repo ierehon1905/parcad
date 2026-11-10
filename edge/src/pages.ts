@@ -154,7 +154,7 @@ export function privacy(): string {
 <li><strong>Your parts</strong>: their scripts, up to 50 earlier versions of each, the pictures and files made from them, and the parts you delete, which wait in a trash for 30 days. They are stored on our server in Germany under your account id, never under your address. A part nobody opens, builds or saves for 30 days is deleted. An exported file is deleted about a day after its link was last given out, and until then the link works for anyone who has it. The server is backed up every night and each backup is kept for 14 days, so a deleted part can outlive its deletion by that long.</li>
 <li><strong>Usage against your limits</strong>: build time and exports per day and month, while your account exists.</li>
 <li><strong>Network data</strong>: Cloudflare processes your IP address to deliver traffic and stop attacks. Our server does not log it. Its logs record start-up, errors and maintenance, with an account id at most, and are rotated out as they grow.</li>
-<li><strong>Statistics</strong>: we may count daily totals of tool calls, builds, failures and active accounts. They keep no IP address, account id or per-person record, and read nothing from your device.</li>
+<li><strong>Statistics</strong>: we count daily totals of tool calls, builds, failures, and new and active accounts. They keep no IP address, account id or per-person record, and read nothing from your device.</li>
 </ul>
 <p>Your parts hold whatever you or your AI client put in them, so keep other people's personal data and your own secrets out of them. We look inside a part only to run the service, to deal with abuse or a legal demand, or when you ask us to.</p>
 <h2>Why</h2>

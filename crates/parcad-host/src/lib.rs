@@ -34,5 +34,6 @@ pub mod script;
 pub mod service;
 pub mod session;
 pub mod signing;
+pub mod stats;
 pub mod storage;
 pub mod tenant;

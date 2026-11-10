@@ -283,6 +283,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | the sandbox agent scripts run in | `crates/parcad-host/src/script.rs` |
 | opening the part in the user's own editor, and which one | `service::open_in_editor` — never the system's `.js` handler, which is a browser; the pencil is in `app/src/ui/titlebar.tsx` |
 | where parts are stored | `crates/parcad-host/src/projects.rs` — a `.parcad` folder per part |
+| a hosted server's daily totals, and what they may never hold | `crates/parcad-host/src/stats.rs`, kept with `parcad serve --hosted --stats-dir DIR`, read with `parcad stats DIR`; the privacy notice in `edge/src/pages.ts` names the same list |
 | the parts picker: folders, new part, rename, trash | `app/src/ui/project-browser.tsx`, rules in `app/src/projects.ts` |
 | which thumbnails are stale, and drawing them in the background | `app/src/thumbnails.ts`; the key is `Drawn` in `projects.rs`, the mesh `routes::build_project` |
 | how the frontend calls the backend | `app/src/backend.ts` — the only module that knows there are two |

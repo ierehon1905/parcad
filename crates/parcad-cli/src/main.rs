@@ -134,6 +134,7 @@ fn parse_args() -> Result<Args> {
                     "usage: parcad serve [--port N]              # host the UI and MCP, no window\n\
                      \x20      parcad serve --hosted ...           # one server for many accounts; parcad serve --help\n\
                      \x20      parcad token new <tenant-id> --tokens FILE\n\
+                     \x20      parcad stats DIR [--days N]          # a hosted server's daily totals\n\
                      \x20      parcad mcp [--port N]                # MCP over stdio, for a client to launch\n\
                      \x20      parcad tools                        # what the running host offers\n\
                      \x20      parcad call <tool> [JSON] [--set key=value | key=@file | key:=json]\n\
@@ -255,6 +256,8 @@ const SERVE_USAGE: &str = "usage: parcad serve [--port N] [--bind ADDR]\n\
                      a pass it signs opens the account it names, with no token here\n\
   --edge-origin NAME the host the edge forwards to, which its passes are addressed to\n\
   --revoked FILE     account ids to refuse however they arrive, one a line; ends their links too\n\
+  --stats-dir DIR    keep daily totals there: calls by tool, builds, failures, new and active\n\
+                     accounts, and no account id. `parcad stats DIR` reads them\n\
   --worker-memory-mb N  the memory each kernel worker may allocate (Linux enforces it), or off;\n\
                      PARCAD_WORKER_MEMORY_MB. By default the container's memory, less 1 GB for the\n\
                      host, shared among --builds";
@@ -284,6 +287,8 @@ struct HostedFlags {
     limits: parcad_host::limits::Limits,
     /// Bytes each worker may allocate; `None` is no cap.
     worker_memory: Option<u64>,
+    /// Where the daily totals go; none are kept without it.
+    stats: Option<PathBuf>,
 }
 
 fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
@@ -299,6 +304,7 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
     let mut edge_key = None;
     let mut edge_origin = None;
     let mut revoked_file = None;
+    let mut stats = None;
     let mut limit_flags: Vec<String> = Vec::new();
     let mut worker_memory: Option<String> = std::env::var("PARCAD_WORKER_MEMORY_MB").ok();
     let mut args = args;
@@ -327,6 +333,7 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
                 edge_origin = Some(parcad_host::tenant::PublicHost::parse(&value("a host name")?).map_err(anyhow::Error::msg)?)
             }
             "--revoked" => revoked_file = Some(PathBuf::from(value("a file")?)),
+            "--stats-dir" => stats = Some(PathBuf::from(value("a folder")?)),
             "--limit" => limit_flags.push(value("NAME=VALUE")?),
             "--worker-memory-mb" => worker_memory = Some(value("a count of MB, or off")?),
             "-h" | "--help" => {
@@ -350,8 +357,8 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
         if tokens.is_some() || tenants.is_some() || public_host.is_some() || link_secret.is_some() || link_lifetime.is_some() {
             anyhow::bail!("--tokens, --tenants-dir, --public-host, --link-secret and --link-lifetime are read only with --hosted");
         }
-        if edge_key.is_some() || edge_origin.is_some() || revoked_file.is_some() {
-            anyhow::bail!("--edge-key, --edge-origin and --revoked are read only with --hosted");
+        if edge_key.is_some() || edge_origin.is_some() || revoked_file.is_some() || stats.is_some() {
+            anyhow::bail!("--edge-key, --edge-origin, --revoked and --stats-dir are read only with --hosted");
         }
         if !limit_flags.is_empty() {
             anyhow::bail!("--limit bounds the accounts of a hosted server, and is read only with --hosted");
@@ -405,6 +412,7 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
                 public_host,
                 limits,
                 worker_memory,
+                stats,
             }),
         }),
         (tokens, tenants, public_host) => {
@@ -462,6 +470,10 @@ fn serve(args: impl Iterator<Item = String>) -> Result<()> {
         limits: flags.limits,
         server: std::sync::Arc::new(parcad_host::limits::Gate::new(Some(options.builds))),
         shipped: parcad_host::projects::shipped_dir(),
+        stats: match &flags.stats {
+            Some(dir) => Some(std::sync::Arc::new(parcad_host::stats::Stats::open(dir).map_err(anyhow::Error::msg)?)),
+            None => None,
+        },
     };
     let mut accounts = parcad_host::tenant::Accounts::read(&flags.tokens, &flags.tenants, links)
         .map_err(anyhow::Error::msg)?
@@ -483,7 +495,7 @@ fn serve(args: impl Iterator<Item = String>) -> Result<()> {
     });
     eprintln!(
         "parcad: {} tokens from {}; accounts under {}; {} builds at once, {} per account; each worker {}; \
-         shipped parts from {}; links signed with {}",
+         shipped parts from {}; links signed with {}; daily totals {}",
         accounts.tokens(),
         flags.tokens.display(),
         flags.tenants.display(),
@@ -491,7 +503,8 @@ fn serve(args: impl Iterator<Item = String>) -> Result<()> {
         flags.limits.builds_at_once.map_or("any".to_string(), |n| n.to_string()),
         flags.worker_memory.map_or("uncapped".to_string(), |bytes| format!("capped at {} MB", bytes >> 20)),
         accounts.policy().shipped.as_ref().map_or("nowhere".to_string(), |dir| dir.display().to_string()),
-        flags.link_secret.display()
+        flags.link_secret.display(),
+        flags.stats.as_ref().map_or("not kept".to_string(), |dir| format!("in {}", dir.display()))
     );
     parcad_host::tenant::require();
     listen(options.address, Some(accounts))
@@ -570,11 +583,76 @@ fn token(args: impl Iterator<Item = String>) -> Result<()> {
     Ok(())
 }
 
+/// `parcad stats DIR [--days N]`: the daily totals a hosted server keeps
+/// with `--stats-dir DIR`, a line a day, then the calls and failures summed.
+fn stats(args: impl Iterator<Item = String>) -> Result<()> {
+    const USAGE: &str = "usage: parcad stats DIR [--days N]   # DIR is the server's --stats-dir";
+    let mut args = args;
+    let mut dir = None;
+    let mut days = 30usize;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--days" => days = args.next().context("--days needs a count")?.parse().context("--days must be a count of days")?,
+            "-h" | "--help" => {
+                eprintln!("{USAGE}");
+                return Ok(());
+            }
+            other if other.starts_with('-') => anyhow::bail!("unknown argument {other:?}\n{USAGE}"),
+            other => dir = Some(PathBuf::from(other)),
+        }
+    }
+    let dir = dir.context(USAGE)?;
+    let all = parcad_host::stats::read(&dir).map_err(anyhow::Error::msg)?;
+    let shown = &all[all.len().saturating_sub(days)..];
+    if shown.is_empty() {
+        println!("no totals in {} yet: the server writes them once it has served a call", dir.display());
+        return Ok(());
+    }
+    println!("{:<10} {:>8} {:>4} {:>6} {:>6} {:>8} {:>6} {:>7} {:>6}", "day", "accounts", "new", "calls", "builds", "build s", "failed", "limited", "starts");
+    let mut tools = std::collections::BTreeMap::<String, u64>::new();
+    let mut failures = std::collections::BTreeMap::<String, u64>::new();
+    let mut limits = std::collections::BTreeMap::<String, u64>::new();
+    for day in shown {
+        let sum = |map: &std::collections::BTreeMap<String, u64>| map.values().sum::<u64>();
+        println!(
+            "{:<10} {:>8} {:>4} {:>6} {:>6} {:>8.0} {:>6} {:>7} {:>6}",
+            day.day,
+            day.accounts,
+            day.new_accounts,
+            sum(&day.calls),
+            day.builds,
+            day.build_ms as f64 / 1000.0,
+            sum(&day.failed),
+            sum(&day.limited),
+            day.starts
+        );
+        for (into, from) in [(&mut tools, &day.calls), (&mut failures, &day.failed), (&mut limits, &day.limited)] {
+            for (name, count) in from {
+                *into.entry(name.clone()).or_default() += count;
+            }
+        }
+    }
+    let ranked = |map: std::collections::BTreeMap<String, u64>| {
+        let mut ranked: Vec<_> = map.into_iter().collect();
+        ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let list: Vec<String> = ranked.iter().map(|(name, count)| format!("{name} {count}")).collect();
+        if list.is_empty() { "none".to_string() } else { list.join(", ") }
+    };
+    println!("\ncalls:    {}", ranked(tools));
+    println!("failed:   {}", ranked(failures));
+    println!("limited:  {}", ranked(limits));
+    if shown.iter().any(|day| day.starts > 1) {
+        println!("\nOn a day with more than one start an account active on both sides of a restart is counted twice.");
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some("serve") => return serve(args),
         Some("token") => return token(args),
+        Some("stats") => return stats(args),
         Some("mcp") => return stdio::run(args),
         Some("tools") => return call::tools(args),
         Some("call") => return call::call(args),
@@ -1056,6 +1134,9 @@ mod tests {
         assert!(origin_alone.contains("--edge-key"), "{origin_alone}");
         let local = options(&["--edge-key", key, "--edge-origin", "origin.example.test"]).err().expect("refused").to_string();
         assert!(local.contains("only with --hosted"), "{local}");
+        assert_eq!(with(&["--stats-dir", "/data/stats"]).unwrap().hosted.expect("hosted").stats, Some(PathBuf::from("/data/stats")));
+        let stats_alone = options(&["--stats-dir", "/data/stats"]).err().expect("refused").to_string();
+        assert!(stats_alone.contains("--stats-dir are read only with --hosted"), "{stats_alone}");
         std::fs::write(dir.join("bad"), "Not An Id\n").unwrap();
         let bad = with(&["--revoked", dir.join("bad").to_str().unwrap()]).err().expect("refused").to_string();
         assert!(bad.contains(":1:") && bad.contains("not a tenant id"), "{bad}");

@@ -36,6 +36,7 @@ use crate::projects;
 use crate::routes::{self, ProjectOp, SaveRequest, SessionPush};
 use crate::service;
 use crate::session;
+use crate::stats::Outcome;
 use crate::tenant;
 use axum::{
     extract::{Path, Request, State},
@@ -329,14 +330,20 @@ async fn admitted(request: Request, next: Next) -> Response {
     };
     let call = match crate::limits::admit(&tenant, &ask).await {
         Ok(call) => call,
-        Err(refused) => return limited(&refused),
+        Err(refused) => {
+            crate::stats::record(&tenant, "/api", Outcome::Limited(refused.name));
+            return limited(&refused);
+        }
     };
     let request = Request::from_parts(parts, axum::body::Body::from(bytes));
     let response = crate::limits::within(call.clone(), next.run(request)).await;
-    match call.limited() {
-        Some(refused) if !response.status().is_success() => limited(&refused),
-        _ => response,
-    }
+    let (outcome, response) = match call.limited() {
+        Some(refused) if !response.status().is_success() => (Outcome::Limited(refused.name), limited(&refused)),
+        _ if !response.status().is_success() => (Outcome::Failed("api"), response),
+        _ => (Outcome::Answered, response),
+    };
+    crate::stats::record(&tenant, "/api", outcome);
+    response
 }
 
 /// A limit as an `/api` answer: the sentence and the block, with the wait in
@@ -763,6 +770,7 @@ mod tests {
             limits,
             server: Arc::new(crate::limits::Gate::new(Some(server_builds))),
             shipped: None,
+            stats: None,
         };
         let accounts = tenant::Accounts::read(&file, &dir.join("tenants"), links()).unwrap().governed(policy);
         (dir, acme, bolt, on_a_spare_port(Some(accounts)))
@@ -1115,6 +1123,45 @@ mod tests {
         assert_eq!(large["result"]["isError"], true, "{large}");
         assert!(large["result"]["content"][0]["text"].as_str().unwrap().starts_with("Not run: the script is 301 KB, over the 256 KB"));
         assert_eq!(large["result"]["_meta"]["parcad/limit"], serde_json::json!({ "type": "too_large", "limit": { "name": "script_kb", "max": 256 } }));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The daily totals count calls by tool, refusals by limit and failures
+    /// by kind, each account once a day, and hold nothing that names an
+    /// account, a token or a part (`stats.rs`).
+    #[test]
+    fn the_daily_totals_count_calls_and_accounts_and_name_no_one() {
+        let dir = crate::tenant::tests::fresh_root("totals");
+        let file = dir.join("tokens");
+        let acme = tenant::issue(TenantId::new("acme").unwrap(), &file).unwrap();
+        let bolt = tenant::issue(TenantId::new("bolt").unwrap(), &file).unwrap();
+        let mut limits = crate::limits::Limits::hosted();
+        limits.repeats = Some(1);
+        let totals = dir.join("stats");
+        let policy = tenant::Policy {
+            limits,
+            server: Arc::new(crate::limits::Gate::new(Some(4))),
+            shipped: None,
+            stats: Some(Arc::new(crate::stats::Stats::open(&totals).unwrap())),
+        };
+        let accounts = tenant::Accounts::read(&file, &dir.join("tenants"), links()).unwrap().governed(policy);
+        let port = on_a_spare_port(Some(accounts));
+        for token in [&acme, &acme, &bolt] {
+            assert_eq!(call_tool(port, token, "read_docs", serde_json::json!({ "topic": "gaps" })).status, 200);
+        }
+        let thrown = call_tool(port, &bolt, "evaluate_part", serde_json::json!({ "script": "throw new Error('gizmo-arm-left')" }));
+        assert!(thrown.body.contains("gizmo-arm-left"), "the script ran and threw: {}", thrown.body);
+
+        let day = crate::stats::read(&totals).unwrap().pop().expect("today's totals");
+        assert_eq!(day.calls["read_docs"], 3, "{day:?}");
+        assert_eq!(day.calls["evaluate_part"], 1, "{day:?}");
+        assert_eq!(day.limited["same_call"], 1, "{day:?}");
+        assert_eq!(day.failed["script"], 1, "{day:?}");
+        assert_eq!((day.accounts, day.new_accounts, day.starts), (2, 2, 1), "{day:?}");
+        let written = std::fs::read_to_string(totals.join("today.json")).unwrap();
+        for name in ["acme", "bolt", "gizmo", &acme, &bolt] {
+            assert!(!written.contains(name), "{name:?} is in the totals: {written}");
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
