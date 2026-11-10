@@ -927,8 +927,8 @@ pub struct RenderedView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub references_out_of_view: Option<Vec<String>>,
     /// How a reference body is drawn ([`REFERENCE_FRAMING`]), said in every
-    /// view that has one, so a reader of the picture knows the blue is a
-    /// backdrop the frame cuts off and not the part.
+    /// view that has one, so a reader of the picture knows the blue is not
+    /// the part, and that grey seen through it is.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub framing: Option<String>,
     /// The same image as a PNG file, for a person to open or a caller to
@@ -949,8 +949,9 @@ pub struct RenderedView {
 
 /// What a view with reference bodies says about its frame: the rule, once,
 /// beside the measured `framed_on` and `references_out_of_view`.
-pub const REFERENCE_FRAMING: &str = "fitted to the part alone, ruler included; a reference body is drawn in blue \
-                                     behind the part and cut off at the frame's edge";
+pub const REFERENCE_FRAMING: &str = "fitted to the part alone, ruler included; a reference body is see-through \
+                                     blue, drawn over the part where it is in front of it and hidden where it is \
+                                     behind it, and cut off at the frame's edge";
 
 /// Where the camera for one view was, said in the part's own axes.
 ///

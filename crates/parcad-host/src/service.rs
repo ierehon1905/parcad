@@ -315,24 +315,13 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
     // one a pixel is coloured for.
     let names = parcad_occt::drawing::tag_names(doc);
     let owner_of_face = parcad_occt::drawing::owner_of_face(&evaluated.faces, &names);
-    // A reference body is painted in its colour whether or not materials
-    // were asked for: grey would read as the part.
-    let is_reference = |face: &parcad_occt::protocol::FaceSummary| {
-        face.body.as_deref().is_some_and(|b| evaluated.reference_bodies.iter().any(|r| r == b))
-    };
-    let face_colors: Vec<Option<[u8; 3]>> = if materials || !evaluated.reference_bodies.is_empty() {
+    // A reference body is drawn in its own blue by the renderer, materials
+    // or not.
+    let face_colors: Vec<Option<[u8; 3]>> = if materials {
         evaluated
             .faces
             .iter()
-            .map(|face| {
-                if is_reference(face) {
-                    Some(parcad_core::graph::REFERENCE_RGB)
-                } else if materials {
-                    face.material.as_ref().and_then(|m| m.rgb())
-                } else {
-                    None
-                }
-            })
+            .map(|face| face.material.as_ref().and_then(|m| m.rgb()))
             .collect()
     } else {
         Vec::new()
@@ -371,8 +360,7 @@ pub fn render(evaluated: &Evaluated, doc: &Doc, spec: &RenderSpec) -> Result<Ren
                     Some(round_fraction(map.unclaimed_pixels as f64 / total as f64)),
                 )
             } else {
-                let mut shaded = parcad_core::render::shade(&buffer, &opts);
-                parcad_core::render::paint_faces(&mut shaded, &buffer, &face_colors);
+                let shaded = parcad_core::render::shade_view(&buffer, &opts, &face_colors);
                 (shaded.downsample(opts.supersample.clamp(1, 4)), None, None)
             };
             // The rule goes on after the downsample so it is drawn at the

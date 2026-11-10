@@ -2443,8 +2443,8 @@ pub struct Node {
     pub material: Option<Material>,
 }
 
-/// The reference colour, sRGB; `service::render` paints it whether or not a
-/// view asked for materials.
+/// The reference colour, sRGB; an agent's render draws every reference in
+/// it whether or not a view asked for materials (`render::shade_view`).
 pub const REFERENCE_COLOR: &str = "#5b8fd6";
 pub const REFERENCE_RGB: [u8; 3] = [0x5b, 0x8f, 0xd6];
 

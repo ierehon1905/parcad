@@ -1531,9 +1531,11 @@ colour and would gain a white region that is not one.
 
 Both are the part's. A `.reference()` body never widens the frame or the
 ruler — a 300 mm wall returned beside a 36 mm bracket had made the bracket a
-few pixels under a 100 mm rule — and is drawn in blue behind the part, cut
-off at the frame's edge; the view's `framed_on` says which bodies the frame
-fits and `references_out_of_view` which references have no pixel in it.
+few pixels under a 100 mm rule — and is drawn as see-through blue in its
+depth order, over the part where it is in front and hidden where it is
+behind, cut off at the frame's edge; the view's `framed_on` says which
+bodies the frame fits and `references_out_of_view` which references have no
+pixel in it.
 
 Pinned by `eval/cases/briefed-tray` (the session's own v5 and its own brief:
 over by exactly 15 mm along x, and on no other axis) and
