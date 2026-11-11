@@ -166,8 +166,8 @@ fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router
 /// edge's sign-in pages' styles (`edge/src/pages.ts`), which are parcad.dev's.
 fn front_page(public: &tenant::PublicHost, signs_in: bool, part_lifetime: Option<std::time::Duration>) -> String {
     let connect = if signs_in {
-        "Add this address to Claude, ChatGPT, Cursor or another MCP client, and sign in when it asks: \
-         with Google, GitHub or a code sent by email."
+        // The edge decides which ways in it offers; the host cannot see them.
+        "Add this address to Claude, ChatGPT, Cursor or another MCP client, and sign in when it asks."
     } else {
         "Add this address to an MCP client with the header <code>Authorization: Bearer &lt;token&gt;</code>, \
          using a token from whoever runs this server."
@@ -934,7 +934,8 @@ mod tests {
         let port = serving(Arc::new(IconOnly), Some(accounts));
         let page = exchange(port, "GET", "/", &[], "");
         assert_eq!(page.status, 200, "{}", page.body);
-        assert!(page.body.contains("sign in") && page.body.contains("a code sent by email"), "{}", page.body);
+        assert!(page.body.contains("sign in when it asks"), "{}", page.body);
+        assert!(!page.body.contains("email"), "{}", page.body);
         assert!(page.body.contains("a part unused for 30 days is deleted"), "{}", page.body);
         assert!(!page.body.contains("Bearer"), "{}", page.body);
         let _ = std::fs::remove_dir_all(&dir);
