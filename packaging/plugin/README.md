@@ -37,12 +37,15 @@ The marketplaces that list it are at the repository root:
 - **Claude's directory** (claude.ai/directory/manage) takes a local MCP server
   or a script file only from a Verified organisation, so this plugin was
   refused there on 2026-11-11. The directory lists
-  `packaging/hosted-plugin/` instead: the same skills, with the server
+  `packaging/claude-plugin/` instead: the same skills, with the server
   pointed at `https://mcp.parcad.dev/mcp`, beside the hosted server's own
   connector listing, as Anthropic's docs ask a product with a remote server
   to do. Its `field-instrument` skill is a copy of this one's, held equal by
-  `the_hosted_plugin_carries_the_local_plugins_shared_skills`; its `parcad`
+  `the_claude_plugin_carries_the_local_plugins_shared_skills`; its `parcad`
   skill differs because the hosted server has no install to fall back on.
+  The directory reads it from `ierehon1905/parcad-claude-plugin`, because this
+  repository is over its 10,000-file limit: run
+  `tools/publish-claude-plugin.sh` after each release to copy the folder there.
 - **Codex**: the public directory does not take local stdio servers without an
   arrangement with OpenAI, and asks for a verified developer identity and
   privacy and terms URLs. Until then, `codex plugin marketplace add
