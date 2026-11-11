@@ -6,25 +6,37 @@ export const BLOB = `${GH}/blob/main`;
 export const RELEASES = `${GH}/releases`;
 export const SITE = "https://parcad.dev/";
 export const WEB = `${SITE}app/`;
+/** The hosted MCP server: sign-in through its edge (edge/), parts in a per-account folder. */
+export const HOSTED = "https://mcp.parcad.dev/mcp";
+/** The hosted server's own page: what it is, how to connect, what it keeps. */
+export const HOSTED_HOME = "https://mcp.parcad.dev/";
 /** The hosted service's pages, served by its sign-in edge (edge/src/pages.ts). */
 export const PRIVACY = "https://mcp.parcad.dev/privacy";
 export const TERMS = "https://mcp.parcad.dev/terms";
 
 export const LICENCE = "AGPL-3.0";
 
-export const TITLE = "ParCAD — parametric CAD you write as code";
+export const TITLE = "ParCAD: open source CAD MCP server for Claude, ChatGPT and Cursor";
 export const DESCRIPTION =
-  "Parametric CAD you write as code, for people and their AI agents: selectors that describe edges and check their count, an OpenCASCADE B-rep kernel, measured reports, and the same tools over MCP.";
+  "Open source CAD your AI drives over MCP. Add mcp.parcad.dev/mcp to Claude, ChatGPT or Cursor, or run it on your own machine. Parts are JavaScript on an OpenCASCADE kernel, measured and checked, and exported as STEP, 3MF or STL for 3D printing.";
 
 export const asset = (path: string) => `${import.meta.env.BASE_URL}${path}`;
 
 export type GetItOption = { os: string; label: string; copy?: string; href?: string };
 
 export const GET_IT: GetItOption[] = [
+  { os: "Your AI · nothing to install", label: "mcp.parcad.dev/mcp", copy: HOSTED },
   { os: "macOS · Linux", label: "brew install parcad", copy: "brew tap ierehon1905/parcad && brew install parcad" },
-  { os: "Windows", label: "winget install ParCAD.ParCAD", copy: "winget install ParCAD.ParCAD" },
-  { os: "Desktop app", label: "Download from Releases", href: RELEASES },
-  { os: "No install", label: "Open ParCAD web", href: WEB },
+  { os: "Desktop app · Windows, macOS, Linux", label: "Download from Releases", href: RELEASES },
+  { os: "Browser · nothing to install", label: "Open ParCAD web", href: WEB },
+];
+
+/** How each client connects to the hosted server, for llms.txt and the page's Markdown. */
+export const CONNECT: { client: string; how: string; code?: string }[] = [
+  { client: "Claude (web and desktop)", how: "Customize, then Connectors, then Add custom connector. Paste the URL and sign in with GitHub or Google." },
+  { client: "Claude Code", how: "One line, then sign in when /mcp asks.", code: `claude mcp add --transport http parcad ${HOSTED}` },
+  { client: "Codex", how: "Add it, then sign in.", code: `codex mcp add parcad --url ${HOSTED} && codex mcp login parcad` },
+  { client: "ChatGPT, Cursor and other clients", how: "Add a remote MCP server with the URL. The client opens the sign-in page itself." },
 ];
 
 export type Hue = "accent" | "gold" | "good" | "cut" | "tag" | "bad";
@@ -263,11 +275,11 @@ export type AgentCard = { title: string; body: string; hue: Hue; cta: string; hr
 
 export const AGENT_CARDS: AgentCard[] = [
   {
-    title: "Add it to your agent",
-    body: "One line for Claude Code or Codex, a plugin that brings a usage skill, or one click in Cursor and VS Code.",
+    title: "One URL, nothing to install",
+    body: "Add mcp.parcad.dev/mcp to Claude, ChatGPT, Cursor or Codex and sign in with GitHub or Google. In Claude the part shows up in 3D right in the chat.",
     hue: "accent",
-    code: "claude mcp add parcad -- parcad mcp",
-    cta: "Setup guide",
+    code: `claude mcp add --transport http parcad ${HOSTED}`,
+    cta: "How to connect",
     href: `${GH}#use-it-from-an-agent`,
   },
   {
@@ -278,11 +290,12 @@ export const AGENT_CARDS: AgentCard[] = [
     href: `${BLOB}/docs/PERCEPTION.md`,
   },
   {
-    title: "No install, one link",
-    body: "Open ParCAD web, choose Connect your AI and give your client the link. The browser tab is the server; the relay forwards messages and stores none.",
+    title: "Or on your own machine",
+    body: "Install with Homebrew and add one line to Claude Code or Codex, or one click in Cursor and VS Code. ParCAD web can also hand your client a link to its tab.",
     hue: "gold",
-    cta: "Open ParCAD web",
-    href: WEB,
+    code: "claude mcp add parcad -- parcad mcp",
+    cta: "Setup guide",
+    href: `${GH}#use-it-from-an-agent`,
   },
   {
     title: "Tested on small models",
@@ -297,10 +310,25 @@ export type Plan = { name: string; hue: Hue; price: string; note: string; blurb:
 
 export const PLANS: Plan[] = [
   {
+    name: "Hosted",
+    hue: "tag",
+    price: "Free",
+    note: "Sign in with GitHub or Google",
+    blurb: "Add one URL to your AI client and it can build parts. Nothing to install.",
+    cta: { label: "Copy the URL", copy: HOSTED },
+    features: [
+      "Claude, ChatGPT, Cursor, Codex or any MCP client",
+      "In Claude, the part in 3D right in the chat",
+      "Your parts in your own account",
+      "Limits on builds and storage per account",
+      "A part unused for 30 days is deleted, so download what you keep",
+    ],
+  },
+  {
     name: "Desktop app",
     hue: "accent",
     price: "Free",
-    note: "Releases · winget on Windows",
+    note: "Releases · macOS, Linux, Windows",
     blurb: "The editor, the viewport and the MCP server in one window.",
     cta: { label: "Download", href: RELEASES },
     features: [
@@ -362,6 +390,24 @@ export type Faq = { q: string; a: string[] };
 
 export const FAQS: Faq[] = [
   {
+    q: "How do I connect ParCAD to Claude or ChatGPT?",
+    a: [
+      `Add ${HOSTED} as a connector and sign in with GitHub or Google. In Claude that's Customize, then Connectors, then Add custom connector. Claude Code and Codex take it in one line, shown under Agents above.`,
+      "Nothing to install. Your parts live in your own account.",
+    ],
+  },
+  {
+    q: "Can an AI design 3D-printable parts with it?",
+    a: [
+      "Yes, that's what it's for. The agent writes the part as JavaScript, and ParCAD builds it on an exact kernel and checks it: the sizes you asked for, wall thickness, what it stands on, whether it fits the thing it holds, and whether a hinge or drawer moves without hitting anything.",
+      "Export 3MF for Bambu Studio, OrcaSlicer, PrusaSlicer or Cura.",
+    ],
+  },
+  {
+    q: "Is ParCAD the same as PartCAD?",
+    a: ["No. PartCAD is a package manager for CAD models. ParCAD is a CAD app and an MCP server, at parcad.dev."],
+  },
+  {
     q: "Is it ready for real parts?",
     a: [
       "It's experimental: one author, and the DSL still changes. Every operation is checked against measured geometry in the eval corpus, but none of it has had years of use yet.",
@@ -383,7 +429,7 @@ export const FAQS: Faq[] = [
   {
     q: "Which agents can use it?",
     a: [
-      "Any MCP client: Claude Code, Codex, Cursor, VS Code, the Claude app as a custom connector, or anything that connects to a URL. Start the agent on read_docs, which returns the whole language in one call.",
+      "Any MCP client. The hosted server works with Claude, ChatGPT, Cursor, Codex or anything that connects to a URL. On your own machine, parcad mcp works with Claude Code, Codex, Cursor, VS Code and Claude Desktop. Start the agent on read_docs, which returns the whole language in one call.",
     ],
   },
   {
@@ -393,8 +439,9 @@ export const FAQS: Faq[] = [
     ],
   },
   {
-    q: "How is it licensed?",
+    q: "Is it free, and how is it licensed?",
     a: [
+      "Free. The app, the CLI, ParCAD web and the hosted server cost nothing. The hosted server has limits on builds and storage per account.",
       "GNU AGPL-3.0 or later. The parts you make are yours: part scripts and everything ParCAD exports from them can be licensed however you like, and the seed parts are MIT. Releases through v0.0.9 stay MIT or Apache-2.0.",
       "OpenCASCADE and its bindings are LGPL-2.1, so redistributing a binary carries obligations; NOTICE.md spells them out.",
     ],

@@ -2,7 +2,7 @@ import type { Route } from "./+types/home";
 import { Divider, Rails } from "../components/frame";
 import { Hero, Nav } from "../components/hero";
 import { Agents, Case, Examples, FAQ, Footer, GetIt, Operations, Plans } from "../components/sections";
-import { DESCRIPTION, GH, LICENCE, RELEASES, SITE, TITLE, WEB } from "../content";
+import { DESCRIPTION, FAQS, GH, HOSTED, LICENCE, RELEASES, SITE, TITLE, WEB } from "../content";
 
 // Crawlers fetch the card from an absolute URL, so it names the deployed site rather than BASE_URL.
 const CARD = `${SITE}og.png`;
@@ -36,18 +36,39 @@ export const meta: Route.MetaFunction = () => [
         { "@type": "WebSite", name: "ParCAD", url: SITE },
         {
           "@type": "SoftwareApplication",
+          "@id": `${SITE}#software`,
           name: "ParCAD",
+          alternateName: "parcad",
           description: DESCRIPTION,
           url: SITE,
           image: CARD,
           applicationCategory: "DesignApplication",
+          applicationSubCategory: "CAD",
           operatingSystem: "macOS, Linux, Windows, Web",
           downloadUrl: RELEASES,
           installUrl: WEB,
           license: `https://spdx.org/licenses/${LICENCE}-or-later.html`,
+          isAccessibleForFree: true,
           sameAs: GH,
-          publisher: { "@type": "Organization", name: "Maging Studio" },
+          keywords: "CAD MCP server, AI CAD, text to CAD, parametric CAD, JavaScript CAD, OpenCASCADE, 3D printing, STEP, 3MF",
+          featureList: [
+            `A hosted MCP server at ${HOSTED} with GitHub or Google sign-in`,
+            "Works with Claude, ChatGPT, Cursor, Codex and other MCP clients",
+            "Parts written in JavaScript and built on an exact OpenCASCADE B-rep kernel",
+            "Measured reports: size, volume, wall thickness, fit, and clearance of moving parts",
+            "STEP, 3MF and STL export",
+            "Runs in the browser, as a desktop app, or headless",
+          ],
+          publisher: { "@type": "Organization", name: "Maging Studio", url: SITE },
           offers: { "@type": "Offer", price: "0", priceCurrency: "USD" },
+        },
+        {
+          "@type": "FAQPage",
+          mainEntity: FAQS.map((f) => ({
+            "@type": "Question",
+            name: f.q,
+            acceptedAnswer: { "@type": "Answer", text: f.a.join(" ") },
+          })),
         },
       ],
     },

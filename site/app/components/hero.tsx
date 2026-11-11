@@ -52,7 +52,7 @@ export function Hero() {
         </h1>
         <p className="mx-auto mt-6 max-w-xl text-[15px] leading-relaxed text-ink-dim md:text-[17px]">
           For people and their AI agents. Select edges with a description like “hole rims on the top face”, get every
-          part measured on an OpenCASCADE B‑rep, and give your agent the same tools over MCP.
+          part measured on an OpenCASCADE B‑rep, and connect Claude, ChatGPT or Cursor with one URL.
         </p>
         <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
           <Button variant="primary" copy="brew tap ierehon1905/parcad && brew install parcad" icon={<Prompt />}>

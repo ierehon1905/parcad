@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AGENT_CARDS, BLOB, CASE, EXAMPLES, FAQS, GET_IT, GH, HUE, LICENCE, PLANS, PRIVACY, REFUSAL, RELEASES, TERMS, WEB, asset, type CaseItem, type Hue } from "../content";
+import { AGENT_CARDS, BLOB, CASE, EXAMPLES, FAQS, GET_IT, GH, HOSTED, HOSTED_HOME, HUE, LICENCE, PLANS, PRIVACY, REFUSAL, RELEASES, TERMS, WEB, asset, type CaseItem, type Hue } from "../content";
 import { Button, Rail, SectionHead, Square, cn } from "./frame";
 
 export function GetIt() {
@@ -130,10 +130,11 @@ export function Agents() {
   return (
     <section id="agents" className="scroll-mt-20 py-20 md:py-28">
       <Rail className="space-y-12">
-        <SectionHead hue="tag" title="Built so models can make models">
+        <SectionHead label="Built so models can make models" hue="tag" title="A CAD MCP server for Claude, ChatGPT and Cursor">
           <p>
-            The running app serves MCP at 127.0.0.1:4242/mcp from the same service the window uses. An agent reads the
-            language, builds, measures and exports parts, and works in the session you have open.
+            Connect your AI to {HOSTED.replace("https://", "")}, or run the same server on your own machine at
+            127.0.0.1:4242/mcp. The agent reads the language, then builds, measures and exports parts. Locally it works
+            in the session you have open.
           </p>
         </SectionHead>
         <figure className="border border-line bg-black">
@@ -202,12 +203,12 @@ export function Plans() {
   return (
     <section id="install" className="scroll-mt-20 py-20 md:py-28">
       <Rail className="space-y-14">
-        <SectionHead hue="cut" title="Free. Three ways to run it">
+        <SectionHead hue="cut" title="Free. Four ways to run it">
           <p>Each one runs the same kernel, with the same tools and reports.</p>
         </SectionHead>
-        <div className="grid border border-line md:grid-cols-3">
+        <div className="grid gap-px border border-line bg-line md:grid-cols-2">
           {PLANS.map((plan) => (
-            <div key={plan.name} className="flex flex-col border-line p-6 not-last:border-b md:p-7 md:not-last:border-r md:not-last:border-b-0">
+            <div key={plan.name} className="flex flex-col bg-bg p-6 md:p-7">
               <div className="flex items-center gap-2.5 font-mono text-[11px] tracking-wider uppercase">
                 <Square hue={plan.hue} className="size-2" />
                 <span className={HUE[plan.hue].text}>{plan.name}</span>
@@ -291,7 +292,7 @@ export function Examples() {
     <section id="examples" className="scroll-mt-20 py-20 md:py-28">
       <Rail className="space-y-12">
         <div className="flex flex-wrap items-end justify-between gap-6">
-          <SectionHead hue="good" title="Twenty-eight example parts">
+          <SectionHead hue="good" title="Thirty-five example parts">
             <p>
               Brackets, flanges, manifolds and heat sinks — parts you print or machine one of. Each opens as a seed part
               in the app, and most have a case in the eval corpus, so an example that stops building fails a test.
@@ -400,7 +401,7 @@ export function Footer() {
       links: [
         ["ParCAD web", WEB],
         ["Homebrew", `${GH}#install-it`],
-        ["winget", `${GH}#install-it`],
+        ["Hosted server", HOSTED_HOME],
         ["Build from source", `${GH}#build-it`],
         ["Contributing", `${BLOB}/CONTRIBUTING.md`],
       ],
