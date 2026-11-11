@@ -1,7 +1,8 @@
 /**
  * The edge under `wrangler dev` in front of a real `parcad serve --hosted`,
  * driven as an MCP client would: discovery, registration, sign-in, the code
- * for a token, and `/mcp` with it — plus the host's own static token, an
+ * for a token, and `/mcp` with it — plus a visitor listing the tools with no
+ * token at all, the host's own static token, an
  * address nobody listed (sign-up is open), a sign-in by emailed code, and one
  * through ChatGPT against a mock of OpenAI's sign-in.
  *
@@ -61,7 +62,8 @@ beforeAll(async () => {
   staticToken = minted.stdout.toString().trim();
   host = Bun.spawn(
     [BIN, "serve", "--hosted", "--tokens", join(dir, "tokens"), "--tenants-dir", join(dir, "tenants"),
-      "--public-host", EDGE, "--port", String(HOST_PORT), "--edge-key", join(dir, "edge.pub"), "--edge-origin", HOST],
+      "--public-host", EDGE, "--port", String(HOST_PORT), "--edge-key", join(dir, "edge.pub"), "--edge-origin", HOST,
+      "--list-without-sign-in"],
     { stdout: "ignore", stderr: "pipe", env: { ...process.env, PARCAD_SEED_DIR: join(dir, "no-seed") } },
   );
   await until(`${HOST}/api/health`, "parcad serve");
@@ -165,16 +167,30 @@ async function tokenFor(client: string, location: string) {
   return (await exchanged.json()) as { access_token: string; refresh_token?: string; expires_in: number };
 }
 
-const initialize = (token?: string) =>
+/** One JSON-RPC message to `/mcp`, with these headers. */
+const mcp = (message: object, headers: Record<string, string> = {}) =>
   fetch(`${EDGE}/mcp`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-      accept: "application/json, text/event-stream",
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
-    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "edge-test", version: "0" } } }),
+    headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...headers },
+    body: JSON.stringify(message),
   });
+
+const initialize = (token?: string, headers: Record<string, string> = {}) =>
+  mcp(
+    { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "edge-test", version: "0" } } },
+    { ...(token ? { authorization: `Bearer ${token}` } : {}), ...headers },
+  );
+
+/** A session opened with no token, past its handshake: the headers that name it. */
+async function visit(): Promise<Record<string, string>> {
+  const opened = await initialize();
+  expect(opened.status).toBe(200);
+  const session = { "mcp-session-id": opened.headers.get("mcp-session-id")!, "mcp-protocol-version": "2025-06-18" };
+  expect((await mcp({ jsonrpc: "2.0", method: "notifications/initialized" }, session)).status).toBe(202);
+  return session;
+}
+
+const listProjects = { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "list_projects", arguments: {} } };
 
 test("discovery names the edge as the authorization server, with registration and S256", async () => {
   const resource = await fetch(`${EDGE}/.well-known/oauth-protected-resource/mcp`);
@@ -191,10 +207,20 @@ test("discovery names the edge as the authorization server, with registration an
   expect(server.scopes_supported).toContain("offline_access");
 });
 
-test("a request with no token is challenged towards the metadata, and one with a stale token told to sign in again", async () => {
-  const refused = await initialize();
+test("with no token the tools are listed, a call is challenged towards the metadata, and a stale token is told to sign in again", async () => {
+  const session = await visit();
+  const listed = await mcp({ jsonrpc: "2.0", id: 2, method: "tools/list" }, session);
+  expect(listed.status).toBe(200);
+  expect(await listed.text()).toContain('"name":"read_docs"');
+  const refused = await mcp(listProjects, session);
   expect(refused.status).toBe(401);
-  expect(refused.headers.get("www-authenticate") ?? "").toContain("resource_metadata=");
+  const challenge401 = refused.headers.get("www-authenticate") ?? "";
+  expect(challenge401).toContain(`resource_metadata="${EDGE}/.well-known/oauth-protected-resource/mcp"`);
+  expect(challenge401).not.toContain('realm="parcad"');
+  expect((await fetch(`${EDGE}/mcp`, { headers: { accept: "text/event-stream", ...session } })).status).toBe(405);
+  const browser = await initialize(undefined, { origin: "https://directory.example.test" });
+  expect(browser.headers.get("access-control-allow-origin")).toBe("https://directory.example.test");
+  expect(browser.headers.get("access-control-expose-headers")).toContain("WWW-Authenticate");
   const stale = await initialize("u-nobody:nogrant:notasecret");
   expect(stale.status).toBe(401);
   const challenge = stale.headers.get("www-authenticate") ?? "";
@@ -218,6 +244,12 @@ test("a listed address signs in, and its token reaches the host as a pass for a 
   expect(await reply.text()).toContain('"serverInfo"');
   const accounts = readdirSync(join(dir, "tenants"));
   expect(accounts.some((name) => /^u-[a-z2-7]{10}$/.test(name))).toBe(true);
+
+  // A client that connected before signing in keeps its session.
+  const session = await visit();
+  const called = await mcp(listProjects, { ...session, authorization: `Bearer ${token.access_token}` });
+  expect(called.status).toBe(200);
+  expect(await called.text()).toContain('"isError":false');
 });
 
 test("the host's own static token passes the edge untouched", async () => {

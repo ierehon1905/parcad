@@ -54,6 +54,16 @@ impl TenantId {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// Whoever reaches a host behind an edge without signing in. No account
+    /// is named this: [`TenantId::new`] refuses a leading `-`.
+    pub fn visitor() -> TenantId {
+        TenantId("-visitor".to_string())
+    }
+
+    pub fn is_visitor(&self) -> bool {
+        self.0 == "-visitor"
+    }
 }
 
 impl std::fmt::Display for TenantId {
@@ -398,6 +408,8 @@ pub struct Accounts {
     /// Accounts refused however they arrive, links included: what ends an
     /// edge account's links before they expire.
     revoked: Vec<TenantId>,
+    /// Whether a request with no bearer may list what `/mcp` offers.
+    lists_to_visitors: bool,
     /// Each account's tenant, made on its first request, so its
     /// `Arc<Tenant>`, its folder and its slots exist once.
     resolved: Mutex<HashMap<TenantId, Arc<Tenant>>>,
@@ -434,6 +446,7 @@ impl Accounts {
             policy: Policy::hosted(),
             edge: None,
             revoked: Vec::new(),
+            lists_to_visitors: false,
             resolved: Mutex::new(HashMap::new()),
         })
     }
@@ -442,6 +455,15 @@ impl Accounts {
     /// file does (parcad-infra's ACCOUNTS.md, "Phase 2, settled").
     pub fn trusting(mut self, edge: crate::edge::Edge) -> Accounts {
         self.edge = Some(edge);
+        self
+    }
+
+    /// Answer a request with no bearer that only lists what `/mcp` offers,
+    /// behind an edge ([`Accounts::visitor`]). Off by default: a client that
+    /// signs in only when `initialize` is refused never signs in with it on
+    /// (docs/HOSTING.md, "Listing before sign-in").
+    pub fn listing_without_sign_in(mut self) -> Accounts {
+        self.lists_to_visitors = true;
         self
     }
 
@@ -461,6 +483,18 @@ impl Accounts {
 
     pub fn edge(&self) -> Option<&crate::edge::Edge> {
         self.edge.as_ref()
+    }
+
+    /// The tenant a request with no bearer runs as, on a host behind an edge
+    /// that lists without sign-in, where signing in is one 401 away: `http.rs`
+    /// lets it list what `/mcp` offers and nothing else. It owns no folder,
+    /// and none is made for it.
+    pub fn visitor(&self) -> Option<Arc<Tenant>> {
+        if !self.lists_to_visitors {
+            return None;
+        }
+        self.edge.as_ref()?;
+        Some(Arc::new(Tenant::hosted(TenantId::visitor(), &self.tenants, &self.links, &self.policy)))
     }
 
     /// Hold every account to `policy` rather than [`Policy::hosted`]. Set

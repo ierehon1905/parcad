@@ -218,6 +218,43 @@ pub fn transport(assets: Arc<dyn Assets>, hosts: &[String]) -> Transport {
     )
 }
 
+/// What a visitor may ask before signing in: who the server is and what it
+/// offers. Directories probe a server with these, and an agent choosing one
+/// reads its tools; every other method is the 401 that starts a sign-in
+/// (docs/HOSTING.md, "Listing before sign-in").
+#[cfg(not(target_os = "emscripten"))]
+const LISTING: &[&str] = &[
+    "initialize",
+    "notifications/initialized",
+    "server/discover",
+    "ping",
+    "tools/list",
+    "resources/list",
+    "resources/templates/list",
+    "prompts/list",
+    "notifications/cancelled",
+];
+
+/// Whether a POST body to `/mcp` asks for nothing but [`LISTING`]: one
+/// JSON-RPC message, or a batch of them.
+#[cfg(not(target_os = "emscripten"))]
+pub(crate) fn only_listing(body: &[u8]) -> bool {
+    let Ok(message) = serde_json::from_slice::<serde_json::Value>(body) else {
+        return false;
+    };
+    let messages = match &message {
+        serde_json::Value::Array(batch) => batch.as_slice(),
+        single => std::slice::from_ref(single),
+    };
+    !messages.is_empty()
+        && messages.iter().all(|message| {
+            message
+                .get("method")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|method| LISTING.contains(&method))
+        })
+}
+
 /// The MCP endpoint, as a router to mount on the app's host.
 #[cfg(not(target_os = "emscripten"))]
 pub fn service(assets: Arc<dyn Assets>, hosts: &[String]) -> axum::Router {
@@ -1595,6 +1632,12 @@ impl ServerHandler for Parcad {
             .extensions
             .get::<http::request::Parts>()
             .map_or_else(tenant::current, |parts| tenant::carried(&parts.extensions));
+        if tenant.id.is_visitor() {
+            return Err(ErrorData::invalid_request(
+                "sign in first: this server lists its tools to anyone and runs them for an account",
+                None,
+            ));
+        }
         if !self.tool_router.has_route(&request.name) {
             return Err(ErrorData::invalid_params(
                 format!("no tool {:?}; tools/list names every tool this parcad has", request.name),
@@ -1861,6 +1904,12 @@ pub(crate) fn note_request(
             ));
         }
     }
+    // Nothing a visitor does is kept: anyone can make sessions, and the one a
+    // client opened before signing in is its account's from the first
+    // request that carries one.
+    if me.is_visitor() {
+        return Ok(client);
+    }
     let calls = activity.calls.entry(me.clone()).or_default();
     calls.last_seen = Some(Instant::now());
     if let Some(name) = client.clone() {
@@ -1900,6 +1949,9 @@ pub(crate) fn note_request(
 /// `initialize`, so a handshake is the one request that cannot name its own
 /// session on the way in.
 pub(crate) fn note_session(id: &str, client: Option<String>) {
+    if tenant::current().id.is_visitor() {
+        return;
+    }
     let mut activity = ACTIVITY.lock().unwrap_or_else(|e| e.into_inner());
     activity
         .sessions
@@ -2431,6 +2483,32 @@ fn error_data(message: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A listing is every message of the body naming a listing method; a
+    /// reply, a call hidden in a batch or a body that is not JSON-RPC is not.
+    #[test]
+    fn a_listing_names_only_listing_methods() {
+        for listing in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            r#"[{"jsonrpc":"2.0","id":3,"method":"ping"},{"jsonrpc":"2.0","id":4,"method":"resources/list"}]"#,
+        ] {
+            assert!(only_listing(listing.as_bytes()), "{listing}");
+        }
+        for not in [
+            r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"read_docs"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"resources/read","params":{"uri":"ui://parcad/viewer"}}"#,
+            r#"[{"jsonrpc":"2.0","id":2,"method":"tools/list"},{"jsonrpc":"2.0","id":3,"method":"tools/call"}]"#,
+            r#"{"jsonrpc":"2.0","id":1,"result":{}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":["tools/list"]}"#,
+            "[]",
+            "",
+            "tools/list",
+        ] {
+            assert!(!only_listing(not.as_bytes()), "{not}");
+        }
+    }
 
     /// A client validates the whole descriptor, so one typeless schema — input
     /// or output — hides every tool. Absent is fine; typeless is not. The

@@ -16,13 +16,14 @@
 //!   `parcad serve --hosted` binds where it is told, and then `/mcp` and every
 //!   `/api` route sit behind [`authenticate`], which resolves a bearer token to
 //!   one account's [`tenant::Tenant`] or answers 401 naming the fix. Only
-//!   `/api/health`, a front page saying where an agent connects, and that
-//!   page's icons stay open, and no frontend is served at all — a browser
-//!   cannot send a bearer. What an account wrote it fetches back from
-//!   `/api/exports/<name>` with the same bearer, or by the signed, expiring
-//!   link the reply carried (`signing.rs`), which is how a picture a model
-//!   pastes reaches the user's chat client; that is the one way a file on the
-//!   server reaches a client.
+//!   `/api/health`, a front page saying where an agent connects, that
+//!   page's icons and, behind an edge that lists without sign-in, the
+//!   listing methods of `/mcp` ([`visiting`]) stay open, and no frontend is
+//!   served at all — a browser cannot send a bearer. What an account wrote
+//!   it fetches back from `/api/exports/<name>` with the same bearer, or by
+//!   the signed, expiring link the reply carried (`signing.rs`), which is how
+//!   a picture a model pastes reaches the user's chat client; that is the one
+//!   way a file on the server reaches a client.
 //! - **No CORS headers.** Their absence is the access control. A page on another
 //!   origin can still *send* a JSON POST, but the preflight it requires will
 //!   fail and it can never read a reply. Adding a permissive layer here would
@@ -368,7 +369,7 @@ fn limited(refused: &crate::limits::Limited) -> Response {
 /// entered around `next` for the `/api` handlers, which run right here.
 async fn authenticate(
     State(accounts): State<Arc<tenant::Accounts>>,
-    mut request: Request,
+    request: Request,
     next: Next,
 ) -> Response {
     let resolved = match signed_link(&request) {
@@ -381,12 +382,52 @@ async fn authenticate(
             accounts.resolve(authorization)
         }
     };
-    let tenant = match resolved {
-        Ok(tenant) => tenant,
+    let (tenant, mut request) = match resolved {
+        Ok(tenant) => (tenant, request),
+        Err(tenant::Refused::NoToken) => match visiting(&accounts, request).await {
+            Ok(visit) => visit,
+            Err(refused) => return refused,
+        },
         Err(refused) => return refused.into_response(),
     };
     request.extensions_mut().insert(tenant.clone());
     tenant::scoped(tenant, next.run(request)).await
+}
+
+/// The most of a visitor's request body read: an `initialize` is under 2 KB.
+const VISITOR_BODY_BYTES: usize = 64 * 1024;
+
+/// Let a request with no bearer list what `/mcp` offers, on a host behind an
+/// edge that lists without sign-in, and answer anything else with the 401
+/// that starts a client's sign-in there. A session it opens is the account's from the first request that
+/// carries one. GET, the stream a session may open, is 405: a visitor has
+/// nothing to be sent.
+async fn visiting(accounts: &tenant::Accounts, request: Request) -> Result<(Arc<tenant::Tenant>, Request), Response> {
+    let refused = || tenant::Refused::NoToken.into_response();
+    let Some(visitor) = accounts.visitor().filter(|_| request.uri().path() == "/mcp") else {
+        return Err(refused());
+    };
+    match *request.method() {
+        axum::http::Method::POST => {}
+        axum::http::Method::DELETE => return Ok((visitor, request)),
+        axum::http::Method::GET => {
+            return Err((
+                StatusCode::METHOD_NOT_ALLOWED,
+                [(header::ALLOW, "POST, DELETE")],
+                "no stream before sign-in: a visitor may list what this server offers, and nothing is sent to one",
+            )
+                .into_response())
+        }
+        _ => return Err(refused()),
+    }
+    let (parts, body) = request.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, VISITOR_BODY_BYTES).await else {
+        return Err(refused());
+    };
+    if !mcp::only_listing(&bytes) {
+        return Err(refused());
+    }
+    Ok((visitor, Request::from_parts(parts, axum::body::Body::from(bytes))))
 }
 
 /// The link's fields, when the request is for an export and carries `sig`.
@@ -938,6 +979,111 @@ mod tests {
         assert!(!page.body.contains("email"), "{}", page.body);
         assert!(page.body.contains("a part unused for 30 days is deleted"), "{}", page.body);
         assert!(!page.body.contains("Bearer"), "{}", page.body);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A host behind an edge, listing without sign-in or not, with no tokens:
+    /// its folder, the edge's key pair, and its port.
+    fn behind_an_edge(listing: bool) -> (std::path::PathBuf, ring::signature::Ed25519KeyPair, u16) {
+        let dir = crate::tenant::tests::fresh_root("visitor");
+        let file = dir.join("tokens");
+        std::fs::write(&file, "").unwrap();
+        let (pair, edge) = crate::edge::tests::edge();
+        let mut accounts = tenant::Accounts::read(&file, &dir.join("tenants"), links()).unwrap().trusting(edge);
+        if listing {
+            accounts = accounts.listing_without_sign_in();
+        }
+        (dir, pair, on_a_spare_port(Some(accounts)))
+    }
+
+    /// One POST to `/mcp` in `session`, signed in or not.
+    fn mcp_post(port: u16, session: Option<&str>, authorization: Option<&str>, body: &str) -> Reply {
+        let mut headers = vec![("Content-Type", "application/json"), ("Accept", "application/json, text/event-stream")];
+        if let Some(session) = session {
+            headers.extend([("Mcp-Session-Id", session), ("Mcp-Protocol-Version", "2025-11-25")]);
+        }
+        if let Some(authorization) = authorization {
+            headers.push(("Authorization", authorization));
+        }
+        exchange(port, "POST", "/mcp", &headers, body)
+    }
+
+    /// The JSON-RPC reply a session's one SSE event carries.
+    fn event(reply: &Reply) -> serde_json::Value {
+        let data = reply.body.lines().find_map(|line| line.strip_prefix("data:")).expect("an event");
+        serde_json::from_str(data.trim()).expect("the event is a JSON-RPC reply")
+    }
+
+    /// Behind an edge that lists without sign-in, a request with no bearer
+    /// learns what the server offers and nothing more, and the session it
+    /// opened is the account's from the first request that carries a pass.
+    #[test]
+    fn a_visitor_lists_the_tools_and_runs_none_of_them() {
+        let (dir, pair, port) = behind_an_edge(true);
+        let initialize = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": { "protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": { "name": "directory", "version": "0" } },
+        })
+        .to_string();
+        let handshake = mcp_post(port, None, None, &initialize);
+        assert_eq!(handshake.status, 200, "{}", handshake.body);
+        assert_eq!(event(&handshake)["result"]["serverInfo"]["name"], "parcad");
+        let id = handshake.header("mcp-session-id").expect("a session").to_string();
+        let session = Some(id.as_str());
+        let initialized = mcp_post(port, session, None, r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#);
+        assert_eq!(initialized.status, 202, "{}", initialized.body);
+        let listed = mcp_post(port, session, None, r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#);
+        let tools = event(&listed)["result"]["tools"].as_array().map_or(0, Vec::len);
+        assert!(tools > 10, "a visitor sees every tool: {}", listed.body);
+        let discover = exchange(
+            port,
+            "POST",
+            "/mcp",
+            &[
+                ("Content-Type", "application/json"),
+                ("Accept", "application/json, text/event-stream"),
+                ("MCP-Protocol-Version", "2026-07-28"),
+                ("Mcp-Method", "server/discover"),
+            ],
+            r#"{"jsonrpc":"2.0","id":3,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}"#,
+        );
+        assert_eq!(discover.status, 200, "a 2026-07-28 client discovers without a session: {}", discover.body);
+
+        let call = r#"{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"list_projects","arguments":{}}}"#;
+        for refused in [
+            call,
+            r#"{"jsonrpc":"2.0","id":5,"method":"resources/read","params":{"uri":"ui://parcad/viewer"}}"#,
+            r#"[{"jsonrpc":"2.0","id":6,"method":"tools/list"},{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"list_projects"}}]"#,
+            "[]",
+            "not json",
+        ] {
+            let reply = mcp_post(port, session, None, refused);
+            assert_eq!(reply.status, 401, "{refused}: {}", reply.body);
+            assert!(reply.header("www-authenticate").is_some_and(|c| c.starts_with("Bearer")), "{refused}: {}", reply.head);
+        }
+        let stream = exchange(port, "GET", "/mcp", &[("Accept", "text/event-stream"), ("Mcp-Session-Id", id.as_str())], "");
+        assert_eq!(stream.status, 405, "nothing is streamed to a visitor: {}", stream.body);
+        assert_eq!(exchange(port, "GET", "/api/projects", &[], "").status, 401, "/api lists nothing to a visitor");
+
+        let pass = bearer(&crate::edge::tests::pass(&pair, "u-k3x9q2mf7a", crate::limits::unix_now()));
+        let signed_in = mcp_post(port, session, Some(&pass), call);
+        assert_eq!(signed_in.status, 200, "the session opened before sign-in carries on: {}", signed_in.body);
+        assert_eq!(event(&signed_in)["result"]["isError"], false, "{}", signed_in.body);
+        assert!(dir.join("tenants/u-k3x9q2mf7a").is_dir(), "the call ran as the account");
+        assert!(!dir.join("tenants/-visitor").exists(), "a visitor never has a folder");
+        let after = mcp_post(port, session, None, r#"{"jsonrpc":"2.0","id":8,"method":"tools/list"}"#);
+        assert_eq!(after.status, 404, "a visitor cannot use a session an account has taken: {}", after.body);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Off, which is the default, a request with no bearer is refused at
+    /// `initialize`, as before.
+    #[test]
+    fn without_the_switch_a_visitor_is_refused_at_initialize() {
+        let (dir, _, port) = behind_an_edge(false);
+        let initialize = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"c","version":"0"}}}"#;
+        assert_eq!(mcp_post(port, None, None, initialize).status, 401);
+        assert_eq!(exchange(port, "GET", "/mcp", &[("Accept", "text/event-stream")], "").status, 401);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

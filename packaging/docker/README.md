@@ -159,6 +159,7 @@ workspace, and the front page says so.
 | `PARCAD_BUILDS` | unset (the container's cores) | builds in flight across every account; `--builds`. 2 on a 2 vCPU / 4 GB box |
 | `PARCAD_EDGE_KEY` | unset | the sign-in edge's Ed25519 public key, base64 (edge/README.md); with `PARCAD_EDGE_ORIGIN`, a pass it signs opens its account. `--edge-key` |
 | `PARCAD_EDGE_ORIGIN` | unset | the name the edge forwards to, which its passes are addressed to: `origin.example.com`; `--edge-origin`. Set both or neither |
+| `PARCAD_LIST_WITHOUT_SIGN_IN` | unset | `1` answers `initialize`, `tools/list` and the other listings of `/mcp` with no bearer, behind an edge; every tool call still signs in. Off, because a client that signs in only when `initialize` is refused never does (docs/HOSTING.md, "Listing before sign-in"); `--list-without-sign-in` |
 | `PARCAD_REVOKED` | unset | account ids refused by token, pass and link alike, separated by spaces or commas; `--revoked` |
 | `PARCAD_STATS_DIR` | `/data/stats` | where the daily totals go: calls by tool, builds, failures, new and active accounts, no account id; `off` keeps none. Read them with `docker exec parcad parcad stats /data/stats`; `--stats-dir` |
 | `PARCAD_SEED_DIR` | `/opt/parcad/examples` | the parts every account is shipped, read-only; the CLI's own lookup is a macOS bundle's `../Resources/examples`, so the image names it |

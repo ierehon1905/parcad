@@ -23,6 +23,7 @@ services:
       PARCAD_EDGE_KEY: ${PARCAD_EDGE_KEY:-}
       PARCAD_EDGE_ORIGIN: ${PARCAD_EDGE_ORIGIN:-}
       PARCAD_REVOKED: ${PARCAD_REVOKED:-}
+      PARCAD_LIST_WITHOUT_SIGN_IN: ${PARCAD_LIST_WITHOUT_SIGN_IN:-}
       # Daily totals, no account id: /data/stats unless set; off keeps none.
       PARCAD_STATS_DIR: ${PARCAD_STATS_DIR:-}
     ports:

@@ -3,14 +3,15 @@
  * authorization server (discovery, registration, tokens, the sign-in pages)
  * and the edge in front of `/mcp`: a request with one of its tokens goes on to
  * the host with a pass naming the account; a request with the host's own
- * static token goes on untouched, for the host to check.
+ * static token goes on untouched, for the host to check; one with no token
+ * goes on as a visitor, whose listing the host answers and nothing else.
  * parcad-infra's ACCOUNTS.md has the design; edge/README.md how to run it.
  */
 
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 
 import type { Env } from "./env";
-import { asAccount, isStaticToken, untouched } from "./forward";
+import { asAccount, asVisitor, isStaticToken, untouched } from "./forward";
 import { pages } from "./signin";
 
 /** Long, because claude.ai often fails to refresh (anthropics/claude-ai-mcp #228); a grant is revoked by deleting it. */
@@ -57,10 +58,20 @@ function explained(response: Response): Response {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
+/** What a request with no bearer may be: a listing, a session's stream, the session's end. The host decides which it answers. */
+const VISITING = new Set(["GET", "POST", "DELETE"]);
+
 export default {
   async fetch(request, env, ctx) {
     if (new URL(request.url).pathname !== "/mcp") return provider(env).fetch(request, env, ctx);
     if (isStaticToken(request)) return untouched(request, env);
+    if (!request.headers.has("authorization") && VISITING.has(request.method)) {
+      // The host lists its tools to anyone. What it refuses gets the library's
+      // challenge instead of the host's, since that one names the metadata a
+      // client signs in from.
+      const visit = await asVisitor(request.clone(), env);
+      if (visit.status !== 401) return visit;
+    }
     return explained(await provider(env).fetch(request, env, ctx));
   },
 } satisfies ExportedHandler<Env>;
