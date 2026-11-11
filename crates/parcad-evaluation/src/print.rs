@@ -29,6 +29,10 @@ pub const MINIMUM_MM: f64 = 0.8;
 /// `measure_wall_thickness` at 6000 is the finer look.
 pub const SAMPLES: usize = 2000;
 
+/// A saw tilts to 45°, so an edge of a sheet body enclosing at least this
+/// much material is a bevel or a mitre a saw cuts, not a feather.
+pub const SAW_WEDGE_DEG: f64 = 45.0;
+
 /// How many findings of each kind the reply lists; the rest are counted.
 const LISTED: usize = 6;
 /// How many of a body's pieces the reply lists, largest first.
@@ -64,6 +68,10 @@ pub struct PrintCheck {
     /// reference body is never printed and is not here.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub bodies: Vec<BodyPrint>,
+    /// The bodies that are not printed (`.made()`, `.bought()`) and what
+    /// they are held to instead; absent when every body prints.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub not_printed: Option<String>,
     pub floor_mm: f64,
     pub minimum_mm: f64,
     /// Faces at or under this angle to the bed are overhang.
@@ -326,7 +334,7 @@ pub fn pieces(snapshot: &EvaluationSnapshot, s: &parcad_occt::Success, overhang:
         None => snapshot.bodies > 1,
         Some(name) => snapshot.named_bodies.iter().any(|b| &b.name == name && b.pieces > 1),
     };
-    let printed: Vec<&Overhang> = overhang.iter().filter(|o| split(o)).collect();
+    let printed: Vec<&Overhang> = overhang.iter().filter(|o| split(o) && Holding::of(snapshot, o.body.as_deref()).is_none()).collect();
     if printed.is_empty() {
         return Vec::new();
     }
@@ -552,6 +560,26 @@ impl PrintFinding {
         }
     }
 
+    /// A body that is not printed, in several pieces: one sheet part or one
+    /// bought part is one solid, so a split is a cut that ran through it.
+    fn split_unprinted(body: &crate::BodyReport) -> Self {
+        let what = body.made.as_deref().or(body.bought.as_deref()).unwrap_or("not printed");
+        Self {
+            kind: "pieces",
+            what: format!("body `{}` ({what}) is {} separate pieces", body.name, body.pieces),
+            fix: "a cut ran through it, or two parts share one body: stop the cut short, or give each part its own body",
+            body: Some(body.name.clone()),
+            thickness_mm: None,
+            thin_kind: None,
+            removed_mm3: None,
+            unsupported_mm2: None,
+            at: None,
+            opposite: None,
+            between: None,
+            pieces: Vec::new(),
+        }
+    }
+
     fn collision(c: &Collision) -> Self {
         let body = c.body.as_deref().map(|b| format!(" in body `{b}`")).unwrap_or_default();
         Self {
@@ -585,6 +613,74 @@ fn extent(sample: &ThicknessSample) -> String {
     }
 }
 
+/// What a body that is not printed is held to instead of a printer.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Holding {
+    /// Cut from a sheet (`.made(sheet(t))`): a wall under the floor fails,
+    /// as does an edge sharper than a saw bevels; nothing else about
+    /// printing applies.
+    Sheet,
+    /// Bought (`.bought()`): its shape stands in for a catalogue part, so
+    /// none of it is judged.
+    Bought,
+}
+
+impl Holding {
+    /// `None` for a body that prints, and for the one shape a script returns.
+    fn of(snapshot: &EvaluationSnapshot, body: Option<&str>) -> Option<Self> {
+        let report = snapshot.named_bodies.iter().find(|b| Some(b.name.as_str()) == body)?;
+        if report.made.is_some() {
+            Some(Holding::Sheet)
+        } else if report.bought.is_some() {
+            Some(Holding::Bought)
+        } else {
+            None
+        }
+    }
+
+    fn fails(self, sample: &ThicknessSample) -> bool {
+        match self {
+            Holding::Bought => false,
+            Holding::Sheet => match sample.kind {
+                ThinKind::Wall => sample.thickness_mm < FLOOR_MM,
+                ThinKind::Feather => sample.wedge_deg.is_none_or(|w| w < SAW_WEDGE_DEG - 0.5),
+                ThinKind::Edge => false,
+            },
+        }
+    }
+}
+
+/// The reply's line on bodies the check does not hold to a printer.
+fn not_printed(snapshot: &EvaluationSnapshot) -> Option<String> {
+    let mut groups: Vec<(String, Vec<&str>)> = Vec::new();
+    for b in &snapshot.named_bodies {
+        let label = match (&b.made, &b.bought) {
+            (Some(made), _) => format!("made as {made}"),
+            (None, Some(_)) => "bought".to_string(),
+            _ => continue,
+        };
+        match groups.iter_mut().find(|(l, _)| *l == label) {
+            Some((_, names)) => names.push(&b.name),
+            None => groups.push((label, vec![&b.name])),
+        }
+    }
+    if groups.is_empty() {
+        return None;
+    }
+    let named = |names: &[&str]| match names {
+        [one] => format!("`{one}`"),
+        [first, .., last] => format!("{} bodies, `{first}` to `{last}`", names.len()),
+        [] => String::new(),
+    };
+    let listed: Vec<String> = groups.iter().map(|(label, names)| format!("{} {label}", named(names))).collect();
+    Some(format!(
+        "{}: not judged as prints. A body cut from a sheet fails only for a wall under floor_mm or \
+         an edge sharper than a saw's {SAW_WEDGE_DEG}° bevel; a bought body is not judged; both are \
+         still in named_bodies and between_bodies",
+        listed.join("; ")
+    ))
+}
+
 /// Judge the part. `pieces` is [`pieces`] of the same build. `sweep` runs the
 /// thickness sweep at the threshold given and is called once; `None` for a
 /// surface, which has no material to be thick and nothing to print.
@@ -601,8 +697,12 @@ pub fn judge(
     let mut failed = Vec::new();
     let mut flagged = Vec::new();
     let mut seen: Vec<[f64; 3]> = Vec::new();
+    let judged = |sample: &ThicknessSample| match Holding::of(snapshot, sample.body.as_deref()) {
+        None => true,
+        Some(holding) => holding.fails(sample),
+    };
     for sample in result.thin_spots.iter().chain(result.min.iter()) {
-        if sample.kind == ThinKind::Edge || sample.thickness_mm >= MINIMUM_MM || seen.contains(&sample.at) {
+        if sample.kind == ThinKind::Edge || sample.thickness_mm >= MINIMUM_MM || seen.contains(&sample.at) || !judged(sample) {
             continue;
         }
         seen.push(sample.at);
@@ -619,7 +719,7 @@ pub fn judge(
         result
             .min
             .as_ref()
-            .filter(|m| m.kind != ThinKind::Edge)
+            .filter(|m| m.kind != ThinKind::Edge && Holding::of(snapshot, m.body.as_deref()).is_none())
             .map(PrintFinding::thin)
     });
     // A part in pieces is read before anything about its walls: first in
@@ -634,10 +734,20 @@ pub fn judge(
         }
         split.extend(PrintFinding::floating(body));
     }
+    // A body made another way is still one piece or a defect; it has no bed
+    // for a piece to float above.
+    named.extend(
+        snapshot
+            .named_bodies
+            .iter()
+            .filter(|b| b.pieces > 1 && Holding::of(snapshot, Some(&b.name)).is_some())
+            .map(PrintFinding::split_unprinted),
+    );
     failed.splice(0..0, split);
     flagged.splice(0..0, named);
     flagged.extend(snapshot.collisions.iter().map(PrintFinding::collision));
-    let bodies: Vec<BodyPrint> = overhang.iter().map(BodyPrint::of).collect();
+    let bodies: Vec<BodyPrint> =
+        overhang.iter().filter(|o| Holding::of(snapshot, o.body.as_deref()).is_none()).map(BodyPrint::of).collect();
     let overhang_deg = overhang.first().map_or(45.0, |o| o.threshold_deg);
     flagged.extend(bodies.iter().filter_map(|b| b.finding(overhang_deg)));
     let unlisted = failed.len().saturating_sub(LISTED) + flagged.len().saturating_sub(LISTED);
@@ -656,6 +766,7 @@ pub fn judge(
         unlisted,
         thinnest,
         bodies,
+        not_printed: not_printed(snapshot),
         floor_mm: FLOOR_MM,
         minimum_mm: MINIMUM_MM,
         overhang_deg,
@@ -920,6 +1031,7 @@ mod tests {
             unlisted: 0,
             thinnest: None,
             bodies: Vec::new(),
+            not_printed: None,
             floor_mm: FLOOR_MM,
             minimum_mm: MINIMUM_MM,
             overhang_deg: 45.0,
@@ -989,6 +1101,69 @@ mod tests {
             support_mm3: None,
             sampled: false,
         }
+    }
+
+    /// Plywood is not a print. A board cut from a sheet keeps its 45° bevel
+    /// and its 40° mitre (a 50° wedge), its 0.5 mm reading and its overhang
+    /// without a word, and a bought magnet is not judged at all; what no
+    /// saw makes still fails — a grazing cut's 15° feather, a 0.2 mm wall —
+    /// and a printed bracket beside them is judged exactly as before.
+    #[test]
+    fn a_sheet_body_is_held_to_a_saw_and_a_bought_body_is_not_judged() {
+        let mut success = cubes(&[([0.0, 0.0, 0.0], 18.0), ([40.0, 0.0, 0.0], 4.0), ([60.0, 0.0, 0.0], 10.0)]);
+        success.bodies = ["board", "magnet", "bracket"]
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                serde_json::from_value(serde_json::json!({
+                    "name": name, "faces": 6, "edges": 12, "triangle_start": 12 * i, "triangle_count": 12,
+                }))
+                .unwrap()
+            })
+            .collect();
+        let mut snap = snapshot();
+        snap.collisions.clear();
+        snap.named_bodies = parcad_occt::measure_bodies(&success).iter().map(|b| crate::BodyReport::of(b, None)).collect();
+        snap.named_bodies[0].made = Some("sheet, 18 mm birch plywood".into());
+        snap.named_bodies[1].bought = Some("10 x 3 mm magnet".into());
+        let wedge = |deg: f64, body: &str| ThicknessSample { wedge_deg: Some(deg), ..sample(ThinKind::Feather, 0.0, ("face", "mitre"), Some(body)) };
+
+        let fine = vec![
+            wedge(45.0, "board"),
+            wedge(50.0, "board"),
+            sample(ThinKind::Wall, 0.5, ("lip", "floor"), Some("board")),
+            wedge(5.0, "magnet"),
+            sample(ThinKind::Wall, 0.1, ("ring", "bore"), Some("magnet")),
+        ];
+        let hanging = |body: &str| Overhang { body: Some(body.into()), unsupported_mm2: 300.0, face_count: 1, ..as_drawn() };
+        let check = judge(&snap, &[hanging("board"), hanging("magnet")], &[], &mut sweep_of(fine)).unwrap().unwrap();
+        assert_eq!((check.verdict, check.failed.len(), check.flagged.len()), ("passed", 0, 0), "{:?}", check.flagged);
+        assert!(check.bodies.is_empty(), "neither body prints, so neither has an orientation");
+        assert!(check.thinnest.is_none(), "{:?}", check.thinnest);
+        assert_eq!(
+            check.not_printed.as_deref(),
+            Some(
+                "`board` made as sheet, 18 mm birch plywood; `magnet` bought: not judged as prints. A body cut from a sheet \
+                 fails only for a wall under floor_mm or an edge sharper than a saw's 45° bevel; a bought body is not judged; \
+                 both are still in named_bodies and between_bodies"
+            )
+        );
+
+        let defects = vec![
+            wedge(15.0, "board"),
+            sample(ThinKind::Wall, 0.2, ("lip", "floor"), Some("board")),
+            sample(ThinKind::Wall, 0.5, ("rib", "web"), Some("bracket")),
+        ];
+        let check = judge(&snap, &[hanging("bracket")], &[], &mut sweep_of(defects)).unwrap().unwrap();
+        assert_eq!(check.verdict, "failed");
+        let failed: Vec<(Option<&str>, Option<&str>)> = check.failed.iter().map(|f| (f.body.as_deref(), f.thin_kind)).collect();
+        assert_eq!(failed, [(Some("board"), Some("feather")), (Some("board"), Some("wall"))]);
+        let flagged: Vec<(&str, Option<&str>)> = check.flagged.iter().map(|f| (f.kind, f.body.as_deref())).collect();
+        assert_eq!(flagged, [("thin", Some("bracket")), ("overhang", Some("bracket"))], "the printed body is judged as before");
+
+        snap.named_bodies[0].pieces = 2;
+        let check = judge(&snap, &[], &[], &mut sweep_of(Vec::new())).unwrap().unwrap();
+        assert_eq!(check.flagged[0].what, "body `board` (sheet, 18 mm birch plywood) is 2 separate pieces");
     }
 
     /// The plate stand's two defects in miniature: a 10 mm cube on the bed

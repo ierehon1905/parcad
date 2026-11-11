@@ -1,7 +1,24 @@
 # Sheet goods: a part says how each body is made
 
-Design, 2026-11-11. Not implemented. The picture is
+Design, 2026-11-11. The picture is
 [images/sheet-goods-shelves.png](images/sheet-goods-shelves.png).
+
+**Status, 2026-11-12.** Only the first piece is built: a body can say it is
+not printed, and the print check stops judging it as a print.
+
+- **What is built:**
+  - `.made(sheet(18))` and `.bought("...")` mark a body. They are stored as
+    `made` and `bought` on each `bodies` entry, with the graph feature
+    `body-process`.
+  - `print_check` leaves those bodies out of bed fit, overhang and the FDM
+    wall band.
+  - A sheet body still fails for a wall under `floor_mm` or for an edge
+    sharper than a saw's 45° bevel (`Holding` in `print.rs`).
+  - The reply's `not_printed` line names those bodies.
+  - The case is `eval/cases/sheet-corner.json`.
+- **What is deferred:** the cut list, the sheet estimate, the drawings, the
+  CSV and the panel measurement. They are a different market from printed
+  parts, with no demand yet. This note keeps them for when there is.
 
 This note builds on `docs/notes/process-architecture.md`, which is untracked
 and lives in the main checkout. That note designs a declared process for every

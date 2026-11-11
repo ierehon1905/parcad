@@ -1,0 +1,167 @@
+{
+  "name": "sheet-corner",
+  "script": "eval/scripts/sheet-corner.js",
+  "why": "A body cut from a sheet or bought is not measured as a print. Two 18 mm plywood boards in a 45° mitre and a cleat ripped at 45° are .made(sheet(18)), a magnet is .bought(), and a printed clip carries a 20 x 6 mm lip: the clip is the only body in `overhang`, at 120 mm², and a sheet or bought body measured there fails the case. Before .made() the plant shelves' 45° rips and 40° mitres read as feathers and a cleat was blunted by 2 mm to quiet the check (docs/SHEET_GOODS.md).",
+  "brep": {
+    "size": [
+      200.0,
+      318.0,
+      308.0
+    ],
+    "volume_mm3": 2273675.619,
+    "area_mm2": 302584.834,
+    "triangles": 336,
+    "bodies": 4,
+    "voids": 0,
+    "stands_on_mm2": 3600.0,
+    "stands_on_patches": 1,
+    "watertight": false,
+    "faces": 29,
+    "edges": 114,
+    "curves": 56,
+    "requires": [
+      "body-process"
+    ],
+    "named_bodies": {
+      "cleat": {
+        "size": [
+          200.0,
+          18.0,
+          58.0
+        ],
+        "volume_mm3": 176400.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "clip": {
+        "size": [
+          20.0,
+          16.0,
+          8.0
+        ],
+        "volume_mm3": 1840.0,
+        "faces": 8,
+        "edges": 36,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "magnet": {
+        "size": [
+          9.995,
+          9.998,
+          3.0
+        ],
+        "volume_mm3": 235.619,
+        "faces": 3,
+        "edges": 6,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "side": {
+        "size": [
+          200.0,
+          18.0,
+          300.0
+        ],
+        "volume_mm3": 1047600.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      },
+      "top": {
+        "size": [
+          200.0,
+          300.0,
+          18.0
+        ],
+        "volume_mm3": 1047600.0,
+        "faces": 6,
+        "edges": 24,
+        "watertight": true,
+        "pieces": 1,
+        "voids": 0
+      }
+    },
+    "between_bodies": {
+      "cleat/clip": {
+        "verdict": "clear",
+        "clearance_mm": 202.951,
+        "interference_mm3": 0.0
+      },
+      "cleat/magnet": {
+        "verdict": "clear",
+        "clearance_mm": 202.951,
+        "interference_mm3": 0.0
+      },
+      "clip/magnet": {
+        "verdict": "clear",
+        "clearance_mm": 55.0,
+        "interference_mm3": 0.0
+      },
+      "side/cleat": {
+        "verdict": "touching",
+        "clearance_mm": 0.0,
+        "interference_mm3": 0.0,
+        "contact_mm2": 11600.0,
+        "contact_patches": 1
+      },
+      "side/clip": {
+        "verdict": "clear",
+        "clearance_mm": 128.269,
+        "interference_mm3": 0.0
+      },
+      "side/magnet": {
+        "verdict": "clear",
+        "clearance_mm": 128.269,
+        "interference_mm3": 0.0
+      },
+      "side/top": {
+        "verdict": "touching",
+        "clearance_mm": 0.0,
+        "interference_mm3": 0.0,
+        "contact_mm2": 5091.169,
+        "contact_patches": 1
+      },
+      "top/cleat": {
+        "verdict": "clear",
+        "clearance_mm": 125.3,
+        "interference_mm3": 0.0
+      },
+      "top/clip": {
+        "verdict": "touching",
+        "clearance_mm": 0.0,
+        "interference_mm3": 0.0,
+        "contact_mm2": 200.0,
+        "contact_patches": 1
+      },
+      "top/magnet": {
+        "verdict": "touching",
+        "clearance_mm": 0.0,
+        "interference_mm3": 0.0,
+        "contact_mm2": 78.54,
+        "contact_patches": 1
+      }
+    },
+    "overhang": {
+      "clip": {
+        "up": [
+          0.0,
+          0.0,
+          1.0
+        ],
+        "unsupported_mm2": 120.0,
+        "bed_mm2": 200.0,
+        "faces": 1,
+        "bridges": 0,
+        "support_mm3": 720.0
+      }
+    }
+  }
+}

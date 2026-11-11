@@ -598,6 +598,15 @@ pub struct BodyReport {
     /// `size` or `stands_on`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub reference: bool,
+    /// How the body is made when it is not printed (`.made()`), as
+    /// "sheet, 18 mm poplar plywood": the print check holds it to that
+    /// process instead of to a printer's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub made: Option<String>,
+    /// What the body is when it is bought (`.bought()`): in fit and
+    /// interference checks like any body, never judged as a print.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bought: Option<String>,
     pub size: [f64; 3],
     pub bounds_min: [f64; 3],
     pub bounds_max: [f64; 3],
@@ -635,6 +644,8 @@ impl BodyReport {
             name: b.name.clone(),
             kind: if solid { "solid" } else { "surface" },
             reference: b.reference,
+            made: None,
+            bought: None,
             size: round_point([size.x, size.y, size.z]),
             bounds_min: round_point([b.bounds.min.x, b.bounds.min.y, b.bounds.min.z]),
             bounds_max: round_point([b.bounds.max.x, b.bounds.max.y, b.bounds.max.z]),
@@ -1021,6 +1032,48 @@ pub struct Region {
     pub visible: bool,
 }
 
+/// Copy each body's `.made()` and `.bought()` from the graph onto its report,
+/// where the print check and a reader find them.
+pub fn declare_processes(doc: &Doc, named_bodies: &mut [BodyReport]) {
+    let Some(declared) = doc.bodies() else { return };
+    for report in named_bodies {
+        if let Some(body) = declared.iter().find(|b| b.name == report.name) {
+            report.made = body.made.as_ref().map(parcad_core::graph::Process::describe);
+            report.bought = body.bought.clone();
+        }
+    }
+}
+
+/// Which of a part's bodies a printer would see.
+enum Printed {
+    /// Every one the part counts: the part's own size is what prints.
+    All,
+    /// Some are made another way or bought: the bed holds these, this big.
+    Some(parcad_core::graph::V3),
+    /// None of them.
+    None,
+}
+
+fn printed_size(named_bodies: &[BodyReport]) -> Printed {
+    let own: Vec<&BodyReport> = named_bodies.iter().filter(|b| !b.reference).collect();
+    if own.iter().all(|b| b.made.is_none() && b.bought.is_none()) {
+        return Printed::All;
+    }
+    let printed: Vec<&&BodyReport> = own.iter().filter(|b| b.kind == "solid" && b.made.is_none() && b.bought.is_none()).collect();
+    if printed.is_empty() {
+        return Printed::None;
+    }
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    for b in printed {
+        for i in 0..3 {
+            min[i] = min[i].min(b.bounds_min[i]);
+            max[i] = max[i].max(b.bounds_max[i]);
+        }
+    }
+    Printed::Some(parcad_core::graph::V3::new(max[0] - min[0], max[1] - min[1], max[2] - min[2]))
+}
+
 /// Describe one evaluation.
 ///
 /// Takes the document as well as the measurements because a treatment is a fact
@@ -1037,6 +1090,9 @@ pub fn describe(
     kernel_ms: u64,
 ) -> EvaluationSnapshot {
     let kind = part_kind(s);
+    let mut named_bodies = named_bodies;
+    declare_processes(doc, &mut named_bodies);
+    let printed = printed_size(&named_bodies);
     let solids: Vec<&BodyReport> = named_bodies.iter().filter(|b| b.kind == "solid" && !b.reference).collect();
     let (volume, watertight, non_manifold, centroid) = match kind {
         "solid" => (
@@ -1128,13 +1184,16 @@ pub fn describe(
         between_bodies,
         mechanism: doc.mechanism.as_ref().and_then(|m| m.resolve().ok()).map(|linkage| checks::MechanismPath::from(&linkage)),
         stands_on: if kind == "solid" { report.stands_on.as_ref().map(StandsOn::from) } else { None },
-        prints_on: if kind == "solid" {
-            parcad_core::measure::fits_beds(report.size)
+        prints_on: match (kind, printed) {
+            ("solid", Printed::All) => parcad_core::measure::fits_beds(report.size)
                 .into_iter()
                 .map(PrintsOn::from)
-                .collect()
-        } else {
-            Vec::new()
+                .collect(),
+            ("solid", Printed::Some(size)) => parcad_core::measure::fits_beds(size)
+                .into_iter()
+                .map(PrintsOn::from)
+                .collect(),
+            _ => Vec::new(),
         },
         tags: report.tags.clone(),
         tag_extents: extents,

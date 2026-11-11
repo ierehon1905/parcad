@@ -4,7 +4,7 @@
  * same words; `crates/parcad-core/src/checks.rs` carries the synonym table.
  */
 import { describe, expect, test } from "bun:test";
-import { box, build, cylinder, type Check } from "./dsl";
+import { box, build, cylinder, sheet, type Check } from "./dsl";
 
 function part(checks: unknown) {
   const top = box(60, 40, 3).tag("top");
@@ -123,5 +123,33 @@ describe("print orientation", () => {
     expect(() => build(box(1, 1, 1).printedUp("-z"))).toThrow("return it as a named body");
     expect(() => box(1, 1, 1).printedUp("up" as never)).toThrow('"+z" (as drawn)');
     expect(() => box(1, 1, 1).printedUp([0, 0, 0])).toThrow("points nowhere");
+  });
+});
+
+describe("how a body is made", () => {
+  test("made and bought land on the bodies the object names, and are stamped as one feature", () => {
+    const ply = sheet(18, { material: "birch plywood" });
+    const shelf = box(600, 250, 18).at(0, 0, 9).made(ply);
+    const magnet = cylinder(5, 3).at(0, 0, -1.5).bought("10 x 3 mm magnet");
+    const bracket = box(40, 30, 4).at(0, -100, -2);
+    const doc = build({ shelf, magnet, bracket });
+    const bodies = (doc.nodes[doc.root] as { bodies: { name: string; made?: unknown; bought?: string }[] }).bodies;
+    expect(bodies[0].made).toEqual({ kind: "sheet", thickness_mm: 18, material: "birch plywood" });
+    expect(bodies[1].bought).toBe("10 x 3 mm magnet");
+    expect(bodies[2].made === undefined && bodies[2].bought === undefined).toBe(true);
+    expect(doc.requires?.map((r) => r.feature)).toEqual(["body-process"]);
+    expect(build({ shelf: box(1, 1, 1).made(sheet(4)) }).nodes.at(-1)).toMatchObject({ bodies: [{ made: { kind: "sheet", thickness_mm: 4 } }] });
+  });
+
+  test("a mark used inside another shape, on a lone shape, or beside another mark is refused by name", () => {
+    const board = box(10, 10, 2).made(sheet(2));
+    expect(() => build({ a: board.union(box(1, 1, 1)) })).toThrow("a shape marked .made() was used to build another shape");
+    expect(() => build(box(1, 1, 1).bought("magnet"))).toThrow("return it as a named body");
+    expect(() => build({ a: box(1, 1, 1), b: box(1, 1, 1).made(sheet(2)).bought("panel") })).toThrow("a body is either a reference, made, or bought");
+    expect(() => build({ a: box(1, 1, 1), b: box(1, 1, 1).made(sheet(2)).printedUp("-z") })).toThrow("leave .printedUp() off it");
+    expect(() => sheet(0)).toThrow("sheet(18)");
+    expect(() => sheet(18, { kerf: 4 } as never)).toThrow("Its options are");
+    expect(() => box(1, 1, 1).made(18 as never)).toThrow(".made(sheet(18))");
+    expect(() => box(1, 1, 1).bought("")).toThrow('.bought("608 bearing")');
   });
 });

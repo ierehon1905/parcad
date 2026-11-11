@@ -202,6 +202,24 @@ never judged: a face exactly at 45° is listed, and a body with any
 unsupported area is a `flagged` finding naming its orientation, its worst
 face and its bridges. Reference bodies and surfaces are not measured.
 
+A body that is not printed is not measured as one either.
+`.made(sheet(18))` and `.bought("...")` land on `NamedBody::made` and
+`bought` (feature id `body-process`). The worker skips its overhang, and the
+host's `print::judge` holds it to its process (`Holding`):
+
+- **Bought:** nothing is judged, because the shape stands in for a catalogue
+  part.
+- **Sheet:**
+  - It has no bed, no overhang and no FDM wall band.
+  - A wall under `floor_mm` still fails, and so does a feather sharper than
+    a saw's 45° bevel. A 45° rip or a 40° mitre (a 50° wedge) is a cut, not a
+    defect.
+  - A sheet body in several pieces is flagged.
+
+`prints_on` is judged on the printed bodies alone, and the reply's
+`not_printed` line names the rest. docs/SHEET_GOODS.md is the larger design
+this is the first step of.
+
 Pieces are the fourth, and the first a reader meets. A body whose mesh is
 several free-standing pieces (`Tessellation::pieces`, the same walk that
 counts `bodies`) has each piece listed with its bounds, volume and height
