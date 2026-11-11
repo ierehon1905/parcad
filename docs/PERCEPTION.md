@@ -1795,6 +1795,74 @@ the recipe under `TurnCheck` in front of it. The window does not yet scrub
 the motion, and `evaluate_part`'s views do not draw the worst pose; the
 reply's `worst_pose` is what both will read.
 
+## 25. A reply that fits — parts in many bodies
+
+A reply the client hides does not exist for the model (§15, and
+docs/GOTCHAS.md, "A tool reply over 50,000 characters…"). `read_docs` was
+held to that in September; evaluate_part and edit_part were not, and a part
+in many bodies passed the limit by itself. The plant-shelves session
+(2026-11-08..11) lost 9 of 32 of those replies to "result (87,631
+characters) exceeds maximum allowed tokens", and §24's motion trials lost
+three 55 KB many-body replies the same way. In the largest, 64,610
+characters were `between_bodies` — 465 pairs of 31 bodies, most of them a
+wall clear of a pot by a metre — 12,447 `named_bodies`, and 8,728
+`print_check`.
+
+Since 2026-11-12 `reply_budget.rs` holds every evaluate_part and edit_part
+reply under 20,000 characters. Each list that grows with the part is ranked
+problems first and cut at a cap: 10 bodies (one of the part's with a defect
+first, references last), 24 pairs (the deepest interference first, then
+contact, then the least clearance; a pair of two references after every pair
+of the part), 6 printed bodies (most overhang first), 24 tag extents, 24
+treatments. Right after a cut list, `<list>_unlisted` says how many it left
+out, counts the rest — `between_bodies_unlisted` by verdict, zeros included,
+with the least clearance among them — and names the argument that lists
+them: `bodies: [...]` for bodies and pairs, `tags: [...]` for tags, cuts and
+regions. A part that still does not fit has its lists halved in tiers,
+detail first and a failed check's evidence last, and whatever the caller
+named after everything else. 201 of the 205 corpus replies are
+byte-identical; the other four differ only in sampled wall positions and
+mesh counts, which differ run to run. The window still gets every pair.
+
+| part | bodies | pairs | 0.0.24 | now |
+|---|---|---|---|---|
+| plant shelves, v4 after its first edit | 31 | 465 | 95,076 | 18,323 |
+| plant shelves, two later versions | 25 | 300 | 67,658 · 66,022 | 19,865 · 18,565 |
+| plant-shelves-v9 | 20 | 190 | 49,444 | 18,996 |
+| eval/scripts/pantry-rack.js | 31 | 465 | 88,214 | 13,785 |
+| 60 generated cubes (the kernel test) | 60 | 1,770 | 285,175 | 18,248 |
+
+Measured on haiku 5.5, 4 trials per arm, `eval/field/which-jar-hits-the-shelf.md`:
+24 leaning jars on a four-shelf rack, one of them 4.034 mm into the shelf
+above — a number no arithmetic on the script gives (ignoring the lean says
+it fits, the trigonometry on it says 4.33).
+
+| arm | 0.0.24 | budget | budget, zeros stated |
+|---|---|---|---|
+| thinking | 2/4 SOUND, 2 VOID · 11–14 calls · 1–2 replies hidden per trial | 4/4 · 5–8 calls · none hidden | 3/4 (1 LUCKY) · 5–6 calls |
+| no thinking | 0/4 (1 LUCKY, 2 WRONG at 4.32 and 4.328, 1 VOID) · 10–15 calls · 1–3 hidden | 4/4 · 5–6 calls | 4/4 · 5–8 calls |
+
+Before, every trial met the hidden reply and worked round it: three of eight
+asked Bash or Read for the file the client saved it to (denied: VOID), most
+rebuilt the part with `edits` narrowing its `return` to a few bodies so the
+reply fitted, and the rest probed with rays or did the trigonometry. A first
+version of the part named its one tipped jar in a constant, and every
+before-trial read the culprit off the script and rebuilt that pair alone; the
+lean is now a table, so the script points at no jar. After, every trial read
+the interference off the first pair of the first reply. With the budget's
+first wording, trials called evaluate_part 2.5 times each, drilling down
+with `bodies` because "90 pairs were left unlisted" and one partitioning by
+shelf before its first call; with `interfering: 0` stated in
+`between_bodies_unlisted` and the `bodies` description saying a first reply
+already lists every interference, 1.4. The LUCKY trial measured 4.034 and
+argued it against the script's trigonometry, which the grader reads as
+citing the source.
+
+**What is not here.** export_part's `measured` carries `named_bodies` and
+`between_bodies` too, unheld: a part of 20 printed bodies would send about
+27 KB of pairs. Sonnet is unmeasured on this case, and the real plant-shelves
+question — does every plant clear the shelf above — was not put to a model.
+
 ## Suggested order
 
 Done, and what each cost is in its own section: point and ray probes and

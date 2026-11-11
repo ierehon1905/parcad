@@ -29,6 +29,7 @@ pub mod mcp;
 pub mod page;
 mod png_text;
 pub mod projects;
+pub mod reply_budget;
 pub mod routes;
 pub mod script;
 pub mod service;

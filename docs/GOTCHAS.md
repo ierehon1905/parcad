@@ -1957,6 +1957,18 @@ escaped — the client limit is a ceiling, not a target) as its contents and the
 reaching its tool, and shows how many replies were hidden: field/README.md,
 "A call is not a read".
 
+evaluate_part and edit_part met it next, on parts in many bodies: the
+plant-shelves session (2026-11-08..11) lost 9 of 32 of those replies to the
+error form, the largest 87,631 characters, 64,610 of them `between_bodies`
+listing 465 pairs of 31 bodies. `reply_budget.rs` now holds every such reply
+under `REPLY_BUDGET_CHARS` (20,000): each list that grows with the part is
+ranked problems first and cut at a cap — 10 bodies, 24 pairs, 6 printed
+bodies, 24 tag extents — and `<list>_unlisted`, right after the list, counts
+what was cut and names the `bodies` or `tags` argument that lists it. Past the
+caps the lists halve in tiers, detail first and a failed check's evidence
+last, so any part fits. The window still gets every pair; only the MCP reply
+is held.
+
 ## An MCP argument the host did not read was dropped, not refused *(fixed 2026-09-18)*
 
 No request struct in `mcp.rs` carried `deny_unknown_fields`, so serde dropped

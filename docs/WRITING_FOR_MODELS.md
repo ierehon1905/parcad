@@ -198,8 +198,10 @@ evidence for parcad.
 **Replies**
 
 1. Stay well under the client's limits: a `read_docs` reply is at most about
-   12,000 characters. Do not raise the cap with `maxResultSizeChars` instead;
-   length costs accuracy even when nothing is hidden.
+   12,000 characters, an evaluate_part or edit_part reply 20,000. Do not raise
+   the cap with `maxResultSizeChars` instead; length costs accuracy even when
+   nothing is hidden. A list cut to fit says how many it left out and the
+   argument that lists them.
 2. Default to concise, offer detail on request (`detail: true`).
 3. A long document is a contents page first, then sections and entries by name.
 4. Report measured values with names a model can quote (`curve_bound_mm`, not an
@@ -238,13 +240,19 @@ In `crates/parcad-host/src/docs.rs`, run by the full `tools/check.sh` (not
 - `every_example_runs`: rule 9, in the sandbox. It catches a wrong call, not
   wrong geometry.
 
+In `crates/parcad-host/src/reply_budget.rs` and `mcp.rs`, for evaluate_part
+and edit_part: `any_part_fits_the_budget` (rule 1 on a synthetic worst case of
+200 bodies) and, with the kernel, `every_reply_fits_its_budget_whatever_the_part`
+(every seed, every corpus part in named bodies, and 60 generated bodies).
+
 In `field/`: the `hid` column and two recorded fixtures of hidden replies.
 
 ## Not done
 
 - The `gotchas` and `gaps` topics are served in sections but still written for
   maintainers (rule 8).
-- No tool but `read_docs` is held to rule 1; a long `list_entities` or probe
-  reply would be hidden the same way.
+- Only `read_docs`, `evaluate_part` and `edit_part` are held to rule 1; a long
+  `list_entities`, a probe, or `export_part`'s `measured` for a part in many
+  bodies would be hidden the same way.
 - No `query` parameter yet: the Context7 result suggests `read_docs(query)`
   ranked on the server would beat names and sections.

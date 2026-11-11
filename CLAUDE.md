@@ -316,6 +316,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | cutting a part open to see inside it | `view.rs`'s `Section`, then `render.rs` for the agent and `app/src/viewport.ts` for the window |
 | what an agent can see, and what to tell it instead | `docs/PERCEPTION.md` |
 | what an agent can *read* about the language | `crates/parcad-host/src/docs.rs` — generated from `dsl.ts`, never written beside it |
+| how long an evaluate_part or edit_part reply may be, which items each list keeps, and what it says about the rest | `crates/parcad-host/src/reply_budget.rs` — the MCP reply only; the window gets every pair |
 | how to write tools, replies, errors and docs a model reads, the evidence, and how to prove a change helped | `docs/WRITING_FOR_MODELS.md` |
 | whether a model can *read* a tool | `eval/field/*.md`, run by `field/run-suite.sh` |
 | which server that harness is pointed at | `field/field.toml` — the only file under `field/` that names parcad |
