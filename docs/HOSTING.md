@@ -395,12 +395,13 @@ What it does:
 - **When the client signs in mid-session.** The session it opened belongs
   to the first account that sends a pass in it. A visitor cannot use an
   account's session: that is a 404.
-- **What the edge does.** It forwards a tokenless GET, POST or DELETE to the
-  host. A 401 from the host becomes the library's challenge, which names
-  `resource_metadata`. A visitor's reply carries the CORS headers the library
-  puts on the replies it forwards.
-- **With the switch off.** Every tokenless request is answered as before,
-  one origin round trip later.
+- **What the edge does.** With its own `LIST_WITHOUT_SIGN_IN=1` it forwards a
+  tokenless GET, POST or DELETE to the host. A 401 from the host becomes the
+  library's challenge, which names `resource_metadata`. A visitor's reply
+  carries the CORS headers the library puts on the replies it forwards.
+- **With the switches off.** Unset on the edge, a tokenless request never
+  reaches the origin: the edge answers 401 itself, so an anonymous flood costs
+  the host nothing. Both switches go on together.
 
 The MCP authorization spec allows this. Authorization is optional, and a 401
 means "authorization required or token invalid". Nothing in it says every
@@ -438,8 +439,9 @@ edge's KV, so the next request is a 401 `invalid_token`.
   - ChatGPT and VS Code.
 
 **Turn it on when** a current cursor-agent signs in from a refused call, or
-when losing that client is the accepted price of the listing. That is a line
-in parcad-infra's deploy, not a code change.
+when losing that client is the accepted price of the listing. That is
+`PARCAD_LIST_WITHOUT_SIGN_IN=1` in parcad-infra's deploy and
+`LIST_WITHOUT_SIGN_IN = "1"` in the edge's production vars, not a code change.
 
 ## Where to run it
 

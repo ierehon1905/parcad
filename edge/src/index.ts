@@ -65,7 +65,7 @@ export default {
   async fetch(request, env, ctx) {
     if (new URL(request.url).pathname !== "/mcp") return provider(env).fetch(request, env, ctx);
     if (isStaticToken(request)) return untouched(request, env);
-    if (!request.headers.has("authorization") && VISITING.has(request.method)) {
+    if (env.LIST_WITHOUT_SIGN_IN === "1" && !request.headers.has("authorization") && VISITING.has(request.method)) {
       // The host lists its tools to anyone. What it refuses gets the library's
       // challenge instead of the host's, since that one names the metadata a
       // client signs in from.

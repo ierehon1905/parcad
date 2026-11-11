@@ -58,10 +58,19 @@ impl Parcad {
     }
 
     pub fn with_capability(mut self, capability: service::Capability) -> Self {
+        if capability.hosted {
+            for tool in ONLY_ON_YOUR_MACHINE {
+                self.tool_router.map.remove(*tool);
+            }
+        }
         self.capability = capability;
         self
     }
 }
+
+/// Tools a hosted server could only refuse, so it does not list them: each
+/// reads a file on the caller's own disk, which a server cannot see.
+const ONLY_ON_YOUR_MACHINE: &[&str] = &["probe_step_export"];
 
 /// The in-chat viewer: an MCP Apps page a client renders beside `open_project`.
 const VIEWER_URI: &str = "ui://parcad/viewer";
@@ -2557,6 +2566,23 @@ mod tests {
         assert_eq!(hosted.instructions.as_deref(), Some(text.as_str()));
         let local = Parcad::new().with_capability(service::capability(false)).get_info();
         assert_eq!(local.instructions.as_deref(), Some(instructions(Screen::App).as_str()));
+    }
+
+    /// A tool that could only refuse on a server is not offered there: a
+    /// directory's review calls every listed tool and expects an answer.
+    #[test]
+    fn a_hosted_server_lists_no_tool_that_reads_the_callers_disk() {
+        let names = |hosted: bool| -> Vec<String> {
+            let parcad = Parcad::new().with_capability(service::capability(hosted));
+            parcad.tool_router.list_all().iter().map(|tool| tool.name.to_string()).collect()
+        };
+        let hosted = names(true);
+        let local = names(false);
+        for tool in ONLY_ON_YOUR_MACHINE {
+            assert!(!hosted.iter().any(|name| name == tool), "{tool} is listed on a hosted server");
+            assert!(local.iter().any(|name| name == tool), "{tool} is missing locally");
+        }
+        assert_eq!(hosted.len() + ONLY_ON_YOUR_MACHINE.len(), local.len());
     }
 
     /// Every tool is a build or a light call by name: a tool in neither list

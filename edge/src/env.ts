@@ -8,6 +8,8 @@ export interface Env {
   MAIL_FROM: string;
   /** The Ed25519 private key the passes are signed with, PKCS#8 base64. A secret. */
   EDGE_KEY: string;
+  /** "1" forwards a tokenless `/mcp` request to the host as a visitor; unset, the edge answers 401 itself. */
+  LIST_WITHOUT_SIGN_IN?: string;
   /** "1" lets in only listed addresses; unset, every verified address signs in. */
   INVITE_ONLY?: string;
   /** With INVITE_ONLY: comma-separated addresses let in besides `allow:<email>` in ACCOUNTS. */

@@ -70,7 +70,7 @@ beforeAll(async () => {
 
   openai = await mockOpenAI(CHATGPT_ID, "edge-test-secret", () => `${EDGE}/callback/chatgpt`);
   const vars = {
-    PUBLIC_HOST: EDGE, ORIGIN: HOST, EDGE_KEY: pkcs8, TEST_SIGN_IN: "1",
+    PUBLIC_HOST: EDGE, ORIGIN: HOST, EDGE_KEY: pkcs8, TEST_SIGN_IN: "1", LIST_WITHOUT_SIGN_IN: "1",
     CHATGPT_CLIENT_ID: CHATGPT_ID, CHATGPT_CLIENT_SECRET: "edge-test-secret", TEST_CHATGPT_ISSUER: openai.issuer,
   };
   edge = Bun.spawn(

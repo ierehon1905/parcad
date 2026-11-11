@@ -35,8 +35,9 @@ and forwards their requests to `parcad serve --hosted` behind it.
   - A static token (no colon) goes through untouched.
   - So do signed export links, the host's front page and icons, and
     `/api/health`.
-  - A request to `/mcp` with no token goes on as a visitor. A host started
-    with `--list-without-sign-in` answers its `initialize` and `tools/list`.
+  - With `LIST_WITHOUT_SIGN_IN=1`, a request to `/mcp` with no token goes on
+    as a visitor. A host started with `--list-without-sign-in` answers its
+    `initialize` and `tools/list`.
     Whatever the host refuses gets the library's 401 here, the one that
     starts a client's sign-in. The switch is off by default
     (docs/HOSTING.md, "Listing before sign-in").
