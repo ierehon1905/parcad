@@ -40,6 +40,8 @@ button:hover{background:rgb(255 255 255/.05)}
 button.primary{background:var(--accent);border-color:var(--accent);color:#000}
 button.primary:hover{background:#8dbbff}
 button.quiet{border-color:var(--line);color:var(--dim)}
+button.link{width:auto;height:auto;margin:0;padding:0;border:0;background:none;font:13px/1.55 var(--sans);letter-spacing:0;text-transform:none;color:var(--dim);text-decoration:underline;text-underline-offset:3px}
+button.link:hover{background:none;color:var(--ink)}
 input{font:15px var(--sans);border:1px solid var(--line-strong);background:var(--field);color:var(--ink);padding:0 12px;box-shadow:inset 0 1px 3px rgb(0 0 0/.7)}
 input:focus,button:focus-visible{outline:1px solid var(--accent);outline-offset:1px}
 .or{display:flex;align-items:center;gap:10px;color:var(--dim);font:11.5px var(--mono);letter-spacing:.05em;text-transform:uppercase;margin:22px 0 12px}
@@ -67,13 +69,18 @@ export interface SignInChoices {
   chatgpt: boolean;
   /** A code by email: only when the server can send one. */
   email: boolean;
+  /** The reviewer's access code: only while REVIEW_CODE is set. */
+  access: boolean;
   test: boolean;
   error?: string;
 }
 
-/** A link back to the sign-in page, when `back` is one; anything else is dropped. */
+/** `back` when it is a sign-in page; anything else is dropped. */
+const signInPage = (back: string | undefined): string | undefined => (back?.startsWith("/authorize?") ? back : undefined);
+
+/** A link back to the sign-in page, when `back` is one. */
 const startOver = (back: string | undefined, label: string): string =>
-  back?.startsWith("/authorize?") ? `<p class="small"><a href="${escape(back)}">${label}</a></p>` : "";
+  signInPage(back) ? `<p class="small"><a href="${escape(back!)}">${label}</a></p>` : "";
 
 export function signIn(c: SignInChoices): string {
   const hidden = (method: string) =>
@@ -100,6 +107,7 @@ ${c.email ? `<form method="post" action="/authorize">${hidden("email")}
 ${providers || c.email || c.test ? "" : `<p class="bad">No way in is set up on this server yet. Ask its operator.</p>`}
 ${c.test ? `<div class="or">test sign-in, local only</div><form method="post" action="/authorize">${hidden("test")}<label for="test-email">Any address</label><input id="test-email" type="email" name="email" required><button type="submit">Sign in as this address</button></form>` : ""}
 <form method="post" action="/authorize">${hidden("deny")}<button class="quiet" type="submit">Cancel</button></form>
+${c.access ? `<form class="small" method="post" action="/authorize">${hidden("access-code")}<button class="link" type="submit">Have an access code?</button></form>` : ""}
 <p class="small">By continuing you agree to the <a href="/terms">terms</a> and have read the <a href="/privacy">privacy notice</a>.</p>`,
   );
 }
@@ -116,6 +124,22 @@ ${error ? `<p class="bad">${escape(error)}</p>` : ""}
 <input id="code" name="code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required autocomplete="one-time-code">
 <button class="primary" type="submit">Sign in</button></form>
 ${startOver(back, "Use another address")}`,
+  );
+}
+
+/** The form for an access code, posted back with the sign-in's consent handle. */
+export function accessCode(handle: string, back: string | undefined, error?: string): string {
+  return page(
+    "Enter your access code",
+    `<h1>Access code</h1>
+<p>Type the access code you were given.</p>
+${error ? `<p class="bad">${escape(error)}</p>` : ""}
+<form method="post" action="/authorize">
+<input type="hidden" name="handle" value="${escape(handle)}"><input type="hidden" name="back" value="${escape(signInPage(back) ?? "")}"><input type="hidden" name="method" value="access-code">
+<label for="code">Access code</label>
+<input id="code" name="code" required autocomplete="off" autocapitalize="off" spellcheck="false">
+<button class="primary" type="submit">Sign in</button></form>
+${startOver(back, "Other ways to sign in")}`,
   );
 }
 
