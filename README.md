@@ -8,7 +8,8 @@ none of it has had the years of abuse that make a CAD kernel trustworthy.
 Measure a part before you machine it.
 
 Start here: [Getting started](docs/GETTING_STARTED.md), five minutes in a browser
-tab.
+tab. Or give your AI one URL, `https://mcp.parcad.dev/mcp`, and sign in with
+GitHub or Google: [details](#use-it-from-an-agent).
 
 ![A bracket built by the script below, in the parcad viewport](docs/images/bracket.jpg)
 
@@ -38,7 +39,7 @@ approximation when it cannot do something faithfully. The graph is what keeps
 today's script working after tomorrow's kernel swap.
 
 Every kernel returns valid-looking wrong answers somewhere, OpenCASCADE and
-NVIDIA's newly open SMLIB included. ParCAD carries five patches to OpenCASCADE
+NVIDIA's newly open SMLIB included. ParCAD carries eight patches to OpenCASCADE
 8.0.1 for the cases its parts ran into, and checks each build itself after the
 kernel reports success.
 
@@ -56,7 +57,7 @@ built it.
 ![What an agent is shown: four views at one scale, two sections, and faces coloured by tag](docs/images/agent-view.png)
 
 It is aimed at small mechanical parts — brackets, flanges, manifolds, heat sinks,
-the things you print or machine one of. [examples/](examples/) has thirty-one.
+the things you print or machine one of. [examples/](examples/) has thirty-five.
 
 ## Why not CadQuery, build123d or OpenSCAD
 
@@ -147,12 +148,42 @@ in `~/Library/Application Support/parcad` as plain `.js` files you can edit anyw
 
 ## Use it from an agent
 
+### The hosted server, nothing to install
+
+Add `https://mcp.parcad.dev/mcp` to your AI client and sign in with GitHub or
+Google when it asks. It's free, with limits on builds and storage per account.
+A part you haven't used for 30 days is deleted and nothing is backed up, so
+download the parts you want to keep.
+
+- **Claude** (web and desktop): Customize → Connectors → Add custom
+  connector, paste the URL. In Claude the part shows up in 3D right in the chat.
+- **Claude Code:**
+
+  ```bash
+  claude mcp add --transport http parcad https://mcp.parcad.dev/mcp
+  ```
+
+- **Codex:**
+
+  ```bash
+  codex mcp add parcad --url https://mcp.parcad.dev/mcp && codex mcp login parcad
+  ```
+
+- **ChatGPT, Cursor and other clients:** add a remote MCP server with the URL.
+  The client opens the sign-in page itself.
+
+What the server keeps about you is in its [privacy notice](https://mcp.parcad.dev/privacy).
+
+### In a browser tab
+
 With nothing installed: open [ParCAD web](https://parcad.dev/app/),
 choose **Connect your AI**, and give your client the link it shows — Claude
 Code, the Claude app as a custom connector, Cursor, VS Code, or any client that
 connects to a URL. The tab is the server, with the same tools as the app, and it
 has to stay open; a relay passes the messages and keeps none
 ([relay/README.md](relay/README.md)).
+
+### On your own machine
 
 Every route below runs the same `parcad` on your machine: the one Homebrew
 installs, which the desktop app carries too. Install either first.
@@ -206,7 +237,7 @@ one call.
 ## More
 
 - [docs/GETTING_STARTED.md](docs/GETTING_STARTED.md) — five minutes, from the browser to your own agent
-- [examples/](examples/) — thirty-one parts, from a bracket to a hydraulic manifold
+- [examples/](examples/) — thirty-five parts, from a bracket to a hydraulic manifold
 - [CONTRIBUTING.md](CONTRIBUTING.md) — the gate, and what a change has to satisfy
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — how the pieces fit, and why
 - [docs/GOTCHAS.md](docs/GOTCHAS.md) — traps that have already cost a day each
@@ -214,8 +245,11 @@ one call.
 
 ## Privacy
 
-ParCAD collects nothing about you: no accounts, no analytics, no telemetry.
-[PRIVACY.md](PRIVACY.md) lists everything that touches the network.
+ParCAD on your own computer collects nothing about you: no accounts, no
+analytics, no telemetry.
+[PRIVACY.md](PRIVACY.md) lists everything that touches the network. The hosted
+server at mcp.parcad.dev needs an account; its
+[privacy notice](https://mcp.parcad.dev/privacy) says what it keeps.
 
 ## Licensing
 
