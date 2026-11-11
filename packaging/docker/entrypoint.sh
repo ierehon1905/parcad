@@ -30,6 +30,10 @@ if [ -n "${PARCAD_EDGE_KEY:-}" ] || [ -n "${PARCAD_EDGE_ORIGIN:-}" ]; then
     printf '%s\n' "$PARCAD_EDGE_KEY" > /tmp/parcad-edge.pub
     edge=(--edge-key /tmp/parcad-edge.pub --edge-origin "$PARCAD_EDGE_ORIGIN")
 fi
+# PARCAD_LIST_WITHOUT_SIGN_IN=1: /mcp lists its tools to a request with no bearer (docs/HOSTING.md).
+if [ "${PARCAD_LIST_WITHOUT_SIGN_IN:-}" = 1 ]; then
+    edge+=(--list-without-sign-in)
+fi
 # PARCAD_REVOKED: account ids refused however they arrive, separated by spaces or commas.
 if [ -n "${PARCAD_REVOKED:-}" ]; then
     tr -s ', ' '\n' <<<"$PARCAD_REVOKED" > /tmp/parcad-revoked

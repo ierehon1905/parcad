@@ -256,6 +256,10 @@ const SERVE_USAGE: &str = "usage: parcad serve [--port N] [--bind ADDR]\n\
                      a pass it signs opens the account it names, with no token here\n\
   --edge-origin NAME the host the edge forwards to, which its passes are addressed to\n\
   --revoked FILE     account ids to refuse however they arrive, one a line; ends their links too\n\
+  --list-without-sign-in  with --edge-key: answer initialize, tools/list and the other listings of\n\
+                     /mcp with no bearer, so a directory or an agent sees the tools; every call\n\
+                     still signs in. Off by default: a client that signs in only when initialize\n\
+                     is refused never signs in with it on (docs/HOSTING.md)\n\
   --stats-dir DIR    keep daily totals there: calls by tool, builds, failures, new and active\n\
                      accounts, and no account id. `parcad stats DIR` reads them\n\
   --worker-memory-mb N  the memory each kernel worker may allocate (Linux enforces it), or off;\n\
@@ -284,6 +288,8 @@ struct HostedFlags {
     edge: Option<(parcad_host::edge::Edge, PathBuf)>,
     /// Accounts refused however they arrive.
     revoked: Vec<parcad_host::tenant::TenantId>,
+    /// Whether `/mcp` lists its tools to a request with no bearer.
+    list_without_sign_in: bool,
     limits: parcad_host::limits::Limits,
     /// Bytes each worker may allocate; `None` is no cap.
     worker_memory: Option<u64>,
@@ -304,6 +310,7 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
     let mut edge_key = None;
     let mut edge_origin = None;
     let mut revoked_file = None;
+    let mut list_without_sign_in = false;
     let mut stats = None;
     let mut limit_flags: Vec<String> = Vec::new();
     let mut worker_memory: Option<String> = std::env::var("PARCAD_WORKER_MEMORY_MB").ok();
@@ -333,6 +340,7 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
                 edge_origin = Some(parcad_host::tenant::PublicHost::parse(&value("a host name")?).map_err(anyhow::Error::msg)?)
             }
             "--revoked" => revoked_file = Some(PathBuf::from(value("a file")?)),
+            "--list-without-sign-in" => list_without_sign_in = true,
             "--stats-dir" => stats = Some(PathBuf::from(value("a folder")?)),
             "--limit" => limit_flags.push(value("NAME=VALUE")?),
             "--worker-memory-mb" => worker_memory = Some(value("a count of MB, or off")?),
@@ -357,8 +365,10 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
         if tokens.is_some() || tenants.is_some() || public_host.is_some() || link_secret.is_some() || link_lifetime.is_some() {
             anyhow::bail!("--tokens, --tenants-dir, --public-host, --link-secret and --link-lifetime are read only with --hosted");
         }
-        if edge_key.is_some() || edge_origin.is_some() || revoked_file.is_some() || stats.is_some() {
-            anyhow::bail!("--edge-key, --edge-origin, --revoked and --stats-dir are read only with --hosted");
+        if edge_key.is_some() || edge_origin.is_some() || revoked_file.is_some() || stats.is_some() || list_without_sign_in {
+            anyhow::bail!(
+                "--edge-key, --edge-origin, --revoked, --list-without-sign-in and --stats-dir are read only with --hosted"
+            );
         }
         if !limit_flags.is_empty() {
             anyhow::bail!("--limit bounds the accounts of a hosted server, and is read only with --hosted");
@@ -382,6 +392,12 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
         }
     };
     let revoked = revoked_file.as_deref().map(read_revoked).transpose()?.unwrap_or_default();
+    if list_without_sign_in && edge_key.is_none() {
+        anyhow::bail!(
+            "--list-without-sign-in needs --edge-key: without an edge there is no sign-in for a client to start, \
+             only a token from whoever runs the server"
+        );
+    }
     match (tokens, tenants, public_host) {
         (Some(tokens), Some(tenants), Some(public_host)) => Ok(Serve {
             address,
@@ -407,6 +423,7 @@ fn serve_options(args: impl Iterator<Item = String>) -> Result<Serve> {
                     ),
                 },
                 revoked,
+                list_without_sign_in,
                 tokens,
                 tenants,
                 public_host,
@@ -486,6 +503,10 @@ fn serve(args: impl Iterator<Item = String>) -> Result<()> {
             edge.origin(),
             key.display()
         );
+    }
+    if flags.list_without_sign_in {
+        accounts = accounts.listing_without_sign_in();
+        eprintln!("parcad: /mcp lists its tools to a request with no bearer; every call still signs in");
     }
     std::fs::create_dir_all(&flags.tenants)
         .with_context(|| format!("creating the tenants folder {}", flags.tenants.display()))?;
@@ -1109,7 +1130,8 @@ mod tests {
     }
 
     /// An edge is its key and its origin together, read with --hosted only;
-    /// a revoked list is account ids, refused line by line.
+    /// a revoked list is account ids, refused line by line; listing without
+    /// sign-in is off unless asked for, and needs an edge.
     #[test]
     fn an_edge_needs_its_key_and_its_origin_and_only_hosted() {
         let dir = std::env::temp_dir().join(format!("parcad-edge-flags-{}", std::process::id()));
@@ -1127,6 +1149,11 @@ mod tests {
         let flags = serve.hosted.expect("hosted");
         assert_eq!(flags.edge.expect("an edge").0.origin().to_string(), "https://origin.example.test");
         assert_eq!(flags.revoked.iter().map(|id| id.as_str()).collect::<Vec<_>>(), ["u-k3x9q2mf7a", "acme"]);
+        assert!(!flags.list_without_sign_in, "a visitor is refused unless the operator says otherwise");
+        let listing = with(&["--edge-key", key, "--edge-origin", "origin.example.test", "--list-without-sign-in"]).unwrap();
+        assert!(listing.hosted.expect("hosted").list_without_sign_in);
+        let no_edge = with(&["--list-without-sign-in"]).err().expect("refused").to_string();
+        assert!(no_edge.contains("needs --edge-key"), "{no_edge}");
 
         let alone = with(&["--edge-key", key]).err().expect("refused").to_string();
         assert!(alone.contains("--edge-origin"), "{alone}");

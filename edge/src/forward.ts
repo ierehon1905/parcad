@@ -36,6 +36,25 @@ export function untouched(request: Request, env: Env): Promise<Response> {
 }
 
 /**
+ * A request to `/mcp` with no bearer: the host answers a listing for anyone
+ * and anything else with 401. Its reply wears the CORS headers the library
+ * puts on every reply it forwards, so a browser client reads both alike.
+ */
+export async function asVisitor(request: Request, env: Env): Promise<Response> {
+  const response = await fetch(toOrigin(request, env, null));
+  const origin = request.headers.get("origin");
+  if (!origin) return response;
+  const cors = new Response(response.body, response);
+  cors.headers.set("access-control-allow-origin", origin);
+  cors.headers.set("access-control-allow-methods", "*");
+  cors.headers.set("access-control-allow-headers", "Authorization, *");
+  cors.headers.set("access-control-max-age", "86400");
+  cors.headers.append("vary", "Origin");
+  cors.headers.set("access-control-expose-headers", "WWW-Authenticate, Retry-After");
+  return cors;
+}
+
+/**
  * Whether a bearer is the host's own static token rather than one this edge
  * issued: the library's tokens are `userId:grantId:secret`, a static token is
  * base64url with no colon.

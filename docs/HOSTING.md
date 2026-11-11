@@ -370,6 +370,77 @@ The edge is `edge/`, a Cloudflare Worker running `workers-oauth-provider`
 (edge/README.md). Its sign-up is open to every verified address, behind the
 host's per-account limits, and `INVITE_ONLY=1` narrows it to a list.
 
+### Listing before sign-in
+
+Directories probe `/mcp` with no token. Glama marks a server that answers 401
+"Unhealthy", and mcptry scores one up to 30 points lower. An agent choosing a
+server cannot read its tools either. `--list-without-sign-in`
+(`PARCAD_LIST_WITHOUT_SIGN_IN=1` in the container) lets a host behind an edge
+answer those requests, and every tool call still signs in. **It is off**,
+because one measured client never signs in once it is on.
+
+What it does:
+
+- **Who counts as a visitor.** A request to `/mcp` with no `Authorization`
+  header at all. It may send `initialize`, `notifications/initialized`,
+  `server/discover`, `ping`, `tools/list`, `resources/list`,
+  `resources/templates/list`, `prompts/list` and `notifications/cancelled`
+  (`mcp::LISTING`, every message of a batch).
+- **What else it gets.** Any other method is the 401. GET, a session's
+  stream, is 405. A body over 64 KiB is refused unread.
+- **A wrong token is never a visitor.** A bearer that is present but wrong
+  is still 401 `invalid_token`, so an expired token is still refreshed.
+- **What a visitor leaves behind.** It owns no folder, and the activity
+  record keeps none of it. rmcp closes its idle session after 300 s.
+- **When the client signs in mid-session.** The session it opened belongs
+  to the first account that sends a pass in it. A visitor cannot use an
+  account's session: that is a 404.
+- **What the edge does.** It forwards a tokenless GET, POST or DELETE to the
+  host. A 401 from the host becomes the library's challenge, which names
+  `resource_metadata`. A visitor's reply carries the CORS headers the library
+  puts on the replies it forwards.
+- **With the switch off.** Every tokenless request is answered as before,
+  one origin round trip later.
+
+The MCP authorization spec allows this. Authorization is optional, and a 401
+means "authorization required or token invalid". Nothing in it says every
+method must be protected. Its one flow for a refusal mid-session is
+403 `insufficient_scope`, for step-up. What a client does with a 401 at
+`tools/call` is up to the client. Anthropic documents it for Claude as "lazy
+authentication", and Codex's source handles it.
+
+Measured on 2026-11-11 against a local stack: `wrangler dev` with
+`TEST_SIGN_IN=1` in front of `parcad serve --hosted`. Each client started
+with no stored token. "Expiry" means the access token was deleted from the
+edge's KV, so the next request is a 401 `invalid_token`.
+
+| client | 401 at `initialize` (today) | listing without sign-in |
+|---|---|---|
+| Claude Code 2.1.322 | "! Needs authentication", and the model gets no ParCAD tools. `claude mcp login` and `/mcp` sign in | "✔ Connected", 19 tools. A call returns "needs you to sign in again (run /mcp to re-authenticate)" and a banner says "1 MCP server needs authentication". In the TUI, `/mcp` → Authenticate signs in, and the same conversation's retry works. `claude mcp login` works too |
+| Codex CLI 0.154.0-alpha.6.2 | "Not logged in". `codex mcp login` signs in | Tools listed. A call returns the tool result "Authentication required", with the challenge in `_meta["mcp/www_authenticate"]`; the model says only that. `codex mcp login` signs in from discovery, and `codex mcp add --url` starts OAuth by itself |
+| opencode 2.0.29 | "needs authentication". `opencode mcp auth` signs in | `opencode mcp list` still says "needs authentication". A call fails with "requires a login before it can register a client". `opencode mcp auth` signs in |
+| cursor-agent 2026.08.04 | `requires_authentication`. `agent mcp login` signs in | **Never signs in.** It reports `ready` with 20 tools. `agent mcp login` prints "✓ MCP login successful" with no OAuth at all and keeps no token. In its bundle, a 401 at a tool call sets `requires_authentication` with an empty callback |
+
+- **After sign-in.** `tools/call` worked in both arms for Claude Code, Codex
+  and opencode. cursor-agent's calls were not measured: its model needs a
+  Cursor sign-in.
+- **After expiry.** All four refreshed and retried in today's arm (Codex's
+  run was the edge's sign-in work, the same day). Claude Code, Codex and
+  opencode did in the listing arm too. cursor-agent never held a token
+  there.
+- **Off.** With the switch off and the new edge, cursor-agent and Claude Code
+  are back to "needs authentication", and cursor-agent signs in.
+- **Not measured.**
+  - claude.ai: its docs promise an inline Connect card on the refused call
+    (claude.com/docs/connectors/building/lazy-authentication).
+  - The Cursor IDE 3.29.9: its agent host has `completeRuntimeAuthorization`,
+    a real code exchange for a 401 at a tool call. That was read, not run.
+  - ChatGPT and VS Code.
+
+**Turn it on when** a current cursor-agent signs in from a refused call, or
+when losing that client is the accepted price of the listing. That is a line
+in parcad-infra's deploy, not a code change.
+
 ## Where to run it
 
 Prices fetched from each provider's own pages on 2026-11-04. A build of a
