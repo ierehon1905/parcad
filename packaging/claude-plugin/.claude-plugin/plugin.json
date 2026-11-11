@@ -11,6 +11,9 @@
   "repository": "https://github.com/ierehon1905/parcad",
   "license": "AGPL-3.0-or-later",
   "privacyPolicyUrl": "https://mcp.parcad.dev/privacy",
+  "termsOfServiceUrl": "https://mcp.parcad.dev/terms",
+  "documentationUrl": "https://github.com/ierehon1905/parcad#use-it-from-an-agent",
+  "supportUrl": "https://github.com/ierehon1905/parcad/issues",
   "icon": ".claude-plugin/icon.png",
   "keywords": [
     "cad",
