@@ -278,6 +278,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | the host without a window, and its tools from a shell | `parcad serve`, `parcad tools`, `parcad call` in `crates/parcad-cli/src/main.rs` and `call.rs` — the CLI is an MCP client of the running host (or one it hosts for the command), so parity with `mcp.rs` is by construction |
 | MCP over stdio, for clients that launch servers | `parcad mcp` in `crates/parcad-cli/src/stdio.rs`, a relay to the running host that becomes the host when there is none; `packaging/plugin/scripts/parcad-mcp` is the one launcher that finds an installed `parcad` |
 | the Claude Code and Codex plugin | `packaging/plugin/`, listed by `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json`; its README says how to release and submit it |
+| the plugin in Claude's directory | `packaging/hosted-plugin/` — the same skills pointed at mcp.parcad.dev, with no local server or scripts, which the directory takes only from a Verified organisation |
 | the MCP bundle and its registry entry | `packaging/mcpb/` — packed by the release workflow; its README is the per-release checklist |
 | which package managers carry parcad, and how a release reaches them | `packaging/README.md`; manifests are templates filled by `packaging/render.py` in `.github/workflows/publish.yml` |
 | the sandbox agent scripts run in | `crates/parcad-host/src/script.rs` |

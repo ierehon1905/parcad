@@ -1,0 +1,27 @@
+{
+  "name": "parcad",
+  "displayName": "ParCAD",
+  "version": "0.0.24",
+  "description": "Design parts for 3D printing and machining. Claude writes the part as code, and ParCAD's CAD kernel builds it, measures it and checks it before you export.",
+  "author": {
+    "name": "Leon Minasian",
+    "url": "https://parcad.dev"
+  },
+  "homepage": "https://parcad.dev",
+  "repository": "https://github.com/ierehon1905/parcad",
+  "license": "AGPL-3.0-or-later",
+  "keywords": [
+    "cad",
+    "3d-printing",
+    "step",
+    "3mf",
+    "stl",
+    "parametric"
+  ],
+  "mcpServers": {
+    "parcad": {
+      "type": "http",
+      "url": "https://mcp.parcad.dev/mcp"
+    }
+  }
+}

@@ -301,6 +301,7 @@ mod tests {
         for manifest in [
             "plugin/.claude-plugin/plugin.json",
             "plugin/.codex-plugin/plugin.json",
+            "hosted-plugin/.claude-plugin/plugin.json",
             "mcpb/manifest.json",
         ] {
             let text = std::fs::read_to_string(format!("{root}/{manifest}")).unwrap();
@@ -309,6 +310,21 @@ mod tests {
                 json["version"],
                 env!("CARGO_PKG_VERSION"),
                 "packaging/{manifest} names another version; set it to the workspace's"
+            );
+        }
+    }
+
+    /// The directory's plugin cannot reach outside its own folder, so it
+    /// carries a copy of each skill the local plugin shares with it.
+    #[test]
+    fn the_hosted_plugin_carries_the_local_plugins_shared_skills() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packaging");
+        for skill in ["field-instrument"] {
+            let read = |plugin: &str| std::fs::read_to_string(format!("{root}/{plugin}/skills/{skill}/SKILL.md")).unwrap();
+            assert_eq!(
+                read("hosted-plugin"),
+                read("plugin"),
+                "packaging/hosted-plugin/skills/{skill}/SKILL.md differs from packaging/plugin's; copy it over"
             );
         }
     }
