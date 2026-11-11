@@ -10,6 +10,8 @@
   "homepage": "https://parcad.dev",
   "repository": "https://github.com/ierehon1905/parcad",
   "license": "AGPL-3.0-or-later",
+  "privacyPolicyUrl": "https://mcp.parcad.dev/privacy",
+  "icon": ".claude-plugin/icon.png",
   "keywords": [
     "cad",
     "3d-printing",

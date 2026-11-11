@@ -1,6 +1,6 @@
 ---
 name: field-instrument
-description: Give a parcad part the field-instrument style — a precise hand-held instrument that is also a toy: one slab on one module, flat faces, one oversized control or gesture, one accent. Use when the user asks for this style, or for a part that should look like a synth, a lab instrument or a toy that is a tool.
+description: "Give a parcad part the field-instrument style — a precise hand-held instrument that is also a toy: one slab on one module, flat faces, one oversized control or gesture, one accent. Use when the user asks for this style, or for a part that should look like a synth, a lab instrument or a toy that is a tool."
 ---
 
 The style is a document on the parcad MCP server, so every client reads the
