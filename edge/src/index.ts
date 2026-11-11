@@ -9,6 +9,7 @@
 
 import { OAuthProvider } from "@cloudflare/workers-oauth-provider";
 
+import { fingerprint } from "./access";
 import type { Env } from "./env";
 import { asAccount, isStaticToken, untouched } from "./forward";
 import { pages } from "./signin";
@@ -17,7 +18,22 @@ import { pages } from "./signin";
 const ACCESS_TOKEN_S = 7 * 86_400;
 const REFRESH_TOKEN_S = 30 * 86_400;
 
+/** What a grant carries: the account, and the code's fingerprint when the access code signed it in. */
+interface Props {
+  account: string;
+  access?: string;
+}
+
 let built: { host: string; provider: OAuthProvider<Env> } | undefined;
+
+/** A signed-in request, or a challenge to sign in again when its access code has been changed or deleted since. */
+async function signedIn(request: Request, env: Env, props: Props): Promise<Response> {
+  if (props.access !== undefined && props.access !== (await fingerprint(env))) {
+    const challenge = `Bearer realm="OAuth", resource_metadata="${env.PUBLIC_HOST}/.well-known/oauth-protected-resource/mcp", error="invalid_token"`;
+    return new Response(null, { status: 401, headers: { "www-authenticate": challenge, "cache-control": "no-store" } });
+  }
+  return asAccount(request, env, props.account);
+}
 
 /** Built on the first request: the resource it protects is named after PUBLIC_HOST. */
 function provider(env: Env): OAuthProvider<Env> {
@@ -25,7 +41,7 @@ function provider(env: Env): OAuthProvider<Env> {
     const provider = new OAuthProvider<Env>({
       apiRoute: "/mcp",
       apiHandler: {
-        fetch: (request, env, ctx) => asAccount(request, env, (ctx as ExecutionContext & { props: { account: string } }).props.account),
+        fetch: (request, env, ctx) => signedIn(request, env, (ctx as ExecutionContext & { props: Props }).props),
       },
       defaultHandler: { fetch: (request, env) => pages(request, env) },
       authorizeEndpoint: "/authorize",

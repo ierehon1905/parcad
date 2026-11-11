@@ -23,6 +23,8 @@ export interface Env {
   TEST_CHATGPT_ISSUER?: string;
   /** Sends the email codes; without it a local run prints them. */
   RESEND_API_KEY?: string;
+  /** The access code a directory's reviewer signs in with, as the account `review`; unset, the way in does not exist. A secret. */
+  REVIEW_CODE?: string;
   /** "1" offers a sign-in that takes any address, on a loopback PUBLIC_HOST only. */
   TEST_SIGN_IN?: string;
   OAUTH_KV: KVNamespace;

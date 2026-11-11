@@ -23,6 +23,19 @@ and forwards their requests to `parcad serve --hosted` behind it.
   under load or abuse. An address is then listed in `ALLOW_EMAILS` or as
   `allow:<address>` in the `ACCOUNTS` namespace, and any other address gets
   the "not on the list" page.
+- **The reviewer's access code.** A directory's reviewer rarely has a Google
+  or GitHub account that gets past a new-device check, so the secret
+  `REVIEW_CODE` adds one more way in: a quiet "Have an access code?" link
+  under the others, leading to a form for the code. The right code, compared
+  in constant time, signs in as the fixed account `review`, which sees the
+  shipped parts like any new account. A wrong one says only that it is wrong,
+  and ten in an hour refuse even the right one until the hour is up. Set it
+  with `bun x wrangler secret put REVIEW_CODE --env production`, and rotate it
+  the same way: a sign-in keeps the code's SHA-256 and `/mcp` checks it on
+  every request, so a new code shuts out every token the old one signed in.
+  `bun x wrangler secret delete REVIEW_CODE --env production` removes the
+  link, the route and those tokens together. Nothing about the reviewer is
+  kept.
 - **Shutting someone out.** The host's `--revoked` (`PARCAD_REVOKED` in the
   container) does it. Signing in again gives the same account id, so a
   revoked account stays shut.
@@ -48,7 +61,9 @@ typed, and works only on a loopback `PUBLIC_HOST`. The test then plays an MCP
 client through discovery, registration, sign-in, the token exchange and
 `/mcp`. ChatGPT's sign-in runs against `test/openai-mock.ts`, which
 `TEST_CHATGPT_ISSUER` points the edge at, also on a loopback `PUBLIC_HOST`
-only. The invite switch is tested on its own, without a Worker.
+only. It sets an access code too, then restarts the edge with a new code and
+with none, and checks that the old code's tokens are refused each time. The
+invite switch is tested on its own, without a Worker.
 
 ## To deploy
 
@@ -73,7 +88,8 @@ Each of these steps belongs to the operator:
      [OpenAI's terms](https://openai.com/policies/sign-in-with-chatgpt-terms/)
      allow the "ChatGPT" name on the button only with OpenAI's permission, so
      it stays hidden until OpenAI issues the client;
-   - `RESEND_API_KEY`, with a sending domain verified for `MAIL_FROM`.
+   - `RESEND_API_KEY`, with a sending domain verified for `MAIL_FROM`;
+   - `REVIEW_CODE`, only while a directory reviews the server.
 
    A way in whose secrets are missing is simply not offered.
 4. **Routing.** Move `mcp.parcad.dev` from the tunnel to this Worker's route,

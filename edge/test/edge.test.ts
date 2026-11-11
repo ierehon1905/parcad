@@ -2,8 +2,9 @@
  * The edge under `wrangler dev` in front of a real `parcad serve --hosted`,
  * driven as an MCP client would: discovery, registration, sign-in, the code
  * for a token, and `/mcp` with it — plus the host's own static token, an
- * address nobody listed (sign-up is open), a sign-in by emailed code, and one
- * through ChatGPT against a mock of OpenAI's sign-in.
+ * address nobody listed (sign-up is open), a sign-in by emailed code, one
+ * through ChatGPT against a mock of OpenAI's sign-in, and the reviewer's
+ * access code, which the last tests rotate and then delete by restarting the edge.
  *
  * Needs a parcad built with the edge flags: PARCAD_BIN, or the repository's
  * target/debug/parcad (`cargo build -p parcad-cli`).
@@ -15,6 +16,7 @@ import { mkdtempSync, writeFileSync, readdirSync, existsSync, rmSync } from "nod
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { REVIEW_ACCOUNT, WRONG_PER_HOUR } from "../src/access";
 import { allowed } from "../src/accounts";
 import type { Env } from "../src/env";
 import { escape } from "../src/pages";
@@ -29,6 +31,8 @@ const ALLOWED = "allowed@example.test";
 const REDIRECT = "http://127.0.0.1:9/callback";
 const BIN = process.env.PARCAD_BIN ?? resolve(import.meta.dir, "../../target/debug/parcad");
 const CHATGPT_ID = "oaiapp_edge_test";
+const ACCESS_CODE = "edge-test-access-code-one";
+const ROTATED_CODE = "edge-test-access-code-two";
 
 const dir = mkdtempSync(join(tmpdir(), "parcad-edge-"));
 let host: Subprocess;
@@ -36,8 +40,38 @@ let edge: Subprocess;
 let edgeLog = "";
 let staticToken = "";
 let openai: Awaited<ReturnType<typeof mockOpenAI>>;
+let edgeVars: Record<string, string> = {};
 
 const b64 = (bytes: ArrayBuffer) => Buffer.from(bytes).toString("base64");
+
+/** `wrangler dev` with these variables, on the one port the host knows the edge by; KV persists across restarts. */
+async function startEdge(vars: Record<string, string>) {
+  edge = Bun.spawn(
+    ["bun", "x", "wrangler", "dev", "--port", String(EDGE_PORT), "--ip", "127.0.0.1", "--persist-to", join(dir, "kv"),
+      ...Object.entries(vars).flatMap(([k, v]) => ["--var", `${k}:${v}`])],
+    { cwd: resolve(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe", env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" } },
+  );
+  (async () => {
+    for await (const chunk of edge.stdout as ReadableStream<Uint8Array>) edgeLog += new TextDecoder().decode(chunk);
+  })();
+  await until(`${EDGE}/api/health`, "wrangler dev");
+}
+
+/** The same edge with its variables changed, as a `wrangler secret put` or `delete` would leave it. */
+async function restartEdge(vars: Record<string, string>) {
+  edge.kill();
+  await edge.exited;
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    try {
+      await fetch(`${EDGE}/api/health`);
+      await Bun.sleep(250);
+    } catch {
+      return startEdge(vars);
+    }
+  }
+  throw new Error("the old wrangler dev kept its port");
+}
 
 async function until(url: string, what: string) {
   const deadline = Date.now() + 60_000;
@@ -62,24 +96,16 @@ beforeAll(async () => {
   host = Bun.spawn(
     [BIN, "serve", "--hosted", "--tokens", join(dir, "tokens"), "--tenants-dir", join(dir, "tenants"),
       "--public-host", EDGE, "--port", String(HOST_PORT), "--edge-key", join(dir, "edge.pub"), "--edge-origin", HOST],
-    { stdout: "ignore", stderr: "pipe", env: { ...process.env, PARCAD_SEED_DIR: join(dir, "no-seed") } },
+    { stdout: "ignore", stderr: "pipe", env: { ...process.env, PARCAD_SEED_DIR: resolve(import.meta.dir, "../../examples") } },
   );
   await until(`${HOST}/api/health`, "parcad serve");
 
   openai = await mockOpenAI(CHATGPT_ID, "edge-test-secret", () => `${EDGE}/callback/chatgpt`);
-  const vars = {
+  edgeVars = {
     PUBLIC_HOST: EDGE, ORIGIN: HOST, EDGE_KEY: pkcs8, TEST_SIGN_IN: "1",
     CHATGPT_CLIENT_ID: CHATGPT_ID, CHATGPT_CLIENT_SECRET: "edge-test-secret", TEST_CHATGPT_ISSUER: openai.issuer,
   };
-  edge = Bun.spawn(
-    ["bun", "x", "wrangler", "dev", "--port", String(EDGE_PORT), "--ip", "127.0.0.1", "--persist-to", join(dir, "kv"),
-      ...Object.entries(vars).flatMap(([k, v]) => ["--var", `${k}:${v}`])],
-    { cwd: resolve(import.meta.dir, ".."), stdout: "pipe", stderr: "pipe", env: { ...process.env, WRANGLER_SEND_METRICS: "false", CI: "1" } },
-  );
-  (async () => {
-    for await (const chunk of edge.stdout as ReadableStream<Uint8Array>) edgeLog += new TextDecoder().decode(chunk);
-  })();
-  await until(`${EDGE}/api/health`, "wrangler dev");
+  await startEdge({ ...edgeVars, REVIEW_CODE: ACCESS_CODE });
 }, 90_000);
 
 afterAll(async () => {
@@ -175,6 +201,24 @@ const initialize = (token?: string) =>
     },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "edge-test", version: "0" } } }),
   });
+
+/** One tool call through the edge, after the handshake an MCP client makes; the reply as plain JSON or one SSE event. */
+async function callTool(token: string, name: string, args: Record<string, unknown> = {}) {
+  const opened = await initialize(token);
+  expect(opened.status).toBe(200);
+  const session = opened.headers.get("mcp-session-id");
+  const headers = {
+    "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${token}`,
+    ...(session ? { "mcp-session-id": session } : {}),
+  };
+  const post = (message: object) => fetch(`${EDGE}/mcp`, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", ...message }) });
+  await post({ method: "notifications/initialized" });
+  const reply = await post({ id: 2, method: "tools/call", params: { name, arguments: args } });
+  expect(reply.status).toBe(200);
+  const body = await reply.text();
+  const data = /^data: (.*)$/m.exec(body)?.[1] ?? body;
+  return (JSON.parse(data) as { result: { isError?: boolean; content: { text: string }[] } }).result;
+}
 
 test("discovery names the edge as the authorization server, with registration and S256", async () => {
   const resource = await fetch(`${EDGE}/.well-known/oauth-protected-resource/mcp`);
@@ -344,3 +388,73 @@ test("a way in whose secrets are missing is not offered", () => {
   expect(configured(env, "chatgpt")).toBe(false);
   expect(configured({ ...env, CHATGPT_CLIENT_SECRET: "s" } as Env, "chatgpt")).toBe(true);
 });
+
+/** A sign-in by access code: the quiet link on the sign-in page, then its form. */
+async function accessSignIn(code: string) {
+  const client = await register();
+  const { jar, handle, back, html } = await openSignIn(client);
+  expect(html).toContain("Have an access code?");
+  const asked = await go(jar, `${EDGE}/authorize`, form({ handle, back, method: "access-code" }));
+  expect(asked.status).toBe(200);
+  expect(asked.headers.get("x-frame-options")).toBe("DENY");
+  expect(await asked.text()).toContain('name="code"');
+  const sent = await go(jar, `${EDGE}/authorize`, form({ handle, back, method: "access-code", code }));
+  return { client, sent };
+}
+
+let reviewToken = "";
+let rotatedToken = "";
+
+test("the access code signs in as the account review, which sees the shipped parts", async () => {
+  const { client, sent } = await accessSignIn(`  ${ACCESS_CODE}\n`);
+  expect(sent.status).toBe(302);
+  reviewToken = (await tokenFor(client, sent.headers.get("location")!)).access_token;
+  expect(reviewToken.startsWith(`${REVIEW_ACCOUNT}:`)).toBe(true);
+  const listed = await callTool(reviewToken, "list_projects");
+  expect(listed.isError).toBeFalsy();
+  expect(JSON.parse(listed.content[0].text).projects).toContain("bracket");
+  expect(readdirSync(join(dir, "tenants"))).toContain(REVIEW_ACCOUNT);
+});
+
+test("a wrong access code says so and nothing else, and ten in an hour shut out the right one too", async () => {
+  const client = await register();
+  const { jar, handle, back } = await openSignIn(client);
+  for (let i = 0; i < WRONG_PER_HOUR; i++) {
+    const wrong = await go(jar, `${EDGE}/authorize`, form({ handle, back, method: "access-code", code: `${ACCESS_CODE.slice(0, -1)}${i}` }));
+    expect(wrong.status).toBe(400);
+    const page = await wrong.text();
+    expect(page).toContain("That code is not right.");
+    expect(page).not.toContain(REVIEW_ACCOUNT);
+  }
+  const locked = await go(jar, `${EDGE}/authorize`, form({ handle, back, method: "access-code", code: ACCESS_CODE }));
+  expect(locked.status).toBe(429);
+  expect(await locked.text()).toContain("Too many wrong codes in the last hour");
+});
+
+test("a new code shuts out the old code's tokens, and its own door is open", async () => {
+  await restartEdge({ ...edgeVars, REVIEW_CODE: ROTATED_CODE });
+  const old = await initialize(reviewToken);
+  expect(old.status).toBe(401);
+  expect(old.headers.get("www-authenticate")).toContain('error="invalid_token", error_description="this server did not issue that token');
+  const stale = await accessSignIn(ACCESS_CODE);
+  expect(stale.sent.status).toBe(400);
+  expect(await stale.sent.text()).toContain("That code is not right.");
+  const { client, sent } = await accessSignIn(ROTATED_CODE);
+  expect(sent.status).toBe(302);
+  rotatedToken = (await tokenFor(client, sent.headers.get("location")!)).access_token;
+  expect((await callTool(rotatedToken, "list_projects")).isError).toBeFalsy();
+}, 60_000);
+
+test("with no code set there is no link and no route, and the last code's tokens stop working", async () => {
+  await restartEdge(edgeVars);
+  const { jar, handle, back, html } = await openSignIn(await register());
+  expect(html).not.toContain("access code");
+  expect(html).not.toContain("access-code");
+  const tried = await go(jar, `${EDGE}/authorize`, form({ handle, back, method: "access-code", code: ROTATED_CODE }));
+  const unknown = await go(jar, `${EDGE}/authorize`, form({ handle, back, method: "no-such-way", code: ROTATED_CODE }));
+  expect(tried.status).toBe(400);
+  expect(tried.status).toBe(unknown.status);
+  expect((await tried.text()).replace("access-code", "")).toBe((await unknown.text()).replace("no-such-way", ""));
+  expect(rotatedToken).toBeTruthy();
+  expect((await initialize(rotatedToken)).status).toBe(401);
+}, 60_000);

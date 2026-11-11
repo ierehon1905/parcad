@@ -18,7 +18,8 @@ MAIL_FROM = "ParCAD <sign-in@parcad.dev>"
 binding = "OAUTH_KV"
 id = "set-at-deploy-oauth"
 
-# allow:<email> and email:<email> → account id; the code a sign-in by email waits on.
+# allow:<email> and email:<email> → account id; the code a sign-in by email waits on;
+# the access code's wrong tries this hour.
 [[kv_namespaces]]
 binding = "ACCOUNTS"
 id = "set-at-deploy-accounts"

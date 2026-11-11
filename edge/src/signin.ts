@@ -7,15 +7,17 @@
  * binds it to this browser); POST /authorize approves it and starts the chosen
  * way in; /callback/<way> ends with a verified address, which gets its
  * account and the client its code — unless the edge is invite-only and the
- * address is not listed.
+ * address is not listed. The access code, while it is set, is the one way in
+ * that needs no callback: a right code signs in as `review` on the spot.
  */
 
 import { AuthorizationError, CimdFetchError, type AuthRequest } from "@cloudflare/workers-oauth-provider";
 
+import { REVIEW_ACCOUNT, checkAccessCode, fingerprint, offered } from "./access";
 import { accountFor, allowed, checkCode, looksLikeEmail, normal, pendingCode, sendCode, sendRefusal } from "./accounts";
 import { type Env, testSignIn } from "./env";
 import { untouched } from "./forward";
-import { enterCode, inviteOnly, privacy, problem, signIn, terms } from "./pages";
+import { accessCode, enterCode, inviteOnly, privacy, problem, signIn, terms } from "./pages";
 import { type Provider, authorizeUrl, configured, isProvider, verifiedEmail } from "./providers";
 
 const HOST_PATHS = new Set(["/", "/api/health", "/favicon.ico", "/favicon.svg", "/favicon-32.png", "/apple-touch-icon.png"]);
@@ -62,6 +64,7 @@ async function showSignIn(request: Request, env: Env): Promise<Response> {
     github: configured(env, "github"),
     chatgpt: configured(env, "chatgpt"),
     email: Boolean(env.RESEND_API_KEY) || testSignIn(env),
+    access: offered(env),
     test: testSignIn(env),
   });
   return html(page, 200, consent.headers);
@@ -76,6 +79,7 @@ async function startSignIn(request: Request, env: Env): Promise<Response> {
     const denied = await env.OAUTH_PROVIDER.denyConsent(request, handle);
     return new Response(null, { status: 302, headers: denied.headers });
   }
+  if (method === "access-code" && offered(env)) return await withAccessCode(request, env, form, handle, back);
   const email = normal(String(form.get("email") ?? ""));
   if ((method === "email" || method === "test") && !looksLikeEmail(email)) {
     return html(problem("That is not an email address", "Go back and type the address you sign in with."), 400);
@@ -106,6 +110,27 @@ async function startSignIn(request: Request, env: Env): Promise<Response> {
   if (method === "test") return redirect(`/callback/test?state=${encodeURIComponent(upstream.state)}`, upstream.headers);
   await sendCode(env, email, upstream.state, back);
   return html(enterCode(upstream.state, email, back), 200, upstream.headers);
+}
+
+/** Like the consent page, never framed or cached: it is where the code is typed. */
+const UNFRAMED = { "cache-control": "no-store", "content-security-policy": "frame-ancestors 'none'", "x-frame-options": "DENY" };
+
+/** The access code's form, then the account `review` for the right code. */
+async function withAccessCode(request: Request, env: Env, form: FormData, handle: string, back: string): Promise<Response> {
+  const typed = form.get("code");
+  if (typed === null) return html(accessCode(handle, back), 200, new Headers(UNFRAMED));
+  const verdict = await checkAccessCode(env, String(typed));
+  if (verdict === "locked") return html(problem("Too many tries", "Too many wrong codes in the last hour. Try again later."), 429);
+  if (verdict === "wrong") return html(accessCode(handle, back, "That code is not right."), 400, new Headers(UNFRAMED));
+  const approved = await env.OAUTH_PROVIDER.approveConsent(request, handle);
+  const { redirectTo } = await env.OAUTH_PROVIDER.completeAuthorization({
+    request: approved.request,
+    userId: REVIEW_ACCOUNT,
+    metadata: {},
+    scope: approved.request.scope,
+    props: { account: REVIEW_ACCOUNT, access: await fingerprint(env) },
+  });
+  return redirect(redirectTo, approved.headers);
 }
 
 /** The last step of every way in: an address, then an account and a code for the client. */
