@@ -660,20 +660,11 @@ pub fn judge(
         minimum_mm: MINIMUM_MM,
         overhang_deg,
         samples: result.samples,
-        note: "measured on the exact solid, every build: walls as the largest ball inside the \
-               material (every feather — material thinning to 0 mm where two faces meet at under \
-               60° — and every wall between two faces that do not meet is found; a thin pin across \
-               one curved face only where wider than the sample spacing); every cut by what it \
-               took from each named feature besides its target; and each body's overhang as it \
-               prints, up its .printedUp() axis or +z as drawn — the area facing down at or under \
-               overhang_deg, a plane's angle exact and a curved face's sampled on the mesh; and \
-               each body's free-standing pieces, off the mesh. A shape returned unnamed in \
-               several pieces, a piece starting above its body's bed, and material under \
-               floor_mm are `failed`: export_part, save_project and a saving edit_part refuse it \
-               unless allow_failing gives the reason. A named body in several pieces, a wall \
-               between floor_mm and minimum_mm, every collision and any overhang: `flagged`, \
-               which prints and is reported, never judged for a printer. A part is done when this \
-               is `passed` or each flag has a reason",
+        note: "`failed` is material under floor_mm, a returned shape in several pieces or a piece \
+               above its bed: export_part, save_project and a saving edit_part refuse it unless \
+               allow_failing gives the reason. `flagged` prints and is reported: a wall under \
+               minimum_mm, a named body in pieces, a cut into another feature, overhang at or under \
+               overhang_deg. A part is done when this is `passed` or each flag has a reason",
     }))
 }
 

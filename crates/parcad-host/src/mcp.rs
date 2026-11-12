@@ -97,7 +97,7 @@ fn surface() -> ToolRouter<Parcad> {
         }
         route.attr.input_schema = std::sync::Arc::new(without_number_formats(&route.attr.input_schema));
         if let Some(output) = route.attr.output_schema.take() {
-            route.attr.output_schema = Some(std::sync::Arc::new(without_number_formats(&output)));
+            route.attr.output_schema = Some(std::sync::Arc::new(without_prose(&without_number_formats(&output))));
         }
         // `ui/resourceUri` is the key hosts read before the extension was final.
         route.attr.meta = match name.as_ref() {
@@ -132,6 +132,48 @@ fn without_number_formats(schema: &rmcp::model::JsonObject) -> rmcp::model::Json
                     map.remove("format");
                 }
                 map.values_mut().for_each(strip);
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
+            _ => {}
+        }
+    }
+    let mut value = serde_json::Value::Object(schema.clone());
+    strip(&mut value);
+    match value {
+        serde_json::Value::Object(object) => object,
+        _ => unreachable!("an object stays an object"),
+    }
+}
+
+/// What `tools/list` may cost, in characters of compact JSON. A tool's
+/// description stays under the 4,096 Claude Code cuts it at (16,384 for a
+/// tool it loads by search); what a model reads of the whole list — every
+/// tool less its output schema, which no client shows a model — stays near
+/// 14k tokens; the wire, output schemas and all, is the looser bound.
+/// docs/WRITING_FOR_MODELS.md, rule 11.
+pub const TOOL_DESCRIPTION_LIMIT_CHARS: usize = 4_000;
+pub const INPUT_SCHEMA_BUDGET_CHARS: usize = 4_000;
+pub const OUTPUT_SCHEMA_BUDGET_CHARS: usize = 12_000;
+pub const TOOL_LIST_READ_BUDGET_CHARS: usize = 56_000;
+pub const TOOL_LIST_WIRE_BUDGET_CHARS: usize = 90_000;
+
+/// An output schema less its descriptions and titles. No client shows an
+/// output schema to its model — Claude Code, Codex and opencode send the
+/// input schema and drop this one (docs/WRITING_FOR_MODELS.md, "Client
+/// limits") — so the prose was 45 KB of `tools/list` nobody read, and what a
+/// client checks a reply against is its types, which stay.
+fn without_prose(schema: &rmcp::model::JsonObject) -> rmcp::model::JsonObject {
+    const NAMES_SCHEMAS: [&str; 4] = ["properties", "$defs", "definitions", "patternProperties"];
+    fn strip(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.retain(|key, value| !(matches!(key.as_str(), "description" | "title") && value.is_string()));
+                for (key, value) in map.iter_mut() {
+                    match value {
+                        serde_json::Value::Object(named) if NAMES_SCHEMAS.contains(&key.as_str()) => named.values_mut().for_each(strip),
+                        _ => strip(value),
+                    }
+                }
             }
             serde_json::Value::Array(items) => items.iter_mut().for_each(strip),
             _ => {}
@@ -299,85 +341,57 @@ pub struct ViewRequest {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EvaluateRequest {
-    /// A parcad DSL script. It must end by returning a shape, e.g.
-    /// `return body.cut(hole)`, or an object of named shapes for a part that
-    /// stays in several bodies, e.g. `return { base, lid }`. Units are
-    /// millimetres; primitives are centred on the origin and placed with
-    /// `.at(x, y, z)`. Give this or `project`, not both: `project` builds a
-    /// saved part without sending it.
+    /// A parcad DSL script that returns a shape, `return body.cut(hole)`, or
+    /// named shapes, `return { base, lid }`. Millimetres; primitives are
+    /// centred on the origin and placed with `.at(x, y, z)`. Give this or
+    /// `project`.
     #[serde(default)]
     pub script: Option<String>,
-    /// The part to build instead of sending it, as list_projects spells it —
-    /// 'Mounts/bracket' — or "@session" for the script on the user's screen.
-    /// Costs no script to send, and reuses the build a save or an earlier call
-    /// made.
+    /// A saved part to build without sending it, as list_projects spells it,
+    /// or "@session" for the script on the user's screen.
     #[serde(default)]
     pub project: Option<String>,
-    /// Changes to make before building, in order, each { old, new } replacing
-    /// text that appears exactly once. Nothing is written back — this is
-    /// "what if the wall were 1.2 mm" in one call; edit_part is the tool that
-    /// saves.
+    /// Changes to build with, in order, each { old, new } replacing text that
+    /// appears exactly once. Nothing is written back; edit_part saves.
     #[serde(default)]
     pub edits: Vec<service::Edit>,
-    /// Also draw the part, from these viewpoints: `iso`, `front`, `back`,
-    /// `left`, `right`, `top`, `bottom`. Omit to measure without rendering,
-    /// which is much faster. Every view shares one framing, so a feature at a
-    /// given pixel in one is at a comparable pixel in another.
-    ///
-    /// **These names are absolute, not part-relative.** `front` looks along +Y
-    /// and shows the XZ plane however the part itself is turned, so a part whose
-    /// length runs along X gets its side elevation under the name `front`. Each
-    /// view in the reply carries `axes`, which says in one sentence what that
-    /// image is looking along and which way is up. Read it before deciding a
-    /// feature is on the wrong side.
+    /// Also draw the part from these viewpoints: `iso`, `front`, `back`,
+    /// `left`, `right`, `top`, `bottom`, all in one framing. The names are
+    /// absolute, not part-relative — `front` looks along +Y whatever way the
+    /// part is turned — and each view's `axes` says in one sentence what it
+    /// looks along and which way is up.
     #[serde(default)]
     pub views: Option<Vec<String>>,
-    /// Colour each view by the tag that owns the surface, instead of shading it.
-    /// The reply then names every tag's colour and its share of the visible
-    /// surface — every tag in the model, with the ones hidden from this angle
-    /// marked `visible: false`, which is what tells you whether an edit is
-    /// invisible or absent. A face carries every tag its history gives it and
-    /// is coloured for the one nearest the node that made it: a tag inside a
-    /// union or cut wins over the union's own, and a tag on a moved, rotated,
-    /// scaled or mirrored copy wins over the tags inside what it copied, so
-    /// `a.mirror("x").tag("b")` shows as `b`. A fillet's faces take the names
-    /// of the faces its edge lay between.
+    /// Colour each view by the tag that owns the surface instead of shading
+    /// it, and name every tag's colour and share, `visible: false` for one
+    /// hidden from that angle. A face takes the tag nearest the node that made
+    /// it: a tag inside a union, or on a moved or mirrored copy, wins.
     #[serde(default)]
     pub regions: Option<bool>,
-    /// Draw each face in the material the script gave it with `.material()`
-    /// instead of neutral grey. Off by default: grey keeps shape and shading
-    /// easiest to read, and the snapshot's `materials` says whether there are
-    /// any to show. Colour only — roughness and metalness are for the window.
+    /// Draw each face in its `.material()` colour instead of grey.
     #[serde(default)]
     pub materials: Option<bool>,
-    /// Cut the part open on a plane before drawing it, so the views show the
-    /// inside. Nothing about the part changes — this is how it is drawn, not an
-    /// operation on it.
+    /// Cut the part open on a plane for the views; the part and every
+    /// measurement stay whole.
     #[serde(default)]
     pub section: Option<SectionRequest>,
     /// Pixels per side, 128 to 1024. Defaults to 512.
     #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub image_size: Option<u32>,
-    /// Seconds the kernel may take, 1 to 600. Defaults to 20, or
-    /// PARCAD_OCCT_TIMEOUT. A part that timed out can be asked again with
-    /// more; a build that finishes is kept, so the next call on the same
-    /// script — a render, an export, the window — does not wait again. A
-    /// script's own work is counted rather than timed and is raised with
-    /// `scriptBudget(n)` in the script, not here.
+    /// Seconds the kernel may take, 1 to 600; defaults to 20. A finished
+    /// build is kept, so asking again does not wait again. A script's own
+    /// work is raised with `scriptBudget(n)` in the script.
     #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
     /// For a part in several bodies, after a reply without it: list only
-    /// these in `named_bodies` and `print_check.bodies`, and in
-    /// `between_bodies` only the pairs with one of them, pairs between two of
-    /// them first. Without it a reply already lists every interference first,
-    /// then contacts and the least clearance, up to 24 pairs and 10 bodies,
-    /// and `between_bodies_unlisted` counts the rest by verdict — so name
-    /// bodies only to see what that left out.
+    /// these in `named_bodies` and `print_check.bodies`, and only the pairs
+    /// with one of them in `between_bodies`, pairs of two of them first. A
+    /// reply already lists every interference first; name bodies to see what
+    /// `between_bodies_unlisted` counted.
     #[serde(default)]
     pub bodies: Option<Vec<String>>,
     /// List only these tags in `tag_extents`, the cuts into them in
-    /// `collisions`, and their colours in a `regions` view. A reply lists at
-    /// most 24 tag extents; `tag_extents_unlisted` names the rest.
+    /// `collisions`, and their colours in a `regions` view.
     #[serde(default)]
     pub tags: Option<Vec<String>>,
 }
@@ -386,26 +400,23 @@ pub struct EvaluateRequest {
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SectionRequest {
-    /// The axis the cutting plane is square to: `x`, `y` or `z`. Look at the
-    /// section from a view that runs along that axis — `x` from `left` or
-    /// `right`, `y` from `front` or `back`, `z` from `top` or `bottom`, or `iso`
-    /// for any of them. A view that looks *along* the plane instead sees it
-    /// edge-on and shows no cut at all.
+    /// `x`, `y` or `z`, the axis the plane is square to. Look from a view
+    /// along it — `x` from `left` or `right`, `y` from `front` or `back`, `z`
+    /// from `top` or `bottom`, or `iso`; a view along the plane shows no cut.
     pub axis: String,
-    /// Where the plane sits on that axis, in mm. Omit to cut through the middle
-    /// of the part, which is what puts a central bore in the picture.
+    /// Where the plane sits on that axis, in mm. Omit to cut through the
+    /// middle.
     #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub at_mm: Option<f64>,
-    /// Which half survives: `below` or `above` the plane on its axis. Omit and
-    /// the half between the plane and the viewer goes, which is the choice that
-    /// shows the cut rather than hiding it behind the material.
+    /// `below` or `above`: the half that stays. Omit and the half towards the
+    /// viewer goes.
     #[serde(default)]
     pub keep: Option<String>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct ScriptRequest {
+pub struct EntitiesRequest {
     /// A parcad DSL script ending in a returned shape. Give this or
     /// `project`, not both.
     #[serde(default)]
@@ -418,6 +429,10 @@ pub struct ScriptRequest {
     /// text that appears exactly once; nothing is written back.
     #[serde(default)]
     pub edits: Vec<service::Edit>,
+    /// The edge and face to start at, the reply's `next_from`; a reply lists
+    /// at most 40 of each.
+    #[serde(default, deserialize_with = "crate::arguments::numeric")]
+    pub from: Option<usize>,
 }
 
 #[derive(Deserialize, schemars::JsonSchema)]
@@ -959,7 +974,7 @@ impl Parcad {
     #[tool(
         name = "evaluate_part",
         annotations(title = "Build and measure a part", read_only_hint = true, open_world_hint = false),
-        description = "Build a part from a parcad DSL script and report its measured geometry, opening with `print_check` — loose pieces (one returned shape in several, or a piece that starts above the bed, is `failed`, each piece's size and place listed; a named body in several is `flagged`), the thinnest wall between its two features, every cut into a feature it was not for (`grille` cuts `boss`), each body's overhang as it prints (up its `.printedUp()` axis, or +z as drawn), `failed` where nothing prints (under 0.3 mm), `flagged` for what prints but should be read — then size, volume, area (integrated over the exact surfaces; `volume_note` says when they are the mesh's), face and edge counts, mesh quality, `bodies` (free-standing pieces: one for a part; more is pieces drawn together, which watertightness does not catch) and `voids` (closed surfaces inside it, a shell's cavity), tags, and `stands_on` — the surface in the part's lowest plane and how many separate patches it is in.\n\nA part that is meant to be several solids — a base and its lid, a clamp in two halves — returns an object of named shapes, `return { base, lid }`, and the reply then carries `named_bodies`: each body measured alone (size, bounds, volume, faces, `watertight`, `pieces` — 1 when that body is intact, more when its own booleans left it split, the defect the part-level `bodies` cannot tell from a second body that was meant) and `between_bodies`: each pair measured on the exact solids, `clear` with a `clearance_mm` and the two `closest_mm` points, `touching` with the `contact_mm2` they share over `contact_patches` patches, or `interfering` with the mm³ they share and the `depth_mm` one reaches into the other at `deepest_mm`. Read the depth and the contact, not the verdict: `interfering` by 0.002 mm³ along a rim is a graze two microns deep, not a catch, and `touching` is the same word for a face seated over 2800 mm² and for two corners that meet at 0 mm². Read `between_bodies` for whether a lid clears its base or a clip is drawn through what it clips onto; for such a part `bodies` should equal the number of named bodies. A reply lists at most 10 bodies and 24 pairs, a body with a defect and the deepest interference, the contacts and the least clearance first; `named_bodies_unlisted` and `between_bodies_unlisted` say how many were left out, and `bodies: [names]` lists those. Bodies are never fused, and selectors, tags and treatments work inside one body only. A part may carry its own rules — `checks: [{ clear: [\"lid\", \"base\"], atLeast: 0.2, why: \"...\" }, { interferes: [\"coin\", \"arm\"], deeperThan: 0.3 }, { wall: { min: 1 } }, ...]` beside the bodies (read_docs dsl, `Check`) — and the reply then opens with `checks`: `{ verdict: \"passed\", passed: n }`, or `failed` with each failing check named, its measurement and where. A body that moves — a lid on a hinge, a drawer — is checked over its whole travel, not at one pose: `{ turns: { body: \"lid\", about: \"x\", at: [0, -28, 16.2], degrees: [0, -170] }, clearOf: [\"base\"], atLeast: 0.3 }` or `{ slides: { body: \"drawer\", along: \"y\", mm: [0, 60] }, clearOf: [\"frame\"], atLeast: 0.3 }` proves the clearance at every pose of the range and reports the least and the pose it is at, and `catches: \"base\", deeperThan: 0.2` in place of `clearOf` says a latch must bite that deep somewhere in the range; `checks.motions` carries every such sweep with the axis, the range and the transform at the worst pose. Bodies that move together on one drive — a lever that pushes a slider, a rack and its pinion — are a `mechanism: { drive: [0, 1], lever: { turns: { about: \"y\", at: PIN, degrees: [0, -18] } }, slider: { slides: { along: \"x\", mm: (t) => ... } } }` beside the bodies (read_docs dsl, Mechanism): `{ moves: \"all\", atLeast: 0.3 }` proves every moving pair's clearance over the whole drive, `{ pushes: [\"lever\", \"slider\"], within: 0.15 }` that the two stay in contact, and the reply's `checks.mechanism` carries each with the worst pair, the drive value and every moving body's pose there; the reply's `mechanism` is the resolved linkage a viewer plays. Clearance says nothing about jamming. A failed check never stops this tool, so you can see the part that failed; export_part and save_project refuse it unless given `allow_failing` with a reason. Read `checks.verdict` before anything else in the reply.\n\nEvery solid reply also carries `brief`: what the part is *for*, judged against what was built. A script declares it with `brief({ envelope: [95, 70, 16], budgetCm3: 12, holds: [\"3 x 2EUR\"], gesture: \"one hand\", printer: \"Bambu A1 mini\" })` at the top (read_docs dsl, `brief`), and the reply's `brief.verdict` is `meets` or `over:` with what is over and by how much — the envelope judged in the best of the six axis orientations. A script with no brief gets one line there saying its size and volume are measured against nothing: write the brief you were given, in the first build of the first turn, because size is the requirement a report cannot check for you and \"that's too big\" is a correction that arrives late. A brief never refuses a save. A body a check talks about that is not the part — a stack of coins, a tipped coin — is marked `.reference()`: it is built, drawn in blue, measured in `named_bodies` (`reference: true`) and against every body in `between_bodies`, and left out of `bodies`, `volume_mm3`, `size`, `stands_on`, the probes, every export and the frame of every view, which fits the part alone and draws a reference as see-through blue: over the part where it is in front of it, hidden where it is behind it (the view's `framed_on` and `references_out_of_view` say so). A script may report a value it computed with `note(label, value)`; the reply carries these under `notes`, marked \"from the script, not measured\": they are what the script asked for, and only the measurements around them say what was built. A printed part rests on that face; one slab is one patch near the whole footprint, and many small patches at a low fraction is a part standing on stubs, which no other number here shows. Pass `views` to also see it — the images come back with the measurements, so looking costs no extra call. Each shaded view has a ruler drawn along its bottom edge and reports what it is worth as `scale_mm` over `scale_px`: a render is otherwise an object floating at an unknown scale, and a size cannot be judged from it. Quote `scale_mm` rather than estimating off the picture, and quote `size` rather than either. Each view in the reply also carries `path`, the same image as a PNG file on this machine. To show the user the part, save_project and open_project it: that puts it on the parcad screen they have open, and a chat that renders MCP Apps draws it in 3D beside your reply. A client that can do neither gets `markdown` on each view, the file as an image line to paste into your reply; there is none where the chat draws the part itself. A build is kept per script: asking again with other views, exporting, or putting the script on screen reuses it (`reused_build`), so render after measuring rather than instead of it. `timeout_s` gives a heavy part longer than the default 20 s. Use this to check that a script produces the part you intended. Give `project` instead of `script` to build a saved part — or \"@session\", the one on screen — without sending it, and add `edits` to build it with lines changed and nothing saved: `{ project, edits }` answers 'what if the wall were 1.2 mm' in one call, and edit_part is the tool that saves. Every reply carries `script_sha256`, which identifies the text that was built.\n\nA part may be a *surface* — faces with no inside, from surfaceLoft, surfaceExtrude, surfaceRevolve, surfaceSweep, trim or patch. Its reply says `kind: \"surface\"` and carries `surface` instead of a volume: `area_mm2`, `open`, `free_edges` and `free_edge_length_mm` (the edges bordered by one face, where the surface ends; select them with { role: \"boundary\" }) and `boundary_loops`; there is no `volume_mm3`, `watertight`, `stands_on` or `prints_on`, because a surface has none. `.thicken(t)` makes it a solid and the reply's `thickened_mm` is the wall measured square to the surface at a grid on every face; `stitchSurfaces(...)` makes one a solid only when its free edges all meet. A part in named bodies may mix the two, `kind: \"mixed\"`.\n\nCurved outlines are drawn, not approximated: a section for extrude, revolve, loft or sweep is a list of corners [x, y], anticlockwise, closing itself; between two corners { through: [x, y] } is a circular arc through that point, { radius: r } the shorter arc of that radius (positive bulges out of the section), { spline: [[x, y], ...] } a smooth curve through the points, { bezier: [[x, y], ...] } one by control points, and { fit: [[x, y], ...], tolerance: 0.05 } a curve fitted through sampled points — a simulation's, a scan's — measured to lie within the tolerance of every one and reported back as `deviation_mm`; { at: [x, y], round: r } is a corner rounded by a tangent arc. A curve given by a formula — an involute, a cam law, a spiral — is { curve: (t) => [x, y], from, to, tolerance }, which brings its own two ends: the script draws it within the tolerance of the function everywhere and the reply's `curve_bound_mm` is that bound, `curve_bound` `certified` when the entry also gives its exact `derivative` and a `fourth`-derivative bound, `estimated` otherwise. spurGearOutline({ module, teeth, profileShift }) is a whole involute spur gear drawn that way, and spurGearPair({ module, teeth: [z1, z2], profileShift, backlash }) gives two that mesh with their centre distance. inset(outline, d) is that outline stepped inward by d, the way a wall is drawn. A pipe or sweep path may be { spline: [[x, y, z], ...] }, and a loft's first or last section { z, point: [x, y] }. Never fake a curve with many short straight edges. SectionEntry in read_docs `dsl` has the rules.\n\nRead `tag_extents` before you look at any picture. It gives one box and one centre per tag, measured from the built surface, and it is the only thing here that answers *is this feature where I meant to put it*. Every other number in this reply — volume, area, watertight, the counts your `.expect()` calls check — is unchanged when a feature is built facing the wrong way or at the wrong end of the part, and a part that is geometrically perfect and wrong as an object passes all of them. Compare each tag's `center` against the part's own `centroid` and against what the script asked for. Each box is the exact extent of the faces the kernel's own history says the tag still owns, and `faces` is how many. A tag in `unlocated_tags` owns no face of the finished part at all: everything it made was cut away or buried by a later boolean.\n\nPass `section` to cut the part open on a plane and see inside. Reach for it whenever the feature you care about is internal — a bore that stops short, a rib inside a boss, the wall between two pockets. None of those appear in any outside view, however many you ask for, and a section is the only picture in which they exist. It changes the drawing only; the part and every measurement are of the whole solid.\n\nReading one: the flat orange **is** the material the plane passed through. Anything darker inside its outline is void the cut opened into — a bore, a pocket, the gap between two features. A dark shape surrounded by orange is a hole through the material at that plane; it is never a shadow, and never material.\n\nThe reply's `section` says which plane was actually cut — `at_mm` and `keep` resolved, whether you named them or not — and `cut_fraction`, the share of the picture that is cut face. A `cut_fraction` of 0 means you are looking at an uncut part: either the plane missed the material, or this view looks along the plane rather than at it. Do not read that picture as a solid part; move the plane, or ask for a view that runs along the section axis."
+        description = "Build a part from a parcad DSL script, or a saved `project` without sending it, and report what the kernel built. The reply opens with the verdicts: the part's own `checks` (read `checks.verdict` first), `brief` (what the part is for, judged on the build: write `brief({ envelope: [x, y, z] })` in the first build), and `print_check` — loose pieces, thin walls (`failed` under 0.3 mm, which export_part and save_project refuse without `allow_failing`), cuts into another feature, overhang. Then size, volume, area, faces, edges, `bodies` (free-standing pieces: one for a part), `voids`, `stands_on`, `tags` and `tag_extents`.\n\nRead `tag_extents` before any picture: it is the only number that says whether a feature is where you meant it, since every other one is unchanged when a feature faces the wrong way. Compare each tag's `center` with the part's `centroid` and with the script; a tag in `unlocated_tags` owns no face of the finished part.\n\nA part in several solids returns named shapes, `return { base, lid }`: `named_bodies` measures each alone (`pieces` above 1 is a body its own booleans split) and `between_bodies` each pair on the exact solids — `clear` with `clearance_mm`, `touching` with `contact_mm2`, `interfering` with `depth_mm`. Read the depth and the contact, not the verdict. Bodies are never fused; selectors and treatments work inside one body. `.reference()` marks a body that is not the part, such as the coins it holds: measured against every body, left out of size, volume, the print check and exports. A reply lists at most 6 bodies and 16 pairs, the deepest interference first; `named_bodies_unlisted` and `between_bodies_unlisted` count the rest, and `bodies: [names]` lists those. Checks, motion and mechanisms are written in the script (read_docs dsl `Check`, `TurnCheck`, `Mechanism`): `{ clear: [\"lid\", \"base\"], atLeast: 0.2 }` holds at one pose, `{ turns: { body, about, at, degrees }, clearOf: [\"base\"], atLeast: 0.3 }` over a whole travel. A failed check never stops this tool.\n\nPass `views` (`iso`, `front`, `top`, …) to see it too; each view carries `scale_mm` over `scale_px` and `path`, and `size` is still the number to quote. Pass `section: { axis, at_mm }` with a view to cut it open: the flat orange is material the plane passed through, anything darker inside it is void, and `cut_fraction` 0 means the plane missed. To show the user the part, save_project and open_project it.\n\n`edits` with `project` builds it with lines changed and nothing saved — 'what if the wall were 1.2 mm' in one call; edit_part is the tool that saves. A build is kept per script, so asking again with views reuses it; `timeout_s` gives a heavy part longer than 20 s.\n\nA surface (surfaceLoft, trim, patch, …) reports `kind: \"surface\"` and `surface` — area, `free_edges`, `boundary_loops` — instead of a volume; `.thicken(t)` makes it a solid. Curved outlines are drawn, never faked with short straight edges: a section entry `{ through }`, `{ radius }`, `{ spline }`, `{ fit, tolerance }` or `{ curve: (t) => [x, y], from, to, tolerance }`, and spurGearOutline for a gear (read_docs dsl `SectionEntry`); `deviation_mm` and `curve_bound_mm` measure what was built."
     )]
     async fn evaluate_part(
         &self,
@@ -1112,14 +1127,14 @@ impl Parcad {
     )]
     async fn list_entities(
         &self,
-        Parameters(Args(request)): Parameters<Args<ScriptRequest>>,
+        Parameters(Args(request)): Parameters<Args<EntitiesRequest>>,
     ) -> Result<rmcp::handler::server::wrapper::Json<Sourced<service::Entities>>, ErrorData> {
         let entities = blocking(move || {
             let source = service::resolve_script(request.script.as_deref(), request.project.as_deref(), &request.edits, None)?;
             let built = script::build(&source.script)?;
             let doc = service::parse_graph(built.graph.clone())?;
             let evaluated = service::evaluate(&doc, None).map_err(|e| built.locate(e))?;
-            Ok(Sourced::of(service::entities(&evaluated), &source))
+            Ok(Sourced::of(service::entities(&evaluated, request.from.unwrap_or(0)), &source))
         })
         .await?;
 
@@ -2689,6 +2704,34 @@ mod tests {
         assert_eq!(size["minimum"], 0, "a count still says it is unsigned: {size}");
     }
 
+    /// The budgets above, on the list a client is sent: each description,
+    /// input and output schema, what a model reads of the whole, and the wire.
+    #[test]
+    fn the_tool_list_fits_what_a_model_reads() {
+        let chars = |value: &serde_json::Value| value.to_string().chars().count();
+        let mut read = 0;
+        let mut wire = 0;
+        for tool in Parcad::new().tool_router.list_all() {
+            let name = tool.name.to_string();
+            let description = tool.description.as_deref().unwrap_or("").chars().count();
+            assert!(description <= TOOL_DESCRIPTION_LIMIT_CHARS, "{name}'s description is {description} characters");
+            let input = chars(&serde_json::to_value(&tool.input_schema).unwrap());
+            assert!(input <= INPUT_SCHEMA_BUDGET_CHARS, "{name}'s input schema is {input} characters");
+            if let Some(output) = &tool.output_schema {
+                let output = chars(&serde_json::to_value(output).unwrap());
+                assert!(output <= OUTPUT_SCHEMA_BUDGET_CHARS, "{name}'s output schema is {output} characters");
+                let text = serde_json::to_value(&tool.output_schema).unwrap().to_string();
+                assert!(!text.contains("\"description\":\""), "{name}'s output schema carries prose no model is shown");
+            }
+            let mut value = serde_json::to_value(&tool).unwrap();
+            wire += chars(&value);
+            value.as_object_mut().unwrap().remove("outputSchema");
+            read += chars(&value);
+        }
+        assert!(read <= TOOL_LIST_READ_BUDGET_CHARS, "a model reads {read} characters of tools/list");
+        assert!(wire <= TOOL_LIST_WIRE_BUDGET_CHARS, "tools/list is {wire} characters on the wire");
+    }
+
     #[test]
     fn every_advertised_schema_is_an_object() {
         let tools = Parcad::new().tool_router.list_all();
@@ -2952,7 +2995,7 @@ mod tests {
                 .is_some_and(|e| e.to_string().contains("no field \"bogus\""))
         }
         let refusals = [
-            refuses_bogus::<ViewRequest>(), refuses_bogus::<EvaluateRequest>(), refuses_bogus::<ScriptRequest>(),
+            refuses_bogus::<ViewRequest>(), refuses_bogus::<EvaluateRequest>(), refuses_bogus::<EntitiesRequest>(),
             refuses_bogus::<InspectRequest>(), refuses_bogus::<ProbeRequest>(), refuses_bogus::<ThicknessRequest>(),
             refuses_bogus::<SelectorRequest>(), refuses_bogus::<ExportRequest>(), refuses_bogus::<FitRequest>(),
             refuses_bogus::<StepProbeRequest>(), refuses_bogus::<DocsRequest>(), refuses_bogus::<ProjectRequest>(),
@@ -3009,7 +3052,7 @@ mod tests {
             serde_json::from_value::<Args<EvaluateRequest>>(value.clone()).expect("evaluate_part");
             serde_json::from_value::<Args<ThicknessRequest>>(value.clone()).expect("measure_wall_thickness");
             serde_json::from_value::<Args<ProbeRequest>>(value.clone()).expect("probe_part");
-            serde_json::from_value::<Args<ScriptRequest>>(value.clone()).expect("list_entities");
+            serde_json::from_value::<Args<EntitiesRequest>>(value.clone()).expect("list_entities");
             let mut fit = value.clone();
             fit["reference"] = serde_json::json!("return box(1,1,1);");
             serde_json::from_value::<Args<FitRequest>>(fit).expect("check_fit");

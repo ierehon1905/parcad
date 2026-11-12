@@ -11,15 +11,16 @@
 use serde_json::{json, Map, Value};
 
 /// The whole reply's text, at most, in characters as a client counts them:
-/// under half of [`crate::docs::CLIENT_RESULT_LIMIT_CHARS`], because length
-/// costs a model accuracy even when nothing is hidden. The corpus's largest
-/// part replied with 10,876.
-pub const REPLY_BUDGET_CHARS: usize = 20_000;
+/// docs/WRITING_FOR_MODELS.md rule 1, which `read_docs` meets at 12,000, and
+/// under the 10,000 bytes Codex keeps of a reply by default once an ordinary
+/// part's lists are cut. Length costs a model accuracy even when nothing is
+/// hidden; the client's own ceiling is [`crate::docs::CLIENT_RESULT_LIMIT_CHARS`].
+pub const REPLY_BUDGET_CHARS: usize = 12_000;
 
 /// How many of each list a reply carries before anything has to be halved.
-const NAMED_BODIES: usize = 10;
-const PAIRS: usize = 24;
-const PRINTED_BODIES: usize = 6;
+const NAMED_BODIES: usize = 6;
+const PAIRS: usize = 16;
+const PRINTED_BODIES: usize = 4;
 /// A printed body's overhanging faces and bridges: the kernel's 8, so a part
 /// that fits loses none, and the first detail to halve when one does not.
 const OVERHANGS: usize = 8;
@@ -27,19 +28,19 @@ const OVERHANGS: usize = 8;
 /// pieces each finding carries.
 const FINDINGS: usize = 6;
 const PIECES: usize = 12;
-const TAG_EXTENTS: usize = 24;
-const TAGS: usize = 100;
-const UNLOCATED_TAGS: usize = 40;
-const TREATMENTS: usize = 24;
-const COLLISIONS: usize = 12;
-const FAILED_CHECKS: usize = 12;
-const MOTIONS: usize = 8;
-const MECHANISM_CHECKS: usize = 8;
-const JOINTS: usize = 16;
-const KNOTS: usize = 32;
-const REGIONS: usize = 24;
+const TAG_EXTENTS: usize = 16;
+const TAGS: usize = 60;
+const UNLOCATED_TAGS: usize = 20;
+const TREATMENTS: usize = 16;
+const COLLISIONS: usize = 8;
+const FAILED_CHECKS: usize = 8;
+const MOTIONS: usize = 6;
+const MECHANISM_CHECKS: usize = 6;
+const JOINTS: usize = 8;
+const KNOTS: usize = 64;
+const REGIONS: usize = 16;
 /// Names, nodes or checks an `_unlisted` record spells out.
-const NAMES: usize = 40;
+const NAMES: usize = 24;
 
 /// What the caller asked to see in full: the `bodies` and `tags` arguments.
 #[derive(Debug, Default, Clone)]
@@ -123,6 +124,17 @@ pub fn hold(reply: &mut Value, focus: &Focus) {
 /// The length a client counts: the compact JSON's characters.
 pub fn chars(reply: &Value) -> usize {
     reply.to_string().chars().count()
+}
+
+/// Room left for what a transport wraps a typed report in: `script_sha256`
+/// and `matched_loosely`.
+const WRAPPER_CHARS: usize = 400;
+
+/// Whether a typed reply serialises within [`REPLY_BUDGET_CHARS`], wrapper
+/// included: what list_entities, probe_part and measure_wall_thickness trim
+/// their lists to.
+pub fn fits<T: serde::Serialize>(reply: &T) -> bool {
+    serde_json::to_string(reply).map_or(true, |text| text.chars().count() + WRAPPER_CHARS <= REPLY_BUDGET_CHARS)
 }
 
 fn trim(reply: &mut Value, focus: &Focus, round: u32) {

@@ -49,8 +49,20 @@ follow. The sources marked *checked* were opened and their numbers confirmed on
   *checked*): a warning above 10,000 tokens per result, a 25,000-token default
   cap (`MAX_MCP_OUTPUT_TOKENS`), and a result over it saved to a file. A tool may
   raise its own cap with `_meta["anthropic/maxResultSizeChars"]`, up to 500,000
-  characters. What parcad measured in practice is in docs/GOTCHAS.md, "A tool
-  reply over 50,000 characters…".
+  characters. A tool description is cut at 4,096 characters, 16,384 for a tool
+  loaded by tool search. What parcad measured in practice is in docs/GOTCHAS.md,
+  "A tool reply over 50,000 characters…". Read in the clients' source on
+  2026-11-12: Codex sends a model a tool's name, description and input schema,
+  keeps 10,000 bytes of a result by default, and reads `structuredContent` in
+  place of the text when there is one (`codex-rs/tools/src/mcp_tool.rs`,
+  `protocol/src/models.rs`); opencode does the same and truncates at 50 KiB;
+  claude.ai takes a result up to about 150,000 characters
+  ([connectors](https://claude.com/docs/connectors/building)). **No client puts
+  an output schema in front of its model**: Codex and opencode drop it (Codex's
+  code mode aside, which renders it as a declaration), and in Claude Code
+  2.1.322 haiku quoted a marker word from a tool's input schema and never the
+  one in its output schema, 2 trials of 2. The MCP TypeScript SDK does check a
+  reply's `structuredContent` against it.
 
 Weak spots: nothing above measures Haiku 4.5 directly, and no study compares
 `.d.ts`-style references with Markdown. The field suite is the only direct
@@ -197,11 +209,12 @@ evidence for parcad.
 
 **Replies**
 
-1. Stay well under the client's limits: a `read_docs` reply is at most about
-   12,000 characters, an evaluate_part or edit_part reply 20,000. Do not raise
+1. Stay well under the client's limits: a reply is at most about 12,000
+   characters — `read_docs`, `evaluate_part`, `edit_part`, `probe_part`,
+   `list_entities` and `measure_wall_thickness` are held to it. Do not raise
    the cap with `maxResultSizeChars` instead; length costs accuracy even when
-   nothing is hidden. A list cut to fit says how many it left out and the
-   argument that lists them.
+   nothing is hidden. A list cut to fit ranks problems first, says how many it
+   left out, and names the argument that lists them.
 2. Default to concise, offer detail on request (`detail: true`).
 3. A long document is a contents page first, then sections and entries by name.
 4. Report measured values with names a model can quote (`curve_bound_mm`, not an
@@ -229,6 +242,15 @@ evidence for parcad.
     noisy. Read the transcripts. The grader does not count a hidden reply as a
     read (`hid`).
 
+**The tool list**
+
+11. Hold the tool list to what a model reads of it: each description under
+    4,000 characters, the most Claude Code shows of one, and each input schema
+    under 4,000; the whole list less its output schemas under 56,000, about 14k
+    tokens, which a client without tool search puts in front of every turn.
+    Output schemas keep their types and no prose, since no client shows one
+    to a model.
+
 ## What holds the rules
 
 In `crates/parcad-host/src/docs.rs`, run by the full `tools/check.sh` (not
@@ -240,10 +262,15 @@ In `crates/parcad-host/src/docs.rs`, run by the full `tools/check.sh` (not
 - `every_example_runs`: rule 9, in the sandbox. It catches a wrong call, not
   wrong geometry.
 
-In `crates/parcad-host/src/reply_budget.rs` and `mcp.rs`, for evaluate_part
-and edit_part: `any_part_fits_the_budget` (rule 1 on a synthetic worst case of
-200 bodies) and, with the kernel, `every_reply_fits_its_budget_whatever_the_part`
-(every seed, every corpus part in named bodies, and 60 generated bodies).
+In `crates/parcad-host/src/reply_budget.rs` and `mcp.rs`:
+
+- `any_part_fits_the_budget`: rule 1 for evaluate_part and edit_part on a
+  synthetic worst case of 200 bodies; with the kernel,
+  `every_reply_fits_its_budget_whatever_the_part` on every seed, every corpus
+  part in named bodies and 60 generated bodies. probe_part, list_entities and
+  measure_wall_thickness trim to the same budget through `reply_budget::fits`.
+- `the_tool_list_fits_what_a_model_reads`: rule 11, on the list a client is
+  sent.
 
 In `field/`: the `hid` column and two recorded fixtures of hidden replies.
 
@@ -251,8 +278,15 @@ In `field/`: the `hid` column and two recorded fixtures of hidden replies.
 
 - The `gotchas` and `gaps` topics are served in sections but still written for
   maintainers (rule 8).
-- Only `read_docs`, `evaluate_part` and `edit_part` are held to rule 1; a long
-  `list_entities`, a probe, or `export_part`'s `measured` for a part in many
-  bodies would be hidden the same way.
+- `export_part`'s `measured` is not held to rule 1: a part of 20 printed
+  bodies sends about 27 KB of pairs. Nor are `check_fit`, `inspect_treatment_target`
+  or `probe_step_export`, which have not been seen to grow.
+- The tool list is held at what it costs now, not at what it should: the
+  model-facing 55,000 characters are mostly descriptions that were each
+  measured into their wording, and export_part's and save_project's output
+  schemas carry the whole verdict tree (11,558 and 8,096 characters of types).
+- No open model has been measured: opencode 2.0.29 stalls before it starts
+  any MCP server (docs/GOTCHAS.md), and its free models refuse any other
+  client.
 - No `query` parameter yet: the Context7 result suggests `read_docs(query)`
   ranked on the server would beat names and sections.

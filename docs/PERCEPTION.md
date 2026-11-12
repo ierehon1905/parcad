@@ -1809,28 +1809,42 @@ wall clear of a pot by a metre — 12,447 `named_bodies`, and 8,728
 `print_check`.
 
 Since 2026-11-12 `reply_budget.rs` holds every evaluate_part and edit_part
-reply under 20,000 characters. Each list that grows with the part is ranked
-problems first and cut at a cap: 10 bodies (one of the part's with a defect
-first, references last), 24 pairs (the deepest interference first, then
-contact, then the least clearance; a pair of two references after every pair
-of the part), 6 printed bodies (most overhang first), 24 tag extents, 24
+reply under 12,000 characters, the bound `read_docs` already met
+(docs/WRITING_FOR_MODELS.md rule 1). Each list that grows with the part is
+ranked problems first and cut at a cap: 6 bodies (one of the part's with a
+defect first, references last), 16 pairs (the deepest interference first,
+then contact, then the least clearance; a pair of two references after every
+pair of the part), 4 printed bodies (most overhang first), 16 tag extents, 16
 treatments. Right after a cut list, `<list>_unlisted` says how many it left
 out, counts the rest — `between_bodies_unlisted` by verdict, zeros included,
 with the least clearance among them — and names the argument that lists
 them: `bodies: [...]` for bodies and pairs, `tags: [...]` for tags, cuts and
-regions. A part that still does not fit has its lists halved in tiers,
-detail first and a failed check's evidence last, and whatever the caller
-named after everything else. 201 of the 205 corpus replies are
-byte-identical; the other four differ only in sampled wall positions and
-mesh counts, which differ run to run. The window still gets every pair.
+regions. A part that still does not fit has its lists halved in tiers, detail
+first and a failed check's evidence last, and whatever the caller named after
+everything else. `print_check.note`, 1,079 characters on every reply, is now
+the rules alone. probe_part drops its last rays, list_entities pages by
+`from` at 40 edges and faces, and measure_wall_thickness drops its least thin
+spots, each saying what it left out. Across the 205 corpus replies the only
+changes are the note and run-to-run sampling noise; the largest is 10,203.
+The window still gets every pair.
 
-| part | bodies | pairs | 0.0.24 | now |
-|---|---|---|---|---|
-| plant shelves, v4 after its first edit | 31 | 465 | 95,076 | 18,323 |
-| plant shelves, two later versions | 25 | 300 | 67,658 · 66,022 | 19,865 · 18,565 |
-| plant-shelves-v9 | 20 | 190 | 49,444 | 18,996 |
-| eval/scripts/pantry-rack.js | 31 | 465 | 88,214 | 13,785 |
-| 60 generated cubes (the kernel test) | 60 | 1,770 | 285,175 | 18,248 |
+| reply | 0.0.24 | now |
+|---|---|---|
+| plant shelves, 31 bodies, 465 pairs | 95,076 | 11,626 |
+| plant shelves, two 25-body versions | 67,658 · 66,022 | 11,819 · 11,966 |
+| plant-shelves-v9, 20 bodies | 49,444 | 10,564 |
+| eval/scripts/pantry-rack.js, 31 bodies | 88,214 | 9,320 |
+| 60 generated cubes (the kernel test), 1,770 pairs | 285,175 | 10,299 |
+| list_entities, twisted-planter (463 edges) | 21,517 | 11,720 |
+| probe_part, 21 rays across field-instrument/planter | 19,964 | 11,385 |
+
+The tool list went the same way (rule 11). `evaluate_part`'s description was
+11,657 characters, past the 4,096 Claude Code shows of one; it is 3,187, the
+worked detail now behind `read_docs dsl`. Output schemas lost their prose —
+no client shows one to a model, measured in Claude Code and read in Codex's
+and opencode's source — and kept their types: `tools/list` is 86,209
+characters on the wire, from 141,337, and what a model reads of it 55,065,
+from 65,499. `the_tool_list_fits_what_a_model_reads` holds both.
 
 Measured on haiku 5.5, 4 trials per arm, `eval/field/which-jar-hits-the-shelf.md`:
 24 leaning jars on a four-shelf rack, one of them 4.034 mm into the shelf
@@ -1858,10 +1872,45 @@ already lists every interference, 1.4. The LUCKY trial measured 4.034 and
 argued it against the script's trigonometry, which the grader reads as
 citing the source.
 
+Then the 12,000 budget, the shorter description and the trimmed tool list
+together, on haiku 5.5, 3 trials per arm, 14 cases chosen for leaning on what
+was cut or moved — the section rules, tag_extents, surfaces, curves, named
+bodies and contact, checks and motion, the brief, list_entities' paging, the
+print check's note — against 0.0.24, the same night:
+
+| | 0.0.24 | now |
+|---|---|---|
+| SOUND, 84 trials | 49 | 59 |
+| WRONG | 9 | 5 |
+| VOID | 10 | 5 |
+| replies hidden | 6 | 0 |
+
+The gains are where expected: which-jar-hits-the-shelf 1/6 → 5/6 SOUND, its
+calls 9–14 → 5–8; where-is-the-feature without thinking 0/3 → 3/3;
+does-the-lid-open 3/6 → 6/6. how-many-edges went from 2 SOUND and 4 WRONG to
+1 SOUND, 4 LUCKY and 1 WRONG, and all six now answer 146: every one read
+`total_edges` and paged with `from` to check it, the LUCKY ones also mention
+the script's comment, as do the other new LUCKY rows, and the WRONG one put
+its 146 at the top of the reply instead of the end, where the grader reads. Two cases
+were weak on both hosts alike and say nothing about the change:
+does-it-meet-the-brief 0/6 and what-is-inside 0/6. where-was-it-cut with
+thinking went 2/3 → 1/3 SOUND for the reason §19 already records — told to
+send the wrong `offset`, the thinking arm writes `at_mm` from the schema and
+never meets the refusal the case is about; all three answered −38.
+
+Sonnet 5.5 at medium effort, 3 trials, on four of those cases: the jar case
+0/3 → 3/3 SOUND, in 5–7 calls before and 2 after — every before-trial met
+the hidden reply, asked Bash, Read or Grep for the saved file (VOID), then
+rebuilt the suspect jar alone through check_fit; where-is-the-feature 1/3 →
+2/3; how-close-to-the-involute and is-the-part-in-the-picture 3/3 on both,
+so the cut description lost neither the curve nor the framing rules.
+
 **What is not here.** export_part's `measured` carries `named_bodies` and
 `between_bodies` too, unheld: a part of 20 printed bodies would send about
-27 KB of pairs. Sonnet is unmeasured on this case, and the real plant-shelves
-question — does every plant clear the shelf above — was not put to a model.
+27 KB of pairs. No open model was measured: opencode 2.0.29, the one client
+its free models answer, stalls before it starts any MCP server
+(docs/GOTCHAS.md). The real plant-shelves question — does every plant clear
+the shelf above — was not put to a model.
 
 ## Suggested order
 
