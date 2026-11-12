@@ -1957,6 +1957,44 @@ escaped — the client limit is a ceiling, not a target) as its contents and the
 reaching its tool, and shows how many replies were hidden: field/README.md,
 "A call is not a read".
 
+evaluate_part and edit_part met it next, on parts in many bodies: the
+plant-shelves session (2026-11-08..11) lost 9 of 32 of those replies to the
+error form, the largest 87,631 characters, 64,610 of them `between_bodies`
+listing 465 pairs of 31 bodies. `reply_budget.rs` now holds every such reply
+under `REPLY_BUDGET_CHARS` (12,000, WRITING_FOR_MODELS rule 1): each list that
+grows with the part is ranked problems first and cut at a cap — 6 bodies, 16
+pairs, 4 printed bodies, 16 tag extents — and `<list>_unlisted`, right after
+the list, counts what was cut and names the `bodies` or `tags` argument that
+lists it. Past the caps the lists halve in tiers, detail first and a failed
+check's evidence last, so any part fits. probe_part, list_entities and
+measure_wall_thickness trim to the same budget and say what they left out. The
+window still gets every pair; only the MCP reply is held.
+
+## rmcp's `Json` widens an f32 to seventeen digits
+
+A tool returning `Json<T>` is serialised through a `serde_json::Value`, text
+block and `structuredContent` alike, and a `Value` holds every number as an
+f64. An `f32` field that serde would print as `6.3` reaches the client as
+`6.300000190734863`: list_entities' edges carried
+`-51.60611343383789` for a centre, and its 60 edges were 11,765 characters.
+Round such a field to f64 where the reply is built (`round_point`, as
+`service::entity` does now); a comment there used to say f32 needed none.
+
+## opencode 2.0.29 stalls before it starts an MCP server
+
+Measured 2026-11-12 with `opencode run --standalone`: with any server under
+`mcp` in `opencode.json` — parcad's `/mcp`, `parcad mcp` over stdio, or a
+30-line stdio echo server — the run's `serve --stdio` child starts and then
+logs nothing and never spawns the server, and no run of nine had answered
+after 60–120 s; without
+`mcp` the same command answers in 3 s. The v2 shape is `"mcp": { "servers":
+{ … } }` (the top-level form is deprecated), and both shapes stall. Two more
+traps on the way: `--format json` with a space prints the help, and `--auto`
+before `--format=json` in one quoted argument does too. Its free models
+(`opencode/…-free`) refuse any other client — "FreeUsageLimitError: Free
+models work in OpenCode" — so they cannot be reached around it. No open model
+has been put to the field suite for that reason.
+
 ## An MCP argument the host did not read was dropped, not refused *(fixed 2026-09-18)*
 
 No request struct in `mcp.rs` carried `deny_unknown_fields`, so serde dropped

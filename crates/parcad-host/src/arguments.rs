@@ -81,6 +81,7 @@ const SYNONYMS: &[(&str, &str)] = &[
     ("snapshot", "id"),
     ("type", "format"),
     ("file", "filename"),
+    ("body", "bodies"),
 ];
 
 /// The schema `tools/list` publishes for `P`.

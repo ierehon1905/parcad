@@ -70,11 +70,11 @@ pub fn body_doc(doc: &Doc, body: &str) -> Result<Doc, String> {
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct EdgeEntity {
     pub id: String,
-    pub center: [f32; 3],
+    pub center: [f64; 3],
     /// Unit direction for a straight edge; absent for a curve.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub direction: Option<[f32; 3]>,
-    pub length_mm: f32,
+    pub direction: Option<[f64; 3]>,
+    pub length_mm: f64,
     /// The named body this edge is on, for a part that returns several.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
@@ -130,6 +130,19 @@ pub struct Entities {
     pub faces: Vec<FaceEntity>,
     /// How many faces the part has, when `faces` was truncated.
     pub total_faces: usize,
+    /// The index the lists start at, when a caller asked for a later page.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub from: usize,
+    /// Where the next page starts, and the call that lists it, when either
+    /// list stops short of its total.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_from: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub more: Option<String>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 /// What a fillet or chamfer will act on, resolved before it runs.
@@ -157,18 +170,17 @@ pub struct TreatmentTarget {
 /// lives here rather than in a transport for the same reason everything else in
 /// this module does: two callers that disagree about how much of a part they
 /// were shown are two callers looking at different parts.
-const ENTITY_LIMIT: usize = 60;
+const ENTITY_LIMIT: usize = 40;
 
 fn entity(edge: &parcad_occt::EdgeCurve) -> EdgeEntity {
+    let wide = |v: [f32; 3]| v.map(f64::from);
     EdgeEntity {
         id: edge.id.clone(),
-        // Not rounded, and does not need to be: these are f32, and serde
-        // prints an f32 as the shortest decimal that round-trips *as f32* —
-        // "6.3", not the seventeen digits the same value grows when it is
-        // widened to f64. See [`round_mm`].
-        center: edge.center,
-        direction: edge.direction,
-        length_mm: edge.length_mm,
+        // Rounded like every other number: rmcp serialises a reply through a
+        // `Value`, which widens an f32 to its seventeen-digit f64.
+        center: round_point(wide(edge.center)),
+        direction: edge.direction.map(|d| round_dir(wide(d))),
+        length_mm: round_mm(f64::from(edge.length_mm)),
         body: edge.body.clone(),
     }
 }
@@ -192,20 +204,49 @@ fn face_entity(index: usize, face: &parcad_occt::protocol::FaceSummary) -> FaceE
     }
 }
 
-pub fn entities(evaluated: &Evaluated) -> Entities {
+/// A page of the part's edges and faces, from `from`, each list at most
+/// `ENTITY_LIMIT` long and the pair held under the reply budget together.
+pub fn entities(evaluated: &Evaluated, from: usize) -> Entities {
     let all = evaluated.edges();
-    Entities {
-        edges: all.iter().take(ENTITY_LIMIT).map(entity).collect(),
+    let mut listed = Entities {
+        edges: all.iter().skip(from).take(ENTITY_LIMIT).map(entity).collect(),
         total_edges: all.len(),
         faces: evaluated
             .faces
             .iter()
             .enumerate()
+            .skip(from)
             .take(ENTITY_LIMIT)
             .map(|(index, face)| face_entity(index, face))
             .collect(),
         total_faces: evaluated.faces.len(),
+        from,
+        next_from: None,
+        more: None,
+    };
+    while !crate::reply_budget::fits(&listed) && (listed.edges.len() > 1 || listed.faces.len() > 1) {
+        if listed.faces.len() >= listed.edges.len() {
+            listed.faces.pop();
+        } else {
+            listed.edges.pop();
+        }
     }
+    let short: Vec<usize> = [(listed.edges.len(), listed.total_edges), (listed.faces.len(), listed.total_faces)]
+        .into_iter()
+        .filter(|(shown, total)| from + shown < *total)
+        .map(|(shown, _)| from + shown)
+        .collect();
+    if let Some(&next) = short.iter().min() {
+        listed.next_from = Some(next);
+        listed.more = Some(format!(
+            "listed from {from}: {} of {} edges and {} of {} faces; list_entities with from: {next} lists the next",
+            listed.edges.len(),
+            listed.total_edges,
+            listed.faces.len(),
+            listed.total_faces
+        ));
+    }
+    listed
 }
 
 /// Summarise a resolved treatment target.
@@ -437,6 +478,15 @@ pub struct ProbeReport {
     pub units: String,
     pub points: Vec<PointProbe>,
     pub rays: Vec<RayProbe>,
+    /// Rays and points measured and left out of the reply to keep it within
+    /// what a model reads well, by their place in the request, and the call
+    /// that lists them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unlisted_rays: Vec<usize>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub unlisted_points: Vec<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub more: Option<String>,
 }
 
 /// What a probe found itself in.
@@ -576,11 +626,31 @@ pub fn probe(
     };
     let answer = perceive(doc, &spec, budget)?;
 
-    Ok(ProbeReport {
+    let mut report = ProbeReport {
         units: doc.units.clone(),
         points: answer.points.iter().map(point_probe).collect(),
         rays: answer.rays.iter().map(ray_probe).collect(),
-    })
+        unlisted_rays: Vec::new(),
+        unlisted_points: Vec::new(),
+        more: None,
+    };
+    while !crate::reply_budget::fits(&report) && report.rays.len() + report.points.len() > 1 {
+        if report.rays.len() > 1 || report.points.is_empty() {
+            report.rays.pop();
+            report.unlisted_rays.insert(0, report.rays.len());
+        } else {
+            report.points.pop();
+            report.unlisted_points.insert(0, report.points.len());
+        }
+    }
+    if !report.unlisted_rays.is_empty() || !report.unlisted_points.is_empty() {
+        report.more = Some(format!(
+            "{} rays and {} points from the end of the request are measured and not listed; probe_part with just those lists them",
+            report.unlisted_rays.len(),
+            report.unlisted_points.len()
+        ));
+    }
+    Ok(report)
 }
 
 fn perceive(
@@ -748,6 +818,12 @@ pub struct ThicknessReport {
     /// material to be thick.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub surfaces_skipped: Vec<String>,
+    /// Thin spots found and left out of the reply, the least thin ones, and
+    /// how to see them.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub unlisted_thin_spots: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub more: Option<String>,
     /// What the number is, and what is certain about it: which thin places
     /// are always found, and which only as finely as `sample_spacing_mm`.
     pub note: &'static str,
@@ -810,7 +886,7 @@ pub fn wall_thickness(
         body: s.body.clone(),
     };
 
-    Ok(ThicknessReport {
+    let mut held = ThicknessReport {
         units: doc.units.clone(),
         thinnest: report.min.as_ref().map(spot),
         samples: report.samples,
@@ -834,7 +910,20 @@ pub fn wall_thickness(
                curved face, such as a thin pin — is found where it is wider than \
                sample_spacing_mm; raise max_samples to narrow that. Every sharp edge and \
                every round reads thin beside itself, as kind `edge`",
-    })
+        unlisted_thin_spots: 0,
+        more: None,
+    };
+    while !crate::reply_budget::fits(&held) && held.thin_spots.len() > 1 {
+        held.thin_spots.pop();
+        held.unlisted_thin_spots += 1;
+    }
+    if held.unlisted_thin_spots > 0 {
+        held.more = Some(format!(
+            "the {} least thin spots are not listed; a lower threshold_mm lists only the thinner places",
+            held.unlisted_thin_spots
+        ));
+    }
+    Ok(held)
 }
 
 /// Parse view names, naming the alternatives when one is wrong.
@@ -2042,9 +2131,8 @@ pub const SESSION: &str = "@session";
 #[derive(Debug, Clone, PartialEq, serde::Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Edit {
-    /// The text to replace, copied exactly — spaces and line breaks included —
-    /// from the script as the previous edit left it. It must appear exactly
-    /// once; when it appears twice, give more of the lines around it.
+    /// Text to replace, copied exactly, spaces and line breaks included, from
+    /// the script as the previous edit left it; it must appear once.
     pub old: String,
     /// What to put in its place. Empty deletes `old`.
     pub new: String,
