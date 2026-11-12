@@ -1337,6 +1337,12 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
     }
 
     if let Some(want) = &expect.overhang {
+        for body in observed.overhang.keys().filter(|b| !want.contains_key(*b)) {
+            out.push(Mismatch {
+                field: format!("overhang.{body}"),
+                detail: "this body was measured as it prints and the case records no overhang for it; a body made another way, bought or a reference is never measured".into(),
+            });
+        }
         for (body, w) in want {
             let Some(g) = observed.overhang.get(body) else {
                 out.push(Mismatch { field: format!("overhang.{body}"), detail: "expected this body's overhang; the build reports none".into() });

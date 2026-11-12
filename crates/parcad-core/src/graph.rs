@@ -528,6 +528,41 @@ mod tests {
     }
 
     #[test]
+    fn a_body_is_one_of_printed_made_bought_or_a_reference() {
+        let doc = two_bodies(2);
+        fn body(doc: &mut Doc) -> &mut NamedBody {
+            let Op::Bodies { bodies } = &mut doc.nodes[2].op else { unreachable!() };
+            &mut bodies[1]
+        }
+        let err = |doc: &Doc| doc.topo_order().unwrap_err().to_string();
+
+        let mut made = doc.clone();
+        body(&mut made).made = serde_json::from_str(r#"{"kind":"sheet","thickness_mm":18,"material":"birch plywood"}"#).unwrap();
+        made.topo_order().unwrap();
+        assert!(!made.bodies().unwrap()[1].printed() && made.bodies().unwrap()[0].printed());
+        assert_eq!(made.bodies().unwrap()[1].made.as_ref().unwrap().describe(), "sheet, 18 mm birch plywood");
+
+        let mut both = made.clone();
+        body(&mut both).bought = Some("magnet".into());
+        assert!(err(&both).contains("more than one of .reference(), .made() and .bought()"), "{}", err(&both));
+
+        let mut turned = made.clone();
+        body(&mut turned).printed_up = Some(V3::new(0.0, 0.0, -1.0));
+        assert!(err(&turned).contains("leave .printedUp() off it"), "{}", err(&turned));
+
+        let mut flat = made.clone();
+        body(&mut flat).made = Some(Process::Sheet { thickness_mm: 0.0, material: None });
+        assert!(err(&flat).contains("as sheet(18)"), "{}", err(&flat));
+
+        let mut nameless = doc.clone();
+        body(&mut nameless).bought = Some(" ".into());
+        assert!(err(&nameless).contains(".bought(\"608 bearing\")"), "{}", err(&nameless));
+
+        let unknown: Result<Process, _> = serde_json::from_str(r#"{"kind":"sheet","thickness_mm":18,"kerf":4}"#);
+        assert!(unknown.is_err(), "a field this host does not read is refused, not dropped");
+    }
+
+    #[test]
     fn vertex_target_preserves_the_authored_corner_intent() {
         let op: Op = serde_json::from_str(
             r#"{"op":"fillet","child":0,"radius":2,"vertices":">X and >Y and >Z","expect":{"count":1}}"#,
@@ -1108,12 +1143,54 @@ pub struct NamedBody {
     /// flat in it. Absent means as drawn, +z. Written by `.printedUp()`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub printed_up: Option<V3>,
+    /// How the body is made when it is not printed: cut from a sheet.
+    /// `print_check` holds it to that process instead of to a printer's.
+    /// Written by `.made()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub made: Option<Process>,
+    /// What the body is when it is bought rather than made, in the author's
+    /// words: "608 bearing". Measured and checked for fit like any body,
+    /// never judged as a print. Written by `.bought()`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bought: Option<String>,
 }
 
 impl NamedBody {
     /// The unit direction the body prints up, +z when none is declared.
     pub fn up(&self) -> V3 {
         self.printed_up.unwrap_or(V3::new(0.0, 0.0, 1.0))
+    }
+
+    /// True for a body the print check judges as a print: neither a
+    /// reference, nor made another way, nor bought.
+    pub fn printed(&self) -> bool {
+        !self.reference && self.made.is_none() && self.bought.is_none()
+    }
+}
+
+/// A way of making a body other than printing it. The only one so far is a
+/// sheet, which is what plywood shelves and laser-cut panels are.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Process {
+    /// Cut from a sheet `thickness_mm` thick: plywood, MDF, acrylic.
+    Sheet {
+        thickness_mm: f64,
+        /// The stock, in the author's words: "poplar plywood".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        material: Option<String>,
+    },
+}
+
+impl Process {
+    /// The process as a reply states it: "sheet, 18 mm poplar plywood".
+    pub fn describe(&self) -> String {
+        match self {
+            Process::Sheet { thickness_mm, material } => match material {
+                Some(m) => format!("sheet, {thickness_mm} mm {m}"),
+                None => format!("sheet, {thickness_mm} mm"),
+            },
+        }
     }
 }
 
@@ -2734,6 +2811,39 @@ impl Doc {
                             body.name
                         );
                     }
+                    if body.made.is_some() || body.bought.is_some() {
+                        anyhow::bail!(
+                            "body {:?} has a print orientation but is {}; it is not printed, so \
+                             leave .printedUp() off it",
+                            body.name,
+                            if body.made.is_some() { "made another way (.made())" } else { "bought (.bought())" }
+                        );
+                    }
+                }
+                let marks = [body.reference, body.made.is_some(), body.bought.is_some()];
+                if marks.iter().filter(|&&m| m).count() > 1 {
+                    anyhow::bail!(
+                        "body {:?} is marked more than one of .reference(), .made() and \
+                         .bought(); a body is either a reference, made, or bought, so keep the \
+                         one it is",
+                        body.name
+                    );
+                }
+                if let Some(Process::Sheet { thickness_mm, .. }) = &body.made {
+                    if !(thickness_mm.is_finite() && *thickness_mm > 0.0) {
+                        anyhow::bail!(
+                            "body {:?} is cut from a sheet {thickness_mm} mm thick; a sheet's \
+                             thickness is a positive number of millimetres, as sheet(18)",
+                            body.name
+                        );
+                    }
+                }
+                if body.bought.as_deref().is_some_and(|name| name.trim().is_empty()) {
+                    anyhow::bail!(
+                        "body {:?} is bought with an empty name; name what is bought, as \
+                         .bought(\"608 bearing\")",
+                        body.name
+                    );
                 }
             }
             let mut seen = std::collections::HashSet::new();

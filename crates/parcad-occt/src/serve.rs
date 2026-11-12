@@ -329,9 +329,13 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
                 for face in &mut measured.faces {
                     face.material = if reference { Some(Material::reference()) } else { material.cloned() };
                 }
-                // A reference body is never printed; a surface has nothing to
-                // hold up. Each body in the orientation it declared, or as drawn.
-                if !reference && measured.kind == BodyKind::Solid {
+                // A reference body is never printed, nor is one made another way
+                // or bought; a surface has nothing to hold up. Each body in the
+                // orientation it declared, or as drawn.
+                let printed = body.name.is_none_or(|name| {
+                    doc.bodies().and_then(|named| named.iter().find(|n| n.name == name)).is_none_or(|n| n.printed())
+                });
+                if !reference && printed && measured.kind == BodyKind::Solid {
                     breadcrumb(&format!("{who}measuring overhang as it prints"));
                     let declared = doc
                         .bodies()

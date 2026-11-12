@@ -2586,6 +2586,7 @@ pub(crate) mod tests {
             unlisted: 0,
             thinnest: None,
             bodies: Vec::new(),
+            not_printed: None,
             floor_mm: parcad_evaluation::print::FLOOR_MM,
             minimum_mm: parcad_evaluation::print::MINIMUM_MM,
             overhang_deg: 45.0,

@@ -53,6 +53,7 @@ pub const FEATURES: &[&str] = &[
     "mechanism",
     "shell-corners",
     "inset-past-axis",
+    "body-process",
 ];
 
 /// The version of parcad reading the graph.

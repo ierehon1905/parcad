@@ -959,13 +959,15 @@ mod tests {
     ];
 
     /// Members the classes carry for the editor rather than for a script.
-    const NOT_CALLABLE: [&str; 10] = [
+    const NOT_CALLABLE: [&str; 12] = [
         "constructor",
         "treatmentCall",
         "tagName",
         "materialSpec",
         "referenceBody",
         "printedUpDirection",
+        "madeProcess",
+        "boughtName",
         "children",
         "toNode",
         "filletVertices",

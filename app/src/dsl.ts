@@ -298,6 +298,60 @@ export function brief(declared: Brief): void {
   declaredBrief = { ...declared };
 }
 
+/**
+ * A sheet a body is cut from — plywood, MDF, acrylic — for `.made()`, so the
+ * print check holds that body to a saw instead of to a printer.
+ *
+ * - `thickness` is in mm; `material` is prose the reply echoes.
+ * - Give each piece of the sheet its own body: one body is one piece.
+ * - A sheet body gets no bed fit, overhang or thin-wall flags. It still
+ *   fails for a wall under 0.3 mm or an edge sharper than a saw's 45° bevel,
+ *   is flagged when it is in several pieces, and stays in `between_bodies`.
+ *
+ * @example
+ *     const ply = sheet(18, { material: "birch plywood" });
+ *     const side = box(18, 300, 400).at(-141, 0, 200).made(ply);
+ *     const top = box(300, 300, 18).at(0, 0, 409).made(ply);
+ *     return { side, top };
+ *
+ * @remarks
+ * The plant shelves of 2026-11 were 18 mm plywood judged as FDM prints: a
+ * 256 mm bed, overhangs, and every 45° rip and 40° mitre read as a feather,
+ * so a cleat was blunted by 2 mm to quiet the check. docs/SHEET_GOODS.md is
+ * the whole design; this is its first step, which only stops the wrong
+ * judgement. Nothing here measures the thickness yet.
+ */
+export function sheet(thickness: number, options: SheetOptions = {}): Process {
+  if (!(typeof thickness === "number" && thickness > 0 && Number.isFinite(thickness))) {
+    throw new Error(`sheet() takes the sheet's thickness in mm, above zero: sheet(18); got ${describeArgument(thickness)}`);
+  }
+  if (!isObject(options)) {
+    throw new Error(`sheet() takes its options as an object, { material: "birch plywood" }; got ${describeArgument(options)}`);
+  }
+  const named = unknownKeys(options, SHEET_KEYS, () => undefined);
+  if (named) throw new Error(`sheet() ${named}. Its options are ${list(SHEET_KEYS)}.`);
+  if (options.material !== undefined && typeof options.material !== "string") {
+    throw new Error(`sheet() material is a string, the stock in your own words; got ${describeArgument(options.material)}`);
+  }
+  return { kind: "sheet", thickness, ...(options.material !== undefined && { material: options.material }) };
+}
+
+/** What {@link sheet} takes besides the thickness. */
+export interface SheetOptions {
+  /** The stock, in your own words: "poplar plywood B/BB". Echoed, never judged. */
+  material?: string;
+}
+
+/** How a body is made when it is not printed; {@link sheet} makes one. */
+export interface Process {
+  kind: "sheet";
+  /** mm. */
+  thickness: number;
+  material?: string;
+}
+
+const SHEET_KEYS = ["material"];
+
 /** What {@link brief} declares. Every key is optional; an empty brief is refused. */
 export interface Brief {
   /** The box the part must fit inside, mm, in any of the six axis orientations. */
@@ -1240,6 +1294,67 @@ export class Shape {
   }
 
   /**
+   * Say this body is made another way than printing: cut from a
+   * {@link sheet}. The print check then holds it to that process instead of
+   * to a printer. Call it last, on the shape the returned object names, like
+   * `.reference()`; it changes the shape in place.
+   *
+   * - A body is one of: printed (the default), made, bought
+   *   ({@link Shape.bought}), or a reference.
+   * - A sheet body is one piece of the sheet; give each piece its own body.
+   *
+   * @example
+   *     const ply = sheet(18, { material: "birch plywood" });
+   *     const shelf = box(600, 250, 18).at(0, 0, 9).made(ply);
+   *     const bracket = box(40, 30, 4).at(0, -100, -2);
+   *     return { shelf, bracket };
+   */
+  made(process: Process): Shape {
+    if (!isObject(process) || process.kind !== "sheet") {
+      throw new Error(`made() takes a process, which so far is a sheet: .made(sheet(18)); got ${describeArgument(process)}`);
+    }
+    this.process = { ...process };
+    return this;
+  }
+
+  private process?: Process;
+
+  /** @internal */
+  get madeProcess(): Process | undefined {
+    return this.process;
+  }
+
+  /**
+   * Say this body is bought, not made — a bearing, a magnet, an LED strip —
+   * so its shape stands in for the real part and the print check leaves it
+   * out. Call it last, on the shape the returned object names; it changes
+   * the shape in place.
+   *
+   * - `name` is what to buy, in your own words; the reply echoes it.
+   * - It is measured and in `between_bodies` like any body, so a check can
+   *   hold its fit: `{ clear: ["magnet", "holder"], atLeast: 0.1 }`.
+   *
+   * @example
+   *     const holder = cylinder(8, 6).at(0, 0, 3).cut(cylinder(5.1, 3.2).at(0, 0, 4.5));
+   *     const magnet = cylinder(5, 3).at(0, 0, 4.5).bought("10 x 3 mm neodymium magnet");
+   *     return { holder, magnet };
+   */
+  bought(name: string): Shape {
+    if (typeof name !== "string" || !name.trim()) {
+      throw new Error(`bought() takes what is bought, in your own words: .bought("608 bearing"); got ${describeArgument(name)}`);
+    }
+    this.purchase = name;
+    return this;
+  }
+
+  private purchase?: string;
+
+  /** @internal */
+  get boughtName(): string | undefined {
+    return this.purchase;
+  }
+
+  /**
    * How this body looks in the window. Visual only: nothing measured reads it,
    * and an agent's render shows it only with `materials: true`. Changes this
    * shape in place and returns it.
@@ -1277,11 +1392,13 @@ export class Shape {
     return this.name;
   }
 
-  /** What `tag`, `reference`, `printedUp` and `material` set in place, carried to a shape that replaces this one. */
+  /** What `tag`, `reference`, `printedUp`, `made`, `bought` and `material` set in place, carried to a shape that replaces this one. */
   private static carryMarks(from: Shape, to: Shape): Shape {
     to.name = from.name;
     to.isReference = from.isReference;
     to.printUp = from.printUp;
+    to.process = from.process;
+    to.purchase = from.purchase;
     to.look = from.look;
     return to;
   }
@@ -4680,6 +4797,13 @@ const GRAPH_FEATURES: (Requirement & { uses: (node: GraphNode) => boolean; doc?:
     uses: (n) => n.op === "bodies" && Array.isArray(n.bodies) && n.bodies.some((b) => (b as GraphNode)?.printed_up !== undefined),
   },
   {
+    feature: "body-process",
+    after: "0.0.24",
+    what: "bodies made another way or bought (.made(sheet(18)), .bought())",
+    uses: (n) =>
+      n.op === "bodies" && Array.isArray(n.bodies) && n.bodies.some((b) => (b as GraphNode)?.made !== undefined || (b as GraphNode)?.bought !== undefined),
+  },
+  {
     feature: "section-curves",
     after: "0.0.6",
     what: "sections with rounded corners, arcs or splines",
@@ -5354,6 +5478,13 @@ export function build(
             "the part and never part of it, so call .reference() last, on the shape the returned object names",
         );
       }
+      if (child.madeProcess || child.boughtName) {
+        const mark = child.madeProcess ? ".made()" : ".bought()";
+        throw new Error(
+          `a shape marked ${mark} was used to build another shape, where the mark would be lost; ` +
+            `call ${mark} last, on the shape the returned object names`,
+        );
+      }
     }
     const kids = s.children.map(visit);
     const node = s.toNode(kids);
@@ -5378,6 +5509,12 @@ export function build(
       throw new Error(
         "the script returned only a reference; a reference is measured against the part, so return the part " +
           "beside it: return { holder, stack: stack.reference() }",
+      );
+    }
+    if (root.madeProcess || root.boughtName) {
+      throw new Error(
+        `${root.madeProcess ? ".made()" : ".bought()"} names how a body is made, and a part in one shape is printed; ` +
+          "return it as a named body: return { shelf: shape.made(sheet(18)) }",
       );
     }
     const rootId = visit(root);
@@ -5412,11 +5549,23 @@ export function build(
         `body "${name}" is a reference and has a print orientation; a reference is never printed, so leave .printedUp() off it`,
       );
     }
+    const marks = [shape.referenceBody && ".reference()", shape.madeProcess && ".made()", shape.boughtName && ".bought()"].filter(Boolean);
+    if (marks.length > 1) {
+      throw new Error(`body "${name}" is marked ${list(marks as string[])}; a body is either a reference, made, or bought, so keep the one it is`);
+    }
+    if ((shape.madeProcess || shape.boughtName) && shape.printedUpDirection) {
+      throw new Error(
+        `body "${name}" has a print orientation but is ${shape.madeProcess ? "made another way" : "bought"}; it is not printed, so leave .printedUp() off it`,
+      );
+    }
+    const made = shape.madeProcess;
     return {
       name,
       child: visit(shape),
       ...(shape.referenceBody && { reference: true }),
       ...(shape.printedUpDirection && { printed_up: { x: shape.printedUpDirection[0], y: shape.printedUpDirection[1], z: shape.printedUpDirection[2] } }),
+      ...(made && { made: { kind: made.kind, thickness_mm: made.thickness, ...(made.material !== undefined && { material: made.material }) } }),
+      ...(shape.boughtName && { bought: shape.boughtName }),
     };
   });
   if (bodies.every((body) => body.reference)) {
