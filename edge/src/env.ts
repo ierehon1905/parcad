@@ -27,6 +27,8 @@ export interface Env {
   RESEND_API_KEY?: string;
   /** The access code a directory's reviewer signs in with, as the account `review`; unset, the way in does not exist. A secret. */
   REVIEW_CODE?: string;
+  /** The token OpenAI's plugin portal asks to find at `/.well-known/openai-apps-challenge`; unset, that path is a 404. A secret. */
+  OPENAI_APPS_CHALLENGE?: string;
   /** "1" offers a sign-in that takes any address, on a loopback PUBLIC_HOST only. */
   TEST_SIGN_IN?: string;
   OAUTH_KV: KVNamespace;

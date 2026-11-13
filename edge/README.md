@@ -36,6 +36,11 @@ and forwards their requests to `parcad serve --hosted` behind it.
   `bun x wrangler secret delete REVIEW_CODE --env production` removes the
   link, the route and those tokens together. Nothing about the reviewer is
   kept.
+- **OpenAI's domain check.** A ChatGPT app is listed only once its portal
+  finds the token it issued at `/.well-known/openai-apps-challenge`, as plain
+  text and nothing else. The secret `OPENAI_APPS_CHALLENGE` is that token
+  (`bun x wrangler secret put OPENAI_APPS_CHALLENGE --env production`);
+  unset, the path is a 404.
 - **Shutting someone out.** The host's `--revoked` (`PARCAD_REVOKED` in the
   container) does it. Signing in again gives the same account id, so a
   revoked account stays shut.
@@ -97,7 +102,8 @@ Each of these steps belongs to the operator:
      allow the "ChatGPT" name on the button only with OpenAI's permission, so
      it stays hidden until OpenAI issues the client;
    - `RESEND_API_KEY`, with a sending domain verified for `MAIL_FROM`;
-   - `REVIEW_CODE`, only while a directory reviews the server.
+   - `REVIEW_CODE`, only while a directory reviews the server;
+   - `OPENAI_APPS_CHALLENGE`, the token from OpenAI's plugin portal.
 
    A way in whose secrets are missing is simply not offered.
 4. **Routing.** Move `mcp.parcad.dev` from the tunnel to this Worker's route,
