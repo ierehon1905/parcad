@@ -4,10 +4,15 @@ import "@fontsource-variable/geist";
 import "@fontsource-variable/geist-mono";
 import "./app.css";
 
+const base = import.meta.env.BASE_URL;
+
 export const links: Route.LinksFunction = () => [
-  { rel: "icon", type: "image/svg+xml", href: `${import.meta.env.BASE_URL}favicon.svg` },
-  { rel: "icon", type: "image/png", sizes: "32x32", href: `${import.meta.env.BASE_URL}favicon-32.png` },
-  { rel: "apple-touch-icon", href: `${import.meta.env.BASE_URL}apple-touch-icon.png` },
+  { rel: "icon", type: "image/svg+xml", href: `${base}favicon.svg` },
+  { rel: "icon", type: "image/png", sizes: "96x96", href: `${base}favicon-96.png` },
+  { rel: "icon", type: "image/png", sizes: "48x48", href: `${base}favicon-48.png` },
+  { rel: "icon", type: "image/png", sizes: "32x32", href: `${base}favicon-32.png` },
+  { rel: "apple-touch-icon", href: `${base}apple-touch-icon.png` },
+  { rel: "manifest", href: `${base}manifest.webmanifest` },
 ];
 
 export function Layout({ children }: { children: React.ReactNode }) {

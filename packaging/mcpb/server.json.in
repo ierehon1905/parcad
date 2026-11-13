@@ -6,6 +6,7 @@
   "websiteUrl": "https://parcad.dev",
   "icons": [
     { "src": "https://parcad.dev/favicon.svg", "mimeType": "image/svg+xml", "sizes": ["any"] },
+    { "src": "https://parcad.dev/icon-512.png", "mimeType": "image/png", "sizes": ["512x512"] },
     { "src": "https://parcad.dev/apple-touch-icon.png", "mimeType": "image/png", "sizes": ["180x180"] }
   ],
   "repository": { "url": "https://github.com/ierehon1905/parcad", "source": "github" },

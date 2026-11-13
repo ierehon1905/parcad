@@ -1,0 +1,37 @@
+<!--
+  The mark, and the source of every web icon: favicons, the touch icon, the
+  manifest's sizes, the plugin's icon. icon.svg frames this same drawing as the
+  desktop app's tile. tools/make-icons.sh renders both; never edit the PNGs.
+
+  Full bleed on purpose. Google crops a favicon to its inscribed circle and puts
+  white behind anything transparent, so the old tile's margin showed as a white
+  ring in search results. Corners stay inside the circle's crop only while the
+  radius is at most 8.5% of the side (80 of 1024 here). Directories round it
+  themselves.
+
+  Flat tones, because shading is the first thing lost at 16 px. The bore's far
+  wall sits inside the top of the opening: drawn below it, the same crescent
+  reads as the side of a raised stud. Colours are the app's accent and chrome
+  (app/src/style.css's @theme), as literals because an SVG cannot read them.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="ground" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1e222a"/>
+      <stop offset="1" stop-color="#0d0f13"/>
+    </linearGradient>
+    <clipPath id="bore">
+      <ellipse cx="512" cy="330.8" rx="120" ry="68.8"/>
+    </clipPath>
+  </defs>
+
+  <rect width="1024" height="1024" rx="80" fill="url(#ground)"/>
+
+  <path fill="#a9cdff" d="M 512,149.5 L 824.5,330.8 L 512,512 L 199.5,330.8 Z"/>
+  <path fill="#5e93e0" d="M 199.5,330.8 L 512,512 L 512,874.5 L 199.5,693.2 Z"/>
+  <path fill="#3d6ab0" d="M 512,512 L 824.5,330.8 L 824.5,693.2 L 512,874.5 Z"/>
+
+  <ellipse fill="#0a0f19" cx="512" cy="330.8" rx="120" ry="68.8"/>
+  <path fill="#2b4f8c" clip-path="url(#bore)"
+        d="M 392,330.8 A 120,68.8 0 0 1 632,330.8 L 632,396.1 A 120,68.8 0 0 0 392,396.1 Z"/>
+</svg>

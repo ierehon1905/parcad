@@ -3,7 +3,9 @@
 name = "parcad-edge"
 main = "src/index.ts"
 compatibility_date = "2026-09-01"
-# Geist, served from here so that no sign-in page sends its visitor to a font CDN.
+# Geist, served from here so that no sign-in page sends its visitor to a font CDN,
+# and the icons, so that they change with an edge deploy rather than a host release.
+# A file here answers before the Worker runs, so these paths never reach the host.
 assets = { directory = "./public" }
 
 [vars]
