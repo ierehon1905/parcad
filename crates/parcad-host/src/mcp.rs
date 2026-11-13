@@ -565,11 +565,10 @@ pub struct ExportRequest {
     /// the same script when there is one.
     #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
-    /// Write the file although a check or the print check fails, for the
-    /// reason the user gave once you told them what fails — their decision,
-    /// in their words, never a reason of your own. Without it a failing
-    /// verdict refuses the export, naming it and what was measured; with it
-    /// the reason is kept in the reply.
+    /// The user's reason, in their words, for writing the file of a part
+    /// that fails a check or the print check. Without it a failing verdict
+    /// refuses the export, naming it and what was measured; with it the
+    /// reason is kept in the reply.
     #[serde(default)]
     pub allow_failing: Option<String>,
 }
@@ -732,12 +731,11 @@ pub struct EditRequest {
     /// Seconds the kernel may take, 1 to 600, as evaluate_part's.
     #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
-    /// Write the part although a check or the print check fails, for the
-    /// reason the user gave once you told them what fails — their decision,
-    /// in their words, never a reason of your own. Without it a failing
-    /// verdict refuses an edit that writes part.js, naming it and what was
-    /// measured; an edit to "@session" changes the screen only and is never
-    /// refused for it.
+    /// The user's reason, in their words, for writing an edit that leaves the
+    /// part failing a check or the print check. Without it a failing verdict
+    /// refuses an edit that writes part.js, naming it and what was measured;
+    /// an edit to "@session" changes the screen only and is never refused
+    /// for it.
     #[serde(default)]
     pub allow_failing: Option<String>,
     /// How long to wait for a window to show the edit, when the part is on
@@ -811,11 +809,10 @@ pub struct SaveRequest {
     pub name: String,
     /// The DSL source to save.
     pub script: String,
-    /// Save although a check or the print check fails, for the reason the
-    /// user gave once you told them what fails — their decision, in their
-    /// words, never a reason of your own. Without it a failing verdict
-    /// refuses the save, naming it and what was measured; with it the reason
-    /// is kept in the reply.
+    /// The user's reason, in their words, for saving a part that fails a
+    /// check or the print check. Without it a failing verdict refuses the
+    /// save, naming it and what was measured; with it the reason is kept in
+    /// the reply.
     #[serde(default)]
     pub allow_failing: Option<String>,
 }
@@ -1008,7 +1005,7 @@ impl Parcad {
     #[tool(
         name = "edit_part",
         annotations(title = "Edit a part in place", read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
-        description = "Change part of a script without sending the whole thing: each edit replaces `old` with `new`, once, and the part is rebuilt and measured exactly as evaluate_part does — same reply, same views — then saved. `project` names the part to edit, or \"@session\" for the script on the user's screen. An `old` that appears twice, or not at all, is refused naming how many times it was found and where, or the nearest line, and nothing is written: give more surrounding lines. An `old` found nowhere exactly but once with its spacing and quotes read loosely is applied, and the reply's `matched_loosely` names it. The edited text is built before anything is written, so a change that does not build is refused and the part is left as it was. The previous text is kept as a snapshot (list_snapshots, restore_snapshot), so an edit is undoable, and an edit to the open part lands in the window's own undo history: the reply then carries `on_screen` with the revision and `viewers`, as set_script's does. A saved part that is also open on screen is put on screen too. Use it for every change after the first: a fillet radius, a dimension, one function — sending 10 KB of unchanged script to change two lines is the most common way a session runs out of room. To try a change without saving it, call evaluate_part with the same `project` and `edits`. The reply adds `edits_applied`, the new `script_sha256`, and for a saved part the `path` written and the `snapshot` kept; pass a reply's `script_sha256` back as `expect_sha256` to be refused if the text changed under you. An edit that writes part.js is refused when the edited text fails its `print_check` (material under 0.3 mm) or one of the part's own `checks`, naming the finding or the check and its measurement, unless `allow_failing` gives the user's reason; an edit to \"@session\" changes only the screen and is never refused for a verdict — the window shows it red."
+        description = "Change part of a script without sending the whole thing: each edit replaces `old` with `new`, once, and the part is rebuilt and measured exactly as evaluate_part does — same reply, same views — then saved. `project` names the part to edit, or \"@session\" for the script on the user's screen. An `old` that appears twice, or not at all, is refused naming how many times it was found and where, or the nearest line, and nothing is written: give more surrounding lines. An `old` found nowhere exactly but once with its spacing and quotes read loosely is applied, and the reply's `matched_loosely` names it. The edited text is built before anything is written, so a change that does not build is refused and the part is left as it was. The previous text is kept as a snapshot (list_snapshots, restore_snapshot), so an edit is undoable, and an edit to the open part lands in the window's own undo history: the reply then carries `on_screen` with the revision and `viewers`, as set_script's does. A saved part that is also open on screen is put on screen too. It changes a saved part after the first build — a fillet radius, a dimension, one function — without 10 KB of unchanged script being sent to change two lines, the most common way a session runs out of room. evaluate_part with the same `project` and `edits` tries a change without saving it. The reply adds `edits_applied`, the new `script_sha256`, and for a saved part the `path` written and the `snapshot` kept; a reply's `script_sha256` passed back as `expect_sha256` refuses the edit if the text has changed since. An edit that writes part.js is refused when the edited text fails its `print_check` (material under 0.3 mm) or one of the part's own `checks`, naming the finding or the check and its measurement, unless `allow_failing` gives the user's reason; an edit to \"@session\" changes only the screen and is never refused for a verdict — the window shows it red."
     )]
     async fn edit_part(
         &self,
@@ -1260,7 +1257,7 @@ impl Parcad {
     #[tool(
         name = "export_part",
         annotations(title = "Export a part to a file", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. On a hosted parcad the reply also carries `url`, a signed link that fetches the file with no token until it expires, and `path` is then relative to the account's folder. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find: use it when the user wants to print or look at the part now, not for every export. `opened` says whether the system took the file; `open_error` says why not and what to tell the user. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part whose `print_check` fails — material under 0.3 mm, where nothing prints — or that carries its own `checks` and fails one is refused, with the finding or the check and its measurement named, and nothing is written: fix the part, or, when the user has decided the failure is acceptable, pass `allow_failing` with their reason, which the reply keeps and the file carries: in an STL's header, a STEP comment, or a 3MF's Description. The reply opens with `print_check` and `checks`, the verdicts the file was written under; a `flagged` print_check writes the file and lists what to read."
+        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. On a hosted parcad the reply also carries `url`, a signed link that fetches the file with no token until it expires, and `path` is then relative to the account's folder. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find, for a part the user wants to print or look at now. `opened` says whether the system took the file, and `open_error` why not. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part whose `print_check` fails — material under 0.3 mm, where nothing prints — or that carries its own `checks` and fails one is refused, with the finding or the check and its measurement named, and nothing is written. `allow_failing` carries the user's reason for writing it anyway; the reply keeps it and the file carries it: in an STL's header, a STEP comment, or a 3MF's Description. The reply opens with `print_check` and `checks`, the verdicts the file was written under; a `flagged` print_check writes the file and lists what to read."
     )]
     async fn export_part(
         &self,
@@ -1455,7 +1452,7 @@ impl Parcad {
     #[tool(
         name = "save_project",
         annotations(title = "Save project", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Write a new part to parcad's project folder so the user can open it; open_project it afterwards to put it on their screen. For a part that is already saved, call edit_part instead: it changes the lines you name, rebuilds, and saves in one call, without the whole script being sent again. Evaluate a script first: saving one that does not build leaves the user a broken file. Replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and naming a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not — the file is saved regardless) and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back. A part that builds and fails its `print_check` (material under 0.3 mm, where nothing prints) or one of its own `checks` is not saved: the refusal names the finding or the check and its measurement; fix the part, or pass `allow_failing` with the user's reason, which the reply keeps beside the verdicts it opens with."
+        description = "Writes a new part to parcad's project folder, where the user can open it; open_project then puts it on their screen. For a part already saved, edit_part changes the lines it names, rebuilds and saves in one call, without the whole script being sent again. A script that does not build is saved regardless, as a broken file; evaluate_part builds a script without saving it. Saving replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not) and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back. A part that builds and fails its `print_check` (material under 0.3 mm, where nothing prints) or one of its own `checks` is not saved: the refusal names the finding or the check and its measurement. `allow_failing` carries the user's reason for keeping such a part, and the reply keeps it beside the verdicts it opens with."
     )]
     async fn save_project(
         &self,
@@ -1505,7 +1502,7 @@ impl Parcad {
     #[tool(
         name = "open_project",
         annotations(title = "Show a part to the user in 3D", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Show the user a part: open a project on the screen they are watching — the parcad app, or the ParCAD web page in their browser — loaded from disk, exactly as if they had picked it, in every open window. To show a part you have built, save it with save_project under a name of its own and open that; the part that was open is left as it was. A chat that renders MCP Apps, such as claude.ai and the Claude apps, also draws the part in 3D beside your reply for the user to turn, and then the reply says `shown_in_chat: true`. On a hosted parcad, which has no window, that is how to show a part in 3D. Takes a path from list_projects. Returns the session without the loaded script: `script_chars` and `script_sha256` identify the text every window took, `script: true` asks for it, and read_project has it anyway. Use this before set_script when the part you want to change is not the one on screen — get_session tells you which that is. Like set_script, the reply waits for a window to report evaluating it and carries `viewers`: tell the user the part is in a window only when one reports it built, and in the chat only when `shown_in_chat` says so. A viewer over 30 seconds old is marked `stale` and is not evidence the user is looking at anything; one silent for 300 seconds is left out, and is not waited for."
+        description = "Shows the user a part: opens a project on the screen they are watching — the parcad app, or the ParCAD web page in their browser — loaded from disk, exactly as if they had picked it, in every open window. A part just built is shown by saving it with save_project under a name of its own and opening that; the part that was open is left as it was. A chat that renders MCP Apps, such as claude.ai, the Claude apps and ChatGPT, also draws the part in 3D beside the reply for the user to turn, and the reply then says `shown_in_chat: true`. On a hosted parcad, which has no window, that is how a part is shown in 3D. Takes a path from list_projects. Returns the session without the loaded script: `script_chars` and `script_sha256` identify the text every window took, `script: true` asks for it, and read_project has it anyway. get_session says which part is on screen; set_script changes that part only. Like set_script, the reply waits for a window to report evaluating it and carries `viewers`: a viewer reporting it built is the evidence that it is in a window, and `shown_in_chat` the evidence that it is in the chat. A viewer over 30 seconds old is marked `stale` and is not evidence the user is looking at anything; one silent for 300 seconds is left out, and is not waited for."
     )]
     async fn open_project(
         &self,
@@ -1522,7 +1519,7 @@ impl Parcad {
     #[tool(
         name = "set_script",
         annotations(title = "Replace the script on screen", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Replace the whole script of the project open on the user's screen. For a change to that part — a dimension, a radius, one function — call edit_part with project \"@session\" instead: it sends only the lines that change, builds them first, and lands on screen the same way; set_script is for a script that is new from the first line. To show them a different part, save it with save_project and open it with open_project, or its text lands in the open project and a save writes it there. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing — there is no lock, and you must not wait for one. It edits the screen only: nothing is written to disk until the user saves or you call save_project. Evaluate the script first with evaluate_part; putting a script that does not build in front of the user replaces their working part with an error. Read get_session first and base your edit on the script it returns, or you will silently revert what the user typed since you last looked.\n\nThe reply waits (up to `wait_s`, default 20 s) until a window reports evaluating this revision, and its `viewers` says what each window showed: built with which `volume_mm3`, or the `error` it hit. It does not echo the script you sent: `script_chars` and `script_sha256` identify what landed, and get_session returns it whole. Do not tell the user the part is on screen unless a viewer reports this `revision` with built: true. Setting the same script again makes every window evaluate it again — the way to recover a window that is showing something stale."
+        description = "Replaces the whole script of the project open on the user's screen, for a script that is new from the first line. edit_part with project \"@session\" changes only the lines it names, builds them first and lands on screen the same way. A different part is shown with save_project and open_project; a script sent here lands in the open project, and a save writes it there. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing; there is no lock. It edits the screen only: nothing is written to disk until the user saves or save_project is called. A script that does not build replaces the user's working part on screen with an error; evaluate_part builds a script without showing it. The script replaces anything the user typed since get_session last returned the text.\n\nThe reply waits (up to `wait_s`, default 20 s) until a window reports evaluating this revision, and its `viewers` says what each window showed: built with which `volume_mm3`, or the `error` it hit. It does not echo the script: `script_chars` and `script_sha256` identify what landed, and get_session returns it whole. A viewer reporting this `revision` with built: true is the evidence that the part is on screen. Setting the same script again makes every window evaluate it again, which recovers a window that is showing something stale."
     )]
     async fn set_script(
         &self,
@@ -1556,7 +1553,7 @@ impl Parcad {
     #[tool(
         name = "restore_snapshot",
         annotations(title = "Restore an earlier version", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Put a kept version of a project back in the editor, as an ordinary edit the user can undo. Opens the project first if another one is on screen. Like set_script it changes the screen only — call save_project to write it — keeps the current text as a snapshot first, and waits for a window to report showing it."
+        description = "Puts a kept version of a project back in the editor, as an ordinary edit the user can undo. Opens the project first if another one is on screen. Like set_script it changes the screen only (save_project writes it to disk), keeps the current text as a snapshot first, and waits for a window to report showing it."
     )]
     async fn restore_snapshot(
         &self,
@@ -2843,6 +2840,35 @@ mod tests {
         assert_eq!(writes, ["edit_part", "export_part", "restore_snapshot", "save_project", "set_script"]);
     }
 
+    /// ChatGPT's approval dialog for a write runs a classifier over the tool's
+    /// description and schema, and flags text that tells the model or the
+    /// approver how to decide as a "Suspicious Instruction" (save_project's
+    /// `allow_failing` wording did, 2026-11-13). A write tool says what it does,
+    /// takes and returns; who decides is the refusal's to say, in the reply.
+    #[test]
+    fn a_write_tool_states_what_it_does_and_steers_no_decision() {
+        let steering = [
+            "you must", "must not", "do not tell", "tell the user", "ask the user", "your own",
+            "user's decision", "their decision", "not yours", "only after", "says yes", "say yes",
+            "call again", "only with", "never a reason",
+        ];
+        for tool in Parcad::new().tool_router.list_all() {
+            let writes = tool.annotations.as_ref().and_then(|a| a.read_only_hint) == Some(false);
+            if !writes {
+                continue;
+            }
+            let text = format!(
+                "{} {}",
+                tool.description.as_deref().unwrap_or_default(),
+                serde_json::to_string(&tool.input_schema).unwrap()
+            )
+            .to_lowercase();
+            for phrase in steering {
+                assert!(!text.contains(phrase), "{} tells the reader how to decide: {phrase:?}", tool.name);
+            }
+        }
+    }
+
     /// A client shows the viewer beside `open_project`, the call that shows a
     /// finished part — not beside every draft `evaluate_part` builds — and
     /// hides the tool that feeds it from the model. The page asks for the
@@ -3232,9 +3258,9 @@ mod tests {
         let tools = Parcad::new().tool_router.list_all();
         let description = |name: &str| tools.iter().find(|t| t.name == name).unwrap().description.clone().unwrap_or_default();
         assert!(description("set_script").contains("edit_part with project \"@session\""));
-        assert!(description("save_project").contains("call edit_part instead"));
+        assert!(description("save_project").contains("For a part already saved, edit_part changes the lines it names"));
         assert!(description("evaluate_part").contains("edit_part is the tool that saves"));
-        assert!(description("edit_part").contains("call evaluate_part with the same `project` and `edits`"));
+        assert!(description("edit_part").contains("evaluate_part with the same `project` and `edits` tries a change without saving it"));
         // The seven script-taking tools all take a project and edits.
         for name in [
             "evaluate_part", "measure_wall_thickness", "probe_part", "export_part",
