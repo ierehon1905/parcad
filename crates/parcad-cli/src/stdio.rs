@@ -314,18 +314,20 @@ mod tests {
         }
     }
 
-    /// The directory's plugin cannot reach outside its own folder, so it
-    /// carries a copy of each skill the local plugin shares with it.
+    /// A directory's plugin cannot reach outside its own folder, so each one
+    /// carries a copy of every skill the local plugin shares with it.
     #[test]
-    fn the_claude_plugin_carries_the_local_plugins_shared_skills() {
+    fn the_directory_plugins_carry_the_local_plugins_shared_skills() {
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../packaging");
-        for skill in ["field-instrument"] {
-            let read = |plugin: &str| std::fs::read_to_string(format!("{root}/{plugin}/skills/{skill}/SKILL.md")).unwrap();
-            assert_eq!(
-                read("claude-plugin"),
-                read("plugin"),
-                "packaging/claude-plugin/skills/{skill}/SKILL.md differs from packaging/plugin's; copy it over"
-            );
+        for plugin in ["claude-plugin", "chatgpt-plugin"] {
+            for skill in ["field-instrument"] {
+                let read = |plugin: &str| std::fs::read_to_string(format!("{root}/{plugin}/skills/{skill}/SKILL.md")).unwrap();
+                assert_eq!(
+                    read(plugin),
+                    read("plugin"),
+                    "packaging/{plugin}/skills/{skill}/SKILL.md differs from packaging/plugin's; copy it over"
+                );
+            }
         }
     }
 

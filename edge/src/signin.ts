@@ -173,9 +173,17 @@ async function finish(request: Request, env: Env, way: string): Promise<Response
   return redirect(redirectTo, resumed.headers);
 }
 
+/** OpenAI's check that this domain is ours: the token its portal issued, alone and as plain text. */
+function openaiChallenge(env: Env): Response {
+  const token = env.OPENAI_APPS_CHALLENGE?.trim();
+  if (!token) return new Response("not found", { status: 404 });
+  return new Response(token, { headers: { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store" } });
+}
+
 export async function pages(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname;
+  if (path === "/.well-known/openai-apps-challenge" && ["GET", "HEAD"].includes(request.method)) return openaiChallenge(env);
   if (HOST_PATHS.has(path) || (path.startsWith("/api/exports/") && url.searchParams.has("sig"))) {
     return untouched(request, env);
   }

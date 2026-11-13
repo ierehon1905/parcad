@@ -947,7 +947,7 @@ impl Parcad {
     /// measurably a worse part than one written from the whole language.
     #[tool(
         name = "read_docs",
-        annotations(title = "Read parcad's own documentation", read_only_hint = true, open_world_hint = false),
+        annotations(title = "Read parcad's own documentation", read_only_hint = true, destructive_hint = false, open_world_hint = false),
         description = "Read parcad's own documentation. Call this before writing your first script: `dsl` is the complete language reference — every function, method and constant, with signatures and what each one means — generated from the DSL source, so nothing it has can be missing from it.\n\nThe alternative is learning the language from example parts, and that has been measured: a session that read two of them built its part out of boxes and cylinders, recorded `mirror` and lofts as impossible when both ship, and never found revolve, cone, ngon, polar, repeat, countersink, counterbore, tapDrill or clearance. The parts it wrote were a function of which files it happened to open.\n\nThe other topics are prose, and each is cited by name inside the seeded parts' own comments: `gaps` is what the language cannot express and what to write instead; `gotchas` is the list of shapes that make the kernel return a plausible wrong answer or die — a blended union of two solids that only touch on a face, an offset that silently drops a body, a fillet that grows the part; `operations` is which operations exist, which are deliberately absent, and why. Read `gaps` and `gotchas` before a part with blends, offsets or shells in it: most failed calls are in there already, described from the other side.\n\nA topic too long for one reply — `dsl` is one, and so is `gotchas` — answers first with its contents, not the document: every section by name, and the name of every entry in it. `section` in that reply says `contents`, and `sections` lists the section names. Call read_docs again with the same `topic` and `section` set to one of those names to read that section whole, or to one entry's name — `holeFor`, `Shape.mirror`, `SectionEntry`; a bare method name like `mirror` also works — to read just that entry. Reading every section in `sections` is reading the whole document; nothing is left out of them. A topic that fits in one reply comes back whole, with no `section`. Entries give the rules and an example; `detail: true` adds the reasons and history behind them, which writing a part rarely needs. When you do not know which section has something, pass `query` with a name or a few words instead: the reply lists every section and entry that mentions them, with the `topic` and `section` to read each one."
     )]
     async fn read_docs(
@@ -973,7 +973,7 @@ impl Parcad {
     /// refusal says what to do instead.
     #[tool(
         name = "evaluate_part",
-        annotations(title = "Build and measure a part", read_only_hint = true, open_world_hint = false),
+        annotations(title = "Build and measure a part", read_only_hint = true, destructive_hint = false, open_world_hint = false),
         description = "Build a part from a parcad DSL script, or a saved `project` without sending it, and report what the kernel built. The reply opens with the verdicts: the part's own `checks` (read `checks.verdict` first), `brief` (what the part is for, judged on the build: write `brief({ envelope: [x, y, z] })` in the first build), and `print_check` — loose pieces, thin walls (`failed` under 0.3 mm, which export_part and save_project refuse without `allow_failing`), cuts into another feature, overhang. Then size, volume, area, faces, edges, `bodies` (free-standing pieces: one for a part), `voids`, `stands_on`, `tags` and `tag_extents`.\n\nRead `tag_extents` before any picture: it is the only number that says whether a feature is where you meant it, since every other one is unchanged when a feature faces the wrong way. Compare each tag's `center` with the part's `centroid` and with the script; a tag in `unlocated_tags` owns no face of the finished part.\n\nA part in several solids returns named shapes, `return { base, lid }`: `named_bodies` measures each alone (`pieces` above 1 is a body its own booleans split) and `between_bodies` each pair on the exact solids — `clear` with `clearance_mm`, `touching` with `contact_mm2`, `interfering` with `depth_mm`. Read the depth and the contact, not the verdict. Bodies are never fused; selectors and treatments work inside one body. `.reference()` marks a body that is not the part, such as the coins it holds: measured against every body, left out of size, volume, the print check and exports. A reply lists at most 6 bodies and 16 pairs, the deepest interference first; `named_bodies_unlisted` and `between_bodies_unlisted` count the rest, and `bodies: [names]` lists those. Checks, motion and mechanisms are written in the script (read_docs dsl `Check`, `TurnCheck`, `Mechanism`): `{ clear: [\"lid\", \"base\"], atLeast: 0.2 }` holds at one pose, `{ turns: { body, about, at, degrees }, clearOf: [\"base\"], atLeast: 0.3 }` over a whole travel. A failed check never stops this tool.\n\nPass `views` (`iso`, `front`, `top`, …) to see it too; each view carries `scale_mm` over `scale_px` and `path`, and `size` is still the number to quote. Pass `section: { axis, at_mm }` with a view to cut it open: the flat orange is material the plane passed through, anything darker inside it is void, and `cut_fraction` 0 means the plane missed. To show the user the part, save_project and open_project it.\n\n`edits` with `project` builds it with lines changed and nothing saved — 'what if the wall were 1.2 mm' in one call; edit_part is the tool that saves. A build is kept per script, so asking again with views reuses it; `timeout_s` gives a heavy part longer than 20 s.\n\nA surface (surfaceLoft, trim, patch, …) reports `kind: \"surface\"` and `surface` — area, `free_edges`, `boundary_loops` — instead of a volume; `.thicken(t)` makes it a solid. Curved outlines are drawn, never faked with short straight edges: a section entry `{ through }`, `{ radius }`, `{ spline }`, `{ fit, tolerance }` or `{ curve: (t) => [x, y], from, to, tolerance }`, and spurGearOutline for a gear (read_docs dsl `SectionEntry`); `deviation_mm` and `curve_bound_mm` measure what was built."
     )]
     async fn evaluate_part(
@@ -1094,7 +1094,7 @@ impl Parcad {
     /// The mesh the in-chat viewer draws, for that page alone.
     #[tool(
         name = "view_part",
-        annotations(title = "Draw a part in the chat", read_only_hint = true, open_world_hint = false),
+        annotations(title = "Draw a part in the chat", read_only_hint = true, destructive_hint = false, open_world_hint = false),
         description = "Only for parcad's in-chat 3D viewer, which calls it itself with the project an open_project call opened: it returns that build's mesh as binary arrays, which are no use to read. To build, measure or look at a part, call evaluate_part."
     )]
     async fn view_part(
@@ -1122,7 +1122,7 @@ impl Parcad {
     /// List the selectable edges and the described faces of an evaluated part.
     #[tool(
         name = "list_entities",
-        annotations(title = "List a part's edges and faces", read_only_hint = true, open_world_hint = false),
+        annotations(title = "List a part's edges and faces", read_only_hint = true, destructive_hint = false, open_world_hint = false),
         description = "List what a part is made of, as text rather than a picture: its visible edges with their centres, directions and lengths, and its faces with what each one is (plane, cylinder, cone, sphere, torus), its exact area, a point on it, its outward normal or axis, and the faces it touches. For a part in several named bodies each edge and face also says which `body` it is on.\n\nUse the edges to work out which directional or topological selector picks the edges you mean. Use the faces to work out the *shape* of the part without looking at it — `adjacent` is the half that carries it, because a plane at z=44 could be the top of a plate or the floor of a pocket and what it borders is what tells them apart. A cylindrical face bordering two planes is a through hole; bordering one is a blind one.\n\nThe returned edge@N and face@N ids describe one evaluation and must never appear in a script — there is no face selector in the DSL, so a face is something to read, and the way to act on one is the edges around it."
     )]
     async fn list_entities(
@@ -1144,7 +1144,7 @@ impl Parcad {
     /// Resolve a treatment's input edges without applying it.
     #[tool(
         name = "inspect_treatment_target",
-        annotations(title = "Show what a fillet will act on", read_only_hint = true, open_world_hint = false),
+        annotations(title = "Show what a fillet will act on", read_only_hint = true, destructive_hint = false, open_world_hint = false),
         description = "Show exactly which edges a fillet or chamfer will act on, resolved against the shape before that treatment runs. Takes a node index from evaluate_part's treatments list. Also reports tags whose edge set is exactly this target, which are stable selectors you can use in the script."
     )]
     async fn inspect_treatment_target(
@@ -1170,7 +1170,7 @@ impl Parcad {
     /// inside-or-outside.
     #[tool(
         name = "probe_part",
-        annotations(title = "Probe a part along rays and points", read_only_hint = true, open_world_hint = false),
+        annotations(title = "Probe a part along rays and points", read_only_hint = true, destructive_hint = false, open_world_hint = false),
         description = "Measure a part along rays and at points instead of looking at it. This is the tool for every question of the form 'is there material here', 'how thick is that', 'does this hole break through', 'do these two bores meet' — a render cannot settle any of them, and neither can arithmetic on the script: the script says what was asked for, and this says what was built. Reach for it before you reason from a dimension in the source.\n\nEach point reports `medium`, either \"material\" or \"void\", plus the distance to the nearest surface (negative in material). Each ray reports every crossing in order, each with the `medium` it passed `into` and `surface_of`, the tag of the node whose surface that face belongs to — read those names down the list and they name the features the line went through, which is how you tell two voids that meet from two that do not. Also `solid_mm`, and `first_solid_mm`, which is a wall thickness, measured.\n\nA ray that reports no crossings at all crossed nothing but void: that is a positive result, not a failed measurement. Everything is measured on the exact solid — every fillet and chamfer is in it, and a distance near a corner is the true distance — so there is nothing left out to allow for. For a part in several bodies each crossing and point also says which `body`. On a surface, which has no inside, a point is never `material`: its `distance_mm` is to the surface, and a ray lists every place it passes through the surface as a crossing into `void`."
     )]
     async fn probe_part(
@@ -1197,7 +1197,7 @@ impl Parcad {
     /// the question nobody knows to ask until the part comes back wrong.
     #[tool(
         name = "measure_wall_thickness",
-        annotations(title = "Find the thinnest wall", read_only_hint = true, open_world_hint = false),
+        annotations(title = "Find the thinnest wall", read_only_hint = true, destructive_hint = false, open_world_hint = false),
         description = "Find the thinnest material anywhere in the part, and where it is. Use this before saying a part is ready to print, cast or mill, and any time you cut a pocket, a bore or a shell into something — it is the check that catches a wall you thinned without meaning to. Unlike probe_part it needs no guess about where to look: it reads every edge, searches every pair of faces for thin material between them, and measures from thousands of points over the whole surface, and reports the worst.\n\nThe thickness at a point is the diameter of the largest ball that fits inside the material touching the surface there — the wall thickness a moulder or a print check means. Through a slanted wall it is the distance across the wall, not along any line: a 2 mm slab tilted 30° reads 2.0 here and 2.31 straight down with probe_part. Use this for how thick a wall is, probe_part for how much material a particular line crosses.\n\nReports `thinnest` — the thickness in mm, the point, and `surface_of` and `opposite_surface_of`, the tags of the two faces the material lies between, which is what tells you *which* wall is thin. Pass `threshold_mm` (the process minimum, e.g. 1.2 for a print) and it also reports `below_threshold`, how many samples failed it, plus `thin_spots`: every thin sample grouped into the place it belongs to, with its `kind`, `samples` and `extent_mm`, so a pocket floor thin all over and one thin corner are different entries.\n\nRead `kind` first. `feather` is a sliver: real material that thins to a knife edge where two faces meet at a shallow angle, what a cut leaves when it grazes another feature. Its `thickness_mm` is 0 because the material really does run out to nothing along that edge — it is the thinnest material in the part, not a measuring artefact and not an `edge` reading — with `wedge_deg` the angle and `extent_mm` the stretch that sharp. It will not print or cast cleanly and is almost never intended, so fix it or say why it stays. `wall` is two faces that do not meet — a floor, a wall, a web between holes — and is thin because a dimension made it so. `edge` is a ball wedged into a corner — beside every sharp edge, and on every round, which reads twice its radius — so it comes last and is not a wall. `surface` and `opposite_surface` say what each face is, which names the feature when no tag does.\n\nMeasured on the exact solid with every fillet and chamfer in it: a rounded edge is in the number, not a caveat beside it. What is certain, at any `max_samples`: every feather is found, however short, and every wall thinner than `threshold_mm` between two faces that do not meet is found and measured exactly where it is thinnest. Only a thin place of another shape — across a single curved face, like a thin pin — rests on the samples, which are never more than `sample_spacing_mm` apart; raise `max_samples` to narrow that. A minimum that tapers toward zero at a groove rim or a run-off blend is real material geometry, not a defect: docs/GOTCHAS.md, in `read_docs`, has the two shipped parts it happens on. A surface has no material to be thick and is refused here, naming `.thicken(t)`; in a part that mixes solids and surfaces the surfaces are left out and listed in `surfaces_skipped`."
     )]
     async fn measure_wall_thickness(
@@ -1221,7 +1221,7 @@ impl Parcad {
     /// Check a selector's syntax without evaluating any geometry.
     #[tool(
         name = "check_selector",
-        annotations(title = "Check a selector", read_only_hint = true, open_world_hint = false),
+        annotations(title = "Check a selector", read_only_hint = true, destructive_hint = false, open_world_hint = false),
         description = "Parse a directional selector such as '>Z and >Y and |X' and report the exact error and character span if it is wrong. Cheap: it runs the kernel's own parser and touches no geometry."
     )]
     async fn check_selector(
@@ -1351,7 +1351,7 @@ impl Parcad {
     /// Measure a foreign STEP export so a recreation has numbers to hit.
     #[tool(
         name = "probe_step_export",
-        annotations(title = "Measure a STEP file", read_only_hint = true, open_world_hint = false),
+        annotations(title = "Measure a STEP file", read_only_hint = true, destructive_hint = false, open_world_hint = false),
         description = "Measure a STEP file exported from another CAD system — Fusion 360, SolidWorks, FreeCAD — so the part in it can be recreated as a parcad script against numbers instead of an impression. Takes the file's absolute path on this machine. Every value in the reply is measured off the file's own B-rep by the exact kernel; nothing is inferred from the file name, and nothing is echoed from a request.\n\nThe reply lists `solids`, each with exact `volume_mm3` and `area_mm2`, `bbox_min`/`bbox_max`, and `face_types` — a tally such as {\"plane\": 18, \"nurbs\": 12} that says at a glance what kind of geometry the body is made of. A file can hold several solids; recreating one of them is not recreating the document, so check the count and say which body a script reproduces. `free_faces` counts faces that belong to no solid — a file that is all free faces holds surface bodies, and there is no solid to recreate.\n\nBy default each solid also carries `faces`: the surface of each (`plane` with origin and outward `normal`; `cylinder`, `cone`, `sphere`, `torus` with axis and radii; `nurbs` with degrees, knots and the full `poles` grid) and its boundary `wires`, edges in traversal order so each edge's `b` is the next edge's `a`. A wire whose edges are all straight lines also carries `polygon` — its vertices in order, which is a section outline an `extrude` or `loft` can take almost verbatim. Pass detail: \"summary\" for the solids without faces, the right first look at an unfamiliar file.\n\nReading a loft target: a `nurbs` wall whose `poles` grid is 2 by 2 is ruled — four corner points fully determine it, and a parcad `loft` through matching sections rebuilds the identical surface (vertex pairing is by outline index, so a section listed a quarter turn on authors a twisted wall). Bigger pole grids are fitted surfaces; hold a recreation to volume, area and bounding box rather than pole-for-pole equality.\n\nReading a curved profile: a revolved or extruded wall's profile is one row of its `poles` grid. When that direction's knots are clamped and uniform — end multiplicity degree + 1, interior knots evenly spaced, weights 1 — the row copies exactly into a section: its first and last poles as corners [x, y] and the poles between as { bspline: [[x, y], ...], degree }. With other knots it is a fitted curve; do not copy it as if it were the sketch. A wall whose grid evaluates to circles or straight lines at its knots was lofted through arcs and polygons, which sections draw with { through } and corners. To compare a finished recreation, `export_part` it as STEP and probe both files the same way."
     )]
     async fn probe_step_export(
@@ -1384,7 +1384,7 @@ impl Parcad {
     /// Every project in the shared folder.
     #[tool(
         name = "check_fit",
-        annotations(title = "Check the fit", read_only_hint = true, open_world_hint = false),
+        annotations(title = "Check the fit", read_only_hint = true, destructive_hint = false, open_world_hint = false),
         description = "Lay a reference object against a part and measure how they sit, on the two exact solids: `verdict` is clear, touching or interfering; `interference_mm3` is the material the two share, which is what would have to be cut away for the object to fit, and `depth_mm` at `deepest_mm` is how far one reaches into the other — the number to read, since a volume is not a depth; `clearance_mm` and `closest_mm` say how much room there is and where, when they do not overlap, and `contact_mm2` over `contact_patches` patches says how much of a face they share when they touch, which is what tells a seat from a corner. This is the question 'does the laptop fit in its holder' or 'does the lid clear the boss', and neither a render nor arithmetic on the script can answer it — the script says what was asked for and this measures what was built.\n\nBoth arguments are scripts. The reference is usually one line drawing the object where it sits, e.g. a 16-inch MacBook Pro as `return box(355.7, 248.1, 16.8).at(0, 0, 18.4)`. A holder is right when the reference is `clear` by about the clearance it was drawn with, and wrong when it `interfering` — the depth and where it is deepest say by how much. When both objects are bodies of one part — `return { holder, laptop }` — evaluate_part already measures the pair in `between_bodies`, with the same verdict and numbers, and no second call is needed."
     )]
     async fn check_fit(
@@ -1410,7 +1410,7 @@ impl Parcad {
 
     #[tool(
         name = "list_projects",
-        annotations(title = "List projects", read_only_hint = true, open_world_hint = false),
+        annotations(title = "List projects", read_only_hint = true, destructive_hint = false, open_world_hint = false),
         description = "List the parts in parcad's project folder. This is the same folder the desktop app and the user see, so anything listed here can be opened in the app, and anything saved here shows up in it. Paths are slash-separated: a part inside a folder is listed as 'Mounts/bracket', and that whole string is the name every other project tool takes. Parts that ship with parcad are seeded into this folder and are ordinary projects."
     )]
     async fn list_projects(
@@ -1437,7 +1437,7 @@ impl Parcad {
     /// One project's source.
     #[tool(
         name = "read_project",
-        annotations(title = "Read a project", read_only_hint = true, open_world_hint = false),
+        annotations(title = "Read a project", read_only_hint = true, destructive_hint = false, open_world_hint = false),
         description = "Return the DSL source of one project. The seeded parts are worth reading before writing your own: they are the same files the eval corpus measures, so they always run. On disk a project is usually a '<name>.parcad' folder whose 'part.js' is the source this returns; a README.md beside it describes the part in prose. A loose '<name>.js' file is also a project. Either way, use the path from list_projects rather than a filename."
     )]
     async fn read_project(
@@ -1492,7 +1492,7 @@ impl Parcad {
     /// What is on the user's screen right now.
     #[tool(
         name = "get_session",
-        annotations(title = "Read the open editor", read_only_hint = true, open_world_hint = false),
+        annotations(title = "Read the open editor", read_only_hint = true, destructive_hint = false, open_world_hint = false),
         description = "Read the live session: which project is open in the parcad window and the script as it currently stands in the editor, including anything the user has typed since you last looked. Call this before editing — the on-screen script may differ from the file on disk, and editing from a stale copy silently reverts the user's work. `name` is null until something is opened; `revision` increases with every change. The editor pushes its document a moment after typing stops, so the very last keystrokes can lag by about half a second.\n\n`viewers` is what each open window is actually drawing, as the window reported it: the `revision` it last evaluated, whether that `built`, the `error` if not, and the `volume_mm3` it measured. A window below the session's revision has not caught up; one with built: false is still drawing an older part beside that error. An empty list means no window is open, so nobody is looking. A viewer over 30 seconds old is marked `stale` and is not evidence the user is looking at anything; one silent for 300 seconds is left out."
     )]
     async fn get_session(
@@ -1521,7 +1521,7 @@ impl Parcad {
     /// Change what is on the user's screen, as an ordinary edit.
     #[tool(
         name = "set_script",
-        annotations(title = "Replace the script on screen", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        annotations(title = "Replace the script on screen", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
         description = "Replace the whole script of the project open on the user's screen. For a change to that part — a dimension, a radius, one function — call edit_part with project \"@session\" instead: it sends only the lines that change, builds them first, and lands on screen the same way; set_script is for a script that is new from the first line. To show them a different part, save it with save_project and open it with open_project, or its text lands in the open project and a save writes it there. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing — there is no lock, and you must not wait for one. It edits the screen only: nothing is written to disk until the user saves or you call save_project. Evaluate the script first with evaluate_part; putting a script that does not build in front of the user replaces their working part with an error. Read get_session first and base your edit on the script it returns, or you will silently revert what the user typed since you last looked.\n\nThe reply waits (up to `wait_s`, default 20 s) until a window reports evaluating this revision, and its `viewers` says what each window showed: built with which `volume_mm3`, or the `error` it hit. It does not echo the script you sent: `script_chars` and `script_sha256` identify what landed, and get_session returns it whole. Do not tell the user the part is on screen unless a viewer reports this `revision` with built: true. Setting the same script again makes every window evaluate it again — the way to recover a window that is showing something stale."
     )]
     async fn set_script(
@@ -1538,7 +1538,7 @@ impl Parcad {
     /// The versions kept before each replace.
     #[tool(
         name = "list_snapshots",
-        annotations(title = "List a project's earlier versions", read_only_hint = true, open_world_hint = false),
+        annotations(title = "List a project's earlier versions", read_only_hint = true, destructive_hint = false, open_world_hint = false),
         description = "List the earlier versions of a project's script that parcad kept, newest first: one is kept automatically before save_project overwrites part.js, and one before set_script replaces the script on screen — including text the user typed and never saved. Each has an `id`, the `path` of a plain .js file, its size and its first line. Use restore_snapshot to put one back on screen; the 50 newest are kept per project."
     )]
     async fn list_snapshots(
@@ -1555,7 +1555,7 @@ impl Parcad {
     /// Put an earlier version back on screen.
     #[tool(
         name = "restore_snapshot",
-        annotations(title = "Restore an earlier version", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
+        annotations(title = "Restore an earlier version", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
         description = "Put a kept version of a project back in the editor, as an ordinary edit the user can undo. Opens the project first if another one is on screen. Like set_script it changes the screen only — call save_project to write it — keeps the current text as a snapshot first, and waits for a window to report showing it."
     )]
     async fn restore_snapshot(
@@ -2787,7 +2787,8 @@ mod tests {
     /// A tool that says nothing about itself is treated as if it might do
     /// anything: the client's defaults are "not read-only, destructive, open
     /// world", so a measurement asks the user for permission on the same terms
-    /// as overwriting their part. Every tool here states which it is.
+    /// as overwriting their part. Every tool here states all three, because
+    /// OpenAI's plugin review refuses a tool that leaves one to its default.
     #[test]
     fn every_tool_says_whether_it_only_looks() {
         for tool in Parcad::new().tool_router.list_all() {
@@ -2795,11 +2796,13 @@ mod tests {
                 .annotations
                 .as_ref()
                 .unwrap_or_else(|| panic!("{} carries no annotations", tool.name));
-            assert!(
-                annotations.read_only_hint.is_some(),
-                "{} does not say whether it changes anything",
-                tool.name
-            );
+            for (hint, stated) in [
+                ("readOnlyHint", annotations.read_only_hint),
+                ("destructiveHint", annotations.destructive_hint),
+                ("openWorldHint", annotations.open_world_hint),
+            ] {
+                assert!(stated.is_some(), "{} leaves {hint} to the client's default", tool.name);
+            }
             // A permission dialog shows one of these; which one depends on how
             // old the client is, so both have to be there and agree.
             assert_eq!(
@@ -2818,9 +2821,11 @@ mod tests {
         }
     }
 
-    /// The two that write to the user's disk, named rather than counted: a
-    /// client auto-approves on `readOnlyHint`, so a tool wrongly marked
-    /// read-only replaces a file with nobody asked.
+    /// The tools that replace something the user has, named rather than
+    /// counted: a file on disk, or the script on their screen even though they
+    /// can undo it — OpenAI's review counts an undoable overwrite as
+    /// destructive. A client auto-approves on `readOnlyHint`, so a tool wrongly
+    /// marked read-only replaces a file with nobody asked.
     #[test]
     fn the_tools_that_write_are_the_ones_that_say_so() {
         let writes: Vec<String> = Parcad::new()
@@ -2835,7 +2840,7 @@ mod tests {
             })
             .map(|tool| tool.name.to_string())
             .collect();
-        assert_eq!(writes, ["edit_part", "export_part", "save_project"]);
+        assert_eq!(writes, ["edit_part", "export_part", "restore_snapshot", "save_project", "set_script"]);
     }
 
     /// A client shows the viewer beside `open_project`, the call that shows a

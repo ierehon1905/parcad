@@ -5,7 +5,8 @@
  * token at all, the host's own static token, an
  * address nobody listed (sign-up is open), a sign-in by emailed code, one
  * through ChatGPT against a mock of OpenAI's sign-in, and the reviewer's
- * access code, which the last tests rotate and then delete by restarting the edge.
+ * access code, which the last tests rotate and then delete by restarting the edge,
+ * and the token OpenAI's portal checks the domain with.
  *
  * Needs a parcad built with the edge flags: PARCAD_BIN, or the repository's
  * target/debug/parcad (`cargo build -p parcad-cli`).
@@ -34,6 +35,7 @@ const BIN = process.env.PARCAD_BIN ?? resolve(import.meta.dir, "../../target/deb
 const CHATGPT_ID = "oaiapp_edge_test";
 const ACCESS_CODE = "edge-test-access-code-one";
 const ROTATED_CODE = "edge-test-access-code-two";
+const OPENAI_CHALLENGE = "edge-test-openai-challenge-token";
 
 const dir = mkdtempSync(join(tmpdir(), "parcad-edge-"));
 let host: Subprocess;
@@ -107,7 +109,7 @@ beforeAll(async () => {
     PUBLIC_HOST: EDGE, ORIGIN: HOST, EDGE_KEY: pkcs8, TEST_SIGN_IN: "1", LIST_WITHOUT_SIGN_IN: "1",
     CHATGPT_CLIENT_ID: CHATGPT_ID, CHATGPT_CLIENT_SECRET: "edge-test-secret", TEST_CHATGPT_ISSUER: openai.issuer,
   };
-  await startEdge({ ...edgeVars, REVIEW_CODE: ACCESS_CODE });
+  await startEdge({ ...edgeVars, REVIEW_CODE: ACCESS_CODE, OPENAI_APPS_CHALLENGE: OPENAI_CHALLENGE });
 }, 90_000);
 
 afterAll(async () => {
@@ -369,6 +371,14 @@ test("the host's health and front page pass through", async () => {
   expect((await fetch(`${EDGE}/somewhere-else`)).status).toBe(404);
 });
 
+test("OpenAI's domain challenge is the token alone, as plain text", async () => {
+  const challenge = await fetch(`${EDGE}/.well-known/openai-apps-challenge`);
+  expect(challenge.status).toBe(200);
+  expect(challenge.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+  expect(await challenge.text()).toBe(OPENAI_CHALLENGE);
+  expect((await fetch(`${EDGE}/.well-known/openai-apps-challenge`, { method: "HEAD" })).status).toBe(200);
+});
+
 /** A sign-in through ChatGPT, with OpenAI's part played by the mock: the claims its ID token carries, and the key it is signed with. */
 async function chatgptSignIn(claims: Record<string, unknown>, key?: CryptoKey) {
   const client = await register();
@@ -479,6 +489,7 @@ test("a new code shuts out the old code's tokens, and its own door is open", asy
 
 test("with no code set there is no link and no route, and the last code's tokens stop working", async () => {
   await restartEdge(edgeVars);
+  expect((await fetch(`${EDGE}/.well-known/openai-apps-challenge`)).status).toBe(404);
   const { jar, handle, back, html } = await openSignIn(await register());
   expect(html).not.toContain("access code");
   expect(html).not.toContain("access-code");
