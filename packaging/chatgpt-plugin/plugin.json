@@ -67,12 +67,11 @@
             },
             {
               "description": "Open one of the example parts every account starts with and show it in 3D.",
-              "prompt": "Show me the lidded box from my ParCAD parts in 3D.",
+              "prompt": "Show me the twisted planter from my ParCAD parts in 3D.",
               "tools_triggered": [
-                "list_projects",
                 "open_project"
               ],
-              "expected_behavior": "ChatGPT finds lidded-box with list_projects and opens it with open_project. ParCAD's 3D viewer appears in the chat with the box and its lid, and the user can turn it."
+              "expected_behavior": "ChatGPT opens twisted-planter with open_project, after list_projects if it needs the path. ParCAD's 3D viewer appears in the chat with the planter and its drip saucer as two bodies; building it takes the viewer about half a minute. The user can turn it, see through it and hide either body."
             },
             {
               "description": "Measure a part's thinnest wall on the exact solid.",
