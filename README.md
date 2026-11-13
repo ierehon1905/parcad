@@ -1,6 +1,30 @@
-# ParCAD
+<h1 align="center">ParCAD</h1>
 
-Parametric CAD you write as code — for people, and for agents.
+<p align="center">
+  <strong>Ask Claude for a part. ParCAD makes sure it fits before you print.</strong><br />
+  Free, open source CAD that AI models drive. Claude writes the part as code, an exact
+  kernel builds it, and every build is measured: the sizes you asked for, the walls,
+  a hinge swung through its whole range. Then export 3MF for your slicer, or STEP.
+</p>
+
+<p align="center">
+  <a href="#use-it-from-an-agent"><img alt="Add to Claude: mcp.parcad.dev" src="https://img.shields.io/badge/Add_to_Claude-mcp.parcad.dev-1f2328?style=for-the-badge"></a>
+  <a href="https://parcad.dev/app/"><img alt="Try it in your browser" src="https://img.shields.io/badge/Try_it-in_your_browser-2f81f7?style=for-the-badge"></a>
+  <a href="#install-it"><img alt="macOS and Linux: Homebrew" src="https://img.shields.io/badge/macOS_%26_Linux-Homebrew-fbb040?style=for-the-badge&logo=homebrew&logoColor=white"></a>
+  <a href="https://github.com/ierehon1905/parcad/releases/latest"><img alt="Windows and Linux downloads" src="https://img.shields.io/badge/Windows_%26_Linux-download-57606a?style=for-the-badge"></a>
+</p>
+
+<p align="center">
+  <a href="https://parcad.dev">Website</a> ·
+  <a href="docs/GETTING_STARTED.md">Getting started</a> ·
+  <a href="https://github.com/ierehon1905/parcad/releases">Releases</a>
+</p>
+
+![Claude, in a chat, adds a snap latch to an SD card box whose lid prints in place, while ParCAD builds and checks it beside the chat](docs/images/demo.gif)
+
+*Claude adds a snap latch to an SD card box with a lid that prints in place. ParCAD builds
+it on an exact kernel, swings the lid shut and checks the latch actually catches.
+[Full video](https://youtube.com/shorts/orbZTZztxEY).*
 
 **Status: 0.0.25, experimental.** Made by Maging Studio, and the DSL still moves. Every
 operation is checked against measured geometry ([eval/cases/](eval/cases/)), but
