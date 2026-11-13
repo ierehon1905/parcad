@@ -47,13 +47,14 @@
         "test_cases": {
           "positive": [
             {
-              "description": "Design a new part from a description and report the size ParCAD measured.",
-              "prompt": "Using ParCAD, design an L-shaped wall bracket 40 mm wide with two 4 mm screw holes, and tell me its measured size.",
+              "description": "Design a new part from a description, report the size ParCAD measured and show it in 3D.",
+              "prompt": "Using ParCAD, design an L-shaped wall bracket 40 mm wide with two 4 mm screw holes, tell me its measured size and show it to me in 3D.",
               "tools_triggered": [
                 "read_docs",
-                "evaluate_part"
+                "evaluate_part",
+                "open_project"
               ],
-              "expected_behavior": "ChatGPT reads ParCAD's language docs with read_docs, writes the part as a script and builds it with evaluate_part. The reply gives the size from ParCAD's measurement (about 40 x 40 x 40 mm for 40 mm legs) and the outcome of ParCAD's checks. It may also save the part with save_project and open it with open_project."
+              "expected_behavior": "ChatGPT reads ParCAD's language docs with read_docs, writes the part as a script and builds it with evaluate_part, then saves it with save_project and opens it with open_project. ParCAD's 3D viewer shows the bracket in the chat, and the user can turn it. The reply gives the size from ParCAD's measurement (about 40 x 40 x 40 mm for 40 mm legs) and the outcome of ParCAD's checks."
             },
             {
               "description": "Build a part and hand the user a printable 3MF file.",
