@@ -46,8 +46,10 @@ and forwards their requests to `parcad serve --hosted` behind it.
   with a pass in its place: an Ed25519 JWS naming the account, which the host
   checks with `--edge-key` and `--edge-origin` (docs/HOSTING.md, "Auth").
   - A static token (no colon) goes through untouched.
-  - So do signed export links, the host's front page and icons, and
-    `/api/health`.
+  - So do signed export links, the host's front page and `/api/health`.
+  - The icons and fonts are the edge's own static files (`public/`, links into
+    `app/public`), served before the Worker runs; a new icon goes live with
+    an edge deploy.
   - With `LIST_WITHOUT_SIGN_IN=1`, a request to `/mcp` with no token goes on
     as a visitor. A host started with `--list-without-sign-in` answers its
     `initialize` and `tools/list`.

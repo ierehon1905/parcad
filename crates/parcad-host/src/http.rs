@@ -153,6 +153,8 @@ fn router(assets: Arc<dyn Assets>, accounts: Option<tenant::Accounts>) -> Router
         .route("/favicon.ico", get(icon))
         .route("/favicon.svg", get(icon))
         .route("/favicon-32.png", get(icon))
+        .route("/favicon-48.png", get(icon))
+        .route("/favicon-96.png", get(icon))
         .route("/apple-touch-icon.png", get(icon))
         .route("/fonts/geist.woff2", get(icon))
         .route("/fonts/geist-mono.woff2", get(icon))
@@ -186,6 +188,8 @@ fn front_page(public: &tenant::PublicHost, signs_in: bool, part_lifetime: Option
 <meta name="color-scheme" content="dark">
 <title>ParCAD</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="icon" href="/favicon-96.png" type="image/png" sizes="96x96">
+<link rel="icon" href="/favicon-48.png" type="image/png" sizes="48x48">
 <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <style>
@@ -950,6 +954,7 @@ mod tests {
         assert!(page.body.contains("a token from whoever runs this server"), "{}", page.body);
         assert!(!page.body.contains("sign in"), "no edge, nothing to sign in to: {}", page.body);
         assert!(page.body.contains(r#"<link rel="icon" href="/favicon-32.png""#), "{}", page.body);
+        assert!(page.body.contains(r#"<link rel="icon" href="/favicon-96.png""#), "Google wants a multiple of 48 px: {}", page.body);
 
         for path in ["/favicon.ico", "/favicon-32.png"] {
             let icon = exchange(port, "GET", path, &[], "");
