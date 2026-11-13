@@ -197,6 +197,19 @@ evidence for parcad.
   check on either host: it fixed the part from `tag_extents` and left the
   script otherwise alone. The one trial that wrote a wrong check read the
   failure's `mismatch` sentence and corrected it on the next call.
+- **A client's classifier reads a write tool's description too, and an
+  instruction there reads to it as steering.** ChatGPT (2026-11-13) stopped a
+  `save_project` call with a "Suspicious Instruction" approval dialog: its
+  description and `allow_failing` said whose decision a failing part is
+  ("their decision, in their words, never a reason of your own"). Restated as
+  facts, the first rewording ("the user's reason, in their words") let one
+  haiku trial of 8 write the brief's own words as the reason and export over
+  the failed print check (`export-what-will-not-print`, none of 8 before).
+  "In the words of a user who knows what fails" closed it: 0 of 16 trials
+  invented a reason, against 0 of 16 on the old text, SOUND 15/16 on both,
+  each miss a dropped verdict line; and `is-it-safe-to-save`, where the user
+  did accept the failure, passed the door in 8 of 8 on both (SOUND 7/8, 6/8
+  before). Who decides is said where it was measured, in the refusal.
 - **What still reads wrong.** With `offset` refused and the meant field
   named, the thinking arm's route is unchanged at 0/3 by `input` — it never
   sends the hazard, so the refusal is unmeasured there. And on the rotate
@@ -223,6 +236,10 @@ evidence for parcad.
 **Descriptions and errors**
 
 5. Say when to call the tool, what comes back, and how to ask for less of it.
+   A tool that writes says it as facts — what it takes, does, returns and
+   refuses — and leaves who decides to its refusal: a client's approval
+   classifier flags a description that tells the reader how to decide
+   (`a_write_tool_states_what_it_does_and_steers_no_decision`).
 6. Name fields for what they are; a field a model can misread will be misread.
 7. An error names the fix, with the numbers that would work.
 
