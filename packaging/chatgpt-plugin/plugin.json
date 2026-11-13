@@ -1,0 +1,118 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "parcad",
+  "version": "1.0.0",
+  "description": "Design parts for 3D printing and machining. ParCAD's CAD kernel builds each part from a short script, measures it and checks it before you export 3MF, STEP or STL.",
+  "author": {
+    "name": "Leon Minasian",
+    "email": "contact@parcad.dev",
+    "url": "https://parcad.dev"
+  },
+  "homepage": "https://parcad.dev",
+  "repository": "https://github.com/ierehon1905/parcad",
+  "license": "AGPL-3.0-or-later",
+  "keywords": [
+    "cad",
+    "3d-printing",
+    "step",
+    "3mf",
+    "stl",
+    "parametric"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "ParCAD",
+        "shortDescription": "Design parts to 3D print",
+        "longDescription": "ParCAD is open source CAD for parts you can 3D print or machine.\n\nAsk for a part in plain words: a wall bracket, an enclosure, a box with a hinged lid, an adapter between two things you own. ChatGPT writes it as a short script, and ParCAD's CAD kernel (OpenCASCADE) builds it as an exact solid and measures it. The numbers you get come from that build: size, volume, the thinnest wall, what the part stands on, whether it fits the object it holds.\n\nWhat you can do:\n- Design a new part from a description, or change one you have (\"make the holes 1 mm bigger\").\n- Check it before you print: wall thickness, fit around a reference object, how a lid or a lever swings.\n- Export a 3MF for your slicer (Bambu Studio, OrcaSlicer, PrusaSlicer, Cura), a STEP for another CAD program or a machine shop, or an STL. Each file comes as a download link.\n\nYou sign in with Google or GitHub the first time. Your parts are kept in your own ParCAD account, which starts with a few dozen example parts to open, measure and change. A part nobody opens, builds or saves for 30 days is deleted, so export what you want to keep.\n\nParCAD is open source (AGPL-3.0) and also runs on your own computer as a desktop app: parcad.dev.",
+        "developerName": "Leon Minasian",
+        "category": "Creativity",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "websiteURL": "https://parcad.dev",
+        "supportURL": "https://github.com/ierehon1905/parcad/issues",
+        "privacyPolicyURL": "https://mcp.parcad.dev/privacy",
+        "termsOfServiceURL": "https://mcp.parcad.dev/terms",
+        "defaultPrompt": [
+          "Design a wall bracket for a 25 mm pipe with two screw holes",
+          "Make a box with a hinged lid that fits a deck of cards",
+          "Show me the lidded box from my ParCAD parts in 3D"
+        ],
+        "composerIcon": "./assets/icon.png",
+        "logo": "./assets/icon.png"
+      },
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "Design a new part from a description and report the size ParCAD measured.",
+              "prompt": "Using ParCAD, design an L-shaped wall bracket 40 mm wide with two 4 mm screw holes, and tell me its measured size.",
+              "tools_triggered": [
+                "read_docs",
+                "evaluate_part"
+              ],
+              "expected_behavior": "ChatGPT reads ParCAD's language docs with read_docs, writes the part as a script and builds it with evaluate_part. The reply gives the size from ParCAD's measurement (about 40 x 40 x 40 mm for 40 mm legs) and the outcome of ParCAD's checks. It may also save the part with save_project and open it with open_project."
+            },
+            {
+              "description": "Build a part and hand the user a printable 3MF file.",
+              "prompt": "In ParCAD, make an open box 60 x 40 x 25 mm with 2 mm walls and give me a 3MF file I can print.",
+              "tools_triggered": [
+                "evaluate_part",
+                "export_part"
+              ],
+              "expected_behavior": "ChatGPT builds the box with evaluate_part and exports it with export_part. The reply links a .3mf download on mcp.parcad.dev that opens in any slicer, and gives the size ParCAD measured in the file (60 x 40 x 25 mm, watertight)."
+            },
+            {
+              "description": "Open one of the example parts every account starts with and show it in 3D.",
+              "prompt": "Show me the lidded box from my ParCAD parts in 3D.",
+              "tools_triggered": [
+                "list_projects",
+                "open_project"
+              ],
+              "expected_behavior": "ChatGPT finds lidded-box with list_projects and opens it with open_project. ParCAD's 3D viewer appears in the chat with the box and its lid, and the user can turn it."
+            },
+            {
+              "description": "Measure a part's thinnest wall on the exact solid.",
+              "prompt": "Use the ParCAD tools: make a 50 mm cube with a 20 mm hole straight through the middle, and tell me how thick its thinnest wall is.",
+              "tools_triggered": [
+                "evaluate_part",
+                "measure_wall_thickness"
+              ],
+              "expected_behavior": "ChatGPT builds the cube with evaluate_part and measures it with measure_wall_thickness. The reply says the thinnest wall is 15 mm, between the hole and each side, as ParCAD measured it."
+            },
+            {
+              "description": "Change a saved part and report what the change did to it.",
+              "prompt": "In ParCAD, make the holes in my bracket 1 mm bigger and tell me how its volume changed.",
+              "tools_triggered": [
+                "list_projects",
+                "read_project",
+                "edit_part"
+              ],
+              "expected_behavior": "ChatGPT finds a bracket with list_projects, reads its script with read_project, and changes the hole diameter with edit_part, which builds the change before saving it. The reply gives the old and new hole size and the volume before and after, as ParCAD measured them."
+            }
+          ],
+          "negative": [
+            {
+              "description": "A general question about 3D-printing materials needs no part built.",
+              "prompt": "What's the difference between PLA and PETG filament for 3D printing?"
+            },
+            {
+              "description": "Shopping for a printer is not part design, so ParCAD is not called.",
+              "prompt": "Find me a good 3D printer under 300 dollars."
+            },
+            {
+              "description": "A drawing or picture is not a part to model.",
+              "prompt": "Draw me a picture of a cat wearing a party hat."
+            }
+          ]
+        },
+        "demo_recording_url": "https://www.youtube.com/watch?v=orbZTZztxEY"
+      },
+      "publication": {
+        "release_notes": "First release for ChatGPT. Build parts with ParCAD's hosted CAD kernel, measure them (size, volume, wall thickness, fit), and export 3MF, STEP or STL by download link. Sign in with Google or GitHub; parts are kept in your own account."
+      }
+    }
+  }
+}

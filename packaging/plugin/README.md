@@ -41,15 +41,16 @@ The marketplaces that list it are at the repository root:
   pointed at `https://mcp.parcad.dev/mcp`, beside the hosted server's own
   connector listing, as Anthropic's docs ask a product with a remote server
   to do. Its `field-instrument` skill is a copy of this one's, held equal by
-  `the_claude_plugin_carries_the_local_plugins_shared_skills`; its `parcad`
+  `the_directory_plugins_carry_the_local_plugins_shared_skills`; its `parcad`
   skill differs because the hosted server has no install to fall back on.
   The directory reads it from `ierehon1905/parcad-claude-plugin`, because this
   repository is over its 10,000-file limit: run
   `tools/publish-claude-plugin.sh` after each release to copy the folder there.
-- **Codex**: the public directory does not take local stdio servers without an
-  arrangement with OpenAI, and asks for a verified developer identity and
-  privacy and terms URLs. Until then, `codex plugin marketplace add
-  ierehon1905/parcad` and `codex plugin add parcad@parcad` install from this
-  repository.
+- **ChatGPT and Codex**: OpenAI's directory takes a remote server only, from
+  a verified developer, so it lists `packaging/chatgpt-plugin/`: the same
+  skills, with the server pointed at `https://mcp.parcad.dev/mcp`. Its
+  README says how to submit it. This plugin still installs in Codex from this
+  repository: `codex plugin marketplace add ierehon1905/parcad` and
+  `codex plugin add parcad@parcad`.
 - **MCP Registry**: listed from the release's `.mcpb` bundle, not from this
   plugin; `packaging/mcpb/README.md` says how.
