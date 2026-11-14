@@ -26,7 +26,7 @@
 it on an exact kernel, swings the lid shut and checks the latch actually catches.
 [Full video](https://youtube.com/shorts/orbZTZztxEY).*
 
-**Status: 0.0.26, experimental.** Made by Maging Studio, and the DSL still moves. Every
+**Status: 0.0.27, experimental.** Made by Maging Studio, and the DSL still moves. Every
 operation is checked against measured geometry ([eval/cases/](eval/cases/)), but
 none of it has had the years of abuse that make a CAD kernel trustworthy.
 Measure a part before you machine it.
