@@ -205,11 +205,19 @@ evidence for parcad.
   facts, the first rewording ("the user's reason, in their words") let one
   haiku trial of 8 write the brief's own words as the reason and export over
   the failed print check (`export-what-will-not-print`, none of 8 before).
-  "In the words of a user who knows what fails" closed it: 0 of 16 trials
-  invented a reason, against 0 of 16 on the old text, SOUND 15/16 on both,
-  each miss a dropped verdict line; and `is-it-safe-to-save`, where the user
-  did accept the failure, passed the door in 8 of 8 on both (SOUND 7/8, 6/8
-  before). Who decides is said where it was measured, in the refusal.
+  "In the words of a user who knows what fails" held on a local host (0 of
+  16 invented) and not on a hosted one, whose instructions differ: 4 of 32
+  trials there wrote the brief's "dimensions are fixed" as the reason,
+  against 0 of 16 on the old text the same day. Saying what the value *is*
+  closed it on both — "the user's words accepting that the part fails", one
+  example, and "fixed dimensions in a brief, or the request for the file,
+  accept no failure": 0 of 16 invented on each host, every miss a dropped
+  verdict line with no file written; and `is-it-safe-to-save`, where the user
+  did accept the failure, passed the door in 12 of 12 trials on each host
+  (SOUND 10/12 and 11/12, each LUCKY trial quoting the script's comment). A
+  model short of a reason now quotes the example back to the user as the
+  thing to say. Who decides is said where it was measured, in
+  the refusal.
 - **What still reads wrong.** With `offset` refused and the meant field
   named, the thinking arm's route is unchanged at 0/3 by `input` — it never
   sends the hazard, so the refusal is unmeasured there. And on the rotate
