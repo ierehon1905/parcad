@@ -62,6 +62,12 @@ impl Parcad {
             for tool in ONLY_ON_YOUR_MACHINE {
                 self.tool_router.map.remove(*tool);
             }
+            if let Some(route) = self.tool_router.map.get_mut("export_part") {
+                route.attr.input_schema = Arc::new(without_property(&route.attr.input_schema, "open"));
+                if let Some(description) = route.attr.description.as_mut() {
+                    *description = description.replace(OPENS_ON_THIS_MACHINE, "").into();
+                }
+            }
         }
         self.capability = capability;
         self
@@ -71,6 +77,22 @@ impl Parcad {
 /// Tools a hosted server could only refuse, so it does not list them: each
 /// reads a file on the caller's own disk, which a server cannot see.
 const ONLY_ON_YOUR_MACHINE: &[&str] = &["probe_step_export"];
+
+/// export_part's `open`, which a hosted server ignores: offered there, a model
+/// passed it and ChatGPT asked the user to approve opening a local app.
+const OPENS_ON_THIS_MACHINE: &str = "`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find, for a part the user wants to print or look at now. `opened` says whether the system took the file, and `open_error` why not. The path is written either way. ";
+
+/// `schema` with one argument taken out of its properties and its required list.
+fn without_property(schema: &rmcp::model::JsonObject, name: &str) -> rmcp::model::JsonObject {
+    let mut schema = schema.clone();
+    if let Some(serde_json::Value::Object(properties)) = schema.get_mut("properties") {
+        properties.remove(name);
+    }
+    if let Some(serde_json::Value::Array(required)) = schema.get_mut("required") {
+        required.retain(|field| field != name);
+    }
+    schema
+}
 
 /// The in-chat viewer: an MCP Apps page a client renders beside `open_project`.
 const VIEWER_URI: &str = "ui://parcad/viewer";
@@ -2838,6 +2860,27 @@ mod tests {
             .map(|tool| tool.name.to_string())
             .collect();
         assert_eq!(writes, ["edit_part", "export_part", "restore_snapshot", "save_project", "set_script"]);
+    }
+
+    /// A hosted server cannot open a file on the user's machine and ignores
+    /// `open`; offered it, a model in ChatGPT passed it and the user was asked
+    /// to approve opening a local app. The local app keeps it.
+    #[test]
+    fn only_a_local_export_part_offers_to_open_the_file() {
+        let export = |hosted: bool| {
+            let tools = Parcad::new().with_capability(service::capability(hosted)).tool_router.list_all();
+            let tool = tools.into_iter().find(|t| t.name == "export_part").unwrap();
+            let schema = serde_json::to_value(&tool.input_schema).unwrap();
+            (tool.description.unwrap_or_default().to_string(), schema)
+        };
+        let (local, local_schema) = export(false);
+        assert!(local.contains(OPENS_ON_THIS_MACHINE), "export_part's wording moved off OPENS_ON_THIS_MACHINE, so a hosted list would keep it");
+        assert!(local_schema["properties"].get("open").is_some());
+        let (hosted, hosted_schema) = export(true);
+        assert!(!hosted.contains("open: true") && !hosted.contains("this machine"), "{hosted}");
+        assert!(hosted_schema["properties"].get("open").is_none());
+        assert!(hosted_schema["properties"].get("format").is_some(), "only `open` goes");
+        assert!(hosted.contains("STL and 3MF describe closed solids"), "the paragraph's other sentence stays");
     }
 
     /// ChatGPT's approval dialog for a write runs a classifier over the tool's
