@@ -23,8 +23,8 @@
     "com.openai": {
       "interface": {
         "displayName": "ParCAD",
-        "shortDescription": "Design parts to 3D print",
-        "longDescription": "ParCAD is open source CAD for parts you can 3D print or machine.\n\nAsk for a part in plain words: a wall bracket, an enclosure, a box with a hinged lid, an adapter between two things you own. ChatGPT writes it as a short script, and ParCAD's CAD kernel (OpenCASCADE) builds it as an exact solid and measures it. The numbers you get come from that build: size, volume, the thinnest wall, what the part stands on, whether it fits the object it holds.\n\nWhat you can do:\n- Design a new part from a description, or change one you have (\"make the holes 1 mm bigger\").\n- Check it before you print: wall thickness, fit around a reference object, how a lid or a lever swings.\n- Export a 3MF for your slicer (Bambu Studio, OrcaSlicer, PrusaSlicer, Cura), a STEP for another CAD program or a machine shop, or an STL. Each file comes as a download link.\n\nYou sign in with Google or GitHub the first time. Your parts are kept in your own ParCAD account, which starts with a few dozen example parts to open, measure and change. A part nobody opens, builds or saves for 30 days is deleted, so export what you want to keep.\n\nParCAD is open source (AGPL-3.0) and also runs on your own computer as a desktop app: parcad.dev.",
+        "shortDescription": "Design parts you can print",
+        "longDescription": "Describe a part. Get one that fits.\n\nAsk ChatGPT for a bracket, a box with a hinged lid, a stand for your phone. ParCAD builds it on a real CAD kernel and checks it before you print: the size you asked for, the walls, whether the lid actually closes.\n\nDownload a 3MF for your slicer or a STEP for any CAD.\n\nFree and open source. Sign in with Google or GitHub.",
         "developerName": "Leon Minasian",
         "category": "Creativity",
         "capabilities": [
@@ -36,9 +36,9 @@
         "privacyPolicyURL": "https://mcp.parcad.dev/privacy",
         "termsOfServiceURL": "https://mcp.parcad.dev/terms",
         "defaultPrompt": [
-          "Design a wall bracket for a 25 mm pipe with two screw holes",
-          "Make a box with a hinged lid that fits a deck of cards",
-          "Show me the lidded box from my ParCAD parts in 3D"
+          "A wall bracket for a 25 mm pipe",
+          "A box for a deck of cards with a hinged lid",
+          "A stand for my phone at 60°"
         ],
         "composerIcon": "./assets/icon.png",
         "logo": "./assets/icon.png"
@@ -48,49 +48,48 @@
           "positive": [
             {
               "description": "Design a new part from a description, report the size ParCAD measured and show it in 3D.",
-              "prompt": "Using ParCAD, design an L-shaped wall bracket 40 mm wide with two 4 mm screw holes, tell me its measured size and show it to me in 3D.",
+              "prompt": "Using ParCAD, design a phone stand 70 mm wide that holds the phone leaning back at 65 degrees, with a lip at the front and a slot for the charging cable. Tell me its measured size and show it to me in 3D.",
               "tools_triggered": [
                 "read_docs",
                 "evaluate_part",
+                "save_project",
                 "open_project"
               ],
-              "expected_behavior": "ChatGPT reads ParCAD's language docs with read_docs, writes the part as a script and builds it with evaluate_part, then saves it with save_project and opens it with open_project. ParCAD's 3D viewer shows the bracket in the chat, and the user can turn it. The reply gives the size from ParCAD's measurement (about 40 x 40 x 40 mm for 40 mm legs) and the outcome of ParCAD's checks."
+              "expected_behavior": "ChatGPT reads ParCAD's language docs with read_docs, writes the stand as a script and builds it with evaluate_part, then saves it with save_project and opens it with open_project. ParCAD's 3D viewer shows the stand in the chat. The reply gives the size ParCAD measured (70 mm wide) and the outcome of its checks."
             },
             {
               "description": "Build a part and hand the user a printable 3MF file.",
-              "prompt": "In ParCAD, make an open box 60 x 40 x 25 mm with 2 mm walls and give me a 3MF file I can print.",
+              "prompt": "Using ParCAD, make a 30 mm knurled knob with a 6 mm D-shaped shaft hole and give me a 3MF file I can print.",
               "tools_triggered": [
                 "evaluate_part",
                 "export_part"
               ],
-              "expected_behavior": "ChatGPT builds the box with evaluate_part and exports it with export_part. The reply links a .3mf download on mcp.parcad.dev that opens in any slicer, and gives the size ParCAD measured in the file (60 x 40 x 25 mm, watertight)."
+              "expected_behavior": "ChatGPT builds the knob with evaluate_part and exports it with export_part. The reply links a .3mf download on mcp.parcad.dev that opens in any slicer, and gives the size ParCAD measured (30 mm across) and that the part is watertight."
             },
             {
               "description": "Open one of the example parts every account starts with and show it in 3D.",
-              "prompt": "Show me the twisted planter from my ParCAD parts in 3D.",
+              "prompt": "Show me the spur gears from my ParCAD parts in 3D.",
               "tools_triggered": [
                 "open_project"
               ],
-              "expected_behavior": "ChatGPT opens twisted-planter with open_project, after list_projects if it needs the path. ParCAD's 3D viewer appears in the chat with the planter and its drip saucer as two bodies; building it takes the viewer about half a minute. The user can turn it, see through it and hide either body."
+              "expected_behavior": "ChatGPT opens spur-gears with open_project, after list_projects if it needs the path. ParCAD's 3D viewer appears in the chat with the pinion and the wheel meshed as two bodies; the user can turn it, see through it and hide either gear."
             },
             {
-              "description": "Measure a part's thinnest wall on the exact solid.",
-              "prompt": "Use the ParCAD tools: make a 50 mm cube with a 20 mm hole straight through the middle, and tell me how thick its thinnest wall is.",
+              "description": "Measure the clearance between two parts of a saved design on the exact solids.",
+              "prompt": "Using ParCAD, how much clearance is there between the two gears in my spur-gears part?",
               "tools_triggered": [
-                "evaluate_part",
-                "measure_wall_thickness"
+                "evaluate_part"
               ],
-              "expected_behavior": "ChatGPT builds the cube with evaluate_part and measures it with measure_wall_thickness. The reply says the thinnest wall is 15 mm, between the hole and each side, as ParCAD measured it."
+              "expected_behavior": "ChatGPT builds spur-gears with evaluate_part and reads the measurement between its two bodies. The reply says the gears are clear of each other by 0.094 mm, as ParCAD measured it."
             },
             {
               "description": "Change a saved part and report what the change did to it.",
-              "prompt": "In ParCAD, make the holes in my bracket 1 mm bigger and tell me how its volume changed.",
+              "prompt": "Using ParCAD, make the knurled knob in my parts 5 mm taller and tell me how its volume changed.",
               "tools_triggered": [
-                "list_projects",
                 "read_project",
                 "edit_part"
               ],
-              "expected_behavior": "ChatGPT finds a bracket with list_projects, reads its script with read_project, and changes the hole diameter with edit_part, which builds the change before saving it. The reply gives the old and new hole size and the volume before and after, as ParCAD measured them."
+              "expected_behavior": "ChatGPT reads knurled-knob with read_project and changes its height with edit_part, which builds the change before saving it. The reply gives the old and new height and the volume before and after, as ParCAD measured them."
             }
           ],
           "negative": [
