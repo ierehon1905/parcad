@@ -1502,7 +1502,7 @@ impl Parcad {
     #[tool(
         name = "open_project",
         annotations(title = "Show a part to the user in 3D", read_only_hint = false, destructive_hint = false, idempotent_hint = true, open_world_hint = false),
-        description = "Shows the user a part: opens a project on the screen they are watching — the parcad app, or the ParCAD web page in their browser — loaded from disk, exactly as if they had picked it, in every open window. A part just built is shown by saving it with save_project under a name of its own and opening that; the part that was open is left as it was. A chat that renders MCP Apps, such as claude.ai, the Claude apps and ChatGPT, also draws the part in 3D beside the reply for the user to turn, and the reply then says `shown_in_chat: true`. On a hosted parcad, which has no window, that is how a part is shown in 3D. Takes a path from list_projects. Returns the session without the loaded script: `script_chars` and `script_sha256` identify the text every window took, `script: true` asks for it, and read_project has it anyway. get_session says which part is on screen; set_script changes that part only. Like set_script, the reply waits for a window to report evaluating it and carries `viewers`: a viewer reporting it built is the evidence that it is in a window, and `shown_in_chat` the evidence that it is in the chat. A viewer over 30 seconds old is marked `stale` and is not evidence the user is looking at anything; one silent for 300 seconds is left out, and is not waited for."
+        description = "Shows the user a part: opens a project on the screen they are watching — the parcad app, or the ParCAD web page in their browser — loaded from disk, exactly as if they had picked it, in every open window. A part just built is shown by saving it with save_project under a name of its own and opening that; the part that was open is left as it was. A chat that renders MCP Apps, such as claude.ai, the Claude apps and ChatGPT, also draws the part in 3D beside the reply for the user to turn, and the reply then says `shown_in_chat: true`. On a hosted parcad, which has no window, the chat is where a part appears in 3D. Takes a path from list_projects. Returns the session without the loaded script: `script_chars` and `script_sha256` identify the text every window took, `script: true` asks for it, and read_project has it anyway. get_session says which part is on screen; set_script changes that part only. Like set_script, the reply waits for a window to report evaluating it and carries `viewers`, each with the revision it showed and whether it built, and `shown_in_chat`, whether the chat draws the part. A viewer that last reported over 30 seconds ago is marked `stale`; one silent for 300 seconds is left out and not waited for."
     )]
     async fn open_project(
         &self,
@@ -1519,7 +1519,7 @@ impl Parcad {
     #[tool(
         name = "set_script",
         annotations(title = "Replace the script on screen", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Replaces the whole script of the project open on the user's screen, for a script that is new from the first line. edit_part with project \"@session\" changes only the lines it names, builds them first and lands on screen the same way. A different part is shown with save_project and open_project; a script sent here lands in the open project, and a save writes it there. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing; there is no lock. It edits the screen only: nothing is written to disk until the user saves or save_project is called. A script that does not build replaces the user's working part on screen with an error; evaluate_part builds a script without showing it. The script replaces anything the user typed since get_session last returned the text.\n\nThe reply waits (up to `wait_s`, default 20 s) until a window reports evaluating this revision, and its `viewers` says what each window showed: built with which `volume_mm3`, or the `error` it hit. It does not echo the script: `script_chars` and `script_sha256` identify what landed, and get_session returns it whole. A viewer reporting this `revision` with built: true is the evidence that the part is on screen. Setting the same script again makes every window evaluate it again, which recovers a window that is showing something stale."
+        description = "Replaces the whole script of the project open on the user's screen, for a script that is new from the first line. edit_part with project \"@session\" changes only the lines it names, builds them first and lands on screen the same way. A different part is shown with save_project and open_project; a script sent here lands in the open project, and a save writes it there. The change appears in every window immediately and lands in the editor's normal undo history, so the user can Cmd-Z it back like their own typing; there is no lock. It edits the screen only: nothing is written to disk until the user saves or save_project is called. A script that does not build replaces the user's working part on screen with an error; evaluate_part builds a script without showing it. The script replaces anything the user typed since get_session last returned the text.\n\nThe reply waits (up to `wait_s`, default 20 s) until a window reports evaluating this revision, and its `viewers` lists each window with the `revision` it showed and whether it `built`: with which `volume_mm3`, or the `error` it hit. It does not echo the script: `script_chars` and `script_sha256` identify what landed, and get_session returns it whole. Setting the same script again makes every window evaluate it again, which recovers a window that is showing something stale."
     )]
     async fn set_script(
         &self,
@@ -2843,14 +2843,15 @@ mod tests {
     /// ChatGPT's approval dialog for a write runs a classifier over the tool's
     /// description and schema, and flags text that tells the model or the
     /// approver how to decide as a "Suspicious Instruction" (save_project's
-    /// `allow_failing` wording did, 2026-11-13). A write tool says what it does,
+    /// `allow_failing` wording did, 2026-11-13, and open_project's "is the evidence
+    /// that it is in a window" on 0.0.26). A write tool says what it does,
     /// takes and returns; who decides is the refusal's to say, in the reply.
     #[test]
     fn a_write_tool_states_what_it_does_and_steers_no_decision() {
         let steering = [
             "you must", "must not", "do not tell", "tell the user", "ask the user", "your own",
             "user's decision", "their decision", "not yours", "only after", "says yes", "say yes",
-            "call again", "only with", "never a reason",
+            "call again", "only with", "never a reason", "evidence",
         ];
         for tool in Parcad::new().tool_router.list_all() {
             let writes = tool.annotations.as_ref().and_then(|a| a.read_only_hint) == Some(false);
