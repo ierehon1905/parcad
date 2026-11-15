@@ -3198,13 +3198,19 @@ pub fn fit_between(part: &Shape, other: &Shape) -> Result<crate::protocol::FitRe
         });
     }
 
-    breadcrumb("intersecting the two");
-    let mut common = AdHocShape(part.clone());
-    common.intersect(other);
-    let interference = if common.0.faces().count() == 0 {
-        0.0
+    // Two solids whose boxes are apart share no volume, and the boolean that
+    // would say so was 1.9 s of a 24-body part's 300 pairs.
+    let common = if Reach::of(part).apart_from(&Reach::of(other)) {
+        None
     } else {
-        common.0.signed_volume().abs()
+        breadcrumb("intersecting the two");
+        let mut common = AdHocShape(part.clone());
+        common.intersect(other);
+        Some(common.0)
+    };
+    let interference = match &common {
+        Some(common) if common.faces().count() > 0 => common.signed_volume().abs(),
+        _ => 0.0,
     };
 
     let (verdict, clearance, closest) = if interference > 1e-6 {
@@ -3229,7 +3235,7 @@ pub fn fit_between(part: &Shape, other: &Shape) -> Result<crate::protocol::FitRe
     let (depth_mm, deepest_mm) = match verdict {
         "interfering" => {
             breadcrumb("measuring how deep the overlap goes");
-            match crate::perceive::deepest_inside(&common.0) {
+            match common.as_ref().and_then(crate::perceive::deepest_inside) {
                 Some((depth, at)) => (Some(depth), Some(at.to_array())),
                 None => (None, None),
             }
