@@ -9,20 +9,12 @@ use crate::backend::{self, BuildCache};
 use crate::overhang;
 use crate::perceive;
 use crate::protocol::{
-    breadcrumb, edge_curve, BodyFit, BodyKind, BodySpan, EdgeCurve, ExactMass, FaceRun, FaceSummary, Request,
-    Response, Success, SurfaceMeasure, TargetPreview, Timings, Topology, WallRange,
+    breadcrumb, edge_curve, BodyFit, BodyKind, BodySpan, EdgeCurve, ExactMass, FaceRun, FaceSummary, FitReport,
+    Overhang, Request, Response, Success, SurfaceMeasure, TargetPreview, Timings, Topology, WallRange,
 };
-use std::collections::BTreeMap;
+use opencascade::primitives::Shape;
+use std::collections::{BTreeMap, HashMap};
 use std::time::Instant;
-
-/// What each face is, and which tags it carries.
-fn describe_faces(body: &perceive::Body) -> Vec<FaceSummary> {
-    let mut faces = perceive::describe_faces(body.shape);
-    for (face, tags) in faces.iter_mut().zip(&body.face_tags) {
-        face.tags = tags.clone();
-    }
-    faces
-}
 
 /// The part's edges as polylines to draw: [`backend::logical_edges`], the
 /// same edges selection counts. A seam, a split between faces of one surface
@@ -30,10 +22,7 @@ fn describe_faces(body: &perceive::Body) -> Vec<FaceSummary> {
 /// drawing a seam puts a crack down every bore — and a curve only such a line
 /// cut is drawn whole. An edge no face borders belongs to no surface drawn
 /// here; one face makes it a free edge.
-fn edge_curves(
-    shape: &opencascade::primitives::Shape,
-    treatment_owners: &std::collections::BTreeMap<Vec<[i64; 3]>, usize>,
-) -> anyhow::Result<Vec<EdgeCurve>> {
+fn edge_curves(shape: &opencascade::primitives::Shape) -> anyhow::Result<Vec<(EdgeCurve, Vec<EdgeKey>)>> {
     use std::collections::{HashMap, HashSet};
 
     let samples = |edge: &opencascade::primitives::Edge| -> Vec<[f32; 3]> {
@@ -62,7 +51,6 @@ fn edge_curves(
             Some(joined) => joined.iter().map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect(),
             None => runs.into_iter().next().unwrap_or_default(),
         };
-        let owners: HashSet<Option<usize>> = keys.iter().map(|key| treatment_owners.get(key).copied()).collect();
         let Some(mut curve) = edge_curve(points) else {
             continue;
         };
@@ -70,15 +58,17 @@ fn edge_curves(
             continue;
         }
         curve.free = faces.iter().all(|&count| count == 1);
-        curve.treatment_node = if owners.len() == 1 { owners.into_iter().next().flatten() } else { None };
-        edges.push(curve);
+        edges.push((curve, keys));
     }
-    edges.sort_by_key(|edge| edge_key(&edge.points));
-    for (index, edge) in edges.iter_mut().enumerate() {
+    edges.sort_by_key(|(edge, _)| edge_key(&edge.points));
+    for (index, (edge, _)) in edges.iter_mut().enumerate() {
         edge.id = format!("edge@{index}");
     }
     Ok(edges)
 }
+
+/// A curve as [`edge_key`] writes it.
+type EdgeKey = Vec<[i64; 3]>;
 
 /// Same stable key used to deduplicate an edge, independent of its curve
 /// direction. The visible ID is intentionally stable within one result only.
@@ -321,11 +311,12 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
     let references = doc.reference_bodies();
     let mut whole = Assembled::default();
     let mut overhangs = Vec::new();
-    for (body, material) in every_body.iter().zip(materials) {
+    for ((body, material), key) in every_body.iter().zip(materials).zip(&part.keys) {
         let who = body.name.map(|name| format!("body `{name}`: ")).unwrap_or_default();
         let reference = body.name.is_some_and(|name| references.contains(&name));
-        match measure(body, &part.treatment_owners, &who) {
-            Ok(mut measured) => {
+        match cache.measures.measure(body, key, &who) {
+            Ok(measured) => {
+                let mut measured = measured.named(body, &part.treatment_owners);
                 for face in &mut measured.faces {
                     face.material = if reference { Some(Material::reference()) } else { material.cloned() };
                 }
@@ -342,7 +333,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
                         .and_then(|named| named.iter().find(|n| Some(n.name.as_str()) == body.name))
                         .and_then(|n| n.printed_up);
                     let up = declared.map_or(glam::DVec3::Z, |u| glam::DVec3::new(u.x, u.y, u.z));
-                    overhangs.push(overhang::overhang(body, &measured.mesh, &measured.faces, up, declared.is_some(), overhang::THRESHOLD_DEG));
+                    overhangs.push(cache.measures.overhang(body, key, &measured, up, declared.is_some()));
                 }
                 whole.append(body.name, reference, measured)
             }
@@ -354,11 +345,11 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
     let (tag_extents, unlocated_tags) = perceive::tag_extents(&part, &bodies);
 
     let mut between = Vec::new();
-    for (i, first) in part.bodies.iter().enumerate() {
-        for second in &part.bodies[i + 1..] {
+    for (i, (first, first_key)) in part.bodies.iter().zip(&part.keys).enumerate() {
+        for (second, second_key) in part.bodies.iter().zip(&part.keys).skip(i + 1) {
             let (a, b) = (&first.name, &second.name);
             breadcrumb(&format!("measuring body {a} against body {b}"));
-            match backend::fit_between(&first.shape, &second.shape) {
+            match cache.measures.fit((&first.shape, first_key), (&second.shape, second_key)) {
                 Ok(fit) => between.push(BodyFit {
                     a: a.clone(),
                     b: b.clone(),
@@ -424,6 +415,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
     }
     let export_ms = t2.elapsed().as_millis() as u64;
 
+    cache.measures.age();
     breadcrumb("done");
     let Assembled {
         positions,
@@ -483,10 +475,15 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
 
 /// One shape meshed, checked and described: a one-solid part, or one named
 /// body of several.
+#[derive(Clone)]
 struct Measured {
     mesh: opencascade::mesh::Mesh,
+    /// Untagged, and without a material: both are the request's to say.
     faces: Vec<FaceSummary>,
+    /// Unowned: which treatment made an edge is read from the part built.
     edges: Vec<EdgeCurve>,
+    /// The kernel edges each of `edges` is drawn from, as their owners are keyed.
+    edge_pieces: Vec<Vec<EdgeKey>>,
     topology: Topology,
     kind: BodyKind,
     surface: Option<SurfaceMeasure>,
@@ -515,11 +512,7 @@ fn mesh_boundary_length(stats_mesh: &parcad_core::mesh::Tessellation) -> f64 {
 /// Mesh a shape and refuse it if the mesh is not the solid. `who` names the
 /// body in a refusal and is empty for a one-solid part, whose refusals read
 /// exactly as they always have.
-fn measure(
-    body: &perceive::Body,
-    treatment_owners: &BTreeMap<Vec<[i64; 3]>, usize>,
-    who: &str,
-) -> Result<Measured, Response> {
+fn measure(body: &perceive::Body, who: &str) -> Result<Measured, Response> {
     let shape = body.shape;
     breadcrumb("counting topology");
     let topology = Topology {
@@ -555,8 +548,8 @@ fn measure(
 
     breadcrumb("tessellating");
     let mesh = shape.mesh();
-    let edges = match edge_curves(shape, treatment_owners) {
-        Ok(edges) => edges,
+    let (edges, edge_pieces) = match edge_curves(shape) {
+        Ok(edges) => edges.into_iter().unzip(),
         Err(e) => return Err(Response::Error { stage: "tessellating".into(), message: format!("{who}{e:#}") }),
     };
     // The backstop, behind whatever the construction sites caught. A shape whose
@@ -720,7 +713,7 @@ fn measure(
     }
 
     breadcrumb("describing the faces");
-    let faces = describe_faces(body);
+    let faces = perceive::describe_faces(shape);
     // The B-rep's own figures wherever its integrals hold, and nothing — so the
     // host reports the mesh's and says so — on a face they have misread. See
     // docs/GOTCHAS.md, "A part's volume is the B-rep's, except on derived surfaces".
@@ -738,11 +731,135 @@ fn measure(
         mesh,
         faces,
         edges,
+        edge_pieces,
         topology,
         kind,
         surface,
         mass,
     })
+}
+
+impl Measured {
+    /// Say what only the request knows: each face's tags, and the treatment
+    /// that made each edge — one when every piece of it has the same owner.
+    fn named(mut self, body: &perceive::Body, treatment_owners: &BTreeMap<EdgeKey, usize>) -> Self {
+        for (face, tags) in self.faces.iter_mut().zip(&body.face_tags) {
+            face.tags = tags.clone();
+        }
+        for (edge, pieces) in self.edges.iter_mut().zip(&self.edge_pieces) {
+            let owners: std::collections::HashSet<Option<usize>> =
+                pieces.iter().map(|key| treatment_owners.get(key).copied()).collect();
+            edge.treatment_node = if owners.len() == 1 { owners.into_iter().next().flatten() } else { None };
+        }
+        self
+    }
+}
+
+/// Each body's measurement and each pair's fit, kept from one evaluate to
+/// the next under the body's build key, so an edit re-meshes the bodies it
+/// changed and re-measures the pairs one of them is in.
+///
+/// An entry answers only for the shape it was measured on — the mesh is on
+/// that shape, and tag extents, the fit and an export read it there — so a
+/// body the build cache dropped and built again is measured again. Entries
+/// two evaluates have not asked for are dropped, as the build cache's are.
+#[derive(Default)]
+pub struct MeasureCache {
+    bodies: HashMap<(Option<String>, String), KeptBody>,
+    pairs: HashMap<(String, String), KeptPair>,
+    generation: u64,
+    #[cfg(test)]
+    measured: Vec<Option<String>>,
+    #[cfg(test)]
+    fitted: usize,
+}
+
+struct KeptBody {
+    shape: Shape,
+    measured: Measured,
+    overhang: Option<(OverhangAsk, Overhang)>,
+    used: u64,
+}
+
+/// Everything an overhang reading depends on besides the body's shape.
+#[derive(PartialEq)]
+struct OverhangAsk {
+    up: [u64; 3],
+    declared: bool,
+    face_tags: Vec<Vec<String>>,
+}
+
+struct KeptPair {
+    shapes: [Shape; 2],
+    fit: FitReport,
+    used: u64,
+}
+
+impl MeasureCache {
+    fn kept(&mut self, body: &perceive::Body, key: &Option<String>) -> Option<&mut KeptBody> {
+        let kept = self.bodies.get_mut(&(body.name.map(str::to_owned), key.clone()?))?;
+        kept.shape.is_same(body.shape).then(|| {
+            kept.used = self.generation;
+            kept
+        })
+    }
+
+    fn measure(&mut self, body: &perceive::Body, key: &Option<String>, who: &str) -> Result<Measured, Response> {
+        if let Some(kept) = self.kept(body, key) {
+            breadcrumb(&format!("{who}measured in the last build"));
+            return Ok(kept.measured.clone());
+        }
+        let measured = measure(body, who)?;
+        #[cfg(test)]
+        self.measured.push(body.name.map(str::to_owned));
+        if let Some(key) = key {
+            self.bodies.insert(
+                (body.name.map(str::to_owned), key.clone()),
+                KeptBody { shape: body.shape.clone(), measured: measured.clone(), overhang: None, used: self.generation },
+            );
+        }
+        Ok(measured)
+    }
+
+    fn overhang(&mut self, body: &perceive::Body, key: &Option<String>, measured: &Measured, up: glam::DVec3, declared: bool) -> Overhang {
+        let ask = OverhangAsk { up: up.to_array().map(f64::to_bits), declared, face_tags: body.face_tags.clone() };
+        let mut kept = self.kept(body, key);
+        if let Some((_, found)) = kept.as_ref().and_then(|kept| kept.overhang.as_ref()).filter(|(asked, _)| *asked == ask) {
+            return found.clone();
+        }
+        let found = overhang::overhang(body, &measured.mesh, &measured.faces, up, declared, overhang::THRESHOLD_DEG);
+        if let Some(kept) = kept.as_mut() {
+            kept.overhang = Some((ask, found.clone()));
+        }
+        found
+    }
+
+    fn fit(&mut self, first: (&Shape, &Option<String>), second: (&Shape, &Option<String>)) -> anyhow::Result<FitReport> {
+        let key = first.1.clone().zip(second.1.clone());
+        if let Some(kept) = key.as_ref().and_then(|key| self.pairs.get_mut(key)) {
+            if kept.shapes[0].is_same(first.0) && kept.shapes[1].is_same(second.0) {
+                kept.used = self.generation;
+                return Ok(kept.fit.clone());
+            }
+        }
+        let fit = backend::fit_between(first.0, second.0)?;
+        #[cfg(test)]
+        {
+            self.fitted += 1;
+        }
+        if let Some(key) = key {
+            self.pairs.insert(key, KeptPair { shapes: [first.0.clone(), second.0.clone()], fit: fit.clone(), used: self.generation });
+        }
+        Ok(fit)
+    }
+
+    /// One evaluate older: what two have not asked for is gone.
+    fn age(&mut self) {
+        self.generation += 1;
+        let generation = self.generation;
+        self.bodies.retain(|_, kept| generation - kept.used <= 2);
+        self.pairs.retain(|_, kept| generation - kept.used <= 2);
+    }
 }
 
 /// The reply's buffers, one body appended after another. Face numbers,
@@ -780,6 +897,7 @@ impl Assembled {
             mesh,
             mut faces,
             mut edges,
+            edge_pieces: _,
             topology,
             kind,
             surface,
@@ -858,6 +976,116 @@ mod tests {
         }
     }
 
+    /// The reply to `doc` from a worker holding `cache`, as JSON without its
+    /// timings: what a warm worker and a fresh one must agree on.
+    fn reply(doc: &serde_json::Value, cache: &mut BuildCache, uncached: bool) -> serde_json::Value {
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "doc": doc, "deflection": 0.01, "step_path": null, "stl_path": null, "uncached": uncached,
+        }))
+        .unwrap();
+        let mut reply = serde_json::to_value(run(request, cache)).unwrap();
+        assert_eq!(reply["status"], "ok", "{reply}");
+        reply.as_object_mut().unwrap().remove("timings");
+        reply
+    }
+
+    fn fresh(doc: &serde_json::Value) -> serde_json::Value {
+        reply(doc, &mut BuildCache::default(), false)
+    }
+
+    /// A block with its upright edges rounded, a peg standing in a blind hole
+    /// of it and a plate 3 mm off: a treatment, a pair that touches and two
+    /// that are clear. `peg_r` is the edit, and `padding` is how many unused
+    /// nodes sit ahead of everything, which renumbers the rest.
+    fn three_bodies(peg_r: f64, padding: usize) -> serde_json::Value {
+        let mut nodes: Vec<serde_json::Value> = (0..padding).map(|_| serde_json::json!({"op":"sphere","r":1})).collect();
+        let at = |i: usize| padding + i;
+        nodes.extend([
+            serde_json::json!({"op":"cuboid","size":{"x":20,"y":20,"z":10}}),
+            serde_json::json!({"op":"cylinder","r":3,"h":6}),
+            serde_json::json!({"op":"translate","child":at(1),"by":{"x":0,"y":0,"z":5}}),
+            serde_json::json!({"op":"difference","base":at(0),"tools":[at(2)],"blend":0}),
+            serde_json::json!({"op":"fillet","child":at(3),"radius":2,"selector":"|Z"}),
+            serde_json::json!({"op":"cylinder","r":peg_r,"h":12,"tag":"peg"}),
+            serde_json::json!({"op":"translate","child":at(5),"by":{"x":0,"y":0,"z":8}}),
+            serde_json::json!({"op":"cuboid","size":{"x":20,"y":20,"z":2}}),
+            serde_json::json!({"op":"translate","child":at(7),"by":{"x":0,"y":0,"z":-9}}),
+            serde_json::json!({"op":"bodies","bodies":[
+                {"name":"block","child":at(4)},{"name":"peg","child":at(6)},{"name":"plate","child":at(8)}]}),
+        ]);
+        serde_json::json!({"units":"mm","root":nodes.len() - 1,"nodes":nodes})
+    }
+
+    /// The same part again measures nothing, and says what a fresh worker says.
+    #[test]
+    fn an_unchanged_part_is_answered_from_what_was_measured() {
+        let doc = three_bodies(2.0, 0);
+        let mut cache = BuildCache::default();
+        let first = reply(&doc, &mut cache, false);
+        assert_eq!(cache.measures.measured.len(), 3);
+        assert_eq!(cache.measures.fitted, 3);
+        let again = reply(&doc, &mut cache, false);
+        assert_eq!(cache.measures.measured.len(), 3, "a body was measured twice: {:?}", cache.measures.measured);
+        assert_eq!(cache.measures.fitted, 3, "a pair was fitted twice");
+        assert_eq!(again, first);
+        assert_eq!(again, fresh(&doc));
+    }
+
+    /// An edit to one body re-measures that body and the pairs it is in, and
+    /// the reply is the one a worker that never saw the part gives.
+    #[test]
+    fn an_edit_measures_the_body_it_changed_and_its_pairs() {
+        let mut cache = BuildCache::default();
+        reply(&three_bodies(2.0, 0), &mut cache, false);
+        let edited = three_bodies(2.5, 0);
+        let warm = reply(&edited, &mut cache, false);
+        assert_eq!(cache.measures.measured[3..], [Some("peg".to_owned())]);
+        assert_eq!(cache.measures.fitted, 5, "block-peg and peg-plate, not block-plate");
+        assert_eq!(warm, fresh(&edited));
+    }
+
+    /// Nodes inserted ahead of the part renumber it: the kept measurement
+    /// still answers, and a rounded edge names the fillet's new node.
+    #[test]
+    fn a_renumbered_part_reads_its_edges_treatment_under_the_new_id() {
+        let mut cache = BuildCache::default();
+        reply(&three_bodies(2.0, 0), &mut cache, false);
+        let renumbered = three_bodies(2.0, 2);
+        let warm = reply(&renumbered, &mut cache, false);
+        assert_eq!(cache.measures.measured.len(), 3, "the bodies are what they were");
+        let owners: std::collections::BTreeSet<u64> =
+            warm["edges"].as_array().unwrap().iter().filter_map(|edge| edge["treatment_node"].as_u64()).collect();
+        assert_eq!(owners.into_iter().collect::<Vec<_>>(), [6], "the fillet is node 6 now");
+        assert_eq!(warm, fresh(&renumbered));
+    }
+
+    /// A measurement two evaluates have not asked for is dropped.
+    #[test]
+    fn a_measurement_unused_for_two_evaluates_is_dropped() {
+        let cube = serde_json::json!({"units":"mm","root":0,"nodes":[{"op":"cuboid","size":{"x":4,"y":4,"z":4}}]});
+        let mut cache = BuildCache::default();
+        reply(&three_bodies(2.0, 0), &mut cache, false);
+        assert_eq!((cache.measures.bodies.len(), cache.measures.pairs.len()), (3, 3));
+        reply(&cube, &mut cache, false);
+        assert_eq!((cache.measures.bodies.len(), cache.measures.pairs.len()), (4, 3), "kept through one");
+        reply(&cube, &mut cache, false);
+        assert_eq!((cache.measures.bodies.len(), cache.measures.pairs.len()), (1, 0));
+    }
+
+    /// An uncached request neither reads what the worker holds nor adds to it.
+    #[test]
+    fn an_uncached_request_leaves_the_measurements_alone() {
+        let doc = three_bodies(2.0, 0);
+        let mut cache = BuildCache::default();
+        assert_eq!(reply(&doc, &mut cache, true), fresh(&doc));
+        assert!(cache.measures.bodies.is_empty() && cache.measures.pairs.is_empty());
+        reply(&doc, &mut cache, false);
+        let generation = cache.measures.generation;
+        assert_eq!(reply(&doc, &mut cache, true), fresh(&doc));
+        assert_eq!(cache.measures.measured.len(), 3, "measured in a cache of its own");
+        assert_eq!(cache.measures.generation, generation, "and the worker's is no older");
+    }
+
     /// A body of `count` one-triangle faces, each described and bordering
     /// the next, as [`measure`] returns one: the kernel's own numbering
     /// inside the body, which [`Assembled::append`] has to shift.
@@ -888,6 +1116,7 @@ mod tests {
             mesh,
             faces,
             edges: Vec::new(),
+            edge_pieces: Vec::new(),
             topology: Topology { faces: count, edges: 0 },
             kind: BodyKind::Solid,
             surface: None,
@@ -1049,12 +1278,11 @@ mod tests {
     }
 
     fn treatment_edge_count(doc: &Doc, node: usize) -> usize {
-        let (shape, owners) = backend::build_with_treatment_edges(doc).unwrap();
-        edge_curves(&shape, &owners)
-            .unwrap()
-            .iter()
-            .filter(|edge| edge.treatment_node == Some(node))
-            .count()
+        let part = backend::build_part(doc).unwrap();
+        let body = perceive::Body::new(None, &part.shape, &part.names[0]);
+        let Ok(measured) = measure(&body, "") else { panic!("the part does not measure") };
+        let measured = measured.named(&body, &part.treatment_owners);
+        measured.edges.iter().filter(|edge| edge.treatment_node == Some(node)).count()
     }
 
     #[test]
@@ -1272,7 +1500,7 @@ mod tests {
         let part = backend::build_part(&doc).unwrap();
         let inside_out = part.shape.reversed();
         let body = perceive::Body::new(None, &inside_out, &part.names[0]);
-        match measure(&body, &BTreeMap::new(), "") {
+        match measure(&body, "") {
             Err(Response::Error { message, .. }) => {
                 assert!(message.contains("inside out") && message.contains("-1000.0 mm³"), "{message}")
             }

@@ -3286,6 +3286,10 @@ pub struct BuiltPart {
     /// still owns, which is what a region map, a tag extent and a ray
     /// crossing's `surface_of` are read from.
     pub names: Vec<NamedFaces>,
+    /// Each body's build key, in `names`' order: what its subtree is, which
+    /// is what the worker keeps a body's measurement under. `None` when no
+    /// build cache is installed.
+    pub keys: Vec<Option<String>>,
     /// Every cut that took material from a named feature besides its
     /// target, each naming its body for a part in several.
     pub collisions: Vec<Collision>,
@@ -3379,6 +3383,7 @@ pub fn build_part(doc: &Doc) -> Result<BuiltPart> {
         validity_probe("final shape", &built.shape);
         return Ok(BuiltPart {
             names: vec![NamedFaces::of(doc, &built.lineage)],
+            keys: vec![build_key(doc, doc.root)],
             shape: built.shape,
             treatment_owners: built.features.edge_owners(),
             treatment_edges: built.features.treatment_edges(),
@@ -3408,6 +3413,7 @@ pub fn build_part(doc: &Doc) -> Result<BuiltPart> {
         treatment_edges: features.treatment_edges(),
         bodies,
         names,
+        keys: named.iter().map(|body| build_key(doc, body.child)).collect(),
         collisions,
     })
 }
@@ -3753,6 +3759,8 @@ impl TreatmentFeatures {
 pub struct BuildCache {
     entries: HashMap<CacheKey, CacheEntry>,
     generation: u64,
+    /// What measuring the built bodies found, under the same keys.
+    pub(crate) measures: crate::serve::MeasureCache,
 }
 
 type CacheKey = (String, [i64; 3]);
@@ -3847,6 +3855,16 @@ fn in_document<T>(doc: &Doc, build: impl FnOnce() -> T) -> T {
         });
     }
     out
+}
+
+/// The key the installed cache holds node `id`'s subtree under, built at the
+/// origin; `None` with no cache installed for `doc`.
+fn build_key(doc: &Doc, id: NodeId) -> Option<String> {
+    REUSE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let reuse = slot.as_mut().filter(|reuse| std::ptr::eq(reuse.doc, doc))?;
+        subtree_key(doc, id, &mut reuse.memo).ok()
+    })
 }
 
 /// Mark a hit node and everything beneath it as used this generation.
