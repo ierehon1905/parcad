@@ -670,6 +670,13 @@ optimisation over the surface and was 5 s of a 14 s build. `bounds_bracket`'s
 outer box is not this: `BRepBndLib::Add` samples a trimmed spline and some
 curves, so it can sit inside the shape.
 
+## `Shape::proven_within`
+
+The sys crate's `Shape_proven_within`: a proof that the shape lies inside a
+box, or `false`, which is no claim that it leaves it. parcad asks it before
+`bounds_optimal` where all it needs is that a loft has not bulged out of its
+sections' extent.
+
 ## `Shape::is_same`, and `Mesh` is `Clone`
 
 `Shape::is_same(other)` is `TopoDS_Shape::IsSame`: the same `TShape` at the

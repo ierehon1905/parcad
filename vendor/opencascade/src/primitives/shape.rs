@@ -983,6 +983,14 @@ impl Shape {
             .then(|| (dvec3(b[0], b[1], b[2]), dvec3(b[3], b[4], b[5])))
     }
 
+    /// Whether the shape is proven to lie inside the box `low..high`, from
+    /// boxes that are certain to hold each of its pieces. `false` is not a
+    /// claim that it leaves the box: measure [`Self::bounds_optimal`] then.
+    /// Added for parcad; see PARCAD-CHANGES.md.
+    pub fn proven_within(&self, low: DVec3, high: DVec3) -> bool {
+        ffi::Shape_proven_within(&self.inner, low.x, low.y, low.z, high.x, high.y, high.z)
+    }
+
     /// Tight bounds from the exact geometry, `BRepBndLib::AddOptimal` with no
     /// triangulation and no tolerance gap. `None` for a shape with no extent.
     /// Added for parcad.

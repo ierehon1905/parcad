@@ -440,6 +440,20 @@ per face, which is what lets a caller treat "the enclosing boxes are apart" as
 "the optimal boxes are apart". Three new includes: `BndLib.hxx`,
 `Geom_BezierCurve.hxx`, `Geom_Ellipse.hxx`.
 
+## Added: `Shape_proven_within`
+
+`Shape_proven_within(shape, box)` is a proof that no point of the shape lies
+outside the box, from the enclosures in `IntTools_Apart.hxx` (occt-sys patch
+0009): a B-spline, Bezier, sphere or torus face over its parameter rectangle,
+a plane, cylinder or cone face by its edges, every vertex. A piece whose box
+pokes out is halved until its halves fit, down to 0.0001 mm and two million
+comparisons for the shape. False is no claim that the shape leaves the box,
+so a caller measures `Shape_bounds_optimal` then, and only then. parcad's
+check that a loft stays within its sections' extent asked for the optimal
+box of all 54 bands of a 55-section skin, 0.4 s; the proof takes about a
+millisecond. One new include, `IntTools_Apart.hxx`, so the crate now needs an
+OpenCASCADE built with patch 0009.
+
 ## Added: `IsSame` and `Shape_identity_hash`
 
 `TopoDS_Shape::IsSame` — the same `TShape` at the same location, whatever

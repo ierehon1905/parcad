@@ -36,6 +36,7 @@
 #include <Bnd_Box.hxx>
 #include <BRepBndLib.hxx>
 #include <BndLib.hxx>             // PARCAD: Shape_bounds_enclosing
+#include <IntTools_Apart.hxx>     // PARCAD: Shape_proven_within
 #include <Geom_BezierCurve.hxx>
 #include <Geom_Ellipse.hxx>
 #include <BRepCheck.hxx>
@@ -655,6 +656,70 @@ inline bool Shape_bounds_enclosing(const TopoDS_Shape &shape, double &x0, double
   box.Enlarge(tolerance);
   box.Get(x0, y0, z0, x1, y1, z1);
   return true;
+}
+
+// Whether every point of the shape is proven to lie inside the box — added
+// for parcad, see PARCAD-CHANGES.md. A proof, from boxes that are certain to
+// hold each piece (`IntTools_Apart.hxx`, patch 0009), halved until they fit;
+// false is no claim that the shape leaves the box. A plane, cylinder or cone
+// face reaches no further than its edges, so those are held by their edges.
+inline bool Shape_proven_within(const TopoDS_Shape &shape, double x0, double y0, double z0, double x1, double y1,
+                                double z1) {
+  const double low[3] = {x0, y0, z0};
+  const double high[3] = {x1, y1, z1};
+  // Box comparisons for the whole shape, and the size below which a piece that still does not fit is given up on.
+  int budget = 2000000;
+  const double smallest = 1e-4;
+  const auto holds = [&](IntTools_Apart::Side &side) {
+    return side.root != nullptr && IntTools_Apart::Holds(side, side.root, low, high, smallest, budget);
+  };
+  const auto edge_holds = [&](const TopoDS_Edge &edge) {
+    if (BRep_Tool::Degenerated(edge)) {
+      return true;
+    }
+    const BRepAdaptor_Curve curve(edge);
+    IntTools_Apart::Side side;
+    IntTools_Apart::EncloseCurve(curve, curve.FirstParameter(), curve.LastParameter(), side);
+    return holds(side);
+  };
+  try {
+    OCC_CATCH_SIGNALS
+    for (TopExp_Explorer it(shape, TopAbs_VERTEX); it.More(); it.Next()) {
+      const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(it.Current()));
+      const double at[3] = {p.X(), p.Y(), p.Z()};
+      for (int k = 0; k < 3; ++k) {
+        if (at[k] < low[k] || at[k] > high[k]) {
+          return false;
+        }
+      }
+    }
+    for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+      const TopoDS_Face face = TopoDS::Face(it.Current());
+      const BRepAdaptor_Surface surface(face);
+      const GeomAbs_SurfaceType kind = surface.GetType();
+      if (kind == GeomAbs_Plane || kind == GeomAbs_Cylinder || kind == GeomAbs_Cone) {
+        for (TopExp_Explorer edges(face, TopAbs_EDGE); edges.More(); edges.Next()) {
+          if (!edge_holds(TopoDS::Edge(edges.Current()))) {
+            return false;
+          }
+        }
+        continue;
+      }
+      IntTools_Apart::Side side;
+      IntTools_Apart::EncloseSurface(surface, side);
+      if (!holds(side)) {
+        return false;
+      }
+    }
+    for (TopExp_Explorer it(shape, TopAbs_EDGE, TopAbs_FACE); it.More(); it.Next()) {
+      if (!edge_holds(TopoDS::Edge(it.Current()))) {
+        return false;
+      }
+    }
+    return true;
+  } catch (const Standard_Failure &) {
+    return false;
+  }
 }
 
 // Two boxes that bracket a shape's tight one, both cheap — added for parcad,
