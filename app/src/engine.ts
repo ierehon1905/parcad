@@ -139,7 +139,8 @@ export async function run() {
     // Resolved targets belong to one graph. A cached count that outlived the
     // edit that changed it would be a confident wrong answer.
     resolvedTargets.clear();
-    show(result);
+    const drawn = show(result);
+    if (name !== null && !result.shipped) held = { ...drawn, source: built.source, path: name };
     previewTreatmentAtCursor();
     clearError();
     S.setStatus(reportOf(result), result.shipped ? "busy" : "");
@@ -325,7 +326,30 @@ const reportOf = (result: Evaluated) =>
     ? "built before this page was served, rebuilding it here"
     : `built in ${result.snapshot.kernel_ms} ms`;
 
-function show(result: Evaluated) {
+/** The build the viewport is drawing of a saved part, and the script it came from. */
+let held: { geometry: Geometry; bounds: S.Bounds; source: string; path: string } | undefined;
+
+/** `service::script_sha256`: what a listing calls a part's `source`. */
+async function scriptDigest(script: string): Promise<string> {
+  const hash = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(script));
+  return Array.from(new Uint8Array(hash).slice(0, 6), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * The viewport's own build of `path`, when it is of exactly the script whose
+ * digest is `source`: the open part's thumbnail is then a picture of what is
+ * already on screen, where building it again cost a second worker the whole
+ * build while the user started editing.
+ */
+export async function heldBuild(path: string, source: string): Promise<{ geometry: Geometry; bounds: S.Bounds } | undefined> {
+  const build = held;
+  if (!build || build.path !== path) return undefined;
+  const digest = await scriptDigest(build.source).catch(() => undefined);
+  return digest === source ? build : undefined;
+}
+
+function show(result: Evaluated): { geometry: Geometry; bounds: S.Bounds } {
+  held = undefined;
   showingShipped = result.shipped === true;
   const snapshot = result.snapshot;
   shownPath = S.openPath.value;
@@ -335,7 +359,8 @@ function show(result: Evaluated) {
   S.visibleVertices.value = verticesFromEdges(edges);
   const bounds = boundsOf(snapshot);
 
-  S.viewportRef.current?.setGeometry(geometryOf(result), bounds);
+  const geometry = geometryOf(result);
+  S.viewportRef.current?.setGeometry(geometry, bounds);
 
   // Frame once, then leave the camera alone — nothing is more irritating than a
   // view that resets itself every time you change a number.
@@ -359,6 +384,7 @@ function show(result: Evaluated) {
         .map((treatment) => `.${treatment.source?.method ?? treatment.kind}`),
     ),
   ];
+  return { geometry, bounds };
 }
 
 // --------------------------------------------------------- treatment targets

@@ -5,14 +5,15 @@
  * script it shows — and this window draws them with its own scene, one part at
  * a time and only while nobody is typing or building. That is the whole cost
  * bound: a folder of a thousand stale parts is a thousand idle builds in a
- * row, never two at once. A part that fails to build or draw is not retried
- * until its script changes.
+ * row, never two at once. The open part is not built at all when the viewport
+ * is showing a build of the script on disk. A part that fails to build or draw
+ * is not retried until its script changes.
  */
 
 import { effect, signal } from "@preact/signals";
 import * as backend from "./backend";
 import type { ProjectPart } from "./backend";
-import { boundsOf, geometryOf, quietForMs } from "./engine";
+import { boundsOf, geometryOf, heldBuild, quietForMs } from "./engine";
 import * as S from "./state";
 import type { Evaluated } from "./state";
 import { drawThumbnail, THUMBNAIL_LOOK } from "./viewport";
@@ -62,8 +63,14 @@ async function step() {
 
   drawing = true;
   try {
-    const built = await backend.buildProject<Evaluated>(part.path);
-    const png = drawThumbnail(geometryOf(built), boundsOf(built.snapshot));
+    const held = await heldBuild(part.path, part.source);
+    let png: string;
+    if (held) {
+      png = drawThumbnail(held.geometry, held.bounds);
+    } else {
+      const built = await backend.buildProject<Evaluated>(part.path);
+      png = drawThumbnail(geometryOf(built), boundsOf(built.snapshot));
+    }
     if (!png) throw new Error("the thumbnail drew nothing");
     // Refused if part.js changed since the listing: the next listing has it stale again.
     await backend.saveProjectPreview(part.path, png, part.source, THUMBNAIL_LOOK);
