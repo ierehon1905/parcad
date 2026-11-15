@@ -40,6 +40,24 @@ export interface BodySpan {
   color?: string;
 }
 
+/** Each named body's triangles, from face runs that arrive in body order; none when they do not. */
+export function bodySpans(runs: readonly FaceRun[], bodyOfFace: (face: number) => string | undefined): BodySpan[] {
+  const spans: BodySpan[] = [];
+  let current: BodySpan | undefined;
+  for (const run of runs) {
+    const name = bodyOfFace(run.face);
+    if (name === undefined) continue;
+    if (current?.name !== name) {
+      // A body met again after another one cannot be one draw range.
+      if (spans.some((span) => span.name === name)) return [];
+      current = { name, start: run.start, count: 0 };
+      spans.push(current);
+    }
+    current.count = run.start + run.count - current.start;
+  }
+  return spans;
+}
+
 type Vec3 = [number, number, number];
 
 /** A light in a look: fixed in the world (and casting the shadow), riding with the camera, or everywhere. */
@@ -285,6 +303,8 @@ export class Viewport {
   private groundCorners: THREE.Vector3[] = [];
   /** See-through: every face drawn faint and without depth, so what is inside shows. */
   private xray = false;
+  /** Bodies drawn solid while the rest are faint; empty for none singled out. */
+  private focus: readonly string[] = [];
   /** A camera move under way, from `look`: interpolated by the render loop. */
   private flight?: Flight;
   /** Where the near plane cuts into the part: see `buildNearCut`. */
@@ -901,8 +921,15 @@ export class Viewport {
         box: own.boundingBox ?? spanBox(geo, span),
       });
     }
+    if (spans.length > 1) {
+      // Each body wears its own copies, so one can be drawn faint and the rest not.
+      const shared = new Set(Array.isArray(material) ? material : [material]);
+      const own = (m: THREE.Material) => (shared.has(m) ? m.clone() : m);
+      for (const { mesh } of this.bodies) mesh.material = Array.isArray(mesh.material) ? mesh.material.map(own) : own(mesh.material);
+      releaseMaterial(material);
+    }
     this.faceRuns = geo.faceRuns ?? [];
-    if (this.xray) this.dressXray();
+    if (this.xray || this.focus.length) this.dressFaint();
     // Stop guessing at creases once told where they are. The silhouette half of
     // the pass stays on: it is a property of the view, so no kernel supplies it.
     this.outline.setCreases(false);
@@ -1003,7 +1030,15 @@ export class Viewport {
   setXray(on: boolean) {
     if (on === this.xray) return;
     this.xray = on;
-    this.dressXray();
+    this.dressFaint();
+    this.wake();
+  }
+
+  /** Draw these bodies as they are and every other one faint; none named draws all of them as they are. */
+  setBodyFocus(names: readonly string[]) {
+    if (names.length === this.focus.length && names.every((name, i) => name === this.focus[i])) return;
+    this.focus = names;
+    this.dressFaint();
     this.wake();
   }
 
@@ -1059,14 +1094,15 @@ export class Viewport {
   }
 
   /** Every material a body is drawn with, x-rayed or put back as it was dressed. */
-  private dressXray() {
+  private dressFaint() {
     for (const body of this.bodies) {
+      const faint = this.xray || (this.focus.length > 0 && !this.focus.includes(body.name));
       const material = body.mesh.material;
       for (const m of Array.isArray(material) ? material : [material]) {
         const solid = (m.userData.solid ??= { transparent: m.transparent, opacity: m.opacity, depthWrite: m.depthWrite });
-        m.transparent = this.xray || solid.transparent;
-        m.opacity = this.xray ? solid.opacity * XRAY_OPACITY : solid.opacity;
-        m.depthWrite = this.xray ? false : solid.depthWrite;
+        m.transparent = faint || solid.transparent;
+        m.opacity = faint ? solid.opacity * XRAY_OPACITY : solid.opacity;
+        m.depthWrite = faint ? false : solid.depthWrite;
         m.needsUpdate = true;
       }
     }

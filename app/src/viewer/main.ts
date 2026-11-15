@@ -15,8 +15,7 @@ import { decompress } from "fzstd";
 import "../style.css";
 import { slidersOf, travelPoses } from "../motion";
 import type { EvaluationSnapshot } from "../state";
-import type { BodySpan, EdgeCurve, FaceMaterial, FaceRun } from "../viewport";
-import { VIEWS, Viewport } from "../viewport";
+import { bodySpans, VIEWS, Viewport, type EdgeCurve, type FaceMaterial, type FaceRun } from "../viewport";
 import { mountControls, showPart } from "./controls";
 import { bodyColors, studio } from "./look";
 
@@ -198,7 +197,7 @@ async function show(source: Source) {
       ...mesh,
       edges: header.edges,
       faceMaterials: header.faces?.map((face) => face.material),
-      bodies: bodySpans(mesh.faceRuns, bodyOfFace, named).map((span) => ({ ...span, color: colorOf(span.name) })),
+      bodies: bodySpans(mesh.faceRuns, (face) => named[bodyOfFace[face] ?? -1]?.name).map((span) => ({ ...span, color: colorOf(span.name) })),
     },
     bounds,
   );
@@ -209,22 +208,6 @@ async function show(source: Source) {
   const volume = snapshot.volume_mm3 == null ? "" : ` · ${snapshot.volume_mm3.toFixed(1)} mm³`;
   loading.hidden = true;
   say(`${size} mm${volume}`);
-}
-
-/** Each named body's triangles, from the face runs once they are in body order. */
-function bodySpans(runs: FaceRun[], bodyOfFace: number[], named: { name: string }[]): BodySpan[] {
-  const spans: BodySpan[] = [];
-  let current: BodySpan | undefined;
-  for (const run of runs) {
-    const body = named[bodyOfFace[run.face] ?? -1];
-    if (!body) continue;
-    if (current?.name !== body.name) {
-      current = { name: body.name, start: run.start, count: 0 };
-      spans.push(current);
-    }
-    current.count = run.start + run.count - current.start;
-  }
-  return spans;
 }
 
 const app = new App({ name: "ParCAD viewer", version: __PARCAD_VERSION__ });

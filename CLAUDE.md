@@ -111,10 +111,11 @@ byte-identical sources; point `PARCAD_OCCT_PREBUILT` at an existing
 `vendor/occt-sys/PARCAD-CHANGES.md` for what that asserts.
 
 **A project is a `.parcad` folder, and `part.js` inside it is the only
-authoritative file.** `parcad.json`, `README.md` and `preview.png` beside it are
-derived and disposable — the app rewrites them on save, from *measured* values
-(the thumbnail whenever the script it is keyed to changes), and nothing reads
-them back as fact. A loose `.js` is still a project and must
+authoritative file.** `README.md` and `preview.png` beside it are derived and
+disposable — the app rewrites them on save, from *measured* values (the
+thumbnail whenever the script it is keyed to changes), and nothing reads them
+back as fact. `parcad.json` holds what a person set: title, tags, and the bodies
+the window hides — a view, never what the part is. A loose `.js` is still a project and must
 stay one. Seeding records what it has placed in `.seeded` rather than checking
 whether a path is occupied: a part the user moved into a folder of their own is
 not a part that is missing. See docs/ARCHITECTURE.md, "Projects are files, not

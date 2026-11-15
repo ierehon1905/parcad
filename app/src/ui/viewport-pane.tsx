@@ -1,11 +1,12 @@
 /**
- * The viewport, and the four panels that float over it.
+ * The viewport, and the few panels that float over it.
  *
  * three.js is the second island: it owns a canvas, a render loop and a
  * raycaster, so this component gives it one empty `<div>` and then leaves it
  * alone. Everything else here — the view tools, the inspector, the source
- * target, the report — is ordinary markup reading the signals the viewport's
- * callbacks write.
+ * target — is ordinary markup reading the signals the viewport's callbacks
+ * write. Nothing durable floats over the part: what was measured is under
+ * Problems, beside Code (`ui/problems.tsx`).
  *
  * The layout claim worth stating, because it is the one that changed: the right
  * edge is a *column*. The controls that decide what you are looking at sit at
@@ -21,7 +22,6 @@ import * as S from "../state";
 import { Viewport } from "../viewport";
 import { EntityInspector } from "./entity-inspector";
 import { KernelLoading } from "./kernel-loading";
-import { Report } from "./report";
 import { TargetPreview } from "./target-preview";
 import { ViewTools } from "./view-tools";
 
@@ -75,7 +75,6 @@ export function ViewportPane() {
       </div>
 
       <TargetPreview />
-      <Report />
       <KernelLoading />
     </section>
   );

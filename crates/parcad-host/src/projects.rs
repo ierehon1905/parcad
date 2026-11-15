@@ -24,7 +24,7 @@
 //! ├─ Mounts/                  an ordinary folder
 //! │  ├─ Bracket.parcad/       one project
 //! │  │  ├─ part.js            the source, and the only thing that is authoritative
-//! │  │  ├─ parcad.json        title and tags
+//! │  │  ├─ parcad.json        title, tags, and the bodies the window hides
 //! │  │  ├─ README.md          what the part is, written from measured values
 //! │  │  └─ preview.png        the picker's thumbnail, keyed to the script it shows
 //! │  └─ motor-mount.js        also a project
@@ -122,6 +122,9 @@ pub struct Part {
     /// parts stays one small reply.
     pub thumbnail: Option<Drawn>,
     pub tags: Vec<String>,
+    /// The bodies the window hides when it opens this part; see [`Manifest::hidden`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<String>,
     /// Seconds since the epoch, from the source file. Read from the filesystem
     /// rather than written into the manifest: a recorded timestamp is a claim,
     /// and this one is a measurement that cannot go stale.
@@ -160,6 +163,11 @@ pub struct Manifest {
     pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Bodies the window hides when it opens the part: how it was last looked
+    /// at, kept in the folder so the view travels with it. Never what the part
+    /// is — every build, measurement and render still has every body.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hidden: Vec<String>,
 }
 
 /// The whole tree, folders before parts and each alphabetical: the account's
@@ -299,6 +307,7 @@ fn describe(stem: &str, path: &str) -> Result<Part, String> {
         source: crate::service::script_sha256(&std::fs::read_to_string(&located.source).unwrap_or_default()),
         thumbnail: located.in_bundle(PREVIEW).and_then(|p| drawn(&p)),
         tags: manifest.tags,
+        hidden: manifest.hidden,
         modified,
         shipped: located.shipped,
         expires: (!located.shipped).then(|| crate::storage::expires_on(located.root())).flatten(),
@@ -771,6 +780,24 @@ pub fn set_title(path: &str, title: &str) -> Result<(), String> {
     )
 }
 
+/// Which bodies the window hides when it opens this part ([`Manifest::hidden`]).
+pub fn set_hidden(path: &str, bodies: &[String]) -> Result<(), String> {
+    let located = locate(path)?;
+    own(path, &located)?;
+    let Some(file) = located.in_bundle(MANIFEST) else {
+        return Err(format!(
+            "{path:?} is a loose .js file, which has nowhere to keep which bodies are hidden. \
+             Convert it to a project folder first."
+        ));
+    };
+    let mut manifest = located.manifest();
+    manifest.hidden = bodies.to_vec();
+    write_file(
+        &file,
+        &serde_json::to_string_pretty(&manifest).map_err(|e| format!("encoding {MANIFEST}: {e}"))?,
+    )
+}
+
 /// An empty folder to put parts in.
 pub fn create_folder(path: &str) -> Result<String, String> {
     let target = safe(path)?;
@@ -901,7 +928,7 @@ fn base_name(base: &Path) -> &str {
 fn manifest_json(stem: &str) -> Result<String, String> {
     serde_json::to_string_pretty(&Manifest {
         title: Some(readable(stem)),
-        tags: Vec::new(),
+        ..Manifest::default()
     })
     .map_err(|e| format!("encoding {MANIFEST}: {e}"))
 }
@@ -1206,6 +1233,27 @@ pub(crate) mod tests {
             std::fs::write(file, script).unwrap();
         }
         examples
+    }
+
+    /// Hidden bodies live in the folder, survive a retitle and a rename, and a
+    /// loose script, with no folder, is told so.
+    #[test]
+    fn hidden_bodies_travel_with_the_folder() {
+        scoped(|root| {
+            write("box", "return { base: box(1,1,1), lid: box(1,1,1) };").unwrap();
+            set_hidden("box", &["lid".to_string()]).unwrap();
+            set_title("box", "Lidded box").unwrap();
+            rename("box", "kept").unwrap();
+            let manifest = std::fs::read_to_string(root.join("kept.parcad/parcad.json")).unwrap();
+            assert!(manifest.contains("\"lid\""), "{manifest}");
+            assert_eq!(describe("kept", "kept").unwrap().hidden, vec!["lid"]);
+            set_hidden("kept", &[]).unwrap();
+            assert!(describe("kept", "kept").unwrap().hidden.is_empty());
+
+            std::fs::write(root.join("loose.js"), "return box(1,1,1);").unwrap();
+            let refused = set_hidden("loose", &["a".to_string()]).unwrap_err();
+            assert!(refused.contains("Convert it to a project folder"), "{refused}");
+        });
     }
 
     /// The whole point of the seam: one name, two accounts, two files.

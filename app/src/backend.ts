@@ -119,6 +119,8 @@ export interface ProjectPart {
   /** The `preview.png` there is to ask for, and what it was drawn from; null when there is none. */
   thumbnail: Drawn | null;
   tags: string[];
+  /** Bodies the window hides when it opens the part, kept in its folder; absent when none are. */
+  hidden?: string[];
   /** Seconds since the epoch, from the file itself. */
   modified: number | null;
 }
@@ -223,6 +225,15 @@ export async function setProjectTitle(name: string, title: string): Promise<void
     return;
   }
   await post(`projects/${route(name)}`, { op: "title", title });
+}
+
+/** Which bodies the window hides when it opens this part; a `.parcad` folder only. */
+export async function setHiddenBodies(name: string, bodies: string[]): Promise<void> {
+  if (inTauri) {
+    await invoke("set_hidden_bodies", { name, bodies });
+    return;
+  }
+  await post(`projects/${route(name)}`, { op: "hidden", bodies });
 }
 
 /** Moves to the project folder's `.trash`. Not an unlink — say so in the UI. */

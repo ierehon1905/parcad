@@ -32,6 +32,7 @@ pub enum ProjectOp {
     Folder,
     Rename { to: String },
     Title { title: String },
+    Hidden { bodies: Vec<String> },
     Convert,
     Open,
 }
@@ -85,6 +86,10 @@ pub fn project_op(name: &str, request: ProjectOp) -> Result<Value, String> {
         ProjectOp::Title { title } => (
             name.to_string(),
             projects::set_title(name, &title).map(|()| name.to_string()),
+        ),
+        ProjectOp::Hidden { bodies } => (
+            name.to_string(),
+            projects::set_hidden(name, &bodies).map(|()| name.to_string()),
         ),
         ProjectOp::Convert => (name.to_string(), projects::convert(name)),
         // The one op that answers with something besides a path: which editor

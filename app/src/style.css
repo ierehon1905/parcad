@@ -192,6 +192,24 @@
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-accent) 45%, transparent);
   }
 
+  /* A body hidden from the view, where the script writes it (hidden-marks.ts):
+     greyed like a comment, since it is out of sight but still built and measured. */
+  .cm-hidden-body,
+  .cm-hidden-body span {
+    color: color-mix(in srgb, var(--color-ink-dim) 55%, transparent) !important;
+  }
+
+  /* The chip after the body's name that shows it again. */
+  .cm-hidden-chip {
+    @apply mx-1.5 px-1.5 rounded-sm border border-line bg-panel-2 text-ink-dim font-sans text-tiny cursor-pointer;
+    line-height: 1.45;
+    vertical-align: 1px;
+  }
+
+  .cm-hidden-chip:hover {
+    @apply text-ink border-accent-edge;
+  }
+
   /* What the operation palette just wrote. The accent rather than gold: gold
      means "this is the source the viewport is pointing at" everywhere else in
      this app, and a write is not a selection.

@@ -20,9 +20,11 @@ import { tooltips } from "@codemirror/view";
 import { undo } from "@codemirror/commands";
 import { javascript } from "@codemirror/lang-javascript";
 import { oneDark } from "@codemirror/theme-one-dark";
+import { useSignalEffect } from "@preact/signals";
 import { useEffect, useRef } from "preact/hooks";
 
 import { insertFlashField, treatmentHoverField } from "../editor-marks";
+import { hiddenBodiesField, setHiddenBodies } from "../hidden-marks";
 import * as engine from "../engine";
 import { intellisense } from "../intellisense/extensions";
 import { cardTheme, surfaceTheme } from "../intellisense/theme";
@@ -86,6 +88,14 @@ const hoverSource: TreatmentHoverSource = {
 export function Editor() {
   const host = useRef<HTMLDivElement>(null);
 
+  // The eye in the part tree, marked in the source; a chip there shows the body again.
+  useSignalEffect(() => {
+    const names = [...S.hiddenBodies.value];
+    S.editorRef.current?.dispatch({
+      effects: setHiddenBodies.of({ names, show: (name) => engine.setBodyHidden(name, false) }),
+    });
+  });
+
   useEffect(() => {
     if (!host.current) return;
 
@@ -105,6 +115,7 @@ export function Editor() {
         surfaceTheme,
         treatmentHoverField,
         insertFlashField,
+        hiddenBodiesField,
         // Selector syntax is marked as you type. Everything else — whether the
         // selector resolves, and to how many edges — waits for the evaluation,
         // because only the kernel knows.
