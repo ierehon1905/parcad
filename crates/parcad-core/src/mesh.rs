@@ -411,12 +411,18 @@ impl Tessellation {
             }
             owned.push((*t, a));
         }
-        let mut by_root: HashMap<usize, Vec<[usize; 3]>> = HashMap::new();
+        // In the order the mesh reaches them, so that shells of one size —
+        // two feet, four pegs — come out the same way round on every run.
+        let mut shell_of: HashMap<usize, usize> = HashMap::new();
+        let mut shells: Vec<Vec<[usize; 3]>> = Vec::new();
         for (t, a) in owned {
             let r = root(&mut parent, a);
-            by_root.entry(r).or_default().push(t);
+            let shell = *shell_of.entry(r).or_insert_with(|| {
+                shells.push(Vec::new());
+                shells.len() - 1
+            });
+            shells[shell].push(t);
         }
-        let mut shells: Vec<Vec<[usize; 3]>> = by_root.into_values().collect();
         shells.sort_by_key(|s| std::cmp::Reverse(s.len()));
         shells
     }
@@ -515,6 +521,17 @@ mod tests {
         let void_turned = mesh(&[(0.0, 10.0, true), (3.0, 6.0, true)]).inward_shells();
         assert_eq!(void_turned.len(), 1);
         assert!((void_turned[0].volume_mm3 - 27.0).abs() < 1e-6 && void_turned[0].depth == 1, "{void_turned:?}");
+    }
+
+    /// Pieces of one size are listed in the order the mesh holds them. They
+    /// came out of a hash map, so two builds of one part listed its feet
+    /// either way round.
+    #[test]
+    fn equal_pieces_are_listed_in_mesh_order() {
+        // Multiples of 6, so every volume is 216 to the last bit.
+        let feet: Vec<(f32, f32, bool)> = (0..12).map(|i| (60.0 * i as f32, 60.0 * i as f32 + 6.0, true)).collect();
+        let first: Vec<usize> = mesh(&feet).pieces().iter().map(|p| p.vertices[0]).collect();
+        assert_eq!(first, (0..12).map(|i| 8 * i).collect::<Vec<_>>());
     }
 
     /// A hollow cube is one piece holding 1000 − 216 mm³; a ball caged in
