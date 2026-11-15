@@ -18,6 +18,7 @@
 import { useEffect, useRef } from "preact/hooks";
 
 import * as engine from "../engine";
+import * as madeBy from "../made-by";
 import * as S from "../state";
 import { Viewport } from "../viewport";
 import { EntityInspector } from "./entity-inspector";
@@ -35,6 +36,8 @@ export function ViewportPane() {
       onFaceHover: (face) => {
         S.hoveredFace.value = face && { face: face.face, triangles: face.triangles };
       },
+      onPoint: madeBy.point,
+      onCommandClick: madeBy.commandClick,
       onHover: (edge) => {
         S.hoveredEdge.value = edge;
         engine.highlightTreatmentForEdge(edge);

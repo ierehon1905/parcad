@@ -455,6 +455,17 @@ corpus case is held to the rule that each chain is a path of inputs ending
 at its body's root (`protocol::made_by_faults`). docs/GOTCHAS.md, "Which
 node made a face is not a tag per node", has what it cost to find out.
 
+The window reads it against each node's creation stack (`app/src/provenance.ts`):
+a face's story is its first maker's chain, told one script line per step, and a
+line that is the body of a helper called from more than one place gives way to
+its caller, because it cannot say which of them the face came from. ⌘ over the
+part lights the face's feature and scrolls the editor to the line that made it;
+⌘-click pins the face, moves the caret there and numbers the story in the
+gutter and on the scrollbar, and ⌘-click again steps up it; the pointer over a
+line lights what that line made. All of it is in the code and on the faces
+themselves: nothing floats over the part or rides the cursor. The marks name
+lines of the build that made them, so an edit clears them until the next one.
+
 ### Edge treatments are a feature family, not an edge-selector trick
 
 The current API applies a treatment to an **edge-set or corner-vertex target**:
