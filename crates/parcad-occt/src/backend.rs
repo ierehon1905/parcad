@@ -4274,8 +4274,20 @@ fn require_inputs_kept(
     let mut first: Option<DVec3> = None;
     let mut outside = 0;
     let mut sampled = 0;
+    // An input's face that is a face of the result has every point on the
+    // result, which is within the tolerance of it: only the rest are classified.
+    let result_faces: Vec<Face> = result.faces().collect();
+    let on_result: HashSet<Identity> = result_faces.iter().map(Face::identity).collect();
     for (&child, input) in children.iter().zip(inputs) {
-        let points = input.face_grid(KEPT_GRID);
+        let mut points = Vec::new();
+        for face in input.faces() {
+            let carried = on_result.contains(&face.identity());
+            let grid = Shape::from(face).face_grid(KEPT_GRID);
+            sampled += grid.len();
+            if !carried {
+                points.extend(grid);
+            }
+        }
         let states = result.classify_points(&points, KEPT_TOLERANCE_MM);
         let out: Vec<DVec3> = points
             .iter()
@@ -4285,7 +4297,6 @@ fn require_inputs_kept(
             // Its ray can lie inside the B-spline face a point is on; docs/GOTCHAS.md, "A point on a B-spline wall".
             .filter(|p| result.distance_to_point(*p).is_none_or(|(gap, _)| gap > KEPT_TOLERANCE_MM))
             .collect();
-        sampled += points.len();
         if let Some(p) = out.first() {
             lost.push(child);
             first.get_or_insert(*p);
