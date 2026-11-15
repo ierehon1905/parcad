@@ -454,6 +454,15 @@ box of all 54 bands of a 55-section skin, 0.4 s; the proof takes about a
 millisecond. One new include, `IntTools_Apart.hxx`, so the crate now needs an
 OpenCASCADE built with patch 0009.
 
+## Added: `Shape_face_grid_off`
+
+`Shape_face_grid_off(shape, result, per_side, sampled)` is `Shape_face_grid`
+less the points that need no point-in-solid test to be known on `result`:
+every point of a face that is a face of `result` (`IsSame`), and every point
+that `BRepClass_FaceClassifier` puts inside or on a face of `result` lying on
+the same surface at the same location, which is where a boolean leaves what
+it kept of a face it split. `sampled` counts the whole grid.
+
 ## Added: `IsSame` and `Shape_identity_hash`
 
 `TopoDS_Shape::IsSame` — the same `TShape` at the same location, whatever

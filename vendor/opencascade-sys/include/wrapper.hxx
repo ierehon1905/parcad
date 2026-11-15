@@ -783,6 +783,71 @@ inline rust::Vec<double> Shape_face_grid(const TopoDS_Shape &shape, int per_side
   return out;
 }
 
+// The points of `Shape_face_grid` that nothing short of a point-in-solid test
+// shows to be on `result` — added for parcad, see PARCAD-CHANGES.md. A face
+// that is a face of `result` gives none, and neither does a point inside a
+// face of `result` on the same surface, which is where a boolean leaves what
+// it kept of a face it split. `sampled` counts every point of the grid.
+inline rust::Vec<double> Shape_face_grid_off(const TopoDS_Shape &shape, const TopoDS_Shape &result, int per_side,
+                                             int &sampled) {
+  rust::Vec<double> out;
+  sampled = 0;
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> carried;
+  std::map<const Geom_Surface *, std::vector<TopoDS_Face>> by_surface;
+  for (TopExp_Explorer faces(result, TopAbs_FACE); faces.More(); faces.Next()) {
+    const TopoDS_Face face = TopoDS::Face(faces.Current());
+    if (carried.Add(face)) {
+      TopLoc_Location at;
+      by_surface[BRep_Tool::Surface(face, at).get()].push_back(face);
+    }
+  }
+  for (TopExp_Explorer faces(shape, TopAbs_FACE); faces.More(); faces.Next()) {
+    const TopoDS_Face face = TopoDS::Face(faces.Current());
+    const bool is_carried = carried.Contains(face);
+    TopLoc_Location at;
+    const auto same_surface = by_surface.find(BRep_Tool::Surface(face, at).get());
+    double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    BRepAdaptor_Surface surface(face);
+    for (int i = 0; i <= per_side; ++i) {
+      for (int j = 0; j <= per_side; ++j) {
+        const gp_Pnt2d uv(u0 + (u1 - u0) * i / per_side, v0 + (v1 - v0) * j / per_side);
+        BRepClass_FaceClassifier inside(face, uv, Precision::PConfusion());
+        if (inside.State() == TopAbs_OUT) {
+          continue;
+        }
+        ++sampled;
+        if (is_carried) {
+          continue;
+        }
+        bool on_result = false;
+        if (same_surface != by_surface.end()) {
+          for (const TopoDS_Face &kept : same_surface->second) {
+            TopLoc_Location kept_at;
+            BRep_Tool::Surface(kept, kept_at);
+            if (!kept_at.IsEqual(at)) {
+              continue;
+            }
+            BRepClass_FaceClassifier within(kept, uv, Precision::PConfusion());
+            if (within.State() == TopAbs_IN || within.State() == TopAbs_ON) {
+              on_result = true;
+              break;
+            }
+          }
+        }
+        if (on_result) {
+          continue;
+        }
+        const gp_Pnt p = surface.Value(uv.X(), uv.Y());
+        out.push_back(p.X());
+        out.push_back(p.Y());
+        out.push_back(p.Z());
+      }
+    }
+  }
+  return out;
+}
+
 // Closest points on a face's own triangulation, and local projection onto its
 // surface from there — added for parcad, see PARCAD-CHANGES.md. The
 // triangulation lies within a measured slack of the surface, so a distance to

@@ -1005,6 +1005,15 @@ pub mod ffi {
         // PARCAD-CHANGES.md.
         pub fn Shape_face_grid(shape: &TopoDS_Shape, per_side: i32) -> Vec<f64>;
 
+        // That grid, less the points shown to be on another shape — added
+        // for parcad, see PARCAD-CHANGES.md.
+        pub fn Shape_face_grid_off(
+            shape: &TopoDS_Shape,
+            result: &TopoDS_Shape,
+            per_side: i32,
+            sampled: &mut i32,
+        ) -> Vec<f64>;
+
         // A proof that the shape lies inside a box — added for parcad, see
         // PARCAD-CHANGES.md.
         pub fn Shape_proven_within(

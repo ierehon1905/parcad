@@ -934,6 +934,19 @@ impl Shape {
             .collect()
     }
 
+    /// The points of [`Self::face_grid`] that are not shown to be on
+    /// `result`, and how many points the grid has in all. A face that is a
+    /// face of `result` contributes none, nor does a point inside a face of
+    /// `result` on the same surface. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn face_grid_off(&self, result: &Shape, per_side: usize) -> (Vec<DVec3>, usize) {
+        let mut sampled = 0;
+        let points = ffi::Shape_face_grid_off(&self.inner, &result.inner, per_side as i32, &mut sampled)
+            .chunks_exact(3)
+            .map(|c| dvec3(c[0], c[1], c[2]))
+            .collect();
+        (points, sampled as usize)
+    }
+
     /// Load this shape for repeated nearest-boundary-point questions. Added
     /// for parcad; see PARCAD-CHANGES.md.
     pub fn nearest_boundary(&self) -> NearestBoundary {

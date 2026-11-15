@@ -677,6 +677,12 @@ box, or `false`, which is no claim that it leaves it. parcad asks it before
 `bounds_optimal` where all it needs is that a loft has not bulged out of its
 sections' extent.
 
+## `Shape::face_grid_off`
+
+The sys crate's `Shape_face_grid_off`: the points of `face_grid` that are not
+shown to be on another shape, and how many the grid has in all. parcad's
+check that a union kept its inputs classifies only these.
+
 ## `Shape::is_same`, and `Mesh` is `Clone`
 
 `Shape::is_same(other)` is `TopoDS_Shape::IsSame`: the same `TShape` at the
