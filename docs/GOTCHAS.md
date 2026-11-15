@@ -1497,6 +1497,55 @@ unchanged; `eval/cases/tagged-stack.json` holds the 26-post stack under the
 20 s budget it used to miss by a factor of four. Not `tag_extents`, the first
 suspect: `AddOptimal` over all 44 saucer faces is 16 ms.
 
+### Which node made a face is not a tag per node
+
+Every evaluation reports `made_by` for each face: the node that made it and
+every op above it (docs/ARCHITECTURE.md, "Which nodes made a face"). The
+first way tried was the lineage that already existed, a synthetic tag on
+every node, read back off `FaceSummary::tags`. Measured 2026-11-15 on a
+165-node part, release worker:
+
+| | build |
+|---|---|
+| nothing reported | 14.7 s |
+| a tag on every node | 144.8 s |
+| `FaceMakers`, one record per shape | 1.5 ms more |
+
+A tag costs every boolean its own pass: `through_boolean_all` asks the
+history about each tag's faces, and `cut_collisions` intersects every tagged
+solid with what a cut removed. The record that replaced it is asked about
+each face once per op, whatever the number of nodes. The 1.5 ms is timed
+inside the build, around the record's own code; by the clock the two builds
+cannot be told apart (15.0 against 15.3 s, the median of three cold runs
+each on a quiet machine), and the STL is the same file byte for byte.
+
+**An intersection kept no history at all**, which is what that run found.
+It went through `AdHocShape::intersect`, which returns a shape and nothing
+more, so every name under an intersection ended there and every face came
+back made by the intersection. The faces lost had been turned twice first,
+and the transform was blamed; a name and a chain both cross a rotation
+(`a_chain_runs_through_two_rotations_and_an_intersection`).
+`BooleanShape::common` is the same `ParcadBoolean` a cut and a fuse are. A
+feature's solid is still not carried across one: it is the feature before
+it was clipped, and a later cut measured against it would report a collision
+with both operands of every intersection.
+
+Two places where a chain written the obvious way is wrong:
+
+- **A node id from the cache is from another document.** A subtree's key
+  ignores ids, and one node used twice in the document that built it can be
+  two nodes in the document that hits it. A map from old id to new sends
+  both uses to one of them; a chain is renumbered by walking it down from
+  the subtree's root (`FaceMakers::renumbered`).
+- **A treatment built before its cuts is still above them.**
+  `treat_before_cuts` fillets first and cuts again, and a chain written in
+  build order would put the fillet under the cut it follows in the script.
+
+A moved shape's faces are paired with the original's by position, not by
+boundary geometry as a name's are: `BRepBuilderAPI_Transform` copies faces in
+the order it finds them, measured on a move, a turn, a mirror and both
+scales by `a_moved_copy_lists_its_faces_in_the_originals_order`.
+
 ### `generatedBy` names the cut, not the tool
 
 Lineage records the boolean node's tag, so `blank.cut(grooves, shaftBore, grub)`

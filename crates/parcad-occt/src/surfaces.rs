@@ -314,6 +314,15 @@ fn through_history(parts: Vec<EdgeLineage>, input: &Shape, history: &FaceHistory
     for &(from, to) in history.all() {
         images.entry(from).or_default().push(to);
     }
+    // A side wall is named after the face whose edge it grew from, and made by the op that grew it.
+    let mut own: HashMap<usize, Vec<usize>> = HashMap::new();
+    for &(from, to) in &history.images {
+        own.entry(from).or_default().push(to);
+    }
+    let makers = FaceMakers::through(parts.iter().map(|part| &part.makers), |face| {
+        let became = map.index_of(face).and_then(|i| own.get(&i));
+        became.into_iter().flatten().filter_map(|&j| faces.get(j).cloned()).collect()
+    });
     let mut named: BTreeMap<String, Vec<usize>> = BTreeMap::new();
     for part in parts {
         for (source, list) in part.faces_by_source {
@@ -329,6 +338,7 @@ fn through_history(parts: Vec<EdgeLineage>, input: &Shape, history: &FaceHistory
         }
     }
     EdgeLineage {
+        makers,
         by_source: BTreeMap::new(),
         solids_by_source: BTreeMap::new(),
         faces_by_source: named

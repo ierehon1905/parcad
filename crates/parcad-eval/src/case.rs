@@ -314,6 +314,13 @@ pub struct Expect {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub perception: Option<PerceptionExpect>,
 
+    /// Which ops made a face, for the faces a case points at. Every measured
+    /// case is already held to the rule that each face names a chain of
+    /// nodes, each an input of the next, up to its body's root; this pins
+    /// which chain. Written by hand and never by `--update`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub made_by: Vec<MadeByExpect>,
+
     /// Pictures drawn the way `evaluate_part` draws them, held to numbers
     /// derived by hand: a tag's share of a view, a cut face's area, a region
     /// of a section that must be capped. Never written by `--update`, like
@@ -640,6 +647,52 @@ pub struct BetweenExpect {
     pub contact_patches: Option<usize>,
 }
 
+/// The makers of the face whose centroid is `at`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MadeByExpect {
+    pub at: [f64; 3],
+    /// One chain per maker, each from the op that made the face to its
+    /// body's root, by op name as the graph spells it. Names rather than
+    /// node ids, which move whenever the DSL lowers a script differently.
+    pub chains: Vec<Vec<String>>,
+}
+
+/// How far a face's centroid may lie from where a case says it is.
+const MADE_BY_AT_MM: f64 = 1e-2;
+
+fn check_made_by(expect: &[MadeByExpect], observed: &Observed) -> Vec<Mismatch> {
+    let mut out: Vec<Mismatch> = observed
+        .made_by_faults
+        .iter()
+        .take(5)
+        .map(|fault| Mismatch { field: "made_by".into(), detail: fault.clone() })
+        .collect();
+    for (i, want) in expect.iter().enumerate() {
+        let field = format!("made_by[{i}]");
+        let distance = |at: &[f64; 3]| (0..3).map(|k| (at[k] - want.at[k]).powi(2)).sum::<f64>().sqrt();
+        let Some((at, chains)) = observed.made_by.iter().min_by(|a, b| distance(&a.0).total_cmp(&distance(&b.0))) else {
+            out.push(Mismatch { field, detail: "the reply describes no faces".into() });
+            continue;
+        };
+        if distance(at) > MADE_BY_AT_MM {
+            out.push(Mismatch {
+                field,
+                detail: format!("no face has its centroid at {:?}; the nearest is at {at:?}, {:.3} mm away", want.at, distance(at)),
+            });
+            continue;
+        }
+        let sorted = |chains: &[Vec<String>]| {
+            let mut chains = chains.to_vec();
+            chains.sort();
+            chains
+        };
+        if sorted(chains) != sorted(&want.chains) {
+            out.push(Mismatch { field, detail: format!("expected {:?}, the face at {at:?} was made by {chains:?}", want.chains) });
+        }
+    }
+    out
+}
+
 /// One body's overhang as it prints, as the reply carries it.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct OverhangExpect {
@@ -867,6 +920,10 @@ pub struct Observed {
     pub treatments: Vec<TreatmentExpect>,
     /// Each body's overhang as it prints, keyed by body.
     pub overhang: BTreeMap<String, OverhangExpect>,
+    /// Every face's centroid and the chains of ops that made it, by name.
+    pub made_by: Vec<([f64; 3], Vec<Vec<String>>)>,
+    /// `parcad_occt::protocol::made_by_faults` over the reply's faces.
+    pub made_by_faults: Vec<String>,
 }
 
 /// One assertion that did not hold, phrased so the terminal line is enough to
@@ -912,6 +969,7 @@ pub fn check(expect: &Expect, observed: &Observed, fallback: Tolerance) -> Vec<M
             abs_check(&mut out, &format!("size.{axis}"), want[i], observed.size[i], tol.size_mm);
         }
     }
+    out.extend(check_made_by(&expect.made_by, observed));
     let kind = expect.kind.as_deref().unwrap_or("solid");
     if kind != observed.kind {
         out.push(Mismatch {

@@ -195,6 +195,15 @@ pub fn run_brep(doc: &Doc, timeout: std::time::Duration) -> Outcome {
                 )
             })
             .collect(),
+        made_by: s
+            .faces
+            .iter()
+            .map(|face| {
+                let named = |chain: &Vec<u32>| chain.iter().map(|&node| doc.op_name(node as usize).unwrap_or_else(|e| e.to_string())).collect();
+                (face.centroid, face.made_by.iter().map(named).collect())
+            })
+            .collect(),
+        made_by_faults: parcad_occt::protocol::made_by_faults(doc, &s.faces),
     })
 }
 

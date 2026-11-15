@@ -1148,9 +1148,49 @@ pub struct FaceSummary {
     /// after the parse; empty for a face no tagged node owns.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tags: Vec<String>,
+    /// Which graph nodes made this face, one chain per maker: the node that
+    /// made it first (a primitive, or the fillet or chamfer that generated
+    /// it), then every op applied to it since, in order, up to its body's
+    /// root. Ids index `Doc::nodes`. Several chains where a merge or a
+    /// boolean made one face of several makers' faces. An op that keeps no
+    /// history made every face it returns. Set by the worker from each
+    /// operation's own history; ephemeral like `EdgeCurve::treatment_node`,
+    /// never graph input.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub made_by: Vec<Vec<u32>>,
     /// What the face's body wears (`Doc::body_materials`). Set by the worker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub material: Option<parcad_core::graph::Material>,
+}
+
+/// Where `faces` break what [`FaceSummary::made_by`] states about the graph
+/// they were built from: a face with no chain, a chain that does not end at
+/// its body's root, or a node in one that is not an input of the next. Empty
+/// when every face holds.
+pub fn made_by_faults(doc: &Doc, faces: &[FaceSummary]) -> Vec<String> {
+    let root_of = |face: &FaceSummary| match (&face.body, doc.bodies()) {
+        (Some(name), Some(bodies)) => bodies.iter().find(|body| &body.name == name).map(|body| body.child),
+        _ => Some(doc.root),
+    };
+    let mut faults = Vec::new();
+    for (i, face) in faces.iter().enumerate() {
+        if face.made_by.is_empty() {
+            faults.push(format!("face {i} names no node that made it"));
+        }
+        for chain in &face.made_by {
+            let ends_at = chain.last().map(|&node| node as usize);
+            if ends_at != root_of(face) {
+                faults.push(format!("face {i}: the chain {chain:?} does not end at its body's root, node {:?}", root_of(face)));
+            }
+            for step in chain.windows(2) {
+                let is_input = doc.children_of(step[1] as usize).is_ok_and(|inputs| inputs.contains(&(step[0] as usize)));
+                if !is_input {
+                    faults.push(format!("face {i}: in the chain {chain:?}, node {} is not an input of node {}", step[0], step[1]));
+                }
+            }
+        }
+    }
+    faults
 }
 
 /// What kind of surface a face is, and how it is placed.

@@ -177,6 +177,14 @@ out. Everything below could otherwise have lived in our own crate.
   that a later tool in the same cut opened. Not used for a common: a
   multi-tool `BRepAlgoAPI_Common` intersects with the tools' union, which is
   not an n-way intersection.
+- `BooleanShape::common(base, tool)` — a two-shape `BRepAlgoAPI_Common` kept
+  as a `ParcadBoolean`, so an intersection answers what each input face and
+  edge became the way a cut and a fuse do (`parcad_common_with_history`).
+  `ParcadBoolean` now holds its algorithm as one
+  `BRepAlgoAPI_BooleanOperation` instead of a cut and a fuse of which one was
+  null. parcad's intersection went through `AdHocShape::intersect`, which
+  returns the shape alone: every name under an intersection ended at it, and
+  so did which node made each face.
 - `Shape::internal_void_bounds()` — the tight box of each cavity shell, the
   outer shell being the one with the largest box. `internal_void_count`'s
   walk, with `bounds_optimal` per shell; lets a refusal say where a void is.

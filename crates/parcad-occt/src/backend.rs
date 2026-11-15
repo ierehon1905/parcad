@@ -35,6 +35,7 @@ use parcad_core::{
 
 use crate::protocol::{breadcrumb, edge_curve, Collision, EdgeCurve, TargetVertex, TreatmentEdges};
 use std::collections::{BTreeMap, HashSet};
+use std::rc::Rc;
 
 #[path = "surfaces.rs"]
 pub(crate) mod surfaces;
@@ -1393,6 +1394,182 @@ fn vertex_key(point: DVec3) -> [i64; 3] {
     ]
 }
 
+/// One maker of a face and every op applied to it since, topmost first,
+/// sharing its tail with the chain it grew from.
+struct Link {
+    node: NodeId,
+    below: Option<Chain>,
+}
+
+type Chain = Rc<Link>;
+
+/// Which graph nodes made each face of a shape: per face, one chain for each
+/// maker, from the node that made the face up through every op since.
+///
+/// One record for the whole shape, carried through each operation by that
+/// operation's own history, so an op costs its faces once. A name's lineage
+/// costs them once per tag, which is why this is not a tag on every node
+/// (docs/GOTCHAS.md, "Which node made a face is not a tag per node").
+///
+/// [`build_node_afresh`] seals the record at every node; sealed, it lists the
+/// shape's faces in their own numbering, each with a chain ending at that node.
+#[derive(Clone, Default)]
+struct FaceMakers {
+    faces: Rc<Vec<(Face, Vec<Chain>)>>,
+}
+
+impl FaceMakers {
+    /// The chains of `records` on what `became` says each of their faces
+    /// turned into. A face several turned into carries every chain of theirs.
+    fn through<'a>(records: impl IntoIterator<Item = &'a Self>, mut became: impl FnMut(&Face) -> Vec<Face>) -> Self {
+        let mut images: Vec<(Face, Vec<Chain>)> = Vec::new();
+        for record in records {
+            for (face, chains) in record.faces.iter() {
+                images.extend(became(face).into_iter().map(|image| (image, chains.clone())));
+            }
+        }
+        let first: Vec<usize> = {
+            let mut seen: HashMap<Identity, usize> = HashMap::new();
+            images.iter().enumerate().map(|(i, (face, _))| *seen.entry(face.identity()).or_insert(i)).collect()
+        };
+        let mut merged: Vec<Option<(Face, Vec<Chain>)>> = images.into_iter().map(Some).collect();
+        for (i, &first) in first.iter().enumerate() {
+            if first == i {
+                continue;
+            }
+            let Some((_, chains)) = merged[i].take() else { continue };
+            let Some((_, kept)) = &mut merged[first] else { continue };
+            for chain in chains {
+                if !kept.iter().any(|k| Rc::ptr_eq(k, &chain)) {
+                    kept.push(chain);
+                }
+            }
+        }
+        Self { faces: Rc::new(merged.into_iter().flatten().collect()) }
+    }
+
+    /// A sealed record moved with its shape: a rigid motion, a scale or a
+    /// mirror copies every face, in the order it found them.
+    fn moved_onto(&self, moved: &Shape) -> Self {
+        let faces = unique_faces(moved.faces().collect());
+        if faces.len() != self.faces.len() {
+            return Self::default();
+        }
+        Self { faces: Rc::new(faces.into_iter().zip(self.faces.iter()).map(|(face, (_, chains))| (face, chains.clone())).collect()) }
+    }
+
+    /// Every face of `shape`, in its own numbering: with the chains this
+    /// record carries for it, or made by `node` where it carries none.
+    fn completed_by(&self, node: NodeId, shape: &Shape) -> Self {
+        let carried: HashMap<Identity, &Vec<Chain>> = self.faces.iter().map(|(face, chains)| (face.identity(), chains)).collect();
+        let made = Rc::new(Link { node, below: None });
+        let faces = unique_faces(shape.faces().collect())
+            .into_iter()
+            .map(|face| {
+                let chains = carried.get(&face.identity()).map_or_else(|| vec![made.clone()], |chains| (*chains).clone());
+                (face, chains)
+            })
+            .collect();
+        Self { faces: Rc::new(faces) }
+    }
+
+    /// Every chain taken up through `nodes` in turn. One that already ends at
+    /// a node was made or sealed there, and is not taken through it twice.
+    fn extended(&self, nodes: &[NodeId]) -> Self {
+        let mut above: HashMap<(*const Link, NodeId), Chain> = HashMap::new();
+        let faces = self
+            .faces
+            .iter()
+            .map(|(face, chains)| {
+                let chains = chains
+                    .iter()
+                    .map(|chain| {
+                        nodes.iter().fold(chain.clone(), |chain, &node| {
+                            if chain.node == node {
+                                return chain;
+                            }
+                            above
+                                .entry((Rc::as_ptr(&chain), node))
+                                .or_insert_with(|| Rc::new(Link { node, below: Some(chain.clone()) }))
+                                .clone()
+                        })
+                    })
+                    .collect();
+                (face.clone(), chains)
+            })
+            .collect();
+        Self { faces: Rc::new(faces) }
+    }
+
+    /// This record once `node` has built `shape`.
+    fn sealed(&self, node: NodeId, shape: &Shape) -> Self {
+        self.completed_by(node, shape).extended(&[node])
+    }
+
+    /// A cached subtree's record in the ids of the document that hit it.
+    /// `from` and `to` are the subtree's [`subtree_ids`] then and now, and
+    /// `parents` its [`subtree_parents`]. A chain is walked down from the
+    /// subtree's root, because a node the old document shared between two
+    /// parents can be two nodes in this one, and only its path says which.
+    fn renumbered(&self, from: &[NodeId], to: &[NodeId], parents: &[usize]) -> Self {
+        let mut child_at: HashMap<(usize, NodeId), usize> = HashMap::new();
+        for (at, (&parent, &old)) in parents.iter().zip(from).enumerate().skip(1) {
+            child_at.entry((parent, old)).or_insert(at);
+        }
+        let mut renumbered: HashMap<*const Link, Chain> = HashMap::new();
+        let faces = self
+            .faces
+            .iter()
+            .map(|(face, chains)| {
+                let chains = chains
+                    .iter()
+                    .map(|chain| {
+                        renumbered
+                            .entry(Rc::as_ptr(chain))
+                            .or_insert_with(|| {
+                                let mut at = 0;
+                                let mut path = vec![to[0]];
+                                for link in std::iter::successors(chain.below.as_ref(), |link| link.below.as_ref()) {
+                                    let Some(&child) = child_at.get(&(at, link.node)) else { break };
+                                    at = child;
+                                    path.push(to[at]);
+                                }
+                                let mut below = None;
+                                for &node in path.iter().rev() {
+                                    below = Some(Rc::new(Link { node, below }));
+                                }
+                                below.expect("the path holds the subtree's root")
+                            })
+                            .clone()
+                    })
+                    .collect();
+                (face.clone(), chains)
+            })
+            .collect();
+        Self { faces: Rc::new(faces) }
+    }
+
+    /// Per face, each maker's chain from the node that made it to the last
+    /// that sealed it, each distinct chain once.
+    fn chains(&self) -> Vec<Vec<Vec<u32>>> {
+        self.faces
+            .iter()
+            .map(|(_, chains)| {
+                let mut distinct: Vec<Vec<u32>> = Vec::new();
+                for chain in chains {
+                    let mut nodes: Vec<u32> =
+                        std::iter::successors(Some(chain), |link| link.below.as_ref()).map(|link| link.node as u32).collect();
+                    nodes.reverse();
+                    if !distinct.contains(&nodes) {
+                        distinct.push(nodes);
+                    }
+                }
+                distinct
+            })
+            .collect()
+    }
+}
+
 /// Named edges that have survived the exact operations evaluated so far.
 ///
 /// These are live OCCT sub-shapes, not sampled viewport IDs. A Boolean tells us
@@ -1410,6 +1587,8 @@ struct EdgeLineage {
     /// to say which features it took material from (`cut_collisions`). A
     /// cutter's solid is a void and is not carried.
     solids_by_source: BTreeMap<String, Shape>,
+    /// Which nodes made each face, whether or not anything is tagged.
+    makers: FaceMakers,
 }
 
 impl EdgeLineage {
@@ -1448,6 +1627,9 @@ impl EdgeLineage {
         if let Some(tag) = tag {
             solids_by_source.insert(tag.to_owned(), result.shape.clone());
         }
+        let makers = FaceMakers::through(std::iter::once(&self.makers).chain(others.iter().map(|o| &o.makers)), |face| {
+            evolved_face(face, result)
+        });
         let (other_edges, other_faces): (Vec<_>, Vec<_>) =
             others.into_iter().map(|o| (o.by_source, o.faces_by_source)).unzip();
         let mut by_source = BTreeMap::new();
@@ -1468,7 +1650,7 @@ impl EdgeLineage {
         }
         let mut faces_by_source = BTreeMap::new();
         for (source, faces) in self.faces_by_source.into_iter().chain(other_faces.into_iter().flatten()) {
-            let evolved = evolve_faces(faces, result);
+            let evolved: Vec<Face> = faces.iter().flat_map(|face| evolved_face(face, result)).collect();
             if !evolved.is_empty() {
                 faces_by_source
                     .entry(source)
@@ -1486,6 +1668,7 @@ impl EdgeLineage {
             by_source,
             faces_by_source,
             solids_by_source,
+            makers,
         }
         .unique()
     }
@@ -1534,19 +1717,19 @@ impl EdgeLineage {
                 by_source.insert(source, evolved);
             }
         }
+        let mut became = |face: &Face| {
+            let modified = treatment.modified_face(face);
+            if modified.is_empty() && !treatment.is_deleted_face(face) {
+                vec![face.clone()]
+            } else {
+                modified
+            }
+        };
+        // The faces it generated are in no record, so whoever seals this made them.
+        let makers = FaceMakers::through([&self.makers], &mut became);
         let mut faces_by_source: BTreeMap<String, Vec<Face>> = BTreeMap::new();
         for (source, faces) in self.faces_by_source {
-            let evolved: Vec<Face> = faces
-                .into_iter()
-                .flat_map(|face| {
-                    let modified = treatment.modified_face(&face);
-                    if modified.is_empty() && !treatment.is_deleted_face(&face) {
-                        vec![face]
-                    } else {
-                        modified
-                    }
-                })
-                .collect();
+            let evolved: Vec<Face> = faces.iter().flat_map(&mut became).collect();
             if !evolved.is_empty() {
                 faces_by_source.insert(source, evolved);
             }
@@ -1586,6 +1769,7 @@ impl EdgeLineage {
             by_source,
             faces_by_source,
             solids_by_source,
+            makers,
         }
         .unique()
     }
@@ -1610,19 +1794,18 @@ impl EdgeLineage {
                 by_source.insert(source, evolved);
             }
         }
+        let became = |face: &Face| {
+            let modified = unification.modified_face(face);
+            if modified.is_empty() && !unification.is_deleted_face(face) {
+                vec![face.clone()]
+            } else {
+                modified
+            }
+        };
+        let makers = FaceMakers::through([&self.makers], became);
         let mut faces_by_source: BTreeMap<String, Vec<Face>> = BTreeMap::new();
         for (source, faces) in self.faces_by_source {
-            let evolved: Vec<Face> = faces
-                .into_iter()
-                .flat_map(|face| {
-                    let modified = unification.modified_face(&face);
-                    if modified.is_empty() && !unification.is_deleted_face(&face) {
-                        vec![face]
-                    } else {
-                        modified
-                    }
-                })
-                .collect();
+            let evolved: Vec<Face> = faces.iter().flat_map(became).collect();
             if !evolved.is_empty() {
                 faces_by_source.insert(source, evolved);
             }
@@ -1631,6 +1814,7 @@ impl EdgeLineage {
             by_source,
             faces_by_source,
             solids_by_source,
+            makers,
         }
         .unique()
     }
@@ -1642,6 +1826,7 @@ impl EdgeLineage {
     /// given, and a copy, however exactly placed, is not one of them — which
     /// is how a mirrored cup lost its name at the union that followed.
     fn through_transform(self, result: &Shape, transform: impl Fn(Shape) -> Shape) -> Self {
+        let makers = self.makers.moved_onto(result);
         let own_faces: HashMap<FaceKey, Face> = result
             .faces()
             .map(|face| (face_key(&face), face))
@@ -1686,6 +1871,7 @@ impl EdgeLineage {
                 .into_iter()
                 .map(|(source, solid)| (source, transform(solid)))
                 .collect(),
+            makers,
         }
         .unique()
     }
@@ -2384,18 +2570,15 @@ fn blend_seam(
     Ok((built, lineage))
 }
 
-fn evolve_faces(faces: Vec<Face>, result: &BooleanShape) -> Vec<Face> {
-    faces
-        .into_iter()
-        .flat_map(|face| {
-            let modified = result.modified_face(&face);
-            if modified.is_empty() && !result.is_deleted_face(&face) {
-                vec![face]
-            } else {
-                modified
-            }
-        })
-        .collect()
+/// What a boolean made of one input face: its pieces, itself where the
+/// boolean left it alone, nothing where it removed it.
+fn evolved_face(face: &Face, result: &BooleanShape) -> Vec<Face> {
+    let modified = result.modified_face(face);
+    if modified.is_empty() && !result.is_deleted_face(face) {
+        vec![face.clone()]
+    } else {
+        modified
+    }
 }
 
 fn evolve_edges(edges: Vec<Edge>, result: &BooleanShape) -> Vec<Edge> {
@@ -3298,6 +3481,10 @@ pub struct BuiltBody {
 /// authored (node order), each name once. A tag with no faces left is
 /// present with an empty list, so "unlocated" is a fact the reader can state.
 pub struct NamedFaces {
+    /// Which nodes made each face, in the body's own face numbering: one
+    /// chain per maker, from the node that made the face up through every op
+    /// since to the body's root.
+    pub made_by: Vec<Vec<Vec<u32>>>,
     pub tags: Vec<(String, Vec<Face>)>,
     /// For each tag, the tags that outrank it on a face both carry: the
     /// names written on a move, turn, scale or mirror whose input it is
@@ -3325,6 +3512,7 @@ impl NamedFaces {
             })
             .collect();
         Self {
+            made_by: lineage.makers.chains(),
             tags,
             outranked_by: copy_names(doc),
         }
@@ -3871,6 +4059,22 @@ fn subtree_ids(doc: &Doc, id: NodeId) -> Result<Vec<NodeId>> {
     Ok(ids)
 }
 
+/// For each entry of [`subtree_ids`], where in that list its parent is; the
+/// root's is itself.
+fn subtree_parents(doc: &Doc, id: NodeId) -> Result<Vec<usize>> {
+    fn visit(doc: &Doc, id: NodeId, parent: usize, parents: &mut Vec<usize>) -> Result<()> {
+        let at = parents.len();
+        parents.push(parent);
+        for child in doc.children_of(id)? {
+            visit(doc, child, at, parents)?;
+        }
+        Ok(())
+    }
+    let mut parents = Vec::new();
+    visit(doc, id, 0, &mut parents)?;
+    Ok(parents)
+}
+
 /// What a subtree is, as text: its op with the child indices blanked, its
 /// tag, and its children's keys in order. Memoised per node for one build.
 fn subtree_key(doc: &Doc, id: NodeId, memo: &mut Vec<Option<String>>) -> Result<String> {
@@ -4053,6 +4257,7 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
         if entry.ids != ids {
             let renumber: HashMap<NodeId, NodeId> = entry.ids.iter().copied().zip(ids.iter().copied()).collect();
             built.features = built.features.renumbered(&renumber);
+            built.lineage.makers = built.lineage.makers.renumbered(&entry.ids, &ids, &subtree_parents(doc, id).ok()?);
         }
         record(entry.measured);
         touch(&mut reuse.cache, &key);
@@ -4763,6 +4968,13 @@ fn treat_before_cuts(
         "{} node {id} ({label}): its stripe runs over the cut at node(s) {order:?}; built before them, and the cuts made again through it",
         kind.thing()
     ));
+    // A chain reads in the graph's order, where these cuts lie under the treatment built before them.
+    base.lineage.makers = base.lineage.makers.extended(&order);
+    for (k, (_, cutters)) in cuts.iter_mut().enumerate() {
+        for cutter in cutters {
+            cutter.lineage.makers = cutter.lineage.makers.extended(&order[k..]);
+        }
+    }
     let mut report = selected.report.clone();
     report.before_cuts = order;
     base.features.resolved.push(report);
@@ -4772,6 +4984,7 @@ fn treat_before_cuts(
         report: selected.report.clone(),
     };
     let mut acc = apply_treatment(None, id, label, kind, base, &on_origin)?;
+    acc.lineage.makers = acc.lineage.makers.completed_by(id, &acc.shape);
     for (cut, cutters) in cuts {
         let cut_node_ref = doc.node(cut)?;
         let Op::Difference { base: cut_base, tools, blend } = &cut_node_ref.op else {
@@ -4787,7 +5000,17 @@ fn treat_before_cuts(
 /// the cuts, for the two to count as the same edge.
 const EDGE_MATCH_MM: f64 = 1.0e-4;
 
-/// Build one node, with `offset` accumulated from enclosing translations.
+/// Build one node and seal which nodes made each of its faces: what its
+/// children's faces became keeps their chains, now ending here, and a face
+/// no history accounts for was made here.
+fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
+    let mut built = lower_node(doc, id, offset)?;
+    built.lineage.makers = built.lineage.makers.sealed(id, &built.shape);
+    Ok(built)
+}
+
+/// Lower one node onto the kernel, with `offset` accumulated from enclosing
+/// translations.
 ///
 /// Translation is carried down and applied at the primitives rather than moving
 /// finished shapes. `set_global_translation` *replaces* a shape's location, so
@@ -4795,7 +5018,7 @@ const EDGE_MATCH_MM: f64 = 1.0e-4;
 /// offset down side-steps that, and is valid because translation commutes with
 /// the booleans. It does *not* commute with rotation or scaling, so those two
 /// build their child at the origin and move the result afterwards.
-fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
+fn lower_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
     let node = doc.node(id)?;
     let label = node.tag.as_deref().unwrap_or("untagged");
 
@@ -4916,28 +5139,23 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             if *blend > 0.0 {
                 bail!(
                     "node {id} ({label}) blends an intersection, which the B-rep \
-                     backend cannot do yet — unlike union and difference, the \
-                     bindings' intersection does not report the edges it created, \
-                     so there is nothing to fillet"
+                     backend does not build yet. Intersect without a blend, then \
+                     select the edges where the two meet and fillet() them"
                 );
             }
             for c in it {
                 let other = build_node(doc, c, offset)?;
                 surfaces::require_solid(doc, id, label, "intersects", c, &other)?;
                 breadcrumb(&format!("intersect node {id} ({label}) with node {c}"));
-                // Intersection mutates in place here and reports no new edges,
-                // so it goes through the ad-hoc wrapper rather than the boolean
-                // result type the other two use.
                 let (a0, a1) = bbox(&acc.shape);
                 let (b0, b1) = bbox(&other.shape);
-                let mut met = AdHocShape(acc.shape);
-                met.intersect(&other.shape);
+                let met = BooleanShape::common(&acc.shape, &other.shape);
                 // Two solids with nothing in common intersect to nothing, and
                 // an empty solid is not a part. Said here, with both extents,
                 // rather than as "no faces" three stages later: when the
                 // question was whether two bodies interfere, this is the
                 // answer, and it is zero.
-                if met.0.faces().count() == 0 {
+                if met.shape.faces().count() == 0 {
                     bail!(
                         "node {id} ({label}) intersects node {c}, and the two share no \
                          volume: x {:.2}..{:.2}, y {:.2}..{:.2}, z {:.2}..{:.2} against \
@@ -4952,9 +5170,13 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
                 features.extend(other.features);
                 let mut collisions = acc.collisions;
                 collisions.extend(other.collisions);
+                let mut lineage = acc.lineage.through_boolean_all(vec![other.lineage], &met, None, false);
+                // A feature's solid is what it was before this clipped it: nothing for a later cut to be measured against.
+                lineage.solids_by_source.clear();
+                let (shape, lineage) = unified_tracked(met.shape, lineage);
                 acc = BuiltShape {
-                    shape: unified(met.0),
-                    lineage: EdgeLineage::default(),
+                    shape,
+                    lineage,
                     features,
                     collisions,
                 };
@@ -5836,7 +6058,10 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             }
 
             breadcrumb(&format!("hollow node {id} ({label})"));
-            let hollow = solid.shape.subtract(&cavity).shape;
+            let hollowed = solid.shape.subtract(&cavity);
+            // The cavity's faces come from an offset with no history, so the shell made them.
+            let makers = FaceMakers::through([&solid.lineage.makers], |face| evolved_face(face, &hollowed));
+            let hollow = hollowed.shape;
             // The cavity lies inside the part, so the hollow part holds the
             // difference of the two volumes, to the volume integral's own noise:
             // 2e-6 of the part on a revolved B-spline wall (docs/GOTCHAS.md,
@@ -5854,7 +6079,7 @@ fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape>
             }
             BuiltShape {
                 shape: hollow,
-                lineage: EdgeLineage::default(),
+                lineage: EdgeLineage { makers, ..EdgeLineage::default() },
                 features: solid.features,
                 collisions: solid.collisions,
             }
@@ -7458,5 +7683,228 @@ mod tests {
         let part = build_part(&doc).unwrap_or_else(|e| panic!("{e:#}"));
         assert!(part.shape.orientation_faults().is_empty());
         assert!(part.shape.signed_volume() > 0.0);
+    }
+
+    /// What kind of surface each face of a one-solid part is, beside the
+    /// chains of nodes that made it.
+    fn made_by(part: &BuiltPart) -> Vec<(String, Vec<Vec<u32>>)> {
+        let faces = crate::perceive::describe_faces(&part.shape);
+        assert_eq!(faces.len(), part.names[0].made_by.len(), "one record per face");
+        faces.into_iter().map(|face| face.surface.kind).zip(part.names[0].made_by.iter().cloned()).collect()
+    }
+
+    fn graph(json: serde_json::Value) -> Doc {
+        serde_json::from_value(json).unwrap()
+    }
+
+    /// A 40 × 40 × 10 plate (node 0) less a cylinder (1) moved 5 mm along x (2).
+    fn drilled_plate() -> Doc {
+        graph(serde_json::json!({"units":"mm","root":3,"nodes":[
+            {"op":"cuboid","size":{"x":40,"y":40,"z":10}},
+            {"op":"cylinder","r":3,"h":20},
+            {"op":"translate","child":1,"by":{"x":5,"y":0,"z":0}},
+            {"op":"difference","base":0,"tools":[2],"blend":0}
+        ]}))
+    }
+
+    #[test]
+    fn a_hole_wall_is_made_by_the_cylinder_its_move_and_the_cut() {
+        let made = made_by(&build_part(&drilled_plate()).unwrap());
+        assert_eq!(made.len(), 7);
+        for (kind, chains) in made {
+            let expected: &[u32] = if kind == "cylinder" { &[1, 2, 3] } else { &[0, 3] };
+            assert_eq!(chains, [expected.to_vec()], "a {kind} face");
+        }
+    }
+
+    #[test]
+    fn a_chain_runs_through_a_rotation_and_names_the_fillet_that_made_a_blend() {
+        let doc = graph(serde_json::json!({"units":"mm","root":2,"nodes":[
+            {"op":"cuboid","size":{"x":20,"y":10,"z":10}},
+            {"op":"rotate","child":0,"axis":{"x":0,"y":0,"z":1},"degrees":30},
+            {"op":"fillet","child":1,"radius":2,"selector":"|Z"}
+        ]}));
+        let made = made_by(&build_part(&doc).unwrap());
+        let blends = made.iter().filter(|(kind, _)| kind == "cylinder").count();
+        assert_eq!((made.len(), blends), (10, 4));
+        for (kind, chains) in made {
+            let expected: &[u32] = if kind == "cylinder" { &[2] } else { &[0, 1, 2] };
+            assert_eq!(chains, [expected.to_vec()], "a {kind} face");
+        }
+    }
+
+    /// The part a tag run first lost faces on: an extrusion turned twice and
+    /// intersected with a box. The intersection used to keep no history.
+    #[test]
+    fn a_chain_runs_through_two_rotations_and_an_intersection() {
+        let doc = graph(serde_json::json!({"units":"mm","root":4,"nodes":[
+            {"op":"extrude","profile":[[-10,-10],[10,-10],[0,10]],"height":40,"draft":0,"tag":"glass"},
+            {"op":"rotate","child":0,"axis":{"x":0,"y":1,"z":0},"degrees":90},
+            {"op":"rotate","child":1,"axis":{"x":1,"y":0,"z":0},"degrees":90},
+            {"op":"cuboid","size":{"x":20,"y":60,"z":60}},
+            {"op":"intersection","children":[2,3],"blend":0}
+        ]}));
+        let part = build_part(&doc).unwrap();
+        let made = part.names[0].made_by.clone();
+        assert_eq!(made.len(), 5);
+        assert_eq!(made.iter().filter(|chains| **chains == [vec![0, 1, 2, 4]]).count(), 3, "the prism's three sides");
+        assert_eq!(made.iter().filter(|chains| **chains == [vec![3, 4]]).count(), 2, "the box's two faces across it");
+        let (_, glass) = part.names[0].tags.iter().find(|(tag, _)| tag == "glass").unwrap();
+        assert_eq!(glass.len(), 3, "and the tag on the extrusion still names those sides");
+    }
+
+    /// Two boxes side by side with flush tops: the unify pass makes one top
+    /// face of the two, and it has two makers.
+    #[test]
+    fn a_face_merged_from_two_solids_names_both_makers() {
+        let doc = graph(serde_json::json!({"units":"mm","root":3,"nodes":[
+            {"op":"cuboid","size":{"x":10,"y":10,"z":10}},
+            {"op":"cuboid","size":{"x":10,"y":10,"z":10}},
+            {"op":"translate","child":1,"by":{"x":5,"y":0,"z":0}},
+            {"op":"union","children":[0,2],"blend":0}
+        ]}));
+        let made = build_part(&doc).unwrap().names[0].made_by.clone();
+        assert_eq!(made.len(), 6);
+        assert_eq!(made.iter().filter(|chains| **chains == [vec![0, 3], vec![1, 2, 3]]).count(), 4, "top, bottom and both sides");
+        assert_eq!(made.iter().filter(|chains| **chains == [vec![0, 3]]).count(), 1);
+        assert_eq!(made.iter().filter(|chains| **chains == [vec![1, 2, 3]]).count(), 1);
+    }
+
+    /// A shell's cavity comes from an offset that keeps no history, so the
+    /// shell made it; the outside is still the box's.
+    #[test]
+    fn a_shell_keeps_the_outside_and_makes_the_cavity() {
+        let doc = graph(serde_json::json!({"units":"mm","root":1,"nodes":[
+            {"op":"cuboid","size":{"x":20,"y":20,"z":20}},
+            {"op":"shell","child":0,"thickness":2}
+        ]}));
+        let made = build_part(&doc).unwrap().names[0].made_by.clone();
+        assert_eq!(made.len(), 12);
+        assert_eq!(made.iter().filter(|chains| **chains == [vec![0, 1]]).count(), 6);
+        assert_eq!(made.iter().filter(|chains| **chains == [vec![1]]).count(), 6);
+    }
+
+    /// The chamfer is built before the pocket it runs through and the pocket
+    /// cut again, and a chain still reads in the graph's order.
+    #[test]
+    fn a_treatment_built_before_its_cuts_still_comes_after_them_in_a_chain() {
+        let doc = graph(serde_json::json!({"units":"mm","root":4,"nodes":[
+            {"op":"cuboid","size":{"x":40,"y":40,"z":20}},
+            {"op":"cuboid","size":{"x":32.45,"y":34.35,"z":20}},
+            {"op":"translate","child":1,"by":{"x":0,"y":0,"z":1.63}},
+            {"op":"difference","base":0,"tools":[2],"blend":0},
+            {"op":"chamfer","child":3,"distance":5.41,"selector":"<Z"}
+        ]}));
+        let part = build_part(&doc).unwrap();
+        assert_eq!(part.treatment_edges[&4].before_cuts, vec![3]);
+        let made = part.names[0].made_by.clone();
+        let count = |chain: &[u32]| made.iter().filter(|chains| **chains == [chain.to_vec()]).count();
+        assert_eq!(
+            (count(&[4]), count(&[0, 3, 4]), count(&[1, 2, 3, 4]), made.len()),
+            (8, 6, 5, 19),
+            "the chamfer's faces, each cut in two by the pocket, the block's, the pocket's, and no others"
+        );
+    }
+
+    #[test]
+    fn a_chain_ends_at_its_own_bodys_root() {
+        let part = build_part(&two_body_doc(false)).unwrap();
+        assert!(part.names[0].made_by.iter().all(|chains| *chains == [vec![0]]));
+        assert!(part.names[1].made_by.iter().all(|chains| *chains == [vec![1, 2]]));
+        assert_eq!((part.names[0].made_by.len(), part.names[1].made_by.len()), (6, 6));
+    }
+
+    /// The cache serves a subtree whatever its nodes are numbered, and the
+    /// chains it kept are in the numbers of the document that built it.
+    #[test]
+    fn a_reused_subtree_reports_its_makers_under_their_new_node_ids() {
+        let renumbered = graph(serde_json::json!({"units":"mm","root":4,"nodes":[
+            {"op":"sphere","r":1},
+            {"op":"cuboid","size":{"x":40,"y":40,"z":10}},
+            {"op":"cylinder","r":3,"h":20},
+            {"op":"translate","child":2,"by":{"x":5,"y":0,"z":0}},
+            {"op":"difference","base":1,"tools":[3],"blend":0}
+        ]}));
+        let first = drilled_plate();
+        let mut cache = BuildCache::default();
+        with_reuse(&mut cache, &first, || build_part(&first).unwrap());
+        let kept = cache.len();
+        let made = with_reuse(&mut cache, &renumbered, || made_by(&build_part(&renumbered).unwrap()));
+        assert_eq!(cache.len(), kept, "nothing was built again");
+        for (kind, chains) in made {
+            let expected: &[u32] = if kind == "cylinder" { &[2, 3, 4] } else { &[1, 4] };
+            assert_eq!(chains, [expected.to_vec()], "a {kind} face");
+        }
+    }
+
+    /// One peg drilled in two places, then the same part with a peg of its
+    /// own for each hole: one cache key, and each hole's chain has to come
+    /// out on its own peg, which only the path through the moves can say.
+    #[test]
+    fn a_node_shared_when_cached_is_renumbered_along_each_path_to_it() {
+        let shared = graph(serde_json::json!({"units":"mm","root":4,"nodes":[
+            {"op":"cylinder","r":3,"h":20},
+            {"op":"translate","child":0,"by":{"x":-8,"y":0,"z":0}},
+            {"op":"translate","child":0,"by":{"x":8,"y":0,"z":0}},
+            {"op":"cuboid","size":{"x":40,"y":40,"z":10}},
+            {"op":"difference","base":3,"tools":[1,2],"blend":0}
+        ]}));
+        let apart = graph(serde_json::json!({"units":"mm","root":5,"nodes":[
+            {"op":"cylinder","r":3,"h":20},
+            {"op":"cylinder","r":3,"h":20},
+            {"op":"translate","child":0,"by":{"x":-8,"y":0,"z":0}},
+            {"op":"translate","child":1,"by":{"x":8,"y":0,"z":0}},
+            {"op":"cuboid","size":{"x":40,"y":40,"z":10}},
+            {"op":"difference","base":4,"tools":[2,3],"blend":0}
+        ]}));
+        let walls = |part: &BuiltPart| -> Vec<(bool, Vec<Vec<u32>>)> {
+            crate::perceive::describe_faces(&part.shape)
+                .into_iter()
+                .zip(&part.names[0].made_by)
+                .filter(|(face, _)| face.surface.kind == "cylinder")
+                .map(|(face, chains)| (face.centroid[0] < 0.0, chains.clone()))
+                .collect()
+        };
+        let mut cache = BuildCache::default();
+        let mut before = with_reuse(&mut cache, &shared, || walls(&build_part(&shared).unwrap()));
+        before.sort();
+        assert_eq!(before, [(false, vec![vec![0, 2, 4]]), (true, vec![vec![0, 1, 4]])]);
+        let kept = cache.len();
+        let mut after = with_reuse(&mut cache, &apart, || walls(&build_part(&apart).unwrap()));
+        after.sort();
+        assert_eq!(cache.len(), kept, "nothing was built again");
+        assert_eq!(after, [(false, vec![vec![1, 3, 5]]), (true, vec![vec![0, 2, 5]])]);
+    }
+
+    /// `FaceMakers::moved_onto` pairs a moved shape's faces with the
+    /// original's by position. Measured here on every transform the backend
+    /// applies: each face of the copy is the original's face in that place,
+    /// moved alone.
+    #[test]
+    fn a_moved_copy_lists_its_faces_in_the_originals_order() {
+        let doc = graph(serde_json::json!({"units":"mm","root":4,"nodes":[
+            {"op":"cuboid","size":{"x":40,"y":30,"z":10}},
+            {"op":"cylinder","r":3,"h":20},
+            {"op":"translate","child":1,"by":{"x":5,"y":2,"z":0}},
+            {"op":"difference","base":0,"tools":[2],"blend":0},
+            {"op":"fillet","child":3,"radius":2,"selector":"|Z"}
+        ]}));
+        let part = build(&doc).unwrap();
+        let originals = unique_faces(part.faces().collect());
+        let moves: [(&str, &dyn Fn(&Shape) -> Shape); 5] = [
+            ("move", &|shape| shape.translated(DVec3::new(3.0, -4.0, 5.0))),
+            ("turn", &|shape| shape.rotated(DVec3::ZERO, DVec3::new(1.0, 2.0, 3.0).normalize(), 0.7)),
+            ("mirror", &|shape| shape.scaled_uniform(DVec3::ZERO, -1.0).rotated(DVec3::ZERO, DVec3::X, std::f64::consts::PI)),
+            ("scale", &|shape| shape.scaled_uniform(DVec3::ZERO, 2.5)),
+            ("stretch", &|shape| shape.scaled_axes(DVec3::new(1.0, 2.0, 0.5)).unwrap()),
+        ];
+        for (name, moved) in moves {
+            let copies = unique_faces(moved(&part).faces().collect());
+            assert_eq!(copies.len(), originals.len(), "{name}");
+            for (i, (original, copy)) in originals.iter().zip(&copies).enumerate() {
+                let alone = Face::from_shape(&moved(&Shape::from(original.clone())));
+                assert_eq!(face_key(copy), face_key(&alone), "{name}: face {i}");
+            }
+        }
     }
 }

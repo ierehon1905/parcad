@@ -30,6 +30,10 @@ name = "validity_audit"
 required-features = ["kernel"]
 
 [[example]]
+name = "provenance_audit"
+required-features = ["kernel"]
+
+[[example]]
 name = "mesh_deviation"
 required-features = ["kernel"]
 
