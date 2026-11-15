@@ -1,7 +1,7 @@
 {
   "name": "refuse-blended-intersection",
   "script": "eval/scripts/refuse-blended-intersection.js",
-  "why": "The bindings report no new edges to fillet on an intersection. Returning an unblended intersection would be a believable wrong answer, so it is refused.",
+  "why": "A blend is built on union and difference only. Returning an unblended intersection would be a believable wrong answer, so it is refused.",
   "brep": {
     "refuses": {
       "kind": "rejected",

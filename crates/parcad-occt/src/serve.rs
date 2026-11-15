@@ -15,11 +15,14 @@ use crate::protocol::{
 use std::collections::BTreeMap;
 use std::time::Instant;
 
-/// What each face is, and which tags it carries.
+/// What each face is, which tags it carries and which nodes made it.
 fn describe_faces(body: &perceive::Body) -> Vec<FaceSummary> {
     let mut faces = perceive::describe_faces(body.shape);
     for (face, tags) in faces.iter_mut().zip(&body.face_tags) {
         face.tags = tags.clone();
+    }
+    for (face, made_by) in faces.iter_mut().zip(body.made_by) {
+        face.made_by = made_by.clone();
     }
     faces
 }
@@ -881,6 +884,7 @@ mod tests {
                 surface: SurfacePlacement { kind: "plane".into(), direction: None, radius: None },
                 body: None,
                 tags: Vec::new(),
+                made_by: Vec::new(),
                 material: None,
             })
             .collect();
@@ -892,6 +896,37 @@ mod tests {
             kind: BodyKind::Solid,
             surface: None,
             mass: None,
+        }
+    }
+
+    /// `made_by` is read off the lineage in the shape's own face order and
+    /// laid over the kernel's description of each face, so the hole's wall
+    /// has to come out on the one cylinder, and a body's faces under its own
+    /// root, never the node that only lists the bodies.
+    #[test]
+    fn a_reply_says_which_nodes_made_each_face() {
+        let drilled = served(serde_json::json!({"units": "mm", "root": 3, "nodes": [
+            {"op": "cuboid", "size": {"x": 40, "y": 40, "z": 10}},
+            {"op": "cylinder", "r": 3, "h": 20},
+            {"op": "translate", "child": 1, "by": {"x": 5, "y": 0, "z": 0}},
+            {"op": "difference", "base": 0, "tools": [2], "blend": 0}
+        ]}));
+        assert_eq!(drilled.faces.len(), 7);
+        for face in &drilled.faces {
+            let expected: &[u32] = if face.surface.kind == "cylinder" { &[1, 2, 3] } else { &[0, 3] };
+            assert_eq!(face.made_by, [expected.to_vec()], "a {} face", face.surface.kind);
+        }
+
+        let apart = served(serde_json::json!({"units": "mm", "root": 3, "nodes": [
+            {"op": "cuboid", "size": {"x": 10, "y": 10, "z": 10}},
+            {"op": "sphere", "r": 4},
+            {"op": "translate", "child": 1, "by": {"x": 20, "y": 0, "z": 0}},
+            {"op": "bodies", "bodies": [{"name": "block", "child": 0}, {"name": "ball", "child": 2}]}
+        ]}));
+        assert_eq!(apart.faces.len(), 7);
+        for face in &apart.faces {
+            let expected: &[u32] = if face.body.as_deref() == Some("ball") { &[1, 2] } else { &[0] };
+            assert_eq!(face.made_by, [expected.to_vec()], "a face of {:?}", face.body);
         }
     }
 

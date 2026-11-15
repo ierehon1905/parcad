@@ -42,6 +42,18 @@ different part. A `perception` block holds closed forms derived by hand for
 rays, points and a thickness sweep; `--update` never writes it, so a drift
 there is a defect rather than a value to re-record.
 
+**Every measured case is held to one rule it does not have to state:** each
+face names at least one chain of the nodes that made it, each node an input
+of the next, ending at the root of the face's body (`FaceSummary::made_by`).
+A `made_by` block pins which chain, for the faces a case points at by their
+centroid, with the chain written as op names read off the script:
+
+```json
+"made_by": [{ "at": [8.0, 0.0, 0.0], "chains": [["cylinder", "translate", "difference", "fillet"]] }]
+```
+
+Like `perception` it is derived by hand and never written by `--update`.
+
 ## A case that needs longer
 
 The kernel gets the host's budget, 20 s or `PARCAD_OCCT_TIMEOUT`, and a case

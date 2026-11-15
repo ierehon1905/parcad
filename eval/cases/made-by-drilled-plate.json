@@ -1,0 +1,29 @@
+{
+  "name": "made-by-drilled-plate",
+  "script": "eval/scripts/made-by-drilled-plate.js",
+  "why": "Which nodes made a face, on the three kinds of face a chain can start at. The hole's wall was the cylinder's, moved, then cut out of the plate, then left alone by the fillet; a round was made by the fillet and by nothing under it; the bottom was the box's, cut and then trimmed by the rounds. Every chain is read off the script by hand, each face found by its centroid, which the script's comment derives. A face that came back under the cut alone, or the round under the box it was rolled on, is the error this holds.",
+  "brep": {
+    "size": [
+      40.0,
+      30.0,
+      10.0
+    ],
+    "volume_mm3": 11579.912,
+    "watertight": true,
+    "faces": 11,
+    "made_by": [
+      {
+        "at": [8.0, 0.0, 0.0],
+        "chains": [["cylinder", "translate", "difference", "fillet"]]
+      },
+      {
+        "at": [18.546, 13.546, 0.0],
+        "chains": [["fillet"]]
+      },
+      {
+        "at": [-0.195, 0.0, -5.0],
+        "chains": [["cuboid", "difference", "fillet"]]
+      }
+    ]
+  }
+}

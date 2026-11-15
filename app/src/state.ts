@@ -318,6 +318,13 @@ export interface FaceSummary {
     direction?: [number, number, number];
     radius?: number;
   };
+  /**
+   * Which graph nodes made this face, one chain per maker: the node that made
+   * it first, then every op applied to it since, up to its body's root. Ids
+   * index the graph's `nodes`. Of one evaluation only, like
+   * `EdgeCurve.treatment_node`.
+   */
+  made_by?: number[][];
   /** The innermost `.material()` on this face, if any. */
   material?: FaceMaterial;
 }

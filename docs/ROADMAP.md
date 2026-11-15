@@ -37,7 +37,7 @@ Each is blocked on a specific missing binding, not on design, and each
 | want | blocked on |
 |---|---|
 | general outward `offset` on a boolean result | `BRepOffsetAPI_MakeOffsetShape` — absent from `opencascade-sys` too, so it needs a new cxx binding plus C++ shim |
-| blended **intersection** | the bindings' intersection reports no new edges to fillet |
+| blended **intersection** | `blend_seam` is wired to union and difference only; `BooleanShape::common` reports the seam it would fillet |
 
 ## Product
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Standard_NoSuchObject.hxx>
+#include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_BooleanOperation.hxx>
@@ -50,9 +51,8 @@ class ParcadBoolean {
  public:
   // The (base, tool) constructors run the boolean themselves, so building
   // after them did the whole operation twice; start empty and build once.
-  ParcadBoolean(const TopoDS_Shape& base, bool is_cut)
-      : cut_(is_cut ? std::unique_ptr<BRepAlgoAPI_Cut>(new BRepAlgoAPI_Cut()) : nullptr),
-        fuse_(is_cut ? nullptr : std::unique_ptr<BRepAlgoAPI_Fuse>(new BRepAlgoAPI_Fuse())) {
+  ParcadBoolean(const TopoDS_Shape& base, std::unique_ptr<BRepAlgoAPI_BooleanOperation> algorithm)
+      : algorithm_(std::move(algorithm)) {
     arguments_.Append(base);
   }
 
@@ -61,54 +61,58 @@ class ParcadBoolean {
   void add_tool(const TopoDS_Shape& tool) { tools_.Append(tool); }
 
   void build() {
-    algorithm().SetArguments(arguments_);
-    algorithm().SetTools(tools_);
-    algorithm().SetToFillHistory(true);
+    algorithm_->SetArguments(arguments_);
+    algorithm_->SetTools(tools_);
+    algorithm_->SetToFillHistory(true);
     // OCCT's global default is serial; the face/face and edge/face loops are
     // written for OSD_Parallel, and matched serial on every part measured.
-    algorithm().SetRunParallel(true);
-    algorithm().Build();
+    algorithm_->SetRunParallel(true);
+    algorithm_->Build();
   }
 
-  const TopoDS_Shape& result() const { return algorithm().Shape(); }
+  const TopoDS_Shape& result() const { return algorithm_->Shape(); }
 
   std::unique_ptr<std::vector<TopoDS_Shape>> section_edges() const {
-    return shapes(algorithm().SectionEdges());
+    return shapes(algorithm_->SectionEdges());
   }
 
   std::unique_ptr<std::vector<TopoDS_Shape>> modified(const TopoDS_Shape& original) const {
-    return shapes(algorithm().Modified(original));
+    return shapes(algorithm_->Modified(original));
   }
 
-  bool is_deleted(const TopoDS_Shape& original) const { return algorithm().IsDeleted(original); }
+  bool is_deleted(const TopoDS_Shape& original) const { return algorithm_->IsDeleted(original); }
 
   // The kernel's own errors and warnings, one alert name per line; empty when
   // it raised none. A result is returned either way.
   rust::String alerts() const {
     std::ostringstream out;
-    algorithm().DumpErrors(out);
-    algorithm().DumpWarnings(out);
+    algorithm_->DumpErrors(out);
+    algorithm_->DumpWarnings(out);
     return out.str();
   }
 
  private:
-  BRepAlgoAPI_BooleanOperation& algorithm() const {
-    return cut_ ? static_cast<BRepAlgoAPI_BooleanOperation&>(*cut_)
-                : static_cast<BRepAlgoAPI_BooleanOperation&>(*fuse_);
-  }
-
   static std::unique_ptr<std::vector<TopoDS_Shape>> shapes(const NCollection_List<TopoDS_Shape>& shapes) {
     return std::unique_ptr<std::vector<TopoDS_Shape>>(
         new std::vector<TopoDS_Shape>(shapes.begin(), shapes.end()));
   }
 
-  mutable std::unique_ptr<BRepAlgoAPI_Cut> cut_;
-  mutable std::unique_ptr<BRepAlgoAPI_Fuse> fuse_;
+  std::unique_ptr<BRepAlgoAPI_BooleanOperation> algorithm_;
   NCollection_List<TopoDS_Shape> arguments_, tools_;
 };
 
 inline std::unique_ptr<ParcadBoolean> parcad_boolean_with_history(const TopoDS_Shape& base, bool is_cut) {
-  return std::unique_ptr<ParcadBoolean>(new ParcadBoolean(base, is_cut));
+  std::unique_ptr<BRepAlgoAPI_BooleanOperation> algorithm;
+  if (is_cut) algorithm.reset(new BRepAlgoAPI_Cut());
+  else algorithm.reset(new BRepAlgoAPI_Fuse());
+  return std::unique_ptr<ParcadBoolean>(new ParcadBoolean(base, std::move(algorithm)));
+}
+
+// What `base` and every tool added have in common, with the same history a
+// cut or a fuse keeps.
+inline std::unique_ptr<ParcadBoolean> parcad_common_with_history(const TopoDS_Shape& base) {
+  return std::unique_ptr<ParcadBoolean>(
+      new ParcadBoolean(base, std::unique_ptr<BRepAlgoAPI_BooleanOperation>(new BRepAlgoAPI_Common())));
 }
 
 inline std::unique_ptr<ParcadBoolean> parcad_cut_with_history(const TopoDS_Shape& base, const TopoDS_Shape& tool) {

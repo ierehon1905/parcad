@@ -261,6 +261,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | the curvature-continuous section behind `.smooth()`, and the measurement that holds it G2 | `vendor/occt-sys/patches/0006-curvature-continuous-fillet-section.patch` (the section, in `BlendFunc_ConstRad`); `ParcadEdgeTreatment::join_continuity` in `vendor/opencascade/include/history.hxx` (the rails measured); the gate and the three-edge-corner refusal in `backend.rs`'s `Op::Fillet` |
 | crash handling, timeouts, breadcrumbs, the worker pool | `crates/parcad-occt/src/host.rs` |
 | what a worker keeps between requests | `backend::BuildCache` and the serve loop in `crates/parcad-occt/src/bin/worker.rs` |
+| which graph nodes made each face | `FaceMakers` in `backend.rs`, sealed per node by `build_node_afresh` and carried inside `EdgeLineage`; on the wire as `FaceSummary::made_by`; the rule every corpus case is held to is `protocol::made_by_faults`; `crates/parcad-occt/examples/provenance_audit.rs` counts makers by op |
 | probes, wall thickness, tag extents on the exact solid | `crates/parcad-occt/src/perceive.rs` |
 | the authoring DSL | `app/src/dsl.ts` (shared with `tools/run.ts`) |
 | drill and clearance sizes | `METRIC_FASTENERS` in `app/src/dsl.ts` — never a literal in a part |
