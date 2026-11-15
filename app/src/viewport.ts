@@ -944,9 +944,12 @@ export class Viewport {
           patch,
           faint
             ? new THREE.MeshBasicMaterial({ ...common, color: accentHex(), transparent: true, opacity: 0.22, depthWrite: false })
-            : new THREE.MeshStandardMaterial({ ...common, color: accentHex(), roughness: 0.6, metalness: 0 }),
+            : new THREE.MeshStandardMaterial({ ...common, color: accentHex(), roughness: 0.6, metalness: 0, depthWrite: false }),
         );
-        mesh.renderOrder = 3;
+        // Between the part (0) and its edges (1), writing no depth: an edge is sampled on the
+        // exact curve and the mesh is chords of it, so a patch drawn after the edges, or one
+        // they are tested against, hides them in dashes along the very edges that bound it.
+        mesh.renderOrder = faint ? 3 : 0.5;
         mesh.castShadow = false;
         mesh.receiveShadow = false;
         mesh.raycast = () => {};
