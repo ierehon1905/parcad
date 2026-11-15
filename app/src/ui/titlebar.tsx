@@ -47,7 +47,7 @@ export function Titlebar() {
       {mcpThroughRelay && <WebLinks />}
       {/* Transient only: saving, exported, copied, and how long the last
           evaluation took. Everything durable about the part is measured, and
-          lives in the report over the viewport. */}
+          is under Problems, beside Code. */}
       <Status />
     </header>
   );
@@ -63,10 +63,10 @@ function OpenPart() {
       class="flex items-center gap-2 max-w-[260px] px-2.5 py-1 bg-panel-2 text-ink
              border border-line rounded-md cursor-pointer hover:border-accent"
       {...tip({
-        title: "Parts",
+        title: "All parts",
         key: "⌘O",
         code: path,
-        text: "Shows the parts beside the editor. Where they are kept, and who else reads them, is the line at the foot of that list.",
+        text: "Shows every part in the sidebar, to open another. Where they are kept, and who else reads them, is the line at the foot of that list.",
       })}
       onClick={() => engine.showParts()}
     >

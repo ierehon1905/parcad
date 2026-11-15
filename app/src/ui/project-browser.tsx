@@ -1,10 +1,10 @@
 /**
- * The parts sidebar: a folder tree, the parts as a list, and the four things you
- * do to a project that are not editing it.
+ * Every part: a folder tree, the parts as a list, and the four things you do to
+ * a project that are not editing it. The sidebar's second tab (`sidebar.tsx`).
  *
- * A panel beside the editor rather than a window over it (docs/notes/ui-audit-
- * birman.md, "Окно «Parts»"): a popup covers the work it is about, and moving
- * between parts is navigation, which belongs in a sidebar on the left.
+ * In the sidebar rather than a window over the editor (docs/notes/ui-audit-
+ * birman.md, "Окно «Parts»"): a popup covers the work it is about. Second to
+ * the open part's tree, because leaving a part is the rarer thing to do.
  *
  * It replaced a `<select>`, which could say a part's name and nothing else. The
  * project folder is shared with the user's filesystem and with agents over MCP,
@@ -92,10 +92,11 @@ export function ProjectBrowser() {
     if (folder.value && !folderPaths(projects.tree).includes(folder.value)) folder.value = "";
   };
 
-  // The panel stays open: going from one part to the next is the point of it.
+  // Choosing a part is leaving this list for the part: the tree is what comes next.
   const choose = async (path: string) => {
     try {
       await engine.openProject(path);
+      engine.showPartTree();
     } catch (e) {
       await failed(e);
     }
@@ -111,40 +112,21 @@ export function ProjectBrowser() {
     }
   };
 
-  const open = S.browserOpen.value;
   // Each time it is shown or asked for again, the list is reread and the search box takes the keys.
   useEffect(() => {
-    if (!open) return;
     void refresh();
     searchBox.current?.focus();
-  }, [open, S.browserAsked.value]);
+  }, [S.browserAsked.value]);
 
   const projects = S.projects.value;
   const matched = projects ? search(projects.tree, query.value) : [];
   const shown = flatten(folder.value ? within(matched, folder.value) : matched);
   const total = projects ? flatten(projects.tree).length : 0;
-  // Nothing inside a hidden panel is drawn. Not for the render cost — for the
-  // network: every row fetches its own thumbnail.
-  if (!open) return null;
 
+  // Mounted only while its tab is showing: every row fetches its own thumbnail.
   return (
-    <aside
-      id="parts"
-      aria-label="Parts"
-      class="flex flex-col flex-none w-[272px] min-h-0 bg-panel border-r border-line"
-    >
+    <div id="parts" aria-label="All parts" class="flex flex-col flex-1 min-h-0">
       <header class="flex flex-col gap-2 px-3 pt-3 pb-2.5 border-b border-line">
-        <div class="flex items-center justify-between">
-          <h2 class="m-0 text-[15px] font-semibold">Parts</h2>
-          <Button
-            variant="quiet"
-            layout="shrink-0 px-2 py-0.5"
-            {...tip({ title: "Hide the parts", key: "⌘O", text: "The project button and ⌘O bring them back." })}
-            onClick={() => (S.browserOpen.value = false)}
-          >
-            Hide
-          </Button>
-        </div>
         <Field
           ref={searchBox}
           type="search"
@@ -239,7 +221,7 @@ export function ProjectBrowser() {
         />
       )}
       <Dialogs asking={asking} telling={telling} />
-    </aside>
+    </div>
   );
 }
 

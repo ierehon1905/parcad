@@ -144,6 +144,11 @@ fn set_project_title(name: String, title: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn set_hidden_bodies(name: String, bodies: Vec<String>) -> Result<(), String> {
+    projects::set_hidden(&name, &bodies)
+}
+
+#[tauri::command]
 fn convert_project(name: String) -> Result<serde_json::Value, String> {
     let path = projects::convert(&name)?;
     Ok(serde_json::json!({ "name": name, "path": path }))
@@ -444,6 +449,7 @@ pub fn run() {
             rename_project,
             delete_project,
             set_project_title,
+            set_hidden_bodies,
             convert_project,
             open_project_source,
             editor,

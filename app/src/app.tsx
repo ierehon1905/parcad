@@ -13,8 +13,10 @@ import * as engine from "./engine";
 import { watchThumbnails } from "./thumbnails";
 import * as S from "./state";
 import { Editor } from "./ui/editor";
+import { TabCount, Tabs } from "./ui/components/Tabs";
 import { OpPalette } from "./ui/op-palette";
-import { ProjectBrowser } from "./ui/project-browser";
+import { problemCount, problemsOf, Problems } from "./ui/problems";
+import { Sidebar } from "./ui/sidebar";
 import { Splitter } from "./ui/splitter";
 import { Titlebar } from "./ui/titlebar";
 import { TooltipLayer } from "./ui/tooltip";
@@ -34,7 +36,7 @@ export function App() {
       <Titlebar />
       <UpdateBar />
       <main class="flex flex-1 min-h-0">
-        <ProjectBrowser />
+        <Sidebar />
         {/* Hidden, never unmounted: CodeMirror owns the document and the
             evaluation cycle starts with it, so a window showing only the part
             is still building that part from the source it holds. */}
@@ -43,11 +45,15 @@ export function App() {
           hidden={!S.codeVisible.value}
           class="flex flex-col w-[42%] min-w-[280px] min-h-0 bg-panel [&[hidden]]:hidden"
         >
-          {/* Pressing an operation writes its call into the source at the
-              cursor — it does not open a command, and there is nowhere else for
-              a feature to live. See ui/op-palette.tsx. */}
-          <OpPalette />
-          <Editor />
+          <EditorTabs />
+          <div hidden={S.editorTab.value !== "code"} class="flex flex-col flex-1 min-h-0 [&[hidden]]:hidden">
+            {/* Pressing an operation writes its call into the source at the
+                cursor — it does not open a command, and there is nowhere else
+                for a feature to live. See ui/op-palette.tsx. */}
+            <OpPalette />
+            <Editor />
+          </div>
+          {S.editorTab.value === "problems" && <Problems />}
           <ErrorPane />
         </section>
         {S.codeVisible.value && <Splitter />}
@@ -55,6 +61,34 @@ export function App() {
       </main>
       <TooltipLayer />
     </div>
+  );
+}
+
+/** Code, and what is wrong with the part it builds; the count is how a glance knows whether to look. */
+function EditorTabs() {
+  const snapshot = S.snapshot.value;
+  const count = snapshot ? problemCount(problemsOf(snapshot)) : undefined;
+  return (
+    <Tabs
+      tabs={[
+        { key: "code", label: "Code" },
+        {
+          key: "problems",
+          label: (
+            <>
+              Problems
+              {count && <TabCount n={count.n} tone={count.tone} />}
+            </>
+          ),
+        },
+      ]}
+      current={S.editorTab.value}
+      onChoose={(key) => {
+        S.editorTab.value = key;
+        // CodeMirror measured nothing while it was hidden.
+        if (key === "code") requestAnimationFrame(() => S.editorRef.current?.requestMeasure());
+      }}
+    />
   );
 }
 
@@ -121,8 +155,8 @@ function keys() {
     }
     if (key === "o") {
       e.preventDefault();
-      // A second ⌘O with the search already taking keys hides the parts again.
-      if (S.browserOpen.peek() && document.activeElement?.closest("#parts")) S.browserOpen.value = false;
+      // A second ⌘O with the search already taking keys goes back to the part.
+      if (S.browserOpen.peek() && document.activeElement?.closest("#parts")) engine.showPartTree();
       else engine.showParts();
       return;
     }

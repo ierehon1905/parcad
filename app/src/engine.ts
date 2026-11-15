@@ -29,7 +29,7 @@ import * as S from "./state";
 import { store, stored } from "./store";
 import type { EdgeCurve, Evaluated, TargetPreview } from "./state";
 import type { Shown } from "./backend";
-import type { Geometry } from "./viewport";
+import { bodySpans, type Geometry } from "./viewport";
 
 /** Whether the camera has been framed on this part yet. */
 let framed = false;
@@ -163,13 +163,18 @@ export async function run() {
 
 /** An evaluation's mesh in the shape the viewport draws. */
 export function geometryOf(result: Evaluated): Geometry {
+  const faces = result.faces;
   return {
     positions: new Float32Array(result.positions),
     normals: new Float32Array(result.normals),
     indices: new Uint32Array(result.indices),
     edges: result.edges,
     faceRuns: result.face_runs,
-    faceMaterials: result.faces?.map((face) => face.material),
+    faceMaterials: faces?.map((face) => face.material),
+    bodies:
+      result.snapshot.named_bodies && result.face_runs && faces
+        ? bodySpans(result.face_runs, (face) => faces[face]?.body)
+        : undefined,
   };
 }
 
@@ -352,6 +357,10 @@ function show(result: Evaluated): { geometry: Geometry; bounds: S.Bounds } {
   held = undefined;
   showingShipped = result.shipped === true;
   const snapshot = result.snapshot;
+  if (shownPath !== S.openPath.value) {
+    S.hiddenBodies.value = hiddenIn(S.openPath.value);
+    focusBodies([]);
+  }
   shownPath = S.openPath.value;
   S.snapshot.value = snapshot;
   const edges = result.edges;
@@ -361,6 +370,7 @@ function show(result: Evaluated): { geometry: Geometry; bounds: S.Bounds } {
 
   const geometry = geometryOf(result);
   S.viewportRef.current?.setGeometry(geometry, bounds);
+  for (const name of S.hiddenBodies.value) S.viewportRef.current?.setBodyHidden(name, true);
 
   // Frame once, then leave the camera alone — nothing is more irritating than a
   // view that resets itself every time you change a number.
@@ -977,7 +987,74 @@ export async function openSourceInEditor() {
 /** Show the parts sidebar and give its search the keys; asked again while shown, it only refocuses. */
 export function showParts() {
   S.browserOpen.value = true;
+  S.sidebarTab.value = "parts";
   S.browserAsked.value++;
+}
+
+/** The open part's bodies and features in the sidebar, which is where it goes once a part is chosen. */
+export function showPartTree() {
+  S.browserOpen.value = true;
+  S.sidebarTab.value = "part";
+}
+
+/**
+ * Hide a named body from the view, or show it again, and remember it: in the
+ * part's `parcad.json`, so the view travels with the folder, or for a loose
+ * `.js`, which has no folder, in this browser.
+ */
+export function setBodyHidden(name: string, hidden: boolean) {
+  const next = new Set(S.hiddenBodies.peek());
+  if (hidden) next.add(name);
+  else next.delete(name);
+  S.hiddenBodies.value = next;
+  S.viewportRef.current?.setBodyHidden(name, hidden);
+  const path = S.openPath.peek();
+  if (!path) return;
+  const bodies = [...next];
+  const part = partAt(S.projects.peek()?.tree ?? [], path);
+  if (!part?.bundle) {
+    store(hiddenKey(path), bodies.length ? JSON.stringify(bodies) : null);
+    return;
+  }
+  part.hidden = bodies;
+  backend.setHiddenBodies(path, bodies).catch((e) => S.setStatus(`not remembered: ${e instanceof Error ? e.message : e}`, "failed"));
+}
+
+const hiddenKey = (path: string) => `parcad.hidden.${path}`;
+
+/** The bodies hidden in this part when it was last looked at. */
+function hiddenIn(path: string | undefined): Set<string> {
+  if (!path) return new Set();
+  const part = partAt(S.projects.peek()?.tree ?? [], path);
+  if (part?.bundle) return new Set(part.hidden ?? []);
+  try {
+    const names: unknown = JSON.parse(stored(hiddenKey(path)) ?? "[]");
+    return new Set(Array.isArray(names) ? names.filter((n): n is string => typeof n === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** Draw these bodies as they are and the rest faint, while the pointer is on something naming them. */
+export function focusBodies(names: readonly string[]) {
+  S.focusedBodies.value = names;
+  S.viewportRef.current?.setBodyFocus(names);
+}
+
+/**
+ * Put the caret on the line that writes `needle`, scrolled into view, and show
+ * the code to do it. Navigation only: nothing is edited, so a guess that lands
+ * on the wrong line costs a glance.
+ */
+export function revealInCode(find: (source: string) => number | undefined) {
+  const view = S.editorRef.current;
+  if (!view) return;
+  const at = find(view.state.doc.toString());
+  if (at === undefined) return;
+  showCode(true);
+  S.editorTab.value = "code";
+  view.dispatch({ selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: "center" }) });
+  view.focus();
 }
 
 export function showCode(visible: boolean) {

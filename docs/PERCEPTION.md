@@ -802,8 +802,8 @@ stubs of 130 mm² each. Its line reads `on 2320 mm² at z −5.53, 18 patches, 7
 the footprint`; the corrected part's reads `on 26469 mm² at z 0.00, 1 patch,
 74%`. The tolerance for "in the plane" is the mesh's own resolution, since a
 dual-contoured plane scatters its vertices by up to a cell. Recorded for every
-measured case in the corpus and shown on the app's report panel, in red under a
-tenth of the footprint. Still a measurement, not a verdict: a stool stands on
+measured case in the corpus and shown under the app's Problems tab, as a problem
+under a tenth of the footprint. Still a measurement, not a verdict: a stool stands on
 four patches and is fine.
 
 ### Bed fit — done, the flat half of printability

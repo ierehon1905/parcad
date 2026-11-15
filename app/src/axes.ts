@@ -1,8 +1,8 @@
 /**
  * Which way X, Y and Z point, drawn in the corner of the view.
  *
- * The grid has no axes of its own, while the section switch, the report and
- * every script name them: without this a reader keeps the mapping in their
+ * The grid has no axes of its own, while the section switch, the problems tab
+ * and every script name them: without this a reader keeps the mapping in their
  * head. An SVG over the canvas, so it costs no draw call and stays out of the
  * thumbnails a canvas copy makes.
  */

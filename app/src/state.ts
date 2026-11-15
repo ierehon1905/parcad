@@ -320,6 +320,8 @@ export interface FaceSummary {
   };
   /** The innermost `.material()` on this face, if any. */
   material?: FaceMaterial;
+  /** The named body the face is on, for a part that returns several. */
+  body?: string;
 }
 
 export interface Evaluated {
@@ -506,7 +508,7 @@ export const codeVisible = signal(stored(CODE_VISIBLE) !== "0");
 codeVisible.subscribe((visible) => store(CODE_VISIBLE, visible ? null : "0"));
 
 /**
- * Whether the parts sidebar is shown, remembered per browser. Shown by default
+ * Whether the sidebar is shown, remembered per browser. Shown by default
  * in a window wide enough to keep the editor and the view beside it.
  */
 export const browserOpen = signal(
@@ -519,6 +521,18 @@ browserOpen.subscribe((visible) => store(PARTS_VISIBLE, visible ? "1" : "0"));
 
 /** Bumped each time the parts are asked for, so the sidebar's search takes the keys again. */
 export const browserAsked = signal(0);
+
+/** What the sidebar shows: the open part's bodies and features, or every part there is. */
+export const sidebarTab = signal<"part" | "parts">("part");
+
+/** What the editor pane shows: the source, or what is wrong with the part it builds. */
+export const editorTab = signal<"code" | "problems">("code");
+
+/** Bodies the person hid from the view, by name, in the part on screen. */
+export const hiddenBodies = signal<ReadonlySet<string>>(new Set());
+
+/** Bodies drawn solid while every other one is faint: whatever the pointer is on in the tree or the problems. */
+export const focusedBodies = signal<readonly string[]>([]);
 
 export function setStatus(text: string, tone: Tone = "") {
   status.value = { text, tone };

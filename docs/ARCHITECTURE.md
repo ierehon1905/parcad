@@ -1149,7 +1149,7 @@ One project is a `.parcad` folder:
 ├─ Mounts/                  an ordinary folder; projects nest
 │  ├─ Bracket.parcad/       one project
 │  │  ├─ part.js            the source, and the only authoritative file in it
-│  │  ├─ parcad.json        title and tags
+│  │  ├─ parcad.json        title, tags, and the bodies the window hides
 │  │  ├─ README.md          what the part is, from measured values
 │  │  └─ preview.png        the picker's thumbnail, keyed to the script it shows
 │  └─ motor-mount.js        a loose script is a project too
@@ -1166,6 +1166,14 @@ the README or the preview loses nothing — the next save rewrites them from the
 report the app just measured, naming which kernel measured it. Nothing is cached:
 a stored report is a stale measurement that looks fresh, which is precisely the
 confident wrong answer the rest of this codebase refuses.
+
+`parcad.json` holds what a person set rather than what was measured: the title,
+the tags, and which bodies the window hides when it opens the part. Hiding is
+kept there rather than in `part.js` because it is how the part is looked at,
+not what it is: written into the script, a glance inside would make a saved
+part unsaved and race an agent editing the same file, and every build,
+measurement and render still has every body. A loose `.js` has no folder, so
+the window keeps its hidden bodies in the browser instead.
 
 The thumbnail is the one derived file that says what it was derived from:
 `preview.png` carries the digest of the `part.js` it shows in a `tEXt` chunk,
