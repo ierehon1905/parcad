@@ -516,6 +516,7 @@ fn run_process(request: Request, opts: &Options) -> Result<Response, OcctError> 
         std::process::id(),
         REPLY_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
+    let builds = request.doc.as_ref().filter(|_| !request.uncached).map(document_digest);
     let frame = serde_json::to_vec(&Frame {
         reply: reply_path.to_string_lossy().into_owned(),
         request,
@@ -526,7 +527,7 @@ fn run_process(request: Request, opts: &Options) -> Result<Response, OcctError> 
     // A pooled worker can have died since it was last used, and its stdin is
     // the first thing to notice. One fresh start covers that; a fresh worker
     // that will not take a request is the host's problem to report.
-    let pooled = Worker::take(&path).and_then(|mut worker| worker.send(&frame).is_ok().then_some(worker));
+    let pooled = Worker::take(&path, builds).and_then(|mut worker| worker.send(&frame).is_ok().then_some(worker));
     let mut worker = match pooled {
         Some(worker) => worker,
         None => {
@@ -541,6 +542,7 @@ fn run_process(request: Request, opts: &Options) -> Result<Response, OcctError> 
     let outcome = worker.wait_for_reply(&reply_path, opts.timeout);
     let raw = match outcome {
         Ok(raw) => {
+            worker.holds = builds.or(worker.holds);
             worker.release();
             raw
         }
@@ -556,6 +558,14 @@ fn run_process(request: Request, opts: &Options) -> Result<Response, OcctError> 
 }
 
 static REPLY_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Which document a request builds, for sending it to the worker that built it last.
+fn document_digest(doc: &Doc) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    serde_json::to_vec(doc).unwrap_or_default().hash(&mut hasher);
+    hasher.finish()
+}
 
 /// Warm workers with nothing to do. A window and an agent make two callers
 /// at once, and a third would wait on one of them rather than start a
@@ -592,6 +602,8 @@ struct Worker {
     latest: Arc<Mutex<String>>,
     noise: Arc<Mutex<Vec<String>>>,
     held_kb: Option<u64>,
+    /// The document its build cache was last filled from, by [`document_digest`].
+    holds: Option<u64>,
 }
 
 impl Worker {
@@ -665,19 +677,27 @@ impl Worker {
             latest,
             noise,
             held_kb: None,
+            holds: None,
         })
     }
 
-    /// An idle worker running `path`, if the pool has one that is still alive.
-    fn take(path: &std::path::Path) -> Option<Worker> {
+    /// An idle worker running `path`, if the pool has one that is still alive:
+    /// the one whose cache holds `builds`, or else the one used last. A part's
+    /// later requests — its body pairs, its sweeps — then find it built,
+    /// where the oldest idle worker took every other one and built it again.
+    fn take(path: &std::path::Path, builds: Option<u64>) -> Option<Worker> {
         let mut idle = IDLE.lock().unwrap_or_else(|e| e.into_inner());
-        while let Some(i) = idle.iter().position(|w| w.path == path) {
+        loop {
+            let ours = |w: &Worker| w.path == path;
+            let i = idle
+                .iter()
+                .rposition(|w| ours(w) && builds.is_some() && w.holds == builds)
+                .or_else(|| idle.iter().rposition(ours))?;
             let mut worker = idle.remove(i);
             if worker.child.try_wait().ok().flatten().is_none() {
                 return Some(worker);
             }
         }
-        None
     }
 
     /// Back to the pool for the next request, or dropped when the pool is
@@ -898,6 +918,11 @@ mod tests {
     /// own pid, so a caller can tell one process from another, reporting
     /// `holding_kb` before each reply when given one.
     fn serving_shim(name: &str, requests_before_exit: Option<usize>, holding_kb: Option<u64>) -> PathBuf {
+        serving_shim_pausing(name, requests_before_exit, holding_kb, 0.0)
+    }
+
+    /// [`serving_shim`], sleeping `pause_s` before each reply.
+    fn serving_shim_pausing(name: &str, requests_before_exit: Option<usize>, holding_kb: Option<u64>, pause_s: f64) -> PathBuf {
         let limit = requests_before_exit
             .map(|n| format!("[ \"$served\" -ge {n} ] && exit 0\n"))
             .unwrap_or_default();
@@ -907,6 +932,7 @@ mod tests {
             &format!(
                 "echo '{BREADCRUMB}serving' >&2\nserved=0\nwhile IFS= read -r line; do\n\
                  reply=$(printf '%s' \"$line\" | sed -E 's/^\\{{\"reply\":\"([^\"]+)\".*/\\1/')\n\
+                 sleep {pause_s}\n\
                  printf '{{\"status\":\"error\",\"stage\":\"shim\",\"message\":\"served by pid %s\"}}' $$ > \"$reply\"\n\
                  {holding}echo '{REPLY}'\"$reply\" >&2\nserved=$((served + 1))\n{limit}done\n"
             ),
@@ -1046,6 +1072,35 @@ mod tests {
         IDLE.lock().unwrap_or_else(|e| e.into_inner()).clear();
         let _ = std::fs::remove_file(&shim);
         assert_eq!(first, second, "the second request started a new worker");
+    }
+
+    /// With two workers idle, a part's next request goes to the one that
+    /// built it, whichever finished last: the other would build it again.
+    #[test]
+    fn a_part_goes_back_to_the_worker_that_built_it() {
+        let _env = WORKER_ENV.lock().unwrap_or_else(|e| e.into_inner());
+        let shim = serving_shim_pausing("affinity", None, None, 0.3);
+        std::env::set_var("PARCAD_OCCT_WORKER", &shim);
+        let cube = |size: f64| -> Doc {
+            serde_json::from_value(serde_json::json!({
+                "units": "mm", "root": 0, "nodes": [{"op": "cuboid", "size": {"x": size, "y": 1, "z": 1}}]
+            }))
+            .unwrap()
+        };
+        let (small, large) = (cube(1.0), cube(2.0));
+        let (served_small, served_large) = std::thread::scope(|s| {
+            let small = s.spawn(|| pid_that_served(evaluate(&small, &Options::default())));
+            std::thread::sleep(Duration::from_millis(100));
+            let large = s.spawn(|| pid_that_served(evaluate(&large, &Options::default())));
+            (small.join().unwrap(), large.join().unwrap())
+        });
+        // Neither the oldest idle worker nor the newest serves all three.
+        let again = [&large, &small, &large].map(|doc| pid_that_served(evaluate(doc, &Options::default())));
+        std::env::remove_var("PARCAD_OCCT_WORKER");
+        IDLE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        let _ = std::fs::remove_file(&shim);
+        assert_ne!(served_small, served_large, "two requests at once are two workers");
+        assert_eq!(again, [served_large.clone(), served_small, served_large]);
     }
 
     /// A pooled worker that died while idle is replaced without the caller

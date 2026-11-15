@@ -540,6 +540,13 @@ supervision is what it was — `host.rs`'s tests still drive a shim that hangs
 and one that dies, plus one that answers twice and one that dies between
 answers.
 
+Which idle worker takes a request matters as much as what it holds: the one
+whose cache was last filled from the same document, else the one used last
+(`Worker::take`). The pool used to hand out the oldest, which sent a part's
+requests to two workers in turn once anything had started a second — a
+thumbnail is enough — and each built and measured again what the other held
+(docs/GOTCHAS.md, "The oldest idle worker took every other request").
+
 What the worker keeps between requests is a **build cache**
 (`backend::BuildCache`): every subtree it built, keyed by what the subtree is
 — its ops and tags with child indices blanked, and its children's keys — and

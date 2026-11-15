@@ -1772,6 +1772,18 @@ warm reply against a fresh one has to allow for both. The measurement cache
 makes the second one rarer rather than commoner: a pair neither of whose
 bodies changed is no longer measured again.
 
+### The oldest idle worker took every other request
+
+Found on 2026-11-15, when the window started measuring body pairs in one-second
+steps after drawing the part: on a 25-body assembly the status line counted
+14, 4, 27, 8, 32, 28 of 300 pairs. The pool handed a request the idle worker
+released longest ago, and a thumbnail drawn while the part opened had started a
+second, so the steps went to the two workers in turn; each built the part
+again and measured the pairs the other already held. `Worker::take` now hands
+out the worker whose cache was last filled from the same document, else the
+one used last, and `a_part_goes_back_to_the_worker_that_built_it` fails on
+either of the other two rules.
+
 ### `role: "hole"` does not match a conical opening
 
 A countersink rim is an inner boundary of the top face by any reading, and
