@@ -180,6 +180,14 @@
     @apply rounded-xs;
   }
 
+  /* A name under ⌘ that the part declares: ⌘-click goes to the declaration. */
+  .cm-definition-link {
+    @apply cursor-pointer;
+    text-decoration: underline;
+    text-decoration-color: var(--color-accent);
+    text-underline-offset: 2px;
+  }
+
   /* The number the pointer engaged, and the chevrons beside it. The accent
      rather than gold: gold means "this is the source the viewport is pointing
      at", and a number you are about to dial is not that. The outline is drawn

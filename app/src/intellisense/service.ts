@@ -89,6 +89,7 @@ function ask<K extends Exclude<Kind, "part">>(
 }
 
 export const quickInfo = (pos: number) => ask("quickInfo", { pos });
+export const definition = (pos: number) => ask("definition", { pos });
 export const completions = (pos: number) => ask("completions", { pos });
 export const completionDetail = (pos: number, label: string) =>
   ask("completionDetail", { pos, label });
