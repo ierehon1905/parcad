@@ -1199,7 +1199,16 @@ pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evalua
             motions: &mut motions,
             mechanism: &mut mechanism,
         };
-        evaluated.snapshot.verdicts.checks = Some(parcad_evaluation::checks::judge(doc, &evaluated.snapshot, measures)?);
+        // Kept with the build like the print check: the graph is the key and
+        // carries the checks, and a `wall` check is a sweep of the whole part.
+        evaluated.snapshot.verdicts.checks = Some(match cached_checks(&built.key) {
+            Some(judged) => judged,
+            None => {
+                let judged = parcad_evaluation::checks::judge(doc, &evaluated.snapshot, measures)?;
+                keep_checks(&built.key, &judged);
+                judged
+            }
+        });
     }
     // The brief is in every solid reply whether the script carries one or
     // not: with none, its one line is the nudge, and a model reads it on the
@@ -1389,6 +1398,8 @@ struct Build {
     /// The print check, once a build has been judged: the sweep is the same
     /// every time for one build, and in a browser tab each sweep is a pause.
     print_check: Option<Option<parcad_evaluation::PrintCheck>>,
+    /// The script's own checks, once judged on this build.
+    checks: Option<parcad_evaluation::checks::ChecksReport>,
     /// The STEP file, once something has asked for it.
     step: Option<std::sync::Arc<Vec<u8>>>,
     wall_ms: u64,
@@ -1434,6 +1445,19 @@ fn keep_print_check(key: &str, print_check: &Option<parcad_evaluation::PrintChec
     with_builds(|builds| {
         if let Some(build) = builds.iter_mut().find(|b| b.key == key) {
             build.print_check = Some(print_check.clone());
+        }
+    })
+}
+
+/// The script's checks as judged on a build, if they have been.
+fn cached_checks(key: &str) -> Option<parcad_evaluation::checks::ChecksReport> {
+    with_builds(|builds| builds.iter().find(|b| b.key == key).and_then(|b| b.checks.clone()))
+}
+
+fn keep_checks(key: &str, checks: &parcad_evaluation::checks::ChecksReport) {
+    with_builds(|builds| {
+        if let Some(build) = builds.iter_mut().find(|b| b.key == key) {
+            build.checks = Some(checks.clone());
         }
     })
 }
@@ -1492,6 +1516,7 @@ fn build_exact(
             key: key.clone(),
             success: success.clone(),
             print_check: None,
+            checks: None,
             step: step.clone(),
             wall_ms,
         });
@@ -2832,6 +2857,28 @@ pub(crate) mod tests {
 
     fn brep(doc: &Doc) -> Evaluated {
         evaluate(doc, None).expect("the part should build")
+    }
+
+    /// A build's checks are judged once and kept with it: the next evaluate
+    /// of the same graph says what was kept, where it used to sweep the part
+    /// for a `wall` check again.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn the_checks_are_judged_once_for_a_build() {
+        crate::projects::tests::scoped(|_| {
+            let _cache = own_build_cache(&[&tenant::current()]);
+            let part = doc(serde_json::json!({
+                "units": "mm", "root": 0,
+                "checks": [{ "size": { "is": [10, 20, 30] } }],
+                "nodes": [{ "op": "cuboid", "size": { "x": 10, "y": 20, "z": 30 } }]
+            }));
+            let judged = brep(&part).snapshot.verdicts.checks.expect("the script carries a check");
+            assert_eq!((judged.verdict, judged.passed), ("passed", 1));
+            with_builds(|builds| builds[0].checks.as_mut().expect("kept with the build").passed = 7);
+            let again = brep(&part);
+            assert!(again.snapshot.reused_build);
+            assert_eq!(again.snapshot.verdicts.checks.expect("still judged").passed, 7, "read from the build");
+        });
     }
 
     /// The window and an agent must be reading one description of one part.
