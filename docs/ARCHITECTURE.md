@@ -109,7 +109,9 @@ the exact solids with `fit_between`, the measurement behind `check_fit`, and
 reported as `between_bodies`: `clear` by a clearance, `touching` over a
 contact area in so many patches, or `interfering` by a shared volume and the
 depth one reaches into the other — a clip drawn through the body it clips onto
-is a design error the number states outright. The verdict alone is not the
+is a design error the number states outright. Two bodies whose enclosing
+boxes are apart share no volume, so that pair goes straight to the distance
+and skips the boolean that would have said so. The verdict alone is not the
 answer either way: a volume is not a depth, and `touching` is the same word
 for a seated face and a corner (docs/PERCEPTION.md §20). STEP writes the compound, which
 OCCT's writer turns into one solid per body; 3MF writes each body's welded
@@ -554,6 +556,29 @@ edit to a peg still costs the blend above it, which is where the time is. A
 cached build answers an edited graph exactly as a fresh worker does — status,
 volume, topology and every tag extent, measured on five example parts each
 edited at the root, edited at a leaf, and unchanged.
+
+Beside the build cache the worker keeps what it **measured**
+(`serve::MeasureCache`): each body's mesh, checks, face and edge report and
+overhang, and each pair's fit, under the body's build key. A build that hits
+every node used to mesh, check and describe every body again and measure every
+pair again, which on a part in 25 bodies was all of the time: a colour change
+cost 9.5 s of kernel and now costs 49 ms, and a change to one body re-measures
+that body and the 24 pairs it is in, 8.5 s to 1.4 s (release worker under
+`taskpolicy -c utility`, medians of three). Three things keep a kept
+measurement honest. It answers only for the shape it was measured on
+(`TopoDS_Shape::IsSame`), because the mesh is on that shape and tag extents,
+the fit and an export read it there; a body the build cache dropped and built
+again is measured again. What the request says and the body does not is never
+kept: a face's tags and material, and which treatment made an edge, are
+applied to every reply from the part just built, so a renumbered document
+names the new node. And an `uncached` request builds in a cache of its own, so
+a thumbnail neither reads these nor ages them. Proven the way the build cache
+was: for a 25-body assembly and a one-body keycap, the same graph and two
+edits of each answered by a warm worker and by a fresh one, compared field by
+field with the timings left out (the differences found are in
+docs/GOTCHAS.md, "A warm worker and a fresh one differ in the thirteenth
+digit, and in which of two equal clearances they name", and are the build
+cache's own).
 
 The process floor — spawn, request, reply file — was never the cost: 11 ms
 warm on the smallest part. The tag extents and face report added to every
@@ -1148,7 +1173,11 @@ as the freedesktop thumbnail standard does with a file's mtime, and the listing
 reports each part's current digest beside it. Whichever window is open redraws
 the stale ones (`app/src/thumbnails.ts`) — one at a time, only while nobody is
 typing or building, with the viewport's own scene off screen, from a mesh the
-host built in the script sandbox with neither build cache touched. So an edit
+host built in the script sandbox with neither build cache touched. The open
+part is the exception: when the viewport is showing a build of exactly the
+script on disk (`engine.heldBuild`, by the same digest), its picture is drawn
+from that, where a second worker used to build the whole part again just as
+the user started editing it. So an edit
 from an agent, git or another editor is redrawn without anything watching the
 folder, and the host refuses a picture of a script that has changed since.
 

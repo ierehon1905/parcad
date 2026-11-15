@@ -260,7 +260,8 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | how an op becomes a B-rep | `crates/parcad-occt/src/backend.rs` |
 | the curvature-continuous section behind `.smooth()`, and the measurement that holds it G2 | `vendor/occt-sys/patches/0006-curvature-continuous-fillet-section.patch` (the section, in `BlendFunc_ConstRad`); `ParcadEdgeTreatment::join_continuity` in `vendor/opencascade/include/history.hxx` (the rails measured); the gate and the three-edge-corner refusal in `backend.rs`'s `Op::Fillet` |
 | crash handling, timeouts, breadcrumbs, the worker pool | `crates/parcad-occt/src/host.rs` |
-| what a worker keeps between requests | `backend::BuildCache` and the serve loop in `crates/parcad-occt/src/bin/worker.rs` |
+| what a worker keeps between requests | `backend::BuildCache` (built subtrees) and `serve::MeasureCache` (each body's measurement, each pair's fit), and the serve loop in `crates/parcad-occt/src/bin/worker.rs` |
+| whether two shapes are apart, without optimising a box | `Reach` in `backend.rs`, over `Shape::bounds_enclosing`; docs/GOTCHAS.md, "`BRepBndLib::Add` does not enclose the shape" |
 | probes, wall thickness, tag extents on the exact solid | `crates/parcad-occt/src/perceive.rs` |
 | the authoring DSL | `app/src/dsl.ts` (shared with `tools/run.ts`) |
 | drill and clearance sizes | `METRIC_FASTENERS` in `app/src/dsl.ts` — never a literal in a part |

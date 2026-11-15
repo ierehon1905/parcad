@@ -1694,7 +1694,10 @@ entry), refuses the union, naming the inputs lost and any alert the kernel
 raised. With a blend the check reads the boolean before the
 blend, which may take material off a convex seam. It costs 150 ms of 2.1 s on
 the twisted planter's 38-input saucer and 20 ms on 48 spheres, paid once per
-build. `eval/cases/refuse-union-grazing-domes.json` holds it. Which OCCT step
+build. A face of an input that is itself a face of the result (`IsSame`) is
+not classified: its points are on the result, which the next entry counts as
+kept whatever the classifier says. On a keycap's union of a 55-section loft
+with its wheels that left 197 of 642 points, of a check that had cost 1.9 s. `eval/cases/refuse-union-grazing-domes.json` holds it. Which OCCT step
 loses the input is not found yet.
 
 ### A point on a B-spline wall read as outside the union that kept it *(fixed 2026-11-09)*
@@ -1725,6 +1728,49 @@ grazing domes still refuse, because their lost dome's points lie millimetres
 from anything. `eval/cases/union-inset-lip-onto-a-shelf.json` holds the shelf.
 The classifier itself is unchanged. Its other callers probe points placed off
 the surface on purpose, so their rays never start on a face.
+
+### `BRepBndLib::Add` does not enclose the shape
+
+It reads as the cheap enclosing box beside `AddOptimal`'s tight one, and for a
+spline face inside its surface's parameter range it is: the hull of the poles.
+Outside that range `GeomBndLib_BSplineSurface::Box` falls back to a grid of
+sampled points, `GeomBndLib_OtherSurface::Box` (offsets, extrusions and
+revolutions of anything but a line or circle) only ever samples, and a B-spline
+*curve* is a sampled box grown by 1.5 × the deflection it measured. A sampled
+box can sit inside the shape, so "these two boxes are apart" proves nothing.
+
+`Shape_bounds_enclosing` (`vendor/opencascade-sys`) is the box that does: every
+pole of a spline, a whole sphere or torus, the edges of a plane, cylinder or
+cone (a ruled face reaches no further than its boundary), `AddOptimal` for
+whatever is left, grown by the shape's largest tolerance. `boolean_in_layers`
+and `cut_collisions` ask it first and compute the tight box only for a pair it
+leaves open (`Reach` in `backend.rs`). A keycap whose eighteen single-tool cuts
+each optimised the box of the same 55-section loft spent 5.3 s of a 13.9 s
+build in `BoxOptimal`, and 0.5 s after. Over the corpus's 2,439 pair decisions
+the enclosing box never called a pair apart that the tight one did not.
+
+### A warm worker and a fresh one differ in the thirteenth digit, and in which of two equal clearances they name
+
+Found on 2026-11-15 comparing replies while adding the worker's measurement
+cache, and older than it: both are on `f61a307b`.
+
+- A one-body keycap edited on a warm worker reports four faces' `area_mm2` and
+  `centroid` differing from a fresh worker's from the thirteenth significant
+  digit (11.4880114938663 against 11.4880114938685). The faces belong to
+  subtrees the build cache handed back, which the previous build's booleans
+  had been run against.
+- A 25-body assembly evaluated again on a warm worker names the other of two
+  equally near point pairs for one clear pair: `closest_mm` at x = 4 where a
+  fresh worker says x = 11, `clearance_mm` 11.65 both times. The bodies are
+  mirror-symmetric there, so both are closest pairs.
+
+Volume, bounds, topology, verdicts and every clearance agree, which is what
+docs/ARCHITECTURE.md claims for the cache. The likely cause is that a boolean
+adds p-curves and widens tolerances on the operands it is given, which the
+cache then hands to the next build; it is not confirmed. A comparison of a
+warm reply against a fresh one has to allow for both. The measurement cache
+makes the second one rarer rather than commoner: a pair neither of whose
+bodies changed is no longer measured again.
 
 ### `role: "hole"` does not match a conical opening
 
