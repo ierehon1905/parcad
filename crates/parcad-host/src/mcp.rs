@@ -62,6 +62,12 @@ impl Parcad {
             for tool in ONLY_ON_YOUR_MACHINE {
                 self.tool_router.map.remove(*tool);
             }
+            if let Some(route) = self.tool_router.map.get_mut("export_part") {
+                route.attr.input_schema = Arc::new(without_property(&route.attr.input_schema, "open"));
+                if let Some(description) = route.attr.description.as_mut() {
+                    *description = description.replace(OPENS_ON_THIS_MACHINE, "").into();
+                }
+            }
         }
         self.capability = capability;
         self
@@ -71,6 +77,22 @@ impl Parcad {
 /// Tools a hosted server could only refuse, so it does not list them: each
 /// reads a file on the caller's own disk, which a server cannot see.
 const ONLY_ON_YOUR_MACHINE: &[&str] = &["probe_step_export"];
+
+/// export_part's `open`, which a hosted server ignores: offered there, a model
+/// passed it and ChatGPT asked the user to approve opening a local app.
+const OPENS_ON_THIS_MACHINE: &str = "`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find, for a part the user wants to print or look at now. `opened` says whether the system took the file, and `open_error` why not. The path is written either way. ";
+
+/// `schema` with one argument taken out of its properties and its required list.
+fn without_property(schema: &rmcp::model::JsonObject, name: &str) -> rmcp::model::JsonObject {
+    let mut schema = schema.clone();
+    if let Some(serde_json::Value::Object(properties)) = schema.get_mut("properties") {
+        properties.remove(name);
+    }
+    if let Some(serde_json::Value::Array(required)) = schema.get_mut("required") {
+        required.retain(|field| field != name);
+    }
+    schema
+}
 
 /// The in-chat viewer: an MCP Apps page a client renders beside `open_project`.
 const VIEWER_URI: &str = "ui://parcad/viewer";
@@ -565,8 +587,9 @@ pub struct ExportRequest {
     /// the same script when there is one.
     #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
-    /// Why the file is to be written although the part fails a check or the
-    /// print check, in the words of a user who knows what fails. Without it a
+    /// The user's words accepting that the part fails a check or the print
+    /// check, such as "export it, I'll ream the bore out". Fixed dimensions in
+    /// a brief, or the request for the file, accept no failure. Without it a
     /// failing verdict refuses the export, naming it and what was measured;
     /// with it the reason is kept in the reply.
     #[serde(default)]
@@ -731,8 +754,9 @@ pub struct EditRequest {
     /// Seconds the kernel may take, 1 to 600, as evaluate_part's.
     #[serde(default, deserialize_with = "crate::arguments::numeric")]
     pub timeout_s: Option<f64>,
-    /// Why the edit is to be written although it leaves the part failing a
-    /// check or the print check, in the words of a user who knows what fails.
+    /// The user's words accepting that the edited part fails a check or the
+    /// print check, such as "save it, I'll fix the clearance later". Fixed
+    /// dimensions in a brief, or the request for the edit, accept no failure.
     /// Without it a failing verdict refuses an edit that writes part.js,
     /// naming it and what was measured; an edit to "@session" changes the
     /// screen only and is never refused for it.
@@ -809,10 +833,11 @@ pub struct SaveRequest {
     pub name: String,
     /// The DSL source to save.
     pub script: String,
-    /// Why the part is to be saved although it fails a check or the print
-    /// check, in the words of a user who knows what fails. Without it a
-    /// failing verdict refuses the save, naming it and what was measured;
-    /// with it the reason is kept in the reply.
+    /// The user's words accepting that the part fails a check or the print
+    /// check, such as "save it, I'll fix the clearance later". Fixed
+    /// dimensions in a brief, or the request to save, accept no failure.
+    /// Without it a failing verdict refuses the save, naming it and what was
+    /// measured; with it the reason is kept in the reply.
     #[serde(default)]
     pub allow_failing: Option<String>,
 }
@@ -1005,7 +1030,7 @@ impl Parcad {
     #[tool(
         name = "edit_part",
         annotations(title = "Edit a part in place", read_only_hint = false, destructive_hint = true, idempotent_hint = false, open_world_hint = false),
-        description = "Change part of a script without sending the whole thing: each edit replaces `old` with `new`, once, and the part is rebuilt and measured exactly as evaluate_part does — same reply, same views — then saved. `project` names the part to edit, or \"@session\" for the script on the user's screen. An `old` that appears twice, or not at all, is refused naming how many times it was found and where, or the nearest line, and nothing is written: give more surrounding lines. An `old` found nowhere exactly but once with its spacing and quotes read loosely is applied, and the reply's `matched_loosely` names it. The edited text is built before anything is written, so a change that does not build is refused and the part is left as it was. The previous text is kept as a snapshot (list_snapshots, restore_snapshot), so an edit is undoable, and an edit to the open part lands in the window's own undo history: the reply then carries `on_screen` with the revision and `viewers`, as set_script's does. A saved part that is also open on screen is put on screen too. It changes a saved part after the first build — a fillet radius, a dimension, one function — without 10 KB of unchanged script being sent to change two lines, the most common way a session runs out of room. evaluate_part with the same `project` and `edits` tries a change without saving it. The reply adds `edits_applied`, the new `script_sha256`, and for a saved part the `path` written and the `snapshot` kept; a reply's `script_sha256` passed back as `expect_sha256` refuses the edit if the text has changed since. An edit that writes part.js is refused when the edited text fails its `print_check` (material under 0.3 mm) or one of the part's own `checks`, naming the finding or the check and its measurement, unless `allow_failing` gives the reason, in the words of a user who knows what fails; an edit to \"@session\" changes only the screen and is never refused for a verdict — the window shows it red."
+        description = "Change part of a script without sending the whole thing: each edit replaces `old` with `new`, once, and the part is rebuilt and measured exactly as evaluate_part does — same reply, same views — then saved. `project` names the part to edit, or \"@session\" for the script on the user's screen. An `old` that appears twice, or not at all, is refused naming how many times it was found and where, or the nearest line, and nothing is written: give more surrounding lines. An `old` found nowhere exactly but once with its spacing and quotes read loosely is applied, and the reply's `matched_loosely` names it. The edited text is built before anything is written, so a change that does not build is refused and the part is left as it was. The previous text is kept as a snapshot (list_snapshots, restore_snapshot), so an edit is undoable, and an edit to the open part lands in the window's own undo history: the reply then carries `on_screen` with the revision and `viewers`, as set_script's does. A saved part that is also open on screen is put on screen too. It changes a saved part after the first build — a fillet radius, a dimension, one function — without 10 KB of unchanged script being sent to change two lines, the most common way a session runs out of room. evaluate_part with the same `project` and `edits` tries a change without saving it. The reply adds `edits_applied`, the new `script_sha256`, and for a saved part the `path` written and the `snapshot` kept; a reply's `script_sha256` passed back as `expect_sha256` refuses the edit if the text has changed since. An edit that writes part.js is refused when the edited text fails its `print_check` (material under 0.3 mm) or one of the part's own `checks`, naming the finding or the check and its measurement, unless `allow_failing` carries the user's words accepting that it fails; an edit to \"@session\" changes only the screen and is never refused for a verdict — the window shows it red."
     )]
     async fn edit_part(
         &self,
@@ -1257,7 +1282,7 @@ impl Parcad {
     #[tool(
         name = "export_part",
         annotations(title = "Export a part to a file", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. On a hosted parcad the reply also carries `url`, a signed link that fetches the file with no token until it expires, and `path` is then relative to the account's folder. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find, for a part the user wants to print or look at now. `opened` says whether the system took the file, and `open_error` why not. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part whose `print_check` fails — material under 0.3 mm, where nothing prints — or that carries its own `checks` and fails one is refused, with the finding or the check and its measurement named, and nothing is written. `allow_failing` carries the reason, in the words of a user who knows what fails, for writing it anyway; the reply keeps it and the file carries it: in an STL's header, a STEP comment, or a 3MF's Description. The reply opens with `print_check` and `checks`, the verdicts the file was written under; a `flagged` print_check writes the file and lists what to read."
+        description = "Export a part and return the absolute path written. `format` is `3mf` for printing — what Bambu Studio, OrcaSlicer, PrusaSlicer and Cura open, with every body its own named object in millimetres — `stl` for a bare mesh any tool reads, or `step` for exact surfaces, for another CAD program or a machine shop. Files are written to the parcad export directory; the filename must have no directory part. On a hosted parcad the reply also carries `url`, a signed link that fetches the file with no token until it expires, and `path` is then relative to the account's folder. The reply's `measured` describes the part in the file, off the same build that wrote it: size, volume, `watertight`, `bodies`, `voids`, and for 3MF and STL the `deflection_mm` every triangle is within. Reuses the build of an earlier evaluate_part on the same script; `timeout_s` gives a heavy part longer.\n\nA part that returns several bodies (`return { base, lid }`) is written whole by default — one object per body in 3MF, one solid per body in STEP, every body's triangles merged into one STL, where a slicer can no longer tell them apart — and `measured.named_bodies` then measures each body in the file. Pass `body: \"lid\"` to write that one body alone. A `.reference()` body is never in the file and cannot be asked for by name.\n\n`open: true` also hands the file to the application this machine opens that extension with, so a 3MF lands in the user's slicer with no path to find, for a part the user wants to print or look at now. `opened` says whether the system took the file, and `open_error` why not. The path is written either way. STL and 3MF describe closed solids and refuse a part with a surface body, naming `.thicken(t)`; STEP carries surfaces exactly.\n\nA part whose `print_check` fails — material under 0.3 mm, where nothing prints — or that carries its own `checks` and fails one is refused, with the finding or the check and its measurement named, and nothing is written. `allow_failing` carries the user's words accepting that it fails, for writing it anyway; the reply keeps it and the file carries it: in an STL's header, a STEP comment, or a 3MF's Description. The reply opens with `print_check` and `checks`, the verdicts the file was written under; a `flagged` print_check writes the file and lists what to read."
     )]
     async fn export_part(
         &self,
@@ -1452,7 +1477,7 @@ impl Parcad {
     #[tool(
         name = "save_project",
         annotations(title = "Save project", read_only_hint = false, destructive_hint = true, idempotent_hint = true, open_world_hint = false),
-        description = "Writes a new part to parcad's project folder, where the user can open it; open_project then puts it on their screen. For a part already saved, edit_part changes the lines it names, rebuilds and saves in one call, without the whole script being sent again. A script that does not build is saved regardless, as a broken file; evaluate_part builds a script without saving it. Saving replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not) and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back. A part that builds and fails its `print_check` (material under 0.3 mm, where nothing prints) or one of its own `checks` is not saved: the refusal names the finding or the check and its measurement. `allow_failing` carries the reason, in the words of a user who knows what fails, for keeping such a part, and the reply keeps it beside the verdicts it opens with."
+        description = "Writes a new part to parcad's project folder, where the user can open it; open_project then puts it on their screen. For a part already saved, edit_part changes the lines it names, rebuilds and saves in one call, without the whole script being sent again. A script that does not build is saved regardless, as a broken file; evaluate_part builds a script without saving it. Saving replaces an existing project at the same path; a new one is created as a '<name>.parcad' folder, and a path like 'Mounts/bracket' files it under a folder, creating the folder if needed. The reply says whether the script `built` (the `error` if not) and the `snapshot` of the version it replaced, which list_snapshots and restore_snapshot can bring back. A part that builds and fails its `print_check` (material under 0.3 mm, where nothing prints) or one of its own `checks` is not saved: the refusal names the finding or the check and its measurement. `allow_failing` carries the user's words accepting that it fails, for keeping such a part, and the reply keeps it beside the verdicts it opens with."
     )]
     async fn save_project(
         &self,
@@ -2838,6 +2863,27 @@ mod tests {
             .map(|tool| tool.name.to_string())
             .collect();
         assert_eq!(writes, ["edit_part", "export_part", "restore_snapshot", "save_project", "set_script"]);
+    }
+
+    /// A hosted server cannot open a file on the user's machine and ignores
+    /// `open`; offered it, a model in ChatGPT passed it and the user was asked
+    /// to approve opening a local app. The local app keeps it.
+    #[test]
+    fn only_a_local_export_part_offers_to_open_the_file() {
+        let export = |hosted: bool| {
+            let tools = Parcad::new().with_capability(service::capability(hosted)).tool_router.list_all();
+            let tool = tools.into_iter().find(|t| t.name == "export_part").unwrap();
+            let schema = serde_json::to_value(&tool.input_schema).unwrap();
+            (tool.description.unwrap_or_default().to_string(), schema)
+        };
+        let (local, local_schema) = export(false);
+        assert!(local.contains(OPENS_ON_THIS_MACHINE), "export_part's wording moved off OPENS_ON_THIS_MACHINE, so a hosted list would keep it");
+        assert!(local_schema["properties"].get("open").is_some());
+        let (hosted, hosted_schema) = export(true);
+        assert!(!hosted.contains("open: true") && !hosted.contains("this machine"), "{hosted}");
+        assert!(hosted_schema["properties"].get("open").is_none());
+        assert!(hosted_schema["properties"].get("format").is_some(), "only `open` goes");
+        assert!(hosted.contains("STL and 3MF describe closed solids"), "the paragraph's other sentence stays");
     }
 
     /// ChatGPT's approval dialog for a write runs a classifier over the tool's
