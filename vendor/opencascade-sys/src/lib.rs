@@ -971,6 +971,18 @@ pub mod ffi {
             z1: &mut f64,
         ) -> bool;
 
+        // A box the shape cannot reach outside, with no surface evaluated —
+        // added for parcad, see PARCAD-CHANGES.md.
+        pub fn Shape_bounds_enclosing(
+            shape: &TopoDS_Shape,
+            x0: &mut f64,
+            y0: &mut f64,
+            z0: &mut f64,
+            x1: &mut f64,
+            y1: &mut f64,
+            z1: &mut f64,
+        ) -> bool;
+
         // A loose enclosing box and the triangulation's box — added for
         // parcad, see PARCAD-CHANGES.md.
         pub fn Shape_bounds_bracket(

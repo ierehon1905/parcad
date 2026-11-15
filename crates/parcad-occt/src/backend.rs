@@ -3572,19 +3572,16 @@ fn cut_collisions(
     cut_tools: &[CombinedTool],
 ) -> Vec<Collision> {
     const ANY_MM3: f64 = 1e-6;
-    let boxes: Vec<(&String, &Shape, Option<(DVec3, DVec3)>)> =
-        features.iter().map(|(tag, solid)| (tag, solid, solid.bounds_optimal())).collect();
-    let meets = |a: Option<(DVec3, DVec3)>, b: Option<(DVec3, DVec3)>| match (a, b) {
-        (Some((a0, a1)), Some((b0, b1))) => {
-            !(a1.cmplt(b0 - MISS_GAP_MM).any() || b1.cmplt(a0 - MISS_GAP_MM).any())
-        }
-        _ => true,
-    };
+    if features.len() < 2 {
+        return Vec::new();
+    }
+    let boxes: Vec<(&String, &Shape, Reach)> =
+        features.iter().map(|(tag, solid)| (tag, solid, Reach::of(solid))).collect();
     let subtrees = tag_subtrees(doc);
     let mut out = Vec::new();
     for (&t, tool) in tools.iter().zip(cut_tools) {
-        let near: Vec<&(&String, &Shape, Option<(DVec3, DVec3)>)> =
-            boxes.iter().filter(|(_, _, b)| meets(*b, tool.bounds)).collect();
+        let near: Vec<&(&String, &Shape, Reach)> =
+            boxes.iter().filter(|(_, _, reach)| !reach.clear_of(&tool.reach)).collect();
         if near.len() < 2 {
             continue;
         }
@@ -4100,6 +4097,50 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
 /// How far clear of the material a cutter must lie to have missed it.
 const MISS_GAP_MM: f64 = 1e-6;
 
+/// How much further apart than [`MISS_GAP_MM`] two enclosing boxes must be to
+/// settle that the tight ones are: `BoxOptimal` grows each face's box by
+/// `Precision::Confusion()`, 1e-7 mm.
+const ENCLOSING_SLACK_MM: f64 = 1e-5;
+
+fn boxes_apart(a: Option<(DVec3, DVec3)>, b: Option<(DVec3, DVec3)>, gap: f64) -> bool {
+    match (a, b) {
+        (Some((a0, a1)), Some((b0, b1))) => a1.cmplt(b0 - gap).any() || b1.cmplt(a0 - gap).any(),
+        _ => false,
+    }
+}
+
+/// Where a shape reaches, for asking whether two are clear of each other. The
+/// tight box of a spline surface is an optimisation over it — 5 s of a 14 s
+/// build went there — so the enclosing box answers when it can and the tight
+/// one is computed only for a pair it leaves open, once.
+struct Reach {
+    shape: Shape,
+    enclosing: Option<(DVec3, DVec3)>,
+    tight: std::cell::OnceCell<Option<(DVec3, DVec3)>>,
+}
+
+impl Reach {
+    fn of(shape: &Shape) -> Self {
+        Self { shape: shape.clone(), enclosing: shape.bounds_enclosing(), tight: std::cell::OnceCell::new() }
+    }
+
+    fn tight(&self) -> Option<(DVec3, DVec3)> {
+        *self.tight.get_or_init(|| self.shape.bounds_optimal())
+    }
+
+    /// Whether the tight boxes are more than [`MISS_GAP_MM`] apart; a shape
+    /// with no extent is clear of nothing.
+    fn clear_of(&self, other: &Reach) -> bool {
+        self.apart_from(other) || boxes_apart(self.tight(), other.tight(), MISS_GAP_MM)
+    }
+
+    /// Whether the enclosing boxes alone put the two apart: no point of one
+    /// is within [`MISS_GAP_MM`] of the other.
+    fn apart_from(&self, other: &Reach) -> bool {
+        boxes_apart(self.enclosing, other.enclosing, MISS_GAP_MM + ENCLOSING_SLACK_MM)
+    }
+}
+
 /// A union or cut of `base` with every one of `tools`, before unification.
 struct Combined {
     shape: Shape,
@@ -4115,7 +4156,7 @@ struct Combined {
 
 struct CombinedTool {
     shape: Shape,
-    bounds: Option<(DVec3, DVec3)>,
+    reach: Reach,
     /// No face of this tool is on the result of the boolean it went into.
     vanished: bool,
 }
@@ -4131,20 +4172,11 @@ struct CombinedTool {
 fn boolean_in_layers(base: BuiltShape, tools: Vec<BuiltShape>, cut: bool, tag: Option<&str>) -> Combined {
     let mut tools_out: Vec<CombinedTool> = tools
         .iter()
-        .map(|t| CombinedTool {
-            shape: t.shape.clone(),
-            bounds: t.shape.bounds_optimal(),
-            vanished: false,
-        })
+        .map(|t| CombinedTool { shape: t.shape.clone(), reach: Reach::of(&t.shape), vanished: false })
         .collect();
     let mut layers: Vec<Vec<usize>> = Vec::new();
     for (i, tool) in tools_out.iter().enumerate() {
-        let clear_of = |j: &usize| match (tool.bounds, tools_out[*j].bounds) {
-            (Some((a0, a1)), Some((b0, b1))) => {
-                a1.cmplt(b0 - MISS_GAP_MM).any() || b1.cmplt(a0 - MISS_GAP_MM).any()
-            }
-            _ => false,
-        };
+        let clear_of = |j: &usize| tool.reach.clear_of(&tools_out[*j].reach);
         match layers.iter_mut().find(|layer| layer.iter().all(clear_of)) {
             Some(layer) => layer.push(i),
             None => layers.push(vec![i]),
@@ -4384,7 +4416,7 @@ fn cut_node(
                         tools
                             .iter()
                             .zip(&cut.tools)
-                            .filter(|(_, tool)| tool.bounds.is_some_and(|(c0, c1)| pick(c0, c1)))
+                            .filter(|(_, tool)| tool.reach.tight().is_some_and(|(c0, c1)| pick(c0, c1)))
                             .map(|(t, _)| *t)
                             .collect()
                     };
@@ -6492,6 +6524,36 @@ mod tests {
             [TreatmentEdges { node: 2, edges: 4, convex: 4, concave: 0, before_cuts: Vec::new() }],
             "the fillet is node 2 now",
         );
+    }
+
+    /// The enclosing box holds the tight one, on every kind of face it reads
+    /// without evaluating and on the ones it hands to the optimiser: a wrong
+    /// "apart" would put two overlapping tools into one boolean.
+    #[test]
+    fn the_enclosing_box_holds_the_tight_one() {
+        let doc = |json: serde_json::Value| -> Doc { serde_json::from_value(json).unwrap() };
+        let turned = |inner: serde_json::Value| {
+            serde_json::json!({"units":"mm","root":1,"nodes":[
+                inner, {"op":"rotate","child":0,"axis":{"x":1,"y":2,"z":3},"degrees":37}]})
+        };
+        let shapes = [
+            turned(serde_json::json!({"op":"cuboid","size":{"x":10,"y":6,"z":3}})),
+            turned(serde_json::json!({"op":"cylinder","r":4,"h":9})),
+            turned(serde_json::json!({"op":"sphere","r":5})),
+            turned(serde_json::json!({"op":"torus","major":8,"minor":2})),
+            turned(serde_json::json!({"op":"revolve","profile":[[0,-4],[5,-4],[3,4],[0,4]]})),
+            turned(serde_json::json!({"op":"extrude","profile":[[0,0],[9,-9],[18,0],{"spline":[[12,6],[6,3]]}],"height":7})),
+            serde_json::json!({"units":"mm","root":1,"nodes":[
+                {"op":"cuboid","size":{"x":10,"y":10,"z":10}},
+                {"op":"fillet","child":0,"radius":2,"selector":"|Z"}]}),
+        ];
+        for json in shapes {
+            let shape = build(&doc(json.clone())).unwrap_or_else(|e| panic!("{json}: {e:#}"));
+            let (e0, e1) = shape.bounds_enclosing().unwrap();
+            let (t0, t1) = shape.bounds_optimal().unwrap();
+            assert!(e0.cmple(t0 + 2e-7).all() && e1.cmpge(t1 - 2e-7).all(), "{json}: {e0:?}..{e1:?} inside {t0:?}..{t1:?}");
+            assert!((e0 - t0).abs().max_element() < 12.0 && (e1 - t1).abs().max_element() < 12.0, "{json}: a box of nothing");
+        }
     }
 
     /// A vertex treatment's count is its corners, which is what

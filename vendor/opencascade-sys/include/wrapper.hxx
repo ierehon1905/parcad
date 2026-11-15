@@ -35,6 +35,9 @@
 #include <gp_GTrsf.hxx>
 #include <Bnd_Box.hxx>
 #include <BRepBndLib.hxx>
+#include <BndLib.hxx>             // PARCAD: Shape_bounds_enclosing
+#include <Geom_BezierCurve.hxx>
+#include <Geom_Ellipse.hxx>
 #include <BRepCheck.hxx>
 #include <BRepCheck_Analyzer.hxx>
 #include <BRepCheck_Result.hxx>
@@ -510,6 +513,146 @@ inline bool Shape_bounds_optimal(const TopoDS_Shape &shape, double &x0, double &
   if (box.IsVoid()) {
     return false;
   }
+  box.Get(x0, y0, z0, x1, y1, z1);
+  return true;
+}
+
+// An edge's curve added to `box` from its poles or its analytic extent, or
+// false when neither bounds it. Added for parcad, see PARCAD-CHANGES.md.
+inline bool parcad_enclose_edge(const TopoDS_Edge &edge, Bnd_Box &box) {
+  if (BRep_Tool::Degenerated(edge)) {
+    for (TopExp_Explorer it(edge, TopAbs_VERTEX); it.More(); it.Next()) {
+      box.Add(BRep_Tool::Pnt(TopoDS::Vertex(it.Current())));
+    }
+    return true;
+  }
+  double first = 0.0, last = 0.0;
+  TopLoc_Location location;
+  opencascade::handle<Geom_Curve> curve = BRep_Tool::Curve(edge, location, first, last);
+  while (!curve.IsNull() && curve->IsKind(STANDARD_TYPE(Geom_TrimmedCurve))) {
+    curve = opencascade::handle<Geom_TrimmedCurve>::DownCast(curve)->BasisCurve();
+  }
+  if (curve.IsNull() || Precision::IsInfinite(first) || Precision::IsInfinite(last)) {
+    return false;
+  }
+  const gp_Trsf &trsf = location.Transformation();
+  if (curve->IsKind(STANDARD_TYPE(Geom_Line))) {
+    box.Add(curve->Value(first).Transformed(trsf));
+    box.Add(curve->Value(last).Transformed(trsf));
+    return true;
+  }
+  if (curve->IsKind(STANDARD_TYPE(Geom_Circle))) {
+    const gp_Circ circle = opencascade::handle<Geom_Circle>::DownCast(curve)->Circ();
+    // A mirrored location turns the parametrisation round, so only the whole circle is safe there.
+    if (trsf.Form() == gp_Identity) {
+      BndLib::Add(circle, first, last, 0.0, box);
+    } else {
+      BndLib::Add(circle.Transformed(trsf), 0.0, box);
+    }
+    return true;
+  }
+  if (curve->IsKind(STANDARD_TYPE(Geom_Ellipse))) {
+    const gp_Elips ellipse = opencascade::handle<Geom_Ellipse>::DownCast(curve)->Elips();
+    if (trsf.Form() == gp_Identity) {
+      BndLib::Add(ellipse, first, last, 0.0, box);
+    } else {
+      BndLib::Add(ellipse.Transformed(trsf), 0.0, box);
+    }
+    return true;
+  }
+  if (curve->IsKind(STANDARD_TYPE(Geom_BSplineCurve))) {
+    for (const gp_Pnt &pole : opencascade::handle<Geom_BSplineCurve>::DownCast(curve)->Poles()) {
+      box.Add(pole.Transformed(trsf));
+    }
+    return true;
+  }
+  if (curve->IsKind(STANDARD_TYPE(Geom_BezierCurve))) {
+    for (const gp_Pnt &pole : opencascade::handle<Geom_BezierCurve>::DownCast(curve)->Poles()) {
+      box.Add(pole.Transformed(trsf));
+    }
+    return true;
+  }
+  return false;
+}
+
+// A face added to `box` without evaluating its surface, or false when nothing
+// here bounds it: a spline by its poles, a whole sphere or torus, and a plane,
+// cylinder or cone by its edges, since a ruled face reaches no further than
+// its boundary. Added for parcad, see PARCAD-CHANGES.md.
+inline bool parcad_enclose_face(const TopoDS_Face &face, Bnd_Box &box) {
+  TopLoc_Location location;
+  opencascade::handle<Geom_Surface> surface = BRep_Tool::Surface(face, location);
+  while (!surface.IsNull() && surface->IsKind(STANDARD_TYPE(Geom_RectangularTrimmedSurface))) {
+    surface = opencascade::handle<Geom_RectangularTrimmedSurface>::DownCast(surface)->BasisSurface();
+  }
+  if (surface.IsNull()) {
+    return false;
+  }
+  const gp_Trsf &trsf = location.Transformation();
+  if (surface->IsKind(STANDARD_TYPE(Geom_BSplineSurface))) {
+    for (const gp_Pnt &pole : opencascade::handle<Geom_BSplineSurface>::DownCast(surface)->Poles()) {
+      box.Add(pole.Transformed(trsf));
+    }
+    return true;
+  }
+  if (surface->IsKind(STANDARD_TYPE(Geom_BezierSurface))) {
+    for (const gp_Pnt &pole : opencascade::handle<Geom_BezierSurface>::DownCast(surface)->Poles()) {
+      box.Add(pole.Transformed(trsf));
+    }
+    return true;
+  }
+  if (surface->IsKind(STANDARD_TYPE(Geom_SphericalSurface))) {
+    BndLib::Add(opencascade::handle<Geom_SphericalSurface>::DownCast(surface)->Sphere().Transformed(trsf), 0.0, box);
+    return true;
+  }
+  if (surface->IsKind(STANDARD_TYPE(Geom_ToroidalSurface))) {
+    BndLib::Add(opencascade::handle<Geom_ToroidalSurface>::DownCast(surface)->Torus().Transformed(trsf), 0.0, box);
+    return true;
+  }
+  if (surface->IsKind(STANDARD_TYPE(Geom_Plane)) || surface->IsKind(STANDARD_TYPE(Geom_CylindricalSurface)) ||
+      surface->IsKind(STANDARD_TYPE(Geom_ConicalSurface))) {
+    bool any = false;
+    for (TopExp_Explorer it(face, TopAbs_EDGE); it.More(); it.Next()) {
+      if (!parcad_enclose_edge(TopoDS::Edge(it.Current()), box)) {
+        return false;
+      }
+      any = true;
+    }
+    return any;
+  }
+  return false;
+}
+
+// A box no point of the shape lies outside, without evaluating a surface —
+// added for parcad, see PARCAD-CHANGES.md. Looser than `Shape_bounds_optimal`
+// and never inside it: a face or edge nothing here bounds gets its optimal
+// box, and the whole is grown by the shape's largest tolerance. False for a
+// shape with no extent.
+inline bool Shape_bounds_enclosing(const TopoDS_Shape &shape, double &x0, double &y0, double &z0, double &x1,
+                                   double &y1, double &z1) {
+  Bnd_Box box;
+  for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+    if (!parcad_enclose_face(TopoDS::Face(it.Current()), box)) {
+      BRepBndLib::AddOptimal(it.Current(), box, /*useTriangulation*/ false, /*useShapeTolerance*/ false);
+    }
+  }
+  for (TopExp_Explorer it(shape, TopAbs_EDGE, TopAbs_FACE); it.More(); it.Next()) {
+    if (!parcad_enclose_edge(TopoDS::Edge(it.Current()), box)) {
+      BRepBndLib::AddOptimal(it.Current(), box, /*useTriangulation*/ false, /*useShapeTolerance*/ false);
+    }
+  }
+  for (TopExp_Explorer it(shape, TopAbs_VERTEX, TopAbs_EDGE); it.More(); it.Next()) {
+    box.Add(BRep_Tool::Pnt(TopoDS::Vertex(it.Current())));
+  }
+  if (box.IsVoid()) {
+    return false;
+  }
+  box.SetGap(0.0);
+  double tolerance = 0.0;
+  for (const TopAbs_ShapeEnum kind : {TopAbs_FACE, TopAbs_EDGE, TopAbs_VERTEX}) {
+    tolerance = std::max(tolerance, BRep_Tool::MaxTolerance(shape, kind));
+  }
+  box.Enlarge(tolerance);
   box.Get(x0, y0, z0, x1, y1, z1);
   return true;
 }

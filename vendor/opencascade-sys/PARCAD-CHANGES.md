@@ -417,6 +417,29 @@ is pruned by its triangles anyway, and `AddOptimal` on 546 offset B-spline
 faces was most of the cost of building one. A face with no mesh keeps the
 tight box.
 
+## Added: `Shape_bounds_enclosing`
+
+A box that provably holds the shape, built without evaluating a surface, so it
+costs a walk over control points where `Shape_bounds_optimal` costs an
+optimisation per face:
+
+- a B-spline or Bézier surface by all of its poles (the convex hull property;
+  no trimming to the face's parameter range, which is where
+  `GeomBndLib_BSplineSurface::Box` falls back to sampling);
+- a sphere or a torus by the whole surface;
+- a plane, cylinder or cone by its edges, since every point of a ruled face
+  lies on a segment that ends on the face's boundary: a line by its ends, a
+  circle or ellipse by `BndLib`'s analytic arc (the whole curve under a
+  location, which may mirror the parametrisation), a spline by its poles;
+- any other face or free edge by its own `AddOptimal` box.
+
+The result is grown by the shape's largest tolerance, because an edge's 3D
+curve may sit that far off the surface it bounds. It is therefore never inside
+`Shape_bounds_optimal` by more than the `Precision::Confusion()` that one adds
+per face, which is what lets a caller treat "the enclosing boxes are apart" as
+"the optimal boxes are apart". Three new includes: `BndLib.hxx`,
+`Geom_BezierCurve.hxx`, `Geom_Ellipse.hxx`.
+
 ## Added: `IsSame` and `Shape_identity_hash`
 
 `TopoDS_Shape::IsSame` — the same `TShape` at the same location, whatever

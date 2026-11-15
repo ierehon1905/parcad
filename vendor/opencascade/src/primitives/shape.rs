@@ -972,6 +972,17 @@ impl Shape {
         Some((outer, inner))
     }
 
+    /// A box no point of the shape lies outside, from control points and
+    /// analytic extents: never inside [`Self::bounds_optimal`], and many
+    /// times cheaper on a spline surface. `None` for a shape with no extent.
+    /// Added for parcad.
+    pub fn bounds_enclosing(&self) -> Option<(DVec3, DVec3)> {
+        let mut b = [0.0f64; 6];
+        let [x0, y0, z0, x1, y1, z1] = &mut b;
+        ffi::Shape_bounds_enclosing(&self.inner, x0, y0, z0, x1, y1, z1)
+            .then(|| (dvec3(b[0], b[1], b[2]), dvec3(b[3], b[4], b[5])))
+    }
+
     /// Tight bounds from the exact geometry, `BRepBndLib::AddOptimal` with no
     /// triangulation and no tolerance gap. `None` for a shape with no extent.
     /// Added for parcad.
@@ -1036,6 +1047,14 @@ impl Eq for Identity<'_> {}
 impl std::hash::Hash for Identity<'_> {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         state.write_usize(ffi::Shape_identity_hash(self.0));
+    }
+}
+
+impl Shape {
+    /// Whether this is `other`'s own `TShape` at its location, orientation
+    /// aside: the same object, not an equal one. Added for parcad.
+    pub fn is_same(&self, other: &Shape) -> bool {
+        self.inner.IsSame(&other.inner)
     }
 }
 

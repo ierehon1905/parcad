@@ -13,7 +13,7 @@ pub struct FaceRun {
     pub count: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Mesh {
     pub vertices: Vec<DVec3>,
     pub uvs: Vec<DVec2>,

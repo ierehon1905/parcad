@@ -660,3 +660,20 @@ shape. Three things came with it in `history.hxx`:
 faces until they meet, over `opencascade-sys`'s `MakeThickSolidByJoinSharp`.
 It is what `shell(t, { corners: "sharp" })` shrinks the part with. Measured
 against `Arc` over every corpus and seed part in docs/GOTCHAS.md, "A sharp shell builds three corpus parts a round one cannot, and loses nine".
+
+## `Shape::bounds_enclosing`
+
+The sys crate's `Shape_bounds_enclosing`: a box no point of the shape lies
+outside, with no surface evaluated. parcad asks it whether two shapes are
+apart before paying for `bounds_optimal`, which on a 55-section loft is an
+optimisation over the surface and was 5 s of a 14 s build. `bounds_bracket`'s
+outer box is not this: `BRepBndLib::Add` samples a trimmed spline and some
+curves, so it can sit inside the shape.
+
+## `Shape::is_same`, and `Mesh` is `Clone`
+
+`Shape::is_same(other)` is `TopoDS_Shape::IsSame`: the same `TShape` at the
+same location. parcad's worker keeps a body's measurement between requests
+and hands it out only for the shape it was measured on, since the mesh is on
+that shape. `Mesh` derives `Clone` so the kept measurement can be handed out
+and still kept.
