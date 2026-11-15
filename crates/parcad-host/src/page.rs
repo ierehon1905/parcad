@@ -710,8 +710,13 @@ fn route(method: &str, path: &str, body: Value) -> Reply {
         }
         ("GET", "built") => meshed(routes::build_project(rest)?),
         ("POST", "evaluate") => {
+            let later = body.get("measure_later").and_then(Value::as_bool).unwrap_or(false);
             let doc = service::parse_graph(field(body, "graph")?)?;
-            meshed(service::evaluate(&doc, None)?)
+            meshed(if later { service::evaluate_first(&doc)? } else { service::evaluate(&doc, None)? })
+        }
+        ("POST", "measure") => {
+            let doc = service::parse_graph(field(body, "graph")?)?;
+            json_of(&service::measure_next(&doc)?)
         }
         ("POST", "inspect-edge-target") => {
             #[derive(Deserialize)]
@@ -984,26 +989,78 @@ mod tests {
         while let Reply::Kernel { call, ticket, packet: bytes, .. } = &reply {
             let (request, _) = packet::unpack_request(bytes).unwrap();
             assert!(request.perceive.is_some(), "an unexpected second kernel request: {request:?}");
-            let swept = Response::Perceived(Box::new(parcad_occt::protocol::Perceived {
-                thickness: Some(parcad_occt::protocol::ThicknessResult {
-                    samples: 24,
-                    discarded: 0,
-                    min: None,
-                    below_threshold: 0,
-                    below_threshold_at_edges: 0,
-                    thin_spots: Vec::new(),
-                    spacing_mm: 1.0,
-                    edges_checked: 12,
-                    face_pairs_checked: 0,
-                    surfaces_skipped: Vec::new(),
-                }),
-                ..Default::default()
-            }));
-            let packed = packet::pack_response(swept, &[]).unwrap();
+            let packed = packet::pack_response(no_thin_walls(), &[]).unwrap();
             answer(*ticket, Outcome::Replied(&packed, Duration::from_millis(1))).unwrap();
             reply = retry(*call);
         }
         reply
+    }
+
+    /// A thickness sweep that found nothing thin.
+    fn no_thin_walls() -> Response {
+        Response::Perceived(Box::new(parcad_occt::protocol::Perceived {
+            thickness: Some(parcad_occt::protocol::ThicknessResult {
+                samples: 24,
+                discarded: 0,
+                min: None,
+                below_threshold: 0,
+                below_threshold_at_edges: 0,
+                thin_spots: Vec::new(),
+                spacing_mm: 1.0,
+                edges_checked: 12,
+                face_pairs_checked: 0,
+                surfaces_skipped: Vec::new(),
+            }),
+            ..Default::default()
+        }))
+    }
+
+    /// The window's two steps in a tab: the part meshed with the print check
+    /// still to come, then the print check, from the build kept between them.
+    #[test]
+    fn the_window_draws_first_and_measures_after_in_a_tab_too() {
+        in_tab(|_| {
+            let paused = call(Input::Route {
+                method: "POST".into(),
+                path: "evaluate".into(),
+                body: json!({"graph": graph(13), "measure_later": true}),
+            });
+            let drawn = through_kernel(paused, |request| {
+                assert!(request.drawing, "only what drawing needs");
+                let mut drawn = cube(13.0);
+                if let Response::Ok(success) = &mut drawn {
+                    success.drawing = true;
+                }
+                drawn
+            });
+            let Reply::Meshed(bytes) = drawn else { panic!("{drawn:?}") };
+            let json_len = u32::from_le_bytes(bytes[..4].try_into().unwrap()) as usize;
+            let evaluated: Value = serde_json::from_slice(&bytes[16..16 + json_len]).unwrap();
+            assert_eq!(evaluated["measuring"], json!([{"field": "volume_mm3"}, {"field": "print_check"}]));
+            assert!(evaluated["snapshot"].get("print_check").is_none());
+
+            let measure = || {
+                call(Input::Route {
+                    method: "POST".into(),
+                    path: "measure".into(),
+                    body: json!({"graph": graph(13)}),
+                })
+            };
+            let finished = through_kernel(measure(), |request| {
+                assert!(!request.drawing && request.perceive.is_none(), "the bodies finished: {request:?}");
+                cube(13.0)
+            });
+            let Reply::Json(finished) = finished else { panic!("{finished:?}") };
+            assert_eq!(finished["measuring"], json!([{"field": "print_check"}]));
+            let measured = through_kernel(measure(), |request| {
+                assert!(request.perceive.is_some(), "only the sweep: the build is kept: {request:?}");
+                no_thin_walls()
+            });
+            let Reply::Json(measured) = measured else { panic!("{measured:?}") };
+            assert!(measured.get("measuring").is_none(), "{measured}");
+            assert_eq!(measured["snapshot"]["print_check"]["verdict"], "passed", "{measured}");
+            assert_eq!(measured["snapshot"]["volume_mm3"], evaluated["snapshot"]["volume_mm3"]);
+        })
     }
 
     #[test]

@@ -146,9 +146,9 @@ export async function request(route: string, init: RequestInit = {}): Promise<Re
   }
 }
 
-/** An evaluation, with its mesh left as the arrays it arrived as. */
-export async function evaluate(graph: unknown): Promise<unknown> {
-  const reply = await call("evaluate", "POST", { graph });
+/** An evaluation, with its mesh left as the arrays it arrived as; `measureLater` as `/api/evaluate` takes it. */
+export async function evaluate(graph: unknown, measureLater = false): Promise<unknown> {
+  const reply = await call("evaluate", "POST", { graph, measure_later: measureLater });
   if (reply.kind === "refused") throw new Error(reply.error);
   if (reply.kind !== "meshed") throw new Error("the host answered an evaluation without its mesh");
   return unpackMeshed(reply.bytes);

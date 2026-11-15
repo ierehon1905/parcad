@@ -10,11 +10,12 @@ use crate::overhang;
 use crate::perceive;
 use crate::protocol::{
     breadcrumb, edge_curve, BodyFit, BodyKind, BodySpan, EdgeCurve, ExactMass, FaceRun, FaceSummary, FitReport,
-    Overhang, Request, Response, Success, SurfaceMeasure, TargetPreview, Timings, Topology, WallRange,
+    Overhang, Pairs, PairsFitted, Request, Response, Success, SurfaceMeasure, TargetPreview, Timings, Topology,
+    WallRange,
 };
 use opencascade::primitives::Shape;
 use std::collections::{BTreeMap, HashMap};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The part's edges as polylines to draw: [`backend::logical_edges`], the
 /// same edges selection counts. A seam, a split between faces of one surface
@@ -257,6 +258,25 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
     let shape = &part.shape;
     let build_ms = t0.elapsed().as_millis() as u64;
 
+    if let Some(ask) = request.fit_pairs {
+        // A worker that did not build the part has not meshed it either, and
+        // a fit reads the mesh where there is one: measured as an evaluate would.
+        for ((body, names), key) in part.bodies.iter().zip(&part.names).zip(&part.keys) {
+            if cache.measures.kept_as(Some(&body.name), &body.shape, key).is_none() {
+                let who = format!("body `{}`: ", body.name);
+                let body = perceive::Body::new(Some(&body.name), &body.shape, names);
+                if let Err(refusal) = cache.measures.measure(&body, key, &who, false) {
+                    return refusal;
+                }
+            }
+        }
+        let reach = ask.within_ms.map_or(Reach::All, |ms| Reach::Until(Instant::now() + Duration::from_millis(ms)));
+        return match body_pairs(&part, &mut cache.measures, reach) {
+            Ok((between, left)) => Response::Pairs(Box::new(PairsFitted { between, left })),
+            Err(refusal) => refusal,
+        };
+    }
+
     if let Some(spec) = &request.perceive {
         breadcrumb("checking which way the solid faces");
         let finished: Vec<(String, &opencascade::primitives::Shape)> = if part.bodies.is_empty() {
@@ -314,7 +334,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
     for ((body, material), key) in every_body.iter().zip(materials).zip(&part.keys) {
         let who = body.name.map(|name| format!("body `{name}`: ")).unwrap_or_default();
         let reference = body.name.is_some_and(|name| references.contains(&name));
-        match cache.measures.measure(body, key, &who) {
+        match cache.measures.measure(body, key, &who, !request.drawing) {
             Ok(measured) => {
                 let mut measured = measured.named(body, &part.treatment_owners);
                 for face in &mut measured.faces {
@@ -326,7 +346,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
                 let printed = body.name.is_none_or(|name| {
                     doc.bodies().and_then(|named| named.iter().find(|n| n.name == name)).is_none_or(|n| n.printed())
                 });
-                if !reference && printed && measured.kind == BodyKind::Solid {
+                if !request.drawing && !reference && printed && measured.kind == BodyKind::Solid {
                     breadcrumb(&format!("{who}measuring overhang as it prints"));
                     let declared = doc
                         .bodies()
@@ -341,37 +361,22 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         }
     }
     let mesh_ms = t1.elapsed().as_millis() as u64;
-    breadcrumb("locating the tags");
-    let (tag_extents, unlocated_tags) = perceive::tag_extents(&part, &bodies);
+    let (tag_extents, unlocated_tags) = if request.drawing {
+        Default::default()
+    } else {
+        breadcrumb("locating the tags");
+        perceive::tag_extents(&part, &bodies)
+    };
 
-    let mut between = Vec::new();
-    for (i, (first, first_key)) in part.bodies.iter().zip(&part.keys).enumerate() {
-        for (second, second_key) in part.bodies.iter().zip(&part.keys).skip(i + 1) {
-            let (a, b) = (&first.name, &second.name);
-            breadcrumb(&format!("measuring body {a} against body {b}"));
-            match cache.measures.fit((&first.shape, first_key), (&second.shape, second_key)) {
-                Ok(fit) => between.push(BodyFit {
-                    a: a.clone(),
-                    b: b.clone(),
-                    verdict: fit.verdict,
-                    interference_mm3: fit.interference_mm3,
-                    clearance_mm: fit.clearance_mm,
-                    closest_mm: fit.closest_mm,
-                    depth_mm: fit.depth_mm,
-                    deepest_mm: fit.deepest_mm,
-                    contact_mm2: fit.contact_mm2,
-                    contact_patches: fit.contact_patches,
-                    contact_center_mm: fit.contact_center_mm,
-                }),
-                Err(e) => {
-                    return Response::Error {
-                        stage: format!("measuring body {a} against body {b}"),
-                        message: format!("{e:#}"),
-                    }
-                }
-            }
-        }
-    }
+    let reach = match request.pairs {
+        _ if request.drawing => Reach::Held,
+        Pairs::Every => Reach::All,
+        Pairs::Held => Reach::Held,
+    };
+    let (between, pairs_left) = match body_pairs(&part, &mut cache.measures, reach) {
+        Ok(pairs) => pairs,
+        Err(refusal) => return refusal,
+    };
 
     let t2 = Instant::now();
     let mut step_path = None;
@@ -459,6 +464,8 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         topology,
         bodies,
         between,
+        pairs_left,
+        drawing: request.drawing,
         tag_extents,
         unlocated_tags,
         treatment_edges: part.treatment_edges.values().cloned().collect(),
@@ -471,6 +478,65 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
         step_path,
         stl_path,
     }))
+}
+
+/// How far into the body pairs the measure cache does not hold a reply goes.
+#[derive(Clone, Copy)]
+enum Reach {
+    All,
+    Held,
+    /// Starts no pair after this instant but the first.
+    Until(Instant),
+}
+
+/// The part's body pairs in the order a reply lists them, each one the cache
+/// holds for these shapes and as many more as `reach` measures, and how many
+/// were left unmeasured.
+fn body_pairs(part: &backend::BuiltPart, measures: &mut MeasureCache, reach: Reach) -> Result<(Vec<BodyFit>, usize), Response> {
+    let mut between = Vec::new();
+    let mut left = 0;
+    let mut fitted = 0;
+    for (i, (first, first_key)) in part.bodies.iter().zip(&part.keys).enumerate() {
+        for (second, second_key) in part.bodies.iter().zip(&part.keys).skip(i + 1) {
+            let (a, b) = (&first.name, &second.name);
+            let pair = ((&first.shape, first_key), (&second.shape, second_key));
+            let fit = match measures.held(pair.0, pair.1) {
+                Some(fit) => fit,
+                None if match reach {
+                    Reach::All => true,
+                    Reach::Held => false,
+                    // At least one, so a slice shorter than any pair still gets through them.
+                    Reach::Until(deadline) => fitted == 0 || Instant::now() < deadline,
+                } =>
+                {
+                    fitted += 1;
+                    breadcrumb(&format!("measuring body {a} against body {b}"));
+                    measures.fit(pair.0, pair.1).map_err(|e| Response::Error {
+                        stage: format!("measuring body {a} against body {b}"),
+                        message: format!("{e:#}"),
+                    })?
+                }
+                None => {
+                    left += 1;
+                    continue;
+                }
+            };
+            between.push(BodyFit {
+                a: a.clone(),
+                b: b.clone(),
+                verdict: fit.verdict,
+                interference_mm3: fit.interference_mm3,
+                clearance_mm: fit.clearance_mm,
+                closest_mm: fit.closest_mm,
+                depth_mm: fit.depth_mm,
+                deepest_mm: fit.deepest_mm,
+                contact_mm2: fit.contact_mm2,
+                contact_patches: fit.contact_patches,
+                contact_center_mm: fit.contact_center_mm,
+            });
+        }
+    }
+    Ok((between, left))
 }
 
 /// One shape meshed, checked and described: a one-solid part, or one named
@@ -488,6 +554,9 @@ struct Measured {
     kind: BodyKind,
     surface: Option<SurfaceMeasure>,
     mass: Option<ExactMass>,
+    /// Whether [`finish`] has run: the mesh checked against the solid, and
+    /// the exact volume and area integrated.
+    finished: bool,
 }
 
 /// The total length of the mesh's own open edges — those one triangle
@@ -512,7 +581,8 @@ fn mesh_boundary_length(stats_mesh: &parcad_core::mesh::Tessellation) -> f64 {
 /// Mesh a shape and refuse it if the mesh is not the solid. `who` names the
 /// body in a refusal and is empty for a one-solid part, whose refusals read
 /// exactly as they always have.
-fn measure(body: &perceive::Body, who: &str) -> Result<Measured, Response> {
+/// One body meshed and described, as far as drawing it needs.
+fn draw(body: &perceive::Body, who: &str) -> Result<Measured, Response> {
     let shape = body.shape;
     breadcrumb("counting topology");
     let topology = Topology {
@@ -666,10 +736,30 @@ fn measure(body: &perceive::Body, who: &str) -> Result<Measured, Response> {
         });
     }
 
+    breadcrumb("describing the faces");
+    let faces = perceive::describe_faces(shape);
+    Ok(Measured {
+        mesh,
+        faces,
+        edges,
+        edge_pieces,
+        topology,
+        kind,
+        surface,
+        mass: None,
+        finished: false,
+    })
+}
+
+/// What [`draw`] leaves for after the part is on screen: the mesh checked
+/// against the solid's own volume, and the B-rep's figures. On a one-body
+/// keycap these were 1.1 s of a mesh that took 0.09 s.
+fn finish(measured: &mut Measured, body: &perceive::Body, who: &str) -> Result<(), Response> {
+    let (shape, mesh, kind) = (body.shape, &measured.mesh, measured.kind);
     // The second backstop: a closed mesh of the wrong solid. See docs/GOTCHAS.md,
     // "A correct solid can mesh as a closed fragment of itself".
     breadcrumb("comparing the mesh's volume with the solid's");
-    let (mesh_volume, mesh_area) = volume_and_area(&mesh);
+    let (mesh_volume, mesh_area) = volume_and_area(mesh);
     let (solid_volume, solid_centre) =
         if kind == BodyKind::Solid { shape.volume_properties() } else { (mesh_volume, glam::DVec3::ZERO) };
     let allowed = 2.0 * mesh_area * BINDING_DEFLECTION_MM + 1e-6 * solid_volume.abs();
@@ -712,13 +802,11 @@ fn measure(body: &perceive::Body, who: &str) -> Result<Measured, Response> {
         });
     }
 
-    breadcrumb("describing the faces");
-    let faces = perceive::describe_faces(shape);
     // The B-rep's own figures wherever its integrals hold, and nothing — so the
     // host reports the mesh's and says so — on a face they have misread. See
     // docs/GOTCHAS.md, "A part's volume is the B-rep's, except on derived surfaces".
     breadcrumb("integrating the area");
-    let mass = (!integral_off && !shape.has_derived_surfaces()).then(|| {
+    measured.mass = (!integral_off && !shape.has_derived_surfaces()).then(|| {
         let (area, area_centre) = shape.surface_properties();
         let solid = kind == BodyKind::Solid;
         ExactMass {
@@ -727,16 +815,8 @@ fn measure(body: &perceive::Body, who: &str) -> Result<Measured, Response> {
             centroid: if solid { solid_centre } else { area_centre }.to_array(),
         }
     });
-    Ok(Measured {
-        mesh,
-        faces,
-        edges,
-        edge_pieces,
-        topology,
-        kind,
-        surface,
-        mass,
-    })
+    measured.finished = true;
+    Ok(())
 }
 
 impl Measured {
@@ -797,19 +877,31 @@ struct KeptPair {
 
 impl MeasureCache {
     fn kept(&mut self, body: &perceive::Body, key: &Option<String>) -> Option<&mut KeptBody> {
-        let kept = self.bodies.get_mut(&(body.name.map(str::to_owned), key.clone()?))?;
-        kept.shape.is_same(body.shape).then(|| {
+        self.kept_as(body.name, body.shape, key)
+    }
+
+    fn kept_as(&mut self, name: Option<&str>, shape: &Shape, key: &Option<String>) -> Option<&mut KeptBody> {
+        let kept = self.bodies.get_mut(&(name.map(str::to_owned), key.clone()?))?;
+        kept.shape.is_same(shape).then(|| {
             kept.used = self.generation;
             kept
         })
     }
 
-    fn measure(&mut self, body: &perceive::Body, key: &Option<String>, who: &str) -> Result<Measured, Response> {
+    /// The body drawn, and `finish`ed too unless the request only draws:
+    /// what the cache holds of it is finished in place, never drawn again.
+    fn measure(&mut self, body: &perceive::Body, key: &Option<String>, who: &str, finish: bool) -> Result<Measured, Response> {
         if let Some(kept) = self.kept(body, key) {
             breadcrumb(&format!("{who}measured in the last build"));
+            if finish && !kept.measured.finished {
+                self::finish(&mut kept.measured, body, who)?;
+            }
             return Ok(kept.measured.clone());
         }
-        let measured = measure(body, who)?;
+        let mut measured = draw(body, who)?;
+        if finish {
+            self::finish(&mut measured, body, who)?;
+        }
         #[cfg(test)]
         self.measured.push(body.name.map(str::to_owned));
         if let Some(key) = key {
@@ -834,14 +926,21 @@ impl MeasureCache {
         found
     }
 
+    /// The pair's fit as measured on these very shapes, if it was.
+    fn held(&mut self, first: (&Shape, &Option<String>), second: (&Shape, &Option<String>)) -> Option<FitReport> {
+        let key = first.1.clone().zip(second.1.clone())?;
+        let kept = self.pairs.get_mut(&key)?;
+        (kept.shapes[0].is_same(first.0) && kept.shapes[1].is_same(second.0)).then(|| {
+            kept.used = self.generation;
+            kept.fit.clone()
+        })
+    }
+
     fn fit(&mut self, first: (&Shape, &Option<String>), second: (&Shape, &Option<String>)) -> anyhow::Result<FitReport> {
-        let key = first.1.clone().zip(second.1.clone());
-        if let Some(kept) = key.as_ref().and_then(|key| self.pairs.get_mut(key)) {
-            if kept.shapes[0].is_same(first.0) && kept.shapes[1].is_same(second.0) {
-                kept.used = self.generation;
-                return Ok(kept.fit.clone());
-            }
+        if let Some(fit) = self.held(first, second) {
+            return Ok(fit);
         }
+        let key = first.1.clone().zip(second.1.clone());
         let fit = backend::fit_between(first.0, second.0)?;
         #[cfg(test)]
         {
@@ -902,6 +1001,7 @@ impl Assembled {
             kind,
             surface,
             mass,
+            finished: _,
         } = measured;
         if !reference {
             self.kinds.push(kind);
@@ -964,6 +1064,13 @@ impl Assembled {
 mod tests {
     use super::*;
     use parcad_core::graph::Doc;
+
+    /// A body drawn and finished, as an evaluate that is not only drawing has it.
+    fn measure(body: &perceive::Body, who: &str) -> Result<Measured, Response> {
+        let mut measured = draw(body, who)?;
+        finish(&mut measured, body, who)?;
+        Ok(measured)
+    }
 
     fn served(doc: serde_json::Value) -> Success {
         let request: Request = serde_json::from_value(serde_json::json!({
@@ -1072,6 +1179,116 @@ mod tests {
         assert_eq!((cache.measures.bodies.len(), cache.measures.pairs.len()), (1, 0));
     }
 
+    fn held(doc: &serde_json::Value, cache: &mut BuildCache) -> serde_json::Value {
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "doc": doc, "deflection": 0.01, "step_path": null, "stl_path": null, "pairs": "held",
+        }))
+        .unwrap();
+        let mut reply = serde_json::to_value(run(request, cache)).unwrap();
+        assert_eq!(reply["status"], "ok", "{reply}");
+        reply.as_object_mut().unwrap().remove("timings");
+        reply
+    }
+
+    fn drawn(doc: &serde_json::Value, cache: &mut BuildCache) -> serde_json::Value {
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "doc": doc, "deflection": 0.01, "step_path": null, "stl_path": null, "drawing": true,
+        }))
+        .unwrap();
+        let mut reply = serde_json::to_value(run(request, cache)).unwrap();
+        assert_eq!(reply["status"], "ok", "{reply}");
+        reply.as_object_mut().unwrap().remove("timings");
+        reply
+    }
+
+    /// A reply for drawing leaves out what is not drawn — the exact figures,
+    /// the overhang, the tag extents, the pairs — and says so; the evaluate
+    /// after it finishes the bodies it meshed, and answers as a fresh worker.
+    #[test]
+    fn a_part_drawn_first_is_finished_without_meshing_it_again() {
+        let doc = three_bodies(2.0, 0);
+        let whole = fresh(&doc);
+        let mut cache = BuildCache::default();
+        let first = drawn(&doc, &mut cache);
+        assert_eq!((first["drawing"].as_bool(), first["pairs_left"].as_u64()), (Some(true), Some(3)));
+        for absent in ["mass", "overhang", "tag_extents"] {
+            assert!(first.get(absent).is_none_or(|v| v.is_null() || v.as_array().is_some_and(Vec::is_empty)), "{absent}: {}", first[absent]);
+        }
+        assert!(whole["mass"].is_object() && !whole["overhang"].as_array().unwrap().is_empty());
+        for drawn_the_same in ["positions", "indices", "face_runs", "faces", "edges", "topology"] {
+            assert_eq!(first[drawn_the_same], whole[drawn_the_same], "{drawn_the_same}");
+        }
+        let mut without_pairs = whole.clone();
+        without_pairs["between"] = serde_json::json!([]);
+        without_pairs["pairs_left"] = serde_json::json!(3);
+        assert_eq!(held(&doc, &mut cache), without_pairs);
+        assert_eq!(cache.measures.measured.len(), 3, "finished, not meshed again");
+    }
+
+    fn fit_pairs(doc: &serde_json::Value, cache: &mut BuildCache, within_ms: Option<u64>) -> PairsFitted {
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "doc": doc, "deflection": 0.01, "step_path": null, "stl_path": null,
+            "fit_pairs": { "within_ms": within_ms },
+        }))
+        .unwrap();
+        match run(request, cache) {
+            Response::Pairs(fitted) => *fitted,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// An evaluate that holds its pairs back measures none, and the pairs
+    /// measured after it are the ones a whole evaluate lists; the next
+    /// evaluate holds them all.
+    #[test]
+    fn held_pairs_are_measured_after_the_mesh_and_equal_an_evaluate_s() {
+        let doc = three_bodies(2.0, 0);
+        let whole = fresh(&doc);
+        let mut cache = BuildCache::default();
+        let first = held(&doc, &mut cache);
+        assert_eq!((cache.measures.fitted, first["pairs_left"].as_u64()), (0, Some(3)));
+        assert_eq!(first["between"], serde_json::json!([]));
+        let mut without_pairs = whole.clone();
+        without_pairs["between"] = serde_json::json!([]);
+        without_pairs["pairs_left"] = serde_json::json!(3);
+        assert_eq!(first, without_pairs, "everything but the pairs is the whole evaluate's");
+
+        let fitted = fit_pairs(&doc, &mut cache, None);
+        assert_eq!(fitted.left, 0);
+        assert_eq!(serde_json::to_value(&fitted.between).unwrap(), whole["between"]);
+        assert_eq!(cache.measures.measured.len(), 3, "measuring the pairs built and meshed nothing again");
+        assert_eq!(held(&doc, &mut cache), whole, "and the next evaluate holds every one");
+        assert_eq!(cache.measures.fitted, 3);
+    }
+
+    /// A worker that never built the part meshes its bodies before it fits
+    /// them, and finds what an evaluate does.
+    #[test]
+    fn pairs_asked_of_a_fresh_worker_are_an_evaluate_s() {
+        let doc = three_bodies(2.0, 0);
+        let mut cache = BuildCache::default();
+        let fitted = fit_pairs(&doc, &mut cache, None);
+        assert_eq!((fitted.left, cache.measures.measured.len()), (0, 3));
+        assert_eq!(serde_json::to_value(&fitted.between).unwrap(), fresh(&doc)["between"]);
+        assert_eq!(reply(&doc, &mut cache, false), fresh(&doc), "and what it measured is what it kept");
+    }
+
+    /// Pairs measured within a time measure at least one each, and pick up
+    /// where the last left off.
+    #[test]
+    fn pairs_measured_within_no_time_still_measure_one_each() {
+        let doc = three_bodies(2.0, 0);
+        let mut cache = BuildCache::default();
+        held(&doc, &mut cache);
+        let counts: Vec<(usize, usize)> = (0..3)
+            .map(|_| fit_pairs(&doc, &mut cache, Some(0)))
+            .map(|fitted| (fitted.between.len(), fitted.left))
+            .collect();
+        assert_eq!(counts, [(1, 2), (2, 1), (3, 0)]);
+        assert_eq!(cache.measures.fitted, 3);
+        assert_eq!(held(&doc, &mut cache), fresh(&doc));
+    }
+
     /// An uncached request neither reads what the worker holds nor adds to it.
     #[test]
     fn an_uncached_request_leaves_the_measurements_alone() {
@@ -1121,6 +1338,7 @@ mod tests {
             kind: BodyKind::Solid,
             surface: None,
             mass: None,
+            finished: true,
         }
     }
 
@@ -1402,6 +1620,9 @@ mod tests {
             step_path: None,
             stl_path: None,
             uncached: false,
+            pairs: Default::default(),
+            drawing: false,
+            fit_pairs: None,
         }
     }
 

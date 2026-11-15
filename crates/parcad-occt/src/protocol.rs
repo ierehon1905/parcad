@@ -46,6 +46,61 @@ pub struct Request {
     /// build of another part must not age out the one being edited.
     #[serde(default)]
     pub uncached: bool,
+    /// Which body pairs an evaluate measures before it replies.
+    #[serde(default, skip_serializing_if = "Pairs::is_every")]
+    pub pairs: Pairs,
+    /// Reply as soon as the part can be drawn: each body meshed and its faces
+    /// and edges described, with the exact volume and area, the overhang, the
+    /// tag extents and the pairs not held left for a later evaluate of the same
+    /// build, which finishes the bodies this one meshed rather than meshing
+    /// them again. The reply says so in [`Success::drawing`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub drawing: bool,
+    /// If present, build the part and measure its body pairs instead of
+    /// replying with its mesh, for as long as this allows: the second half of
+    /// an evaluate that held its pairs back ([`Pairs::Held`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fit_pairs: Option<FitPairs>,
+}
+
+/// Which body pairs an evaluate measures before it replies. Each pair is an
+/// exact distance and, where their boxes meet, a boolean: 300 of them were
+/// half of opening a 25-body assembly, after its mesh was ready.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pairs {
+    /// Every pair: the reply is the whole evaluation.
+    #[default]
+    Every,
+    /// Only the pairs already measured on these very shapes; the rest are
+    /// counted in [`Success::pairs_left`] for a [`Request::fit_pairs`] to
+    /// measure while the mesh is on screen.
+    Held,
+}
+
+impl Pairs {
+    pub fn is_every(&self) -> bool {
+        *self == Pairs::Every
+    }
+}
+
+/// How long a [`Request::fit_pairs`] may measure before it replies with
+/// what it has.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct FitPairs {
+    /// Stop starting new pairs after this long, in ms; absent, measure them all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub within_ms: Option<u64>,
+}
+
+/// A part's body pairs, as far as a [`Request::fit_pairs`] got.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PairsFitted {
+    /// Every pair measured on these shapes so far, in the order an evaluate
+    /// lists them: whole only when `left` is 0.
+    pub between: Vec<BodyFit>,
+    /// The pairs not measured yet.
+    pub left: usize,
 }
 
 /// What to ask of the built solid. Every answer is measured on the exact
@@ -511,6 +566,14 @@ fn one() -> usize {
     1
 }
 
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 /// Where one tag's surface is on the finished part: the exact bounds of the
 /// faces the kernel's lineage says it owns.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -924,6 +987,15 @@ pub struct Success {
     /// reference. Empty unless there are at least two bodies.
     #[serde(default)]
     pub between: Vec<BodyFit>,
+    /// Pairs a [`Pairs::Held`] evaluate left unmeasured; `between` is then
+    /// only the ones it held, and is whole only when this is 0.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub pairs_left: usize,
+    /// Only what drawing needs is here ([`Request::drawing`]): `mass`,
+    /// `overhang`, `tag_extents` and `unlocated_tags` are not measured yet,
+    /// not absent.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub drawing: bool,
     /// Where each tag's own surface is, from the faces the kernel's lineage
     /// gives it, bounded exactly. One entry per tag that owns a face of the
     /// finished part; the rest are in `unlocated_tags`.
@@ -1365,6 +1437,7 @@ pub enum Response {
     StepProbe(Box<StepProbe>),
     Fit(Box<FitReport>),
     Perceived(Box<Perceived>),
+    Pairs(Box<PairsFitted>),
     /// The worker understood the request and refused it — a bad radius, an
     /// unsupported operation, a boolean that produced nothing.
     Error {

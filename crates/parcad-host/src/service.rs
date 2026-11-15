@@ -1163,84 +1163,195 @@ fn percent_encoded(name: &str) -> String {
 /// person — so the alternate `{:#}` form is used to keep the whole context chain
 /// rather than just the outermost message.
 pub fn evaluate(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Evaluated, String> {
-    let built = build_exact(doc, budget, false)?;
+    let built = build_exact(doc, budget, false, Needs::Everything)?;
     let mut evaluated = parcad_evaluation::evaluated(doc, &built.success, built.wall_ms, built.reused)?;
-    // A `wall` check and the print check are each the thickness sweep at
-    // their own threshold, on the build the worker has just made and keeps.
-    let sweep = |min: f64, samples: usize| {
-        let spec = parcad_occt::Perceive {
-            thickness: Some(parcad_occt::ThicknessSpec {
-                max_samples: samples,
-                threshold_mm: Some(min),
-            }),
-            ..Default::default()
-        };
-        perceive(doc, &spec, budget)?
-            .thickness
-            .ok_or_else(|| "the kernel measured no thickness for the wall check".to_string())
-    };
-    if !doc.checks.is_empty() {
-        let mut at_default = |min: f64| sweep(min, DEFAULT_THICKNESS_SAMPLES);
-        let mut holes = || {
-            let spec = parcad_occt::Perceive { holes: true, ..Default::default() };
-            Ok(perceive(doc, &spec, budget)?.holes)
-        };
-        let mut motions = |specs: &[parcad_occt::protocol::MotionSpec]| {
-            let spec = parcad_occt::Perceive { motions: specs.to_vec(), ..Default::default() };
-            Ok(perceive(doc, &spec, budget)?.motions)
-        };
-        let mut mechanism = |spec: &parcad_occt::protocol::MechanismSpec| {
-            let spec = parcad_occt::Perceive { mechanism: Some(spec.clone()), ..Default::default() };
-            Ok(perceive(doc, &spec, budget)?.mechanism)
-        };
-        let measures = parcad_evaluation::checks::Measures {
-            wall: &mut at_default,
-            holes: &mut holes,
-            motions: &mut motions,
-            mechanism: &mut mechanism,
-        };
-        // Kept with the build like the print check: the graph is the key and
-        // carries the checks, and a `wall` check is a sweep of the whole part.
-        evaluated.snapshot.verdicts.checks = Some(match cached_checks(&built.key) {
-            Some(judged) => judged,
-            None => {
-                let judged = parcad_evaluation::checks::judge(doc, &evaluated.snapshot, measures)?;
-                keep_checks(&built.key, &judged);
-                judged
-            }
-        });
-    }
-    // The brief is in every solid reply whether the script carries one or
-    // not: with none, its one line is the nudge, and a model reads it on the
-    // first build of the first turn rather than in the turn that says "it's
-    // too big". Never a door — a part is over its envelope for most of the
-    // time it is designed.
-    if evaluated.snapshot.kind != "surface" {
-        evaluated.snapshot.verdicts.brief = Some(match &doc.brief {
-            Some(brief) => parcad_evaluation::brief::judge(
-                brief,
-                evaluated.snapshot.size,
-                evaluated.snapshot.volume_mm3,
-                &evaluated.snapshot.prints_on,
-            ),
-            None => parcad_evaluation::BriefReport::none(),
-        });
-    }
-    // Judged beside the author's checks, on every build, whether or not
-    // anyone asked: docs/NEXT.md, item 1. evaluate_part never refuses over
-    // it; the door does. Kept with the build, so asking again costs nothing.
-    evaluated.snapshot.verdicts.print_check = match cached_print_check(&built.key) {
-        Some(judged) => judged,
-        None => {
-            let mut for_print = sweep;
-            let overhang = &built.success.overhang;
-            let pieces = parcad_evaluation::print::pieces(&evaluated.snapshot, &built.success, overhang);
-            let judged = parcad_evaluation::print::judge(&evaluated.snapshot, overhang, &pieces, &mut for_print)?;
-            keep_print_check(&built.key, &judged);
-            judged
-        }
-    };
+    let snapshot = &mut evaluated.snapshot;
+    snapshot.verdicts.checks = judged_checks(doc, &built, snapshot, budget)?;
+    snapshot.verdicts.brief = brief_of(doc, snapshot);
+    snapshot.verdicts.print_check = judged_print_check(doc, &built, snapshot, budget)?;
     Ok(evaluated)
+}
+
+/// [`evaluate`] for a window, which draws the part as soon as it is meshed:
+/// the exact volume and area, the tag extents, the body pairs, the author's
+/// checks and the print check are in the snapshot only if this build already
+/// has them, and `measuring` names the rest for [`measure_next`] to fill in
+/// while the part is on screen.
+pub fn evaluate_first(doc: &Doc) -> Result<Evaluated, String> {
+    let built = build_exact(doc, None, false, Needs::Drawing)?;
+    let mut evaluated = parcad_evaluation::evaluated(doc, &built.success, built.wall_ms, built.reused)?;
+    evaluated.measuring = with_known_verdicts(doc, &built, &mut evaluated.snapshot, pending_pairs(&built.success));
+    Ok(evaluated)
+}
+
+/// One more of what [`evaluate_first`] left to measure, and the snapshot as
+/// far as it is now measured.
+#[derive(Serialize)]
+pub struct Measuring {
+    pub snapshot: EvaluationSnapshot,
+    /// What is still left; empty once the snapshot is what [`evaluate`] returns.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub measuring: Vec<parcad_evaluation::Pending>,
+    /// What this step took.
+    pub ms: u64,
+}
+
+/// How long one [`measure_next`] measures body pairs before it says how far
+/// it got: what an edit made meanwhile waits for, at most, before it builds.
+const PAIRS_SLICE: Duration = Duration::from_secs(1);
+
+/// The next of what [`evaluate_first`] left: the bodies' exact figures, then
+/// body pairs for up to [`PAIRS_SLICE`], then the author's checks, then the
+/// print check, each kept with the build. Called until `measuring` is empty,
+/// each answer is the snapshot as far as it goes, and the last is what
+/// [`evaluate`] returns.
+pub fn measure_next(doc: &Doc) -> Result<Measuring, String> {
+    let t0 = std::time::Instant::now();
+    let mut built = build_exact(doc, None, false, Needs::Drawing)?;
+    let mut pairs = None;
+    let stepped = built.success.drawing || built.success.pairs_left > 0;
+    if built.success.drawing {
+        built = finished(doc, built, parcad_occt::Pairs::Held, None)?;
+        pairs = pending_pairs(&built.success);
+    } else if built.success.pairs_left > 0 {
+        let fitted = kernel(|| parcad_occt::fit_pairs(doc, Some(PAIRS_SLICE), &kernel_options()).map_err(|e| format!("{e}")))?;
+        if fitted.left == 0 {
+            built = with_pairs(built, fitted.between);
+        } else {
+            pairs = Some(parcad_evaluation::Pending::pairs(fitted.between.len(), fitted.between.len() + fitted.left));
+        }
+    }
+    let mut snapshot = parcad_evaluation::snapshot(doc, &built.success, built.wall_ms, built.reused)?;
+    if !stepped {
+        if !doc.checks.is_empty() && cached_checks(&built.key).is_none() {
+            judged_checks(doc, &built, &snapshot, None)?;
+        } else {
+            judged_print_check(doc, &built, &snapshot, None)?;
+        }
+    }
+    let measuring = with_known_verdicts(doc, &built, &mut snapshot, pairs);
+    Ok(Measuring { snapshot, measuring, ms: t0.elapsed().as_millis() as u64 })
+}
+
+/// The body pairs a build has left to measure, as far as it got.
+fn pending_pairs(success: &parcad_occt::Success) -> Option<parcad_evaluation::Pending> {
+    let (held, left) = (success.between.len(), success.pairs_left);
+    (left > 0).then(|| parcad_evaluation::Pending::pairs(held, held + left))
+}
+
+/// The verdicts `built` has been judged for, set on its snapshot, and what
+/// is still to measure: the bodies' exact figures and the brief judged on
+/// them, the `pairs` left, then the checks that read both, then the print
+/// check.
+fn with_known_verdicts(
+    doc: &Doc,
+    built: &Built,
+    snapshot: &mut EvaluationSnapshot,
+    pairs: Option<parcad_evaluation::Pending>,
+) -> Vec<parcad_evaluation::Pending> {
+    let drawing = built.success.drawing;
+    let mut measuring: Vec<_> = drawing.then(parcad_evaluation::Pending::volume).into_iter().chain(pairs).collect();
+    if !doc.checks.is_empty() {
+        snapshot.verdicts.checks = cached_checks(&built.key);
+        if snapshot.verdicts.checks.is_none() {
+            measuring.push(parcad_evaluation::Pending::checks());
+        }
+    }
+    if !drawing {
+        snapshot.verdicts.brief = brief_of(doc, snapshot);
+    }
+    match cached_print_check(&built.key) {
+        Some(judged) => snapshot.verdicts.print_check = judged,
+        None => measuring.push(parcad_evaluation::Pending::print_check()),
+    }
+    measuring
+}
+
+/// A thickness sweep of the build the worker has just made and keeps, as a
+/// `wall` check and the print check each read it, at their own threshold.
+fn thickness_sweep(doc: &Doc, budget: Option<Duration>, min: f64, samples: usize) -> Result<parcad_occt::ThicknessResult, String> {
+    let spec = parcad_occt::Perceive {
+        thickness: Some(parcad_occt::ThicknessSpec {
+            max_samples: samples,
+            threshold_mm: Some(min),
+        }),
+        ..Default::default()
+    };
+    perceive(doc, &spec, budget)?
+        .thickness
+        .ok_or_else(|| "the kernel measured no thickness for the wall check".to_string())
+}
+
+/// The script's own checks on `built`, judged once per build and kept with
+/// it: the graph is the key and carries the checks, and a `wall` check is a
+/// sweep of the whole part. `None` when the script carries none.
+fn judged_checks(
+    doc: &Doc,
+    built: &Built,
+    snapshot: &EvaluationSnapshot,
+    budget: Option<Duration>,
+) -> Result<Option<parcad_evaluation::checks::ChecksReport>, String> {
+    if doc.checks.is_empty() {
+        return Ok(None);
+    }
+    if let Some(judged) = cached_checks(&built.key) {
+        return Ok(Some(judged));
+    }
+    let mut at_default = |min: f64| thickness_sweep(doc, budget, min, DEFAULT_THICKNESS_SAMPLES);
+    let mut holes = || {
+        let spec = parcad_occt::Perceive { holes: true, ..Default::default() };
+        Ok(perceive(doc, &spec, budget)?.holes)
+    };
+    let mut motions = |specs: &[parcad_occt::protocol::MotionSpec]| {
+        let spec = parcad_occt::Perceive { motions: specs.to_vec(), ..Default::default() };
+        Ok(perceive(doc, &spec, budget)?.motions)
+    };
+    let mut mechanism = |spec: &parcad_occt::protocol::MechanismSpec| {
+        let spec = parcad_occt::Perceive { mechanism: Some(spec.clone()), ..Default::default() };
+        Ok(perceive(doc, &spec, budget)?.mechanism)
+    };
+    let measures = parcad_evaluation::checks::Measures {
+        wall: &mut at_default,
+        holes: &mut holes,
+        motions: &mut motions,
+        mechanism: &mut mechanism,
+    };
+    let judged = parcad_evaluation::checks::judge(doc, snapshot, measures)?;
+    keep_checks(&built.key, &judged);
+    Ok(Some(judged))
+}
+
+/// The brief is in every solid reply whether the script carries one or not:
+/// with none, its one line is the nudge, and a model reads it on the first
+/// build of the first turn rather than in the turn that says "it's too big".
+/// Never a door — a part is over its envelope for most of the time it is
+/// designed.
+fn brief_of(doc: &Doc, snapshot: &EvaluationSnapshot) -> Option<parcad_evaluation::BriefReport> {
+    (snapshot.kind != "surface").then(|| match &doc.brief {
+        Some(brief) => parcad_evaluation::brief::judge(brief, snapshot.size, snapshot.volume_mm3, &snapshot.prints_on),
+        None => parcad_evaluation::BriefReport::none(),
+    })
+}
+
+/// The print check, judged beside the author's checks on every build,
+/// whether or not anyone asked: docs/NEXT.md, item 1. evaluate_part never
+/// refuses over it; the door does. Kept with the build, so asking again
+/// costs nothing.
+fn judged_print_check(
+    doc: &Doc,
+    built: &Built,
+    snapshot: &EvaluationSnapshot,
+    budget: Option<Duration>,
+) -> Result<Option<parcad_evaluation::PrintCheck>, String> {
+    if let Some(judged) = cached_print_check(&built.key) {
+        return Ok(judged);
+    }
+    let mut for_print = |min: f64, samples: usize| thickness_sweep(doc, budget, min, samples);
+    let overhang = &built.success.overhang;
+    let pieces = parcad_evaluation::print::pieces(snapshot, &built.success, overhang);
+    let judged = parcad_evaluation::print::judge(snapshot, overhang, &pieces, &mut for_print)?;
+    keep_print_check(&built.key, &judged);
+    Ok(judged)
 }
 
 /// The part's mesh and measurements, for a picture nobody is waiting on.
@@ -1462,10 +1573,22 @@ fn keep_checks(key: &str, checks: &parcad_evaluation::checks::ChecksReport) {
     })
 }
 
+/// How much of a build a caller reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Needs {
+    /// The mesh, its edges and faces: what a window draws first.
+    Drawing,
+    /// All of it: what a reply, an export and the door read.
+    Everything,
+}
+
+/// The build of `doc`, kept or made, measured as far as `needs` says. A kept
+/// build a window drew first is finished on the worker that holds it.
 fn build_exact(
     doc: &Doc,
     budget: Option<std::time::Duration>,
     want_step: bool,
+    needs: Needs,
 ) -> Result<Built, String> {
     let graph = serde_json::to_string(doc).map_err(|e| format!("encoding the graph: {e}"))?;
     let key = crate::tenant::key(&graph);
@@ -1486,6 +1609,17 @@ fn build_exact(
     });
     if let Some(built) = hit {
         crate::limits::build_reused();
+        if needs == Needs::Everything && built.success.drawing {
+            return finished(doc, built, parcad_occt::Pairs::Every, budget);
+        }
+        if needs == Needs::Everything && built.success.pairs_left > 0 {
+            let mut opts = kernel_options();
+            if let Some(budget) = budget {
+                opts.timeout = budget;
+            }
+            let fitted = kernel(|| parcad_occt::fit_pairs(doc, None, &opts).map_err(|e| format!("{e}")))?;
+            return Ok(with_pairs(built, fitted.between));
+        }
         return Ok(built);
     }
 
@@ -1493,6 +1627,10 @@ fn build_exact(
     let mut opts = kernel_options();
     if let Some(budget) = budget {
         opts.timeout = budget;
+    }
+    if needs == Needs::Drawing && !want_step {
+        opts.drawing = true;
+        opts.pairs = parcad_occt::Pairs::Held;
     }
     let (success, step) = kernel(|| {
         if want_step {
@@ -1531,6 +1669,39 @@ fn build_exact(
     })
 }
 
+/// `built` with every one of its body pairs, kept so for the next caller.
+fn with_pairs(built: Built, between: Vec<parcad_occt::BodyFit>) -> Built {
+    let success = parcad_occt::Success {
+        between,
+        pairs_left: 0,
+        ..(*built.success).clone()
+    };
+    replaced(built, success)
+}
+
+/// `built`, which a window drew first, measured as an evaluate measures it,
+/// with `pairs`: on the worker that drew it nothing is built or meshed again.
+fn finished(doc: &Doc, built: Built, pairs: parcad_occt::Pairs, budget: Option<Duration>) -> Result<Built, String> {
+    let mut opts = kernel_options();
+    if let Some(budget) = budget {
+        opts.timeout = budget;
+    }
+    opts.pairs = pairs;
+    let success = kernel(|| parcad_occt::evaluate(doc, &opts).map_err(|e| format!("{e}")))?;
+    Ok(replaced(built, success))
+}
+
+/// `built` with `success` in place of what it held, kept so for the next caller.
+fn replaced(built: Built, success: parcad_occt::Success) -> Built {
+    let success = std::sync::Arc::new(success);
+    with_builds(|builds| {
+        if let Some(build) = builds.iter_mut().find(|b| b.key == built.key) {
+            build.success = success.clone();
+        }
+    });
+    Built { success, ..built }
+}
+
 /// Resolve a fillet or chamfer's input edges without applying that treatment.
 ///
 /// The editor uses this only for source-to-viewport inspection. It is a second
@@ -1550,7 +1721,7 @@ pub fn inspect_edge_target(doc: &Doc, node: usize) -> Result<parcad_occt::Target
 /// times the bytes — and, until the tolerance was passed through, re-meshed
 /// every face at a micron on the way.
 pub fn export_stl(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Export, String> {
-    let built = build_exact(doc, budget, false)?;
+    let built = build_exact(doc, budget, false, Needs::Everything)?;
     let (bytes, measured) = parcad_evaluation::stl(doc, &built.success, built.reused)?;
     Ok(Export::named("part.stl", bytes, measured))
 }
@@ -1563,7 +1734,7 @@ pub fn export_3mf(
     name: &str,
     description: Option<&str>,
 ) -> Result<Export, String> {
-    let built = build_exact(doc, budget, false)?;
+    let built = build_exact(doc, budget, false, Needs::Everything)?;
     let (bytes, measured) = parcad_evaluation::three_mf(doc, &built.success, built.reused, name, description)?;
     Ok(Export::named("part.3mf", bytes, measured))
 }
@@ -1603,7 +1774,7 @@ pub fn export_step(doc: &Doc) -> Result<Export, String> {
 }
 
 pub fn export_step_within(doc: &Doc, budget: Option<std::time::Duration>) -> Result<Export, String> {
-    let built = build_exact(doc, budget, true)?;
+    let built = build_exact(doc, budget, true, Needs::Everything)?;
     let bytes = built.step.as_ref().expect("asked for STEP").as_ref().clone();
     if bytes.is_empty() {
         return Err("the step export produced no bytes; the kernel returned without writing a file".into());
@@ -2878,6 +3049,62 @@ pub(crate) mod tests {
             let again = brep(&part);
             assert!(again.snapshot.reused_build);
             assert_eq!(again.snapshot.verdicts.checks.expect("still judged").passed, 7, "read from the build");
+        });
+    }
+
+    /// The window draws a part before its exact figures, pairs, checks and
+    /// print check are measured, and fills them in step by step; the last step's snapshot is
+    /// the one `evaluate` returns, and an evaluate after it measures nothing.
+    #[test]
+    #[ignore = "needs the kernel worker"]
+    fn the_window_measures_after_drawing_and_ends_where_evaluate_does() {
+        crate::projects::tests::scoped(|_| {
+            let part = doc(serde_json::json!({
+                "units": "mm", "root": 6,
+                "checks": [{ "clear": ["base", "lid"], "atLeast": 0.5 }],
+                "nodes": [
+                    { "op": "cuboid", "size": { "x": 20, "y": 20, "z": 4 } },
+                    { "op": "cuboid", "size": { "x": 20, "y": 20, "z": 2 } },
+                    { "op": "translate", "child": 1, "by": { "x": 0, "y": 0, "z": 4 } },
+                    { "op": "cylinder", "r": 2, "h": 6 },
+                    { "op": "translate", "child": 3, "by": { "x": 30, "y": 0, "z": 0 } },
+                    { "op": "sphere", "r": 1 },
+                    { "op": "bodies", "bodies": [
+                        { "name": "base", "child": 0 }, { "name": "lid", "child": 2 }, { "name": "pin", "child": 4 }] }
+                ]
+            }));
+            let comparable = |snapshot: &EvaluationSnapshot| {
+                let mut value = serde_json::to_value(snapshot).unwrap();
+                for key in ["kernel_ms", "reused_build"] {
+                    value.as_object_mut().unwrap().remove(key);
+                }
+                value
+            };
+            let cache = own_build_cache(&[&tenant::current()]);
+            let first = evaluate_first(&part).expect("the part should build");
+            let fields = |pending: &[parcad_evaluation::Pending]| pending.iter().map(|p| p.field).collect::<Vec<_>>();
+            assert_eq!(fields(&first.measuring), ["volume_mm3", "between_bodies", "checks", "print_check"]);
+            assert_eq!((first.measuring[1].done, first.measuring[1].of), (Some(0), Some(3)));
+            assert!(first.snapshot.between_bodies.is_empty() && first.snapshot.verdicts.checks.is_none());
+            assert!(first.snapshot.verdicts.print_check.is_none() && first.snapshot.verdicts.brief.is_none());
+            assert!(first.snapshot.volume_note.is_none(), "not measured yet is not misread");
+
+            let mut steps = Vec::new();
+            let last = loop {
+                let step = measure_next(&part).expect("measuring should not fail");
+                steps.push(fields(&step.measuring));
+                if step.measuring.is_empty() {
+                    break step.snapshot;
+                }
+            };
+            assert_eq!(steps, [vec!["between_bodies", "checks", "print_check"], vec!["checks", "print_check"], vec!["print_check"], vec![]]);
+            let again = brep(&part);
+            assert!(again.snapshot.reused_build, "nothing was left for an evaluate to measure");
+            assert_eq!(comparable(&again.snapshot), comparable(&last));
+            assert!(evaluate_first(&part).unwrap().measuring.is_empty(), "a measured build is drawn whole");
+            drop(cache);
+            let _cache = own_build_cache(&[&tenant::current()]);
+            assert_eq!(comparable(&brep(&part).snapshot), comparable(&last), "an evaluate built afresh says the same");
         });
     }
 

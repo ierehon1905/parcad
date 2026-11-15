@@ -127,6 +127,7 @@ export async function run() {
     sessionRevision = Math.max(sessionRevision ?? 0, pushed.revision);
   }
 
+  let drawn: { result: Evaluated; graph: dsl.Doc; notes: BuiltGraph["notes"] } | undefined;
   try {
     const built = await buildWithParts(source);
     const result = await backend.evaluate<Evaluated>(built.graph, { part: name ?? undefined, source });
@@ -139,14 +140,15 @@ export async function run() {
     // Resolved targets belong to one graph. A cached count that outlived the
     // edit that changed it would be a confident wrong answer.
     resolvedTargets.clear();
-    const drawn = show(result);
-    if (name !== null && !result.shipped) held = { ...drawn, source: built.source, path: name };
+    const shown = show(result);
+    if (name !== null && !result.shipped) held = { ...shown, source: built.source, path: name };
     previewTreatmentAtCursor();
     clearError();
-    S.setStatus(reportOf(result), result.shipped ? "busy" : "");
+    S.setStatus(reportOf(result), result.shipped || S.measuring.value.length ? "busy" : "");
     if (revision !== undefined) {
       report({ id: viewerId, revision, built: true, volume_mm3: result.snapshot.volume_mm3 });
     }
+    drawn = { result, graph: built.graph, notes: built.notes };
   } catch (e) {
     e = e instanceof Error ? new Error(locateNodes(e.message)) : e;
     showError(e);
@@ -154,10 +156,48 @@ export async function run() {
     if (revision !== undefined) {
       report({ id: viewerId, revision, built: false, error: e instanceof Error ? e.message : String(e) });
     }
+  }
+  try {
+    if (drawn) await measureRest(drawn.result, drawn.graph, drawn.notes);
   } finally {
     running = false;
     lastActive = performance.now();
     if (dirty) schedule();
+  }
+}
+
+/**
+ * Fill in what the evaluation on screen left in `measuring`, a step at a
+ * time, until the snapshot is whole or the editor has moved on.
+ *
+ * Still inside `run`, so an edit meanwhile waits for the step in flight —
+ * at most a second of body pairs, or one sweep — and the worker that holds
+ * this build is the one that measures it. A step that lands after an edit,
+ * or after another part was drawn, is dropped: its numbers describe geometry
+ * no longer on screen.
+ */
+async function measureRest(result: Evaluated, graph: dsl.Doc, notes: BuiltGraph["notes"]) {
+  const drawing = drawings;
+  let ms = 0;
+  while (S.measuring.value.length && !dirty && drawing === drawings) {
+    let step: S.Measuring;
+    try {
+      step = await backend.measure<S.Measuring>(graph);
+    } catch (e) {
+      if (dirty || drawing !== drawings) return;
+      // Measuring the bodies is where a mesh that is not the solid is refused, and it is on screen.
+      const refused = S.measuring.value[0]?.field === "volume_mm3";
+      if (refused) discardShownPart();
+      showError(e instanceof Error ? new Error(locateNodes(e.message)) : e);
+      S.setStatus(refused ? "failed" : `built in ${result.snapshot.kernel_ms} ms · could not measure the rest`, "failed");
+      return;
+    }
+    if (dirty || drawing !== drawings) return;
+    ms += step.ms;
+    if (notes) step.snapshot.notes = notes;
+    S.snapshot.value = step.snapshot;
+    S.measuring.value = step.measuring ?? [];
+    S.setStatus(reportOf(result, ms), S.measuring.value.length ? "busy" : "");
   }
 }
 
@@ -326,10 +366,30 @@ function locateNodes(message: string): string {
 /** Whether the viewport is drawing a build that travelled with the page. */
 let showingShipped = false;
 
-const reportOf = (result: Evaluated) =>
-  result.shipped
-    ? "built before this page was served, rebuilding it here"
-    : `built in ${result.snapshot.kernel_ms} ms`;
+const reportOf = (result: Evaluated, measuredMs = 0) => {
+  if (result.shipped) return "built before this page was served, rebuilding it here";
+  const built = `built in ${result.snapshot.kernel_ms} ms`;
+  const next = S.measuring.value[0];
+  if (next) return `${built} · ${measuringLabel(next)}`;
+  return measuredMs ? `${built} · measured in ${measuredMs} ms` : built;
+};
+
+/** What the status line says is being measured. */
+function measuringLabel(pending: S.Pending): string {
+  switch (pending.field) {
+    case "volume_mm3":
+      return "measuring the volume";
+    case "between_bodies":
+      return `measuring body pairs, ${pending.done} of ${pending.of}`;
+    case "checks":
+      return "running the part's checks";
+    case "print_check":
+      return "running the print check";
+  }
+}
+
+/** Counts the parts drawn, so a measurement can tell whether its part is still the one on screen. */
+let drawings = 0;
 
 /** The build the viewport is drawing of a saved part, and the script it came from. */
 let held: { geometry: Geometry; bounds: S.Bounds; source: string; path: string } | undefined;
@@ -355,8 +415,10 @@ export async function heldBuild(path: string, source: string): Promise<{ geometr
 
 function show(result: Evaluated): { geometry: Geometry; bounds: S.Bounds } {
   held = undefined;
+  drawings++;
   showingShipped = result.shipped === true;
   const snapshot = result.snapshot;
+  S.measuring.value = result.measuring ?? [];
   if (shownPath !== S.openPath.value) {
     S.hiddenBodies.value = hiddenIn(S.openPath.value);
     focusBodies([]);
@@ -585,7 +647,9 @@ export function showError(e: unknown) {
 /** Drop the rendered part and everything measured from it. */
 function discardShownPart() {
   shownPath = undefined;
+  drawings++;
   S.snapshot.value = undefined;
+  S.measuring.value = [];
   S.lastGraph.value = null;
   S.lastSource.value = "";
   S.lastTreatments.value = [];
@@ -802,7 +866,8 @@ export async function saveOpenPart() {
   const editor = S.editor();
   const typed = editor.state.doc.toString();
   // Measured against the text as typed: formatting leaves the syntax tree, and so the part, as it was.
-  const clean = typed === S.lastSource.value && S.snapshot.value !== undefined;
+  // A description written while body pairs are still being measured would read as having none.
+  const clean = typed === S.lastSource.value && S.snapshot.value !== undefined && S.measuring.value.length === 0;
 
   S.setStatus("saving", "busy");
   saving = true;

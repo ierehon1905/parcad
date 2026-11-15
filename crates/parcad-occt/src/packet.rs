@@ -208,6 +208,9 @@ mod tests {
             step_path: Some("/tmp/out.step".into()),
             stl_path: None,
             uncached: false,
+            pairs: Default::default(),
+            drawing: false,
+            fit_pairs: None,
         }
     }
 

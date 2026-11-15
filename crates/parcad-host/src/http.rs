@@ -70,6 +70,9 @@ pub fn loopback(port: u16) -> SocketAddr {
 #[derive(Deserialize)]
 struct EvaluateRequest {
     graph: serde_json::Value,
+    /// Reply once the part is meshed, leaving the rest to `/api/measure`.
+    #[serde(default)]
+    measure_later: bool,
 }
 
 #[derive(Deserialize)]
@@ -272,6 +275,7 @@ fn api<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route("/api/session/events", get(session_events))
         .route("/api/session/shown", post(session_shown))
         .route("/api/evaluate", post(evaluate))
+        .route("/api/measure", post(measure))
         .route("/api/built/{*name}", get(build_project))
         .route("/api/inspect-edge-target", post(inspect_edge_target))
         .route("/api/export/stl", post(export_stl))
@@ -312,7 +316,7 @@ async fn admitted(request: Request, next: Next) -> Response {
     if tenant.mode != tenant::Mode::Hosted || route.starts_with("/api/exports/") {
         return next.run(request).await;
     }
-    let builds = ["/api/evaluate", "/api/built/", "/api/inspect-edge-target", "/api/export/"]
+    let builds = ["/api/evaluate", "/api/measure", "/api/built/", "/api/inspect-edge-target", "/api/export/"]
         .iter()
         .any(|prefix| route.starts_with(prefix));
     let (parts, body) = request.into_parts();
@@ -582,8 +586,21 @@ where
 
 async fn evaluate(Json(request): Json<EvaluateRequest>) -> Result<Response, Failed> {
     let doc = service::parse_graph(request.graph).map_err(Failed)?;
-    let evaluated = blocking(move || service::evaluate(&doc, None)).await?;
+    let evaluated = blocking(move || {
+        if request.measure_later {
+            service::evaluate_first(&doc)
+        } else {
+            service::evaluate(&doc, None)
+        }
+    })
+    .await?;
     Ok(Json(evaluated).into_response())
+}
+
+async fn measure(Json(request): Json<EvaluateRequest>) -> Result<Response, Failed> {
+    let doc = service::parse_graph(request.graph).map_err(Failed)?;
+    let measured = blocking(move || service::measure_next(&doc)).await?;
+    Ok(Json(measured).into_response())
 }
 
 async fn build_project(Path(name): Path<String>) -> Result<Response, Failed> {

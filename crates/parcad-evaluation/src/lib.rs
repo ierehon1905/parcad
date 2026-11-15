@@ -63,6 +63,34 @@ pub fn evaluated(
     wall_ms: u64,
     reused: bool,
 ) -> Result<Evaluated, String> {
+    let (snapshot, bounds) = described(doc, s, wall_ms, reused)?;
+    Ok(Evaluated {
+        bounds,
+        reference_bodies: s.reference_bodies().iter().map(|b| b.to_string()).collect(),
+        snapshot,
+        positions: s.positions.clone(),
+        normals: s.normals.clone(),
+        indices: s.indices.clone(),
+        face_runs: s.face_runs.clone(),
+        faces: s.faces.clone(),
+        edges: s.edges.clone(),
+        triangle_bodies: parcad_occt::drawing::TriangleOwners::of(s).bodies,
+        body_names: s.bodies.iter().map(|body| body.name.clone()).collect(),
+        measuring: Vec::new(),
+    })
+}
+
+/// [`evaluated`]'s snapshot alone, for a caller that has drawn the mesh already.
+pub fn snapshot(doc: &Doc, s: &parcad_occt::Success, wall_ms: u64, reused: bool) -> Result<EvaluationSnapshot, String> {
+    Ok(described(doc, s, wall_ms, reused)?.0)
+}
+
+fn described(
+    doc: &Doc,
+    s: &parcad_occt::Success,
+    wall_ms: u64,
+    reused: bool,
+) -> Result<(EvaluationSnapshot, parcad_core::measure::Aabb), String> {
     let (report, tess) = measure_brep(doc, s)?;
     let mut snapshot = describe(doc, &report, s, body_reports(s), tag_extents(doc, s), wall_ms);
     if snapshot.kind != "solid" && s.bodies.is_empty() {
@@ -89,19 +117,7 @@ pub fn evaluated(
     snapshot.patch_gap_mm = s.patch_gap_mm.map(|d| (d * 1e6).ceil() / 1e6);
     // An error bound rounds up: a step of 1e-15 must not read as none.
     snapshot.curvature_jump_per_mm = s.curvature_jump_per_mm.map(|d| (d * 1e6).ceil() / 1e6);
-    Ok(Evaluated {
-        bounds: report.bounds,
-        reference_bodies: s.reference_bodies().iter().map(|b| b.to_string()).collect(),
-        snapshot,
-        positions: s.positions.clone(),
-        normals: s.normals.clone(),
-        indices: s.indices.clone(),
-        face_runs: s.face_runs.clone(),
-        faces: s.faces.clone(),
-        edges: s.edges.clone(),
-        triangle_bodies: parcad_occt::drawing::TriangleOwners::of(s).bodies,
-        body_names: s.bodies.iter().map(|body| body.name.clone()).collect(),
-    })
+    Ok((snapshot, report.bounds))
 }
 
 /// A part as binary STL — the welded triangles the viewport shows — and the
@@ -207,6 +223,42 @@ pub struct Evaluated {
     /// not a view asked for materials.
     #[serde(skip)]
     pub reference_bodies: Vec<String>,
+    /// What the snapshot does not say yet, for a window that draws the part
+    /// first and measures the rest after; empty when it is whole.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub measuring: Vec<Pending>,
+}
+
+/// A part of the snapshot still being measured, named by the field it fills.
+#[derive(Debug, Clone, Serialize)]
+pub struct Pending {
+    /// `volume_mm3`, `between_bodies`, `checks` or `print_check`.
+    pub field: &'static str,
+    /// For `between_bodies`: the pairs measured so far, of `of`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub done: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub of: Option<usize>,
+}
+
+impl Pending {
+    pub fn pairs(done: usize, of: usize) -> Self {
+        Self { field: "between_bodies", done: Some(done), of: Some(of) }
+    }
+
+    /// The bodies' exact volume, area and centroid, with what is judged on
+    /// them: the brief and the tag extents.
+    pub fn volume() -> Self {
+        Self { field: "volume_mm3", done: None, of: None }
+    }
+
+    pub fn checks() -> Self {
+        Self { field: "checks", done: None, of: None }
+    }
+
+    pub fn print_check() -> Self {
+        Self { field: "print_check", done: None, of: None }
+    }
 }
 
 /// Read access for callers that list entities rather than serialise geometry.
@@ -759,14 +811,15 @@ impl From<&parcad_occt::protocol::Collision> for Collision {
 }
 
 /// What the exact kernel measured per body and between bodies, for the
-/// snapshot and for an export's `measured`.
+/// snapshot and for an export's `measured`. The pairs are all of them or none:
+/// a build that held some back lists them once the rest are measured.
 pub fn body_reports(s: &parcad_occt::Success) -> (Vec<BodyReport>, Vec<BodyFit>) {
     (
         parcad_occt::measure_bodies(s)
             .iter()
             .map(|b| BodyReport::of(b, s.surfaces.iter().find(|m| m.body.as_deref() == Some(b.name.as_str()))))
             .collect(),
-        s.between.iter().map(BodyFit::from).collect(),
+        if s.pairs_left == 0 { s.between.iter().map(BodyFit::from).collect() } else { Vec::new() },
     )
 }
 
@@ -1161,7 +1214,8 @@ pub fn describe(
         volume_mm3: volume,
         area_mm2: round_mm(report.mass.area_mm2),
         centroid,
-        volume_note: report.mass_from_mesh.then_some(MESH_MASS_NOTE),
+        // A build drawn first has no exact figures yet, which is not the integrals misreading.
+        volume_note: (report.mass_from_mesh && !s.drawing).then_some(MESH_MASS_NOTE),
         surface: (!surface_measures.is_empty()).then(|| SurfaceSummary::of(&surface_measures, surface_area)),
         faces: Some(s.topology.faces),
         topological_edges: Some(s.topology.edges),
@@ -1515,6 +1569,8 @@ mod tests {
             topology: Topology { faces: 0, edges: 0 },
             bodies: Vec::new(),
             between: Vec::new(),
+            pairs_left: 0,
+            drawing: false,
             tag_extents: vec![
                 TagBounds { tag: "holder".into(), min: [0.0; 3], max: [10.0, 10.0, 2.0], faces: 6 },
                 TagBounds { tag: "nub".into(), min: [0.0; 3], max: [2.0, 2.0, 1.0], faces: 4 },
@@ -1586,6 +1642,8 @@ mod tests {
             topology: Topology { faces: 6, edges: 12 },
             bodies: vec![span("near", false, 0), span("far", true, 12)],
             between: Vec::new(),
+            pairs_left: 0,
+            drawing: false,
             tag_extents: Vec::new(),
             unlocated_tags: Vec::new(),
             collisions: Vec::new(),
@@ -1653,6 +1711,8 @@ mod tests {
             topology: Topology { faces: 6, edges: 12 },
             bodies: Vec::new(),
             between: Vec::new(),
+            pairs_left: 0,
+            drawing: false,
             tag_extents: Vec::new(),
             unlocated_tags: Vec::new(),
             collisions: Vec::new(),

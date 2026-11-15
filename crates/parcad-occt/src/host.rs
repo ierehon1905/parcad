@@ -117,6 +117,10 @@ pub struct Options {
     pub stl_path: Option<PathBuf>,
     /// See [`Request::uncached`].
     pub uncached: bool,
+    /// See [`Request::pairs`].
+    pub pairs: crate::protocol::Pairs,
+    /// See [`Request::drawing`].
+    pub drawing: bool,
 }
 
 impl Default for Options {
@@ -127,6 +131,8 @@ impl Default for Options {
             step_path: None,
             stl_path: None,
             uncached: false,
+            pairs: Default::default(),
+            drawing: false,
         }
     }
 }
@@ -332,6 +338,9 @@ pub fn evaluate(doc: &Doc, opts: &Options) -> Result<Success, OcctError> {
             step_path: opts.step_path.clone(),
             stl_path: opts.stl_path.clone(),
             uncached: opts.uncached,
+            pairs: opts.pairs,
+            drawing: opts.drawing,
+            fit_pairs: None,
         },
         opts,
     )? {
@@ -361,6 +370,9 @@ pub fn probe_step(path: &std::path::Path, opts: &Options) -> Result<crate::proto
             step_path: None,
             stl_path: None,
             uncached: false,
+            pairs: Default::default(),
+            drawing: false,
+            fit_pairs: None,
         },
         opts,
     )? {
@@ -391,6 +403,9 @@ pub fn check_fit(
             step_path: None,
             stl_path: None,
             uncached: false,
+            pairs: Default::default(),
+            drawing: false,
+            fit_pairs: None,
         },
         opts,
     )? {
@@ -421,6 +436,9 @@ pub fn perceive(
             step_path: None,
             stl_path: None,
             uncached: false,
+            pairs: Default::default(),
+            drawing: false,
+            fit_pairs: None,
         },
         opts,
     )? {
@@ -428,6 +446,43 @@ pub fn perceive(
         Response::Error { stage, message } => Err(rejected(stage, message)),
         _ => Err(OcctError::Host(
             "the kernel returned the wrong reply kind for a perception request".into(),
+        )),
+    }
+}
+
+/// Measure the body pairs of a part an evaluate with [`Pairs::Held`] built,
+/// starting none after `within`: on the worker that built it, nothing is
+/// built again and the pairs it already measured are not measured again.
+///
+/// [`Pairs::Held`]: crate::protocol::Pairs::Held
+pub fn fit_pairs(
+    doc: &Doc,
+    within: Option<Duration>,
+    opts: &Options,
+) -> Result<crate::protocol::PairsFitted, OcctError> {
+    match run_worker(
+        Request {
+            doc: Some(doc.clone()),
+            probe_step: None,
+            fit_against: None,
+            inspect_target: None,
+            perceive: None,
+            deflection: opts.deflection,
+            step_path: None,
+            stl_path: None,
+            uncached: false,
+            pairs: Default::default(),
+            drawing: false,
+            fit_pairs: Some(crate::protocol::FitPairs {
+                within_ms: within.map(|d| d.as_millis() as u64),
+            }),
+        },
+        opts,
+    )? {
+        Response::Pairs(fitted) => Ok(*fitted),
+        Response::Error { stage, message } => Err(rejected(stage, message)),
+        _ => Err(OcctError::Host(
+            "the kernel returned the wrong reply kind for a body-pairs request".into(),
         )),
     }
 }
@@ -449,6 +504,9 @@ pub fn inspect_edge_target(
             step_path: None,
             stl_path: None,
             uncached: false,
+            pairs: Default::default(),
+            drawing: false,
+            fit_pairs: None,
         },
         opts,
     )? {

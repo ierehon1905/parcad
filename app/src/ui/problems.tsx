@@ -62,19 +62,53 @@ export function Problems() {
     return <p class="m-0 px-4 py-4 text-ink-dim">Nothing is built yet.</p>;
   }
   const problems = problemsOf(snapshot);
+  const measuring = S.measuring.value;
   return (
     <div class="flex-1 min-h-0 overflow-auto py-2">
-      {problems.length === 0 ? (
-        <p class="m-0 px-4 py-2 text-good">Nothing is wrong with this part.</p>
-      ) : (
+      {problems.length > 0 && (
         <ul class="m-0 p-0 list-none">
           {problems.map((problem) => (
             <ProblemRow key={problem.key} problem={problem} />
           ))}
         </ul>
       )}
+      {measuring.length > 0 ? (
+        <ul class="m-0 p-0 list-none">
+          {measuring.map((pending) => (
+            <PendingRow key={pending.field} pending={pending} />
+          ))}
+        </ul>
+      ) : (
+        problems.length === 0 && <p class="m-0 px-4 py-2 text-good">Nothing is wrong with this part.</p>
+      )}
       <Measured snapshot={snapshot} />
     </div>
+  );
+}
+
+/** What is not measured yet: a part is not clean until its pairs and checks say so. */
+const PENDING_LABEL: Record<S.Pending["field"], string> = {
+  volume_mm3: "Volume and tags",
+  between_bodies: "Body pairs",
+  checks: "The part's checks",
+  print_check: "Print check",
+};
+
+function PendingRow({ pending }: { pending: S.Pending }) {
+  return (
+    <li class="flex items-baseline gap-2.5 px-4 py-1.5 text-ink-dim">
+      <span class="shrink-0 size-2 rounded-full translate-y-[-1px] border border-ink-dim" />
+      <span>
+        {PENDING_LABEL[pending.field]}:{" "}
+        {pending.of !== undefined ? (
+          <>
+            <Strong>{pending.done}</Strong> of <Strong>{pending.of}</Strong> measured
+          </>
+        ) : (
+          "not measured yet"
+        )}
+      </span>
+    </li>
   );
 }
 
@@ -280,6 +314,8 @@ function Measured({ snapshot }: { snapshot: Snapshot }) {
     .sort((p, q) => p.clearance_mm! - q.clearance_mm!);
   const checks = snapshot.checks;
   const print = snapshot.print_check;
+  // Until then the volumes are the mesh's, which the exact ones replace.
+  const exact = !S.measuring.value.some((pending) => pending.field === "volume_mm3");
 
   return (
     <section class="mt-3 pt-3 border-t border-line">
@@ -294,7 +330,9 @@ function Measured({ snapshot }: { snapshot: Snapshot }) {
         <Row label="Height">
           z <Strong>{fmt(snapshot.bounds_min[2])}</Strong> to <Strong>{fmt(snapshot.bounds_max[2])}</Strong>
         </Row>
-        {snapshot.volume_mm3 !== undefined ? (
+        {!exact ? (
+          <Row label={snapshot.volume_mm3 !== undefined ? "Volume" : "Surface"}>measuring</Row>
+        ) : snapshot.volume_mm3 !== undefined ? (
           <Row label="Volume">
             <Strong>{fmt(snapshot.volume_mm3)}</Strong> mm³
             {snapshot.brief?.envelope?.fits && (
@@ -345,7 +383,7 @@ function Measured({ snapshot }: { snapshot: Snapshot }) {
         {print?.verdict === "passed" && <Row label="Print">clean</Row>}
         {made.length > 0 && (
           <Row label="Bodies">
-            {made.length <= NAMES_LISTED
+            {exact && made.length <= NAMES_LISTED
               ? made.map((body, i) => (
                   <span key={body.name}>
                     {i > 0 && " · "}

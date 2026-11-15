@@ -340,12 +340,31 @@ export interface Evaluated {
   /** What each face is. Indexed by the kernel's own face number. */
   faces?: FaceSummary[];
   snapshot: EvaluationSnapshot;
+  /** What `snapshot` does not say yet; absent when it is whole. */
+  measuring?: Pending[];
   /**
    * Measured before this page was deployed rather than here, and standing in
    * only until the same graph has been built in front of the reader. Set by
    * the transport that shipped it; see `page/prebuilt.ts`.
    */
   shipped?: boolean;
+}
+
+/** A part of the snapshot still being measured, named by the field it fills. */
+export interface Pending {
+  /** `volume_mm3` also stands for the area, the centroid, the tag extents and the brief. */
+  field: "volume_mm3" | "between_bodies" | "checks" | "print_check";
+  /** Body pairs measured so far, of `of`. */
+  done?: number;
+  of?: number;
+}
+
+/** One more step of what an evaluation left, and the snapshot as far as it goes. */
+export interface Measuring {
+  snapshot: EvaluationSnapshot;
+  measuring?: Pending[];
+  /** What the step took. */
+  ms: number;
 }
 
 export interface TargetPreview {
@@ -527,6 +546,9 @@ export const sidebarTab = signal<"part" | "parts">("part");
 
 /** What the editor pane shows: the source, or what is wrong with the part it builds. */
 export const editorTab = signal<"code" | "problems">("code");
+
+/** What the snapshot on screen does not say yet: measured after the part is drawn. */
+export const measuring = signal<readonly Pending[]>([]);
 
 /** Bodies the person hid from the view, by name, in the part on screen. */
 export const hiddenBodies = signal<ReadonlySet<string>>(new Set());

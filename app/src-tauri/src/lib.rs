@@ -12,8 +12,19 @@ use parcad_host::{http, mcp, projects, routes, service, session};
 use service::Evaluated;
 
 #[tauri::command]
-fn evaluate(graph: serde_json::Value) -> Result<Evaluated, String> {
-    service::evaluate(&service::parse_graph(graph)?, None)
+fn evaluate(graph: serde_json::Value, measure_later: Option<bool>) -> Result<Evaluated, String> {
+    let doc = service::parse_graph(graph)?;
+    if measure_later == Some(true) {
+        service::evaluate_first(&doc)
+    } else {
+        service::evaluate(&doc, None)
+    }
+}
+
+/// Off the main thread: the part is on screen while this runs.
+#[tauri::command(async)]
+fn measure(graph: serde_json::Value) -> Result<service::Measuring, String> {
+    service::measure_next(&service::parse_graph(graph)?)
 }
 
 /// Off the main thread: a thumbnail is built in the background, and must not
@@ -437,6 +448,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             evaluate,
+            measure,
             inspect_edge_target,
             export_stl,
             export_3mf,

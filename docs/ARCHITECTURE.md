@@ -885,6 +885,33 @@ that rule have been broken — `mcp.rs` rebuilding the summary from raw graph JS
 and looking for `smooth` and `squircle` nodes, which have never been ops; the
 editor assembling its own from a raw `PartReport`.
 
+A window asks for that description in two steps, so a part is on screen once
+it is meshed rather than once everything about it is measured. `evaluate`
+with `measure_later` (`service::evaluate_first`) replies with the mesh, its
+edges and faces, and a snapshot that holds the rest only where this build
+already has it; `measuring` names what it does not. The worker drew that reply
+alone (`Request::drawing`): each body tessellated, checked for a closed and
+outward-facing mesh and its faces described, but not its exact volume and
+area, the overhang, the tag extents or the body pairs — on a one-body keycap
+those were 2.6 s after a 0.09 s mesh. `measure` (`service::measure_next`)
+then does one more of them: the bodies finished on the worker that meshed
+them, with the brief and the tag extents; up to a second of body pairs
+(`fit_pairs`); the checks, which read both; the print check. Each is kept with
+the build, and each reply is the snapshot as far as it goes. The window
+(`measureRest` in `engine.ts`) calls it until `measuring` is empty, and the
+last snapshot is the one `service::evaluate` returns, which is what a model's
+`evaluate_part` still gets in one reply. Two consequences. The steps stay
+inside the window's evaluation cycle: an edit meanwhile waits for the step in
+flight, and a step that lands after it is dropped, since its numbers describe
+the geometry that was. And the backstop that compares the mesh's volume with
+the solid's runs in the first step after drawing, so a part it refuses has
+been on screen for that long; the window then withdraws it with the refusal.
+Measured cold on two parts from a user, release worker under `taskpolicy -c
+utility`, medians of three interleaved with the build before: a 25-body
+assembly is drawn after 3.1 s where it waited 11.4 s, and is measured whole by
+12.3 s; a one-body lofted keycap is drawn after 18.8 s where it waited 29.4 s
+on a busy machine, and is measured whole by 27.2 s.
+
 Three constraints on the HTTP half, each deliberate:
 
 - **Loopback only.** The endpoint evaluates arbitrary intent graphs, which means

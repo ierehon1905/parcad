@@ -68,6 +68,7 @@ export function App() {
 function EditorTabs() {
   const snapshot = S.snapshot.value;
   const count = snapshot ? problemCount(problemsOf(snapshot)) : undefined;
+  const measuring = S.measuring.value.length > 0;
   return (
     <Tabs
       tabs={[
@@ -78,6 +79,7 @@ function EditorTabs() {
             <>
               Problems
               {count && <TabCount n={count.n} tone={count.tone} />}
+              {measuring && <span class="text-ink-dim">…</span>}
             </>
           ),
         },

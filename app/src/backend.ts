@@ -472,6 +472,10 @@ export function watchFirstRebuild(listener: (evaluated: unknown) => void): () =>
   return () => (onRebuilt = undefined);
 }
 
+/**
+ * The part, as soon as it is meshed: what the snapshot does not say yet is
+ * named in `measuring`, for {@link measure} to fill in while it is on screen.
+ */
 export async function evaluate<T>(graph: unknown, showing?: { part?: string; source: string }): Promise<T> {
   if (inPage) {
     const host = await page();
@@ -485,9 +489,16 @@ export async function evaluate<T>(graph: unknown, showing?: { part?: string; sou
     }
     const already = showing && host.prebuilt.inFlight(showing.part, showing.source);
     if (already) return (await already) as T;
-    return (await host.host.evaluate(graph)) as T;
+    return (await host.host.evaluate(graph, true)) as T;
   }
-  return inTauri ? invoke<T>("evaluate", { graph }) : post<T>("evaluate", { graph });
+  return inTauri
+    ? invoke<T>("evaluate", { graph, measureLater: true })
+    : post<T>("evaluate", { graph, measure_later: true });
+}
+
+/** The next of what an evaluation left in `measuring`, and the snapshot as far as it goes. */
+export function measure<T>(graph: unknown): Promise<T> {
+  return inTauri ? invoke<T>("measure", { graph }) : post<T>("measure", { graph });
 }
 
 

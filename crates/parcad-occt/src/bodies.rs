@@ -169,6 +169,8 @@ mod tests {
                 BodySpan { name: "far".into(), kind: Default::default(), reference: true, faces: 6, edges: 12, triangle_start: 12, triangle_count: 12, mass: None },
             ],
             between: Vec::new(),
+            pairs_left: 0,
+            drawing: false,
             tag_extents: Vec::new(),
             unlocated_tags: Vec::new(),
             collisions: Vec::new(),

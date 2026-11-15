@@ -39,11 +39,11 @@ mod skinned;
 
 pub use bodies::{body_meshes, measure_bodies, MeasuredBody};
 pub use host::{
-    check_fit, confine_workers, default_timeout, default_worker_memory, evaluate, inspect_edge_target, perceive,
+    check_fit, confine_workers, default_timeout, default_worker_memory, evaluate, fit_pairs, inspect_edge_target, perceive,
     probe_step, with_kernel, Kernel, OcctError, Options, WorkerLimits,
 };
 pub use protocol::{
-    BodyFit, BodyKind, BodySpan, SurfaceMeasure, CurveProbe, EdgeCurve, ExactMass, FaceProbe, FitReport, HoleMeasure, Perceive, Perceived,
+    BodyFit, BodyKind, BodySpan, SurfaceMeasure, CurveProbe, EdgeCurve, ExactMass, FaceProbe, FitReport, HoleMeasure, Pairs, PairsFitted, Perceive, Perceived,
     PointResult, RayHitResult, RayLine, RayResult, SolidProbe, StepProbe, Success, SurfaceProbe,
     TagBounds, TargetPreview, TargetVertex, ThicknessResult, ThicknessSample, ThicknessSpec, ThinKind,
     Timings, Topology, WireProbe,
