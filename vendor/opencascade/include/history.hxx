@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Standard_NoSuchObject.hxx>
+#include <BRepAlgoAPI_Common.hxx>
 #include <BRepAlgoAPI_Cut.hxx>
 #include <BRepAlgoAPI_Fuse.hxx>
 #include <BRepAlgoAPI_BooleanOperation.hxx>
@@ -123,6 +124,21 @@ inline std::unique_ptr<ParcadBoolean> parcad_fuse_with_history(const TopoDS_Shap
   boolean->add_tool(tool);
   boolean->build();
   return boolean;
+}
+
+// What two shapes share. `BRepAlgoAPI_Common(a, b)` builds in its constructor,
+// on one thread; this is the same operation with the pair loops in parallel,
+// as the cut and the fuse above run.
+inline std::unique_ptr<TopoDS_Shape> parcad_common(const TopoDS_Shape& base, const TopoDS_Shape& tool) {
+  NCollection_List<TopoDS_Shape> arguments, tools;
+  arguments.Append(base);
+  tools.Append(tool);
+  BRepAlgoAPI_Common common;
+  common.SetArguments(arguments);
+  common.SetTools(tools);
+  common.SetRunParallel(true);
+  common.Build();
+  return std::unique_ptr<TopoDS_Shape>(new TopoDS_Shape(common.Shape()));
 }
 
 // The local-operation API has the same history contract as booleans: it can

@@ -25,6 +25,7 @@ pub(crate) mod ffi {
             tool: &TopoDS_Shape,
         ) -> UniquePtr<ParcadBoolean>;
         fn parcad_boolean_with_history(base: &TopoDS_Shape, is_cut: bool) -> UniquePtr<ParcadBoolean>;
+        fn parcad_common(base: &TopoDS_Shape, tool: &TopoDS_Shape) -> UniquePtr<TopoDS_Shape>;
         fn add_tool(self: Pin<&mut ParcadBoolean>, tool: &TopoDS_Shape);
         fn build(self: Pin<&mut ParcadBoolean>);
 
