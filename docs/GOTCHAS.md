@@ -1536,7 +1536,9 @@ Two places where a chain written the obvious way is wrong:
   ignores ids, and one node used twice in the document that built it can be
   two nodes in the document that hits it. A map from old id to new sends
   both uses to one of them; a chain is renumbered by walking it down from
-  the subtree's root (`FaceMakers::renumbered`).
+  the subtree's root (`Renumbering`). A treatment's records carry a chain
+  for the same reason, though nothing reports it: the treatment's id alone
+  cannot say which copy made an edge, or which cuts it was built before.
 - **A treatment built before its cuts is still above them.**
   `treat_before_cuts` fillets first and cuts again, and a chain written in
   build order would put the fillet under the cut it follows in the script.
