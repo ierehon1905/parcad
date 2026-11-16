@@ -295,7 +295,11 @@ many times), and a tag's exact extent (`BRepBndLib::AddOptimal`). These are
 what parcad's probes, wall-thickness sweep and tag extents run on now that the
 exact kernel is the only one; they used to read a distance field.
 
-`Shape::classify_points` classifies many points against one loaded solid.
+`Shape::classify_points` classifies many points against one loaded solid: in
+runs on separate threads when there are sixteen or more, kept only if the sys
+crate reports that no run's answers rested on the points before them, and
+otherwise in one run. `Shape::solid_probe` returns a `SolidProbe`, the solid
+kept loaded for calls made one at a time.
 
 ## `BooleanShape::alerts`
 

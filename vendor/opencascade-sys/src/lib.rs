@@ -954,7 +954,10 @@ pub mod ffi {
 
         // BRepClass3d_SolidClassifier — added for parcad, see PARCAD-CHANGES.md.
         pub fn BRepClass3d_classify(shape: &TopoDS_Shape, x: f64, y: f64, z: f64, tolerance: f64) -> i32;
-        pub fn BRepClass3d_classify_points(shape: &TopoDS_Shape, points: &[f64], tolerance: f64) -> Vec<i32>;
+        pub fn BRepClass3d_classify_points(shape: &TopoDS_Shape, points: &[f64], tolerance: f64, carried: &mut bool) -> Vec<i32>;
+        type SolidProbe;
+        pub fn SolidProbe_new(shape: &TopoDS_Shape) -> UniquePtr<SolidProbe>;
+        pub fn SolidProbe_classify(probe: Pin<&mut SolidProbe>, points: &[f64], tolerance: f64) -> Vec<i32>;
 
         // std::hash<TopoDS_Shape>, the hash IsSame agrees with — added for
         // parcad, see PARCAD-CHANGES.md.

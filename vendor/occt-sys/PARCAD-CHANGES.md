@@ -100,7 +100,23 @@ of `lib`, `libd`, `libi` holds `TKernel`, for a fresh build and for
 
 ## Changes to OCCT itself
 
-Nine patches.
+Ten patches.
+
+`patches/0010-say-where-a-classifier-aims.patch`: `BRepClass3d_SolidExplorer`
+aims each point's ray from a parameter along a face's edge, puts it back after
+every face it tries, and moves it only when a point finds no face of the solid
+to aim at, which is also the only pass that replaces a face's intersector. So
+that parameter is all one classification leaves for the next. The patch adds
+`AimParameter()`, which returns it, and nothing else. With it the sys crate
+classifies a union's guard points in runs on separate threads, each with an
+explorer of its own, and keeps the answers only when no run's parameter moved:
+then every point was classified from the state one run would have had. A run
+that moved it makes the whole list one run, as before. The overhang pass keeps
+one explorer loaded on the same evidence (`SolidProbe`). Measured on a
+keycap's rebuild after an edit: the guard's classification 1.2 s of 3.4 s
+before the part is drawn, 0.3 s after, and the replies for it and for a
+25-body assembly the same parsed JSON, timings apart. Not yet reported
+upstream.
 
 `patches/0009-skip-an-edge-proven-clear-of-a-face.patch`: a boolean
 intersects every edge with every face whose boxes overlap

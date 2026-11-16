@@ -474,14 +474,13 @@ inline int BRepClass3d_classify(const TopoDS_Shape &shape, double x, double y, d
   }
 }
 
-// Point-in-solid for many points against one loaded shape — added for parcad,
-// see PARCAD-CHANGES.md. `points` is x, y, z triples; one state per point,
-// coded as BRepClass3d_classify's.
-inline rust::Vec<int32_t> BRepClass3d_classify_points(const TopoDS_Shape &shape, rust::Slice<const double> points, double tolerance) {
-  rust::Vec<int32_t> out;
-  BRepClass3d_SolidClassifier classifier(shape);
+namespace parcad_classify {
+// One state per x, y, z triple of `points`, coded as BRepClass3d_classify's:
+// what BRepClass3d_SolidClassifier does with a solid it has loaded.
+inline void states(BRepClass3d_SolidExplorer &explorer, BRepClass3d_SClassifier &classifier,
+                   rust::Slice<const double> points, double tolerance, rust::Vec<int32_t> &out) {
   for (size_t i = 0; i + 2 < points.size(); i += 3) {
-    classifier.Perform(gp_Pnt(points[i], points[i + 1], points[i + 2]), tolerance);
+    classifier.Perform(explorer, gp_Pnt(points[i], points[i + 1], points[i + 2]), tolerance);
     switch (classifier.State()) {
       case TopAbs_IN:
         out.push_back(0);
@@ -496,7 +495,52 @@ inline rust::Vec<int32_t> BRepClass3d_classify_points(const TopoDS_Shape &shape,
         out.push_back(3);
     }
   }
+}
+} // namespace parcad_classify
+
+// Point-in-solid for many points against one loaded shape — added for parcad,
+// see PARCAD-CHANGES.md. `carried` is whether the explorer's aim moved
+// (occt-sys patch 0010): only then did a point's answer rest on the points
+// classified before it.
+inline rust::Vec<int32_t> BRepClass3d_classify_points(const TopoDS_Shape &shape, rust::Slice<const double> points,
+                                                      double tolerance, bool &carried) {
+  rust::Vec<int32_t> out;
+  BRepClass3d_SolidExplorer explorer(shape);
+  BRepClass3d_SClassifier classifier;
+  const double aim = explorer.AimParameter();
+  parcad_classify::states(explorer, classifier, points, tolerance, out);
+  carried = explorer.AimParameter() != aim;
   return out;
+}
+
+// A solid kept loaded between point-in-solid questions — added for parcad, see
+// PARCAD-CHANGES.md. Each call answers as a classifier loaded for that call
+// would: the solid is loaded again only after a call that moved the aim.
+class SolidProbe {
+  TopoDS_Shape shape;
+  BRepClass3d_SolidExplorer explorer;
+  BRepClass3d_SClassifier classifier;
+  double aim;
+
+public:
+  explicit SolidProbe(const TopoDS_Shape &shape) : shape(shape), explorer(shape), aim(explorer.AimParameter()) {}
+
+  rust::Vec<int32_t> classify(rust::Slice<const double> points, double tolerance) {
+    if (explorer.AimParameter() != aim) {
+      explorer.InitShape(shape);
+    }
+    rust::Vec<int32_t> out;
+    parcad_classify::states(explorer, classifier, points, tolerance, out);
+    return out;
+  }
+};
+
+inline std::unique_ptr<SolidProbe> SolidProbe_new(const TopoDS_Shape &shape) {
+  return std::unique_ptr<SolidProbe>(new SolidProbe(shape));
+}
+
+inline rust::Vec<int32_t> SolidProbe_classify(SolidProbe &probe, rust::Slice<const double> points, double tolerance) {
+  return probe.classify(points, tolerance);
 }
 
 // The hash `TopTools_ShapeMapHasher` keys a shape map on: the TShape and its

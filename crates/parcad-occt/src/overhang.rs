@@ -14,7 +14,7 @@ use crate::protocol::{Bridge, FaceSummary, Overhang, OverhangFace};
 use glam::DVec3;
 use opencascade::mesh::Mesh;
 use opencascade::adhoc::AdHocShape;
-use opencascade::primitives::{BooleanShape, Crossing, Edge, Face, PointState, Shape};
+use opencascade::primitives::{BooleanShape, Crossing, Edge, Face, PointState, Shape, SolidProbe};
 use parcad_core::planar_supports;
 
 /// Faces at or under this angle to the bed need support or a bridge: the
@@ -145,6 +145,8 @@ pub fn overhang(
     let body_faces: Vec<Face> = body.shape.faces().collect();
     let on_bed = |p: DVec3| [p.dot(u), p.dot(v)];
     let mut caster = body.shape.ray_caster(1e-4);
+    // Loaded for the first ceiling and kept: loading the solid was most of each question.
+    let mut probe: Option<SolidProbe> = None;
     let mut bridges = Vec::new();
     let mut listed = Vec::new();
     for hit in hits.iter() {
@@ -158,10 +160,11 @@ pub fn overhang(
             hit.exact
                 && hit.angle <= CEILING_DEG
                 && planar_supports::encloses(&segments(&laid_flat(face.outer_wire().edges(), on_bed)), middle)
-                && body.shape.classify_point(centre - up * 1e-3, 1e-4) != PointState::Inside
+                && probe.get_or_insert_with(|| body.shape.solid_probe()).classify_points(&[centre - up * 1e-3], 1e-4)
+                    != [PointState::Inside]
         });
         if let Some(ceiling) = ceiling {
-            let held = held_edges(body.shape, ceiling, up);
+            let held = held_edges(probe.get_or_insert_with(|| body.shape.solid_probe()), ceiling, up);
             let walls = laid_flat(held.iter().cloned(), on_bed);
             let hull = planar_supports::convex_hull(&walls.concat());
             let crossing = planar_supports::contains(&hull, middle, SUPPORT_DEFLECTION_MM)
@@ -231,7 +234,7 @@ fn segments(lines: &[Vec<[f64; 2]>]) -> Vec<[[f64; 2]; 2]> {
 /// just past the edge's middle and just below the ceiling. One probe per
 /// B-rep edge, however finely the mesh cut it, classified against one loaded
 /// solid.
-fn held_edges(shape: &Shape, ceiling: &Face, up: DVec3) -> Vec<Edge> {
+fn held_edges(solid: &mut SolidProbe, ceiling: &Face, up: DVec3) -> Vec<Edge> {
     let flat = |p: DVec3| p - up * p.dot(up);
     let (edges, probes): (Vec<Edge>, Vec<DVec3>) = ceiling
         .edges()
@@ -249,7 +252,7 @@ fn held_edges(shape: &Shape, ceiling: &Face, up: DVec3) -> Vec<Edge> {
         .unzip();
     edges
         .into_iter()
-        .zip(shape.classify_points(&probes, 1e-4))
+        .zip(solid.classify_points(&probes, 1e-4))
         .filter_map(|(edge, state)| (state == PointState::Inside).then_some(edge))
         .collect()
 }

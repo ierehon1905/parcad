@@ -1,0 +1,40 @@
+Say where a solid classifier aims its next segment from.
+
+What it adds
+  BRepClass3d_SolidExplorer aims each point's ray at a point of a face,
+  taken from a parameter along one of the face's edges (myParamOnEdge).
+  OtherSegment puts the parameter back after every face it tries, and
+  moves it only when a point has found no face of the solid to aim at;
+  the same pass is the only one that replaces a face's intersector. So
+  the parameter is the one thing a classification leaves for the next,
+  and while it has not moved, the points classified so far would have
+  had the same answers in any order, or from another explorer of the
+  same solid.
+
+  AimParameter() returns it. Nothing in OCCT reads it. parcad classifies
+  the points of one solid in runs on separate threads, each run with an
+  explorer of its own, and keeps the answers only if no run's parameter
+  moved; otherwise it classifies them in one run, as before.
+
+How it was measured
+  See vendor/occt-sys/PARCAD-CHANGES.md: the replies of two parts and
+  the corpus, with the runs side by side and in one.
+
+Upstream status
+  Not yet reported.
+
+--- a/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SolidExplorer.hxx	2026-11-16 03:59:09
++++ b/src/ModelingAlgorithms/TKTopAlgo/BRepClass3d/BRepClass3d_SolidExplorer.hxx	2026-11-16 03:59:09
+@@ -183,6 +183,12 @@
+ 
+   Standard_EXPORT void Destroy();
+ 
++  //! Where along an edge the next segment is aimed from. It is the one thing
++  //! a classification leaves for the next, and it moves only when a point
++  //! found no face to aim at: unchanged, the points classified since might
++  //! have been classified in any order.
++  double AimParameter() const { return myParamOnEdge; }
++
+ private:
+   BRepClass3d_SolidExplorer(const BRepClass3d_SolidExplorer& Oth) = delete;
+ 

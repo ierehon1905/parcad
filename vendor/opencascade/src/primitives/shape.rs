@@ -891,17 +891,50 @@ impl Shape {
     }
 
     /// [`Shape::classify_point`] for every one of `points`, loading the solid
-    /// once. Added for parcad; see PARCAD-CHANGES.md.
+    /// once a thread: the points are classified in runs side by side, which
+    /// answers as one run does unless a run says a point's answer rested on
+    /// the points before it, and then one run is what is made. Added for
+    /// parcad; see PARCAD-CHANGES.md.
     pub fn classify_points(&self, points: &[DVec3], tolerance: f64) -> Vec<PointState> {
+        /// Points a run is worth loading the solid again for.
+        const RUN: usize = 8;
+        // A finished shape is only read here, and OCCT reads one from many threads.
+        struct Read<'a>(&'a Shape);
+        unsafe impl Sync for Read<'_> {}
+        impl Read<'_> {
+            fn run(&self, points: &[f64], tolerance: f64) -> (Vec<i32>, bool) {
+                let mut carried = false;
+                let states = ffi::BRepClass3d_classify_points(&self.0.inner, points, tolerance, &mut carried);
+                (states, carried)
+            }
+        }
+        let shape = Read(self);
+        let run = |points: &[f64]| shape.run(points, tolerance);
         let flat: Vec<f64> = points.iter().flat_map(|p| p.to_array()).collect();
-        ffi::BRepClass3d_classify_points(&self.inner, &flat, tolerance)
-            .into_iter()
-            .map(|state| match state {
-                0 => PointState::Inside,
-                1 => PointState::Outside,
-                2 => PointState::OnBoundary,
-                _ => PointState::Unknown,
+        let threads = if cfg!(target_family = "wasm") {
+            1
+        } else {
+            std::thread::available_parallelism().map_or(1, |n| n.get()).min(points.len() / RUN)
+        };
+        let side_by_side = (threads > 1).then(|| {
+            let each = points.len().div_ceil(threads) * 3;
+            std::thread::scope(|scope| {
+                let runs: Vec<_> = flat.chunks(each).map(|part| scope.spawn(|| run(part))).collect();
+                let mut states = Vec::with_capacity(points.len());
+                let mut carried = false;
+                for part in runs {
+                    let (part, moved) = part.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+                    states.extend(part);
+                    carried |= moved;
+                }
+                (!carried).then_some(states)
             })
+        });
+        side_by_side
+            .flatten()
+            .unwrap_or_else(|| run(&flat).0)
+            .into_iter()
+            .map(PointState::of)
             .collect()
     }
 
@@ -945,6 +978,12 @@ impl Shape {
             .map(|c| dvec3(c[0], c[1], c[2]))
             .collect();
         (points, sampled as usize)
+    }
+
+    /// Load this solid for point-in-solid questions asked a call at a time.
+    /// Added for parcad; see PARCAD-CHANGES.md.
+    pub fn solid_probe(&self) -> SolidProbe {
+        SolidProbe { inner: ffi::SolidProbe_new(&self.inner) }
     }
 
     /// Load this shape for repeated nearest-boundary-point questions. Added
@@ -1040,6 +1079,17 @@ pub enum PointState {
     /// Within the classification tolerance of a face.
     OnBoundary,
     Unknown,
+}
+
+impl PointState {
+    fn of(code: i32) -> Self {
+        match code {
+            0 => PointState::Inside,
+            1 => PointState::Outside,
+            2 => PointState::OnBoundary,
+            _ => PointState::Unknown,
+        }
+    }
 }
 
 /// Which way a line crosses the material at a hit. Added for parcad.
@@ -1163,6 +1213,20 @@ impl RayCaster {
         }
         hits.sort_by(|a, b| a.distance.total_cmp(&b.distance));
         hits
+    }
+}
+
+/// A solid held loaded for point-in-solid questions; each call answers as
+/// [`Shape::classify_points`] on its own would. Added for parcad; see
+/// PARCAD-CHANGES.md.
+pub struct SolidProbe {
+    inner: UniquePtr<ffi::SolidProbe>,
+}
+
+impl SolidProbe {
+    pub fn classify_points(&mut self, points: &[DVec3], tolerance: f64) -> Vec<PointState> {
+        let flat: Vec<f64> = points.iter().flat_map(|p| p.to_array()).collect();
+        ffi::SolidProbe_classify(self.inner.pin_mut(), &flat, tolerance).into_iter().map(PointState::of).collect()
     }
 }
 

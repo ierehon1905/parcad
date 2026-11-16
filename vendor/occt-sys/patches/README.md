@@ -86,3 +86,8 @@ dropping it.
   meeting it otherwise costs thousands of root searches that fail. Header
   inside the patch, with the measurements and `PARCAD_APART_VERIFY`; not yet
   offered upstream.
+- `0010-say-where-a-classifier-aims.patch` — `BRepClass3d_SolidExplorer`
+  gets `AimParameter()`, the one thing a point classification leaves for the
+  next, so a caller can tell that points classified on separate explorers
+  were answered as one explorer would have. An accessor only. Header inside
+  the patch; not yet offered upstream.
