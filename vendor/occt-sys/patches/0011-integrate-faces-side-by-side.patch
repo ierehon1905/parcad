@@ -1,0 +1,174 @@
+Take the faces' adaptive integrals side by side, and add them in order.
+
+What it changes
+  BRepGProp::SurfaceProperties and VolumeProperties with an Eps integrate
+  a shape face by face (BRepGProp_Sinert, BRepGProp_Vinert), each face
+  about the same point, and add each result to the shape's as they go.
+  The adaptive integral of a B-spline face is milliseconds, and a part in
+  hundreds of them is integrated on one thread.
+
+  One face's integral reads nothing of another's: the loops reuse one
+  BRepGProp_Face, one BRepGProp_Domain and one integrator, and each is
+  loaded afresh per face. So with Eps < 1 the faces are listed in the
+  loop's own order, integrated with OSD_Parallel, each with a face,
+  a domain and an integrator of its own, and then added to the shape's
+  properties in that order: the same additions of the same numbers one
+  thread makes. A shape with a face that has no surface, or no wire (the
+  loop would hand such a face the domain of the face before it), and a
+  shape of one face, take the loop as it was. The non-adaptive calls and
+  the triangulation paths are untouched.
+
+How it was measured
+  See vendor/occt-sys/PARCAD-CHANGES.md.
+
+Upstream status
+  Not yet reported.
+
+--- a/src/ModelingAlgorithms/TKTopAlgo/BRepGProp/BRepGProp.cxx	2026-11-16 03:59:09
++++ b/src/ModelingAlgorithms/TKTopAlgo/BRepGProp/BRepGProp.cxx	2026-11-16 03:59:09
+@@ -32,7 +32,9 @@
+ #include <TopTools_ShapeMapHasher.hxx>
+ #include <TopoDS_Compound.hxx>
+ #include <TopoDS_Shape.hxx>
++#include <OSD_Parallel.hxx>
+ #include <cmath>
++#include <vector>
+ 
+ #ifdef OCCT_DEBUG
+ static int AffichEps = 0;
+@@ -164,6 +166,105 @@
+   }
+ }
+ 
++namespace
++{
++//! One face's adaptive integral about the point every face is integrated
++//! about, and the error it reached.
++template <class Inert>
++struct FaceIntegral
++{
++  TopoDS_Face Face;
++  Inert       G;
++  double      Error = 0.0;
++};
++
++//! Integrates each face with a face and a domain of its own: nothing is
++//! carried from one face's integral to the next.
++template <class Inert>
++struct FaceIntegrator
++{
++  std::vector<FaceIntegral<Inert>>* Faces;
++  double                            Eps;
++
++  void operator()(const int theIndex) const
++  {
++    FaceIntegral<Inert>& aFace = (*Faces)[theIndex];
++    BRepGProp_Face       BF;
++    BRepGProp_Domain     BD;
++    BF.Load(aFace.Face);
++    BD.Init(aFace.Face);
++    aFace.G.Perform(BF, BD, Eps);
++    aFace.Error = aFace.G.GetEpsilon();
++  }
++};
++
++//! The faces of S the adaptive loops below integrate exactly, in the order
++//! they add them, each to be integrated about thePnt; forVolume keeps the
++//! FORWARD and REVERSED ones alone, as the volume loop does. False when a
++//! face would be read from its triangulation or has no wire: those loops
++//! then run as they always have.
++template <class Inert>
++bool exactFaces(const TopoDS_Shape&               S,
++                const gp_Pnt&                     thePnt,
++                const bool                        SkipShared,
++                const bool                        forVolume,
++                std::vector<FaceIntegral<Inert>>& theFaces)
++{
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aFwdFMap;
++  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> aRvsFMap;
++  TopLoc_Location                                        aLocDummy;
++  for (TopExp_Explorer ex(S, TopAbs_FACE); ex.More(); ex.Next())
++  {
++    const TopoDS_Face& F     = TopoDS::Face(ex.Current());
++    const bool         isFwd = F.Orientation() == TopAbs_FORWARD;
++    const bool         isRvs = F.Orientation() == TopAbs_REVERSED;
++    if (SkipShared)
++    {
++      if (forVolume ? ((isFwd && !aFwdFMap.Add(F)) || (isRvs && !aRvsFMap.Add(F)))
++                    : !aFwdFMap.Add(F))
++      {
++        continue;
++      }
++    }
++    if (BRep_Tool::Surface(F, aLocDummy).IsNull() || F.NbChildren() == 0)
++    {
++      return false;
++    }
++    if (forVolume && !isFwd && !isRvs)
++    {
++      continue;
++    }
++    FaceIntegral<Inert> aFace;
++    aFace.Face = F;
++    aFace.G.SetLocation(thePnt);
++    theFaces.push_back(aFace);
++  }
++  return theFaces.size() > 1;
++}
++
++//! Every face's integral taken side by side and added in the faces' order,
++//! which is the sum one thread makes: the adaptive integrals are most of a
++//! measurement of a part in hundreds of B-spline faces.
++template <class Inert>
++double addInParallel(std::vector<FaceIntegral<Inert>>& theFaces,
++                     GProp_GProps&                     Props,
++                     const double                      Eps)
++{
++  FaceIntegrator<Inert> anIntegrator{&theFaces, Eps};
++  OSD_Parallel::For(0, static_cast<int>(theFaces.size()), anIntegrator);
++  double ErrorMax = 0.0;
++  for (const FaceIntegral<Inert>& aFace : theFaces)
++  {
++    if (ErrorMax < aFace.Error)
++    {
++      ErrorMax = aFace.Error;
++    }
++    Props.Add(aFace.G);
++  }
++  return ErrorMax;
++}
++} // namespace
++
+ static double surfaceProperties(const TopoDS_Shape& S,
+                                 GProp_GProps&       Props,
+                                 const double        Eps,
+@@ -177,6 +278,14 @@
+   double           ErrorMax = 0.0, Error;
+   TopExp_Explorer  ex;
+   gp_Pnt           P(roughBaryCenter(S));
++  if (Eps < 1.0 && !UseTriangulation)
++  {
++    std::vector<FaceIntegral<BRepGProp_Sinert>> aFaces;
++    if (exactFaces(S, P, SkipShared, false, aFaces))
++    {
++      return addInParallel(aFaces, Props, Eps);
++    }
++  }
+   BRepGProp_Sinert G;
+   G.SetLocation(P);
+   BRepGProp_MeshProps MG(BRepGProp_MeshProps::Sinert);
+@@ -308,6 +417,14 @@
+ #endif
+   double           ErrorMax = 0.0, Error = 0.0;
+   TopExp_Explorer  ex;
++  if (Eps < 1.0 && !UseTriangulation)
++  {
++    std::vector<FaceIntegral<BRepGProp_Vinert>> aFaces;
++    if (exactFaces(S, theRefPnt, SkipShared, true, aFaces))
++    {
++      return addInParallel(aFaces, Props, Eps);
++    }
++  }
+   BRepGProp_Vinert G;
+   G.SetLocation(theRefPnt);
+   BRepGProp_MeshProps MG(BRepGProp_MeshProps::Vinert);

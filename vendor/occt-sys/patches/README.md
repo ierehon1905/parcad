@@ -91,3 +91,7 @@ dropping it.
   next, so a caller can tell that points classified on separate explorers
   were answered as one explorer would have. An accessor only. Header inside
   the patch; not yet offered upstream.
+- `0011-integrate-faces-side-by-side.patch` — `BRepGProp`'s adaptive surface
+  and volume integrals take a shape's faces with `OSD_Parallel` and add the
+  results in the faces' order, which is the sum one thread makes. Header
+  inside the patch; not yet offered upstream.

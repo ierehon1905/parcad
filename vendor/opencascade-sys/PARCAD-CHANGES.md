@@ -251,6 +251,11 @@ distance field the B-rep does not have.
 - `Shape_bounds_optimal(shape, …)`: `BRepBndLib::AddOptimal` off the exact
   geometry, no triangulation and no tolerance gap, so a tag's extent is the
   surface's own reach and not the mesh's.
+  `AddOptimal` bounds a shape face by face and widens its box by each face's,
+  so for a shape of several faces and no loose edge or vertex the faces are
+  bounded with `OSD_Parallel` and the box widened by them in order.
+  `Shape_faces_json` measures its faces the same way, each one's
+  `SurfaceProperties` side by side and the list written in order.
 
 Two new includes for them: `BRepClass3d_SolidClassifier.hxx` and
 `GeomAdaptor_Curve.hxx`. Both classes are in `TKTopAlgo` / `TKG3d`, which

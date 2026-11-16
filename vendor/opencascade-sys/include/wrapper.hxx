@@ -554,7 +554,28 @@ inline size_t Shape_identity_hash(const TopoDS_Shape &shape) { return std::hash<
 inline bool Shape_bounds_optimal(const TopoDS_Shape &shape, double &x0, double &y0, double &z0, double &x1,
                                  double &y1, double &z1) {
   Bnd_Box box;
-  BRepBndLib::AddOptimal(shape, box, /*useTriangulation*/ false, /*useShapeTolerance*/ false);
+  std::vector<TopoDS_Shape> faces;
+  for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next()) {
+    faces.push_back(f.Current());
+  }
+  const bool loose = TopExp_Explorer(shape, TopAbs_EDGE, TopAbs_FACE).More() ||
+                     TopExp_Explorer(shape, TopAbs_VERTEX, TopAbs_EDGE).More();
+  if (faces.size() < 2 || loose) {
+    BRepBndLib::AddOptimal(shape, box, /*useTriangulation*/ false, /*useShapeTolerance*/ false);
+  } else {
+    // AddOptimal bounds a shape face by face and widens its box by each face's: the same, the faces side by side.
+    std::vector<Bnd_Box> each(faces.size());
+    OSD_Parallel::For(0, static_cast<int>(faces.size()), [&](int i) {
+      BRepBndLib::AddOptimal(faces[i], each[i], /*useTriangulation*/ false, /*useShapeTolerance*/ false);
+    });
+    for (const Bnd_Box &face : each) {
+      if (!face.IsVoid()) {
+        double lo[3], hi[3];
+        face.Get(lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+        box.Update(lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]);
+      }
+    }
+  }
   if (box.IsVoid()) {
     return false;
   }
@@ -3033,15 +3054,22 @@ inline rust::String Shape_faces_json(const TopoDS_Shape &shape) {
     }
   }
 
+  // Each face's integral is its own, so they are taken side by side and written in order.
+  std::vector<TopoDS_Face> listed;
+  for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next()) {
+    listed.push_back(TopoDS::Face(f.Current()));
+  }
+  std::vector<GProp_GProps> measured(listed.size());
+  OSD_Parallel::For(0, static_cast<int>(listed.size()),
+                    [&](int i) { BRepGProp::SurfaceProperties(listed[i], measured[i]); });
+
   std::ostringstream out;
   out.precision(15);
   out << "[";
-  position = 0;
-  for (TopExp_Explorer f(shape, TopAbs_FACE); f.More(); f.Next(), ++position) {
-    const TopoDS_Face &face = TopoDS::Face(f.Current());
-    GProp_GProps props;
-    BRepGProp::SurfaceProperties(face, props);
-    out << (position > 0 ? "," : "") << "{\"area_mm2\":" << props.Mass() << ",\"centroid\":";
+  for (size_t at = 0; at < listed.size(); ++at) {
+    const TopoDS_Face &face = listed[at];
+    const GProp_GProps &props = measured[at];
+    out << (at > 0 ? "," : "") << "{\"area_mm2\":" << props.Mass() << ",\"centroid\":";
     write_pnt(out, props.CentreOfMass());
     out << ",\"adjacent\":";
     write_neighbours(out, face, faces, edge_faces, &numbered);

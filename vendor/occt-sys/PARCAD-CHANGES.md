@@ -100,7 +100,21 @@ of `lib`, `libd`, `libi` holds `TKernel`, for a fresh build and for
 
 ## Changes to OCCT itself
 
-Ten patches.
+Eleven patches.
+
+`patches/0011-integrate-faces-side-by-side.patch`: `BRepGProp`'s adaptive
+`SurfaceProperties` and `VolumeProperties` integrate a shape face by face
+about one point and add each face's result to the shape's as they go, on one
+thread: 1.2 s for a keycap of 215 B-spline faces, every time it was measured.
+No face's integral reads another's, so with an `Eps` the faces are listed in
+the loop's order, integrated with `OSD_Parallel`, each with a face, a domain
+and an integrator of its own, and added in that order: the additions one
+thread makes, of the same numbers. A shape holding a face with no surface or
+no wire, and a shape of one face, take the loop as it was; the non-adaptive
+calls and the triangulation paths are untouched. Measured: those two integrals
+0.17 s in place of 1.2 s, and the volume, area and centroid of the keycap and
+of each of an assembly's 25 bodies equal to the last digit of the reply. Not
+yet reported upstream.
 
 `patches/0010-say-where-a-classifier-aims.patch`: `BRepClass3d_SolidExplorer`
 aims each point's ray from a parameter along a face's edge, puts it back after
