@@ -58,6 +58,9 @@ pub struct Body<'a> {
     boundary: Shape,
     /// A surface body: faces with no inside.
     pub surface: bool,
+    /// [`describe_faces`] of this shape and its tight box, where a measurement of it is kept.
+    pub described: Option<Vec<FaceSummary>>,
+    pub extent: Option<Option<(DVec3, DVec3)>>,
 }
 
 impl<'a> Body<'a> {
@@ -68,6 +71,8 @@ impl<'a> Body<'a> {
             face_tags: face_tags(shape, names),
             boundary: Compound::from_shapes(shape.faces().map(Shape::from)).into(),
             surface: crate::backend::kind_of(shape).is_ok_and(|k| k == crate::backend::Kind::Surface),
+            described: None,
+            extent: None,
         }
     }
 
@@ -314,7 +319,7 @@ fn patches(shape: &Shape) -> usize {
 pub fn perceive(bodies: &[Body], spec: &Perceive) -> Result<Perceived> {
     let extent = bodies
         .iter()
-        .filter_map(|b| b.shape.bounds_optimal())
+        .filter_map(|b| b.extent.unwrap_or_else(|| b.shape.bounds_optimal()))
         .fold(None, |acc: Option<(DVec3, DVec3)>, (lo, hi)| {
             Some(match acc {
                 None => (lo, hi),
@@ -1494,7 +1499,7 @@ struct FacesOf {
 impl FacesOf {
     fn new(body: &Body) -> Self {
         Self {
-            summaries: describe_faces(body.shape),
+            summaries: body.described.clone().unwrap_or_else(|| describe_faces(body.shape)),
         }
     }
 

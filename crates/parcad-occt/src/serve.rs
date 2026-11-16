@@ -293,7 +293,13 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
             }
         }
         breadcrumb("measuring the solid");
-        let answer = perceive::perceive(&perceive::bodies_of(&part), spec).and_then(|mut answer| {
+        let mut bodies = perceive::bodies_of(&part);
+        let references = part.bodies.iter().map(|body| body.reference).chain(std::iter::repeat(false));
+        let keys = part.keys.iter().zip(references).filter(|(_, reference)| !reference);
+        for (body, (key, _)) in bodies.iter_mut().zip(keys) {
+            cache.measures.lend(body, key);
+        }
+        let answer = perceive::perceive(&bodies, spec).and_then(|mut answer| {
             if !spec.motions.is_empty() {
                 breadcrumb("moving a body through its range");
                 answer.motions = crate::motion::measure(&part, &spec.motions)?;
@@ -858,6 +864,8 @@ struct KeptBody {
     shape: Shape,
     measured: Measured,
     overhang: Option<(OverhangAsk, Overhang)>,
+    /// The shape's tight box, once a sweep has asked for it.
+    extent: Option<Option<(glam::DVec3, glam::DVec3)>>,
     used: u64,
 }
 
@@ -907,10 +915,18 @@ impl MeasureCache {
         if let Some(key) = key {
             self.bodies.insert(
                 (body.name.map(str::to_owned), key.clone()),
-                KeptBody { shape: body.shape.clone(), measured: measured.clone(), overhang: None, used: self.generation },
+                KeptBody { shape: body.shape.clone(), measured: measured.clone(), overhang: None, extent: None, used: self.generation },
             );
         }
         Ok(measured)
+    }
+
+    /// Hand a sweep of `body` the face description and tight box kept for this very shape.
+    fn lend(&mut self, body: &mut perceive::Body, key: &Option<String>) {
+        let Some(kept) = self.kept(body, key) else { return };
+        let extent = *kept.extent.get_or_insert_with(|| body.shape.bounds_optimal());
+        body.described = Some(kept.measured.faces.clone());
+        body.extent = Some(extent);
     }
 
     fn overhang(&mut self, body: &perceive::Body, key: &Option<String>, measured: &Measured, up: glam::DVec3, declared: bool) -> Overhang {
