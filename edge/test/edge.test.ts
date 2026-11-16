@@ -432,8 +432,8 @@ test("a way in whose secrets are missing is not offered", () => {
 });
 
 /** A sign-in by access code: the quiet link on the sign-in page, then its form. */
-async function accessSignIn(code: string) {
-  const client = await register();
+async function accessSignIn(code: string, as?: string) {
+  const client = as ?? (await register());
   const { jar, handle, back, html } = await openSignIn(client);
   expect(html).toContain("Have an access code?");
   const asked = await go(jar, `${EDGE}/authorize`, form({ handle, back, method: "access-code" }));
@@ -456,6 +456,17 @@ test("the access code signs in as the account review, which sees the shipped par
   expect(listed.isError).toBeFalsy();
   expect(JSON.parse(listed.content[0].text).projects).toContain("bracket");
   expect(readdirSync(join(dir, "tenants"))).toContain(REVIEW_ACCOUNT);
+});
+
+test("a second reviewer through the same client leaves the first one signed in", async () => {
+  const shared = await register();
+  const first = await accessSignIn(ACCESS_CODE, shared);
+  const firstToken = (await tokenFor(shared, first.sent.headers.get("location")!)).access_token;
+  const second = await accessSignIn(ACCESS_CODE, shared);
+  const secondToken = (await tokenFor(shared, second.sent.headers.get("location")!)).access_token;
+  expect((await callTool(secondToken, "list_projects")).isError).toBeFalsy();
+  expect((await initialize(firstToken)).status).toBe(200);
+  expect((await callTool(firstToken, "list_projects")).isError).toBeFalsy();
 });
 
 test("a wrong access code says so and nothing else, and ten in an hour shut out the right one too", async () => {

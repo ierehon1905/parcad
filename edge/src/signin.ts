@@ -129,6 +129,8 @@ async function withAccessCode(request: Request, env: Env, form: FormData, handle
     metadata: {},
     scope: approved.request.scope,
     props: { account: REVIEW_ACCOUNT, access: await fingerprint(env) },
+    // Every reviewer signs in as `review` through one client (ChatGPT's); the default revoke would sign each previous one out. The code's fingerprint still ends them all.
+    revokeExistingGrants: false,
   });
   return redirect(redirectTo, approved.headers);
 }
