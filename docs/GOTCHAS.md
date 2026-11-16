@@ -1694,11 +1694,21 @@ entry), refuses the union, naming the inputs lost and any alert the kernel
 raised. With a blend the check reads the boolean before the
 blend, which may take material off a convex seam. It costs 150 ms of 2.1 s on
 the twisted planter's 38-input saucer and 20 ms on 48 spheres, paid once per
-build. A face of an input that is itself a face of the result (`IsSame`) is
-not classified: its points are on the result, which the next entry counts as
-kept whatever the classifier says. On a keycap's union of a 55-section loft
-with its wheels that left 197 of 642 points, of a check that had cost 1.9 s. `eval/cases/refuse-union-grazing-domes.json` holds it. Which OCCT step
+build. `eval/cases/refuse-union-grazing-domes.json` holds it. Which OCCT step
 loses the input is not found yet.
+
+Only a point that could be off the result is classified. A face of an input
+that is itself a face of the result (`IsSame`) has every point on it, and so
+has a point inside a face of the result on the same surface, where a boolean
+leaves what it kept of a face it split (`Shape_face_grid_off`); the next entry
+counts both as kept whatever the classifier says. One classifier serves every
+input. On a keycap's union of a 55-section loft with its wheels and mirrors
+that leaves 82 of 642 points, 64 of them buried inside the result, and those
+are what the check still costs: 1.2 s, 15 ms a point, each a ray that crosses
+the boxes of the skin's section rings and runs `Extrema_ExtCC` against every
+one. Classifying a buried point against the other inputs instead would be
+cheap and is not the same check: a void the kernel left where two inputs
+overlap is inside both.
 
 ### A point on a B-spline wall read as outside the union that kept it *(fixed 2026-11-09)*
 
@@ -1748,6 +1758,100 @@ leaves open (`Reach` in `backend.rs`). A keycap whose eighteen single-tool cuts
 each optimised the box of the same 55-section loft spent 5.3 s of a 13.9 s
 build in `BoxOptimal`, and 0.5 s after. Over the corpus's 2,439 pair decisions
 the enclosing box never called a pair apart that the tight one did not.
+
+A loft's check that it stays within its sections' extent asked for the tight
+box too, 0.4 s for each of that keycap's skins. `Shape_proven_within` proves
+the skin inside the extent instead, from boxes that hold each Bezier patch,
+halved where one pokes out, in about a millisecond; the tight box is measured
+only for a loft the proof does not cover, which is one that bulges.
+
+### An edge that runs beside a B-spline face cost a boolean thousands of failed searches *(fixed 2026-11-15)*
+
+A keycap shaped like a car: a 55-section smooth loft, its recesses cut 0.6 mm
+deep by prisms that had each had a second loft, 0.6 mm inside the first, cut
+out of them. 7.4 s of B-rep build, 4.2 s of it inside OCCT's booleans, and
+most of that in `BOPAlgo_PaveFiller::PerformEF`: 2.4 s of wall, 20 s of CPU on
+fourteen threads.
+
+`PerformEF` intersects every edge with every face whose boxes overlap. On a
+B-spline face that is `IntCurveSurface_HInter`: a polygon of the edge against
+a polyhedron of the face, and an exact root search from every place the two
+come within their deflections of each other. An edge that runs beside the face
+without meeting it starts thousands of searches, and each fails only when its
+iterations run out. One tyre's circle, 0.12 mm from one band of the skin,
+started 21,805 searches and took 0.64 s to find nothing. Of the 1,172
+edge/face pairs in the part's last cut, 855 had no common part, and they took
+5.2 s of the 6.6 s the pairs cost on one thread.
+
+Patch 0009 (`vendor/occt-sys/patches/`) proves such a pair apart before
+intersecting it, and skips the intersection on a proof. The proof is exact:
+each piece is enclosed in a box certain to hold it (the control points of a
+Bezier piece of the spline; the corners of an analytic piece grown by its
+second derivative's bound), and boxes that will not separate are halved until
+they do or a budget of 20,000 comparisons runs out. Nothing is sampled, and a
+pair it cannot prove is intersected as before. 806 of the 1,172 pairs were
+proven, in 39 ms in all.
+
+What was tried and dropped or had to be put right, with its number:
+
+- **Splitting the faces first** (`ShapeUpgrade_ShapeDivideClosed`): the split
+  shape fails `BRepCheck` and the boolean errors. A split that held would
+  still move every intersection curve in its last digits.
+- **`SetUseOBB`**: slower, 2.14 s against 1.93 s for the same cut. A band of
+  the skin is a ring, and a ring's oriented box is its axis-aligned one.
+- **Dropping the start points on a stretch of the edge proven clear of the
+  face**, which would have taken the pairs that do meet from 50 ms to 1 ms:
+  **wrong**. Three of five booleans came back with other face counts. The
+  search reaches a root from start points far along the edge from it — one
+  ring found its only crossing, at parameter 0.626, from starts at 0.534 to
+  0.571 and from none nearer — so the polygon and polyhedron do not put a
+  start beside every root, and the far ones are load-bearing.
+- **A proof that recursed as deep as its budget**: the first version crashed
+  four corpus parts (`helical-groove`, `wash-bottle`, `smooth-boss-root`,
+  `refuse-tapered-pipe-through-itself`) with SIGILL. A boolean's pool threads
+  have 512 KB of stack, and a Bezier patch that closes on itself, split by
+  the distance between its ends, halved the wrong way as deep as the budget of
+  20,000 without shrinking. The split goes by the length of the control net now, and a proof
+  gives up 128 halvings down whatever its budget. The keycap never met it;
+  the corpus did.
+- **The same proof for face/face pairs**: 408 of 670 pairs proven in the same
+  cut, a third of the face/face time, about 0.1 s of the cut. Not taken:
+  `IntTools_FaceFace` intersects each face over a rectangle it has enlarged,
+  and two analytic faces on their whole surfaces, so "the faces are apart" is
+  not yet "it finds nothing".
+- **The same proof for the classifier's ray against an edge**
+  (`BRepClass3d_BndBoxTreeSelectorLine::Accept`, a global optimisation per
+  spline edge the ray's box crosses): not exact. `Extrema_ExtCC` also reports
+  *parallel*, at any distance, and a parallel edge makes the classifier throw
+  the ray away and pick another.
+
+With that patch, a loft's extent proven instead of measured, the union's
+check classifying only the points it has to and intersections run on every
+thread (the entries above and `vendor/opencascade/PARCAD-CHANGES.md`), on a
+release worker, medians of three:
+
+| | before | after |
+|---|---|---|
+| the keycap, built cold | 7.37 s | 4.76 s |
+| one tyre 0.05 mm narrower, on the worker that built it | 4.40 s | 2.89 s |
+| a 25-body assembly, built cold | 2.08 s | 1.83 s |
+
+The replies are the same bytes, timings apart, for all three and for 234 of
+the 245 scripts in `eval/scripts/` and `examples/` that build alone. The other
+eleven, every one an offset, a shell or a thickened surface, do not come out
+the same twice from one worker, before or after: most list the same faces in
+another order from run to run, and two move an edge by microns. Summed over
+the 245 the
+build time did not move, 47.4 s and 48.2 s. Inside the keycap's build its 20
+cuts went from 3.38 s to 2.41 s, its unions from 2.24 s to 1.52 s, its twelve
+intersections from 0.47 s to 0.23 s, and what follows a skin's crossing check
+from 0.92 s to 0.05 s.
+
+What is left is pairs that do meet and run close on the way, which start the
+same failing searches and which no proof of this kind can take, and the 1.2 s
+of rays in the union's check ("A union that drops solids"). Getting the keycap
+under 2.5 s means changing what the kernel computes for those, and then the
+reply is no longer the same bytes.
 
 ### A warm worker and a fresh one differ in the thirteenth digit, and in which of two equal clearances they name
 
