@@ -1888,6 +1888,29 @@ out the worker whose cache was last filled from the same document, else the
 one used last, and `a_part_goes_back_to_the_worker_that_built_it` fails on
 either of the other two rules.
 
+### A sweep reads one shape from every core
+
+Found on 2026-11-16, making a keycap's thickness sweeps faster. A sweep's
+readings are chained only within a face: the last ball's radius on a face is
+the first radius tried at the next sample there, and nothing else carries
+over. So the faces are swept on as many threads as there are cores
+(`perceive::Finished::sweep_face`, `parcad_core::par::map_with`), the largest
+first, and the readings are put back in the order one thread took them. Each
+thread builds a `NearestBoundary` of its own, 17 ms on 336 faces, because the
+class answers from projectors, classifiers and surface adaptors it changes as
+it goes; the shape under them is only read, which OCCT's own parallel booleans
+and mesher rely on as well. Two rules follow, and breaking either changes
+replies in the last digits rather than failing:
+
+- nothing a reading depends on may cross faces. A guess shared between faces
+  would make the answer depend on which thread got there first;
+- a `NearestBoundary` answer must not depend on the questions before it. It
+  does not today: the replies for a 336-face keycap and a 25-body assembly are
+  the same parsed JSON as the one-thread sweep's, at 2000 and at 6000 samples.
+
+The 6000-sample sweep of the keycap went from 1.9 s to 1.1 s and the print
+check's from 1.0 s to 0.8 s; what is left is on one thread again.
+
 ### `role: "hole"` does not match a conical opening
 
 A countersink rim is an inner boundary of the top face by any reading, and

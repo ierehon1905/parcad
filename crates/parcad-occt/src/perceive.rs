@@ -705,52 +705,38 @@ fn thickness(bodies: &[Body], spec: &ThicknessSpec, diagonal: f64) -> ThicknessR
     let starts = surface_samples(&meshes, spacing);
 
     let faces: Vec<FacesOf> = bodies.iter().map(FacesOf::new).collect();
-    let mut nearest: Vec<NearestBoundary> = bodies.iter().map(|b| b.shape.nearest_boundary()).collect();
-    // Neighbouring samples on one face read alike, so the last reading there
-    // is the first radius tried.
-    let mut last_radius: HashMap<(usize, usize), f64> = HashMap::new();
     // How far into its face a sample on a convex edge is moved. Beside a
     // right-angled edge a ball there reads 1.1 times the threshold, so the
     // edge itself is not counted, and any wall thinner than the threshold
     // still is.
     let step = spec.threshold_mm.map_or(0.5 * spacing, |t| 0.55 * t);
-    for Start { body: b, face, uv, into, may_be_outside, .. } in starts {
-        let Some((p, outward)) = nearest[b].evaluate(face, uv, may_be_outside) else {
-            // A lattice point in the sliver between a curved boundary and its
-            // chord is not on the face at all; anything else is a failure.
-            if !may_be_outside {
-                discarded += 1;
-            }
-            continue;
-        };
-        // A first ball much wider than the wall asks every face near it.
-        let guess = last_radius.get(&(b, face)).copied().unwrap_or(finest);
-        // A point on the face's boundary is measured where it is only beside
-        // a concave edge; beside a convex one no ball fits. The probe that
-        // tells them apart can be fooled where a point lies on the line of
-        // another edge, and a point on a boundary's chord is up to the
-        // deflection inside the face, so a ball no wider than that moves too.
-        let mut reading = None;
-        if into.is_none() || !on_convex_edge(&mut nearest[b], p, -outward) {
-            reading = measure(&bodies[b], &faces[b], &mut nearest[b], p, -outward, face, guess, limit);
+    // A reading depends on the one before it only on its own face, so the
+    // faces are swept side by side, the largest first, and read back in order.
+    let mut by_face: Vec<Vec<(usize, Start)>> = Vec::new();
+    let mut place: HashMap<(usize, usize), usize> = HashMap::new();
+    for (i, start) in starts.into_iter().enumerate() {
+        let at = *place.entry((start.body, start.face)).or_insert(by_face.len());
+        if at == by_face.len() {
+            by_face.push(Vec::new());
         }
-        if let Some(into) = into.filter(|_| reading.as_ref().is_none_or(|s| s.thickness_mm < 4.0 * DEFLECTION_MM)) {
-            let along = (into - outward * into.dot(outward)).normalize_or_zero();
-            reading = match nearest[b].project(face, p + along * step) {
-                Some((q, outward)) if along != DVec3::ZERO => {
-                    measure(&bodies[b], &faces[b], &mut nearest[b], q, -outward, face, guess, limit)
-                }
-                _ => continue,
-            };
-        }
-        match reading {
-            Some(sample) => {
-                last_radius.insert((b, face), (0.5 * sample.thickness_mm).max(1e-3));
-                samples.push(sample);
-            }
-            None => discarded += 1,
-        }
+        by_face[at].push((i, start));
     }
+    by_face.sort_by_key(|face| std::cmp::Reverse(face.len()));
+    let shared = Finished { bodies, faces: &faces };
+    let count = bodies.len();
+    let swept = parcad_core::par::map_with(
+        &by_face,
+        || -> Vec<Option<NearestBoundary>> { (0..count).map(|_| None).collect() },
+        |nearest, starts| shared.sweep_face(nearest, starts, finest, step, limit),
+    );
+    let mut readings: Vec<(usize, ThicknessSample)> = Vec::new();
+    for (found, lost) in swept {
+        readings.extend(found);
+        discarded += lost;
+    }
+    readings.sort_by_key(|(i, _)| *i);
+    samples.extend(readings.into_iter().map(|(_, sample)| sample));
+    let mut nearest: Vec<NearestBoundary> = bodies.iter().map(|b| b.shape.nearest_boundary()).collect();
 
     // Readings beside a feather run down to nothing and the seam search
     // reports those exactly, so the reach is the thinnest sampled wall.
@@ -858,6 +844,76 @@ fn thickness(bodies: &[Body], spec: &ThicknessSpec, diagonal: f64) -> ThicknessR
         edges_checked,
         face_pairs_checked,
         surfaces_skipped: Vec::new(),
+    }
+}
+
+/// Finished bodies and their faces, read from every thread of a sweep.
+struct Finished<'a, 'b> {
+    bodies: &'a [Body<'b>],
+    faces: &'a [FacesOf],
+}
+
+// A finished shape is only read here, and OCCT reads one from many threads: docs/GOTCHAS.md, "A sweep reads one shape from every core".
+unsafe impl Sync for Finished<'_, '_> {}
+
+impl Finished<'_, '_> {
+    /// The readings on one face from its `starts`, each with its place among
+    /// all of them, and how many starts gave none. `nearest` is this thread's
+    /// own, a body's built when its first face comes up.
+    fn sweep_face(
+        &self,
+        nearest: &mut [Option<NearestBoundary>],
+        starts: &[(usize, Start)],
+        finest: f64,
+        step: f64,
+        limit: f64,
+    ) -> (Vec<(usize, ThicknessSample)>, usize) {
+        let mut readings = Vec::new();
+        let mut discarded = 0;
+        // Neighbouring samples on one face read alike, so the last reading
+        // there is the first radius tried.
+        let mut last_radius: Option<f64> = None;
+        for (i, Start { body: b, face, uv, into, may_be_outside, .. }) in starts {
+            let (b, face, uv, into) = (*b, *face, *uv, *into);
+            let body = &self.bodies[b];
+            let nearest = nearest[b].get_or_insert_with(|| body.shape.nearest_boundary());
+            let Some((p, outward)) = nearest.evaluate(face, uv, *may_be_outside) else {
+                // A lattice point in the sliver between a curved boundary and its
+                // chord is not on the face at all; anything else is a failure.
+                if !may_be_outside {
+                    discarded += 1;
+                }
+                continue;
+            };
+            // A first ball much wider than the wall asks every face near it.
+            let guess = last_radius.unwrap_or(finest);
+            // A point on the face's boundary is measured where it is only beside
+            // a concave edge; beside a convex one no ball fits. The probe that
+            // tells them apart can be fooled where a point lies on the line of
+            // another edge, and a point on a boundary's chord is up to the
+            // deflection inside the face, so a ball no wider than that moves too.
+            let mut reading = None;
+            if into.is_none() || !on_convex_edge(nearest, p, -outward) {
+                reading = measure(body, &self.faces[b], nearest, p, -outward, face, guess, limit);
+            }
+            if let Some(into) = into.filter(|_| reading.as_ref().is_none_or(|s| s.thickness_mm < 4.0 * DEFLECTION_MM)) {
+                let along = (into - outward * into.dot(outward)).normalize_or_zero();
+                reading = match nearest.project(face, p + along * step) {
+                    Some((q, outward)) if along != DVec3::ZERO => {
+                        measure(body, &self.faces[b], nearest, q, -outward, face, guess, limit)
+                    }
+                    _ => continue,
+                };
+            }
+            match reading {
+                Some(sample) => {
+                    last_radius = Some((0.5 * sample.thickness_mm).max(1e-3));
+                    readings.push((*i, sample));
+                }
+                None => discarded += 1,
+            }
+        }
+        (readings, discarded)
     }
 }
 
