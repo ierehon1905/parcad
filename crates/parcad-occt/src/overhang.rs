@@ -145,26 +145,36 @@ pub fn overhang(
     let body_faces: Vec<Face> = body.shape.faces().collect();
     let on_bed = |p: DVec3| [p.dot(u), p.dot(v)];
     let mut caster = body.shape.ray_caster(1e-4);
-    // Loaded for the first ceiling and kept: loading the solid was most of each question.
-    let mut probe: Option<SolidProbe> = None;
+    // Which hits are ceilings and which of their edges are held, a ceiling to
+    // a thread: each question is one a classifier loaded for it would answer.
+    let looked = Solid { body, faces: &body_faces };
+    let ceilings = parcad_core::par::map_with(
+        &hits,
+        || None,
+        |probe: &mut Option<SolidProbe>, hit: &Hit| {
+            let (body, faces) = looked.parts();
+            let centre = hit.moment / hit.area;
+            let face = faces.get(hit.face)?;
+            let ceiling = hit.exact
+                && hit.angle <= CEILING_DEG
+                && planar_supports::encloses(&segments(&laid_flat(face.outer_wire().edges(), on_bed)), on_bed(centre))
+                && probe.get_or_insert_with(|| body.shape.solid_probe()).classify_points(&[centre - up * 1e-3], 1e-4)
+                    != [PointState::Inside];
+            ceiling.then(|| held_edges(probe.get_or_insert_with(|| body.shape.solid_probe()), face, up))
+        },
+    );
     let mut bridges = Vec::new();
     let mut listed = Vec::new();
-    for hit in hits.iter() {
+    for (hit, held) in hits.iter().zip(ceilings) {
         let centre = hit.moment / hit.area;
         let span = (hit.hi.0 - hit.lo.0).max(hit.hi.1 - hit.lo.1).max(0.0);
         let summary = faces.get(hit.face);
         let tag = summary.and_then(|f| f.tags.first().cloned());
         let surface = summary.map(|f| f.surface.kind.clone()).unwrap_or_else(|| "face".into());
         let middle = on_bed(centre);
-        let ceiling = body_faces.get(hit.face).filter(|face| {
-            hit.exact
-                && hit.angle <= CEILING_DEG
-                && planar_supports::encloses(&segments(&laid_flat(face.outer_wire().edges(), on_bed)), middle)
-                && probe.get_or_insert_with(|| body.shape.solid_probe()).classify_points(&[centre - up * 1e-3], 1e-4)
-                    != [PointState::Inside]
-        });
-        if let Some(ceiling) = ceiling {
-            let held = held_edges(probe.get_or_insert_with(|| body.shape.solid_probe()), ceiling, up);
+        if let Some(held) = held {
+            let edges: Vec<Edge> = body_faces[hit.face].edges().collect();
+            let held: Vec<Edge> = held.into_iter().map(|i| edges[i].clone()).collect();
             let walls = laid_flat(held.iter().cloned(), on_bed);
             let hull = planar_supports::convex_hull(&walls.concat());
             let crossing = planar_supports::contains(&hull, middle, SUPPORT_DEFLECTION_MM)
@@ -230,15 +240,31 @@ fn segments(lines: &[Vec<[f64; 2]>]) -> Vec<[[f64; 2]; 2]> {
     lines.iter().flat_map(|line| line.windows(2).map(|w| [w[0], w[1]])).collect()
 }
 
-/// The ceiling's boundary edges with a wall going down beside them: material
+/// A body and its faces, read from every thread that looks at a ceiling.
+struct Solid<'a, 'b> {
+    body: &'a Body<'b>,
+    faces: &'a [Face],
+}
+
+// A finished shape is only read here: docs/GOTCHAS.md, "A sweep reads one shape from every core".
+unsafe impl Sync for Solid<'_, '_> {}
+
+impl<'a, 'b> Solid<'a, 'b> {
+    fn parts(&self) -> (&'a Body<'b>, &'a [Face]) {
+        (self.body, self.faces)
+    }
+}
+
+/// The ceiling's boundary edges, by their place among its edges, with a wall going down beside them: material
 /// just past the edge's middle and just below the ceiling. One probe per
 /// B-rep edge, however finely the mesh cut it, classified against one loaded
 /// solid.
-fn held_edges(solid: &mut SolidProbe, ceiling: &Face, up: DVec3) -> Vec<Edge> {
+fn held_edges(solid: &mut SolidProbe, ceiling: &Face, up: DVec3) -> Vec<usize> {
     let flat = |p: DVec3| p - up * p.dot(up);
-    let (edges, probes): (Vec<Edge>, Vec<DVec3>) = ceiling
+    let (edges, probes): (Vec<usize>, Vec<DVec3>) = ceiling
         .edges()
-        .filter_map(|edge| {
+        .enumerate()
+        .filter_map(|(edge_at, edge)| {
             let (at, derivative) = edge.middle();
             let along = if edge.is_reversed() { -derivative } else { derivative };
             // The face's normal across its direction of travel points into the
@@ -246,7 +272,7 @@ fn held_edges(solid: &mut SolidProbe, ceiling: &Face, up: DVec3) -> Vec<Edge> {
             let away = flat(-ceiling.normal_at(at).cross(along));
             (away.length() > 1e-9).then(|| {
                 let probe = at + away.normalize() * PROBE_MM - up * PROBE_MM;
-                (edge, probe)
+                (edge_at, probe)
             })
         })
         .unzip();

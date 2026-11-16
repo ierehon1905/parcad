@@ -778,9 +778,23 @@ fn thickness(bodies: &[Body], spec: &ThicknessSpec, diagonal: f64) -> ThicknessR
         // from it finds a reading rather than the minimum: worth it for what a
         // threshold asks about, and for the thinnest when nothing is asked.
         let boundaries_below = spec.threshold_mm.unwrap_or(reach);
-        for pair in pairs.into_iter().filter(|p| p.inside || p.distance < boundaries_below) {
-            let sampled = sampled_walls.get(&(b, pair.faces.0, pair.faces.1)).map(|w| (w.1, w.2));
-            samples.extend(wall_between(body, &faces[b], &mut nearest[b], &pair, sampled, limit));
+        let walls: Vec<(ClosePair, Option<(DVec3, DVec3)>)> = pairs
+            .into_iter()
+            .filter(|p| p.inside || p.distance < boundaries_below)
+            .map(|pair| (pair, sampled_walls.get(&(b, pair.faces.0, pair.faces.1)).map(|w| (w.1, w.2))))
+            .collect();
+        // Each pair's wall is its own; a handful is not worth a thread's own lookup.
+        if walls.len() < SIDE_BY_SIDE {
+            for (pair, sampled) in &walls {
+                samples.extend(wall_between(body, &faces[b], &mut nearest[b], pair, *sampled, limit));
+            }
+        } else {
+            let found = parcad_core::par::map_with(
+                &walls,
+                || None,
+                |nearest, (pair, sampled)| shared.wall(b, nearest, pair, *sampled, limit),
+            );
+            samples.extend(found.into_iter().flatten());
         }
     }
 
@@ -856,7 +870,24 @@ struct Finished<'a, 'b> {
 // A finished shape is only read here, and OCCT reads one from many threads: docs/GOTCHAS.md, "A sweep reads one shape from every core".
 unsafe impl Sync for Finished<'_, '_> {}
 
+/// Face pairs below which their walls are measured on the calling thread.
+const SIDE_BY_SIDE: usize = 8;
+
 impl Finished<'_, '_> {
+    /// [`wall_between`] on body `b`, with this thread's own lookup.
+    fn wall(
+        &self,
+        b: usize,
+        nearest: &mut Option<NearestBoundary>,
+        pair: &ClosePair,
+        sampled: Option<(DVec3, DVec3)>,
+        limit: f64,
+    ) -> Option<ThicknessSample> {
+        let body = &self.bodies[b];
+        let nearest = nearest.get_or_insert_with(|| body.shape.nearest_boundary());
+        wall_between(body, &self.faces[b], nearest, pair, sampled, limit)
+    }
+
     /// The readings on one face from its `starts`, each with its place among
     /// all of them, and how many starts gave none. `nearest` is this thread's
     /// own, a body's built when its first face comes up.
