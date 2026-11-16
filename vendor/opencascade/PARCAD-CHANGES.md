@@ -177,6 +177,14 @@ out. Everything below could otherwise have lived in our own crate.
   that a later tool in the same cut opened. Not used for a common: a
   multi-tool `BRepAlgoAPI_Common` intersects with the tools' union, which is
   not an n-way intersection.
+- `BooleanShape::common(base, tool)` — a two-shape `BRepAlgoAPI_Common` kept
+  as a `ParcadBoolean`, so an intersection answers what each input face and
+  edge became the way a cut and a fuse do (`parcad_common_with_history`).
+  `ParcadBoolean` now holds its algorithm as one
+  `BRepAlgoAPI_BooleanOperation` instead of a cut and a fuse of which one was
+  null. parcad's intersection went through `AdHocShape::intersect`, which
+  returns the shape alone: every name under an intersection ended at it, and
+  so did which node made each face.
 - `Shape::internal_void_bounds()` — the tight box of each cavity shell, the
   outer shell being the one with the largest box. `internal_void_count`'s
   walk, with `bounds_optimal` per shell; lets a refusal say where a void is.
@@ -705,3 +713,16 @@ same location. parcad's worker keeps a body's measurement between requests
 and hands it out only for the shape it was measured on, since the mesh is on
 that shape. `Mesh` derives `Clone` so the kept measurement can be handed out
 and still kept.
+
+## `Edge::polygon_on`
+
+`Edge::polygon_on(&Face)` returns the nodes the face's current triangulation
+put along the edge, in space: `BRep_Tool::PolygonOnTriangulation` for that
+edge on `BRep_Tool::Triangulation(face)`, each node moved by the
+triangulation's location (`parcad_polygon_on_face` in `surfacing.hxx`). The
+edge must come from `face.edges()`, since the polygon is looked up by the
+edge's location relative to the face's. `None` when the face is not meshed or
+its mesh holds no polygon for the edge. For a seam it is whichever of the two
+polygons the edge's orientation returns; both run through the same points.
+ParCAD draws its edge lines through these nodes: see docs/GOTCHAS.md, "An edge
+drawn from its own samples dashes on a curved face".

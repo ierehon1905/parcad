@@ -2659,6 +2659,12 @@ impl Doc {
         })
     }
 
+    /// A node's op as the graph spells it: `cuboid`, `difference`.
+    pub fn op_name(&self, id: NodeId) -> anyhow::Result<String> {
+        let op = serde_json::to_value(&self.node(id)?.op)?;
+        Ok(op["op"].as_str().unwrap_or_default().to_owned())
+    }
+
     /// Every node that the root actually depends on, in dependency order.
     ///
     /// Also the cycle check: a graph that cannot be ordered is rejected here

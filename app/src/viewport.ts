@@ -160,6 +160,14 @@ export interface TargetVertex {
 
 export interface EdgeCallbacks {
   onFaceHover?: (face: FacePick | undefined) => void;
+  /**
+   * The face under the pointer, whatever edge or corner is nearer, and whether
+   * ⌘ (Ctrl elsewhere) is held: with it the pointer asks which line made the
+   * face, and the edge and corner marks stand down.
+   */
+  onPoint?: (face: number | undefined, command: boolean) => void;
+  /** A ⌘-click on a face; true when it was taken, which keeps it from selecting an edge. */
+  onCommandClick?: (face: number | undefined) => boolean;
   onHover?: (edge: EdgeCurve | undefined) => void;
   onSelect?: (edge: EdgeCurve | undefined) => void;
   onVertexHover?: (vertex: VertexPoint | undefined) => void;
@@ -207,6 +215,21 @@ function gold(): string {
 }
 
 const goldHex = () => Number.parseInt(gold().slice(1), 16);
+
+/**
+ * `--color-accent`, read the way `gold` is. What a line of the script made is
+ * drawn in it: gold vanishes on a part's own warm colours, the accent does not.
+ */
+let accentCache: string | undefined;
+function accentHex(): number {
+  accentCache ??= getComputedStyle(document.documentElement).getPropertyValue("--color-accent").trim();
+  if (!/^#[0-9a-f]{6}$/i.test(accentCache)) {
+    throw new Error(`--color-accent read as ${accentCache || "nothing"}; the viewport takes it from @theme in app/src/style.css.`);
+  }
+  return Number.parseInt(accentCache.slice(1), 16);
+}
+
+
 
 /** The highlight's two colours: neither survives alone against both a bright background and dark material. */
 const INK = 0x0b0e13;
@@ -284,6 +307,10 @@ export class Viewport {
   private hoveredFace?: FacePick;
   /** The lit patch over the hovered face: additive, so shading still reads through it. */
   private faceHighlight?: THREE.Mesh;
+  /** Faces drawn in the accent, one patch per body: what a line of the script made. */
+  private litFaces: THREE.Mesh[] = [];
+  /** The face under the pointer, edges or not; see `onPoint`. */
+  private pointedFace?: number;
   private hoveredVertex?: THREE.Points;
   private selectedVertex?: THREE.Points;
   /** Where the pointer went down, to tell a click apart from an orbit drag. */
@@ -361,6 +388,8 @@ export class Viewport {
     this.renderer.domElement.addEventListener("pointerleave", () => {
       this.setHoveredEdge();
       this.setHoveredVertex();
+      this.pointedFace = undefined;
+      this.edgeCallbacks.onPoint?.(undefined, false);
     });
     // An orbit drag also ends in a `click`, wherever the pointer stopped, so
     // without the distance test orbiting to see the selection is what clears it.
@@ -381,6 +410,7 @@ export class Viewport {
       const down = this.pointerDownAt;
       this.pointerDownAt = undefined;
       if (down && Math.hypot(event.clientX - down.x, event.clientY - down.y) > DRAG_SLOP_PX) return;
+      if ((event.metaKey || event.ctrlKey) && this.edgeCallbacks.onCommandClick?.(this.pointedFace)) return;
       this.setSelectedVertex(this.hoveredVertex);
       this.setSelectedEdge(this.hoveredVertex ? undefined : this.hoveredEdge);
     });
@@ -642,6 +672,17 @@ export class Viewport {
       hit && hit.distance <= near ? hit : undefined;
 
     // A raycaster tests layers, not `visible`: a hidden body's edges are still in the lists.
+    const surfaceFace = surface?.faceIndex === undefined || surface.faceIndex === null ? undefined : this.faceAt(surface.faceIndex)?.face;
+    const command = event.metaKey || event.ctrlKey;
+    this.pointedFace = surfaceFace;
+    this.edgeCallbacks.onPoint?.(surfaceFace, command);
+    if (command) {
+      this.setHoveredVertex();
+      this.setHoveredEdge();
+      this.setHoveredFace(undefined);
+      return;
+    }
+
     const vertexHit = visible(this.vertexRaycaster.intersectObjects(this.vertexMarkers.filter(shown), false)[0]);
     const edgeHit = visible(this.edgeRaycaster.intersectObjects(this.edgeLines.filter(shown), false)[0]);
     const vertex = vertexHit?.object as THREE.Points | undefined;
@@ -847,6 +888,76 @@ export class Viewport {
         : shown
           ? vertexMaterial("hover")
           : vertexMaterial("hidden");
+  }
+
+  /** The face under the pointer now, for a ⌘ pressed without moving it. */
+  pointed(): number | undefined {
+    return this.pointedFace;
+  }
+
+  /**
+   * Draw faces in the accent: `made` plainly, `shaped` faintly. Over the
+   * shading, not instead of it, so the part still reads as itself. Nothing
+   * named clears it.
+   */
+  setLitFaces(made: Iterable<number> = [], shaped: Iterable<number> = []) {
+    for (const mesh of this.litFaces) {
+      mesh.parent?.remove(mesh);
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.litFaces = [];
+    const runs = new Map(this.faceRuns.map((run) => [run.face, run]));
+    for (const [faces, faint] of [[made, false], [shaped, true]] as const) {
+      const byBody = new Map<DrawnBody, FaceRun[]>();
+      for (const face of faces) {
+        const run = runs.get(face);
+        const body = run && this.bodyOf(run.start);
+        if (!run || !body) continue;
+        byBody.set(body, [...(byBody.get(body) ?? []), run]);
+      }
+      for (const [body, bodyRuns] of byBody) {
+        const source = body.mesh.geometry;
+        const index = source.getIndex();
+        if (!index) continue;
+        const triangles = new Uint32Array(bodyRuns.reduce((n, run) => n + run.count * 3, 0));
+        let at = 0;
+        for (const run of bodyRuns) {
+          triangles.set(index.array.subarray(run.start * 3, (run.start + run.count) * 3), at);
+          at += run.count * 3;
+        }
+        const patch = new THREE.BufferGeometry();
+        patch.setAttribute("position", source.getAttribute("position"));
+        patch.setAttribute("normal", source.getAttribute("normal"));
+        patch.setIndex(new THREE.BufferAttribute(triangles, 1));
+        const common = {
+          // Coplanar with the faces it covers, as the hover patch is.
+          polygonOffset: true,
+          polygonOffsetFactor: -4,
+          polygonOffsetUnits: -4,
+          side: THREE.DoubleSide,
+          clippingPlanes: this.clipPlanes.length > 0 ? this.clipPlanes : null,
+        };
+        // Made: the faces in the accent and shaded like the part, so a warm part's
+        // own colour does not mix into it. Shaped: a faint wash over what is there.
+        const mesh = new THREE.Mesh(
+          patch,
+          faint
+            ? new THREE.MeshBasicMaterial({ ...common, color: accentHex(), transparent: true, opacity: 0.22, depthWrite: false })
+            : new THREE.MeshStandardMaterial({ ...common, color: accentHex(), roughness: 0.6, metalness: 0, depthWrite: false }),
+        );
+        // Between the part (0) and its edges (1), writing no depth: an edge is sampled on the
+        // exact curve and the mesh is chords of it, so a patch drawn after the edges, or one
+        // they are tested against, hides them in dashes along the very edges that bound it.
+        mesh.renderOrder = faint ? 3 : 0.5;
+        mesh.castShadow = false;
+        mesh.receiveShadow = false;
+        mesh.raycast = () => {};
+        body.mesh.add(mesh);
+        this.litFaces.push(mesh);
+      }
+    }
+    this.wake();
   }
 
   /** Replace the displayed part. */
@@ -1479,6 +1590,12 @@ export class Viewport {
     this.faceRuns = [];
     this.hoveredFace = undefined;
     this.faceHighlight = undefined;
+    this.pointedFace = undefined;
+    for (const mesh of this.litFaces) {
+      mesh.geometry.dispose();
+      (mesh.material as THREE.Material).dispose();
+    }
+    this.litFaces = [];
     // The highlight lives on the scene, not in the part group, so it survives
     // the sweep below and has to be put away by hand.
     this.showEdgeHighlight(undefined);

@@ -23,17 +23,31 @@ use std::time::{Duration, Instant};
 /// drawing a seam puts a crack down every bore — and a curve only such a line
 /// cut is drawn whole. An edge no face borders belongs to no surface drawn
 /// here; one face makes it a free edge.
-fn edge_curves(shape: &opencascade::primitives::Shape) -> anyhow::Result<Vec<(EdgeCurve, Vec<EdgeKey>)>> {
+///
+/// Each line runs through the nodes the shape's mesh put on its edge, so it
+/// lies on the triangles beside it; where no face's mesh carries the edge it
+/// is the exact curve's samples. Keys, length and centre come from those
+/// samples either way, and each edge is returned with its key, which
+/// numbers it, and the keys of the kernel edges it is drawn from, which
+/// say whose treatment made it. See docs/GOTCHAS.md, "An edge drawn from
+/// its own samples dashes on a curved face".
+fn edge_curves(shape: &opencascade::primitives::Shape) -> anyhow::Result<Vec<(KeyedEdge, Vec<EdgeKey>)>> {
     use std::collections::{HashMap, HashSet};
 
     let samples = |edge: &opencascade::primitives::Edge| -> Vec<[f32; 3]> {
         edge.approximation_segments().map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect()
     };
     let mut faces_bordering: HashMap<Vec<[i64; 3]>, usize> = HashMap::new();
+    let mut meshed: HashMap<Vec<[i64; 3]>, Vec<glam::DVec3>> = HashMap::new();
     for face in shape.faces() {
         let mut seen_here = HashSet::new();
         for edge in face.edges() {
             let key = edge_key(&samples(&edge));
+            if !meshed.contains_key(&key) {
+                if let Some(nodes) = edge.polygon_on(&face).map_err(|e| anyhow::anyhow!(e))? {
+                    meshed.insert(key.clone(), nodes);
+                }
+            }
             if seen_here.insert(key.clone()) {
                 *faces_bordering.entry(key).or_default() += 1;
             }
@@ -48,28 +62,37 @@ fn edge_curves(shape: &opencascade::primitives::Shape) -> anyhow::Result<Vec<(Ed
         if faces.contains(&0) {
             continue;
         }
-        let points = match logical.points {
+        let exact: Vec<[f32; 3]> = match logical.points {
             Some(joined) => joined.iter().map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect(),
             None => runs.into_iter().next().unwrap_or_default(),
         };
-        let Some(mut curve) = edge_curve(points) else {
+        let drawn = keys
+            .iter()
+            .map(|key| meshed.get(key).cloned())
+            .collect::<Option<Vec<_>>>()
+            .and_then(backend::joined_end_to_end)
+            .filter(|nodes| nodes.len() >= 2);
+        let order = edge_key(&exact);
+        let Some(mut curve) = edge_curve(exact) else {
             continue;
         };
         if curve.length_mm <= 1e-6 {
             continue;
         }
+        if let Some(nodes) = drawn {
+            curve.points = nodes.iter().map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect();
+        }
         curve.free = faces.iter().all(|&count| count == 1);
-        edges.push((curve, keys));
-    }
-    edges.sort_by_key(|(edge, _)| edge_key(&edge.points));
-    for (index, (edge, _)) in edges.iter_mut().enumerate() {
-        edge.id = format!("edge@{index}");
+        edges.push(((order, curve), keys));
     }
     Ok(edges)
 }
 
 /// A curve as [`edge_key`] writes it.
 type EdgeKey = Vec<[i64; 3]>;
+
+/// An edge and the [`edge_key`] of its exact curve's samples.
+type KeyedEdge = (EdgeKey, EdgeCurve);
 
 /// Same stable key used to deduplicate an edge, independent of its curve
 /// direction. The visible ID is intentionally stable within one result only.
@@ -444,10 +467,15 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
     } = whole;
     // One numbering across every body, in the same key order a one-solid
     // part's edges have always had.
-    edges.sort_by_key(|edge| edge_key(&edge.points));
-    for (index, edge) in edges.iter_mut().enumerate() {
-        edge.id = format!("edge@{index}");
-    }
+    edges.sort_by(|a, b| a.0.cmp(&b.0));
+    let edges: Vec<EdgeCurve> = edges
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, mut edge))| {
+            edge.id = format!("edge@{index}");
+            edge
+        })
+        .collect();
     Response::Ok(Box::new(Success {
         collisions: part.collisions.clone(),
         overhang: overhangs,
@@ -550,10 +578,10 @@ fn body_pairs(part: &backend::BuiltPart, measures: &mut MeasureCache, reach: Rea
 #[derive(Clone)]
 struct Measured {
     mesh: opencascade::mesh::Mesh,
-    /// Untagged, and without a material: both are the request's to say.
+    /// Without tags, makers or a material: all three are the request's to say.
     faces: Vec<FaceSummary>,
     /// Unowned: which treatment made an edge is read from the part built.
-    edges: Vec<EdgeCurve>,
+    edges: Vec<KeyedEdge>,
     /// The kernel edges each of `edges` is drawn from, as their owners are keyed.
     edge_pieces: Vec<Vec<EdgeKey>>,
     topology: Topology,
@@ -826,13 +854,17 @@ fn finish(measured: &mut Measured, body: &perceive::Body, who: &str) -> Result<(
 }
 
 impl Measured {
-    /// Say what only the request knows: each face's tags, and the treatment
-    /// that made each edge — one when every piece of it has the same owner.
+    /// Say what only the request knows: each face's tags and the nodes that
+    /// made it, and the treatment that made each edge — one when every piece
+    /// of it has the same owner.
     fn named(mut self, body: &perceive::Body, treatment_owners: &BTreeMap<EdgeKey, usize>) -> Self {
         for (face, tags) in self.faces.iter_mut().zip(&body.face_tags) {
             face.tags = tags.clone();
         }
-        for (edge, pieces) in self.edges.iter_mut().zip(&self.edge_pieces) {
+        for (face, made_by) in self.faces.iter_mut().zip(body.made_by) {
+            face.made_by = made_by.clone();
+        }
+        for ((_, edge), pieces) in self.edges.iter_mut().zip(&self.edge_pieces) {
             let owners: std::collections::HashSet<Option<usize>> =
                 pieces.iter().map(|key| treatment_owners.get(key).copied()).collect();
             edge.treatment_node = if owners.len() == 1 { owners.into_iter().next().flatten() } else { None };
@@ -989,7 +1021,7 @@ struct Assembled {
     indices: Vec<u32>,
     face_runs: Vec<FaceRun>,
     faces: Vec<FaceSummary>,
-    edges: Vec<EdgeCurve>,
+    edges: Vec<KeyedEdge>,
     /// The part's own faces and edges; a reference body's are drawn but
     /// not counted.
     topology: Topology,
@@ -1052,7 +1084,7 @@ impl Assembled {
             face.body = body.map(str::to_owned);
         }
         self.faces.extend(faces);
-        for edge in &mut edges {
+        for (_, edge) in &mut edges {
             edge.body = body.map(str::to_owned);
         }
         self.edges.extend(edges);
@@ -1342,6 +1374,7 @@ mod tests {
                 surface: SurfacePlacement { kind: "plane".into(), direction: None, radius: None },
                 body: None,
                 tags: Vec::new(),
+                made_by: Vec::new(),
                 material: None,
             })
             .collect();
@@ -1355,6 +1388,37 @@ mod tests {
             surface: None,
             mass: None,
             finished: true,
+        }
+    }
+
+    /// `made_by` is read off the lineage in the shape's own face order and
+    /// laid over the kernel's description of each face, so the hole's wall
+    /// has to come out on the one cylinder, and a body's faces under its own
+    /// root, never the node that only lists the bodies.
+    #[test]
+    fn a_reply_says_which_nodes_made_each_face() {
+        let drilled = served(serde_json::json!({"units": "mm", "root": 3, "nodes": [
+            {"op": "cuboid", "size": {"x": 40, "y": 40, "z": 10}},
+            {"op": "cylinder", "r": 3, "h": 20},
+            {"op": "translate", "child": 1, "by": {"x": 5, "y": 0, "z": 0}},
+            {"op": "difference", "base": 0, "tools": [2], "blend": 0}
+        ]}));
+        assert_eq!(drilled.faces.len(), 7);
+        for face in &drilled.faces {
+            let expected: &[u32] = if face.surface.kind == "cylinder" { &[1, 2, 3] } else { &[0, 3] };
+            assert_eq!(face.made_by, [expected.to_vec()], "a {} face", face.surface.kind);
+        }
+
+        let apart = served(serde_json::json!({"units": "mm", "root": 3, "nodes": [
+            {"op": "cuboid", "size": {"x": 10, "y": 10, "z": 10}},
+            {"op": "sphere", "r": 4},
+            {"op": "translate", "child": 1, "by": {"x": 20, "y": 0, "z": 0}},
+            {"op": "bodies", "bodies": [{"name": "block", "child": 0}, {"name": "ball", "child": 2}]}
+        ]}));
+        assert_eq!(apart.faces.len(), 7);
+        for face in &apart.faces {
+            let expected: &[u32] = if face.body.as_deref() == Some("ball") { &[1, 2] } else { &[0] };
+            assert_eq!(face.made_by, [expected.to_vec()], "a face of {:?}", face.body);
         }
     }
 
@@ -1511,12 +1575,33 @@ mod tests {
         assert_eq!(sheet.mass, None, "a thickened spline sheet lies on offset surfaces");
     }
 
+    /// A line through points of its own dips under the finer mesh between
+    /// them and draws dashed (docs/GOTCHAS.md, "An edge drawn from its own
+    /// samples dashes on a curved face"), so every drawn point is a vertex
+    /// of the mesh, while the length is still the exact curve's.
+    #[test]
+    fn an_edge_is_drawn_through_the_mesh_s_own_vertices() {
+        let rounded = served(serde_json::json!({"units": "mm", "root": 1, "nodes": [
+            {"op": "cylinder", "r": 20, "h": 10},
+            {"op": "fillet", "child": 0, "radius": 3, "selector": ">Z", "expect": {"count": 1}}
+        ]}));
+        let vertices: std::collections::HashSet<[u32; 3]> =
+            rounded.positions.chunks_exact(3).map(|p| [p[0].to_bits(), p[1].to_bits(), p[2].to_bits()]).collect();
+        assert_eq!(rounded.edges.len(), 3, "the base rim and the blend's two rails");
+        for edge in &rounded.edges {
+            assert!(edge.points.iter().all(|p| vertices.contains(&p.map(f32::to_bits))), "{} leaves the mesh", edge.id);
+        }
+        let rail = rounded.edges.iter().find(|edge| (edge.center[2] - 2.0).abs() < 1e-3).expect("the rail on the wall");
+        let around = std::f32::consts::TAU * 20.0;
+        assert!((rail.length_mm - around).abs() < 2e-3 * around, "{} mm", rail.length_mm);
+    }
+
     fn treatment_edge_count(doc: &Doc, node: usize) -> usize {
         let part = backend::build_part(doc).unwrap();
         let body = perceive::Body::new(None, &part.shape, &part.names[0]);
         let Ok(measured) = measure(&body, "") else { panic!("the part does not measure") };
         let measured = measured.named(&body, &part.treatment_owners);
-        measured.edges.iter().filter(|edge| edge.treatment_node == Some(node)).count()
+        measured.edges.iter().filter(|(_, edge)| edge.treatment_node == Some(node)).count()
     }
 
     #[test]

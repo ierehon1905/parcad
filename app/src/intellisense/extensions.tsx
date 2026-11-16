@@ -1,11 +1,12 @@
 /**
  * The language service, wired to the editor.
  *
- * Four surfaces, all reading the one analyzer: completion with the real
+ * Five surfaces, all reading the one analyzer: completion with the real
  * signature beside each entry, a hover card, the parameter you are currently
- * typing, and diagnostics. Each is asynchronous because the service is on
- * another thread, and each is allowed to answer "nothing" — a completion list
- * that has not arrived must never be the reason a keystroke is slow.
+ * typing, diagnostics, and ⌘-click to a declaration. Each is asynchronous
+ * because the service is on another thread, and each is allowed to answer
+ * "nothing" — a completion list that has not arrived must never be the reason
+ * a keystroke is slow.
  */
 
 import {
@@ -16,9 +17,10 @@ import {
 } from "@codemirror/autocomplete";
 import { type Diagnostic, linter } from "@codemirror/lint";
 import { StateEffect, StateField, type Extension } from "@codemirror/state";
-import { EditorView, showTooltip, type Tooltip } from "@codemirror/view";
+import { Decoration, EditorView, showTooltip, type DecorationSet, type Tooltip } from "@codemirror/view";
 import { render } from "preact";
 
+import { flashInsert } from "../editor-marks";
 import type { SignatureInfo } from "./analyzer";
 import { Card, Code, InfoCard } from "./card";
 import * as service from "./service";
@@ -239,8 +241,82 @@ async function typeDiagnostics(view: EditorView): Promise<Diagnostic[]> {
 // ---------------------------------------------------------------------------
 
 /** Everything above, as one extension. */
+// ---------------------------------------------------------------------------
+// Go to the declaration
+// ---------------------------------------------------------------------------
+
+/** The name under ⌘, underlined when the part declares it, as a link is. */
+const setLink = StateEffect.define<{ from: number; to: number } | undefined>();
+
+const linkField = StateField.define<DecorationSet>({
+  create: () => Decoration.none,
+  update(marks, transaction) {
+    for (const effect of transaction.effects) {
+      if (effect.is(setLink)) {
+        return effect.value ? Decoration.set([Decoration.mark({ class: "cm-definition-link" }).range(effect.value.from, effect.value.to)]) : Decoration.none;
+      }
+    }
+    return transaction.docChanged ? Decoration.none : marks;
+  },
+  provide: (field) => EditorView.decorations.from(field),
+});
+
+/** Questions in flight: an answer to one the pointer has moved on from is dropped. */
+let asked = 0;
+
+/**
+ * ⌘ over a name the part declares underlines it; ⌘-click goes to where it is
+ * declared, as in VS Code. A name the DSL declares has no declaration here,
+ * and its hover card already says what it is. ⌘-click takes the place of
+ * CodeMirror's add-a-cursor, which VS Code puts on Alt.
+ */
+const definitions = EditorView.domEventHandlers({
+  mousemove(event, view) {
+    const linked = view.state.field(linkField).size > 0;
+    const pos = event.metaKey || event.ctrlKey ? view.posAtCoords({ x: event.clientX, y: event.clientY }) : null;
+    if (pos === null) {
+      if (linked) view.dispatch({ effects: setLink.of(undefined) });
+      return false;
+    }
+    const question = ++asked;
+    void service.definition(pos).then((found) => {
+      if (question !== asked) return;
+      view.dispatch({ effects: setLink.of(found?.at) });
+    });
+    return false;
+  },
+  mouseleave(_event, view) {
+    asked++;
+    if (view.state.field(linkField).size > 0) view.dispatch({ effects: setLink.of(undefined) });
+    return false;
+  },
+  mousedown(event, view) {
+    if (!(event.metaKey || event.ctrlKey) || event.button !== 0) return false;
+    const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+    if (pos === null) return false;
+    event.preventDefault();
+    view.focus();
+    const question = ++asked;
+    const doc = view.state.doc;
+    void service.definition(pos).then((found) => {
+      if (question !== asked || view.state.doc !== doc) return;
+      const target = found?.target;
+      view.dispatch({
+        selection: { anchor: target?.from ?? pos },
+        effects: [
+          setLink.of(undefined),
+          ...(target ? [EditorView.scrollIntoView(target.from, { y: "center" }), flashInsert.of(target)] : []),
+        ],
+      });
+    });
+    return true;
+  },
+});
+
 export function intellisense(): Extension {
   return [
+    linkField,
+    definitions,
     autocompletion({ override: [complete], icons: true, activateOnTyping: true }),
     hovering,
     signatureField,

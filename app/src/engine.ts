@@ -22,6 +22,7 @@ import { Shape } from "./dsl";
 import { setTreatmentHover } from "./editor-marks";
 import { verticesFromEdges } from "./entities";
 import { formatSource } from "./format";
+import { stackLines } from "./provenance";
 import { describeProjects, label as projectLabel, partAt } from "./projects";
 import { instrumentTreatmentCalls, sourceOffset, treatmentAtCursor, treatmentCallRange } from "./source-link";
 import { shortestUniqueSelector } from "./shortest-selector";
@@ -53,6 +54,8 @@ interface BuiltGraph {
   graph: dsl.Doc;
   source: string;
   treatments: dsl.TreatmentSource[];
+  /** For each graph node, the script lines on its creation stack, innermost first. */
+  nodeLines: number[][];
   /** What the script reported with `note()`; shown as requested, not measured. */
   notes?: S.EvaluationSnapshot["notes"];
 }
@@ -137,6 +140,7 @@ export async function run() {
     S.lastGraph.value = built.graph;
     S.lastSource.value = built.source;
     S.lastTreatments.value = built.treatments;
+    S.lastNodeLines.value = built.nodeLines;
     // Resolved targets belong to one graph. A cached count that outlived the
     // edit that changed it would be a confident wrong answer.
     resolvedTargets.clear();
@@ -310,12 +314,13 @@ function buildGraph(source: string): BuiltGraph {
   const stacks: (string | undefined)[] = [];
   const graph = dsl.build(result as dsl.Part, treatments, stacks);
   nodeLines = stacks.map(lineOf);
+  const everyLine = stacks.map((stack) => stackLines(stack, SCRIPT_URL, HEADER_LINES));
   const taken = dsl.__parcadTakeNotes();
   const notes =
     taken.values.length || taken.dropped
       ? { source: "from the script, not measured" as const, values: taken.values, ...(taken.dropped && { dropped: taken.dropped }) }
       : undefined;
-  return { graph, source, treatments, notes };
+  return { graph, source, treatments, nodeLines: everyLine, notes };
 }
 
 const SCRIPT_URL = "parcad-editor.js";

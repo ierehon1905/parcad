@@ -57,8 +57,17 @@ impl BooleanShape {
         Self::many(base, tools, false)
     }
 
+    /// What `base` and `tool` have in common, with what every face and edge
+    /// of both became. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn common(base: &Shape, tool: &Shape) -> Self {
+        Self::built(ffi::parcad_common_with_history(&base.inner), [tool])
+    }
+
     fn many<'a>(base: &Shape, tools: impl IntoIterator<Item = &'a Shape>, is_cut: bool) -> Self {
-        let mut history = ffi::parcad_boolean_with_history(&base.inner, is_cut);
+        Self::built(ffi::parcad_boolean_with_history(&base.inner, is_cut), tools)
+    }
+
+    fn built<'a>(mut history: UniquePtr<ffi::ParcadBoolean>, tools: impl IntoIterator<Item = &'a Shape>) -> Self {
         for tool in tools {
             history.pin_mut().add_tool(&tool.inner);
         }

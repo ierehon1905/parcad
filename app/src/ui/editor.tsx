@@ -26,6 +26,8 @@ import { useEffect, useRef } from "preact/hooks";
 import { insertFlashField, treatmentHoverField } from "../editor-marks";
 import { hiddenBodiesField, setHiddenBodies } from "../hidden-marks";
 import * as engine from "../engine";
+import { madeByMarks } from "../made-by-marks";
+import * as madeBy from "../made-by";
 import { intellisense } from "../intellisense/extensions";
 import { cardTheme, surfaceTheme } from "../intellisense/theme";
 import * as languageService from "../intellisense/service";
@@ -116,6 +118,8 @@ export function Editor() {
         treatmentHoverField,
         insertFlashField,
         hiddenBodiesField,
+        // Which line made the face under ⌘, and a pinned face's steps.
+        madeByMarks,
         // Selector syntax is marked as you type. Everything else — whether the
         // selector resolves, and to how many edges — waits for the evaluation,
         // because only the kernel knows.
@@ -159,13 +163,22 @@ export function Editor() {
         // service that compiles `dsl.ts` itself. After the hover above, whose
         // tooltip it renders into rather than beside.
         intellisense(),
-        EditorView.domEventHandlers({ blur: () => engine.saveOnBlur() }),
+        EditorView.domEventHandlers({
+          blur: () => engine.saveOnBlur(),
+          // What the line under the pointer made, lit on the part.
+          mousemove: (event, view) => {
+            const at = view.posAtCoords({ x: event.clientX, y: event.clientY });
+            madeBy.hoverLine(at === null ? undefined : view.state.doc.lineAt(at).number);
+          },
+          mouseleave: () => madeBy.hoverLine(undefined),
+        }),
         EditorView.updateListener.of((v) => {
           if (v.docChanged) {
             // The titlebar's saved/unsaved mark is a fact about this keystroke,
             // so it cannot wait for the debounced evaluation.
             S.docSource.value = v.state.doc.toString();
             engine.forgetTreatmentPreview();
+            madeBy.edited();
             engine.schedule();
           }
           if (v.selectionSet) void engine.previewTreatmentAtCursor();
@@ -182,6 +195,7 @@ export function Editor() {
 
     void engine.start();
     engine.subscribeSession();
+    const stopMadeBy = madeBy.watch();
     // The compiler costs a few hundred milliseconds to start and nothing until
     // it is asked something, so it waits for the window to be done with the
     // first part rather than competing with it.
@@ -195,6 +209,7 @@ export function Editor() {
 
     return () => {
       warm.cancel();
+      stopMadeBy();
       view.destroy();
       S.editorRef.current = undefined;
     };

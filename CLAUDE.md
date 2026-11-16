@@ -264,6 +264,8 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | what a worker keeps between requests | `backend::BuildCache` (built subtrees) and `serve::MeasureCache` (each body's measurement, each pair's fit), and the serve loop in `crates/parcad-occt/src/bin/worker.rs` |
 | the window drawing a part before it is measured | `service::evaluate_first` and `measure_next`, `measureRest` in `app/src/engine.ts`; the worker's half is `Request::drawing`, `Pairs::Held` and `fit_pairs` in `protocol.rs`, `draw` and `finish` in `serve.rs` |
 | whether two shapes are apart, without optimising a box | `Reach` in `backend.rs`, over `Shape::bounds_enclosing`; docs/GOTCHAS.md, "`BRepBndLib::Add` does not enclose the shape" |
+| which line made a face, in the window: ⌘ over the part, ⌘-click, the pointer over a line | `app/src/made-by.ts` (what is lit when), `provenance.ts` (lines from `made_by` and the creation stacks, tested in bun), `made-by-marks.ts` (the editor's line, steps and scrollbar ticks), `Viewport.setLitFaces` |
+| which graph nodes made each face | `FaceMakers` in `backend.rs`, sealed per node by `build_node_afresh` and carried inside `EdgeLineage`; on the wire as `FaceSummary::made_by`; the rule every corpus case is held to is `protocol::made_by_faults`; `crates/parcad-occt/examples/provenance_audit.rs` counts makers by op |
 | probes, wall thickness, tag extents on the exact solid | `crates/parcad-occt/src/perceive.rs` |
 | the authoring DSL | `app/src/dsl.ts` (shared with `tools/run.ts`) |
 | drill and clearance sizes | `METRIC_FASTENERS` in `app/src/dsl.ts` — never a literal in a part |
@@ -308,6 +310,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | the section controls | `app/src/ui/view-tools.tsx` — on the viewport, not the titlebar |
 | any control's tooltip | `tip()` from `app/src/ui/tooltip.tsx`, spread onto the element |
 | how it looks | `app/src/viewport.ts`, `app/src/outline.ts` |
+| which points an edge line is drawn through | `edge_curves` in `crates/parcad-occt/src/serve.rs` — the mesh's own nodes on the edge (`Edge::polygon_on`), never fresh samples of the curve; docs/GOTCHAS.md, "An edge drawn from its own samples dashes on a curved face" |
 | colours, type, the design tokens | `@theme` in `app/src/style.css` — never a literal in a component |
 | what "still correct" means | `eval/cases/*.json`, `eval/scripts/*.js` |
 | the seed parts | `examples/*.js` — indexed in `examples/README.md`; copied into the project folder on first run, not read by the picker. Changing one does **not** change the user's copy: see `examples/fusion360/README.md`, "A seeded copy is frozen" |

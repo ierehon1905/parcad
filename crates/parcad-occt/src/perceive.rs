@@ -52,6 +52,8 @@ pub struct Body<'a> {
     /// face — `bore` rather than the `part` that was unioned around it, and
     /// `right` rather than `left` on `left.mirror("x").tag("right")`.
     pub face_tags: Vec<Vec<String>>,
+    /// Per face, in the same order: [`NamedFaces::made_by`].
+    pub made_by: &'a [Vec<Vec<u32>>],
     /// The body's faces alone, for distances. `BRepExtrema` reads a solid as
     /// a volume, so a point inside one is 0 from it; the distance a probe
     /// reports is to the boundary.
@@ -64,11 +66,12 @@ pub struct Body<'a> {
 }
 
 impl<'a> Body<'a> {
-    pub fn new(name: Option<&'a str>, shape: &'a Shape, names: &NamedFaces) -> Self {
+    pub fn new(name: Option<&'a str>, shape: &'a Shape, names: &'a NamedFaces) -> Self {
         Self {
             name,
             shape,
             face_tags: face_tags(shape, names),
+            made_by: &names.made_by,
             boundary: Compound::from_shapes(shape.faces().map(Shape::from)).into(),
             surface: crate::backend::kind_of(shape).is_ok_and(|k| k == crate::backend::Kind::Surface),
             described: None,

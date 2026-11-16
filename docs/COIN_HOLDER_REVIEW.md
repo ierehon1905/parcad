@@ -99,9 +99,9 @@ The file write was blocked by the harness (subagents must return findings as tex
 # What the euro coin holder session says ParCAD should build
 
 **Lens:** mechanical engineering, design for additive manufacture, mechanism.
-**Source:** the condensed transcript, all 45 evaluated scripts, the three renders the user saw, and the repo at `/Users/leon/dev/parcad` as of `d3fcda11`.
+**Source:** the condensed transcript, all 45 evaluated scripts, the three renders the user saw, and the repo as of `d3fcda11`.
 
-*(Note: I was asked to write this to `/private/tmp/claude-501/-Users-leon-dev-parcad/852cb4df-8daa-4e72-b0a9-35115e79228e/scratchpad/report-mechanical.md`; the Write tool refused the path on a report-file guard. Nothing in the repo was touched.)*
+*(Note: I was asked to write this to a scratchpad path; the Write tool refused the path on a report-file guard. Nothing in the repo was touched.)*
 
 ---
 
@@ -1775,7 +1775,7 @@ surface entirely:
 
 ```
 ### TOOL_USE Bash
-cd "/Users/leon/Library/Application Support/parcad/euro-coin-holder.parcad" &&
+cd "$PARCAD_PROJECTS_DIR/euro-coin-holder.parcad" &&
 python3 - <<'EOF'
 p = "part.js"; s = open(p).read()
 old = """const panelLine = union(…"""

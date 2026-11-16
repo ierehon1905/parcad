@@ -1,0 +1,40 @@
+{
+  "name": "made-by-turned-and-clipped",
+  "script": "eval/scripts/made-by-turned-and-clipped.js",
+  "why": "An intersection kept no history, so everything under one was lost at it: a face of an extrusion turned twice and clipped came back made by the intersection alone, and the tag on the extrusion named no face at all. The transforms were suspected and were not the cause; a chain and a name both cross a rotation. Now the intersection is asked what each face became, like a cut and a union. The prism's three sides still start at the extrude and pass both rotations, the two faces the box cut across it are the box's, and `glass` still names the three sides, whose box is the whole 20 mm cube. Chains and centroids are derived by hand in the script's comment.",
+  "brep": {
+    "size": [
+      20.0,
+      20.0,
+      20.0
+    ],
+    "volume_mm3": 4000.0,
+    "watertight": true,
+    "faces": 5,
+    "tags": {
+      "glass": [-10.0, -10.0, -10.0, 10.0, 10.0, 10.0]
+    },
+    "made_by": [
+      {
+        "at": [0.0, 0.0, -10.0],
+        "chains": [["extrude", "rotate", "rotate", "intersection"]]
+      },
+      {
+        "at": [0.0, 5.0, 0.0],
+        "chains": [["extrude", "rotate", "rotate", "intersection"]]
+      },
+      {
+        "at": [0.0, -5.0, 0.0],
+        "chains": [["extrude", "rotate", "rotate", "intersection"]]
+      },
+      {
+        "at": [10.0, 0.0, -3.333],
+        "chains": [["cuboid", "intersection"]]
+      },
+      {
+        "at": [-10.0, 0.0, -3.333],
+        "chains": [["cuboid", "intersection"]]
+      }
+    ]
+  }
+}

@@ -24,7 +24,7 @@
       "interface": {
         "displayName": "ParCAD",
         "shortDescription": "Design parts you can print",
-        "longDescription": "Describe a part. Get one that fits.\n\nAsk ChatGPT for a bracket, a box with a hinged lid, a stand for your phone. ParCAD builds it on a real CAD kernel and checks it before you print: the size you asked for, the walls, whether the lid actually closes.\n\nDownload a 3MF for your slicer or a STEP for any CAD.\n\nFree and open source. Sign in with Google or GitHub.",
+        "longDescription": "Describe a part. Get one that fits.\n\nAsk ChatGPT for a bracket, a box with a hinged lid, a stand for your phone. ParCAD builds it on a real CAD kernel and checks it before you print: the size you asked for, the walls, whether the lid actually closes.\n\nDownload a 3MF for your slicer or a STEP for any CAD.\n\nOpen source. Sign in with Google or GitHub.",
         "developerName": "Leon Minasian",
         "category": "Creativity",
         "capabilities": [
@@ -47,62 +47,47 @@
         "test_cases": {
           "positive": [
             {
-              "description": "Design a new part from a description, report the size ParCAD measured and show it in 3D.",
+              "description": "Design a new part from a description, report the size ParCAD measured and show it in 3D. Prompt: \"Using ParCAD, design a phone stand 70 mm wide that holds the phone leaning back at 65 degrees, with a lip at the front and a slot for the charging cable. Tell me its measured size and show it to me in 3D.\"",
               "prompt": "Using ParCAD, design a phone stand 70 mm wide that holds the phone leaning back at 65 degrees, with a lip at the front and a slot for the charging cable. Tell me its measured size and show it to me in 3D.",
-              "tools_triggered": [
-                "read_docs",
-                "evaluate_part",
-                "save_project",
-                "open_project"
-              ],
+              "tools_triggered": "read_docs, evaluate_part, save_project, open_project",
               "expected_behavior": "ChatGPT reads ParCAD's language docs with read_docs, writes the stand as a script and builds it with evaluate_part, then saves it with save_project and opens it with open_project. ParCAD's 3D viewer shows the stand in the chat. The reply gives the size ParCAD measured (70 mm wide) and the outcome of its checks."
             },
             {
-              "description": "Build a part and hand the user a printable 3MF file.",
+              "description": "Build a part and hand the user a printable 3MF file. Prompt: \"Using ParCAD, make a 30 mm knurled knob with a 6 mm D-shaped shaft hole and give me a 3MF file I can print.\"",
               "prompt": "Using ParCAD, make a 30 mm knurled knob with a 6 mm D-shaped shaft hole and give me a 3MF file I can print.",
-              "tools_triggered": [
-                "evaluate_part",
-                "export_part"
-              ],
+              "tools_triggered": "evaluate_part, export_part",
               "expected_behavior": "ChatGPT builds the knob with evaluate_part and exports it with export_part. The reply links a .3mf download on mcp.parcad.dev that opens in any slicer, and gives the size ParCAD measured (30 mm across) and that the part is watertight."
             },
             {
-              "description": "Open one of the example parts every account starts with and show it in 3D.",
+              "description": "Open one of the example parts every account starts with and show it in 3D. Prompt: \"Show me the spur gears from my ParCAD parts in 3D.\"",
               "prompt": "Show me the spur gears from my ParCAD parts in 3D.",
-              "tools_triggered": [
-                "open_project"
-              ],
+              "tools_triggered": "open_project",
               "expected_behavior": "ChatGPT opens spur-gears with open_project, after list_projects if it needs the path. ParCAD's 3D viewer appears in the chat with the pinion and the wheel meshed as two bodies; the user can turn it, see through it and hide either gear."
             },
             {
-              "description": "Measure the clearance between two parts of a saved design on the exact solids.",
+              "description": "Measure the clearance between two parts of a saved design on the exact solids. Prompt: \"Using ParCAD, how much clearance is there between the two gears in my spur-gears part?\"",
               "prompt": "Using ParCAD, how much clearance is there between the two gears in my spur-gears part?",
-              "tools_triggered": [
-                "evaluate_part"
-              ],
+              "tools_triggered": "evaluate_part",
               "expected_behavior": "ChatGPT builds spur-gears with evaluate_part and reads the measurement between its two bodies. The reply says the gears are clear of each other by 0.094 mm, as ParCAD measured it."
             },
             {
-              "description": "Change a saved part and report what the change did to it.",
+              "description": "Change a saved part and report what the change did to it. Prompt: \"Using ParCAD, make the knurled knob in my parts 5 mm taller and tell me how its volume changed.\"",
               "prompt": "Using ParCAD, make the knurled knob in my parts 5 mm taller and tell me how its volume changed.",
-              "tools_triggered": [
-                "read_project",
-                "edit_part"
-              ],
+              "tools_triggered": "read_project, edit_part",
               "expected_behavior": "ChatGPT reads knurled-knob with read_project and changes its height with edit_part, which builds the change before saving it. The reply gives the old and new height and the volume before and after, as ParCAD measured them."
             }
           ],
           "negative": [
             {
-              "description": "A general question about 3D-printing materials needs no part built.",
+              "description": "A general question about 3D-printing materials needs no part built. Prompt: \"What's the difference between PLA and PETG filament for 3D printing?\"",
               "prompt": "What's the difference between PLA and PETG filament for 3D printing?"
             },
             {
-              "description": "Shopping for a printer is not part design, so ParCAD is not called.",
+              "description": "Shopping for a printer is not part design, so ParCAD is not called. Prompt: \"Find me a good 3D printer under 300 dollars.\"",
               "prompt": "Find me a good 3D printer under 300 dollars."
             },
             {
-              "description": "A drawing or picture is not a part to model.",
+              "description": "A drawing or picture is not a part to model. Prompt: \"Draw me a picture of a cat wearing a party hat.\"",
               "prompt": "Draw me a picture of a cat wearing a party hat."
             }
           ]

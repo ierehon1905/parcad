@@ -318,6 +318,13 @@ export interface FaceSummary {
     direction?: [number, number, number];
     radius?: number;
   };
+  /**
+   * Which graph nodes made this face, one chain per maker: the node that made
+   * it first, then every op applied to it since, up to its body's root. Ids
+   * index the graph's `nodes`. Of one evaluation only, like
+   * `EdgeCurve.treatment_node`.
+   */
+  made_by?: number[][];
   /** The innermost `.material()` on this face, if any. */
   material?: FaceMaterial;
   /** The named body the face is on, for a part that returns several. */
@@ -404,6 +411,8 @@ export const snapshot = signal<EvaluationSnapshot | undefined>(undefined);
 export const lastGraph = signal<dsl.Doc | null>(null);
 export const lastSource = signal("");
 export const lastTreatments = signal<dsl.TreatmentSource[]>([]);
+/** For each node of `lastGraph`, the lines of `lastSource` on its creation stack, innermost first. */
+export const lastNodeLines = signal<number[][]>([]);
 export const visibleEdges = signal<EdgeCurve[]>([]);
 export const visibleVertices = signal<VertexPoint[]>([]);
 /** How many final curves this evaluation traced back to an authored call. */
