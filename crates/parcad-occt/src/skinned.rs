@@ -883,6 +883,17 @@ mod tests {
         assert!(fit_closed(&lobes, 1e-6).unwrap().is_err());
     }
 
+    /// The proof the loft's extent check asks for holds on a skin, with a
+    /// hundredth to spare, and not for a box the skin leaves.
+    #[test]
+    fn a_skinned_loft_is_proven_within_its_own_box_and_no_smaller_one() {
+        let shape = frustum(false, None).unwrap().shape;
+        let (low, high) = shape.bounds_optimal().unwrap();
+        assert!(shape.proven_within(low - 0.01, high + 0.01), "{low:?}..{high:?}");
+        assert!(!shape.proven_within(low + DVec3::new(0.01, 0.0, 0.0), high));
+        assert!(!shape.proven_within(low, high - DVec3::new(0.0, 0.01, 0.0)));
+    }
+
     #[test]
     fn a_skinned_loft_faces_out_whichever_way_its_sections_run() {
         for clockwise in [false, true] {

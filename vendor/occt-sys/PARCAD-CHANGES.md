@@ -100,7 +100,47 @@ of `lib`, `libd`, `libi` holds `TKernel`, for a fresh build and for
 
 ## Changes to OCCT itself
 
-Eight patches.
+Nine patches.
+
+`patches/0009-skip-an-edge-proven-clear-of-a-face.patch`: a boolean
+intersects every edge with every face whose boxes overlap
+(`BOPAlgo_PaveFiller::PerformEF`), and on a B-spline face an edge that runs
+beside it without meeting it starts a root search from every facet it passes
+within a deflection of, each of which fails only when its iterations run out:
+21,805 searches and 0.64 s for one circle 0.12 mm from one band of a lofted
+skin, and 5.2 of the 6.6 thread-seconds a keycap's last cut spent on its
+1,172 pairs went on the 855 with no common part. The patch adds
+`IntTools_Apart.hxx`, a proof that two pieces are apart: each is enclosed in
+a box certain to hold it (a Bezier piece by its control points, weights
+positive; a line, circle, ellipse, plane, cylinder, cone, sphere or torus
+piece by its corners grown by its second derivative's bound, bend x step^2 / 8),
+and a pair of boxes that does not separate is halved, nearer half first, until
+it does or 20,000 comparisons or 128 halvings are spent. The depth is a limit
+of its own because the proof runs on the boolean's pool threads, whose stacks
+are 512 KB: a Bezier patch that closes on itself, split by the distance
+between its ends, halved the wrong way without shrinking and crashed four
+corpus parts before the split went by the length of the control net. Nothing is sampled; no proof is no
+claim. `BOPAlgo_EdgeFace::Perform` asks for it at ten times the pair's
+tolerances and no less than 0.001 mm, and answers "done, no common part" on
+a proof, as `IntTools_EdgeFace` does for such a pair. The least distance that
+an intersection without a common part would have measured is kept as half
+the proven gap, negated, and `ProcessExistingPaveBlocks` runs the intersection
+after all (`MeasuredEdgeFace`) only where that gap cannot answer its
+comparison; on nothing measured did it need to.
+
+Measured: 806 of those 1,172 pairs proven in 39 ms; that cut 1.75 s before
+and 0.87 s after, the keycap's union with its wheels 0.74 s and 0.32 s. The
+worker's reply for the keycap and for a 25-body assembly, 2.3 MB and 4.7 MB
+of JSON, are byte for byte what they were, timings apart, and the corpus
+passes unchanged. `PARCAD_APART_VERIFY=1` runs every proof and then the
+intersection it would have replaced, and reports on stderr any the
+intersection disagrees with; `PARCAD_APART_VERIFY=measure` skips as usual and
+measures every negated gap where it is read. Both reported nothing over the
+corpus and gave the same replies. The header also carries `Holds`, the same
+enclosures proving a piece inside a box, which `Shape_proven_within` in the
+sys crate uses. A pair that does meet and runs close on the way still pays
+for the failing searches; docs/GOTCHAS.md, "An edge that runs beside a
+B-spline face", has what was tried for those. Not yet reported upstream.
 
 `patches/0008-offset-a-curve-past-a-re-entrant-corner.patch`:
 `BRepOffsetAPI_MakeOffset` with `GeomAbs_Intersection` joins failed, at

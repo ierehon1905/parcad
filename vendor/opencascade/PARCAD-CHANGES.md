@@ -670,6 +670,30 @@ optimisation over the surface and was 5 s of a 14 s build. `bounds_bracket`'s
 outer box is not this: `BRepBndLib::Add` samples a trimmed spline and some
 curves, so it can sit inside the shape.
 
+## `Shape::proven_within`
+
+The sys crate's `Shape_proven_within`: a proof that the shape lies inside a
+box, or `false`, which is no claim that it leaves it. parcad asks it before
+`bounds_optimal` where all it needs is that a loft has not bulged out of its
+sections' extent.
+
+## `Shape::face_grid_off`
+
+The sys crate's `Shape_face_grid_off`: the points of `face_grid` that are not
+shown to be on another shape, and how many the grid has in all. parcad's
+check that a union kept its inputs classifies only these.
+
+## `AdHocShape::intersect` runs its pair loops in parallel
+
+`AdHocShape::intersect` built `BRepAlgoAPI_Common(a, b)`, whose constructor
+runs the boolean on one thread. It now calls `parcad_common`
+(`include/history.hxx`): the same operation with `SetRunParallel(true)`, as
+`ParcadBoolean`'s cut and fuse have run since they stopped building twice.
+Twelve intersections of a fitted prism with a box in one keycap took 0.49 s
+together, most of it `GeomLib_CheckCurveOnSurface` checking each section
+curve in turn, and take 0.24 s. The corpus and the worker's replies are
+unchanged by it.
+
 ## `Shape::is_same`, and `Mesh` is `Clone`
 
 `Shape::is_same(other)` is `TopoDS_Shape::IsSame`: the same `TShape` at the

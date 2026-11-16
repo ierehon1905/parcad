@@ -78,3 +78,11 @@ dropping it.
   at such a pass-through and rebuilds every face of a cut edge. A fillet
   ending exactly on a hole's rim built with two wires touching at no
   vertex. Header inside the patch; not yet offered upstream.
+- `0009-skip-an-edge-proven-clear-of-a-face.patch` — a boolean's edge/face
+  pass (`BOPAlgo_PaveFiller::PerformEF`) asks `IntTools_Apart.hxx` for a
+  proof that the edge clears the face before intersecting them, and skips
+  the intersection on one. The proof is exact, boxes certain to hold each
+  piece halved until they separate; an edge beside a B-spline face without
+  meeting it otherwise costs thousands of root searches that fail. Header
+  inside the patch, with the measurements and `PARCAD_APART_VERIFY`; not yet
+  offered upstream.

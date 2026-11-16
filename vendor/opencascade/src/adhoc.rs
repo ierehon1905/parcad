@@ -213,9 +213,7 @@ impl AdHocShape {
     }
 
     pub fn intersect(&mut self, other: &Shape) {
-        let mut common_operation = ffi::BRepAlgoAPI_Common_ctor(&self.inner, &other.inner);
-
-        let cut_shape = common_operation.pin_mut().Shape();
-        self.inner = ffi::TopoDS_Shape_to_owned(cut_shape);
+        // PARCAD: in parallel, as `BooleanShape`'s cut and fuse are; see PARCAD-CHANGES.md.
+        self.inner = crate::history::ffi::parcad_common(&self.inner, &other.inner);
     }
 }

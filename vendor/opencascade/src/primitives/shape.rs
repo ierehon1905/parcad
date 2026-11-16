@@ -934,6 +934,19 @@ impl Shape {
             .collect()
     }
 
+    /// The points of [`Self::face_grid`] that are not shown to be on
+    /// `result`, and how many points the grid has in all. A face that is a
+    /// face of `result` contributes none, nor does a point inside a face of
+    /// `result` on the same surface. Added for parcad; see PARCAD-CHANGES.md.
+    pub fn face_grid_off(&self, result: &Shape, per_side: usize) -> (Vec<DVec3>, usize) {
+        let mut sampled = 0;
+        let points = ffi::Shape_face_grid_off(&self.inner, &result.inner, per_side as i32, &mut sampled)
+            .chunks_exact(3)
+            .map(|c| dvec3(c[0], c[1], c[2]))
+            .collect();
+        (points, sampled as usize)
+    }
+
     /// Load this shape for repeated nearest-boundary-point questions. Added
     /// for parcad; see PARCAD-CHANGES.md.
     pub fn nearest_boundary(&self) -> NearestBoundary {
@@ -981,6 +994,14 @@ impl Shape {
         let [x0, y0, z0, x1, y1, z1] = &mut b;
         ffi::Shape_bounds_enclosing(&self.inner, x0, y0, z0, x1, y1, z1)
             .then(|| (dvec3(b[0], b[1], b[2]), dvec3(b[3], b[4], b[5])))
+    }
+
+    /// Whether the shape is proven to lie inside the box `low..high`, from
+    /// boxes that are certain to hold each of its pieces. `false` is not a
+    /// claim that it leaves the box: measure [`Self::bounds_optimal`] then.
+    /// Added for parcad; see PARCAD-CHANGES.md.
+    pub fn proven_within(&self, low: DVec3, high: DVec3) -> bool {
+        ffi::Shape_proven_within(&self.inner, low.x, low.y, low.z, high.x, high.y, high.z)
     }
 
     /// Tight bounds from the exact geometry, `BRepBndLib::AddOptimal` with no

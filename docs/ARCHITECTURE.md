@@ -632,6 +632,35 @@ Two lowerings exist for the same reason:
   needs a face to open and produced a *shrunken solid* rather than a hollow one
   (measured: 64×39×22 became a solid 60×35×18 with six faces).
 
+### Work is skipped on a proof, never on a sample
+
+The same kernel that is checked afterwards is also the slow part, and the
+ways of making it faster split cleanly in two. Some leave out a computation
+whose answer is already known: the answer is then the one the kernel would
+have given, and a build's reply is the same bytes. Others change what the
+kernel computes (a finer polyhedron, a face split before a boolean, fewer
+starting points for a search) and every intersection curve moves in its last
+digits, when it does not move further. Only the first kind is taken.
+
+"Already known" means proven. Two shapes whose enclosing boxes are apart share
+no volume (`Reach`, `Shape_bounds_enclosing`). An edge proven clear of a face
+has no intersection with it for a boolean to look for (occt-sys patch 0009,
+`IntTools_Apart.hxx`). A loft proven inside its sections' extent does not
+bulge out of it (`Shape_proven_within`). A point inside a face of a union's
+result is on that result (`Shape_face_grid_off`). Each proof encloses geometry
+in boxes that are certain to hold it, control points and analytic bounds, and
+answers "not proven" for anything else, at which point the kernel is asked as
+before. A box of sampled points proves nothing, which docs/GOTCHAS.md,
+"`BRepBndLib::Add` does not enclose the shape", found out; and docs/GOTCHAS.md,
+"An edge that runs beside a B-spline face", has a shortcut that looked like a
+proof and was not.
+
+What this buys is measured on the part that asked for it, a car-shaped keycap
+of two 55-section lofts and 26 recesses: 7.4 s of build to 4.8 s, and a
+reply of 2.3 MB that is byte for byte the old one, timings apart. What it does not buy
+is the rest: pairs that do meet, and the point-in-solid rays of
+`require_inputs_kept`, cost what they did.
+
 ## A walled loft, and lofts through fitted sections
 
 A loft whose sections are each one closed `{ fit }` over the same number of

@@ -36,6 +36,7 @@
 #include <Bnd_Box.hxx>
 #include <BRepBndLib.hxx>
 #include <BndLib.hxx>             // PARCAD: Shape_bounds_enclosing
+#include <IntTools_Apart.hxx>     // PARCAD: Shape_proven_within
 #include <Geom_BezierCurve.hxx>
 #include <Geom_Ellipse.hxx>
 #include <BRepCheck.hxx>
@@ -657,6 +658,70 @@ inline bool Shape_bounds_enclosing(const TopoDS_Shape &shape, double &x0, double
   return true;
 }
 
+// Whether every point of the shape is proven to lie inside the box — added
+// for parcad, see PARCAD-CHANGES.md. A proof, from boxes that are certain to
+// hold each piece (`IntTools_Apart.hxx`, patch 0009), halved until they fit;
+// false is no claim that the shape leaves the box. A plane, cylinder or cone
+// face reaches no further than its edges, so those are held by their edges.
+inline bool Shape_proven_within(const TopoDS_Shape &shape, double x0, double y0, double z0, double x1, double y1,
+                                double z1) {
+  const double low[3] = {x0, y0, z0};
+  const double high[3] = {x1, y1, z1};
+  // Box comparisons for the whole shape, and the size below which a piece that still does not fit is given up on.
+  int budget = 2000000;
+  const double smallest = 1e-4;
+  const auto holds = [&](IntTools_Apart::Side &side) {
+    return side.root != nullptr && IntTools_Apart::Holds(side, side.root, low, high, smallest, budget);
+  };
+  const auto edge_holds = [&](const TopoDS_Edge &edge) {
+    if (BRep_Tool::Degenerated(edge)) {
+      return true;
+    }
+    const BRepAdaptor_Curve curve(edge);
+    IntTools_Apart::Side side;
+    IntTools_Apart::EncloseCurve(curve, curve.FirstParameter(), curve.LastParameter(), side);
+    return holds(side);
+  };
+  try {
+    OCC_CATCH_SIGNALS
+    for (TopExp_Explorer it(shape, TopAbs_VERTEX); it.More(); it.Next()) {
+      const gp_Pnt p = BRep_Tool::Pnt(TopoDS::Vertex(it.Current()));
+      const double at[3] = {p.X(), p.Y(), p.Z()};
+      for (int k = 0; k < 3; ++k) {
+        if (at[k] < low[k] || at[k] > high[k]) {
+          return false;
+        }
+      }
+    }
+    for (TopExp_Explorer it(shape, TopAbs_FACE); it.More(); it.Next()) {
+      const TopoDS_Face face = TopoDS::Face(it.Current());
+      const BRepAdaptor_Surface surface(face);
+      const GeomAbs_SurfaceType kind = surface.GetType();
+      if (kind == GeomAbs_Plane || kind == GeomAbs_Cylinder || kind == GeomAbs_Cone) {
+        for (TopExp_Explorer edges(face, TopAbs_EDGE); edges.More(); edges.Next()) {
+          if (!edge_holds(TopoDS::Edge(edges.Current()))) {
+            return false;
+          }
+        }
+        continue;
+      }
+      IntTools_Apart::Side side;
+      IntTools_Apart::EncloseSurface(surface, side);
+      if (!holds(side)) {
+        return false;
+      }
+    }
+    for (TopExp_Explorer it(shape, TopAbs_EDGE, TopAbs_FACE); it.More(); it.Next()) {
+      if (!edge_holds(TopoDS::Edge(it.Current()))) {
+        return false;
+      }
+    }
+    return true;
+  } catch (const Standard_Failure &) {
+    return false;
+  }
+}
+
 // Two boxes that bracket a shape's tight one, both cheap — added for parcad,
 // see PARCAD-CHANGES.md. `outer` (x0..z1) encloses the shape, from control
 // points and tolerances; `inner` (a0..c1) is the box of its triangulation's
@@ -706,6 +771,71 @@ inline rust::Vec<double> Shape_face_grid(const TopoDS_Shape &shape, int per_side
         const gp_Pnt2d uv(u0 + (u1 - u0) * i / per_side, v0 + (v1 - v0) * j / per_side);
         BRepClass_FaceClassifier inside(face, uv, Precision::PConfusion());
         if (inside.State() == TopAbs_OUT) {
+          continue;
+        }
+        const gp_Pnt p = surface.Value(uv.X(), uv.Y());
+        out.push_back(p.X());
+        out.push_back(p.Y());
+        out.push_back(p.Z());
+      }
+    }
+  }
+  return out;
+}
+
+// The points of `Shape_face_grid` that nothing short of a point-in-solid test
+// shows to be on `result` — added for parcad, see PARCAD-CHANGES.md. A face
+// that is a face of `result` gives none, and neither does a point inside a
+// face of `result` on the same surface, which is where a boolean leaves what
+// it kept of a face it split. `sampled` counts every point of the grid.
+inline rust::Vec<double> Shape_face_grid_off(const TopoDS_Shape &shape, const TopoDS_Shape &result, int per_side,
+                                             int &sampled) {
+  rust::Vec<double> out;
+  sampled = 0;
+  NCollection_Map<TopoDS_Shape, TopTools_ShapeMapHasher> carried;
+  std::map<const Geom_Surface *, std::vector<TopoDS_Face>> by_surface;
+  for (TopExp_Explorer faces(result, TopAbs_FACE); faces.More(); faces.Next()) {
+    const TopoDS_Face face = TopoDS::Face(faces.Current());
+    if (carried.Add(face)) {
+      TopLoc_Location at;
+      by_surface[BRep_Tool::Surface(face, at).get()].push_back(face);
+    }
+  }
+  for (TopExp_Explorer faces(shape, TopAbs_FACE); faces.More(); faces.Next()) {
+    const TopoDS_Face face = TopoDS::Face(faces.Current());
+    const bool is_carried = carried.Contains(face);
+    TopLoc_Location at;
+    const auto same_surface = by_surface.find(BRep_Tool::Surface(face, at).get());
+    double u0 = 0.0, u1 = 0.0, v0 = 0.0, v1 = 0.0;
+    BRepTools::UVBounds(face, u0, u1, v0, v1);
+    BRepAdaptor_Surface surface(face);
+    for (int i = 0; i <= per_side; ++i) {
+      for (int j = 0; j <= per_side; ++j) {
+        const gp_Pnt2d uv(u0 + (u1 - u0) * i / per_side, v0 + (v1 - v0) * j / per_side);
+        BRepClass_FaceClassifier inside(face, uv, Precision::PConfusion());
+        if (inside.State() == TopAbs_OUT) {
+          continue;
+        }
+        ++sampled;
+        if (is_carried) {
+          continue;
+        }
+        bool on_result = false;
+        if (same_surface != by_surface.end()) {
+          for (const TopoDS_Face &kept : same_surface->second) {
+            TopLoc_Location kept_at;
+            BRep_Tool::Surface(kept, kept_at);
+            if (!kept_at.IsEqual(at)) {
+              continue;
+            }
+            BRepClass_FaceClassifier within(kept, uv, Precision::PConfusion());
+            if (within.State() == TopAbs_IN || within.State() == TopAbs_ON) {
+              on_result = true;
+              break;
+            }
+          }
+        }
+        if (on_result) {
           continue;
         }
         const gp_Pnt p = surface.Value(uv.X(), uv.Y());

@@ -1,0 +1,1289 @@
+Skip the intersection of an edge with a face it is proven clear of.
+
+What it fixes
+  BOPAlgo_PaveFiller::PerformEF intersects every edge with every face
+  whose bounding boxes overlap. On a B-spline face that is
+  IntCurveSurface_HInter: a polygon of the edge against a polyhedron of
+  the face, and an exact root search (math_FunctionSetRoot) from every
+  place the two come within their deflections of each other. An edge
+  that runs beside the face without meeting it starts thousands of
+  searches, each of which fails only after its iterations run out. One
+  circle 0.12 mm from one face of a lofted skin, in a keycap whose
+  recesses follow a second skin 0.6 mm inside the first, started 21,805
+  searches and took 0.64 s to find nothing; of the 1,172 edge/face pairs
+  in that part's last cut, 855 had no common part and took 5.2 s of the
+  6.6 s the pairs cost on one thread.
+
+  IntTools_Apart.hxx proves such a pair apart, exactly: each piece is
+  enclosed in a box that is certain to hold it (the control points of a
+  Bezier piece cut from the B-spline; the corners of a line, circle,
+  ellipse, plane, cylinder, cone, sphere or torus piece, grown by the
+  bound of its second derivative), and a pair of boxes that will not
+  separate is halved until it does, or a budget of comparisons or a
+  depth of halvings runs out. Nothing is sampled. BOPAlgo_EdgeFace::Perform asks for that proof first, at a
+  gap of ten times the tolerances inside which IntTools_EdgeFace reports
+  a common part and never less than 0.001, and returns "done, no common
+  part" on a proof, which is what the intersection returns for such a
+  pair. Anything not proven is intersected as before.
+
+  The one other thing PerformEF keeps from an intersection with no
+  common part is the least distance it happened to measure, which
+  ProcessExistingPaveBlocks later compares with the tolerance of a
+  section edge. A proven pair has no measurement, so it keeps half the
+  proven gap, negated. Where the comparison is made, a gap above the tolerance
+  answers it the way any measurement above the gap would; the
+  intersection is run after all (MeasuredEdgeFace) only if the gap is
+  within that tolerance, or if a later range of the same edge could
+  answer differently depending on whether this one had measured
+  anything. Neither happened on anything measured below.
+
+How it was measured
+  The keycap's last cut (14 tools, 136 faces, against 99 faces): 806 of
+  the 1,172 pairs proven, in 39 ms in all and 0.1 ms at worst; the cut
+  1.75 s before and 0.87 s after on fourteen threads, its union with
+  the wheels 0.74 s and 0.32 s. Faces, edges, vertices, volume and area
+  of every result equal to the last printed digit, with the proofs
+  skipping, with every proof followed by its intersection
+  (PARCAD_APART_VERIFY=1, which reports any proof the intersection
+  disagrees with: none), and with every negated gap measured where it is
+  read (PARCAD_APART_VERIFY=measure). parcad's corpus and its recorded
+  replies are in vendor/occt-sys/PARCAD-CHANGES.md.
+
+  What it does not fix: a pair that does meet, and runs close to the
+  face on the way, still starts the same failing searches. Those are
+  what is left of the edge/face time.
+
+Upstream status
+  Not yet reported.
+
+diff -ruN a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_5.cxx b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_5.cxx
+--- a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_5.cxx	2026-11-15 21:58:29
++++ b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_5.cxx	2026-11-15 22:46:59
+@@ -32,15 +32,19 @@
+ #include <BOPTools_Parallel.hxx>
+ #include <BRep_Builder.hxx>
+ #include <BRep_Tool.hxx>
++#include <BRepAdaptor_Curve.hxx>
++#include <BRepAdaptor_Surface.hxx>
+ #include <Standard_ErrorHandler.hxx>
+ #include <GeomAPI_ProjectPointOnSurf.hxx>
+ #include <gp_Pnt.hxx>
++#include <IntTools_Apart.hxx>
+ #include <IntTools_CommonPrt.hxx>
+ #include <IntTools_Context.hxx>
+ #include <IntTools_EdgeFace.hxx>
+ #include <IntTools_Range.hxx>
+ #include <NCollection_Sequence.hxx>
+ #include <IntTools_Tools.hxx>
++#include <iostream>
+ #include <NCollection_IncAllocator.hxx>
+ #include <NCollection_DynamicArray.hxx>
+ #include <Precision.hxx>
+@@ -61,7 +65,12 @@
+   BOPAlgo_EdgeFace()
+       : BOPAlgo_ParallelAlgo(),
+         myIE(-1),
+-        myIF(-1) {};
++        myIF(-1),
++        myApartBy(0.0) {};
++
++  //! PARCAD: the gap the edge was proven to clear the face by, when that
++  //! proof stood in for the intersection; zero when the intersection ran.
++  double ApartBy() const { return myApartBy; }
+   //
+   ~BOPAlgo_EdgeFace() override = default;
+ 
+@@ -112,10 +121,32 @@
+     TopoDS_Face aFace   = myFace;
+     TopoDS_Edge anEdge  = myEdge;
+     bool        hasTrsf = false;
++    // PARCAD: an edge proven clear of the face has no common part to find.
++    // See IntTools_Apart.hxx.
++    bool isApart = false;
+     try
+     {
+       OCC_CATCH_SIGNALS
+ 
++      const double aGap = IntTools_Apart::SkippedGap(
++        BRep_Tool::Tolerance(myEdge) + BRep_Tool::Tolerance(myFace) + IntTools_EdgeFace::myFuzzyValue);
++      if (myContext.IsNull())
++      {
++        myContext = new IntTools_Context;
++      }
++      const BRepAdaptor_Curve    aCurve(myEdge);
++      const BRepAdaptor_Surface& aSurface = myContext->SurfaceAdaptor(myFace);
++      isApart =
++        IntTools_Apart::EdgeFromFace(aCurve, myRange.First(), myRange.Last(), aSurface, aGap);
++      if (isApart && IntTools_Apart::Verifying() != IntTools_Apart::Verify_Both)
++      {
++        // Half of what was proven: a Bezier piece is cut from its B-spline
++        // within the parametric confusion of the ends asked for.
++        myApartBy = 0.5 * aGap;
++        myIsDone  = true;
++        return;
++      }
++
+       gp_Trsf aTrsf;
+       if (BOPAlgo_Tools::TrsfToPoint(myBox1, myBox2, aTrsf))
+       {
+@@ -136,6 +167,13 @@
+     myFace = aFace;
+     myEdge = anEdge;
+ 
++    if (isApart && (!myIsDone || HasErrors() || !mySeqOfCommonPrts.IsEmpty()))
++    {
++      std::cerr << "IntTools_Apart: edge " << myIE << " was proven clear of face " << myIF
++                << ", and their intersection " << (myIsDone && !HasErrors() ? "found " : "failed, ")
++                << mySeqOfCommonPrts.Length() << " common part(s)" << std::endl;
++    }
++
+     if (hasTrsf)
+     {
+       for (int i = 1; i <= mySeqOfCommonPrts.Length(); ++i)
+@@ -154,6 +192,7 @@
+   occ::handle<BOPDS_PaveBlock> myPB;
+   Bnd_Box                      myBox1;
+   Bnd_Box                      myBox2;
++  double                       myApartBy;
+ };
+ 
+ //
+@@ -347,7 +386,21 @@
+     aNbCPrts                                               = aCPrts.Length();
+     if (!aNbCPrts)
+     {
+-      if (aEdgeFace.MinimalDistance() < RealLast() && aEdgeFace.MinimalDistance() > aTolE + aTolF)
++      if (aEdgeFace.ApartBy() > 0.0)
++      {
++        // PARCAD: no distance was measured; the proven gap is kept negated,
++        // for ProcessExistingPaveBlocks to measure only if it has to.
++        const occ::handle<BOPDS_PaveBlock>& aPB = aEdgeFace.PaveBlock();
++        aPB->Range(aT1, aT2);
++        NCollection_List<EdgeRangeDistance>* pList = myDistances.ChangeSeek(BOPDS_Pair(nE, nF));
++        if (!pList)
++        {
++          pList = myDistances.Bound(BOPDS_Pair(nE, nF), NCollection_List<EdgeRangeDistance>());
++        }
++        pList->Append(EdgeRangeDistance(aT1, aT2, -aEdgeFace.ApartBy()));
++      }
++      else if (aEdgeFace.MinimalDistance() < RealLast()
++               && aEdgeFace.MinimalDistance() > aTolE + aTolF)
+       {
+         const occ::handle<BOPDS_PaveBlock>& aPB = aEdgeFace.PaveBlock();
+         aPB->Range(aT1, aT2);
+diff -ruN a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx
+--- a/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx	2026-11-15 21:58:29
++++ b/src/ModelingAlgorithms/TKBO/BOPAlgo/BOPAlgo_PaveFiller_6.cxx	2026-11-15 22:47:36
+@@ -57,6 +57,8 @@
+ #include <IntSurf_PntOn2S.hxx>
+ #include <Standard_ErrorHandler.hxx>
+ #include <IntTools.hxx>
++#include <IntTools_Apart.hxx>
++#include <iostream>
+ #include <IntTools_Context.hxx>
+ #include <IntTools_Curve.hxx>
+ #include <IntTools_EdgeFace.hxx>
+@@ -3067,6 +3069,62 @@
+   }
+ }
+ 
++//=======================================================================
++// function : MeasuredEdgeFace
++// purpose  : PARCAD: the least distance PerformEF would have recorded for
++//           the range [theT1, theT2] of an edge it proved clear of a face
++//           instead of intersecting; RealLast() where it would have
++//           recorded none.
++//=======================================================================
++static double MeasuredEdgeFace(const BOPDS_PDS&                     theDS,
++                               const occ::handle<IntTools_Context>& theContext,
++                               const double                         theFuzzyValue,
++                               const int                            theNE,
++                               const int                            theNF,
++                               const double                         theT1,
++                               const double                         theT2)
++{
++  TopoDS_Edge  aE    = TopoDS::Edge(theDS->Shape(theNE));
++  TopoDS_Face  aF    = TopoDS::Face(theDS->Shape(theNF));
++  const double aTolE = BRep_Tool::Tolerance(aE);
++  const double aTolF = BRep_Tool::Tolerance(aF);
++
++  IntTools_Range aSR(theT1, theT2);
++  IntTools_Range aRange = aSR;
++  BOPTools_AlgoTools::CorrectRange(aE, aF, aSR, aRange);
++
++  try
++  {
++    OCC_CATCH_SIGNALS
++
++    gp_Trsf aTrsf;
++    if (BOPAlgo_Tools::TrsfToPoint(theDS->ShapeInfo(theNE).Box(),
++                                   theDS->ShapeInfo(theNF).Box(),
++                                   aTrsf))
++    {
++      TopLoc_Location aLoc(aTrsf);
++      aE.Move(aLoc);
++      aF.Move(aLoc);
++    }
++    IntTools_EdgeFace anEdgeFace;
++    anEdgeFace.SetEdge(aE);
++    anEdgeFace.SetFace(aF);
++    anEdgeFace.SetFuzzyValue(theFuzzyValue);
++    anEdgeFace.SetContext(theContext);
++    anEdgeFace.SetRange(aRange);
++    anEdgeFace.Perform();
++    if (anEdgeFace.IsDone() && anEdgeFace.CommonParts().IsEmpty()
++        && anEdgeFace.MinimalDistance() < RealLast() && anEdgeFace.MinimalDistance() > aTolE + aTolF)
++    {
++      return anEdgeFace.MinimalDistance();
++    }
++  }
++  catch (Standard_Failure const&)
++  {
++  }
++  return RealLast();
++}
++
+ //=================================================================================================
+ 
+ void BOPAlgo_PaveFiller::ProcessExistingPaveBlocks(
+@@ -3129,24 +3187,68 @@
+     double aT1, aT2;
+     aPBF->Range(aT1, aT2);
+ 
++    const TopoDS_Edge& aEF     = TopoDS::Edge(myDS->Shape(aPBF->Edge()));
++    const double       aTolSum = aTolES + BRep_Tool::Tolerance(aEF);
++    auto               isOver  = [&](const EdgeRangeDistance& theRange) {
++      return (aT1 <= theRange.First && theRange.First <= aT2)
++             || (aT1 <= theRange.Last && theRange.Last <= aT2)
++             || (theRange.First <= aT1 && aT1 <= theRange.Last)
++             || (theRange.First <= aT2 && aT2 <= theRange.Last);
++    };
++
+     double aDist = RealLast();
+     for (NCollection_List<EdgeRangeDistance>::Iterator itR(*pList); itR.More(); itR.Next())
+     {
+       const EdgeRangeDistance& aRangeDist = itR.Value();
+-      if ((aT1 <= aRangeDist.First && aRangeDist.First <= aT2)
+-          || (aT1 <= aRangeDist.Last && aRangeDist.Last <= aT2)
+-          || (aRangeDist.First <= aT1 && aT1 <= aRangeDist.Last)
+-          || (aRangeDist.First <= aT2 && aT2 <= aRangeDist.Last))
++      if (!isOver(aRangeDist))
+       {
+-        aDist = aRangeDist.Distance;
+-        break;
++        continue;
+       }
++      double aFound = aRangeDist.Distance;
++      if (aFound < 0.0)
++      {
++        // PARCAD: a range PerformEF proved clear of the face by -aFound
++        // instead of intersecting. The intersection would have measured more
++        // than that or nothing: more asks for nothing here and ends the
++        // search, nothing lets the search go on. The two differ only if a
++        // later range could ask for something, and the measurement is made
++        // only then, or when the proven gap itself is within the tolerances.
++        bool isNeeded = -aFound <= aTolSum || IntTools_Apart::Verifying() == IntTools_Apart::Verify_Measure;
++        if (!isNeeded)
++        {
++          NCollection_List<EdgeRangeDistance>::Iterator itLater = itR;
++          for (itLater.Next(); itLater.More() && !isNeeded; itLater.Next())
++          {
++            isNeeded = isOver(itLater.Value()) && std::abs(itLater.Value().Distance) <= aTolSum;
++          }
++        }
++        if (!isNeeded)
++        {
++          break;
++        }
++        aFound = MeasuredEdgeFace(myDS,
++                                  myContext,
++                                  myFuzzyValue,
++                                  aPBF->OriginalEdge(),
++                                  nF,
++                                  aRangeDist.First,
++                                  aRangeDist.Last);
++        if (aFound <= -aRangeDist.Distance)
++        {
++          std::cerr << "IntTools_Apart: edge " << aPBF->OriginalEdge() << " was proven "
++                    << -aRangeDist.Distance << " clear of face " << nF << ", and measures " << aFound
++                    << std::endl;
++        }
++        if (!(aFound < RealLast()))
++        {
++          continue;
++        }
++      }
++      aDist = aFound;
++      break;
+     }
+     if (aDist < RealLast())
+     {
+-      const TopoDS_Edge& aEF     = TopoDS::Edge(myDS->Shape(aPBF->Edge()));
+-      const double       aTolSum = aTolES + BRep_Tool::Tolerance(aEF);
+-
+       if (aDist <= aTolSum)
+       {
+         theMPB.Add(aPBF);
+diff -ruN a/src/ModelingAlgorithms/TKBO/IntTools/FILES.cmake b/src/ModelingAlgorithms/TKBO/IntTools/FILES.cmake
+--- a/src/ModelingAlgorithms/TKBO/IntTools/FILES.cmake	2026-11-15 21:58:29
++++ b/src/ModelingAlgorithms/TKBO/IntTools/FILES.cmake	2026-11-15 21:59:14
+@@ -6,6 +6,7 @@
+   IntTools.hxx
+ 
+   IntTools_BaseRangeSample.cxx
++  IntTools_Apart.hxx
+   IntTools_BaseRangeSample.hxx
+   IntTools_BeanFaceIntersector.cxx
+   IntTools_BeanFaceIntersector.hxx
+diff -ruN a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Apart.hxx b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Apart.hxx
+--- a/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Apart.hxx	1970-01-01 01:00:00
++++ b/src/ModelingAlgorithms/TKBO/IntTools/IntTools_Apart.hxx	2026-11-16 00:15:25
+@@ -0,0 +1,948 @@
++// PARCAD: a proof that two pieces of geometry are apart, or no answer.
++//
++// Each piece is enclosed in a box that is certain to hold it: the control
++// points of a Bezier piece (a rational one too, its weights being positive),
++// or the corners of an analytic one grown by its second derivative's bound.
++// Two pieces whose boxes are further apart than the gap are that far apart;
++// otherwise the larger is halved and both halves must pass. Nothing here
++// samples: an answer of "apart" is exact, and anything short of it is "not
++// proven", which a caller must treat as "may meet".
++//
++// Why it exists: an edge that runs beside a B-spline face without meeting it
++// costs IntCurveSurface_HInter a failed root search from every facet of the
++// face's polyhedron the edge passes within its deflection of, 0.6 s for one
++// circle 0.12 mm from one face. See vendor/occt-sys/PARCAD-CHANGES.md.
++
++#ifndef _IntTools_Apart_HeaderFile
++#define _IntTools_Apart_HeaderFile
++
++#include <BRepAdaptor_Curve.hxx>
++#include <BRepAdaptor_Surface.hxx>
++#include <GeomConvert_BSplineCurveToBezierCurve.hxx>
++#include <GeomConvert_BSplineSurfaceToBezierSurface.hxx>
++#include <Geom_BSplineCurve.hxx>
++#include <Geom_BSplineSurface.hxx>
++#include <Geom_BezierCurve.hxx>
++#include <Geom_BezierSurface.hxx>
++#include <NCollection_Array2.hxx>
++#include <Precision.hxx>
++#include <Standard_Failure.hxx>
++#include <gp_Circ.hxx>
++#include <gp_Cone.hxx>
++#include <gp_Cylinder.hxx>
++#include <gp_Elips.hxx>
++#include <gp_Pnt.hxx>
++#include <gp_Sphere.hxx>
++#include <gp_Torus.hxx>
++
++#include <algorithm>
++#include <cmath>
++#include <cstdlib>
++#include <memory>
++#include <string>
++#include <vector>
++
++namespace IntTools_Apart
++{
++
++struct Box
++{
++  double lo[3];
++  double hi[3];
++
++  Box()
++  {
++    for (int k = 0; k < 3; ++k)
++    {
++      lo[k] = 1e300;
++      hi[k] = -1e300;
++    }
++  }
++
++  void Add(const double x, const double y, const double z)
++  {
++    const double p[3] = {x, y, z};
++    for (int k = 0; k < 3; ++k)
++    {
++      lo[k] = (std::min)(lo[k], p[k]);
++      hi[k] = (std::max)(hi[k], p[k]);
++    }
++  }
++
++  void Add(const gp_Pnt& p) { Add(p.X(), p.Y(), p.Z()); }
++
++  void Add(const Box& b)
++  {
++    for (int k = 0; k < 3; ++k)
++    {
++      lo[k] = (std::min)(lo[k], b.lo[k]);
++      hi[k] = (std::max)(hi[k], b.hi[k]);
++    }
++  }
++
++  void Grow(const double d)
++  {
++    for (int k = 0; k < 3; ++k)
++    {
++      lo[k] -= d;
++      hi[k] += d;
++    }
++  }
++
++  double Diagonal() const
++  {
++    double s = 0.0;
++    for (int k = 0; k < 3; ++k)
++    {
++      s += (hi[k] - lo[k]) * (hi[k] - lo[k]);
++    }
++    return std::sqrt(s);
++  }
++
++  //! The square of the least distance between a point of each box.
++  double SquareDistance(const Box& b) const
++  {
++    double s = 0.0;
++    for (int k = 0; k < 3; ++k)
++    {
++      const double d = (std::max)((std::max)(lo[k] - b.hi[k], b.lo[k] - hi[k]), 0.0);
++      s += d * d;
++    }
++    return s;
++  }
++};
++
++class Node;
++
++//! Owns every node of one proof.
++class Arena
++{
++public:
++  template <typename T>
++  T* Keep(T* theNode)
++  {
++    myNodes.emplace_back(theNode);
++    return theNode;
++  }
++
++private:
++  std::vector<std::unique_ptr<Node>> myNodes;
++};
++
++//! A piece of a curve or a surface, the box that holds it, and its two halves.
++class Node
++{
++public:
++  virtual ~Node() {}
++
++  const Box& Bounds() const { return myBox; }
++
++  double Size() const { return mySize; }
++
++  //! The halves, made once; false for a piece that does not halve.
++  bool Split(Arena& theArena, Node*& theFirst, Node*& theSecond)
++  {
++    if (!myTried)
++    {
++      myTried = true;
++      Halve(theArena, myKids[0], myKids[1]);
++    }
++    theFirst  = myKids[0];
++    theSecond = myKids[1];
++    return myKids[0] != nullptr && myKids[1] != nullptr;
++  }
++
++protected:
++  virtual void Halve(Arena& theArena, Node*& theFirst, Node*& theSecond) = 0;
++
++  //! Rounding in the evaluation of a corner or a control point.
++  void Close()
++  {
++    double reach = 0.0;
++    for (int k = 0; k < 3; ++k)
++    {
++      reach = (std::max)(reach, (std::max)(std::abs(myBox.lo[k]), std::abs(myBox.hi[k])));
++    }
++    myBox.Grow(1e-9 + 1e-12 * reach);
++    mySize = myBox.Diagonal();
++  }
++
++  Box    myBox;
++  double mySize = 0.0;
++
++private:
++  Node* myKids[2] = {nullptr, nullptr};
++  bool  myTried   = false;
++};
++
++//! Several pieces in a row, halved by count.
++class Row : public Node
++{
++public:
++  Row(const std::vector<Node*>& thePieces, const size_t theFrom, const size_t theTo)
++      : myPieces(thePieces),
++        myFrom(theFrom),
++        myTo(theTo)
++  {
++    for (size_t i = myFrom; i < myTo; ++i)
++    {
++      myBox.Add(myPieces[i]->Bounds());
++    }
++    mySize = myBox.Diagonal();
++  }
++
++  //! The node for pieces [theFrom, theTo): the piece itself when it is one.
++  static Node* Of(Arena&                    theArena,
++                  const std::vector<Node*>& thePieces,
++                  const size_t              theFrom,
++                  const size_t              theTo)
++  {
++    if (theTo - theFrom == 1)
++    {
++      return thePieces[theFrom];
++    }
++    return theArena.Keep(new Row(thePieces, theFrom, theTo));
++  }
++
++protected:
++  void Halve(Arena& theArena, Node*& theFirst, Node*& theSecond) override
++  {
++    const size_t mid = (myFrom + myTo) / 2;
++    theFirst         = Of(theArena, myPieces, myFrom, mid);
++    theSecond        = Of(theArena, myPieces, mid, myTo);
++  }
++
++private:
++  const std::vector<Node*>& myPieces;
++  size_t                    myFrom;
++  size_t                    myTo;
++};
++
++//! Patches in a grid, halved along the direction with more of them.
++class Grid : public Node
++{
++public:
++  Grid(const std::vector<Node*>& thePatches,
++       const int                 theColumns,
++       const int                 theU0,
++       const int                 theU1,
++       const int                 theV0,
++       const int                 theV1)
++      : myPatches(thePatches),
++        myColumns(theColumns),
++        myU0(theU0),
++        myU1(theU1),
++        myV0(theV0),
++        myV1(theV1)
++  {
++    for (int i = myU0; i < myU1; ++i)
++    {
++      for (int j = myV0; j < myV1; ++j)
++      {
++        myBox.Add(myPatches[static_cast<size_t>(i) * myColumns + j]->Bounds());
++      }
++    }
++    mySize = myBox.Diagonal();
++  }
++
++  static Node* Of(Arena&                    theArena,
++                  const std::vector<Node*>& thePatches,
++                  const int                 theColumns,
++                  const int                 theU0,
++                  const int                 theU1,
++                  const int                 theV0,
++                  const int                 theV1)
++  {
++    if (theU1 - theU0 == 1 && theV1 - theV0 == 1)
++    {
++      return thePatches[static_cast<size_t>(theU0) * theColumns + theV0];
++    }
++    return theArena.Keep(new Grid(thePatches, theColumns, theU0, theU1, theV0, theV1));
++  }
++
++protected:
++  void Halve(Arena& theArena, Node*& theFirst, Node*& theSecond) override
++  {
++    if (myU1 - myU0 >= myV1 - myV0)
++    {
++      const int mid = (myU0 + myU1) / 2;
++      theFirst      = Of(theArena, myPatches, myColumns, myU0, mid, myV0, myV1);
++      theSecond     = Of(theArena, myPatches, myColumns, mid, myU1, myV0, myV1);
++    }
++    else
++    {
++      const int mid = (myV0 + myV1) / 2;
++      theFirst      = Of(theArena, myPatches, myColumns, myU0, myU1, myV0, mid);
++      theSecond     = Of(theArena, myPatches, myColumns, myU0, myU1, mid, myV1);
++    }
++  }
++
++private:
++  const std::vector<Node*>& myPatches;
++  int                       myColumns;
++  int                       myU0, myU1, myV0, myV1;
++};
++
++//! A line, circle or ellipse between two parameters: the chord's box, grown
++//! by the most a curve whose second derivative is at most `theBend` leaves
++//! its chord by, bend * dt^2 / 8.
++class Arc : public Node
++{
++public:
++  Arc(const Adaptor3d_Curve& theCurve, const double theT0, const double theT1, const double theBend)
++      : myCurve(theCurve),
++        myT0(theT0),
++        myT1(theT1),
++        myBend(theBend)
++  {
++    myBox.Add(myCurve.Value(myT0));
++    myBox.Add(myCurve.Value(myT1));
++    const double dt = myT1 - myT0;
++    myBox.Grow(myBend * dt * dt / 8.0);
++    Close();
++  }
++
++protected:
++  void Halve(Arena& theArena, Node*& theFirst, Node*& theSecond) override
++  {
++    const double mid = 0.5 * (myT0 + myT1);
++    if (!(mid > myT0 && mid < myT1))
++    {
++      return;
++    }
++    theFirst  = theArena.Keep(new Arc(myCurve, myT0, mid, myBend));
++    theSecond = theArena.Keep(new Arc(myCurve, mid, myT1, myBend));
++  }
++
++private:
++  const Adaptor3d_Curve& myCurve;
++  double                 myT0;
++  double                 myT1;
++  double                 myBend;
++};
++
++//! A Bezier curve as homogeneous control points (xw, yw, zw, w), w > 0.
++class BezierArc : public Node
++{
++public:
++  explicit BezierArc(std::vector<double>&& thePoles)
++      : myPoles(std::move(thePoles))
++  {
++    for (size_t i = 0; i + 3 < myPoles.size(); i += 4)
++    {
++      const double w = myPoles[i + 3];
++      myBox.Add(myPoles[i] / w, myPoles[i + 1] / w, myPoles[i + 2] / w);
++    }
++    Close();
++  }
++
++protected:
++  void Halve(Arena& theArena, Node*& theFirst, Node*& theSecond) override
++  {
++    const size_t        n = myPoles.size() / 4;
++    std::vector<double> left(myPoles.size());
++    std::vector<double> right(myPoles.size());
++    std::vector<double> work(myPoles);
++    for (size_t level = 0; level < n; ++level)
++    {
++      for (int k = 0; k < 4; ++k)
++      {
++        left[level * 4 + k]            = work[k];
++        right[(n - 1 - level) * 4 + k] = work[(n - 1 - level) * 4 + k];
++      }
++      for (size_t i = 0; i + 1 < n - level; ++i)
++      {
++        for (int k = 0; k < 4; ++k)
++        {
++          work[i * 4 + k] = 0.5 * (work[i * 4 + k] + work[(i + 1) * 4 + k]);
++        }
++      }
++    }
++    theFirst  = theArena.Keep(new BezierArc(std::move(left)));
++    theSecond = theArena.Keep(new BezierArc(std::move(right)));
++  }
++
++private:
++  std::vector<double> myPoles;
++};
++
++//! A plane, cylinder, cone, sphere or torus over a rectangle of parameters:
++//! the corners' box, grown by the most a surface leaves the bilinear patch
++//! through its corners by, bendU * du^2 / 8 + bendV * dv^2 / 8.
++class Sheet : public Node
++{
++public:
++  Sheet(const Adaptor3d_Surface& theSurface,
++        const double             theU0,
++        const double             theU1,
++        const double             theV0,
++        const double             theV1)
++      : mySurface(theSurface),
++        myU0(theU0),
++        myU1(theU1),
++        myV0(theV0),
++        myV1(theV1)
++  {
++    Bends(myBendU, myBendV);
++    const gp_Pnt p00 = mySurface.Value(myU0, myV0);
++    const gp_Pnt p10 = mySurface.Value(myU1, myV0);
++    const gp_Pnt p01 = mySurface.Value(myU0, myV1);
++    const gp_Pnt p11 = mySurface.Value(myU1, myV1);
++    myBox.Add(p00);
++    myBox.Add(p10);
++    myBox.Add(p01);
++    myBox.Add(p11);
++    const double du = myU1 - myU0;
++    const double dv = myV1 - myV0;
++    const double su = myBendU * du * du / 8.0;
++    const double sv = myBendV * dv * dv / 8.0;
++    myBox.Grow(su + sv);
++    myAlongU = (std::max)(p00.Distance(p10), p01.Distance(p11)) + 4.0 * su;
++    myAlongV = (std::max)(p00.Distance(p01), p10.Distance(p11)) + 4.0 * sv;
++    Close();
++  }
++
++  //! Whether a surface of this kind is one this class encloses.
++  static bool Encloses(const GeomAbs_SurfaceType theType)
++  {
++    return theType == GeomAbs_Plane || theType == GeomAbs_Cylinder || theType == GeomAbs_Cone
++           || theType == GeomAbs_Sphere || theType == GeomAbs_Torus;
++  }
++
++protected:
++  void Halve(Arena& theArena, Node*& theFirst, Node*& theSecond) override
++  {
++    if (myAlongU >= myAlongV)
++    {
++      const double mid = 0.5 * (myU0 + myU1);
++      if (!(mid > myU0 && mid < myU1))
++      {
++        return;
++      }
++      theFirst  = theArena.Keep(new Sheet(mySurface, myU0, mid, myV0, myV1));
++      theSecond = theArena.Keep(new Sheet(mySurface, mid, myU1, myV0, myV1));
++    }
++    else
++    {
++      const double mid = 0.5 * (myV0 + myV1);
++      if (!(mid > myV0 && mid < myV1))
++      {
++        return;
++      }
++      theFirst  = theArena.Keep(new Sheet(mySurface, myU0, myU1, myV0, mid));
++      theSecond = theArena.Keep(new Sheet(mySurface, myU0, myU1, mid, myV1));
++    }
++  }
++
++private:
++  //! The largest second derivative along u and along v over this rectangle.
++  void Bends(double& theU, double& theV) const
++  {
++    theU = 0.0;
++    theV = 0.0;
++    switch (mySurface.GetType())
++    {
++      case GeomAbs_Cylinder:
++        theU = mySurface.Cylinder().Radius();
++        break;
++      case GeomAbs_Cone: {
++        const gp_Cone cone = mySurface.Cone();
++        const double  s    = std::sin(cone.SemiAngle());
++        theU = (std::max)(std::abs(cone.RefRadius() + myV0 * s), std::abs(cone.RefRadius() + myV1 * s));
++        break;
++      }
++      case GeomAbs_Sphere:
++        theU = mySurface.Sphere().Radius();
++        theV = theU;
++        break;
++      case GeomAbs_Torus: {
++        const gp_Torus torus = mySurface.Torus();
++        theU                 = torus.MajorRadius() + torus.MinorRadius();
++        theV                 = torus.MinorRadius();
++        break;
++      }
++      default:
++        break;
++    }
++  }
++
++  const Adaptor3d_Surface& mySurface;
++  double                   myU0, myU1, myV0, myV1;
++  double                   myBendU  = 0.0;
++  double                   myBendV  = 0.0;
++  double                   myAlongU = 0.0;
++  double                   myAlongV = 0.0;
++};
++
++//! A Bezier patch as homogeneous control points, row i (along u) by column j.
++class BezierPatch : public Node
++{
++public:
++  BezierPatch(std::vector<double>&& thePoles, const int theRows, const int theColumns)
++      : myPoles(std::move(thePoles)),
++        myRows(theRows),
++        myColumns(theColumns)
++  {
++    for (size_t i = 0; i + 3 < myPoles.size(); i += 4)
++    {
++      const double w = myPoles[i + 3];
++      myBox.Add(myPoles[i] / w, myPoles[i + 1] / w, myPoles[i + 2] / w);
++    }
++    Close();
++  }
++
++protected:
++  void Halve(Arena& theArena, Node*& theFirst, Node*& theSecond) override
++  {
++    // Along the direction the control net is longer in, measured along the
++    // net: a patch that closes on itself has ends that coincide and is no
++    // shorter for it.
++    double alongU = 0.0;
++    double alongV = 0.0;
++    for (int j = 0; j < myColumns; ++j)
++    {
++      double length = 0.0;
++      for (int i = 0; i + 1 < myRows; ++i)
++      {
++        length += Span(At(i, j), At(i + 1, j));
++      }
++      alongU = (std::max)(alongU, length);
++    }
++    for (int i = 0; i < myRows; ++i)
++    {
++      double length = 0.0;
++      for (int j = 0; j + 1 < myColumns; ++j)
++      {
++        length += Span(At(i, j), At(i, j + 1));
++      }
++      alongV = (std::max)(alongV, length);
++    }
++    const bool          byU = alongU >= alongV;
++    std::vector<double> left(myPoles.size());
++    std::vector<double> right(myPoles.size());
++    const int           lines = byU ? myColumns : myRows;
++    const int           n     = byU ? myRows : myColumns;
++    std::vector<double> work(static_cast<size_t>(n) * 4);
++    for (int line = 0; line < lines; ++line)
++    {
++      auto at = [&](const int k) { return byU ? At(k, line) : At(line, k); };
++      for (int k = 0; k < n; ++k)
++      {
++        std::copy(&myPoles[at(k)], &myPoles[at(k)] + 4, &work[static_cast<size_t>(k) * 4]);
++      }
++      for (int level = 0; level < n; ++level)
++      {
++        for (int c = 0; c < 4; ++c)
++        {
++          left[at(level) + c]          = work[c];
++          right[at(n - 1 - level) + c] = work[static_cast<size_t>(n - 1 - level) * 4 + c];
++        }
++        for (int k = 0; k + 1 < n - level; ++k)
++        {
++          for (int c = 0; c < 4; ++c)
++          {
++            work[static_cast<size_t>(k) * 4 + c] =
++              0.5 * (work[static_cast<size_t>(k) * 4 + c] + work[static_cast<size_t>(k + 1) * 4 + c]);
++          }
++        }
++      }
++    }
++    theFirst  = theArena.Keep(new BezierPatch(std::move(left), myRows, myColumns));
++    theSecond = theArena.Keep(new BezierPatch(std::move(right), myRows, myColumns));
++  }
++
++private:
++  size_t At(const int theRow, const int theColumn) const
++  {
++    return (static_cast<size_t>(theRow) * myColumns + theColumn) * 4;
++  }
++
++  double Span(const size_t theA, const size_t theB) const
++  {
++    double s = 0.0;
++    for (int k = 0; k < 3; ++k)
++    {
++      const double d = myPoles[theA + k] / myPoles[theA + 3] - myPoles[theB + k] / myPoles[theB + 3];
++      s += d * d;
++    }
++    return std::sqrt(s);
++  }
++
++  std::vector<double> myPoles;
++  int                 myRows;
++  int                 myColumns;
++};
++
++//! One side of a proof: the node for the whole piece and what it is made of.
++struct Side
++{
++  Arena              arena;
++  std::vector<Node*> pieces;
++  Node*              root = nullptr;
++};
++
++//! The edge's curve over [theT0, theT1]. Leaves `root` null for a curve this
++//! does not enclose.
++inline void EncloseCurve(const BRepAdaptor_Curve& theCurve,
++                         const double             theT0,
++                         const double             theT1,
++                         Side&                    theSide)
++{
++  if (!theCurve.Is3DCurve() || Precision::IsInfinite(theT0) || Precision::IsInfinite(theT1)
++      || !(theT1 > theT0))
++  {
++    return;
++  }
++  switch (theCurve.GetType())
++  {
++    case GeomAbs_Line:
++      theSide.root = theSide.arena.Keep(new Arc(theCurve, theT0, theT1, 0.0));
++      return;
++    case GeomAbs_Circle:
++      theSide.root = theSide.arena.Keep(new Arc(theCurve, theT0, theT1, theCurve.Circle().Radius()));
++      return;
++    case GeomAbs_Ellipse:
++      theSide.root =
++        theSide.arena.Keep(new Arc(theCurve, theT0, theT1, theCurve.Ellipse().MajorRadius()));
++      return;
++    case GeomAbs_BSplineCurve:
++    case GeomAbs_BezierCurve:
++      break;
++    default:
++      return;
++  }
++  auto keep = [&](const occ::handle<Geom_BezierCurve>& theArc) {
++    const int           n = theArc->NbPoles();
++    std::vector<double> poles(static_cast<size_t>(n) * 4);
++    for (int i = 1; i <= n; ++i)
++    {
++      const gp_Pnt p = theArc->Pole(i);
++      const double w = theArc->Weight(i);
++      if (!(w > 0.0))
++      {
++        return false;
++      }
++      double* at = &poles[static_cast<size_t>(i - 1) * 4];
++      at[0]      = p.X() * w;
++      at[1]      = p.Y() * w;
++      at[2]      = p.Z() * w;
++      at[3]      = w;
++    }
++    theSide.pieces.push_back(theSide.arena.Keep(new BezierArc(std::move(poles))));
++    return true;
++  };
++  if (theCurve.GetType() == GeomAbs_BezierCurve)
++  {
++    occ::handle<Geom_BezierCurve> whole = occ::down_cast<Geom_BezierCurve>(theCurve.Bezier()->Copy());
++    whole->Segment((std::max)(theT0, 0.0), (std::min)(theT1, 1.0));
++    if (!keep(whole))
++    {
++      return;
++    }
++  }
++  else
++  {
++    occ::handle<Geom_BSplineCurve> whole =
++      occ::down_cast<Geom_BSplineCurve>(theCurve.BSpline()->Copy());
++    double t0 = theT0;
++    double t1 = theT1;
++    if (!whole->IsPeriodic())
++    {
++      t0 = (std::max)(t0, whole->FirstParameter());
++      t1 = (std::min)(t1, whole->LastParameter());
++      if (!(t1 > t0))
++      {
++        return;
++      }
++    }
++    whole->Segment(t0, t1);
++    GeomConvert_BSplineCurveToBezierCurve arcs(whole);
++    for (int i = 1; i <= arcs.NbArcs(); ++i)
++    {
++      if (!keep(arcs.Arc(i)))
++      {
++        return;
++      }
++    }
++  }
++  if (!theSide.pieces.empty())
++  {
++    theSide.root = Row::Of(theSide.arena, theSide.pieces, 0, theSide.pieces.size());
++  }
++}
++
++//! The face's surface over the rectangle of parameters the face lies in.
++//! Leaves `root` null for a surface this does not enclose.
++inline void EncloseSurface(const BRepAdaptor_Surface& theSurface, Side& theSide)
++{
++  double u0 = theSurface.FirstUParameter();
++  double u1 = theSurface.LastUParameter();
++  double v0 = theSurface.FirstVParameter();
++  double v1 = theSurface.LastVParameter();
++  if (Precision::IsInfinite(u0) || Precision::IsInfinite(u1) || Precision::IsInfinite(v0)
++      || Precision::IsInfinite(v1) || !(u1 > u0) || !(v1 > v0))
++  {
++    return;
++  }
++  const GeomAbs_SurfaceType type = theSurface.GetType();
++  if (Sheet::Encloses(type))
++  {
++    theSide.root = theSide.arena.Keep(new Sheet(theSurface, u0, u1, v0, v1));
++    return;
++  }
++  int  columns = 0;
++  auto keep    = [&](const occ::handle<Geom_BezierSurface>& thePatch) {
++    const int           rows = thePatch->NbUPoles();
++    const int           cols = thePatch->NbVPoles();
++    std::vector<double> poles(static_cast<size_t>(rows) * cols * 4);
++    for (int i = 1; i <= rows; ++i)
++    {
++      for (int j = 1; j <= cols; ++j)
++      {
++        const gp_Pnt p = thePatch->Pole(i, j);
++        const double w = thePatch->Weight(i, j);
++        if (!(w > 0.0))
++        {
++          return false;
++        }
++        double* at = &poles[(static_cast<size_t>(i - 1) * cols + (j - 1)) * 4];
++        at[0]      = p.X() * w;
++        at[1]      = p.Y() * w;
++        at[2]      = p.Z() * w;
++        at[3]      = w;
++      }
++    }
++    theSide.pieces.push_back(theSide.arena.Keep(new BezierPatch(std::move(poles), rows, cols)));
++    return true;
++  };
++  if (type == GeomAbs_BezierSurface)
++  {
++    occ::handle<Geom_BezierSurface> whole =
++      occ::down_cast<Geom_BezierSurface>(theSurface.Bezier()->Copy());
++    whole->Segment((std::max)(u0, 0.0), (std::min)(u1, 1.0), (std::max)(v0, 0.0), (std::min)(v1, 1.0));
++    if (!keep(whole))
++    {
++      return;
++    }
++    theSide.root = theSide.pieces[0];
++    return;
++  }
++  if (type != GeomAbs_BSplineSurface)
++  {
++    return;
++  }
++  occ::handle<Geom_BSplineSurface> whole =
++    occ::down_cast<Geom_BSplineSurface>(theSurface.BSpline()->Copy());
++  double s0, s1, r0, r1;
++  whole->Bounds(s0, s1, r0, r1);
++  if (!whole->IsUPeriodic())
++  {
++    u0 = (std::max)(u0, s0);
++    u1 = (std::min)(u1, s1);
++  }
++  if (!whole->IsVPeriodic())
++  {
++    v0 = (std::max)(v0, r0);
++    v1 = (std::min)(v1, r1);
++  }
++  if (!(u1 > u0) || !(v1 > v0))
++  {
++    return;
++  }
++  whole->Segment(u0, u1, v0, v1);
++  GeomConvert_BSplineSurfaceToBezierSurface              convert(whole);
++  NCollection_Array2<occ::handle<Geom_BezierSurface>> patches(1,
++                                                                 convert.NbUPatches(),
++                                                                 1,
++                                                                 convert.NbVPatches());
++  convert.Patches(patches);
++  columns = convert.NbVPatches();
++  for (int i = 1; i <= convert.NbUPatches(); ++i)
++  {
++    for (int j = 1; j <= columns; ++j)
++    {
++      if (!keep(patches(i, j)))
++      {
++        return;
++      }
++    }
++  }
++  theSide.root = Grid::Of(theSide.arena, theSide.pieces, columns, 0, convert.NbUPatches(), 0, columns);
++}
++
++//! How many halvings deep a proof may go. Sixty take a metre to a size no
++//! tolerance resolves; the limit is what keeps a piece that halves without
++//! shrinking from running a pool thread out of stack.
++constexpr int THE_DEPTH = 128;
++
++//! Whether every point of one piece is further than the gap from every point
++//! of the other, shown within `theBudget` box comparisons. False is no proof.
++inline bool Proves(Side&        theA,
++                   Node*        theNodeA,
++                   Side&        theB,
++                   Node*        theNodeB,
++                   const double theSquareGap,
++                   const double theFloor,
++                   int&         theBudget,
++                   const int    theDepth = 0)
++{
++  if (--theBudget < 0 || theDepth > THE_DEPTH)
++  {
++    return false;
++  }
++  if (theNodeA->Bounds().SquareDistance(theNodeB->Bounds()) > theSquareGap)
++  {
++    return true;
++  }
++  const bool aFirst = theNodeA->Size() >= theNodeB->Size();
++  for (int attempt = 0; attempt < 2; ++attempt)
++  {
++    const bool splitA = (attempt == 0) == aFirst;
++    Node*      whole  = splitA ? theNodeA : theNodeB;
++    Node*      other  = splitA ? theNodeB : theNodeA;
++    if (whole->Size() < theFloor)
++    {
++      continue;
++    }
++    Node* first  = nullptr;
++    Node* second = nullptr;
++    if (!whole->Split(splitA ? theA.arena : theB.arena, first, second))
++    {
++      continue;
++    }
++    // The nearer half first: a pair that meets is given up on at once.
++    if (second->Bounds().SquareDistance(other->Bounds())
++        < first->Bounds().SquareDistance(other->Bounds()))
++    {
++      std::swap(first, second);
++    }
++    for (Node* half : {first, second})
++    {
++      const bool proven =
++        splitA ? Proves(theA, half, theB, other, theSquareGap, theFloor, theBudget, theDepth + 1)
++               : Proves(theA, other, theB, half, theSquareGap, theFloor, theBudget, theDepth + 1);
++      if (!proven)
++      {
++        return false;
++      }
++    }
++    return true;
++  }
++  return false;
++}
++
++//! How many box comparisons one proof may spend before it gives up.
++constexpr int THE_BUDGET = 20000;
++
++inline bool Proves(Side& theA, Side& theB, const double theGap)
++{
++  if (theA.root == nullptr || theB.root == nullptr)
++  {
++    return false;
++  }
++  // A Bezier piece is cut from its B-spline within the parametric confusion
++  // of the ends asked for, so a proof is of a gap a little under theGap; no
++  // caller may need all of it.
++  const double gap    = theGap + 1e-6;
++  int          budget = THE_BUDGET;
++  return Proves(theA, theA.root, theB, theB.root, gap * gap, 0.5 * gap, budget);
++}
++
++//! True when the edge over [theT0, theT1] is proven further than theGap from
++//! the surface of the face over the face's parameter rectangle. False is not
++//! a claim that they meet.
++inline bool EdgeFromFace(const BRepAdaptor_Curve&   theCurve,
++                         const double               theT0,
++                         const double               theT1,
++                         const BRepAdaptor_Surface& theSurface,
++                         const double               theGap)
++{
++  try
++  {
++    Side curve;
++    EncloseCurve(theCurve, theT0, theT1, curve);
++    if (curve.root == nullptr)
++    {
++      return false;
++    }
++    Side surface;
++    EncloseSurface(theSurface, surface);
++    return Proves(curve, surface, theGap);
++  }
++  catch (Standard_Failure const&)
++  {
++    return false;
++  }
++}
++
++//! Whether every point of the piece lies inside the box [theLow, theHigh],
++//! shown within `theBudget` box comparisons. False is no proof.
++inline bool Holds(Side&        theSide,
++                  Node*        theNode,
++                  const double theLow[3],
++                  const double theHigh[3],
++                  const double theFloor,
++                  int&         theBudget,
++                  const int    theDepth = 0)
++{
++  if (--theBudget < 0 || theDepth > THE_DEPTH)
++  {
++    return false;
++  }
++  const Box& box    = theNode->Bounds();
++  bool       inside = true;
++  for (int k = 0; k < 3; ++k)
++  {
++    inside = inside && box.lo[k] >= theLow[k] && box.hi[k] <= theHigh[k];
++  }
++  if (inside)
++  {
++    return true;
++  }
++  Node* first  = nullptr;
++  Node* second = nullptr;
++  if (theNode->Size() < theFloor || !theNode->Split(theSide.arena, first, second))
++  {
++    return false;
++  }
++  return Holds(theSide, first, theLow, theHigh, theFloor, theBudget, theDepth + 1)
++         && Holds(theSide, second, theLow, theHigh, theFloor, theBudget, theDepth + 1);
++}
++
++//! The gap an edge and a face are proven apart by before their intersection
++//! is skipped: well above the sum of tolerances inside which the intersection
++//! reports a common part, so a proof leaves it nothing to find.
++inline double SkippedGap(const double theTolerances)
++{
++  return (std::max)(1e-3, 10.0 * theTolerances);
++}
++
++//! PARCAD_APART_VERIFY, for checking the proofs on a corpus. Set to
++//! "measure", a proof still stands in for its intersection, and every gap it
++//! left unmeasured is measured where it is read; set to anything else,
++//! nothing is skipped and every proof is followed by the intersection it
++//! would have replaced. A proof the kernel disagrees with is reported on the
++//! standard error either way.
++enum Verify
++{
++  Verify_Off,
++  Verify_Both,
++  Verify_Measure
++};
++
++inline Verify Verifying()
++{
++  static const Verify aMode = []() {
++    const char* aValue = std::getenv("PARCAD_APART_VERIFY");
++    if (aValue == nullptr)
++    {
++      return Verify_Off;
++    }
++    return std::string(aValue) == "measure" ? Verify_Measure : Verify_Both;
++  }();
++  return aMode;
++}
++
++} // namespace IntTools_Apart
++
++#endif
