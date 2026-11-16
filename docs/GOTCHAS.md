@@ -2651,3 +2651,29 @@ Both looks now draw edges opaque, where overlap cannot show. If a look ever
 needs translucent wide edges again, give each one a stencil bit where it draws
 and skip pixels already marked (bit 7 sits above the section caps' crossing
 counts), so every pixel is blended once; that was measured to remove the beads.
+
+## An edge drawn from its own samples dashes on a curved face *(fixed 2026-11-16)*
+
+The viewport drew each edge through `Edge::approximation_segments`: points
+0.1 rad apart on the exact curve, chosen with no knowledge of the mesh. The
+mesh is cut to 0.01 mm. On a convex curve every chord of the line runs inside
+the surface, and the mesh's shorter chords run nearer it, so between its
+points the line lay behind the triangles: on the tp device's dial (R 36 mm) by
+0.045 mm against the mesh's 0.005. A sharp rim hides this, because a chord of
+it lies in the plane of the flat face beside it. A tangent edge between two
+curved faces has no such face, the part's `polygonOffset(1, 1)` does not span
+the gap on a face seen square-on, and the line came out as dashes: visible at
+each sample, hidden between.
+
+`serve::edge_curves` now draws an edge through the nodes the mesh itself put
+on it, `Edge::polygon_on` (`BRep_Tool::PolygonOnTriangulation`), so every
+segment of the line is an edge of the triangles on both sides. Where no face's
+mesh carries the edge it falls back to the samples. The edge's key, id,
+`length_mm`, `center` and `direction` still come from the samples, because
+selection and `treatment_owners` key on them and a reported length must not
+depend on the mesher. Over the seed parts and tp, 37 in all: 6125 edges, every
+field but `points` unchanged, 2140 edges moved onto the mesh, 93 373 points
+drawn before and 95 429 after.
+
+Do not fix this kind of thing with a larger polygon offset: it lets edges on
+the far side of a thin wall show through, and it still depends on the view.

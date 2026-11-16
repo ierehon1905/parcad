@@ -33,20 +33,33 @@ fn describe_faces(body: &perceive::Body) -> Vec<FaceSummary> {
 /// drawing a seam puts a crack down every bore — and a curve only such a line
 /// cut is drawn whole. An edge no face borders belongs to no surface drawn
 /// here; one face makes it a free edge.
+///
+/// Each line runs through the nodes the shape's mesh put on its edge, so it
+/// lies on the triangles beside it; where no face's mesh carries the edge it
+/// is the exact curve's samples. Keys, length and centre come from those
+/// samples either way, and each edge is returned with its key, which
+/// numbers it. See docs/GOTCHAS.md, "An edge drawn from its own samples
+/// dashes on a curved face".
 fn edge_curves(
     shape: &opencascade::primitives::Shape,
     treatment_owners: &std::collections::BTreeMap<Vec<[i64; 3]>, usize>,
-) -> anyhow::Result<Vec<EdgeCurve>> {
+) -> anyhow::Result<Vec<KeyedEdge>> {
     use std::collections::{HashMap, HashSet};
 
     let samples = |edge: &opencascade::primitives::Edge| -> Vec<[f32; 3]> {
         edge.approximation_segments().map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect()
     };
     let mut faces_bordering: HashMap<Vec<[i64; 3]>, usize> = HashMap::new();
+    let mut meshed: HashMap<Vec<[i64; 3]>, Vec<glam::DVec3>> = HashMap::new();
     for face in shape.faces() {
         let mut seen_here = HashSet::new();
         for edge in face.edges() {
             let key = edge_key(&samples(&edge));
+            if !meshed.contains_key(&key) {
+                if let Some(nodes) = edge.polygon_on(&face).map_err(|e| anyhow::anyhow!(e))? {
+                    meshed.insert(key.clone(), nodes);
+                }
+            }
             if seen_here.insert(key.clone()) {
                 *faces_bordering.entry(key).or_default() += 1;
             }
@@ -61,27 +74,36 @@ fn edge_curves(
         if faces.contains(&0) {
             continue;
         }
-        let points = match logical.points {
+        let exact: Vec<[f32; 3]> = match logical.points {
             Some(joined) => joined.iter().map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect(),
             None => runs.into_iter().next().unwrap_or_default(),
         };
+        let drawn = keys
+            .iter()
+            .map(|key| meshed.get(key).cloned())
+            .collect::<Option<Vec<_>>>()
+            .and_then(backend::joined_end_to_end)
+            .filter(|nodes| nodes.len() >= 2);
+        let order = edge_key(&exact);
         let owners: HashSet<Option<usize>> = keys.iter().map(|key| treatment_owners.get(key).copied()).collect();
-        let Some(mut curve) = edge_curve(points) else {
+        let Some(mut curve) = edge_curve(exact) else {
             continue;
         };
         if curve.length_mm <= 1e-6 {
             continue;
         }
+        if let Some(nodes) = drawn {
+            curve.points = nodes.iter().map(|p| [p.x as f32, p.y as f32, p.z as f32]).collect();
+        }
         curve.free = faces.iter().all(|&count| count == 1);
         curve.treatment_node = if owners.len() == 1 { owners.into_iter().next().flatten() } else { None };
-        edges.push(curve);
-    }
-    edges.sort_by_key(|edge| edge_key(&edge.points));
-    for (index, edge) in edges.iter_mut().enumerate() {
-        edge.id = format!("edge@{index}");
+        edges.push((order, curve));
     }
     Ok(edges)
 }
+
+/// An edge and the [`edge_key`] of its exact curve's samples.
+type KeyedEdge = (Vec<[i64; 3]>, EdgeCurve);
 
 /// Same stable key used to deduplicate an edge, independent of its curve
 /// direction. The visible ID is intentionally stable within one result only.
@@ -444,10 +466,15 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
     } = whole;
     // One numbering across every body, in the same key order a one-solid
     // part's edges have always had.
-    edges.sort_by_key(|edge| edge_key(&edge.points));
-    for (index, edge) in edges.iter_mut().enumerate() {
-        edge.id = format!("edge@{index}");
-    }
+    edges.sort_by(|a, b| a.0.cmp(&b.0));
+    let edges: Vec<EdgeCurve> = edges
+        .into_iter()
+        .enumerate()
+        .map(|(index, (_, mut edge))| {
+            edge.id = format!("edge@{index}");
+            edge
+        })
+        .collect();
     Response::Ok(Box::new(Success {
         collisions: part.collisions.clone(),
         overhang: overhangs,
@@ -489,7 +516,7 @@ pub fn run(request: Request, cache: &mut BuildCache) -> Response {
 struct Measured {
     mesh: opencascade::mesh::Mesh,
     faces: Vec<FaceSummary>,
-    edges: Vec<EdgeCurve>,
+    edges: Vec<KeyedEdge>,
     topology: Topology,
     kind: BodyKind,
     surface: Option<SurfaceMeasure>,
@@ -760,7 +787,7 @@ struct Assembled {
     indices: Vec<u32>,
     face_runs: Vec<FaceRun>,
     faces: Vec<FaceSummary>,
-    edges: Vec<EdgeCurve>,
+    edges: Vec<KeyedEdge>,
     /// The part's own faces and edges; a reference body's are drawn but
     /// not counted.
     topology: Topology,
@@ -821,7 +848,7 @@ impl Assembled {
             face.body = body.map(str::to_owned);
         }
         self.faces.extend(faces);
-        for edge in &mut edges {
+        for (_, edge) in &mut edges {
             edge.body = body.map(str::to_owned);
         }
         self.edges.extend(edges);
@@ -1083,12 +1110,33 @@ mod tests {
         assert_eq!(sheet.mass, None, "a thickened spline sheet lies on offset surfaces");
     }
 
+    /// A line through points of its own dips under the finer mesh between
+    /// them and draws dashed (docs/GOTCHAS.md, "An edge drawn from its own
+    /// samples dashes on a curved face"), so every drawn point is a vertex
+    /// of the mesh, while the length is still the exact curve's.
+    #[test]
+    fn an_edge_is_drawn_through_the_mesh_s_own_vertices() {
+        let rounded = served(serde_json::json!({"units": "mm", "root": 1, "nodes": [
+            {"op": "cylinder", "r": 20, "h": 10},
+            {"op": "fillet", "child": 0, "radius": 3, "selector": ">Z", "expect": {"count": 1}}
+        ]}));
+        let vertices: std::collections::HashSet<[u32; 3]> =
+            rounded.positions.chunks_exact(3).map(|p| [p[0].to_bits(), p[1].to_bits(), p[2].to_bits()]).collect();
+        assert_eq!(rounded.edges.len(), 3, "the base rim and the blend's two rails");
+        for edge in &rounded.edges {
+            assert!(edge.points.iter().all(|p| vertices.contains(&p.map(f32::to_bits))), "{} leaves the mesh", edge.id);
+        }
+        let rail = rounded.edges.iter().find(|edge| (edge.center[2] - 2.0).abs() < 1e-3).expect("the rail on the wall");
+        let around = std::f32::consts::TAU * 20.0;
+        assert!((rail.length_mm - around).abs() < 2e-3 * around, "{} mm", rail.length_mm);
+    }
+
     fn treatment_edge_count(doc: &Doc, node: usize) -> usize {
         let (shape, owners) = backend::build_with_treatment_edges(doc).unwrap();
         edge_curves(&shape, &owners)
             .unwrap()
             .iter()
-            .filter(|edge| edge.treatment_node == Some(node))
+            .filter(|(_, edge)| edge.treatment_node == Some(node))
             .count()
     }
 
