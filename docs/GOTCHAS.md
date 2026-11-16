@@ -1890,26 +1890,80 @@ either of the other two rules.
 
 ### A sweep reads one shape from every core
 
-Found on 2026-11-16, making a keycap's thickness sweeps faster. A sweep's
-readings are chained only within a face: the last ball's radius on a face is
-the first radius tried at the next sample there, and nothing else carries
-over. So the faces are swept on as many threads as there are cores
-(`perceive::Finished::sweep_face`, `parcad_core::par::map_with`), the largest
-first, and the readings are put back in the order one thread took them. Each
-thread builds a `NearestBoundary` of its own, 17 ms on 336 faces, because the
-class answers from projectors, classifiers and surface adaptors it changes as
-it goes; the shape under them is only read, which OCCT's own parallel booleans
-and mesher rely on as well. Two rules follow, and breaking either changes
-replies in the last digits rather than failing:
+Found on 2026-11-16, making the measuring of a keycap faster: 336 faces, 215
+of them B-spline, one body. Everything after its build ran on one thread of
+fourteen. What was taken, each on the evidence that the reply is the one
+thread's reply:
 
-- nothing a reading depends on may cross faces. A guess shared between faces
-  would make the answer depend on which thread got there first;
-- a `NearestBoundary` answer must not depend on the questions before it. It
-  does not today: the replies for a 336-face keycap and a 25-body assembly are
-  the same parsed JSON as the one-thread sweep's, at 2000 and at 6000 samples.
+- **The thickness sweep, by face.** A reading is chained only within a face:
+  the last ball's radius there is the first radius tried at the next sample,
+  and nothing else carries over. The faces are swept on separate threads
+  (`perceive::Finished::sweep_face`, `parcad_core::par::map_with`), largest
+  first, and the readings put back in the order one thread took them. Each
+  thread builds a `NearestBoundary` of its own, 17 ms, because the class
+  answers from projectors, classifiers and surface adaptors it changes as it
+  goes. The walls between close face pairs are settled the same way.
+- **Point-in-solid, in runs.** `BRepClass3d_SolidExplorer` carries one thing
+  from a point to the next, the parameter it aims its ray from, and moves it
+  only when a point finds no face to aim at. occt-sys patch 0010 lets a caller
+  read it: `Shape::classify_points` classifies in runs side by side and keeps
+  the answers only when no run moved it, and `SolidProbe` keeps a solid loaded
+  between calls and reloads after one that did.
+- **Integrals, descriptions and boxes, by face.** `BRepGProp`'s adaptive loops
+  (occt-sys patch 0011), `Shape_faces_json` and `Shape_bounds_optimal` each
+  compute a face at a time and combine in face order. The faces are computed
+  with `OSD_Parallel` and combined in that order, so a sum is the same
+  additions of the same numbers.
+- **What the sweep asked for twice.** It described every face and bounded the
+  body again; both are now read from the measurement kept for that shape.
 
-The 6000-sample sweep of the keycap went from 1.9 s to 1.1 s and the print
-check's from 1.0 s to 0.8 s; what is left is on one thread again.
+Two rules follow, and breaking either changes replies in the last digits
+rather than failing: nothing a result depends on may cross the unit that is
+handed to a thread (a guess shared between faces would depend on which thread
+got there first), and a reduction combines in the order one thread would, never
+in the order threads finish. The shape under all of it is only read, which
+OCCT's own parallel booleans and mesher rely on as well.
+
+Measured through `/api/evaluate` on fourteen cores, medians of three, before
+and after interleaved; "drawn" is the window's first reply (`measure_later`)
+and "whole" the reply an agent waits for:
+
+| | drawn before | drawn after | whole before | whole after |
+|---|---|---|---|---|
+| keycap, opened | 5.06 s | 3.84 s | 11.10 s | 5.13 s |
+| keycap, one dimension edited | 3.29 s | 2.08 s | 9.27 s | 3.34 s |
+| 25-body assembly, opened | 1.94 s | 1.90 s | 7.55 s | 7.25 s |
+| 25-body assembly, a colour edited | 0.07 s | 0.07 s | 0.34 s | 0.33 s |
+
+Every reply, the window's steps included, is the same parsed JSON before and
+after, timings apart, and the corpus passes unchanged. Of the edited keycap's
+3.3 s, 2.1 s is its build and mesh, nearly all of it booleans, 0.45 s volume,
+area and overhang, and 0.9 s the wall check's sweep and the print check's.
+
+### Body pairs are measured one after another, and the two ways round that were dropped
+
+The 25-body assembly above did not get faster: 4.5 s of its 7.25 s is its 300
+body pairs, and they stay as they were. Tried on 2026-11-16:
+
+- **Measuring the clearances ahead of the booleans.** A pair's fit intersects
+  the two bodies and then measures their distance, and a boolean widens
+  tolerances and adds curve representations on its operands in place.
+  `BRepExtrema` reads those tolerances (`BRepExtrema_ExtPF`, `ExtCF`,
+  `DistanceSS`), so a distance taken before the booleans it now follows is not
+  proven to be the same distance. Not taken.
+- **Pairs that share no body, side by side.** This one keeps every body's
+  pairs in their order: pairs were taken in waves, each wave the pairs next
+  for both their bodies, with bodies that share topology grouped. The replies
+  were identical and the assembly slower, 8.2 s against 7.2 s. The 300 pairs
+  make 47 waves however many cores there are, the costly pairs are the ones
+  touching the body everything else sits in, which no wave can hold two of,
+  and `BRepExtrema_DistShapeShape` already runs on every core
+  (`SetMultiThread`), so a wave only divided the cores it had. Reverted.
+- **The box each fit takes of both bodies.** `fit_between` meshes both
+  operands for a box that a pair's report does not carry, 0.7 s over the 300.
+  The mesher is asked again after booleans have touched the body, and nothing
+  proves it leaves the triangulation alone then, which later sweeps read. Not
+  taken.
 
 ### `role: "hole"` does not match a conical opening
 

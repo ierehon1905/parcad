@@ -655,6 +655,15 @@ before. A box of sampled points proves nothing, which docs/GOTCHAS.md,
 "An edge that runs beside a B-spline face", has a shortcut that looked like a
 proof and was not.
 
+Work spread over cores is held to the same rule. A unit is handed to a thread
+only when nothing it computes reads another unit's result, and the results are
+combined in the order one thread would combine them: the faces of a thickness
+sweep, of an integral, of a face description, the runs of a point
+classification (kept only when the classifier says no run's answer rested on
+the points before it, occt-sys patch 0010). docs/GOTCHAS.md, "A sweep reads one
+shape from every core", has each and what it bought; "Body pairs are measured
+one after another" has the one that was not taken.
+
 What this buys is measured on the part that asked for it, a car-shaped keycap
 of two 55-section lofts and 26 recesses: 7.4 s of build to 4.8 s, and a
 reply of 2.3 MB that is byte for byte the old one, timings apart. What it does not buy
