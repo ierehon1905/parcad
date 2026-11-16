@@ -219,6 +219,17 @@ One session at a time, because each rewrites the same core files (`graph.rs`,
    artefact: look, point, get back something that survives a dimension
    change.
 
+### Found submitting to the ChatGPT directory (2026-11-16)
+
+- **A reviewer gets an account of their own.** The access code signs every
+  reviewer in as one account, `review`, so reviewers share one set of parts
+  (test case 5 makes the knob 5 mm taller on every run). Until e1ab7b8a, each
+  sign-in through ChatGPT's single client also revoked the previous reviewer's
+  grant. Before the next submission, give each code sign-in a freshly seeded
+  tenant of its own that expires like any unused account. `REVIEW_CODE` still
+  gates them, and rotating it still ends them all (`edge/src/access.ts`,
+  `edge/src/signin.ts`).
+
 ### Waiting on a decision
 
 - **How ParCAD web is published.** `web.yml` builds the whole site — the corpus
