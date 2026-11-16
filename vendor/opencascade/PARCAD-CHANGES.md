@@ -668,3 +668,16 @@ shape. Three things came with it in `history.hxx`:
 faces until they meet, over `opencascade-sys`'s `MakeThickSolidByJoinSharp`.
 It is what `shell(t, { corners: "sharp" })` shrinks the part with. Measured
 against `Arc` over every corpus and seed part in docs/GOTCHAS.md, "A sharp shell builds three corpus parts a round one cannot, and loses nine".
+
+## `Edge::polygon_on`
+
+`Edge::polygon_on(&Face)` returns the nodes the face's current triangulation
+put along the edge, in space: `BRep_Tool::PolygonOnTriangulation` for that
+edge on `BRep_Tool::Triangulation(face)`, each node moved by the
+triangulation's location (`parcad_polygon_on_face` in `surfacing.hxx`). The
+edge must come from `face.edges()`, since the polygon is looked up by the
+edge's location relative to the face's. `None` when the face is not meshed or
+its mesh holds no polygon for the edge. For a seam it is whichever of the two
+polygons the edge's orientation returns; both run through the same points.
+ParCAD draws its edge lines through these nodes: see docs/GOTCHAS.md, "An edge
+drawn from its own samples dashes on a curved face".

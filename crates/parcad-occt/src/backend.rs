@@ -1297,7 +1297,7 @@ pub(crate) fn logical_edges(shape: &Shape) -> Result<Vec<LogicalEdge>> {
 }
 
 /// Sampled runs chained into one polyline, each turned to follow the last.
-fn joined_end_to_end(mut runs: Vec<Vec<DVec3>>) -> Option<Vec<DVec3>> {
+pub(crate) fn joined_end_to_end(mut runs: Vec<Vec<DVec3>>) -> Option<Vec<DVec3>> {
     const MEET: f64 = 1e-4;
     let meets = |a: DVec3, b: DVec3| a.distance(b) <= MEET;
     runs.retain(|run| run.len() >= 2);

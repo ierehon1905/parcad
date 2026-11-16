@@ -308,6 +308,7 @@ source comment. Run it before calling anything in docs/PERCEPTION.md done, read
 | the section controls | `app/src/ui/view-tools.tsx` — on the viewport, not the titlebar |
 | any control's tooltip | `tip()` from `app/src/ui/tooltip.tsx`, spread onto the element |
 | how it looks | `app/src/viewport.ts`, `app/src/outline.ts` |
+| which points an edge line is drawn through | `edge_curves` in `crates/parcad-occt/src/serve.rs` — the mesh's own nodes on the edge (`Edge::polygon_on`), never fresh samples of the curve; docs/GOTCHAS.md, "An edge drawn from its own samples dashes on a curved face" |
 | colours, type, the design tokens | `@theme` in `app/src/style.css` — never a literal in a component |
 | what "still correct" means | `eval/cases/*.json`, `eval/scripts/*.js` |
 | the seed parts | `examples/*.js` — indexed in `examples/README.md`; copied into the project folder on first run, not read by the picker. Changing one does **not** change the user's copy: see `examples/fusion360/README.md`, "A seeded copy is frozen" |

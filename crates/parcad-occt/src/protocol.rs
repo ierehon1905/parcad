@@ -666,13 +666,15 @@ pub struct EdgeCurve {
     /// fillet operations can change topology, and this ID is only meaningful
     /// until the next evaluation.
     pub id: String,
-    /// The sampled exact edge curve, in document-space millimetres.
+    /// The edge as drawn, in document-space millimetres: the nodes the part's
+    /// mesh put on it, or the exact curve's samples where no mesh carries it.
     pub points: Vec<[f32; 3]>,
-    /// Average sample position, used for inspection and directional selectors.
+    /// Average position of the exact curve's samples, used for inspection and
+    /// directional selectors.
     pub center: [f32; 3],
     /// Unit direction when this is a straight edge; absent for curves.
     pub direction: Option<[f32; 3]>,
-    /// Polyline length in millimetres, for the hover inspector.
+    /// Length of the exact curve's samples in millimetres, for the hover inspector.
     pub length_mm: f32,
     /// Intent-graph node of the fillet or chamfer that generated this edge.
     ///
