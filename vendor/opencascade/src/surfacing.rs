@@ -5,7 +5,7 @@
 //! Face histories are `(input face, output face)` pairs numbered as
 //! [`Shape::face_map`] numbers faces.
 
-use crate::primitives::{Compound, Edge, Shape, Wire};
+use crate::primitives::{Compound, Edge, Face, Shape, Wire};
 use cxx::UniquePtr;
 use glam::DVec3;
 
@@ -306,6 +306,18 @@ impl Shape {
     }
 }
 
+impl Edge {
+    /// The nodes `face`'s current triangulation put along this edge, which
+    /// must be one of `face.edges()`: the mesh's own vertices, in the
+    /// polygon's order, so a line through them runs along the triangles'
+    /// edges. `None` when the face is not meshed or its mesh has no polygon
+    /// for this edge.
+    pub fn polygon_on(&self, face: &Face) -> Result<Option<Vec<DVec3>>, String> {
+        let flat = ffi::parcad_polygon_on_face(&self.inner, &face.inner).map_err(|e| e.what().to_string())?;
+        Ok((!flat.is_empty()).then(|| flat.chunks_exact(3).map(|c| DVec3::new(c[0], c[1], c[2])).collect()))
+    }
+}
+
 #[cxx::bridge]
 pub(crate) mod ffi {
     unsafe extern "C++" {
@@ -313,10 +325,13 @@ pub(crate) mod ffi {
 
         type TopoDS_Shape = opencascade_sys::ffi::TopoDS_Shape;
         type TopoDS_Wire = opencascade_sys::ffi::TopoDS_Wire;
+        type TopoDS_Edge = opencascade_sys::ffi::TopoDS_Edge;
+        type TopoDS_Face = opencascade_sys::ffi::TopoDS_Face;
 
         fn parcad_census(shape: &TopoDS_Shape) -> Result<Vec<f64>>;
         fn parcad_volume_by_spans(shape: &TopoDS_Shape, eps: f64) -> Result<Vec<f64>>;
         fn parcad_uncovered_faces(shape: &TopoDS_Shape, rel: f64) -> Result<Vec<f64>>;
+        fn parcad_polygon_on_face(edge: &TopoDS_Edge, face: &TopoDS_Face) -> Result<Vec<f64>>;
         fn parcad_free_edges(shape: &TopoDS_Shape) -> Result<UniquePtr<TopoDS_Shape>>;
         fn parcad_logical_edges(shape: &TopoDS_Shape) -> Result<UniquePtr<CxxVector<TopoDS_Shape>>>;
         fn parcad_prism(wire: &TopoDS_Shape, dx: f64, dy: f64, dz: f64) -> Result<UniquePtr<TopoDS_Shape>>;

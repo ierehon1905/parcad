@@ -11,6 +11,7 @@ export type Request =
   /** The document changed. Answered by nothing; ordered before what follows. */
   | { id: number; kind: "part"; text: string }
   | { id: number; kind: "quickInfo"; pos: number }
+  | { id: number; kind: "definition"; pos: number }
   | { id: number; kind: "completions"; pos: number }
   | { id: number; kind: "completionDetail"; pos: number; label: string }
   | { id: number; kind: "signatureHelp"; pos: number }
@@ -19,6 +20,7 @@ export type Request =
 export interface Replies {
   part: void;
   quickInfo: (Info & { from: number; to: number }) | undefined;
+  definition: { at: { from: number; to: number }; target: { from: number; to: number } } | undefined;
   completions: CompletionItem[];
   completionDetail: Info | undefined;
   signatureHelp: SignatureInfo | undefined;

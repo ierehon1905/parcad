@@ -224,3 +224,19 @@ describe("the wrapper the compiler needs", () => {
     expect(declared).toEqual(Object.keys(dsl));
   });
 });
+
+describe("definition", () => {
+  test("a name the part declares leads to its declaration", () => {
+    const source = "const W = 72;\nconst plate = box(W, 10, 2);\nreturn plate;";
+    analyzer.setPart(source);
+    const use = source.indexOf("W,");
+    expect(analyzer.definition(use)).toEqual({ at: { from: use, to: use + 1 }, target: { from: 6, to: 7 } });
+    const returned = source.lastIndexOf("plate");
+    expect(analyzer.definition(returned)?.target).toEqual({ from: source.indexOf("plate"), to: source.indexOf("plate") + 5 });
+  });
+
+  test("a name the DSL declares has nowhere in the part to go", () => {
+    analyzer.setPart("return box(1, 1, 1);");
+    expect(analyzer.definition(8)).toBeUndefined();
+  });
+});

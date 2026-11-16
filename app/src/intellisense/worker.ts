@@ -57,6 +57,8 @@ self.onmessage = (event: MessageEvent<Request>) => {
         return analyzer.setPart(request.text);
       case "quickInfo":
         return reply({ id: request.id, value: analyzer.quickInfo(request.pos) });
+      case "definition":
+        return reply({ id: request.id, value: analyzer.definition(request.pos) });
       case "completions":
         return reply({ id: request.id, value: analyzer.completions(request.pos) });
       case "completionDetail":

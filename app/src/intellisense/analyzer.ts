@@ -147,6 +147,22 @@ export function createAnalyzer(sources: AnalyzerSources) {
       file.version += 1;
     },
 
+    /**
+     * Where the name at a position is declared in the part, and the name's own
+     * span there: for ⌘-click, as in any editor. None for a name the DSL
+     * declares, since the part is the only file the window has.
+     */
+    definition(pos: number): { at: { from: number; to: number }; target: { from: number; to: number } } | undefined {
+      const found = service.getDefinitionAndBoundSpan(PART_FILE, toCompiler(pos));
+      const own = found?.definitions?.find((definition) => definition.fileName === PART_FILE);
+      if (!found || !own) return undefined;
+      const span = (s: ts.TextSpan) => ({
+        from: toDocument(s.start, document.length),
+        to: toDocument(s.start + s.length, document.length),
+      });
+      return { at: span(found.textSpan), target: span(own.textSpan) };
+    },
+
     /** The signature, type and doc comment at a position, for a hover. */
     quickInfo(pos: number): (Info & { from: number; to: number }) | undefined {
       const info = service.getQuickInfoAtPosition(PART_FILE, toCompiler(pos));

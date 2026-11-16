@@ -1297,7 +1297,7 @@ pub(crate) fn logical_edges(shape: &Shape) -> Result<Vec<LogicalEdge>> {
 }
 
 /// Sampled runs chained into one polyline, each turned to follow the last.
-fn joined_end_to_end(mut runs: Vec<Vec<DVec3>>) -> Option<Vec<DVec3>> {
+pub(crate) fn joined_end_to_end(mut runs: Vec<Vec<DVec3>>) -> Option<Vec<DVec3>> {
     const MEET: f64 = 1e-4;
     let meets = |a: DVec3, b: DVec3| a.distance(b) <= MEET;
     runs.retain(|run| run.len() >= 2);
@@ -1403,6 +1403,32 @@ struct Link {
 
 type Chain = Rc<Link>;
 
+impl Link {
+    /// The node at the foot of the chain: the one that made what it carries.
+    fn maker(&self) -> NodeId {
+        let mut link = self;
+        while let Some(below) = &link.below {
+            link = below;
+        }
+        link.node
+    }
+}
+
+/// `chain` taken up through `nodes` in turn. A chain that already ends at a
+/// node was made or sealed there, and is not taken through it twice. `above`
+/// keeps chains that shared a tail sharing what is built on it.
+fn chain_through(chain: &Chain, nodes: &[NodeId], above: &mut HashMap<(*const Link, NodeId), Chain>) -> Chain {
+    nodes.iter().fold(chain.clone(), |chain, &node| {
+        if chain.node == node {
+            return chain;
+        }
+        above
+            .entry((Rc::as_ptr(&chain), node))
+            .or_insert_with(|| Rc::new(Link { node, below: Some(chain.clone()) }))
+            .clone()
+    })
+}
+
 /// Which graph nodes made each face of a shape: per face, one chain for each
 /// maker, from the node that made the face up through every op since.
 ///
@@ -1473,30 +1499,13 @@ impl FaceMakers {
         Self { faces: Rc::new(faces) }
     }
 
-    /// Every chain taken up through `nodes` in turn. One that already ends at
-    /// a node was made or sealed there, and is not taken through it twice.
+    /// Every chain taken up through `nodes` in turn, by [`chain_through`].
     fn extended(&self, nodes: &[NodeId]) -> Self {
-        let mut above: HashMap<(*const Link, NodeId), Chain> = HashMap::new();
+        let mut above = HashMap::new();
         let faces = self
             .faces
             .iter()
-            .map(|(face, chains)| {
-                let chains = chains
-                    .iter()
-                    .map(|chain| {
-                        nodes.iter().fold(chain.clone(), |chain, &node| {
-                            if chain.node == node {
-                                return chain;
-                            }
-                            above
-                                .entry((Rc::as_ptr(&chain), node))
-                                .or_insert_with(|| Rc::new(Link { node, below: Some(chain.clone()) }))
-                                .clone()
-                        })
-                    })
-                    .collect();
-                (face.clone(), chains)
-            })
+            .map(|(face, chains)| (face.clone(), chains.iter().map(|chain| chain_through(chain, nodes, &mut above)).collect()))
             .collect();
         Self { faces: Rc::new(faces) }
     }
@@ -1506,47 +1515,18 @@ impl FaceMakers {
         self.completed_by(node, shape).extended(&[node])
     }
 
-    /// A cached subtree's record in the ids of the document that hit it.
-    /// `from` and `to` are the subtree's [`subtree_ids`] then and now, and
-    /// `parents` its [`subtree_parents`]. A chain is walked down from the
-    /// subtree's root, because a node the old document shared between two
-    /// parents can be two nodes in this one, and only its path says which.
-    fn renumbered(&self, from: &[NodeId], to: &[NodeId], parents: &[usize]) -> Self {
-        let mut child_at: HashMap<(usize, NodeId), usize> = HashMap::new();
-        for (at, (&parent, &old)) in parents.iter().zip(from).enumerate().skip(1) {
-            child_at.entry((parent, old)).or_insert(at);
-        }
-        let mut renumbered: HashMap<*const Link, Chain> = HashMap::new();
+    /// A cached subtree's record in the ids of the document that hit it, or
+    /// `None` where a chain leaves the subtree.
+    fn renumbered(&self, renumbering: &mut Renumbering) -> Option<Self> {
         let faces = self
             .faces
             .iter()
             .map(|(face, chains)| {
-                let chains = chains
-                    .iter()
-                    .map(|chain| {
-                        renumbered
-                            .entry(Rc::as_ptr(chain))
-                            .or_insert_with(|| {
-                                let mut at = 0;
-                                let mut path = vec![to[0]];
-                                for link in std::iter::successors(chain.below.as_ref(), |link| link.below.as_ref()) {
-                                    let Some(&child) = child_at.get(&(at, link.node)) else { break };
-                                    at = child;
-                                    path.push(to[at]);
-                                }
-                                let mut below = None;
-                                for &node in path.iter().rev() {
-                                    below = Some(Rc::new(Link { node, below }));
-                                }
-                                below.expect("the path holds the subtree's root")
-                            })
-                            .clone()
-                    })
-                    .collect();
-                (face.clone(), chains)
+                let chains = chains.iter().map(|chain| Some(renumbering.chain(chain)?.0)).collect::<Option<_>>()?;
+                Some((face.clone(), chains))
             })
-            .collect();
-        Self { faces: Rc::new(faces) }
+            .collect::<Option<_>>()?;
+        Some(Self { faces: Rc::new(faces) })
     }
 
     /// Per face, each maker's chain from the node that made it to the last
@@ -3837,13 +3817,18 @@ fn cut_collisions(
 /// They are kept as shapes, rather than edge indexes, so an outer transform or
 /// a later Boolean can either carry an unchanged edge through exactly or make
 /// it disappear from the final lookup. No geometric nearest-edge guess is made.
+///
+/// Each record carries a chain from its treatment up through every node built
+/// since, as a face's makers do: a node shared in the document a cached
+/// subtree was built in can be two in the one that hits it, and only the
+/// chain says which of them a record came up through.
 #[derive(Default, Clone)]
 struct TreatmentFeatures {
-    generated: Vec<(NodeId, Shape)>,
+    generated: Vec<(Chain, Shape)>,
     /// What each treatment's selector resolved to: the count a reply
     /// reports beside the treatment, so `.expect({ count })` has a number to
     /// be written from, and the corners it spans.
-    resolved: Vec<TreatmentEdges>,
+    resolved: Vec<(Chain, TreatmentEdges)>,
 }
 
 impl TreatmentFeatures {
@@ -3853,24 +3838,57 @@ impl TreatmentFeatures {
     }
 
     fn treatment_edges(&self) -> BTreeMap<NodeId, TreatmentEdges> {
-        self.resolved.iter().map(|resolved| (resolved.node, resolved.clone())).collect()
+        self.resolved.iter().map(|(_, resolved)| (resolved.node, resolved.clone())).collect()
     }
 
-    fn renumbered(self, renumber: &HashMap<NodeId, NodeId>) -> Self {
-        let id = |node: NodeId| renumber.get(&node).copied().unwrap_or(node);
+    /// Every record taken up through `nodes` in turn, by [`chain_through`].
+    fn extended(self, nodes: &[NodeId]) -> Self {
+        let mut above = HashMap::new();
         Self {
-            generated: self.generated.into_iter().map(|(node, shape)| (id(node), shape)).collect(),
-            resolved: self
-                .resolved
-                .into_iter()
-                .map(|resolved| TreatmentEdges { node: id(resolved.node), ..resolved })
-                .collect(),
+            generated: self.generated.into_iter().map(|(chain, shape)| (chain_through(&chain, nodes, &mut above), shape)).collect(),
+            resolved: self.resolved.into_iter().map(|(chain, report)| (chain_through(&chain, nodes, &mut above), report)).collect(),
         }
     }
 
+    /// A cached subtree's records in the ids of the document that hit it, or
+    /// `None` where a chain or a cut a treatment was built before leaves the
+    /// subtree.
+    fn renumbered(&self, renumbering: &mut Renumbering) -> Option<Self> {
+        let generated = self
+            .generated
+            .iter()
+            .map(|(chain, shape)| Some((renumbering.chain(chain)?.0, shape.clone())))
+            .collect::<Option<_>>()?;
+        let resolved = self
+            .resolved
+            .iter()
+            .map(|(chain, report)| {
+                let (chain, at) = renumbering.chain(chain)?;
+                // `before_cuts` is inner cut first, and the outermost is the treatment's child.
+                let mut cut = at;
+                let mut before_cuts = report
+                    .before_cuts
+                    .iter()
+                    .rev()
+                    .map(|&old| {
+                        cut = renumbering.child(cut, old)?;
+                        Some(renumbering.to[cut])
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                before_cuts.reverse();
+                Some((chain, TreatmentEdges { node: renumbering.to[at], before_cuts, ..report.clone() }))
+            })
+            .collect::<Option<_>>()?;
+        Some(Self { generated, resolved })
+    }
+
+    fn add_resolved(&mut self, report: TreatmentEdges) {
+        self.resolved.push((Rc::new(Link { node: report.node, below: None }), report));
+    }
+
     fn add_generated(&mut self, node: NodeId, shapes: Vec<Shape>) {
-        self.generated
-            .extend(shapes.into_iter().map(|shape| (node, shape)));
+        let made = Rc::new(Link { node, below: None });
+        self.generated.extend(shapes.into_iter().map(|shape| (made.clone(), shape)));
     }
 
     fn rotated(self, origin: DVec3, axis: DVec3, radians: f64) -> Self {
@@ -3878,7 +3896,7 @@ impl TreatmentFeatures {
             generated: self
                 .generated
                 .into_iter()
-                .map(|(node, shape)| (node, shape.rotated(origin, axis, radians)))
+                .map(|(chain, shape)| (chain, shape.rotated(origin, axis, radians)))
                 .collect(),
             resolved: self.resolved,
         }
@@ -3889,7 +3907,7 @@ impl TreatmentFeatures {
             generated: self
                 .generated
                 .into_iter()
-                .map(|(node, shape)| (node, shape.scaled_uniform(origin, factor)))
+                .map(|(chain, shape)| (chain, shape.scaled_uniform(origin, factor)))
                 .collect(),
             resolved: self.resolved,
         }
@@ -3900,7 +3918,7 @@ impl TreatmentFeatures {
             generated: self
                 .generated
                 .into_iter()
-                .map(|(node, shape)| (node, shape.translated(by)))
+                .map(|(chain, shape)| (chain, shape.translated(by)))
                 .collect(),
             resolved: self.resolved,
         }
@@ -3908,14 +3926,15 @@ impl TreatmentFeatures {
 
     fn edge_owners(&self) -> BTreeMap<Vec<[i64; 3]>, NodeId> {
         let mut owners = BTreeMap::new();
-        for (node, shape) in &self.generated {
+        for (chain, shape) in &self.generated {
+            let node = chain.maker();
             for edge in shape.edges() {
                 let points: Vec<DVec3> = edge.approximation_segments().collect();
                 if points.len() >= 2 {
                     // Later feature entries intentionally win: if a second
                     // treatment consumes a first treatment's boundary, the
                     // visible replacement belongs to the later source call.
-                    owners.insert(edge_key(&points), *node);
+                    owners.insert(edge_key(&points), node);
                 }
             }
         }
@@ -3945,8 +3964,9 @@ type CacheKey = (String, [i64; 3]);
 struct CacheEntry {
     built: BuiltShape,
     /// The subtree's node ids in pre-order, in the document it was built in.
-    /// `built.features` names treatments by these ids, and the key ignores
-    /// them, so a hit in a renumbered document maps them across.
+    /// Every chain in `built` names nodes by these ids, and the key ignores
+    /// them, so a hit in a renumbered document maps them across
+    /// ([`Renumbering`]).
     ids: Vec<NodeId>,
     /// What building this subtree measured, re-reported on a hit as if it
     /// had been built again.
@@ -4073,6 +4093,66 @@ fn subtree_parents(doc: &Doc, id: NodeId) -> Result<Vec<usize>> {
     let mut parents = Vec::new();
     visit(doc, id, 0, &mut parents)?;
     Ok(parents)
+}
+
+/// A cached subtree's chains in the ids of the document that hit it.
+///
+/// A node the old document shared between two parents can be two nodes in
+/// this one, and a map from old id to new sends both uses to one of them. A
+/// chain is walked down from the subtree's root instead, parent to child,
+/// because only its path says which copy it came up through.
+struct Renumbering<'a> {
+    root: NodeId,
+    to: &'a [NodeId],
+    child_at: HashMap<(usize, NodeId), usize>,
+    walked: HashMap<*const Link, Option<(Chain, usize)>>,
+}
+
+impl<'a> Renumbering<'a> {
+    /// `from` and `to` are the subtree's [`subtree_ids`] then and now, and
+    /// `parents` its [`subtree_parents`].
+    fn new(from: &[NodeId], to: &'a [NodeId], parents: &[usize]) -> Self {
+        let mut child_at = HashMap::new();
+        // A parent with one child twice keeps the first: no chain says which use it came up.
+        for (at, (&parent, &old)) in parents.iter().zip(from).enumerate().skip(1) {
+            child_at.entry((parent, old)).or_insert(at);
+        }
+        Self { root: from[0], to, child_at, walked: HashMap::new() }
+    }
+
+    /// Where in the subtree the child `old` of the entry at `at` is.
+    fn child(&self, at: usize, old: NodeId) -> Option<usize> {
+        self.child_at.get(&(at, old)).copied()
+    }
+
+    /// Where in the subtree each link of `chain` is, root first.
+    fn path(&self, chain: &Chain) -> Option<Vec<usize>> {
+        if chain.node != self.root {
+            return None;
+        }
+        let mut path = vec![0];
+        for link in std::iter::successors(chain.below.as_ref(), |link| link.below.as_ref()) {
+            path.push(self.child(*path.last()?, link.node)?);
+        }
+        Some(path)
+    }
+
+    /// `chain`, sealed at the subtree's root, in this document's ids, and
+    /// where in the subtree the node at its foot is.
+    fn chain(&mut self, chain: &Chain) -> Option<(Chain, usize)> {
+        if let Some(walked) = self.walked.get(&Rc::as_ptr(chain)) {
+            return walked.clone();
+        }
+        let walked = self.path(chain).map(|path| {
+            let mut below = None;
+            for &at in path.iter().rev() {
+                below = Some(Rc::new(Link { node: self.to[at], below }));
+            }
+            (below.expect("the path holds the subtree's root"), path[path.len() - 1])
+        });
+        self.walked.insert(Rc::as_ptr(chain), walked.clone());
+        walked
+    }
 }
 
 /// What a subtree is, as text: its op with the child indices blanked, its
@@ -4255,9 +4335,15 @@ fn build_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
         let entry = reuse.cache.entries.get(&key)?;
         let mut built = entry.built.clone();
         if entry.ids != ids {
-            let renumber: HashMap<NodeId, NodeId> = entry.ids.iter().copied().zip(ids.iter().copied()).collect();
-            built.features = built.features.renumbered(&renumber);
-            built.lineage.makers = built.lineage.makers.renumbered(&entry.ids, &ids, &subtree_parents(doc, id).ok()?);
+            let parents = subtree_parents(doc, id).ok()?;
+            let mut renumbering = Renumbering::new(&entry.ids, &ids, &parents);
+            let renumbered = built.features.renumbered(&mut renumbering).zip(built.lineage.makers.renumbered(&mut renumbering));
+            let Some((features, makers)) = renumbered else {
+                breadcrumb(&format!("node {id}: a chain in its cached build leaves the subtree, so it is built again"));
+                return None;
+            };
+            built.features = features;
+            built.lineage.makers = makers;
         }
         record(entry.measured);
         touch(&mut reuse.cache, &key);
@@ -4970,14 +5056,16 @@ fn treat_before_cuts(
     ));
     // A chain reads in the graph's order, where these cuts lie under the treatment built before them.
     base.lineage.makers = base.lineage.makers.extended(&order);
+    base.features = std::mem::take(&mut base.features).extended(&order);
     for (k, (_, cutters)) in cuts.iter_mut().enumerate() {
         for cutter in cutters {
             cutter.lineage.makers = cutter.lineage.makers.extended(&order[k..]);
+            cutter.features = std::mem::take(&mut cutter.features).extended(&order[k..]);
         }
     }
     let mut report = selected.report.clone();
     report.before_cuts = order;
-    base.features.resolved.push(report);
+    base.features.add_resolved(report);
     let on_origin = ResolvedEdgeTarget {
         edges: pieces.iter().map(|(piece, _)| (*piece).clone()).collect(),
         vertices: Vec::new(),
@@ -5002,10 +5090,12 @@ const EDGE_MATCH_MM: f64 = 1.0e-4;
 
 /// Build one node and seal which nodes made each of its faces: what its
 /// children's faces became keeps their chains, now ending here, and a face
-/// no history accounts for was made here.
+/// no history accounts for was made here. Every treatment record's chain
+/// ends here too.
 fn build_node_afresh(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
     let mut built = lower_node(doc, id, offset)?;
     built.lineage.makers = built.lineage.makers.sealed(id, &built.shape);
+    built.features = built.features.extended(&[id]);
     Ok(built)
 }
 
@@ -5672,7 +5762,7 @@ fn lower_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                     .features
                     .generated
                     .into_iter()
-                    .map(|(node, shape)| (node, place(reflect(shape))))
+                    .map(|(chain, shape)| (chain, place(reflect(shape))))
                     .collect(),
                 resolved: inner.features.resolved,
             };
@@ -5795,7 +5885,7 @@ fn lower_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
                         .features
                         .generated
                         .into_iter()
-                        .filter_map(|(node, part)| Some((node, stretch(part)?)))
+                        .filter_map(|(chain, part)| Some((chain, stretch(part)?)))
                         .collect(),
                     resolved: inner.features.resolved,
                 };
@@ -6123,7 +6213,7 @@ fn lower_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             surfaces::require_solid(doc, id, label, verb, *child, &solid)?;
             let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
             let count = selected.report.edges;
-            solid.features.resolved.push(selected.report.clone());
+            solid.features.add_resolved(selected.report.clone());
             if continuity == BlendContinuity::Curvature {
                 if let Some(corner) = smoothed_corner(&selected.edges) {
                     bail!(
@@ -6168,7 +6258,7 @@ fn lower_node(doc: &Doc, id: NodeId, offset: DVec3) -> Result<BuiltShape> {
             surfaces::require_solid(doc, id, label, "chamfers", *child, &solid)?;
             let selected = select_edge_target(&solid.shape, target, &solid.lineage, id, label)?;
             let count = selected.report.edges;
-            solid.features.resolved.push(selected.report.clone());
+            solid.features.add_resolved(selected.report.clone());
             breadcrumb(&format!(
                 "chamfer node {id} ({label}) {distance} mm on {count} selected edge(s)"
             ));
@@ -6717,6 +6807,74 @@ mod tests {
             [TreatmentEdges { node: 2, edges: 4, convex: 4, concave: 0, before_cuts: Vec::new() }],
             "the fillet is node 2 now",
         );
+    }
+
+    /// Whether the cache served `doc`'s root from the build of `built_in`:
+    /// a hit keeps the ids that build recorded, a build replaces them.
+    fn served_from(cache: &BuildCache, doc: &Doc, built_in: &Doc) -> bool {
+        let key = (subtree_key(doc, doc.root, &mut vec![None; doc.nodes.len()]).unwrap(), offset_key(DVec3::ZERO));
+        cache.entries.get(&key).is_some_and(|entry| entry.ids == subtree_ids(built_in, built_in.root).unwrap())
+    }
+
+    /// One filleted block placed twice, then the same part with a block of
+    /// its own in each place: one cache key, and each fillet has to own its
+    /// own edges, which only the path through the moves can say.
+    #[test]
+    fn a_treatment_shared_when_cached_reports_under_each_copy_of_it() {
+        let shared = graph(serde_json::json!({"units":"mm","root":4,"nodes":[
+            {"op":"cuboid","size":{"x":10,"y":10,"z":10}},
+            {"op":"fillet","child":0,"radius":1,"selector":"|Z"},
+            {"op":"translate","child":1,"by":{"x":-15,"y":0,"z":0}},
+            {"op":"translate","child":1,"by":{"x":15,"y":0,"z":0}},
+            {"op":"union","children":[2,3],"blend":0}
+        ]}));
+        let apart = graph(serde_json::json!({"units":"mm","root":6,"nodes":[
+            {"op":"cuboid","size":{"x":10,"y":10,"z":10}},
+            {"op":"cuboid","size":{"x":10,"y":10,"z":10}},
+            {"op":"fillet","child":0,"radius":1,"selector":"|Z"},
+            {"op":"fillet","child":1,"radius":1,"selector":"|Z"},
+            {"op":"translate","child":2,"by":{"x":-15,"y":0,"z":0}},
+            {"op":"translate","child":3,"by":{"x":15,"y":0,"z":0}},
+            {"op":"union","children":[4,5],"blend":0}
+        ]}));
+        let owners = |part: &BuiltPart| -> std::collections::BTreeSet<(bool, NodeId)> {
+            part.treatment_owners.iter().map(|(edge, &node)| (edge[0][0] < 0, node)).collect()
+        };
+        let mut cache = BuildCache::default();
+        let before = with_reuse(&mut cache, &shared, || build_part(&shared).unwrap());
+        assert_eq!(before.treatment_edges.keys().copied().collect::<Vec<_>>(), [1]);
+        assert_eq!(owners(&before), [(false, 1), (true, 1)].into());
+        let after = with_reuse(&mut cache, &apart, || build_part(&apart).unwrap());
+        assert!(served_from(&cache, &apart, &shared), "the union was reused");
+        assert_eq!(after.treatment_edges.keys().copied().collect::<Vec<_>>(), [2, 3]);
+        assert_eq!(owners(&after), [(false, 3), (true, 2)].into(), "the left block's fillet is node 2");
+        let fresh = build_part(&apart).unwrap();
+        assert_eq!((after.treatment_owners, after.treatment_edges), (fresh.treatment_owners, fresh.treatment_edges));
+    }
+
+    /// The cuts a treatment was built before are nodes under it, and a hit
+    /// in a renumbered document names them in that document's numbers.
+    #[test]
+    fn a_reused_treatment_names_the_cuts_it_was_built_before_by_their_new_ids() {
+        let pocketed = |root: usize, nodes: Vec<serde_json::Value>| graph(serde_json::json!({"units":"mm","root":root,"nodes":nodes}));
+        let pocket = |at: usize| {
+            vec![
+                serde_json::json!({"op":"cuboid","size":{"x":40,"y":40,"z":20}}),
+                serde_json::json!({"op":"cuboid","size":{"x":32.45,"y":34.35,"z":20}}),
+                serde_json::json!({"op":"translate","child":at + 1,"by":{"x":0,"y":0,"z":1.63}}),
+                serde_json::json!({"op":"difference","base":at,"tools":[at + 2],"blend":0}),
+                serde_json::json!({"op":"chamfer","child":at + 3,"distance":5.41,"selector":"<Z"}),
+            ]
+        };
+        let first = pocketed(4, pocket(0));
+        let renumbered = pocketed(5, std::iter::once(serde_json::json!({"op":"sphere","r":1})).chain(pocket(1)).collect());
+        let mut cache = BuildCache::default();
+        let before = with_reuse(&mut cache, &first, || build_part(&first).unwrap().treatment_edges);
+        assert_eq!(before[&4].before_cuts, [3]);
+        let after = with_reuse(&mut cache, &renumbered, || build_part(&renumbered).unwrap().treatment_edges);
+        assert!(served_from(&cache, &renumbered, &first), "the chamfer was reused");
+        assert_eq!(after.keys().copied().collect::<Vec<_>>(), [5]);
+        assert_eq!(after[&5].before_cuts, [4], "the pocket is node 4 now");
     }
 
     /// A vertex treatment's count is its corners, which is what

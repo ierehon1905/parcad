@@ -247,6 +247,39 @@ inline rust::Vec<double> parcad_volume_by_spans(const TopoDS_Shape& shape, doubl
   });
 }
 
+// The nodes `face`'s current triangulation put along `edge` (an edge of that
+// face, as its explorer gives it), in the polygon's own order, x y z
+// flattened. Empty when the face carries no triangulation, or the
+// triangulation no polygon for this edge, or one naming a node it lacks.
+inline rust::Vec<double> parcad_polygon_on_face(const TopoDS_Edge& edge, const TopoDS_Face& face) {
+  return parcad_surfacing_guard("reading an edge off the mesh", [&]() {
+    rust::Vec<double> out;
+    TopLoc_Location location;
+    const occ::handle<Poly_Triangulation> mesh = BRep_Tool::Triangulation(face, location);
+    if (mesh.IsNull()) {
+      return out;
+    }
+    const occ::handle<Poly_PolygonOnTriangulation> polygon = BRep_Tool::PolygonOnTriangulation(edge, mesh, location);
+    if (polygon.IsNull()) {
+      return out;
+    }
+    for (int k = 1; k <= polygon->NbNodes(); ++k) {
+      if (polygon->Node(k) < 1 || polygon->Node(k) > mesh->NbNodes()) {
+        out.clear();
+        return out;
+      }
+    }
+    const gp_Trsf placed = location.Transformation();
+    for (int k = 1; k <= polygon->NbNodes(); ++k) {
+      const gp_Pnt p = mesh->Node(polygon->Node(k)).Transformed(placed);
+      out.push_back(p.X());
+      out.push_back(p.Y());
+      out.push_back(p.Z());
+    }
+    return out;
+  });
+}
+
 // Faces whose triangulation does not cover the face: for each face the
 // triangles' area in the face's parameter plane against the area the
 // triangulation's own boundary — the polygon every edge of the face was

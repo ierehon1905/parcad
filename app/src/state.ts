@@ -392,6 +392,8 @@ export const snapshot = signal<EvaluationSnapshot | undefined>(undefined);
 export const lastGraph = signal<dsl.Doc | null>(null);
 export const lastSource = signal("");
 export const lastTreatments = signal<dsl.TreatmentSource[]>([]);
+/** For each node of `lastGraph`, the lines of `lastSource` on its creation stack, innermost first. */
+export const lastNodeLines = signal<number[][]>([]);
 export const visibleEdges = signal<EdgeCurve[]>([]);
 export const visibleVertices = signal<VertexPoint[]>([]);
 /** How many final curves this evaluation traced back to an authored call. */
